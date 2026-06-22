@@ -29,13 +29,13 @@ LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 
 
 def prepare_annotation_image(image: np.ndarray) -> Tuple[np.ndarray, int, bool]:
-    """Normalize an image for annotation: squeeze singletons and map channels to RGB.
+    """Normalize an image for annotation: squeeze singletons and map 2D channels to RGB.
 
-    Singleton axes (commonly exposed by formats like CZI) are squeezed out across all
-    axes, and the trailing channel axis is mapped to 3 channels: a 2-channel input is
-    padded with a zero channel and an input with more than 3 channels is reduced to the
-    first three (with a warning). Both squeezing and channel slicing return views, so
-    the only case that allocates is the 2-channel padding.
+    Singleton axes (commonly exposed by formats like CZI) are squeezed out across all axes.
+    For a 2D image, the trailing channel axis is mapped to 3 channels: a 2-channel input is
+    padded with a zero channel and a 4-channel input is reduced to the first three (with a
+    warning). Both squeezing and channel slicing return views, so the only case that
+    allocates is the 2-channel padding.
 
     Args:
         image: The input image data.
@@ -45,22 +45,29 @@ def prepare_annotation_image(image: np.ndarray) -> Tuple[np.ndarray, int, bool]:
         it has a trailing RGB channel axis.
 
     Raises:
-        ValueError: If the squeezed image is not 2D or 3D image data.
+        ValueError: If the squeezed image is not a 2D image or a grayscale 3D volume.
     """
     image = np.squeeze(image)
 
-    # Decide whether the trailing axis is a channel axis: present for a 2D multichannel
-    # image (H, W, C) and a 3D multichannel volume (Z, H, W, C). A 3D array whose last axis
-    # is larger than 4 is a grayscale volume (Z, H, W) and is left untouched.
-    ndim = image.ndim
-    has_channel_axis = (ndim == 3 and image.shape[-1] in (2, 3, 4)) or ndim == 4
-    if has_channel_axis:
-        n_channels = image.shape[-1]
-        if n_channels == 2:
+    # A 4D array is either a 3D volume with a channel axis (Z, H, W, C) or a volumetric
+    # time series (T, Z, H, W). Neither is supported: the v2 3D path assumes a grayscale
+    # (Z, H, W) volume, so a channel axis would otherwise produce wrong-shaped masks.
+    # TODO: support multichannel 3D once the v2 3D path is channel-aware, aligned with
+    # NGFF (OME-Zarr) axis conventions (t, c, z, y, x) instead of a trailing channel axis.
+    if image.ndim == 4:
+        if image.shape[-1] in (2, 3, 4):
+            raise ValueError(
+                f"3D volumes with a channel axis are not supported yet, got shape {image.shape}."
+            )
+        raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data (3D+t is not supported).")
+
+    # 2D image with a channel axis: map the channel axis to 3 channels.
+    if image.ndim == 3 and image.shape[-1] in (2, 4):
+        if image.shape[-1] == 2:
             zero_channel = np.zeros(image.shape[:-1] + (1,), dtype=image.dtype)
             image = np.concatenate([image, zero_channel], axis=-1)
-        elif n_channels > 3:
-            warnings.warn(f"You provided an input with {n_channels} channels. Only the first three will be used.")
+        else:
+            warnings.warn("You provided an input with 4 channels. Only the first three will be used.")
             image = image[..., :3]
 
     # Map the (possibly normalized) shape to a spatial dimensionality and rgb flag.
@@ -70,8 +77,6 @@ def prepare_annotation_image(image: np.ndarray) -> Tuple[np.ndarray, int, bool]:
         if image.shape[-1] == 3:
             return image, 2, True
         return image, 3, False
-    elif image.ndim == 4:
-        return image, 3, True
     raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data.")
 
 

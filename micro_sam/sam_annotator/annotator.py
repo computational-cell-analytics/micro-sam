@@ -3,6 +3,7 @@ from typing import Optional, Tuple, Union
 import napari
 import numpy as np
 import torch
+from napari.utils.notifications import show_info
 
 from .. import util
 from . import _widgets as widgets
@@ -65,7 +66,13 @@ def detect_ndim_from_viewer(viewer: "napari.viewer.Viewer") -> int:
     """
     image_layers = [layer for layer in viewer.layers if isinstance(layer, napari.layers.Image)]
     if image_layers:
-        return detect_ndim(image_layers[0].data)
+        # Use the normalizer so singletons/channels are accounted for. Unsupported inputs
+        # fall back to 2D here so the widget can open; '_on_image_selection_changed' then
+        # reports the issue to the user instead of crashing construction.
+        try:
+            return vutil.prepare_annotation_image(image_layers[0].data)[1]
+        except ValueError:
+            return 2
     return 2
 
 
@@ -180,8 +187,13 @@ class Annotator(_AnnotatorBase):
         if image_layer is None:
             return
         # Squeeze singletons and map channels to RGB, replacing the image layer if needed,
-        # so the image, segmentation and prompt layers all stay aligned.
-        image_layer, ndim = self._maybe_normalize_image_layer(image_layer)
+        # so the image, segmentation and prompt layers all stay aligned. Unsupported inputs
+        # (e.g. 3D volumes with a channel axis) are reported instead of crashing the widget.
+        try:
+            image_layer, ndim = self._maybe_normalize_image_layer(image_layer)
+        except ValueError as e:
+            show_info(str(e))
+            return
         if ndim != self._ndim:
             self._rebuild_for_ndim(ndim)
 
