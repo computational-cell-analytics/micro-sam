@@ -1217,6 +1217,16 @@ def _validate_layers(
             return False
 
 
+def _batched_disabled_when_tiled(state, batched):
+    """Batched (multi-object) prompting is not supported with tiling: each tile is segmented
+    independently, so object ids would collide across tiles. Force single-object and warn."""
+    is_tiled = state.image_embeddings is not None and state.image_embeddings.get("input_size") is None
+    if batched and is_tiled:
+        show_info("Batched (multi-object) prompting is not supported with tiling. Running single-object.")
+        return False
+    return batched
+
+
 def _segment_object_2d(viewer, batched=False):
     """Segment object(s) in 2d for the current prompts.
 
@@ -1245,17 +1255,27 @@ def _segment_object_2d(viewer, batched=False):
     state = AnnotatorState()
     predictor = state.predictor
     image_embeddings = state.image_embeddings
+    batched = _batched_disabled_when_tiled(state, batched)
 
     if state.is_sam2:
-        from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
-        seg = promptable_segmentation_2d(
-            predictor=predictor,
-            points=points,
-            labels=labels,
-            boxes=boxes,
-            masks=masks,
-            batched=batched,
-        )
+        # When the embeddings are tiled (top-level 'input_size' is None), route the prompts to the
+        # matching tile and stitch; otherwise the predictor already holds the single image embedding.
+        if image_embeddings is not None and image_embeddings.get("input_size") is None:
+            from micro_sam.v2.prompt_based_segmentation import tiled_promptable_segmentation_2d
+            seg = tiled_promptable_segmentation_2d(
+                predictor=predictor, image_embeddings=image_embeddings,
+                points=points, labels=labels, boxes=boxes, masks=masks, batched=batched,
+            )
+        else:
+            from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
+            seg = promptable_segmentation_2d(
+                predictor=predictor,
+                points=points,
+                labels=labels,
+                boxes=boxes,
+                masks=masks,
+                batched=batched,
+            )
     else:
         seg = vutil.prompt_segmentation(
             predictor,
@@ -1351,6 +1371,10 @@ class EmbeddingWidget(_WidgetBase):
 
         # Section 2: Settings (collapsible).
         self.layout().addWidget(self._create_settings_widget())
+
+        # Enable sensible default tiling when a large image is selected.
+        self.image_selection.changed.connect(self._set_default_tiling)
+        self._set_default_tiling()
 
         # Section 3: The button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
@@ -1453,44 +1477,6 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
-        # Add the model size widget section.
-        layout = self._create_model_size_section()
-        setting_values.layout().addLayout(layout)
-
-        # Create UI for the device.
-        self.device = "auto"
-        device_options = ["auto"] + util._available_devices()
-
-        self.device_dropdown, layout = self._add_choice_param(
-            "device",
-            self.device,
-            device_options,
-            tooltip=get_tooltip("embedding", "device"),
-        )
-        setting_values.layout().addLayout(layout)
-
-        # Create UI for the save path.
-        self.embeddings_save_path = None
-        self.embeddings_save_path_param, layout = self._add_path_param(
-            "embeddings_save_path",
-            self.embeddings_save_path,
-            "directory",
-            title="embeddings save path:",
-            tooltip=get_tooltip("embedding", "embeddings_save_path"),
-        )
-        setting_values.layout().addLayout(layout)
-
-        # Create UI for the custom weights.
-        self.custom_weights = None
-        self.custom_weights_param, layout = self._add_path_param(
-            "custom_weights",
-            self.custom_weights,
-            "file",
-            title="custom weights path:",
-            tooltip=get_tooltip("embedding", "custom_weights"),
-        )
-        setting_values.layout().addLayout(layout)
-
         # Create UI for tiling. A dropdown toggles whether tiling is used; when enabled,
         # the tile shape and halo fields are revealed with sensible defaults.
         self.tiling = "no"
@@ -1534,6 +1520,44 @@ class EmbeddingWidget(_WidgetBase):
         self._tiling_widget.setVisible(False)
         setting_values.layout().addWidget(self._tiling_widget)
 
+        # Add the model size widget section.
+        layout = self._create_model_size_section()
+        setting_values.layout().addLayout(layout)
+
+        # Create UI for the device.
+        self.device = "auto"
+        device_options = ["auto"] + util._available_devices()
+
+        self.device_dropdown, layout = self._add_choice_param(
+            "device",
+            self.device,
+            device_options,
+            tooltip=get_tooltip("embedding", "device"),
+        )
+        setting_values.layout().addLayout(layout)
+
+        # Create UI for the save path.
+        self.embeddings_save_path = None
+        self.embeddings_save_path_param, layout = self._add_path_param(
+            "embeddings_save_path",
+            self.embeddings_save_path,
+            "directory",
+            title="embeddings save path:",
+            tooltip=get_tooltip("embedding", "embeddings_save_path"),
+        )
+        setting_values.layout().addLayout(layout)
+
+        # Create UI for the custom weights.
+        self.custom_weights = None
+        self.custom_weights_param, layout = self._add_path_param(
+            "custom_weights",
+            self.custom_weights,
+            "file",
+            title="custom weights path:",
+            tooltip=get_tooltip("embedding", "custom_weights"),
+        )
+        setting_values.layout().addLayout(layout)
+
         settings = _make_collapsible(
             setting_values, title="Embedding Settings"
         )
@@ -1543,6 +1567,27 @@ class EmbeddingWidget(_WidgetBase):
         # Show the tile shape and halo fields only when tiling is enabled.
         self.tiling = self.tiling_dropdown.currentText()
         self._tiling_widget.setVisible(self.tiling == "yes")
+
+    def _set_default_tiling(self, *args):
+        # Enable tiling by default for large images: more than 512 pixels along either
+        # in-plane axis (2d/3d), or more than 8 slices along the leading axis (3d).
+        image = self.image_selection.get_value()
+        if image is None:
+            return
+
+        shape = image.data.shape[:-1] if image.rgb else image.data.shape
+        if len(shape) == 2:
+            needs_tiling = shape[0] > 512 or shape[1] > 512
+        elif len(shape) == 3:
+            needs_tiling = shape[0] > 8 or shape[1] > 512 or shape[2] > 512
+        else:
+            needs_tiling = False
+
+        if needs_tiling:
+            self.tile_x, self.tile_y = 512, 512
+            self.tile_x_param.setValue(self.tile_x)
+            self.tile_y_param.setValue(self.tile_y)
+            self.tiling_dropdown.setCurrentText("yes")
 
     def _validate_inputs(self):
         """Validates the inputs for the annotation process and returns a dictionary
@@ -1976,7 +2021,7 @@ class UnifiedSegmentWidget(_WidgetBase):
         points, labels = point_prompts
 
         state = AnnotatorState()
-        batched = bool(self.batched)
+        batched = _batched_disabled_when_tiled(state, bool(self.batched))
 
         if state.is_sam2:
             # Use the segment_slice method for SAM2.
@@ -2138,7 +2183,7 @@ class UnifiedSegmentWidget(_WidgetBase):
                 )
 
                 # Whether the user decide to provide batched prompts for multi-object segmentation.
-                is_batched = bool(self.batched)
+                is_batched = _batched_disabled_when_tiled(state, bool(self.batched))
 
                 # Check batched mode validity and show warning if needed
                 if is_batched and not state.is_sam2:
@@ -2150,10 +2195,12 @@ class UnifiedSegmentWidget(_WidgetBase):
 
                 # Let's do points first.
                 for curr_z_values_point in z_values_points:
-                    # Extract the point prompts from the points layer first.
-                    points, labels = vutil.point_layer_to_prompts(
-                        layer=point_prompts, i=curr_z_values_point
-                    )
+                    # Extract the point prompts from the points layer first. A slice whose only
+                    # prompt is a single negative point is a 'stop' annotation; skip it here.
+                    prompts = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z_values_point)
+                    if prompts is None:
+                        continue
+                    points, labels = prompts
 
                     # Add prompts one after the other.
                     [

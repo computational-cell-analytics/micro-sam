@@ -324,8 +324,8 @@ def main():
         description="Start the μSAM GUI for image segmentation (2D or 3D)."
     )
     parser.add_argument(
-        "--ndim",
-        help="The number of spatial dimensions (2 or 3). If None, auto-detected from image shape.",
+        "--ndim", type=int,
+        help="The number of spatial dimensions (2 or 3). If None, auto-detected from image shape."
     )
     args = parser.parse_args()
     image = util.load_image_data(args.input, key=args.key)
