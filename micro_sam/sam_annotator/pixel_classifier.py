@@ -122,8 +122,13 @@ def _save_rf(viewer, export_dir):
 
 def _create_train_widget(viewer):
     # The 'Train and predict' button is kept at the top level, outside the settings dropdown.
-    train_button = PushButton(text="Train and predict")
+    train_button = PushButton(text="Train and predict [Shift + T]")
     train_button.clicked.connect(lambda: _run_train_and_predict(viewer))
+
+    @viewer.bind_key("Shift-T", overwrite=True)
+    def _train_and_predict(event=None):
+        _run_train_and_predict(viewer)
+
     return Container(widgets=[train_button], labels=False)
 
 
@@ -188,8 +193,10 @@ class PixelClassifier(QtWidgets.QScrollArea):
             if image_scale is not None:
                 self._viewer.layers["prediction"].scale = image_scale
 
-        # Make 'annotations' the active layer so the layer controls (incl. the label id) show it
-        # and the user can paint right away, rather than the last-added 'prediction' layer.
+        # Move 'annotations' to the top of the layer stack so scribbles are always visible above
+        # the prediction, and make it the active layer so the controls (incl. the label id) show it
+        # and the user can paint right away rather than on the last-added 'prediction' layer.
+        self._viewer.layers.move(self._viewer.layers.index("annotations"), len(self._viewer.layers))
         self._viewer.layers.selection.active = self._viewer.layers["annotations"]
 
     def _create_label_widget(self):
