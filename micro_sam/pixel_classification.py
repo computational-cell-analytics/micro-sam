@@ -7,7 +7,9 @@ import numpy as np
 
 from bioimage_cpp.utils import Blocking
 
+from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
 
 from skimage.transform import resize
 
@@ -213,8 +215,9 @@ def train_pixel_classifier(
     n_estimators: int = 200,
     max_depth: int = 10,
     n_jobs: Optional[int] = None,
+    n_components: Optional[int] = None,
     **rf_kwargs,
-) -> RandomForestClassifier:
+):
     """Train a random forest on per-pixel features and labels.
 
     Pixels with label 0 are treated as unlabeled and excluded from training. This is the
@@ -229,10 +232,15 @@ def train_pixel_classifier(
         n_estimators: The number of trees in the random forest.
         max_depth: The maximum depth of each tree.
         n_jobs: The number of parallel jobs for training. By default uses all available cores.
+        n_components: If given and smaller than the feature dimension, reduce the features to this
+            many PCA components before training. If `None`, `0` or `>=` the feature dimension, all
+            features are used. The fitted PCA is part of the returned model, so prediction transforms
+            the features automatically.
         rf_kwargs: Additional keyword arguments for the `RandomForestClassifier`.
 
     Returns:
-        The trained random forest.
+        The trained classifier. A `RandomForestClassifier`, or a `Pipeline` of PCA and the random
+        forest when `n_components` triggers dimensionality reduction.
     """
     assert len(features) == len(labels)
     valid = labels != 0
@@ -247,8 +255,18 @@ def train_pixel_classifier(
         n_estimators=n_estimators, max_depth=max_depth,
         n_jobs=cpu_count() if n_jobs is None else n_jobs, **rf_kwargs,
     )
-    rf.fit(X, y)
-    return rf
+
+    # Optionally reduce the features to the top-n PCA components. n_components is clamped to the
+    # number of features and samples; if it covers all features we skip PCA and use the plain RF.
+    n_features = X.shape[1]
+    k = min(int(n_components), n_features, len(X)) if n_components else 0
+    if 0 < k < n_features:
+        model = Pipeline([("pca", PCA(n_components=k)), ("rf", rf)])
+    else:
+        model = rf
+
+    model.fit(X, y)
+    return model
 
 
 # TODO think about the function signature, specially how exactly we pass model and optional embedding path.
@@ -264,8 +282,9 @@ def run_training_with_pixel_classifier(
     n_estimators: int = 200,
     max_depth: int = 10,
     n_jobs: Optional[int] = None,
+    n_components: Optional[int] = None,
     **rf_kwargs,
-) -> RandomForestClassifier:
+):
     """Train a pixel classifier on a series of images and (sparse) annotations.
 
     Object features are computed from the SAM embeddings for each image, the annotations
@@ -284,10 +303,12 @@ def run_training_with_pixel_classifier(
         n_estimators: The number of trees in the random forest.
         max_depth: The maximum depth of each tree.
         n_jobs: The number of parallel jobs for training. By default uses all available cores.
+        n_components: If given, reduce the features to this many PCA components before training.
+            If `None`, `0` or `>=` the feature dimension, all embedding channels are used.
         rf_kwargs: Additional keyword arguments for the `RandomForestClassifier`.
 
     Returns:
-        The trained random forest.
+        The trained classifier.
     """
     if len(images) != len(annotations):
         raise ValueError(
@@ -321,7 +342,8 @@ def run_training_with_pixel_classifier(
     labels = np.concatenate(all_labels, axis=0)
 
     rf = train_pixel_classifier(
-        features, labels, n_estimators=n_estimators, max_depth=max_depth, n_jobs=n_jobs, **rf_kwargs,
+        features, labels, n_estimators=n_estimators, max_depth=max_depth, n_jobs=n_jobs,
+        n_components=n_components, **rf_kwargs,
     )
 
     dump(rf, rf_path)

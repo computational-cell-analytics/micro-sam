@@ -11,18 +11,25 @@ import numpy as np
 import torch
 
 from magicgui import magicgui
-from magicgui.widgets import Widget, Container, FileEdit, FunctionGui, PushButton, create_widget
+from magicgui.widgets import CheckBox, Widget, Container, FileEdit, FunctionGui, PushButton, SpinBox, create_widget
 from napari.utils.notifications import show_info
 from qtpy import QtWidgets
 
 from skimage.measure import regionprops_table
+from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from .. import util
 from ..object_classification import compute_object_features, project_prediction_to_segmentation
 from ._state import AnnotatorState
 from . import _widgets as widgets
 from .util import _sync_embedding_widget
+
+# Object features are the object area plus the per-channel mean of the 256-channel SAM/SAM2 image
+# embedding, i.e. 257 features. PCA can reduce to at most this many components.
+OBJECT_FEATURES = 257
 
 #
 # Utility functionality.
@@ -48,7 +55,7 @@ def _accumulate_labels(segmentation, annotations):
     return all_features["majority_label"].astype("int")
 
 
-def _train_rf(features, labels, previous_features=None, previous_labels=None, **rf_kwargs):
+def _train_rf(features, labels, previous_features=None, previous_labels=None, n_components=None, **rf_kwargs):
     assert len(features) == len(labels)
     valid = labels != 0
     X, y = features[valid], labels[valid]
@@ -59,8 +66,20 @@ def _train_rf(features, labels, previous_features=None, previous_labels=None, **
         y = np.concatenate([previous_labels, y], axis=0)
 
     rf = RandomForestClassifier(**rf_kwargs)
-    rf.fit(X, y)
-    return rf
+
+    # Optionally reduce the features to the top-n PCA components. n_components is clamped to the
+    # number of features and samples; if it covers all features we skip PCA and use the plain RF.
+    # Object features mix area (large magnitude) with embedding means (small), so we standardize
+    # them before PCA to keep area from dominating the components.
+    n_features = X.shape[1]
+    k = min(int(n_components), n_features, len(X)) if n_components else 0
+    if 0 < k < n_features:
+        model = Pipeline([("scaler", StandardScaler()), ("pca", PCA(n_components=k)), ("rf", rf)])
+    else:
+        model = rf
+
+    model.fit(X, y)
+    return model
 
 
 def _compute_object_features_if_needed(viewer):
@@ -104,10 +123,14 @@ def _run_train_and_predict(viewer):
     if (labels == 0).all() and (previous_labels is None):
         return widgets._generate_message("error", "You have not provided any annotations.")
 
+    # Optionally reduce to the top-n PCA feature channels, read from the settings widget.
+    get_n_components = getattr(state.annotator, "_get_n_components", None)
+    n_components = get_n_components() if get_n_components is not None else 0
+
     # Run RF training and store it in the state.
     state.object_rf = _train_rf(
         features, labels, previous_features=previous_features, previous_labels=previous_labels,
-        n_estimators=200, max_depth=10, n_jobs=cpu_count(),
+        n_estimators=200, max_depth=10, n_jobs=cpu_count(), n_components=n_components,
     )
 
     # Run and set the prediction.
@@ -179,6 +202,28 @@ def _create_train_widget(viewer):
 
 
 def _create_classifier_io_widget(viewer):
+    # Optional PCA dimensionality reduction. The checkbox is off by default, in which case all
+    # object features are used and PCA is never applied. Checking it reveals a number box for the
+    # count of top PCA components to reduce the features to before training. Object features are
+    # the area plus the 256 per-channel embedding means, i.e. 257, which is the maximum.
+    use_top_features = CheckBox(value=False, text="Choose top feature channels")
+    top_features = SpinBox(value=10, min=1, max=OBJECT_FEATURES, step=1, visible=False)
+    top_features.native.setToolTip(
+        f"Number of top PCA components to reduce the object features to, between 1 and {OBJECT_FEATURES} "
+        "(object area plus the 256 per-channel embedding means)."
+    )
+    use_top_features.native.setToolTip(
+        "Reduce the object features to their most informative components via PCA before training. "
+        "When unchecked, all features are used and no PCA is applied."
+    )
+    use_top_features.changed.connect(lambda checked: setattr(top_features, "visible", checked))
+    top_features_row = Container(
+        layout="horizontal", widgets=[use_top_features, top_features], labels=False,
+    )
+
+    def get_n_components():
+        return int(top_features.value) if use_top_features.value else 0
+
     # Classifier load/export, with separate paths (load a stored model, retrain, then export
     # the current one elsewhere). The path fields follow the same path-selector style as the
     # custom weights in the embedding widget.
@@ -202,7 +247,10 @@ def _create_classifier_io_widget(viewer):
     export_button.native.setToolTip("Save the current classifier into the selected folder.")
     export_button.clicked.connect(lambda: _save_rf(viewer, export_dir.value))
 
-    return Container(widgets=[load_path, load_button, export_dir, export_button], labels=False)
+    container = Container(
+        widgets=[top_features_row, load_path, load_button, export_dir, export_button], labels=False,
+    )
+    return container, get_n_components
 
 #
 # Object classifier implementation.
@@ -333,7 +381,7 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         # load/export) on top, with the 'Train and predict' button below it.
         self._train_and_predict_widget = _create_train_widget(self._viewer)
         self._seg_selection_widget = self._create_segmentation_layer_section()
-        self._classifier_io_widget = _create_classifier_io_widget(self._viewer)
+        self._classifier_io_widget, self._get_n_components = _create_classifier_io_widget(self._viewer)
 
         settings = QtWidgets.QWidget()
         settings.setLayout(QtWidgets.QVBoxLayout())

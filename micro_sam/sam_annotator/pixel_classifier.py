@@ -8,7 +8,7 @@ import napari
 import numpy as np
 import torch
 
-from magicgui.widgets import Widget, Container, FileEdit, FunctionGui, PushButton
+from magicgui.widgets import CheckBox, Widget, Container, FileEdit, FunctionGui, PushButton, SpinBox
 from napari.utils.notifications import show_info
 from qtpy import QtWidgets
 
@@ -19,6 +19,10 @@ from ..pixel_classification import (
 from ._state import AnnotatorState
 from . import _widgets as widgets
 from .util import _sync_embedding_widget
+
+# The SAM and SAM2 image encoders project every model size down to a fixed 256-channel image
+# embedding (prompt_embed_dim), so the per-pixel feature dimension is always 256.
+EMBEDDING_CHANNELS = 256
 
 
 def _compute_pixel_features_if_needed(viewer):
@@ -59,9 +63,14 @@ def _run_train_and_predict(viewer):
     if (labels == 0).all() and (previous_labels is None):
         return widgets._generate_message("error", "You have not provided any annotations.")
 
+    # Optionally reduce to the top-n PCA feature channels, read from the settings widget.
+    get_n_components = getattr(state.annotator, "_get_n_components", None)
+    n_components = get_n_components() if get_n_components is not None else 0
+
     # Run RF training and store it in the state.
     state.pixel_rf = train_pixel_classifier(
         features, labels, previous_features=previous_features, previous_labels=previous_labels,
+        n_components=n_components,
     )
 
     # Run and set the prediction.
@@ -134,6 +143,28 @@ def _create_train_widget(viewer):
 
 
 def _create_classifier_io_widget(viewer):
+    # Optional PCA dimensionality reduction. The checkbox is off by default, in which case all
+    # embedding channels are used and PCA is never applied. Checking it reveals a number box for
+    # the count of top PCA components to reduce the features to before training. The SAM and SAM2
+    # image embeddings have 256 channels for every model size, so that is the maximum.
+    use_top_features = CheckBox(value=False, text="Choose top feature channels")
+    top_features = SpinBox(value=10, min=1, max=EMBEDDING_CHANNELS, step=1, visible=False)
+    top_features.native.setToolTip(
+        f"Number of top PCA components to reduce the embedding to, between 1 and {EMBEDDING_CHANNELS} "
+        "(the SAM/SAM2 image embedding has 256 channels for all model sizes)."
+    )
+    use_top_features.native.setToolTip(
+        "Reduce the SAM/SAM2 embedding to its most informative channels via PCA before training. "
+        "When unchecked, all 256 embedding channels are used and no PCA is applied."
+    )
+    use_top_features.changed.connect(lambda checked: setattr(top_features, "visible", checked))
+    top_features_row = Container(
+        layout="horizontal", widgets=[use_top_features, top_features], labels=False,
+    )
+
+    def get_n_components():
+        return int(top_features.value) if use_top_features.value else 0
+
     # Classifier load/export. Load takes a stored model file; export chooses a destination folder
     # (defaulting to the current working directory) where the model is saved with an auto-generated
     # name. The fields follow the path-selector style of the custom weights in the embedding widget.
@@ -157,7 +188,10 @@ def _create_classifier_io_widget(viewer):
     export_button.native.setToolTip("Save the current classifier into the selected folder.")
     export_button.clicked.connect(lambda: _save_rf(viewer, export_dir.value))
 
-    return Container(widgets=[load_path, load_button, export_dir, export_button], labels=False)
+    container = Container(
+        widgets=[top_features_row, load_path, load_button, export_dir, export_button], labels=False,
+    )
+    return container, get_n_components
 
 
 class PixelClassifier(QtWidgets.QScrollArea):
@@ -271,7 +305,7 @@ class PixelClassifier(QtWidgets.QScrollArea):
         # One section: the "Classification Settings" dropdown (classifier load/export) on top,
         # with the 'Train and predict' button below it.
         self._train_and_predict_widget = _create_train_widget(self._viewer)
-        self._classifier_io_widget = _create_classifier_io_widget(self._viewer)
+        self._classifier_io_widget, self._get_n_components = _create_classifier_io_widget(self._viewer)
 
         settings = QtWidgets.QWidget()
         settings.setLayout(QtWidgets.QVBoxLayout())
