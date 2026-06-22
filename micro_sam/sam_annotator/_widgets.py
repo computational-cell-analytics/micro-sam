@@ -1372,6 +1372,10 @@ class EmbeddingWidget(_WidgetBase):
         # Section 2: Settings (collapsible).
         self.layout().addWidget(self._create_settings_widget())
 
+        # Enable sensible default tiling when a large image is selected.
+        self.image_selection.changed.connect(self._set_default_tiling)
+        self._set_default_tiling()
+
         # Section 3: The button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
         self.run_button.clicked.connect(self._initialize_image)
@@ -1473,44 +1477,6 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
-        # Add the model size widget section.
-        layout = self._create_model_size_section()
-        setting_values.layout().addLayout(layout)
-
-        # Create UI for the device.
-        self.device = "auto"
-        device_options = ["auto"] + util._available_devices()
-
-        self.device_dropdown, layout = self._add_choice_param(
-            "device",
-            self.device,
-            device_options,
-            tooltip=get_tooltip("embedding", "device"),
-        )
-        setting_values.layout().addLayout(layout)
-
-        # Create UI for the save path.
-        self.embeddings_save_path = None
-        self.embeddings_save_path_param, layout = self._add_path_param(
-            "embeddings_save_path",
-            self.embeddings_save_path,
-            "directory",
-            title="embeddings save path:",
-            tooltip=get_tooltip("embedding", "embeddings_save_path"),
-        )
-        setting_values.layout().addLayout(layout)
-
-        # Create UI for the custom weights.
-        self.custom_weights = None
-        self.custom_weights_param, layout = self._add_path_param(
-            "custom_weights",
-            self.custom_weights,
-            "file",
-            title="custom weights path:",
-            tooltip=get_tooltip("embedding", "custom_weights"),
-        )
-        setting_values.layout().addLayout(layout)
-
         # Create UI for tiling. A dropdown toggles whether tiling is used; when enabled,
         # the tile shape and halo fields are revealed with sensible defaults.
         self.tiling = "no"
@@ -1554,6 +1520,44 @@ class EmbeddingWidget(_WidgetBase):
         self._tiling_widget.setVisible(False)
         setting_values.layout().addWidget(self._tiling_widget)
 
+        # Add the model size widget section.
+        layout = self._create_model_size_section()
+        setting_values.layout().addLayout(layout)
+
+        # Create UI for the device.
+        self.device = "auto"
+        device_options = ["auto"] + util._available_devices()
+
+        self.device_dropdown, layout = self._add_choice_param(
+            "device",
+            self.device,
+            device_options,
+            tooltip=get_tooltip("embedding", "device"),
+        )
+        setting_values.layout().addLayout(layout)
+
+        # Create UI for the save path.
+        self.embeddings_save_path = None
+        self.embeddings_save_path_param, layout = self._add_path_param(
+            "embeddings_save_path",
+            self.embeddings_save_path,
+            "directory",
+            title="embeddings save path:",
+            tooltip=get_tooltip("embedding", "embeddings_save_path"),
+        )
+        setting_values.layout().addLayout(layout)
+
+        # Create UI for the custom weights.
+        self.custom_weights = None
+        self.custom_weights_param, layout = self._add_path_param(
+            "custom_weights",
+            self.custom_weights,
+            "file",
+            title="custom weights path:",
+            tooltip=get_tooltip("embedding", "custom_weights"),
+        )
+        setting_values.layout().addLayout(layout)
+
         settings = _make_collapsible(
             setting_values, title="Embedding Settings"
         )
@@ -1563,6 +1567,27 @@ class EmbeddingWidget(_WidgetBase):
         # Show the tile shape and halo fields only when tiling is enabled.
         self.tiling = self.tiling_dropdown.currentText()
         self._tiling_widget.setVisible(self.tiling == "yes")
+
+    def _set_default_tiling(self, *args):
+        # Enable tiling by default for large images: more than 512 pixels along either
+        # in-plane axis (2d/3d), or more than 8 slices along the leading axis (3d).
+        image = self.image_selection.get_value()
+        if image is None:
+            return
+
+        shape = image.data.shape[:-1] if image.rgb else image.data.shape
+        if len(shape) == 2:
+            needs_tiling = shape[0] > 512 or shape[1] > 512
+        elif len(shape) == 3:
+            needs_tiling = shape[0] > 8 or shape[1] > 512 or shape[2] > 512
+        else:
+            needs_tiling = False
+
+        if needs_tiling:
+            self.tile_x, self.tile_y = 512, 512
+            self.tile_x_param.setValue(self.tile_x)
+            self.tile_y_param.setValue(self.tile_y)
+            self.tiling_dropdown.setCurrentText("yes")
 
     def _validate_inputs(self):
         """Validates the inputs for the annotation process and returns a dictionary
