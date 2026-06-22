@@ -1584,9 +1584,12 @@ class EmbeddingWidget(_WidgetBase):
             needs_tiling = False
 
         if needs_tiling:
-            self.tile_x, self.tile_y = 512, 512
+            self.tile_x, self.tile_y = 384, 384
+            self.halo_x, self.halo_y = 64, 64
             self.tile_x_param.setValue(self.tile_x)
             self.tile_y_param.setValue(self.tile_y)
+            self.halo_x_param.setValue(self.halo_x)
+            self.halo_y_param.setValue(self.halo_y)
             self.tiling_dropdown.setCurrentText("yes")
 
     def _validate_inputs(self):
