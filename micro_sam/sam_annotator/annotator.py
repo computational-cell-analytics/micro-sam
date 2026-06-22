@@ -167,12 +167,21 @@ class Annotator(_AnnotatorBase):
         # This handles loading e.g. a 3D image after the widget was opened from the Plugins menu.
         self._embedding_widget.image_selection.changed.connect(self._on_image_selection_changed)
 
+        # Normalize and align to any image that is already selected (e.g. opened from the
+        # Plugins menu after an image was loaded, so no selection-changed event will fire).
+        self._on_image_selection_changed()
+
     def _on_image_selection_changed(self, *args):
-        """Rebuild the annotator when the selected input image has a different dimensionality."""
+        """Normalize the selected image and rebuild the annotator if its dimensionality changed."""
+        # Skip while we are replacing the image layer ourselves during normalization.
+        if self._suppress_selection_rebuild:
+            return
         image_layer = self._embedding_widget.image_selection.get_value()
         if image_layer is None:
             return
-        ndim = detect_ndim(image_layer.data)
+        # Squeeze singletons and map channels to RGB, replacing the image layer if needed,
+        # so the image, segmentation and prompt layers all stay aligned.
+        image_layer, ndim = self._maybe_normalize_image_layer(image_layer)
         if ndim != self._ndim:
             self._rebuild_for_ndim(ndim)
 
@@ -242,16 +251,19 @@ def annotator(
     Raises:
         ValueError: If ndim is invalid or doesn't match the image shape.
     """
+    # Normalize the image: squeeze singletons and map the channel axis to RGB. This keeps
+    # the dimensionality decision consistent with the GUI and the layer shapes aligned.
+    image, detected_ndim, rgb = vutil.prepare_annotation_image(image)
+
     # Auto-detect ndim if not provided
     if ndim is None:
-        ndim = detect_ndim(image)
+        ndim = detected_ndim
 
     # Validate ndim
     if ndim not in (2, 3):
         raise ValueError(f"Invalid ndim: {ndim}. Expected 2 or 3.")
 
     # Validate ndim matches image shape
-    detected_ndim = detect_ndim(image)
     if ndim != detected_ndim:
         raise ValueError(
             f"Provided ndim={ndim} does not match detected ndim={detected_ndim} from image shape {image.shape}."
@@ -259,14 +271,7 @@ def annotator(
 
     # Extract image shape (strip RGB channel if present)
     state = AnnotatorState()
-    if ndim == 2:
-        state.image_shape = (
-            image.shape[:-1] if image.ndim == 3 else image.shape
-        )
-    else:  # ndim == 3
-        state.image_shape = (
-            image.shape[:-1] if image.ndim == 4 else image.shape
-        )
+    state.image_shape = image.shape[:-1] if rgb else image.shape
 
     # Initialize the predictor state
     state.initialize_predictor(
@@ -289,7 +294,7 @@ def annotator(
     if viewer is None:
         viewer = napari.Viewer()
 
-    viewer.add_image(image, name="image")
+    viewer.add_image(image, name="image", rgb=rgb)
     annotator_instance = Annotator(viewer, ndim=ndim, reset_state=False)
 
     # Trigger layer update of the annotator so that layers have the correct shape.

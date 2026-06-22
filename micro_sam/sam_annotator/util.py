@@ -28,6 +28,53 @@ LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 #
 
 
+def prepare_annotation_image(image: np.ndarray) -> Tuple[np.ndarray, int, bool]:
+    """Normalize an image for annotation: squeeze singletons and map channels to RGB.
+
+    Singleton axes (commonly exposed by formats like CZI) are squeezed out across all
+    axes, and the trailing channel axis is mapped to 3 channels: a 2-channel input is
+    padded with a zero channel and an input with more than 3 channels is reduced to the
+    first three (with a warning). Both squeezing and channel slicing return views, so
+    the only case that allocates is the 2-channel padding.
+
+    Args:
+        image: The input image data.
+
+    Returns:
+        A tuple of the normalized image, its spatial dimensionality (2 or 3), and whether
+        it has a trailing RGB channel axis.
+
+    Raises:
+        ValueError: If the squeezed image is not 2D or 3D image data.
+    """
+    image = np.squeeze(image)
+
+    # Decide whether the trailing axis is a channel axis: present for a 2D multichannel
+    # image (H, W, C) and a 3D multichannel volume (Z, H, W, C). A 3D array whose last axis
+    # is larger than 4 is a grayscale volume (Z, H, W) and is left untouched.
+    ndim = image.ndim
+    has_channel_axis = (ndim == 3 and image.shape[-1] in (2, 3, 4)) or ndim == 4
+    if has_channel_axis:
+        n_channels = image.shape[-1]
+        if n_channels == 2:
+            zero_channel = np.zeros(image.shape[:-1] + (1,), dtype=image.dtype)
+            image = np.concatenate([image, zero_channel], axis=-1)
+        elif n_channels > 3:
+            warnings.warn(f"You provided an input with {n_channels} channels. Only the first three will be used.")
+            image = image[..., :3]
+
+    # Map the (possibly normalized) shape to a spatial dimensionality and rgb flag.
+    if image.ndim == 2:
+        return image, 2, False
+    elif image.ndim == 3:
+        if image.shape[-1] == 3:
+            return image, 2, True
+        return image, 3, False
+    elif image.ndim == 4:
+        return image, 3, True
+    raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data.")
+
+
 def toggle_label(prompts):
     """@private"""
     # get the currently selected label
