@@ -1217,6 +1217,16 @@ def _validate_layers(
             return False
 
 
+def _batched_disabled_when_tiled(state, batched):
+    """Batched (multi-object) prompting is not supported with tiling: each tile is segmented
+    independently, so object ids would collide across tiles. Force single-object and warn."""
+    is_tiled = state.image_embeddings is not None and state.image_embeddings.get("input_size") is None
+    if batched and is_tiled:
+        show_info("Batched (multi-object) prompting is not supported with tiling. Running single-object.")
+        return False
+    return batched
+
+
 def _segment_object_2d(viewer, batched=False):
     """Segment object(s) in 2d for the current prompts.
 
@@ -1245,17 +1255,27 @@ def _segment_object_2d(viewer, batched=False):
     state = AnnotatorState()
     predictor = state.predictor
     image_embeddings = state.image_embeddings
+    batched = _batched_disabled_when_tiled(state, batched)
 
     if state.is_sam2:
-        from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
-        seg = promptable_segmentation_2d(
-            predictor=predictor,
-            points=points,
-            labels=labels,
-            boxes=boxes,
-            masks=masks,
-            batched=batched,
-        )
+        # When the embeddings are tiled (top-level 'input_size' is None), route the prompts to the
+        # matching tile and stitch; otherwise the predictor already holds the single image embedding.
+        if image_embeddings is not None and image_embeddings.get("input_size") is None:
+            from micro_sam.v2.prompt_based_segmentation import tiled_promptable_segmentation_2d
+            seg = tiled_promptable_segmentation_2d(
+                predictor=predictor, image_embeddings=image_embeddings,
+                points=points, labels=labels, boxes=boxes, masks=masks, batched=batched,
+            )
+        else:
+            from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
+            seg = promptable_segmentation_2d(
+                predictor=predictor,
+                points=points,
+                labels=labels,
+                boxes=boxes,
+                masks=masks,
+                batched=batched,
+            )
     else:
         seg = vutil.prompt_segmentation(
             predictor,
@@ -1976,7 +1996,7 @@ class UnifiedSegmentWidget(_WidgetBase):
         points, labels = point_prompts
 
         state = AnnotatorState()
-        batched = bool(self.batched)
+        batched = _batched_disabled_when_tiled(state, bool(self.batched))
 
         if state.is_sam2:
             # Use the segment_slice method for SAM2.
@@ -2138,7 +2158,7 @@ class UnifiedSegmentWidget(_WidgetBase):
                 )
 
                 # Whether the user decide to provide batched prompts for multi-object segmentation.
-                is_batched = bool(self.batched)
+                is_batched = _batched_disabled_when_tiled(state, bool(self.batched))
 
                 # Check batched mode validity and show warning if needed
                 if is_batched and not state.is_sam2:
@@ -2150,10 +2170,12 @@ class UnifiedSegmentWidget(_WidgetBase):
 
                 # Let's do points first.
                 for curr_z_values_point in z_values_points:
-                    # Extract the point prompts from the points layer first.
-                    points, labels = vutil.point_layer_to_prompts(
-                        layer=point_prompts, i=curr_z_values_point
-                    )
+                    # Extract the point prompts from the points layer first. A slice whose only
+                    # prompt is a single negative point is a 'stop' annotation; skip it here.
+                    prompts = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z_values_point)
+                    if prompts is None:
+                        continue
+                    points, labels = prompts
 
                     # Add prompts one after the other.
                     [

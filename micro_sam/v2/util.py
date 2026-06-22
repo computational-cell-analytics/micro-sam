@@ -271,7 +271,9 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
         high_res_features = [feat.cpu().numpy() for feat in predictor._features["high_res_feats"]]
         ds = _create_dataset_with_data(features, str(tile_id), data=tile_features)
         ds.attrs["input_size"] = predictor.model.image_size
-        ds.attrs["original_size"] = list(predictor._orig_hw[0])
+        # Store the original size in the predictor's nested '[[h, w]]' layout (one entry per image),
+        # so 'set_precomputed' restores '_orig_hw[-1] == (h, w)' for non-square tiles too.
+        ds.attrs["original_size"] = [list(predictor._orig_hw[0])]
 
         tile_high_res = high_res_group.require_group(str(tile_id))
         for level, feat in enumerate(high_res_features):

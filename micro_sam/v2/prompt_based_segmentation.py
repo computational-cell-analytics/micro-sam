@@ -15,6 +15,48 @@ def _crop_to_original_shape(mask, shape):
     return mask[:shape[0], :shape[1]]
 
 
+def _tile_index_for(tiling, halo, y, x):
+    """Return the id of the tile whose inner (halo-free) block contains the point (y, x)."""
+    for tile_id in range(tiling.number_of_blocks):
+        inner = tiling.get_block_with_halo(tile_id, list(halo)).inner_block
+        if inner.begin[0] <= y < inner.end[0] and inner.begin[1] <= x < inner.end[1]:
+            return tile_id
+    return 0
+
+
+def _inner_block_slices(tiling, halo, tile_id):
+    """Return the (local, global) inner-block slices for placing a tile result into the full array."""
+    block = tiling.get_block_with_halo(tile_id, list(halo))
+    local = tuple(slice(b, e) for b, e in zip(block.inner_block_local.begin, block.inner_block_local.end))
+    glob = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
+    return local, glob
+
+
+def _box_to_tiles(tiling, halo, box):
+    """Assign a box to every tile whose inner block it overlaps, clipped to the tile's outer block.
+
+    A single box can span several tiles (e.g. at a 4-tile junction); each tile segments the box's
+    portion that falls in it and the results are unioned. The box and the returned clipped boxes are
+    in (y0, x0, y1, x1) order.
+
+    Returns:
+        Mapping from tile id to the clipped box (in global coordinates).
+    """
+    y0, x0, y1, x1 = box
+    assignments = {}
+    for tile_id in range(tiling.number_of_blocks):
+        block = tiling.get_block_with_halo(tile_id, list(halo))
+        inner, outer = block.inner_block, block.outer_block
+        # Skip tiles whose inner (halo-free) block the box does not overlap.
+        if y1 <= inner.begin[0] or y0 >= inner.end[0] or x1 <= inner.begin[1] or x0 >= inner.end[1]:
+            continue
+        assignments[tile_id] = np.array([
+            max(y0, outer.begin[0]), max(x0, outer.begin[1]),
+            min(y1, outer.end[0]), min(x1, outer.end[1]),
+        ])
+    return assignments
+
+
 def promptable_segmentation_2d(
     predictor,
     image: Optional[np.ndarray] = None,
@@ -139,6 +181,86 @@ def _batched_promptable_segmentation_2d(predictor, points, labels, boxes):
         return None
 
     return seg
+
+
+def tiled_promptable_segmentation_2d(
+    predictor,
+    image_embeddings: dict,
+    points: Optional[np.ndarray] = None,
+    labels: Optional[np.ndarray] = None,
+    boxes: Optional[np.ndarray] = None,
+    masks: Optional[np.ndarray] = None,
+    batched: Optional[bool] = None,
+):
+    """Tiled 2d promptable segmentation for the SAM2 image predictor.
+
+    Routes the prompts to the tile-column they fall in, sets that tile's precomputed embeddings on
+    the predictor (via `set_precomputed`), runs `promptable_segmentation_2d` on the tile, and
+    stitches the per-tile mask into the full image. Points are in (y, x) order, as passed by the
+    annotator. Same return convention as `promptable_segmentation_2d`.
+    """
+    from bioimage_cpp.utils import Blocking
+    from micro_sam.v2.util import set_precomputed
+
+    feats = image_embeddings["features"]
+    shape = tuple(int(s) for s in feats.attrs["shape"])
+    tile_shape = tuple(int(s) for s in feats.attrs["tile_shape"])
+    halo = tuple(int(s) for s in feats.attrs["halo"])
+    tiling = Blocking([0, 0], list(shape), list(tile_shape))
+
+    have_points = points is not None and len(points) > 0
+    have_boxes = boxes is not None and len(boxes) > 0
+    if not have_points and not have_boxes:
+        return None
+
+    # Group the prompts by the tile each falls in, so an object spanning multiple tiles is segmented
+    # in every tile it has prompts in. Points are (y, x); boxes are (y0, x0, y1, x1).
+    tile_points, tile_labels, tile_boxes = {}, {}, {}
+    if have_points:
+        for point, label in zip(np.asarray(points), np.asarray(labels)):
+            tid = _tile_index_for(tiling, halo, int(round(point[0])), int(round(point[1])))
+            tile_points.setdefault(tid, []).append(point)
+            tile_labels.setdefault(tid, []).append(label)
+    if have_boxes:
+        for box in boxes:
+            # A box may span several tiles; segment its clipped portion in each (boxes are y0,x0,y1,x1).
+            for tid, clipped in _box_to_tiles(tiling, halo, np.asarray(box)).items():
+                tile_boxes.setdefault(tid, []).append(clipped)
+
+    out = np.zeros(shape, dtype="uint32")
+    found = False
+    for tile_id in sorted(set(tile_points) | set(tile_boxes)):
+        tpoints = np.asarray(tile_points.get(tile_id, [])).reshape(-1, 2)
+        tlabels = np.asarray(tile_labels.get(tile_id, []), dtype=int)
+        tboxes = tile_boxes.get(tile_id, [])
+        # Only segment tiles that have a positive cue (a positive point or a box); a tile with only
+        # negative points has nothing to segment there.
+        if not ((tlabels == 1).any() or len(tboxes) > 0):
+            continue
+
+        outer = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
+        y0, x0 = int(outer.begin[0]), int(outer.begin[1])
+        local_points = (tpoints - np.array([y0, x0])) if len(tpoints) else tpoints
+        local_boxes = [b - np.array([y0, x0, y0, x0]) for b in tboxes] if tboxes else None
+
+        set_precomputed(predictor, image_embeddings, tile_id=tile_id)
+        tile_seg = promptable_segmentation_2d(
+            predictor, image=None, points=local_points, labels=tlabels, boxes=local_boxes,
+            masks=masks, batched=batched,
+        )
+        if tile_seg is None:
+            continue
+
+        local, glob = _inner_block_slices(tiling, halo, tile_id)
+        region = tile_seg[local]
+        # Union the per-tile result into the output, preserving object ids (an object spanning tiles
+        # keeps the same id and is merged across the tile boundary).
+        sub = out[glob]
+        positive = region > 0
+        sub[positive] = region[positive]
+        found = True
+
+    return out if found else None
 
 
 def promptable_segmentation_3d(
@@ -632,4 +754,196 @@ class PromptableSegmentation3D:
                 mask = _crop_to_original_shape(instance_mask.squeeze(), shape)
                 per_slice_seg[mask] = instance_idx
 
+        return segmentation
+
+
+class TiledPromptableSegmentation3D:
+    """Tiled promptable segmentation for volumetric data.
+
+    Routes each prompt to the in-plane tile-column it falls in, runs a per-tile
+    `PromptableSegmentation3D` on the tile's sub-volume (reusing the precomputed tiled embeddings),
+    and stitches the per-tile results into the full volume. Exposes the same interface as
+    `PromptableSegmentation3D`, so it is a drop-in replacement when the embeddings are tiled.
+
+    Args:
+        predictor: The SAM2 video predictor.
+        volume: The input volume, shape (Z, Y, X).
+        volume_embeddings: The precomputed tiled 3d embeddings (with per-tile `features`/`pos_enc`/
+            `fpn` groups and `shape`/`tile_shape`/`halo` attrs). See `precompute_image_embeddings`.
+        device: The device to run inference on.
+    """
+
+    def __init__(self, predictor, volume, volume_embeddings, device=None, **kwargs):
+        from bioimage_cpp.utils import Blocking
+
+        self.predictor = predictor
+        self.volume = volume
+        self.volume_embeddings = volume_embeddings
+        self.device = device
+        self._kwargs = kwargs
+
+        feats = volume_embeddings["features"]
+        self.shape = tuple(int(s) for s in feats.attrs["shape"])
+        self.tile_shape = tuple(int(s) for s in feats.attrs["tile_shape"])
+        self.halo = tuple(int(s) for s in feats.attrs["halo"])
+        self.tiling = Blocking([0, 0], list(self.shape[1:]), list(self.tile_shape))
+
+        # Per-tile state, built lazily for the tiles that actually receive prompts.
+        self._segmenters = {}
+
+    def init_predictor(self):
+        # Per-tile inference states are created lazily in '_get_segmenter'.
+        pass
+
+    def reset_predictor(self):
+        for segmenter in self._segmenters.values():
+            segmenter.reset_predictor()
+        self._segmenters = {}
+
+    def _tile_index(self, y, x):
+        """Return the id of the tile whose inner (halo-free) block contains the point (y, x)."""
+        for tile_id in range(self.tiling.number_of_blocks):
+            inner = self.tiling.get_block_with_halo(tile_id, list(self.halo)).inner_block
+            if inner.begin[0] <= y < inner.end[0] and inner.begin[1] <= x < inner.end[1]:
+                return tile_id
+        return 0
+
+    def _outer_offset(self, tile_id):
+        """Return the (y0, x0) origin of the tile's outer (halo-included) block."""
+        outer = self.tiling.get_block_with_halo(tile_id, list(self.halo)).outer_block
+        return int(outer.begin[0]), int(outer.begin[1])
+
+    def _get_segmenter(self, tile_id):
+        if tile_id not in self._segmenters:
+            from micro_sam.v2.util import _load_list_datasets
+
+            outer = self.tiling.get_block_with_halo(tile_id, list(self.halo)).outer_block
+            bb = (slice(int(outer.begin[0]), int(outer.end[0])), slice(int(outer.begin[1]), int(outer.end[1])))
+            sub_volume = np.ascontiguousarray(self.volume[:, bb[0], bb[1]])
+
+            feats = self.volume_embeddings["features"]
+            tile_dataset = feats[str(tile_id)]
+            tile_embeddings = {
+                "features": np.asarray(tile_dataset),
+                "pos_enc": _load_list_datasets(self.volume_embeddings["pos_enc"], str(tile_id), lazy_loading=False),
+                "fpn": _load_list_datasets(self.volume_embeddings["fpn"], str(tile_id), lazy_loading=False),
+                "input_size": tile_dataset.attrs["input_size"],
+                "original_size": tile_dataset.attrs["original_size"],
+            }
+            self._segmenters[tile_id] = PromptableSegmentation3D(
+                self.predictor, sub_volume, tile_embeddings, device=self.device, **self._kwargs
+            )
+        return self._segmenters[tile_id]
+
+    def _inner_slices(self, tile_id):
+        """Return the (local, global) inner-block slices for placing a tile result into the volume."""
+        block = self.tiling.get_block_with_halo(tile_id, list(self.halo))
+        local = tuple(slice(b, e) for b, e in zip(block.inner_block_local.begin, block.inner_block_local.end))
+        glob = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
+        return local, glob
+
+    def segment_slice(self, frame_idx, points=None, labels=None, boxes=None, masks=None, object_id=1):
+        """Segment a single slice. Points are (x, y), boxes (x0, y0, x1, y1), as passed by the annotator.
+
+        Groups the prompts by the tile they fall in, segments every tile with a positive cue, and
+        unions the per-tile masks - so an object spanning tiles is segmented on both sides.
+        """
+        have_points = points is not None and len(points) > 0
+        have_boxes = boxes is not None and len(boxes) > 0
+        if not have_points and not have_boxes:
+            return None
+
+        tile_points, tile_labels, tile_boxes = {}, {}, {}
+        if have_points:
+            for point, label in zip(np.asarray(points), np.asarray(labels)):
+                tid = self._tile_index(int(round(point[1])), int(round(point[0])))  # (y, x) from (x, y)
+                tile_points.setdefault(tid, []).append(point)
+                tile_labels.setdefault(tid, []).append(label)
+        if have_boxes:
+            for box in boxes:
+                box = np.asarray(box)  # (x0, y0, x1, y1)
+                box_yx = np.array([box[1], box[0], box[3], box[2]])
+                for tid, clipped in _box_to_tiles(self.tiling, self.halo, box_yx).items():
+                    tile_boxes.setdefault(tid, []).append(np.array([clipped[1], clipped[0], clipped[3], clipped[2]]))
+
+        out = np.zeros(self.shape[1:], dtype="uint32")
+        found = False
+        for tile_id in sorted(set(tile_points) | set(tile_boxes)):
+            tpoints = np.asarray(tile_points.get(tile_id, [])).reshape(-1, 2)
+            tlabels = np.asarray(tile_labels.get(tile_id, []), dtype=int)
+            tboxes = tile_boxes.get(tile_id, [])
+            if not ((tlabels == 1).any() or len(tboxes) > 0):
+                continue
+            y0, x0 = self._outer_offset(tile_id)
+            local_points = (tpoints - np.array([x0, y0])) if len(tpoints) else None
+            local_boxes = [b - np.array([x0, y0, x0, y0]) for b in tboxes] if tboxes else None
+            tile_seg = self._get_segmenter(tile_id).segment_slice(
+                frame_idx, points=local_points, labels=(tlabels if len(tlabels) else None),
+                boxes=local_boxes, masks=masks, object_id=object_id,
+            )
+            if tile_seg is None:
+                continue
+            local, glob = self._inner_slices(tile_id)
+            region = tile_seg[local]
+            sub = out[glob]
+            positive = region > 0
+            sub[positive] = region[positive]
+            found = True
+
+        return out if found else None
+
+    def add_point_prompts(self, frame_ids, points, point_labels, object_id=None, multiple_objects=False):
+        """Add point prompts. Points are in (y, x) order; each is routed to the tile it falls in, so
+        an object with prompts in several tiles is added to each of those tiles."""
+        if points is None or len(points) == 0:
+            return
+        if object_id is None:
+            object_id = 1
+
+        tile_points, tile_labels = {}, {}
+        for point, label in zip(np.asarray(points), np.asarray(point_labels)):
+            tid = self._tile_index(int(round(point[0])), int(round(point[1])))
+            tile_points.setdefault(tid, []).append(point)
+            tile_labels.setdefault(tid, []).append(label)
+
+        for tile_id, tpoints in tile_points.items():
+            y0, x0 = self._outer_offset(tile_id)
+            local_points = np.asarray(tpoints) - np.array([y0, x0])
+            self._get_segmenter(tile_id).add_point_prompts(
+                frame_ids=frame_ids, points=local_points, point_labels=np.asarray(tile_labels[tile_id]),
+                object_id=object_id, multiple_objects=multiple_objects,
+            )
+
+    def add_box_prompts(self, frame_ids, boxes=None):
+        """Add box prompts (y0, x0, y1, x1). A box spanning several tiles is added, clipped, to each."""
+        if boxes is None or len(boxes) == 0:
+            return
+        tile_boxes = {}
+        for box in boxes:
+            for tid, clipped in _box_to_tiles(self.tiling, self.halo, np.asarray(box)).items():
+                tile_boxes.setdefault(tid, []).append(clipped)
+        for tile_id, tboxes in tile_boxes.items():
+            y0, x0 = self._outer_offset(tile_id)
+            local_boxes = [b - np.array([y0, x0, y0, x0]) for b in tboxes]
+            self._get_segmenter(tile_id).add_box_prompts(frame_ids=frame_ids, boxes=np.array(local_boxes))
+
+    def add_mask_prompts(self, frame_ids, masks=None):
+        raise NotImplementedError
+
+    def predict(self, update_progress=None, early_stop_patience=None, z_range=None):
+        """Propagate the prompts in every active tile and stitch the results into the full volume.
+
+        Object ids are preserved across tiles (the inner blocks are disjoint), so an object that was
+        prompted in several tiles keeps one id and is merged across the tile boundaries.
+        """
+        segmentation = np.zeros(self.shape, dtype="uint64")
+        for tile_id in sorted(self._segmenters):
+            tile_seg = self._segmenters[tile_id].predict(
+                update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+            )
+            local, glob = self._inner_slices(tile_id)
+            inner = tile_seg[(slice(None),) + local]
+            region = segmentation[(slice(None),) + glob]
+            positive = inner != 0
+            region[positive] = inner[positive]
         return segmentation
