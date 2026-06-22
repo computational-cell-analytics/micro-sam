@@ -19,17 +19,57 @@ from .import util
 from .v1.util import precompute_image_embeddings
 
 
-def _compute_object_features_impl(embeddings, segmentation, resize_embedding_shape):
-    # Get the embeddings and put the channel axis last.
-    embeddings = embeddings.transpose(1, 2, 0)
+def _anyup_object_resize(embeds_chw, image_region, target_hw, upsampler, is_sam2=False):
+    # Upsample a (C, h, w) embedding to (target_h, target_w, C) with AnyUp, using the image region
+    # as guidance. SAM1 padded the image to a square, so we square-pad the image here to match how
+    # the segmentation is padded; SAM2 stretched the image to a square, so we pass it as-is (AnyUp
+    # pools it to the embedding grid, matching the stretched features).
+    import torch
+    import torch.nn.functional as F
+    from .pixel_classification import _to_anyup_image
 
-    # Pad the segmentation to be of square shape.
+    # AnyUp's internal convolutions need at least 2 px per spatial dim. Fall back to plain
+    # interpolation for degenerate regions.
+    if min(embeds_chw.shape[-2:]) < 2 or min(target_hw) < 2 or min(image_region.shape[:2]) < 2:
+        return resize(
+            embeds_chw.transpose(1, 2, 0), tuple(target_hw) + (embeds_chw.shape[0],), preserve_range=True
+        ).astype("float32")
+
+    device = next(upsampler.parameters()).device
+    image_tensor = _to_anyup_image(image_region, device)  # (1, 3, H, W)
+    if not is_sam2:
+        h, w = image_tensor.shape[-2:]
+        image_tensor = F.pad(image_tensor, (0, max(h - w, 0), 0, max(w - h, 0)))
+    feature_tensor = torch.from_numpy(np.ascontiguousarray(embeds_chw)).to(device).float().unsqueeze(0)
+    from .pixel_classification import ANYUP_Q_CHUNK_SIZE
+    with torch.no_grad():
+        upsampled = upsampler(
+            image_tensor, feature_tensor, output_size=tuple(target_hw), q_chunk_size=ANYUP_Q_CHUNK_SIZE
+        )
+    return upsampled[0].permute(1, 2, 0).cpu().numpy().astype("float32")
+
+
+def _compute_object_features_impl(
+    embeddings, segmentation, resize_embedding_shape, image_region=None, upsampler=None, is_sam2=False,
+    pbar_update=None,
+):
+    # Keep the raw (C, h, w) embedding for AnyUp, which needs the channel axis first.
+    embeddings_chw = embeddings
+
+    # Bring the segmentation to a square shape matching the (square) embedding. SAM1 pads the image
+    # to a square (so we zero-pad the segmentation to match); SAM2 stretches the image to a square
+    # (so we resize the segmentation to a square to match the stretched embedding).
     shape = segmentation.shape
-    if shape[0] == shape[1]:
+    if is_sam2:
+        side = max(shape)
+        segmentation_rescaled = resize(
+            segmentation, (side, side), order=0, anti_aliasing=False, preserve_range=True
+        ).astype(segmentation.dtype)
+    elif shape[0] == shape[1]:
         segmentation_rescaled = segmentation
     elif shape[0] > shape[1]:
         segmentation_rescaled = np.pad(segmentation, ((0, 0), (0, shape[0] - shape[1])))
-    elif shape[1] > shape[0]:
+    else:
         segmentation_rescaled = np.pad(segmentation, ((0, shape[1] - shape[0]), (0, 0)))
     assert segmentation_rescaled.shape[0] == segmentation_rescaled.shape[1]
     shape = segmentation_rescaled.shape
@@ -40,8 +80,15 @@ def _compute_object_features_impl(embeddings, segmentation, resize_embedding_sha
     # The motivation for this is to avoid loosing smaller segmented objects when resizing the segmentation
     # to the original embedding shape. On the other hand, we avoid resizing the embeddings to the full segmentation
     # shape for efficiency reasons.
-    resize_shape = tuple(min(rsh, sh) for rsh, sh in zip(resize_embedding_shape, shape)) + (embeddings.shape[-1],)
-    embeddings = resize(embeddings, resize_shape, preserve_range=True).astype(embeddings.dtype)
+    resize_hw = tuple(min(rsh, sh) for rsh, sh in zip(resize_embedding_shape, shape))
+    if upsampler is not None:
+        # AnyUp upsamples the embedding using the image region instead of plain interpolation.
+        embeddings = _anyup_object_resize(embeddings_chw, image_region, resize_hw, upsampler, is_sam2)
+    else:
+        embeddings = embeddings_chw.transpose(1, 2, 0)  # put the channel axis last
+        embeddings = resize(
+            embeddings, resize_hw + (embeddings.shape[-1],), preserve_range=True
+        ).astype(embeddings.dtype)
 
     segmentation_rescaled = resize(
         segmentation_rescaled, embeddings.shape[:2], order=0, anti_aliasing=False, preserve_range=True
@@ -56,10 +103,12 @@ def _compute_object_features_impl(embeddings, segmentation, resize_embedding_sha
         ["area"] + [f"mean_intensity-{i}" for i in range(embeddings.shape[-1])]
     ].values
 
+    if pbar_update is not None:
+        pbar_update(1)
     return seg_ids, features
 
 
-def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is_3d):
+def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is_3d, image=None):
     assert is_tiled or is_3d
 
     if is_tiled:
@@ -71,10 +120,13 @@ def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is
         tiling = None
         length = segmentation.shape[0]
 
+    # The generators yield (segmentation, embeddings, image_region) per slice / tile. The image
+    # region is None unless an image is given (only needed for AnyUp upsampling).
     if is_3d and is_tiled:  # 3d data with tiling
         def generator():
             for z in range(segmentation.shape[0]):
                 seg_z = segmentation[z]
+                image_z = None if image is None else image[z]
                 for block_id in range(tiling.number_of_blocks):
                     block = tiling.get_block_with_halo(block_id, halo)
 
@@ -83,15 +135,17 @@ def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is
 
                     bb = tuple(slice(beg, end) for beg, end in zip(block.outer_block.begin, block.outer_block.end))
                     seg = seg_z[bb]
+                    image_region = None if image_z is None else image_z[bb]
 
-                    yield seg, embeds
+                    yield seg, embeds, image_region
 
     elif is_3d:  # 3d data no tiling
         def generator():
             for z in range(length):
                 seg = segmentation[z]
                 embeds = image_embeddings["features"][z].squeeze()
-                yield seg, embeds
+                image_region = None if image is None else image[z]
+                yield seg, embeds, image_region
 
     else:  # 2d data with tiling
         def generator():
@@ -102,8 +156,9 @@ def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is
                 embeds = tile_embeds[str(block_id)][:].squeeze()
                 bb = tuple(slice(beg, end) for beg, end in zip(block.outer_block.begin, block.outer_block.end))
                 seg = segmentation[bb]
+                image_region = None if image is None else image[bb]
 
-                yield seg, embeds
+                yield seg, embeds, image_region
 
     return generator, length
 
@@ -113,6 +168,8 @@ def compute_object_features(
     segmentation: np.ndarray,
     resize_embedding_shape: Tuple[int, int] = (256, 256),
     verbose: bool = True,
+    image: Optional[np.ndarray] = None,
+    upsampler=None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Compute object features based on SAM embeddings.
 
@@ -121,18 +178,37 @@ def compute_object_features(
         segmentation: The segmentation for which to compute the features.
         resize_embedding_shape: Shape for intermediate resizing of the embeddings.
         verbose: Whether to print a progressbar for the computation.
+        image: The original image, required when `upsampler` is given (AnyUp uses it as guidance).
+        upsampler: An optional AnyUp model (see `pixel_classification.get_anyup_upsampler`). When
+            given, the embedding is upsampled with AnyUp using the image instead of plain interpolation.
 
     Returns:
         The segmentation ids.
         The object features.
     """
+    if upsampler is not None and image is None:
+        raise ValueError("An 'image' is required when an AnyUp 'upsampler' is given.")
+
     is_tiled = image_embeddings["input_size"] is None
     is_3d = segmentation.ndim == 3
+    # SAM2 embeddings carry the high-resolution decoder features; SAM1 embeddings never do. SAM2
+    # stretches the image to a square (no padding), which changes how the embedding aligns spatially.
+    is_sam2 = "high_res_feats" in image_embeddings
 
     # If we have simple embeddings, i.e. 2d without tiling, then we can directly compute the features.
     if not is_tiled and not is_3d:
         embeddings = image_embeddings["features"].squeeze()
-        return _compute_object_features_impl(embeddings, segmentation, resize_embedding_shape)
+        # AnyUp is the slow part, so show a progress bar (which also drives napari's activity dots)
+        # for the single upsampling call.
+        anyup_pbar = tqdm(
+            total=1, desc="Upsampling with AnyUp", disable=(not verbose) or (upsampler is None)
+        )
+        result = _compute_object_features_impl(
+            embeddings, segmentation, resize_embedding_shape, image_region=image, upsampler=upsampler,
+            is_sam2=is_sam2, pbar_update=anyup_pbar.update if upsampler is not None else None,
+        )
+        anyup_pbar.close()
+        return result
 
     # Otherwise, we compute the features by iterating over slices and/or tiles,
     # compute the features for each slice / tile and accumulate them.
@@ -149,14 +225,18 @@ def compute_object_features(
     # Then, we create a generator for iterating over the slices and / or tile.
     # This generator returns the respective segmentation and embeddings.
     seg_embed_generator, n_gen = _create_seg_and_embed_generator(
-        segmentation, image_embeddings, is_tiled=is_tiled, is_3d=is_3d
+        segmentation, image_embeddings, is_tiled=is_tiled, is_3d=is_3d, image=image
     )
 
-    for seg, embeds in tqdm(
-        seg_embed_generator(), total=n_gen, disable=not verbose, desc="Compute object features"
+    # With AnyUp, label the bar accordingly since the upsampling is the slow part.
+    desc = "Upsampling with AnyUp" if upsampler is not None else "Compute object features"
+    for seg, embeds, image_region in tqdm(
+        seg_embed_generator(), total=n_gen, disable=not verbose, desc=desc
     ):
         # Compute this seg ids and features.
-        this_seg_ids, this_features = _compute_object_features_impl(embeds, seg, resize_embedding_shape)
+        this_seg_ids, this_features = _compute_object_features_impl(
+            embeds, seg, resize_embedding_shape, image_region=image_region, upsampler=upsampler, is_sam2=is_sam2
+        )
         this_seg_ids = this_seg_ids.tolist()
 
         # Find which of the seg ids are new (= processed for the first time).
@@ -232,6 +312,7 @@ def run_prediction_with_object_classifier(
     segmentation_key: Optional[str] = None,
     project_prediction: bool = True,
     ndim: Optional[int] = None,
+    upsampler=None,
 ) -> List[np.ndarray]:
     """Run prediction with a pretrained object classifier on a series of images.
 
@@ -244,6 +325,9 @@ def run_prediction_with_object_classifier(
         segmentation_key:
         project_prediction:
         ndim:
+        upsampler: An optional AnyUp model (see `pixel_classification.get_anyup_upsampler`) to
+            upsample the embeddings with the image as guidance instead of plain interpolation.
+            Use the same setting that the classifier was trained with.
 
     Returns:
         The predictions.
@@ -255,7 +339,10 @@ def run_prediction_with_object_classifier(
         zip(images, segmentations), total=len(images), desc="Run prediction with object classifier"
     ):
         embeddings = precompute_image_embeddings(predictor, image, verbose=False, ndim=ndim)
-        seg_ids, features = compute_object_features(embeddings, segmentation, verbose=False)
+        seg_ids, features = compute_object_features(
+            embeddings, segmentation, verbose=False, image=image if upsampler is not None else None,
+            upsampler=upsampler,
+        )
         prediction = rf.predict(features)
         if project_prediction:
             prediction = project_prediction_to_segmentation(segmentation, prediction, seg_ids)

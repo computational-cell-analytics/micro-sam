@@ -33,3 +33,5 @@ dependencies:
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git
         - git+https://github.com/facebookresearch/sam2.git
+        # Optional AnyUp feature upsampler for the pixel and object classifiers.
+        - git+https://github.com/wimmerth/anyup

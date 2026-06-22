@@ -11,7 +11,9 @@ import numpy as np
 import torch
 
 from magicgui import magicgui
-from magicgui.widgets import CheckBox, Widget, Container, FileEdit, FunctionGui, PushButton, SpinBox, create_widget
+from magicgui.widgets import (
+    CheckBox, Widget, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox, create_widget
+)
 from napari.utils.notifications import show_info
 from qtpy import QtWidgets
 
@@ -82,6 +84,16 @@ def _train_rf(features, labels, previous_features=None, previous_labels=None, n_
     return model
 
 
+def _get_cached_upsampler():
+    # Load the AnyUp model once and cache it on the state (small model, reused across runs).
+    from ..pixel_classification import get_anyup_upsampler
+    state = AnnotatorState()
+    if state.anyup_upsampler is None:
+        device = getattr(state.predictor, "device", None)
+        state.anyup_upsampler = get_anyup_upsampler(device=device)
+    return state.anyup_upsampler
+
+
 def _compute_object_features_if_needed(viewer):
     # Returns (features, seg_ids) for the current image+segmentation, computing/caching if needed.
     state = AnnotatorState()
@@ -89,7 +101,18 @@ def _compute_object_features_if_needed(viewer):
         if widgets._validate_embeddings(viewer):
             return None, None
         segmentation = state.segmentation_selection.get_value().data
-        seg_ids, features = compute_object_features(state.image_embeddings, segmentation)
+        use_anyup = getattr(state.annotator, "_get_use_anyup", None)
+        image, upsampler = None, None
+        if use_anyup is not None and use_anyup():
+            try:
+                upsampler = _get_cached_upsampler()
+            except ImportError as e:
+                widgets._generate_message("error", str(e))
+                return None, None
+            image = viewer.layers["image"].data
+        seg_ids, features = compute_object_features(
+            state.image_embeddings, segmentation, image=image, upsampler=upsampler,
+        )
         state.seg_ids, state.object_features = seg_ids, features
     return state.object_features, state.seg_ids
 
@@ -207,22 +230,51 @@ def _create_classifier_io_widget(viewer):
     # count of top PCA components to reduce the features to before training. Object features are
     # the area plus the 256 per-channel embedding means, i.e. 257, which is the maximum.
     use_top_features = CheckBox(value=False, text="Choose top feature channels")
-    top_features = SpinBox(value=10, min=1, max=OBJECT_FEATURES, step=1, visible=False)
-    top_features.native.setToolTip(
-        f"Number of top PCA components to reduce the object features to, between 1 and {OBJECT_FEATURES} "
-        "(object area plus the 256 per-channel embedding means)."
-    )
     use_top_features.native.setToolTip(
         "Reduce the object features to their most informative components via PCA before training. "
         "When unchecked, all features are used and no PCA is applied."
     )
-    use_top_features.changed.connect(lambda checked: setattr(top_features, "visible", checked))
-    top_features_row = Container(
-        layout="horizontal", widgets=[use_top_features, top_features], labels=False,
+
+    # Optional AnyUp upsampling. When checked, the SAM/SAM2 embedding is upsampled with AnyUp using
+    # the original image as guidance instead of plain interpolation. Toggling it changes the
+    # features, so the cached features are cleared on change to force a recompute.
+    use_anyup = CheckBox(value=False, text="Upsample with AnyUp")
+    use_anyup.native.setToolTip(
+        "Use AnyUp to upsample the embedding with the original image as guidance, for sharper "
+        "features near object boundaries. When unchecked, plain interpolation is used."
     )
+
+    # The two option checkboxes sit side by side (PCA on the left, AnyUp on the right). A trailing
+    # stretch packs them flush left; zeroing the nested-container margins lines them up with the
+    # path fields below (which otherwise get double-indented by the nested container).
+    checkbox_row = Container(layout="horizontal", widgets=[use_top_features, use_anyup], labels=False)
+    checkbox_row.native.layout().setContentsMargins(0, 0, 0, 0)
+    checkbox_row.native.layout().addStretch(1)
+
+    # The PCA component count appears on its own row below, revealed when the checkbox is ticked.
+    top_features = SpinBox(value=10, min=1, max=OBJECT_FEATURES, step=1)
+    top_features.native.setToolTip(
+        f"Number of top PCA components to reduce the object features to, between 1 and {OBJECT_FEATURES} "
+        "(object area plus the 256 per-channel embedding means)."
+    )
+    top_features_row = Container(
+        layout="horizontal", widgets=[Label(value="top feature channels:"), top_features], labels=False,
+    )
+    top_features_row.native.layout().setContentsMargins(0, 0, 0, 0)
+    top_features_row.native.layout().addStretch(1)
+    top_features_row.visible = False
+    use_top_features.changed.connect(lambda checked: setattr(top_features_row, "visible", checked))
 
     def get_n_components():
         return int(top_features.value) if use_top_features.value else 0
+
+    def _invalidate_features(*args):
+        state = AnnotatorState()
+        state.object_features, state.seg_ids = None, None
+    use_anyup.changed.connect(_invalidate_features)
+
+    def get_use_anyup():
+        return bool(use_anyup.value)
 
     # Classifier load/export, with separate paths (load a stored model, retrain, then export
     # the current one elsewhere). The path fields follow the same path-selector style as the
@@ -248,9 +300,9 @@ def _create_classifier_io_widget(viewer):
     export_button.clicked.connect(lambda: _save_rf(viewer, export_dir.value))
 
     container = Container(
-        widgets=[top_features_row, load_path, load_button, export_dir, export_button], labels=False,
+        widgets=[checkbox_row, top_features_row, load_path, load_button, export_dir, export_button], labels=False,
     )
-    return container, get_n_components
+    return container, get_n_components, get_use_anyup
 
 #
 # Object classifier implementation.
@@ -381,7 +433,8 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         # load/export) on top, with the 'Train and predict' button below it.
         self._train_and_predict_widget = _create_train_widget(self._viewer)
         self._seg_selection_widget = self._create_segmentation_layer_section()
-        self._classifier_io_widget, self._get_n_components = _create_classifier_io_widget(self._viewer)
+        io = _create_classifier_io_widget(self._viewer)
+        self._classifier_io_widget, self._get_n_components, self._get_use_anyup = io
 
         settings = QtWidgets.QWidget()
         settings.setLayout(QtWidgets.QVBoxLayout())
@@ -546,7 +599,7 @@ def object_classifier(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator)
+    viewer.window.add_dock_widget(annotator, name="(Object Classifier) Segment Anything for Microscopy")
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
