@@ -168,6 +168,10 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         super().__init__()
         self._viewer = viewer
 
+        # Guard against re-entrant image-selection handling while we replace the image
+        # layer during normalization (the replacement itself fires selection events).
+        self._suppress_selection_rebuild = False
+
         # Add the layers for prompts and segmented obejcts.
         # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
         self._ndim = ndim
@@ -207,6 +211,37 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self.setWidgetResizable(True)
         # Replacing the inner widget deletes the previous one (and its now-orphaned children).
         self.setWidget(self._annotator_widget)
+
+    def _maybe_normalize_image_layer(self, image_layer):
+        """Normalize the selected image layer in place so all layers stay aligned.
+
+        Squeezes singleton axes and maps the channel axis to RGB (see
+        ``util.prepare_annotation_image``). When this changes the data shape or the rgb
+        flag, the image layer is replaced with the normalized version. Replacement passes
+        the normalized array by reference (napari does not copy), so it does not duplicate
+        the image buffer. Returns the (possibly new) layer and its spatial dimensionality.
+        """
+        data, ndim, rgb = vutil.prepare_annotation_image(image_layer.data)
+
+        # Nothing changed: keep the existing layer.
+        if data.shape == tuple(image_layer.data.shape) and bool(image_layer.rgb) == rgb:
+            return image_layer, ndim
+
+        name = image_layer.name
+        scale = image_layer.scale
+        # Carry over the scale only when it still matches the normalized dimensionality.
+        keep_scale = len(scale) == (data.ndim - 1 if rgb else data.ndim)
+
+        self._suppress_selection_rebuild = True
+        try:
+            del self._viewer.layers[name]
+            new_layer = self._viewer.add_image(data, name=name, rgb=rgb)
+            if keep_scale:
+                new_layer.scale = scale
+        finally:
+            self._suppress_selection_rebuild = False
+
+        return new_layer, ndim
 
     def _rebuild_for_ndim(self, ndim):
         # Rebuild the layers and dimension-specific widgets for a new dimensionality.

@@ -28,6 +28,58 @@ LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 #
 
 
+def prepare_annotation_image(image: np.ndarray) -> Tuple[np.ndarray, int, bool]:
+    """Normalize an image for annotation: squeeze singletons and map 2D channels to RGB.
+
+    Singleton axes (commonly exposed by formats like CZI) are squeezed out across all axes.
+    For a 2D image, the trailing channel axis is mapped to 3 channels: a 2-channel input is
+    padded with a zero channel and a 4-channel input is reduced to the first three (with a
+    warning). Both squeezing and channel slicing return views, so the only case that
+    allocates is the 2-channel padding.
+
+    Args:
+        image: The input image data.
+
+    Returns:
+        A tuple of the normalized image, its spatial dimensionality (2 or 3), and whether
+        it has a trailing RGB channel axis.
+
+    Raises:
+        ValueError: If the squeezed image is not a 2D image or a grayscale 3D volume.
+    """
+    image = np.squeeze(image)
+
+    # A 4D array is either a 3D volume with a channel axis (Z, H, W, C) or a volumetric
+    # time series (T, Z, H, W). Neither is supported: the v2 3D path assumes a grayscale
+    # (Z, H, W) volume, so a channel axis would otherwise produce wrong-shaped masks.
+    # TODO: support multichannel 3D once the v2 3D path is channel-aware, aligned with
+    # NGFF (OME-Zarr) axis conventions (t, c, z, y, x) instead of a trailing channel axis.
+    if image.ndim == 4:
+        if image.shape[-1] in (2, 3, 4):
+            raise ValueError(
+                f"3D volumes with a channel axis are not supported yet, got shape {image.shape}."
+            )
+        raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data (3D+t is not supported).")
+
+    # 2D image with a channel axis: map the channel axis to 3 channels.
+    if image.ndim == 3 and image.shape[-1] in (2, 4):
+        if image.shape[-1] == 2:
+            zero_channel = np.zeros(image.shape[:-1] + (1,), dtype=image.dtype)
+            image = np.concatenate([image, zero_channel], axis=-1)
+        else:
+            warnings.warn("You provided an input with 4 channels. Only the first three will be used.")
+            image = image[..., :3]
+
+    # Map the (possibly normalized) shape to a spatial dimensionality and rgb flag.
+    if image.ndim == 2:
+        return image, 2, False
+    elif image.ndim == 3:
+        if image.shape[-1] == 3:
+            return image, 2, True
+        return image, 3, False
+    raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data.")
+
+
 def toggle_label(prompts):
     """@private"""
     # get the currently selected label
