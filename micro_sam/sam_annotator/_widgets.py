@@ -162,6 +162,20 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(param)
         return param, layout
 
+    def _make_int_field(self, name, value, min_val, max_val, step=1, title=None, tooltip=None):
+        # A single labeled int spinbox wrapped in its own widget, so it can be placed inside a row
+        # next to other fields and shown / hidden independently (e.g. the z fields, which only apply
+        # to 3d data). Returns the spinbox and the wrapping widget.
+        field = QtWidgets.QWidget()
+        field_layout = QtWidgets.QVBoxLayout()
+        field_layout.setContentsMargins(0, 0, 0, 0)
+        param, _ = self._add_int_param(
+            name, value, min_val=min_val, max_val=max_val, step=step,
+            layout=field_layout, title=title, tooltip=tooltip,
+        )
+        field.setLayout(field_layout)
+        return param, field
+
     def _add_choice_param(
         self,
         name,
@@ -1572,7 +1586,11 @@ class EmbeddingWidget(_WidgetBase):
         self._tiling_widget.setLayout(QtWidgets.QVBoxLayout())
         self._tiling_widget.layout().setContentsMargins(0, 0, 0, 0)
 
-        # Default tile shape and halo, used when tiling is enabled.
+        # Default tile shape and halo, used when tiling is enabled. The z block / halo (for 3d
+        # volumetric automatic segmentation) sit side-by-side with the in-plane x / y fields in the
+        # same row; the z fields are shown only for 3d data (see '_update_tiling_visibility').
+        # Defaults (z block 4, z halo 2) match the UniSAM2 training crop; set 'tile z' >= the slice
+        # count to disable z-tiling.
         self.tile_x, self.tile_y = 384, 384
         self.tile_x_param, self.tile_y_param, tile_layout = self._add_shape_param(
             ("tile_x", "tile_y"),
@@ -1582,6 +1600,12 @@ class EmbeddingWidget(_WidgetBase):
             step=16,
             tooltip=get_tooltip("embedding", "tiling"),
         )
+        self.tile_z = 4
+        self.tile_z_param, self._tile_z_field = self._make_int_field(
+            "tile_z", self.tile_z, min_val=1, max_val=512, step=1, title="tile_z:",
+            tooltip=get_tooltip("embedding", "tile_z"),
+        )
+        tile_layout.addWidget(self._tile_z_field)
         self._tiling_widget.layout().addLayout(tile_layout)
 
         self.halo_x, self.halo_y = 64, 64
@@ -1592,7 +1616,17 @@ class EmbeddingWidget(_WidgetBase):
             max_val=512,
             tooltip=get_tooltip("embedding", "halo"),
         )
+        self.halo_z = 2
+        self.halo_z_param, self._halo_z_field = self._make_int_field(
+            "halo_z", self.halo_z, min_val=0, max_val=128, step=1, title="halo_z:",
+            tooltip=get_tooltip("embedding", "halo_z"),
+        )
+        halo_layout.addWidget(self._halo_z_field)
         self._tiling_widget.layout().addLayout(halo_layout)
+
+        # The z fields are hidden until a 3d image is selected with tiling enabled.
+        self._tile_z_field.setVisible(False)
+        self._halo_z_field.setVisible(False)
 
         self._tiling_widget.setVisible(False)
         setting_values.layout().addWidget(self._tiling_widget)
@@ -1640,10 +1674,22 @@ class EmbeddingWidget(_WidgetBase):
         )
         return settings
 
+    def _selected_image_ndim(self):
+        # Spatial dimensionality of the currently selected image layer (2 or 3), or None if no image.
+        image = self.image_selection.get_value()
+        if image is None:
+            return None
+        shape = image.data.shape[:-1] if image.rgb else image.data.shape
+        return len(shape)
+
     def _update_tiling_visibility(self, index=None):
-        # Show the tile shape and halo fields only when tiling is enabled.
+        # Show the tile shape and halo fields only when tiling is enabled. The z block / halo fields
+        # are additionally restricted to 3d data, since z-tiling only applies to volumetric inputs.
         self.tiling = self.tiling_dropdown.currentText()
         self._tiling_widget.setVisible(self.tiling == "yes")
+        show_z = self.tiling == "yes" and self._selected_image_ndim() == 3
+        self._tile_z_field.setVisible(show_z)
+        self._halo_z_field.setVisible(show_z)
 
     def _set_default_tiling(self, *args):
         # Enable tiling by default for large images: more than 512 pixels along either
@@ -1661,10 +1707,45 @@ class EmbeddingWidget(_WidgetBase):
             needs_tiling = False
 
         if needs_tiling:
-            self.tile_x, self.tile_y = 512, 512
+            # Our standard tiling: 384 block shape, 64 halo (in-plane).
+            self.tile_x, self.tile_y = 384, 384
+            self.halo_x, self.halo_y = 64, 64
             self.tile_x_param.setValue(self.tile_x)
             self.tile_y_param.setValue(self.tile_y)
+            self.halo_x_param.setValue(self.halo_x)
+            self.halo_y_param.setValue(self.halo_y)
             self.tiling_dropdown.setCurrentText("yes")
+
+        # Refresh which tiling fields are visible now that the image (and its dimensionality) changed.
+        self._update_tiling_visibility()
+
+    def _reset_inputs_to_defaults(self):
+        """Reset the user inputs to their fresh-open defaults.
+
+        Called when the selected image changes, so a new image starts exactly as a freshly opened
+        tool would: the default model family/size, no custom weights, default tiling parameters and
+        no embeddings save path. The auto-tiling rule for the new image is re-applied at the end via
+        '_set_default_tiling' (which also refreshes field visibility), matching a fresh open.
+        """
+        # Clear custom weights first, then restore the default model family + size. (Setting custom
+        # weights blanks the family dropdown, so clearing it before re-selecting keeps them in sync.)
+        self.custom_weights_param.setText("")
+        default_family = {v: k for k, v in self.supported_dropdown_maps.items()}[self._default_model_choice[5:]]
+        default_size = self._model_size_map[self._default_model_choice[4]]
+        self.model_family_dropdown.setCurrentText(default_family)
+        self.model_size_dropdown.setCurrentText(default_size)
+
+        # Reset the tiling parameters to their creation defaults and the save path; the on/off state
+        # is then decided by '_set_default_tiling' (auto-enabled for large images, as on a fresh open).
+        self.tile_x_param.setValue(384)
+        self.tile_y_param.setValue(384)
+        self.halo_x_param.setValue(64)
+        self.halo_y_param.setValue(64)
+        self.tile_z_param.setValue(4)
+        self.halo_z_param.setValue(2)
+        self.tiling_dropdown.setCurrentText("no")
+        self.embeddings_save_path_param.setText("")
+        self._set_default_tiling()
 
     def _validate_inputs(self):
         """Validates the inputs for the annotation process and returns a dictionary
@@ -3271,10 +3352,6 @@ class AutoSegmentWidget(_WidgetBase):
         parent: The parent Qt widget.
     """
 
-    # Fixed z block and halo for 3d tiled inference, matching the UniSAM2 training crop.
-    Z_TILE = 4
-    Z_HALO = 2
-
     def __init__(self, viewer, with_decoder, volumetric, parent=None):
         super().__init__(parent)
         self._viewer = viewer
@@ -3488,24 +3565,33 @@ class AutoSegmentWidget(_WidgetBase):
             n_threads=self.n_threads, backend=self.backend,
         )
 
-    def _get_tiling(self, ndim):
-        # Reuse the in-plane tiling configured in the embedding widget (micro-sam style: set once).
-        # For 3d data we additionally tile along z, using fixed block/halo defaults that match the
-        # UniSAM2 training (z block 4, z halo 2), so prediction is fully 3d-tiled.
+    def _get_tiling(self, ndim, spatial_shape=None):
+        # Tiling is configured once in the embedding widget. When enabled, in-plane (xy) tiling is
+        # used for all data, and for 3d data the volume is additionally tiled along z using the
+        # 'tile z' / 'halo z' controls grouped with the in-plane fields there.
         state = AnnotatorState()
         embed_widget = state.widgets.get("embeddings")
         if embed_widget is None or getattr(embed_widget, "tiling", "no") != "yes":
             return None, None
-        tile_shape, halo = _process_tiling_inputs(
+        tile_inplane, halo_inplane = _process_tiling_inputs(
             embed_widget.tile_x, embed_widget.tile_y, embed_widget.halo_x, embed_widget.halo_y,
         )
-        if tile_shape is None:
-            return None, None
-        if ndim == 3:
-            halo_xy = (0, 0) if halo is None else tuple(halo)
-            tile_shape = (self.Z_TILE,) + tuple(tile_shape)
-            halo = (self.Z_HALO,) + halo_xy
-        return tile_shape, halo
+
+        # 2d (per-slice AMG, or 2d segmentation), or no in-plane tile: in-plane only.
+        if ndim != 3 or tile_inplane is None:
+            return tile_inplane, halo_inplane
+
+        # 3d: add the z block / halo from the embedding widget controls. 'tile_z' >= the slice count
+        # means no z-tiling (the whole volume is one block along z).
+        if spatial_shape is None:
+            spatial_shape = tuple(state.image_shape)
+        n_slices = int(spatial_shape[0])
+        tile_z = int(getattr(embed_widget, "tile_z", 4))
+        halo_z = int(getattr(embed_widget, "halo_z", 2))
+        z_tile = tile_z if 0 < tile_z < n_slices else n_slices
+        z_halo = halo_z if z_tile < n_slices else 0
+        halo_xy = (0, 0) if halo_inplane is None else tuple(halo_inplane)
+        return (z_tile,) + tuple(tile_inplane), (z_halo,) + halo_xy
 
     def _run_unisam2(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.v2.automatic_segmentation import get_unisam2_segmentation_generator
@@ -3517,7 +3603,7 @@ class AutoSegmentWidget(_WidgetBase):
         # For volumetric data the embeddings are video-style, so we run the (optionally tiled)
         # inference directly - tiling stays None when it is not configured.
         if self.volumetric:
-            tile_shape, halo = self._get_tiling(ndim)
+            tile_shape, halo = self._get_tiling(ndim, spatial_shape=run_raw.shape)
             image_embeddings, is_tiled = None, tile_shape is not None
         else:
             tile_shape, halo, image_embeddings = None, None, state.image_embeddings
@@ -3598,6 +3684,11 @@ class AutoSegmentWidget(_WidgetBase):
                 "Load one via the 'custom weights' path in the embedding widget, or use the 'amg' mode.",
             )
         if _validate_layers(self._viewer, automatic_segmentation=True):
+            return
+        # The (2d) decoder modes reuse the precomputed image embeddings, so they must exist and match
+        # the current image. If embeddings were reset (e.g. after an image change) this prompts the
+        # user to recompute them instead of segmenting with stale embeddings.
+        if _validate_embeddings(self._viewer):
             return
 
         # Get the raw image and determine the run dimensionality.

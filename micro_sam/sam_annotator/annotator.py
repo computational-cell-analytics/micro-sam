@@ -195,6 +195,29 @@ class Annotator(_AnnotatorBase):
         except ValueError as e:
             show_info(str(e))
             return
+
+        # Detect an actual change of the selected image, tracked by layer identity (the state's
+        # 'image_name' is not reliably set on every code path, so we don't depend on it). The first
+        # call (during setup) just records the image and does not reset; a later switch to a
+        # different image layer triggers the reset below.
+        previous_layer = getattr(self, "_last_image_layer", None)
+        image_changed = previous_layer is not None and image_layer is not previous_layer
+        self._last_image_layer = image_layer
+
+        # When the selected image changes, reset everything so the tool behaves as if it was just
+        # opened on the new image: the precomputed embeddings, the model and everything derived from
+        # them belong to the previous image and must not be reused (they can even differ in
+        # dimensionality, e.g. 3D volume -> 2D image). 'reset_state' clears the state; resetting the
+        # (shared, kept) embedding widget inputs restores the default model / tiling / save path; and
+        # the forced rebuild recreates the dimension-specific widgets and napari layers, so all
+        # checkboxes are back to defaults, the autosegment cache is gone and the prompt / segmentation
+        # layers are cleared. The user recomputes embeddings for the new image via 'Compute Embeddings'.
+        if image_changed:
+            AnnotatorState().reset_state()
+            self._embedding_widget._reset_inputs_to_defaults()
+            self._rebuild_for_ndim(ndim, force=True)
+            return
+
         if ndim != self._ndim:
             self._rebuild_for_ndim(ndim)
 

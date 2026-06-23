@@ -54,7 +54,6 @@ def run_amg(
     image_key: Optional[str],
     experiment_folder: Union[os.PathLike, str],
     model_type: str,
-    backbone: str,
     checkpoint_path: Union[os.PathLike, str],
     device: Optional[Union[torch.device, str]] = None,
     min_object_size: int = 0,
@@ -85,7 +84,7 @@ def run_amg(
         if image.ndim == 2:  # Convert single channel images to RGB images.
             image = np.stack([image] * 3, axis=-1)
 
-        model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path, backbone=backbone)
+        model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
 
         mask_generator = SAM2AutomaticMaskGenerator(
             model=model,
@@ -241,7 +240,6 @@ def run_interactive_segmentation_2d(
     gt_key: Optional[str],
     prediction_dir: Union[os.PathLike, str],
     model_type: str,
-    backbone: str,
     checkpoint_path: Union[os.PathLike, str],
     start_with_box_prompt: bool = False,
     device: Optional[Union[torch.device, str]] = None,
@@ -268,7 +266,7 @@ def run_interactive_segmentation_2d(
     for i in range(n_iterations):
         os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
 
-    model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path, backbone=backbone)
+    model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
     predictor = SAM2ImagePredictor(model)
 
     for image_path, gt_path in tqdm(
@@ -347,7 +345,6 @@ def run_interactive_segmentation_3d(
     raw: np.ndarray,
     labels: np.ndarray,
     model_type: str,
-    backbone: str,
     checkpoint_path: Union[os.PathLike, str],
     start_with_box_prompt: bool,
     prediction_dir: Union[os.PathLike, str],
@@ -366,7 +363,6 @@ def run_interactive_segmentation_3d(
         raw: The raw input array.
         labels: The corresponding ground-truth array with instance labels.
         model_type: The choice of Segment Anything 2 model.
-        backbone: The backbone of Segment Anything 2 model. Either 'sam2' or 'sam2.1'.
         checkpoint_path: The filepath to the model checkpoints.
         start_with_box_prompt: Whether the iterative prompting starts with 'box' as first prompt
             (else 'points' will be used).
@@ -424,7 +420,7 @@ def run_interactive_segmentation_3d(
 
     # Get the SAM2 predictor.
     predictor = get_sam2_model(
-        model_type=model_type, device=device, checkpoint_path=checkpoint_path, input_type="videos", backbone=backbone,
+        model_type=model_type, device=device, checkpoint_path=checkpoint_path, input_type="videos",
     )
     # Match training: frames that receive correction clicks become conditioning frames so
     # their corrected predictions are preserved and used as memory for neighboring frames.
