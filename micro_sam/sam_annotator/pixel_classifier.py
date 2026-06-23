@@ -1,95 +1,34 @@
 import os
+
 from datetime import datetime
 from joblib import dump, hash as joblib_hash, load
-from multiprocessing import cpu_count
-from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
-import imageio.v3 as imageio
 import napari
 import numpy as np
 import torch
 
-from magicgui import magicgui
-from magicgui.widgets import (
-    CheckBox, ComboBox, Widget, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox
-)
+from magicgui.widgets import CheckBox, Widget, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox
 from napari.utils.notifications import show_info
 from qtpy import QtWidgets
 
-from skimage.measure import regionprops_table
-from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-
 from .. import util
 from ..__version__ import __version__ as micro_sam_version
-from ..v2.util import DEFAULT_MODEL
-from ..object_classification import compute_object_features, project_prediction_to_segmentation
+from ..pixel_classification import (
+    accumulate_pixel_labels, compute_pixel_features, get_anyup_upsampler, project_prediction_to_image,
+    train_pixel_classifier,
+)
 from ._state import AnnotatorState
 from . import _widgets as widgets
 from .util import _sync_embedding_widget
 
-# Object features are the object area plus the per-channel mean of the 256-channel SAM/SAM2 image
-# embedding, i.e. 257 features. PCA can reduce to at most this many components.
-OBJECT_FEATURES = 257
-INTERNAL_LABEL_LAYER_NAMES = {"annotations", "prediction"}
-
-#
-# Utility functionality.
-# Some of this could be refactored to general purpose functionality that can also
-# be used for inference with the trained classifier.
-#
-
-
-def _accumulate_labels(segmentation, annotations):
-
-    def majority_label(mask, annotation):
-        ids, counts = np.unique(annotation[mask], return_counts=True)
-        if len(ids) == 1 and ids[0] == 0:
-            return 0
-        if ids[0] == 0:
-            ids, counts = ids[1:], counts[1:]
-        return ids[np.argmax(counts)]
-
-    all_features = regionprops_table(
-        segmentation, intensity_image=annotations, properties=("label",),
-        extra_properties=[majority_label],
-    )
-    return all_features["majority_label"].astype("int")
-
-
-def _train_rf(features, labels, previous_features=None, previous_labels=None, n_components=None, **rf_kwargs):
-    assert len(features) == len(labels)
-    valid = labels != 0
-    X, y = features[valid], labels[valid]
-
-    if previous_features is not None:
-        assert previous_labels is not None and len(previous_features) == len(previous_labels)
-        X = np.concatenate([previous_features, X], axis=0)
-        y = np.concatenate([previous_labels, y], axis=0)
-
-    rf = RandomForestClassifier(**rf_kwargs)
-
-    # Optionally reduce the features to the top-n PCA components. n_components is clamped to the
-    # number of features and samples; if it covers all features we skip PCA and use the plain RF.
-    # Object features mix area (large magnitude) with embedding means (small), so we standardize
-    # them before PCA to keep area from dominating the components.
-    n_features = X.shape[1]
-    k = min(int(n_components), n_features, len(X)) if n_components else 0
-    if 0 < k < n_features:
-        model = Pipeline([("scaler", StandardScaler()), ("pca", PCA(n_components=k)), ("rf", rf)])
-    else:
-        model = rf
-
-    model.fit(X, y)
-    return model
+# The SAM and SAM2 image encoders project every model size down to a fixed 256-channel image
+# embedding (prompt_embed_dim), so the per-pixel feature dimension is always 256.
+EMBEDDING_CHANNELS = 256
 
 
 def _get_cached_upsampler():
     # Load the AnyUp model once and cache it on the state (small model, reused across runs).
-    from ..pixel_classification import get_anyup_upsampler
     state = AnnotatorState()
     if state.anyup_upsampler is None:
         device = getattr(state.predictor, "device", None)
@@ -97,16 +36,12 @@ def _get_cached_upsampler():
     return state.anyup_upsampler
 
 
-def _compute_object_features_if_needed(viewer):
-    # Returns (features, seg_ids) for the current image+segmentation, computing/caching if needed.
+def _compute_pixel_features_if_needed(viewer):
+    # Returns (features, grid_shape) for the current image, computing and caching them if needed.
     state = AnnotatorState()
-    if state.object_features is None:
+    if state.pixel_features is None:
         if widgets._validate_embeddings(viewer):
             return None, None
-        segmentation_layer = _get_selected_segmentation_layer()
-        if segmentation_layer is None:
-            return None, None
-        segmentation = segmentation_layer.data
         use_anyup = getattr(state.annotator, "_get_use_anyup", None)
         image, upsampler = None, None
         if use_anyup is not None and use_anyup():
@@ -116,26 +51,22 @@ def _compute_object_features_if_needed(viewer):
                 widgets._generate_message("error", str(e))
                 return None, None
             image = viewer.layers["image"].data
-        seg_ids, features = compute_object_features(
-            state.image_embeddings, segmentation, image=image, upsampler=upsampler,
+        features, grid_shape = compute_pixel_features(
+            state.image_embeddings, state.image_shape, image=image, upsampler=upsampler,
         )
-        state.seg_ids, state.object_features = seg_ids, features
-    return state.object_features, state.seg_ids
+        state.pixel_features, state.pixel_grid_shape = features, grid_shape
+    return state.pixel_features, state.pixel_grid_shape
 
 
-def _predict_and_show(viewer, rf, features, seg_ids, apply_to_volume=True):
+def _predict_and_show(viewer, rf, features, grid_shape, apply_to_volume=True):
     state = AnnotatorState()
-    segmentation_layer = _get_selected_segmentation_layer()
-    if segmentation_layer is None:
-        return None
-    segmentation = segmentation_layer.data
     try:
         pred = rf.predict(features)
     except ValueError:
         return widgets._generate_message(
             "error", "The loaded classifier does not match the current embeddings. Use the same model type."
         )
-    prediction = project_prediction_to_segmentation(segmentation, pred, seg_ids)
+    prediction = project_prediction_to_image(pred, grid_shape, state.image_shape)
     layer = viewer.layers["prediction"]
     if apply_to_volume or prediction.ndim < 3:
         layer.data = prediction
@@ -148,21 +79,17 @@ def _predict_and_show(viewer, rf, features, seg_ids, apply_to_volume=True):
 
 
 def _run_train_and_predict(viewer, apply_to_volume=True):
-    # Get the object features and the annotations.
+    # Get the per-pixel features and the annotations.
     state = AnnotatorState()
     state.annotator._require_layers()
     annotations = viewer.layers["annotations"].data
-    segmentation_layer = _get_selected_segmentation_layer()
-    if segmentation_layer is None:
-        return None
-    segmentation = segmentation_layer.data
 
-    features, seg_ids = _compute_object_features_if_needed(viewer)
+    features, grid_shape = _compute_pixel_features_if_needed(viewer)
     if features is None:
         return None
 
     previous_features, previous_labels = state.previous_features, state.previous_labels
-    labels = _accumulate_labels(segmentation, annotations)
+    labels = accumulate_pixel_labels(annotations, grid_shape)
     if (labels == 0).all() and (previous_labels is None):
         return widgets._generate_message("error", "You have not provided any annotations.")
 
@@ -171,13 +98,13 @@ def _run_train_and_predict(viewer, apply_to_volume=True):
     n_components = get_n_components() if get_n_components is not None else 0
 
     # Run RF training and store it in the state.
-    state.object_rf = _train_rf(
+    state.pixel_rf = train_pixel_classifier(
         features, labels, previous_features=previous_features, previous_labels=previous_labels,
-        n_estimators=200, max_depth=10, n_jobs=cpu_count(), n_components=n_components,
+        n_components=n_components,
     )
 
     # Run and set the prediction.
-    _predict_and_show(viewer, state.object_rf, features, seg_ids, apply_to_volume=apply_to_volume)
+    _predict_and_show(viewer, state.pixel_rf, features, grid_shape, apply_to_volume=apply_to_volume)
 
 
 def _restore_from_spec(spec):
@@ -197,8 +124,7 @@ def _restore_from_spec(spec):
         if size is not None:
             ew.model_size_dropdown.setCurrentText(size)
 
-    # Tiling, tile/halo params and custom weights via the shared sync helper (these field names do
-    # match). 'model_type' is only used by the helper for the tiling/custom-weights side here.
+    # Tiling, tile/halo params and custom weights via the shared sync helper (these field names match).
     if ew is not None:
         _sync_embedding_widget(
             ew, model_type=spec.get("model_type") or ew.model_type,
@@ -241,27 +167,18 @@ def _load_rf(viewer, model_path):
     # Stored as {'rf': ..., 'model_spec': ...}; older files are a bare classifier (no spec).
     obj = load(model_path)
     if isinstance(obj, dict) and "rf" in obj:
-        state.object_rf, spec = obj["rf"], obj.get("model_spec", {})
+        state.pixel_rf, spec = obj["rf"], obj.get("model_spec", {})
     else:
-        state.object_rf, spec = obj, {}
+        state.pixel_rf, spec = obj, {}
     if spec:
         _restore_from_spec(spec)
 
     # Predict on the current image if embeddings are available.
-    features, seg_ids = _compute_object_features_if_needed(viewer)
+    features, grid_shape = _compute_pixel_features_if_needed(viewer)
     if features is None:
         return None
     state.annotator._require_layers()
-    _predict_and_show(viewer, state.object_rf, features, seg_ids)
-
-
-def _get_selected_segmentation_layer():
-    state = AnnotatorState()
-    segmentation_layer = None if state.segmentation_selection is None else state.segmentation_selection.get_value()
-    if segmentation_layer is None:
-        widgets._generate_message("error", "You have to select a segmentation labels layer.")
-        return None
-    return segmentation_layer
+    _predict_and_show(viewer, state.pixel_rf, features, grid_shape)
 
 
 def _resolve_export_path(viewer, export_dir, rf):
@@ -315,12 +232,12 @@ def _classifier_spec(rf):
 
 def _save_rf(viewer, export_dir):
     state = AnnotatorState()
-    if state.object_rf is None:
+    if state.pixel_rf is None:
         return widgets._generate_message("error", "You have not trained or loaded a classifier yet.")
-    out_path = _resolve_export_path(viewer, export_dir, state.object_rf)
+    out_path = _resolve_export_path(viewer, export_dir, state.pixel_rf)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     # Store the classifier together with its specs, so a load can restore the full config.
-    dump({"rf": state.object_rf, "model_spec": _classifier_spec(state.object_rf)}, out_path)
+    dump({"rf": state.pixel_rf, "model_spec": _classifier_spec(state.pixel_rf)}, out_path)
     show_info(f"Exported classifier to {out_path}")
 
 
@@ -350,6 +267,7 @@ def _clear_annotations(viewer, apply_to_volume=True):
 
 def _create_train_widget(viewer):
     # The 'Train and predict' button is kept at the top level, outside the settings dropdown.
+    # The label id can be switched while annotating with napari's built-in '=' / '-' shortcuts.
     # A single 'Apply to Volume' checkbox governs both 'Train and predict' and 'Clear Annotations'
     # (shown only for 3d data, see '_update_image'): when checked they act on the whole volume,
     # when unchecked (the default) only on the current slice.
@@ -386,13 +304,13 @@ def _create_train_widget(viewer):
 
 def _create_classifier_io_widget(viewer):
     # Optional PCA dimensionality reduction. The checkbox is off by default, in which case all
-    # object features are used and PCA is never applied. Checking it reveals a number box for the
-    # count of top PCA components to reduce the features to before training. Object features are
-    # the area plus the 256 per-channel embedding means, i.e. 257, which is the maximum.
+    # embedding channels are used and PCA is never applied. Checking it reveals a number box for
+    # the count of top PCA components to reduce the features to before training. The SAM and SAM2
+    # image embeddings have 256 channels for every model size, so that is the maximum.
     use_top_features = CheckBox(value=False, text="Choose top feature channels")
     use_top_features.native.setToolTip(
-        "Reduce the object features to their most informative components via PCA before training. "
-        "When unchecked, all features are used and no PCA is applied."
+        "Reduce the SAM/SAM2 embedding to its most informative channels via PCA before training. "
+        "When unchecked, all 256 embedding channels are used and no PCA is applied."
     )
 
     # Optional AnyUp upsampling. When checked, the SAM/SAM2 embedding is upsampled with AnyUp using
@@ -412,10 +330,10 @@ def _create_classifier_io_widget(viewer):
     checkbox_row.native.layout().addStretch(1)
 
     # The PCA component count appears on its own row below, revealed when the checkbox is ticked.
-    top_features = SpinBox(value=10, min=1, max=OBJECT_FEATURES, step=1)
+    top_features = SpinBox(value=10, min=1, max=EMBEDDING_CHANNELS, step=1)
     top_features.native.setToolTip(
-        f"Number of top PCA components to reduce the object features to, between 1 and {OBJECT_FEATURES} "
-        "(object area plus the 256 per-channel embedding means)."
+        f"Number of top PCA components to reduce the embedding to, between 1 and {EMBEDDING_CHANNELS} "
+        "(the SAM/SAM2 image embedding has 256 channels for all model sizes)."
     )
     top_features_row = Container(
         layout="horizontal", widgets=[Label(value="top feature channels:"), top_features], labels=False,
@@ -430,7 +348,7 @@ def _create_classifier_io_widget(viewer):
 
     def _invalidate_features(*args):
         state = AnnotatorState()
-        state.object_features, state.seg_ids = None, None
+        state.pixel_features, state.pixel_grid_shape = None, None
     use_anyup.changed.connect(_invalidate_features)
 
     def get_use_anyup():
@@ -443,9 +361,9 @@ def _create_classifier_io_widget(viewer):
             top_features.value = int(n_top_features)
         use_anyup.value = bool(use_anyup_val)
 
-    # Classifier load/export, with separate paths (load a stored model, retrain, then export
-    # the current one elsewhere). The path fields follow the same path-selector style as the
-    # custom weights in the embedding widget.
+    # Classifier load/export. Load takes a stored model file; export chooses a destination folder
+    # (defaulting to the current working directory) where the model is saved with an auto-generated
+    # name. The fields follow the path-selector style of the custom weights in the embedding widget.
     load_path = FileEdit(label="load classifier path:", mode="r", filter="*.joblib")
     load_path.line_edit.native.setPlaceholderText("/path/to/stored_model.joblib")
     load_path.native.setToolTip(
@@ -471,21 +389,15 @@ def _create_classifier_io_widget(viewer):
     )
     return container, get_n_components, get_use_anyup, set_options
 
-#
-# Object classifier implementation.
-#
 
-
-# TODO add a gui element that shows the current label ids, how many objects are labeled, and that
-# enables naming them so that the user can keep track of what has been labeled
-class ObjectClassifier(QtWidgets.QScrollArea):
+class PixelClassifier(QtWidgets.QScrollArea):
 
     def _require_layers(self, layer_choices: Optional[List[str]] = None):
         # Check whether the image is initialized already. And use the image shape and scale for the layers.
         state = AnnotatorState()
         shape = self._shape if state.image_shape is None else state.image_shape
 
-        # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
+        # Add the label layers for the annotations and the prediction.
         dummy_data = np.zeros(shape, dtype="uint32")
         image_scale = state.image_scale
 
@@ -513,63 +425,10 @@ class ObjectClassifier(QtWidgets.QScrollArea):
                 self._viewer.layers["prediction"].scale = image_scale
 
         # Move 'annotations' to the top of the layer stack so scribbles are always visible above
-        # the segmentation and prediction, and make it the active layer so the controls (incl. the
-        # label id) show it and the user can paint right away rather than on another layer.
+        # the prediction, and make it the active layer so the controls (incl. the label id) show it
+        # and the user can paint right away rather than on the last-added 'prediction' layer.
         self._viewer.layers.move(self._viewer.layers.index("annotations"), len(self._viewer.layers))
         self._viewer.layers.selection.active = self._viewer.layers["annotations"]
-
-    def _invalidate_object_features(self, *args):
-        state = AnnotatorState()
-        state.object_features, state.seg_ids = None, None
-
-    def _reset_segmentation_layer_choices(self, *args):
-        previous_selection = self.segmentation_selection.value
-        self.segmentation_selection.reset_choices()
-        choices = self.segmentation_selection.choices
-        if any(layer is previous_selection for layer in choices):
-            self.segmentation_selection.value = previous_selection
-        else:
-            self._select_default_segmentation_layer()
-        if self.segmentation_selection.value is not previous_selection:
-            self._invalidate_object_features()
-
-    def _is_segmentation_layer(self, layer):
-        return isinstance(layer, napari.layers.Labels) and layer.name.lower() not in INTERNAL_LABEL_LAYER_NAMES
-
-    def _find_default_segmentation_layer(self):
-        candidates = [layer for layer in self._viewer.layers if self._is_segmentation_layer(layer)]
-        if not candidates:
-            return None
-
-        for layer in candidates:
-            if layer.name == "segmentation":
-                return layer
-
-        for layer in candidates:
-            if "seg" in layer.name.lower():
-                return layer
-
-        return candidates[0]
-
-    def _select_default_segmentation_layer(self):
-        default_layer = self._find_default_segmentation_layer()
-        if default_layer is not None:
-            self.segmentation_selection.value = default_layer
-
-    def _segmentation_layer_choices(self):
-        return [(layer.name, layer) for layer in self._viewer.layers if self._is_segmentation_layer(layer)]
-
-    def _create_segmentation_layer_section(self):
-        segmentation_selection = QtWidgets.QVBoxLayout()
-        segmentation_layer_widget = QtWidgets.QLabel("Segmentation:")
-        segmentation_selection.addWidget(segmentation_layer_widget)
-        self.segmentation_selection = ComboBox(choices=lambda _: self._segmentation_layer_choices())
-        self._select_default_segmentation_layer()
-        self.segmentation_selection.changed.connect(self._invalidate_object_features)
-        state = AnnotatorState()
-        state.segmentation_selection = self.segmentation_selection
-        segmentation_selection.addWidget(self.segmentation_selection.native)
-        return segmentation_selection
 
     def _create_label_widget(self):
         self._label_form = QtWidgets.QFormLayout()
@@ -580,7 +439,7 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         scroll_area.setWidgetResizable(True)
 
         layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(QtWidgets.QLabel("Object label names:"))
+        layout.addWidget(QtWidgets.QLabel("Pixel label names:"))
         layout.addWidget(scroll_area)
 
         return layout
@@ -639,15 +498,11 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         # Connect the run button with the function to update the image.
         self._embedding_widget.run_button.clicked.connect(self._update_image)
 
-        # The segmentation selection stays visible at top level; only classifier options live in the
-        # "Classification Settings" dropdown. The 'Apply to Volume' checkboxes are shown only for
-        # 3d data (toggled in '_update_image').
+        # One section: the "Classification Settings" dropdown (classifier load/export) on top,
+        # with the 'Train and predict' button below it. The 'Apply to Volume' checkboxes are shown
+        # only for 3d data (toggled in '_update_image').
         self._train_and_predict_widget, self._apply_to_volume = _create_train_widget(self._viewer)
         self._apply_to_volume.visible = False
-        self._seg_selection_widget = self._create_segmentation_layer_section()
-        self._viewer.layers.events.inserted.connect(self._reset_segmentation_layer_choices)
-        self._viewer.layers.events.removed.connect(self._reset_segmentation_layer_choices)
-        self._viewer.layers.events.reordered.connect(self._reset_segmentation_layer_choices)
         io = _create_classifier_io_widget(self._viewer)
         self._classifier_io_widget, self._get_n_components, self._get_use_anyup, self._set_options = io
 
@@ -658,13 +513,10 @@ class ObjectClassifier(QtWidgets.QScrollArea):
 
         classification_section = QtWidgets.QWidget()
         classification_section.setLayout(QtWidgets.QVBoxLayout())
-        seg_container = QtWidgets.QWidget()
-        seg_container.setLayout(self._seg_selection_widget)
-        classification_section.layout().addWidget(seg_container)
         classification_section.layout().addWidget(collapsible)
         classification_section.layout().addWidget(self._train_and_predict_widget.native)
 
-        # A separate section: the object label names.
+        # A separate section: the pixel label names.
         self._label_widget = self._create_label_widget()
 
         self._widgets = {
@@ -674,7 +526,7 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         }
 
     def __init__(self, viewer: "napari.viewer.Viewer") -> None:
-        """Create the GUI for the object classifier.
+        """Create the GUI for the pixel classifier.
 
         Args:
             viewer: The napari viewer.
@@ -684,17 +536,16 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         self._annotator_widget = QtWidgets.QWidget()
         self._annotator_widget.setLayout(QtWidgets.QVBoxLayout())
 
-        # Add the layers for prompts and segmented obejcts.
+        # Add the layers for annotations and prediction.
         # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
         self._shape = (256, 256)
         self._require_layers()
         self._ndim = len(self._shape)
 
         # Create all the widgets and add them to the layout.
-        self._label_names = {}  # The names for the object labels.
+        self._label_names = {}  # The names for the pixel labels.
         self._create_widgets()
 
-        # We could refactor this.
         for widget_name, widget in self._widgets.items():
             widget_frame = QtWidgets.QGroupBox()
             widget_layout = QtWidgets.QVBoxLayout()
@@ -741,6 +592,10 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         # The 'Apply to Volume' checkbox only makes sense for 3d data.
         self._apply_to_volume.visible = self._ndim == 3
 
+        # The features depend on the image, so they have to be recomputed for a new image.
+        state.pixel_features = None
+        state.pixel_grid_shape = None
+
         # Before we reset the layers, we ensure all expected layers exist.
         self._require_layers()
 
@@ -754,11 +609,10 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         self._viewer.layers["prediction"].scale = scale
 
 
-def object_classifier(
+def pixel_classifier(
     image: np.ndarray,
-    segmentation: np.ndarray,
     embedding_path: Optional[Union[str, util.ImageEmbeddings]] = None,
-    model_type: str = DEFAULT_MODEL,
+    model_type: str = util._DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
@@ -767,11 +621,10 @@ def object_classifier(
     device: Optional[Union[str, torch.device]] = None,
     ndim: Optional[int] = None,
 ) -> Optional["napari.viewer.Viewer"]:
-    """Start the object classifier for a given image and segmentation.
+    """Start the pixel classifier for a given image.
 
     Args:
         image: The image data.
-        segmentation: The segmentation data.
         embedding_path: Filepath where to save the embeddings
             or the precompted image embeddings computed by `precompute_image_embeddings`.
         model_type: The Segment Anything model to use. For details on the available models check out
@@ -808,16 +661,14 @@ def object_classifier(
         viewer = napari.Viewer()
 
     viewer.add_image(image, name="image")
-    viewer.add_labels(segmentation, name="segmentation")
 
-    annotator = ObjectClassifier(viewer)
+    annotator = PixelClassifier(viewer)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
-    # And initialize the 'committed_objects' with the segmentation result if it was given.
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator, name="(Object Classifier) Segment Anything for Microscopy")
+    viewer.window.add_dock_widget(annotator, name="(Pixel Classifier) Segment Anything for Microscopy")
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
@@ -832,141 +683,3 @@ def object_classifier(
         return viewer
 
     napari.run()
-
-
-def image_series_object_classifier(
-    images: List[np.ndarray],
-    segmentations: List[np.ndarray],
-    output_folder: str,
-    embedding_paths: Optional[List[Union[str, util.ImageEmbeddings]]] = None,
-    model_type: str = DEFAULT_MODEL,
-    tile_shape: Optional[Tuple[int, int]] = None,
-    halo: Optional[Tuple[int, int]] = None,
-    checkpoint_path: Optional[str] = None,
-    device: Optional[Union[str, torch.device]] = None,
-    ndim: Optional[int] = None,
-) -> None:
-    """Start the object classifier for a list of images and segmentations.
-
-    This function will save the all features and labels for annotated objects,
-    to enable training a random forest on multiple images.
-
-    Args:
-        images: The input images.
-        segmentations: The input segmentations.
-        output_folder: The folder where segmentation results, trained random forest
-            and the features, labels aggregated during training will be saved.
-        embedding_paths: Filepaths where to save the embeddings
-            or the precompted image embeddings computed by `precompute_image_embeddings`.
-        model_type: The Segment Anything model to use. For details on the available models check out
-            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
-        tile_shape: Shape of tiles for tiled embedding prediction.
-            If `None` then the whole image is passed to Segment Anything.
-        halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
-        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
-        device: The computational device to use for the SAM model.
-            By default, automatically chooses the best available device.
-        ndim: The dimensionality of the data. If not given will be derived from the data.
-    """
-    # TODO precompute the embeddings if not computed, can re-use 'precompute' from image series annotator.
-    # TODO support file paths as inputs
-    # TODO option to skip segmented
-    if len(images) != len(segmentations):
-        raise ValueError(
-            f"Expect the same number of images and segmentations, got {len(images)}, {len(segmentations)}."
-        )
-
-    end_msg = "You have annotated the last image. Do you wish to close napari?"
-
-    # Initialize the object classifier on the fist image / segmentation.
-    viewer = object_classifier(
-        image=images[0], segmentation=segmentations[0],
-        embedding_path=None if embedding_paths is None else embedding_paths[0],
-        model_type=model_type, tile_shape=tile_shape, halo=halo,
-        return_viewer=True, checkpoint_path=checkpoint_path,
-        device=device, ndim=ndim,
-    )
-
-    os.makedirs(output_folder, exist_ok=True)
-    next_image_id = 0
-
-    def _save_prediction(image, pred, image_id):
-        fname = f"{Path(image).stem}_prediction.tif" if isinstance(image, str) else f"prediction_{image_id}.tif"
-        save_path = os.path.join(output_folder, fname)
-        imageio.imwrite(save_path, pred, compression="zlib")
-
-    # TODO handle cases where rf for the image was not trained, raise a message, enable contnuing
-    # Add functionality for going to the next image.
-    @magicgui(call_button="Next Image [N]")
-    def next_image(*args):
-        nonlocal next_image_id
-
-        # Get the state and the current segmentation (note that next image id has not yet been increased)
-        state = AnnotatorState()
-        segmentation = segmentations[next_image_id]
-
-        # Keep track of the previous features and labels.
-        labels = _accumulate_labels(segmentation, viewer.layers["annotations"].data)
-        valid = labels != 0
-        if valid.sum() > 0:
-            features, labels = state.object_features[valid], labels[valid]
-            if state.previous_features is None:
-                state.previous_features, state.previous_labels = features, labels
-            else:
-                state.previous_features = np.concatenate([state.previous_features, features], axis=0)
-                state.previous_labels = np.concatenate([state.previous_labels, labels], axis=0)
-            # Save the accumulated features and labels.
-            np.save(os.path.join(output_folder, "features.npy"), state.previous_features)
-            np.save(os.path.join(output_folder, "labels.npy"), state.previous_labels)
-
-        # Save the current prediction and RF (with its specs, matching the single-image export).
-        _save_prediction(images[next_image_id], viewer.layers["prediction"].data, next_image_id)
-        dump(
-            {"rf": state.object_rf, "model_spec": _classifier_spec(state.object_rf)},
-            os.path.join(output_folder, "rf.joblib"),
-        )
-
-        # Go to the next image.
-        next_image_id += 1
-
-        # Check if we are done.
-        if next_image_id == len(images):
-            # Inform the user via dialog.
-            abort = widgets._generate_message("info", end_msg)
-            if not abort:
-                viewer.close()
-            return
-
-        # Get the next image, segmentation and embedding_path.
-        image = images[next_image_id]
-        segmentation = segmentations[next_image_id]
-        embedding_path = None if embedding_paths is None else embedding_paths[next_image_id]
-
-        # Set the new image in the viewer, state and annotator.
-        viewer.layers["image"].data = image
-        viewer.layers["segmentation"].data = segmentation
-
-        state.initialize_predictor(
-            image, model_type=model_type, ndim=ndim,
-            save_path=embedding_path,
-            tile_shape=tile_shape, halo=halo,
-            predictor=state.predictor, device=device,
-        )
-        state.image_shape = image.shape if image.ndim == ndim else image.shape[:-1]
-        state.annotator._update_image()
-
-        # Clear the object features and seg-ids from the state.
-        state.object_features = None
-        state.seg_ids = None
-
-    viewer.window.add_dock_widget(next_image)
-
-    @viewer.bind_key("n", overwrite=True)
-    def _next_image(viewer):
-        next_image(viewer)
-
-    napari.run()
-
-
-# TODO: folder annotator
-# TODO: main function

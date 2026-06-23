@@ -122,6 +122,15 @@ class AnnotatorState(metaclass=Singleton):
     previous_features: Optional[np.ndarray] = None
     previous_labels: Optional[np.ndarray] = None
 
+    # Extra options for pixel classification.
+    pixel_features: Optional[np.ndarray] = None
+    pixel_grid_shape: Optional[Tuple[int, ...]] = None
+    # TODO use RF class
+    pixel_rf: Optional[Any] = None
+
+    # Cached AnyUp upsampler, shared by the classification tools when upsampling is enabled.
+    anyup_upsampler: Optional[Any] = None
+
     # Interactive segmentation class for 'micro-sam2'.
     interactive_segmenter: Optional[Any] = None  # TODO: Create a base class and add it here.
     is_sam2: Optional[bool] = None  # Whether this is a SAM1 or SAM2 model.
@@ -355,4 +364,5 @@ class AnnotatorState(metaclass=Singleton):
         self.data_signature = None
         self.interactive_segmenter = None
         self.is_sam2 = None
+        self.anyup_upsampler = None
         # Note: we don't clear the widgets here, because they are fixed for a viewer session.

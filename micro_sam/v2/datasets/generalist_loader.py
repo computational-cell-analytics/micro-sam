@@ -146,10 +146,10 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
 
     # 4. EmbedSeg (cell and nucleus segmentation in fluorescence microscopy images)
     # Anisotropy factors (z/xy) from file metadata or EmbedSeg paper (Table 3, arXiv:2101.10033).
-    # Mouse-Organoid: z=1.0µm, xy=0.1733µm → ~5.8x → (6, 1, 1)
-    # Mouse-Skull: z≈0.5µm, xy≈0.1µm → ~5x → (5, 1, 1)
+    # Mouse-Organoid: z=1.0µm, xy=0.1733µm -> ~5.8x -> (6, 1, 1)
+    # Mouse-Skull: z≈0.5µm, xy≈0.1µm -> ~5x -> (5, 1, 1)
     # Platynereis-ISH: confirmed isotropic from TIFF metadata (z≈xy≈0.45µm)
-    # Platynereis-Nuclei: confirmed from TIFF metadata (z=2.031µm, xy=0.406µm → ~5x)
+    # Platynereis-Nuclei: confirmed from TIFF metadata (z=2.031µm, xy=0.406µm -> ~5x)
     embedseg_sampling = {
         "Mouse-Organoid-Cells-CBG": (6, 1, 1),
         "Mouse-Skull-Nuclei-CBG": (5, 1, 1),
@@ -411,7 +411,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     n_z = len(z_slices)
 
     # 1. CREMI (neuron segmentation in vEM)
-    # NOTE: Neurons are large — a patch typically contains only 1-2 of them, so min_num_instances=3
+    # NOTE: Neurons are large - a patch typically contains only 1-2 of them, so min_num_instances=3
     # would reject nearly every sample. Use min_num_instances=1 to require just one foreground object.
     for z in z_slices:
         cremi_kwargs = {
@@ -444,9 +444,9 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
         )
 
     # 2. EMNeuron (neuron segmentation in vEM)
-    # NOTE: Large neurons — use min_num_instances=1 (same reasoning as CREMI).
+    # NOTE: Large neurons - use min_num_instances=1 (same reasoning as CREMI).
     # J0126-sbem (train: 150×150 or 256×256 XY) and FIB25 (val: 250×250 XY) are too small
-    # for the standard 512×512 patch shape — they get their own 128×128 patch group with a
+    # for the standard 512×512 patch shape - they get their own 128×128 patch group with a
     # resize-to-512 transform applied to both raw and label before the EM label transform.
     from torch_em.data.datasets.electron_microscopy.emneuron import get_emneuron_paths
 
@@ -494,7 +494,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             ), source_ndim=3, group_key=(3, z),
         ))
 
-        # Small volumes (J0126 train; J0126+FIB25 val): 128×128 patches → resize to 512×512
+        # Small volumes (J0126 train; J0126+FIB25 val): 128×128 patches -> resize to 512×512
         small_kwargs = {
             "patch_shape": (z, 128, 128),
             "raw_transform": _resize_raw_to_512,
@@ -748,7 +748,7 @@ def get_interactive_dataloaders(
             Falls back to *batch_size* when not provided.
         z_slices: List of z-slice counts for 3D data (e.g. [8]).
             Defaults to [8].
-        dataset_choice: Which dataset domain to include — ``"lm"``, ``"em"``,
+        dataset_choice: Which dataset domain to include - ``"lm"``, ``"em"``,
             or ``"both"`` (default).
         n_workers: Number of DataLoader worker processes.
 
@@ -862,8 +862,8 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice):
 
     Labels have **5 channels**: ``[instance_ids, fg, d_x, d_y, d_z]``.
 
-    - Channel 0 (int64): instance IDs → interactive branch via ``ConvertToSam2VideoBatch``.
-    - Channels 1-4 (float32): foreground + directed distances → automatic branch via
+    - Channel 0 (int64): instance IDs -> interactive branch via ``ConvertToSam2VideoBatch``.
+    - Channels 1-4 (float32): foreground + directed distances -> automatic branch via
       ``DirectedDistanceLoss``.
 
     Unlike building two separate datasets, this shares a single data pipeline so both
@@ -873,7 +873,7 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice):
         Tuple of (train_ds, val_ds) as :class:`ConcatDataset` instances.
     """
     patch_shape = (512, 512)
-    label_trafo = _JointLabelTransform  # instances=True by default → 5-channel output
+    label_trafo = _JointLabelTransform  # instances=True by default -> 5-channel output
 
     kwargs = {
         "raw_transform": _identity,

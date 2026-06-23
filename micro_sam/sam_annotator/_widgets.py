@@ -1941,6 +1941,105 @@ class EmbeddingWidget(_WidgetBase):
         # return worker
 
 
+class ClassificationEmbeddingWidget(EmbeddingWidget):
+    """Embedding widget for the classification tools (pixel and object classification).
+
+    Unlike the SAM2-only `EmbeddingWidget` used by the segmentation and tracking annotators,
+    this exposes all SAM1, micro-sam (finetuned SAM1) and SAM2 model families. Classification
+    operates directly on the image encoder embeddings, so any of these models can be used.
+    """
+
+    size_order = ["tiny", "small", "base", "large", "huge"]
+
+    def _create_model_section(self, default_model="vit_t_sam2", create_layout=True):
+        # The model family mapped to the model-name suffix. SAM2 families use the 'hvit_' prefix
+        # ('_sam2' for the natural-image backbones, '_cells' for the finetuned microscopy model);
+        # the SAM1 families use the 'vit_' prefix.
+        self.supported_dropdown_maps = {
+            "Natural Images (SAM1)": "",
+            "Natural Images (SAM2)": "_sam2",
+            "Microscopy (SAM2)": "_cells",
+            "Light Microscopy (SAM1)": "_lm",
+            "Electron Microscopy (SAM1)": "_em_organelles",
+            "Medical Imaging (SAM1)": "_medical_imaging",
+            "Histopathology (SAM1)": "_histopathology",
+        }
+        self._model_size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
+
+        self._default_model_choice = default_model
+        self.model_family = {v: k for k, v in self.supported_dropdown_maps.items()}[default_model[5:]]
+
+        kwargs = {}
+        if create_layout:
+            layout = QtWidgets.QVBoxLayout()
+            kwargs["layout"] = layout
+
+        self.model_family_dropdown, layout = self._add_choice_param(
+            "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
+            title="Model:", tooltip=get_tooltip("embedding", "model_family"), **kwargs,
+        )
+        self.model_family_dropdown.currentTextChanged.connect(self._update_model_type)
+        return layout
+
+    def _get_model_size_options(self):
+        # Build the available sizes for the selected family, mapping each UI label to the model name.
+        self.model_size_mapping = {}
+        if self.model_family == "Natural Images (SAM2)":
+            for key in ("t", "s", "b", "l"):
+                self.model_size_mapping[self._model_size_map[key]] = f"hvit_{key}"
+        elif self.model_family == "Microscopy (SAM2)":
+            from micro_sam.v2.util import FINETUNED_MODELS
+            for key in ("t", "s", "b", "l"):
+                name = f"hvit_{key}_cells"
+                if name in FINETUNED_MODELS:
+                    self.model_size_mapping[self._model_size_map[key]] = name
+        else:
+            from ..v1.util import get_model_names
+            suffix = self.supported_dropdown_maps[self.model_family]
+            available = {m for m in get_model_names() if not m.endswith("decoder")}
+            for key, label in self._model_size_map.items():
+                name = f"vit_{key}{suffix}"
+                if name in available:
+                    self.model_size_mapping[label] = name
+
+        self.model_size_options = sorted(self.model_size_mapping.keys(), key=self.size_order.index)
+
+    def _update_model_type(self):
+        current_selection = self.model_size_dropdown.currentText()
+        self._get_model_size_options()
+
+        # NOTE: We prevent recursive updates while we rebuild the dropdown.
+        self.model_size_dropdown.blockSignals(True)
+        self.model_size_dropdown.clear()
+        self.model_size_dropdown.addItems(self.model_size_options)
+
+        # Restore the previous selection if still valid, else default to the first available size.
+        if current_selection in self.model_size_options:
+            self.model_size = current_selection
+        elif self.model_size_options:
+            self.model_size = self.model_size_options[0]
+        self.model_type = self.model_size_mapping.get(self.model_size)
+
+        self.model_size_dropdown.setCurrentText(self.model_size)
+        self.model_size_dropdown.update()
+        self.model_size_dropdown.blockSignals(False)
+
+    def _validate_model_type_and_custom_weights(self):
+        # Map the selected family and size to the actual model name.
+        if self.model_family in self.supported_dropdown_maps:
+            self._get_model_size_options()
+            if self.model_size in self.model_size_mapping:
+                self.model_type = self.model_size_mapping[self.model_size]
+
+        # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
+        if self.custom_weights:
+            # NOTE: We prevent recursive updates for this step temporarily.
+            self.model_family_dropdown.blockSignals(True)
+            self.model_family_dropdown.setCurrentIndex(-1)
+            self.model_family_dropdown.update()
+            self.model_family_dropdown.blockSignals(False)
+
+
 #
 # Functionality and widget for nd segmentation.
 #

@@ -1446,7 +1446,8 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
                 ```
                 where `foreground`, `center_distances`, and `boundary_distances` are the respective
                 predictions from the segmentation decoder. It must returns a dictionary containing
-                either point, box, or mask prompts in a format compattible with `micro_sam.v1.inference.batched_inference`.
+                either point, box, or mask prompts in a format compatible with
+                `micro_sam.v1.inference.batched_inference`.
 
         Returns:
             The instance segmentation masks.
@@ -1550,7 +1551,8 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
                 ```
                 where `foreground`, `center_distances`, and `boundary_distances` are the respective
                 predictions from the segmentation decoder. It must returns a dictionary containing
-                either point, box, or mask prompts in a format compattible with `micro_sam.v1.inference.batched_inference`.
+                either point, box, or mask prompts in a format compatible with
+                `micro_sam.v1.inference.batched_inference`.
             optimize_memory: Whether to optimize the memory consumption by merging the per-slice
                 segmentation results immediatly with NMS, rather than running a NMS for all results.
                 This may lead to a slightly different segmentation result and is only compatible with

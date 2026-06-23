@@ -131,7 +131,7 @@ class DistributedUniBatchSampler(Sampler[List[int]]):
         return batches[:n_batches]
 
     def set_epoch(self, epoch: int) -> None:
-        """Seed the shuffle for *epoch* — must be called identically on all ranks."""
+        """Seed the shuffle for *epoch* - must be called identically on all ranks."""
         self._base.set_epoch(epoch)
 
     def __iter__(self):

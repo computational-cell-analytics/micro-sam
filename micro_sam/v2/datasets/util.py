@@ -16,12 +16,12 @@ def check_loader(loader, n_samples: int = 50, n_target_channels: int = 4):
 
         if x.shape[1] != 3:
             raw_channel_errors.append(
-                f"  batch {i}: raw has {x.shape[1]} channels, expected 3 — shape {tuple(x.shape)}"
+                f"  batch {i}: raw has {x.shape[1]} channels, expected 3 - shape {tuple(x.shape)}"
             )
 
         if y.shape[1] != n_target_channels:
             label_channel_errors.append(
-                f"  batch {i}: target has {y.shape[1]} channels, expected {n_target_channels} — shape {tuple(y.shape)}"
+                f"  batch {i}: target has {y.shape[1]} channels, expected {n_target_channels} - shape {tuple(y.shape)}"
             )
 
     print(f"Checked {min(n_samples, i + 1)} batches.")

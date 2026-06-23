@@ -61,7 +61,7 @@ def _plantseg_label_trafo(y, data, label_trafo):
 
 
 def _joint_em_cell_label_trafo(y, label_trafo):
-    """EM label transform for joint training — keeps instance IDs as channel 0.
+    """EM label transform for joint training - keeps instance IDs as channel 0.
 
     Like :func:`_em_cell_label_trafo` but returns
     ``[instance_ids, expected_fg, d_x, d_y, d_z]`` (5 channels) instead of
