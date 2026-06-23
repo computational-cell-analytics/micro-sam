@@ -6,6 +6,7 @@ import torch
 from magicgui.widgets import ComboBox, Container
 
 from .. import util
+from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
 from . import util as vutil
 from ._annotator import _AnnotatorBase
@@ -321,7 +322,7 @@ def annotator_tracking(
     image: np.ndarray,
     embedding_path: Optional[str] = None,
     # tracking_result: Optional[str] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,

@@ -13,7 +13,6 @@ from skimage import draw
 from scipy.ndimage import shift
 
 from .. import util
-from ..v1.util import get_model_names
 from ..v1 import prompt_based_segmentation
 from .. import _model_settings as model_settings
 from ..v1.multi_dimensional_segmentation import _validate_projection
@@ -94,7 +93,7 @@ def toggle_label(prompts):
 
 def _initialize_parser(description, with_segmentation_result=True, with_instance_segmentation=True):
 
-    from micro_sam.v2.util import SUPPORTED_MODELS
+    from micro_sam.v2.util import SUPPORTED_MODELS, get_model_names, DEFAULT_MODEL
     available_models = ", ".join(SUPPORTED_MODELS + list(get_model_names()))
 
     parser = argparse.ArgumentParser(description=description)
@@ -130,7 +129,7 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
         )
 
     parser.add_argument(
-        "-m", "--model_type", default="hvit_t",
+        "-m", "--model_type", default=DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(
@@ -739,8 +738,13 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         "histopathology": "Histopathology",
     }
 
-    if model_type.startswith("hvit"):  # SAM2 models, eg. 'hvit_t', are all natural-image models.
-        model_family = "Natural Images (SAM2)"
+    if model_type.startswith("hvit"):  # SAM2 models, eg. 'hvit_t'.
+        # Finetuned SAM2 families carry a suffix (e.g. 'hvit_t_cells' -> 'Microscopy'); the plain
+        # backbones ('hvit_t', ...) are natural-image models.
+        if model_type.endswith("_cells"):
+            model_family = "Microscopy"
+        else:
+            model_family = "Natural Images"
     else:
         model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to 'Natural Images (SAM)' family.
         for k, v in supported_dropdown_maps.items():

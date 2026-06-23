@@ -305,12 +305,12 @@ class _WidgetBase(QtWidgets.QWidget):
             print("Invalid file selected. Please try again.")
 
     def _get_model_size_options(self):
-        # All supported families are SAM2 (hvit_*) models, so the size options map directly
-        # to the hvit model names. We store the UI labels mapped to actual model names.
-        self.model_size_options = list(self._model_size_map.values())
-        self.model_size_mapping = {
-            self._model_size_map[k]: f"hvit_{k}" for k in self._model_size_map.keys()
-        }
+        # The available model sizes depend on the selected family: the base SAM2 family supports all
+        # sizes, while finetuned families may only be available for specific sizes (e.g. 'Microscopy'
+        # is an 'hvit_t' model). We store the UI labels mapped to the corresponding model names.
+        sizes = self.model_family_config[self.model_family]["sizes"]
+        self.model_size_options = [self._model_size_map[k] for k in sizes]
+        self.model_size_mapping = {self._model_size_map[k]: f"hvit_{k}" for k in sizes}
 
         # We ensure an assorted order of model sizes ('tiny' to 'large').
         self.model_size_options.sort(
@@ -318,6 +318,9 @@ class _WidgetBase(QtWidgets.QWidget):
         )
 
     def _update_model_type(self):
+        # Sync the selected family; both the available sizes and the model-type suffix depend on it.
+        self.model_family = self.model_family_dropdown.currentText() or self.model_family
+
         # Get currently selected model size (before clearing dropdown)
         current_selection = self.model_size_dropdown.currentText()
         self._get_model_size_options()  # Update model size options dynamically
@@ -347,7 +350,9 @@ class _WidgetBase(QtWidgets.QWidget):
             ),
             "t",
         )
-        self.model_type = f"hvit_{size_key}"
+        # Append the family suffix (e.g. 'tiny' + 'Microscopy' -> 'hvit_t_cells'; base -> 'hvit_t').
+        suffix = self.model_family_config[self.model_family]["suffix"]
+        self.model_type = f"hvit_{size_key}{suffix}"
 
         self.model_size_dropdown.setCurrentText(
             self.model_size
@@ -361,15 +366,29 @@ class _WidgetBase(QtWidgets.QWidget):
 
     def _create_model_section(
         self,
-        default_model: str = util._DEFAULT_MODEL,
+        default_model: Optional[str] = None,
         create_layout: bool = True,
     ):
+        # The widget encodes its default as the synthetic 'vit_<size><suffix>' selector string. For
+        # SAM2 model ids ('hvit_...') this is just the id without the leading 'h', so we derive it
+        # from the single-source 'DEFAULT_MODEL' (e.g. 'hvit_t_cells' -> 'vit_t_cells' -> Microscopy/tiny).
+        if default_model is None:
+            from ..v2.util import DEFAULT_MODEL
+            default_model = DEFAULT_MODEL[1:]
 
-        # Create a list of support dropdown values and correspond them to suffixes.
-        # We only support SAM2 (hvit_*) families. Finetuned SAM2 checkpoints are loaded via the
-        # custom weights path. Additional SAM2 families can be added here in the future.
+        # Create a list of supported dropdown values and correspond them to suffixes (used to parse
+        # the synthetic default-model string). Additional SAM2 families can be added here in future.
         self.supported_dropdown_maps = {
-            "Natural Images (SAM2)": "_sam2",
+            "Natural Images": "_sam2",
+            "Microscopy": "_cells",
+        }
+
+        # Per-family backend config: the model-type suffix appended after 'hvit_{size}' and the
+        # available model sizes. The base SAM2 family supports all sizes; finetuned families (e.g.
+        # 'Microscopy', the joint SAM2 + UniSAM2 'hvit_t_cells' model) may exist only for some sizes.
+        self.model_family_config = {
+            "Natural Images": {"suffix": "", "sizes": ["t", "s", "b", "l"]},
+            "Microscopy": {"suffix": "_cells", "sizes": ["t"]},
         }
 
         # NOTE: The available SAM2 model sizes are 'tiny', 'small', 'base' and 'large'.
@@ -428,8 +447,10 @@ class _WidgetBase(QtWidgets.QWidget):
         return layout
 
     def _validate_model_type_and_custom_weights(self):
-        # Let's get the selected model size into the desired SAM2 `model_type` structure.
-        self.model_type = "hvit_" + self.model_size[0]
+        # Map the selected family + size to the SAM2 `model_type`, appending the family suffix
+        # (e.g. 'tiny' + 'Microscopy' -> 'hvit_t_cells'; 'tiny' + base family -> 'hvit_t').
+        suffix = self.model_family_config.get(self.model_family, {}).get("suffix", "")
+        self.model_type = f"hvit_{self.model_size[0]}{suffix}"
 
         # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
         if self.custom_weights:
@@ -1388,10 +1409,10 @@ class EmbeddingWidget(_WidgetBase):
         # Section 1: Image and Model.
         section1_layout = QtWidgets.QHBoxLayout()
         section1_layout.addLayout(self._create_image_section())
-        # Default to the natural-image SAM2 family. The widget encodes the default choice as
-        # 'vit_<size><suffix>', so 'vit_t_sam2' selects 'Natural Images (SAM2)' at the tiny size.
+        # Default to the single-source 'DEFAULT_MODEL' (the 'Microscopy' / 'hvit_t_cells' model);
+        # '_create_model_section' derives the synthetic selector string from it when no value is given.
         section1_layout.addLayout(
-            self._create_model_section(default_model="vit_t_sam2")
+            self._create_model_section()
         )  # Creates the model family widget section.
         self.layout().addLayout(section1_layout)
 
@@ -3133,12 +3154,13 @@ class AutoTrackWidget(AutoSegmentV1Widget):
 class AutoSegmentWidget(_WidgetBase):
     """Automatic segmentation widget for SAM2 with 'amg', 'sparse' and 'dense' modes.
 
-    The 'amg' mode runs grid-based automatic mask generation (`micro_sam.v2.instance_segmentation`)
-    and does not require a decoder, so it works for any SAM2 model. The 'sparse' (flow, LM data) and
-    'dense' (multicut, EM data) modes operate on the foreground and directed-distance predictions of
-    a UniSAM2 decoder (`AnnotatorState.decoder`) via `micro_sam.v2.automatic_segmentation`, so they
-    are only offered when a decoder is loaded. A mode dropdown sits next to the 'Apply to Volume'
-    switch and the post-processing parameters refresh on mode change.
+    When a UniSAM2 decoder is loaded (`AnnotatorState.decoder`), only the decoder-based 'sparse'
+    (flow, LM data) and 'dense' (multicut, EM data) modes are offered - these operate on the
+    foreground and directed-distance predictions of the decoder via
+    `micro_sam.v2.automatic_segmentation` and supersede grid-based AMG. The 'amg' mode (grid-based
+    automatic mask generation via `micro_sam.v2.instance_segmentation`, no decoder required) is only
+    offered as a fallback when no decoder is available. A mode dropdown sits next to the 'Apply to
+    Volume' switch and the post-processing parameters refresh on mode change.
 
     Args:
         viewer: The napari viewer.
@@ -3156,7 +3178,8 @@ class AutoSegmentWidget(_WidgetBase):
         self._viewer = viewer
         self.with_decoder = with_decoder
         self.volumetric = volumetric
-        # 'amg' needs no decoder and is the default (and only mode) without one.
+        # With a decoder we default to (and only offer) the decoder-based modes; 'amg' is the
+        # fallback (and only mode) when no decoder is available.
         self.mode = "sparse" if with_decoder else "amg"
         self.settings = None
         # The flow computation backend is always the (faster) cpp implementation.
@@ -3180,9 +3203,9 @@ class AutoSegmentWidget(_WidgetBase):
             )
             top_row.addWidget(self.apply_to_volume_checkbox)
 
-        # 'amg' (grid-based, no decoder) is always available. The decoder-based 'sparse' (flow, LM)
-        # and 'dense' (multicut, EM) modes are only offered when a UniSAM2 decoder is loaded.
-        mode_choices = ["amg", "sparse", "dense"] if self.with_decoder else ["amg"]
+        # With a UniSAM2 decoder we only offer the decoder-based 'sparse' (flow, LM) and 'dense'
+        # (multicut, EM) modes; 'amg' (grid-based, no decoder) is the fallback when none is loaded.
+        mode_choices = ["sparse", "dense"] if self.with_decoder else ["amg"]
         self.mode_dropdown, mode_layout = self._add_choice_param(
             "mode",
             self.mode,
@@ -3205,8 +3228,26 @@ class AutoSegmentWidget(_WidgetBase):
         self.layout().addWidget(self.run_button)
 
     def _reset_segmentation_mode(self, with_decoder):
-        # The dense/sparse modes are independent of the decoder, so we only keep the flag in sync.
+        # If the decoder availability is unchanged there is nothing to rebuild.
+        if with_decoder == self.with_decoder:
+            return
         self.with_decoder = with_decoder
+
+        # The mode dropdown (built from 'with_decoder') must be rebuilt when the loaded model changes:
+        # with a decoder we offer only the decoder-based 'sparse'/'dense' modes, and without one only
+        # the 'amg' fallback - otherwise a finetuned model would keep showing the wrong options.
+        mode_choices = ["sparse", "dense"] if with_decoder else ["amg"]
+        self.mode_dropdown.blockSignals(True)
+        self.mode_dropdown.clear()
+        self.mode_dropdown.addItems(mode_choices)
+        self.mode_dropdown.setCurrentText("sparse" if with_decoder else "amg")
+        self.mode_dropdown.blockSignals(False)
+
+        # Drop the cached segmenter, since the loaded model (and so its predictions) changed, and
+        # refresh the settings panel to match the new default mode.
+        self._segmenter = None
+        self._segmenter_key = None
+        self._on_mode_changed()
 
     def _on_mode_changed(self, index=None):
         self.mode = self.mode_dropdown.currentText()
@@ -3364,7 +3405,7 @@ class AutoSegmentWidget(_WidgetBase):
             halo = (self.Z_HALO,) + halo_xy
         return tile_shape, halo
 
-    def _run_unisam2(self, state, run_raw, ndim, z):
+    def _run_unisam2(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.v2.automatic_segmentation import get_unisam2_segmentation_generator
 
         device = next(state.decoder.parameters()).device
@@ -3386,12 +3427,13 @@ class AutoSegmentWidget(_WidgetBase):
             self._segmenter = get_unisam2_segmentation_generator(state.decoder, is_tiled=is_tiled, device=device)
             self._segmenter.initialize(
                 run_raw, ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo,
+                pbar_init=pbar_init, pbar_update=pbar_update,
             )
             self._segmenter_key = cache_key
 
         return self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
 
-    def _run_amg(self, state, run_raw, ndim, z):
+    def _run_amg(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.v2.instance_segmentation import get_amg_segmenter, automatic_3d_segmentation
 
         # The SAM2 model: 'state.predictor' is the image predictor (2d) wrapping the model, or the
@@ -3411,7 +3453,8 @@ class AutoSegmentWidget(_WidgetBase):
         if ndim == 3:  # Segment slice-by-slice and stitch across z. Tiling is in-plane (None if off).
             tile_shape, halo = self._get_tiling(2)
             return automatic_3d_segmentation(
-                run_raw, _build(tile_shape is not None), tile_shape=tile_shape, halo=halo, **generate_kwargs
+                run_raw, _build(tile_shape is not None), tile_shape=tile_shape, halo=halo,
+                pbar_init=pbar_init, pbar_update=pbar_update, **generate_kwargs,
             )
 
         # For plain 2d the annotator has already precomputed the embeddings, so we reuse them (the
@@ -3429,7 +3472,17 @@ class AutoSegmentWidget(_WidgetBase):
                      self.points_per_side, self.pred_iou_thresh, self.stability_score_thresh)
         if self._segmenter is None or self._segmenter_key != cache_key:
             self._segmenter = _build(is_tiled)
-            self._segmenter.initialize(run_raw, tile_shape=tile_shape, halo=halo, image_embeddings=image_embeddings)
+            if is_tiled:  # The tiled segmenter reports per-tile progress.
+                self._segmenter.initialize(
+                    run_raw, tile_shape=tile_shape, halo=halo, image_embeddings=image_embeddings,
+                    pbar_init=pbar_init, pbar_update=pbar_update,
+                )
+            else:  # A single 2d image is one step.
+                if pbar_init is not None:
+                    pbar_init(1, "Automatic segmentation")
+                self._segmenter.initialize(run_raw, tile_shape=tile_shape, halo=halo, image_embeddings=image_embeddings)
+                if pbar_update is not None:
+                    pbar_update(1)
             self._segmenter_key = cache_key
 
         return self._segmenter.generate(**generate_kwargs)
@@ -3459,10 +3512,33 @@ class AutoSegmentWidget(_WidgetBase):
         else:
             run_raw, ndim = raw, 2
 
-        if self.mode == "amg":
-            seg = self._run_amg(state, run_raw, ndim, z)
-        else:
-            seg = self._run_unisam2(state, run_raw, ndim, z)
+        # Show a progress bar in the napari activity dock (and the status-bar wheel) that advances
+        # with the actual work: per tile for tiled runs, per slice for 3d, and as a single step for a
+        # plain 2d image. Thread workers are disabled in this tool (see top of module), so the run is
+        # synchronous; we drive the bar via callbacks the backends call between units and pump the Qt
+        # event loop with 'processEvents' on each update so it repaints live. It is always closed in
+        # the 'finally' block. (3d decoder inference runs through a thread pool and is reported as a
+        # single step, since it cannot update the napari bar live.)
+        pbar, pbar_signals = _create_pbar_for_threadworker()
+
+        def pbar_init(total, description):
+            pbar_signals.pbar_total.emit(total)
+            pbar_signals.pbar_description.emit(description)
+            QtWidgets.QApplication.processEvents()
+
+        def pbar_update(update=1):
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
+
+        pbar_signals.pbar_description.emit(f"Running automatic segmentation ({self.mode})")
+        QtWidgets.QApplication.processEvents()
+        try:
+            if self.mode == "amg":
+                seg = self._run_amg(state, run_raw, ndim, z, pbar_init=pbar_init, pbar_update=pbar_update)
+            else:
+                seg = self._run_unisam2(state, run_raw, ndim, z, pbar_init=pbar_init, pbar_update=pbar_update)
+        finally:
+            pbar_signals.pbar_stop.emit()
 
         if z is None:
             self._viewer.layers["auto_segmentation"].data = seg
