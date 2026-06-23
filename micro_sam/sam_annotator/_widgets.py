@@ -36,6 +36,7 @@ from .. import util
 from ..v1 import instance_segmentation
 from ..v1.multi_dimensional_segmentation import (
     PROJECTION_MODES,
+    export_tracking_result_to_ctc,
     get_napari_track_data,
     merge_instance_segmentation_3d,
     segment_mask_in_volume,
@@ -1052,6 +1053,31 @@ def commit_track(
 
     # Perform garbage collection.
     gc.collect()
+
+
+@magic_factory(
+    call_button="Export to CTC",
+    export_folder={"mode": "d"},  # choose a directory
+)
+def export_track_to_ctc(
+    viewer: "napari.viewer.Viewer",
+    export_folder: Path = Path.cwd(),
+) -> None:
+    """Widget for exporting the committed tracking result to the Cell Tracking Challenge (CTC) format.
+
+    Args:
+        viewer: The napari viewer.
+        export_folder: The folder where the CTC results (the lineage file 'man_track.txt' and the per-frame
+            label images) are written. By default the current working directory is used.
+    """
+    if "committed_objects" not in viewer.layers or viewer.layers["committed_objects"].data.max() == 0:
+        _generate_message("error", "There are no committed tracking results to export yet.")
+        return
+
+    segmentation = viewer.layers["committed_objects"].data
+    lineages = AnnotatorState().committed_lineages
+    export_tracking_result_to_ctc(segmentation, lineages, export_folder)
+    show_info(f"Exported the tracking result to CTC format in '{export_folder}'.")
 
 
 def create_prompt_menu(

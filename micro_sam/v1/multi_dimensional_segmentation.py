@@ -7,6 +7,7 @@ import warnings
 from concurrent import futures
 from typing import Dict, List, Optional, Union, Tuple
 
+import imageio.v3 as imageio
 import networkx as nx
 import numpy as np
 import torch
@@ -487,11 +488,14 @@ def _filter_tracks(tracking_result, min_track_length):
     discard_ids = []
     for prop in props:
         label_id = prop.label
-        z_start, z_stop = prop.bbox[0], prop.bbox[3]
-        if z_stop - z_start < min_track_length:
+        # The first axis of the tracking result is time, so the bbox extent along it is the track length.
+        t_start, t_stop = prop.bbox[0], prop.bbox[3]
+        if t_stop - t_start < min_track_length:
             discard_ids.append(label_id)
+    tracking_result = tracking_result.copy()
     tracking_result[np.isin(tracking_result, discard_ids)] = 0
-    tracking_result, _, _ = relabel_sequential(tracking_result)
+    # We deliberately do not relabel the result here, so that the remaining track ids stay consistent with
+    # the lineage information. Non-consecutive track ids are filtered from the lineages via '_filter_lineages'.
     return tracking_result
 
 
@@ -564,7 +568,11 @@ def _filter_lineages(lineages, tracking_result):
     track_ids = set(np.unique(tracking_result)) - {0}
     filtered_lineages = []
     for lineage in lineages:
-        filtered_lineage = {k: v for k, v in lineage.items() if k in track_ids}
+        # Drop nodes that are no longer present, both as parents (keys) and as children (values),
+        # so that the lineage does not reference filtered-out tracks.
+        filtered_lineage = {
+            k: [c for c in v if c in track_ids] for k, v in lineage.items() if k in track_ids
+        }
         if filtered_lineage:
             filtered_lineages.append(filtered_lineage)
     return filtered_lineages
@@ -592,11 +600,9 @@ def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folde
     if output_folder is not None:  # Store tracking results in CTC format.
         graph_to_ctc(lineage_graph, segmentation, outdir=output_folder)
 
-    # TODO
-    # We should check if trackastra supports this already.
-    # Filter out short tracks / lineages.
+    # Filter out short tracks. Trackastra has no native option for this, so we do it as a post-process.
     if min_time_extent is not None and min_time_extent > 0:
-        raise NotImplementedError
+        tracking_result = _filter_tracks(tracking_result, min_time_extent)
 
     # Filter out pruned lineages.
     # May either be missing due to track filtering or non-consecutive track numbering in trackastra.
@@ -753,7 +759,8 @@ def get_napari_track_data(
     with futures.ThreadPoolExecutor(n_threads) as tp:
         track_data = list(tp.map(compute_props, range(segmentation.shape[0])))
     track_data = [data for data in track_data if data.size > 0]
-    track_data = np.concatenate(track_data)
+    # The segmentation may be empty, e.g. if all tracks were filtered out via 'min_time_extent'.
+    track_data = np.concatenate(track_data) if track_data else np.zeros((0, 4), dtype="float64")
 
     # The graph representation of napari uses the children as keys and the parents as values,
     # whereas our representation uses parents as keys and children as values.
@@ -763,3 +770,65 @@ def get_napari_track_data(
     }
 
     return track_data, parent_graph
+
+
+def export_tracking_result_to_ctc(
+    segmentation: np.ndarray,
+    lineages: List[Dict],
+    output_folder: Union[os.PathLike, str],
+) -> None:
+    """Export a tracking result to the Cell Tracking Challenge (CTC) format.
+
+    This writes the standard CTC folder layout into 'output_folder':
+    - 'TRA/man_track.txt', the lineage file with one space-separated row 'L B E P' per track
+      (track id, first frame, last frame, parent track id, where the parent is 0 if the track has no parent).
+    - 'TRA/man_track<frame>.tif', the per-frame tracking masks, with each object labeled by its track id.
+    - 'SEG/man_seg<frame>.tif', the per-frame segmentation masks.
+
+    Args:
+        segmentation: The tracking result of shape (T, Y, X), with each object labeled by its track id.
+        lineages: The lineage information, a list of dicts mapping each parent track id to its child track ids.
+        output_folder: The folder where the CTC results are written, with 'TRA' and 'SEG' subfolders.
+    """
+    if segmentation.ndim != 3:
+        raise ValueError(f"Expected a 3d (T, Y, X) tracking result, got shape {segmentation.shape}.")
+
+    tra_folder = os.path.join(output_folder, "TRA")
+    seg_folder = os.path.join(output_folder, "SEG")
+    os.makedirs(tra_folder, exist_ok=True)
+    os.makedirs(seg_folder, exist_ok=True)
+
+    # Map each child track to its parent track. Tracks without a parent get 0, as expected by the CTC format.
+    child_to_parent = {}
+    for lineage in lineages:
+        for parent, children in lineage.items():
+            for child in children:
+                child_to_parent[child] = parent
+
+    # Determine the first and last frame in which each track id is present.
+    n_frames = segmentation.shape[0]
+    first_frame, last_frame = {}, {}
+    for t in range(n_frames):
+        for label_id in np.unique(segmentation[t]):
+            label_id = int(label_id)
+            if label_id == 0:
+                continue
+            if label_id not in first_frame:
+                first_frame[label_id] = t
+            last_frame[label_id] = t
+
+    # Write the lineage file into the tracking folder.
+    with open(os.path.join(tra_folder, "man_track.txt"), "w") as f:
+        for label_id in sorted(first_frame.keys()):
+            parent = child_to_parent.get(label_id, 0)
+            f.write(f"{label_id} {first_frame[label_id]} {last_frame[label_id]} {parent}\n")
+
+    # Write the per-frame masks, using uint16 if the track ids fit and uint32 otherwise.
+    # The tracking masks (TRA) and segmentation masks (SEG) share the same track-id labeling.
+    max_id = int(segmentation.max())
+    dtype = "uint16" if max_id < np.iinfo("uint16").max else "uint32"
+    n_digits = max(4, len(str(n_frames - 1)))
+    for t in range(n_frames):
+        frame = segmentation[t].astype(dtype)
+        imageio.imwrite(os.path.join(tra_folder, f"man_track{t:0{n_digits}d}.tif"), frame)
+        imageio.imwrite(os.path.join(seg_folder, f"man_seg{t:0{n_digits}d}.tif"), frame)
