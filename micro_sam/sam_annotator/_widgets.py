@@ -304,12 +304,12 @@ class _WidgetBase(QtWidgets.QWidget):
             print("Invalid file selected. Please try again.")
 
     def _get_model_size_options(self):
-        # All supported families are SAM2 (hvit_*) models, so the size options map directly
-        # to the hvit model names. We store the UI labels mapped to actual model names.
-        self.model_size_options = list(self._model_size_map.values())
-        self.model_size_mapping = {
-            self._model_size_map[k]: f"hvit_{k}" for k in self._model_size_map.keys()
-        }
+        # The available model sizes depend on the selected family: the base SAM2 family supports all
+        # sizes, while finetuned families may only be available for specific sizes (e.g. 'Microscopy'
+        # is an 'hvit_t' model). We store the UI labels mapped to the corresponding model names.
+        sizes = self.model_family_config[self.model_family]["sizes"]
+        self.model_size_options = [self._model_size_map[k] for k in sizes]
+        self.model_size_mapping = {self._model_size_map[k]: f"hvit_{k}" for k in sizes}
 
         # We ensure an assorted order of model sizes ('tiny' to 'large').
         self.model_size_options.sort(
@@ -317,6 +317,9 @@ class _WidgetBase(QtWidgets.QWidget):
         )
 
     def _update_model_type(self):
+        # Sync the selected family; both the available sizes and the model-type suffix depend on it.
+        self.model_family = self.model_family_dropdown.currentText() or self.model_family
+
         # Get currently selected model size (before clearing dropdown)
         current_selection = self.model_size_dropdown.currentText()
         self._get_model_size_options()  # Update model size options dynamically
@@ -346,7 +349,9 @@ class _WidgetBase(QtWidgets.QWidget):
             ),
             "t",
         )
-        self.model_type = f"hvit_{size_key}"
+        # Append the family suffix (e.g. 'tiny' + 'Microscopy' -> 'hvit_t_omni'; base -> 'hvit_t').
+        suffix = self.model_family_config[self.model_family]["suffix"]
+        self.model_type = f"hvit_{size_key}{suffix}"
 
         self.model_size_dropdown.setCurrentText(
             self.model_size
@@ -364,11 +369,19 @@ class _WidgetBase(QtWidgets.QWidget):
         create_layout: bool = True,
     ):
 
-        # Create a list of support dropdown values and correspond them to suffixes.
-        # We only support SAM2 (hvit_*) families. Finetuned SAM2 checkpoints are loaded via the
-        # custom weights path. Additional SAM2 families can be added here in the future.
+        # Create a list of supported dropdown values and correspond them to suffixes (used to parse
+        # the synthetic default-model string). Additional SAM2 families can be added here in future.
         self.supported_dropdown_maps = {
             "Natural Images (SAM2)": "_sam2",
+            "Microscopy": "_omni",
+        }
+
+        # Per-family backend config: the model-type suffix appended after 'hvit_{size}' and the
+        # available model sizes. The base SAM2 family supports all sizes; finetuned families (e.g.
+        # 'Microscopy', the joint SAM2 + UniSAM2 'hvit_t_omni' model) may exist only for some sizes.
+        self.model_family_config = {
+            "Natural Images (SAM2)": {"suffix": "", "sizes": ["t", "s", "b", "l"]},
+            "Microscopy": {"suffix": "_omni", "sizes": ["t"]},
         }
 
         # NOTE: The available SAM2 model sizes are 'tiny', 'small', 'base' and 'large'.
@@ -427,8 +440,10 @@ class _WidgetBase(QtWidgets.QWidget):
         return layout
 
     def _validate_model_type_and_custom_weights(self):
-        # Let's get the selected model size into the desired SAM2 `model_type` structure.
-        self.model_type = "hvit_" + self.model_size[0]
+        # Map the selected family + size to the SAM2 `model_type`, appending the family suffix
+        # (e.g. 'tiny' + 'Microscopy' -> 'hvit_t_omni'; 'tiny' + base family -> 'hvit_t').
+        suffix = self.model_family_config.get(self.model_family, {}).get("suffix", "")
+        self.model_type = f"hvit_{self.model_size[0]}{suffix}"
 
         # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
         if self.custom_weights:
@@ -3179,8 +3194,26 @@ class AutoSegmentWidget(_WidgetBase):
         self.layout().addWidget(self.run_button)
 
     def _reset_segmentation_mode(self, with_decoder):
-        # The dense/sparse modes are independent of the decoder, so we only keep the flag in sync.
+        # If the decoder availability is unchanged there is nothing to rebuild.
+        if with_decoder == self.with_decoder:
+            return
         self.with_decoder = with_decoder
+
+        # The decoder-based 'sparse'/'dense' modes are only available with a UniSAM2 decoder, so the
+        # mode dropdown (built from 'with_decoder') must be rebuilt when the loaded model changes -
+        # otherwise a finetuned model with a decoder would still only show 'amg', and vice versa.
+        mode_choices = ["amg", "sparse", "dense"] if with_decoder else ["amg"]
+        self.mode_dropdown.blockSignals(True)
+        self.mode_dropdown.clear()
+        self.mode_dropdown.addItems(mode_choices)
+        self.mode_dropdown.setCurrentText("sparse" if with_decoder else "amg")
+        self.mode_dropdown.blockSignals(False)
+
+        # Drop the cached segmenter, since the loaded model (and so its predictions) changed, and
+        # refresh the settings panel to match the new default mode.
+        self._segmenter = None
+        self._segmenter_key = None
+        self._on_mode_changed()
 
     def _on_mode_changed(self, index=None):
         self.mode = self.mode_dropdown.currentText()

@@ -739,8 +739,13 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         "histopathology": "Histopathology",
     }
 
-    if model_type.startswith("hvit"):  # SAM2 models, eg. 'hvit_t', are all natural-image models.
-        model_family = "Natural Images (SAM2)"
+    if model_type.startswith("hvit"):  # SAM2 models, eg. 'hvit_t'.
+        # Finetuned SAM2 families carry a suffix (e.g. 'hvit_t_omni' -> 'Microscopy'); the plain
+        # backbones ('hvit_t', ...) are natural-image models.
+        if model_type.endswith("_omni"):
+            model_family = "Microscopy"
+        else:
+            model_family = "Natural Images (SAM2)"
     else:
         model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to 'Natural Images (SAM)' family.
         for k, v in supported_dropdown_maps.items():
