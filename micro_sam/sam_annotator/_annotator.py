@@ -99,9 +99,12 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             "The child classes of _AnnotatorBase have to implement _get_widgets."
         )
 
+    def _create_embedding_widget(self):
+        return widgets.EmbeddingWidget()
+
     def _create_widgets(self):
         # Create the embedding widget and connect all events related to it.
-        self._embedding_widget = widgets.EmbeddingWidget()
+        self._embedding_widget = self._create_embedding_widget()
         # Connect events for the image selection box.
         self._viewer.layers.events.inserted.connect(
             self._embedding_widget.image_selection.reset_choices

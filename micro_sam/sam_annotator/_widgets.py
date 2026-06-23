@@ -36,6 +36,9 @@ from .. import util
 from ..v1 import instance_segmentation
 from ..v1.multi_dimensional_segmentation import (
     PROJECTION_MODES,
+    export_tracking_result_to_ctc,
+    export_tracking_result_to_geff,
+    export_tracking_result_to_trackmate_xml,
     get_napari_track_data,
     merge_instance_segmentation_3d,
     segment_mask_in_volume,
@@ -462,6 +465,15 @@ class _WidgetBase(QtWidgets.QWidget):
             # NOTE: And re-enable signals again.
             self.model_family_dropdown.blockSignals(False)
 
+    def _validate_model_support(self):
+        if getattr(self, "sam2_only", False) and not self.model_type.startswith("hvit_"):
+            return _generate_message(
+                "error",
+                "The tracking annotator only supports micro-sam2/SAM2 models. "
+                f"Got unsupported model '{self.model_type}'.",
+            )
+        return False
+
 
 # Custom signals for managing progress updates.
 class PBarSignals(QObject):
@@ -539,9 +551,9 @@ def _reset_tracking_state(viewer):
     viewer.layers["point_prompts"].property_choices["track_id"] = ["1"]
     viewer.layers["prompts"].property_choices["track_id"] = ["1"]
 
-    # Reset the choices in the track_id menu.
-    state.widgets["tracking"][1].value = "1"
-    state.widgets["tracking"][1].choices = ["1"]
+    # Reset the choices in the track_id menu (index 2: prompt, track_state, track_id).
+    state.annotator._tracking_widget[2].value = "1"
+    state.annotator._tracking_widget[2].choices = ["1"]
 
 
 #
@@ -994,14 +1006,20 @@ def commit(
 
 @magic_factory(
     call_button="Commit [C]",
-    layer={"choices": ["current_object", "auto_segmentation"]},
-    preserve_mode={"choices": ["objects", "pixels", "none"]},
-    commit_path={"mode": "d"},  # choose a directory
+    layer={
+        "choices": ["current_object", "auto_segmentation"],
+        "tooltip": get_tooltip("commit", "layer"),
+    },
+    preserve_mode={
+        "choices": ["objects", "pixels", "none"],
+        "tooltip": get_tooltip("commit", "preserve_mode"),
+    },
+    commit_path={"mode": "d", "tooltip": get_tooltip("commit", "commit_path")},
 )
 def commit_track(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
-    preserve_mode: str = "objects",
+    preserve_mode: str = "pixels",
     preservation_threshold: float = 0.75,
     commit_path: Optional[Path] = None,
 ) -> None:
@@ -1012,8 +1030,9 @@ def commit_track(
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
         preserve_mode: The mode for preserving already committed objects, in order to prevent over-writing
-            them by a new commit. Supports the modes 'objects', which preserves on the object level and is the default,
-            'pixels', which preserves on the pixel-level, or 'none', which does not preserve commited objects.
+            them by a new commit. Supports the modes 'objects', which preserves on the object level,
+            'pixels', which preserves on the pixel-level and is the default, or 'none', which does not
+            preserve commited objects.
         preservation_threshold: The overlap threshold for preserving objects. This is only used if
             preservation_mode is set to 'objects'.
         commit_path: Select a file path where the committed results and prompts will be saved.
@@ -1073,6 +1092,42 @@ def commit_track(
 
     # Perform garbage collection.
     gc.collect()
+
+
+@magic_factory(
+    call_button="Export",
+    export_format={"choices": ["CTC", "GEFF", "TrackMate XML"]},
+    export_folder={"mode": "d"},  # choose a directory
+)
+def export_track(
+    viewer: "napari.viewer.Viewer",
+    export_format: str = "CTC",
+    export_folder: Path = Path.cwd(),
+) -> None:
+    """Widget for exporting the committed tracking result.
+
+    Args:
+        viewer: The napari viewer.
+        export_format: The tracking export format. Supports 'CTC', 'GEFF' and 'TrackMate XML'.
+        export_folder: The folder where the export is written. By default the current working directory is used.
+    """
+    if "committed_objects" not in viewer.layers or viewer.layers["committed_objects"].data.max() == 0:
+        _generate_message("error", "There are no committed tracking results to export yet.")
+        return
+
+    segmentation = viewer.layers["committed_objects"].data
+    lineages = AnnotatorState().committed_lineages
+    if export_format == "CTC":
+        export_tracking_result_to_ctc(segmentation, lineages, export_folder)
+        show_info(f"Exported the tracking result to CTC format in '{export_folder}'.")
+    elif export_format == "GEFF":
+        export_path = export_tracking_result_to_geff(segmentation, lineages, export_folder)
+        show_info(f"Exported the tracking result to GEFF format in '{export_path}'.")
+    elif export_format == "TrackMate XML":
+        export_path = export_tracking_result_to_trackmate_xml(segmentation, lineages, export_folder)
+        show_info(f"Exported the tracking result to TrackMate XML format in '{export_path}'.")
+    else:
+        _generate_message("error", f"Unsupported tracking export format: {export_format}.")
 
 
 def create_prompt_menu(
@@ -1376,8 +1431,9 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, sam2_only=False):
         super().__init__(parent=parent)
+        self.sam2_only = sam2_only
 
         # Create a nested layout for the sections.
         # Section 1: Image and Model.
@@ -1665,6 +1721,8 @@ class EmbeddingWidget(_WidgetBase):
                 self.model_type = f.attrs.get(
                     "model_name", f.attrs["model_type"]
                 )
+                if self._validate_model_support():
+                    return True
                 if (
                     "tile_shape" in f.attrs
                     and f.attrs["tile_shape"] is not None
@@ -1721,6 +1779,8 @@ class EmbeddingWidget(_WidgetBase):
 
     def __call__(self, skip_validate=False):
         self._validate_model_type_and_custom_weights()
+        if self._validate_model_support():
+            return
 
         # Validate user inputs.
         if not skip_validate and self._validate_inputs():
@@ -1810,7 +1870,7 @@ def _update_lineage(viewer):
     This helper function is needed by 'track_object'.
     """
     state = AnnotatorState()
-    tracking_widget = state.widgets["tracking"]
+    tracking_widget = state.annotator._tracking_widget
 
     mother = state.current_track_id
     assert mother in state.lineage
@@ -1825,8 +1885,9 @@ def _update_lineage(viewer):
     state.lineage[daughter2] = []
 
     # Update the choices in the track_id menu so that it contains the new track ids.
+    # (index 2: prompt, track_state, track_id).
     track_ids = list(map(str, state.lineage.keys()))
-    tracking_widget[1].choices = track_ids
+    tracking_widget[2].choices = track_ids
 
     viewer.layers["point_prompts"].property_choices["track_id"] = [
         str(track_id) for track_id in track_ids
@@ -2122,62 +2183,90 @@ class UnifiedSegmentWidget(_WidgetBase):
 
         return seg
 
-    def _run_frame_segmentation(self):
-        """Execute per-frame segmentation (tracking mode).
-        """
-        state = AnnotatorState()
-        shape = state.image_shape[1:]
-        position = self._viewer.dims.point
-        t = int(position[0])
+    def _all_track_ids(self):
+        """Return all track ids that have any point or box prompt across the video."""
+        track_ids = set()
+        point_layer = self._viewer.layers["point_prompts"]
+        if len(point_layer.data):
+            track_ids.update(int(tid) for tid in point_layer.properties["track_id"])
+        box_layer = self._viewer.layers["prompts"]
+        if box_layer.data:
+            track_ids.update(int(tid) for tid in box_layer.properties["track_id"])
+        return sorted(track_ids)
 
+    def _track_ids_on_frame(self, t):
+        """Return the track ids that have point or box prompts on frame 't'."""
+        track_ids = set()
+        point_layer = self._viewer.layers["point_prompts"]
+        if len(point_layer.data):
+            on_frame = np.round(point_layer.data[:, 0]).astype(int) == t
+            point_track_ids = np.array(list(map(int, point_layer.properties["track_id"])))
+            track_ids.update(point_track_ids[on_frame].tolist())
+
+        box_layer = self._viewer.layers["prompts"]
+        if box_layer.data:
+            box_track_ids = np.array(list(map(int, box_layer.properties["track_id"])))
+            for box, box_track_id in zip(box_layer.data, box_track_ids):
+                if int(round(box[0, 0])) == t:
+                    track_ids.add(int(box_track_id))
+        return sorted(track_ids)
+
+    def _segment_track_on_frame(self, state, t, track_id, shape):
+        """Segment a single track's object on frame 't'. Returns the binary mask or None."""
         point_prompts = vutil.point_layer_to_prompts(
-            self._viewer.layers["point_prompts"],
-            i=t,
-            track_id=state.current_track_id,
+            self._viewer.layers["point_prompts"], i=t, track_id=track_id,
         )
-        # this is a stop prompt, we do nothing
+        # A single negative point is a stop prompt: nothing to segment for this track here.
         if not point_prompts:
-            return
+            return None
 
         boxes, masks = vutil.shape_layer_to_prompts(
-            self._viewer.layers["prompts"],
-            shape,
-            i=t,
-            track_id=state.current_track_id,
+            self._viewer.layers["prompts"], shape, i=t, track_id=track_id,
         )
         points, labels = point_prompts
 
-        seg = vutil.prompt_segmentation(
-            state.predictor,
-            points,
-            labels,
-            boxes,
-            masks,
-            shape,
-            multiple_box_prompts=False,
-            image_embeddings=state.image_embeddings,
-            i=t,
+        # The tracking annotator is SAM2-only: segment the frame via the video predictor.
+        # Points are reordered to (x, y) and boxes to (x0, y0, x1, y1), matching the per-slice path.
+        sam2_boxes = [box[[1, 0, 3, 2]] for box in boxes]
+        seg = state.interactive_segmenter.segment_slice(
+            frame_idx=t,
+            points=points[:, ::-1].copy() if len(points) else points,
+            labels=labels,
+            boxes=sam2_boxes,
+            masks=masks,
         )
+        return None if seg is None else (seg.squeeze() == 1)
 
-        # no prompts were given or prompts were invalid, skip segmentation
-        if seg is None:
+    def _run_frame_segmentation(self):
+        """Execute per-frame segmentation (tracking mode).
+
+        With 'Batched' enabled, every track that has prompts on the current frame is segmented in
+        one pass (one object per track id); otherwise only the current track is segmented.
+        """
+        state = AnnotatorState()
+        shape = state.image_shape[1:]
+        t = int(self._viewer.dims.point[0])
+
+        track_ids = self._track_ids_on_frame(t) if self.batched else [state.current_track_id]
+
+        segmented_any = False
+        layer = self._viewer.layers["current_object"]
+        for track_id in track_ids:
+            new_mask = self._segment_track_on_frame(state, t, track_id, shape)
+            if new_mask is None:
+                continue
+            # Clear the old segmentation for this track id, then set the new one.
+            layer.data[t][layer.data[t] == track_id] = 0
+            layer.data[t][new_mask] = track_id
+            segmented_any = True
+
+        if not segmented_any:
             print(
                 "You either haven't provided any prompts or invalid prompts. The segmentation will be skipped."
             )
             return
 
-        # clear the old segmentation for this track_id
-        old_mask = (
-            self._viewer.layers["current_object"].data[t]
-            == state.current_track_id
-        )
-        self._viewer.layers["current_object"].data[t][old_mask] = 0
-        # set the new segmentation
-        new_mask = seg.squeeze() == 1
-        self._viewer.layers["current_object"].data[t][
-            new_mask
-        ] = state.current_track_id
-        self._viewer.layers["current_object"].refresh()
+        layer.refresh()
 
     def _run_volumetric_segmentation(self):
         """Execute volumetric segmentation.
@@ -2324,78 +2413,108 @@ class UnifiedSegmentWidget(_WidgetBase):
         # return worker
 
     def _run_tracking(self):
-        """Execute tracking segmentation.
+        """Execute interactive tracking by propagating the current track's prompts across frames.
+
+        Design boundary: SAM2 only does per-object mask propagation across frames. It has no concept
+        of a division / lineage event and never signals one. Everything division-related here is
+        mechanistic orchestration on top of the model (reading the user's 'division' annotation,
+        bounding propagation, seeding daughters, recording lineage edges) - none of it is a SAM2
+        capability. Genuine automatic division detection lives in the automatic-tracking path via
+        trackastra, which predicts lineages from per-frame segmentations; it is not SAM2.
         """
         state = AnnotatorState()
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        # @thread_worker
-        def tracking_impl():
+        def propagate_track(track_id):
+            # Propagate a single track's prompts across the video with the SAM2 predictor.
+            # A frame whose only prompt for this track is a single negative point is a 'stop'
+            # annotation; a stop on the lowest / highest annotated frame bounds the propagation
+            # below / above the prompts, mirroring the micro-sam v1 tracking behavior.
             shape = state.image_shape
+            point_layer = self._viewer.layers["point_prompts"]
+            box_layer = self._viewer.layers["prompts"]
 
-            pbar_signals.pbar_total.emit(shape[0])
-            pbar_signals.pbar_description.emit("Track object")
+            # Reset so a re-run does not accumulate prompts from a previous propagation.
+            state.interactive_segmenter.reset_predictor()
+            pbar_signals.pbar_description.emit(f"Track object {track_id}")
 
-            # Step 1: Segment all slices with prompts.
-            seg, slices, _, stop_upper = vutil.segment_slices_with_prompts(
-                state.predictor,
-                self._viewer.layers["point_prompts"],
-                self._viewer.layers["prompts"],
-                state.image_embeddings,
-                shape,
-                track_id=state.current_track_id,
-                update_progress=lambda update: pbar_signals.pbar_update.emit(
-                    update
-                ),
+            # Add the point prompts for this track, one frame at a time, recording the prompted
+            # frames and the stop annotations.
+            prompted_frames, stop_frames = [], []
+            z_points = (
+                np.unique(np.round(point_layer.data[:, 0]).astype(int))
+                if len(point_layer.data) else np.zeros(0, dtype=int)
             )
+            for t in z_points:
+                prompts = vutil.point_layer_to_prompts(point_layer, i=int(t), track_id=track_id)
+                if prompts is None:  # Single negative point: a stop annotation for this track.
+                    stop_frames.append(int(t))
+                    continue
+                points, labels = prompts
+                if len(points) == 0:  # This track has no point prompts on this frame.
+                    continue
+                for point, label in zip(points, labels):
+                    state.interactive_segmenter.add_point_prompts(
+                        frame_ids=int(t), points=np.array([point]), point_labels=np.array([label]),
+                    )
+                prompted_frames.append(int(t))
 
-            # Step 2: Track the object starting from the lowest annotated slice.
-            seg, has_division = vutil.track_from_prompts(
-                self._viewer.layers["point_prompts"],
-                self._viewer.layers["prompts"],
-                seg,
-                state.predictor,
-                slices,
-                state.image_embeddings,
-                stop_upper,
-                threshold=self.iou_threshold,
-                projection=self.projection,
-                motion_smoothing=self.motion_smoothing,
-                box_extension=self.box_extension,
-                update_progress=lambda update: pbar_signals.pbar_update.emit(
-                    update
-                ),
+            # Add the box prompts for this track.
+            z_boxes = (
+                np.unique(np.concatenate([box[:1, 0] for box in box_layer.data]).round().astype(int))
+                if box_layer.data else np.zeros(0, dtype=int)
             )
+            for t in z_boxes:
+                boxes, _ = vutil.shape_layer_to_prompts(box_layer, shape=shape, i=int(t), track_id=track_id)
+                for box in boxes:
+                    state.interactive_segmenter.add_box_prompts(frame_ids=int(t), boxes=[box])
+                if boxes:
+                    prompted_frames.append(int(t))
 
+            if not prompted_frames:
+                return None
+
+            # Map the stop annotations to a propagation z-range: a stop on the lowest / highest
+            # annotated frame bounds propagation below / above the prompts ('predict' enforces it).
+            annotated = sorted(set(prompted_frames) | set(stop_frames))
+            stop_lower = annotated[0] in stop_frames
+            stop_upper = annotated[-1] in stop_frames
+            z_lo = min(prompted_frames) if stop_lower else 0
+            z_hi = max(prompted_frames) if stop_upper else shape[0] - 1
+
+            pbar_signals.pbar_total.emit(z_hi - z_lo + 1)
+            seg = state.interactive_segmenter.predict(
+                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                early_stop_patience=None, z_range=(z_lo, z_hi),
+            )
+            return seg
+
+        def tracking_impl():
+            # With 'Batched' enabled, propagate every track that has prompts; otherwise only the
+            # current track. Each track's propagated mask is labelled with its own track id.
+            track_ids = self._all_track_ids() if self.batched else [state.current_track_id]
+            results = {}
+            for track_id in track_ids:
+                seg = propagate_track(track_id)
+                if seg is not None:
+                    results[track_id] = seg
             pbar_signals.pbar_stop.emit()
-            return seg, has_division
+            return results
 
-        def update_segmentation(ret_val):
-            seg, has_division = ret_val
-            # If a division has occurred and it's the first time it occurred for this track
-            # then we need to create the two daughter tracks and update the lineage.
-            if has_division and (
-                len(state.lineage[state.current_track_id]) == 0
-            ):
-                _update_lineage(self._viewer)
+        def update_segmentation(results):
+            if not results:
+                print("No prompts were given for the track(s). The tracking will be skipped.")
+                return
 
-            # Clear the old track mask.
-            self._viewer.layers["current_object"].data[
-                self._viewer.layers["current_object"].data
-                == state.current_track_id
-            ] = 0
-            # Set the new object mask.
-            self._viewer.layers["current_object"].data[
-                seg == 1
-            ] = state.current_track_id
-            self._viewer.layers["current_object"].refresh()
+            layer = self._viewer.layers["current_object"]
+            for track_id, seg in results.items():
+                # Clear the old mask for this track, then set the propagated one.
+                layer.data[layer.data == track_id] = 0
+                layer.data[seg == 1] = track_id
+            layer.refresh()
 
-        ret_val = tracking_impl()
-        update_segmentation(ret_val)
-        # worker = tracking_impl()
-        # worker.returned.connect(update_segmentation)
-        # worker.start()
-        # return worker
+        results = tracking_impl()
+        update_segmentation(results)
 
 
 #
@@ -2699,6 +2818,114 @@ class InteractiveSegmentationWidget(_WidgetBase):
         if state.interactive_segmenter is not None:
             state.interactive_segmenter.reset_predictor()
 
+        gc.collect()
+
+
+class InteractiveTrackingWidget(_WidgetBase):
+    """Merged interactive widget for the tracking annotator.
+
+    Combines the prompt label menu, the track id / track state menus and the segment / clear
+    controls into a single container, mirroring the segmentation annotator's
+    'InteractiveSegmentationWidget'. The 'Apply to All Frames' checkbox governs both segmentation
+    (current frame vs. propagating across the whole video) and clearing (current frame vs. all
+    frames). A hidden 'UnifiedSegmentWidget' is used purely as the segmentation engine.
+
+    Args:
+        viewer: The napari viewer.
+        tracking_widget: The combined prompt label / track id / track state menu created by
+            'create_tracking_menu'.
+        parent: The parent Qt widget.
+    """
+
+    def __init__(self, viewer, tracking_widget, parent=None):
+        super().__init__(parent=parent)
+        self._viewer = viewer
+        self._tracking_widget = tracking_widget
+        self.batched = False
+        self.apply_to_volume = False
+        self._segment_widget = None
+        self._create_widget()
+
+    def _create_widget(self):
+        # The combined prompt label / track id / track state menus (one container so the three
+        # dropdowns share an aligned label column). Lay each row out as label-left, box-right.
+        self.layout().addWidget(self._tracking_widget.native)
+        self._align_menu_rows()
+
+        # Hidden segmentation engine: owns the per-frame and propagation logic, driven via its
+        # 'apply_to_volume' and 'batched' attributes. Its own controls are not shown.
+        self._segment_widget = UnifiedSegmentWidget(self._viewer, tracking=True)
+        self._segment_widget.setVisible(False)
+        self.layout().addWidget(self._segment_widget)
+
+        # 'Batched' (left) and 'Apply to All Frames' (right), matching the segmentation annotator.
+        self.batched_checkbox = self._add_boolean_param(
+            "batched", self.batched, title="Batched",
+            tooltip=get_tooltip("unified_segment", "batched"),
+        )
+        self.batched_checkbox.stateChanged.connect(self._on_batched_changed)
+        self.apply_to_volume_checkbox = self._add_boolean_param(
+            "apply_to_volume", self.apply_to_volume, title="Apply to All Frames",
+            tooltip=get_tooltip("unified_segment", "apply_to_volume"),
+        )
+        self.apply_to_volume_checkbox.stateChanged.connect(self._on_apply_to_volume_changed)
+
+        checkbox_row = QtWidgets.QHBoxLayout()
+        checkbox_row.addWidget(self.batched_checkbox)
+        checkbox_row.addStretch()
+        checkbox_row.addWidget(self.apply_to_volume_checkbox)
+        self.layout().addLayout(checkbox_row)
+
+        # 'Segment Object' / 'Clear Annotations' side by side.
+        self.segment_button = QtWidgets.QPushButton("Segment Object [S]")
+        self.segment_button.clicked.connect(lambda: self.segment())
+        self.clear_button = QtWidgets.QPushButton("Clear Annotations [Shift + C]")
+        self.clear_button.clicked.connect(lambda: self.clear())
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addWidget(self.segment_button)
+        button_row.addWidget(self.clear_button)
+        self.layout().addLayout(button_row)
+
+    def _align_menu_rows(self):
+        # Each menu row is a QHBoxLayout of [QLabel, QComboBox]. Insert a stretch between them so the
+        # label stays left and the (fixed-width) combo box is right-aligned. Idempotent, since the
+        # menu container persists across layout rebuilds.
+        container_layout = self._tracking_widget.native.layout()
+        for i in range(container_layout.count()):
+            row = container_layout.itemAt(i).widget()
+            row_layout = None if row is None else row.layout()
+            if row_layout is None or row_layout.count() < 2:
+                continue
+            combo = row_layout.itemAt(row_layout.count() - 1).widget()
+            if combo is not None:
+                combo.setFixedWidth(300)
+            if row_layout.count() < 3:  # No stretch inserted yet.
+                row_layout.insertStretch(1)
+
+    def _on_batched_changed(self, state):
+        self.batched = bool(state)
+        self._segment_widget.batched = self.batched
+
+    def _on_apply_to_volume_changed(self, state):
+        self.apply_to_volume = bool(state)
+        self._segment_widget.apply_to_volume = self.apply_to_volume
+
+    def segment(self, viewer=None):
+        """Run interactive tracking segmentation for the current prompts."""
+        self._segment_widget(self._viewer)
+
+    def clear(self, viewer=None):
+        """Clear the annotations: the current frame, or all frames in 'Apply to All Frames' mode."""
+        if self.apply_to_volume:
+            _reset_tracking_state(self._viewer)
+            vutil.clear_annotations(self._viewer)
+        else:
+            i = int(self._viewer.dims.point[0])
+            vutil.clear_annotations_slice(self._viewer, i=i)
+
+        state = AnnotatorState()
+        if state.interactive_segmenter is not None:
+            state.interactive_segmenter.reset_predictor()
         gc.collect()
 
 
@@ -3024,105 +3251,6 @@ class AutoSegmentV1Widget(_WidgetBase):
             worker = self._run_segmentation_2d(kwargs)
         _select_layer(self._viewer, "auto_segmentation")
         return worker
-
-
-class AutoTrackWidget(AutoSegmentV1Widget):
-    def _create_tracking_switch(self):
-        self.apply_to_volume = False
-        return self._add_boolean_param(
-            "apply_to_volume",
-            self.apply_to_volume,
-            title="Track Timeseries",
-            tooltip=get_tooltip("autotrack", "run_tracking"),
-        )
-
-    def _create_widget(self):
-        # Add the switch for segmenting the slice vs. tracking the timeseries.
-        self.layout().addWidget(self._create_tracking_switch())
-
-        # Add the nested settings widget.
-        self.settings = self._create_settings()
-        self.layout().addWidget(self.settings)
-
-        # Add the run button.
-        self.run_button = QtWidgets.QPushButton("Automatic Tracking")
-        self.run_button.clicked.connect(self.__call__)
-        self.run_button.setToolTip(get_tooltip("autotrack", "run_button"))
-        self.layout().addWidget(self.run_button)
-
-    def _run_segmentation_3d(self, kwargs):
-        allow_segment_3d = self._allow_segment_3d()
-        if not allow_segment_3d:
-            return _generate_message(
-                "error",
-                "Tracking with AMG is only supported if you have a GPU.",
-            )
-
-        state = AnnotatorState()
-        if len(state.committed_lineages) > 0:
-            return _generate_message(
-                "error",
-                "Automatic tracking can only be called if you haven't commited results from interactive tracking yet.",
-            )
-        pbar, pbar_signals = _create_pbar_for_threadworker()
-
-        # @thread_worker
-        def seg_impl():
-            image_name = state.get_image_name(self._viewer)
-            timeseries = self._viewer.layers[image_name].data
-            segmentation = np.zeros_like(
-                self._viewer.layers["auto_segmentation"].data
-            )
-            offset = 0
-
-            def pbar_init(total, description):
-                pbar_signals.pbar_total.emit(total)
-                pbar_signals.pbar_description.emit(description)
-
-            pbar_init(segmentation.shape[0], "Run tracking")
-
-            # Further optimization: parallelize if state is precomputed for all slices
-            for i in range(segmentation.shape[0]):
-                seg = _instance_segmentation_impl(
-                    self.min_object_size, i=i, **kwargs
-                )
-                seg_max = seg.max()
-                if seg_max == 0:
-                    continue
-                seg[seg != 0] += offset
-                offset = seg_max + offset
-                segmentation[i] = seg
-                pbar_signals.pbar_update.emit(1)
-
-            pbar_signals.pbar_reset.emit()
-            segmentation, lineages = track_across_frames(
-                timeseries,
-                segmentation,
-                verbose=True,
-                pbar_init=pbar_init,
-                pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
-            )
-            pbar_signals.pbar_stop.emit()
-            return (segmentation, lineages)
-
-        def update_segmentation(result):
-            segmentation, lineages = result
-            is_empty = segmentation.max() == 0
-            if is_empty:
-                self._empty_segmentation_warning()
-
-            state = AnnotatorState()
-            state.lineage = lineages
-
-            self._viewer.layers["auto_segmentation"].data = segmentation
-            self._viewer.layers["auto_segmentation"].refresh()
-
-        result = seg_impl()
-        update_segmentation(result)
-        # worker = seg_impl()
-        # worker.returned.connect(update_segmentation)
-        # worker.start()
-        # return worker
 
 
 class AutoSegmentWidget(_WidgetBase):
@@ -3520,3 +3648,128 @@ class AutoSegmentWidget(_WidgetBase):
             self._viewer.layers["auto_segmentation"].data[z] = seg
         self._viewer.layers["auto_segmentation"].refresh()
         _select_layer(self._viewer, "auto_segmentation")
+
+
+class AutoTrackWidget(AutoSegmentWidget):
+    def _create_widget(self):
+        top_row = QtWidgets.QHBoxLayout()
+        self.apply_to_volume = False
+        self.apply_to_volume_checkbox = self._add_boolean_param(
+            "apply_to_volume",
+            self.apply_to_volume,
+            title="Track Timeseries",
+            tooltip=get_tooltip("autotrack", "run_tracking"),
+        )
+        top_row.addWidget(self.apply_to_volume_checkbox)
+
+        mode_choices = ["sparse", "dense"] if self.with_decoder else ["amg"]
+        self.mode_dropdown, mode_layout = self._add_choice_param(
+            "mode",
+            self.mode,
+            mode_choices,
+            title="segmentation mode:",
+            update=self._on_mode_changed,
+            tooltip=get_tooltip("autosegment", "mode"),
+        )
+        top_row.addLayout(mode_layout)
+        self.layout().addLayout(top_row)
+
+        self.settings = self._make_settings_widget()
+        self.layout().addWidget(self.settings)
+
+        self.run_button = QtWidgets.QPushButton("Automatic Tracking")
+        self.run_button.clicked.connect(self.__call__)
+        self.run_button.setToolTip(get_tooltip("autotrack", "run_button"))
+        self.layout().addWidget(self.run_button)
+
+    def _empty_tracking_warning(self):
+        return _generate_message(
+            "error",
+            "The automatic tracking result does not contain any objects. "
+            "Try adjusting the automatic tracking settings.",
+        )
+
+    def _run_frame_segmentation(self, state, frame, frame_id, pbar_signals):
+        def pbar_init(total, description):
+            pbar_signals.pbar_total.emit(total)
+            pbar_signals.pbar_description.emit(f"{description} (frame {frame_id + 1})")
+            QtWidgets.QApplication.processEvents()
+
+        def pbar_update(update=1):
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
+
+        if self.mode == "amg":
+            return self._run_amg(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
+        return self._run_unisam2(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
+
+    def _track_timeseries(self, state, raw):
+        segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
+        pbar, pbar_signals = _create_pbar_for_threadworker()
+        offset = 0
+
+        def tracking_pbar_init(total, description):
+            pbar_signals.pbar_total.emit(total)
+            pbar_signals.pbar_description.emit(description)
+            QtWidgets.QApplication.processEvents()
+
+        def tracking_pbar_update(update=1):
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
+
+        try:
+            pbar_signals.pbar_description.emit(f"Running automatic tracking ({self.mode})")
+            QtWidgets.QApplication.processEvents()
+            for frame_id, frame in enumerate(raw):
+                seg = self._run_frame_segmentation(state, frame, frame_id, pbar_signals)
+                seg_max = int(seg.max())
+                if seg_max == 0:
+                    continue
+                seg[seg != 0] += offset
+                offset += seg_max
+                segmentation[frame_id] = seg
+
+            if offset == 0:
+                self._viewer.layers["auto_segmentation"].data = segmentation
+                self._viewer.layers["auto_segmentation"].refresh()
+                return self._empty_tracking_warning()
+
+            pbar_signals.pbar_reset.emit()
+            segmentation, lineages = track_across_frames(
+                raw,
+                segmentation,
+                verbose=True,
+                pbar_init=tracking_pbar_init,
+                pbar_update=tracking_pbar_update,
+            )
+        finally:
+            pbar_signals.pbar_stop.emit()
+
+        state.lineage = lineages
+        self._viewer.layers["auto_segmentation"].data = segmentation
+        self._viewer.layers["auto_segmentation"].refresh()
+        _select_layer(self._viewer, "auto_segmentation")
+
+    def __call__(self):
+        state = AnnotatorState()
+        if not (self.volumetric and getattr(self, "apply_to_volume", False)):
+            return super().__call__()
+        if self.mode != "amg" and (not self.with_decoder or state.decoder is None):
+            return _generate_message(
+                "error",
+                "The 'sparse' and 'dense' modes require a finetuned UniSAM2 model with a decoder. "
+                "Load one via the 'custom weights' path in the embedding widget, or use the 'amg' mode.",
+            )
+        if _validate_layers(self._viewer, automatic_segmentation=True):
+            return None
+        if state.committed_lineages:
+            return _generate_message(
+                "error",
+                "Automatic tracking can only be called if you have not committed interactive tracking results yet.",
+            )
+
+        image_name = state.get_image_name(self._viewer)
+        raw = np.asarray(self._viewer.layers[image_name].data)
+        if raw.ndim != 3:
+            return _generate_message("error", "Automatic tracking expects a 2d timeseries.")
+        return self._track_timeseries(state, raw)
