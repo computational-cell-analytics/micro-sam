@@ -166,16 +166,10 @@ def run_unisam2_inference(
         Channel 0 is the foreground probability, channels 1-3 the directed distances.
     """
     from torch_em.util.prediction import predict_with_halo
+    from torch_em.transform.raw import normalize
 
     def _preprocess(crop):
-        # Min-max normalize to [0, 1] (per block), matching the SAM2 image path used for the
-        # precomputed embeddings (`micro_sam.util._to_image(..., normalization="minmax")`), under
-        # which the UniSAM2 decoder was trained. The model's own preprocessing then applies the SAM2
-        # (ImageNet) statistics, which expect inputs in [0, 1].
-        crop = crop.astype("float32")
-        lo, hi = crop.min(), crop.max()
-        crop = (crop - lo) / (hi - lo + 1e-7)
-        return np.concatenate([crop] * 3, axis=0)
+        return np.concatenate([normalize(crop)] * 3, axis=0)
 
     is_3d = ndim == 3
 

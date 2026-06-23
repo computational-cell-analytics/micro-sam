@@ -1377,10 +1377,11 @@ class EmbeddingWidget(_WidgetBase):
         # Section 1: Image and Model.
         section1_layout = QtWidgets.QHBoxLayout()
         section1_layout.addLayout(self._create_image_section())
-        # Default to the natural-image SAM2 family. The widget encodes the default choice as
-        # 'vit_<size><suffix>', so 'vit_t_sam2' selects 'Natural Images (SAM2)' at the tiny size.
+        # Default to the 'Microscopy' family (the joint SAM2 + UniSAM2 'hvit_t_omni' model). The
+        # widget encodes the default choice as 'vit_<size><suffix>', so 'vit_t_omni' selects the
+        # 'Microscopy' family at the tiny size.
         section1_layout.addLayout(
-            self._create_model_section(default_model="vit_t_sam2")
+            self._create_model_section(default_model="vit_t_omni")
         )  # Creates the model family widget section.
         self.layout().addLayout(section1_layout)
 
