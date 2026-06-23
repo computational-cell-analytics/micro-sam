@@ -3128,12 +3128,13 @@ class AutoTrackWidget(AutoSegmentV1Widget):
 class AutoSegmentWidget(_WidgetBase):
     """Automatic segmentation widget for SAM2 with 'amg', 'sparse' and 'dense' modes.
 
-    The 'amg' mode runs grid-based automatic mask generation (`micro_sam.v2.instance_segmentation`)
-    and does not require a decoder, so it works for any SAM2 model. The 'sparse' (flow, LM data) and
-    'dense' (multicut, EM data) modes operate on the foreground and directed-distance predictions of
-    a UniSAM2 decoder (`AnnotatorState.decoder`) via `micro_sam.v2.automatic_segmentation`, so they
-    are only offered when a decoder is loaded. A mode dropdown sits next to the 'Apply to Volume'
-    switch and the post-processing parameters refresh on mode change.
+    When a UniSAM2 decoder is loaded (`AnnotatorState.decoder`), only the decoder-based 'sparse'
+    (flow, LM data) and 'dense' (multicut, EM data) modes are offered - these operate on the
+    foreground and directed-distance predictions of the decoder via
+    `micro_sam.v2.automatic_segmentation` and supersede grid-based AMG. The 'amg' mode (grid-based
+    automatic mask generation via `micro_sam.v2.instance_segmentation`, no decoder required) is only
+    offered as a fallback when no decoder is available. A mode dropdown sits next to the 'Apply to
+    Volume' switch and the post-processing parameters refresh on mode change.
 
     Args:
         viewer: The napari viewer.
@@ -3151,7 +3152,8 @@ class AutoSegmentWidget(_WidgetBase):
         self._viewer = viewer
         self.with_decoder = with_decoder
         self.volumetric = volumetric
-        # 'amg' needs no decoder and is the default (and only mode) without one.
+        # With a decoder we default to (and only offer) the decoder-based modes; 'amg' is the
+        # fallback (and only mode) when no decoder is available.
         self.mode = "sparse" if with_decoder else "amg"
         self.settings = None
         # The flow computation backend is always the (faster) cpp implementation.
@@ -3175,9 +3177,9 @@ class AutoSegmentWidget(_WidgetBase):
             )
             top_row.addWidget(self.apply_to_volume_checkbox)
 
-        # 'amg' (grid-based, no decoder) is always available. The decoder-based 'sparse' (flow, LM)
-        # and 'dense' (multicut, EM) modes are only offered when a UniSAM2 decoder is loaded.
-        mode_choices = ["amg", "sparse", "dense"] if self.with_decoder else ["amg"]
+        # With a UniSAM2 decoder we only offer the decoder-based 'sparse' (flow, LM) and 'dense'
+        # (multicut, EM) modes; 'amg' (grid-based, no decoder) is the fallback when none is loaded.
+        mode_choices = ["sparse", "dense"] if self.with_decoder else ["amg"]
         self.mode_dropdown, mode_layout = self._add_choice_param(
             "mode",
             self.mode,
@@ -3205,10 +3207,10 @@ class AutoSegmentWidget(_WidgetBase):
             return
         self.with_decoder = with_decoder
 
-        # The decoder-based 'sparse'/'dense' modes are only available with a UniSAM2 decoder, so the
-        # mode dropdown (built from 'with_decoder') must be rebuilt when the loaded model changes -
-        # otherwise a finetuned model with a decoder would still only show 'amg', and vice versa.
-        mode_choices = ["amg", "sparse", "dense"] if with_decoder else ["amg"]
+        # The mode dropdown (built from 'with_decoder') must be rebuilt when the loaded model changes:
+        # with a decoder we offer only the decoder-based 'sparse'/'dense' modes, and without one only
+        # the 'amg' fallback - otherwise a finetuned model would keep showing the wrong options.
+        mode_choices = ["sparse", "dense"] if with_decoder else ["amg"]
         self.mode_dropdown.blockSignals(True)
         self.mode_dropdown.clear()
         self.mode_dropdown.addItems(mode_choices)
