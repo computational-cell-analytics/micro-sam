@@ -94,6 +94,32 @@ class TestMultiDimensionalSegmentation(unittest.TestCase):
 
         get_napari_track_data(tracks, lineages)
 
+    def test_extract_tracks_and_lineages_orientation(self):
+        # A division where the mother (track 1) appears in frames 0 and 1 and divides into
+        # daughters (tracks 2 and 3) in frame 2. The lineage must be oriented by time, i.e. the
+        # temporally earliest track is the parent, regardless of the (undirected) parent graph order.
+        from micro_sam.v1.multi_dimensional_segmentation import _extract_tracks_and_lineages
+
+        # track_data columns: track_id, timepoint, y, x.
+        track_data = np.array([
+            [1, 0, 2, 2], [1, 1, 2, 2], [2, 2, 1, 4], [3, 2, 4, 4],
+        ], dtype="float64")
+
+        seg = np.zeros((3, 8, 8), dtype="uint16")
+        seg[0, 2, 2] = 1
+        seg[1, 2, 2] = 1
+        seg[2, 1, 4] = 2
+        seg[2, 4, 4] = 3
+
+        # The napari parent graph maps children to their parent.
+        parent_graph = {2: 1, 3: 1}
+
+        _, lineages = _extract_tracks_and_lineages(seg, track_data, parent_graph)
+
+        division = [lineage for lineage in lineages if any(children for children in lineage.values())]
+        self.assertEqual(len(division), 1)
+        self.assertEqual(sorted(division[0][1]), [2, 3])
+
 
 if __name__ == "__main__":
     unittest.main()

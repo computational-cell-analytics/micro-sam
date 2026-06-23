@@ -5,8 +5,12 @@ import os
 import multiprocessing as mp
 import warnings
 from concurrent import futures
+from collections import defaultdict
+from pathlib import Path
 from typing import Dict, List, Optional, Union, Tuple
+import xml.etree.ElementTree as ET
 
+import imageio.v3 as imageio
 import networkx as nx
 import numpy as np
 import torch
@@ -487,11 +491,14 @@ def _filter_tracks(tracking_result, min_track_length):
     discard_ids = []
     for prop in props:
         label_id = prop.label
-        z_start, z_stop = prop.bbox[0], prop.bbox[3]
-        if z_stop - z_start < min_track_length:
+        # The first axis of the tracking result is time, so the bbox extent along it is the track length.
+        t_start, t_stop = prop.bbox[0], prop.bbox[3]
+        if t_stop - t_start < min_track_length:
             discard_ids.append(label_id)
+    tracking_result = tracking_result.copy()
     tracking_result[np.isin(tracking_result, discard_ids)] = 0
-    tracking_result, _, _ = relabel_sequential(tracking_result)
+    # We deliberately do not relabel the result here, so that the remaining track ids stay consistent with
+    # the lineage information. Non-consecutive track ids are filtered from the lineages via '_filter_lineages'.
     return tracking_result
 
 
@@ -527,10 +534,20 @@ def _extract_tracks_and_lineages(segmentations, track_data, parent_graph):
     #   {5: []}, lineage with just one cell
     # ]
 
+    # Determine the first time point of each track, so that we can orient each lineage tree by time.
+    # The parent_graph is undirected here, so we root each component at its temporally earliest track.
+    # Otherwise the parent / child orientation would be arbitrary and could be temporally invalid
+    # (a 'parent' appearing only after its 'child'), which breaks downstream consumers like CTC, GEFF
+    # and TrackMate export as well as the napari lineage display.
+    track_first_time = {}
+    for track_id, t in zip(track_ids.tolist(), track_data[:, 1].astype("int32").tolist()):
+        if track_id not in track_first_time or t < track_first_time[track_id]:
+            track_first_time[track_id] = t
+
     # First, we fill the lineages which have one or more divisions, i.e. trees with more than one node.
     lineages = []
     for component in nx.connected_components(lineage_graph):
-        root = next(iter(component))
+        root = min(component, key=lambda node: track_first_time.get(node, 0))
         lineage_dict = {}
 
         def dfs(node, parent):
@@ -564,7 +581,11 @@ def _filter_lineages(lineages, tracking_result):
     track_ids = set(np.unique(tracking_result)) - {0}
     filtered_lineages = []
     for lineage in lineages:
-        filtered_lineage = {k: v for k, v in lineage.items() if k in track_ids}
+        # Drop nodes that are no longer present, both as parents (keys) and as children (values),
+        # so that the lineage does not reference filtered-out tracks.
+        filtered_lineage = {
+            k: [c for c in v if c in track_ids] for k, v in lineage.items() if k in track_ids
+        }
         if filtered_lineage:
             filtered_lineages.append(filtered_lineage)
     return filtered_lineages
@@ -592,11 +613,9 @@ def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folde
     if output_folder is not None:  # Store tracking results in CTC format.
         graph_to_ctc(lineage_graph, segmentation, outdir=output_folder)
 
-    # TODO
-    # We should check if trackastra supports this already.
-    # Filter out short tracks / lineages.
+    # Filter out short tracks. Trackastra has no native option for this, so we do it as a post-process.
     if min_time_extent is not None and min_time_extent > 0:
-        raise NotImplementedError
+        tracking_result = _filter_tracks(tracking_result, min_time_extent)
 
     # Filter out pruned lineages.
     # May either be missing due to track filtering or non-consecutive track numbering in trackastra.
@@ -753,7 +772,8 @@ def get_napari_track_data(
     with futures.ThreadPoolExecutor(n_threads) as tp:
         track_data = list(tp.map(compute_props, range(segmentation.shape[0])))
     track_data = [data for data in track_data if data.size > 0]
-    track_data = np.concatenate(track_data)
+    # The segmentation may be empty, e.g. if all tracks were filtered out via 'min_time_extent'.
+    track_data = np.concatenate(track_data) if track_data else np.zeros((0, 4), dtype="float64")
 
     # The graph representation of napari uses the children as keys and the parents as values,
     # whereas our representation uses parents as keys and children as values.
@@ -763,3 +783,439 @@ def get_napari_track_data(
     }
 
     return track_data, parent_graph
+
+
+def export_tracking_result_to_ctc(
+    segmentation: np.ndarray,
+    lineages: List[Dict],
+    output_folder: Union[os.PathLike, str],
+) -> None:
+    """Export a tracking result to the Cell Tracking Challenge (CTC) format.
+
+    This writes the standard CTC folder layout into 'output_folder':
+    - 'TRA/man_track.txt', the lineage file with one space-separated row 'L B E P' per track
+      (track id, first frame, last frame, parent track id, where the parent is 0 if the track has no parent).
+    - 'TRA/man_track<frame>.tif', the per-frame tracking masks, with each object labeled by its track id.
+    - 'SEG/man_seg<frame>.tif', the per-frame segmentation masks.
+
+    Args:
+        segmentation: The tracking result of shape (T, Y, X), with each object labeled by its track id.
+        lineages: The lineage information, a list of dicts mapping each parent track id to its child track ids.
+        output_folder: The folder where the CTC results are written, with 'TRA' and 'SEG' subfolders.
+    """
+    if segmentation.ndim != 3:
+        raise ValueError(f"Expected a 3d (T, Y, X) tracking result, got shape {segmentation.shape}.")
+
+    tra_folder = os.path.join(output_folder, "TRA")
+    seg_folder = os.path.join(output_folder, "SEG")
+    os.makedirs(tra_folder, exist_ok=True)
+    os.makedirs(seg_folder, exist_ok=True)
+
+    # Map each child track to its parent track. Tracks without a parent get 0, as expected by the CTC format.
+    child_to_parent = {}
+    for lineage in lineages:
+        for parent, children in lineage.items():
+            for child in children:
+                child_to_parent[child] = parent
+
+    # Determine the first and last frame in which each track id is present.
+    n_frames = segmentation.shape[0]
+    first_frame, last_frame = {}, {}
+    for t in range(n_frames):
+        for label_id in np.unique(segmentation[t]):
+            label_id = int(label_id)
+            if label_id == 0:
+                continue
+            if label_id not in first_frame:
+                first_frame[label_id] = t
+            last_frame[label_id] = t
+
+    # Write the lineage file into the tracking folder.
+    with open(os.path.join(tra_folder, "man_track.txt"), "w") as f:
+        for label_id in sorted(first_frame.keys()):
+            parent = child_to_parent.get(label_id, 0)
+            f.write(f"{label_id} {first_frame[label_id]} {last_frame[label_id]} {parent}\n")
+
+    # Write the per-frame masks, using uint16 if the track ids fit and uint32 otherwise.
+    # The tracking masks (TRA) and segmentation masks (SEG) share the same track-id labeling.
+    max_id = int(segmentation.max())
+    dtype = "uint16" if max_id < np.iinfo("uint16").max else "uint32"
+    n_digits = max(4, len(str(n_frames - 1)))
+    for t in range(n_frames):
+        frame = segmentation[t].astype(dtype)
+        imageio.imwrite(os.path.join(tra_folder, f"man_track{t:0{n_digits}d}.tif"), frame)
+        imageio.imwrite(os.path.join(seg_folder, f"man_seg{t:0{n_digits}d}.tif"), frame)
+
+
+def _validate_tracking_result(segmentation):
+    if segmentation.ndim not in (3, 4):
+        raise ValueError(
+            f"Expected a tracking result with shape (T, Y, X) or (T, Z, Y, X), got shape {segmentation.shape}."
+        )
+
+
+def _child_to_parent(lineages):
+    child_to_parent = {}
+    for lineage in lineages:
+        for parent, children in lineage.items():
+            for child in children:
+                child_to_parent[int(child)] = int(parent)
+    return child_to_parent
+
+
+def _equivalent_radius(area, ndim):
+    if ndim == 2:
+        return float(np.sqrt(area / np.pi))
+    return float(((3.0 * area) / (4.0 * np.pi)) ** (1.0 / 3.0))
+
+
+def _tracking_result_to_graph(segmentation, lineages):
+    _validate_tracking_result(segmentation)
+
+    graph = nx.DiGraph()
+    records = []
+    nodes_by_track = defaultdict(list)
+    spatial_ndim = segmentation.ndim - 1
+
+    for t, frame in enumerate(segmentation):
+        for prop in regionprops(frame):
+            node_id = len(records)
+            track_id = int(prop.label)
+            coords = tuple(float(coord) for coord in prop.centroid)
+            area = float(prop.area)
+            radius = _equivalent_radius(area, spatial_ndim)
+            record = {
+                "node_id": node_id,
+                "track_id": track_id,
+                "time": int(t),
+                "coords": coords,
+                "area": area,
+                "radius": radius,
+            }
+            records.append(record)
+            nodes_by_track[track_id].append(node_id)
+            graph.add_node(
+                node_id,
+                label=track_id,
+                track_id=track_id,
+                time=int(t),
+                coords=coords,
+                area=area,
+                radius=radius,
+            )
+
+    if not records:
+        raise ValueError("Cannot export an empty tracking result.")
+
+    records_by_node = {record["node_id"]: record for record in records}
+
+    for track_nodes in nodes_by_track.values():
+        track_nodes.sort(key=lambda node_id: records_by_node[node_id]["time"])
+        for source, target in zip(track_nodes[:-1], track_nodes[1:]):
+            graph.add_edge(source, target, weight=1.0)
+
+    for child, parent in _child_to_parent(lineages).items():
+        parent_nodes = nodes_by_track.get(parent, [])
+        child_nodes = nodes_by_track.get(child, [])
+        if not parent_nodes or not child_nodes:
+            continue
+
+        first_child = min(child_nodes, key=lambda node_id: records_by_node[node_id]["time"])
+        child_start = records_by_node[first_child]["time"]
+        parent_candidates = [
+            node_id for node_id in parent_nodes if records_by_node[node_id]["time"] < child_start
+        ]
+        if not parent_candidates:
+            warnings.warn(
+                f"Could not add lineage edge from parent track {parent} to child track {child}: "
+                "the parent has no detection before the child starts.",
+                stacklevel=2,
+            )
+            continue
+
+        last_parent = max(parent_candidates, key=lambda node_id: records_by_node[node_id]["time"])
+        graph.add_edge(last_parent, first_child, weight=1.0, division=True)
+
+    return graph, records, records_by_node
+
+
+def _normalize_output_path(output_path, default_name, suffix):
+    output_path = Path(output_path)
+    if output_path.suffix.lower() != suffix:
+        output_path = output_path / default_name
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    return output_path
+
+
+def export_tracking_result_to_geff(
+    segmentation: np.ndarray,
+    lineages: List[Dict],
+    output_path: Union[os.PathLike, str],
+) -> Path:
+    """Export a tracking result to GEFF.
+
+    The export follows the Trackastra GEFF layout: a zarr group containing the tracking masks in
+    'segmentation' and the graph in 'tracking_graph.geff'.
+
+    Args:
+        segmentation: The tracking result of shape (T, Y, X), with each object labeled by its track id.
+        lineages: The lineage information, a list of dicts mapping each parent track id to its child track ids.
+        output_path: The zarr path to write to. If a directory is passed, 'tracking_result.zarr' is written in it.
+
+    Returns:
+        The path of the written zarr group.
+    """
+    try:
+        from trackastra.tracking import write_to_geff
+    except ImportError as e:
+        raise RuntimeError(
+            "GEFF export requires trackastra with GEFF support. Install a recent trackastra/geff version."
+        ) from e
+
+    output_path = _normalize_output_path(output_path, "tracking_result.zarr", ".zarr")
+    graph, _, _ = _tracking_result_to_graph(segmentation, lineages)
+    write_to_geff(graph, segmentation, output_path)
+    return output_path
+
+
+def _format_float(value):
+    return f"{float(value):.6f}"
+
+
+def _trackmate_xyz(record):
+    coords = record["coords"]
+    if len(coords) == 2:
+        y, x = coords
+        z = 0.0
+    elif len(coords) == 3:
+        z, y, x = coords
+    else:
+        raise ValueError(f"Expected 2d or 3d coordinates, got {coords}.")
+    return x, y, z
+
+
+def _add_feature(parent, feature, name, shortname, dimension, isint=False):
+    ET.SubElement(
+        parent,
+        "Feature",
+        {
+            "feature": feature,
+            "name": name,
+            "shortname": shortname,
+            "dimension": dimension,
+            "isint": str(isint).lower(),
+        },
+    )
+
+
+def _add_trackmate_feature_declarations(model):
+    declarations = ET.SubElement(model, "FeatureDeclarations")
+
+    spot_features = ET.SubElement(declarations, "SpotFeatures")
+    _add_feature(spot_features, "QUALITY", "Quality", "Quality", "QUALITY")
+    _add_feature(spot_features, "POSITION_X", "X", "X", "POSITION")
+    _add_feature(spot_features, "POSITION_Y", "Y", "Y", "POSITION")
+    _add_feature(spot_features, "POSITION_Z", "Z", "Z", "POSITION")
+    _add_feature(spot_features, "POSITION_T", "T", "T", "TIME")
+    _add_feature(spot_features, "FRAME", "Frame", "Frame", "NONE", isint=True)
+    _add_feature(spot_features, "RADIUS", "Radius", "R", "LENGTH")
+    _add_feature(spot_features, "VISIBILITY", "Visibility", "Visibility", "NONE", isint=True)
+    _add_feature(spot_features, "AREA", "Area", "Area", "AREA")
+    _add_feature(spot_features, "TRACKLET_ID", "micro-sam tracklet id", "Tracklet id", "NONE", isint=True)
+
+    edge_features = ET.SubElement(declarations, "EdgeFeatures")
+    _add_feature(edge_features, "SPOT_SOURCE_ID", "Source spot ID", "Source", "NONE", isint=True)
+    _add_feature(edge_features, "SPOT_TARGET_ID", "Target spot ID", "Target", "NONE", isint=True)
+    _add_feature(edge_features, "LINK_COST", "Link cost", "Cost", "COST")
+    _add_feature(edge_features, "EDGE_TIME", "Edge time", "T", "TIME")
+    _add_feature(edge_features, "EDGE_X_LOCATION", "Edge X", "X", "POSITION")
+    _add_feature(edge_features, "EDGE_Y_LOCATION", "Edge Y", "Y", "POSITION")
+    _add_feature(edge_features, "EDGE_Z_LOCATION", "Edge Z", "Z", "POSITION")
+    _add_feature(edge_features, "VELOCITY", "Velocity", "V", "VELOCITY")
+
+    track_features = ET.SubElement(declarations, "TrackFeatures")
+    _add_feature(track_features, "TRACK_ID", "Track ID", "ID", "NONE", isint=True)
+    _add_feature(track_features, "TRACK_INDEX", "Track index", "Index", "NONE", isint=True)
+    _add_feature(track_features, "NUMBER_SPOTS", "Number of spots", "N spots", "NONE", isint=True)
+    _add_feature(track_features, "NUMBER_GAPS", "Number of gaps", "Gaps", "NONE", isint=True)
+    _add_feature(track_features, "NUMBER_SPLITS", "Number of splits", "Splits", "NONE", isint=True)
+    _add_feature(track_features, "NUMBER_MERGES", "Number of merges", "Merges", "NONE", isint=True)
+    _add_feature(track_features, "TRACK_START", "Track start", "Start", "TIME")
+    _add_feature(track_features, "TRACK_STOP", "Track stop", "Stop", "TIME")
+    _add_feature(track_features, "TRACK_DURATION", "Track duration", "Duration", "TIME")
+    _add_feature(track_features, "TRACK_X_LOCATION", "Track X", "X", "POSITION")
+    _add_feature(track_features, "TRACK_Y_LOCATION", "Track Y", "Y", "POSITION")
+    _add_feature(track_features, "TRACK_Z_LOCATION", "Track Z", "Z", "POSITION")
+
+
+def _add_trackmate_spots(model, records):
+    all_spots = ET.SubElement(model, "AllSpots", {"nspots": str(len(records))})
+    records_by_frame = defaultdict(list)
+    for record in records:
+        records_by_frame[record["time"]].append(record)
+
+    for frame in sorted(records_by_frame):
+        spots_in_frame = ET.SubElement(all_spots, "SpotsInFrame", {"frame": str(frame)})
+        for record in sorted(records_by_frame[frame], key=lambda rec: rec["node_id"]):
+            x, y, z = _trackmate_xyz(record)
+            node_id = record["node_id"]
+            ET.SubElement(
+                spots_in_frame,
+                "Spot",
+                {
+                    "ID": str(node_id),
+                    "name": f"ID{node_id}",
+                    "QUALITY": "1.0",
+                    "POSITION_X": _format_float(x),
+                    "POSITION_Y": _format_float(y),
+                    "POSITION_Z": _format_float(z),
+                    "POSITION_T": _format_float(record["time"]),
+                    "FRAME": str(record["time"]),
+                    "RADIUS": _format_float(record["radius"]),
+                    "VISIBILITY": "1",
+                    "AREA": _format_float(record["area"]),
+                    "TRACKLET_ID": str(record["track_id"]),
+                },
+            )
+
+
+def _component_track_attributes(graph, component, track_id, track_index, records_by_node):
+    times = [records_by_node[node_id]["time"] for node_id in component]
+    xyz = np.array([_trackmate_xyz(records_by_node[node_id]) for node_id in component], dtype="float64")
+    n_gaps = 0
+    for source, target in graph.subgraph(component).edges:
+        dt = records_by_node[target]["time"] - records_by_node[source]["time"]
+        n_gaps += max(0, int(dt) - 1)
+
+    return {
+        "name": f"Track_{track_id}",
+        "TRACK_ID": str(track_id),
+        "TRACK_INDEX": str(track_index),
+        "NUMBER_SPOTS": str(len(component)),
+        "NUMBER_GAPS": str(n_gaps),
+        "NUMBER_SPLITS": str(sum(1 for node_id in component if graph.out_degree(node_id) > 1)),
+        "NUMBER_MERGES": str(sum(1 for node_id in component if graph.in_degree(node_id) > 1)),
+        "TRACK_START": _format_float(min(times)),
+        "TRACK_STOP": _format_float(max(times)),
+        "TRACK_DURATION": _format_float(max(times) - min(times) + 1),
+        "TRACK_X_LOCATION": _format_float(float(xyz[:, 0].mean())),
+        "TRACK_Y_LOCATION": _format_float(float(xyz[:, 1].mean())),
+        "TRACK_Z_LOCATION": _format_float(float(xyz[:, 2].mean())),
+    }
+
+
+def _edge_trackmate_attributes(source, target, records_by_node):
+    source_record = records_by_node[source]
+    target_record = records_by_node[target]
+    sx, sy, sz = _trackmate_xyz(source_record)
+    tx, ty, tz = _trackmate_xyz(target_record)
+    dt = target_record["time"] - source_record["time"]
+    distance = np.linalg.norm(np.array([tx - sx, ty - sy, tz - sz], dtype="float64"))
+    velocity = 0.0 if dt <= 0 else distance / dt
+
+    return {
+        "SPOT_SOURCE_ID": str(source),
+        "SPOT_TARGET_ID": str(target),
+        "LINK_COST": "0.0",
+        "EDGE_TIME": _format_float((source_record["time"] + target_record["time"]) / 2.0),
+        "EDGE_X_LOCATION": _format_float((sx + tx) / 2.0),
+        "EDGE_Y_LOCATION": _format_float((sy + ty) / 2.0),
+        "EDGE_Z_LOCATION": _format_float((sz + tz) / 2.0),
+        "VELOCITY": _format_float(velocity),
+    }
+
+
+def _add_trackmate_tracks(model, graph, records_by_node):
+    all_tracks = ET.SubElement(model, "AllTracks")
+    filtered_tracks = ET.SubElement(model, "FilteredTracks")
+
+    def component_sort_key(component):
+        return min(records_by_node[node_id]["time"] for node_id in component), min(component)
+
+    def edge_sort_key(edge):
+        source, target = edge
+        return records_by_node[source]["time"], source, records_by_node[target]["time"], target
+
+    components = list(nx.weakly_connected_components(graph))
+    components.sort(key=component_sort_key)
+
+    for track_index, component in enumerate(components):
+        track_id = track_index
+        track = ET.SubElement(
+            all_tracks,
+            "Track",
+            _component_track_attributes(graph, component, track_id, track_index, records_by_node),
+        )
+        edges = list(graph.subgraph(component).edges)
+        edges.sort(key=edge_sort_key)
+        for source, target in edges:
+            ET.SubElement(track, "Edge", _edge_trackmate_attributes(source, target, records_by_node))
+
+        ET.SubElement(filtered_tracks, "TrackID", {"TRACK_ID": str(track_id)})
+
+
+def _add_trackmate_settings(root, segmentation):
+    settings = ET.SubElement(root, "Settings")
+    spatial_shape = segmentation.shape[1:]
+    if len(spatial_shape) == 2:
+        height, width = spatial_shape
+        nslices = 1
+    else:
+        nslices, height, width = spatial_shape
+
+    ET.SubElement(
+        settings,
+        "ImageData",
+        {
+            "filename": "",
+            "folder": "",
+            "width": str(width),
+            "height": str(height),
+            "nslices": str(nslices),
+            "nframes": str(segmentation.shape[0]),
+            "pixelwidth": "1.0",
+            "pixelheight": "1.0",
+            "voxeldepth": "1.0",
+            "timeinterval": "1.0",
+        },
+    )
+    ET.SubElement(settings, "InitialSpotFilter", {"feature": "QUALITY", "value": "0.0", "isabove": "true"})
+    ET.SubElement(settings, "SpotFilterCollection")
+    ET.SubElement(settings, "TrackFilterCollection")
+    ET.SubElement(settings, "AnalyzerCollection")
+
+
+def export_tracking_result_to_trackmate_xml(
+    segmentation: np.ndarray,
+    lineages: List[Dict],
+    output_path: Union[os.PathLike, str],
+) -> Path:
+    """Export a tracking result to TrackMate XML.
+
+    The XML contains all per-frame detections as TrackMate spots and the committed tracking graph as TrackMate tracks.
+
+    Args:
+        segmentation: The tracking result of shape (T, Y, X), with each object labeled by its track id.
+        lineages: The lineage information, a list of dicts mapping each parent track id to its child track ids.
+        output_path: The XML path to write to. If a directory is passed, 'tracking_result.xml' is written in it.
+
+    Returns:
+        The path of the written XML file.
+    """
+    output_path = _normalize_output_path(output_path, "tracking_result.xml", ".xml")
+    graph, records, records_by_node = _tracking_result_to_graph(segmentation, lineages)
+
+    root = ET.Element("TrackMate", {"version": "micro-sam"})
+    ET.SubElement(root, "Log").text = "Created by micro-sam."
+    model = ET.SubElement(root, "Model", {"spatialunits": "pixel", "timeunits": "frame"})
+    _add_trackmate_feature_declarations(model)
+    _add_trackmate_spots(model, records)
+    _add_trackmate_tracks(model, graph, records_by_node)
+    _add_trackmate_settings(root, segmentation)
+    ET.SubElement(root, "GUIState", {"state": "ConfigureViews"})
+    ET.SubElement(root, "DisplaySettings")
+
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="  ")
+    tree.write(output_path, encoding="UTF-8", xml_declaration=True)
+    return output_path
