@@ -172,20 +172,32 @@ class AnnotatorState(metaclass=Singleton):
             self.predictor = predictor
             self.decoder = decoder
 
-        # For SAM2, auto-detect a UniSAM2 decoder from the (custom) checkpoint to enable automatic
-        # segmentation. This mirrors the v1 decoder-from-checkpoint behavior: when a finetuned model
-        # with a decoder is loaded, the automatic segmentation widget switches to decoder mode.
-        if self.is_sam2 and prefer_decoder and checkpoint_path is not None and self.decoder is None:
+        # For SAM2, load a UniSAM2 decoder so the automatic segmentation widget can run in decoder
+        # mode. This mirrors the v1 decoder-from-checkpoint behavior. Two cases are handled: a custom
+        # finetuned checkpoint passed via 'checkpoint_path', or a finetuned model from the download
+        # console (e.g. 'hvit_t_cells') whose decoder is downloaded from the SAM2 model registry.
+        if self.is_sam2 and prefer_decoder and self.decoder is None:
             from micro_sam.v2.automatic_segmentation import get_unisam2_model
-            try:
-                # Resolve 'auto'/None to a concrete device so the model is loaded and placed on the
-                # same device as the predictor (torch.load does not accept 'auto' as map_location).
-                self.decoder = get_unisam2_model(
-                    checkpoint_path, device=util.get_device(device), encoder=model_type,
-                )
-            except Exception as e:
-                print(f"Could not load a UniSAM2 decoder from '{checkpoint_path}': {e}")
-                self.decoder = None
+            from micro_sam.v2.util import FINETUNED_MODELS, _download_finetuned_sam2_model
+
+            # The decoder is built on the base SAM2 backbone, i.e. the first 6 characters of the
+            # name ('hvit_t_cells' -> 'hvit_t'). Resolve where to load the decoder weights from.
+            decoder_source, encoder_type = None, model_type[:6]
+            if checkpoint_path is not None:
+                decoder_source = checkpoint_path
+            elif model_type in FINETUNED_MODELS:
+                _, _, decoder_source = _download_finetuned_sam2_model(model_type)
+
+            if decoder_source is not None:
+                try:
+                    # Resolve 'auto'/None to a concrete device so the model is loaded and placed on
+                    # the same device as the predictor (torch.load does not accept 'auto').
+                    self.decoder = get_unisam2_model(
+                        decoder_source, device=util.get_device(device), encoder=encoder_type,
+                    )
+                except Exception as e:
+                    print(f"Could not load a UniSAM2 decoder from '{decoder_source}': {e}")
+                    self.decoder = None
 
         # Compute the image embeddings.
         if isinstance(save_path, dict) and "features" in save_path:  # i.e. embeddings are precomputed

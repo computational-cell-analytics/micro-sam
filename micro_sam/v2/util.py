@@ -10,7 +10,7 @@ import numpy as np
 
 import torch
 
-from micro_sam.util import get_device
+from micro_sam.util import get_device, get_cache_directory, microsam_cachedir
 from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
 
 import sam2
@@ -73,6 +73,91 @@ HASHES = {
 }
 
 
+# Finetuned SAM2 models (the micro-sam "model download console" for SAM2). These are exported into
+# the two-file micro-sam layout - an interactive predictor checkpoint ('<name>') and a UniSAM2
+# decoder checkpoint ('<name>_decoder') - by 'scripts/model_export/export_sam2_cells_model.py'.
+# This mirrors the v1 'micro_sam.v1.util.models' registry (encoder + '_decoder' entries) so the
+# backend (download, loading, GUI, automatic segmentation) works the same way as for SAM v1.
+# The base SAM2 backbone is read off the first 6 characters of the name (e.g. 'hvit_t_cells' ->
+# 'hvit_t'), so no explicit backbone mapping is needed. The user-facing GUI name is defined in the
+# annotator widgets.
+FINETUNED_MODELS = [
+    # Microscopy generalist: joint SAM2 + UniSAM2 model with the 'hvit_t' backbone.
+    "hvit_t_cells",
+]
+
+# The default model for the annotation tools (GUI + CLI + Python API). This is the single source of
+# truth for the default; the GUI derives its synthetic 'vit_<size><suffix>' selector string from it.
+DEFAULT_MODEL = "hvit_t_cells"
+
+FINETUNED_URLS = {
+    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/PJRPRXC3BNOLJ6X/download",
+    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/URqdbdzJiUtUiq1/download",
+}
+
+FINETUNED_HASHES = {
+    "hvit_t_cells": "xxh128:385a8521cbadad2536b2e7950c394f80",
+    "hvit_t_cells_decoder": "xxh128:842add10a67e4c7827d97f033e62a6f5",
+}
+
+
+def models():
+    """Return the finetuned SAM2 models registry.
+
+    Mirrors `micro_sam.v1.util.models`: finetuned SAM2 checkpoints and their UniSAM2 decoders are
+    registered with their xxh128 hashes and download URLs and fetched via pooch. The base SAM2
+    backbones (hvit_t/s/b/l) are downloaded separately, see `_get_checkpoint`.
+
+    Returns:
+        The pooch registry for the finetuned SAM2 models.
+    """
+    registry = pooch.create(
+        path=os.path.join(microsam_cachedir(), "models"),
+        base_url="",
+        registry=FINETUNED_HASHES,
+        urls=FINETUNED_URLS,
+    )
+    return registry
+
+
+def get_model_names():
+    """Return the names of the finetuned SAM2 models available in the download console."""
+    return list(FINETUNED_MODELS)
+
+
+def _download_finetuned_sam2_model(model_type, progress_bar_factory=None):
+    """Download a finetuned SAM2 model and (if available) its UniSAM2 decoder.
+
+    Mirrors `micro_sam.v1.util._download_sam_model`.
+
+    Args:
+        model_type: The finetuned model name, e.g. 'hvit_t_cells'.
+        progress_bar_factory: Optional callable creating a progress bar for the download.
+
+    Returns:
+        A tuple of (checkpoint_path, model_hash, decoder_path). 'decoder_path' is None if the model
+        does not have a registered decoder.
+    """
+    model_registry = models()
+
+    progress_bar = True
+    if not os.path.exists(os.path.join(get_cache_directory(), model_type)) and progress_bar_factory is not None:
+        progress_bar = progress_bar_factory(model_type)
+
+    checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)
+    if not isinstance(progress_bar, bool):
+        progress_bar.close()
+
+    model_hash = model_registry.registry[model_type]
+
+    decoder_name = f"{model_type}_decoder"
+    decoder_path = model_registry.fetch(
+        decoder_name, progressbar=True
+    ) if decoder_name in model_registry.registry else None
+
+    return checkpoint_path, model_hash, decoder_path
+
+
 def _get_device(device=None):
     if device is None or device == "auto":
         device = get_device()
@@ -126,6 +211,10 @@ def get_sam2_model(
     Returns:
         The SAM2 model.
     """
+    # The base SAM2 backbone (which determines the model config) is the first 6 characters of the
+    # name, e.g. 'hvit_t_cells' -> 'hvit_t'. For finetuned micro-sam models the (finetuned) weights
+    # come from the download console / registry rather than the base SAM2 download.
+    is_finetuned = model_type in FINETUNED_MODELS
     model_cfg = CFG_PATHS[backbone][model_type[:6]]
 
     device = _get_device(device)
@@ -138,7 +227,10 @@ def get_sam2_model(
         raise ValueError(f"'{input_type}' is not a valid input type.")
 
     if checkpoint_path is None:
-        checkpoint_path = _get_checkpoint(model_type=model_type, backbone=backbone)
+        if is_finetuned:  # Download the finetuned weights from the model registry.
+            checkpoint_path, _, _ = _download_finetuned_sam2_model(model_type)
+        else:  # Download the base SAM2 backbone weights.
+            checkpoint_path = _get_checkpoint(model_type=model_type, backbone=backbone)
 
     model = _build_segment_anything_2(
         config_file=model_cfg,

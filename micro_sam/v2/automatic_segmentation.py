@@ -78,21 +78,63 @@ def get_unisam2_model(
     from .models.util import UniSAM2
 
     _alias_legacy_namespace()
-    model = UniSAM2(encoder=encoder, output_channels=output_channels)
 
     state = torch.load(checkpoint_path, weights_only=False, map_location=device or "cpu")
     # The standalone trainer saves the full model under 'model_state'; the joint trainer saves it
-    # under 'unetr_state'. We also accept a raw state dict.
+    # under 'unetr_state' or 'decoder_state'. We also accept a raw state dict.
     if isinstance(state, dict):
-        model_state = state.get("model_state", state.get("unetr_state", state))
+        model_state = state.get("model_state", state.get("unetr_state", state.get("decoder_state", state)))
     else:
         model_state = state
+
+    # The standalone UniSAM2 trainer builds the model with a string encoder, so the SAM2 image
+    # encoder lives directly under 'encoder.*'. The joint trainer instead passes the SAM2 image
+    # encoder module, which gets wrapped in 'SAM2EncoderAdapter' and so lives under 'encoder.inner.*'.
+    # Detect the latter and rebuild the matching structure by passing a SAM2 image encoder module.
+    needs_adapter = isinstance(encoder, str) and any(k.startswith("encoder.inner.") for k in model_state)
+    if needs_adapter:
+        from .util import get_sam2_model
+        sam2_model = get_sam2_model(model_type=encoder, input_type="images", device=device or "cpu")
+        encoder = sam2_model.image_encoder
+
+    model = UniSAM2(encoder=encoder, output_channels=output_channels)
     model.load_state_dict(model_state)
 
     if device is not None:
         model.to(device)
     model.eval()
     return model
+
+
+def _resize_spatial(x: torch.Tensor, size: tuple) -> torch.Tensor:
+    """Resize the trailing (Y, X) of a (B, C, Z, Y, X) tensor to `size`, leaving Z unchanged."""
+    b, c, z, y, x_dim = x.shape
+    x = x.permute(0, 2, 1, 3, 4).reshape(b * z, c, y, x_dim)
+    x = torch.nn.functional.interpolate(x, size=tuple(size), mode="bilinear", align_corners=False)
+    return x.reshape(b, z, c, size[0], size[1]).permute(0, 2, 1, 3, 4)
+
+
+class _SquareResizeWrapper(torch.nn.Module):
+    """Run UniSAM2 with SAM2's square (anisotropic) resize convention.
+
+    SAM2 resizes inputs to a fixed square `img_size` (not aspect-preserving), and the UniSAM2 decoder
+    was trained on these square features. The UNETR3D forward instead applies a SAM-style
+    aspect-preserving resize + crop, which disagrees for non-square inputs. Square-resizing each block
+    to `img_size` here makes the inner preprocess/postprocess spatially no-ops, so the full-inference
+    path matches the square convention (and the precomputed-embeddings path); the prediction is then
+    resized back to the block size.
+    """
+
+    def __init__(self, model: torch.nn.Module, img_size: int) -> None:
+        super().__init__()
+        self.model = model
+        self.img_size = img_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        spatial = x.shape[-2:]
+        x = _resize_spatial(x, (self.img_size, self.img_size))
+        out = self.model(x)
+        return _resize_spatial(out, spatial)
 
 
 def run_unisam2_inference(
@@ -151,9 +193,15 @@ def run_unisam2_inference(
         input_ = raw[np.newaxis, np.newaxis].astype("float32")
         output = np.zeros((4, 1, *raw.shape), dtype="float32")
 
+    # Wrap the model so each block is square-resized to 'img_size' before the forward pass, matching
+    # SAM2's square resize (and the precomputed-embeddings path) instead of UNETR3D's aspect-preserving
+    # resize + crop, which would misalign non-square blocks (the whole image when untiled, or edge tiles).
+    img_size = getattr(getattr(model, "encoder", None), "img_size", 1024)
+    square_model = _SquareResizeWrapper(model, img_size)
+
     output = predict_with_halo(
         input_=input_,
-        model=model,
+        model=square_model,
         block_shape=block_shape,
         halo=block_halo,
         preprocess=_preprocess,
@@ -270,21 +318,34 @@ def run_unisam2_decoder_on_embeddings(
     feature = torch.as_tensor(features, device=device).float()
     original_size = tuple(int(s) for s in np.array(image_embeddings["original_size"]).reshape(-1)[:2])
 
+    img_size = getattr(model.encoder, "img_size", 1024)
     real_encoder = model.encoder
-    model.encoder = _StubEncoder(feature, getattr(real_encoder, "img_size", 1024))
+    model.encoder = _StubEncoder(feature, img_size)
     try:
-        # The stub ignores the input content, so a zero image of the original shape is enough for
-        # the model's preprocess/postprocess to resize the prediction back to the original size.
-        dummy = torch.zeros((1, 3, 1, *original_size), device=device)
+        # The precomputed SAM2 features come from a square 'img_size x img_size' resize of the image
+        # (SAM2 resizes to a fixed square, not aspect-preserving). The UNETR3D postprocessing instead
+        # assumes the SAM-style aspect-preserving resize + crop, which only matches for square images
+        # and otherwise misaligns the prediction. So we run the decoder on a square dummy (making the
+        # crop a no-op) and resize the square prediction back to the original image size ourselves.
+        dummy = torch.zeros((1, 3, 1, img_size, img_size), device=device)
         output = model(dummy)
     finally:
         model.encoder = real_encoder
-    return output[0, :, 0].detach().cpu().numpy()
+
+    prediction = output[0, :, 0]  # (4, img_size, img_size)
+    prediction = torch.nn.functional.interpolate(
+        prediction.unsqueeze(0), size=original_size, mode="bilinear", align_corners=False,
+    )[0]
+    return prediction.detach().cpu().numpy()
 
 
 @torch.no_grad()
 def run_unisam2_decoder_on_tiled_embeddings(
-    model: torch.nn.Module, image_embeddings: dict, device: Optional[Union[str, torch.device]] = None,
+    model: torch.nn.Module,
+    image_embeddings: dict,
+    device: Optional[Union[str, torch.device]] = None,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
 ) -> np.ndarray:
     """Run the UniSAM2 decoder on precomputed tiled 2d embeddings and stitch the tiles.
 
@@ -297,6 +358,8 @@ def run_unisam2_decoder_on_tiled_embeddings(
         image_embeddings: Precomputed tiled 2d image embeddings (with per-tile `features`/`high_res_feats`
             groups and `shape`/`tile_shape`/`halo` attrs), see `precompute_image_embeddings`.
         device: The device to run inference on.
+        pbar_init: Callback to initialize an external progress bar, called with the number of tiles.
+        pbar_update: Callback to update an external progress bar, called once per tile.
 
     Returns:
         The predictions stacked along the channel axis, shape (4, Y, X).
@@ -306,6 +369,9 @@ def run_unisam2_decoder_on_tiled_embeddings(
     tile_shape = tuple(int(s) for s in feats_group.attrs["tile_shape"])
     halo = tuple(int(s) for s in feats_group.attrs["halo"])
     tiling = Blocking([0, 0], list(shape), list(tile_shape))
+
+    if pbar_init is not None:
+        pbar_init(tiling.number_of_blocks, "Automatic segmentation (tiles)")
 
     output = np.zeros((4, *shape), dtype="float32")
     for tile_id in range(tiling.number_of_blocks):
@@ -318,6 +384,8 @@ def run_unisam2_decoder_on_tiled_embeddings(
         local_bb = tuple(slice(b, e) for b, e in zip(block.inner_block_local.begin, block.inner_block_local.end))
         inner_bb = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
         output[(slice(None),) + inner_bb] = tile_prediction[(slice(None),) + local_bb]
+        if pbar_update is not None:
+            pbar_update(1)
 
     return output
 
@@ -358,6 +426,8 @@ class UniSAM2InstanceSegmentation:
         i: Optional[int] = None,
         tile_shape: Optional[tuple] = None,
         halo: Optional[tuple] = None,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Run the UniSAM2 inference and store the foreground and distance predictions.
 
@@ -371,13 +441,22 @@ class UniSAM2InstanceSegmentation:
             tile_shape: Unused for the non-tiled segmenter (no tiling); kept so the interface matches
                 the tiled segmenter.
             halo: Unused for the non-tiled segmenter; kept for interface compatibility.
+            pbar_init: Callback to initialize an external progress bar. The non-tiled inference is a
+                single step, so it is called with a total of 1.
+            pbar_update: Callback to update an external progress bar, called once when done.
         """
+        # The non-tiled inference is a single (whole-image or whole-volume) step, so progress is
+        # reported as one unit; the tiled / 3d-slice variants report per tile / per slice.
+        if pbar_init is not None:
+            pbar_init(1, "Automatic segmentation")
         if image_embeddings is not None and ndim == 2:
             self._prediction = run_unisam2_decoder_on_embeddings(
                 self._model, image_embeddings, device=self._device
             )
         else:
             self._prediction = run_unisam2_inference(self._model, image, ndim, device=self._device)
+        if pbar_update is not None:
+            pbar_update(1)
         self._is_initialized = True
 
     def generate(self, mode: str = "sparse", **kwargs) -> np.ndarray:
@@ -414,6 +493,8 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
         halo: Optional[tuple] = None,
         image_embeddings: Optional[dict] = None,
         i: Optional[int] = None,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Run the tiled UniSAM2 inference and store the foreground and distance predictions.
 
@@ -426,15 +507,25 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
                 decoder is run per tile on them and stitched, reusing the embeddings shared with
                 interactive / AMG. Ignored for 3d. See `precompute_image_embeddings`.
             i: Index for the image data. Unused here, kept for interface compatibility.
+            pbar_init: Callback to initialize an external progress bar. For the 2d tiled path it is
+                called with the number of tiles; the 3d path is a single step (total of 1).
+            pbar_update: Callback to update an external progress bar, called per tile (2d) or once (3d).
         """
         if image_embeddings is not None and ndim == 2:
             self._prediction = run_unisam2_decoder_on_tiled_embeddings(
-                self._model, image_embeddings, device=self._device
+                self._model, image_embeddings, device=self._device,
+                pbar_init=pbar_init, pbar_update=pbar_update,
             )
         else:
+            # 3d tiled inference runs through 'predict_with_halo' (a thread pool), which cannot drive
+            # the napari progress live, so it is reported as a single step.
+            if pbar_init is not None:
+                pbar_init(1, "Automatic segmentation (volume)")
             self._prediction = run_unisam2_inference(
                 self._model, image, ndim, device=self._device, tile_shape=tile_shape, halo=halo,
             )
+            if pbar_update is not None:
+                pbar_update(1)
         self._is_initialized = True
 
 

@@ -6,6 +6,7 @@ import torch
 from napari.utils.notifications import show_info
 
 from .. import util
+from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
 from . import util as vutil
 from ._annotator import _AnnotatorBase
@@ -216,7 +217,7 @@ def annotator(
     ndim: Optional[int] = None,
     embedding_path: Optional[Union[str, util.ImageEmbeddings]] = None,
     segmentation_result: Optional[np.ndarray] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
