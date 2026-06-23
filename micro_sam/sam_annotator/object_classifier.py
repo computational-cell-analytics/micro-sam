@@ -12,7 +12,7 @@ import torch
 
 from magicgui import magicgui
 from magicgui.widgets import (
-    CheckBox, Widget, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox, create_widget
+    CheckBox, ComboBox, Widget, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox
 )
 from napari.utils.notifications import show_info
 from qtpy import QtWidgets
@@ -33,6 +33,7 @@ from .util import _sync_embedding_widget
 # Object features are the object area plus the per-channel mean of the 256-channel SAM/SAM2 image
 # embedding, i.e. 257 features. PCA can reduce to at most this many components.
 OBJECT_FEATURES = 257
+INTERNAL_LABEL_LAYER_NAMES = {"annotations", "prediction"}
 
 #
 # Utility functionality.
@@ -101,7 +102,10 @@ def _compute_object_features_if_needed(viewer):
     if state.object_features is None:
         if widgets._validate_embeddings(viewer):
             return None, None
-        segmentation = state.segmentation_selection.get_value().data
+        segmentation_layer = _get_selected_segmentation_layer()
+        if segmentation_layer is None:
+            return None, None
+        segmentation = segmentation_layer.data
         use_anyup = getattr(state.annotator, "_get_use_anyup", None)
         image, upsampler = None, None
         if use_anyup is not None and use_anyup():
@@ -120,7 +124,10 @@ def _compute_object_features_if_needed(viewer):
 
 def _predict_and_show(viewer, rf, features, seg_ids):
     state = AnnotatorState()
-    segmentation = state.segmentation_selection.get_value().data
+    segmentation_layer = _get_selected_segmentation_layer()
+    if segmentation_layer is None:
+        return None
+    segmentation = segmentation_layer.data
     try:
         pred = rf.predict(features)
     except ValueError:
@@ -136,7 +143,10 @@ def _run_train_and_predict(viewer):
     state = AnnotatorState()
     state.annotator._require_layers()
     annotations = viewer.layers["annotations"].data
-    segmentation = state.segmentation_selection.get_value().data
+    segmentation_layer = _get_selected_segmentation_layer()
+    if segmentation_layer is None:
+        return None
+    segmentation = segmentation_layer.data
 
     features, seg_ids = _compute_object_features_if_needed(viewer)
     if features is None:
@@ -174,6 +184,15 @@ def _load_rf(viewer, model_path):
         return None
     state.annotator._require_layers()
     _predict_and_show(viewer, state.object_rf, features, seg_ids)
+
+
+def _get_selected_segmentation_layer():
+    state = AnnotatorState()
+    segmentation_layer = None if state.segmentation_selection is None else state.segmentation_selection.get_value()
+    if segmentation_layer is None:
+        widgets._generate_message("error", "You have to select a segmentation labels layer.")
+        return None
+    return segmentation_layer
 
 
 def _resolve_export_path(viewer, export_dir, rf):
@@ -352,11 +371,54 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         self._viewer.layers.move(self._viewer.layers.index("annotations"), len(self._viewer.layers))
         self._viewer.layers.selection.active = self._viewer.layers["annotations"]
 
+    def _invalidate_object_features(self, *args):
+        state = AnnotatorState()
+        state.object_features, state.seg_ids = None, None
+
+    def _reset_segmentation_layer_choices(self, *args):
+        previous_selection = self.segmentation_selection.value
+        self.segmentation_selection.reset_choices()
+        choices = self.segmentation_selection.choices
+        if any(layer is previous_selection for layer in choices):
+            self.segmentation_selection.value = previous_selection
+        else:
+            self._select_default_segmentation_layer()
+        if self.segmentation_selection.value is not previous_selection:
+            self._invalidate_object_features()
+
+    def _is_segmentation_layer(self, layer):
+        return isinstance(layer, napari.layers.Labels) and layer.name.lower() not in INTERNAL_LABEL_LAYER_NAMES
+
+    def _find_default_segmentation_layer(self):
+        candidates = [layer for layer in self._viewer.layers if self._is_segmentation_layer(layer)]
+        if not candidates:
+            return None
+
+        for layer in candidates:
+            if layer.name == "segmentation":
+                return layer
+
+        for layer in candidates:
+            if "seg" in layer.name.lower():
+                return layer
+
+        return candidates[0]
+
+    def _select_default_segmentation_layer(self):
+        default_layer = self._find_default_segmentation_layer()
+        if default_layer is not None:
+            self.segmentation_selection.value = default_layer
+
+    def _segmentation_layer_choices(self):
+        return [(layer.name, layer) for layer in self._viewer.layers if self._is_segmentation_layer(layer)]
+
     def _create_segmentation_layer_section(self):
         segmentation_selection = QtWidgets.QVBoxLayout()
         segmentation_layer_widget = QtWidgets.QLabel("Segmentation:")
         segmentation_selection.addWidget(segmentation_layer_widget)
-        self.segmentation_selection = create_widget(annotation=napari.layers.Labels)
+        self.segmentation_selection = ComboBox(choices=lambda _: self._segmentation_layer_choices())
+        self._select_default_segmentation_layer()
+        self.segmentation_selection.changed.connect(self._invalidate_object_features)
         state = AnnotatorState()
         state.segmentation_selection = self.segmentation_selection
         segmentation_selection.addWidget(self.segmentation_selection.native)
@@ -430,23 +492,26 @@ class ObjectClassifier(QtWidgets.QScrollArea):
         # Connect the run button with the function to update the image.
         self._embedding_widget.run_button.clicked.connect(self._update_image)
 
-        # One section: the "Classification Settings" dropdown (segmentation selection and classifier
-        # load/export) on top, with the 'Train and predict' button below it.
+        # The segmentation selection stays visible at top level; only classifier options live in the
+        # "Classification Settings" dropdown.
         self._train_and_predict_widget = _create_train_widget(self._viewer)
         self._seg_selection_widget = self._create_segmentation_layer_section()
+        self._viewer.layers.events.inserted.connect(self._reset_segmentation_layer_choices)
+        self._viewer.layers.events.removed.connect(self._reset_segmentation_layer_choices)
+        self._viewer.layers.events.reordered.connect(self._reset_segmentation_layer_choices)
         io = _create_classifier_io_widget(self._viewer)
         self._classifier_io_widget, self._get_n_components, self._get_use_anyup = io
 
         settings = QtWidgets.QWidget()
         settings.setLayout(QtWidgets.QVBoxLayout())
-        seg_container = QtWidgets.QWidget()
-        seg_container.setLayout(self._seg_selection_widget)
-        settings.layout().addWidget(seg_container)
         settings.layout().addWidget(self._classifier_io_widget.native)
         collapsible = widgets._make_collapsible(settings, title="Classification Settings")
 
         classification_section = QtWidgets.QWidget()
         classification_section.setLayout(QtWidgets.QVBoxLayout())
+        seg_container = QtWidgets.QWidget()
+        seg_container.setLayout(self._seg_selection_widget)
+        classification_section.layout().addWidget(seg_container)
         classification_section.layout().addWidget(collapsible)
         classification_section.layout().addWidget(self._train_and_predict_widget.native)
 
