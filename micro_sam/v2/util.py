@@ -86,6 +86,10 @@ FINETUNED_MODELS = [
     "hvit_t_omni",
 ]
 
+# The default model for the annotation tools (GUI + CLI + Python API). This is the single source of
+# truth for the default; the GUI derives its synthetic 'vit_<size><suffix>' selector string from it.
+DEFAULT_MODEL = "hvit_t_omni"
+
 FINETUNED_URLS = {
     "hvit_t_omni": "https://owncloud.gwdg.de/index.php/s/PJRPRXC3BNOLJ6X/download",
     "hvit_t_omni_decoder": "https://owncloud.gwdg.de/index.php/s/URqdbdzJiUtUiq1/download",

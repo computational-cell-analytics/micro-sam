@@ -365,9 +365,15 @@ class _WidgetBase(QtWidgets.QWidget):
 
     def _create_model_section(
         self,
-        default_model: str = util._DEFAULT_MODEL,
+        default_model: Optional[str] = None,
         create_layout: bool = True,
     ):
+        # The widget encodes its default as the synthetic 'vit_<size><suffix>' selector string. For
+        # SAM2 model ids ('hvit_...') this is just the id without the leading 'h', so we derive it
+        # from the single-source 'DEFAULT_MODEL' (e.g. 'hvit_t_omni' -> 'vit_t_omni' -> Microscopy/tiny).
+        if default_model is None:
+            from ..v2.util import DEFAULT_MODEL
+            default_model = DEFAULT_MODEL[1:]
 
         # Create a list of supported dropdown values and correspond them to suffixes (used to parse
         # the synthetic default-model string). Additional SAM2 families can be added here in future.
@@ -1377,11 +1383,10 @@ class EmbeddingWidget(_WidgetBase):
         # Section 1: Image and Model.
         section1_layout = QtWidgets.QHBoxLayout()
         section1_layout.addLayout(self._create_image_section())
-        # Default to the 'Microscopy' family (the joint SAM2 + UniSAM2 'hvit_t_omni' model). The
-        # widget encodes the default choice as 'vit_<size><suffix>', so 'vit_t_omni' selects the
-        # 'Microscopy' family at the tiny size.
+        # Default to the single-source 'DEFAULT_MODEL' (the 'Microscopy' / 'hvit_t_omni' model);
+        # '_create_model_section' derives the synthetic selector string from it when no value is given.
         section1_layout.addLayout(
-            self._create_model_section(default_model="vit_t_omni")
+            self._create_model_section()
         )  # Creates the model family widget section.
         self.layout().addLayout(section1_layout)
 
