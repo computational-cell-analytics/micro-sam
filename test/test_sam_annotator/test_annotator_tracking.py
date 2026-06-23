@@ -6,6 +6,7 @@ from skimage.data import binary_blobs
 
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator import annotator_tracking
+from micro_sam.sam_annotator._widgets import AutoSegmentV1Widget, AutoSegmentWidget, AutoTrackWidget
 from micro_sam.sam_annotator.annotator_tracking import _validate_tracking_model_type
 from micro_sam._test_util import check_layer_initialization
 
@@ -34,3 +35,8 @@ def test_annotator_tracking(make_napari_viewer_proxy):
 def test_tracking_rejects_sam1_models():
     with pytest.raises(ValueError, match="only supports micro-sam2/SAM2"):
         _validate_tracking_model_type("vit_b_lm")
+
+
+def test_auto_tracking_uses_sam2_widget():
+    assert issubclass(AutoTrackWidget, AutoSegmentWidget)
+    assert not issubclass(AutoTrackWidget, AutoSegmentV1Widget)

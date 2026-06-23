@@ -23,10 +23,7 @@ def track_ctc_data():
     embedding_path = os.path.join(EMBEDDING_CACHE, f"embeddings-ctc-{DEFAULT_MODEL}.zarr")
 
     # start the annotator with cached embeddings
-    annotator_tracking(
-        timeseries, embedding_path=embedding_path, model_type=DEFAULT_MODEL,
-        precompute_amg_state=True,
-    )
+    annotator_tracking(timeseries, embedding_path=embedding_path, model_type=DEFAULT_MODEL)
 
 
 def main():

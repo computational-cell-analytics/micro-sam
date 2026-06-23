@@ -534,10 +534,20 @@ def _extract_tracks_and_lineages(segmentations, track_data, parent_graph):
     #   {5: []}, lineage with just one cell
     # ]
 
+    # Determine the first time point of each track, so that we can orient each lineage tree by time.
+    # The parent_graph is undirected here, so we root each component at its temporally earliest track.
+    # Otherwise the parent / child orientation would be arbitrary and could be temporally invalid
+    # (a 'parent' appearing only after its 'child'), which breaks downstream consumers like CTC, GEFF
+    # and TrackMate export as well as the napari lineage display.
+    track_first_time = {}
+    for track_id, t in zip(track_ids.tolist(), track_data[:, 1].astype("int32").tolist()):
+        if track_id not in track_first_time or t < track_first_time[track_id]:
+            track_first_time[track_id] = t
+
     # First, we fill the lineages which have one or more divisions, i.e. trees with more than one node.
     lineages = []
     for component in nx.connected_components(lineage_graph):
-        root = next(iter(component))
+        root = min(component, key=lambda node: track_first_time.get(node, 0))
         lineage_dict = {}
 
         def dfs(node, parent):

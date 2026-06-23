@@ -3079,105 +3079,6 @@ class AutoSegmentV1Widget(_WidgetBase):
         return worker
 
 
-class AutoTrackWidget(AutoSegmentV1Widget):
-    def _create_tracking_switch(self):
-        self.apply_to_volume = False
-        return self._add_boolean_param(
-            "apply_to_volume",
-            self.apply_to_volume,
-            title="Track Timeseries",
-            tooltip=get_tooltip("autotrack", "run_tracking"),
-        )
-
-    def _create_widget(self):
-        # Add the switch for segmenting the slice vs. tracking the timeseries.
-        self.layout().addWidget(self._create_tracking_switch())
-
-        # Add the nested settings widget.
-        self.settings = self._create_settings()
-        self.layout().addWidget(self.settings)
-
-        # Add the run button.
-        self.run_button = QtWidgets.QPushButton("Automatic Tracking")
-        self.run_button.clicked.connect(self.__call__)
-        self.run_button.setToolTip(get_tooltip("autotrack", "run_button"))
-        self.layout().addWidget(self.run_button)
-
-    def _run_segmentation_3d(self, kwargs):
-        allow_segment_3d = self._allow_segment_3d()
-        if not allow_segment_3d:
-            return _generate_message(
-                "error",
-                "Tracking with AMG is only supported if you have a GPU.",
-            )
-
-        state = AnnotatorState()
-        if len(state.committed_lineages) > 0:
-            return _generate_message(
-                "error",
-                "Automatic tracking can only be called if you haven't commited results from interactive tracking yet.",
-            )
-        pbar, pbar_signals = _create_pbar_for_threadworker()
-
-        # @thread_worker
-        def seg_impl():
-            image_name = state.get_image_name(self._viewer)
-            timeseries = self._viewer.layers[image_name].data
-            segmentation = np.zeros_like(
-                self._viewer.layers["auto_segmentation"].data
-            )
-            offset = 0
-
-            def pbar_init(total, description):
-                pbar_signals.pbar_total.emit(total)
-                pbar_signals.pbar_description.emit(description)
-
-            pbar_init(segmentation.shape[0], "Run tracking")
-
-            # Further optimization: parallelize if state is precomputed for all slices
-            for i in range(segmentation.shape[0]):
-                seg = _instance_segmentation_impl(
-                    self.min_object_size, i=i, **kwargs
-                )
-                seg_max = seg.max()
-                if seg_max == 0:
-                    continue
-                seg[seg != 0] += offset
-                offset = seg_max + offset
-                segmentation[i] = seg
-                pbar_signals.pbar_update.emit(1)
-
-            pbar_signals.pbar_reset.emit()
-            segmentation, lineages = track_across_frames(
-                timeseries,
-                segmentation,
-                verbose=True,
-                pbar_init=pbar_init,
-                pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
-            )
-            pbar_signals.pbar_stop.emit()
-            return (segmentation, lineages)
-
-        def update_segmentation(result):
-            segmentation, lineages = result
-            is_empty = segmentation.max() == 0
-            if is_empty:
-                self._empty_segmentation_warning()
-
-            state = AnnotatorState()
-            state.lineage = lineages
-
-            self._viewer.layers["auto_segmentation"].data = segmentation
-            self._viewer.layers["auto_segmentation"].refresh()
-
-        result = seg_impl()
-        update_segmentation(result)
-        # worker = seg_impl()
-        # worker.returned.connect(update_segmentation)
-        # worker.start()
-        # return worker
-
-
 class AutoSegmentWidget(_WidgetBase):
     """Automatic segmentation widget for SAM2 with 'amg', 'sparse' and 'dense' modes.
 
@@ -3573,3 +3474,128 @@ class AutoSegmentWidget(_WidgetBase):
             self._viewer.layers["auto_segmentation"].data[z] = seg
         self._viewer.layers["auto_segmentation"].refresh()
         _select_layer(self._viewer, "auto_segmentation")
+
+
+class AutoTrackWidget(AutoSegmentWidget):
+    def _create_widget(self):
+        top_row = QtWidgets.QHBoxLayout()
+        self.apply_to_volume = False
+        self.apply_to_volume_checkbox = self._add_boolean_param(
+            "apply_to_volume",
+            self.apply_to_volume,
+            title="Track Timeseries",
+            tooltip=get_tooltip("autotrack", "run_tracking"),
+        )
+        top_row.addWidget(self.apply_to_volume_checkbox)
+
+        mode_choices = ["sparse", "dense"] if self.with_decoder else ["amg"]
+        self.mode_dropdown, mode_layout = self._add_choice_param(
+            "mode",
+            self.mode,
+            mode_choices,
+            title="mode:",
+            update=self._on_mode_changed,
+            tooltip=get_tooltip("autosegment", "mode"),
+        )
+        top_row.addLayout(mode_layout)
+        self.layout().addLayout(top_row)
+
+        self.settings = self._make_settings_widget()
+        self.layout().addWidget(self.settings)
+
+        self.run_button = QtWidgets.QPushButton("Automatic Tracking")
+        self.run_button.clicked.connect(self.__call__)
+        self.run_button.setToolTip(get_tooltip("autotrack", "run_button"))
+        self.layout().addWidget(self.run_button)
+
+    def _empty_tracking_warning(self):
+        return _generate_message(
+            "error",
+            "The automatic tracking result does not contain any objects. "
+            "Try adjusting the automatic tracking settings.",
+        )
+
+    def _run_frame_segmentation(self, state, frame, frame_id, pbar_signals):
+        def pbar_init(total, description):
+            pbar_signals.pbar_total.emit(total)
+            pbar_signals.pbar_description.emit(f"{description} (frame {frame_id + 1})")
+            QtWidgets.QApplication.processEvents()
+
+        def pbar_update(update=1):
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
+
+        if self.mode == "amg":
+            return self._run_amg(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
+        return self._run_unisam2(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
+
+    def _track_timeseries(self, state, raw):
+        segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
+        pbar, pbar_signals = _create_pbar_for_threadworker()
+        offset = 0
+
+        def tracking_pbar_init(total, description):
+            pbar_signals.pbar_total.emit(total)
+            pbar_signals.pbar_description.emit(description)
+            QtWidgets.QApplication.processEvents()
+
+        def tracking_pbar_update(update=1):
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
+
+        try:
+            pbar_signals.pbar_description.emit(f"Running automatic tracking ({self.mode})")
+            QtWidgets.QApplication.processEvents()
+            for frame_id, frame in enumerate(raw):
+                seg = self._run_frame_segmentation(state, frame, frame_id, pbar_signals)
+                seg_max = int(seg.max())
+                if seg_max == 0:
+                    continue
+                seg[seg != 0] += offset
+                offset += seg_max
+                segmentation[frame_id] = seg
+
+            if offset == 0:
+                self._viewer.layers["auto_segmentation"].data = segmentation
+                self._viewer.layers["auto_segmentation"].refresh()
+                return self._empty_tracking_warning()
+
+            pbar_signals.pbar_reset.emit()
+            segmentation, lineages = track_across_frames(
+                raw,
+                segmentation,
+                verbose=True,
+                pbar_init=tracking_pbar_init,
+                pbar_update=tracking_pbar_update,
+            )
+        finally:
+            pbar_signals.pbar_stop.emit()
+
+        state.lineage = lineages
+        self._viewer.layers["auto_segmentation"].data = segmentation
+        self._viewer.layers["auto_segmentation"].refresh()
+        _select_layer(self._viewer, "auto_segmentation")
+
+    def __call__(self):
+        state = AnnotatorState()
+        if not (self.volumetric and getattr(self, "apply_to_volume", False)):
+            return super().__call__()
+        if self.mode != "amg" and (not self.with_decoder or state.decoder is None):
+            return _generate_message(
+                "error",
+                "The 'sparse' and 'dense' modes require a finetuned UniSAM2 model with a decoder. "
+                "Load one via the 'custom weights' path in the embedding widget, or use the 'amg' mode.",
+            )
+        if _validate_layers(self._viewer, automatic_segmentation=True):
+            return None
+        if state.committed_lineages:
+            return _generate_message(
+                "error",
+                "Automatic tracking can only be called if you have not committed interactive tracking results yet.",
+            )
+
+        image_name = state.get_image_name(self._viewer)
+        raw = np.asarray(self._viewer.layers[image_name].data)
+        if raw.ndim != 3:
+            return _generate_message("error", "Automatic tracking expects a 2d timeseries.")
+        return self._track_timeseries(state, raw)
