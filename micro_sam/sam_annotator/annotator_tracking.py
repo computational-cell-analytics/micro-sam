@@ -31,7 +31,7 @@ def _validate_tracking_model_type(model_type):
 
 # This solution is a bit hacky, so I won't move it to _widgets.py yet.
 def create_tracking_menu(
-    points_layer, box_layer, states, track_ids, tracking_widget=None
+    points_layer, box_layer, states, track_ids, point_labels=None, tracking_widget=None
 ):
     """@private"""
     state = AnnotatorState()
@@ -43,6 +43,13 @@ def create_tracking_menu(
         raise ValueError(f"ComboBox with label '{label}' not found.")
 
     if tracking_widget is None:
+        # The prompt label menu (positive / negative point prompts) shares this container with the
+        # track id / track state menus so that all three dropdowns align in a single label column.
+        label_menu = ComboBox(
+            label="prompt",
+            choices=point_labels,
+            tooltip=get_tooltip("prompt_menu", "labels"),
+        )
         state_menu = ComboBox(
             label="track_state",
             choices=states,
@@ -53,10 +60,26 @@ def create_tracking_menu(
             choices=list(map(str, track_ids)),
             tooltip=get_tooltip("annotator_tracking", "track_id"),
         )
-        tracking_widget = Container(widgets=[state_menu, track_id_menu])
+        tracking_widget = Container(widgets=[label_menu, state_menu, track_id_menu])
     else:
+        label_menu = _get_widget_menu(tracking_widget, "prompt")
         state_menu = _get_widget_menu(tracking_widget, "track_state")
         track_id_menu = _get_widget_menu(tracking_widget, "track_id")
+
+    # Keep the prompt label menu in sync with the point layer's current label.
+    def update_label_menu(event):
+        new_label = str(points_layer.current_properties["label"][0])
+        if new_label != label_menu.value:
+            label_menu.value = new_label
+
+    def label_changed(new_label):
+        current_properties = points_layer.current_properties
+        current_properties["label"] = np.array([new_label])
+        points_layer.current_properties = current_properties
+        points_layer.refresh_colors()
+
+    points_layer.events.current_properties.connect(update_label_menu)
+    label_menu.changed.connect(label_changed)
 
     def update_state(event):
         if "state" in points_layer.current_properties:
@@ -257,40 +280,70 @@ class AnnotatorTracking(_AnnotatorBase):
                 box_layer=self._box_prompt_layer,
                 states=self._track_state_labels,
                 track_ids=list(state.lineage.keys()),
-                tracking_widget=state.widgets.get("tracking"),
+                point_labels=self._point_labels,
+                tracking_widget=getattr(self, "_tracking_widget", None),
             )
-            state.widgets["tracking"] = self._tracking_widget
 
     def _get_widgets(self):
-        state = AnnotatorState()
         self._require_layers()
 
-        # Create the tracking state menu.
-        # NOTE: Check whether it exists already from `_require_layers` or needs to be created.
-        if state.widgets.get("tracking") is None:
+        # Ensure the tracking state menu exists ('_require_layers' creates it when the layers are
+        # (re)created; create it here as a fallback otherwise).
+        if getattr(self, "_tracking_widget", None) is None:
             self._tracking_widget = create_tracking_menu(
-                ponts_layer=self._point_prompt_layer,
+                points_layer=self._point_prompt_layer,
                 box_layer=self._box_prompt_layer,
                 states=self._track_state_labels,
-                track_ids=list(state.lineage.keys()),
+                track_ids=list(AnnotatorState().lineage.keys()),
+                point_labels=self._point_labels,
             )
-        else:
-            self._tracking_widget = state.widgets.get("tracking")
 
+        # The prompt menu, the track id / track state menus and the segment / clear controls all
+        # live in a single merged container, mirroring the segmentation annotator.
+        interactive = widgets.InteractiveTrackingWidget(
+            self._viewer, tracking_widget=self._tracking_widget,
+        )
         autotrack = widgets.AutoTrackWidget(
             self._viewer, with_decoder=self._with_decoder, volumetric=True
         )
         return {
-            "prompts": self._prompt_widget,
-            "tracking": self._tracking_widget,
-            "segment": widgets.UnifiedSegmentWidget(
-                self._viewer, tracking=True
-            ),
+            "interactive": interactive,
             "autosegment": autotrack,
             "commit": widgets.commit_track(),
             "export": widgets.export_track(),
-            "clear": widgets.clear_track(),
         }
+
+    def _create_keybindings(self):
+        interactive = self._widgets["interactive"]
+
+        @self._viewer.bind_key("s", overwrite=True)
+        def _segment(viewer):
+            interactive.segment(viewer)
+
+        # We also need to over-write the keybindings for the prompt layers.
+        # See https://github.com/napari/napari/issues/7302 for details.
+        prompt_layer = self._viewer.layers["prompts"]
+        point_prompt_layer = self._viewer.layers["point_prompts"]
+
+        @prompt_layer.bind_key("s", overwrite=True)
+        def _segment_prompts(event):
+            interactive.segment(self._viewer)
+
+        @point_prompt_layer.bind_key("s", overwrite=True)
+        def _segment_point_prompts(event):
+            interactive.segment(self._viewer)
+
+        @self._viewer.bind_key("c", overwrite=True)
+        def _commit(viewer):
+            self._widgets["commit"](viewer)
+
+        @self._viewer.bind_key("t", overwrite=True)
+        def _toggle_label(event=None):
+            vutil.toggle_label(self._point_prompt_layer)
+
+        @self._viewer.bind_key("Shift-C", overwrite=True)
+        def _clear_annotations(viewer):
+            interactive.clear(viewer)
 
     def __init__(
         self, viewer: "napari.viewer.Viewer", reset_state: bool = True
