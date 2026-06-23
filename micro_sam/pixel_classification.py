@@ -526,7 +526,9 @@ def run_prediction_with_pixel_classifier(
     Returns:
         The pixel level predictions.
     """
-    rf = load(rf_path)
+    # Stored as {'rf': ..., 'metadata': ...} by the GUI; older / backend files are a bare classifier.
+    obj = load(rf_path)
+    rf = obj["rf"] if isinstance(obj, dict) and "rf" in obj else obj
     predictions = []
     for image in tqdm(images, total=len(images), desc="Run prediction with pixel classifier"):
         if isinstance(image, (str, os.PathLike)):

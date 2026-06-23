@@ -207,3 +207,5 @@ data/
 embeddings/
 *.zarr
 
+# Trained classifier exports.
+*.joblib

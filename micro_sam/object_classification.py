@@ -346,7 +346,9 @@ def run_prediction_with_object_classifier(
         The predictions.
     """
     assert len(images) == len(segmentations)
-    rf = load(rf_path)
+    # Stored as {'rf': ..., 'metadata': ...}; older files are a bare classifier.
+    obj = load(rf_path)
+    rf = obj["rf"] if isinstance(obj, dict) and "rf" in obj else obj
     predictions = []
     for image, segmentation in tqdm(
         zip(images, segmentations), total=len(images), desc="Run prediction with object classifier"
