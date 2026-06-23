@@ -37,6 +37,8 @@ from ..v1 import instance_segmentation
 from ..v1.multi_dimensional_segmentation import (
     PROJECTION_MODES,
     export_tracking_result_to_ctc,
+    export_tracking_result_to_geff,
+    export_tracking_result_to_trackmate_xml,
     get_napari_track_data,
     merge_instance_segmentation_3d,
     segment_mask_in_volume,
@@ -1077,19 +1079,21 @@ def commit_track(
 
 
 @magic_factory(
-    call_button="Export to CTC",
+    call_button="Export",
+    export_format={"choices": ["CTC", "GEFF", "TrackMate XML"]},
     export_folder={"mode": "d"},  # choose a directory
 )
-def export_track_to_ctc(
+def export_track(
     viewer: "napari.viewer.Viewer",
+    export_format: str = "CTC",
     export_folder: Path = Path.cwd(),
 ) -> None:
-    """Widget for exporting the committed tracking result to the Cell Tracking Challenge (CTC) format.
+    """Widget for exporting the committed tracking result.
 
     Args:
         viewer: The napari viewer.
-        export_folder: The folder where the CTC results (the lineage file 'man_track.txt' and the per-frame
-            label images) are written. By default the current working directory is used.
+        export_format: The tracking export format. Supports 'CTC', 'GEFF' and 'TrackMate XML'.
+        export_folder: The folder where the export is written. By default the current working directory is used.
     """
     if "committed_objects" not in viewer.layers or viewer.layers["committed_objects"].data.max() == 0:
         _generate_message("error", "There are no committed tracking results to export yet.")
@@ -1097,8 +1101,17 @@ def export_track_to_ctc(
 
     segmentation = viewer.layers["committed_objects"].data
     lineages = AnnotatorState().committed_lineages
-    export_tracking_result_to_ctc(segmentation, lineages, export_folder)
-    show_info(f"Exported the tracking result to CTC format in '{export_folder}'.")
+    if export_format == "CTC":
+        export_tracking_result_to_ctc(segmentation, lineages, export_folder)
+        show_info(f"Exported the tracking result to CTC format in '{export_folder}'.")
+    elif export_format == "GEFF":
+        export_path = export_tracking_result_to_geff(segmentation, lineages, export_folder)
+        show_info(f"Exported the tracking result to GEFF format in '{export_path}'.")
+    elif export_format == "TrackMate XML":
+        export_path = export_tracking_result_to_trackmate_xml(segmentation, lineages, export_folder)
+        show_info(f"Exported the tracking result to TrackMate XML format in '{export_path}'.")
+    else:
+        _generate_message("error", f"Unsupported tracking export format: {export_format}.")
 
 
 def create_prompt_menu(

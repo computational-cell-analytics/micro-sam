@@ -277,7 +277,7 @@ class AnnotatorTracking(_AnnotatorBase):
             ),
             "autosegment": autotrack,
             "commit": widgets.commit_track(),
-            "export": widgets.export_track_to_ctc(),
+            "export": widgets.export_track(),
             "clear": widgets.clear_track(),
         }
 
