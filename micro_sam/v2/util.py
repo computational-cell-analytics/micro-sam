@@ -75,29 +75,29 @@ HASHES = {
 
 # Finetuned SAM2 models (the micro-sam "model download console" for SAM2). These are exported into
 # the two-file micro-sam layout - an interactive predictor checkpoint ('<name>') and a UniSAM2
-# decoder checkpoint ('<name>_decoder') - by 'scripts/model_export/export_sam2_omni_model.py'.
+# decoder checkpoint ('<name>_decoder') - by 'scripts/model_export/export_sam2_cells_model.py'.
 # This mirrors the v1 'micro_sam.v1.util.models' registry (encoder + '_decoder' entries) so the
 # backend (download, loading, GUI, automatic segmentation) works the same way as for SAM v1.
-# The base SAM2 backbone is read off the first 6 characters of the name (e.g. 'hvit_t_omni' ->
+# The base SAM2 backbone is read off the first 6 characters of the name (e.g. 'hvit_t_cells' ->
 # 'hvit_t'), so no explicit backbone mapping is needed. The user-facing GUI name is defined in the
 # annotator widgets.
 FINETUNED_MODELS = [
     # Microscopy generalist: joint SAM2 + UniSAM2 model with the 'hvit_t' backbone.
-    "hvit_t_omni",
+    "hvit_t_cells",
 ]
 
 # The default model for the annotation tools (GUI + CLI + Python API). This is the single source of
 # truth for the default; the GUI derives its synthetic 'vit_<size><suffix>' selector string from it.
-DEFAULT_MODEL = "hvit_t_omni"
+DEFAULT_MODEL = "hvit_t_cells"
 
 FINETUNED_URLS = {
-    "hvit_t_omni": "https://owncloud.gwdg.de/index.php/s/PJRPRXC3BNOLJ6X/download",
-    "hvit_t_omni_decoder": "https://owncloud.gwdg.de/index.php/s/URqdbdzJiUtUiq1/download",
+    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/PJRPRXC3BNOLJ6X/download",
+    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/URqdbdzJiUtUiq1/download",
 }
 
 FINETUNED_HASHES = {
-    "hvit_t_omni": "xxh128:385a8521cbadad2536b2e7950c394f80",
-    "hvit_t_omni_decoder": "xxh128:842add10a67e4c7827d97f033e62a6f5",
+    "hvit_t_cells": "xxh128:385a8521cbadad2536b2e7950c394f80",
+    "hvit_t_cells_decoder": "xxh128:842add10a67e4c7827d97f033e62a6f5",
 }
 
 
@@ -131,7 +131,7 @@ def _download_finetuned_sam2_model(model_type, progress_bar_factory=None):
     Mirrors `micro_sam.v1.util._download_sam_model`.
 
     Args:
-        model_type: The finetuned model name, e.g. 'hvit_t_omni'.
+        model_type: The finetuned model name, e.g. 'hvit_t_cells'.
         progress_bar_factory: Optional callable creating a progress bar for the download.
 
     Returns:
@@ -212,7 +212,7 @@ def get_sam2_model(
         The SAM2 model.
     """
     # The base SAM2 backbone (which determines the model config) is the first 6 characters of the
-    # name, e.g. 'hvit_t_omni' -> 'hvit_t'. For finetuned micro-sam models the (finetuned) weights
+    # name, e.g. 'hvit_t_cells' -> 'hvit_t'. For finetuned micro-sam models the (finetuned) weights
     # come from the download console / registry rather than the base SAM2 download.
     is_finetuned = model_type in FINETUNED_MODELS
     model_cfg = CFG_PATHS[backbone][model_type[:6]]

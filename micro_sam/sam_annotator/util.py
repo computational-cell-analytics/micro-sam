@@ -739,9 +739,9 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
     }
 
     if model_type.startswith("hvit"):  # SAM2 models, eg. 'hvit_t'.
-        # Finetuned SAM2 families carry a suffix (e.g. 'hvit_t_omni' -> 'Microscopy'); the plain
+        # Finetuned SAM2 families carry a suffix (e.g. 'hvit_t_cells' -> 'Microscopy'); the plain
         # backbones ('hvit_t', ...) are natural-image models.
-        if model_type.endswith("_omni"):
+        if model_type.endswith("_cells"):
             model_family = "Microscopy"
         else:
             model_family = "Natural Images (SAM2)"

@@ -48,7 +48,7 @@ def export_joint_model(checkpoint_path, output_folder, name, base_model_type):
     Args:
         checkpoint_path: Path to the joint trainer checkpoint (e.g. 'best.pt').
         output_folder: Directory where the exported files are written.
-        name: Base name for the exported files, e.g. 'hvit_t_omni'.
+        name: Base name for the exported files, e.g. 'hvit_t_cells'.
         base_model_type: The SAM2 backbone the model was trained from, e.g. 'hvit_t'.
 
     Returns:
@@ -87,7 +87,7 @@ def main():
         "-o", "--output_folder", default=".",
         help="Folder where the exported '<name>.pt' and '<name>_decoder.pt' files are written.",
     )
-    parser.add_argument("-n", "--name", default="hvit_t_omni", help="Base name for the exported files.")
+    parser.add_argument("-n", "--name", default="hvit_t_cells", help="Base name for the exported files.")
     parser.add_argument("--base_model_type", default="hvit_t", help="The SAM2 backbone the model was trained from.")
     args = parser.parse_args()
 

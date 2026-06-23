@@ -349,7 +349,7 @@ class _WidgetBase(QtWidgets.QWidget):
             ),
             "t",
         )
-        # Append the family suffix (e.g. 'tiny' + 'Microscopy' -> 'hvit_t_omni'; base -> 'hvit_t').
+        # Append the family suffix (e.g. 'tiny' + 'Microscopy' -> 'hvit_t_cells'; base -> 'hvit_t').
         suffix = self.model_family_config[self.model_family]["suffix"]
         self.model_type = f"hvit_{size_key}{suffix}"
 
@@ -370,7 +370,7 @@ class _WidgetBase(QtWidgets.QWidget):
     ):
         # The widget encodes its default as the synthetic 'vit_<size><suffix>' selector string. For
         # SAM2 model ids ('hvit_...') this is just the id without the leading 'h', so we derive it
-        # from the single-source 'DEFAULT_MODEL' (e.g. 'hvit_t_omni' -> 'vit_t_omni' -> Microscopy/tiny).
+        # from the single-source 'DEFAULT_MODEL' (e.g. 'hvit_t_cells' -> 'vit_t_cells' -> Microscopy/tiny).
         if default_model is None:
             from ..v2.util import DEFAULT_MODEL
             default_model = DEFAULT_MODEL[1:]
@@ -379,15 +379,15 @@ class _WidgetBase(QtWidgets.QWidget):
         # the synthetic default-model string). Additional SAM2 families can be added here in future.
         self.supported_dropdown_maps = {
             "Natural Images (SAM2)": "_sam2",
-            "Microscopy": "_omni",
+            "Microscopy": "_cells",
         }
 
         # Per-family backend config: the model-type suffix appended after 'hvit_{size}' and the
         # available model sizes. The base SAM2 family supports all sizes; finetuned families (e.g.
-        # 'Microscopy', the joint SAM2 + UniSAM2 'hvit_t_omni' model) may exist only for some sizes.
+        # 'Microscopy', the joint SAM2 + UniSAM2 'hvit_t_cells' model) may exist only for some sizes.
         self.model_family_config = {
             "Natural Images (SAM2)": {"suffix": "", "sizes": ["t", "s", "b", "l"]},
-            "Microscopy": {"suffix": "_omni", "sizes": ["t"]},
+            "Microscopy": {"suffix": "_cells", "sizes": ["t"]},
         }
 
         # NOTE: The available SAM2 model sizes are 'tiny', 'small', 'base' and 'large'.
@@ -447,7 +447,7 @@ class _WidgetBase(QtWidgets.QWidget):
 
     def _validate_model_type_and_custom_weights(self):
         # Map the selected family + size to the SAM2 `model_type`, appending the family suffix
-        # (e.g. 'tiny' + 'Microscopy' -> 'hvit_t_omni'; 'tiny' + base family -> 'hvit_t').
+        # (e.g. 'tiny' + 'Microscopy' -> 'hvit_t_cells'; 'tiny' + base family -> 'hvit_t').
         suffix = self.model_family_config.get(self.model_family, {}).get("suffix", "")
         self.model_type = f"hvit_{self.model_size[0]}{suffix}"
 
@@ -1383,7 +1383,7 @@ class EmbeddingWidget(_WidgetBase):
         # Section 1: Image and Model.
         section1_layout = QtWidgets.QHBoxLayout()
         section1_layout.addLayout(self._create_image_section())
-        # Default to the single-source 'DEFAULT_MODEL' (the 'Microscopy' / 'hvit_t_omni' model);
+        # Default to the single-source 'DEFAULT_MODEL' (the 'Microscopy' / 'hvit_t_cells' model);
         # '_create_model_section' derives the synthetic selector string from it when no value is given.
         section1_layout.addLayout(
             self._create_model_section()
