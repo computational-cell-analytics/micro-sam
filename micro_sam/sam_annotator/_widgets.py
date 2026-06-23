@@ -465,6 +465,15 @@ class _WidgetBase(QtWidgets.QWidget):
             # NOTE: And re-enable signals again.
             self.model_family_dropdown.blockSignals(False)
 
+    def _validate_model_support(self):
+        if getattr(self, "sam2_only", False) and not self.model_type.startswith("hvit_"):
+            return _generate_message(
+                "error",
+                "The tracking annotator only supports micro-sam2/SAM2 models. "
+                f"Got unsupported model '{self.model_type}'.",
+            )
+        return False
+
 
 # Custom signals for managing progress updates.
 class PBarSignals(QObject):
@@ -1415,8 +1424,9 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, sam2_only=False):
         super().__init__(parent=parent)
+        self.sam2_only = sam2_only
 
         # Create a nested layout for the sections.
         # Section 1: Image and Model.
@@ -1704,6 +1714,8 @@ class EmbeddingWidget(_WidgetBase):
                 self.model_type = f.attrs.get(
                     "model_name", f.attrs["model_type"]
                 )
+                if self._validate_model_support():
+                    return True
                 if (
                     "tile_shape" in f.attrs
                     and f.attrs["tile_shape"] is not None
@@ -1760,6 +1772,8 @@ class EmbeddingWidget(_WidgetBase):
 
     def __call__(self, skip_validate=False):
         self._validate_model_type_and_custom_weights()
+        if self._validate_model_support():
+            return
 
         # Validate user inputs.
         if not skip_validate and self._validate_inputs():

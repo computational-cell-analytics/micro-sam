@@ -21,6 +21,14 @@ STATE_COLOR_CYCLE = [
 """@private"""
 
 
+def _validate_tracking_model_type(model_type):
+    if not model_type.startswith("hvit_"):
+        raise ValueError(
+            "The tracking annotator only supports micro-sam2/SAM2 models. "
+            f"Got unsupported model '{model_type}'."
+        )
+
+
 # This solution is a bit hacky, so I won't move it to _widgets.py yet.
 def create_tracking_menu(
     points_layer, box_layer, states, track_ids, tracking_widget=None
@@ -119,6 +127,9 @@ def create_tracking_menu(
 
 
 class AnnotatorTracking(_AnnotatorBase):
+
+    def _create_embedding_widget(self):
+        return widgets.EmbeddingWidget(sam2_only=True)
 
     # The tracking annotator needs different settings for the prompt layers
     # to support the additional tracking state.
@@ -357,6 +368,8 @@ def annotator_tracking(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
+
+    _validate_tracking_model_type(model_type)
 
     # Initialize the predictor state.
     state = AnnotatorState()
