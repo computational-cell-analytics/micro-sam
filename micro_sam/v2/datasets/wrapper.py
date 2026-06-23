@@ -35,7 +35,7 @@ class UniDataWrapper(torch.utils.data.Dataset):
         elif t.ndim == 3:
             if self.source_ndim == 3:  # (Z, Y, X)
                 t = t.unsqueeze(0)  # converts to (1, Z, Y, X)
-            else:  # (C, Y, X) — 2D data, any number of channels
+            else:  # (C, Y, X) - 2D data, any number of channels
                 t = t.unsqueeze(1)  # converts to (C, 1, Y, X)
         elif t.ndim == 4:  # assumes (C, Z, Y, X) and life goes on.
             pass
@@ -74,7 +74,7 @@ class UniDataWrapper(torch.utils.data.Dataset):
                 stacklevel=2,
             )
 
-        # Encoder patch_embed expects 3 input channels — triplicate any single-channel input.
+        # Encoder patch_embed expects 3 input channels - triplicate any single-channel input.
         if raw.shape[0] == 1:
             raw = torch.cat([raw] * 3, dim=0)
 

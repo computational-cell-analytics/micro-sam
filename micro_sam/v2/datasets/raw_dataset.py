@@ -95,7 +95,7 @@ class VolumeRawDataset(VOSRawDataset):
             self.raw_key, self.label_key = None, None
 
         elif dataset_name == "platynereis":
-            # All 8 training samples — split by convention (1-6 train, 7-8 val).
+            # All 8 training samples - split by convention (1-6 train, 7-8 val).
             sample_ids = [1, 2, 3, 4, 5, 6] if split == "train" else [7, 8]
             paths = electron_microscopy.platynereis.get_platynereis_paths(
                 path=path, sample_ids=sample_ids, name="cells"
@@ -204,7 +204,7 @@ class ImageRawDataset(VOSRawDataset):
             )
 
         elif dataset_name == "deepbacs":
-            # Returns (raw_folder, label_folder) — glob .tif files from each.
+            # Returns (raw_folder, label_folder) - glob .tif files from each.
             raw_folder, label_folder = light_microscopy.deepbacs.get_deepbacs_paths(
                 path=path, bac_type="mixed", split=split,
             )
@@ -244,7 +244,7 @@ class ImageRawDataset(VOSRawDataset):
         raw = np.array(load_data(raw_path))
 
         # Normalize non-uint8 images per-image before RGB conversion
-        # (Convention 2: output uint8 [0, 255] for ToTensorAPI → NormalizeAPI pipeline).
+        # (Convention 2: output uint8 [0, 255] for ToTensorAPI -> NormalizeAPI pipeline).
         if raw.dtype != np.uint8:
             raw = normalize_percentile(raw.astype(np.float32))
             raw = np.clip(raw, 0, 1)
@@ -267,7 +267,7 @@ class ImageRawDataset(VOSRawDataset):
         return len(self.raw_paths)
 
 
-_CTC_DATASETS = [
+CTC_DATASETS = [
     "BF-C2DL-HSC", "BF-C2DL-MuSC", "DIC-C2DH-HeLa",
     "Fluo-C2DL-Huh7", "Fluo-C2DL-MSC", "Fluo-N2DH-SIM+",
     "PhC-C2DH-U373", "PhC-C2DL-PSC",
@@ -302,7 +302,7 @@ class TissueNetDataset(VOSRawDataset):
         raw = np.array(load_data(zarr_path, "raw/rgb"))        # (3, H, W) float64
         labels = np.array(load_data(zarr_path, "labels/cell"))  # (H, W) int32
 
-        # Percentile normalize per channel → [0, 1] → uint8
+        # Percentile normalize per channel -> [0, 1] -> uint8
         raw = normalize_percentile(raw, axis=(1, 2))
         raw = np.clip(raw, 0, 1)
         raw = (raw * 255).astype(np.uint8)  # (3, H, W)
@@ -385,7 +385,7 @@ class CTCDataset(VOSRawDataset):
         download: bool = False,
     ):
         self.sequence_pairs = []  # List of (image_folder, label_folder, dataset_name, vol_id)
-        for dataset_name in _CTC_DATASETS:
+        for dataset_name in CTC_DATASETS:
             try:
                 image_folders, label_folders = ctc_module.get_ctc_segmentation_paths(
                     path=path, dataset_name=dataset_name, split=split, download=download,
@@ -412,7 +412,7 @@ class CTCDataset(VOSRawDataset):
 
         # Normalize non-uint8 sequences per-sequence so all frames share the same
         # intensity scale (avoids frame-to-frame brightness flicker in SAM2 video mode).
-        # Convention 2 → uint8 [0, 255], consistent with ToTensorAPI → NormalizeAPI pipeline.
+        # Convention 2 -> uint8 [0, 255], consistent with ToTensorAPI -> NormalizeAPI pipeline.
         if all_raw[0].dtype != np.uint8:
             seq_stack = np.stack(all_raw).astype(np.float32)  # (T, H, W)
             seq_stack = normalize_percentile(seq_stack)        # percentiles over whole sequence

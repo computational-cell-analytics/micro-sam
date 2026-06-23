@@ -21,8 +21,8 @@ class JointSam2Trainer(Sam2Trainer):
     Uses a single **5-channel label tensor** per batch built by
     :func:`~micro_sam.v2.datasets.generalist_loader._build_joint_datasets`:
 
-    - Channel 0 (int64): instance IDs → interactive branch.
-    - Channels 1-4 (float32): foreground mask + directed distances → automatic branch.
+    - Channel 0 (int64): instance IDs -> interactive branch.
+    - Channels 1-4 (float32): foreground mask + directed distances -> automatic branch.
 
     Both branches see the **same image patch**, which halves the number of data
     loaders compared to using separate interactive and automatic datasets.
