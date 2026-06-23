@@ -378,7 +378,7 @@ class _WidgetBase(QtWidgets.QWidget):
         # Create a list of supported dropdown values and correspond them to suffixes (used to parse
         # the synthetic default-model string). Additional SAM2 families can be added here in future.
         self.supported_dropdown_maps = {
-            "Natural Images (SAM2)": "_sam2",
+            "Natural Images": "_sam2",
             "Microscopy": "_cells",
         }
 
@@ -386,7 +386,7 @@ class _WidgetBase(QtWidgets.QWidget):
         # available model sizes. The base SAM2 family supports all sizes; finetuned families (e.g.
         # 'Microscopy', the joint SAM2 + UniSAM2 'hvit_t_cells' model) may exist only for some sizes.
         self.model_family_config = {
-            "Natural Images (SAM2)": {"suffix": "", "sizes": ["t", "s", "b", "l"]},
+            "Natural Images": {"suffix": "", "sizes": ["t", "s", "b", "l"]},
             "Microscopy": {"suffix": "_cells", "sizes": ["t"]},
         }
 

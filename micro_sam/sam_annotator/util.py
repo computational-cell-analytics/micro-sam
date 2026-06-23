@@ -744,7 +744,7 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         if model_type.endswith("_cells"):
             model_family = "Microscopy"
         else:
-            model_family = "Natural Images (SAM2)"
+            model_family = "Natural Images"
     else:
         model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to 'Natural Images (SAM)' family.
         for k, v in supported_dropdown_maps.items():

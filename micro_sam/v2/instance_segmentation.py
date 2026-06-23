@@ -26,6 +26,24 @@ from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentat
 from micro_sam.v2.util import precompute_image_embeddings, set_precomputed
 
 
+class _LazyRLEMask(dict):
+    """A mask dict whose 'segmentation' is stored as an (uncompressed) RLE and decoded on access.
+
+    The SAM2 mask generator can emit hundreds-thousands of masks; holding them all as full-resolution
+    binary arrays is what makes AMG run out of memory (it gets OS-killed even for 2d). Storing them as
+    compact RLE and decoding to a binary mask only when 'segmentation' is read (e.g. inside
+    `mask_data_to_segmentation`'s loop) keeps the peak at a single full-resolution mask at a time.
+    All other fields (area, bbox, ...) are plain dict entries and are read without decoding.
+    """
+
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        if key == "segmentation" and isinstance(value, dict):
+            from sam2.utils.amg import rle_to_mask
+            return rle_to_mask(value)
+        return value
+
+
 class AutomaticMaskGenerationSegmenter:
     """Generates an instance segmentation for the SAM2 model using grid-based prompting (AMG).
 
@@ -68,20 +86,25 @@ class AutomaticMaskGenerationSegmenter:
         model: torch.nn.Module,
         model_type: Optional[str] = None,
         points_per_side: Optional[int] = 32,
-        points_per_batch: int = 64,
+        points_per_batch: int = 32,
         pred_iou_thresh: float = 0.8,
         stability_score_thresh: float = 0.9,
         **kwargs,
     ) -> None:
         from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
+        # 'output_mode="uncompressed_rle"' stores each mask as a compact RLE instead of a full-
+        # resolution binary array; we decode them lazily, one at a time, via '_LazyRLEMask' (see
+        # '_generate_masks_for_shape'). Together with the lower 'points_per_batch' (which bounds the
+        # number of masks upscaled to full resolution at once during prediction) this keeps AMG from
+        # running out of memory on large images, where the old binary-mask storage got OS-killed.
         self._mask_generator = SAM2AutomaticMaskGenerator(
             model=model,
             points_per_side=points_per_side,
             points_per_batch=points_per_batch,
             pred_iou_thresh=pred_iou_thresh,
             stability_score_thresh=stability_score_thresh,
-            output_mode="binary_mask",
+            output_mode="uncompressed_rle",
             **kwargs,
         )
         # The embedding signature written by 'precompute_image_embeddings' reads 'model_type' and
@@ -117,7 +140,9 @@ class AutomaticMaskGenerationSegmenter:
             masks = self._mask_generator.generate(dummy)
         finally:
             predictor.set_image = original_set_image
-        return masks
+        # Wrap the RLE masks so 'segmentation' decodes to a binary mask only when read (one at a
+        # time), instead of materialising every mask at full resolution. See '_LazyRLEMask'.
+        return [_LazyRLEMask(mask) for mask in masks]
 
     @torch.no_grad()
     def initialize(
@@ -226,6 +251,8 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
         i: Optional[int] = None,
         save_path: Optional[str] = None,
         verbose: bool = False,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
         **kwargs,
     ) -> None:
         """Run the grid-based mask prediction tile-by-tile and store the per-tile masks.
@@ -264,13 +291,19 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
         self._tiling = Blocking([0, 0], list(self._original_size), list(tile_shape))
         self._halo = tuple(halo)
 
+        from micro_sam.util import handle_pbar
+        _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
+
         self._masks = []
         n_tiles = self._tiling.number_of_blocks
-        for tile_id in tqdm(range(n_tiles), desc="Compute masks for tile", disable=not verbose):
+        pbar_init(n_tiles, "Automatic segmentation (tiles)")
+        for tile_id in range(n_tiles):
             block = self._tiling.get_block_with_halo(tile_id, list(self._halo)).outer_block
             set_precomputed(predictor, image_embeddings, tile_id=tile_id)
             tile_size = tuple(end - begin for begin, end in zip(block.begin, block.end))
             self._masks.append(self._generate_masks_for_shape(tile_size))
+            pbar_update(1)
+        pbar_close()
 
         self._is_initialized = True
 
@@ -360,6 +393,8 @@ def automatic_3d_segmentation(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
     **kwargs,
 ) -> np.ndarray:
     """Automatically segment objects in a volume with the SAM2 mask generator.
@@ -381,6 +416,8 @@ def automatic_3d_segmentation(
         tile_shape: The tile shape for the tiled per-slice prediction, (y, x). By default 'None'.
         halo: The overlap between the tiles, (y, x). By default 'None'.
         verbose: Verbosity flag. By default 'True'.
+        pbar_init: Callback to initialize an external progress bar, called with the number of slices.
+        pbar_update: Callback to update an external progress bar, called once per segmented slice.
         kwargs: Keyword arguments for the 'generate' method of the segmenter.
 
     Returns:
@@ -393,19 +430,24 @@ def automatic_3d_segmentation(
     if tile_shape is not None and halo is not None:
         init_kwargs = {"tile_shape": tile_shape, "halo": halo}
 
+    from micro_sam.util import handle_pbar
+    _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
+    pbar_init(volume.shape[0], "Automatic segmentation (slices)")
+
     segmentation = np.zeros(volume.shape, dtype="uint32")
     offset = 0
-    for i in tqdm(range(volume.shape[0]), desc="Segment slices", disable=not verbose):
+    for i in range(volume.shape[0]):
         segmenter.initialize(volume[i], verbose=False, **init_kwargs)
         seg = segmenter.generate(**kwargs)
 
         # Offset the per-slice instance ids so that they are unique across the whole volume.
         max_z = int(seg.max())
-        if max_z == 0:
-            continue
-        seg[seg != 0] += offset
-        offset += max_z
-        segmentation[i] = seg
+        if max_z != 0:
+            seg[seg != 0] += offset
+            offset += max_z
+            segmentation[i] = seg
+        pbar_update(1)
+    pbar_close()
 
     segmentation = merge_instance_segmentation_3d(
         segmentation,
