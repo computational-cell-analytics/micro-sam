@@ -3474,10 +3474,22 @@ class AutoSegmentWidget(_WidgetBase):
         else:
             run_raw, ndim = raw, 2
 
-        if self.mode == "amg":
-            seg = self._run_amg(state, run_raw, ndim, z)
-        else:
-            seg = self._run_unisam2(state, run_raw, ndim, z)
+        # Show a progress indicator (the napari status-bar wheel + the activity-dock progress bar)
+        # for every run. Thread workers are disabled in this tool (see top of module), so the run is
+        # synchronous and the underlying backends only expose console 'tqdm' (no napari hooks). We
+        # therefore show an indeterminate ('busy') progress that covers all modes (amg / sparse /
+        # dense), 2d and 3d, and tiled or untiled uniformly. 'processEvents' paints it before the
+        # (blocking) computation starts, and it is always closed in the 'finally' block.
+        pbar, pbar_signals = _create_pbar_for_threadworker()
+        pbar_signals.pbar_description.emit(f"Running automatic segmentation ({self.mode})")
+        QtWidgets.QApplication.processEvents()
+        try:
+            if self.mode == "amg":
+                seg = self._run_amg(state, run_raw, ndim, z)
+            else:
+                seg = self._run_unisam2(state, run_raw, ndim, z)
+        finally:
+            pbar_signals.pbar_stop.emit()
 
         if z is None:
             self._viewer.layers["auto_segmentation"].data = seg
