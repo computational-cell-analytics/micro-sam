@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from micro_sam.util import get_device
 
-from micro_sam.v2.util import CFG_PATHS, BACKBONE, _get_checkpoint
+from micro_sam.v2.util import CFG_PATHS, _get_checkpoint
 
 
 def get_sam2_train_model(
@@ -14,7 +14,6 @@ def get_sam2_train_model(
     device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
-    backbone: str = BACKBONE,
     prob_to_use_pt_input: float = 0.5,
     prob_to_use_box_input: float = 0.5,
     num_frames_to_correct: int = 1,
@@ -36,7 +35,6 @@ def get_sam2_train_model(
         device: Target device. Auto-selects if None.
         checkpoint_path: Path to a custom checkpoint. Downloads default weights if None.
         freeze: Component name prefixes to freeze (e.g. ["image_encoder"]).
-        backbone: SAM2 backbone version, "sam2.0" or "sam2.1".
         prob_to_use_pt_input: Probability of using point/box prompts (vs mask propagation).
         prob_to_use_box_input: Conditional probability of using a box instead of a click.
         num_frames_to_correct: Max number of frames per volume that receive iterative
@@ -64,9 +62,9 @@ def get_sam2_train_model(
 
     device = get_device(device)
     if checkpoint_path is None:
-        checkpoint_path = _get_checkpoint(model_type=model_type, backbone=backbone)
+        checkpoint_path = _get_checkpoint(model_type=model_type)
 
-    model_cfg = CFG_PATHS[backbone][model_type[:6]]
+    model_cfg = CFG_PATHS[model_type[:6]]
 
     model = build_sam2(
         config_file=model_cfg,

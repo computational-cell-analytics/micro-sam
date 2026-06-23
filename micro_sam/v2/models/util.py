@@ -39,7 +39,7 @@ class UniSAM2(UNETR3D):
         self, encoder: Union[str, nn.Module] = "hvit_t", output_channels: int = 4, img_size: int = 1024, **kwargs
     ):
         if isinstance(encoder, str):
-            encoder_checkpoint = _get_checkpoint(model_type=encoder, backbone="sam2.1")
+            encoder_checkpoint = _get_checkpoint(model_type=encoder)
         else:
             encoder_checkpoint = None
             encoder = SAM2EncoderAdapter(encoder, img_size=img_size)
