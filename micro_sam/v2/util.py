@@ -23,53 +23,28 @@ sys.path.append(str(Path(sam2.__file__).parents[0]))
 
 _DEFAULT_MODEL = "hvit_t"
 
-BACKBONE = "sam2.1"
-
+# Only SAM2.1 is supported.
 CFG_PATHS = {
-    "sam2.0": {
-        "hvit_t": "configs/sam2/sam2_hiera_t.yaml",
-        "hvit_s": "configs/sam2/sam2_hiera_s.yaml",
-        "hvit_b": "configs/sam2/sam2_hiera_b+.yaml",
-        "hvit_l": "configs/sam2/sam2_hiera_l.yaml",
-    },
-    "sam2.1": {
-        "hvit_t": "configs/sam2.1/sam2.1_hiera_t.yaml",
-        "hvit_s": "configs/sam2.1/sam2.1_hiera_s.yaml",
-        "hvit_b": "configs/sam2.1/sam2.1_hiera_b+.yaml",
-        "hvit_l": "configs/sam2.1/sam2.1_hiera_l.yaml",
-    }
+    "hvit_t": "configs/sam2.1/sam2.1_hiera_t.yaml",
+    "hvit_s": "configs/sam2.1/sam2.1_hiera_s.yaml",
+    "hvit_b": "configs/sam2.1/sam2.1_hiera_b+.yaml",
+    "hvit_l": "configs/sam2.1/sam2.1_hiera_l.yaml",
 }
 
 SUPPORTED_MODELS = ["hvit_t", "hvit_s", "hvit_b", "hvit_l"]
 
 URLS = {
-    "sam2.0": {
-        "hvit_t": "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt",
-        "hvit_s": "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_small.pt",
-        "hvit_b": "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_base_plus.pt",
-        "hvit_l": "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt",
-    },
-    "sam2.1": {
-        "hvit_t": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt",
-        "hvit_s": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt",
-        "hvit_b": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
-        "hvit_l": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt",
-    },
+    "hvit_t": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_tiny.pt",
+    "hvit_s": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt",
+    "hvit_b": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
+    "hvit_l": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt",
 }
 
 HASHES = {
-    "sam2.0": {
-        "hvit_t": "65b50056e05bcb13694174f51bb6da89c894b57b75ccdf0ba6352c597c5d1125",
-        "hvit_s": "95949964d4e548409021d47b22712d5f1abf2564cc0c3c765ba599a24ac7dce3",
-        "hvit_b": "d0bb7f236400a49669ffdd1be617959a8b1d1065081789d7bbff88eded3a8071",
-        "hvit_l": "7442e4e9b732a508f80e141e7c2913437a3610ee0c77381a66658c3a445df87b",
-    },
-    "sam2.1": {
-        "hvit_t": "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69",
-        "hvit_s": "6d1aa6f30de5c92224f8172114de081d104bbd23dd9dc5c58996f0cad5dc4d38",
-        "hvit_b": "a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5",
-        "hvit_l": "2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318",
-    },
+    "hvit_t": "7402e0d864fa82708a20fbd15bc84245c2f26dff0eb43a4b5b93452deb34be69",
+    "hvit_s": "6d1aa6f30de5c92224f8172114de081d104bbd23dd9dc5c58996f0cad5dc4d38",
+    "hvit_b": "a2345aede8715ab1d5d31b4a509fb160c5a4af1970f199d9054ccfb746c004c5",
+    "hvit_l": "2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318",
 }
 
 
@@ -171,23 +146,19 @@ def _get_device(device=None):
     return device
 
 
-def _get_checkpoint(model_type=_DEFAULT_MODEL, backbone=BACKBONE):
-    # Let's first create a cache directory.
+def _get_checkpoint(model_type=_DEFAULT_MODEL):
     save_directory = os.path.expanduser(pooch.os_cache("micro_sam/v2/models"))
 
-    # Download the checkpoint paths if the user does not provide them.
-    fname = f"{model_type}_{backbone}"
+    fname = f"{model_type}_sam2.1"
     pooch.retrieve(
-        url=URLS[backbone][model_type],
-        known_hash=HASHES[backbone][model_type],
+        url=URLS[model_type],
+        known_hash=HASHES[model_type],
         fname=fname,
         path=save_directory,
         progressbar=True
     )
 
-    # Finally, get the filepath to the cached checkpoint.
     checkpoint_path = os.path.join(save_directory, fname)
-
     return checkpoint_path
 
 
@@ -196,7 +167,6 @@ def get_sam2_model(
     device: Optional[Union[torch.device, str]] = None,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     input_type: Literal["images", "videos"] = "images",
-    backbone: Literal["sam2.0", "sam2.1"] = BACKBONE,
 ):
     """Get the Segment Anything 2 (SAM2) model for interactive segmentation of images and videos.
 
@@ -205,17 +175,14 @@ def get_sam2_model(
         device: The pytorch device.
         checkpoint_path: Filepath to the pretrained model weights.
         input_type: Whether the inputs are images or videos.
-        backbone: Whether the SAM2 backbone is initialized with `sam2.0` or `sam2.1` model configuration.
-            The default is `sam2.1`.
 
     Returns:
         The SAM2 model.
     """
-    # The base SAM2 backbone (which determines the model config) is the first 6 characters of the
-    # name, e.g. 'hvit_t_cells' -> 'hvit_t'. For finetuned micro-sam models the (finetuned) weights
-    # come from the download console / registry rather than the base SAM2 download.
+    # The base SAM2 backbone is the first 6 characters of the name, e.g. 'hvit_t_cells' -> 'hvit_t';
+    # finetuned micro-sam weights come from the registry rather than the base SAM2 download.
     is_finetuned = model_type in FINETUNED_MODELS
-    model_cfg = CFG_PATHS[backbone][model_type[:6]]
+    model_cfg = CFG_PATHS[model_type[:6]]
 
     device = _get_device(device)
 
@@ -227,10 +194,10 @@ def get_sam2_model(
         raise ValueError(f"'{input_type}' is not a valid input type.")
 
     if checkpoint_path is None:
-        if is_finetuned:  # Download the finetuned weights from the model registry.
+        if is_finetuned:
             checkpoint_path, _, _ = _download_finetuned_sam2_model(model_type)
-        else:  # Download the base SAM2 backbone weights.
-            checkpoint_path = _get_checkpoint(model_type=model_type, backbone=backbone)
+        else:
+            checkpoint_path = _get_checkpoint(model_type=model_type)
 
     model = _build_segment_anything_2(
         config_file=model_cfg,

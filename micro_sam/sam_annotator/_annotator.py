@@ -246,11 +246,13 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
 
         return new_layer, ndim
 
-    def _rebuild_for_ndim(self, ndim):
+    def _rebuild_for_ndim(self, ndim, force=False):
         # Rebuild the layers and dimension-specific widgets for a new dimensionality.
         # This supports loading an image whose dimensionality differs from the one the
         # annotator was created with, e.g. opening the plugin and then loading a 3D image.
-        if ndim == self._ndim:
+        # 'force=True' rebuilds even when the dimensionality is unchanged - used on an image
+        # change to reset the widgets (checkboxes, ...) and layers to a fresh-open state.
+        if ndim == self._ndim and not force:
             return
         self._ndim = ndim
         self._shape = PLACEHOLDER_SHAPE[ndim]

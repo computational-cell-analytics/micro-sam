@@ -12,6 +12,8 @@ tooltips = {
         "automatic_segmentation_mode": "Select the automatic segmentation mode.",
         "run_button": "Compute embeddings or load embeddings if embedding_save_path is specified.",
         "tiling": "Enter tile size for computing tiled embeddings. Enter only x-value for quadratic size or both for non-quadratic.",  # noqa
+        "tile_z": "Number of slices per z-block for 3d automatic segmentation. Set this to the number of slices (or more) to process the whole volume in one block (no z-tiling).",  # noqa
+        "halo_z": "Number of overlapping slices between z-blocks for 3d automatic segmentation, used as context and discarded when stitching.",  # noqa
     },
     "segmentnd": {
         "box_extension": "Enter factor by which box size is increased when projecting to adjacent slices. Larger factors help if object sizes change between slices.",  # noqa
