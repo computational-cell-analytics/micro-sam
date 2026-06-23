@@ -3379,7 +3379,7 @@ class AutoSegmentWidget(_WidgetBase):
             halo = (self.Z_HALO,) + halo_xy
         return tile_shape, halo
 
-    def _run_unisam2(self, state, run_raw, ndim, z):
+    def _run_unisam2(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.v2.automatic_segmentation import get_unisam2_segmentation_generator
 
         device = next(state.decoder.parameters()).device
@@ -3401,12 +3401,13 @@ class AutoSegmentWidget(_WidgetBase):
             self._segmenter = get_unisam2_segmentation_generator(state.decoder, is_tiled=is_tiled, device=device)
             self._segmenter.initialize(
                 run_raw, ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo,
+                pbar_init=pbar_init, pbar_update=pbar_update,
             )
             self._segmenter_key = cache_key
 
         return self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
 
-    def _run_amg(self, state, run_raw, ndim, z):
+    def _run_amg(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.v2.instance_segmentation import get_amg_segmenter, automatic_3d_segmentation
 
         # The SAM2 model: 'state.predictor' is the image predictor (2d) wrapping the model, or the
@@ -3426,7 +3427,8 @@ class AutoSegmentWidget(_WidgetBase):
         if ndim == 3:  # Segment slice-by-slice and stitch across z. Tiling is in-plane (None if off).
             tile_shape, halo = self._get_tiling(2)
             return automatic_3d_segmentation(
-                run_raw, _build(tile_shape is not None), tile_shape=tile_shape, halo=halo, **generate_kwargs
+                run_raw, _build(tile_shape is not None), tile_shape=tile_shape, halo=halo,
+                pbar_init=pbar_init, pbar_update=pbar_update, **generate_kwargs,
             )
 
         # For plain 2d the annotator has already precomputed the embeddings, so we reuse them (the
@@ -3444,7 +3446,17 @@ class AutoSegmentWidget(_WidgetBase):
                      self.points_per_side, self.pred_iou_thresh, self.stability_score_thresh)
         if self._segmenter is None or self._segmenter_key != cache_key:
             self._segmenter = _build(is_tiled)
-            self._segmenter.initialize(run_raw, tile_shape=tile_shape, halo=halo, image_embeddings=image_embeddings)
+            if is_tiled:  # The tiled segmenter reports per-tile progress.
+                self._segmenter.initialize(
+                    run_raw, tile_shape=tile_shape, halo=halo, image_embeddings=image_embeddings,
+                    pbar_init=pbar_init, pbar_update=pbar_update,
+                )
+            else:  # A single 2d image is one step.
+                if pbar_init is not None:
+                    pbar_init(1, "Automatic segmentation")
+                self._segmenter.initialize(run_raw, tile_shape=tile_shape, halo=halo, image_embeddings=image_embeddings)
+                if pbar_update is not None:
+                    pbar_update(1)
             self._segmenter_key = cache_key
 
         return self._segmenter.generate(**generate_kwargs)
@@ -3474,20 +3486,31 @@ class AutoSegmentWidget(_WidgetBase):
         else:
             run_raw, ndim = raw, 2
 
-        # Show a progress indicator (the napari status-bar wheel + the activity-dock progress bar)
-        # for every run. Thread workers are disabled in this tool (see top of module), so the run is
-        # synchronous and the underlying backends only expose console 'tqdm' (no napari hooks). We
-        # therefore show an indeterminate ('busy') progress that covers all modes (amg / sparse /
-        # dense), 2d and 3d, and tiled or untiled uniformly. 'processEvents' paints it before the
-        # (blocking) computation starts, and it is always closed in the 'finally' block.
+        # Show a progress bar in the napari activity dock (and the status-bar wheel) that advances
+        # with the actual work: per tile for tiled runs, per slice for 3d, and as a single step for a
+        # plain 2d image. Thread workers are disabled in this tool (see top of module), so the run is
+        # synchronous; we drive the bar via callbacks the backends call between units and pump the Qt
+        # event loop with 'processEvents' on each update so it repaints live. It is always closed in
+        # the 'finally' block. (3d decoder inference runs through a thread pool and is reported as a
+        # single step, since it cannot update the napari bar live.)
         pbar, pbar_signals = _create_pbar_for_threadworker()
+
+        def pbar_init(total, description):
+            pbar_signals.pbar_total.emit(total)
+            pbar_signals.pbar_description.emit(description)
+            QtWidgets.QApplication.processEvents()
+
+        def pbar_update(update=1):
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
+
         pbar_signals.pbar_description.emit(f"Running automatic segmentation ({self.mode})")
         QtWidgets.QApplication.processEvents()
         try:
             if self.mode == "amg":
-                seg = self._run_amg(state, run_raw, ndim, z)
+                seg = self._run_amg(state, run_raw, ndim, z, pbar_init=pbar_init, pbar_update=pbar_update)
             else:
-                seg = self._run_unisam2(state, run_raw, ndim, z)
+                seg = self._run_unisam2(state, run_raw, ndim, z, pbar_init=pbar_init, pbar_update=pbar_update)
         finally:
             pbar_signals.pbar_stop.emit()
 

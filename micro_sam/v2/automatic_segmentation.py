@@ -341,7 +341,11 @@ def run_unisam2_decoder_on_embeddings(
 
 @torch.no_grad()
 def run_unisam2_decoder_on_tiled_embeddings(
-    model: torch.nn.Module, image_embeddings: dict, device: Optional[Union[str, torch.device]] = None,
+    model: torch.nn.Module,
+    image_embeddings: dict,
+    device: Optional[Union[str, torch.device]] = None,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
 ) -> np.ndarray:
     """Run the UniSAM2 decoder on precomputed tiled 2d embeddings and stitch the tiles.
 
@@ -354,6 +358,8 @@ def run_unisam2_decoder_on_tiled_embeddings(
         image_embeddings: Precomputed tiled 2d image embeddings (with per-tile `features`/`high_res_feats`
             groups and `shape`/`tile_shape`/`halo` attrs), see `precompute_image_embeddings`.
         device: The device to run inference on.
+        pbar_init: Callback to initialize an external progress bar, called with the number of tiles.
+        pbar_update: Callback to update an external progress bar, called once per tile.
 
     Returns:
         The predictions stacked along the channel axis, shape (4, Y, X).
@@ -363,6 +369,9 @@ def run_unisam2_decoder_on_tiled_embeddings(
     tile_shape = tuple(int(s) for s in feats_group.attrs["tile_shape"])
     halo = tuple(int(s) for s in feats_group.attrs["halo"])
     tiling = Blocking([0, 0], list(shape), list(tile_shape))
+
+    if pbar_init is not None:
+        pbar_init(tiling.number_of_blocks, "Automatic segmentation (tiles)")
 
     output = np.zeros((4, *shape), dtype="float32")
     for tile_id in range(tiling.number_of_blocks):
@@ -375,6 +384,8 @@ def run_unisam2_decoder_on_tiled_embeddings(
         local_bb = tuple(slice(b, e) for b, e in zip(block.inner_block_local.begin, block.inner_block_local.end))
         inner_bb = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
         output[(slice(None),) + inner_bb] = tile_prediction[(slice(None),) + local_bb]
+        if pbar_update is not None:
+            pbar_update(1)
 
     return output
 
@@ -415,6 +426,8 @@ class UniSAM2InstanceSegmentation:
         i: Optional[int] = None,
         tile_shape: Optional[tuple] = None,
         halo: Optional[tuple] = None,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Run the UniSAM2 inference and store the foreground and distance predictions.
 
@@ -428,13 +441,22 @@ class UniSAM2InstanceSegmentation:
             tile_shape: Unused for the non-tiled segmenter (no tiling); kept so the interface matches
                 the tiled segmenter.
             halo: Unused for the non-tiled segmenter; kept for interface compatibility.
+            pbar_init: Callback to initialize an external progress bar. The non-tiled inference is a
+                single step, so it is called with a total of 1.
+            pbar_update: Callback to update an external progress bar, called once when done.
         """
+        # The non-tiled inference is a single (whole-image or whole-volume) step, so progress is
+        # reported as one unit; the tiled / 3d-slice variants report per tile / per slice.
+        if pbar_init is not None:
+            pbar_init(1, "Automatic segmentation")
         if image_embeddings is not None and ndim == 2:
             self._prediction = run_unisam2_decoder_on_embeddings(
                 self._model, image_embeddings, device=self._device
             )
         else:
             self._prediction = run_unisam2_inference(self._model, image, ndim, device=self._device)
+        if pbar_update is not None:
+            pbar_update(1)
         self._is_initialized = True
 
     def generate(self, mode: str = "sparse", **kwargs) -> np.ndarray:
@@ -471,6 +493,8 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
         halo: Optional[tuple] = None,
         image_embeddings: Optional[dict] = None,
         i: Optional[int] = None,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
     ) -> None:
         """Run the tiled UniSAM2 inference and store the foreground and distance predictions.
 
@@ -483,15 +507,25 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
                 decoder is run per tile on them and stitched, reusing the embeddings shared with
                 interactive / AMG. Ignored for 3d. See `precompute_image_embeddings`.
             i: Index for the image data. Unused here, kept for interface compatibility.
+            pbar_init: Callback to initialize an external progress bar. For the 2d tiled path it is
+                called with the number of tiles; the 3d path is a single step (total of 1).
+            pbar_update: Callback to update an external progress bar, called per tile (2d) or once (3d).
         """
         if image_embeddings is not None and ndim == 2:
             self._prediction = run_unisam2_decoder_on_tiled_embeddings(
-                self._model, image_embeddings, device=self._device
+                self._model, image_embeddings, device=self._device,
+                pbar_init=pbar_init, pbar_update=pbar_update,
             )
         else:
+            # 3d tiled inference runs through 'predict_with_halo' (a thread pool), which cannot drive
+            # the napari progress live, so it is reported as a single step.
+            if pbar_init is not None:
+                pbar_init(1, "Automatic segmentation (volume)")
             self._prediction = run_unisam2_inference(
                 self._model, image, ndim, device=self._device, tile_shape=tile_shape, halo=halo,
             )
+            if pbar_update is not None:
+                pbar_update(1)
         self._is_initialized = True
 
 
