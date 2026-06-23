@@ -33,3 +33,4 @@ dependencies:
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git
         - git+https://github.com/facebookresearch/sam2.git
+        - git+https://github.com/wimmerth/anyup
