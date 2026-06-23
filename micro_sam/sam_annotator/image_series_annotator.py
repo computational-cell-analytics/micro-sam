@@ -16,6 +16,7 @@ from qtpy.QtCore import QTimer
 
 from .. import util
 from ..v1.util import get_sam_model, get_model_names
+from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
 from ._tooltips import get_tooltip
 from ._state import AnnotatorState
@@ -128,7 +129,7 @@ def image_series_annotator(
     output_folder: str,
     *,
     ndim: Optional[int] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = DEFAULT_MODEL,
     embedding_path: Optional[str] = None,
     initial_segmentations: Optional[Union[List[Union[os.PathLike, str]], List[np.ndarray]]] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
@@ -558,7 +559,7 @@ def main():
         "otherwise they will be recomputed every time (which can take a long time)."
     )
     parser.add_argument(
-        "-m", "--model_type", default=util._DEFAULT_MODEL,
+        "-m", "--model_type", default=DEFAULT_MODEL,
         help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(

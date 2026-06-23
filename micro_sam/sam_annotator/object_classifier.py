@@ -17,6 +17,7 @@ from skimage.measure import regionprops_table
 from sklearn.ensemble import RandomForestClassifier
 
 from .. import util
+from ..v2.util import DEFAULT_MODEL
 from ..object_classification import compute_object_features, project_prediction_to_segmentation
 from ._state import AnnotatorState
 from . import _widgets as widgets
@@ -313,7 +314,7 @@ def object_classifier(
     image: np.ndarray,
     segmentation: np.ndarray,
     embedding_path: Optional[Union[str, util.ImageEmbeddings]] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
@@ -394,7 +395,7 @@ def image_series_object_classifier(
     segmentations: List[np.ndarray],
     output_folder: str,
     embedding_paths: Optional[List[Union[str, util.ImageEmbeddings]]] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     checkpoint_path: Optional[str] = None,
