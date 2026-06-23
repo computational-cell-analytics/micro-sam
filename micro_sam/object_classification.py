@@ -291,12 +291,25 @@ def project_prediction_to_segmentation(
         The pixel level object prediction, corresponding to a semantic segmentation.
     """
     assert len(object_prediction) == len(seg_ids)
+
+    # bioimage_cpp.take_dict only accepts these integer label dtypes. Napari label layers may use
+    # smaller dtypes such as uint8, so cast only for the relabeling call.
+    if segmentation.dtype not in (np.uint32, np.uint64, np.int32, np.int64):
+        if segmentation.dtype == bool or np.issubdtype(segmentation.dtype, np.unsignedinteger):
+            segmentation_for_relabeling = segmentation.astype("uint32", copy=False)
+        elif np.issubdtype(segmentation.dtype, np.signedinteger):
+            segmentation_for_relabeling = segmentation.astype("int32", copy=False)
+        else:
+            raise TypeError(f"The segmentation must have an integer dtype, got dtype={segmentation.dtype}.")
+    else:
+        segmentation_for_relabeling = segmentation
+
     prediction = {seg_id: class_pred for seg_id, class_pred in zip(seg_ids, object_prediction)}
     # Find missing segmentation ids. This will include the background id, but may include other ids of small objects.
     # Such objects may get removed in the resizing operations.
     missing_ids = np.setdiff1d(np.unique(segmentation), seg_ids)
     prediction.update({missing_id: 0 for missing_id in missing_ids})
-    return take_dict(prediction, segmentation)
+    return take_dict(prediction, segmentation_for_relabeling)
 
 
 # TODO handle images / segmentations as file paths
