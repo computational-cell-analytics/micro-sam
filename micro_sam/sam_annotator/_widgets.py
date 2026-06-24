@@ -1706,9 +1706,9 @@ class EmbeddingWidget(_WidgetBase):
             needs_tiling = False
 
         if needs_tiling:
-            # Our standard tiling: 384 block shape, 64 halo (in-plane).
-            self.tile_x, self.tile_y = 384, 384
-            self.halo_x, self.halo_y = 64, 64
+            # Our standard tiling: 512 block shape, 128 halo (in-plane); patch = tile_shape + 2 * halo.
+            self.tile_x, self.tile_y = 512, 512
+            self.halo_x, self.halo_y = 128, 128
             self.tile_x_param.setValue(self.tile_x)
             self.tile_y_param.setValue(self.tile_y)
             self.halo_x_param.setValue(self.halo_x)
