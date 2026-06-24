@@ -1692,16 +1692,16 @@ class EmbeddingWidget(_WidgetBase):
         self._halo_z_field.setVisible(show_z)
 
     def _set_default_tiling(self, *args):
-        # Enable tiling by default for large images: more than 512 pixels along either in-plane axis (2d/3d).
+        # Enable tiling by default for large images: more than 768 pixels along either in-plane axis (2d/3d).
         image = self.image_selection.get_value()
         if image is None:
             return
 
         shape = image.data.shape[:-1] if image.rgb else image.data.shape
         if len(shape) == 2:
-            needs_tiling = shape[0] > 512 or shape[1] > 512
+            needs_tiling = shape[0] > 768 or shape[1] > 768
         elif len(shape) == 3:
-            needs_tiling = shape[1] > 512 or shape[2] > 512
+            needs_tiling = shape[1] > 768 or shape[2] > 768
         else:
             needs_tiling = False
 
