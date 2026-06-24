@@ -48,6 +48,31 @@ HASHES = {
 }
 
 
+# Default in-plane tiling for large images. Tiling is enabled when an in-plane axis exceeds
+# DEFAULT_TILING_THRESHOLD; the SAM input patch per axis is then DEFAULT_TILE_SHAPE + 2 * DEFAULT_HALO,
+# which is kept equal to the threshold (512 + 2 * 128 = 768).
+DEFAULT_TILING_THRESHOLD = 768
+DEFAULT_TILE_SHAPE = (512, 512)
+DEFAULT_HALO = (128, 128)
+
+
+def needs_default_tiling(shape):
+    """Whether default in-plane tiling should be enabled for a given image shape.
+
+    Args:
+        shape: The image shape without any channel axis. Either 2d (y, x) or 3d (z, y, x);
+            for 3d only the in-plane (y, x) axes are considered, not the leading z axis.
+
+    Returns:
+        Whether tiling should be enabled by default.
+    """
+    if len(shape) == 2:
+        return shape[0] > DEFAULT_TILING_THRESHOLD or shape[1] > DEFAULT_TILING_THRESHOLD
+    elif len(shape) == 3:
+        return shape[1] > DEFAULT_TILING_THRESHOLD or shape[2] > DEFAULT_TILING_THRESHOLD
+    return False
+
+
 # Finetuned SAM2 models (the micro-sam "model download console" for SAM2). These are exported into
 # the two-file micro-sam layout - an interactive predictor checkpoint ('<name>') and a UniSAM2
 # decoder checkpoint ('<name>_decoder') - by 'scripts/model_export/export_sam2_cells_model.py'.

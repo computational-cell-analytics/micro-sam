@@ -1692,23 +1692,17 @@ class EmbeddingWidget(_WidgetBase):
         self._halo_z_field.setVisible(show_z)
 
     def _set_default_tiling(self, *args):
-        # Enable tiling by default for large images: more than 768 pixels along either in-plane axis (2d/3d).
+        # Enable tiling by default for large in-plane images, using the central v2 tiling defaults.
+        from micro_sam.v2.util import needs_default_tiling, DEFAULT_TILE_SHAPE, DEFAULT_HALO
+
         image = self.image_selection.get_value()
         if image is None:
             return
 
         shape = image.data.shape[:-1] if image.rgb else image.data.shape
-        if len(shape) == 2:
-            needs_tiling = shape[0] > 768 or shape[1] > 768
-        elif len(shape) == 3:
-            needs_tiling = shape[1] > 768 or shape[2] > 768
-        else:
-            needs_tiling = False
-
-        if needs_tiling:
-            # Our standard tiling: 512 block shape, 128 halo (in-plane); patch = tile_shape + 2 * halo.
-            self.tile_x, self.tile_y = 512, 512
-            self.halo_x, self.halo_y = 128, 128
+        if needs_default_tiling(shape):
+            self.tile_x, self.tile_y = DEFAULT_TILE_SHAPE
+            self.halo_x, self.halo_y = DEFAULT_HALO
             self.tile_x_param.setValue(self.tile_x)
             self.tile_y_param.setValue(self.tile_y)
             self.halo_x_param.setValue(self.halo_x)
