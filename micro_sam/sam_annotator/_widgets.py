@@ -2585,19 +2585,16 @@ class UnifiedSegmentWidget(_WidgetBase):
                 # Report per-slice progress so the user can see the propagation advancing.
                 # A patience of 0 disables early stopping (propagate through the whole volume).
                 early_stop_patience = self.early_stop_patience if self.early_stop_patience > 0 else None
-                # 'self.z_range' is a hard slice bound set by the interactive widget; 'None' = full volume.
-                # Match the progress bar total to the slices that will actually be propagated.
-                # When a z-range is set the total is its width. With the full volume and no early
-                # stopping it is the full depth. But with the full volume AND early stopping the
-                # endpoint is not knowable upfront (propagation halts wherever the object ends), so
-                # we use an indeterminate ('busy') bar: napari renders total=0 as an animated range.
+                # Use a determinate total = the upper bound on slices the propagation can cover: the
+                # selected z-range width, else the full depth. With early stopping the propagation may
+                # finish before reaching the total (the bar then completes early) - this still shows a
+                # sense of scale / ETA, unlike a vague indeterminate 'busy' bar. 'self.z_range' is a
+                # hard slice bound set by the interactive widget; 'None' means the full volume.
                 if self.z_range is not None:
                     z_lo, z_hi = self.z_range
                     n_propagation_steps = z_hi - z_lo + 1
-                elif early_stop_patience is None:
-                    n_propagation_steps = shape[0]
                 else:
-                    n_propagation_steps = 0  # Indeterminate / busy bar.
+                    n_propagation_steps = shape[0]
                 pbar_signals.pbar_total.emit(n_propagation_steps)
                 pbar_signals.pbar_description.emit("Propagate in volume")
                 seg = state.interactive_segmenter.predict(
