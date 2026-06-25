@@ -194,31 +194,37 @@ class TestAnnotatorClass:
 
         viewer.close()
 
-    def test_batched_checkbox_hidden_when_tiled(self, make_napari_viewer_proxy):
+    @pytest.mark.parametrize("ndim", [2, 3])
+    def test_batched_checkbox_hidden_when_tiled(self, make_napari_viewer_proxy, ndim):
         # Regression for 3c: batched (multi-object) prompting is unsupported with tiling, so the
         # 'Batched' checkbox must be hidden while the embeddings are tiled (and shown otherwise).
+        # This holds for both the 2d and 3d segmentation annotator.
         from micro_sam.sam_annotator._state import AnnotatorState
 
+        image = binary_blobs(256) if ndim == 2 else np.stack(4 * [binary_blobs(256)])
+        shape = (256, 256) if ndim == 2 else (4, 256, 256)
+
         viewer = make_napari_viewer_proxy()
-        viewer.add_image(binary_blobs(256), name="image")
+        viewer.add_image(image, name="image")
         widget = Annotator(viewer)
+        assert widget._ndim == ndim
         interactive = widget._widgets["interactive"]
         state = AnnotatorState()
 
         # Non-tiled embeddings -> batched control shown.
-        state.image_embeddings = {"input_size": (256, 256), "original_size": (256, 256), "features": None}
+        state.image_embeddings = {"input_size": (256, 256), "original_size": shape, "features": None}
         interactive._update_batched_visibility()
         assert not interactive.batched_checkbox.isHidden()
 
         # Tiled embeddings (top-level input_size is None) -> hidden and reset to single-object.
         interactive.batched_checkbox.setChecked(True)
-        state.image_embeddings = {"input_size": None, "original_size": (256, 256), "features": None}
+        state.image_embeddings = {"input_size": None, "original_size": shape, "features": None}
         interactive._update_batched_visibility()
         assert interactive.batched_checkbox.isHidden()
         assert not interactive.batched
 
         # Back to non-tiled -> shown again.
-        state.image_embeddings = {"input_size": (256, 256), "original_size": (256, 256), "features": None}
+        state.image_embeddings = {"input_size": (256, 256), "original_size": shape, "features": None}
         interactive._update_batched_visibility()
         assert not interactive.batched_checkbox.isHidden()
 
