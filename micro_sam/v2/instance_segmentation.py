@@ -22,7 +22,51 @@ from bioimage_cpp.utils import Blocking
 from micro_sam.util import mask_data_to_segmentation
 from micro_sam.v1.inference import _merge_segmentations
 from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
-from micro_sam.v2.util import precompute_image_embeddings, set_precomputed
+from micro_sam.v2.util import precompute_image_embeddings, set_precomputed, _load_list_datasets
+
+
+def _set_image_predictor_from_backbone(predictor, fpn_list, pos_enc_list, original_size, i):
+    """Set a SAM2 image predictor's ``_features`` for slice ``i`` from stored backbone outputs.
+
+    ``fpn_list`` / ``pos_enc_list`` are the per-level backbone FPN outputs and positional encodings,
+    each indexable as ``level[i] -> (1, C, H, W)``. This reconstructs the image predictor's features
+    exactly as ``SAM2ImagePredictor.set_image`` does (``_prepare_backbone_features`` + reshape) but
+    without re-running the (expensive) image encoder.
+    """
+    model = predictor.model
+    device = next(model.parameters()).device
+
+    def _slice(level):
+        t = torch.as_tensor(np.asarray(level[i]), device=device).float()
+        return t if t.ndim == 4 else t.unsqueeze(0)  # ensure (B, C, H, W)
+
+    backbone_out = {
+        "backbone_fpn": [_slice(level) for level in fpn_list],
+        "vision_pos_enc": [_slice(level) for level in pos_enc_list],
+    }
+    _, vision_feats, _, _ = model._prepare_backbone_features(backbone_out)
+    if model.directly_add_no_mem_embed:
+        vision_feats[-1] = vision_feats[-1] + model.no_mem_embed
+
+    feats = [
+        feat.permute(1, 2, 0).view(1, -1, *feat_size)
+        for feat, feat_size in zip(vision_feats[::-1], predictor._bb_feat_sizes[::-1])
+    ][::-1]
+    predictor._features = {"image_embed": feats[-1], "high_res_feats": feats[:-1]}
+    predictor._orig_hw = [tuple(int(s) for s in np.array(original_size).reshape(-1)[:2])]
+    predictor._is_image_set = True
+
+
+def _set_image_predictor_from_3d_embeddings(predictor, image_embeddings, i):
+    """Set a SAM2 image predictor's features for slice ``i`` from precomputed 3d (video-style) embeddings.
+
+    The 3d embeddings produced for the volume (the same ones used for interactive 3d and the decoder)
+    store the per-slice backbone FPN outputs (``fpn``) and positional encodings (``pos_enc``), so the
+    per-slice AMG reuses them instead of re-encoding each slice.
+    """
+    _set_image_predictor_from_backbone(
+        predictor, image_embeddings["fpn"], image_embeddings["pos_enc"], image_embeddings["original_size"], i,
+    )
 
 
 class _LazyRLEMask(dict):
@@ -181,6 +225,10 @@ class AutomaticMaskGenerationSegmenter:
                 predictor, image, save_path=save_path, ndim=2, verbose=verbose,
                 pbar_init=pbar_init, pbar_update=pbar_update,
             )
+        elif "fpn" in image_embeddings and i is not None:
+            # Reuse a slice of the precomputed 3d (video-style) embeddings: reconstruct the image
+            # predictor's features for slice 'i' without re-running the encoder.
+            _set_image_predictor_from_3d_embeddings(predictor, image_embeddings, i)
         else:
             set_precomputed(predictor, image_embeddings, i=i)
 
@@ -274,6 +322,12 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
             kwargs: Additional arguments, ignored. Kept for interface compatibility.
         """
         predictor = self._mask_generator.predictor
+        # Reuse a slice of precomputed 3d (video-style) tiled embeddings: reconstruct the image
+        # predictor's features per tile for slice 'i' without re-running the encoder.
+        if image_embeddings is not None and "fpn" in image_embeddings and i is not None:
+            self._initialize_slice_from_3d_embeddings(image_embeddings, i)
+            return
+
         if image_embeddings is None:
             if tile_shape is None or halo is None:
                 raise ValueError("Both 'tile_shape' and 'halo' have to be passed for the tiled segmenter.")
@@ -303,6 +357,34 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
             self._masks.append(self._generate_masks_for_shape(tile_size))
             pbar_update(1)
         pbar_close()
+
+        self._is_initialized = True
+
+    def _initialize_slice_from_3d_embeddings(self, image_embeddings, i):
+        """Run the tiled AMG for slice ``i`` reusing precomputed 3d (video-style) tiled embeddings.
+
+        Each tile's image features for slice ``i`` are reconstructed from the per-tile ``fpn``/``pos_enc``
+        (no encoder pass), the grid prediction is run per tile, and the per-tile masks are stitched
+        in-plane by `generate`. The tiling is taken from the embeddings; the z axis is not tiled.
+        """
+        predictor = self._mask_generator.predictor
+        feats = image_embeddings["features"]
+        full_shape = tuple(int(s) for s in feats.attrs["shape"])  # (Z, Y, X)
+        tile_shape = tuple(int(s) for s in feats.attrs["tile_shape"])
+        halo = tuple(int(s) for s in feats.attrs["halo"])
+        self._original_size = full_shape[1:]  # in-plane (Y, X); z is not tiled
+        self._tiling = Blocking([0, 0], list(self._original_size), list(tile_shape))
+        self._halo = halo
+
+        self._masks = []
+        for tile_id in range(self._tiling.number_of_blocks):
+            block = self._tiling.get_block_with_halo(tile_id, list(self._halo)).outer_block
+            fpn_tile = _load_list_datasets(image_embeddings["fpn"], str(tile_id), lazy_loading=False)
+            pos_tile = _load_list_datasets(image_embeddings["pos_enc"], str(tile_id), lazy_loading=False)
+            original_size = feats[str(tile_id)].attrs["original_size"]
+            _set_image_predictor_from_backbone(predictor, fpn_tile, pos_tile, original_size, i)
+            tile_size = tuple(end - begin for begin, end in zip(block.begin, block.end))
+            self._masks.append(self._generate_masks_for_shape(tile_size))
 
         self._is_initialized = True
 
@@ -391,6 +473,7 @@ def automatic_3d_segmentation(
     min_z_extent: Optional[int] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
+    image_embeddings: Optional[dict] = None,
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
@@ -414,6 +497,8 @@ def automatic_3d_segmentation(
             prevent segmentation artifacts. By default 'None'.
         tile_shape: The tile shape for the tiled per-slice prediction, (y, x). By default 'None'.
         halo: The overlap between the tiles, (y, x). By default 'None'.
+        image_embeddings: Optional precomputed 3d (video-style) embeddings for the volume. When given
+            (and not tiled), each slice's AMG reuses the precomputed features instead of re-encoding.
         verbose: Verbosity flag. By default 'True'.
         pbar_init: Callback to initialize an external progress bar, called with the number of slices.
         pbar_update: Callback to update an external progress bar, called once per segmented slice.
@@ -428,6 +513,9 @@ def automatic_3d_segmentation(
     init_kwargs = {}
     if tile_shape is not None and halo is not None:
         init_kwargs = {"tile_shape": tile_shape, "halo": halo}
+    # Reuse the precomputed 3d embeddings per slice (no re-encode) for both the tiled and non-tiled
+    # paths; the segmenter reconstructs each slice's features from them.
+    reuse_embeddings = image_embeddings is not None
 
     from micro_sam.util import handle_pbar
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
@@ -436,7 +524,10 @@ def automatic_3d_segmentation(
     segmentation = np.zeros(volume.shape, dtype="uint32")
     offset = 0
     for i in range(volume.shape[0]):
-        segmenter.initialize(volume[i], verbose=False, **init_kwargs)
+        if reuse_embeddings:
+            segmenter.initialize(volume[i], image_embeddings=image_embeddings, i=i, verbose=False, **init_kwargs)
+        else:
+            segmenter.initialize(volume[i], verbose=False, **init_kwargs)
         seg = segmenter.generate(**kwargs)
 
         # Offset the per-slice instance ids so that they are unique across the whole volume.

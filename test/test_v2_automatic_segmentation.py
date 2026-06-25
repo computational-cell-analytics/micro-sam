@@ -6,7 +6,59 @@ import torch
 from micro_sam.v2.automatic_segmentation import (
     _block_shape_and_halo, run_unisam2_decoder_on_3d_embeddings,
 )
+from micro_sam.v2.instance_segmentation import _set_image_predictor_from_backbone
 from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
+
+
+class _FakeSAM2Model:
+    """Mimics SAM2's `_prepare_backbone_features` (flatten + permute, no encoder), for model-free tests."""
+
+    num_feature_levels = 3
+    directly_add_no_mem_embed = False
+    no_mem_embed = None
+
+    def parameters(self):
+        yield torch.zeros(1)  # so `next(model.parameters()).device` works
+
+    def _prepare_backbone_features(self, backbone_out):
+        feature_maps = backbone_out["backbone_fpn"][-self.num_feature_levels:]
+        pos = backbone_out["vision_pos_enc"][-self.num_feature_levels:]
+        feat_sizes = [(x.shape[-2], x.shape[-1]) for x in pos]
+        vision_feats = [x.flatten(2).permute(2, 0, 1) for x in feature_maps]
+        vision_pos = [x.flatten(2).permute(2, 0, 1) for x in pos]
+        return backbone_out, vision_feats, vision_pos, feat_sizes
+
+
+class _FakePredictor:
+    def __init__(self):
+        self.model = _FakeSAM2Model()
+        self._bb_feat_sizes = [(8, 8), (4, 4), (2, 2)]  # high -> low resolution
+        self._features = None
+        self._orig_hw = None
+        self._is_image_set = False
+
+
+def test_set_image_predictor_from_backbone_reconstructs_features():
+    # The reconstruction must pick slice i's per-level features, in the right order, reshaped back to
+    # (1, C, H, W): image_embed = lowest-res level, high_res_feats = the higher-res levels.
+    z, c = 4, 3
+    sizes = [(8, 8), (4, 4), (2, 2)]
+    fpn = [np.random.rand(z, 1, c, h, w).astype("float32") for (h, w) in sizes]
+    pos_enc = [np.zeros((z, 1, c, h, w), dtype="float32") for (h, w) in sizes]
+
+    predictor = _FakePredictor()
+    _set_image_predictor_from_backbone(predictor, fpn, pos_enc, original_size=(64, 64), i=2)
+
+    assert predictor._is_image_set is True
+    assert predictor._orig_hw == [(64, 64)]
+    image_embed = predictor._features["image_embed"]
+    high_res = predictor._features["high_res_feats"]
+    assert tuple(image_embed.shape) == (1, c, 2, 2)
+    assert [tuple(f.shape) for f in high_res] == [(1, c, 8, 8), (1, c, 4, 4)]
+    # The flatten/permute/reshape round-trips, so the features equal slice i of the input levels.
+    assert np.allclose(image_embed.numpy(), fpn[2][2])
+    assert np.allclose(high_res[0].numpy(), fpn[0][2])
+    assert np.allclose(high_res[1].numpy(), fpn[1][2])
 
 
 class _FakeUNETR:

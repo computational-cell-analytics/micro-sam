@@ -3854,8 +3854,10 @@ class AutoSegmentWidget(_WidgetBase):
 
         if ndim == 3:  # Segment slice-by-slice and stitch across z. Tiling is in-plane (None if off).
             tile_shape, halo = self._get_tiling()
+            # Reuse the precomputed 3d embeddings per slice (tiled or not) so AMG does not re-encode.
             return automatic_3d_segmentation(
                 run_raw, _build(tile_shape is not None), tile_shape=tile_shape, halo=halo,
+                image_embeddings=state.image_embeddings,
                 pbar_init=pbar_init, pbar_update=pbar_update, **generate_kwargs,
             )
 
