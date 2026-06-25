@@ -32,6 +32,54 @@ def test_annotator_tracking(make_napari_viewer_proxy):
     viewer.close()  # must close the viewer at the end of tests
 
 
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_division_frame_detection(make_napari_viewer_proxy):
+    # A point tagged with the 'division' track-state marks the frame where the track divides.
+    from micro_sam.sam_annotator._widgets import _division_frame_for_track
+
+    viewer = make_napari_viewer_proxy()
+    data = np.array([[1, 10, 10], [3, 20, 20], [2, 5, 5]])
+    properties = {
+        "state": np.array(["track", "division", "track"]),
+        "track_id": np.array(["1", "1", "2"]),
+    }
+    layer = viewer.add_points(data, properties=properties, ndim=3)
+
+    assert _division_frame_for_track(layer, 1) == 3  # track 1 divides at frame 3
+    assert _division_frame_for_track(layer, 2) is None  # track 2 has no division
+    assert _division_frame_for_track(layer, 3) is None  # unknown track
+    viewer.close()
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_update_lineage_seeds_daughters(make_napari_viewer_proxy):
+    # Recording a division seeds two daughter tracks and refreshes the track-id menu.
+    from micro_sam.sam_annotator._state import AnnotatorState
+    from micro_sam.sam_annotator._widgets import _update_lineage
+    from micro_sam.sam_annotator.annotator_tracking import AnnotatorTracking
+
+    viewer = make_napari_viewer_proxy()
+    AnnotatorTracking(viewer)
+    state = AnnotatorState()
+    state.lineage = {1: []}
+    state.current_track_id = 1
+
+    _update_lineage(viewer, mother=1)
+    assert state.lineage == {1: [2, 3], 2: [], 3: []}
+    assert set(state.annotator._tracking_widget[2].choices) == {"1", "2", "3"}
+
+    # Re-dividing the same mother is a no-op.
+    _update_lineage(viewer, mother=1)
+    assert state.lineage == {1: [2, 3], 2: [], 3: []}
+
+    # Dividing a daughter allocates fresh, non-colliding ids.
+    _update_lineage(viewer, mother=2)
+    assert state.lineage[2] == [4, 5]
+    viewer.close()
+
+
 def test_tracking_rejects_sam1_models():
     with pytest.raises(ValueError, match="only supports micro-sam2/SAM2"):
         _validate_tracking_model_type("vit_b_lm")

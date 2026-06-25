@@ -14,6 +14,11 @@ from sam2.sam2_video_predictor import SAM2VideoPredictor
 from sam2.utils.misc import AsyncVideoFrameLoader
 
 
+# Number of recent frames whose precomputed features are cached on the device during inference. >1
+# so repeatedly segmenting the same / nearby slice reuses the upload; small so memory stays bounded.
+MAX_CACHED_FRAMES = 8
+
+
 def _load_img_as_tensor(img_path, image_size):
     """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
 
@@ -266,8 +271,14 @@ class CustomVideoPredictor(SAM2VideoPredictor):
                 torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in embeddings["fpn"]
             ]
             backbone_out = {"backbone_fpn": backbone_fpn, "vision_pos_enc": vision_pos_enc}
-            # Keep only the most recent frame's features, matching upstream SAM2's single-frame cache.
-            inference_state["cached_features"] = {frame_idx: (image, backbone_out)}
+            # Cache the few most recent frames (not just one) so repeatedly segmenting the same or a
+            # nearby slice does not re-read the (possibly zarr-backed, tiled) embeddings and re-upload
+            # them to the device every interaction - the cause of the noticeable per-slice delay with
+            # tiling. The small cap still bounds memory for large volumes / propagation.
+            cache = inference_state["cached_features"]
+            cache[frame_idx] = (image, backbone_out)
+            while len(cache) > MAX_CACHED_FRAMES:
+                del cache[next(iter(cache))]  # evict the oldest inserted frame (FIFO)
 
         # Expand the features to the number of objects being tracked (mirrors upstream SAM2).
         expanded_image = image.expand(batch_size, -1, -1, -1)

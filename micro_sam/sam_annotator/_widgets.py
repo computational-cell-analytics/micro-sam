@@ -81,6 +81,17 @@ class _WidgetBase(QtWidgets.QWidget):
             checkbox.setToolTip(tooltip)
         return checkbox
 
+    def _update_batched_visibility(self):
+        """Hide the 'Batched' checkbox while embeddings are tiled (batched prompting is unsupported
+        with tiling). No-op for widgets without a batched checkbox."""
+        checkbox = getattr(self, "batched_checkbox", None)
+        if checkbox is None:
+            return
+        is_tiled = _embeddings_are_tiled(AnnotatorState())
+        if is_tiled and getattr(self, "batched", False):
+            checkbox.setChecked(False)  # reset to single-object (also updates 'self.batched')
+        checkbox.setVisible(not is_tiled)
+
     def _add_string_param(
         self,
         name,
@@ -1307,11 +1318,15 @@ def _validate_layers(
             return False
 
 
+def _embeddings_are_tiled(state):
+    """Whether the current embeddings are tiled (tiled embeddings have a top-level 'input_size' of None)."""
+    return state.image_embeddings is not None and state.image_embeddings.get("input_size") is None
+
+
 def _batched_disabled_when_tiled(state, batched):
     """Batched (multi-object) prompting is not supported with tiling: each tile is segmented
     independently, so object ids would collide across tiles. Force single-object and warn."""
-    is_tiled = state.image_embeddings is not None and state.image_embeddings.get("input_size") is None
-    if batched and is_tiled:
+    if batched and _embeddings_are_tiled(state):
         show_info("Batched (multi-object) prompting is not supported with tiling. Running single-object.")
         return False
     return batched
@@ -1445,9 +1460,13 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
-    def __init__(self, parent=None, sam2_only=False):
+    def __init__(self, parent=None, sam2_only=False, ndim_choice=False):
         super().__init__(parent=parent)
         self.sam2_only = sam2_only
+        # Whether to expose the 'image dimensions' (ndim) override dropdown. Only the segmentation
+        # annotator wires it into image normalization, so it is off by default (hidden for tracking
+        # and the classifiers, which do not use it).
+        self.ndim_choice = ndim_choice
 
         # Create a nested layout for the sections.
         # Section 1: Image and Model.
@@ -1536,8 +1555,10 @@ class EmbeddingWidget(_WidgetBase):
             save_path=self.embeddings_save_path,
             checkpoint_path=self.custom_weights,
             device=self.device,
-            tile_shape=[self.tile_x, self.tile_y],
-            halo=[self.halo_x, self.halo_y],
+            # Only forward tiling params when tiling is actually enabled; otherwise '_sync_embedding_widget'
+            # would force the tiling dropdown to "yes" using the (always-nonzero) default tile values.
+            tile_shape=[self.tile_x, self.tile_y] if self.tiling == "yes" else None,
+            halo=[self.halo_x, self.halo_y] if self.tiling == "yes" else None,
         )
 
         # Set the default settings for this model in the autosegment widget if it is part of
@@ -1563,10 +1584,30 @@ class EmbeddingWidget(_WidgetBase):
                 state.widgets["segment_nd"], _model_type, self.custom_weights
             )
 
+        # Now that the (possibly tiled) embeddings are known, refresh the 'Batched' control on the
+        # segment/track widgets: batched prompting is unsupported with tiling, so it is hidden then.
+        for widget in state.widgets.values():
+            update_batched = getattr(widget, "_update_batched_visibility", None)
+            if callable(update_batched):
+                update_batched()
+
     def _create_settings_widget(self):
         setting_values = QtWidgets.QWidget()
         setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
+
+        # Optional image dimensionality override. 'auto' detects 2d/3d (including channels) from the
+        # selected image; '2d'/'3d' force the interpretation, e.g. to read a channels-first
+        # (C, H, W) array as a 2d multi-channel image.
+        if self.ndim_choice:
+            self.image_ndim_mode = "auto"
+            self.image_ndim_dropdown, ndim_layout = self._add_choice_param(
+                "image_ndim_mode", self.image_ndim_mode, ["auto", "2d", "3d"], title="image dimensions:",
+                tooltip="Spatial dimensionality of the image. 'auto' detects it (a channels-first "
+                "array is read as a volume); set '2d' to read a multi-channel array (e.g. (C, H, W) "
+                "or (H, W, C)) as a single 2d image, or '3d' to force a (Z, H, W) volume.",
+            )
+            setting_values.layout().addLayout(ndim_layout)
 
         # Create UI for tiling. A dropdown toggles whether tiling is used; when enabled,
         # the tile shape and halo fields are revealed with sensible defaults.
@@ -1586,12 +1627,12 @@ class EmbeddingWidget(_WidgetBase):
         self._tiling_widget.setLayout(QtWidgets.QVBoxLayout())
         self._tiling_widget.layout().setContentsMargins(0, 0, 0, 0)
 
-        # Default tile shape and halo, used when tiling is enabled. The z block / halo (for 3d
-        # volumetric automatic segmentation) sit side-by-side with the in-plane x / y fields in the
-        # same row; the z fields are shown only for 3d data (see '_update_tiling_visibility').
-        # Defaults (z block 4, z halo 2) match the UniSAM2 training crop; set 'tile z' >= the slice
-        # count to disable z-tiling.
-        self.tile_x, self.tile_y = 384, 384
+        # In-plane (xy) tile shape and halo, used when tiling is enabled. The defaults come from the
+        # central v2 tiling values. The z block / halo are not set here: they only affect 3d automatic
+        # segmentation (not the embeddings, which are tiled in-plane only), so they live in the
+        # automatic segmentation settings instead.
+        from micro_sam.v2.util import DEFAULT_TILE_SHAPE, DEFAULT_HALO
+        self.tile_x, self.tile_y = DEFAULT_TILE_SHAPE
         self.tile_x_param, self.tile_y_param, tile_layout = self._add_shape_param(
             ("tile_x", "tile_y"),
             (self.tile_x, self.tile_y),
@@ -1600,15 +1641,9 @@ class EmbeddingWidget(_WidgetBase):
             step=16,
             tooltip=get_tooltip("embedding", "tiling"),
         )
-        self.tile_z = 4
-        self.tile_z_param, self._tile_z_field = self._make_int_field(
-            "tile_z", self.tile_z, min_val=1, max_val=512, step=1, title="tile_z:",
-            tooltip=get_tooltip("embedding", "tile_z"),
-        )
-        tile_layout.addWidget(self._tile_z_field)
         self._tiling_widget.layout().addLayout(tile_layout)
 
-        self.halo_x, self.halo_y = 64, 64
+        self.halo_x, self.halo_y = DEFAULT_HALO
         self.halo_x_param, self.halo_y_param, halo_layout = self._add_shape_param(
             ("halo_x", "halo_y"),
             (self.halo_x, self.halo_y),
@@ -1616,17 +1651,7 @@ class EmbeddingWidget(_WidgetBase):
             max_val=512,
             tooltip=get_tooltip("embedding", "halo"),
         )
-        self.halo_z = 2
-        self.halo_z_param, self._halo_z_field = self._make_int_field(
-            "halo_z", self.halo_z, min_val=0, max_val=128, step=1, title="halo_z:",
-            tooltip=get_tooltip("embedding", "halo_z"),
-        )
-        halo_layout.addWidget(self._halo_z_field)
         self._tiling_widget.layout().addLayout(halo_layout)
-
-        # The z fields are hidden until a 3d image is selected with tiling enabled.
-        self._tile_z_field.setVisible(False)
-        self._halo_z_field.setVisible(False)
 
         self._tiling_widget.setVisible(False)
         setting_values.layout().addWidget(self._tiling_widget)
@@ -1682,14 +1707,17 @@ class EmbeddingWidget(_WidgetBase):
         shape = image.data.shape[:-1] if image.rgb else image.data.shape
         return len(shape)
 
+    def _ndim_override(self):
+        # The user-selected image dimensionality override: None for 'auto', else 2 or 3. Read the
+        # dropdown directly so the value is correct regardless of signal ordering.
+        dropdown = getattr(self, "image_ndim_dropdown", None)
+        mode = dropdown.currentText() if dropdown is not None else "auto"
+        return {"auto": None, "2d": 2, "3d": 3}.get(mode)
+
     def _update_tiling_visibility(self, index=None):
-        # Show the tile shape and halo fields only when tiling is enabled. The z block / halo fields
-        # are additionally restricted to 3d data, since z-tiling only applies to volumetric inputs.
+        # Show the in-plane tile shape and halo fields only when tiling is enabled.
         self.tiling = self.tiling_dropdown.currentText()
         self._tiling_widget.setVisible(self.tiling == "yes")
-        show_z = self.tiling == "yes" and self._selected_image_ndim() == 3
-        self._tile_z_field.setVisible(show_z)
-        self._halo_z_field.setVisible(show_z)
 
     def _set_default_tiling(self, *args):
         # Enable tiling by default for large in-plane images, using the central v2 tiling defaults.
@@ -1728,16 +1756,24 @@ class EmbeddingWidget(_WidgetBase):
         self.model_family_dropdown.setCurrentText(default_family)
         self.model_size_dropdown.setCurrentText(default_size)
 
-        # Reset the tiling parameters to their creation defaults and the save path; the on/off state
-        # is then decided by '_set_default_tiling' (auto-enabled for large images, as on a fresh open).
-        self.tile_x_param.setValue(384)
-        self.tile_y_param.setValue(384)
-        self.halo_x_param.setValue(64)
-        self.halo_y_param.setValue(64)
-        self.tile_z_param.setValue(4)
-        self.halo_z_param.setValue(2)
+        # Reset the in-plane tiling parameters to their creation defaults and the save path; the on/off
+        # state is then decided by '_set_default_tiling' (auto-enabled for large images, as on a fresh open).
+        from micro_sam.v2.util import DEFAULT_TILE_SHAPE, DEFAULT_HALO
+        self.tile_x_param.setValue(DEFAULT_TILE_SHAPE[0])
+        self.tile_y_param.setValue(DEFAULT_TILE_SHAPE[1])
+        self.halo_x_param.setValue(DEFAULT_HALO[0])
+        self.halo_y_param.setValue(DEFAULT_HALO[1])
         self.tiling_dropdown.setCurrentText("no")
         self.embeddings_save_path_param.setText("")
+
+        # Reset the image-dimensionality override back to 'auto' so a new image is re-detected.
+        # Block the signal so this does not re-trigger the annotator's normalization mid-reset.
+        if getattr(self, "ndim_choice", False):
+            self.image_ndim_dropdown.blockSignals(True)
+            self.image_ndim_dropdown.setCurrentText("auto")
+            self.image_ndim_mode = "auto"
+            self.image_ndim_dropdown.blockSignals(False)
+
         self._set_default_tiling()
 
     def _validate_inputs(self):
@@ -1890,6 +1926,15 @@ class EmbeddingWidget(_WidgetBase):
             tile_shape, halo = _process_tiling_inputs(
                 self.tile_x, self.tile_y, self.halo_x, self.halo_y
             )
+            # Reflect the values actually used (after normalization) back in the UI so they are retained.
+            if tile_shape is not None:
+                self.tile_x, self.tile_y = tile_shape
+                self.tile_x_param.setValue(self.tile_x)
+                self.tile_y_param.setValue(self.tile_y)
+            if halo is not None:
+                self.halo_x, self.halo_y = halo
+                self.halo_x_param.setValue(self.halo_x)
+                self.halo_y_param.setValue(self.halo_y)
         else:
             tile_shape, halo = None, None
         save_path = (
@@ -2038,21 +2083,40 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
 #
 
 
-def _update_lineage(viewer):
-    """Updated the lineage after recording a division event.
-    This helper function is needed by 'track_object'.
+def _division_frame_for_track(point_layer, track_id):
+    """Frame at which 'track_id' is annotated to divide, or None.
+
+    A division is a point tagged with the 'division' track-state for this track; the earliest such
+    frame is the mother track's last frame (propagation is bounded above there).
+    """
+    props = point_layer.properties
+    if not len(point_layer.data) or "state" not in props or "track_id" not in props:
+        return None
+    states = np.asarray(props["state"])
+    track_ids_prop = np.asarray(props["track_id"])
+    z_all = np.round(point_layer.data[:, 0]).astype(int)
+    div_mask = (states == "division") & (track_ids_prop == str(track_id))
+    return int(z_all[div_mask].min()) if np.any(div_mask) else None
+
+
+def _update_lineage(viewer, mother=None):
+    """Record a division for 'mother' by seeding two daughter track ids and refreshing the menus.
+
+    Args:
+        viewer: The napari viewer.
+        mother: The track id that divides. Defaults to the current track id.
     """
     state = AnnotatorState()
     tracking_widget = state.annotator._tracking_widget
 
-    mother = state.current_track_id
-    assert mother in state.lineage
-    assert len(state.lineage[mother]) == 0
+    if mother is None:
+        mother = state.current_track_id
+    # Only seed daughters once per division: skip unknown tracks or tracks that already divided.
+    if mother not in state.lineage or len(state.lineage[mother]) > 0:
+        return
 
-    daughter1, daughter2 = (
-        state.current_track_id + 1,
-        state.current_track_id + 2,
-    )
+    daughter1 = max(state.lineage.keys()) + 1
+    daughter2 = daughter1 + 1
     state.lineage[mother] = [daughter1, daughter2]
     state.lineage[daughter1] = []
     state.lineage[daughter2] = []
@@ -2062,12 +2126,8 @@ def _update_lineage(viewer):
     track_ids = list(map(str, state.lineage.keys()))
     tracking_widget[2].choices = track_ids
 
-    viewer.layers["point_prompts"].property_choices["track_id"] = [
-        str(track_id) for track_id in track_ids
-    ]
-    viewer.layers["prompts"].property_choices["track_id"] = [
-        str(track_id) for track_id in track_ids
-    ]
+    viewer.layers["point_prompts"].property_choices["track_id"] = list(track_ids)
+    viewer.layers["prompts"].property_choices["track_id"] = list(track_ids)
 
 
 class UnifiedSegmentWidget(_WidgetBase):
@@ -2205,12 +2265,15 @@ class UnifiedSegmentWidget(_WidgetBase):
         self._update_batched_visibility()
 
     def _update_batched_visibility(self):
-        """Show/hide batched checkbox based on volume mode and SAM version."""
+        """Show/hide batched checkbox based on volume mode, SAM version and tiling."""
         state = AnnotatorState()
         is_sam2 = state.is_sam2 if state.is_sam2 is not None else False
 
-        # Only show batched if: volume mode enabled AND SAM2 model
-        should_show = self.apply_to_volume and is_sam2
+        # Only show batched if: volume mode enabled AND SAM2 model AND embeddings are not tiled
+        # (batched prompting is unsupported with tiling).
+        should_show = self.apply_to_volume and is_sam2 and not _embeddings_are_tiled(state)
+        if not should_show and getattr(self, "batched", False):
+            self.batched_checkbox.setChecked(False)
         self.batched_checkbox.setVisible(should_show)
 
     def _get_button_text(self):
@@ -2446,6 +2509,12 @@ class UnifiedSegmentWidget(_WidgetBase):
         """
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
+        def emit_progress(update):
+            # The run is synchronous, so pump the Qt event loop to repaint the bar live instead of
+            # only updating the terminal tqdm.
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
+
         # @thread_worker
         def volumetric_segmentation_impl():
             state = AnnotatorState()
@@ -2532,7 +2601,7 @@ class UnifiedSegmentWidget(_WidgetBase):
                 pbar_signals.pbar_total.emit(n_propagation_steps)
                 pbar_signals.pbar_description.emit("Propagate in volume")
                 seg = state.interactive_segmenter.predict(
-                    update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                    update_progress=emit_progress,
                     early_stop_patience=early_stop_patience, z_range=self.z_range,
                 )
 
@@ -2545,9 +2614,7 @@ class UnifiedSegmentWidget(_WidgetBase):
                         self._viewer.layers["prompts"],
                         state.image_embeddings,
                         shape,
-                        update_progress=lambda update: pbar_signals.pbar_update.emit(
-                            update
-                        ),
+                        update_progress=emit_progress,
                     )
                 )
 
@@ -2562,9 +2629,7 @@ class UnifiedSegmentWidget(_WidgetBase):
                     iou_threshold=self.iou_threshold,
                     projection=self.projection,
                     box_extension=self.box_extension,
-                    update_progress=lambda update: pbar_signals.pbar_update.emit(
-                        update
-                    ),
+                    update_progress=emit_progress,
                 )
 
                 state.z_range = (z_min, z_max)
@@ -2597,6 +2662,11 @@ class UnifiedSegmentWidget(_WidgetBase):
         """
         state = AnnotatorState()
         pbar, pbar_signals = _create_pbar_for_threadworker()
+
+        def emit_progress(update):
+            # Synchronous run: pump the Qt event loop so the bar repaints live, not only in the terminal.
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
 
         def propagate_track(track_id):
             # Propagate a single track's prompts across the video with the SAM2 predictor.
@@ -2645,7 +2715,12 @@ class UnifiedSegmentWidget(_WidgetBase):
                     prompted_frames.append(int(t))
 
             if not prompted_frames:
-                return None
+                return None, None
+
+            # Division markers: a point tagged with the 'division' track-state marks the frame where
+            # this (mother) track ends and two daughters begin. It bounds propagation above at the
+            # division frame instead of running to the end of the video.
+            division_frame = _division_frame_for_track(point_layer, track_id)
 
             # Map the stop annotations to a propagation z-range: a stop on the lowest / highest
             # annotated frame bounds propagation below / above the prompts ('predict' enforces it).
@@ -2654,13 +2729,15 @@ class UnifiedSegmentWidget(_WidgetBase):
             stop_upper = annotated[-1] in stop_frames
             z_lo = min(prompted_frames) if stop_lower else 0
             z_hi = max(prompted_frames) if stop_upper else shape[0] - 1
+            if division_frame is not None:  # The mother track ends at the division frame.
+                z_hi = min(z_hi, division_frame)
 
             pbar_signals.pbar_total.emit(z_hi - z_lo + 1)
             seg = state.interactive_segmenter.predict(
-                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+                update_progress=emit_progress,
                 early_stop_patience=None, z_range=(z_lo, z_hi),
             )
-            return seg
+            return seg, division_frame
 
         def tracking_impl():
             # With 'Batched' enabled, propagate every track that has prompts; otherwise only the
@@ -2668,9 +2745,12 @@ class UnifiedSegmentWidget(_WidgetBase):
             track_ids = self._all_track_ids() if self.batched else [state.current_track_id]
             results = {}
             for track_id in track_ids:
-                seg = propagate_track(track_id)
+                seg, division_frame = propagate_track(track_id)
                 if seg is not None:
                     results[track_id] = seg
+                # A division seeds two daughter tracks, so the user can continue from the division.
+                if division_frame is not None:
+                    _update_lineage(self._viewer, mother=track_id)
             pbar_signals.pbar_stop.emit()
             return results
 
@@ -2872,6 +2952,9 @@ class InteractiveSegmentationWidget(_WidgetBase):
         button_row.addWidget(self.clear_button)
         self.layout().addLayout(button_row)
 
+        # Hide the batched control if the (already loaded) embeddings are tiled.
+        self._update_batched_visibility()
+
     def _create_propagation_settings(self):
         """Build the SAM2 volume-mode propagation controls (early stopping + z-range slider).
 
@@ -3058,6 +3141,9 @@ class InteractiveTrackingWidget(_WidgetBase):
         button_row.addWidget(self.segment_button)
         button_row.addWidget(self.clear_button)
         self.layout().addLayout(button_row)
+
+        # Hide the batched control if the (already loaded) embeddings are tiled.
+        self._update_batched_visibility()
 
     def _align_menu_rows(self):
         # Each menu row is a QHBoxLayout of [QLabel, QComboBox]. Insert a stretch between them so the
@@ -3429,6 +3515,9 @@ class AutoSegmentV1Widget(_WidgetBase):
 class AutoSegmentWidget(_WidgetBase):
     """Automatic segmentation widget for SAM2 with 'amg', 'sparse' and 'dense' modes.
 
+    Subclasses set `_is_tracking = True` to hide the z-tiling controls (tracking segments per frame
+    in 2d, so z-tiling does not apply).
+
     When a UniSAM2 decoder is loaded (`AnnotatorState.decoder`), only the decoder-based 'sparse'
     (flow, LM data) and 'dense' (multicut, EM data) modes are offered - these operate on the
     foreground and directed-distance predictions of the decoder via
@@ -3444,6 +3533,8 @@ class AutoSegmentWidget(_WidgetBase):
         parent: The parent Qt widget.
     """
 
+    _is_tracking = False
+
     def __init__(self, viewer, with_decoder, volumetric, parent=None):
         super().__init__(parent)
         self._viewer = viewer
@@ -3455,6 +3546,10 @@ class AutoSegmentWidget(_WidgetBase):
         self.settings = None
         # The flow computation backend is always the (faster) cpp implementation.
         self.backend = "cpp"
+        # z block / halo for 3d decoder inference: the volume is decoded in z chunks to bound memory.
+        # These only matter for volumetric decoder modes; set 'tile_z' >= the slice count for no z-tiling.
+        from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
+        self.tile_z, self.halo_z = DEFAULT_TILE_Z, DEFAULT_HALO_Z
         # Cache of the (initialized) segmentation generator so changing post-processing parameters
         # only re-runs 'generate', not the expensive UniSAM2 inference. Keyed by the inputs.
         self._segmenter = None
@@ -3529,10 +3624,11 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _make_settings_widget(self):
         # All hyperparameters (except mode and apply-to-volume) live in one collapsible
-        # 'Advanced Settings' panel.
+        # 'Advanced Settings' panel. The z block / halo (3d decoder modes) sit at the very top.
         advanced = QtWidgets.QWidget()
         advanced.setLayout(QtWidgets.QVBoxLayout())
         advanced.layout().setContentsMargins(0, 0, 0, 0)
+        self._add_z_tiling_params(advanced)
         if self.mode == "amg":
             self._amg_settings(advanced)
         elif self.mode == "dense":
@@ -3553,6 +3649,24 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addLayout(layout)
 
+    def _add_z_tiling_params(self, settings):
+        # 3d decoder inference decodes the volume in z blocks (with a halo for context) to bound
+        # memory. 'tile_z' and 'halo_z' sit side by side at the top of the settings. Only for
+        # volumetric decoder segmentation - not 2d, not tracking (per-frame 2d) and not amg
+        # (slice-by-slice, no z decoder pass).
+        if not self.volumetric or self._is_tracking or self.mode == "amg":
+            return
+        row = QtWidgets.QHBoxLayout()
+        self.tile_z_param, _ = self._add_int_param(
+            "tile_z", self.tile_z, min_val=1, max_val=512, title="tile_z:",
+            tooltip=get_tooltip("autosegment", "tile_z"), layout=row,
+        )
+        self.halo_z_param, _ = self._add_int_param(
+            "halo_z", self.halo_z, min_val=0, max_val=128, title="halo_z:",
+            tooltip=get_tooltip("autosegment", "halo_z"), layout=row,
+        )
+        settings.layout().addLayout(row)
+
     def _add_flow_integration_params(self, settings, n_iter):
         self.n_iter = n_iter
         self.n_iter_param, layout = self._add_int_param(
@@ -3572,7 +3686,9 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addLayout(layout)
 
-        self.n_threads = 1 if self.mode == "sparse" else 8
+        # Default to 8 threads for the post-processing flow/multicut backends (a sensible default that
+        # does not oversubscribe; the user can raise it up to the spinbox maximum).
+        self.n_threads = min(8, mp.cpu_count())
         self.n_threads_param, layout = self._add_int_param(
             "n_threads", self.n_threads, min_val=1, max_val=64, tooltip=get_tooltip("autosegment", "n_threads"),
         )
@@ -3657,57 +3773,63 @@ class AutoSegmentWidget(_WidgetBase):
             n_threads=self.n_threads, backend=self.backend,
         )
 
-    def _get_tiling(self, ndim, spatial_shape=None):
-        # Tiling is configured once in the embedding widget. When enabled, in-plane (xy) tiling is
-        # used for all data, and for 3d data the volume is additionally tiled along z using the
-        # 'tile z' / 'halo z' controls grouped with the in-plane fields there.
+    def _get_tiling(self):
+        # In-plane (xy) tiling for automatic segmentation, taken from the embedding widget (where the
+        # embeddings' tiling is configured). Returns (None, None) when tiling is off. z-tiling is not
+        # handled here - it is a decoder-inference concern driven by this widget's 'tile_z'/'halo_z'.
         state = AnnotatorState()
         embed_widget = state.widgets.get("embeddings")
         if embed_widget is None or getattr(embed_widget, "tiling", "no") != "yes":
             return None, None
-        tile_inplane, halo_inplane = _process_tiling_inputs(
+        return _process_tiling_inputs(
             embed_widget.tile_x, embed_widget.tile_y, embed_widget.halo_x, embed_widget.halo_y,
         )
 
-        # 2d (per-slice AMG, or 2d segmentation), or no in-plane tile: in-plane only.
-        if ndim != 3 or tile_inplane is None:
-            return tile_inplane, halo_inplane
-
-        # 3d: add the z block / halo from the embedding widget controls. 'tile_z' >= the slice count
-        # means no z-tiling (the whole volume is one block along z).
-        if spatial_shape is None:
-            spatial_shape = tuple(state.image_shape)
-        n_slices = int(spatial_shape[0])
-        tile_z = int(getattr(embed_widget, "tile_z", 4))
-        halo_z = int(getattr(embed_widget, "halo_z", 2))
-        z_tile = tile_z if 0 < tile_z < n_slices else n_slices
-        z_halo = halo_z if z_tile < n_slices else 0
-        halo_xy = (0, 0) if halo_inplane is None else tuple(halo_inplane)
-        return (z_tile,) + tuple(tile_inplane), (z_halo,) + halo_xy
+    def _z_tiling(self, n_slices):
+        # The z block / halo for 3d decoder inference. 'tile_z' >= the slice count means no z-tiling
+        # (the whole volume is decoded in one z block).
+        z_block = self.tile_z if 0 < self.tile_z < n_slices else n_slices
+        z_halo = self.halo_z if z_block < n_slices else 0
+        return z_block, z_halo
 
     def _run_unisam2(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.v2.automatic_segmentation import get_unisam2_segmentation_generator
 
         device = next(state.decoder.parameters()).device
 
-        # For plain 2d the annotator has already precomputed the embeddings, so we reuse them (the
-        # decoder runs directly on them, per tile when tiled; the tiling is taken from the embeddings).
-        # For volumetric data the embeddings are video-style, so we run the (optionally tiled)
-        # inference directly - tiling stays None when it is not configured.
-        if self.volumetric:
-            tile_shape, halo = self._get_tiling(ndim, spatial_shape=run_raw.shape)
-            image_embeddings, is_tiled = None, tile_shape is not None
-        else:
-            tile_shape, halo, image_embeddings = None, None, state.image_embeddings
+        # All decoder auto-seg cases reuse the precomputed embeddings and run the decoder on them (no
+        # encoder re-run). The tiling is taken from the embeddings (tiled embeddings have a top-level
+        # 'input_size' of None). This covers 2d and 3d, tiled and untiled.
+        tile_shape, halo = None, None
+        z_block, z_halo = None, None
+        if not self.volumetric or ndim == 3:
+            # Plain 2d image, or the whole 3d volume: the precomputed embeddings match directly.
+            image_embeddings = state.image_embeddings
             is_tiled = image_embeddings["input_size"] is None
+            if ndim == 3:  # the decoder pass is z-chunked using the auto-seg z block / halo controls.
+                z_block, z_halo = self._z_tiling(int(run_raw.shape[0]))
+        else:
+            # A single slice of a 3d volume: reuse that slice's per-slice features from the (untiled)
+            # 3d embeddings; for tiled 3d embeddings fall back to a per-slice re-encode.
+            emb3d = state.image_embeddings
+            if emb3d is not None and emb3d.get("input_size") is not None:
+                image_embeddings = {
+                    "features": np.asarray(emb3d["features"][z:z + 1]),
+                    "input_size": emb3d["input_size"], "original_size": emb3d["original_size"],
+                }
+                is_tiled = False
+            else:
+                tile_shape, halo = self._get_tiling()
+                image_embeddings, is_tiled = None, tile_shape is not None
 
         # The cache avoids re-running the model when only the post-processing parameters change.
-        cache_key = (state.data_signature, "unisam2", ndim, z, tile_shape, halo, image_embeddings is not None)
+        cache_key = (state.data_signature, "unisam2", ndim, z, tile_shape, halo, z_block, z_halo,
+                     image_embeddings is not None)
         if self._segmenter is None or self._segmenter_key != cache_key:
             self._segmenter = get_unisam2_segmentation_generator(state.decoder, is_tiled=is_tiled, device=device)
             self._segmenter.initialize(
                 run_raw, ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo,
-                pbar_init=pbar_init, pbar_update=pbar_update,
+                pbar_init=pbar_init, pbar_update=pbar_update, z_block=z_block, z_halo=z_halo,
             )
             self._segmenter_key = cache_key
 
@@ -3731,7 +3853,7 @@ class AutoSegmentWidget(_WidgetBase):
             )
 
         if ndim == 3:  # Segment slice-by-slice and stitch across z. Tiling is in-plane (None if off).
-            tile_shape, halo = self._get_tiling(2)
+            tile_shape, halo = self._get_tiling()
             return automatic_3d_segmentation(
                 run_raw, _build(tile_shape is not None), tile_shape=tile_shape, halo=halo,
                 pbar_init=pbar_init, pbar_update=pbar_update, **generate_kwargs,
@@ -3741,7 +3863,7 @@ class AutoSegmentWidget(_WidgetBase):
         # tiling is taken from the embeddings). For a single slice of a volume the embeddings are
         # video-style, so we compute the slice embedding - tiling stays None when it is not configured.
         if self.volumetric:
-            tile_shape, halo = self._get_tiling(2)
+            tile_shape, halo = self._get_tiling()
             image_embeddings, is_tiled = None, tile_shape is not None
         else:
             tile_shape, halo, image_embeddings = None, None, state.image_embeddings
@@ -3834,6 +3956,8 @@ class AutoSegmentWidget(_WidgetBase):
 
 
 class AutoTrackWidget(AutoSegmentWidget):
+    _is_tracking = True
+
     def _create_widget(self):
         top_row = QtWidgets.QHBoxLayout()
         self.apply_to_volume = False
@@ -3872,19 +3996,13 @@ class AutoTrackWidget(AutoSegmentWidget):
             "Try adjusting the automatic tracking settings.",
         )
 
-    def _run_frame_segmentation(self, state, frame, frame_id, pbar_signals):
-        def pbar_init(total, description):
-            pbar_signals.pbar_total.emit(total)
-            pbar_signals.pbar_description.emit(f"{description} (frame {frame_id + 1})")
-            QtWidgets.QApplication.processEvents()
-
-        def pbar_update(update=1):
-            pbar_signals.pbar_update.emit(update)
-            QtWidgets.QApplication.processEvents()
-
+    def _run_frame_segmentation(self, state, frame, frame_id):
+        # No per-frame pbar callbacks: the timeseries loop advances the bar once per frame, so the
+        # per-frame segmentation must not reset the overall total (which made the bar refill 0-100%
+        # for every frame).
         if self.mode == "amg":
-            return self._run_amg(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
-        return self._run_unisam2(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
+            return self._run_amg(state, frame, 2, frame_id)
+        return self._run_unisam2(state, frame, 2, frame_id)
 
     def _track_timeseries(self, state, raw):
         segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
@@ -3901,16 +4019,20 @@ class AutoTrackWidget(AutoSegmentWidget):
             QtWidgets.QApplication.processEvents()
 
         try:
-            pbar_signals.pbar_description.emit(f"Running automatic tracking ({self.mode})")
+            # One determinate bar over all frames (advance once per frame), instead of resetting it
+            # to 0-100% inside each frame's segmentation.
+            pbar_signals.pbar_total.emit(len(raw))
+            pbar_signals.pbar_description.emit(f"Running automatic segmentation ({self.mode})")
             QtWidgets.QApplication.processEvents()
             for frame_id, frame in enumerate(raw):
-                seg = self._run_frame_segmentation(state, frame, frame_id, pbar_signals)
+                seg = self._run_frame_segmentation(state, frame, frame_id)
                 seg_max = int(seg.max())
-                if seg_max == 0:
-                    continue
-                seg[seg != 0] += offset
-                offset += seg_max
-                segmentation[frame_id] = seg
+                if seg_max != 0:
+                    seg[seg != 0] += offset
+                    offset += seg_max
+                    segmentation[frame_id] = seg
+                pbar_signals.pbar_update.emit(1)
+                QtWidgets.QApplication.processEvents()
 
             if offset == 0:
                 self._viewer.layers["auto_segmentation"].data = segmentation

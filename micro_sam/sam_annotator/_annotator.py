@@ -215,7 +215,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Replacing the inner widget deletes the previous one (and its now-orphaned children).
         self.setWidget(self._annotator_widget)
 
-    def _maybe_normalize_image_layer(self, image_layer):
+    def _maybe_normalize_image_layer(self, image_layer, ndim=None):
         """Normalize the selected image layer in place so all layers stay aligned.
 
         Squeezes singleton axes and maps the channel axis to RGB (see
@@ -223,12 +223,20 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         flag, the image layer is replaced with the normalized version. Replacement passes
         the normalized array by reference (napari does not copy), so it does not duplicate
         the image buffer. Returns the (possibly new) layer and its spatial dimensionality.
+
+        Args:
+            image_layer: The selected napari image layer.
+            ndim: Optional image-dimensionality override forwarded to ``prepare_annotation_image``
+                (``None`` = auto-detect, else 2 or 3).
         """
-        data, ndim, rgb = vutil.prepare_annotation_image(image_layer.data)
+        # Re-derive from the original (pre-normalization) data when available, so toggling the ndim
+        # override reinterprets the raw image instead of an already-reduced one.
+        source = image_layer.metadata.get("micro_sam_original_data", image_layer.data)
+        data, detected_ndim, rgb = vutil.prepare_annotation_image(source, ndim=ndim)
 
         # Nothing changed: keep the existing layer.
         if data.shape == tuple(image_layer.data.shape) and bool(image_layer.rgb) == rgb:
-            return image_layer, ndim
+            return image_layer, detected_ndim
 
         name = image_layer.name
         scale = image_layer.scale
@@ -241,10 +249,12 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             new_layer = self._viewer.add_image(data, name=name, rgb=rgb)
             if keep_scale:
                 new_layer.scale = scale
+            # Remember the original so a later ndim-override change re-derives from it.
+            new_layer.metadata["micro_sam_original_data"] = source
         finally:
             self._suppress_selection_rebuild = False
 
-        return new_layer, ndim
+        return new_layer, detected_ndim
 
     def _rebuild_for_ndim(self, ndim, force=False):
         # Rebuild the layers and dimension-specific widgets for a new dimensionality.

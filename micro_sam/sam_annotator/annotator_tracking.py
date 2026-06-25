@@ -350,7 +350,10 @@ class AnnotatorTracking(_AnnotatorBase):
     ) -> None:
         # Initialize the state for tracking.
         self._init_track_state()
-        self._with_decoder = AnnotatorState().decoder is not None
+        # At startup the decoder is not loaded yet; also treat the default model as decoder-capable
+        # when it has a registered decoder, so the default mode is correct before 'Compute Embeddings'.
+        from ..v2.util import has_registered_decoder
+        self._with_decoder = AnnotatorState().decoder is not None or has_registered_decoder(DEFAULT_MODEL)
         super().__init__(viewer=viewer, ndim=3)
         # Go to t=0.
         self._viewer.dims.current_step = (0, 0, 0) + tuple(

@@ -131,9 +131,6 @@ def _restore_from_spec(spec):
             save_path=None, checkpoint_path=spec.get("custom_weights"),
             device=None, tile_shape=spec.get("tile_shape"), halo=spec.get("halo"),
         )
-        for attr, key in (("tile_z_param", "tile_z"), ("halo_z_param", "halo_z")):
-            if spec.get(key) is not None and getattr(ew, attr, None) is not None:
-                getattr(ew, attr).setValue(int(spec[key]))
 
     # Top-feature selection and AnyUp/interpolation upsampling.
     if getattr(ann, "_set_options", None) is not None:
@@ -219,8 +216,6 @@ def _classifier_spec(rf):
         "tiling": getattr(ew, "tiling", "no"),
         "tile_shape": [ew.tile_x, ew.tile_y] if tiling_on else None,
         "halo": [ew.halo_x, ew.halo_y] if tiling_on else None,
-        "tile_z": getattr(ew, "tile_z", None) if tiling_on else None,
-        "halo_z": getattr(ew, "halo_z", None) if tiling_on else None,
         "use_top_features": n_components > 0,
         "n_top_features": n_components if n_components > 0 else None,
         "upsampling": "anyup" if use_anyup else "interpolation",
@@ -584,9 +579,18 @@ class PixelClassifier(QtWidgets.QScrollArea):
         if state.image_shape is None:
             return
 
-        # Update the dimension and image shape if it has changed.
+        # Update the dimension and image shape if it has changed. When the dimensionality changes
+        # (e.g. a 3d image loaded after the tool opened with 2d placeholder layers), the existing
+        # label layers must be recreated at the new ndim - assigning n-d data and an n-element scale
+        # to a layer created with a different ndim crashes napari. Delete them so '_require_layers'
+        # rebuilds them at the correct ndim.
         if state.image_shape != self._shape:
-            self._ndim = len(state.image_shape)
+            new_ndim = len(state.image_shape)
+            if new_ndim != self._ndim:
+                for name in ("annotations", "prediction"):
+                    if name in self._viewer.layers:
+                        del self._viewer.layers[name]
+            self._ndim = new_ndim
             self._shape = state.image_shape
 
         # The 'Apply to Volume' checkbox only makes sense for 3d data.

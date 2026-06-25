@@ -55,6 +55,11 @@ DEFAULT_TILING_THRESHOLD = 768
 DEFAULT_TILE_SHAPE = (512, 512)
 DEFAULT_HALO = (128, 128)
 
+# Default z block / halo for volumetric (3d) tiling, matching the UniSAM2 training crop. Set the
+# z tile >= the slice count to disable z-tiling (the whole volume becomes one block along z).
+DEFAULT_TILE_Z = 4
+DEFAULT_HALO_Z = 2
+
 
 def needs_default_tiling(shape):
     """Whether default in-plane tiling should be enabled for a given image shape.
@@ -123,6 +128,21 @@ def models():
 def get_model_names():
     """Return the names of the finetuned SAM2 models available in the download console."""
     return list(FINETUNED_MODELS)
+
+
+def has_registered_decoder(model_type):
+    """Whether a finetuned SAM2 model has a registered UniSAM2 decoder (for automatic segmentation).
+
+    A cheap registry lookup (no download), used e.g. to decide the default automatic-segmentation mode
+    before the model / decoder has actually been loaded.
+
+    Args:
+        model_type: The SAM2 model name, e.g. 'hvit_t_cells'.
+
+    Returns:
+        Whether a '<model_type>_decoder' is registered.
+    """
+    return f"{model_type}_decoder" in FINETUNED_HASHES
 
 
 def _download_finetuned_sam2_model(model_type, progress_bar_factory=None):
@@ -398,7 +418,9 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
     features.attrs["tile_shape"] = list(tile_shape)
     features.attrs["halo"] = list(halo)
 
-    pbar_init(n_tiles, "Compute Image Embeddings 3D tiled")
+    # Progress is reported per actual patch (tile-column x z slice), not per tile, since each tile
+    # encodes all z slices and that inner loop is the bulk of the work.
+    pbar_init(n_tiles * n_slices, "Compute Image Embeddings 3D tiled")
     for tile_id in range(n_tiles):
         block = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
         bb = tuple(slice(begin, end) for begin, end in zip(block.begin, block.end))
@@ -410,7 +432,7 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
         )
         batched_images = [_to_image(sub_volume[z]) for z in range(n_slices)]
         vision_feats, pos_encs, fpns, original_sizes, input_sizes = _compute_embeddings_batched_3d(
-            inference_state, predictor, list(range(n_slices)), batched_images,
+            inference_state, predictor, list(range(n_slices)), batched_images, pbar_update=pbar_update,
         )
 
         # Stack the per-slice outputs along z, matching the (n_slices, ...) layout '_compute_3d' saves.
@@ -429,8 +451,6 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
         tile_fpn_group = fpn_group.require_group(str(tile_id))
         for level, level_feat in enumerate(tile_fpn):
             _create_dataset_with_data(tile_fpn_group, str(level), data=level_feat)
-
-        pbar_update(1)
 
     if save_path is not None:
         _write_embedding_signature(
@@ -488,7 +508,7 @@ def _load_list_datasets(group, prefix_name, lazy_loading):
 
 
 @torch.no_grad
-def _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batched_images):
+def _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batched_images, pbar_update=None):
     batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes, input_sizes = [], [], [], [], []
 
     for image, z_id in zip(batched_images, batched_z):
@@ -504,6 +524,9 @@ def _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batche
         batched_backbone_fpn.append(curr_backbone_out["backbone_fpn"])
         original_sizes.append(image.shape[:2])
         input_sizes.append(predictor.image_size)
+
+        if pbar_update is not None:  # Advance per slice so a tile-column reports per-patch progress.
+            pbar_update(1)
 
     return batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes, input_sizes
 

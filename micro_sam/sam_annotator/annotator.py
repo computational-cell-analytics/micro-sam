@@ -84,13 +84,24 @@ class Annotator(_AnnotatorBase):
     controlled by the `ndim` parameter or auto-detected from the image.
     """
 
+    def _create_embedding_widget(self):
+        # Expose the 'image dimensions' (ndim) override here: the segmentation annotator is the only
+        # one that wires it into image normalization (it handles both 2d and 3d data).
+        return widgets.EmbeddingWidget(ndim_choice=True)
+
     def _get_widgets(self):
         """Create the widgets for the segmentation annotator.
 
         The interactive segmentation widget merges the prompt menu, the segment and the
         clear controls into a single ndim-aware widget placed right after the embeddings.
         """
-        with_decoder = AnnotatorState().decoder is not None
+        # The default automatic-segmentation mode depends on whether a UniSAM2 decoder is available.
+        # At startup the decoder is not loaded yet (only on 'Compute Embeddings'), so also treat the
+        # default model as decoder-capable when it has a registered decoder - otherwise the Microscopy
+        # default would wrongly start in 'amg'. The mode is re-synced after compute via
+        # '_sync_autosegment_widget' once the actual decoder is known.
+        from ..v2.util import DEFAULT_MODEL, has_registered_decoder
+        with_decoder = AnnotatorState().decoder is not None or has_registered_decoder(DEFAULT_MODEL)
         return {
             "interactive": widgets.InteractiveSegmentationWidget(
                 self._viewer, ndim=self._ndim, prompt_widget=self._prompt_widget,
@@ -175,6 +186,10 @@ class Annotator(_AnnotatorBase):
         # This handles loading e.g. a 3D image after the widget was opened from the Plugins menu.
         self._embedding_widget.image_selection.changed.connect(self._on_image_selection_changed)
 
+        # Re-normalize when the user changes the 'image dimensions' (ndim) override.
+        if getattr(self._embedding_widget, "ndim_choice", False):
+            self._embedding_widget.image_ndim_dropdown.currentTextChanged.connect(self._on_ndim_mode_changed)
+
         # Normalize and align to any image that is already selected (e.g. opened from the
         # Plugins menu after an image was loaded, so no selection-changed event will fire).
         self._on_image_selection_changed()
@@ -188,10 +203,13 @@ class Annotator(_AnnotatorBase):
         if image_layer is None:
             return
         # Squeeze singletons and map channels to RGB, replacing the image layer if needed,
-        # so the image, segmentation and prompt layers all stay aligned. Unsupported inputs
-        # (e.g. 3D volumes with a channel axis) are reported instead of crashing the widget.
+        # so the image, segmentation and prompt layers all stay aligned. The 'image dimensions'
+        # override (auto/2d/3d) disambiguates multi-channel inputs. Unsupported inputs (e.g. 3D
+        # volumes with a channel axis) are reported instead of crashing the widget.
         try:
-            image_layer, ndim = self._maybe_normalize_image_layer(image_layer)
+            image_layer, ndim = self._maybe_normalize_image_layer(
+                image_layer, ndim=self._embedding_widget._ndim_override()
+            )
         except ValueError as e:
             show_info(str(e))
             return
@@ -220,6 +238,48 @@ class Annotator(_AnnotatorBase):
 
         if ndim != self._ndim:
             self._rebuild_for_ndim(ndim)
+
+    def _on_ndim_mode_changed(self, *args):
+        """Re-interpret the current image when the 'image dimensions' override changes.
+
+        Unlike selecting a different image, this keeps the embedding-widget inputs (model, tiling and
+        the override itself); it only re-normalizes, clears the now-invalid embeddings / prompts and
+        rebuilds the layers for the resulting dimensionality.
+        """
+        if self._suppress_selection_rebuild:
+            return
+        image_layer = self._embedding_widget.image_selection.get_value()
+        if image_layer is None:
+            return
+        try:
+            image_layer, ndim = self._maybe_normalize_image_layer(
+                image_layer, ndim=self._embedding_widget._ndim_override()
+            )
+        except ValueError as e:
+            # The chosen override (e.g. '3d' on a 2D image) cannot be applied: warn in a modal dialog,
+            # recommend 'auto', and revert the dropdown to 'auto' so the tool is not stuck on the
+            # invalid choice.
+            from qtpy import QtWidgets
+            QtWidgets.QMessageBox.warning(
+                self, "Invalid image dimensions",
+                f"{e}\n\nThis dimensionality cannot be applied to the selected image. "
+                "Switching back to 'auto', which is recommended for automatic dimensionality detection.",
+                QtWidgets.QMessageBox.Ok,
+            )
+            dropdown = self._embedding_widget.image_ndim_dropdown
+            dropdown.blockSignals(True)
+            dropdown.setCurrentText("auto")
+            self._embedding_widget.image_ndim_mode = "auto"
+            dropdown.blockSignals(False)
+            return
+
+        # No effective change (same layer and dimensionality): keep the current work.
+        if image_layer is getattr(self, "_last_image_layer", None) and ndim == self._ndim:
+            return
+
+        self._last_image_layer = image_layer
+        AnnotatorState().reset_state()
+        self._rebuild_for_ndim(ndim, force=True)
 
     def _update_image(self, segmentation_result=None):
         """Update the image and load AMG state for 3D."""
@@ -287,23 +347,11 @@ def annotator(
     Raises:
         ValueError: If ndim is invalid or doesn't match the image shape.
     """
-    # Normalize the image: squeeze singletons and map the channel axis to RGB. This keeps
-    # the dimensionality decision consistent with the GUI and the layer shapes aligned.
-    image, detected_ndim, rgb = vutil.prepare_annotation_image(image)
-
-    # Auto-detect ndim if not provided
-    if ndim is None:
-        ndim = detected_ndim
-
-    # Validate ndim
-    if ndim not in (2, 3):
-        raise ValueError(f"Invalid ndim: {ndim}. Expected 2 or 3.")
-
-    # Validate ndim matches image shape
-    if ndim != detected_ndim:
-        raise ValueError(
-            f"Provided ndim={ndim} does not match detected ndim={detected_ndim} from image shape {image.shape}."
-        )
+    # Normalize the image: squeeze singletons and map the channel axis to RGB. The optional 'ndim'
+    # override disambiguates multi-channel inputs (e.g. reads a channels-first (C, H, W) array as a
+    # 2d image), consistent with the GUI's 'image dimensions' control; with ndim=None it is
+    # auto-detected. 'prepare_annotation_image' raises if the override cannot be applied to the shape.
+    image, ndim, rgb = vutil.prepare_annotation_image(image, ndim=ndim)
 
     # Extract image shape (strip RGB channel if present)
     state = AnnotatorState()
@@ -366,7 +414,9 @@ def main():
     )
     parser.add_argument(
         "--ndim", type=int,
-        help="The number of spatial dimensions (2 or 3). If None, auto-detected from image shape."
+        help="The number of spatial dimensions (2 or 3). If not given, auto-detected from the image "
+        "shape. Set 2 to read a multi-channel array (e.g. channels-first (C, H, W) or (H, W, C)) as a "
+        "single 2D image, or 3 to force a (Z, H, W) volume."
     )
     args = parser.parse_args()
     image = util.load_image_data(args.input, key=args.key)
