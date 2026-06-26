@@ -3806,8 +3806,9 @@ class AutoSegmentWidget(_WidgetBase):
             if ndim == 3:  # the decoder pass is z-chunked using the auto-seg z block / halo controls.
                 z_block, z_halo = self._z_tiling(int(run_raw.shape[0]))
         else:
-            # A single slice of a 3d volume: reuse that slice's per-slice features from the (untiled)
-            # 3d embeddings; for tiled 3d embeddings fall back to a per-slice re-encode.
+            # A single slice of a 3d volume: reuse that slice's features (no re-encode). For untiled
+            # embeddings, build the slice's 2d embedding; for tiled embeddings, pass the tiled 3d
+            # embeddings + slice index 'z' and let the segmenter reconstruct each tile's slice.
             emb3d = state.image_embeddings
             if emb3d is not None and emb3d.get("input_size") is not None:
                 image_embeddings = {
@@ -3816,8 +3817,7 @@ class AutoSegmentWidget(_WidgetBase):
                 }
                 is_tiled = False
             else:
-                tile_shape, halo = self._get_tiling()
-                image_embeddings, is_tiled = None, tile_shape is not None
+                image_embeddings, is_tiled = emb3d, True
 
         # The cache avoids re-running the model when only the post-processing parameters change.
         cache_key = (state.data_signature, "unisam2", ndim, z, tile_shape, halo, z_block, z_halo,
@@ -3825,7 +3825,7 @@ class AutoSegmentWidget(_WidgetBase):
         if self._segmenter is None or self._segmenter_key != cache_key:
             self._segmenter = get_unisam2_segmentation_generator(state.decoder, is_tiled=is_tiled, device=device)
             self._segmenter.initialize(
-                run_raw, ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo,
+                run_raw, ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo, i=z,
                 pbar_init=pbar_init, pbar_update=pbar_update, z_block=z_block, z_halo=z_halo,
             )
             self._segmenter_key = cache_key

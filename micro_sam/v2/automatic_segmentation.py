@@ -645,6 +645,63 @@ def run_unisam2_decoder_on_tiled_3d_embeddings(
     return output
 
 
+@torch.no_grad()
+def run_unisam2_decoder_on_tiled_3d_embeddings_slice(
+    model: torch.nn.Module,
+    image_embeddings: dict,
+    i: int,
+    device: Optional[Union[str, torch.device]] = None,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
+) -> np.ndarray:
+    """Run the UniSAM2 decoder on a single slice of precomputed tiled 3d embeddings, stitched in-plane.
+
+    For segmenting one slice of a volume without re-encoding: per tile, slice ``i``'s precomputed
+    features are decoded as a single-slice (Z=1) volume via `run_unisam2_decoder_on_3d_embeddings`
+    (which uses UNETR3D's aspect-preserving resize, matching the video-style features), and the inner
+    block is stitched in-plane.
+
+    Args:
+        model: The UniSAM2 model.
+        image_embeddings: Precomputed tiled 3d embeddings (per-tile `features` groups, `shape`
+            (Z, Y, X) / `tile_shape` / `halo` attrs).
+        i: The slice index to segment.
+        device: The device to run inference on.
+        pbar_init: Callback to initialize an external progress bar, called with the number of tiles.
+        pbar_update: Callback to update an external progress bar, called once per tile.
+
+    Returns:
+        The slice predictions stacked along the channel axis, shape ``(4, Y, X)``.
+    """
+    feats_group = image_embeddings["features"]
+    shape = tuple(int(s) for s in feats_group.attrs["shape"])  # (Z, Y, X)
+    tile_shape = tuple(int(s) for s in feats_group.attrs["tile_shape"])  # (y, x)
+    halo = tuple(int(s) for s in feats_group.attrs["halo"])  # (y, x)
+    tiling = Blocking([0, 0], list(shape[1:]), list(tile_shape))
+
+    if pbar_init is not None:
+        pbar_init(tiling.number_of_blocks, "Automatic segmentation (tiles)")
+
+    output = np.zeros((4, *shape[1:]), dtype="float32")  # (4, Y, X)
+    for tile_id in range(tiling.number_of_blocks):
+        tile_features = feats_group[str(tile_id)]  # (Z, 1, C, h, w)
+        # Slice 'i' as a single-slice (Z=1) feature volume for this tile.
+        slice_embeddings = {
+            "features": np.asarray(tile_features[i]), "original_size": tile_features.attrs["original_size"],
+        }
+        tile_prediction = run_unisam2_decoder_on_3d_embeddings(model, slice_embeddings, device=device)  # (4, 1, ty, tx)
+        tile_prediction = tile_prediction[:, 0]  # (4, ty, tx)
+
+        block = tiling.get_block_with_halo(tile_id, halo=list(halo))
+        local_bb = tuple(slice(b, e) for b, e in zip(block.inner_block_local.begin, block.inner_block_local.end))
+        inner_bb = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
+        output[(slice(None),) + inner_bb] = tile_prediction[(slice(None),) + local_bb]
+        if pbar_update is not None:
+            pbar_update(1)
+
+    return output
+
+
 class UniSAM2InstanceSegmentation:
     """Generates an instance segmentation with the UniSAM2 model.
 
@@ -777,14 +834,22 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
             image_embeddings: Optional precomputed tiled image embeddings. If given, the decoder is run
                 per tile on them and stitched (no encoder pass), reusing the embeddings shared with
                 interactive / AMG - for both 2d and 3d. See `precompute_image_embeddings`.
-            i: Index for the image data. Unused here, kept for interface compatibility.
+            i: Slice index, for segmenting a single slice of a volume from tiled 3d embeddings
+                (ndim 2); unused otherwise.
             pbar_init: Callback to initialize an external progress bar, called with the number of
                 tiles (2d) or the number of blocks / z chunks (3d).
             pbar_update: Callback to update an external progress bar, called once per tile / block.
             z_block: Number of slices per z block for the per-tile 3d decoder (defaults to `DEFAULT_TILE_Z`).
             z_halo: Overlapping slices between z blocks (defaults to `DEFAULT_HALO_Z`).
         """
-        if image_embeddings is not None and ndim == 3:
+        # A single slice of a volume from tiled 3d (video-style) embeddings: reuse slice 'i's features
+        # per tile (no re-encode). 3d tiled embeddings carry an 'fpn' group; 2d tiled ones do not.
+        if image_embeddings is not None and ndim == 2 and "fpn" in image_embeddings and i is not None:
+            self._prediction = run_unisam2_decoder_on_tiled_3d_embeddings_slice(
+                self._model, image_embeddings, i, device=self._device,
+                pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+        elif image_embeddings is not None and ndim == 3:
             self._prediction = run_unisam2_decoder_on_tiled_3d_embeddings(
                 self._model, image_embeddings, device=self._device,
                 pbar_init=pbar_init, pbar_update=pbar_update, z_block=z_block, z_halo=z_halo,
