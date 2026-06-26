@@ -1953,11 +1953,19 @@ class EmbeddingWidget(_WidgetBase):
         # @thread_worker()
         def compute_image_embedding():
 
+            # The computation runs synchronously on the main thread, so pump the Qt event loop on
+            # every progress step; otherwise the napari progress bar only repaints once at the end
+            # (it just jumps to 100%). This matters most for tiled embeddings (many tiles / slices).
             def pbar_init(total, description):
                 if self.is_timeseries:  # A timeseries goes through the 3D compute path; relabel it.
                     description = description.replace("3D", "Timeseries")
                 pbar_signals.pbar_total.emit(total)
                 pbar_signals.pbar_description.emit(description)
+                QtWidgets.QApplication.processEvents()
+
+            def pbar_update(update):
+                pbar_signals.pbar_update.emit(update)
+                QtWidgets.QApplication.processEvents()
 
             state.initialize_predictor(
                 image_data,
@@ -1970,9 +1978,7 @@ class EmbeddingWidget(_WidgetBase):
                 halo=halo,
                 prefer_decoder=True,
                 pbar_init=pbar_init,
-                pbar_update=lambda update: pbar_signals.pbar_update.emit(
-                    update
-                ),
+                pbar_update=pbar_update,
             )
             pbar_signals.pbar_stop.emit()
 
@@ -4049,13 +4055,28 @@ class AutoTrackWidget(AutoSegmentWidget):
             "Try adjusting the automatic tracking settings.",
         )
 
-    def _run_frame_segmentation(self, state, frame, frame_id):
-        # No per-frame pbar callbacks: the timeseries loop advances the bar once per frame, so the
-        # per-frame segmentation must not reset the overall total (which made the bar refill 0-100%
-        # for every frame).
+    def _run_frame_segmentation(self, state, frame, frame_id, pbar_init=None, pbar_update=None):
+        # Forward the progress callbacks so a frame advances the overall bar per tile (tiled) or by
+        # one step (untiled). The caller passes a no-op 'pbar_init' so a frame cannot reset the total.
         if self.mode == "amg":
-            return self._run_amg(state, frame, 2, frame_id)
-        return self._run_unisam2(state, frame, 2, frame_id)
+            return self._run_amg(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
+        return self._run_unisam2(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
+
+    def _n_inplane_tiles(self, state, raw):
+        # In-plane tiles per frame for the current run (1 if not tiled). The auto-tracking bar
+        # advances per tile, so its total is this times the number of frames.
+        from bioimage_cpp.utils import Blocking
+
+        if self.mode == "amg":
+            tile_shape, _ = self._get_tiling()
+        else:  # decoder modes reuse the precomputed embeddings; tiled ones have no top-level input_size.
+            emb = state.image_embeddings
+            tile_shape = None
+            if emb is not None and emb.get("input_size") is None:
+                tile_shape = tuple(int(s) for s in emb["features"].attrs["tile_shape"])
+        if tile_shape is None:
+            return 1
+        return Blocking([0, 0], list(raw.shape[1:3]), list(tile_shape)).number_of_blocks
 
     def _track_timeseries(self, state, raw):
         segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
@@ -4071,21 +4092,31 @@ class AutoTrackWidget(AutoSegmentWidget):
             pbar_signals.pbar_update.emit(update)
             QtWidgets.QApplication.processEvents()
 
+        # Swallow each frame's 'pbar_init' so it cannot reset the overall total; the per-tile (or
+        # per-step) 'pbar_update' calls drive the bar instead.
+        def frame_pbar_init(total, description):
+            pass
+
+        n_tiles = self._n_inplane_tiles(state, raw)
         try:
-            # One determinate bar over all frames (advance once per frame), instead of resetting it
-            # to 0-100% inside each frame's segmentation.
-            pbar_signals.pbar_total.emit(len(raw))
-            pbar_signals.pbar_description.emit(f"Running automatic segmentation ({self.mode})")
+            # One determinate bar over the actual work: n_tiles x n_frames. The per-frame segmentation
+            # advances it per tile (tiled) or once per frame (untiled), so a tiled run no longer looks
+            # like it is doing only n_frames steps.
+            pbar_signals.pbar_total.emit(n_tiles * len(raw))
             QtWidgets.QApplication.processEvents()
             for frame_id, frame in enumerate(raw):
-                seg = self._run_frame_segmentation(state, frame, frame_id)
+                pbar_signals.pbar_description.emit(
+                    f"Automatic segmentation ({self.mode}): frame {frame_id + 1}/{len(raw)}"
+                )
+                QtWidgets.QApplication.processEvents()
+                seg = self._run_frame_segmentation(
+                    state, frame, frame_id, pbar_init=frame_pbar_init, pbar_update=tracking_pbar_update,
+                )
                 seg_max = int(seg.max())
                 if seg_max != 0:
                     seg[seg != 0] += offset
                     offset += seg_max
                     segmentation[frame_id] = seg
-                pbar_signals.pbar_update.emit(1)
-                QtWidgets.QApplication.processEvents()
 
             if offset == 0:
                 self._viewer.layers["auto_segmentation"].data = segmentation

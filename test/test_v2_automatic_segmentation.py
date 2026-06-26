@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from micro_sam.v2.automatic_segmentation import (
-    _block_shape_and_halo, run_unisam2_decoder_on_3d_embeddings,
+    _block_shape_and_halo, run_unisam2_decoder_on_3d_embeddings, run_unisam2_decoder_on_embeddings,
 )
 from micro_sam.v2.instance_segmentation import _set_image_predictor_from_backbone
 from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
@@ -109,6 +109,20 @@ def test_decoder_3d_squeezes_5d_features():
     for i, feat in enumerate(model.seen):
         assert tuple(feat.shape) == (1, c, h, w)
         assert np.allclose(feat[0].cpu().numpy(), feats5[i, 0])
+
+
+def test_decoder_2d_squeezes_5d_features():
+    # Regression: a single slice from save-path 3d embeddings is (1, 1, C, h, w); the singleton batch
+    # axis must be squeezed so the 2d decoder gets (1, C, h, w). This is the auto-tracking per-frame
+    # and interactive single-slice path, which crashed ('got 5') when embeddings came from a cache.
+    c, h, w = 2, 4, 4
+    feats5 = np.arange(1 * 1 * c * h * w, dtype="float32").reshape(1, 1, c, h, w)
+    model = _FakeUNETR(img_size=8)
+    out = run_unisam2_decoder_on_embeddings(model, {"features": feats5, "original_size": (8, 8)}, device="cpu")
+    assert out.shape == (4, 8, 8)
+    assert len(model.seen) == 1
+    assert tuple(model.seen[0].shape) == (1, c, h, w)
+    assert np.allclose(model.seen[0][0].cpu().numpy(), feats5[0, 0])
 
 
 def test_decoder_3d_zchunks_deep_volume():

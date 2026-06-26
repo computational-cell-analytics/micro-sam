@@ -506,6 +506,10 @@ def run_unisam2_decoder_on_embeddings(
         The predictions stacked along the channel axis, shape (4, Y, X).
     """
     features = np.asarray(image_embeddings["features"])
+    # A single slice taken from save-path 3d embeddings keeps a singleton batch axis, i.e.
+    # (1, 1, C, h, w); squeeze it back to the (1, C, h, w) a 2d embedding has (the in-memory layout).
+    if features.ndim == 5 and features.shape[1] == 1:
+        features = features[:, 0]
     if features.ndim != 4:
         raise ValueError(
             f"Decoder-from-embeddings requires 2d image embeddings (features with ndim 4), got {features.ndim}."
