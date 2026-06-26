@@ -55,8 +55,10 @@ DEFAULT_TILING_THRESHOLD = 768
 DEFAULT_TILE_SHAPE = (512, 512)
 DEFAULT_HALO = (128, 128)
 
-# Default z block / halo for volumetric (3d) tiling, matching the UniSAM2 training crop. Set the
-# z tile >= the slice count to disable z-tiling (the whole volume becomes one block along z).
+# Default z block / halo for volumetric (3d) tiling. Each decoder pass spans the inner block plus the
+# halo on each side, i.e. DEFAULT_TILE_Z + 2 * DEFAULT_HALO_Z = 8 slices, matching the UniSAM2 8-slice
+# training crop (so the z-convolutions see the z-context they were trained on; do not enlarge this
+# beyond the training crop). Set the z tile >= the slice count to disable z-tiling.
 DEFAULT_TILE_Z = 4
 DEFAULT_HALO_Z = 2
 
