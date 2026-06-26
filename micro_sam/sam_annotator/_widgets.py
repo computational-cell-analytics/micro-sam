@@ -1460,13 +1460,16 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
-    def __init__(self, parent=None, sam2_only=False, ndim_choice=False):
+    def __init__(self, parent=None, sam2_only=False, ndim_choice=False, is_timeseries=False):
         super().__init__(parent=parent)
         self.sam2_only = sam2_only
         # Whether to expose the 'image dimensions' (ndim) override dropdown. Only the segmentation
         # annotator wires it into image normalization, so it is off by default (hidden for tracking
         # and the classifiers, which do not use it).
         self.ndim_choice = ndim_choice
+        # The tracking annotator operates on a (T, H, W) timeseries, not a 3D volume; relabel the
+        # embedding progress accordingly (the underlying compute path is the same as for 3D).
+        self.is_timeseries = is_timeseries
 
         # Create a nested layout for the sections.
         # Section 1: Image and Model.
@@ -1951,6 +1954,8 @@ class EmbeddingWidget(_WidgetBase):
         def compute_image_embedding():
 
             def pbar_init(total, description):
+                if self.is_timeseries:  # A timeseries goes through the 3D compute path; relabel it.
+                    description = description.replace("3D", "Timeseries")
                 pbar_signals.pbar_total.emit(total)
                 pbar_signals.pbar_description.emit(description)
 
@@ -2097,6 +2102,17 @@ def _division_frame_for_track(point_layer, track_id):
     z_all = np.round(point_layer.data[:, 0]).astype(int)
     div_mask = (states == "division") & (track_ids_prop == str(track_id))
     return int(z_all[div_mask].min()) if np.any(div_mask) else None
+
+
+def _mother_division_frame(point_layer, lineage, track_id):
+    """Division frame of 'track_id's mother, or None if it is not a daughter of a dividing track.
+
+    A daughter does not exist before its mother divides, so its mask must start the frame after.
+    """
+    for mother, daughters in lineage.items():
+        if track_id in daughters:
+            return _division_frame_for_track(point_layer, mother)
+    return None
 
 
 def _update_lineage(viewer, mother=None):
@@ -2665,11 +2681,11 @@ class UnifiedSegmentWidget(_WidgetBase):
             pbar_signals.pbar_update.emit(update)
             QtWidgets.QApplication.processEvents()
 
-        def propagate_track(track_id):
-            # Propagate a single track's prompts across the video with the SAM2 predictor.
-            # A frame whose only prompt for this track is a single negative point is a 'stop'
-            # annotation; a stop on the lowest / highest annotated frame bounds the propagation
-            # below / above the prompts, mirroring the micro-sam v1 tracking behavior.
+        def propagate_track(track_id, division_frame):
+            # Propagate a single track's prompts forward in time with the SAM2 predictor. Tracking
+            # is forward-only: it starts at the first prompted frame and never runs to earlier
+            # frames. A frame whose only prompt for this track is a single negative point is a
+            # 'stop' annotation; a stop on the highest annotated frame bounds propagation above.
             shape = state.image_shape
             point_layer = self._viewer.layers["point_prompts"]
             box_layer = self._viewer.layers["prompts"]
@@ -2686,7 +2702,12 @@ class UnifiedSegmentWidget(_WidgetBase):
                 if len(point_layer.data) else np.zeros(0, dtype=int)
             )
             for t in z_points:
-                prompts = vutil.point_layer_to_prompts(point_layer, i=int(t), track_id=track_id)
+                # Exclude division markers: they signal a lineage event and bound propagation
+                # (see below), but must not be fed to SAM2 as conditioning prompts - doing so
+                # adds a second conditioning frame that corrupts the mother track's propagation.
+                prompts = vutil.point_layer_to_prompts(
+                    point_layer, i=int(t), track_id=track_id, exclude_states=("division",)
+                )
                 if prompts is None:  # Single negative point: a stop annotation for this track.
                     stop_frames.append(int(t))
                     continue
@@ -2712,39 +2733,60 @@ class UnifiedSegmentWidget(_WidgetBase):
                     prompted_frames.append(int(t))
 
             if not prompted_frames:
-                return None, None
+                return None
 
-            # Division markers: a point tagged with the 'division' track-state marks the frame where
-            # this (mother) track ends and two daughters begin. It bounds propagation above at the
-            # division frame instead of running to the end of the video.
-            division_frame = _division_frame_for_track(point_layer, track_id)
-
-            # Map the stop annotations to a propagation z-range: a stop on the lowest / highest
-            # annotated frame bounds propagation below / above the prompts ('predict' enforces it).
+            # Forward-only propagation: start at the first prompted frame and never go to earlier
+            # frames. A stop annotation on the highest annotated frame bounds propagation above
+            # ('predict' enforces the z-range); a division bounds the mother at the division frame -
+            # its last frame (only reached when the mother is not segmented yet, see 'tracking_impl').
             annotated = sorted(set(prompted_frames) | set(stop_frames))
-            stop_lower = annotated[0] in stop_frames
             stop_upper = annotated[-1] in stop_frames
-            z_lo = min(prompted_frames) if stop_lower else 0
+            z_lo = min(prompted_frames)
             z_hi = max(prompted_frames) if stop_upper else shape[0] - 1
-            if division_frame is not None:  # The mother track ends at the division frame.
+            if division_frame is not None:  # The division frame is the mother's last frame.
                 z_hi = min(z_hi, division_frame)
+
+            if z_hi < z_lo:  # The division precedes the track's first frame: nothing to segment.
+                return None
 
             pbar_signals.pbar_total.emit(z_hi - z_lo + 1)
             seg = state.interactive_segmenter.predict(
                 update_progress=emit_progress,
                 early_stop_patience=None, z_range=(z_lo, z_hi),
             )
-            return seg, division_frame
+            return seg
 
         def tracking_impl():
             # With 'Batched' enabled, propagate every track that has prompts; otherwise only the
             # current track. Each track's propagated mask is labelled with its own track id.
             track_ids = self._all_track_ids() if self.batched else [state.current_track_id]
+            point_layer = self._viewer.layers["point_prompts"]
+            seg_layer = self._viewer.layers["current_object"]
             results = {}
             for track_id in track_ids:
-                seg, division_frame = propagate_track(track_id)
+                division_frame = _division_frame_for_track(point_layer, track_id)
+                # A division is a cleanup, not a (re)segmentation: when the mother is already
+                # segmented, its frames up to and including the division are correct (tracking is
+                # forward-only), so we just erase it AFTER the division frame and seed the daughters
+                # - no SAM2 re-run. Only when the mother is not segmented yet do we fall back to a
+                # bounded propagation so it still gets created up to the division frame.
+                segmented = division_frame is not None and bool(
+                    np.any(seg_layer.data[:division_frame + 1] == track_id)
+                )
+                if segmented:
+                    results[track_id] = {"truncate_from": division_frame + 1}
+                    _update_lineage(self._viewer, mother=track_id)
+                    continue
+
+                seg = propagate_track(track_id, division_frame)
                 if seg is not None:
-                    results[track_id] = seg
+                    res = {"seg": seg}
+                    # A daughter must not occupy its mother's frames: clip its mask to start the
+                    # frame after the mother's division, no matter where the user prompted it.
+                    mother_division = _mother_division_frame(point_layer, state.lineage, track_id)
+                    if mother_division is not None:
+                        res["min_frame"] = mother_division + 1
+                    results[track_id] = res
                 # A division seeds two daughter tracks, so the user can continue from the division.
                 if division_frame is not None:
                     _update_lineage(self._viewer, mother=track_id)
@@ -2757,10 +2799,22 @@ class UnifiedSegmentWidget(_WidgetBase):
                 return
 
             layer = self._viewer.layers["current_object"]
-            for track_id, seg in results.items():
-                # Clear the old mask for this track, then set the propagated one.
-                layer.data[layer.data == track_id] = 0
-                layer.data[seg == 1] = track_id
+            for track_id, res in results.items():
+                if "truncate_from" in res:
+                    # Division cleanup: erase the mother after the division frame, leaving its
+                    # frames up to and including the division (already correct) untouched.
+                    f = res["truncate_from"]
+                    layer.data[f:][layer.data[f:] == track_id] = 0
+                else:
+                    # Clear the old mask for this track, then set the propagated one. A daughter is
+                    # clipped to start the frame after its mother's division (it did not exist yet).
+                    seg = res["seg"]
+                    min_frame = res.get("min_frame")
+                    if min_frame is not None:
+                        seg = seg.copy()
+                        seg[:min_frame] = 0
+                    layer.data[layer.data == track_id] = 0
+                    layer.data[seg == 1] = track_id
             layer.refresh()
 
         results = tracking_impl()

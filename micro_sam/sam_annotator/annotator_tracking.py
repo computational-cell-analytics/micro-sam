@@ -152,7 +152,7 @@ def create_tracking_menu(
 class AnnotatorTracking(_AnnotatorBase):
 
     def _create_embedding_widget(self):
-        return widgets.EmbeddingWidget(sam2_only=True)
+        return widgets.EmbeddingWidget(sam2_only=True, is_timeseries=True)
 
     # The tracking annotator needs different settings for the prompt layers
     # to support the additional tracking state.

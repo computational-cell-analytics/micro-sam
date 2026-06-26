@@ -249,7 +249,7 @@ def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=T
 
 
 def point_layer_to_prompts(
-    layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True,
+    layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True, exclude_states=None,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Extract point prompts for SAM from a napari point layer.
 
@@ -259,6 +259,8 @@ def point_layer_to_prompts(
         track_id: Id of the current track (required for tracking data).
         with_stop_annotation: Whether a single negative point will be interpreted
             as stop annotation or just returned as normal prompt.
+        exclude_states: Track-states to drop (e.g. ('division',)); such points mark a lineage
+            event rather than a segmentation prompt and must not be fed to the predictor.
 
     Returns:
         The point coordinates for the prompts.
@@ -269,12 +271,17 @@ def point_layer_to_prompts(
     labels = layer.properties["label"]
     assert len(points) == len(labels)
 
+    # Drop points tagged with an excluded track-state (division markers are not prompts).
+    keep = np.ones(len(points), dtype=bool)
+    if exclude_states is not None and "state" in layer.properties:
+        keep = ~np.isin(np.asarray(layer.properties["state"]), list(exclude_states))
+
     if i is None:
         assert points.shape[1] == 2, f"{points.shape}"
-        this_points, this_labels = points, labels
+        this_points, this_labels = points[keep], labels[keep]
     else:
         assert points.shape[1] == 3, f"{points.shape}"
-        mask = np.round(points[:, 0]) == i
+        mask = (np.round(points[:, 0]) == i) & keep
         this_points = points[mask][:, 1:]
         this_labels = labels[mask]
     assert len(this_points) == len(this_labels)

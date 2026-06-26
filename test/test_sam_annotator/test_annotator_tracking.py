@@ -52,6 +52,48 @@ def test_division_frame_detection(make_napari_viewer_proxy):
     viewer.close()
 
 
+def test_mother_division_frame(make_napari_viewer_proxy):
+    # A daughter's mask must start the frame after its mother divides; this resolves the bound.
+    from micro_sam.sam_annotator._widgets import _mother_division_frame
+
+    viewer = make_napari_viewer_proxy()
+    data = np.array([[10, 10, 10]])
+    properties = {"state": np.array(["division"]), "track_id": np.array(["1"])}
+    layer = viewer.add_points(data, properties=properties, ndim=3)
+
+    lineage = {1: [2, 3], 2: [], 3: []}
+    assert _mother_division_frame(layer, lineage, 2) == 10  # daughter of track 1 (divides at 10)
+    assert _mother_division_frame(layer, lineage, 3) == 10
+    assert _mother_division_frame(layer, lineage, 1) is None  # the mother itself is not a daughter
+    assert _mother_division_frame(layer, lineage, 4) is None  # unknown track
+    viewer.close()
+
+
+def test_division_marker_excluded_from_prompts(make_napari_viewer_proxy):
+    # A 'division' point bounds propagation but must not be fed to the predictor as a prompt,
+    # otherwise it adds a second conditioning frame that wipes the mother track's earlier frames.
+    from micro_sam.sam_annotator.util import point_layer_to_prompts
+
+    viewer = make_napari_viewer_proxy()
+    data = np.array([[0, 10, 10], [3, 20, 20], [3, 21, 21]])
+    properties = {
+        "label": np.array(["positive", "positive", "positive"]),
+        "state": np.array(["track", "division", "track"]),
+        "track_id": np.array(["1", "1", "1"]),
+    }
+    layer = viewer.add_points(data, properties=properties, ndim=3)
+
+    # Frame 3 has one division point and one regular point: only the regular one is a prompt.
+    points, labels = point_layer_to_prompts(layer, i=3, track_id=1, exclude_states=("division",))
+    assert len(points) == 1
+    np.testing.assert_array_equal(points[0], [21, 21])
+
+    # Without the filter both points come through (the buggy behavior).
+    points_all, _ = point_layer_to_prompts(layer, i=3, track_id=1)
+    assert len(points_all) == 2
+    viewer.close()
+
+
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_update_lineage_seeds_daughters(make_napari_viewer_proxy):
