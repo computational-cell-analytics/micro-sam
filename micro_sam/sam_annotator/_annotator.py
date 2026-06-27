@@ -647,11 +647,13 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             "'fixed' trains with a fixed random seed so the prediction is reproducible across runs. "
             "'random' leaves the random forest unseeded, so results change slightly each time you train."
         )
+        # Let the dropdown expand to fill the row width (no trailing stretch), matching the path widgets.
+        size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
+        random_seed.native.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
         random_seed_row = Container(
             layout="horizontal", widgets=[Label(value="random seed:"), random_seed], labels=False,
         )
         random_seed_row.native.layout().setContentsMargins(0, 0, 0, 0)
-        random_seed_row.native.layout().addStretch(1)
 
         def get_n_components():
             return int(top_features.value) if use_top_features.value else 0
