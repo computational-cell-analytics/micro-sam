@@ -24,6 +24,7 @@ from ..v2.util import DEFAULT_MODEL
 from ..object_classification import compute_object_features, project_prediction_to_segmentation
 from ._annotator import _ClassifierBase
 from ._state import AnnotatorState
+from ._tooltips import get_tooltip
 from . import _widgets as widgets
 from .util import _sync_embedding_widget
 
@@ -91,14 +92,7 @@ class ObjectClassifier(_ClassifierBase):
     aux_attr = "seg_ids"
     label_widget_title = "Object label names:"
     max_components = OBJECT_FEATURES
-    pca_checkbox_tooltip = (
-        "Reduce the object features to their most informative components via PCA before training. "
-        "When unchecked, all features are used and no PCA is applied."
-    )
-    top_features_tooltip = (
-        f"Number of top PCA components to reduce the object features to, between 1 and {OBJECT_FEATURES} "
-        "(object area plus the 256 per-channel embedding means)."
-    )
+    tool_key = "object"
 
     def _get_selected_segmentation_layer(self):
         state = AnnotatorState()
@@ -187,8 +181,11 @@ class ObjectClassifier(_ClassifierBase):
 
     def _create_segmentation_layer_section(self):
         segmentation_selection = QtWidgets.QVBoxLayout()
-        segmentation_selection.addWidget(QtWidgets.QLabel("Segmentation:"))
+        seg_label = QtWidgets.QLabel("Segmentation:")
+        seg_label.setToolTip(get_tooltip("classification", "segmentation"))
+        segmentation_selection.addWidget(seg_label)
         self.segmentation_selection = ComboBox(choices=lambda _: self._segmentation_layer_choices())
+        self.segmentation_selection.native.setToolTip(get_tooltip("classification", "segmentation"))
         self._select_default_segmentation_layer()
         self.segmentation_selection.changed.connect(self._invalidate_features)
         AnnotatorState().segmentation_selection = self.segmentation_selection

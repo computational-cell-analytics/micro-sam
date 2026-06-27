@@ -12,6 +12,7 @@ from qtpy import QtWidgets
 from . import _widgets as widgets
 from . import util as vutil
 from ._state import AnnotatorState
+from ._tooltips import get_tooltip
 from ..__version__ import __version__ as micro_sam_version
 
 # Placeholder shapes used to seed the annotator layers before a real image is loaded.
@@ -360,8 +361,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
     aux_attr = None  # state attribute caching the per-tool aux data (grid_shape | seg_ids)
     label_widget_title = "Label names:"
     max_components = 256  # PCA upper bound (256 pixel channels, 257 object features)
-    pca_checkbox_tooltip = ""
-    top_features_tooltip = ""
+    tool_key = None  # "pixel" | "object", selects the tool-specific tooltips
 
     #
     # Hooks the subclasses implement.
@@ -523,7 +523,9 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         scroll_area.setWidgetResizable(True)
 
         layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(QtWidgets.QLabel(self.label_widget_title))
+        header = QtWidgets.QLabel(self.label_widget_title)
+        header.setToolTip(get_tooltip("classification", "label_names"))
+        layout.addWidget(header)
         layout.addWidget(scroll_area)
         return layout
 
@@ -561,6 +563,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             if lbl in self._label_names:
                 continue
             line = QtWidgets.QLineEdit(self._label_names.get(lbl, ""))
+            line.setToolTip(get_tooltip("classification", "label_name_row"))
             self._label_names[lbl] = ""
             self._label_form.addRow(self._make_label_role_widget(lbl), line)
             line.textChanged.connect(lambda txt, lbl=lbl: self._label_names.__setitem__(lbl, txt))
@@ -582,12 +585,11 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # (shown only for 3d data, see '_update_image'): when checked they act on the whole volume,
         # when unchecked (the default) only on the current slice.
         train_button = PushButton(text="Train and predict [Shift + T]")
+        train_button.native.setToolTip(get_tooltip("classification", "train_button"))
         clear_button = PushButton(text="Clear Annotations [C]")
+        clear_button.native.setToolTip(get_tooltip("classification", "clear_button"))
         apply_to_volume = CheckBox(value=False, text="Apply to Volume")
-        apply_to_volume.native.setToolTip(
-            "Apply 'Train and predict' and 'Clear Annotations' to the whole volume. When unchecked, "
-            "they act only on the current slice (training always uses all annotations). Only relevant for 3d data."
-        )
+        apply_to_volume.native.setToolTip(get_tooltip("classification", "apply_to_volume"))
         train_button.clicked.connect(lambda: self._run_train_and_predict(apply_to_volume.value))
         clear_button.clicked.connect(lambda: self._clear_annotations(apply_to_volume.value))
 
@@ -613,25 +615,25 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # Optional PCA dimensionality reduction. Off by default (all features used); checking it reveals
         # a number box for the count of top PCA components to reduce the features to before training.
         use_top_features = CheckBox(value=False, text="Choose top feature channels")
-        use_top_features.native.setToolTip(self.pca_checkbox_tooltip)
+        use_top_features.native.setToolTip(get_tooltip("classification", f"use_top_features_{self.tool_key}"))
 
         # Optional AnyUp upsampling. When checked, the SAM/SAM2 embedding is upsampled with AnyUp using
         # the original image as guidance instead of plain interpolation. Toggling it changes the
         # features, so the cached features are cleared on change to force a recompute.
         use_anyup = CheckBox(value=False, text="Upsample with AnyUp")
-        use_anyup.native.setToolTip(
-            "Use AnyUp to upsample the embedding with the original image as guidance, for sharper "
-            "features near object boundaries. When unchecked, plain interpolation is used."
-        )
+        use_anyup.native.setToolTip(get_tooltip("classification", "use_anyup"))
 
         checkbox_row = Container(layout="horizontal", widgets=[use_top_features, use_anyup], labels=False)
         checkbox_row.native.layout().setContentsMargins(0, 0, 0, 0)
         checkbox_row.native.layout().addStretch(1)
 
+        top_features_tooltip = get_tooltip("classification", f"top_features_{self.tool_key}")
         top_features = SpinBox(value=10, min=1, max=self.max_components, step=1)
-        top_features.native.setToolTip(self.top_features_tooltip)
+        top_features.native.setToolTip(top_features_tooltip)
+        top_features_label = Label(value="top feature channels:")
+        top_features_label.native.setToolTip(top_features_tooltip)
         top_features_row = Container(
-            layout="horizontal", widgets=[Label(value="top feature channels:"), top_features], labels=False,
+            layout="horizontal", widgets=[top_features_label, top_features], labels=False,
         )
         top_features_row.native.layout().setContentsMargins(0, 0, 0, 0)
         top_features_row.native.layout().addStretch(1)
@@ -643,15 +645,15 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # reproducible; 'random' leaves it unseeded so results vary slightly between runs. The exact
         # seed value does not matter, so this is a simple two-way choice rather than a numeric field.
         random_seed = ComboBox(value="fixed", choices=["fixed", "random"])
-        random_seed.native.setToolTip(
-            "'fixed' trains with a fixed random seed so the prediction is reproducible across runs. "
-            "'random' leaves the random forest unseeded, so results change slightly each time you train."
-        )
+        random_seed_tooltip = get_tooltip("classification", "random_seed")
+        random_seed.native.setToolTip(random_seed_tooltip)
         # Let the dropdown expand to fill the row width (no trailing stretch), matching the path widgets.
         size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
         random_seed.native.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
+        random_seed_label = Label(value="random seed:")
+        random_seed_label.native.setToolTip(random_seed_tooltip)
         random_seed_row = Container(
-            layout="horizontal", widgets=[Label(value="random seed:"), random_seed], labels=False,
+            layout="horizontal", widgets=[random_seed_label, random_seed], labels=False,
         )
         random_seed_row.native.layout().setContentsMargins(0, 0, 0, 0)
 
@@ -682,18 +684,15 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # (defaulting to the current working directory) where the model is saved with an auto-generated name.
         load_path = FileEdit(label="load classifier path:", mode="r", filter="*.joblib")
         load_path.line_edit.native.setPlaceholderText("/path/to/stored_model.joblib")
-        load_path.native.setToolTip("Path to a stored classifier (.joblib) to load and apply to the current image.")
+        load_path.native.setToolTip(get_tooltip("classification", "load_path"))
         load_button = PushButton(text="Load classifier")
-        load_button.native.setToolTip("Load the selected classifier and predict on the current image.")
+        load_button.native.setToolTip(get_tooltip("classification", "load_button"))
         load_button.clicked.connect(lambda: self._load_rf(load_path.value))
 
         export_dir = FileEdit(label="export classifier folder:", mode="d", value=os.getcwd())
-        export_dir.native.setToolTip(
-            "Folder where the trained classifier is saved. The file name is generated automatically as "
-            "<image>_<nclasses>classes_<date>_<time>_<hash>.joblib. Defaults to the current working directory."
-        )
+        export_dir.native.setToolTip(get_tooltip("classification", "export_dir"))
         export_button = PushButton(text="Export classifier")
-        export_button.native.setToolTip("Save the current classifier into the selected folder.")
+        export_button.native.setToolTip(get_tooltip("classification", "export_button"))
         export_button.clicked.connect(lambda: self._save_rf(export_dir.value))
 
         rows = [checkbox_row, top_features_row, random_seed_row, load_path, load_button, export_dir, export_button]
@@ -713,7 +712,9 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         settings = QtWidgets.QWidget()
         settings.setLayout(QtWidgets.QVBoxLayout())
         settings.layout().addWidget(self._classifier_io_widget.native)
-        collapsible = widgets._make_collapsible(settings, title="Classification Settings")
+        collapsible = widgets._make_collapsible(
+            settings, title="Classification Settings", tooltip=get_tooltip("classification", "settings"),
+        )
 
         # Any tool-specific sections (e.g. the object classifier's segmentation selector) sit above
         # the settings dropdown, with the train/predict button below it.

@@ -58,10 +58,17 @@ def _select_layer(viewer, layer_name):
 
 
 # Create a collapsible around the widget
-def _make_collapsible(widget, title):
+def _make_collapsible(widget, title, tooltip=None):
     parent_widget = QtWidgets.QWidget()
     parent_widget.setLayout(QtWidgets.QVBoxLayout())
     collapsible = QCollapsible(title, parent_widget)
+    if tooltip:
+        collapsible.setToolTip(tooltip)
+        # Also set it on the header toggle button, since that is what the user hovers (Qt does not
+        # fall back to the parent's tooltip for child widgets).
+        toggle_btn = getattr(collapsible, "_toggle_btn", None)
+        if toggle_btn is not None:
+            toggle_btn.setToolTip(tooltip)
     collapsible.addWidget(widget)
     parent_widget.layout().addWidget(collapsible)
     return parent_widget
@@ -973,8 +980,17 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
     f.attrs["commit_history"] = commit_history
 
 
+def _call_button_tooltip(widget_type, name):
+    # Returns a magic_factory 'widget_init' that sets the call button's tooltip (magicgui call buttons
+    # cannot be given a tooltip via the decorator directly).
+    def _init(widget):
+        widget.call_button.tooltip = get_tooltip(widget_type, name)
+    return _init
+
+
 @magic_factory(
     call_button="Commit [C]",
+    widget_init=_call_button_tooltip("commit", "commit_button"),
     layer={
         "choices": ["current_object", "auto_segmentation"],
         "tooltip": get_tooltip("commit", "layer"),
@@ -1031,6 +1047,7 @@ def commit(
 
 @magic_factory(
     call_button="Commit [C]",
+    widget_init=_call_button_tooltip("commit", "commit_button"),
     layer={
         "choices": ["current_object", "auto_segmentation"],
         "tooltip": get_tooltip("commit", "layer"),
@@ -1121,6 +1138,7 @@ def commit_track(
 
 @magic_factory(
     call_button="Export",
+    widget_init=_call_button_tooltip("annotator_tracking", "export_button"),
     export_format={"choices": ["CTC", "GEFF", "TrackMate XML"]},
     export_folder={"mode": "d"},  # choose a directory
 )
@@ -1702,7 +1720,7 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.layout().addLayout(layout)
 
         settings = _make_collapsible(
-            setting_values, title="Embedding Settings"
+            setting_values, title="Embedding Settings", tooltip=get_tooltip("embedding", "settings"),
         )
         return settings
 
@@ -2212,6 +2230,7 @@ class UnifiedSegmentWidget(_WidgetBase):
 
         # 4. Add run button
         self.run_button = QtWidgets.QPushButton(self._get_button_text())
+        self.run_button.setToolTip(get_tooltip("unified_segment", "segment_button"))
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
@@ -2270,7 +2289,7 @@ class UnifiedSegmentWidget(_WidgetBase):
             setting_values.layout().addLayout(layout)
 
         settings = _make_collapsible(
-            setting_values, title="Segmentation Settings"
+            setting_values, title="Segmentation Settings", tooltip=get_tooltip("unified_segment", "settings"),
         )
         return settings
 
@@ -2951,9 +2970,11 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self.layout().addWidget(self._prompt_widget.native)
 
         self.clear_button = QtWidgets.QPushButton("Clear Annotations [Shift + C]")
+        self.clear_button.setToolTip(get_tooltip("unified_segment", "clear_button"))
         self.clear_button.clicked.connect(lambda: self.clear())
 
         self.segment_button = QtWidgets.QPushButton("Segment Object [S]")
+        self.segment_button.setToolTip(get_tooltip("unified_segment", "segment_button"))
         self.segment_button.clicked.connect(lambda: self.segment())
 
         # Segmentation controls.
@@ -3061,7 +3082,9 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self.full_z_range_checkbox.stateChanged.connect(self._on_full_z_range_changed)
         self.z_range_slider.valueChanged.connect(self._sync_propagation_settings)
 
-        return _make_collapsible(container, title="Volume Propagation Settings")
+        return _make_collapsible(
+            container, title="Volume Propagation Settings", tooltip=get_tooltip("segmentnd", "settings"),
+        )
 
     def _on_full_z_range_changed(self, state):
         """Enable/disable the z-range slider and push the change to the engine."""
@@ -3196,8 +3219,10 @@ class InteractiveTrackingWidget(_WidgetBase):
 
         # 'Segment Object' / 'Clear Annotations' side by side.
         self.segment_button = QtWidgets.QPushButton("Segment Object [S]")
+        self.segment_button.setToolTip(get_tooltip("unified_segment", "segment_button"))
         self.segment_button.clicked.connect(lambda: self.segment())
         self.clear_button = QtWidgets.QPushButton("Clear Annotations [Shift + C]")
+        self.clear_button.setToolTip(get_tooltip("unified_segment", "clear_button"))
         self.clear_button.clicked.connect(lambda: self.clear())
         button_row = QtWidgets.QHBoxLayout()
         button_row.addWidget(self.segment_button)
@@ -3409,7 +3434,7 @@ class AutoSegmentV1Widget(_WidgetBase):
             self._ais_settings() if self.with_decoder else self._amg_settings()
         )
         settings = _make_collapsible(
-            setting_values, title="Automatic Segmentation Settings"
+            setting_values, title="Automatic Segmentation Settings", tooltip=get_tooltip("autosegment", "settings"),
         )
         return settings
 
@@ -3701,7 +3726,10 @@ class AutoSegmentWidget(_WidgetBase):
         settings = QtWidgets.QWidget()
         settings.setLayout(QtWidgets.QVBoxLayout())
         settings.layout().setContentsMargins(0, 0, 0, 0)
-        settings.layout().addWidget(_make_collapsible(advanced, title="Advanced Settings"))
+        advanced_tooltip = get_tooltip("autosegment", "advanced_settings")
+        settings.layout().addWidget(
+            _make_collapsible(advanced, title="Advanced Settings", tooltip=advanced_tooltip)
+        )
         return settings
 
     def _add_density_threshold(self, settings):

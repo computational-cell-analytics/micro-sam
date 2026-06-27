@@ -27,14 +27,7 @@ class PixelClassifier(_ClassifierBase):
     aux_attr = "pixel_grid_shape"
     label_widget_title = "Pixel label names:"
     max_components = EMBEDDING_CHANNELS
-    pca_checkbox_tooltip = (
-        "Reduce the SAM/SAM2 embedding to its most informative channels via PCA before training. "
-        "When unchecked, all 256 embedding channels are used and no PCA is applied."
-    )
-    top_features_tooltip = (
-        f"Number of top PCA components to reduce the embedding to, between 1 and {EMBEDDING_CHANNELS} "
-        "(the SAM/SAM2 image embedding has 256 channels for all model sizes)."
-    )
+    tool_key = "pixel"
 
     def _compute_features(self):
         # Returns (features, grid_shape) for the current image, computing and caching them if needed.
