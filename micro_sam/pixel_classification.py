@@ -359,6 +359,7 @@ def train_pixel_classifier(
     max_depth: int = 10,
     n_jobs: Optional[int] = None,
     n_components: Optional[int] = None,
+    random_state: Optional[int] = 0,
     **rf_kwargs,
 ):
     """Train a random forest on per-pixel features and labels.
@@ -379,6 +380,8 @@ def train_pixel_classifier(
             many PCA components before training. If `None`, `0` or `>=` the feature dimension, all
             features are used. The fitted PCA is part of the returned model, so prediction transforms
             the features automatically.
+        random_state: Seed for the random forest (and PCA) so training is reproducible. Pass `None`
+            to leave it unseeded, in which case predictions vary slightly between runs.
         rf_kwargs: Additional keyword arguments for the `RandomForestClassifier`.
 
     Returns:
@@ -396,7 +399,7 @@ def train_pixel_classifier(
 
     rf = RandomForestClassifier(
         n_estimators=n_estimators, max_depth=max_depth,
-        n_jobs=cpu_count() if n_jobs is None else n_jobs, **rf_kwargs,
+        n_jobs=cpu_count() if n_jobs is None else n_jobs, random_state=random_state, **rf_kwargs,
     )
 
     # Optionally reduce the features to the top-n PCA components. n_components is clamped to the
@@ -404,7 +407,7 @@ def train_pixel_classifier(
     n_features = X.shape[1]
     k = min(int(n_components), n_features, len(X)) if n_components else 0
     if 0 < k < n_features:
-        model = Pipeline([("pca", PCA(n_components=k)), ("rf", rf)])
+        model = Pipeline([("pca", PCA(n_components=k, random_state=random_state)), ("rf", rf)])
     else:
         model = rf
 
@@ -426,6 +429,7 @@ def run_training_with_pixel_classifier(
     max_depth: int = 10,
     n_jobs: Optional[int] = None,
     n_components: Optional[int] = None,
+    random_state: Optional[int] = 0,
     upsampler=None,
     **rf_kwargs,
 ):
@@ -449,6 +453,8 @@ def run_training_with_pixel_classifier(
         n_jobs: The number of parallel jobs for training. By default uses all available cores.
         n_components: If given, reduce the features to this many PCA components before training.
             If `None`, `0` or `>=` the feature dimension, all embedding channels are used.
+        random_state: Seed for the random forest (and PCA) so training is reproducible. Pass `None`
+            to leave it unseeded, in which case predictions vary slightly between runs.
         upsampler: An optional AnyUp model (see `get_anyup_upsampler`) to upsample the embeddings
             with the image as guidance instead of plain interpolation.
         rf_kwargs: Additional keyword arguments for the `RandomForestClassifier`.
@@ -492,7 +498,7 @@ def run_training_with_pixel_classifier(
 
     rf = train_pixel_classifier(
         features, labels, n_estimators=n_estimators, max_depth=max_depth, n_jobs=n_jobs,
-        n_components=n_components, **rf_kwargs,
+        n_components=n_components, random_state=random_state, **rf_kwargs,
     )
 
     dump(rf, rf_path)
