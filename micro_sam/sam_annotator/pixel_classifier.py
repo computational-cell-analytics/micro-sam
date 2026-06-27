@@ -1,23 +1,15 @@
-import os
-
-from datetime import datetime
-from joblib import dump, hash as joblib_hash, load
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import napari
 import numpy as np
 import torch
 
-from magicgui.widgets import CheckBox, Widget, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox
-from napari.utils.notifications import show_info
-from qtpy import QtWidgets
-
 from .. import util
-from ..__version__ import __version__ as micro_sam_version
+from ..v2.util import DEFAULT_MODEL
 from ..pixel_classification import (
-    accumulate_pixel_labels, compute_pixel_features, get_anyup_upsampler, project_prediction_to_image,
-    train_pixel_classifier,
+    accumulate_pixel_labels, compute_pixel_features, project_prediction_to_image, train_pixel_classifier,
 )
+from ._annotator import _ClassifierBase
 from ._state import AnnotatorState
 from . import _widgets as widgets
 from .util import _sync_embedding_widget
@@ -27,596 +19,48 @@ from .util import _sync_embedding_widget
 EMBEDDING_CHANNELS = 256
 
 
-def _get_cached_upsampler():
-    # Load the AnyUp model once and cache it on the state (small model, reused across runs).
-    state = AnnotatorState()
-    if state.anyup_upsampler is None:
-        device = getattr(state.predictor, "device", None)
-        state.anyup_upsampler = get_anyup_upsampler(device=device)
-    return state.anyup_upsampler
+class PixelClassifier(_ClassifierBase):
+    """GUI for the pixel classifier: trains a random forest on per-pixel SAM/SAM2 embedding features."""
 
+    rf_attr = "pixel_rf"
+    features_attr = "pixel_features"
+    aux_attr = "pixel_grid_shape"
+    label_widget_title = "Pixel label names:"
+    max_components = EMBEDDING_CHANNELS
+    tool_key = "pixel"
 
-def _compute_pixel_features_if_needed(viewer):
-    # Returns (features, grid_shape) for the current image, computing and caching them if needed.
-    state = AnnotatorState()
-    if state.pixel_features is None:
-        if widgets._validate_embeddings(viewer):
-            return None, None
-        use_anyup = getattr(state.annotator, "_get_use_anyup", None)
-        image, upsampler = None, None
-        if use_anyup is not None and use_anyup():
-            try:
-                upsampler = _get_cached_upsampler()
-            except ImportError as e:
-                widgets._generate_message("error", str(e))
+    def _compute_features(self):
+        # Returns (features, grid_shape) for the current image, computing and caching them if needed.
+        state = AnnotatorState()
+        if state.pixel_features is None:
+            if widgets._validate_embeddings(self._viewer):
                 return None, None
-            image = viewer.layers["image"].data
-        features, grid_shape = compute_pixel_features(
-            state.image_embeddings, state.image_shape, image=image, upsampler=upsampler,
-        )
-        state.pixel_features, state.pixel_grid_shape = features, grid_shape
-    return state.pixel_features, state.pixel_grid_shape
+            image, upsampler, ok = self._resolve_anyup()
+            if not ok:
+                return None, None
+            features, grid_shape = compute_pixel_features(
+                state.image_embeddings, state.image_shape, image=image, upsampler=upsampler,
+            )
+            state.pixel_features, state.pixel_grid_shape = features, grid_shape
+        return state.pixel_features, state.pixel_grid_shape
 
+    def _compute_training_labels(self, aux):
+        return accumulate_pixel_labels(self._viewer.layers["annotations"].data, aux)
 
-def _predict_and_show(viewer, rf, features, grid_shape, apply_to_volume=True):
-    state = AnnotatorState()
-    try:
-        pred = rf.predict(features)
-    except ValueError:
-        return widgets._generate_message(
-            "error", "The loaded classifier does not match the current embeddings. Use the same model type."
-        )
-    prediction = project_prediction_to_image(pred, grid_shape, state.image_shape)
-    layer = viewer.layers["prediction"]
-    if apply_to_volume or prediction.ndim < 3:
-        layer.data = prediction
-    else:
-        data = layer.data if layer.data.shape == prediction.shape else np.zeros_like(prediction)
-        z = _current_slice(viewer)
-        data[z] = prediction[z]
-        layer.data = data
-    state.annotator._refresh_label_widget()
-
-
-def _run_train_and_predict(viewer, apply_to_volume=True):
-    # Get the per-pixel features and the annotations.
-    state = AnnotatorState()
-    state.annotator._require_layers()
-    annotations = viewer.layers["annotations"].data
-
-    features, grid_shape = _compute_pixel_features_if_needed(viewer)
-    if features is None:
-        return None
-
-    previous_features, previous_labels = state.previous_features, state.previous_labels
-    labels = accumulate_pixel_labels(annotations, grid_shape)
-    if (labels == 0).all() and (previous_labels is None):
-        return widgets._generate_message("error", "You have not provided any annotations.")
-
-    # Optionally reduce to the top-n PCA feature channels, read from the settings widget.
-    get_n_components = getattr(state.annotator, "_get_n_components", None)
-    n_components = get_n_components() if get_n_components is not None else 0
-
-    # Run RF training and store it in the state.
-    state.pixel_rf = train_pixel_classifier(
-        features, labels, previous_features=previous_features, previous_labels=previous_labels,
-        n_components=n_components,
-    )
-
-    # Run and set the prediction.
-    _predict_and_show(viewer, state.pixel_rf, features, grid_shape, apply_to_volume=apply_to_volume)
-
-
-def _restore_from_spec(spec):
-    # Push a loaded classifier's stored specs back into the widgets, so the session matches the
-    # config the classifier was trained with. Warn (but don't recompute) if the current embeddings
-    # were computed with a different model.
-    state = AnnotatorState()
-    ann = state.annotator
-    ew = state.widgets.get("embeddings")
-
-    # Model family / size are set directly from the stored strings (the classifier widget's family
-    # names don't match '_sync_embedding_widget's model_type -> family inference). Family first, since
-    # the size options are rebuilt when it changes.
-    family, size = spec.get("model_family"), spec.get("model_size")
-    if ew is not None and family is not None:
-        ew.model_family_dropdown.setCurrentText(family)
-        if size is not None:
-            ew.model_size_dropdown.setCurrentText(size)
-
-    # Tiling, tile/halo params and custom weights via the shared sync helper (these field names match).
-    if ew is not None:
-        _sync_embedding_widget(
-            ew, model_type=spec.get("model_type") or ew.model_type,
-            save_path=None, checkpoint_path=spec.get("custom_weights"),
-            device=None, tile_shape=spec.get("tile_shape"), halo=spec.get("halo"),
+    def _train(self, features, labels, previous_features, previous_labels, n_components, random_state):
+        return train_pixel_classifier(
+            features, labels, previous_features=previous_features, previous_labels=previous_labels,
+            n_components=n_components, random_state=random_state,
         )
 
-    # Top-feature selection and AnyUp/interpolation upsampling.
-    if getattr(ann, "_set_options", None) is not None:
-        ann._set_options(
-            spec.get("use_top_features", False), spec.get("n_top_features"),
-            spec.get("upsampling") == "anyup",
-        )
-
-    # Class names, restored into the label widget.
-    class_names = spec.get("class_names") or {}
-    if class_names and getattr(ann, "_label_names", None) is not None:
-        ann._label_names.update({int(k): v for k, v in class_names.items()})
-        ann._refresh_label_widget()
-
-    # Warn if the current embeddings were computed with a different model than the classifier expects.
-    stored_model = spec.get("model_type")
-    current_model = getattr(state.predictor, "model_type", None) if state.predictor is not None else None
-    if stored_model is not None and current_model is not None and stored_model != current_model:
-        show_info(
-            f"Loaded classifier was trained with '{stored_model}', but the current embeddings use "
-            f"'{current_model}'. Recompute the embeddings with the restored settings before predicting."
-        )
-
-
-def _load_rf(viewer, model_path):
-    state = AnnotatorState()
-    model_path = str(model_path)
-    if not model_path or not os.path.exists(model_path):
-        return widgets._generate_message("error", "You have to provide a valid path to load the classifier.")
-
-    # Stored as {'rf': ..., 'model_spec': ...}; older files are a bare classifier (no spec).
-    obj = load(model_path)
-    if isinstance(obj, dict) and "rf" in obj:
-        state.pixel_rf, spec = obj["rf"], obj.get("model_spec", {})
-    else:
-        state.pixel_rf, spec = obj, {}
-    if spec:
-        _restore_from_spec(spec)
-
-    # Predict on the current image if embeddings are available.
-    features, grid_shape = _compute_pixel_features_if_needed(viewer)
-    if features is None:
-        return None
-    state.annotator._require_layers()
-    _predict_and_show(viewer, state.pixel_rf, features, grid_shape)
-
-
-def _resolve_export_path(viewer, export_dir, rf):
-    # The classifier is saved into the chosen folder (defaulting to the current working directory)
-    # with a descriptive auto-generated name: <image>_<nclasses>classes_<date>_<time>_<hash>.joblib.
-    state = AnnotatorState()
-    name = state.image_name or (viewer.layers["image"].name if "image" in viewer.layers else "image")
-    name = os.path.splitext(os.path.basename(str(name)))[0]
-    n_classes = len(rf.classes_)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"{name}_{n_classes}classes_{stamp}_{joblib_hash(rf)[:8]}.joblib"
-    base_dir = str(export_dir).strip() or os.getcwd()
-    return os.path.join(base_dir, fname)
-
-
-def _gather_class_names(rf):
-    # User-provided class names keyed by class id, for the classes the classifier knows. None if none.
-    state = AnnotatorState()
-    names = getattr(state.annotator, "_label_names", None) or {}
-    class_names = {int(k): v for k, v in names.items() if v and int(k) in rf.classes_}
-    return class_names or None
-
-
-def _classifier_spec(rf):
-    # Specs stored alongside the classifier so a load can restore the full config.
-    state = AnnotatorState()
-    ann = state.annotator
-    ew = state.widgets.get("embeddings")
-    tiling_on = getattr(ew, "tiling", "no") == "yes"
-    n_components = ann._get_n_components() if getattr(ann, "_get_n_components", None) else 0
-    use_anyup = bool(ann._get_use_anyup()) if getattr(ann, "_get_use_anyup", None) else False
-    return {
-        "micro_sam_version": micro_sam_version,
-        "model_family": getattr(ew, "model_family", None),
-        "model_size": getattr(ew, "model_size", None),
-        "model_type": getattr(ew, "model_type", None),
-        "custom_weights": getattr(ew, "custom_weights", None) or None,
-        "tiling": getattr(ew, "tiling", "no"),
-        "tile_shape": [ew.tile_x, ew.tile_y] if tiling_on else None,
-        "halo": [ew.halo_x, ew.halo_y] if tiling_on else None,
-        "use_top_features": n_components > 0,
-        "n_top_features": n_components if n_components > 0 else None,
-        "upsampling": "anyup" if use_anyup else "interpolation",
-        "ndim": getattr(ann, "_ndim", None),
-        "class_ids": [int(c) for c in rf.classes_],
-        "class_names": _gather_class_names(rf),
-    }
-
-
-def _save_rf(viewer, export_dir):
-    state = AnnotatorState()
-    if state.pixel_rf is None:
-        return widgets._generate_message("error", "You have not trained or loaded a classifier yet.")
-    out_path = _resolve_export_path(viewer, export_dir, state.pixel_rf)
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    # Store the classifier together with its specs, so a load can restore the full config.
-    dump({"rf": state.pixel_rf, "model_spec": _classifier_spec(state.pixel_rf)}, out_path)
-    show_info(f"Exported classifier to {out_path}")
-
-
-def _current_slice(viewer):
-    # The z index currently shown in the viewer (for 3d per-slice operations).
-    return int(viewer.dims.current_step[0])
-
-
-def _clear_annotations(viewer, apply_to_volume=True):
-    # Remove the annotation scribbles and the prediction: the whole volume, or only the current
-    # slice for 3d data when 'apply_to_volume' is False.
-    if "annotations" not in viewer.layers:
-        return widgets._generate_message("error", "There is no annotations layer to clear.")
-    whole = apply_to_volume or viewer.layers["annotations"].data.ndim < 3
-    for name in ("annotations", "prediction"):
-        if name not in viewer.layers:
-            continue
-        layer = viewer.layers[name]
-        if whole:
-            layer.data = np.zeros_like(layer.data)
-        else:
-            data = layer.data
-            data[_current_slice(viewer)] = 0
-            layer.data = data
-        layer.refresh()
-
-
-def _create_train_widget(viewer):
-    # The 'Train and predict' button is kept at the top level, outside the settings dropdown.
-    # The label id can be switched while annotating with napari's built-in '=' / '-' shortcuts.
-    # A single 'Apply to Volume' checkbox governs both 'Train and predict' and 'Clear Annotations'
-    # (shown only for 3d data, see '_update_image'): when checked they act on the whole volume,
-    # when unchecked (the default) only on the current slice.
-    train_button = PushButton(text="Train and predict [Shift + T]")
-    clear_button = PushButton(text="Clear Annotations [C]")
-    apply_to_volume = CheckBox(value=False, text="Apply to Volume")
-    apply_to_volume.native.setToolTip(
-        "Apply 'Train and predict' and 'Clear Annotations' to the whole volume. When unchecked, "
-        "they act only on the current slice (training always uses all annotations). Only relevant for 3d data."
-    )
-    train_button.clicked.connect(lambda: _run_train_and_predict(viewer, apply_to_volume.value))
-    clear_button.clicked.connect(lambda: _clear_annotations(viewer, apply_to_volume.value))
-
-    @viewer.bind_key("Shift-T", overwrite=True)
-    def _train_and_predict(event=None):
-        _run_train_and_predict(viewer, apply_to_volume.value)
-
-    @viewer.bind_key("c", overwrite=True)
-    def _clear(event=None):
-        _clear_annotations(viewer, apply_to_volume.value)
-
-    # The shared "Apply to Volume" checkbox sits on top, left-aligned with the settings dropdown
-    # above and the buttons below; the two buttons sit side-by-side, packed to the left.
-    button_row = Container(layout="horizontal", widgets=[train_button, clear_button], labels=False)
-    button_row.native.layout().setContentsMargins(0, 0, 0, 0)
-    # Let both buttons expand to share the row width equally (instead of staying at their
-    # minimum size). QSizePolicy.Policy is nested in Qt6 and top-level in Qt5.
-    size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
-    for button in (train_button, clear_button):
-        button.native.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
-    container = Container(widgets=[apply_to_volume, button_row], labels=False)
-    return container, apply_to_volume
-
-
-def _create_classifier_io_widget(viewer):
-    # Optional PCA dimensionality reduction. The checkbox is off by default, in which case all
-    # embedding channels are used and PCA is never applied. Checking it reveals a number box for
-    # the count of top PCA components to reduce the features to before training. The SAM and SAM2
-    # image embeddings have 256 channels for every model size, so that is the maximum.
-    use_top_features = CheckBox(value=False, text="Choose top feature channels")
-    use_top_features.native.setToolTip(
-        "Reduce the SAM/SAM2 embedding to its most informative channels via PCA before training. "
-        "When unchecked, all 256 embedding channels are used and no PCA is applied."
-    )
-
-    # Optional AnyUp upsampling. When checked, the SAM/SAM2 embedding is upsampled with AnyUp using
-    # the original image as guidance instead of plain interpolation. Toggling it changes the
-    # features, so the cached features are cleared on change to force a recompute.
-    use_anyup = CheckBox(value=False, text="Upsample with AnyUp")
-    use_anyup.native.setToolTip(
-        "Use AnyUp to upsample the embedding with the original image as guidance, for sharper "
-        "features near object boundaries. When unchecked, plain interpolation is used."
-    )
-
-    # The two option checkboxes sit side by side (PCA on the left, AnyUp on the right). A trailing
-    # stretch packs them flush left; zeroing the nested-container margins lines them up with the
-    # path fields below (which otherwise get double-indented by the nested container).
-    checkbox_row = Container(layout="horizontal", widgets=[use_top_features, use_anyup], labels=False)
-    checkbox_row.native.layout().setContentsMargins(0, 0, 0, 0)
-    checkbox_row.native.layout().addStretch(1)
-
-    # The PCA component count appears on its own row below, revealed when the checkbox is ticked.
-    top_features = SpinBox(value=10, min=1, max=EMBEDDING_CHANNELS, step=1)
-    top_features.native.setToolTip(
-        f"Number of top PCA components to reduce the embedding to, between 1 and {EMBEDDING_CHANNELS} "
-        "(the SAM/SAM2 image embedding has 256 channels for all model sizes)."
-    )
-    top_features_row = Container(
-        layout="horizontal", widgets=[Label(value="top feature channels:"), top_features], labels=False,
-    )
-    top_features_row.native.layout().setContentsMargins(0, 0, 0, 0)
-    top_features_row.native.layout().addStretch(1)
-    top_features_row.visible = False
-    use_top_features.changed.connect(lambda checked: setattr(top_features_row, "visible", checked))
-
-    def get_n_components():
-        return int(top_features.value) if use_top_features.value else 0
-
-    def _invalidate_features(*args):
-        state = AnnotatorState()
-        state.pixel_features, state.pixel_grid_shape = None, None
-    use_anyup.changed.connect(_invalidate_features)
-
-    def get_use_anyup():
-        return bool(use_anyup.value)
-
-    def set_options(use_top_features_val, n_top_features, use_anyup_val):
-        # Restore the option controls from a loaded classifier's spec.
-        use_top_features.value = bool(use_top_features_val)
-        if n_top_features:
-            top_features.value = int(n_top_features)
-        use_anyup.value = bool(use_anyup_val)
-
-    # Classifier load/export. Load takes a stored model file; export chooses a destination folder
-    # (defaulting to the current working directory) where the model is saved with an auto-generated
-    # name. The fields follow the path-selector style of the custom weights in the embedding widget.
-    load_path = FileEdit(label="load classifier path:", mode="r", filter="*.joblib")
-    load_path.line_edit.native.setPlaceholderText("/path/to/stored_model.joblib")
-    load_path.native.setToolTip(
-        "Path to a stored classifier (.joblib) to load and apply to the current image."
-    )
-    load_button = PushButton(text="Load classifier")
-    load_button.native.setToolTip("Load the selected classifier and predict on the current image.")
-    load_button.clicked.connect(lambda: _load_rf(viewer, load_path.value))
-
-    # Export saves to the chosen folder (pre-filled with the current working directory) with an
-    # auto-generated name: <image>_<nclasses>classes_<date>_<time>_<hash>.joblib.
-    export_dir = FileEdit(label="export classifier folder:", mode="d", value=os.getcwd())
-    export_dir.native.setToolTip(
-        "Folder where the trained classifier is saved. The file name is generated automatically as "
-        "<image>_<nclasses>classes_<date>_<time>_<hash>.joblib. Defaults to the current working directory."
-    )
-    export_button = PushButton(text="Export classifier")
-    export_button.native.setToolTip("Save the current classifier into the selected folder.")
-    export_button.clicked.connect(lambda: _save_rf(viewer, export_dir.value))
-
-    container = Container(
-        widgets=[checkbox_row, top_features_row, load_path, load_button, export_dir, export_button], labels=False,
-    )
-    return container, get_n_components, get_use_anyup, set_options
-
-
-class PixelClassifier(QtWidgets.QScrollArea):
-
-    def _require_layers(self, layer_choices: Optional[List[str]] = None):
-        # Check whether the image is initialized already. And use the image shape and scale for the layers.
-        state = AnnotatorState()
-        shape = self._shape if state.image_shape is None else state.image_shape
-
-        # Add the label layers for the annotations and the prediction.
-        dummy_data = np.zeros(shape, dtype="uint32")
-        image_scale = state.image_scale
-
-        # Before adding new layers, we always check whether a layer with this name already exists or not.
-        if "annotations" not in self._viewer.layers:
-            if layer_choices and "annotations" in layer_choices:
-                widgets._validation_window_for_missing_layer("annotations")
-            annotation_layer = self._viewer.add_labels(data=dummy_data, name="annotations")
-            if image_scale is not None:
-                self._viewer.layers["annotations"].scale = image_scale
-            # Reduce the brush size and set the default mode to "paint" brush mode.
-            annotation_layer.brush_size = 3
-            annotation_layer.mode = "paint"
-            # Start painting with label id 1 (id 0 is the unlabeled background). napari already
-            # defaults 'selected_label' to 1, so assigning 1 fires no change-event and the layer
-            # controls spinbox stays at its displayed 0. Toggle to force the event so it shows 1.
-            annotation_layer.selected_label = 2
-            annotation_layer.selected_label = 1
-
-        if "prediction" not in self._viewer.layers:
-            if layer_choices and "prediction" in layer_choices:
-                widgets._validation_window_for_missing_layer("prediction")
-            self._viewer.add_labels(data=dummy_data, name="prediction")
-            if image_scale is not None:
-                self._viewer.layers["prediction"].scale = image_scale
-
-        # Move 'annotations' to the top of the layer stack so scribbles are always visible above
-        # the prediction, and make it the active layer so the controls (incl. the label id) show it
-        # and the user can paint right away rather than on the last-added 'prediction' layer.
-        self._viewer.layers.move(self._viewer.layers.index("annotations"), len(self._viewer.layers))
-        self._viewer.layers.selection.active = self._viewer.layers["annotations"]
-
-    def _create_label_widget(self):
-        self._label_form = QtWidgets.QFormLayout()
-        scroll_area = QtWidgets.QScrollArea()
-        inner = QtWidgets.QWidget()
-        inner.setLayout(self._label_form)
-        scroll_area.setWidget(inner)
-        scroll_area.setWidgetResizable(True)
-
-        layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(QtWidgets.QLabel("Pixel label names:"))
-        layout.addWidget(scroll_area)
-
-        return layout
-
-    def _make_label_role_widget(self, lbl):
-        # Build the left-hand widget for a label row: a color swatch matching the annotation
-        # layer color for this id, followed by the exact id ("ID <n>"). The id is stored as the
-        # object name so it can be read back reliably when removing vanished rows.
-        container = QtWidgets.QWidget()
-        container.setObjectName(str(int(lbl)))
-        row_layout = QtWidgets.QHBoxLayout(container)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(4)
-
-        swatch = QtWidgets.QLabel()
-        swatch.setFixedSize(14, 14)
-        color = self._viewer.layers["annotations"].get_color(int(lbl))
-        r, g, b = (int(round(255 * c)) for c in color[:3])
-        swatch.setStyleSheet(f"background-color: rgb({r}, {g}, {b}); border: 1px solid #888;")
-
-        row_layout.addWidget(swatch)
-        row_layout.addWidget(QtWidgets.QLabel(f"ID {int(lbl)}"))
-        row_layout.addStretch(1)
-        return container
-
-    def _refresh_label_widget(self):
-        state = AnnotatorState()
-
-        # Get the current label ids.
-        ids = np.unique(self._viewer.layers["annotations"].data)[1:]
-        if state.previous_labels is not None:
-            ids = np.union1d(ids, np.unique(state.previous_labels))
-
-        # Add new rows.
-        for lbl in ids:
-            if lbl in self._label_names:
-                continue
-            line = QtWidgets.QLineEdit(self._label_names.get(lbl, ""))
-            self._label_names[lbl] = ""
-            self._label_form.addRow(self._make_label_role_widget(lbl), line)
-            line.textChanged.connect(lambda txt, lbl=lbl: self._label_names.__setitem__(lbl, txt))
-
-        # Remove rows whose label vanished. 'removeRow' deletes the row's widgets itself.
-        for row in reversed(range(self._label_form.rowCount())):
-            lbl_id = int(self._label_form.itemAt(row, QtWidgets.QFormLayout.LabelRole).widget().objectName())
-            if lbl_id not in ids:
-                self._label_form.removeRow(row)
-                self._label_names.pop(lbl_id, None)
-
-    def _create_widgets(self):
-        # Create the embedding widget and connect all events related to it.
-        self._embedding_widget = widgets.ClassificationEmbeddingWidget()
-        # Connect events for the image selection box.
-        self._viewer.layers.events.inserted.connect(self._embedding_widget.image_selection.reset_choices)
-        self._viewer.layers.events.removed.connect(self._embedding_widget.image_selection.reset_choices)
-        # Connect the run button with the function to update the image.
-        self._embedding_widget.run_button.clicked.connect(self._update_image)
-
-        # One section: the "Classification Settings" dropdown (classifier load/export) on top,
-        # with the 'Train and predict' button below it. The 'Apply to Volume' checkboxes are shown
-        # only for 3d data (toggled in '_update_image').
-        self._train_and_predict_widget, self._apply_to_volume = _create_train_widget(self._viewer)
-        self._apply_to_volume.visible = False
-        io = _create_classifier_io_widget(self._viewer)
-        self._classifier_io_widget, self._get_n_components, self._get_use_anyup, self._set_options = io
-
-        settings = QtWidgets.QWidget()
-        settings.setLayout(QtWidgets.QVBoxLayout())
-        settings.layout().addWidget(self._classifier_io_widget.native)
-        collapsible = widgets._make_collapsible(settings, title="Classification Settings")
-
-        classification_section = QtWidgets.QWidget()
-        classification_section.setLayout(QtWidgets.QVBoxLayout())
-        classification_section.layout().addWidget(collapsible)
-        classification_section.layout().addWidget(self._train_and_predict_widget.native)
-
-        # A separate section: the pixel label names.
-        self._label_widget = self._create_label_widget()
-
-        self._widgets = {
-            "embeddings": self._embedding_widget,
-            "classification": classification_section,
-            "label_widget": self._label_widget,
-        }
-
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
-        """Create the GUI for the pixel classifier.
-
-        Args:
-            viewer: The napari viewer.
-        """
-        super().__init__()
-        self._viewer = viewer
-        self._annotator_widget = QtWidgets.QWidget()
-        self._annotator_widget.setLayout(QtWidgets.QVBoxLayout())
-
-        # Add the layers for annotations and prediction.
-        # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
-        self._shape = (256, 256)
-        self._require_layers()
-        self._ndim = len(self._shape)
-
-        # Create all the widgets and add them to the layout.
-        self._label_names = {}  # The names for the pixel labels.
-        self._create_widgets()
-
-        for widget_name, widget in self._widgets.items():
-            widget_frame = QtWidgets.QGroupBox()
-            widget_layout = QtWidgets.QVBoxLayout()
-            if isinstance(widget, (Container, FunctionGui, Widget)):
-                # This is a magicgui type and we need to get the native qt widget.
-                widget_layout.addWidget(widget.native)
-            elif isinstance(widget, QtWidgets.QLayout):
-                widget_layout.addLayout(widget)
-            else:
-                # This is a qt type and we add the widget directly.
-                widget_layout.addWidget(widget)
-            widget_frame.setLayout(widget_layout)
-            self._annotator_widget.layout().addWidget(widget_frame)
-
-        # Connect the label layer and the refresh function.
-        self._refresh_label_widget()
-
-        # Set the expected annotator class to the state.
-        state = AnnotatorState()
-        state.annotator = self
-
-        # Add the widgets to the state.
-        state.widgets = self._widgets
-
-        # Add the widget to the scroll area.
-        self.setWidgetResizable(True)  # Allow widget to resize within scroll area.
-        self.setWidget(self._annotator_widget)
-
-    def _update_image(self, segmentation_result=None):
-        state = AnnotatorState()
-
-        # Whether embeddings already exist and avoid clearing objects in layers.
-        if state.skip_recomputing_embeddings:
-            return
-
-        if state.image_shape is None:
-            return
-
-        # Update the dimension and image shape if it has changed. When the dimensionality changes
-        # (e.g. a 3d image loaded after the tool opened with 2d placeholder layers), the existing
-        # label layers must be recreated at the new ndim - assigning n-d data and an n-element scale
-        # to a layer created with a different ndim crashes napari. Delete them so '_require_layers'
-        # rebuilds them at the correct ndim.
-        if state.image_shape != self._shape:
-            new_ndim = len(state.image_shape)
-            if new_ndim != self._ndim:
-                for name in ("annotations", "prediction"):
-                    if name in self._viewer.layers:
-                        del self._viewer.layers[name]
-            self._ndim = new_ndim
-            self._shape = state.image_shape
-
-        # The 'Apply to Volume' checkbox only makes sense for 3d data.
-        self._apply_to_volume.visible = self._ndim == 3
-
-        # The features depend on the image, so they have to be recomputed for a new image.
-        state.pixel_features = None
-        state.pixel_grid_shape = None
-
-        # Before we reset the layers, we ensure all expected layers exist.
-        self._require_layers()
-
-        # Update the image scale.
-        scale = state.image_scale
-
-        # Reset all layers.
-        self._viewer.layers["annotations"].data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.layers["annotations"].scale = scale
-        self._viewer.layers["prediction"].data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.layers["prediction"].scale = scale
+    def _project_prediction(self, prediction, aux):
+        return project_prediction_to_image(prediction, aux, AnnotatorState().image_shape)
 
 
 def pixel_classifier(
     image: np.ndarray,
     embedding_path: Optional[Union[str, util.ImageEmbeddings]] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
@@ -653,6 +97,7 @@ def pixel_classifier(
 
     state = AnnotatorState()
     state.image_shape = image.shape[:ndim]
+    state.ndim = ndim
 
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,

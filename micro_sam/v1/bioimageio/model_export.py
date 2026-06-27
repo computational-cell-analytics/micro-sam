@@ -6,6 +6,7 @@ from typing import Optional, Union
 import xarray
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.ndimage import binary_dilation, binary_erosion
 
 import torch
 
@@ -241,15 +242,27 @@ def _check_model(model_description, input_paths, result_paths):
 
         predicted_mask = prediction.members["masks"].data
         assert predicted_mask.shape == mask.shape
-        # The masks are binary; the export round-trip (direct PyTorch vs the reloaded bioimage.io
-        # pipeline) can flip a few boundary pixels due to platform-level float / interpolation
-        # differences (notably on macOS), so exact equality is too brittle. Require a high overlap
-        # (IoU) instead, which still catches a genuinely wrong prediction.
+        # The masks are binary and thresholded at logit 0 right after a bilinear upsample, so the
+        # export round-trip (direct PyTorch vs the reloaded bioimage.io pipeline) can flip pixels in
+        # a thin band along the mask boundary due to platform-level float / interpolation differences
+        # (notably on macOS/arm64). Such boundary flips are expected; only a disagreement deeper than
+        # this band indicates a genuinely wrong export. So we ignore disagreements within 'band' px of
+        # the reference mask boundary and require the rest to match exactly.
         mask_bool, predicted_bool = mask.astype(bool), predicted_mask.astype(bool)
-        union = np.logical_or(mask_bool, predicted_bool).sum()
-        iou = 1.0 if union == 0 else np.logical_and(mask_bool, predicted_bool).sum() / union
-        n_disagree = int(np.logical_xor(mask_bool, predicted_bool).sum())
-        assert iou >= 0.99, f"Exported mask mismatch: IoU {iou:.4f}, {n_disagree} differing pixels."
+        disagree = np.logical_xor(mask_bool, predicted_bool)
+
+        band = 2
+        # Structuring element spanning only the trailing (y, x) axes, so the band stays within each
+        # spatial plane and does not bleed across the batch/object/channel axes.
+        structure = np.ones((1,) * (mask_bool.ndim - 2) + (3, 3), dtype=bool)
+        boundary = mask_bool ^ binary_erosion(mask_bool, structure=structure)
+        boundary_band = binary_dilation(boundary, structure=structure, iterations=band)
+
+        interior_disagree = int(np.logical_and(disagree, ~boundary_band).sum())
+        assert interior_disagree == 0, (
+            f"Exported mask mismatch: {interior_disagree} pixels differ away from the mask boundary "
+            f"({int(disagree.sum())} differing in total)."
+        )
 
         # Run the checks with partial prompts.
         prompt_kwargs = [

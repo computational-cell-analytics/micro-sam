@@ -12,6 +12,7 @@ tooltips = {
         "automatic_segmentation_mode": "Select the automatic segmentation mode.",
         "run_button": "Compute embeddings or load embeddings if embedding_save_path is specified.",
         "tiling": "Enter tile size for computing tiled embeddings. Enter only x-value for quadratic size or both for non-quadratic.",  # noqa
+        "settings": "Settings for computing the image embeddings: model family and size, tiling, the embedding save path and the compute device.",  # noqa
     },
     "segmentnd": {
         "box_extension": "Enter factor by which box size is increased when projecting to adjacent slices. Larger factors help if object sizes change between slices.",  # noqa
@@ -22,10 +23,14 @@ tooltips = {
         "motion_smoothing": "Enter the motion smoothing factor. It is used to follow objects which have a directed movement, higher values help for objects that are moving fast.",  # noqa
         "projection_dropdown": "Choose the projection mode. It determines which prompts are derived from the masks projected to adjacent frames to rerun SAM.",  # noqa
         "batched": "Enable to segment multiple objects with separate point prompts. Each positive point will be tracked as a separate object. Only available for SAM2 models.",  # noqa
+        "settings": "Settings controlling how a 2d segmentation is propagated through the volume (projection mode, IoU threshold, early stopping and the z-range).",  # noqa
     },
     "unified_segment": {
         "apply_to_volume": "Choose if segmentation is run for the current slice/frame only or for the full volume/all frames.",  # noqa
         "batched": "Enable to segment multiple objects with separate point prompts. Each positive point will be tracked as a separate object. Only available for SAM2 models in volume mode.",  # noqa
+        "segment_button": "Run Segment Anything on the current point/box prompts to segment the object. Shortcut: S.",  # noqa
+        "clear_button": "Clear the current prompts and the current-object segmentation (whole volume or current slice per 'Apply to Volume' for 3d data). Shortcut: Shift + C.",  # noqa
+        "settings": "Settings for interactive segmentation across slices (projection mode and propagation parameters).",  # noqa
     },
     "autosegment": {
         # General settings.
@@ -57,6 +62,8 @@ tooltips = {
         "dt": "Enter the flow-integration step size.",
         "sigma": "Enter the Gaussian sigma for smoothing the convergence-density map.",
         "n_threads": "Enter the number of threads for the post-processing.",
+        "settings": "Settings for automatic segmentation: the mode and its thresholds.",
+        "advanced_settings": "Advanced automatic-segmentation parameters.",
     },
     "autotrack": {
         "run_button": "Run automatic tracking.",
@@ -68,6 +75,7 @@ tooltips = {
     "annotator_tracking": {
         "track_id": "Select the id of the track you are currently annotating.",
         "track_state": "Select the state of the current annotation. Choose 'division' if the object is dviding in the current frame.",  # noqa
+        "export_button": "Export the committed tracking result in the chosen format (CTC, GEFF or TrackMate XML).",  # noqa
     },
     "image_series_annotator": {
         "folder": "Select the folder with the images to annotate.",
@@ -96,6 +104,26 @@ tooltips = {
         "layer": "The layer to commit. Either 'current_object' to commit results from prompt-based segmentation or 'auto_segmentation' to commit results from automatic segmentation.",  # noqa
         "preserve_mode": "The mode for preserving already committed objects. Either 'objects' to preserve on a per-object level, 'pixels' to preserve on a per-pixel level, or 'none' to not preserve.",  # noqa
         "commit_path": "The path to a zarr file for saving committed objects, prompts and other segmentation settings.",
+        "commit_button": "Commit the current segmentation to the committed-objects layer. Shortcut: C.",
+    },
+    "classification": {
+        "settings": "Optional classifier settings: PCA feature reduction, AnyUp upsampling, the random seed, and loading or exporting a trained classifier.",  # noqa
+        "segmentation": "Select the segmentation (labels) layer whose objects will be classified.",
+        "train_button": "Train the random forest on all current annotations and predict on the image. Shortcut: Shift + T.",  # noqa
+        "clear_button": "Clear the annotation scribbles and the prediction (whole volume, or the current slice for 3d data when 'Apply to Volume' is unchecked). Shortcut: C.",  # noqa
+        "apply_to_volume": "Apply 'Train and predict' and 'Clear Annotations' to the whole volume. When unchecked, they act only on the current slice (training always uses all annotations). Only relevant for 3d data.",  # noqa
+        "use_top_features_pixel": "Reduce the SAM/SAM2 embedding to its most informative channels via PCA before training. When unchecked, all 256 embedding channels are used and no PCA is applied.",  # noqa
+        "use_top_features_object": "Reduce the object features to their most informative components via PCA before training. When unchecked, all features are used and no PCA is applied.",  # noqa
+        "top_features_pixel": "Number of top PCA components to reduce the embedding to, between 1 and 256 (the SAM/SAM2 image embedding has 256 channels for all model sizes).",  # noqa
+        "top_features_object": "Number of top PCA components to reduce the object features to, between 1 and 257 (object area plus the 256 per-channel embedding means).",  # noqa
+        "use_anyup": "Use AnyUp to upsample the embedding with the original image as guidance, for sharper features near object boundaries. When unchecked, plain interpolation is used.",  # noqa
+        "random_seed": "'fixed' trains with a fixed random seed so the prediction is reproducible across runs. 'random' leaves the random forest unseeded, so results change slightly each time you train.",  # noqa
+        "load_path": "Path to a stored classifier (.joblib) to load and apply to the current image.",
+        "load_button": "Load the selected classifier and predict on the current image.",
+        "export_dir": "Folder where the trained classifier is saved. The file name is generated automatically as <image>_<nclasses>classes_<date>_<time>_<hash>.joblib. Defaults to the current working directory.",  # noqa
+        "export_button": "Save the current classifier into the selected folder.",
+        "label_names": "Optional names for your classes. Each painted label id gets a row here; type a name to keep track of what each class represents. Names are saved with the exported classifier.",  # noqa
+        "label_name_row": "Optional name for this label id.",
     },
 }
 
