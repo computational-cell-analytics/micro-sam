@@ -13,6 +13,7 @@ from napari.utils.notifications import show_info
 from qtpy import QtWidgets
 
 from .. import util
+from ..v2.util import DEFAULT_MODEL
 from ..__version__ import __version__ as micro_sam_version
 from ..pixel_classification import (
     accumulate_pixel_labels, compute_pixel_features, get_anyup_upsampler, project_prediction_to_image,
@@ -389,12 +390,24 @@ class PixelClassifier(QtWidgets.QScrollArea):
 
     def _require_layers(self, layer_choices: Optional[List[str]] = None):
         # Check whether the image is initialized already. And use the image shape and scale for the layers.
+        # The dimensionality comes from the embedding widget ('state.ndim', RGB-aware) so the label layers
+        # always match the image: 2d (YX) for 2d data, 3d (ZYX) for 3d data.
         state = AnnotatorState()
-        shape = self._shape if state.image_shape is None else state.image_shape
+        if state.image_shape is None:
+            ndim, shape = self._ndim, self._shape
+        else:
+            ndim = len(state.image_shape) if state.ndim is None else state.ndim
+            shape = tuple(state.image_shape)[:ndim]
 
         # Add the label layers for the annotations and the prediction.
         dummy_data = np.zeros(shape, dtype="uint32")
-        image_scale = state.image_scale
+        image_scale = None if state.image_scale is None else tuple(state.image_scale)[:ndim]
+
+        # Drop any existing label layer whose dimensionality no longer matches the image. Reassigning data
+        # of a different ndim corrupts the napari layer transforms, so we rebuild such layers from scratch.
+        for name in ("annotations", "prediction"):
+            if name in self._viewer.layers and self._viewer.layers[name].data.ndim != len(shape):
+                del self._viewer.layers[name]
 
         # Before adding new layers, we always check whether a layer with this name already exists or not.
         if "annotations" not in self._viewer.layers:
@@ -534,8 +547,8 @@ class PixelClassifier(QtWidgets.QScrollArea):
         # Add the layers for annotations and prediction.
         # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
         self._shape = (256, 256)
-        self._require_layers()
         self._ndim = len(self._shape)
+        self._require_layers()
 
         # Create all the widgets and add them to the layout.
         self._label_names = {}  # The names for the pixel labels.
@@ -579,19 +592,11 @@ class PixelClassifier(QtWidgets.QScrollArea):
         if state.image_shape is None:
             return
 
-        # Update the dimension and image shape if it has changed. When the dimensionality changes
-        # (e.g. a 3d image loaded after the tool opened with 2d placeholder layers), the existing
-        # label layers must be recreated at the new ndim - assigning n-d data and an n-element scale
-        # to a layer created with a different ndim crashes napari. Delete them so '_require_layers'
-        # rebuilds them at the correct ndim.
-        if state.image_shape != self._shape:
-            new_ndim = len(state.image_shape)
-            if new_ndim != self._ndim:
-                for name in ("annotations", "prediction"):
-                    if name in self._viewer.layers:
-                        del self._viewer.layers[name]
-            self._ndim = new_ndim
-            self._shape = state.image_shape
+        # Use the dimensionality determined by the embedding widget ('state.ndim', RGB-aware) so the label
+        # layers always match the image: 2d (YX) for 2d data, 3d (ZYX) for 3d data. '_require_layers'
+        # rebuilds any layer whose dimensionality no longer matches before we reset its data.
+        self._ndim = len(state.image_shape) if state.ndim is None else state.ndim
+        self._shape = tuple(state.image_shape)[:self._ndim]
 
         # The 'Apply to Volume' checkbox only makes sense for 3d data.
         self._apply_to_volume.visible = self._ndim == 3
@@ -600,23 +605,24 @@ class PixelClassifier(QtWidgets.QScrollArea):
         state.pixel_features = None
         state.pixel_grid_shape = None
 
-        # Before we reset the layers, we ensure all expected layers exist.
+        # Before we reset the layers, we ensure all expected layers exist at the correct ndim.
         self._require_layers()
 
         # Update the image scale.
-        scale = state.image_scale
+        scale = None if state.image_scale is None else tuple(state.image_scale)[:self._ndim]
 
         # Reset all layers.
         self._viewer.layers["annotations"].data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.layers["annotations"].scale = scale
         self._viewer.layers["prediction"].data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.layers["prediction"].scale = scale
+        if scale is not None:
+            self._viewer.layers["annotations"].scale = scale
+            self._viewer.layers["prediction"].scale = scale
 
 
 def pixel_classifier(
     image: np.ndarray,
     embedding_path: Optional[Union[str, util.ImageEmbeddings]] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
@@ -653,6 +659,7 @@ def pixel_classifier(
 
     state = AnnotatorState()
     state.image_shape = image.shape[:ndim]
+    state.ndim = ndim
 
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,

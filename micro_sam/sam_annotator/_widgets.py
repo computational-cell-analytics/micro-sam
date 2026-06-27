@@ -1506,10 +1506,14 @@ class EmbeddingWidget(_WidgetBase):
         if layer is None:
             return
 
-        image_shape = layer.data.shape
-        image_scale = tuple(layer.scale)
-        state.image_shape = image_shape
-        state.image_scale = image_scale
+        # Drop the channel axis for RGB images so the shape and ndim describe the spatial dims only.
+        if layer.rgb:
+            state.ndim = layer.data.ndim - 1
+            state.image_shape = layer.data.shape[:-1]
+        else:
+            state.ndim = layer.data.ndim
+            state.image_shape = layer.data.shape
+        state.image_scale = tuple(layer.scale)
         state.image_name = layer.name
 
     def _create_image_section(self):
@@ -1920,6 +1924,7 @@ class EmbeddingWidget(_WidgetBase):
         else:
             ndim = image.data.ndim
             state.image_shape = image.data.shape
+        state.ndim = ndim
 
         # Set layer scale
         state.image_scale = tuple(image.scale)
@@ -2000,7 +2005,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
 
     size_order = ["tiny", "small", "base", "large", "huge"]
 
-    def _create_model_section(self, default_model="vit_t_sam2", create_layout=True):
+    def _create_model_section(self, default_model="vit_t_cells", create_layout=True):
         # The model family mapped to the model-name suffix. SAM2 families use the 'hvit_' prefix
         # ('_sam2' for the natural-image backbones, '_cells' for the finetuned microscopy model);
         # the SAM1 families use the 'vit_' prefix.
