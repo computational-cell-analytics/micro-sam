@@ -48,6 +48,38 @@ HASHES = {
 }
 
 
+# Default in-plane tiling for large images. Tiling is enabled when an in-plane axis exceeds
+# DEFAULT_TILING_THRESHOLD; the SAM input patch per axis is then DEFAULT_TILE_SHAPE + 2 * DEFAULT_HALO,
+# which is kept equal to the threshold (512 + 2 * 128 = 768).
+DEFAULT_TILING_THRESHOLD = 768
+DEFAULT_TILE_SHAPE = (512, 512)
+DEFAULT_HALO = (128, 128)
+
+# Default z block / halo for volumetric (3d) tiling. Each decoder pass spans the inner block plus the
+# halo on each side, i.e. DEFAULT_TILE_Z + 2 * DEFAULT_HALO_Z = 8 slices, matching the UniSAM2 8-slice
+# training crop (so the z-convolutions see the z-context they were trained on; do not enlarge this
+# beyond the training crop). Set the z tile >= the slice count to disable z-tiling.
+DEFAULT_TILE_Z = 4
+DEFAULT_HALO_Z = 2
+
+
+def needs_default_tiling(shape):
+    """Whether default in-plane tiling should be enabled for a given image shape.
+
+    Args:
+        shape: The image shape without any channel axis. Either 2d (y, x) or 3d (z, y, x);
+            for 3d only the in-plane (y, x) axes are considered, not the leading z axis.
+
+    Returns:
+        Whether tiling should be enabled by default.
+    """
+    if len(shape) == 2:
+        return shape[0] > DEFAULT_TILING_THRESHOLD or shape[1] > DEFAULT_TILING_THRESHOLD
+    elif len(shape) == 3:
+        return shape[1] > DEFAULT_TILING_THRESHOLD or shape[2] > DEFAULT_TILING_THRESHOLD
+    return False
+
+
 # Finetuned SAM2 models (the micro-sam "model download console" for SAM2). These are exported into
 # the two-file micro-sam layout - an interactive predictor checkpoint ('<name>') and a UniSAM2
 # decoder checkpoint ('<name>_decoder') - by 'scripts/model_export/export_sam2_cells_model.py'.
@@ -98,6 +130,21 @@ def models():
 def get_model_names():
     """Return the names of the finetuned SAM2 models available in the download console."""
     return list(FINETUNED_MODELS)
+
+
+def has_registered_decoder(model_type):
+    """Whether a finetuned SAM2 model has a registered UniSAM2 decoder (for automatic segmentation).
+
+    A cheap registry lookup (no download), used e.g. to decide the default automatic-segmentation mode
+    before the model / decoder has actually been loaded.
+
+    Args:
+        model_type: The SAM2 model name, e.g. 'hvit_t_cells'.
+
+    Returns:
+        Whether a '<model_type>_decoder' is registered.
+    """
+    return f"{model_type}_decoder" in FINETUNED_HASHES
 
 
 def _download_finetuned_sam2_model(model_type, progress_bar_factory=None):
@@ -373,7 +420,9 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
     features.attrs["tile_shape"] = list(tile_shape)
     features.attrs["halo"] = list(halo)
 
-    pbar_init(n_tiles, "Compute Image Embeddings 3D tiled")
+    # Progress is reported per actual patch (tile-column x z slice), not per tile, since each tile
+    # encodes all z slices and that inner loop is the bulk of the work.
+    pbar_init(n_tiles * n_slices, "Compute Image Embeddings 3D tiled")
     for tile_id in range(n_tiles):
         block = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
         bb = tuple(slice(begin, end) for begin, end in zip(block.begin, block.end))
@@ -385,7 +434,7 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
         )
         batched_images = [_to_image(sub_volume[z]) for z in range(n_slices)]
         vision_feats, pos_encs, fpns, original_sizes, input_sizes = _compute_embeddings_batched_3d(
-            inference_state, predictor, list(range(n_slices)), batched_images,
+            inference_state, predictor, list(range(n_slices)), batched_images, pbar_update=pbar_update,
         )
 
         # Stack the per-slice outputs along z, matching the (n_slices, ...) layout '_compute_3d' saves.
@@ -404,8 +453,6 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
         tile_fpn_group = fpn_group.require_group(str(tile_id))
         for level, level_feat in enumerate(tile_fpn):
             _create_dataset_with_data(tile_fpn_group, str(level), data=level_feat)
-
-        pbar_update(1)
 
     if save_path is not None:
         _write_embedding_signature(
@@ -463,7 +510,7 @@ def _load_list_datasets(group, prefix_name, lazy_loading):
 
 
 @torch.no_grad
-def _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batched_images):
+def _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batched_images, pbar_update=None):
     batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes, input_sizes = [], [], [], [], []
 
     for image, z_id in zip(batched_images, batched_z):
@@ -479,6 +526,9 @@ def _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batche
         batched_backbone_fpn.append(curr_backbone_out["backbone_fpn"])
         original_sizes.append(image.shape[:2])
         input_sizes.append(predictor.image_size)
+
+        if pbar_update is not None:  # Advance per slice so a tile-column reports per-patch progress.
+            pbar_update(1)
 
     return batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes, input_sizes
 

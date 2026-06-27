@@ -241,7 +241,15 @@ def _check_model(model_description, input_paths, result_paths):
 
         predicted_mask = prediction.members["masks"].data
         assert predicted_mask.shape == mask.shape
-        assert np.allclose(mask, predicted_mask)
+        # The masks are binary; the export round-trip (direct PyTorch vs the reloaded bioimage.io
+        # pipeline) can flip a few boundary pixels due to platform-level float / interpolation
+        # differences (notably on macOS), so exact equality is too brittle. Require a high overlap
+        # (IoU) instead, which still catches a genuinely wrong prediction.
+        mask_bool, predicted_bool = mask.astype(bool), predicted_mask.astype(bool)
+        union = np.logical_or(mask_bool, predicted_bool).sum()
+        iou = 1.0 if union == 0 else np.logical_and(mask_bool, predicted_bool).sum() / union
+        n_disagree = int(np.logical_xor(mask_bool, predicted_bool).sum())
+        assert iou >= 0.99, f"Exported mask mismatch: IoU {iou:.4f}, {n_disagree} differing pixels."
 
         # Run the checks with partial prompts.
         prompt_kwargs = [

@@ -99,6 +99,9 @@ def _initialize_annotator(
         checkpoint_path=checkpoint_path, device=device, skip_load=False, use_cli=True,
     )
     state.image_shape = _get_input_shape(image, ndim)
+    # Establish the scale for this image (matching the segmentation annotator) so the layers do not
+    # inherit a stale 'image_scale' of a different dimensionality from a previous image / session.
+    state.image_scale = tuple(viewer.layers["image"].scale)
 
     annotator = Annotator(viewer, ndim=ndim, reset_state=False)
 
@@ -331,6 +334,7 @@ def image_series_annotator(
             skip_load=False,
         )
         state.image_shape = _get_input_shape(image, ndim)
+        state.image_scale = tuple(viewer.layers["image"].scale)
 
         annotator._update_image(segmentation_result=segmentation_result)
 

@@ -599,7 +599,9 @@ class PromptableSegmentation3D:
     ):
         raise NotImplementedError
 
-    def _propagate_in_direction(self, reverse, update_progress=None, early_stop_patience=None, z_range=None):
+    def _propagate_in_direction(
+        self, reverse, update_progress=None, early_stop_patience=None, z_range=None, seen_frames=None
+    ):
         """Run SAM2 propagation in one temporal direction, optionally stopping early.
 
         Each step of the SAM2 video predictor runs the full memory attention and mask decoder
@@ -617,6 +619,8 @@ class PromptableSegmentation3D:
             z_range: If given, an inclusive '(z_min, z_max)' bound on the slice indices propagation
                 may cover. Propagation stops at the range edge in this direction. 'None' propagates
                 to the end of the volume.
+            seen_frames: Optional set of already-counted frame indices, shared across both directions,
+                so a frame processed in both (the conditioning frame) advances 'update_progress' once.
 
         Returns:
             Mapping from frame index to per-object boolean masks, in the order frames were yielded.
@@ -634,8 +638,12 @@ class PromptableSegmentation3D:
                 out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
             }
             video_segments[out_frame_idx] = per_object
-            if update_progress is not None:
+            # Count each slice at most once across both directions (the conditioning frame is yielded
+            # by both), so the progress bar reaches its total exactly on a full pass without overshoot.
+            if update_progress is not None and (seen_frames is None or out_frame_idx not in seen_frames):
                 update_progress(1)
+            if seen_frames is not None:
+                seen_frames.add(out_frame_idx)
 
             # Early stopping: once every tracked object has been absent for 'early_stop_patience'
             # consecutive frames, the object has left the volume and there is nothing more to track.
@@ -661,15 +669,19 @@ class PromptableSegmentation3D:
         # 'early_stop_patience' bounds the propagation by stopping a direction once the object has been
         # absent for that many consecutive frames (see '_propagate_in_direction'). 'z_range' is an
         # inclusive '(z_min, z_max)' hard bound on the slices propagation may cover.
+        # Shared across both directions so the conditioning frame (yielded by both) is counted once.
+        seen_frames = set()
         forward_video_segments = self._propagate_in_direction(
-            reverse=False, update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+            reverse=False, update_progress=update_progress, early_stop_patience=early_stop_patience,
+            z_range=z_range, seen_frames=seen_frames,
         )
 
         # Next, we do the propagation reverse in time.
         reverse_video_segments = {}
         if len(forward_video_segments) < self.volume.shape[0]:  # Perform reverse propagation only if necessary
             reverse_video_segments = self._propagate_in_direction(
-                reverse=True, update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+                reverse=True, update_progress=update_progress, early_stop_patience=early_stop_patience,
+                z_range=z_range, seen_frames=seen_frames,
             )
             # NOTE: The order is reversed to stitch the reverse propagation with forward.
             reverse_video_segments = dict(reversed(list(reverse_video_segments.items())))

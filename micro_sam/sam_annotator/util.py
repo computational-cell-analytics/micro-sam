@@ -27,32 +27,77 @@ LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 #
 
 
-def prepare_annotation_image(image: np.ndarray) -> Tuple[np.ndarray, int, bool]:
+def _channels_to_rgb(image: np.ndarray) -> np.ndarray:
+    """Map a 2D image's trailing channel axis to exactly 3 channels.
+
+    A single channel is replicated, two channels are padded with a zero channel, three channels are
+    left as-is, and more than three channels are reduced to the first three (with a warning).
+    """
+    n_channels = image.shape[-1]
+    if n_channels == 3:
+        return image
+    if n_channels == 1:
+        return np.concatenate([image] * 3, axis=-1)
+    if n_channels == 2:
+        zero_channel = np.zeros(image.shape[:-1] + (1,), dtype=image.dtype)
+        return np.concatenate([image, zero_channel], axis=-1)
+    warnings.warn(f"You provided an input with {n_channels} channels. Only the first three will be used.")
+    return image[..., :3]
+
+
+def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> Tuple[np.ndarray, int, bool]:
     """Normalize an image for annotation: squeeze singletons and map 2D channels to RGB.
 
     Singleton axes (commonly exposed by formats like CZI) are squeezed out across all axes.
     For a 2D image, the trailing channel axis is mapped to 3 channels: a 2-channel input is
     padded with a zero channel and a 4-channel input is reduced to the first three (with a
-    warning). Both squeezing and channel slicing return views, so the only case that
-    allocates is the 2-channel padding.
+    warning). A 3D volume with a channel axis (3D+C) is not supported.
 
     Args:
         image: The input image data.
+        ndim: Optional override for the spatial dimensionality (2 or 3). With ``None`` (the default)
+            the dimensionality is auto-detected from the shape (a trailing axis of size 3 -> RGB 2D,
+            of size 2 or 4 -> channels mapped to RGB 2D, otherwise a 3D volume). With ``2`` a 3D array
+            is read as a 2D multi-channel image, taking the smallest axis as the channel axis (so a
+            channels-first ``(C, H, W)`` array also works) and mapping the channels to RGB. With ``3``
+            a 3D array is read as a ``(Z, H, W)`` volume.
 
     Returns:
         A tuple of the normalized image, its spatial dimensionality (2 or 3), and whether
         it has a trailing RGB channel axis.
 
     Raises:
-        ValueError: If the squeezed image is not a 2D image or a grayscale 3D volume.
+        ValueError: If the (overridden) dimensionality cannot be applied to the image shape, or the
+            squeezed image is neither a 2D image nor a grayscale 3D volume.
     """
+    if ndim not in (None, 2, 3):
+        raise ValueError(f"Invalid ndim override: {ndim}. Expected None, 2 or 3.")
+
     image = np.squeeze(image)
 
-    # A 4D array is either a 3D volume with a channel axis (Z, H, W, C) or a volumetric
-    # time series (T, Z, H, W). Neither is supported: the v2 3D path assumes a grayscale
-    # (Z, H, W) volume, so a channel axis would otherwise produce wrong-shaped masks.
-    # TODO: support multichannel 3D once the v2 3D path is channel-aware, aligned with
-    # NGFF (OME-Zarr) axis conventions (t, c, z, y, x) instead of a trailing channel axis.
+    # Forced 2D: read a 3D array as a 2D multi-channel image. The channel axis is taken to be the
+    # smallest axis (so both channels-first (C, H, W) and channels-last (H, W, C) work); it is moved
+    # to the trailing position and mapped to 3 channels.
+    if ndim == 2:
+        if image.ndim == 2:
+            return image, 2, False
+        if image.ndim == 3:
+            channel_axis = int(np.argmin(image.shape))
+            image = np.moveaxis(image, channel_axis, -1)
+            return _channels_to_rgb(image), 2, True
+        raise ValueError(f"Cannot interpret shape {image.shape} as a 2D image.")
+
+    # Forced 3D: read a 3D array as a (Z, H, W) volume. A channel axis (4D, or 3D+C) is not supported.
+    if ndim == 3:
+        if image.ndim == 3:
+            return image, 3, False
+        raise ValueError(
+            f"Cannot interpret shape {image.shape} as a 3D volume (3D data with channels is not supported yet)."
+        )
+
+    # Auto-detect. A 4D array is either a 3D volume with a channel axis (Z, H, W, C) or a volumetric
+    # time series (T, Z, H, W). Neither is supported: the v2 3D path assumes a grayscale (Z, H, W)
+    # volume, so a channel axis would otherwise produce wrong-shaped masks.
     if image.ndim == 4:
         if image.shape[-1] in (2, 3, 4):
             raise ValueError(
@@ -60,14 +105,10 @@ def prepare_annotation_image(image: np.ndarray) -> Tuple[np.ndarray, int, bool]:
             )
         raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data (3D+t is not supported).")
 
-    # 2D image with a channel axis: map the channel axis to 3 channels.
+    # 2D image with a 2- or 4-channel trailing axis: map it to 3 channels. A trailing axis of any
+    # other size is left alone, so a size-3 axis stays RGB and anything else is treated as a volume.
     if image.ndim == 3 and image.shape[-1] in (2, 4):
-        if image.shape[-1] == 2:
-            zero_channel = np.zeros(image.shape[:-1] + (1,), dtype=image.dtype)
-            image = np.concatenate([image, zero_channel], axis=-1)
-        else:
-            warnings.warn("You provided an input with 4 channels. Only the first three will be used.")
-            image = image[..., :3]
+        image = _channels_to_rgb(image)
 
     # Map the (possibly normalized) shape to a spatial dimensionality and rgb flag.
     if image.ndim == 2:
@@ -208,7 +249,7 @@ def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=T
 
 
 def point_layer_to_prompts(
-    layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True,
+    layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True, exclude_states=None,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Extract point prompts for SAM from a napari point layer.
 
@@ -218,6 +259,8 @@ def point_layer_to_prompts(
         track_id: Id of the current track (required for tracking data).
         with_stop_annotation: Whether a single negative point will be interpreted
             as stop annotation or just returned as normal prompt.
+        exclude_states: Track-states to drop (e.g. ('division',)); such points mark a lineage
+            event rather than a segmentation prompt and must not be fed to the predictor.
 
     Returns:
         The point coordinates for the prompts.
@@ -228,12 +271,17 @@ def point_layer_to_prompts(
     labels = layer.properties["label"]
     assert len(points) == len(labels)
 
+    # Drop points tagged with an excluded track-state (division markers are not prompts).
+    keep = np.ones(len(points), dtype=bool)
+    if exclude_states is not None and "state" in layer.properties:
+        keep = ~np.isin(np.asarray(layer.properties["state"]), list(exclude_states))
+
     if i is None:
         assert points.shape[1] == 2, f"{points.shape}"
-        this_points, this_labels = points, labels
+        this_points, this_labels = points[keep], labels[keep]
     else:
         assert points.shape[1] == 3, f"{points.shape}"
-        mask = np.round(points[:, 0]) == i
+        mask = (np.round(points[:, 0]) == i) & keep
         this_points = points[mask][:, 1:]
         this_labels = labels[mask]
     assert len(this_points) == len(this_labels)
