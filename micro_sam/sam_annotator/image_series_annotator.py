@@ -320,16 +320,31 @@ def image_folder_annotator(
     )
 
 
+def _hide_layout_widgets(item):
+    """Recursively hide every widget held by a layout item.
+
+    Used to hide the embedding widget's top image / model row once its model dropdown has been
+    relocated next to the launcher's Task dropdown.
+    """
+    if item is None:
+        return
+    layout = item.layout()
+    if layout is None:
+        widget = item.widget()
+        if widget is not None:
+            widget.hide()
+        return
+    for i in range(layout.count()):
+        _hide_layout_widgets(layout.itemAt(i))
+
+
 class ImageSeriesAnnotator(widgets._WidgetBase):
     def __init__(self, viewer: napari.Viewer, parent=None):
         super().__init__(parent=parent)
         self._viewer = viewer
 
-        # Create the UI: the general options.
+        # Create the UI: options + the embedded model / embedding settings.
         self._create_options()
-
-        # Add the settings (collapsible).
-        self.layout().addWidget(self._create_settings())
 
         # Add the run button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Annotate Images")
@@ -338,12 +353,21 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
 
     def _create_options(self):
         self.folder = None
-        _, layout = self._add_path_param(
+        self._folder_textbox, layout = self._add_path_param(
             "folder", self.folder, "directory",
             title="Input Folder", placeholder="Folder with images ...",
             tooltip=get_tooltip("image_series_annotator", "folder")
         )
         self.layout().addLayout(layout)
+        self._folder_label = layout.itemAt(0).widget()
+
+        # File pattern qualifying the input folder: which files form the series.
+        self.pattern = "*"
+        self._pattern_param, layout = self._add_string_param(
+            "pattern", self.pattern, tooltip=get_tooltip("image_series_annotator", "pattern")
+        )
+        self.layout().addLayout(layout)
+        self._pattern_label = layout.itemAt(0).widget()
 
         self.output_folder = None
         _, layout = self._add_path_param(
@@ -352,13 +376,25 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
             tooltip=get_tooltip("image_series_annotator", "output_folder")
         )
         self.layout().addLayout(layout)
+        self._output_label = layout.itemAt(0).widget()
 
-        # Task selector: the whole series is annotated with the chosen task.
+        # Model dropdown on top, then the Task dropdown below it (stacked). The model dropdown is owned
+        # by the embedded embedding widget and relocated into '_model_row' in '_rebuild_embedding_widget'.
+        self._model_row = QtWidgets.QHBoxLayout()
+        self.layout().addLayout(self._model_row)
+        self._model_label = None
+        self._relocated_model_dropdown = None
+
         self.task = "Segmentation"
-        self.task_dropdown, layout = self._add_choice_param(
+        self.task_dropdown, task_layout = self._add_choice_param(
             "task", self.task, TASKS, title="Task:", tooltip=get_tooltip("image_series_annotator", "task"),
         )
-        self.layout().addLayout(layout)
+        # Let the dropdown absorb the row's extra width so the 'Task:' label hugs it (otherwise the
+        # label expands and leaves a gap between the text and the dropdown).
+        size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
+        self.task_dropdown.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
+        self.layout().addLayout(task_layout)
+        self._task_label = task_layout.itemAt(0).widget()
 
         # Segmentation folder (object classification only), toggled by the task selector.
         self.segmentation_folder = None
@@ -375,72 +411,95 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         self._seg_folder_container.setLayout(seg_layout)
         self._seg_folder_container.setVisible(False)
         self.layout().addWidget(self._seg_folder_container)
-        self.task_dropdown.currentTextChanged.connect(
-            lambda task: self._seg_folder_container.setVisible(task == "Object Classification")
+
+        # Embedded model / embedding settings, reusing the annotator's embedding widget so the model
+        # family/size, image-dimensions and tiling controls (and, for the classifier tasks, the
+        # 'Advanced Models' selector) are not duplicated. Swapped to match the selected task.
+        self._embedding_container = QtWidgets.QWidget()
+        self._embedding_container.setLayout(QtWidgets.QVBoxLayout())
+        self._embedding_container.layout().setContentsMargins(0, 0, 0, 0)
+        self.layout().addWidget(self._embedding_container)
+        self._embedding_widget = None
+        self._rebuild_embedding_widget()
+
+        # Swap the embedding widget + toggle the segmentation folder on task change, and re-judge the
+        # default tiling from the first image when the input folder or pattern changes.
+        self.task_dropdown.currentTextChanged.connect(self._on_task_changed)
+        self._folder_textbox.textChanged.connect(self._update_default_tiling)
+        self._pattern_param.textChanged.connect(self._update_default_tiling)
+
+    def _build_embedding_widget(self):
+        # The classifier tasks use the classification embedding widget (which adds the 'Advanced
+        # Models' selector); tracking uses the SAM2-only timeseries widget; segmentation the default.
+        if self.task in ("Object Classification", "Pixel Classification"):
+            ew = widgets.ClassificationEmbeddingWidget(ndim_choice=True)
+        elif self.task == "Tracking":
+            ew = widgets.EmbeddingWidget(sam2_only=True, is_timeseries=True)
+        else:
+            ew = widgets.EmbeddingWidget(ndim_choice=True)
+        # The launcher works on a folder and the harness computes embeddings itself, so the
+        # 'Compute Embeddings' button is not needed (the image / model row is hidden in the rebuild,
+        # after the model dropdown has been relocated next to the Task dropdown).
+        ew.run_button.hide()
+        return ew
+
+    def _rebuild_embedding_widget(self, *args):
+        # Drop the previous embedding widget and the model row relocated from it.
+        if self._model_label is not None:
+            self._model_label.setParent(None)
+            self._model_label.deleteLater()
+            self._model_label = None
+        if self._relocated_model_dropdown is not None:
+            self._relocated_model_dropdown.setParent(None)
+            self._relocated_model_dropdown.deleteLater()
+            self._relocated_model_dropdown = None
+        if self._embedding_widget is not None:
+            self._embedding_widget.setParent(None)
+            self._embedding_widget.deleteLater()
+
+        self._embedding_widget = self._build_embedding_widget()
+        self._embedding_container.layout().addWidget(self._embedding_widget)
+
+        # Relocate the model-family dropdown into the model row (above Task), then hide the now-empty
+        # image / model row at the top of the embedding widget.
+        self._model_label = QtWidgets.QLabel("Model:")
+        self._relocated_model_dropdown = self._embedding_widget.model_family_dropdown
+        # Expanding so the 'Model:' label hugs the dropdown (matching the Task field).
+        size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
+        self._relocated_model_dropdown.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
+        self._model_row.addWidget(self._model_label)
+        self._model_row.addWidget(self._relocated_model_dropdown)
+        _hide_layout_widgets(self._embedding_widget.layout().itemAt(0))
+
+        # Uniform label widths so the input / output / pattern fields and the model / task dropdowns
+        # all start at the same x and span the same width.
+        self._align_widths(
+            [self._folder_label, self._pattern_label, self._output_label, self._task_label, self._model_label]
         )
 
-        # Add the model family widget section.
-        layout = self._create_model_section(create_layout=False)
-        self.layout().addLayout(layout)
+        self._update_default_tiling()
 
-    def _create_settings(self):
-        setting_values = QtWidgets.QWidget()
-        setting_values.setLayout(QtWidgets.QVBoxLayout())
+    def _on_task_changed(self, *args):
+        self.task = self.task_dropdown.currentText()
+        self._seg_folder_container.setVisible(self.task == "Object Classification")
+        self._rebuild_embedding_widget()
 
-        # Add the model size widget section.
-        layout = self._create_model_size_section()
-        setting_values.layout().addLayout(layout)
-
-        self.pattern = "*"
-        _, layout = self._add_string_param(
-            "pattern", self.pattern, tooltip=get_tooltip("image_series_annotator", "pattern")
-        )
-        setting_values.layout().addLayout(layout)
-
-        self.ndim = 0  # 0 = auto-detect from the image shape
-        _, layout = self._add_int_param(
-            "ndim", self.ndim, min_val=0, max_val=3, title="ndim (0 = auto):",
-            tooltip=get_tooltip("image_series_annotator", "ndim"),
-        )
-        setting_values.layout().addLayout(layout)
-
-        self.device = "auto"
-        device_options = ["auto"] + util._available_devices()
-        self.device_dropdown, layout = self._add_choice_param(
-            "device", self.device, device_options, tooltip=get_tooltip("embedding", "device")
-        )
-        setting_values.layout().addLayout(layout)
-
-        self.embeddings_save_path = None
-        _, layout = self._add_path_param(
-            "embeddings_save_path", self.embeddings_save_path, "directory", title="embeddings save path:",
-            tooltip=get_tooltip("embedding", "embeddings_save_path")
-        )
-        setting_values.layout().addLayout(layout)
-
-        self.custom_weights = None  # select_file
-        _, layout = self._add_path_param(
-            "custom_weights", self.custom_weights, "file", title="custom weights path:",
-            tooltip=get_tooltip("embedding", "custom_weights")
-        )
-        setting_values.layout().addLayout(layout)
-
-        self.tile_x, self.tile_y = 0, 0
-        self.tile_x_param, self.tile_y_param, layout = self._add_shape_param(
-            ("tile_x", "tile_y"), (self.tile_x, self.tile_y), min_val=0, max_val=2048, step=16,
-            tooltip=get_tooltip("embedding", "tiling")
-        )
-        setting_values.layout().addLayout(layout)
-
-        self.halo_x, self.halo_y = 0, 0
-        self.halo_x_param, self.halo_y_param, layout = self._add_shape_param(
-            ("halo_x", "halo_y"), (self.halo_x, self.halo_y), min_val=0, max_val=512,
-            tooltip=get_tooltip("embedding", "halo")
-        )
-        setting_values.layout().addLayout(layout)
-
-        settings = widgets._make_collapsible(setting_values, title="Advanced Settings")
-        return settings
+    def _update_default_tiling(self, *args):
+        # Judge default tiling from the first image in the series, mirroring the embedding widget's
+        # per-image auto-tiling (which keys off a selected layer that the launcher does not have).
+        ew = self._embedding_widget
+        if ew is None or not self.folder:
+            return
+        files = sorted(glob(os.path.join(self.folder, self.pattern)))
+        if not files:
+            return
+        try:
+            shape = imageio.improps(files[0]).shape
+        except Exception:
+            return
+        # Drop a trailing channel axis (RGB/RGBA) for the in-plane size judgement.
+        spatial = shape[:-1] if (len(shape) >= 3 and shape[-1] in (3, 4)) else shape
+        ew._apply_default_tiling_for_shape(spatial)
 
     def _validate_inputs(self):
         missing_data = self.folder is None or len(glob(os.path.join(self.folder, self.pattern))) == 0
@@ -466,32 +525,39 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
     def _embedding_paths_for(self, image_files):
         # Per-item embedding zarr paths under the chosen folder (the classification series functions
         # take an explicit list); 'None' when no embedding folder is set.
-        if not self.embeddings_save_path:
+        save_path = self._embedding_widget.embeddings_save_path
+        if not save_path:
             return None
-        os.makedirs(self.embeddings_save_path, exist_ok=True)
+        os.makedirs(save_path, exist_ok=True)
         return [
-            os.path.join(self.embeddings_save_path, os.path.splitext(os.path.basename(f))[0] + ".zarr")
-            for f in image_files
+            os.path.join(save_path, os.path.splitext(os.path.basename(f))[0] + ".zarr") for f in image_files
         ]
 
     def __call__(self, skip_validate=False):
-        self._validate_model_type_and_custom_weights()
+        ew = self._embedding_widget
+        ew._validate_model_type_and_custom_weights()
 
         if not skip_validate and self._validate_inputs():
             return
-        tile_shape, halo = widgets._process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
-        ndim = self.ndim or None  # 0 means auto-detect
+
+        # Only forward tiling params when tiling is enabled (the tile/halo defaults are nonzero even
+        # when tiling is 'no'). 'ndim' comes from the image-dimensions dropdown (None = auto-detect).
+        if ew.tiling == "yes":
+            tile_shape, halo = widgets._process_tiling_inputs(ew.tile_x, ew.tile_y, ew.halo_x, ew.halo_y)
+        else:
+            tile_shape, halo = None, None
+        ndim = ew._ndim_override()
 
         common = dict(
-            model_type=self.model_type, tile_shape=tile_shape, halo=halo,
-            checkpoint_path=self.custom_weights, device=self.device,
+            model_type=ew.model_type, tile_shape=tile_shape, halo=halo,
+            checkpoint_path=ew.custom_weights, device=ew.device,
             viewer=self._viewer, return_viewer=True,
         )
 
         if self.task == "Segmentation":
             image_folder_annotator(
                 input_folder=self.folder, output_folder=self.output_folder, ndim=ndim,
-                pattern=self.pattern, embedding_path=self.embeddings_save_path, **common,
+                pattern=self.pattern, embedding_path=ew.embeddings_save_path, **common,
             )
             return
 
@@ -500,7 +566,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         if self.task == "Tracking":
             from .annotator_tracking import image_series_tracking_annotator
             image_series_tracking_annotator(
-                image_files, self.output_folder, embedding_path=self.embeddings_save_path, **common,
+                image_files, self.output_folder, embedding_path=ew.embeddings_save_path, **common,
             )
             return
 

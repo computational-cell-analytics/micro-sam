@@ -32,6 +32,57 @@ def test_launcher_task_selector_toggles_segmentation_folder(make_napari_viewer_p
     assert not widget._seg_folder_container.isVisibleTo(widget)
 
 
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_launcher_embedding_widget_swaps_per_task(make_napari_viewer_proxy):
+    from micro_sam.sam_annotator._widgets import EmbeddingWidget, ClassificationEmbeddingWidget
+
+    viewer = make_napari_viewer_proxy()
+    widget = ImageSeriesAnnotator(viewer)
+
+    # Segmentation: a plain embedding widget with the image-dimensions dropdown, no 'Advanced Models'.
+    assert isinstance(widget._embedding_widget, EmbeddingWidget)
+    assert not isinstance(widget._embedding_widget, ClassificationEmbeddingWidget)
+    assert widget._embedding_widget.ndim_choice
+    assert not hasattr(widget._embedding_widget, "advanced_checkbox")
+    # The image selector and the Compute button are hidden (the launcher works on a folder).
+    assert widget._embedding_widget.image_selection.native.isHidden()
+    assert widget._embedding_widget.run_button.isHidden()
+
+    # Classifier tasks: the classification embedding widget, which has the 'Advanced Models' selector.
+    widget.task_dropdown.setCurrentText("Object Classification")
+    assert isinstance(widget._embedding_widget, ClassificationEmbeddingWidget)
+    assert hasattr(widget._embedding_widget, "advanced_checkbox")
+
+    # Tracking: the SAM2-only timeseries widget (no image-dimensions dropdown, always 3d).
+    widget.task_dropdown.setCurrentText("Tracking")
+    assert isinstance(widget._embedding_widget, EmbeddingWidget)
+    assert widget._embedding_widget.sam2_only
+    assert not widget._embedding_widget.ndim_choice
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_launcher_model_dropdown_above_task(make_napari_viewer_proxy):
+    # The model dropdown is relocated out of the embedding widget into the model row (above Task), and
+    # re-relocated (pointing at the new widget's dropdown) whenever the task changes and the widget is
+    # rebuilt.
+    viewer = make_napari_viewer_proxy()
+    widget = ImageSeriesAnnotator(viewer)
+
+    def _row_widgets():
+        row = widget._model_row
+        return [row.itemAt(i).widget() for i in range(row.count()) if row.itemAt(i).widget() is not None]
+
+    assert widget._relocated_model_dropdown is widget._embedding_widget.model_family_dropdown
+    assert widget._relocated_model_dropdown in _row_widgets()
+
+    # After switching tasks (which rebuilds the embedding widget), the row tracks the new dropdown.
+    widget.task_dropdown.setCurrentText("Pixel Classification")
+    assert widget._relocated_model_dropdown is widget._embedding_widget.model_family_dropdown
+    assert widget._relocated_model_dropdown in _row_widgets()
+
+
 # Each task must dispatch to its series function. The launcher imports these lazily from their home
 # modules, so patching the module attribute intercepts the call.
 DISPATCH = [

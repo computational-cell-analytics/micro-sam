@@ -5,6 +5,7 @@ import tempfile
 import numpy as np
 import imageio.v3 as imageio
 import pytest
+from qtpy import QtWidgets
 from skimage.data import binary_blobs
 
 from micro_sam.v2.util import DEFAULT_MODEL
@@ -69,6 +70,14 @@ def test_image_series_navigation(make_napari_viewer_proxy):
 
         next_image = AnnotatorState().widgets["series_next"]
         prev_image = AnnotatorState().widgets["series_prev"]
+
+        # In a series session the launcher owns the embedding settings, so the docked annotator's
+        # embedding section is hidden (its wrapping group box is explicitly hidden).
+        embedding_widget = AnnotatorState().annotator._embedding_widget
+        frame = embedding_widget
+        while frame is not None and not isinstance(frame, QtWidgets.QGroupBox):
+            frame = frame.parentWidget()
+        assert frame is not None and frame.isHidden()
 
         def _result_path(index):
             return os.path.join(output_folder, os.path.splitext(os.path.basename(image_paths[index]))[0] + ".tif")

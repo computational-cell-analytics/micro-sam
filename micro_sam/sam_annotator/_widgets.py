@@ -338,6 +338,15 @@ class _WidgetBase(QtWidgets.QWidget):
             # Handle the case where the selected path is not a file
             print("Invalid file selected. Please try again.")
 
+    def _align_widths(self, widgets):
+        # Give a set of widgets a uniform (max) fixed width so rows line up symmetrically.
+        widgets = [w for w in widgets if w is not None]
+        if not widgets:
+            return
+        width = max(w.sizeHint().width() for w in widgets)
+        for w in widgets:
+            w.setFixedWidth(width)
+
     def _get_model_size_options(self):
         # The available model sizes depend on the selected family: the base SAM2 family supports all
         # sizes, while finetuned families may only be available for specific sizes (e.g. 'Microscopy'
@@ -1709,25 +1718,36 @@ class EmbeddingWidget(_WidgetBase):
 
         # Create UI for the save path.
         self.embeddings_save_path = None
-        self.embeddings_save_path_param, layout = self._add_path_param(
+        self.embeddings_save_path_param, save_layout = self._add_path_param(
             "embeddings_save_path",
             self.embeddings_save_path,
             "directory",
             title="embeddings save path:",
             tooltip=get_tooltip("embedding", "embeddings_save_path"),
         )
-        setting_values.layout().addLayout(layout)
+        setting_values.layout().addLayout(save_layout)
 
         # Create UI for the custom weights.
         self.custom_weights = None
-        self.custom_weights_param, layout = self._add_path_param(
+        self.custom_weights_param, weights_layout = self._add_path_param(
             "custom_weights",
             self.custom_weights,
             "file",
             title="custom weights path:",
             tooltip=get_tooltip("embedding", "custom_weights"),
         )
-        setting_values.layout().addLayout(layout)
+        setting_values.layout().addLayout(weights_layout)
+
+        # Make the two path rows symmetric: equal label widths and equal button widths, so their text
+        # boxes match too ('Select Directory' is wider than 'Select File', which would offset them).
+        self._align_widths([save_layout.itemAt(0).widget(), weights_layout.itemAt(0).widget()])
+        self._align_widths([
+            save_layout.itemAt(save_layout.count() - 1).widget(),
+            weights_layout.itemAt(weights_layout.count() - 1).widget(),
+        ])
+        # Trim the text boxes a touch so they do not run flush into the browse button.
+        for path_layout in (save_layout, weights_layout):
+            path_layout.insertSpacing(path_layout.count() - 1, 20)
 
         # Hook for subclasses to add extra model controls at the end of the settings (no-op by default).
         self._add_extra_model_settings(setting_values.layout())
@@ -1768,16 +1788,13 @@ class EmbeddingWidget(_WidgetBase):
         self.tiling = self.tiling_dropdown.currentText()
         self._tiling_widget.setVisible(self.tiling == "yes")
 
-    def _set_default_tiling(self, *args):
+    def _apply_default_tiling_for_shape(self, shape):
         # Enable tiling by default for large in-plane images, using the central v2 tiling defaults.
+        # 'shape' is the spatial image shape (channel axis already removed). Shared by the layer-based
+        # auto-tiling and the image series launcher (which judges from the first file in the folder).
         from micro_sam.v2.util import needs_default_tiling, DEFAULT_TILE_SHAPE, DEFAULT_HALO
 
-        image = self.image_selection.get_value()
-        if image is None:
-            return
-
-        shape = image.data.shape[:-1] if image.rgb else image.data.shape
-        if needs_default_tiling(shape):
+        if shape is not None and needs_default_tiling(shape):
             self.tile_x, self.tile_y = DEFAULT_TILE_SHAPE
             self.halo_x, self.halo_y = DEFAULT_HALO
             self.tile_x_param.setValue(self.tile_x)
@@ -1788,6 +1805,13 @@ class EmbeddingWidget(_WidgetBase):
 
         # Refresh which tiling fields are visible now that the image (and its dimensionality) changed.
         self._update_tiling_visibility()
+
+    def _set_default_tiling(self, *args):
+        image = self.image_selection.get_value()
+        if image is None:
+            return
+        shape = image.data.shape[:-1] if image.rgb else image.data.shape
+        self._apply_default_tiling_for_shape(shape)
 
     def _reset_inputs_to_defaults(self):
         """Reset the user inputs to their fresh-open defaults.

@@ -10,11 +10,80 @@ import os
 
 import napari
 import imageio.v3 as imageio
-from magicgui import magicgui
-from qtpy.QtCore import QTimer
+from magicgui.widgets import Container, PushButton
+from qtpy import QtWidgets
+from qtpy.QtCore import Qt, QTimer
 
 from . import _widgets as widgets
 from ._state import AnnotatorState
+
+
+def _hide_embedding_widget(annotator):
+    """Hide the docked annotator's embedding section during a series session.
+
+    The launcher's advanced settings are the single source of truth for the model / tiling / device /
+    embedding-path / ndim, and the harness computes embeddings itself in 'start'/'advance', so the
+    annotator's embedding panel (and its 'Compute Embeddings' button) is redundant here. The widget
+    object is kept alive (just hidden) because '_sync_embedding_widget' and the classifier spec read
+    from it. Standalone (non-series) annotators never call this, so their panel stays visible.
+    """
+    ew = getattr(annotator, "_embedding_widget", None)
+    if ew is None:
+        return
+    # Each annotator wraps its widgets in a QGroupBox; hide that wrapper so the whole section (frame
+    # included) disappears rather than leaving an empty box.
+    frame = ew
+    while frame is not None and not isinstance(frame, QtWidgets.QGroupBox):
+        frame = frame.parentWidget()
+    (frame or ew).hide()
+
+
+def _embed_navigation(viewer, annotator, nav_container):
+    """Add the navigation controls as a 'Series Navigation' section inside the docked annotator.
+
+    Falls back to a standalone dock widget if the annotator has no embeddable inner layout.
+    """
+    inner = getattr(annotator, "_annotator_widget", None)
+    if inner is None or inner.layout() is None:
+        viewer.window.add_dock_widget(nav_container, name="Series Navigation")
+        return
+    group = QtWidgets.QGroupBox("Series Navigation")
+    group_layout = QtWidgets.QVBoxLayout()
+    # Add a top margin so the group title is not cramped against the navigation buttons.
+    group_layout.setContentsMargins(8, 14, 8, 8)
+    group_layout.addWidget(nav_container.native)
+    group.setLayout(group_layout)
+    # Pin to the top of the annotator panel so it stays visible (the task annotators are tall and
+    # the navigation would otherwise sit below the fold at the bottom of the scroll area).
+    inner.layout().insertWidget(0, group)
+
+
+def _maximize_dock_vertically(viewer, annotator):
+    """Expand the docked annotator to fill the available vertical space when it opens.
+
+    napari sizes a freshly docked widget to its (small) size hint, leaving it shrunk; this makes the
+    annotator claim the full window height instead. Best-effort and guarded, so it is a no-op in
+    headless / test runs where the main window is not shown.
+    """
+    size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
+    annotator.setSizePolicy(size_policy.Preferred, size_policy.Expanding)
+
+    # Walk up to the QDockWidget that hosts the annotator.
+    dock = annotator
+    while dock is not None and not isinstance(dock, QtWidgets.QDockWidget):
+        dock = dock.parentWidget()
+    if dock is None:
+        return
+
+    def _resize():
+        try:
+            main_window = viewer.window._qt_window
+            main_window.resizeDocks([dock], [main_window.height()], Qt.Vertical)
+        except Exception:
+            pass
+
+    # Defer until the window is shown, otherwise the initial dock layout overrides the resize.
+    QTimer.singleShot(0, _resize)
 
 
 class SeriesAnnotatorTask:
@@ -132,6 +201,13 @@ def run_image_series(
     image = _load_pixels(current_index)
     annotator = task.start(viewer, images[current_index], image, embedding_paths[current_index], current_index)
 
+    # The launcher owns the model / embedding settings in a series session, so hide the annotator's
+    # (now redundant) embedding section to avoid duplicating those controls.
+    _hide_embedding_widget(annotator)
+
+    # Open the annotator maximized vertically instead of shrunk to its size hint.
+    _maximize_dock_vertically(viewer, annotator)
+
     def _go_to(index):
         nonlocal current_index
         current_index = index
@@ -143,8 +219,7 @@ def run_image_series(
         task.on_leave_item(viewer, images[current_index], current_index)
         task.save_item(viewer, images[current_index], current_index)
 
-    @magicgui(call_button="Next Image [N]")
-    def next_image(*args):
+    def _do_next(*args):
         # Prompt before advancing if nothing was produced for this item.
         if not task.has_unsaved_content(viewer):
             if widgets._generate_message("info", task.empty_item_message):
@@ -163,32 +238,44 @@ def run_image_series(
             return
         _go_to(index)
 
-    viewer.window.add_dock_widget(next_image)
-    # Track the navigation controls in the shared state alongside the other widgets, so they can be
-    # triggered programmatically (e.g. in tests) just like the annotator's own widgets.
-    AnnotatorState().widgets["series_next"] = next_image
+    def _do_prev(*args):
+        if current_index == 0:
+            widgets._generate_message("info", "This is already the first image.")
+            return
+        # Save the current item before stepping back so progress is not lost.
+        _save_current()
+        _go_to(current_index - 1)
+
+    # Build a single navigation container (Previous + Next) and embed it as a section inside the
+    # docked annotator, so the controls travel with the image series annotator instead of as
+    # separate floating dock widgets. The actions are also tracked in the shared state, so they can
+    # be triggered programmatically (e.g. in tests) just like the annotator's own widgets.
+    state = AnnotatorState()
+    next_button = PushButton(text="Next Image [N]")
+    next_button.clicked.connect(lambda: _do_next())
+    state.widgets["series_next"] = _do_next
+
+    nav_buttons = []
+    # Backward navigation is only offered for tasks that do not accumulate state forward.
+    if task.supports_previous:
+        prev_button = PushButton(text="Previous Image [P]")
+        prev_button.clicked.connect(lambda: _do_prev())
+        state.widgets["series_prev"] = _do_prev
+        nav_buttons.append(prev_button)
+    nav_buttons.append(next_button)
+
+    nav_container = Container(layout="horizontal", widgets=nav_buttons, labels=False)
+    nav_container.native.layout().setContentsMargins(0, 0, 0, 0)
+    _embed_navigation(viewer, annotator, nav_container)
 
     @viewer.bind_key("n", overwrite=True)
     def _next_image(viewer):
-        next_image(viewer)
+        _do_next()
 
-    # Backward navigation is only offered for tasks that do not accumulate state forward.
     if task.supports_previous:
-        @magicgui(call_button="Previous Image [P]")
-        def prev_image(*args):
-            if current_index == 0:
-                widgets._generate_message("info", "This is already the first image.")
-                return
-            # Save the current item before stepping back so progress is not lost.
-            _save_current()
-            _go_to(current_index - 1)
-
-        viewer.window.add_dock_widget(prev_image)
-        AnnotatorState().widgets["series_prev"] = prev_image
-
         @viewer.bind_key("p", overwrite=True)
         def _prev_image(viewer):
-            prev_image(viewer)
+            _do_prev()
 
     if return_viewer:
         return viewer
