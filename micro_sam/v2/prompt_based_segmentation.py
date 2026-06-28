@@ -568,7 +568,12 @@ class PromptableSegmentation3D:
                 labels=np.array([curr_point_label]),
             )
 
-    def add_box_prompts(self, frame_ids: Union[int, List[int]], boxes: Optional[np.ndarray] = None):
+    def add_box_prompts(
+        self,
+        frame_ids: Union[int, List[int]],
+        boxes: Optional[np.ndarray] = None,
+        object_id: Optional[Union[int, List[int]]] = None,
+    ):
         # Check what's been provided by the user.
         have_boxes = boxes is not None and len(boxes) > 0
 
@@ -576,8 +581,17 @@ class PromptableSegmentation3D:
         if not have_boxes:
             return
 
-        if not isinstance(frame_ids, List):
+        if not isinstance(frame_ids, list):
             frame_ids = [frame_ids]
+        # A single frame id applies to every box (the annotator passes one frame with all its boxes).
+        if len(frame_ids) == 1:
+            frame_ids = frame_ids * len(boxes)
+
+        # One object id per box. Default to a single object (id 1) for non-batched segmentation.
+        if object_id is None:
+            object_id = [1] * len(boxes)
+        elif not isinstance(object_id, list):
+            object_id = [object_id] * len(boxes)
 
         # Prepare the box prompts.
         # TODO: Validate based on running prompts.
@@ -585,11 +599,11 @@ class PromptableSegmentation3D:
         boxes = np.array([_process_box(b, self.volume.shape[-2:]) for b in boxes])
 
         # Add box prompts in a particular frame.
-        for curr_frame_id, curr_box in zip(frame_ids, boxes):
+        for curr_frame_id, curr_box, curr_obj_id in zip(frame_ids, boxes, object_id):
             self.predictor.add_new_points_or_box(
                 inference_state=self.inference_state,
                 frame_idx=int(curr_frame_id),
-                obj_id=1,  # NOTE: Setting a fixed object id, assuming only one object is being segmented.
+                obj_id=int(curr_obj_id),
                 clear_old_points=clear_old_points,  # Whether to make use of old points in memory.
                 box=np.array([curr_box]),
             )
@@ -926,18 +940,27 @@ class TiledPromptableSegmentation3D:
                 object_id=object_id, multiple_objects=multiple_objects,
             )
 
-    def add_box_prompts(self, frame_ids, boxes=None):
+    def add_box_prompts(self, frame_ids, boxes=None, object_id=None):
         """Add box prompts (y0, x0, y1, x1). A box spanning several tiles is added, clipped, to each."""
         if boxes is None or len(boxes) == 0:
             return
-        tile_boxes = {}
-        for box in boxes:
+        # One object id per box; default to a single object (id 1) when not batched.
+        if object_id is None:
+            object_id = [1] * len(boxes)
+        elif not isinstance(object_id, list):
+            object_id = [object_id] * len(boxes)
+        # Group the (clipped) boxes and their object ids by the tile each falls in.
+        tile_boxes, tile_ids = {}, {}
+        for box, obj_id in zip(boxes, object_id):
             for tid, clipped in _box_to_tiles(self.tiling, self.halo, np.asarray(box)).items():
                 tile_boxes.setdefault(tid, []).append(clipped)
+                tile_ids.setdefault(tid, []).append(obj_id)
         for tile_id, tboxes in tile_boxes.items():
             y0, x0 = self._outer_offset(tile_id)
             local_boxes = [b - np.array([y0, x0, y0, x0]) for b in tboxes]
-            self._get_segmenter(tile_id).add_box_prompts(frame_ids=frame_ids, boxes=np.array(local_boxes))
+            self._get_segmenter(tile_id).add_box_prompts(
+                frame_ids=frame_ids, boxes=np.array(local_boxes), object_id=tile_ids[tile_id],
+            )
 
     def add_mask_prompts(self, frame_ids, masks=None):
         raise NotImplementedError

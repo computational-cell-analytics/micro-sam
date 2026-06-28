@@ -2212,7 +2212,7 @@ class UnifiedSegmentWidget(_WidgetBase):
         self.volume_checkbox.stateChanged.connect(self._on_volume_mode_changed)
         self.layout().addWidget(self.volume_checkbox)
 
-        # 2. Add batched checkbox (initially hidden, shown only for SAM2 + volume mode)
+        # 2. Add batched checkbox (initially hidden, shown for SAM2 when not tiled)
         self.batched = False
         self.batched_checkbox = self._add_boolean_param(
             "batched",
@@ -2311,13 +2311,13 @@ class UnifiedSegmentWidget(_WidgetBase):
         self._update_batched_visibility()
 
     def _update_batched_visibility(self):
-        """Show/hide batched checkbox based on volume mode, SAM version and tiling."""
+        """Show/hide batched checkbox based on SAM version and tiling."""
         state = AnnotatorState()
         is_sam2 = state.is_sam2 if state.is_sam2 is not None else False
 
-        # Only show batched if: volume mode enabled AND SAM2 model AND embeddings are not tiled
-        # (batched prompting is unsupported with tiling).
-        should_show = self.apply_to_volume and is_sam2 and not _embeddings_are_tiled(state)
+        # Show batched for SAM2 models when the embeddings are not tiled (batched prompting is
+        # unsupported with tiling). Available in both slice/frame and volume/all-frames mode.
+        should_show = is_sam2 and not _embeddings_are_tiled(state)
         if not should_show and getattr(self, "batched", False):
             self.batched_checkbox.setChecked(False)
         self.batched_checkbox.setVisible(should_show)
@@ -2591,41 +2591,35 @@ class UnifiedSegmentWidget(_WidgetBase):
                     )
                     is_batched = False
 
-                # Let's do points first.
-                for curr_z_values_point in z_values_points:
-                    # Extract the point prompts from the points layer first. A slice whose only
-                    # prompt is a single negative point is a 'stop' annotation; skip it here.
-                    prompts = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z_values_point)
+                # Object-id counter for batched multi-object segmentation: each positive point and
+                # each box becomes its own object, so points and boxes draw distinct ids from one
+                # shared counter. In non-batched mode every prompt feeds a single object (id 1).
+                object_id = 0
+
+                # Add the point prompts first. Iterate unique frames so each point is added once.
+                for curr_z in np.unique(z_values_points):
+                    # A slice whose only prompt is a single negative point is a 'stop' annotation; skip it.
+                    prompts = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z)
                     if prompts is None:
                         continue
                     points, labels = prompts
-
-                    # Add prompts one after the other.
-                    [
+                    for curr_point, curr_label in zip(points, labels):
+                        object_id += 1
                         state.interactive_segmenter.add_point_prompts(
-                            frame_ids=curr_z_values_point,
+                            frame_ids=curr_z,
                             points=np.array([curr_point]),
                             point_labels=np.array([curr_label]),
-                            object_id=i if is_batched else None,
+                            object_id=object_id if is_batched else None,
                         )
-                        for i, (curr_point, curr_label) in enumerate(
-                            zip(points, labels), start=1
-                        )
-                    ]
 
-                # Next, we add box prompts.
-                for curr_z_values_box in z_values_boxes:
-                    # Extract the box prompts from the shapes layer first.
-                    boxes, _ = vutil.shape_layer_to_prompts(
-                        layer=box_prompts,
-                        shape=state.image_shape,
-                        i=curr_z_values_box,
-                    )
-
-                    # Add prompts one after the other.
-                    state.interactive_segmenter.add_box_prompts(
-                        frame_ids=curr_z_values_box, boxes=boxes
-                    )
+                # Next, add the box prompts, continuing the counter so boxes keep ids distinct from points.
+                for curr_z in np.unique(z_values_boxes):
+                    boxes, _ = vutil.shape_layer_to_prompts(layer=box_prompts, shape=state.image_shape, i=curr_z)
+                    if not boxes:
+                        continue
+                    box_ids = list(range(object_id + 1, object_id + 1 + len(boxes))) if is_batched else None
+                    object_id += len(boxes)
+                    state.interactive_segmenter.add_box_prompts(frame_ids=curr_z, boxes=boxes, object_id=box_ids)
 
                 # Propagate the prompts throughout the volume and combine the propagated segmentations.
                 # Report per-slice progress so the user can see the propagation advancing.
