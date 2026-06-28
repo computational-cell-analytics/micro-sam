@@ -950,9 +950,15 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # the size options are rebuilt when it changes.
         family, size = spec.get("model_family"), spec.get("model_size")
         if ew is not None and family is not None:
-            ew.model_family_dropdown.setCurrentText(family)
-            if size is not None:
-                ew.model_size_dropdown.setCurrentText(size)
+            # The classification widget routes the family to the primary or advanced selector; other
+            # widgets fall back to setting the family dropdown directly.
+            setter = getattr(ew, "set_model_family_size", None)
+            if setter is not None:
+                setter(family, size)
+            else:
+                ew.model_family_dropdown.setCurrentText(family)
+                if size is not None:
+                    ew.model_size_dropdown.setCurrentText(size)
 
         # Tiling, tile/halo params and custom weights via the shared sync helper (these field names match).
         # 'ew.model_type' may be unset until embeddings are computed, so fall back via getattr.

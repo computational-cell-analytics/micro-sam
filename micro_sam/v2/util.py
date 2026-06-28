@@ -262,34 +262,44 @@ def get_sam2_model(
 
 
 def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
+    """Validate saved embeddings against the requested configuration.
+
+    Returns True if the saved embeddings are stale and should be recomputed (the model or tiling
+    configuration changed), False if they can be loaded. Raises if they belong to different image
+    data (data signature mismatch).
+    """
     # We may have an empty zarr file that was already created to save the embeddings in.
     # In this case the embeddings will be computed and we don't need to perform any checks.
     if "input_size" not in f.attrs:
-        return
+        return False
 
     # Creates all the metadta that is stored along with the embeddings.
     # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam.v2`?
     from micro_sam.util import _get_embedding_signature
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
 
+    stale = False
     for key, val in signature.items():
-        # Check whether the key is missing from the attrs or if the value is not matching.
-        if key not in f.attrs or f.attrs[key] != val:
-            # These keys were recently added, so we don't want to fail yet if they don't
-            # match in order to not invalidate previous embedding files.
-            # Instead we just raise a warning. (For the version we probably also don't want to fail
-            # i the future since it should not invalidate the embeddings).
-            if key in ("micro_sam_version", "model_hash", "model_name"):
-                warnings.warn(
-                    f"The signature for {key} in embeddings file {save_path} has a mismatch: "
-                    f"{f.attrs.get(key)} != {val}. This key was recently added, so your embeddings are likely correct. "
-                    "But please recompute them if model predictions don't look as expected."
-                )
-            else:
-                raise RuntimeError(
-                    f"Embeddings file {save_path} is invalid due to mismatch in {key}: "
-                    f"{f.attrs.get(key)} != {val}. Please recompute embeddings in a new file."
-                )
+        # A key absent from an older file should not invalidate it (it predates that key).
+        if key not in f.attrs or f.attrs[key] == val:
+            continue
+        # Different image data: surface as an error rather than silently overwriting it.
+        if key == "data_signature":
+            raise RuntimeError(
+                f"Embeddings file {save_path} is invalid due to mismatch in {key}: "
+                f"{f.attrs.get(key)} != {val}. Please recompute embeddings in a new file."
+            )
+        # A version bump alone does not invalidate the embeddings.
+        if key == "micro_sam_version":
+            warnings.warn(
+                f"The signature for {key} in embeddings file {save_path} has a mismatch: "
+                f"{f.attrs.get(key)} != {val}. This key was recently added, so your embeddings are likely correct. "
+                "But please recompute them if model predictions don't look as expected."
+            )
+            continue
+        # Model or tiling changed: the saved embeddings are stale and must be recomputed.
+        stale = True
+    return stale
 
 
 def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
@@ -696,7 +706,9 @@ def precompute_image_embeddings(
     # check tha tthe saved embeedidng in there match the parameters of the function call.abs
     elif os.path.exists(save_path):
         f = zarr.open(save_path, mode="a")
-        _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo)
+        if _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
+            # Stale embeddings (model or tiling changed): truncate and recompute, overwriting them.
+            f = zarr.open(save_path, mode="w")
 
     # We have a save path and it does not exist yet. Create the zarr file to which the
     # embeddings will then be saved.
