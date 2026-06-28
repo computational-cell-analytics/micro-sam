@@ -1543,9 +1543,10 @@ class EmbeddingWidget(_WidgetBase):
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
-        image_layer_widget = QtWidgets.QLabel("Image Layer:")
-        # image_layer_widget.setToolTip(get_tooltip("embedding", "image")) #  this adds tooltip to label
-        image_section.addWidget(image_layer_widget)
+        layer_label = "Timeseries Layer:" if self.is_timeseries else "Image Layer:"
+        self.image_layer_label = QtWidgets.QLabel(layer_label)
+        # self.image_layer_label.setToolTip(get_tooltip("embedding", "image")) #  this adds tooltip to label
+        image_section.addWidget(self.image_layer_label)
 
         # Setting a napari layer in QT, see:
         # https://github.com/pyapp-kit/magicgui/blob/main/docs/examples/napari/napari_combine_qt.py
