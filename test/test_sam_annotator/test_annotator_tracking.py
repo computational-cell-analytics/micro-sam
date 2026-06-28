@@ -7,8 +7,16 @@ from skimage.data import binary_blobs
 
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator import annotator_tracking
-from micro_sam.sam_annotator._widgets import AutoSegmentV1Widget, AutoSegmentWidget, AutoTrackWidget
-from micro_sam.sam_annotator.annotator_tracking import _validate_tracking_model_type
+from micro_sam.sam_annotator._widgets import (
+    AutoSegmentV1Widget,
+    AutoSegmentWidget,
+    AutoTrackWidget,
+    EmbeddingWidget,
+)
+from micro_sam.sam_annotator.annotator_tracking import (
+    AnnotatorTracking,
+    _validate_tracking_model_type,
+)
 from micro_sam._test_util import check_layer_initialization
 
 
@@ -31,6 +39,16 @@ def test_annotator_tracking(make_napari_viewer_proxy):
 
     check_layer_initialization(viewer, image.shape)
     viewer.close()  # must close the viewer at the end of tests
+
+
+def test_tracking_uses_timeseries_layer_label(qtbot):
+    tracking_widget = AnnotatorTracking._create_embedding_widget(None)
+    image_widget = EmbeddingWidget()
+    qtbot.addWidget(tracking_widget)
+    qtbot.addWidget(image_widget)
+
+    assert tracking_widget.image_layer_label.text() == "Timeseries Layer:"
+    assert image_widget.image_layer_label.text() == "Image Layer:"
 
 
 def test_division_frame_detection():

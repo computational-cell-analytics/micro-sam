@@ -582,14 +582,14 @@ class _ClassifierBase(QtWidgets.QScrollArea):
     #
 
     def _create_train_widget(self):
-        # The 'Train and predict' button is kept at the top level, outside the settings dropdown.
-        # A single 'Apply to Volume' checkbox governs both 'Train and predict' and 'Clear Annotations'
+        # The 'Train and Predict' button is kept at the top level, outside the settings dropdown.
+        # A single 'Apply to Volume' checkbox governs both 'Train and Predict' and 'Clear Annotations'
         # (shown only for 3d data, see '_update_image'): when checked they act on the whole volume,
         # when unchecked (the default) only on the current slice. Tools that do not support it
         # ('supports_apply_to_volume' False) omit the checkbox and always run over the full image/volume.
-        train_button = PushButton(text="Train and predict [Shift + T]")
+        train_button = PushButton(text="Train and Predict [Shift + T]")
         train_button.native.setToolTip(get_tooltip("classification", "train_button"))
-        clear_button = PushButton(text="Clear Annotations [C]")
+        clear_button = PushButton(text="Clear Annotations [Shift + C]")
         clear_button.native.setToolTip(get_tooltip("classification", "clear_button"))
 
         apply_to_volume = None
@@ -607,7 +607,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         def _train_and_predict(event=None):
             self._run_train_and_predict(_volume_value())
 
-        @self._viewer.bind_key("c", overwrite=True)
+        @self._viewer.bind_key("Shift-C", overwrite=True)
         def _clear(event=None):
             self._clear_annotations(_volume_value())
 
