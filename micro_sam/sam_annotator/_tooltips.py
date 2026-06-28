@@ -84,6 +84,8 @@ tooltips = {
         "output_folder": "Select the folder for saving the segmentation results.",
         "pattern": "Select a pattern for selecting files. E.g. '*.tif' to only select tif files. By default all files in the input folder are selected.",  # noqa
         "ndim": "The spatial dimensionality of the data.",
+        "task": "The annotation task to run over the series: interactive segmentation, tracking (each file is a timeseries), or object / pixel classification.",  # noqa
+        "segmentation_folder": "Object classification only: a folder with one segmentation per image to classify. Leave empty to produce the segmentations in the tool.",  # noqa
     },
     "training": {
         "checkpoint": "Select a checkpoint (saved model) to resume training from.",

@@ -1,7 +1,4 @@
-import os
-from joblib import dump
 from multiprocessing import cpu_count
-from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
 import imageio.v3 as imageio
@@ -9,7 +6,6 @@ import napari
 import numpy as np
 import torch
 
-from magicgui import magicgui
 from magicgui.widgets import ComboBox
 from qtpy import QtWidgets
 
@@ -23,6 +19,8 @@ from .. import util
 from ..v2.util import DEFAULT_MODEL
 from ..object_classification import compute_object_features, project_prediction_to_segmentation
 from ._annotator import _ClassifierBase
+from ._series import run_image_series
+from ._classification_series import ClassificationSeriesTask
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from . import _widgets as widgets
@@ -281,6 +279,34 @@ def object_classifier(
     napari.run()
 
 
+class ObjectClassificationSeriesTask(ClassificationSeriesTask):
+    """Series task for the object classifier: per-item segmentation layer + projected prediction."""
+
+    dock_name = "(Object Classifier) Segment Anything for Microscopy"
+    classifier_class = ObjectClassifier
+    features_attr = "object_features"
+    aux_attr = "seg_ids"
+    rf_attr = "object_rf"
+
+    def __init__(self, *, segmentations, **kwargs):
+        super().__init__(**kwargs)
+        self.segmentations = segmentations
+
+    def _set_layers(self, viewer, index):
+        # Load (or carry over) the per-item segmentation. When none is provided, start from an empty
+        # segmentation the user can fill in-tool (the 'produce' path).
+        seg = None if self.segmentations is None else self.segmentations[index]
+        if seg is not None and not isinstance(seg, np.ndarray):
+            seg = imageio.imread(seg)
+        if "segmentation" in viewer.layers:
+            if seg is not None:
+                viewer.layers["segmentation"].data = seg
+        else:
+            if seg is None:
+                seg = np.zeros(tuple(AnnotatorState().image_shape), dtype="uint32")
+            viewer.add_labels(seg, name="segmentation")
+
+
 def image_series_object_classifier(
     images: List[np.ndarray],
     segmentations: List[np.ndarray],
@@ -292,19 +318,21 @@ def image_series_object_classifier(
     checkpoint_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
     ndim: Optional[int] = None,
-) -> None:
+    viewer: Optional["napari.viewer.Viewer"] = None,
+    return_viewer: bool = False,
+    skip_done: bool = False,
+) -> Optional["napari.viewer.Viewer"]:
     """Start the object classifier for a list of images and segmentations.
 
-    This function will save the all features and labels for annotated objects,
-    to enable training a random forest on multiple images.
+    This function saves the features and labels for annotated objects across the series, so a random
+    forest can be trained on multiple images, plus the per-image prediction and the trained classifier.
 
     Args:
         images: The input images.
-        segmentations: The input segmentations.
-        output_folder: The folder where segmentation results, trained random forest
-            and the features, labels aggregated during training will be saved.
-        embedding_paths: Filepaths where to save the embeddings
-            or the precompted image embeddings computed by `precompute_image_embeddings`.
+        segmentations: The input segmentations, one per image.
+        output_folder: The folder where predictions, the trained random forest and the accumulated
+            features/labels are saved.
+        embedding_paths: Filepaths where to save/load the embeddings, one per image.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         tile_shape: Shape of tiles for tiled embedding prediction.
@@ -314,107 +342,28 @@ def image_series_object_classifier(
         device: The computational device to use for the SAM model.
             By default, automatically chooses the best available device.
         ndim: The dimensionality of the data. If not given will be derived from the data.
+        viewer: The viewer to which the functionality should be added.
+        return_viewer: Whether to return the napari viewer instead of starting the event loop.
+        skip_done: Whether to skip images whose prediction already exists in `output_folder`.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
     """
-    # TODO precompute the embeddings if not computed, can re-use 'precompute' from image series annotator.
-    # TODO support file paths as inputs
-    # TODO option to skip segmented
-    if len(images) != len(segmentations):
+    if segmentations is not None and len(images) != len(segmentations):
         raise ValueError(
             f"Expect the same number of images and segmentations, got {len(images)}, {len(segmentations)}."
         )
 
-    end_msg = "You have annotated the last image. Do you wish to close napari?"
+    have_inputs_as_arrays = isinstance(images[0], np.ndarray)
+    if ndim is None:
+        first = images[0] if have_inputs_as_arrays else imageio.imread(images[0])
+        ndim = first.ndim - 1 if first.shape[-1] == 3 and first.ndim in (3, 4) else first.ndim
 
-    # Initialize the object classifier on the fist image / segmentation.
-    viewer = object_classifier(
-        image=images[0], segmentation=segmentations[0],
-        embedding_path=None if embedding_paths is None else embedding_paths[0],
-        model_type=model_type, tile_shape=tile_shape, halo=halo,
-        return_viewer=True, checkpoint_path=checkpoint_path,
-        device=device, ndim=ndim,
+    task = ObjectClassificationSeriesTask(
+        segmentations=segmentations, ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,
+        tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
     )
-
-    os.makedirs(output_folder, exist_ok=True)
-    next_image_id = 0
-
-    def _save_prediction(image, pred, image_id):
-        fname = f"{Path(image).stem}_prediction.tif" if isinstance(image, str) else f"prediction_{image_id}.tif"
-        save_path = os.path.join(output_folder, fname)
-        imageio.imwrite(save_path, pred, compression="zlib")
-
-    # TODO handle cases where rf for the image was not trained, raise a message, enable contnuing
-    # Add functionality for going to the next image.
-    @magicgui(call_button="Next Image [N]")
-    def next_image(*args):
-        nonlocal next_image_id
-
-        # Get the state and the current segmentation (note that next image id has not yet been increased)
-        state = AnnotatorState()
-        segmentation = segmentations[next_image_id]
-
-        # Keep track of the previous features and labels.
-        labels = _accumulate_labels(segmentation, viewer.layers["annotations"].data)
-        valid = labels != 0
-        if valid.sum() > 0:
-            features, labels = state.object_features[valid], labels[valid]
-            if state.previous_features is None:
-                state.previous_features, state.previous_labels = features, labels
-            else:
-                state.previous_features = np.concatenate([state.previous_features, features], axis=0)
-                state.previous_labels = np.concatenate([state.previous_labels, labels], axis=0)
-            # Save the accumulated features and labels.
-            np.save(os.path.join(output_folder, "features.npy"), state.previous_features)
-            np.save(os.path.join(output_folder, "labels.npy"), state.previous_labels)
-
-        # Save the current prediction and RF (with its specs, matching the single-image export).
-        _save_prediction(images[next_image_id], viewer.layers["prediction"].data, next_image_id)
-        dump(
-            {"rf": state.object_rf, "model_spec": state.annotator._classifier_spec(state.object_rf)},
-            os.path.join(output_folder, "rf.joblib"),
-        )
-
-        # Go to the next image.
-        next_image_id += 1
-
-        # Check if we are done.
-        if next_image_id == len(images):
-            # Inform the user via dialog.
-            abort = widgets._generate_message("info", end_msg)
-            if not abort:
-                viewer.close()
-            return
-
-        # Get the next image, segmentation and embedding_path.
-        image = images[next_image_id]
-        segmentation = segmentations[next_image_id]
-        embedding_path = None if embedding_paths is None else embedding_paths[next_image_id]
-
-        # Set the new image in the viewer, state and annotator.
-        viewer.layers["image"].data = image
-        viewer.layers["segmentation"].data = segmentation
-
-        state.initialize_predictor(
-            image, model_type=model_type, ndim=ndim,
-            save_path=embedding_path,
-            tile_shape=tile_shape, halo=halo,
-            predictor=state.predictor, device=device,
-        )
-        state.image_shape = image.shape if image.ndim == ndim else image.shape[:-1]
-        state.ndim = ndim
-        state.annotator._update_image()
-
-        # Clear the object features and seg-ids from the state.
-        state.object_features = None
-        state.seg_ids = None
-
-    viewer.window.add_dock_widget(next_image)
-
-    @viewer.bind_key("n", overwrite=True)
-    def _next_image(viewer):
-        next_image(viewer)
-
-    napari.run()
-
-
-# TODO: folder annotator
-# TODO: main function
+    return run_image_series(
+        images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
+        viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
+    )

@@ -2,12 +2,14 @@ import os
 import platform
 import tempfile
 
+import numpy as np
 import imageio.v3 as imageio
 import pytest
 from skimage.data import binary_blobs
 
-import micro_sam.util as util
+from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator import image_series_annotator, image_folder_annotator
+from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam._test_util import check_layer_initialization
 
 
@@ -27,7 +29,7 @@ def test_image_series_annotator(make_napari_viewer_proxy):
     """Integration test for `image_series_annotator`.
     """
     n_images = 3
-    model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
+    model_type = DEFAULT_MODEL
 
     with tempfile.TemporaryDirectory() as tmpdir:
         image_paths = _create_images(tmpdir, n_images)
@@ -49,11 +51,58 @@ def test_image_series_annotator(make_napari_viewer_proxy):
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_image_series_navigation(make_napari_viewer_proxy):
+    """Drive the Next/Previous navigation harness: forward saves and advances, backward saves,
+    steps back and reloads the previously saved result.
+    """
+    n_images = 3
+    model_type = DEFAULT_MODEL
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        image_paths = _create_images(tmpdir, n_images)
+        output_folder = os.path.join(tmpdir, "segmentation_results")
+
+        viewer = make_napari_viewer_proxy()
+        viewer = image_series_annotator(
+            image_paths, output_folder, model_type=model_type, viewer=viewer, return_viewer=True,
+        )
+
+        next_image = AnnotatorState().widgets["series_next"]
+        prev_image = AnnotatorState().widgets["series_prev"]
+
+        def _result_path(index):
+            return os.path.join(output_folder, os.path.splitext(os.path.basename(image_paths[index]))[0] + ".tif")
+
+        # Item 0: paint a segmentation and advance. It should be saved and the next image loaded.
+        seg0 = np.full((512, 512), 1, dtype="uint32")
+        viewer.layers["committed_objects"].data = seg0
+        next_image()
+        assert os.path.exists(_result_path(0))
+        np.testing.assert_array_equal(imageio.imread(_result_path(0)), seg0)
+        # The freshly loaded item starts from a cleared committed layer.
+        assert viewer.layers["committed_objects"].data.sum() == 0
+
+        # Item 1: paint a distinct segmentation and advance.
+        seg1 = np.full((512, 512), 5, dtype="uint32")
+        viewer.layers["committed_objects"].data = seg1
+        next_image()
+        assert os.path.exists(_result_path(1))
+        np.testing.assert_array_equal(imageio.imread(_result_path(1)), seg1)
+
+        # Step back from item 2 to item 1: the previously saved segmentation should be reloaded.
+        prev_image()
+        np.testing.assert_array_equal(viewer.layers["committed_objects"].data, seg1)
+
+        viewer.close()  # must close the viewer at the end of tests
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_image_folder_annotator(make_napari_viewer_proxy):
     """Integration test for `image_folder_annotator`.
     """
     n_images = 3
-    model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
+    model_type = DEFAULT_MODEL
 
     with tempfile.TemporaryDirectory() as tmpdir:
         _create_images(tmpdir, n_images)

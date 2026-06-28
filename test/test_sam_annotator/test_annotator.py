@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from skimage.data import binary_blobs
 
-import micro_sam.util as util
+from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator.annotator import annotator, detect_ndim, detect_ndim_from_viewer, Annotator
 from micro_sam._test_util import check_layer_initialization
 
@@ -100,7 +100,7 @@ class TestAnnotatorClass:
 
     def test_annotator_2d(self, make_napari_viewer_proxy):
         image = binary_blobs(512)
-        model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
+        model_type = DEFAULT_MODEL
 
         viewer = make_napari_viewer_proxy()
         # test generating image embedding, then adding micro-sam dock widgets to the GUI
@@ -145,7 +145,7 @@ class TestAnnotatorClass:
 
     def test_annotator_3d(self, make_napari_viewer_proxy):
         image = np.stack(4 * [binary_blobs(512)])
-        model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
+        model_type = DEFAULT_MODEL
 
         viewer = make_napari_viewer_proxy()
         # test generating image embedding, then adding micro-sam dock widgets to the GUI

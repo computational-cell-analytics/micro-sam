@@ -10,20 +10,22 @@ import imageio.v3 as imageio
 import torch
 
 import napari
-from magicgui import magicgui
 from qtpy import QtWidgets
-from qtpy.QtCore import QTimer
 
 from .. import util
 from ..v1.util import get_sam_model, get_model_names
 from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
+from ._series import SeriesAnnotatorTask, run_image_series
 from ._tooltips import get_tooltip
 from ._state import AnnotatorState
 from .annotator import Annotator, detect_ndim
 from .util import _sync_embedding_widget
 from ..v1.instance_segmentation import get_decoder
 from ..precompute_state import _precompute_state_for_files
+
+# The tasks the unified image series annotator can run over a series.
+TASKS = ["Segmentation", "Tracking", "Object Classification", "Pixel Classification"]
 
 
 def _precompute(
@@ -81,50 +83,118 @@ def _get_input_shape(image, ndim):
     return image_shape
 
 
-def _initialize_annotator(
-    viewer, image, image_embedding_path,
-    model_type, halo, tile_shape, predictor, decoder, ndim,
-    precompute_amg_state, checkpoint_path, device, embedding_path,
-    segmentation_path, initial_seg,
-):
-    if viewer is None:
-        viewer = napari.Viewer()
-    viewer.add_image(image, name="image")
+class SegmentationSeriesTask(SeriesAnnotatorTask):
+    """Series task for 2d/3d interactive segmentation (the original image series annotator)."""
 
-    state = AnnotatorState()
-    state.initialize_predictor(
-        image, model_type=model_type, save_path=image_embedding_path, halo=halo, tile_shape=tile_shape,
-        predictor=predictor, decoder=decoder,
-        ndim=ndim, precompute_amg_state=precompute_amg_state,
-        checkpoint_path=checkpoint_path, device=device, skip_load=False, use_cli=True,
-    )
-    state.image_shape = _get_input_shape(image, ndim)
-    # Establish the scale for this image (matching the segmentation annotator) so the layers do not
-    # inherit a stale 'image_scale' of a different dimensionality from a previous image / session.
-    state.image_scale = tuple(viewer.layers["image"].scale)
+    empty_item_message = "Nothing is segmented yet. Do you wish to continue to the next image?"
 
-    annotator = Annotator(viewer, ndim=ndim, reset_state=False)
+    def __init__(
+        self, *, ndim, model_type, embedding_path, tile_shape, halo,
+        precompute_amg_state, checkpoint_path, device, prefer_decoder, initial_segmentations=None,
+    ):
+        self.ndim = ndim
+        self.model_type = model_type
+        self.embedding_path = embedding_path
+        self.tile_shape = tile_shape
+        self.halo = halo
+        self.precompute_amg_state = precompute_amg_state
+        self.checkpoint_path = checkpoint_path
+        self.device = device
+        self.prefer_decoder = prefer_decoder
+        self.initial_segmentations = initial_segmentations
+        self.predictor = None
+        self.decoder = None
 
-    if os.path.exists(segmentation_path):
-        segmentation_result = imageio.imread(segmentation_path)
-    else:
-        segmentation_result = None
-    if initial_seg is not None and segmentation_result is None:
-        segmentation_result = initial_seg if isinstance(initial_seg, np.ndarray) else imageio.imread(initial_seg)
-    annotator._update_image(segmentation_result=segmentation_result)
+    def result_filename(self, entry, index):
+        if self.have_inputs_as_arrays:
+            return f"seg_{index:05}.tif"
+        return os.path.splitext(os.path.basename(entry))[0] + ".tif"
 
-    # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator)
-    _sync_embedding_widget(
-        widget=state.widgets["embeddings"],
-        model_type=model_type if checkpoint_path is None else state.predictor.model_type,
-        save_path=embedding_path,
-        checkpoint_path=checkpoint_path,
-        device=device,
-        tile_shape=tile_shape,
-        halo=halo,
-    )
-    return viewer, annotator
+    def precompute(self, images):
+        # The v1 precompute path only handles SAM1 models. SAM2 models are loaded lazily per item via
+        # 'initialize_predictor' (which routes SAM1/SAM2 correctly), computing embeddings on the fly
+        # or into a per-item zarr when an embedding folder is given.
+        if self.model_type.startswith("h"):
+            if self.embedding_path is None:
+                return [None] * len(images)
+            os.makedirs(self.embedding_path, exist_ok=True)
+            if self.have_inputs_as_arrays:
+                return [os.path.join(self.embedding_path, f"embedding_{i:05}.zarr") for i in range(len(images))]
+            return [
+                os.path.join(self.embedding_path, os.path.splitext(os.path.basename(p))[0] + ".zarr") for p in images
+            ]
+
+        self.predictor, self.decoder, embedding_paths = _precompute(
+            images, self.model_type, self.embedding_path, self.tile_shape, self.halo,
+            self.precompute_amg_state, checkpoint_path=self.checkpoint_path, device=self.device,
+            ndim=self.ndim, prefer_decoder=self.prefer_decoder,
+        )
+        return embedding_paths
+
+    def _resolve_initial_result(self, entry, index):
+        # Load an existing saved result if present, otherwise an initial segmentation if provided.
+        save_path = os.path.join(self.output_folder, self.result_filename(entry, index))
+        if os.path.exists(save_path):
+            return imageio.imread(save_path)
+        if self.initial_segmentations is not None:
+            initial = self.initial_segmentations[index]
+            return initial if isinstance(initial, np.ndarray) else imageio.imread(initial)
+        return None
+
+    def _init_predictor(self, viewer, image, embedding_path):
+        state = AnnotatorState()
+        # Reuse the already-loaded model on later items (and for SAM1, which preloads it in 'precompute');
+        # only the first SAM2 item actually loads the model and its decoder.
+        if self.predictor is not None:
+            kwargs = dict(predictor=self.predictor, decoder=self.decoder, prefer_decoder=False)
+        else:
+            kwargs = dict(prefer_decoder=self.prefer_decoder)
+        state.initialize_predictor(
+            image, model_type=self.model_type, save_path=embedding_path, halo=self.halo, tile_shape=self.tile_shape,
+            ndim=self.ndim, precompute_amg_state=self.precompute_amg_state, checkpoint_path=self.checkpoint_path,
+            device=self.device, skip_load=False, use_cli=True, **kwargs,
+        )
+        # Capture the loaded model so subsequent items reuse it instead of reloading.
+        self.predictor, self.decoder = state.predictor, state.decoder
+        state.image_shape = _get_input_shape(image, self.ndim)
+        # Establish the scale for this image (matching the segmentation annotator) so the layers do not
+        # inherit a stale 'image_scale' of a different dimensionality from a previous image / session.
+        state.image_scale = tuple(viewer.layers["image"].scale)
+
+    def start(self, viewer, entry, image, embedding_path, index):
+        viewer.add_image(image, name="image")
+        self._init_predictor(viewer, image, embedding_path)
+
+        annotator = Annotator(viewer, ndim=self.ndim, reset_state=False)
+        annotator._update_image(segmentation_result=self._resolve_initial_result(entry, index))
+
+        state = AnnotatorState()
+        viewer.window.add_dock_widget(annotator)
+        _sync_embedding_widget(
+            widget=state.widgets["embeddings"],
+            model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
+            save_path=self.embedding_path, checkpoint_path=self.checkpoint_path,
+            device=self.device, tile_shape=self.tile_shape, halo=self.halo,
+        )
+        return annotator
+
+    def advance(self, viewer, annotator, entry, image, embedding_path, index):
+        state = AnnotatorState()
+        # Clear the committed segmentation first to avoid laggy removal of the previous result.
+        viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
+        segmentation_result = self._resolve_initial_result(entry, index)
+        viewer.layers["image"].data = image
+        if state.amg is not None:
+            state.amg.clear_state()
+        self._init_predictor(viewer, image, embedding_path)
+        annotator._update_image(segmentation_result=segmentation_result)
+
+    def has_unsaved_content(self, viewer):
+        return viewer.layers["committed_objects"].data.sum() != 0
+
+    def save_item(self, viewer, entry, index):
+        save_path = os.path.join(self.output_folder, self.result_filename(entry, index))
+        imageio.imwrite(save_path, viewer.layers["committed_objects"].data, compression="zlib")
 
 
 def image_series_annotator(
@@ -184,169 +254,23 @@ def image_series_annotator(
             f"{len(images)} != {len(initial_segmentations)}."
         )
 
-    end_msg = "You have annotated the last image. Do you wish to close napari?"
-    os.makedirs(output_folder, exist_ok=True)
+    have_inputs_as_arrays = isinstance(images[0], np.ndarray)
 
-    next_image_id = 0
-    have_inputs_as_arrays = isinstance(images[next_image_id], np.ndarray)
-
-    def _get_save_path(image_path, current_idx):
-        if have_inputs_as_arrays:
-            fname = f"seg_{current_idx:05}.tif"
-        else:
-            fname = os.path.basename(image_path)
-            fname = os.path.splitext(fname)[0] + ".tif"
-        return os.path.join(output_folder, fname)
-
-    def _load_image(load_embeds=True):
-        image = images[next_image_id]
-        if not have_inputs_as_arrays:
-            image = imageio.imread(image)
-        if not load_embeds:
-            return image
-        image_embedding_path = embedding_paths[next_image_id]
-        return image, image_embedding_path
-
+    # Auto-detect the dimensionality from the first image if not given.
     if ndim is None:
-        image = _load_image(load_embeds=False)
-        ndim = detect_ndim(image)
+        first_image = images[0] if have_inputs_as_arrays else imageio.imread(images[0])
+        ndim = detect_ndim(first_image)
 
-    # Precompute embeddings and amg state (if corresponding options set).
-    predictor, decoder, embedding_paths = _precompute(
-        images, model_type,
-        embedding_path, tile_shape, halo, precompute_amg_state,
-        checkpoint_path=checkpoint_path, device=device,
-        ndim=ndim, prefer_decoder=prefer_decoder,
+    task = SegmentationSeriesTask(
+        ndim=ndim, model_type=model_type, embedding_path=embedding_path,
+        tile_shape=tile_shape, halo=halo, precompute_amg_state=precompute_amg_state,
+        checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
+        initial_segmentations=initial_segmentations,
     )
-
-    # Check which image to load next if we skip segmented images.
-    if skip_segmented:
-        while True:
-            if next_image_id == len(images):
-                print("All images have already been annotated and you have set 'skip_segmented=True'. Nothing to do.")
-                return
-
-            save_path = _get_save_path(images[next_image_id], next_image_id)
-            if not os.path.exists(save_path):
-                print("The first image to annotate is image number", next_image_id)
-                image, image_embedding_path = _load_image()
-                break
-
-            next_image_id += 1
-
-    else:
-        save_path = _get_save_path(images[next_image_id], next_image_id)
-        image, image_embedding_path = _load_image()
-
-    # Initialize the viewer and annotator for this image.
-    state = AnnotatorState()
-    viewer, annotator = _initialize_annotator(
-        viewer, image, image_embedding_path,
-        model_type, halo, tile_shape, predictor, decoder, ndim,
-        precompute_amg_state, checkpoint_path, device, embedding_path,
-        save_path, None if initial_segmentations is None else initial_segmentations[next_image_id],
+    return run_image_series(
+        images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
+        viewer=viewer, return_viewer=return_viewer, skip_done=skip_segmented,
     )
-
-    def _save_segmentation(image_path, current_idx, segmentation):
-        save_path = _get_save_path(image_path, next_image_id)
-        imageio.imwrite(save_path, segmentation, compression="zlib")
-
-    # Add functionality for going to the next image.
-    @magicgui(call_button="Next Image [N]")
-    def next_image(*args):
-        nonlocal next_image_id
-
-        segmentation = viewer.layers["committed_objects"].data
-        abort = False
-        if segmentation.sum() == 0:
-            msg = "Nothing is segmented yet. Do you wish to continue to the next image?"
-            abort = widgets._generate_message("info", msg)
-            if abort:
-                return
-
-        # Save the current segmentation.
-        _save_segmentation(images[next_image_id], next_image_id, segmentation)
-
-        # Check if we are done.
-        if (next_image_id + 1) == len(images):
-            # Inform the user via dialog.
-            abort = widgets._generate_message("info", end_msg)
-            if not abort:
-                QTimer.singleShot(0, viewer.close)
-            return
-
-        # Clear the segmentation already to avoid lagging removal.
-        viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
-
-        # Go to the next image.
-        next_image_id += 1
-
-        # If we are skipping images that are already segmented, then check if we have to load the next image.
-        save_path = _get_save_path(images[next_image_id], next_image_id)
-        if skip_segmented:
-            segmentation_result = None
-            while os.path.exists(save_path):
-                next_image_id += 1
-
-                # Check if we are done.
-                if next_image_id == len(images):
-                    # Inform the user via dialog.
-                    abort = widgets._generate_message("info", end_msg)
-                    if not abort:
-                        viewer.close()
-                    return
-
-                save_path = _get_save_path(images[next_image_id], next_image_id)
-        else:
-            if os.path.exists(save_path):
-                segmentation_result = imageio.imread(save_path)
-            else:
-                segmentation_result = None
-
-        # Load initial segmentation if it exists and if we don't have a segmentation result loaded yet.
-        if initial_segmentations is not None and segmentation_result is None:
-            initial_seg = initial_segmentations[next_image_id]
-            segmentation_result = initial_seg if isinstance(initial_seg, np.ndarray) else imageio.imread(initial_seg)
-
-        print(
-            "Loading next image:", images[next_image_id] if not have_inputs_as_arrays else f"at index {next_image_id}"
-        )
-
-        if have_inputs_as_arrays:
-            image = images[next_image_id]
-        else:
-            image = imageio.imread(images[next_image_id])
-
-        image_embedding_path = embedding_paths[next_image_id]
-
-        # Set the new image in the viewer, state and annotator.
-        viewer.layers["image"].data = image
-
-        if state.amg is not None:
-            state.amg.clear_state()
-
-        state.initialize_predictor(
-            image, model_type=model_type, ndim=ndim,
-            save_path=image_embedding_path,
-            tile_shape=tile_shape, halo=halo,
-            predictor=predictor, decoder=decoder,
-            precompute_amg_state=precompute_amg_state, device=device,
-            skip_load=False,
-        )
-        state.image_shape = _get_input_shape(image, ndim)
-        state.image_scale = tuple(viewer.layers["image"].scale)
-
-        annotator._update_image(segmentation_result=segmentation_result)
-
-    viewer.window.add_dock_widget(next_image)
-
-    @viewer.bind_key("n", overwrite=True)
-    def _next_image(viewer):
-        next_image(viewer)
-
-    if return_viewer:
-        return viewer
-    napari.run()
 
 
 def image_folder_annotator(
@@ -429,6 +353,32 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         )
         self.layout().addLayout(layout)
 
+        # Task selector: the whole series is annotated with the chosen task.
+        self.task = "Segmentation"
+        self.task_dropdown, layout = self._add_choice_param(
+            "task", self.task, TASKS, title="Task:", tooltip=get_tooltip("image_series_annotator", "task"),
+        )
+        self.layout().addLayout(layout)
+
+        # Segmentation folder (object classification only), toggled by the task selector.
+        self.segmentation_folder = None
+        self.segmentation_pattern = "*"
+        self._seg_folder_container = QtWidgets.QWidget()
+        seg_layout = QtWidgets.QVBoxLayout()
+        seg_layout.setContentsMargins(0, 0, 0, 0)
+        _, path_layout = self._add_path_param(
+            "segmentation_folder", self.segmentation_folder, "directory",
+            title="Segmentation Folder", placeholder="Folder with segmentations (optional) ...",
+            tooltip=get_tooltip("image_series_annotator", "segmentation_folder"),
+        )
+        seg_layout.addLayout(path_layout)
+        self._seg_folder_container.setLayout(seg_layout)
+        self._seg_folder_container.setVisible(False)
+        self.layout().addWidget(self._seg_folder_container)
+        self.task_dropdown.currentTextChanged.connect(
+            lambda task: self._seg_folder_container.setVisible(task == "Object Classification")
+        )
+
         # Add the model family widget section.
         layout = self._create_model_section(create_layout=False)
         self.layout().addLayout(layout)
@@ -447,10 +397,12 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
-        self.ndim = None
-        setting_values.layout().addWidget(self._add_int_param(
-            "ndim", self.ndim, tooltip=get_tooltip("image_series_annotator", "ndim")
-        ))
+        self.ndim = 0  # 0 = auto-detect from the image shape
+        _, layout = self._add_int_param(
+            "ndim", self.ndim, min_val=0, max_val=3, title="ndim (0 = auto):",
+            tooltip=get_tooltip("image_series_annotator", "ndim"),
+        )
+        setting_values.layout().addLayout(layout)
 
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
@@ -500,7 +452,27 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
             if missing_output:
                 msg += "The output folder is missing."
             return widgets._generate_message("error", msg)
+
+        # For object classification with provided segmentations, the counts must match.
+        if self.task == "Object Classification" and self.segmentation_folder:
+            n_img = len(glob(os.path.join(self.folder, self.pattern)))
+            n_seg = len(glob(os.path.join(self.segmentation_folder, self.segmentation_pattern)))
+            if n_img != n_seg:
+                return widgets._generate_message(
+                    "error", f"The number of images ({n_img}) and segmentations ({n_seg}) does not match."
+                )
         return False
+
+    def _embedding_paths_for(self, image_files):
+        # Per-item embedding zarr paths under the chosen folder (the classification series functions
+        # take an explicit list); 'None' when no embedding folder is set.
+        if not self.embeddings_save_path:
+            return None
+        os.makedirs(self.embeddings_save_path, exist_ok=True)
+        return [
+            os.path.join(self.embeddings_save_path, os.path.splitext(os.path.basename(f))[0] + ".zarr")
+            for f in image_files
+        ]
 
     def __call__(self, skip_validate=False):
         self._validate_model_type_and_custom_weights()
@@ -508,19 +480,46 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         if not skip_validate and self._validate_inputs():
             return
         tile_shape, halo = widgets._process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
+        ndim = self.ndim or None  # 0 means auto-detect
 
-        image_folder_annotator(
-            input_folder=self.folder,
-            output_folder=self.output_folder,
-            ndim=self.ndim,
-            pattern=self.pattern,
-            model_type=self.model_type,
-            embedding_path=self.embeddings_save_path,
-            tile_shape=tile_shape, halo=halo,
-            checkpoint_path=self.custom_weights,
-            device=self.device,
-            viewer=self._viewer,
-            return_viewer=True,
+        common = dict(
+            model_type=self.model_type, tile_shape=tile_shape, halo=halo,
+            checkpoint_path=self.custom_weights, device=self.device,
+            viewer=self._viewer, return_viewer=True,
+        )
+
+        if self.task == "Segmentation":
+            image_folder_annotator(
+                input_folder=self.folder, output_folder=self.output_folder, ndim=ndim,
+                pattern=self.pattern, embedding_path=self.embeddings_save_path, **common,
+            )
+            return
+
+        image_files = sorted(glob(os.path.join(self.folder, self.pattern)))
+
+        if self.task == "Tracking":
+            from .annotator_tracking import image_series_tracking_annotator
+            image_series_tracking_annotator(
+                image_files, self.output_folder, embedding_path=self.embeddings_save_path, **common,
+            )
+            return
+
+        embedding_paths = self._embedding_paths_for(image_files)
+        if self.task == "Pixel Classification":
+            from .pixel_classifier import image_series_pixel_classifier
+            image_series_pixel_classifier(
+                image_files, self.output_folder, embedding_paths=embedding_paths, ndim=ndim, **common,
+            )
+            return
+
+        # Object Classification: load the per-image segmentations if a folder is given.
+        from .object_classifier import image_series_object_classifier
+        seg_files = None
+        if self.segmentation_folder:
+            seg_files = sorted(glob(os.path.join(self.segmentation_folder, self.segmentation_pattern)))
+        image_series_object_classifier(
+            image_files, seg_files, self.output_folder,
+            embedding_paths=embedding_paths, ndim=ndim, **common,
         )
 
 
