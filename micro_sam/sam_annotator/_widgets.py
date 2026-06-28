@@ -2212,7 +2212,7 @@ class UnifiedSegmentWidget(_WidgetBase):
         self.volume_checkbox.stateChanged.connect(self._on_volume_mode_changed)
         self.layout().addWidget(self.volume_checkbox)
 
-        # 2. Add batched checkbox (initially hidden, shown only for SAM2 + volume mode)
+        # 2. Add batched checkbox (initially hidden, shown for SAM2 when not tiled)
         self.batched = False
         self.batched_checkbox = self._add_boolean_param(
             "batched",
@@ -2311,13 +2311,13 @@ class UnifiedSegmentWidget(_WidgetBase):
         self._update_batched_visibility()
 
     def _update_batched_visibility(self):
-        """Show/hide batched checkbox based on volume mode, SAM version and tiling."""
+        """Show/hide batched checkbox based on SAM version and tiling."""
         state = AnnotatorState()
         is_sam2 = state.is_sam2 if state.is_sam2 is not None else False
 
-        # Only show batched if: volume mode enabled AND SAM2 model AND embeddings are not tiled
-        # (batched prompting is unsupported with tiling).
-        should_show = self.apply_to_volume and is_sam2 and not _embeddings_are_tiled(state)
+        # Show batched for SAM2 models when the embeddings are not tiled (batched prompting is
+        # unsupported with tiling). Available in both slice/frame and volume/all-frames mode.
+        should_show = is_sam2 and not _embeddings_are_tiled(state)
         if not should_show and getattr(self, "batched", False):
             self.batched_checkbox.setChecked(False)
         self.batched_checkbox.setVisible(should_show)

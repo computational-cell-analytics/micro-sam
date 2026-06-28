@@ -27,7 +27,7 @@ tooltips = {
     },
     "unified_segment": {
         "apply_to_volume": "Choose if segmentation is run for the current slice/frame only or for the full volume/all frames.",  # noqa
-        "batched": "Enable to segment multiple objects with separate point prompts. Each positive point will be tracked as a separate object. Only available for SAM2 models in volume mode.",  # noqa
+        "batched": "Enable to segment multiple objects at once: each positive point and each box defines a separate object. Only available for SAM2 models.",  # noqa
         "segment_button": "Run Segment Anything on the current point/box prompts to segment the object. Shortcut: S.",  # noqa
         "clear_button": "Clear the current prompts and the current-object segmentation (whole volume or current slice per 'Apply to Volume' for 3d data). Shortcut: Shift + C.",  # noqa
         "settings": "Settings for interactive segmentation across slices (projection mode and propagation parameters).",  # noqa
