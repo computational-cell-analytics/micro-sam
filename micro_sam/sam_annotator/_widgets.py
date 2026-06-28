@@ -517,37 +517,34 @@ class PBarSignals(QObject):
 
 
 class InfoDialog(QtWidgets.QDialog):
-    def __init__(self, title, message):
+    def __init__(self, title, message, buttons=("OK", "Cancel")):
         super().__init__()
         self.setWindowTitle(title)
+        # The label of the button the user clicked (None if the dialog was closed without a button).
+        self.clicked_label = None
+        # The first button accepts the dialog, the rest reject it (so exec_()'s return code still
+        # distinguishes the default action from a cancel for callers that only check that).
+        self._accept_label = buttons[0]
 
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(QtWidgets.QLabel(message))
 
-        # Add buttons
-        button_box = (
-            QtWidgets.QHBoxLayout()
-        )  # Use QHBoxLayout for buttons side-by-side
-        accept_button = QtWidgets.QPushButton("OK")
-        accept_button.clicked.connect(
-            lambda: self.button_clicked(accept_button)
-        )  # Connect to clicked signal
-        button_box.addWidget(accept_button)
-
-        cancel_button = QtWidgets.QPushButton("Cancel")
-        cancel_button.clicked.connect(
-            lambda: self.button_clicked(cancel_button)
-        )  # Connect to clicked signal
-        button_box.addWidget(cancel_button)
+        # Buttons side-by-side.
+        button_box = QtWidgets.QHBoxLayout()
+        for label in buttons:
+            button = QtWidgets.QPushButton(label)
+            button.clicked.connect(lambda checked=False, lbl=label: self.button_clicked(lbl))
+            button_box.addWidget(button)
 
         layout.addLayout(button_box)
         self.setLayout(layout)
 
-    def button_clicked(self, button):
-        if button.text() == "OK":
-            self.accept()  # Accept the dialog
+    def button_clicked(self, label):
+        self.clicked_label = label
+        if label == self._accept_label:
+            self.accept()
         else:
-            self.reject()  # Reject the dialog (Cancel)
+            self.reject()
 
 
 # Set up the progress bar. We handle this via custom signals that are passed as callbacks to the
@@ -1259,20 +1256,9 @@ def _ask_load_or_recompute(message: str) -> str:
 
     Returns 'load', 'recompute' or 'cancel'.
     """
-    box = QtWidgets.QMessageBox()
-    box.setWindowTitle("Existing embeddings found")
-    box.setText(message)
-    load_button = box.addButton("Load", QtWidgets.QMessageBox.AcceptRole)
-    recompute_button = box.addButton("Recompute", QtWidgets.QMessageBox.DestructiveRole)
-    box.addButton("Cancel", QtWidgets.QMessageBox.RejectRole)
-    box.setDefaultButton(load_button)
-    box.exec_()
-    clicked = box.clickedButton()
-    if clicked is load_button:
-        return "load"
-    if clicked is recompute_button:
-        return "recompute"
-    return "cancel"
+    dialog = InfoDialog(title="Existing embeddings found", message=message, buttons=("Load", "Recompute", "Cancel"))
+    dialog.exec_()
+    return {"Load": "load", "Recompute": "recompute"}.get(dialog.clicked_label, "cancel")
 
 
 def _validate_embeddings(viewer: "napari.viewer.Viewer"):
@@ -1865,7 +1851,10 @@ class EmbeddingWidget(_WidgetBase):
         # Check if we have an existing embedding path.
         # If yes we check the data signature of these embeddings against the selected image
         # and we ask the user if they want to load these embeddings.
-        if self.embeddings_save_path and os.listdir(self.embeddings_save_path):
+        if (
+            self.embeddings_save_path and os.path.isdir(self.embeddings_save_path)
+            and os.listdir(self.embeddings_save_path)
+        ):
             try:
                 f = zarr.open(self.embeddings_save_path, mode="a")
 
@@ -1890,12 +1879,15 @@ class EmbeddingWidget(_WidgetBase):
                 # The model the saved embeddings were computed with.
                 saved_model = f.attrs.get("model_name", f.attrs["model_type"])
 
-                # Ask the user whether to load the saved embeddings or recompute them. The default
-                # depends on whether the current model selection still matches the saved embeddings:
-                # a model/config change makes recompute the natural choice, an exact match makes
-                # loading the natural choice.
-                config_changed = (not self.custom_weights) and saved_model != self.model_type
-                if config_changed:
+                # Ask the user whether to load the saved embeddings or recompute them. The message
+                # reflects what changed vs the saved embeddings: a model swap, custom weights (whose
+                # identity we cannot verify here, so always flag them), or an exact match.
+                if self.custom_weights:
+                    message = (
+                        f"Saved embeddings use '{saved_model}'; custom weights are now selected. "
+                        "Load the saved embeddings or recompute?"
+                    )
+                elif saved_model != self.model_type:
                     message = (
                         f"Saved embeddings use '{saved_model}', but '{self.model_type}' is selected. "
                         "Load the saved embeddings or recompute?"
