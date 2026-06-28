@@ -2465,34 +2465,6 @@ class UnifiedSegmentWidget(_WidgetBase):
 
         return seg
 
-    def _all_track_ids(self):
-        """Return all track ids that have any point or box prompt across the video."""
-        track_ids = set()
-        point_layer = self._viewer.layers["point_prompts"]
-        if len(point_layer.data):
-            track_ids.update(int(tid) for tid in point_layer.properties["track_id"])
-        box_layer = self._viewer.layers["prompts"]
-        if box_layer.data:
-            track_ids.update(int(tid) for tid in box_layer.properties["track_id"])
-        return sorted(track_ids)
-
-    def _track_ids_on_frame(self, t):
-        """Return the track ids that have point or box prompts on frame 't'."""
-        track_ids = set()
-        point_layer = self._viewer.layers["point_prompts"]
-        if len(point_layer.data):
-            on_frame = np.round(point_layer.data[:, 0]).astype(int) == t
-            point_track_ids = np.array(list(map(int, point_layer.properties["track_id"])))
-            track_ids.update(point_track_ids[on_frame].tolist())
-
-        box_layer = self._viewer.layers["prompts"]
-        if box_layer.data:
-            box_track_ids = np.array(list(map(int, box_layer.properties["track_id"])))
-            for box, box_track_id in zip(box_layer.data, box_track_ids):
-                if int(round(box[0, 0])) == t:
-                    track_ids.add(int(box_track_id))
-        return sorted(track_ids)
-
     def _segment_track_on_frame(self, state, t, track_id, shape):
         """Segment a single track's object on frame 't'. Returns the binary mask or None."""
         point_prompts = vutil.point_layer_to_prompts(
@@ -2520,34 +2492,23 @@ class UnifiedSegmentWidget(_WidgetBase):
         return None if seg is None else (seg.squeeze() == 1)
 
     def _run_frame_segmentation(self):
-        """Execute per-frame segmentation (tracking mode).
-
-        With 'Batched' enabled, every track that has prompts on the current frame is segmented in
-        one pass (one object per track id); otherwise only the current track is segmented.
-        """
+        """Execute per-frame segmentation for the current track (tracking mode)."""
         state = AnnotatorState()
         shape = state.image_shape[1:]
         t = int(self._viewer.dims.point[0])
 
-        track_ids = self._track_ids_on_frame(t) if self.batched else [state.current_track_id]
-
-        segmented_any = False
-        layer = self._viewer.layers["current_object"]
-        for track_id in track_ids:
-            new_mask = self._segment_track_on_frame(state, t, track_id, shape)
-            if new_mask is None:
-                continue
-            # Clear the old segmentation for this track id, then set the new one.
-            layer.data[t][layer.data[t] == track_id] = 0
-            layer.data[t][new_mask] = track_id
-            segmented_any = True
-
-        if not segmented_any:
+        track_id = state.current_track_id
+        new_mask = self._segment_track_on_frame(state, t, track_id, shape)
+        if new_mask is None:
             print(
                 "You either haven't provided any prompts or invalid prompts. The segmentation will be skipped."
             )
             return
 
+        # Clear the old segmentation for this track id, then set the new one.
+        layer = self._viewer.layers["current_object"]
+        layer.data[t][layer.data[t] == track_id] = 0
+        layer.data[t][new_mask] = track_id
         layer.refresh()
 
     def _run_volumetric_segmentation(self):
@@ -2781,9 +2742,8 @@ class UnifiedSegmentWidget(_WidgetBase):
             return seg
 
         def tracking_impl():
-            # With 'Batched' enabled, propagate every track that has prompts; otherwise only the
-            # current track. Each track's propagated mask is labelled with its own track id.
-            track_ids = self._all_track_ids() if self.batched else [state.current_track_id]
+            # Propagate the current track. Its propagated mask is labelled with its track id.
+            track_ids = [state.current_track_id]
             point_layer = self._viewer.layers["point_prompts"]
             seg_layer = self._viewer.layers["current_object"]
             results = {}
@@ -3176,7 +3136,6 @@ class InteractiveTrackingWidget(_WidgetBase):
         super().__init__(parent=parent)
         self._viewer = viewer
         self._tracking_widget = tracking_widget
-        self.batched = False
         self.apply_to_volume = False
         self._segment_widget = None
         self._create_widget()
@@ -3188,28 +3147,18 @@ class InteractiveTrackingWidget(_WidgetBase):
         self._align_menu_rows()
 
         # Hidden segmentation engine: owns the per-frame and propagation logic, driven via its
-        # 'apply_to_volume' and 'batched' attributes. Its own controls are not shown.
+        # 'apply_to_volume' attribute. Its own controls are not shown.
         self._segment_widget = UnifiedSegmentWidget(self._viewer, tracking=True)
         self._segment_widget.setVisible(False)
         self.layout().addWidget(self._segment_widget)
 
-        # 'Batched' (left) and 'Apply to All Frames' (right), matching the segmentation annotator.
-        self.batched_checkbox = self._add_boolean_param(
-            "batched", self.batched, title="Batched",
-            tooltip=get_tooltip("unified_segment", "batched"),
-        )
-        self.batched_checkbox.stateChanged.connect(self._on_batched_changed)
+        # 'Apply to All Frames' toggles between segmenting the current frame and propagating the track.
         self.apply_to_volume_checkbox = self._add_boolean_param(
             "apply_to_volume", self.apply_to_volume, title="Apply to All Frames",
             tooltip=get_tooltip("unified_segment", "apply_to_volume"),
         )
         self.apply_to_volume_checkbox.stateChanged.connect(self._on_apply_to_volume_changed)
-
-        checkbox_row = QtWidgets.QHBoxLayout()
-        checkbox_row.addWidget(self.batched_checkbox)
-        checkbox_row.addStretch()
-        checkbox_row.addWidget(self.apply_to_volume_checkbox)
-        self.layout().addLayout(checkbox_row)
+        self.layout().addWidget(self.apply_to_volume_checkbox)
 
         # 'Segment Object' / 'Clear Annotations' side by side.
         self.segment_button = QtWidgets.QPushButton("Segment Object [S]")
@@ -3222,9 +3171,6 @@ class InteractiveTrackingWidget(_WidgetBase):
         button_row.addWidget(self.segment_button)
         button_row.addWidget(self.clear_button)
         self.layout().addLayout(button_row)
-
-        # Hide the batched control if the (already loaded) embeddings are tiled.
-        self._update_batched_visibility()
 
     def _align_menu_rows(self):
         # Each menu row is a QHBoxLayout of [QLabel, QComboBox]. Insert a stretch between them so the
@@ -3241,10 +3187,6 @@ class InteractiveTrackingWidget(_WidgetBase):
                 combo.setFixedWidth(300)
             if row_layout.count() < 3:  # No stretch inserted yet.
                 row_layout.insertStretch(1)
-
-    def _on_batched_changed(self, state):
-        self.batched = bool(state)
-        self._segment_widget.batched = self.batched
 
     def _on_apply_to_volume_changed(self, state):
         self.apply_to_volume = bool(state)
