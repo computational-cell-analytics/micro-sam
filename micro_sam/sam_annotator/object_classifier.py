@@ -93,6 +93,7 @@ class ObjectClassifier(_ClassifierBase):
     label_widget_title = "Object label names:"
     max_components = OBJECT_FEATURES
     tool_key = "object"
+    supports_apply_to_volume = False  # object classification always runs over the full image/volume
 
     def _get_selected_segmentation_layer(self):
         state = AnnotatorState()

@@ -362,6 +362,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
     label_widget_title = "Label names:"
     max_components = 256  # PCA upper bound (256 pixel channels, 257 object features)
     tool_key = None  # "pixel" | "object", selects the tool-specific tooltips
+    supports_apply_to_volume = True  # if False the tool always runs over the full image/volume
 
     #
     # Hooks the subclasses implement.
@@ -494,8 +495,9 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         self._ndim = len(state.image_shape) if state.ndim is None else state.ndim
         self._shape = tuple(state.image_shape)[:self._ndim]
 
-        # The 'Apply to Volume' checkbox only makes sense for 3d data.
-        self._apply_to_volume.visible = self._ndim == 3
+        # The 'Apply to Volume' checkbox only makes sense for 3d data (and only for tools that have it).
+        if self._apply_to_volume is not None:
+            self._apply_to_volume.visible = self._ndim == 3
 
         # The features depend on the image, so they have to be recomputed for a new image.
         self._invalidate_features()
@@ -583,23 +585,31 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # The 'Train and predict' button is kept at the top level, outside the settings dropdown.
         # A single 'Apply to Volume' checkbox governs both 'Train and predict' and 'Clear Annotations'
         # (shown only for 3d data, see '_update_image'): when checked they act on the whole volume,
-        # when unchecked (the default) only on the current slice.
+        # when unchecked (the default) only on the current slice. Tools that do not support it
+        # ('supports_apply_to_volume' False) omit the checkbox and always run over the full image/volume.
         train_button = PushButton(text="Train and predict [Shift + T]")
         train_button.native.setToolTip(get_tooltip("classification", "train_button"))
         clear_button = PushButton(text="Clear Annotations [C]")
         clear_button.native.setToolTip(get_tooltip("classification", "clear_button"))
-        apply_to_volume = CheckBox(value=False, text="Apply to Volume")
-        apply_to_volume.native.setToolTip(get_tooltip("classification", "apply_to_volume"))
-        train_button.clicked.connect(lambda: self._run_train_and_predict(apply_to_volume.value))
-        clear_button.clicked.connect(lambda: self._clear_annotations(apply_to_volume.value))
+
+        apply_to_volume = None
+        if self.supports_apply_to_volume:
+            apply_to_volume = CheckBox(value=False, text="Apply to Volume")
+            apply_to_volume.native.setToolTip(get_tooltip("classification", "apply_to_volume"))
+
+        def _volume_value():
+            return True if apply_to_volume is None else apply_to_volume.value
+
+        train_button.clicked.connect(lambda: self._run_train_and_predict(_volume_value()))
+        clear_button.clicked.connect(lambda: self._clear_annotations(_volume_value()))
 
         @self._viewer.bind_key("Shift-T", overwrite=True)
         def _train_and_predict(event=None):
-            self._run_train_and_predict(apply_to_volume.value)
+            self._run_train_and_predict(_volume_value())
 
         @self._viewer.bind_key("c", overwrite=True)
         def _clear(event=None):
-            self._clear_annotations(apply_to_volume.value)
+            self._clear_annotations(_volume_value())
 
         # The two buttons sit side-by-side and expand to share the row width equally. QSizePolicy.Policy
         # is nested in Qt6 and top-level in Qt5.
@@ -608,7 +618,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
         for button in (train_button, clear_button):
             button.native.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
-        container = Container(widgets=[apply_to_volume, button_row], labels=False)
+        widgets_ = ([apply_to_volume] if apply_to_volume is not None else []) + [button_row]
+        container = Container(widgets=widgets_, labels=False)
         return container, apply_to_volume
 
     def _create_classifier_io_widget(self):
@@ -706,7 +717,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         self._embedding_widget.run_button.clicked.connect(self._update_image)
 
         self._train_and_predict_widget, self._apply_to_volume = self._create_train_widget()
-        self._apply_to_volume.visible = False
+        if self._apply_to_volume is not None:
+            self._apply_to_volume.visible = False
         self._classifier_io_widget = self._create_classifier_io_widget()
 
         settings = QtWidgets.QWidget()
@@ -938,9 +950,15 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # the size options are rebuilt when it changes.
         family, size = spec.get("model_family"), spec.get("model_size")
         if ew is not None and family is not None:
-            ew.model_family_dropdown.setCurrentText(family)
-            if size is not None:
-                ew.model_size_dropdown.setCurrentText(size)
+            # The classification widget routes the family to the primary or advanced selector; other
+            # widgets fall back to setting the family dropdown directly.
+            setter = getattr(ew, "set_model_family_size", None)
+            if setter is not None:
+                setter(family, size)
+            else:
+                ew.model_family_dropdown.setCurrentText(family)
+                if size is not None:
+                    ew.model_size_dropdown.setCurrentText(size)
 
         # Tiling, tile/halo params and custom weights via the shared sync helper (these field names match).
         # 'ew.model_type' may be unset until embeddings are computed, so fall back via getattr.

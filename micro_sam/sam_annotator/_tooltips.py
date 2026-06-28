@@ -7,8 +7,10 @@ tooltips = {
         "embeddings_save_path": "Select path to save or load the computed image embeddings.",
         "halo": "Enter overlap values for computing tiled embeddings. Enter only x-value for quadratic size.\n Only active when tiling is used.",  # noqa
         "image": "Select the napari image layer.",
-        "model_family": "Select the segment anything model family.",
-        "model_size": "Select the image encoder size of the segment anything model.",
+        "model_family": "Select the segment anything 2 model family.",
+        "model_family_advanced": "Select the advanced (non-SAM2) model family, e.g. a SAM1 family. Switched on via 'Advanced Models' in the embedding settings.",  # noqa
+        "model_size": "Select the image encoder size of the segment anything 2 model.",
+        "advanced_model": "Switch the model list above to advanced models beyond the default SAM2 models (currently SAM1). Only available for the classification tools.",  # noqa
         "automatic_segmentation_mode": "Select the automatic segmentation mode.",
         "run_button": "Compute embeddings or load embeddings if embedding_save_path is specified.",
         "tiling": "Enter tile size for computing tiled embeddings. Enter only x-value for quadratic size or both for non-quadratic.",  # noqa
@@ -28,7 +30,7 @@ tooltips = {
     "unified_segment": {
         "apply_to_volume": "Choose if segmentation is run for the current slice/frame only or for the full volume/all frames.",  # noqa
         "batched": "Enable to segment multiple objects at once: each positive point and each box defines a separate object. Only available for SAM2 models.",  # noqa
-        "segment_button": "Run Segment Anything on the current point/box prompts to segment the object. Shortcut: S.",  # noqa
+        "segment_button": "Run Segment Anything 2 on the current point/box prompts to segment the object. Shortcut: S.",  # noqa
         "clear_button": "Clear the current prompts and the current-object segmentation (whole volume or current slice per 'Apply to Volume' for 3d data). Shortcut: Shift + C.",  # noqa
         "settings": "Settings for interactive segmentation across slices (projection mode and propagation parameters).",  # noqa
     },
