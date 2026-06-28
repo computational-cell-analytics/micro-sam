@@ -2156,6 +2156,21 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         if size:
             self.model_size_dropdown.setCurrentText(size)
 
+    def _validate_model_support(self):
+        if super()._validate_model_support():
+            return True
+        # The vit-tiny backbone needs MobileSAM; warn (instead of crashing later) if it is selected
+        # without MobileSAM installed. The model stays selectable - we just block this compute.
+        from ..util import VIT_T_SUPPORT
+        if not VIT_T_SUPPORT and (self.model_type or "").startswith("vit_t"):
+            return _generate_message(
+                "error",
+                f"The selected model '{self.model_type}' uses the vit-tiny backbone, which requires "
+                "MobileSAM. Install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git' "
+                "or choose a different model size.",
+            )
+        return False
+
     def _family_and_size_for_model(self, model_name):
         """Map a stored model name to its (family label, size label) for this widget's dropdowns."""
         full_size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
