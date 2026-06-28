@@ -520,20 +520,22 @@ class InfoDialog(QtWidgets.QDialog):
     def __init__(self, title, message, buttons=("OK", "Cancel")):
         super().__init__()
         self.setWindowTitle(title)
-        # The label of the button the user clicked (None if the dialog was closed without a button).
+        # Label of the button the user clicked (None if the dialog was closed without a button).
         self.clicked_label = None
-        # The first button accepts the dialog, the rest reject it (so exec_()'s return code still
-        # distinguishes the default action from a cancel for callers that only check that).
+        # The first button accepts the dialog; the rest reject it.
         self._accept_label = buttons[0]
 
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(QtWidgets.QLabel(message))
 
-        # Buttons side-by-side.
+        # Buttons side-by-side; the first is the default so Enter triggers it.
         button_box = QtWidgets.QHBoxLayout()
-        for label in buttons:
+        for i, label in enumerate(buttons):
             button = QtWidgets.QPushButton(label)
             button.clicked.connect(lambda checked=False, lbl=label: self.button_clicked(lbl))
+            if i == 0:
+                button.setDefault(True)
+                button.setFocus()
             button_box.addWidget(button)
 
         layout.addLayout(button_box)
@@ -1878,7 +1880,11 @@ class EmbeddingWidget(_WidgetBase):
                         return _generate_message("error", msg)
 
                 # The model the saved embeddings were computed with.
-                saved_model = f.attrs.get("model_name", f.attrs["model_type"])
+                saved_model = f.attrs.get("model_name") or f.attrs.get("model_type")
+                if saved_model is None:
+                    return _generate_message(
+                        "error", f"The embeddings at '{self.embeddings_save_path}' do not record a model."
+                    )
 
                 # Ask the user whether to load the saved embeddings or recompute them. The message
                 # reflects what changed vs the saved embeddings: a model swap, custom weights (whose
@@ -1907,7 +1913,11 @@ class EmbeddingWidget(_WidgetBase):
                     zarr.open(self.embeddings_save_path, mode="w")
                     return False
 
-                # 'load': adopt the saved model and tiling, then load the existing embeddings.
+                # 'load': adopt the saved model and tiling, then load the existing embeddings. Clear any
+                # custom weights so the predictor matches the loaded embeddings ('saved_model'), not a
+                # mismatched custom checkpoint.
+                self.custom_weights = None
+                self.custom_weights_param.setText("")
                 self.model_type = saved_model
                 if self._validate_model_support():
                     return True
