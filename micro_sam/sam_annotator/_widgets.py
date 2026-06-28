@@ -1897,17 +1897,11 @@ class EmbeddingWidget(_WidgetBase):
                 config_changed = (not self.custom_weights) and saved_model != self.model_type
                 if config_changed:
                     message = (
-                        f"The embeddings at '{self.embeddings_save_path}' were computed with model "
-                        f"'{saved_model}', but the current selection is '{self.model_type}'. "
-                        "Load the saved embeddings, or recompute them with the current model "
-                        "(this overwrites the saved embeddings)?"
+                        f"Saved embeddings use '{saved_model}', but '{self.model_type}' is selected. "
+                        "Load the saved embeddings or recompute?"
                     )
                 else:
-                    message = (
-                        f"Embeddings for model '{saved_model}' already exist at "
-                        f"'{self.embeddings_save_path}'. Load them, or recompute them "
-                        "(this overwrites the saved embeddings)?"
-                    )
+                    message = f"Embeddings for '{saved_model}' already exist. Load or recompute?"
                 choice = _ask_load_or_recompute(message)
 
                 if choice == "cancel":
@@ -2165,9 +2159,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         if not VIT_T_SUPPORT and (self.model_type or "").startswith("vit_t"):
             return _generate_message(
                 "error",
-                f"The selected model '{self.model_type}' uses the vit-tiny backbone, which requires "
-                "MobileSAM. Install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git' "
-                "or choose a different model size.",
+                f"'{self.model_type}' (vit-tiny) requires MobileSAM. Install MobileSAM or pick another size.",
             )
         return False
 
