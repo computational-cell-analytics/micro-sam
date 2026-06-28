@@ -386,7 +386,7 @@ def annotator(
     annotator_instance._update_image(segmentation_result=segmentation_result)
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator_instance)
+    viewer.window.add_dock_widget(annotator_instance, name="Segment Anything for Microscopy (Segmentation)")
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=(

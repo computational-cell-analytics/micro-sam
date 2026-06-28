@@ -262,7 +262,7 @@ def object_classifier(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator, name="(Object Classifier) Segment Anything for Microscopy")
+    viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Object Classification)")
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
@@ -282,7 +282,7 @@ def object_classifier(
 class ObjectClassificationSeriesTask(ClassificationSeriesTask):
     """Series task for the object classifier: per-item segmentation layer + projected prediction."""
 
-    dock_name = "(Object Classifier) Segment Anything for Microscopy"
+    dock_name = "Segment Anything for Microscopy (Object Classification)"
     classifier_class = ObjectClassifier
     features_attr = "object_features"
     aux_attr = "seg_ids"

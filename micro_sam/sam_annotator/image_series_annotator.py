@@ -169,7 +169,7 @@ class SegmentationSeriesTask(SeriesAnnotatorTask):
         annotator._update_image(segmentation_result=self._resolve_initial_result(entry, index))
 
         state = AnnotatorState()
-        viewer.window.add_dock_widget(annotator)
+        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Segmentation)")
         _sync_embedding_widget(
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
@@ -350,6 +350,10 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         self.run_button = QtWidgets.QPushButton("Annotate Images")
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
+
+        # Pack the menus to the top: the dock's extra vertical space collapses below the button
+        # instead of being distributed as fixed gaps between the rows.
+        self.layout().addStretch()
 
     def _create_options(self):
         self.folder = None

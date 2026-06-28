@@ -458,7 +458,7 @@ def annotator_tracking(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator)
+    viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Tracking)")
     vutil._sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=(
@@ -544,7 +544,7 @@ class TrackingSeriesTask(SeriesAnnotatorTask):
         annotator._update_image()
 
         state = AnnotatorState()
-        viewer.window.add_dock_widget(annotator)
+        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Tracking)")
         vutil._sync_embedding_widget(
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,

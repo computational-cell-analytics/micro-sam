@@ -1738,16 +1738,17 @@ class EmbeddingWidget(_WidgetBase):
         )
         setting_values.layout().addLayout(weights_layout)
 
-        # Make the two path rows symmetric: equal label widths and equal button widths, so their text
-        # boxes match too ('Select Directory' is wider than 'Select File', which would offset them).
+        # Make the two path rows symmetric: equal label widths, so their text boxes match too.
         self._align_widths([save_layout.itemAt(0).widget(), weights_layout.itemAt(0).widget()])
-        self._align_widths([
-            save_layout.itemAt(save_layout.count() - 1).widget(),
-            weights_layout.itemAt(weights_layout.count() - 1).widget(),
-        ])
-        # Trim the text boxes a touch so they do not run flush into the browse button.
-        for path_layout in (save_layout, weights_layout):
-            path_layout.insertSpacing(path_layout.count() - 1, 20)
+        # Move the horizontal space trimmed from the text boxes into the browse buttons (rather than
+        # leaving a gap): widen them uniformly by that amount ('Select Directory' is wider than
+        # 'Select File', which would otherwise offset the rows).
+        path_button_extra = 20
+        save_button = save_layout.itemAt(save_layout.count() - 1).widget()
+        weights_button = weights_layout.itemAt(weights_layout.count() - 1).widget()
+        button_width = max(save_button.sizeHint().width(), weights_button.sizeHint().width()) + path_button_extra
+        for button in (save_button, weights_button):
+            button.setFixedWidth(button_width)
 
         # Hook for subclasses to add extra model controls at the end of the settings (no-op by default).
         self._add_extra_model_settings(setting_values.layout())

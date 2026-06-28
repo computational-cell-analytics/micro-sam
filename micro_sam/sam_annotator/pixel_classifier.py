@@ -120,7 +120,7 @@ def pixel_classifier(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator, name="(Pixel Classifier) Segment Anything for Microscopy")
+    viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Pixel Classification)")
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
@@ -140,7 +140,7 @@ def pixel_classifier(
 class PixelClassificationSeriesTask(ClassificationSeriesTask):
     """Series task for the pixel classifier."""
 
-    dock_name = "(Pixel Classifier) Segment Anything for Microscopy"
+    dock_name = "Segment Anything for Microscopy (Pixel Classification)"
     classifier_class = PixelClassifier
     features_attr = "pixel_features"
     aux_attr = "pixel_grid_shape"
