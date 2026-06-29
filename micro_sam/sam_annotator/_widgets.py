@@ -1573,7 +1573,8 @@ class EmbeddingWidget(_WidgetBase):
             self.custom_weights
         ):  # Whether the user provided a filepath to custom finetuned model weights.
             msg += f"the model located at '{os.path.abspath(self.custom_weights)}' "
-            msg += f"of size '{self._model_size_map[_model_type[4]]}'."
+            size_key = _model_type[4] if len(_model_type) > 4 else ""
+            msg += f"of size '{self._model_size_map.get(size_key, self.model_size)}'."
         else:
             msg += (
                 f"the '{self.model_family}' model of size '{self.model_size}'."
@@ -2067,14 +2068,15 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     'Model:' dropdown with the SAM2 'Natural Images' and 'Microscopy' families (same names and config).
     Since classification operates directly on the image-encoder embeddings, it can additionally use
     models beyond SAM2. An opt-in 'Advanced Models' checkbox in the embedding settings swaps that one
-    dropdown to the advanced families instead of adding a second dropdown (currently the SAM1 families;
-    future backends such as DINO can be added to `_advanced_family_suffixes`).
+    dropdown to the advanced families instead of adding a second dropdown. The advanced tier holds both
+    the SAM1 families and the DINO Vision Foundation Model families (`_advanced_family_suffixes` and
+    `_dino_families`).
     """
 
-    size_order = ["tiny", "small", "base", "large", "huge"]
+    size_order = ["tiny", "small", "base", "large", "huge", "giant"]
 
-    # Advanced (non-SAM2) families: UI label -> model-name suffix on the SAM1 'vit_' prefix. Future
-    # backends (e.g. DINO) get their own entries here, resolved in '_get_model_size_options'.
+    # Advanced SAM1 families: UI label -> model-name suffix on the SAM1 'vit_' prefix, resolved in
+    # '_get_model_size_options'.
     _advanced_family_suffixes = {
         "Natural Images (SAM1)": "",
         "Light Microscopy (SAM1)": "_lm",
@@ -2083,14 +2085,29 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         "Histopathology (SAM1)": "_histopathology",
     }
     _advanced_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+    # Vision Foundation Model families beyond SAM: UI label -> the registry model_types in that family
+    # (ordered by size). Sizes/names come from 'micro_sam.vfm.VFM_MODELS'/'VFM_SIZE_LABELS', not the
+    # SAM1 naming scheme. DINOv2/v3 are natural-image (LVD-1689M) models; UNI/UNI2-h are histopathology.
+    _dino_families = {
+        "Natural Images (DINOv2)": ("dino_v2_vits", "dino_v2_vitb", "dino_v2_vitl", "dino_v2_vitg"),
+        "Natural Images (DINOv3)": ("dino_v3_vits", "dino_v3_vitb", "dino_v3_vitl"),
+        "Histopathology (UNI)": ("uni", "uni2_h"),
+    }
     # Older saved classifiers stored the primary SAM2 families under '(SAM2)' labels; map them to the
     # current names so loading such a classifier still restores the right family.
     _primary_family_aliases = {"Natural Images (SAM2)": "Natural Images", "Microscopy (SAM2)": "Microscopy"}
 
+    def _all_advanced_families(self):
+        # The advanced tier combines the SAM1 families and the DINO Vision Foundation Model families.
+        return list(self._advanced_family_suffixes) + list(self._dino_families)
+
+    def _is_dino_active(self):
+        return getattr(self, "model_family", None) in self._dino_families
+
     def _advanced_active(self):
         # The single 'Model:' dropdown holds either the primary or the advanced families, so the
         # current family's membership is the source of truth (robust to the dropdown being blanked).
-        return getattr(self, "model_family", None) in self._advanced_family_suffixes
+        return getattr(self, "model_family", None) in self._all_advanced_families()
 
     def _add_extra_model_settings(self, layout):
         # 'Advanced Models' swaps the single 'Model:' dropdown above between the primary (SAM2) and the
@@ -2131,7 +2148,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     def _on_advanced_toggled(self, state):
         advanced = self.advanced_checkbox.isChecked()
         if advanced:
-            self._set_family_choices(list(self._advanced_family_suffixes))
+            self._set_family_choices(self._all_advanced_families())
         else:  # Back to the SAM2 families, defaulting to 'Microscopy' rather than the first entry.
             self._set_family_choices(self._primary_families, select=self._default_primary_family)
         # Reflect the active tier in the 'Model:' dropdown tooltip.
@@ -2148,7 +2165,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     def set_model_family_size(self, family, size):
         """Restore a saved (family, size): swap the dropdown to the matching tier, then select it."""
         family = self._primary_family_aliases.get(family, family)
-        self.advanced_checkbox.setChecked(family in self._advanced_family_suffixes)
+        self.advanced_checkbox.setChecked(family in self._all_advanced_families())
         self.model_family_dropdown.setCurrentText(family)
         if size:
             self.model_size_dropdown.setCurrentText(size)
@@ -2169,6 +2186,10 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     def _family_and_size_for_model(self, model_name):
         """Map a stored model name to its (family label, size label) for this widget's dropdowns."""
         full_size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
+        for family, models in self._dino_families.items():  # VFM families (DINO / UNI).
+            if model_name in models:
+                from ..vfm import VFM_SIZE_LABELS
+                return family, VFM_SIZE_LABELS.get(model_name)
         if model_name.startswith("hvit_"):  # SAM2 (primary families).
             size = full_size_map.get(model_name[5])
             family = "Microscopy" if model_name.endswith("_cells") else "Natural Images"
@@ -2184,9 +2205,15 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         self.set_model_family_size(family, size)
 
     def _get_model_size_options(self):
-        # Primary (SAM2) sizes come from the inherited logic; advanced families resolve to SAM1 names.
+        # Primary (SAM2) sizes come from the inherited logic; advanced families resolve to SAM1/DINO names.
         if not self._advanced_active():
             return super()._get_model_size_options()
+        if self._is_dino_active():
+            from ..vfm import VFM_SIZE_LABELS
+            models = self._dino_families[self.model_family]
+            self.model_size_mapping = {VFM_SIZE_LABELS[m]: m for m in models}
+            self.model_size_options = sorted(self.model_size_mapping.keys(), key=self.size_order.index)
+            return
         from ..v1.util import get_model_names
         suffix = self._advanced_family_suffixes[self.model_family]
         available = {m for m in get_model_names() if not m.endswith("decoder")}
@@ -2222,7 +2249,13 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         self.model_size_dropdown.blockSignals(False)
 
     def _validate_model_type_and_custom_weights(self):
-        # Advanced mode (without custom weights): resolve the SAM1 model name from family + size.
+        # DINO families always resolve from the registry. DINOv3 weights load from HuggingFace using the
+        # user's own HF access (huggingface-cli login / HF_TOKEN), not the custom-weights field.
+        if self._is_dino_active():
+            self._get_model_size_options()
+            self.model_type = self.model_size_mapping.get(self.model_size, self.model_type)
+            return
+        # Advanced SAM1 mode (without custom weights): resolve the SAM1 model name from family + size.
         if self._advanced_active() and not self.custom_weights:
             self._get_model_size_options()
             self.model_type = self.model_size_mapping.get(self.model_size, self.model_type)

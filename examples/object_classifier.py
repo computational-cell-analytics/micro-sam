@@ -259,9 +259,22 @@ def batch_prediction():
         napari.run()
 
 
+def dino_annotator():
+    from micro_sam.sam_annotator.object_classifier import object_classifier
+
+    example_data = fetch_livecell_example_data(DATA_CACHE)
+    image = imageio.imread(example_data)
+    segmentation = imageio.imread("./clf-test-data/livecell-test-seg.tif")
+
+    # DINOv2 encoder weights download automatically via torch.hub. DINOv3 ('dino_v3_*') weights are
+    # license-gated; supply the emailed URL or local path via the MICROSAM_DINOV3_WEIGHTS env var.
+    object_classifier(image, segmentation, model_type="dino_v2_vitb")
+
+
 def main():
     # create_3d_data_with_tiling()
 
+    # dino_annotator()
     # livecell_annotator()
     # wholeslide_annotator()
     # lucchi_annotator()

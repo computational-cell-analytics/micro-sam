@@ -41,6 +41,11 @@ class Singleton(type):
 # TODO: this should be refactored once we have decided on which models to support.
 # (Likely only SAM2 models)
 def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_cli):
+    from micro_sam.vfm import is_vfm_model, get_vfm_model
+    if is_vfm_model(model_type):  # VFM encoders (DINO / UNI) for the classification tools.
+        encoder = get_vfm_model(model_type, device=device, checkpoint_path=checkpoint_path)
+        return encoder, {}
+
     if model_type.startswith("h"):  # i.e. SAM2 models.
         from micro_sam.v2.util import get_sam2_model
 
@@ -135,6 +140,7 @@ class AnnotatorState(metaclass=Singleton):
     # Interactive segmentation class for 'micro-sam2'.
     interactive_segmenter: Optional[Any] = None  # TODO: Create a base class and add it here.
     is_sam2: Optional[bool] = None  # Whether this is a SAM1 or SAM2 model.
+    is_vfm: Optional[bool] = None  # Whether this is a DINO encoder (classification tools only).
 
     def initialize_predictor(
         self,
@@ -157,7 +163,9 @@ class AnnotatorState(metaclass=Singleton):
         use_cli=False,
     ):
         assert ndim in (2, 3)
+        from micro_sam.vfm import is_vfm_model
         self.is_sam2 = model_type.startswith("h")
+        self.is_vfm = is_vfm_model(model_type)
 
         # Initialize the model if necessary.
         if predictor is None:
@@ -206,7 +214,9 @@ class AnnotatorState(metaclass=Singleton):
             self.embedding_path = None  # setting this to 'None' as we do not have embeddings cached.
 
         else:  # Otherwise, compute the image embeddings.
-            if self.is_sam2:
+            if self.is_vfm:
+                from micro_sam.vfm import precompute_vfm_embeddings as _comp_embed_fn
+            elif self.is_sam2:
                 from micro_sam.v2.util import precompute_image_embeddings as _comp_embed_fn
             else:
                 _comp_embed_fn = precompute_image_embeddings
@@ -366,5 +376,6 @@ class AnnotatorState(metaclass=Singleton):
         self.data_signature = None
         self.interactive_segmenter = None
         self.is_sam2 = None
+        self.is_vfm = None
         self.anyup_upsampler = None
         # Note: we don't clear the widgets here, because they are fixed for a viewer session.

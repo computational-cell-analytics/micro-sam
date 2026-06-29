@@ -67,11 +67,23 @@ def tiled_3d_pixel_classifier():
     )
 
 
+def dino_pixel_classifier():
+    from micro_sam.sam_annotator.pixel_classifier import pixel_classifier
+
+    example_data = fetch_livecell_example_data(DATA_CACHE)
+    image = imageio.imread(example_data)
+
+    # DINOv2 encoder weights download automatically via torch.hub. DINOv3 ('dino_v3_*') weights are
+    # license-gated; supply the emailed URL or local path via the MICROSAM_DINOV3_WEIGHTS env var.
+    pixel_classifier(image, model_type="dino_v2_vitb")
+
+
 def main():
     livecell_pixel_classifier()
     # wholeslide_pixel_classifier()
     # lucchi_pixel_classifier()
     # tiled_3d_pixel_classifier()
+    # dino_pixel_classifier()
 
 
 if __name__ == "__main__":

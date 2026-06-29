@@ -125,13 +125,20 @@ def _aspect_crop(embeddings: np.ndarray, block_hw: Tuple[int, int]) -> np.ndarra
     block_h, block_w = block_hw
     if block_h == block_w:
         return embeddings
+    # Keep at least one pixel: a very oblong block can round the crop length down to zero.
     if block_h > block_w:
-        return embeddings[:, :, :int(round((block_w / block_h) * emb_w))]
-    return embeddings[:, :int(round((block_h / block_w) * emb_h)), :]
+        return embeddings[:, :, :max(1, int(round((block_w / block_h) * emb_w)))]
+    return embeddings[:, :max(1, int(round((block_h / block_w) * emb_h))), :]
 
 
 def _resize_to_grid(embeddings: np.ndarray, target_hw: Tuple[int, int]) -> np.ndarray:
     """Resize a (C, H, W) embedding to a (target_h, target_w, C) feature image."""
+    n_channels = embeddings.shape[0]
+    # An empty target band (a sub-pixel-thin edge strip) has nothing to fill, and a degenerate
+    # zero-size source cannot be interpolated; in both cases return a zero-filled band so the caller's
+    # slice assignment is a no-op instead of resizing to/from a zero-size shape (which raises a NaN).
+    if min(target_hw) == 0 or min(embeddings.shape[-2:]) == 0:
+        return np.zeros((target_hw[0], target_hw[1], n_channels), dtype="float32")
     feature_image = embeddings.transpose(1, 2, 0)
     resize_shape = (target_hw[0], target_hw[1], feature_image.shape[-1])
     return resize(feature_image, resize_shape, preserve_range=True).astype("float32")
@@ -183,6 +190,10 @@ def _compute_tiled_feature_image(
         tile_scale = (embeds.shape[-2] / outer_hw[0], embeds.shape[-1] / outer_hw[1])
         iy0, iy1 = int(round(inner_local.begin[0] * tile_scale[0])), int(round(inner_local.end[0] * tile_scale[0]))
         ix0, ix1 = int(round(inner_local.begin[1] * tile_scale[1])), int(round(inner_local.end[1] * tile_scale[1]))
+        # A thin edge tile can round its inner region to zero feature rows/cols; keep at least one real
+        # row/column so the strip gets coarse (but valid) features instead of an empty, un-resizable block.
+        iy0, ix0 = min(iy0, embeds.shape[-2] - 1), min(ix0, embeds.shape[-1] - 1)
+        iy1, ix1 = max(iy1, iy0 + 1), max(ix1, ix0 + 1)
         inner_embeds = embeds[:, iy0:iy1, ix0:ix1]
 
         # Map the inner block to its position in the global grid and place the features there.

@@ -219,14 +219,16 @@ def compute_object_features(
         seg_ids = seg_ids[1:]
     visited = {seg_id: False for seg_id in seg_ids}
 
-    n_features = 257  # Don't hard-code?
-    features = np.zeros((len(seg_ids), n_features), dtype="float32")
-
     # Then, we create a generator for iterating over the slices and / or tile.
     # This generator returns the respective segmentation and embeddings.
     seg_embed_generator, n_gen = _create_seg_and_embed_generator(
         segmentation, image_embeddings, is_tiled=is_tiled, is_3d=is_3d, image=image
     )
+
+    # Feature vector = object area + per-channel embedding mean, so the width follows the embedding
+    # channel count (256 for SAM1/SAM2, larger for e.g. DINO encoders).
+    n_channels = int(next(seg_embed_generator())[1].shape[0])
+    features = np.zeros((len(seg_ids), n_channels + 1), dtype="float32")
 
     # With AnyUp, label the bar accordingly since the upsampling is the slow part.
     desc = "Upsampling with AnyUp" if upsampler is not None else "Compute object features"
