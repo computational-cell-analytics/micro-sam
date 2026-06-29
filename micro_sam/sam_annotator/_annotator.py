@@ -641,6 +641,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         top_features_tooltip = get_tooltip("classification", f"top_features_{self.tool_key}")
         top_features = SpinBox(value=10, min=1, max=self.max_components, step=1)
         top_features.native.setToolTip(top_features_tooltip)
+        self._top_features_spinbox = top_features
         top_features_label = Label(value="top feature channels:")
         top_features_label.native.setToolTip(top_features_tooltip)
         top_features_row = Container(
@@ -800,6 +801,15 @@ class _ClassifierBase(QtWidgets.QScrollArea):
     # Train / predict / clear / load / save / spec.
     #
 
+    def _update_feature_cap(self, n_features):
+        """Clamp the PCA top-features control to the actual embedding feature dimension."""
+        spinbox = getattr(self, "_top_features_spinbox", None)
+        if spinbox is None:
+            return
+        spinbox.max = int(n_features)
+        if spinbox.value > n_features:
+            spinbox.value = int(n_features)
+
     def _run_train_and_predict(self, apply_to_volume=True):
         state = AnnotatorState()
         self._require_layers()
@@ -807,6 +817,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         features, aux = self._compute_features()
         if features is None:
             return None
+        self._update_feature_cap(features.shape[1])
         labels = self._compute_training_labels(aux)
         if labels is None:
             return None
