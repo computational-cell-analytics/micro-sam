@@ -1,7 +1,5 @@
 import os
-import time
 from glob import glob
-from pathlib import Path
 from typing import List, Optional, Union, Tuple
 
 import numpy as np
@@ -11,9 +9,9 @@ import torch
 
 import napari
 from qtpy import QtWidgets
+from qtpy.QtCore import QTimer
 
-from .. import util
-from ..v1.util import get_sam_model, get_model_names
+from ..v1.util import get_model_names
 from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
 from ._series import SeriesAnnotatorTask, run_image_series
@@ -21,52 +19,9 @@ from ._tooltips import get_tooltip
 from ._state import AnnotatorState
 from .annotator import Annotator, detect_ndim
 from .util import _sync_embedding_widget
-from ..v1.instance_segmentation import get_decoder
-from ..precompute_state import _precompute_state_for_files
 
 # The tasks the unified image series annotator can run over a series.
 TASKS = ["Segmentation", "Tracking", "Object Classification", "Pixel Classification"]
-
-
-def _precompute(
-    images, model_type, embedding_path,
-    tile_shape, halo, precompute_amg_state,
-    checkpoint_path, device, ndim, prefer_decoder,
-):
-    t_start = time.time()
-
-    device = util.get_device(device)
-    predictor, state = get_sam_model(
-        model_type=model_type, checkpoint_path=checkpoint_path, device=device, return_state=True
-    )
-    if prefer_decoder and "decoder_state" in state:
-        decoder = get_decoder(predictor.model.image_encoder, state["decoder_state"], device)
-    else:
-        decoder = None
-
-    if embedding_path is None:
-        embedding_paths = [None] * len(images)
-    else:
-        _precompute_state_for_files(
-            predictor, images, embedding_path, ndim=ndim, tile_shape=tile_shape, halo=halo,
-            precompute_amg_state=precompute_amg_state, decoder=decoder,
-        )
-        if isinstance(images[0], np.ndarray):
-            embedding_paths = [
-                os.path.join(embedding_path, f"embedding_{i:05}.zarr") for i, path in enumerate(images)
-            ]
-        else:
-            embedding_paths = [
-                os.path.join(embedding_path, f"{Path(path).stem}.zarr") for path in images
-            ]
-        assert all(os.path.exists(emb_path) for emb_path in embedding_paths)
-
-        t_run = time.time() - t_start
-        minutes = int(t_run // 60)
-        seconds = int(round(t_run % 60, 0))
-        print("Precomputation took", t_run, f"seconds (= {minutes:02}:{seconds:02} minutes)")
-
-    return predictor, decoder, embedding_paths
 
 
 def _get_input_shape(image, ndim):
@@ -111,25 +66,17 @@ class SegmentationSeriesTask(SeriesAnnotatorTask):
         return os.path.splitext(os.path.basename(entry))[0] + ".tif"
 
     def precompute(self, images):
-        # The v1 precompute path only handles SAM1 models. SAM2 models are loaded lazily per item via
-        # 'initialize_predictor' (which routes SAM1/SAM2 correctly), computing embeddings on the fly
-        # or into a per-item zarr when an embedding folder is given.
-        if self.model_type.startswith("h"):
-            if self.embedding_path is None:
-                return [None] * len(images)
-            os.makedirs(self.embedding_path, exist_ok=True)
-            if self.have_inputs_as_arrays:
-                return [os.path.join(self.embedding_path, f"embedding_{i:05}.zarr") for i in range(len(images))]
-            return [
-                os.path.join(self.embedding_path, os.path.splitext(os.path.basename(p))[0] + ".zarr") for p in images
-            ]
-
-        self.predictor, self.decoder, embedding_paths = _precompute(
-            images, self.model_type, self.embedding_path, self.tile_shape, self.halo,
-            self.precompute_amg_state, checkpoint_path=self.checkpoint_path, device=self.device,
-            ndim=self.ndim, prefer_decoder=self.prefer_decoder,
-        )
-        return embedding_paths
+        # Embeddings are computed lazily per item in start/advance (via 'initialize_predictor', which
+        # routes SAM1/SAM2 and loads the model once, reused across items). Here we only build the
+        # per-item embedding paths; 'None' for every item when no embedding folder is given.
+        if self.embedding_path is None:
+            return [None] * len(images)
+        os.makedirs(self.embedding_path, exist_ok=True)
+        if self.have_inputs_as_arrays:
+            return [os.path.join(self.embedding_path, f"embedding_{i:05}.zarr") for i in range(len(images))]
+        return [
+            os.path.join(self.embedding_path, os.path.splitext(os.path.basename(p))[0] + ".zarr") for p in images
+        ]
 
     def _resolve_initial_result(self, entry, index):
         # Load an existing saved result if present, otherwise an initial segmentation if provided.
@@ -563,34 +510,45 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
                 input_folder=self.folder, output_folder=self.output_folder, ndim=ndim,
                 pattern=self.pattern, embedding_path=ew.embeddings_save_path, **common,
             )
-            return
+        else:
+            image_files = sorted(glob(os.path.join(self.folder, self.pattern)))
+            if self.task == "Tracking":
+                from .annotator_tracking import image_series_tracking_annotator
+                image_series_tracking_annotator(
+                    image_files, self.output_folder, embedding_path=ew.embeddings_save_path, **common,
+                )
+            else:
+                embedding_paths = self._embedding_paths_for(image_files)
+                if self.task == "Pixel Classification":
+                    from .pixel_classifier import image_series_pixel_classifier
+                    image_series_pixel_classifier(
+                        image_files, self.output_folder, embedding_paths=embedding_paths, ndim=ndim, **common,
+                    )
+                else:
+                    # Object Classification: load the per-image segmentations if a folder is given.
+                    from .object_classifier import image_series_object_classifier
+                    seg_files = None
+                    if self.segmentation_folder:
+                        seg_files = sorted(glob(os.path.join(self.segmentation_folder, self.segmentation_pattern)))
+                    image_series_object_classifier(
+                        image_files, seg_files, self.output_folder,
+                        embedding_paths=embedding_paths, ndim=ndim, **common,
+                    )
 
-        image_files = sorted(glob(os.path.join(self.folder, self.pattern)))
+        # The console has done its job (task + settings are locked in for this session); remove it so
+        # the annotator has the screen to itself.
+        self._dismiss()
 
-        if self.task == "Tracking":
-            from .annotator_tracking import image_series_tracking_annotator
-            image_series_tracking_annotator(
-                image_files, self.output_folder, embedding_path=ew.embeddings_save_path, **common,
-            )
-            return
-
-        embedding_paths = self._embedding_paths_for(image_files)
-        if self.task == "Pixel Classification":
-            from .pixel_classifier import image_series_pixel_classifier
-            image_series_pixel_classifier(
-                image_files, self.output_folder, embedding_paths=embedding_paths, ndim=ndim, **common,
-            )
-            return
-
-        # Object Classification: load the per-image segmentations if a folder is given.
-        from .object_classifier import image_series_object_classifier
-        seg_files = None
-        if self.segmentation_folder:
-            seg_files = sorted(glob(os.path.join(self.segmentation_folder, self.segmentation_pattern)))
-        image_series_object_classifier(
-            image_files, seg_files, self.output_folder,
-            embedding_paths=embedding_paths, ndim=ndim, **common,
-        )
+    def _dismiss(self):
+        # Remove the console dock after a successful launch. Deferred so it runs after this click
+        # handler returns (deleting the widget mid-handler is unsafe); a no-op if the console was not
+        # added as a dock (e.g. in tests that construct it directly).
+        def _remove():
+            try:
+                self._viewer.window.remove_dock_widget(self)
+            except Exception:
+                pass
+        QTimer.singleShot(0, _remove)
 
 
 def main():

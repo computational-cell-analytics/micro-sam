@@ -12,9 +12,11 @@ import os
 import numpy as np
 import imageio.v3 as imageio
 from joblib import dump
+from magicgui.widgets import CheckBox
 
 from ._series import SeriesAnnotatorTask
 from ._state import AnnotatorState
+from ._tooltips import get_tooltip
 from .util import _sync_embedding_widget
 
 
@@ -94,6 +96,18 @@ class ClassificationSeriesTask(SeriesAnnotatorTask):
         )
         return annotator
 
+    def nav_extra_widgets(self):
+        # A checkbox next to the Next button (classification tasks only), on by default, to carry the
+        # classifier state forward across the series. Tracked in the state so it is reachable in tests.
+        self._forward_state = CheckBox(value=True, text="Forward Classifier State")
+        self._forward_state.native.setToolTip(get_tooltip("classification", "forward_classifier_state"))
+        AnnotatorState().widgets["series_forward_state"] = self._forward_state
+        return [self._forward_state]
+
+    def _forward_state_enabled(self):
+        widget = getattr(self, "_forward_state", None)
+        return True if widget is None else bool(widget.value)
+
     def advance(self, viewer, annotator, entry, image, embedding_path, index):
         viewer.layers["image"].data = image
         self._set_layers(viewer, index)
@@ -104,16 +118,28 @@ class ClassificationSeriesTask(SeriesAnnotatorTask):
         setattr(state, self.features_attr, None)
         setattr(state, self.aux_attr, None)
 
+        # Carry the classifier forward: retrain a fresh random forest on the accumulated (forwarded)
+        # features and apply it to this image right away, even without new annotations here.
+        if self._forward_state_enabled() and state.previous_labels is not None:
+            annotator._run_train_and_predict()
+
     def has_unsaved_content(self, viewer):
         # Classification always has a prediction to save, so it never prompts on advance.
         return True
 
     def on_leave_item(self, viewer, entry, index):
         state = AnnotatorState()
-        state.annotator.accumulate_series_features()
-        if state.previous_features is not None:
-            np.save(os.path.join(self.output_folder, "features.npy"), state.previous_features)
-            np.save(os.path.join(self.output_folder, "labels.npy"), state.previous_labels)
+        if self._forward_state_enabled():
+            # Stack this image's annotated features into the running training set, forwarded to the next.
+            state.annotator.accumulate_series_features()
+            if state.previous_features is not None:
+                np.save(os.path.join(self.output_folder, "features.npy"), state.previous_features)
+                np.save(os.path.join(self.output_folder, "labels.npy"), state.previous_labels)
+        else:
+            # Independent per image: drop the accumulated training set and the classifier so the next
+            # image starts fresh.
+            state.previous_features, state.previous_labels = None, None
+            setattr(state, self.rf_attr, None)
 
     def save_item(self, viewer, entry, index):
         state = AnnotatorState()

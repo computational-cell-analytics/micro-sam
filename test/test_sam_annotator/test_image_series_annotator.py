@@ -8,6 +8,7 @@ import pytest
 from qtpy import QtWidgets
 from skimage.data import binary_blobs
 
+import micro_sam.util as util
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator import image_series_annotator, image_folder_annotator
 from micro_sam.sam_annotator._state import AnnotatorState
@@ -103,6 +104,47 @@ def test_image_series_navigation(make_napari_viewer_proxy):
         np.testing.assert_array_equal(viewer.layers["committed_objects"].data, seg1)
 
         viewer.close()  # must close the viewer at the end of tests
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_image_series_lazy_embeddings(make_napari_viewer_proxy):
+    """The segmentation series computes embeddings lazily per item (saved to a per-item zarr) and
+    reuses the loaded model across items, rather than precomputing everything up front.
+    """
+    model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
+    n_images = 3
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        image_paths = _create_images(tmpdir, n_images)
+        output_folder = os.path.join(tmpdir, "seg")
+        embedding_folder = os.path.join(tmpdir, "emb")
+
+        viewer = make_napari_viewer_proxy()
+        viewer = image_series_annotator(
+            image_paths, output_folder, model_type=model_type,
+            embedding_path=embedding_folder, viewer=viewer, return_viewer=True,
+        )
+
+        def _zarr(index):
+            stem = os.path.splitext(os.path.basename(image_paths[index]))[0]
+            return os.path.join(embedding_folder, stem + ".zarr")
+
+        state = AnnotatorState()
+        # Only the first item's embeddings are computed at launch (lazy), not the whole series.
+        assert os.path.exists(_zarr(0))
+        assert not os.path.exists(_zarr(1))
+
+        predictor = state.predictor
+        assert predictor is not None
+
+        # Advancing computes the next item's embeddings now, reusing the already-loaded model.
+        viewer.layers["committed_objects"].data = np.ones((512, 512), dtype="uint32")
+        state.widgets["series_next"]()
+        assert os.path.exists(_zarr(1))
+        assert state.predictor is predictor
+
+        viewer.close()
 
 
 @pytest.mark.gui

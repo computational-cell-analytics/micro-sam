@@ -142,6 +142,13 @@ class SeriesAnnotatorTask:
     #: Message shown when the user advances without producing anything for the current item.
     empty_item_message = "Nothing is annotated yet. Do you wish to continue to the next image?"
 
+    def nav_extra_widgets(self):
+        """Extra magicgui widgets to place next to the Next button in the Series Navigation container.
+
+        Task-specific (e.g. the classifiers' 'Forward Classifier State' checkbox); none by default.
+        """
+        return []
+
 
 def run_image_series(
     images,
@@ -263,6 +270,8 @@ def run_image_series(
         state.widgets["series_prev"] = _do_prev
         nav_buttons.append(prev_button)
     nav_buttons.append(next_button)
+    # Task-specific controls placed next to Next (e.g. the classifiers' 'Forward Classifier State').
+    nav_buttons.extend(task.nav_extra_widgets())
 
     nav_container = Container(layout="horizontal", widgets=nav_buttons, labels=False)
     nav_container.native.layout().setContentsMargins(0, 0, 0, 0)

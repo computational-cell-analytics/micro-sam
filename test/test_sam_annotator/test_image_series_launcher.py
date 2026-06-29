@@ -120,3 +120,32 @@ def test_launcher_dispatches_to_the_selected_task(
         # The output folder is forwarded to the selected series function (positionally or by keyword).
         args, kwargs = calls[0]
         assert widget.output_folder in args or widget.output_folder in kwargs.values()
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_launcher_removes_itself_after_launch(make_napari_viewer_proxy, monkeypatch):
+    # Once the task + settings are locked in and a launch happens, the console dock removes itself so
+    # the annotator has the screen to itself.
+    from qtpy.QtWidgets import QApplication, QDockWidget
+    isa = importlib.import_module("micro_sam.sam_annotator.image_series_annotator")
+    monkeypatch.setattr(isa, "image_folder_annotator", lambda *args, **kwargs: None)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i in range(2):
+            imageio.imwrite(os.path.join(tmpdir, f"image-{i}.tif"), binary_blobs(64).astype(np.uint8) * 255)
+
+        viewer = make_napari_viewer_proxy()
+        widget = ImageSeriesAnnotator(viewer)
+        widget.folder = tmpdir
+        widget.output_folder = os.path.join(tmpdir, "out")
+        widget.pattern = "*.tif"
+        dock = viewer.window.add_dock_widget(widget, name="Image Series Annotator")
+        assert dock in viewer.window._qt_window.findChildren(QDockWidget)
+
+        widget(skip_validate=True)
+        # The removal is deferred to the event loop; flush it.
+        for _ in range(3):
+            QApplication.processEvents()
+
+        assert dock not in viewer.window._qt_window.findChildren(QDockWidget)
