@@ -282,7 +282,7 @@ def object_classifier(
 class ObjectClassificationSeriesTask(ClassificationSeriesTask):
     """Series task for the object classifier: per-item segmentation layer + projected prediction."""
 
-    dock_name = "Segment Anything for Microscopy (Object Classification)"
+    dock_name = "Segment Anything for Microscopy (Image Series Object Classification)"
     classifier_class = ObjectClassifier
     features_attr = "object_features"
     aux_attr = "seg_ids"

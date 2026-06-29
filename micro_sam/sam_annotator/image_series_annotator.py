@@ -116,7 +116,7 @@ class SegmentationSeriesTask(SeriesAnnotatorTask):
         annotator._update_image(segmentation_result=self._resolve_initial_result(entry, index))
 
         state = AnnotatorState()
-        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Segmentation)")
+        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Image Series Segmentation)")
         _sync_embedding_widget(
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
@@ -290,17 +290,28 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         super().__init__(parent=parent)
         self._viewer = viewer
 
+        # Compose all of the console's menus inside a single scrollable, bordered container (a
+        # QGroupBox, matching the bordered boxes the annotators wrap their sections in), so it reads
+        # as one panel and scrolls when the (expanded) embedding settings make it taller than the dock.
+        self._content = QtWidgets.QGroupBox()
+        self._content.setLayout(QtWidgets.QVBoxLayout())
+
         # Create the UI: options + the embedded model / embedding settings.
         self._create_options()
 
         # Add the run button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Annotate Images")
         self.run_button.clicked.connect(self.__call__)
-        self.layout().addWidget(self.run_button)
+        self._content.layout().addWidget(self.run_button)
 
         # Pack the menus to the top: the dock's extra vertical space collapses below the button
         # instead of being distributed as fixed gaps between the rows.
-        self.layout().addStretch()
+        self._content.layout().addStretch()
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._content)
+        self.layout().addWidget(scroll)
 
     def _create_options(self):
         self.folder = None
@@ -309,7 +320,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
             title="Input Folder", placeholder="Folder with images ...",
             tooltip=get_tooltip("image_series_annotator", "folder")
         )
-        self.layout().addLayout(layout)
+        self._content.layout().addLayout(layout)
         self._folder_label = layout.itemAt(0).widget()
 
         # File pattern qualifying the input folder: which files form the series.
@@ -317,7 +328,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         self._pattern_param, layout = self._add_string_param(
             "pattern", self.pattern, tooltip=get_tooltip("image_series_annotator", "pattern")
         )
-        self.layout().addLayout(layout)
+        self._content.layout().addLayout(layout)
         self._pattern_label = layout.itemAt(0).widget()
 
         self.output_folder = None
@@ -326,13 +337,13 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
             title="Output Folder", placeholder="Folder to save the results ...",
             tooltip=get_tooltip("image_series_annotator", "output_folder")
         )
-        self.layout().addLayout(layout)
+        self._content.layout().addLayout(layout)
         self._output_label = layout.itemAt(0).widget()
 
         # Model dropdown on top, then the Task dropdown below it (stacked). The model dropdown is owned
         # by the embedded embedding widget and relocated into '_model_row' in '_rebuild_embedding_widget'.
         self._model_row = QtWidgets.QHBoxLayout()
-        self.layout().addLayout(self._model_row)
+        self._content.layout().addLayout(self._model_row)
         self._model_label = None
         self._relocated_model_dropdown = None
 
@@ -344,7 +355,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         # label expands and leaves a gap between the text and the dropdown).
         size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
         self.task_dropdown.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
-        self.layout().addLayout(task_layout)
+        self._content.layout().addLayout(task_layout)
         self._task_label = task_layout.itemAt(0).widget()
 
         # Segmentation folder (object classification only), toggled by the task selector.
@@ -361,7 +372,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         seg_layout.addLayout(path_layout)
         self._seg_folder_container.setLayout(seg_layout)
         self._seg_folder_container.setVisible(False)
-        self.layout().addWidget(self._seg_folder_container)
+        self._content.layout().addWidget(self._seg_folder_container)
 
         # Embedded model / embedding settings, reusing the annotator's embedding widget so the model
         # family/size, image-dimensions and tiling controls (and, for the classifier tasks, the
@@ -369,7 +380,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         self._embedding_container = QtWidgets.QWidget()
         self._embedding_container.setLayout(QtWidgets.QVBoxLayout())
         self._embedding_container.layout().setContentsMargins(0, 0, 0, 0)
-        self.layout().addWidget(self._embedding_container)
+        self._content.layout().addWidget(self._embedding_container)
         self._embedding_widget = None
         self._rebuild_embedding_widget()
 

@@ -140,7 +140,7 @@ def pixel_classifier(
 class PixelClassificationSeriesTask(ClassificationSeriesTask):
     """Series task for the pixel classifier."""
 
-    dock_name = "Segment Anything for Microscopy (Pixel Classification)"
+    dock_name = "Segment Anything for Microscopy (Image Series Pixel Classification)"
     classifier_class = PixelClassifier
     features_attr = "pixel_features"
     aux_attr = "pixel_grid_shape"
