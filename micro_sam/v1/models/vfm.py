@@ -1,4 +1,4 @@
-"""DINO (DINOv2 / DINOv3) Vision Foundation Model encoders for the classification tools.
+"""Vision Foundation Model (DINO, UNI) encoders for the classification tools.
 
 The classification tools operate directly on dense image-encoder features, so they can use backbones
 beyond SAM. This module produces embeddings in the same `ImageEmbeddings` format that
@@ -33,7 +33,7 @@ except ImportError:
 
 from bioimage_cpp.utils import Blocking
 
-from . import util
+from ... import util
 
 # Registry of supported Vision Foundation Model encoders, keyed by the micro-sam `model_type`.
 # 'backend' selects how the model is loaded: 'torch_hub' (DINOv2, auto-download) builds 'repo'/'entrypoint'
@@ -61,7 +61,7 @@ VFM_SIZE_LABELS = {
     "uni": "large", "uni2_h": "huge",  # UNI is ViT-L, UNI2-h is ViT-H.
 }
 
-# ImageNet statistics the web-pretrained DINO models expect, applied after mapping the image to [0, 1].
+# ImageNet statistics the web-pretrained VFM models expect, applied after mapping the image to [0, 1].
 VFM_MEAN = (0.485, 0.456, 0.406)
 VFM_STD = (0.229, 0.224, 0.225)
 
@@ -80,17 +80,17 @@ def get_vfm_model_names() -> Tuple[str, ...]:
 
 
 class VFMEncoder(torch.nn.Module):
-    """Wraps a DINO model and produces dense (C, H, W) features for the classification tools.
+    """Wraps a Vision Foundation Model and produces dense (C, H, W) features for the classification tools.
 
-    Works for both backends: a torch.hub DINOv2 model and a HuggingFace `transformers` DINOv3 model.
+    Works across the RGB backends: torch.hub (DINOv2), transformers (DINOv3) and timm (UNI / UNI2-h).
     The image is mapped to RGB (via `util._to_image`, matching what SAM sees), resized so its longest
     side equals `img_size` and padded to a square multiple of the patch size, then encoded. As with the
     SAM1 image encoder, the square feature map has its content in the top-left sub-rectangle, which the
-    classification feature computation crops back to the image aspect ratio. Both backends return the
+    classification feature computation crops back to the image aspect ratio. All backends return the
     identical (C, h, w) feature contract, so downstream consumption is backend-agnostic.
 
     Args:
-        model: The loaded DINO model (a torch.hub module or a transformers model).
+        model: The loaded model (a torch.hub, transformers or timm module).
         spec: The `VFM_MODELS` entry for this model.
         img_size: The longest-side input size, snapped down to a multiple of the patch size.
         device: The device to run the encoder on.
@@ -114,9 +114,24 @@ class VFMEncoder(torch.nn.Module):
         scale = long_side / max(height, width)
         return int(round(height * scale)), int(round(width * scale))
 
+    def _to_unit_rgb(self, image: np.ndarray) -> torch.Tensor:
+        """Map an image to a (1, 3, H, W) tensor in [0, 1], preserving colour for true RGB.
+
+        A genuine 8-bit RGB image (e.g. H&E) is scaled straight by 1/255 so the stain colour is kept,
+        matching the standard DINO / UNI preprocessing. Grayscale, 2-channel or non-8-bit inputs go
+        through SAM's per-channel min-max mapping (`util._to_image`), which normalizes arbitrary intensity
+        ranges - and is colour-neutral for grayscale, since the replicated channels are scaled identically.
+        """
+        image = np.asarray(image)
+        if image.ndim == 3 and image.shape[-1] == 3 and image.dtype == np.uint8:
+            rgb = image  # true 8-bit RGB: keep the colour, just scale to [0, 1]
+        else:
+            rgb = util._to_image(image)  # (H, W, 3) uint8, per-channel min-max normalized
+        tensor = torch.from_numpy(np.ascontiguousarray(rgb)).to(self.device).float().permute(2, 0, 1)
+        return tensor.unsqueeze(0) / 255.0
+
     def _preprocess(self, image: np.ndarray) -> Tuple[torch.Tensor, Tuple[int, int]]:
-        rgb = util._to_image(image)  # (H, W, 3) uint8, identical to what SAM consumes
-        x = torch.from_numpy(np.ascontiguousarray(rgb)).to(self.device).float().permute(2, 0, 1).unsqueeze(0) / 255.0
+        x = self._to_unit_rgb(image)
         mean = torch.tensor(VFM_MEAN, device=self.device).view(1, 3, 1, 1)
         std = torch.tensor(VFM_STD, device=self.device).view(1, 3, 1, 1)
 
@@ -180,7 +195,7 @@ def get_vfm_model(
     """
     if model_type not in VFM_MODELS:
         raise ValueError(
-            f"Unknown DINO model '{model_type}'. Available models: {sorted(VFM_MODELS)}."
+            f"Unknown VFM model '{model_type}'. Available models: {sorted(VFM_MODELS)}."
         )
     spec = VFM_MODELS[model_type]
     device = util.get_device(device)
@@ -302,7 +317,7 @@ def _write_signature(f, encoder, input_, mode):
     f.attrs["vfm_mode"] = mode
 
 
-def _load_cached_dino(f, encoder, input_):
+def _load_cached_embeddings(f, encoder, input_):
     """Return cached embeddings from an opened zarr group if they match the image and model; else None."""
     if "features" not in f or f.attrs.get("vfm_mode") is None:
         return None
@@ -322,7 +337,7 @@ def _load_cached_dino(f, encoder, input_):
 
 
 def _compute_vfm_2d(encoder, input_, f, save_path, pbar_init, pbar_update):
-    from .util import _create_dataset_with_data
+    from ...util import _create_dataset_with_data
     pbar_init(1, "Compute Image Embeddings 2D")
     features, input_size = encoder.encode(input_)
     features = features[None]  # (1, C, h, w), matching the SAM1 2D layout
@@ -338,7 +353,7 @@ def _compute_vfm_2d(encoder, input_, f, save_path, pbar_init, pbar_update):
 
 
 def _compute_vfm_3d(encoder, input_, f, save_path, pbar_init, pbar_update):
-    from .util import _create_dataset_with_data
+    from ...util import _create_dataset_with_data
     n_slices = input_.shape[0]
     pbar_init(n_slices, "Compute Image Embeddings 3D")
     planes, input_size = [], None
@@ -359,7 +374,7 @@ def _compute_vfm_3d(encoder, input_, f, save_path, pbar_init, pbar_update):
 
 
 def _compute_vfm_tiled(encoder, input_, tile_shape, halo, f, pbar_init, pbar_update, is_3d):
-    from .util import _create_dataset_with_data
+    from ...util import _create_dataset_with_data
     spatial_shape = input_.shape[1:] if is_3d else input_.shape[:2]
     tiling = Blocking([0, 0], list(spatial_shape), list(tile_shape))
     n_tiles = tiling.number_of_blocks
@@ -413,13 +428,14 @@ def precompute_vfm_embeddings(
     pbar_update: Optional[callable] = None,
     **kwargs,
 ) -> util.ImageEmbeddings:
-    """Compute DINO image embeddings in the `ImageEmbeddings` format used by the classification tools.
+    """Compute VFM image embeddings in the `ImageEmbeddings` format used by the classification tools.
 
     This mirrors `micro_sam.v1.util.precompute_image_embeddings` (same signature and return contract) so
-    it can be used as a drop-in for DINO encoders. Supports 2D and 3D images, with or without tiling.
+    it can be used as a drop-in for VFM (DINO / UNI) encoders. Supports 2D and 3D images, with or without
+    tiling.
 
     Args:
-        predictor: The DINO encoder (named 'predictor' to match the SAM precompute signature).
+        predictor: The VFM encoder (named 'predictor' to match the SAM precompute signature).
         input_: The input data, 2D (H, W[, C]) or 3D (Z, H, W[, C]).
         save_path: Optional path to a zarr container to cache the embeddings.
         ndim: The dimensionality of the data. If not given, deduced from the input.
@@ -443,7 +459,7 @@ def precompute_vfm_embeddings(
         f = zarr.group()
     elif os.path.exists(save_path):
         f = zarr.open(save_path, mode="a")
-        cached = _load_cached_dino(f, predictor, input_)
+        cached = _load_cached_embeddings(f, predictor, input_)
         if cached is not None:
             return cached
         f = zarr.open(save_path, mode="w")

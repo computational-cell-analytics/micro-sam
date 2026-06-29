@@ -2069,8 +2069,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     Since classification operates directly on the image-encoder embeddings, it can additionally use
     models beyond SAM2. An opt-in 'Advanced Models' checkbox in the embedding settings swaps that one
     dropdown to the advanced families instead of adding a second dropdown. The advanced tier holds both
-    the SAM1 families and the DINO Vision Foundation Model families (`_advanced_family_suffixes` and
-    `_dino_families`).
+    the SAM1 families and the VFM (DINO / UNI) families (`_advanced_family_suffixes` and `_dino_families`).
     """
 
     size_order = ["tiny", "small", "base", "large", "huge", "giant"]
@@ -2086,7 +2085,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     }
     _advanced_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
     # Vision Foundation Model families beyond SAM: UI label -> the registry model_types in that family
-    # (ordered by size). Sizes/names come from 'micro_sam.vfm.VFM_MODELS'/'VFM_SIZE_LABELS', not the
+    # (ordered by size). Sizes/names come from 'micro_sam.v1.models.vfm.VFM_MODELS'/'VFM_SIZE_LABELS', not the
     # SAM1 naming scheme. DINOv2/v3 are natural-image (LVD-1689M) models; UNI/UNI2-h are histopathology.
     _dino_families = {
         "Natural Images (DINOv2)": ("dino_v2_vits", "dino_v2_vitb", "dino_v2_vitl", "dino_v2_vitg"),
@@ -2098,7 +2097,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     _primary_family_aliases = {"Natural Images (SAM2)": "Natural Images", "Microscopy (SAM2)": "Microscopy"}
 
     def _all_advanced_families(self):
-        # The advanced tier combines the SAM1 families and the DINO Vision Foundation Model families.
+        # The advanced tier combines the SAM1 families and the VFM (DINO / UNI) families.
         return list(self._advanced_family_suffixes) + list(self._dino_families)
 
     def _is_dino_active(self):
@@ -2188,7 +2187,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         full_size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
         for family, models in self._dino_families.items():  # VFM families (DINO / UNI).
             if model_name in models:
-                from ..vfm import VFM_SIZE_LABELS
+                from ..v1.models.vfm import VFM_SIZE_LABELS
                 return family, VFM_SIZE_LABELS.get(model_name)
         if model_name.startswith("hvit_"):  # SAM2 (primary families).
             size = full_size_map.get(model_name[5])
@@ -2209,7 +2208,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         if not self._advanced_active():
             return super()._get_model_size_options()
         if self._is_dino_active():
-            from ..vfm import VFM_SIZE_LABELS
+            from ..v1.models.vfm import VFM_SIZE_LABELS
             models = self._dino_families[self.model_family]
             self.model_size_mapping = {VFM_SIZE_LABELS[m]: m for m in models}
             self.model_size_options = sorted(self.model_size_mapping.keys(), key=self.size_order.index)
