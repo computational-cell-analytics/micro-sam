@@ -1,7 +1,7 @@
 """Shared navigation harness for the image series annotator.
 
 Hosts any per-task annotator (segmentation, tracking, classification) and drives
-Next/Previous navigation, the skip-already-done check and per-item loading/saving
+forward navigation, the skip-already-done check and per-item loading/saving
 through a small task-adapter interface (`SeriesAnnotatorTask`). The harness is
 task-agnostic; everything task-specific lives in the concrete adapter.
 """
@@ -100,10 +100,6 @@ class SeriesAnnotatorTask:
 
     #: Whether the series inputs are in-memory arrays (True) or file paths (False). Set by the harness.
     have_inputs_as_arrays = False
-
-    #: Whether backward (Previous) navigation is offered. Tasks that accumulate state forward across
-    #: the series (e.g. the classifiers, which would double-count features on revisit) set this False.
-    supports_previous = True
 
     def result_filename(self, entry, index: int) -> str:
         """Return the filename (relative to `output_folder`) of this item's saved result.
@@ -245,32 +241,17 @@ def run_image_series(
             return
         _go_to(index)
 
-    def _do_prev(*args):
-        if current_index == 0:
-            widgets._generate_message("info", "This is already the first image.")
-            return
-        # Save the current item before stepping back so progress is not lost.
-        _save_current()
-        _go_to(current_index - 1)
-
-    # Build a single navigation container (Previous + Next) and embed it as a section inside the
-    # docked annotator, so the controls travel with the image series annotator instead of as
-    # separate floating dock widgets. The actions are also tracked in the shared state, so they can
-    # be triggered programmatically (e.g. in tests) just like the annotator's own widgets.
+    # Embed the navigation controls in the docked annotator, so they travel with the image series
+    # annotator instead of as a separate floating dock widget. The action is also tracked in the
+    # shared state, so it can be triggered programmatically (e.g. in tests) just like the annotator's
+    # own widgets.
     state = AnnotatorState()
     next_button = PushButton(text="Next Image [N]")
     next_button.clicked.connect(lambda: _do_next())
     state.widgets["series_next"] = _do_next
 
-    nav_buttons = []
-    # Backward navigation is only offered for tasks that do not accumulate state forward.
-    if task.supports_previous:
-        prev_button = PushButton(text="Previous Image [P]")
-        prev_button.clicked.connect(lambda: _do_prev())
-        state.widgets["series_prev"] = _do_prev
-        nav_buttons.append(prev_button)
-    nav_buttons.append(next_button)
-    # Task-specific controls placed next to Next (e.g. the classifiers' 'Forward Classifier State').
+    nav_buttons = [next_button]
+    # Task-specific controls placed next to Next (e.g. the classifiers' 'Keep Classifier').
     nav_buttons.extend(task.nav_extra_widgets())
 
     nav_container = Container(layout="horizontal", widgets=nav_buttons, labels=False)
@@ -280,11 +261,6 @@ def run_image_series(
     @viewer.bind_key("n", overwrite=True)
     def _next_image(viewer):
         _do_next()
-
-    if task.supports_previous:
-        @viewer.bind_key("p", overwrite=True)
-        def _prev_image(viewer):
-            _do_prev()
 
     if return_viewer:
         return viewer

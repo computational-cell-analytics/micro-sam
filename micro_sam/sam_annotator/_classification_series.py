@@ -23,10 +23,6 @@ from .util import _sync_embedding_widget
 class ClassificationSeriesTask(SeriesAnnotatorTask):
     """Series task base for the classifiers; subclasses bind the concrete widget and state attrs."""
 
-    # Classification accumulates labeled features forward across the series; revisiting an item would
-    # double-count its features, so backward navigation is disabled.
-    supports_previous = False
-
     # Bound by subclasses.
     classifier_class = None  # ObjectClassifier | PixelClassifier
     dock_name = "Segment Anything for Microscopy"
@@ -99,7 +95,7 @@ class ClassificationSeriesTask(SeriesAnnotatorTask):
     def nav_extra_widgets(self):
         # A checkbox next to the Next button (classification tasks only), on by default, to carry the
         # classifier state forward across the series. Tracked in the state so it is reachable in tests.
-        self._forward_state = CheckBox(value=True, text="Forward Classifier State")
+        self._forward_state = CheckBox(value=True, text="Keep Classifier")
         self._forward_state.native.setToolTip(get_tooltip("classification", "forward_classifier_state"))
         AnnotatorState().widgets["series_forward_state"] = self._forward_state
         return [self._forward_state]

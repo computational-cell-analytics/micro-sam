@@ -484,10 +484,6 @@ class TrackingSeriesTask(SeriesAnnotatorTask):
 
     empty_item_message = "Nothing is tracked yet. Do you wish to continue to the next timeseries?"
 
-    # Forward-only: the tracking annotator cannot yet restore a committed result (it would also need to
-    # deserialize the lineage), so stepping back into a saved video is not supported.
-    supports_previous = False
-
     def __init__(
         self, *, model_type, embedding_path=None, tile_shape=None, halo=None,
         checkpoint_path=None, decoder_path=None, device=None, precompute_amg_state=False,

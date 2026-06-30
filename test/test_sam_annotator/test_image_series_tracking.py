@@ -16,7 +16,7 @@ from micro_sam.sam_annotator.annotator_tracking import AnnotatorTracking, image_
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_image_series_tracking_navigation(make_napari_viewer_proxy):
     """Drive the tracking series harness: each item is a video, advancing saves the tracks and loads
-    the next video. Tracking is forward-only, so no Previous control is offered.
+    the next video.
     """
     videos = [np.stack(3 * [binary_blobs(256)]).astype("float32") for _ in range(2)]
 
@@ -30,7 +30,7 @@ def test_image_series_tracking_navigation(make_napari_viewer_proxy):
         state = AnnotatorState()
         assert isinstance(state.annotator, AnnotatorTracking)
         assert "committed_objects" in viewer.layers
-        # Forward-only: only the Next control is registered.
+        # Only the Next control is registered.
         assert "series_next" in state.widgets
         assert "series_prev" not in state.widgets
 

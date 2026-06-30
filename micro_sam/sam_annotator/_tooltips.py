@@ -82,6 +82,7 @@ tooltips = {
     "image_series_annotator": {
         "folder": "Select the folder with the images to annotate.",
         "output_folder": "Select the folder for saving the segmentation results.",
+        "continue_annotation": "Resume at the first image without a saved result in the output folder. Uncheck to restart at the first image and load existing segmentations for review or editing.",  # noqa
         "pattern": "Select a pattern for selecting files. E.g. '*.tif' to only select tif files. By default all files in the input folder are selected.",  # noqa
         "ndim": "The spatial dimensionality of the data.",
         "task": "The annotation task to run over the series: interactive segmentation, tracking (each file is a timeseries), or object / pixel classification.",  # noqa

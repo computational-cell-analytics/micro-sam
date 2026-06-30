@@ -54,9 +54,7 @@ def test_image_series_annotator(make_napari_viewer_proxy):
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_image_series_navigation(make_napari_viewer_proxy):
-    """Drive the Next/Previous navigation harness: forward saves and advances, backward saves,
-    steps back and reloads the previously saved result.
-    """
+    """Drive the forward-only navigation harness: advancing saves and loads the next image."""
     n_images = 3
     model_type = DEFAULT_MODEL
 
@@ -69,8 +67,9 @@ def test_image_series_navigation(make_napari_viewer_proxy):
             image_paths, output_folder, model_type=model_type, viewer=viewer, return_viewer=True,
         )
 
-        next_image = AnnotatorState().widgets["series_next"]
-        prev_image = AnnotatorState().widgets["series_prev"]
+        state = AnnotatorState()
+        next_image = state.widgets["series_next"]
+        assert "series_prev" not in state.widgets
 
         # In a series session the launcher owns the embedding settings, so the docked annotator's
         # embedding section is hidden (its wrapping group box is explicitly hidden).
@@ -98,10 +97,6 @@ def test_image_series_navigation(make_napari_viewer_proxy):
         next_image()
         assert os.path.exists(_result_path(1))
         np.testing.assert_array_equal(imageio.imread(_result_path(1)), seg1)
-
-        # Step back from item 2 to item 1: the previously saved segmentation should be reloaded.
-        prev_image()
-        np.testing.assert_array_equal(viewer.layers["committed_objects"].data, seg1)
 
         viewer.close()  # must close the viewer at the end of tests
 
@@ -172,3 +167,36 @@ def test_image_folder_annotator(make_napari_viewer_proxy):
 
         check_layer_initialization(viewer, (512, 512))
         viewer.close()  # must close the viewer at the end of tests
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_image_series_continue_or_restart(make_napari_viewer_proxy):
+    """Existing outputs are completion markers when continuing and editable inputs when restarting."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        image_paths = _create_images(tmpdir, 3)
+        output_folder = os.path.join(tmpdir, "segmentation_results")
+        os.makedirs(output_folder)
+
+        completed = np.full((512, 512), 7, dtype="uint32")
+        imageio.imwrite(os.path.join(output_folder, "image-0.tif"), completed)
+
+        # Continue mode skips the completed first image and starts at the first missing output.
+        viewer = make_napari_viewer_proxy()
+        viewer = image_series_annotator(
+            image_paths, output_folder, model_type=DEFAULT_MODEL,
+            viewer=viewer, return_viewer=True, skip_segmented=True,
+        )
+        np.testing.assert_array_equal(viewer.layers["image"].data, imageio.imread(image_paths[1]))
+        assert viewer.layers["committed_objects"].data.sum() == 0
+        viewer.close()
+
+        # Restart mode begins at image 0 and loads its saved segmentation for review or editing.
+        viewer = make_napari_viewer_proxy()
+        viewer = image_series_annotator(
+            image_paths, output_folder, model_type=DEFAULT_MODEL,
+            viewer=viewer, return_viewer=True, skip_segmented=False,
+        )
+        np.testing.assert_array_equal(viewer.layers["image"].data, imageio.imread(image_paths[0]))
+        np.testing.assert_array_equal(viewer.layers["committed_objects"].data, completed)
+        viewer.close()

@@ -17,8 +17,13 @@ def test_launcher_task_selector_toggles_segmentation_folder(make_napari_viewer_p
     viewer = make_napari_viewer_proxy()
     widget = ImageSeriesAnnotator(viewer)
 
+    # Continuing from existing outputs is enabled by default.
+    assert widget.continue_annotation is True
+    assert widget.continue_annotation_checkbox.isChecked()
+
     # The task dropdown offers all tasks and defaults to segmentation, with the segmentation folder hidden.
     assert widget.task == "Segmentation"
+    assert widget.continue_annotation_checkbox.isVisibleTo(widget)
     items = [widget.task_dropdown.itemText(i) for i in range(widget.task_dropdown.count())]
     assert items == TASKS
     assert not widget._seg_folder_container.isVisibleTo(widget)
@@ -27,9 +32,13 @@ def test_launcher_task_selector_toggles_segmentation_folder(make_napari_viewer_p
     widget.task_dropdown.setCurrentText("Object Classification")
     assert widget.task == "Object Classification"
     assert widget._seg_folder_container.isVisibleTo(widget)
+    assert not widget.continue_annotation_checkbox.isVisibleTo(widget)
 
     widget.task_dropdown.setCurrentText("Pixel Classification")
     assert not widget._seg_folder_container.isVisibleTo(widget)
+
+    widget.task_dropdown.setCurrentText("Segmentation")
+    assert widget.continue_annotation_checkbox.isVisibleTo(widget)
 
 
 @pytest.mark.gui
@@ -120,6 +129,32 @@ def test_launcher_dispatches_to_the_selected_task(
         # The output folder is forwarded to the selected series function (positionally or by keyword).
         args, kwargs = calls[0]
         assert widget.output_folder in args or widget.output_folder in kwargs.values()
+        if task == "Segmentation":
+            assert kwargs["skip_segmented"] is True
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_launcher_can_restart_segmentation_from_first_image(make_napari_viewer_proxy, monkeypatch):
+    isa = importlib.import_module("micro_sam.sam_annotator.image_series_annotator")
+    calls = []
+    monkeypatch.setattr(isa, "image_folder_annotator", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        imageio.imwrite(os.path.join(tmpdir, "image.tif"), binary_blobs(64).astype(np.uint8) * 255)
+
+        viewer = make_napari_viewer_proxy()
+        widget = ImageSeriesAnnotator(viewer)
+        widget.folder = tmpdir
+        widget.output_folder = os.path.join(tmpdir, "out")
+        widget.pattern = "*.tif"
+        widget.continue_annotation_checkbox.setChecked(False)
+
+        widget(skip_validate=True)
+
+        assert not widget.continue_annotation
+        assert len(calls) == 1
+        assert calls[0][1]["skip_segmented"] is False
 
 
 @pytest.mark.gui

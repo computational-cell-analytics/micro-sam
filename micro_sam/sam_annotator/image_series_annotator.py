@@ -3,6 +3,7 @@ from glob import glob
 from typing import List, Optional, Union, Tuple
 
 import numpy as np
+
 import imageio.v3 as imageio
 
 import torch
@@ -188,9 +189,9 @@ def image_series_annotator(
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
             By default, set to 'True'.
-        skip_segmented: Whether to skip images that were already segmented.
-            If set to False, then segmentations that already exist will be loaded
-            and used to populate the 'committed_objects' layer.
+        skip_segmented: Whether existing output files mark images as completed. If True, resume at
+            the first image without an output and skip any later completed images. If False, start
+            at the first image and load existing segmentations into the 'committed_objects' layer.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -337,6 +338,12 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
             title="Output Folder", placeholder="Folder to save the results ...",
             tooltip=get_tooltip("image_series_annotator", "output_folder")
         )
+        self.continue_annotation = True
+        self.continue_annotation_checkbox = self._add_boolean_param(
+            "continue_annotation", self.continue_annotation, title="Continue Annotation",
+            tooltip=get_tooltip("image_series_annotator", "continue_annotation"),
+        )
+        layout.addWidget(self.continue_annotation_checkbox)
         self._content.layout().addLayout(layout)
         self._output_label = layout.itemAt(0).widget()
 
@@ -444,6 +451,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
     def _on_task_changed(self, *args):
         self.task = self.task_dropdown.currentText()
         self._seg_folder_container.setVisible(self.task == "Object Classification")
+        self.continue_annotation_checkbox.setVisible(self.task == "Segmentation")
         self._rebuild_embedding_widget()
 
     def _update_default_tiling(self, *args):
@@ -519,7 +527,8 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         if self.task == "Segmentation":
             image_folder_annotator(
                 input_folder=self.folder, output_folder=self.output_folder, ndim=ndim,
-                pattern=self.pattern, embedding_path=ew.embeddings_save_path, **common,
+                pattern=self.pattern, embedding_path=ew.embeddings_save_path,
+                skip_segmented=bool(self.continue_annotation), **common,
             )
         else:
             image_files = sorted(glob(os.path.join(self.folder, self.pattern)))
