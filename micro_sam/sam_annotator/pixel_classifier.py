@@ -1,7 +1,8 @@
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import napari
 import numpy as np
+import imageio.v3 as imageio
 import torch
 
 from .. import util
@@ -10,6 +11,8 @@ from ..pixel_classification import (
     accumulate_pixel_labels, compute_pixel_features, project_prediction_to_image, train_pixel_classifier,
 )
 from ._annotator import _ClassifierBase
+from ._series import run_image_series
+from ._classification_series import ClassificationSeriesTask
 from ._state import AnnotatorState
 from . import _widgets as widgets
 from .util import _sync_embedding_widget
@@ -117,7 +120,7 @@ def pixel_classifier(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator, name="(Pixel Classifier) Segment Anything for Microscopy")
+    viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Pixel Classification)")
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
@@ -132,3 +135,68 @@ def pixel_classifier(
         return viewer
 
     napari.run()
+
+
+class PixelClassificationSeriesTask(ClassificationSeriesTask):
+    """Series task for the pixel classifier."""
+
+    dock_name = "Segment Anything for Microscopy (Image Series Pixel Classification)"
+    classifier_class = PixelClassifier
+    features_attr = "pixel_features"
+    aux_attr = "pixel_grid_shape"
+    rf_attr = "pixel_rf"
+
+
+def image_series_pixel_classifier(
+    images: List[np.ndarray],
+    output_folder: str,
+    embedding_paths: Optional[List[Union[str, util.ImageEmbeddings]]] = None,
+    model_type: str = DEFAULT_MODEL,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    checkpoint_path: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    ndim: Optional[int] = None,
+    viewer: Optional["napari.viewer.Viewer"] = None,
+    return_viewer: bool = False,
+    skip_done: bool = False,
+) -> Optional["napari.viewer.Viewer"]:
+    """Start the pixel classifier for a list of images.
+
+    This function saves the per-pixel features and labels across the series, so a random forest can be
+    trained on multiple images, plus the per-image prediction and the trained classifier.
+
+    Args:
+        images: The input images.
+        output_folder: The folder where predictions, the trained random forest and the accumulated
+            features/labels are saved.
+        embedding_paths: Filepaths where to save/load the embeddings, one per image.
+        model_type: The Segment Anything model to use. For details on the available models check out
+            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+            If `None` then the whole image is passed to Segment Anything.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
+        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        device: The computational device to use for the SAM model.
+            By default, automatically chooses the best available device.
+        ndim: The dimensionality of the data. If not given will be derived from the data.
+        viewer: The viewer to which the functionality should be added.
+        return_viewer: Whether to return the napari viewer instead of starting the event loop.
+        skip_done: Whether to skip images whose prediction already exists in `output_folder`.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
+    """
+    have_inputs_as_arrays = isinstance(images[0], np.ndarray)
+    if ndim is None:
+        first = images[0] if have_inputs_as_arrays else imageio.imread(images[0])
+        ndim = first.ndim - 1 if first.shape[-1] == 3 and first.ndim in (3, 4) else first.ndim
+
+    task = PixelClassificationSeriesTask(
+        ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,
+        tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
+    )
+    return run_image_series(
+        images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
+        viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
+    )

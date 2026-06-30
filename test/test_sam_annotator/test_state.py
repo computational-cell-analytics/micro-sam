@@ -2,11 +2,11 @@ import unittest
 
 from skimage.data import binary_blobs
 from magicgui.widgets import Container
-from micro_sam.util import VIT_T_SUPPORT
+from micro_sam.v2.util import DEFAULT_MODEL
 
 
 class TestState(unittest.TestCase):
-    model_type = "vit_t" if VIT_T_SUPPORT else "vit_b"
+    model_type = DEFAULT_MODEL
 
     def test_state_for_interactive_segmentation(self):
         from micro_sam.sam_annotator._state import AnnotatorState

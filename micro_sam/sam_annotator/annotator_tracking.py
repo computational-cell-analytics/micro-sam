@@ -1,7 +1,9 @@
+import os
 from typing import List, Optional, Tuple, Union
 
 import napari
 import numpy as np
+import imageio.v3 as imageio
 import torch
 from magicgui.widgets import ComboBox, Container
 
@@ -10,6 +12,7 @@ from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
 from . import util as vutil
 from ._annotator import _AnnotatorBase
+from ._series import SeriesAnnotatorTask, run_image_series
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 
@@ -455,7 +458,7 @@ def annotator_tracking(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator)
+    viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Tracking)")
     vutil._sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=(
@@ -474,6 +477,140 @@ def annotator_tracking(
         return viewer
 
     napari.run()
+
+
+class TrackingSeriesTask(SeriesAnnotatorTask):
+    """Series task for tracking: each item is a TYX timeseries tracked independently."""
+
+    empty_item_message = "Nothing is tracked yet. Do you wish to continue to the next timeseries?"
+
+    def __init__(
+        self, *, model_type, embedding_path=None, tile_shape=None, halo=None,
+        checkpoint_path=None, decoder_path=None, device=None, precompute_amg_state=False,
+    ):
+        _validate_tracking_model_type(model_type)
+        self.model_type = model_type
+        self.embedding_path = embedding_path
+        self.tile_shape = tile_shape
+        self.halo = halo
+        self.checkpoint_path = checkpoint_path
+        self.decoder_path = decoder_path
+        self.device = device
+        self.precompute_amg_state = precompute_amg_state
+
+    def result_filename(self, entry, index):
+        if self.have_inputs_as_arrays:
+            return f"tracks_{index:05}.tif"
+        return os.path.splitext(os.path.basename(entry))[0] + "_tracks.tif"
+
+    def precompute(self, images):
+        # The SAM2 video embeddings are computed lazily per video in start/advance. When an embedding
+        # folder is given, derive one per-video zarr path inside it; otherwise keep them in memory.
+        if self.embedding_path is None:
+            return [None] * len(images)
+        os.makedirs(self.embedding_path, exist_ok=True)
+        if self.have_inputs_as_arrays:
+            return [os.path.join(self.embedding_path, f"tracking_{i:05}.zarr") for i in range(len(images))]
+        return [
+            os.path.join(self.embedding_path, os.path.splitext(os.path.basename(p))[0] + ".zarr") for p in images
+        ]
+
+    def _init_predictor(self, image, embedding_path, reuse):
+        state = AnnotatorState()
+        # Reuse the loaded model and decoder on subsequent videos (only the embeddings and the
+        # interactive segmenter are rebuilt per video).
+        if reuse and state.predictor is not None:
+            kwargs = dict(predictor=state.predictor, decoder=state.decoder, prefer_decoder=False)
+        else:
+            kwargs = dict(prefer_decoder=True)
+        state.initialize_predictor(
+            image, model_type=self.model_type, save_path=embedding_path, halo=self.halo,
+            tile_shape=self.tile_shape, ndim=3, checkpoint_path=self.checkpoint_path,
+            decoder_path=self.decoder_path, device=self.device,
+            precompute_amg_state=self.precompute_amg_state, use_cli=True, **kwargs,
+        )
+        state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
+
+    def start(self, viewer, entry, image, embedding_path, index):
+        self._init_predictor(image, embedding_path, reuse=False)
+        viewer.add_image(image, name="image")
+        AnnotatorState().image_scale = tuple(viewer.layers["image"].scale)
+
+        annotator = AnnotatorTracking(viewer, reset_state=False)
+        annotator._update_image()
+
+        state = AnnotatorState()
+        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Image Series Tracking)")
+        vutil._sync_embedding_widget(
+            widget=state.widgets["embeddings"],
+            model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
+            save_path=embedding_path, checkpoint_path=self.checkpoint_path,
+            device=self.device, tile_shape=self.tile_shape, halo=self.halo,
+        )
+        return annotator
+
+    def advance(self, viewer, annotator, entry, image, embedding_path, index):
+        viewer.layers["image"].data = image
+        self._init_predictor(image, embedding_path, reuse=True)
+        AnnotatorState().image_scale = tuple(viewer.layers["image"].scale)
+        annotator._update_image()
+
+    def has_unsaved_content(self, viewer):
+        return viewer.layers["committed_objects"].data.sum() != 0
+
+    def save_item(self, viewer, entry, index):
+        save_path = os.path.join(self.output_folder, self.result_filename(entry, index))
+        imageio.imwrite(save_path, viewer.layers["committed_objects"].data, compression="zlib")
+
+
+def image_series_tracking_annotator(
+    images: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
+    output_folder: str,
+    *,
+    model_type: str = DEFAULT_MODEL,
+    embedding_path: Optional[str] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    checkpoint_path: Optional[str] = None,
+    decoder_path: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    precompute_amg_state: bool = False,
+    viewer: Optional["napari.viewer.Viewer"] = None,
+    return_viewer: bool = False,
+    skip_done: bool = True,
+) -> Optional["napari.viewer.Viewer"]:
+    """Run the tracking annotation tool for a series of timeseries (each item is one TYX video).
+
+    Args:
+        images: List of timeseries (TYX arrays) or file paths, each tracked independently.
+        output_folder: The folder where the per-video tracking results are saved.
+        model_type: The micro-sam2/SAM2 model to use (must start with 'hvit_').
+        embedding_path: Folder where to save/load the per-video embeddings.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+            If `None` then the whole image is passed to Segment Anything.
+        halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
+        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        decoder_path: Path to a custom decoder checkpoint from which to load the `micro-sam` decoder.
+        device: The computational device to use for the SAM model.
+            By default, automatically chooses the best available device.
+        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+        viewer: The viewer to which the functionality should be added.
+        return_viewer: Whether to return the napari viewer instead of starting the event loop.
+        skip_done: Whether to skip videos whose tracking result already exists in `output_folder`.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
+    """
+    have_inputs_as_arrays = isinstance(images[0], np.ndarray)
+    task = TrackingSeriesTask(
+        model_type=model_type, embedding_path=embedding_path, tile_shape=tile_shape, halo=halo,
+        checkpoint_path=checkpoint_path, decoder_path=decoder_path, device=device,
+        precompute_amg_state=precompute_amg_state,
+    )
+    return run_image_series(
+        images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
+        viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
+    )
 
 
 def main():

@@ -82,8 +82,11 @@ tooltips = {
     "image_series_annotator": {
         "folder": "Select the folder with the images to annotate.",
         "output_folder": "Select the folder for saving the segmentation results.",
+        "continue_annotation": "Resume at the first image without a saved result in the output folder. Uncheck to restart at the first image and load existing segmentations for review or editing.",  # noqa
         "pattern": "Select a pattern for selecting files. E.g. '*.tif' to only select tif files. By default all files in the input folder are selected.",  # noqa
         "ndim": "The spatial dimensionality of the data.",
+        "task": "The annotation task to run over the series: interactive segmentation, tracking (each file is a timeseries), or object / pixel classification.",  # noqa
+        "segmentation_folder": "Object classification only: a folder with one segmentation per image to classify. Leave empty to produce the segmentations in the tool.",  # noqa
     },
     "training": {
         "checkpoint": "Select a checkpoint (saved model) to resume training from.",
@@ -110,6 +113,7 @@ tooltips = {
     },
     "classification": {
         "settings": "Optional classifier settings: PCA feature reduction, AnyUp upsampling, the random seed, and loading or exporting a trained classifier.",  # noqa
+        "forward_classifier_state": "Carry the classifier across images in the series: annotated features from previous images are stacked with the current one, a fresh random forest is trained on the combined set, and it is applied to the next image automatically (even without new annotations). Uncheck to classify each image independently.",  # noqa
         "segmentation": "Select the segmentation (labels) layer whose objects will be classified.",
         "train_button": "Train the random forest on all current annotations and predict on the image. Shortcut: Shift + T.",  # noqa
         "clear_button": "Clear the annotation scribbles and the prediction (whole volume, or the current slice for 3d data when 'Apply to Volume' is unchecked). Shortcut: C.",  # noqa

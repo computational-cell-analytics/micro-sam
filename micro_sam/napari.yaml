@@ -38,10 +38,9 @@ contributions:
     - id: micro_sam.annotator_tracking
       python_name: micro_sam.sam_annotator.annotator_tracking:AnnotatorTracking
       title: Start the tracking annotator
-    # Temporarily disabled until the image series annotator is ready to be exposed in napari again.
-    # - id: micro_sam.image_series_annotator
-    #   python_name: micro_sam.sam_annotator.image_series_annotator:ImageSeriesAnnotator
-    #   title: Run the annotator for multiple images in a folder
+    - id: micro_sam.image_series_annotator
+      python_name: micro_sam.sam_annotator.image_series_annotator:ImageSeriesAnnotator
+      title: Run the annotator for multiple images in a folder
     - id: micro_sam.object_classifier
       python_name: micro_sam.sam_annotator.object_classifier:ObjectClassifier
       title: Start the SAM based object classifier
@@ -80,8 +79,8 @@ contributions:
       display_name: Segmentation Annotator
     - command: micro_sam.annotator_tracking
       display_name: Tracking Annotator
-    # - command: micro_sam.image_series_annotator
-    #   display_name: Image Series Annotator
+    - command: micro_sam.image_series_annotator
+      display_name: Image Series Annotator
     - command: micro_sam.object_classifier
       display_name: Object Classifier
     - command: micro_sam.pixel_classifier

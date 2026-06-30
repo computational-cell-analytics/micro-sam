@@ -916,3 +916,25 @@ def _load_is_state(embedding_path):
             is_state[i] = state
 
     return is_state
+
+
+def suppress_eventemitter_loop_errors():
+    """Swallow vispy's benign 'EventEmitter loop detected!' RuntimeError so it stops clogging the
+    napari trace. napari routes uncaught Qt-slot exceptions through its notification manager
+    (installed as `sys.excepthook`); this wraps it to drop that one message and pass everything else
+    through. Idempotent."""
+    import sys
+    from napari.utils.notifications import notification_manager as nm
+
+    if getattr(nm, "_micro_sam_loop_filter_installed", False):
+        return
+    original = nm.receive_error
+
+    def filtered(exctype, value, traceback=None, thread=None):
+        if isinstance(value, RuntimeError) and "EventEmitter loop detected" in str(value):
+            return
+        return original(exctype, value, traceback, thread)
+
+    nm.receive_error = filtered
+    sys.excepthook = filtered
+    nm._micro_sam_loop_filter_installed = True

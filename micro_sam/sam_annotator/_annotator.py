@@ -428,6 +428,29 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             image = self._viewer.layers["image"].data
         return image, upsampler, True
 
+    def accumulate_series_features(self):
+        """Add the current image's labeled features to the running training set (image series).
+
+        Uses the per-tool feature and label hooks so it works for both classifiers. No-op when the
+        features cannot be computed or when the current image has no annotations.
+        """
+        features, aux = self._compute_features()
+        if features is None:
+            return
+        labels = self._compute_training_labels(aux)
+        if labels is None:
+            return
+        valid = labels != 0
+        if valid.sum() == 0:
+            return
+        state = AnnotatorState()
+        new_features, new_labels = features[valid], labels[valid]
+        if state.previous_features is None:
+            state.previous_features, state.previous_labels = new_features, new_labels
+        else:
+            state.previous_features = np.concatenate([state.previous_features, new_features], axis=0)
+            state.previous_labels = np.concatenate([state.previous_labels, new_labels], axis=0)
+
     #
     # Layers.
     #
