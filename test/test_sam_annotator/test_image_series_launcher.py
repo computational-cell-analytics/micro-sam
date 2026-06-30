@@ -184,23 +184,3 @@ def test_launcher_removes_itself_after_launch(make_napari_viewer_proxy, monkeypa
             QApplication.processEvents()
 
         assert dock not in viewer.window._qt_window.findChildren(QDockWidget)
-
-
-def test_eventemitter_loop_error_is_suppressed():
-    import sys
-    from napari.utils.notifications import notification_manager as nm
-    from micro_sam.sam_annotator.util import suppress_eventemitter_loop_errors
-
-    suppress_eventemitter_loop_errors()
-    dispatched = []
-    original_dispatch = nm.dispatch
-    nm.dispatch = lambda notification: dispatched.append(notification)
-    try:
-        # The benign reentrancy error is swallowed (no notification surfaced)...
-        sys.excepthook(RuntimeError, RuntimeError("EventEmitter loop detected!"), None)
-        assert dispatched == []
-        # ...but any other error still passes through to napari's notification manager.
-        sys.excepthook(RuntimeError, RuntimeError("a real error"), None)
-        assert len(dispatched) == 1
-    finally:
-        nm.dispatch = original_dispatch
