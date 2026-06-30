@@ -10,6 +10,7 @@ tooltips = {
         "model_family": "Select the segment anything 2 model family.",
         "model_family_advanced": "Select the advanced (non-SAM2) model family, e.g. a SAM1 family. Switched on via 'Advanced Models' in the embedding settings.",  # noqa
         "model_size": "Select the image encoder size of the segment anything 2 model.",
+        "region": "Compute embeddings for the full image or for one rectangle selected in the 'geometry' layer. The ROI becomes a new selected image layer while the source stays open. For 3D volumes and timeseries, the rectangle crops Y/X across all slices or frames.",  # noqa
         "advanced_model": "Switch the model list above to advanced models beyond the default SAM2 models (currently SAM1). Only available for the classification tools.",  # noqa
         "automatic_segmentation_mode": "Select the automatic segmentation mode.",
         "run_button": "Compute embeddings or load embeddings if embedding_save_path is specified.",
