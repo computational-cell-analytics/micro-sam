@@ -16,7 +16,6 @@ from qtpy.QtCore import Qt, QTimer
 
 from . import _widgets as widgets
 from ._state import AnnotatorState
-from .util import suppress_eventemitter_loop_errors
 
 
 def _hide_embedding_widget(annotator):
@@ -172,9 +171,6 @@ def run_image_series(
         The napari viewer, only if `return_viewer=True`.
     """
     end_msg = "You have annotated the last image. Do you wish to close napari?"
-    # Rapid input (fast Next, prompt + Segment) can re-enter napari's event emitters, raising vispy's
-    # benign 'EventEmitter loop detected!' that clogs the trace; filter it out.
-    suppress_eventemitter_loop_errors()
     os.makedirs(output_folder, exist_ok=True)
     task.output_folder = output_folder
     task.have_inputs_as_arrays = have_inputs_as_arrays
