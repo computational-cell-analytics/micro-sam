@@ -38,6 +38,7 @@ def test_classifier_recreates_label_layers_for_3d(make_napari_viewer_proxy, clas
     state = AnnotatorState()
     state.image_shape = None
     state.image_scale = None
+    state.ndim = None
     state.skip_recomputing_embeddings = False
 
     viewer = make_napari_viewer_proxy()
