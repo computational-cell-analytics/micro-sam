@@ -221,7 +221,8 @@ def _check_model(model_description, input_paths, result_paths):
     # Load outputs.
     mask = np.load(result_paths["mask"])
 
-    with bioimageio.core.create_prediction_pipeline(model_description) as pp:
+    # Match the device used to generate the reference outputs.
+    with bioimageio.core.create_prediction_pipeline(model_description, devices=["cpu"]) as pp:
 
         # Check with all prompts. We only check the result for this setting,
         # because this was used to generate the test data.
