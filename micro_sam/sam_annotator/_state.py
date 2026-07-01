@@ -190,19 +190,28 @@ class AnnotatorState(metaclass=Singleton):
             from micro_sam.v2.util import FINETUNED_MODELS, _download_finetuned_sam2_model
 
             # The decoder is built on the base SAM2 backbone, i.e. the first 6 characters of the
-            # name ('hvit_t_cells' -> 'hvit_t'). Resolve where to load the decoder weights from.
-            decoder_source, encoder_type = None, model_type[:6]
+            # name ('hvit_t_cells' -> 'hvit_t'). Resolve where to load the decoder weights from and
+            # which encoder ('encoder') the decoder is built on.
+            decoder_source, encoder = None, model_type[:6]
             if checkpoint_path is not None:
                 decoder_source = checkpoint_path
             elif model_type in FINETUNED_MODELS:
                 _, _, decoder_source = _download_finetuned_sam2_model(model_type)
+                # Reuse the interactive predictor's already-loaded (finetuned) image encoder as the
+                # decoder's encoder instead of rebuilding it from the base backbone. This avoids a
+                # redundant base-backbone download/build; the strict load inside 'get_unisam2_model'
+                # still fully (re)defines these encoder weights from the decoder checkpoint. The 2d
+                # image predictor holds the SAM2 model under '.model'; the 3d video predictor is
+                # itself a SAM2 model. Fall back to the backbone name if no encoder is exposed.
+                sam2_model = getattr(self.predictor, "model", self.predictor)
+                encoder = getattr(sam2_model, "image_encoder", encoder)
 
             if decoder_source is not None:
                 try:
                     # Resolve 'auto'/None to a concrete device so the model is loaded and placed on
                     # the same device as the predictor (torch.load does not accept 'auto').
                     self.decoder = get_unisam2_model(
-                        decoder_source, device=util.get_device(device), encoder=encoder_type,
+                        decoder_source, device=util.get_device(device), encoder=encoder,
                     )
                 except Exception as e:
                     print(f"Could not load a UniSAM2 decoder from '{decoder_source}': {e}")

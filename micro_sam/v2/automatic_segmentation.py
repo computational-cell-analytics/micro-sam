@@ -62,7 +62,7 @@ def _alias_legacy_namespace():
 def get_unisam2_model(
     checkpoint_path: Union[str, "os.PathLike"],
     device: Optional[Union[str, torch.device]] = None,
-    encoder: str = _DEFAULT_MODEL,
+    encoder: Union[str, torch.nn.Module] = _DEFAULT_MODEL,
     output_channels: int = 4,
 ) -> torch.nn.Module:
     """Load a UniSAM2 model for automatic segmentation from a checkpoint.
@@ -70,7 +70,9 @@ def get_unisam2_model(
     Args:
         checkpoint_path: Path to the UniSAM2 checkpoint.
         device: The device to load the model onto.
-        encoder: The SAM2 encoder backbone to build, e.g. 'hvit_t'.
+        encoder: The SAM2 encoder to build the decoder on. Either the backbone name to build from
+            scratch, e.g. 'hvit_t', or a prebuilt SAM2 image-encoder module to reuse (which avoids
+            rebuilding / downloading the base backbone). Its weights are (re)defined by the checkpoint.
         output_channels: The number of output channels (foreground + directed distances).
 
     Returns:
