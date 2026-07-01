@@ -14,10 +14,10 @@ from typing import Optional, Tuple
 
 import numpy as np
 from skimage.filters import gaussian
-from skimage.measure import label
-from skimage.segmentation import watershed
 from scipy.ndimage import map_coordinates
 from tqdm import tqdm, trange
+
+from bioimage_cpp.segmentation import label, watershed
 
 FLOW_BACKENDS = ("python", "cpp")
 
@@ -228,6 +228,8 @@ def run_multicut(
             backend=backend, n_threads=1,
         )
         seeds = label(density > density_threshold)
+        # watershed requires a float heightmap; boundary maps are usually float already.
+        bd = bd if np.issubdtype(bd.dtype, np.floating) else bd.astype("float32")
         wsz = watershed(bd, markers=seeds)
         overseg[z] = wsz
         return int(wsz.max())

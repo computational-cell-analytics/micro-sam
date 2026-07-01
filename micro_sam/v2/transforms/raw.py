@@ -14,7 +14,7 @@ from .labels import _plantseg_label_trafo  # noqa
 
 # NOTE: This is a legacy function: we will keep this for now for unpickling checkpoints saved before the refactor.
 def _axondeepseg_label_transform(y):  # noqa
-    from skimage.measure import label as connected_components
+    from bioimage_cpp.segmentation import label as connected_components
     return connected_components(y == 2).astype("uint32")
 
 
