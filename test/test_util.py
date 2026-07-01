@@ -6,11 +6,7 @@ import numpy as np
 import requests
 import torch
 import zarr
-
-try:
-    import z5py
-except ImportError:
-    z5py = None
+import z5py
 
 from skimage.data import binary_blobs
 from skimage.measure import label
@@ -392,7 +388,6 @@ class TestSAM2Util(unittest.TestCase):
         check_slices(embeddings)
 
 
-@unittest.skipUnless(z5py, "The z5py embedding backend requires z5py.")
 class TestEmbeddingBackend(unittest.TestCase):
     """Direct tests of the z5py embedding backend, without needing a SAM model."""
     tmp_folder = "tmp-backend"
