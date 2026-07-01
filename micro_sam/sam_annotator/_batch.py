@@ -1,8 +1,8 @@
-"""Shared navigation harness for the image series annotator.
+"""Shared navigation harness for the batch annotator.
 
 Hosts any per-task annotator (segmentation, tracking, classification) and drives
 forward navigation, the skip-already-done check and per-item loading/saving
-through a small task-adapter interface (`SeriesAnnotatorTask`). The harness is
+through a small task-adapter interface (`BatchAnnotatorTask`). The harness is
 task-agnostic; everything task-specific lives in the concrete adapter.
 """
 
@@ -19,13 +19,13 @@ from ._state import AnnotatorState
 
 
 def _hide_embedding_widget(annotator):
-    """Hide the docked annotator's embedding section during a series session.
+    """Hide the docked annotator's embedding section during a batch session.
 
     The launcher's advanced settings are the single source of truth for the model / tiling / device /
     embedding-path / ndim, and the harness computes embeddings itself in 'start'/'advance', so the
     annotator's embedding panel (and its 'Compute Embeddings' button) is redundant here. The widget
     object is kept alive (just hidden) because '_sync_embedding_widget' and the classifier spec read
-    from it. Standalone (non-series) annotators never call this, so their panel stays visible.
+    from it. Standalone (non-batch) annotators never call this, so their panel stays visible.
     """
     ew = getattr(annotator, "_embedding_widget", None)
     if ew is None:
@@ -39,15 +39,15 @@ def _hide_embedding_widget(annotator):
 
 
 def _embed_navigation(viewer, annotator, nav_container):
-    """Add the navigation controls as a 'Series Navigation' section inside the docked annotator.
+    """Add the navigation controls as a 'Batch Navigation' section inside the docked annotator.
 
     Falls back to a standalone dock widget if the annotator has no embeddable inner layout.
     """
     inner = getattr(annotator, "_annotator_widget", None)
     if inner is None or inner.layout() is None:
-        viewer.window.add_dock_widget(nav_container, name="Series Navigation")
+        viewer.window.add_dock_widget(nav_container, name="Batch Navigation")
         return
-    group = QtWidgets.QGroupBox("Series Navigation")
+    group = QtWidgets.QGroupBox("Batch Navigation")
     group_layout = QtWidgets.QVBoxLayout()
     # Add a top margin so the group title is not cramped against the navigation buttons.
     group_layout.setContentsMargins(8, 14, 8, 8)
@@ -86,10 +86,10 @@ def _maximize_dock_vertically(viewer, annotator):
     QTimer.singleShot(0, _resize)
 
 
-class SeriesAnnotatorTask:
-    """Adapter encoding the task-specific parts of an image series session.
+class BatchAnnotatorTask:
+    """Adapter encoding the task-specific parts of a batch annotation session.
 
-    The harness owns navigation, the skip-already-done check and the end-of-series dialog.
+    The harness owns navigation, the skip-already-done check and the end-of-batch dialog.
     The adapter owns precomputing the model and embeddings, loading an item into the viewer,
     deciding whether there is content worth saving, and saving the per-item result. Concrete
     tasks: segmentation, tracking, object/pixel classification.
@@ -98,14 +98,14 @@ class SeriesAnnotatorTask:
     #: Folder where per-item results are written. Set by the harness before the session starts.
     output_folder = None
 
-    #: Whether the series inputs are in-memory arrays (True) or file paths (False). Set by the harness.
+    #: Whether the batch inputs are in-memory arrays (True) or file paths (False). Set by the harness.
     have_inputs_as_arrays = False
 
     def result_filename(self, entry, index: int) -> str:
         """Return the filename (relative to `output_folder`) of this item's saved result.
 
-        Used to skip items that are already done. `entry` is the raw series entry
-        (an array or a file path), `index` its position in the series.
+        Used to skip items that are already done. `entry` is the raw batch entry
+        (an array or a file path), `index` its position in the batch.
         """
         raise NotImplementedError
 
@@ -139,27 +139,27 @@ class SeriesAnnotatorTask:
     empty_item_message = "Nothing is annotated yet. Do you wish to continue to the next image?"
 
     def nav_extra_widgets(self):
-        """Extra magicgui widgets to place next to the Next button in the Series Navigation container.
+        """Extra magicgui widgets to place next to the Next button in the Batch Navigation container.
 
         Task-specific (e.g. the classifiers' 'Forward Classifier State' checkbox); none by default.
         """
         return []
 
 
-def run_image_series(
+def run_batch(
     images,
     output_folder,
-    task: SeriesAnnotatorTask,
+    task: BatchAnnotatorTask,
     *,
     have_inputs_as_arrays: bool,
     viewer=None,
     return_viewer: bool = False,
     skip_done: bool = True,
 ):
-    """Drive an image series annotation session for any task.
+    """Drive a batch annotation session for any task.
 
     Args:
-        images: The series entries (in-memory arrays or file paths).
+        images: The batch entries (in-memory arrays or file paths).
         output_folder: The folder where per-item results are saved.
         task: The task adapter that encodes the task-specific behavior.
         have_inputs_as_arrays: Whether `images` holds arrays (True) or file paths (False).
@@ -193,7 +193,11 @@ def run_image_series(
         while current_index < n_images and _is_done(current_index):
             current_index += 1
         if current_index == n_images:
-            print("All images have already been annotated and 'skip_done' is set. Nothing to do.")
+            # The batch launcher reports this in a dialog and stays open so its settings can be
+            # changed. Keep the terminal message for direct Python / CLI use, where no viewer was
+            # supplied to display that feedback.
+            if viewer is None:
+                print("All images have already been annotated and 'skip_done' is set. Nothing to do.")
             return
         if current_index != 0:
             print("The first image to annotate is image number", current_index)
@@ -204,7 +208,7 @@ def run_image_series(
     image = _load_pixels(current_index)
     annotator = task.start(viewer, images[current_index], image, embedding_paths[current_index], current_index)
 
-    # The launcher owns the model / embedding settings in a series session, so hide the annotator's
+    # The launcher owns the model / embedding settings in a batch session, so hide the annotator's
     # (now redundant) embedding section to avoid duplicating those controls.
     _hide_embedding_widget(annotator)
 
@@ -241,14 +245,14 @@ def run_image_series(
             return
         _go_to(index)
 
-    # Embed the navigation controls in the docked annotator, so they travel with the image series
+    # Embed the navigation controls in the docked annotator, so they travel with the batch
     # annotator instead of as a separate floating dock widget. The action is also tracked in the
     # shared state, so it can be triggered programmatically (e.g. in tests) just like the annotator's
     # own widgets.
     state = AnnotatorState()
     next_button = PushButton(text="Next Image [N]")
     next_button.clicked.connect(lambda: _do_next())
-    state.widgets["series_next"] = _do_next
+    state.widgets["batch_next"] = _do_next
 
     nav_buttons = [next_button]
     # Task-specific controls placed next to Next (e.g. the classifiers' 'Keep Classifier').

@@ -147,7 +147,7 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
     parser.add_argument(
         "-k", "--key",
         help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
-        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
+        "for an image batch it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
     parser.add_argument(
         "-e", "--embedding_path",

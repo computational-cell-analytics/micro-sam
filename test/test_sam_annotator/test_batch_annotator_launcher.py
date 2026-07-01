@@ -92,13 +92,13 @@ def test_launcher_model_dropdown_above_task(make_napari_viewer_proxy):
     assert widget._relocated_model_dropdown in _row_widgets()
 
 
-# Each task must dispatch to its series function. The launcher imports these lazily from their home
+# Each task must dispatch to its batch function. The launcher imports these lazily from their home
 # modules, so patching the module attribute intercepts the call.
 DISPATCH = [
     ("Segmentation", "micro_sam.sam_annotator.batch_annotator", "image_folder_annotator"),
-    ("Tracking", "micro_sam.sam_annotator.annotator_tracking", "image_series_tracking_annotator"),
-    ("Pixel Classification", "micro_sam.sam_annotator.pixel_classifier", "image_series_pixel_classifier"),
-    ("Object Classification", "micro_sam.sam_annotator.object_classifier", "image_series_object_classifier"),
+    ("Tracking", "micro_sam.sam_annotator.annotator_tracking", "batch_tracking_annotator"),
+    ("Pixel Classification", "micro_sam.sam_annotator.pixel_classifier", "batch_pixel_classifier"),
+    ("Object Classification", "micro_sam.sam_annotator.object_classifier", "batch_object_classifier"),
 ]
 
 
@@ -110,7 +110,12 @@ def test_launcher_dispatches_to_the_selected_task(
 ):
     module = importlib.import_module(module_path)
     calls = []
-    monkeypatch.setattr(module, func_name, lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    def launch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return kwargs["viewer"]
+
+    monkeypatch.setattr(module, func_name, launch)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         for i in range(2):
@@ -126,7 +131,7 @@ def test_launcher_dispatches_to_the_selected_task(
         widget(skip_validate=True)
 
         assert len(calls) == 1, f"expected exactly one dispatch for task '{task}'"
-        # The output folder is forwarded to the selected series function (positionally or by keyword).
+        # The output folder is forwarded to the selected batch function (positionally or by keyword).
         args, kwargs = calls[0]
         assert widget.output_folder in args or widget.output_folder in kwargs.values()
         if task == "Segmentation":
@@ -138,7 +143,12 @@ def test_launcher_dispatches_to_the_selected_task(
 def test_launcher_can_restart_segmentation_from_first_image(make_napari_viewer_proxy, monkeypatch):
     isa = importlib.import_module("micro_sam.sam_annotator.batch_annotator")
     calls = []
-    monkeypatch.setattr(isa, "image_folder_annotator", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    def launch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return kwargs["viewer"]
+
+    monkeypatch.setattr(isa, "image_folder_annotator", launch)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         imageio.imwrite(os.path.join(tmpdir, "image.tif"), binary_blobs(64).astype(np.uint8) * 255)
@@ -164,7 +174,11 @@ def test_launcher_removes_itself_after_launch(make_napari_viewer_proxy, monkeypa
     # the annotator has the screen to itself.
     from qtpy.QtWidgets import QApplication, QDockWidget
     isa = importlib.import_module("micro_sam.sam_annotator.batch_annotator")
-    monkeypatch.setattr(isa, "image_folder_annotator", lambda *args, **kwargs: None)
+
+    def launch(*args, **kwargs):
+        return kwargs["viewer"]
+
+    monkeypatch.setattr(isa, "image_folder_annotator", launch)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         for i in range(2):
@@ -184,3 +198,33 @@ def test_launcher_removes_itself_after_launch(make_napari_viewer_proxy, monkeypa
             QApplication.processEvents()
 
         assert dock not in viewer.window._qt_window.findChildren(QDockWidget)
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_launcher_stays_open_when_all_images_are_annotated(make_napari_viewer_proxy, monkeypatch):
+    from qtpy.QtWidgets import QApplication, QDockWidget
+    isa = importlib.import_module("micro_sam.sam_annotator.batch_annotator")
+    messages = []
+    monkeypatch.setattr(isa, "image_folder_annotator", lambda *args, **kwargs: None)
+    monkeypatch.setattr(isa.widgets, "_generate_message", lambda *args: messages.append(args))
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        imageio.imwrite(os.path.join(tmpdir, "image.tif"), binary_blobs(64).astype(np.uint8) * 255)
+
+        viewer = make_napari_viewer_proxy()
+        widget = BatchAnnotator(viewer)
+        widget.folder = tmpdir
+        widget.output_folder = os.path.join(tmpdir, "out")
+        widget.pattern = "*.tif"
+        dock = viewer.window.add_dock_widget(widget, name="Batch Annotator")
+
+        widget(skip_validate=True)
+        for _ in range(3):
+            QApplication.processEvents()
+
+        assert dock in viewer.window._qt_window.findChildren(QDockWidget)
+        assert len(messages) == 1
+        assert messages[0][0] == "info"
+        assert "All images have already been annotated" in messages[0][1]
+        assert "Continue Annotation" in messages[0][1]

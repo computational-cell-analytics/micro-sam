@@ -1,6 +1,6 @@
-"""Shared image-series task for the object and pixel classifiers.
+"""Shared batch-annotation task for the object and pixel classifiers.
 
-Both classifiers share the per-item series flow: (re)initialize the predictor, build the classifier
+Both classifiers share the per-item batch flow: (re)initialize the predictor, build the classifier
 widget, accumulate the per-item labeled features into the running training set when leaving an item,
 and save the prediction plus the trained classifier. Subclasses bind the concrete classifier widget
 class, the cached state-attribute names and any extra per-item layers (the object classifier adds a
@@ -14,14 +14,14 @@ import imageio.v3 as imageio
 from joblib import dump
 from magicgui.widgets import CheckBox
 
-from ._series import SeriesAnnotatorTask
+from ._batch import BatchAnnotatorTask
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from .util import _sync_embedding_widget
 
 
-class ClassificationSeriesTask(SeriesAnnotatorTask):
-    """Series task base for the classifiers; subclasses bind the concrete widget and state attrs."""
+class ClassificationBatchTask(BatchAnnotatorTask):
+    """Batch task base for the classifiers; subclasses bind the concrete widget and state attrs."""
 
     # Bound by subclasses.
     classifier_class = None  # ObjectClassifier | PixelClassifier
@@ -51,7 +51,7 @@ class ClassificationSeriesTask(SeriesAnnotatorTask):
         return os.path.splitext(os.path.basename(entry))[0] + "_prediction.tif"
 
     def precompute(self, images):
-        # Start the series with a fresh running training set and no cached features/classifier, so a
+        # Start the batch with a fresh running training set and no cached features/classifier, so a
         # new session does not inherit accumulated state from a previous one (the state is a singleton).
         state = AnnotatorState()
         state.previous_features, state.previous_labels = None, None
@@ -94,10 +94,10 @@ class ClassificationSeriesTask(SeriesAnnotatorTask):
 
     def nav_extra_widgets(self):
         # A checkbox next to the Next button (classification tasks only), on by default, to carry the
-        # classifier state forward across the series. Tracked in the state so it is reachable in tests.
+        # classifier state forward across the batch. Tracked in the state so it is reachable in tests.
         self._forward_state = CheckBox(value=True, text="Keep Classifier")
         self._forward_state.native.setToolTip(get_tooltip("classification", "forward_classifier_state"))
-        AnnotatorState().widgets["series_forward_state"] = self._forward_state
+        AnnotatorState().widgets["batch_forward_state"] = self._forward_state
         return [self._forward_state]
 
     def _forward_state_enabled(self):
@@ -127,7 +127,7 @@ class ClassificationSeriesTask(SeriesAnnotatorTask):
         state = AnnotatorState()
         if self._forward_state_enabled():
             # Stack this image's annotated features into the running training set, forwarded to the next.
-            state.annotator.accumulate_series_features()
+            state.annotator.accumulate_batch_features()
             if state.previous_features is not None:
                 np.save(os.path.join(self.output_folder, "features.npy"), state.previous_features)
                 np.save(os.path.join(self.output_folder, "labels.npy"), state.previous_labels)

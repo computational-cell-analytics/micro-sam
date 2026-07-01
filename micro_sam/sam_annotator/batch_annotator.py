@@ -15,13 +15,13 @@ from qtpy.QtCore import QTimer
 from ..v1.util import get_model_names
 from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
-from ._series import SeriesAnnotatorTask, run_image_series
+from ._batch import BatchAnnotatorTask, run_batch
 from ._tooltips import get_tooltip
 from ._state import AnnotatorState
 from .annotator import Annotator, detect_ndim
 from .util import _sync_embedding_widget
 
-# The tasks the unified image series annotator can run over a series.
+# The tasks supported by the unified batch annotator.
 TASKS = ["Segmentation", "Tracking", "Object Classification", "Pixel Classification"]
 
 
@@ -39,8 +39,8 @@ def _get_input_shape(image, ndim):
     return image_shape
 
 
-class SegmentationSeriesTask(SeriesAnnotatorTask):
-    """Series task for 2d/3d interactive segmentation (the original image series annotator)."""
+class SegmentationBatchTask(BatchAnnotatorTask):
+    """Batch task for 2d/3d interactive segmentation."""
 
     empty_item_message = "Nothing is segmented yet. Do you wish to continue to the next image?"
 
@@ -117,7 +117,7 @@ class SegmentationSeriesTask(SeriesAnnotatorTask):
         annotator._update_image(segmentation_result=self._resolve_initial_result(entry, index))
 
         state = AnnotatorState()
-        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Image Series Segmentation)")
+        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Batch Segmentation)")
         _sync_embedding_widget(
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
@@ -145,7 +145,7 @@ class SegmentationSeriesTask(SeriesAnnotatorTask):
         imageio.imwrite(save_path, viewer.layers["committed_objects"].data, compression="zlib")
 
 
-def image_series_annotator(
+def batch_annotator(
     images: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
     output_folder: str,
     *,
@@ -163,7 +163,7 @@ def image_series_annotator(
     prefer_decoder: bool = True,
     skip_segmented: bool = True,
 ) -> Optional["napari.viewer.Viewer"]:
-    """Run the segmentation annotation tool for a series of images (2d or 3d).
+    """Run the segmentation annotation tool for a batch of images (2d or 3d).
 
     Args:
         images: List of the file paths or list of (set of) slices for the images to be annotated.
@@ -209,13 +209,13 @@ def image_series_annotator(
         first_image = images[0] if have_inputs_as_arrays else imageio.imread(images[0])
         ndim = detect_ndim(first_image)
 
-    task = SegmentationSeriesTask(
+    task = SegmentationBatchTask(
         ndim=ndim, model_type=model_type, embedding_path=embedding_path,
         tile_shape=tile_shape, halo=halo, precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
         initial_segmentations=initial_segmentations,
     )
-    return run_image_series(
+    return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
         viewer=viewer, return_viewer=return_viewer, skip_done=skip_segmented,
     )
@@ -233,7 +233,7 @@ def image_folder_annotator(
     return_viewer: bool = False,
     **kwargs
 ) -> Optional["napari.viewer.Viewer"]:
-    """Run the segmentation annotation tool for a series of images (2d or 3d) in a folder.
+    """Run the segmentation annotation tool for a batch of images (2d or 3d) in a folder.
 
     Args:
         input_folder: The folder with the images to be annotated.
@@ -248,7 +248,7 @@ def image_folder_annotator(
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
             By default, does not return the napari viewer.
-        kwargs: The keyword arguments for `micro_sam.sam_annotator.batch_annotator.image_series_annotator`.
+        kwargs: The keyword arguments for `micro_sam.sam_annotator.batch_annotator.batch_annotator`.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -261,7 +261,7 @@ def image_folder_annotator(
             initial_segmentation_folder, initial_segmentation_pattern
         )))
 
-    return image_series_annotator(
+    return batch_annotator(
         image_files, output_folder, ndim=ndim,
         initial_segmentations=initial_segmentations,
         viewer=viewer, return_viewer=return_viewer, **kwargs
@@ -319,15 +319,15 @@ class BatchAnnotator(widgets._WidgetBase):
         self._folder_textbox, layout = self._add_path_param(
             "folder", self.folder, "directory",
             title="Input Folder", placeholder="Folder with images ...",
-            tooltip=get_tooltip("image_series_annotator", "folder")
+            tooltip=get_tooltip("batch_annotator", "folder")
         )
         self._content.layout().addLayout(layout)
         self._folder_label = layout.itemAt(0).widget()
 
-        # File pattern qualifying the input folder: which files form the series.
+        # File pattern qualifying the input folder: which files form the batch.
         self.pattern = "*"
         self._pattern_param, layout = self._add_string_param(
-            "pattern", self.pattern, tooltip=get_tooltip("image_series_annotator", "pattern")
+            "pattern", self.pattern, tooltip=get_tooltip("batch_annotator", "pattern")
         )
         self._content.layout().addLayout(layout)
         self._pattern_label = layout.itemAt(0).widget()
@@ -336,12 +336,12 @@ class BatchAnnotator(widgets._WidgetBase):
         _, layout = self._add_path_param(
             "output_folder", self.output_folder, "directory",
             title="Output Folder", placeholder="Folder to save the results ...",
-            tooltip=get_tooltip("image_series_annotator", "output_folder")
+            tooltip=get_tooltip("batch_annotator", "output_folder")
         )
         self.continue_annotation = True
         self.continue_annotation_checkbox = self._add_boolean_param(
             "continue_annotation", self.continue_annotation, title="Continue Annotation",
-            tooltip=get_tooltip("image_series_annotator", "continue_annotation"),
+            tooltip=get_tooltip("batch_annotator", "continue_annotation"),
         )
         layout.addWidget(self.continue_annotation_checkbox)
         self._content.layout().addLayout(layout)
@@ -356,7 +356,7 @@ class BatchAnnotator(widgets._WidgetBase):
 
         self.task = "Segmentation"
         self.task_dropdown, task_layout = self._add_choice_param(
-            "task", self.task, TASKS, title="Task:", tooltip=get_tooltip("image_series_annotator", "task"),
+            "task", self.task, TASKS, title="Task:", tooltip=get_tooltip("batch_annotator", "task"),
         )
         # Let the dropdown absorb the row's extra width so the 'Task:' label hugs it (otherwise the
         # label expands and leaves a gap between the text and the dropdown).
@@ -374,7 +374,7 @@ class BatchAnnotator(widgets._WidgetBase):
         _, path_layout = self._add_path_param(
             "segmentation_folder", self.segmentation_folder, "directory",
             title="Segmentation Folder", placeholder="Folder with segmentations (optional) ...",
-            tooltip=get_tooltip("image_series_annotator", "segmentation_folder"),
+            tooltip=get_tooltip("batch_annotator", "segmentation_folder"),
         )
         seg_layout.addLayout(path_layout)
         self._seg_folder_container.setLayout(seg_layout)
@@ -455,7 +455,7 @@ class BatchAnnotator(widgets._WidgetBase):
         self._rebuild_embedding_widget()
 
     def _update_default_tiling(self, *args):
-        # Judge default tiling from the first image in the series, mirroring the embedding widget's
+        # Judge default tiling from the first image in the batch, mirroring the embedding widget's
         # per-image auto-tiling (which keys off a selected layer that the launcher does not have).
         ew = self._embedding_widget
         if ew is None or not self.folder:
@@ -493,7 +493,7 @@ class BatchAnnotator(widgets._WidgetBase):
         return False
 
     def _embedding_paths_for(self, image_files):
-        # Per-item embedding zarr paths under the chosen folder (the classification series functions
+        # Per-item embedding zarr paths under the chosen folder (the batch classification functions
         # take an explicit list); 'None' when no embedding folder is set.
         save_path = self._embedding_widget.embeddings_save_path
         if not save_path:
@@ -525,7 +525,7 @@ class BatchAnnotator(widgets._WidgetBase):
         )
 
         if self.task == "Segmentation":
-            image_folder_annotator(
+            launched_viewer = image_folder_annotator(
                 input_folder=self.folder, output_folder=self.output_folder, ndim=ndim,
                 pattern=self.pattern, embedding_path=ew.embeddings_save_path,
                 skip_segmented=bool(self.continue_annotation), **common,
@@ -533,27 +533,41 @@ class BatchAnnotator(widgets._WidgetBase):
         else:
             image_files = sorted(glob(os.path.join(self.folder, self.pattern)))
             if self.task == "Tracking":
-                from .annotator_tracking import image_series_tracking_annotator
-                image_series_tracking_annotator(
+                from .annotator_tracking import batch_tracking_annotator
+                launched_viewer = batch_tracking_annotator(
                     image_files, self.output_folder, embedding_path=ew.embeddings_save_path, **common,
                 )
             else:
                 embedding_paths = self._embedding_paths_for(image_files)
                 if self.task == "Pixel Classification":
-                    from .pixel_classifier import image_series_pixel_classifier
-                    image_series_pixel_classifier(
+                    from .pixel_classifier import batch_pixel_classifier
+                    launched_viewer = batch_pixel_classifier(
                         image_files, self.output_folder, embedding_paths=embedding_paths, ndim=ndim, **common,
                     )
                 else:
                     # Object Classification: load the per-image segmentations if a folder is given.
-                    from .object_classifier import image_series_object_classifier
+                    from .object_classifier import batch_object_classifier
                     seg_files = None
                     if self.segmentation_folder:
                         seg_files = sorted(glob(os.path.join(self.segmentation_folder, self.segmentation_pattern)))
-                    image_series_object_classifier(
+                    launched_viewer = batch_object_classifier(
                         image_files, seg_files, self.output_folder,
                         embedding_paths=embedding_paths, ndim=ndim, **common,
                     )
+
+        # A batch function returns None when all results already exist and continuing is enabled.
+        # Keep this launcher available so the user can restart for review or choose another output.
+        if launched_viewer is None:
+            message = "All images have already been annotated. "
+            if self.task == "Segmentation":
+                message += (
+                    "To review or edit them, uncheck 'Continue Annotation' and start the batch annotator again, "
+                    "or choose a different output folder."
+                )
+            else:
+                message += "Choose a different output folder to start another batch."
+            widgets._generate_message("info", message)
+            return
 
         # The console has done its job (task + settings are locked in for this session); remove it so
         # the annotator has the screen to itself.
@@ -578,7 +592,7 @@ def main():
     available_models = list(get_model_names())
     available_models = ", ".join(available_models)
 
-    parser = argparse.ArgumentParser(description="Annotate a series of images from a folder.")
+    parser = argparse.ArgumentParser(description="Annotate a batch of images from a folder.")
     parser.add_argument(
         "-i", "--input_folder", required=True,
         help="The folder containing the image data. The data can be stored in any common format (tif, jpg, png, ...)."
