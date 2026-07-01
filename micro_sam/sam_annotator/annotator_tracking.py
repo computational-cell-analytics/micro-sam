@@ -216,18 +216,18 @@ class AnnotatorTracking(_AnnotatorBase):
         }
 
         point_layer_mismatch = True
-        if "point_prompts" in self._viewer.layers:
+        if "points" in self._viewer.layers:
             # Check whether the 'property_choices' match or not.
             curr_property_choices = self._viewer.layers[
-                "point_prompts"
+                "points"
             ].property_choices
             point_layer_mismatch = set(curr_property_choices.keys()) != set(
                 _point_prompt_property_choices.keys()
             )
 
-        if point_layer_mismatch and "point_prompts" not in self._viewer.layers:
+        if point_layer_mismatch and "points" not in self._viewer.layers:
             self._point_prompt_layer = self._viewer.add_points(
-                name="point_prompts",
+                name="points",
                 property_choices=_point_prompt_property_choices,
                 border_color="label",
                 border_color_cycle=vutil.LABEL_COLOR_CYCLE,
@@ -242,7 +242,7 @@ class AnnotatorTracking(_AnnotatorBase):
             self._point_prompt_layer.face_color_mode = "cycle"
             _new_point_layer = True
         else:
-            self._point_prompt_layer = self._viewer.layers["point_prompts"]
+            self._point_prompt_layer = self._viewer.layers["points"]
             _new_point_layer = False
 
         # Add the point prompts layer.
@@ -328,7 +328,7 @@ class AnnotatorTracking(_AnnotatorBase):
         # We also need to over-write the keybindings for the prompt layers.
         # See https://github.com/napari/napari/issues/7302 for details.
         prompt_layer = self._viewer.layers["geometry"]
-        point_prompt_layer = self._viewer.layers["point_prompts"]
+        point_prompt_layer = self._viewer.layers["points"]
 
         @prompt_layer.bind_key("s", overwrite=True)
         def _segment_prompts(event):

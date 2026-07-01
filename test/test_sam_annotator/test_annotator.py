@@ -149,7 +149,7 @@ class TestAnnotatorClass:
         widget._embedding_widget.image_selection.reset_choices()
         assert widget._ndim == 3
         # The prompt layers must be recreated with the new dimensionality.
-        assert viewer.layers["point_prompts"].ndim == 3
+        assert viewer.layers["points"].ndim == 3
         viewer.close()
 
     def test_annotator_3d(self, make_napari_viewer_proxy):
@@ -272,7 +272,7 @@ class TestNdimOverride:
         assert widget._ndim == 2
         assert viewer.layers["image"].rgb is True
         assert tuple(viewer.layers["image"].data.shape) == (64, 64, 3)
-        assert viewer.layers["point_prompts"].ndim == 2
+        assert viewer.layers["points"].ndim == 2
         viewer.close()
 
     def test_channels_last_two_channel_auto(self, make_napari_viewer_proxy):
@@ -368,6 +368,8 @@ class TestEmbeddingROI:
         assert state.image_name == roi_layer.name
         assert viewer.layers.selection.active.name == roi_layer.name
         assert "image" in viewer.layers  # the source layer stays open
+        assert not viewer.layers["image"].visible  # but is hidden so only the crop shows
+        assert viewer.layers.index(roi_layer) == 0  # crop sits at the bottom, under the annotation layers
 
         widget._update_image()
         assert viewer.layers["current_object"].data.shape == (50, 60)
@@ -376,6 +378,7 @@ class TestEmbeddingROI:
 
         # Select the source again and create another independent crop.
         embedding_widget.image_selection.value = image
+        assert viewer.layers["image"].visible  # re-selecting the source unhides it
         geometry = viewer.layers["geometry"]
         source_vertices = np.array([[20, 30], [20, 70], [50, 70], [50, 30]])
         geometry_vertices = np.array([

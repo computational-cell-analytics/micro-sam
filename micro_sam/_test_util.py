@@ -6,7 +6,7 @@ def check_layer_initialization(viewer, expected_shape):
 
     assert len(viewer.layers) == 6
     expected_layer_names = [
-        "image", "auto_segmentation", "committed_objects", "current_object", "point_prompts", "geometry"
+        "image", "auto_segmentation", "committed_objects", "current_object", "points", "geometry"
     ]
 
     for layer_name in expected_layer_names:
@@ -14,7 +14,7 @@ def check_layer_initialization(viewer, expected_shape):
 
     # Check prompt layers
     assert viewer.layers["geometry"].data == []  # shape data is list, not numpy array
-    np.testing.assert_equal(viewer.layers["point_prompts"].data, 0)
+    np.testing.assert_equal(viewer.layers["points"].data, 0)
 
     # Check segmentation layers.
     for layer_name in ["auto_segmentation", "committed_objects", "current_object"]:

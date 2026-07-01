@@ -588,7 +588,7 @@ def _reset_tracking_state(viewer):
     state.lineage = {1: []}
 
     # Reset the layer properties.
-    viewer.layers["point_prompts"].property_choices["track_id"] = ["1"]
+    viewer.layers["points"].property_choices["track_id"] = ["1"]
     viewer.layers["geometry"].property_choices["track_id"] = ["1"]
 
     # Reset the choices in the track_id menu (index 2: prompt, track_state, track_id).
@@ -915,7 +915,7 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
 
     # Get the prompts from the layers.
     prompts = viewer.layers["geometry"].data
-    point_layer = viewer.layers["point_prompts"]
+    point_layer = viewer.layers["points"]
     point_prompts = point_layer.data
     point_labels = point_layer.properties["label"]
     if len(point_prompts) > 0:
@@ -1346,7 +1346,7 @@ def _validate_layers(
         # Check prompts layer.
         if (
             len(viewer.layers["geometry"].data) == 0
-            and len(viewer.layers["point_prompts"].data) == 0
+            and len(viewer.layers["points"].data) == 0
         ):
             msg = "No prompts were given. Please provide prompts to run interactive segmentation."
             return _generate_message("error", msg)
@@ -1390,7 +1390,7 @@ def _segment_object_2d(viewer, batched=False):
         viewer.layers["geometry"], shape
     )
     points, labels = vutil.point_layer_to_prompts(
-        viewer.layers["point_prompts"], with_stop_annotation=False
+        viewer.layers["points"], with_stop_annotation=False
     )
 
     state = AnnotatorState()
@@ -1926,6 +1926,10 @@ class EmbeddingWidget(_WidgetBase):
             roi_layer.gamma = image.gamma
             if not image.rgb:
                 roi_layer.colormap = image.colormap
+            # Hide the source so the crop is the only image shown; it stays in the viewer.
+            image.visible = False
+            # Move the crop to the bottom so the prompt / segmentation layers render on top of it.
+            self._viewer.layers.move(self._viewer.layers.index(roi_layer), 0)
             self.image_selection.value = roi_layer
             self._viewer.layers.selection.active = roi_layer
             if suppress:
@@ -2537,7 +2541,7 @@ def _update_lineage(viewer, mother=None):
     track_ids = list(map(str, state.lineage.keys()))
     tracking_widget[2].choices = track_ids
 
-    viewer.layers["point_prompts"].property_choices["track_id"] = list(track_ids)
+    viewer.layers["points"].property_choices["track_id"] = list(track_ids)
     viewer.layers["geometry"].property_choices["track_id"] = list(track_ids)
 
 
@@ -2733,13 +2737,13 @@ class UnifiedSegmentWidget(_WidgetBase):
         shape = self._viewer.layers["current_object"].data.shape[1:]
 
         position_world = self._viewer.dims.point
-        position = self._viewer.layers["point_prompts"].world_to_data(
+        position = self._viewer.layers["points"].world_to_data(
             position_world
         )
         z = int(position[0])
 
         point_prompts = vutil.point_layer_to_prompts(
-            self._viewer.layers["point_prompts"], z
+            self._viewer.layers["points"], z
         )
         # this is a stop prompt, we do nothing
         if not point_prompts:
@@ -2834,7 +2838,7 @@ class UnifiedSegmentWidget(_WidgetBase):
     def _segment_track_on_frame(self, state, t, track_id, shape):
         """Segment a single track's object on frame 't'. Returns the binary mask or None."""
         point_prompts = vutil.point_layer_to_prompts(
-            self._viewer.layers["point_prompts"], i=t, track_id=track_id,
+            self._viewer.layers["points"], i=t, track_id=track_id,
         )
         # A single negative point is a stop prompt: nothing to segment for this track here.
         if not point_prompts:
@@ -2898,7 +2902,7 @@ class UnifiedSegmentWidget(_WidgetBase):
 
             if state.is_sam2:
                 # Prepare the prompts
-                point_prompts = self._viewer.layers["point_prompts"]
+                point_prompts = self._viewer.layers["points"]
                 box_prompts = self._viewer.layers["geometry"]
                 z_values_points = np.round(point_prompts.data[:, 0])
                 z_values_boxes = (
@@ -2974,7 +2978,7 @@ class UnifiedSegmentWidget(_WidgetBase):
                 seg, slices, stop_lower, stop_upper = (
                     vutil.segment_slices_with_prompts(
                         state.predictor,
-                        self._viewer.layers["point_prompts"],
+                        self._viewer.layers["points"],
                         self._viewer.layers["geometry"],
                         state.image_embeddings,
                         shape,
@@ -3038,7 +3042,7 @@ class UnifiedSegmentWidget(_WidgetBase):
             # frames. A frame whose only prompt for this track is a single negative point is a
             # 'stop' annotation; a stop on the highest annotated frame bounds propagation above.
             shape = state.image_shape
-            point_layer = self._viewer.layers["point_prompts"]
+            point_layer = self._viewer.layers["points"]
             box_layer = self._viewer.layers["geometry"]
 
             # Reset so a re-run does not accumulate prompts from a previous propagation.
@@ -3110,7 +3114,7 @@ class UnifiedSegmentWidget(_WidgetBase):
         def tracking_impl():
             # Propagate the current track. Its propagated mask is labelled with its track id.
             track_ids = [state.current_track_id]
-            point_layer = self._viewer.layers["point_prompts"]
+            point_layer = self._viewer.layers["points"]
             seg_layer = self._viewer.layers["current_object"]
             results = {}
             for track_id in track_ids:
