@@ -14,8 +14,10 @@ except ImportError:
 
 from skimage.data import binary_blobs
 from skimage.measure import label
-from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory
+from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory, _open_embeddings
 from micro_sam.v1.util import get_sam_model, set_precomputed
+
+ZARR_MAJOR = int(zarr.__version__.split(".")[0])
 
 
 class TestUtil(unittest.TestCase):
@@ -144,7 +146,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, mode="r")
+        f = _open_embeddings(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(f["features"].shape, (1, 256, 64, 64))
 
@@ -173,7 +175,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, mode="r")
+        f = _open_embeddings(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(f["features"].shape, (3, 1, 256, 64, 64))
 
@@ -204,7 +206,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, mode="r")
+        f = _open_embeddings(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(len(f["features"]), 4)
 
@@ -239,7 +241,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, mode="r")
+        f = _open_embeddings(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(len(f["features"]), 4)
 
@@ -339,7 +341,7 @@ class TestSAM2Util(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, mode="r")
+        f = _open_embeddings(save_path, mode="r")
         self.assertIn("features", f)
         self.assertIn("high_res_feats", f)
         self.assertEqual(f["features"].shape, (1, 256, 64, 64))
@@ -378,7 +380,7 @@ class TestSAM2Util(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, mode="r")
+        f = _open_embeddings(save_path, mode="r")
         self.assertIn("features", f)
         self.assertIn("pos_enc", f)
         self.assertIn("fpn", f)
@@ -403,12 +405,14 @@ class TestEmbeddingBackend(unittest.TestCase):
 
     @staticmethod
     def _write_legacy_cache(save_path, data, attrs, zarr_format):
-        # Mimic a cache written by the old zarr-python backend.
-        group = zarr.open(save_path, mode="w", zarr_format=zarr_format)
-        if hasattr(group, "create_array"):  # zarr-python v3
+        # Mimic a cache written by the old zarr-python backend. zarr-python v2 has no zarr_format
+        # argument and always writes v2, so only pass it on v3.
+        if ZARR_MAJOR >= 3:
+            group = zarr.open(save_path, mode="w", zarr_format=zarr_format)
             arr = group.create_array("features", shape=data.shape, dtype=data.dtype, chunks=data.shape)
             arr[:] = data
-        else:  # zarr-python v2
+        else:
+            group = zarr.open(save_path, mode="w")
             group.create_dataset("features", data=data, shape=data.shape, chunks=data.shape)
         for key, val in attrs.items():
             group.attrs[key] = val
@@ -438,11 +442,13 @@ class TestEmbeddingBackend(unittest.TestCase):
         self.assertEqual(list(g.attrs["input_size"]), [1024, 1024])
         self.assertIsNone(g.attrs["tile_shape"])
 
-        # z5py-written caches remain readable by zarr-python, and are written as zarr v3 with blosc.
-        z = zarr.open(save_path, mode="r")
-        self.assertTrue(np.allclose(z["features"][:], data))
-        self.assertEqual(z.metadata.zarr_format, 3)
-        self.assertTrue(any("blosc" in repr(codec).lower() for codec in z["features"].metadata.codecs))
+        # z5py-written caches are zarr v3 with blosc; verify via zarr-python where it can read v3
+        # (zarr-python v2 cannot read the v3 format, so this cross-check only applies on v3).
+        if ZARR_MAJOR >= 3:
+            z = zarr.open(save_path, mode="r")
+            self.assertTrue(np.allclose(z["features"][:], data))
+            self.assertEqual(z.metadata.zarr_format, 3)
+            self.assertTrue(any("blosc" in repr(codec).lower() for codec in z["features"].metadata.codecs))
 
     def test_open_metadataless_dir(self):
         # z5py cannot open a directory without zarr metadata; _open_embeddings must handle it
@@ -454,13 +460,15 @@ class TestEmbeddingBackend(unittest.TestCase):
         self.assertNotIn("features", f)
 
     def test_read_legacy_zarr_python_cache(self):
-        # Caches written by the old zarr-python backend (v2 and v3) must still load via z5py.
+        # Caches written by the old zarr-python backend must still load via z5py. Only test the
+        # formats the installed zarr-python can write (v2 alone on zarr-python v2, v2 and v3 on v3).
         from micro_sam.util import _open_embeddings
         data = np.random.rand(1, 256, 64, 64).astype("float32")
         attrs = {
             "input_size": [1024, 1024], "original_size": [512, 512], "tile_shape": None, "model_name": "vit_t",
         }
-        for zarr_format in (2, 3):
+        formats = (2, 3) if ZARR_MAJOR >= 3 else (2,)
+        for zarr_format in formats:
             save_path = os.path.join(self.tmp_folder, f"legacy_v{zarr_format}.zarr")
             self._write_legacy_cache(save_path, data, attrs, zarr_format)
 
