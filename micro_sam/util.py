@@ -2,6 +2,7 @@
 """
 
 import os
+import json
 import pooch
 import xxhash
 import pickle
@@ -17,6 +18,7 @@ import imageio.v3 as imageio
 import segment_anything.utils.amg as amg_utils
 
 import zarr
+import z5py
 
 from elf.io import open_file
 import elf.parallel as parallel_impl
@@ -243,11 +245,50 @@ def _to_image(image, normalization="minmax"):
     return np.array(input_)
 
 
-# Wrapper of zarr.create dataset to support zarr v2 and zarr v3.
+# The zarr format used when writing new on-disk embedding caches. Reading auto-detects the format,
+# so existing caches (v2 or v3) still load; this only controls newly created containers.
+EMBEDDING_ZARR_FORMAT = 3
+# Compression codec for on-disk embeddings. blosc (byte-shuffle + lz4) is the fastest to read/write
+# and the smallest for float32 features; it is also z5py's default, so this just pins it explicitly.
+EMBEDDING_COMPRESSION = "blosc"
+
+
+def _open_embeddings(save_path, mode="a"):
+    """Open the container for image embeddings.
+
+    On-disk embeddings use z5py, whose C++ core reads and writes zarr much faster than zarr-python.
+    Reading auto-detects the zarr format, so existing caches (v2 and v3) still load; new caches use
+    the format given by ``EMBEDDING_ZARR_FORMAT``. In-memory embeddings (``save_path=None``) use an
+    in-memory zarr group, which z5py does not support.
+    """
+    if save_path is None:
+        return zarr.group()
+    save_path = str(save_path)
+    # Unlike zarr-python, z5py cannot open an existing directory that has no zarr metadata
+    # (e.g. an empty folder left by a previous run). When appending, write the group metadata
+    # for the pinned format first so the container opens as an empty group, as zarr-python did.
+    if mode == "a" and os.path.isdir(save_path):
+        has_metadata = any(
+            os.path.exists(os.path.join(save_path, name)) for name in (".zgroup", ".zarray", "zarr.json")
+        )
+        if not has_metadata:
+            if EMBEDDING_ZARR_FORMAT == 2:
+                meta_name, meta = ".zgroup", {"zarr_format": 2}
+            else:
+                meta_name, meta = "zarr.json", {"zarr_format": 3, "node_type": "group", "attributes": {}}
+            with open(os.path.join(save_path, meta_name), "w") as f:
+                json.dump(meta, f)
+    return z5py.ZarrFile(save_path, mode=mode, zarr_format=EMBEDDING_ZARR_FORMAT)
+
+
 def _create_dataset_with_data(group, name, data, chunks=None):
-    zarr_major_version = int(zarr.__version__.split(".")[0])
     if chunks is None:
         chunks = data.shape
+    # z5py exposes the h5py-style create_dataset for both zarr v2 and v3.
+    if isinstance(group, z5py.Group):
+        return group.create_dataset(name, data=data, shape=data.shape, chunks=chunks, compression=EMBEDDING_COMPRESSION)
+    # In-memory zarr group (only used when no save_path is given).
+    zarr_major_version = int(zarr.__version__.split(".")[0])
     if zarr_major_version == 2:
         ds = group.create_dataset(name, data=data, shape=data.shape, chunks=chunks)
     elif zarr_major_version == 3:
@@ -259,6 +300,11 @@ def _create_dataset_with_data(group, name, data, chunks=None):
 
 
 def _create_dataset_without_data(group, name, shape, dtype, chunks):
+    if isinstance(group, z5py.Group):
+        return group.create_dataset(
+            name, shape=shape, dtype=dtype, chunks=chunks, compression=EMBEDDING_COMPRESSION
+        )
+    # In-memory zarr group (only used when no save_path is given).
     zarr_major_version = int(zarr.__version__.split(".")[0])
     if zarr_major_version == 2:
         ds = group.create_dataset(name, shape=shape, dtype=dtype, chunks=chunks)

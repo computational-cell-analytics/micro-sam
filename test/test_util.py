@@ -7,6 +7,11 @@ import requests
 import torch
 import zarr
 
+try:
+    import z5py
+except ImportError:
+    z5py = None
+
 from skimage.data import binary_blobs
 from skimage.measure import label
 from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory
@@ -383,6 +388,87 @@ class TestSAM2Util(unittest.TestCase):
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
         check_slices(embeddings)
+
+
+@unittest.skipUnless(z5py, "The z5py embedding backend requires z5py.")
+class TestEmbeddingBackend(unittest.TestCase):
+    """Direct tests of the z5py embedding backend, without needing a SAM model."""
+    tmp_folder = "tmp-backend"
+
+    def setUp(self):
+        os.makedirs(self.tmp_folder, exist_ok=True)
+
+    def tearDown(self):
+        rmtree(self.tmp_folder)
+
+    @staticmethod
+    def _write_legacy_cache(save_path, data, attrs, zarr_format):
+        # Mimic a cache written by the old zarr-python backend.
+        group = zarr.open(save_path, mode="w", zarr_format=zarr_format)
+        if hasattr(group, "create_array"):  # zarr-python v3
+            arr = group.create_array("features", shape=data.shape, dtype=data.dtype, chunks=data.shape)
+            arr[:] = data
+        else:  # zarr-python v2
+            group.create_dataset("features", data=data, shape=data.shape, chunks=data.shape)
+        for key, val in attrs.items():
+            group.attrs[key] = val
+
+    def test_open_in_memory(self):
+        from micro_sam.util import _open_embeddings
+        # save_path=None returns an in-memory zarr group (z5py has no in-memory store).
+        f = _open_embeddings(None)
+        self.assertIsInstance(f, zarr.Group)
+
+    def test_roundtrip(self):
+        from micro_sam.util import _open_embeddings, _create_dataset_with_data, _create_dataset_without_data
+        save_path = os.path.join(self.tmp_folder, "embed.zarr")
+        data = np.random.rand(1, 256, 64, 64).astype("float32")
+
+        # On-disk embeddings use the z5py backend.
+        f = _open_embeddings(save_path, mode="a")
+        self.assertIsInstance(f, z5py.Group)
+        _create_dataset_with_data(f, "features", data=data)
+        _create_dataset_without_data(f, "empty", shape=data.shape, dtype="float32", chunks=data.shape)
+        f.attrs["input_size"] = [1024, 1024]
+        f.attrs["tile_shape"] = None
+
+        # Reload with the backend and check the contents (including tricky attrs: a list and None).
+        g = _open_embeddings(save_path, mode="r")
+        self.assertTrue(np.allclose(g["features"][:], data))
+        self.assertEqual(list(g.attrs["input_size"]), [1024, 1024])
+        self.assertIsNone(g.attrs["tile_shape"])
+
+        # z5py-written caches remain readable by zarr-python, and are written as zarr v3 with blosc.
+        z = zarr.open(save_path, mode="r")
+        self.assertTrue(np.allclose(z["features"][:], data))
+        self.assertEqual(z.metadata.zarr_format, 3)
+        self.assertTrue(any("blosc" in repr(codec).lower() for codec in z["features"].metadata.codecs))
+
+    def test_open_metadataless_dir(self):
+        # z5py cannot open a directory without zarr metadata; _open_embeddings must handle it
+        # gracefully, as the old zarr-python backend did (implicit group creation).
+        from micro_sam.util import _open_embeddings
+        save_path = os.path.join(self.tmp_folder, "empty.zarr")
+        os.makedirs(save_path)
+        f = _open_embeddings(save_path, mode="a")
+        self.assertNotIn("features", f)
+
+    def test_read_legacy_zarr_python_cache(self):
+        # Caches written by the old zarr-python backend (v2 and v3) must still load via z5py.
+        from micro_sam.util import _open_embeddings
+        data = np.random.rand(1, 256, 64, 64).astype("float32")
+        attrs = {
+            "input_size": [1024, 1024], "original_size": [512, 512], "tile_shape": None, "model_name": "vit_t",
+        }
+        for zarr_format in (2, 3):
+            save_path = os.path.join(self.tmp_folder, f"legacy_v{zarr_format}.zarr")
+            self._write_legacy_cache(save_path, data, attrs, zarr_format)
+
+            f = _open_embeddings(save_path, mode="a")
+            self.assertTrue(np.allclose(f["features"][:], data))
+            self.assertEqual(f.attrs["model_name"], "vit_t")
+            self.assertEqual(list(f.attrs["original_size"]), [512, 512])
+            self.assertIsNone(f.attrs["tile_shape"])
 
 
 if __name__ == "__main__":

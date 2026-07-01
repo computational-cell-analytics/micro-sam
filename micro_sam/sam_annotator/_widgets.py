@@ -12,7 +12,6 @@ import elf.parallel
 import h5py
 import napari
 import numpy as np
-import zarr
 
 try:
     import z5py
@@ -1886,7 +1885,7 @@ class EmbeddingWidget(_WidgetBase):
             and os.listdir(self.embeddings_save_path)
         ):
             try:
-                f = zarr.open(self.embeddings_save_path, mode="a")
+                f = util._open_embeddings(self.embeddings_save_path, mode="a")
 
                 # Validate that the embeddings are complete.
                 # Note: 'input_size' is the last value set in the attrs of f,
@@ -1937,7 +1936,7 @@ class EmbeddingWidget(_WidgetBase):
                     # Recompute with the user's current selection: clear the saved file so the backend
                     # recomputes from scratch (works for any model and even when the model is unchanged).
                     # Tiling and model stay as the user set them in the widget.
-                    zarr.open(self.embeddings_save_path, mode="w")
+                    util._open_embeddings(self.embeddings_save_path, mode="w")
                     return False
 
                 # 'load': adopt the saved model and tiling, then load the existing embeddings. Clear any

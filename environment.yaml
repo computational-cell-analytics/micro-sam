@@ -29,6 +29,7 @@ dependencies:
     - timm
     - trackastra >=0.5.3
     - xarray
+    - z5py
     - zarr
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git

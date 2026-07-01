@@ -10,7 +10,6 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Callable  
 
 import numpy as np
 import pooch
-import zarr
 import torch
 
 from bioimage_cpp.utils import Blocking
@@ -20,7 +19,7 @@ from ..util import (  # noqa
     _DEFAULT_MODEL, _MODEL_TYPES,
     get_device, _available_devices, _to_image, _load_checkpoint, _compute_hash,
     _CustomUnpickler, get_cache_directory, microsam_cachedir,
-    _create_dataset_with_data, _create_dataset_without_data,
+    _create_dataset_with_data, _create_dataset_without_data, _open_embeddings,
     _compute_data_signature, _get_embedding_signature, _write_embedding_signature,
     handle_pbar,
 )
@@ -885,20 +884,20 @@ def precompute_image_embeddings(
     # Handle the embedding save_path.
     # We don't have a save path, open in memory zarr file to hold tiled embeddings.
     if save_path is None:
-        f = zarr.group()
+        f = _open_embeddings(None)
 
     # We have a save path and it already exists. Embeddings will be loaded from it,
     # check that the saved embeddings in there match the parameters of the function call.
     elif os.path.exists(save_path):
-        f = zarr.open(save_path, mode="a")
+        f = _open_embeddings(save_path, mode="a")
         if _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
             # Stale embeddings (model or tiling changed): truncate and recompute, overwriting them.
-            f = zarr.open(save_path, mode="w")
+            f = _open_embeddings(save_path, mode="w")
 
     # We have a save path and it does not exist yet. Create the zarr file to which the
     # embeddings will then be saved.
     else:
-        f = zarr.open(save_path, mode="a")
+        f = _open_embeddings(save_path, mode="a")
 
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
 
