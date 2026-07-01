@@ -3,19 +3,18 @@ from typing import Optional, Tuple
 import numpy as np
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
-from skimage.measure import label as connected_components
 
-import vigra
+from bioimage_cpp.distance import vector_difference_transform
+from bioimage_cpp.segmentation import label as connected_components, relabel_sequential
 
 
 def _instance_labels(labels):
     """Relabel each connected region as a unique integer instance.
 
-    Wraps skimage.measure.label so that disconnected regions with the same
-    label ID get separate consecutive IDs.  Used as label_transform2 in the
+    Wraps a connected-components labeling so that disconnected regions with the
+    same label ID get separate consecutive IDs.  Used as label_transform2 in the
     interactive generalist dataloaders.
     """
-    from skimage.measure import label as connected_components
     return connected_components(labels).astype("int64")
 
 
@@ -102,8 +101,10 @@ class DirectedPerObjectBoundaryDistanceTransform:
 
         cropped_boundary_mask = boundaries[bb]
 
-        kwargs = {} if self.sampling is None else {"pixel_pitch": self.sampling}
-        this_distances = vigra.filters.vectorDistanceTransform(cropped_boundary_mask, **kwargs)
+        # Inverted mask ('== 0') gives the vector to the nearest boundary, matching vigra's
+        # 'vectorDistanceTransform' (as migrated in torch_em); 'sampling' replaces 'pixel_pitch'.
+        kwargs = {} if self.sampling is None else {"sampling": self.sampling}
+        this_distances = vector_difference_transform(cropped_boundary_mask == 0, **kwargs)
         this_distances[inv_mask] = 0
 
         spatial_axes = tuple(range(labels.ndim))
@@ -126,21 +127,22 @@ class DirectedPerObjectBoundaryDistanceTransform:
         if labels.ndim == 2:
             labels = labels[None]
 
-        # skimage/vigra C extensions read raw bytes assuming native byte order; swap if needed.
+        # bioimage-cpp / skimage C extensions read raw bytes assuming native byte order; swap if needed.
         if not labels.dtype.isnative:
             labels = labels.byteswap().view(labels.dtype.newbyteorder())
 
         if self.apply_label:
             labels = connected_components(labels).astype("uint32")
         else:  # Otherwise just relabel the segmentation.
-            labels = vigra.analysis.relabelConsecutive(labels)[0].astype("uint32")
+            # Cast to uint32: relabel_sequential rejects uint8/16 and labels fit uint32.
+            labels = relabel_sequential(labels.astype("uint32"))[0].astype("uint32")
 
         # Filter out small objects if min_size is specified.
         if self.min_size > 0:
             ids, sizes = np.unique(labels, return_counts=True)
             discard_ids = ids[sizes < self.min_size]
             labels[np.isin(labels, discard_ids)] = 0
-            labels = vigra.analysis.relabelConsecutive(labels)[0].astype("uint32")
+            labels = relabel_sequential(labels)[0].astype("uint32")
 
         # Compute the boundaries.
         boundaries = find_boundaries(labels, mode="inner").astype("uint32")

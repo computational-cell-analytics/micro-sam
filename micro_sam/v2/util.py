@@ -737,6 +737,24 @@ def precompute_image_embeddings(
     return embeddings
 
 
+def _to_device_tensor(data, device):
+    """Convert embedding data (numpy array or torch tensor on any device) to a float tensor.
+
+    Freshly computed embeddings may still be tensors on MPS/CUDA, which 'np.asarray' cannot
+    convert; move those to the target device directly instead of via numpy.
+
+    Args:
+        data: The embedding data, either a numpy array or a torch tensor on any device.
+        device: The target device for the returned tensor.
+
+    Returns:
+        The data as a float tensor on the given device.
+    """
+    if torch.is_tensor(data):
+        return data.detach().to(device).float()
+    return torch.as_tensor(np.asarray(data), device=device).float()
+
+
 def set_precomputed(
     predictor,
     image_embeddings,
@@ -807,9 +825,9 @@ def set_precomputed(
         running_features = {}
         for slice_id in range(features.shape[0]):
             image = inference_state["images"][slice_id].to(device).float().unsqueeze(0)
-            vision_features = torch.as_tensor(np.asarray(features[slice_id]), device=device).float()
-            vision_pos_enc = [torch.as_tensor(np.asarray(t[slice_id]), device=device).float() for t in pos_list]
-            backbone_fpn = [torch.as_tensor(np.asarray(t[slice_id]), device=device).float() for t in fpn_list]
+            vision_features = _to_device_tensor(features[slice_id], device)
+            vision_pos_enc = [_to_device_tensor(t[slice_id], device) for t in pos_list]
+            backbone_fpn = [_to_device_tensor(t[slice_id], device) for t in fpn_list]
             backbone_out = {
                 "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
             }
@@ -822,13 +840,9 @@ def set_precomputed(
         if i is not None:
             raise ValueError("The data is 2D so an index is not needed.")
 
-        # Reloaded embeddings are numpy arrays, so convert them to tensors on the predictor device,
-        # matching what 'predictor.set_image' would have produced for the decoder.
-        image_embed = torch.as_tensor(np.asarray(features), device=device).float()
-        high_res_feats = [
-            torch.as_tensor(np.asarray(feat), device=device).float()
-            for feat in image_embeddings["high_res_feats"]
-        ]
+        # Convert to tensors on the predictor device, as 'predictor.set_image' would for the decoder.
+        image_embed = _to_device_tensor(features, device)
+        high_res_feats = [_to_device_tensor(feat, device) for feat in image_embeddings["high_res_feats"]]
         predictor._features = {"image_embed": image_embed, "high_res_feats": high_res_feats}
         predictor._is_image_set = True
         predictor._orig_hw = image_embeddings["original_size"]
