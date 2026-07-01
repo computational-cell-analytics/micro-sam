@@ -8,14 +8,14 @@ import numpy as np
 import pytest
 from skimage.data import binary_blobs
 
-from micro_sam.sam_annotator.image_series_annotator import ImageSeriesAnnotator, TASKS
+from micro_sam.sam_annotator.batch_annotator import BatchAnnotator, TASKS
 
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_launcher_task_selector_toggles_segmentation_folder(make_napari_viewer_proxy):
     viewer = make_napari_viewer_proxy()
-    widget = ImageSeriesAnnotator(viewer)
+    widget = BatchAnnotator(viewer)
 
     # Continuing from existing outputs is enabled by default.
     assert widget.continue_annotation is True
@@ -47,7 +47,7 @@ def test_launcher_embedding_widget_swaps_per_task(make_napari_viewer_proxy):
     from micro_sam.sam_annotator._widgets import EmbeddingWidget, ClassificationEmbeddingWidget
 
     viewer = make_napari_viewer_proxy()
-    widget = ImageSeriesAnnotator(viewer)
+    widget = BatchAnnotator(viewer)
 
     # Segmentation: a plain embedding widget with the image-dimensions dropdown, no 'Advanced Models'.
     assert isinstance(widget._embedding_widget, EmbeddingWidget)
@@ -77,7 +77,7 @@ def test_launcher_model_dropdown_above_task(make_napari_viewer_proxy):
     # re-relocated (pointing at the new widget's dropdown) whenever the task changes and the widget is
     # rebuilt.
     viewer = make_napari_viewer_proxy()
-    widget = ImageSeriesAnnotator(viewer)
+    widget = BatchAnnotator(viewer)
 
     def _row_widgets():
         row = widget._model_row
@@ -95,7 +95,7 @@ def test_launcher_model_dropdown_above_task(make_napari_viewer_proxy):
 # Each task must dispatch to its series function. The launcher imports these lazily from their home
 # modules, so patching the module attribute intercepts the call.
 DISPATCH = [
-    ("Segmentation", "micro_sam.sam_annotator.image_series_annotator", "image_folder_annotator"),
+    ("Segmentation", "micro_sam.sam_annotator.batch_annotator", "image_folder_annotator"),
     ("Tracking", "micro_sam.sam_annotator.annotator_tracking", "image_series_tracking_annotator"),
     ("Pixel Classification", "micro_sam.sam_annotator.pixel_classifier", "image_series_pixel_classifier"),
     ("Object Classification", "micro_sam.sam_annotator.object_classifier", "image_series_object_classifier"),
@@ -117,7 +117,7 @@ def test_launcher_dispatches_to_the_selected_task(
             imageio.imwrite(os.path.join(tmpdir, f"image-{i}.tif"), binary_blobs(64).astype(np.uint8) * 255)
 
         viewer = make_napari_viewer_proxy()
-        widget = ImageSeriesAnnotator(viewer)
+        widget = BatchAnnotator(viewer)
         widget.folder = tmpdir
         widget.output_folder = os.path.join(tmpdir, "out")
         widget.pattern = "*.tif"
@@ -136,7 +136,7 @@ def test_launcher_dispatches_to_the_selected_task(
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_launcher_can_restart_segmentation_from_first_image(make_napari_viewer_proxy, monkeypatch):
-    isa = importlib.import_module("micro_sam.sam_annotator.image_series_annotator")
+    isa = importlib.import_module("micro_sam.sam_annotator.batch_annotator")
     calls = []
     monkeypatch.setattr(isa, "image_folder_annotator", lambda *args, **kwargs: calls.append((args, kwargs)))
 
@@ -144,7 +144,7 @@ def test_launcher_can_restart_segmentation_from_first_image(make_napari_viewer_p
         imageio.imwrite(os.path.join(tmpdir, "image.tif"), binary_blobs(64).astype(np.uint8) * 255)
 
         viewer = make_napari_viewer_proxy()
-        widget = ImageSeriesAnnotator(viewer)
+        widget = BatchAnnotator(viewer)
         widget.folder = tmpdir
         widget.output_folder = os.path.join(tmpdir, "out")
         widget.pattern = "*.tif"
@@ -163,7 +163,7 @@ def test_launcher_removes_itself_after_launch(make_napari_viewer_proxy, monkeypa
     # Once the task + settings are locked in and a launch happens, the console dock removes itself so
     # the annotator has the screen to itself.
     from qtpy.QtWidgets import QApplication, QDockWidget
-    isa = importlib.import_module("micro_sam.sam_annotator.image_series_annotator")
+    isa = importlib.import_module("micro_sam.sam_annotator.batch_annotator")
     monkeypatch.setattr(isa, "image_folder_annotator", lambda *args, **kwargs: None)
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -171,11 +171,11 @@ def test_launcher_removes_itself_after_launch(make_napari_viewer_proxy, monkeypa
             imageio.imwrite(os.path.join(tmpdir, f"image-{i}.tif"), binary_blobs(64).astype(np.uint8) * 255)
 
         viewer = make_napari_viewer_proxy()
-        widget = ImageSeriesAnnotator(viewer)
+        widget = BatchAnnotator(viewer)
         widget.folder = tmpdir
         widget.output_folder = os.path.join(tmpdir, "out")
         widget.pattern = "*.tif"
-        dock = viewer.window.add_dock_widget(widget, name="Image Series Annotator")
+        dock = viewer.window.add_dock_widget(widget, name="Batch Annotator")
         assert dock in viewer.window._qt_window.findChildren(QDockWidget)
 
         widget(skip_validate=True)

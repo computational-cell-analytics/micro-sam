@@ -48,7 +48,7 @@ pytest
 - `annotator.py`, `annotator_tracking.py` - UIs for interactive and automatic segmentation / tracking
 - `_state.py` - Singleton state manager (predictor, embeddings, AMG generators)
 - `_widgets.py` - Qt widgets for embedding/segmentation/tracking controls
-- `image_series_annotator.py` - Multi-image batch annotation workflow
+- `batch_annotator.py` - Multi-image batch annotation workflow
 
 **Training/Finetuning (micro_sam/training/):**
 - `sam_trainer.py` - Base trainer extending torch_em.DefaultTrainer

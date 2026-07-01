@@ -39,8 +39,8 @@ contributions:
       python_name: micro_sam.sam_annotator.annotator_tracking:AnnotatorTracking
       title: Start the tracking annotator
     - id: micro_sam.image_series_annotator
-      python_name: micro_sam.sam_annotator.image_series_annotator:ImageSeriesAnnotator
-      title: Run the annotator for multiple images in a folder
+      python_name: micro_sam.sam_annotator.batch_annotator:BatchAnnotator
+      title: Start the batch annotator
     - id: micro_sam.object_classifier
       python_name: micro_sam.sam_annotator.object_classifier:ObjectClassifier
       title: Start the SAM based object classifier
@@ -80,7 +80,7 @@ contributions:
     - command: micro_sam.annotator_tracking
       display_name: Tracking Annotator
     - command: micro_sam.image_series_annotator
-      display_name: Image Series Annotator
+      display_name: Batch Annotator
     - command: micro_sam.object_classifier
       display_name: Object Classifier
     - command: micro_sam.pixel_classifier
