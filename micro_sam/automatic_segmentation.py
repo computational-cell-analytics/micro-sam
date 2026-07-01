@@ -98,6 +98,8 @@ def automatic_tracking(
     return_embeddings: bool = False,
     annotate: bool = False,
     batch_size: int = 1,
+    mode: str = "greedy",
+    tracking_model: str = "general_2d",
     **generate_kwargs
 ) -> Tuple[np.ndarray, List[Dict]]:
     """Run automatic tracking for the input timeseries.
@@ -120,6 +122,9 @@ def automatic_tracking(
             By default, does not activate the annotator.
         batch_size: The batch size to compute image embeddings over tiles / z-planes.
             By default, does it sequentially, i.e. one after the other.
+        mode: The trackastra linking solver. One of 'greedy_nodiv', 'greedy' or 'ilp'.
+            'ilp' uses the motile solver. By default, set to 'greedy'.
+        tracking_model: The pretrained trackastra model to use. By default, set to 'general_2d'.
         generate_kwargs: optional keyword arguments for the generate function of the AMG, APG, or AIS class.
 
     Returns:
@@ -146,6 +151,8 @@ def automatic_tracking(
         halo=halo,
         verbose=verbose,
         batch_size=batch_size,
+        mode=mode,
+        tracking_model=tracking_model,
         return_embeddings=True,
         output_folder=output_path,
         **generate_kwargs,

@@ -176,9 +176,14 @@ class TestPromptGenerators(unittest.TestCase):
 
                 self.assertTrue(agree.all())
 
-                # the condition only holds if we have a negative area (prediction mask where we don't have true mask)
-                if ((pred_mask - mask) > 0).sum() > 0:
-                    self.assertTrue(diff.all())
+                # Positive and negative prompts correct false-negative and false-positive regions, respectively.
+                has_false_negatives = ((mask - pred_mask) > 0).any()
+                has_false_positives = ((pred_mask - mask) > 0).any()
+
+                if has_false_negatives:
+                    self.assertTrue(diff[0])
+                if has_false_positives:
+                    self.assertTrue(diff[1])
 
 
 if __name__ == "__main__":
