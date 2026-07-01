@@ -248,7 +248,7 @@ def image_folder_annotator(
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
             By default, does not return the napari viewer.
-        kwargs: The keyword arguments for `micro_sam.sam_annotator.image_series_annotator`.
+        kwargs: The keyword arguments for `micro_sam.sam_annotator.batch_annotator.image_series_annotator`.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -286,7 +286,7 @@ def _hide_layout_widgets(item):
         _hide_layout_widgets(layout.itemAt(i))
 
 
-class ImageSeriesAnnotator(widgets._WidgetBase):
+class BatchAnnotator(widgets._WidgetBase):
     def __init__(self, viewer: napari.Viewer, parent=None):
         super().__init__(parent=parent)
         self._viewer = viewer
