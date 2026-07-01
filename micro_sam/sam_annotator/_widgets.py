@@ -1694,6 +1694,7 @@ class EmbeddingWidget(_WidgetBase):
             (self.halo_x, self.halo_y),
             min_val=0,
             max_val=512,
+            title=("overlap_x", "overlap_y"),
             tooltip=get_tooltip("embedding", "halo"),
         )
         self._tiling_widget.layout().addLayout(halo_layout)
@@ -3864,7 +3865,7 @@ class AutoSegmentWidget(_WidgetBase):
             tooltip=get_tooltip("autosegment", "tile_z"), layout=row,
         )
         self.halo_z_param, _ = self._add_int_param(
-            "halo_z", self.halo_z, min_val=0, max_val=128, title="halo_z:",
+            "halo_z", self.halo_z, min_val=0, max_val=128, title="overlap_z:",
             tooltip=get_tooltip("autosegment", "halo_z"), layout=row,
         )
         settings.layout().addLayout(row)
