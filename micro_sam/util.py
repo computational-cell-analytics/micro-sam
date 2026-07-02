@@ -543,11 +543,15 @@ def get_block_shape(shape: Tuple[int]) -> Tuple[int]:
     return block_shape
 
 
-def micro_sam_info() -> None:
-    """Display μSAM information using a rich console."""
+def micro_sam_info(download: Optional[List[str]] = None) -> None:
+    """Display μSAM information using a rich console.
+
+    Args:
+        download: Optional list to download pretrained SAM models. E.g. ['models'] downloads all
+            models, ['models', 'vit_b_lm'] downloads the listed model(s).
+    """
     import psutil
     import platform
-    import argparse
     from .v1.util import models, _download_sam_model
     from rich import progress
     from rich.panel import Panel
@@ -556,16 +560,6 @@ def micro_sam_info() -> None:
 
     import torch
     import micro_sam
-
-    parser = argparse.ArgumentParser(description="μSAM Information Booth")
-    parser.add_argument(
-        "--download", nargs="+", metavar=("WHAT", "KIND"),
-        help="Downloads the pretrained SAM models."
-        "'--download models' -> downloads all pretrained models; "
-        "'--download models vit_b_lm vit_b_em_organelles' -> downloads the listed models; "
-        "'--download model/models vit_b_lm' -> downloads a single specified model."
-    )
-    args = parser.parse_args()
 
     # Open up a new console.
     console = Console()
@@ -671,8 +665,8 @@ def micro_sam_info() -> None:
 
     # The section allowing to download models.
     # NOTE: In future, can be extended to download sample data.
-    if args.download:
-        download_provided_args = [t.lower() for t in args.download]
+    if download:
+        download_provided_args = [t.lower() for t in download]
         mode, *model_types = download_provided_args
 
         if mode not in {"models", "model"}:

@@ -339,7 +339,7 @@ def _get_inputs_from_paths(paths, pattern):
     return fpaths
 
 
-def main():
+def main(argv=None):
     """@private"""
     import argparse
 
@@ -428,7 +428,7 @@ def main():
         "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
     )
 
-    args, parameter_args = parser.parse_known_args()
+    args, parameter_args = parser.parse_known_args(argv)
 
     def _convert_argval(value):
         # The values for the parsed arguments need to be in the expected input structure as provided.

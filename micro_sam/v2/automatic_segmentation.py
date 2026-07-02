@@ -26,7 +26,7 @@ import torch
 
 from bioimage_cpp.utils import Blocking
 
-from .util import _DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z
+from .util import _DEFAULT_MODEL, DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z
 from .postprocessing import flow_instance_segmentation, run_multicut
 
 
@@ -335,7 +335,7 @@ def segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kwa
     return seg.astype("uint32")
 
 
-def automatic_instance_segmentation(
+def segment_instances(
     model: torch.nn.Module,
     raw: np.ndarray,
     ndim: int,
@@ -894,3 +894,119 @@ def get_unisam2_segmentation_generator(
     if is_tiled:
         return TiledUniSAM2InstanceSegmentation(model, device=device)
     return UniSAM2InstanceSegmentation(model, device=device)
+
+
+def get_predictor_and_segmenter(
+    model_type: str = DEFAULT_MODEL,
+    checkpoint: Optional[Union[str, "os.PathLike"]] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    is_tiled: bool = False,
+) -> tuple:
+    """Load the SAM2 predictor and UniSAM2 instance segmentation generator.
+
+    Automatic segmentation with SAM2 needs a UniSAM2 decoder. This is provided either by a
+    decoder `checkpoint` or by a finetuned model with a registered decoder (e.g. 'hvit_t_cells').
+
+    Args:
+        model_type: The SAM2 model. Either a finetuned model with a registered decoder (see
+            `micro_sam.v2.util.get_model_names`) or a base backbone combined with `checkpoint`.
+        checkpoint: Optional path to a decoder checkpoint. Used both to load the encoder / predictor
+            and to build the UniSAM2 decoder.
+        device: The device to run inference on. By default the best available device is selected.
+        is_tiled: Whether to run tiled inference.
+
+    Returns:
+        The SAM2 image predictor (used to precompute embeddings) and the UniSAM2 generator.
+    """
+    from ..util import get_device
+    from .util import get_sam2_model, FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
+
+    device = get_device(device)
+    predictor = get_sam2_model(
+        model_type=model_type, checkpoint_path=checkpoint, input_type="images", device=device
+    )
+
+    # The decoder is built on the base backbone (first 6 characters, e.g. 'hvit_t_cells' -> 'hvit_t').
+    encoder = model_type[:6]
+    if checkpoint is not None:
+        decoder_source = checkpoint
+    elif model_type in FINETUNED_MODELS and has_registered_decoder(model_type):
+        _, _, decoder_source = _download_finetuned_sam2_model(model_type)
+        # Reuse the predictor's already-loaded (finetuned) image encoder for the decoder.
+        sam2_model = getattr(predictor, "model", predictor)
+        encoder = getattr(sam2_model, "image_encoder", encoder)
+    else:
+        raise ValueError(
+            f"Automatic segmentation with SAM2 requires a finetuned model with a registered decoder "
+            f"or a decoder '--checkpoint'. '{model_type}' provides neither."
+        )
+
+    model = get_unisam2_model(decoder_source, device=device, encoder=encoder)
+    segmenter = get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
+    return predictor, segmenter
+
+
+def automatic_instance_segmentation(
+    predictor,
+    segmenter,
+    input_path: Union[str, "os.PathLike", np.ndarray],
+    output_path: Optional[Union[str, "os.PathLike"]] = None,
+    embedding_path: Optional[Union[str, "os.PathLike"]] = None,
+    key: Optional[str] = None,
+    ndim: Optional[int] = None,
+    tile_shape: Optional[tuple] = None,
+    halo: Optional[tuple] = None,
+    mode: str = "sparse",
+    device: Optional[Union[str, torch.device]] = None,
+    verbose: bool = True,
+    **generate_kwargs,
+) -> np.ndarray:
+    """Run UniSAM2 automatic instance segmentation for a single input and save the result.
+
+    Args:
+        predictor: The SAM2 image predictor (used to precompute embeddings when `embedding_path` is set).
+        segmenter: The UniSAM2 instance segmentation generator.
+        input_path: The input image, either a filepath (e.g. tif or a container with `key`) or an array.
+        output_path: Optional path to save the segmentation as a tif file.
+        embedding_path: Optional path to cache the image embeddings. If given, only the decoder is run
+            on the (cached) embeddings; otherwise the full model is run.
+        key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
+        ndim: The number of spatial dimensions (2 or 3). By default inferred from the data.
+        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
+        mode: The segmentation mode, 'sparse' (flow) or 'dense' (multicut).
+        device: The device to run inference on.
+        verbose: Whether to print progress.
+        generate_kwargs: Additional postprocessing parameters forwarded to the segmenter's `generate`.
+
+    Returns:
+        The instance segmentation, uint32 array.
+    """
+    from ..util import load_image_data
+    from .util import precompute_image_embeddings
+
+    if isinstance(input_path, np.ndarray):
+        raw = input_path
+    else:
+        raw = load_image_data(input_path, key=key)
+
+    if ndim is None:
+        ndim = raw.ndim
+
+    image_embeddings = None
+    if embedding_path is not None:
+        image_embeddings = precompute_image_embeddings(
+            predictor, raw, save_path=embedding_path, ndim=ndim,
+            tile_shape=tile_shape, halo=halo, verbose=verbose,
+        )
+
+    segmenter.initialize(
+        raw, ndim=ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo,
+    )
+    segmentation = segmenter.generate(mode=mode, **generate_kwargs)
+
+    if output_path is not None:
+        import imageio.v3 as imageio
+        imageio.imwrite(output_path, segmentation, compression="zlib")
+
+    return segmentation
