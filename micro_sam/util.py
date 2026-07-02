@@ -728,6 +728,16 @@ def micro_sam_info(download: Optional[List[str]] = None) -> None:
         all_names = sam1_names + sam2_names
         if any(t.lower() == "all" for t in download):  # Download every available model.
             download_list = all_names
+            # Guard the bulk download (all SAM1 + SAM2 models, several GB) behind a confirmation, but
+            # only when interactive so scripted '--download all' still runs unattended.
+            import sys
+            from rich.prompt import Confirm
+            if sys.stdin.isatty() and not Confirm.ask(
+                f"[yellow]This downloads all {len(download_list)} models (SAM1 + SAM2), several GB. Continue?[/]",
+                console=console, default=False,
+            ):
+                console.print("[red]Download aborted.[/]")
+                return
         else:
             download_list = list(download)
             incorrect_models = [m for m in download_list if m not in all_names]

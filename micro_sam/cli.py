@@ -8,7 +8,8 @@ heavy dependencies (torch, napari, ...) lazily, so ``micro_sam --help`` stays fa
 import click
 
 
-@click.group()
+@click.group(context_settings=dict(help_option_names=["-h", "--help"]))
+@click.version_option(package_name="micro_sam", prog_name="micro_sam")
 def cli():
     """micro_sam: Segment Anything for Microscopy."""
 
