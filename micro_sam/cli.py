@@ -386,11 +386,12 @@ def train(config, use_cluster, partition, account, qos, num_gpus, num_nodes):
 
 @cli.command("info")
 @click.option(
-    "--download", multiple=True,
-    help="Download pretrained SAM models, e.g. '--download models' or '--download models vit_b_lm'."
+    "--download", multiple=True, metavar="MODEL",
+    help="Download pretrained models by name (repeatable), e.g. '--download vit_b_lm --download hvit_t'. "
+    "Use '--download all' to download every available model."
 )
 def info(download):
-    """Display micro_sam information (version, cache, models, system)."""
+    """Display micro_sam information (version, cache, models, system, accelerator)."""
     from .util import micro_sam_info
     micro_sam_info(download=list(download) if download else None)
 
