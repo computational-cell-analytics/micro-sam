@@ -198,7 +198,8 @@ def batch_annotator(
 @click.option("-k", "--key", default=None, help="The key for opening data with elf.io.open_file.")
 @click.option(
     "-m", "--model_type", default=None,
-    help="The SAM2 model to use. By default the base backbone 'hvit_t' is used."
+    help="The model to use: SAM1 ('vit_*'), SAM2 ('hvit_*') or a VFM (DINO / UNI) encoder. "
+    "By default the base backbone 'hvit_t' is used."
 )
 @click.option("-c", "--checkpoint", "checkpoint_path", default=None, help="Checkpoint to load the SAM2 model from.")
 @click.option(

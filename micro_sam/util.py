@@ -138,6 +138,30 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
     return device
 
 
+def get_embedding_function(model_type: str) -> callable:
+    """Get the precompute-embeddings function for the model family of `model_type`.
+
+    Dispatches across the three families: VFM (DINO / UNI) encoders, SAM2 ('hvit_*') and SAM1 ('vit_*').
+    All returned functions share the interface (predictor, input_, save_path, ndim, tile_shape, halo,
+    verbose, lazy_loading, pbar_init, pbar_update).
+
+    Args:
+        model_type: The model name, e.g. 'vit_b_lm', 'hvit_t' or 'dino_v2_vitb'.
+
+    Returns:
+        The matching `precompute_image_embeddings` / `precompute_vfm_embeddings` function.
+    """
+    from .v1.models.vfm import is_vfm_model
+    if is_vfm_model(model_type):
+        from .v1.models.vfm import precompute_vfm_embeddings
+        return precompute_vfm_embeddings
+    if model_type.startswith("h"):
+        from .v2.util import precompute_image_embeddings
+        return precompute_image_embeddings
+    from .v1.util import precompute_image_embeddings
+    return precompute_image_embeddings
+
+
 def _available_devices():
     available_devices = []
     for i in ["cuda", "mps", "cpu"]:
