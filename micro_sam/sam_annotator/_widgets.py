@@ -510,6 +510,45 @@ class _WidgetBase(QtWidgets.QWidget):
             )
         return False
 
+    def _validate_vfm_requirements(self):
+        # For gated VFM models (DINOv3 via 'transformers', UNI / UNI2-h via 'timm') check that the backend
+        # package is importable and HuggingFace access is set up, surfacing a clear message if not. DINOv2
+        # ('torch_hub') is ungated and auto-downloads, so it is not checked. A no-op for SAM models.
+        import importlib
+        from ..v1.models.vfm import is_vfm_model, VFM_MODELS
+
+        if not is_vfm_model(self.model_type):
+            return False
+
+        backend = VFM_MODELS[self.model_type]["backend"]
+        if backend == "torch_hub":  # DINOv2: ungated, weights auto-download.
+            return False
+
+        package = "transformers" if backend == "hf" else "timm"
+        try:
+            importlib.import_module(package)
+        except ImportError:
+            return _generate_message(
+                "error",
+                f"The model '{self.model_type}' requires the '{package}' package, which is not installed. "
+                f"Install it (e.g. 'pip install {package}') and try again."
+            )
+
+        # These weights are gated on HuggingFace; warn (but allow continuing, e.g. if already cached).
+        try:
+            from huggingface_hub import get_token
+            has_token = get_token() is not None
+        except Exception:
+            has_token = False
+        if not has_token:
+            return _generate_message(
+                "info",
+                f"'{self.model_type}' is a gated model on Hugging Face. Request access on its Hugging Face "
+                "page and authenticate via 'huggingface-cli login' or the 'HF_TOKEN' environment variable. "
+                "If the weights are already downloaded you can continue; otherwise the download will fail."
+            )
+        return False
+
 
 # Custom signals for managing progress updates.
 class PBarSignals(QObject):
@@ -1977,6 +2016,10 @@ class EmbeddingWidget(_WidgetBase):
     def __call__(self, skip_validate=False):
         self._validate_model_type_and_custom_weights()
         if self._validate_model_support():
+            return
+
+        # For gated advanced (DINO / UNI) models, check the backend package + HuggingFace access.
+        if self._validate_vfm_requirements():
             return
 
         # Validate user inputs.
