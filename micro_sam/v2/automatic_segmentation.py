@@ -901,6 +901,7 @@ def get_predictor_and_segmenter(
     checkpoint: Optional[Union[str, "os.PathLike"]] = None,
     device: Optional[Union[str, torch.device]] = None,
     is_tiled: bool = False,
+    load_predictor: bool = True,
 ) -> tuple:
     """Load the SAM2 predictor and UniSAM2 instance segmentation generator.
 
@@ -914,17 +915,21 @@ def get_predictor_and_segmenter(
             and to build the UniSAM2 decoder.
         device: The device to run inference on. By default the best available device is selected.
         is_tiled: Whether to run tiled inference.
+        load_predictor: Whether to load the SAM2 image predictor. It is only needed to precompute
+            embeddings; set to False to skip loading it (the returned predictor is then None).
 
     Returns:
-        The SAM2 image predictor (used to precompute embeddings) and the UniSAM2 generator.
+        The SAM2 image predictor (used to precompute embeddings, or None) and the UniSAM2 generator.
     """
     from ..util import get_device
     from .util import get_sam2_model, FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
 
     device = get_device(device)
-    predictor = get_sam2_model(
-        model_type=model_type, checkpoint_path=checkpoint, input_type="images", device=device
-    )
+    predictor = None
+    if load_predictor:
+        predictor = get_sam2_model(
+            model_type=model_type, checkpoint_path=checkpoint, input_type="images", device=device
+        )
 
     # The decoder is built on the base backbone (first 6 characters, e.g. 'hvit_t_cells' -> 'hvit_t').
     encoder = model_type[:6]
@@ -932,9 +937,10 @@ def get_predictor_and_segmenter(
         decoder_source = checkpoint
     elif model_type in FINETUNED_MODELS and has_registered_decoder(model_type):
         _, _, decoder_source = _download_finetuned_sam2_model(model_type)
-        # Reuse the predictor's already-loaded (finetuned) image encoder for the decoder.
-        sam2_model = getattr(predictor, "model", predictor)
-        encoder = getattr(sam2_model, "image_encoder", encoder)
+        # Reuse the predictor's already-loaded (finetuned) image encoder for the decoder, if loaded.
+        if predictor is not None:
+            sam2_model = getattr(predictor, "model", predictor)
+            encoder = getattr(sam2_model, "image_encoder", encoder)
     else:
         raise ValueError(
             f"Automatic segmentation with SAM2 requires a finetuned model with a registered decoder "

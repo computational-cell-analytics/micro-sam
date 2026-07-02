@@ -116,6 +116,35 @@ class TestCLI(unittest.TestCase):
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
+    @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
+    def test_automatic_segmentation(self):
+        # Create 1 image as testdata.
+        im_path = os.path.join(self.tmp_folder, "image.tif")
+        image_data = binary_blobs(256).astype("uint8") * 255
+        imageio.imwrite(im_path, image_data)
+
+        out_path = os.path.join(self.tmp_folder, "seg.tif")
+
+        # Test 'sparse' (flow) mode with a pass-through postproc param in '--key=value' form.
+        _cli("automatic_segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+             "-n", "2", "--mode", "sparse", "--foreground_threshold=0.5")
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
+
+        # Test 'dense' (multicut) mode with a pass-through postproc param in '--key value' form.
+        _cli("automatic_segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+             "-n", "2", "--mode", "dense", "--beta", "0.6")
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
+
+        # Test the embedding-reuse path (only the decoder is run on cached embeddings).
+        emb_path = os.path.join(self.tmp_folder, "seg-embeddings.zarr")
+        _cli("automatic_segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+             "-n", "2", "--mode", "sparse", "-e", emb_path)
+        self.assertTrue(os.path.exists(out_path))
+        self.assertTrue(os.path.exists(emb_path))
+        os.remove(out_path)
+
 
 if __name__ == "__main__":
     unittest.main()

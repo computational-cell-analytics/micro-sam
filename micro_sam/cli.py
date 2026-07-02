@@ -236,8 +236,14 @@ def precompute_embeddings(input_path, embedding_path, pattern, key, model_type, 
     help="The SAM2 model to use. Needs a registered decoder or a '--checkpoint'. Default: 'hvit_t_cells'."
 )
 @click.option("-c", "--checkpoint", "checkpoint_path", default=None, help="Decoder checkpoint to load the model from.")
-@click.option("--tile_shape", type=int, nargs=2, default=None, help="The tile shape for tiled prediction.")
-@click.option("--halo", type=int, nargs=2, default=None, help="The halo for tiled prediction.")
+@click.option(
+    "--tile_shape", default=None,
+    help="The tile shape for tiled prediction, comma-separated, e.g. '384,384' (2D) or '4,384,384' (3D)."
+)
+@click.option(
+    "--halo", default=None,
+    help="The halo for tiled prediction, comma-separated, e.g. '64,64' (2D) or '2,64,64' (3D)."
+)
 @click.option(
     "-n", "--ndim", type=int, default=None,
     help="The number of spatial dimensions. Specify this if your data has a channel dimension."
@@ -271,8 +277,14 @@ def automatic_segmentation(
     from .v2.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
     model_type = model_type or DEFAULT_MODEL
-    tile_shape = tile_shape or None
-    halo = halo or None
+
+    def _parse_shape(value):
+        if value is None:
+            return None
+        return tuple(int(x) for x in value.replace(" ", "").split(","))
+
+    tile_shape = _parse_shape(tile_shape)
+    halo = _parse_shape(halo)
 
     def _convert_argval(value):
         try:
@@ -283,11 +295,28 @@ def automatic_segmentation(
             except ValueError:
                 return value
 
-    extra = ctx.args
-    generate_kwargs = {extra[i].lstrip("-"): _convert_argval(extra[i + 1]) for i in range(0, len(extra), 2)}
+    def _parse_extra(tokens):
+        # Pass-through postprocessing options, supporting both '--key value' and '--key=value'.
+        kwargs, i = {}, 0
+        while i < len(tokens):
+            token = tokens[i]
+            if not token.startswith("-"):
+                raise click.UsageError(f"Expected an option starting with '--', got '{token}'.")
+            if "=" in token:
+                name, value = token.lstrip("-").split("=", 1)
+                i += 1
+            elif i + 1 < len(tokens):
+                name, value, i = token.lstrip("-"), tokens[i + 1], i + 2
+            else:
+                raise click.UsageError(f"Missing value for option '{token}'.")
+            kwargs[name] = _convert_argval(value)
+        return kwargs
+
+    generate_kwargs = _parse_extra(ctx.args)
 
     predictor, segmenter = get_predictor_and_segmenter(
-        model_type=model_type, checkpoint=checkpoint_path, device=device, is_tiled=tile_shape is not None,
+        model_type=model_type, checkpoint=checkpoint_path, device=device,
+        is_tiled=tile_shape is not None, load_predictor=embedding_path is not None,
     )
 
     input_paths = _get_inputs_from_paths(list(input_path), pattern)
@@ -365,7 +394,7 @@ def info(download):
     micro_sam_info(download=list(download) if download else None)
 
 
-def _passthrough(module_path):
+def _passthrough(module_path, prog):
     """Build a click command that forwards all raw args to a legacy argparse ``main(argv)``."""
 
     @click.command(
@@ -373,16 +402,28 @@ def _passthrough(module_path):
     )
     @click.argument("args", nargs=-1, type=click.UNPROCESSED)
     def command(args):
+        import sys
         import importlib
-        importlib.import_module(module_path).main(list(args))
+        # Set the program name so the legacy argparse usage / error messages read 'micro_sam v1 <cmd>'.
+        original_argv0 = sys.argv[0]
+        sys.argv[0] = prog
+        try:
+            importlib.import_module(module_path).main(list(args))
+        finally:
+            sys.argv[0] = original_argv0
 
     return command
 
 
-v1.add_command(_passthrough("micro_sam.v1.training.training"), "train")
-v1.add_command(_passthrough("micro_sam.v1.automatic_segmentation"), "automatic_segmentation")
-v1.add_command(_passthrough("micro_sam.v1.evaluation.evaluation"), "evaluate")
-v1.add_command(_passthrough("micro_sam.v1.evaluation.benchmark_datasets"), "benchmark_sam")
+v1.add_command(_passthrough("micro_sam.v1.training.training", "micro_sam v1 train"), "train")
+v1.add_command(
+    _passthrough("micro_sam.v1.automatic_segmentation", "micro_sam v1 automatic_segmentation"),
+    "automatic_segmentation",
+)
+v1.add_command(_passthrough("micro_sam.v1.evaluation.evaluation", "micro_sam v1 evaluate"), "evaluate")
+v1.add_command(
+    _passthrough("micro_sam.v1.evaluation.benchmark_datasets", "micro_sam v1 benchmark_sam"), "benchmark_sam"
+)
 
 
 if __name__ == "__main__":
