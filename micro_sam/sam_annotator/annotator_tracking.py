@@ -12,7 +12,7 @@ from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
 from . import util as vutil
 from ._annotator import _AnnotatorBase
-from ._series import SeriesAnnotatorTask, run_image_series
+from ._batch import BatchAnnotatorTask, run_batch
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 
@@ -479,8 +479,8 @@ def annotator_tracking(
     napari.run()
 
 
-class TrackingSeriesTask(SeriesAnnotatorTask):
-    """Series task for tracking: each item is a TYX timeseries tracked independently."""
+class TrackingBatchTask(BatchAnnotatorTask):
+    """Batch task for tracking: each item is a TYX timeseries tracked independently."""
 
     empty_item_message = "Nothing is tracked yet. Do you wish to continue to the next timeseries?"
 
@@ -540,7 +540,7 @@ class TrackingSeriesTask(SeriesAnnotatorTask):
         annotator._update_image()
 
         state = AnnotatorState()
-        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Image Series Tracking)")
+        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Batch Tracking)")
         vutil._sync_embedding_widget(
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
@@ -563,7 +563,7 @@ class TrackingSeriesTask(SeriesAnnotatorTask):
         imageio.imwrite(save_path, viewer.layers["committed_objects"].data, compression="zlib")
 
 
-def image_series_tracking_annotator(
+def batch_tracking_annotator(
     images: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
     output_folder: str,
     *,
@@ -579,7 +579,7 @@ def image_series_tracking_annotator(
     return_viewer: bool = False,
     skip_done: bool = True,
 ) -> Optional["napari.viewer.Viewer"]:
-    """Run the tracking annotation tool for a series of timeseries (each item is one TYX video).
+    """Run the tracking annotation tool for a batch of timeseries (each item is one TYX video).
 
     Args:
         images: List of timeseries (TYX arrays) or file paths, each tracked independently.
@@ -602,12 +602,12 @@ def image_series_tracking_annotator(
         The napari viewer, only returned if `return_viewer=True`.
     """
     have_inputs_as_arrays = isinstance(images[0], np.ndarray)
-    task = TrackingSeriesTask(
+    task = TrackingBatchTask(
         model_type=model_type, embedding_path=embedding_path, tile_shape=tile_shape, halo=halo,
         checkpoint_path=checkpoint_path, decoder_path=decoder_path, device=device,
         precompute_amg_state=precompute_amg_state,
     )
-    return run_image_series(
+    return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
         viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
     )

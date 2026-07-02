@@ -11,8 +11,8 @@ from ..pixel_classification import (
     accumulate_pixel_labels, compute_pixel_features, project_prediction_to_image, train_pixel_classifier,
 )
 from ._annotator import _ClassifierBase
-from ._series import run_image_series
-from ._classification_series import ClassificationSeriesTask
+from ._batch import run_batch
+from ._batch_classification import ClassificationBatchTask
 from ._state import AnnotatorState
 from . import _widgets as widgets
 from .util import _sync_embedding_widget
@@ -137,17 +137,17 @@ def pixel_classifier(
     napari.run()
 
 
-class PixelClassificationSeriesTask(ClassificationSeriesTask):
-    """Series task for the pixel classifier."""
+class PixelClassificationBatchTask(ClassificationBatchTask):
+    """Batch task for the pixel classifier."""
 
-    dock_name = "Segment Anything for Microscopy (Image Series Pixel Classification)"
+    dock_name = "Segment Anything for Microscopy (Batch Pixel Classification)"
     classifier_class = PixelClassifier
     features_attr = "pixel_features"
     aux_attr = "pixel_grid_shape"
     rf_attr = "pixel_rf"
 
 
-def image_series_pixel_classifier(
+def batch_pixel_classifier(
     images: List[np.ndarray],
     output_folder: str,
     embedding_paths: Optional[List[Union[str, util.ImageEmbeddings]]] = None,
@@ -163,7 +163,7 @@ def image_series_pixel_classifier(
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the pixel classifier for a list of images.
 
-    This function saves the per-pixel features and labels across the series, so a random forest can be
+    This function saves the per-pixel features and labels across the batch, so a random forest can be
     trained on multiple images, plus the per-image prediction and the trained classifier.
 
     Args:
@@ -192,11 +192,11 @@ def image_series_pixel_classifier(
         first = images[0] if have_inputs_as_arrays else imageio.imread(images[0])
         ndim = first.ndim - 1 if first.shape[-1] == 3 and first.ndim in (3, 4) else first.ndim
 
-    task = PixelClassificationSeriesTask(
+    task = PixelClassificationBatchTask(
         ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,
         tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
     )
-    return run_image_series(
+    return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
         viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
     )

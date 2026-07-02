@@ -220,7 +220,7 @@ def histopathology_annotator():
         segmentations.append(segmentation)
         embedding_paths.append(embedding_path)
 
-    clf.image_series_object_classifier(
+    clf.batch_object_classifier(
         images, segmentations, output_folder="./clf-test-data/histo-results",
         embedding_paths=embedding_paths, model_type="vit_b_histopathology", ndim=2,
     )

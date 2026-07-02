@@ -428,8 +428,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             image = self._viewer.layers["image"].data
         return image, upsampler, True
 
-    def accumulate_series_features(self):
-        """Add the current image's labeled features to the running training set (image series).
+    def accumulate_batch_features(self):
+        """Add the current image's labeled features to the running batch training set.
 
         Uses the per-tool feature and label hooks so it works for both classifiers. No-op when the
         features cannot be computed or when the current image has no annotations.

@@ -1782,7 +1782,7 @@ class EmbeddingWidget(_WidgetBase):
     def _apply_default_tiling_for_shape(self, shape):
         # Enable tiling by default for large in-plane images, using the central v2 tiling defaults.
         # 'shape' is the spatial image shape (channel axis already removed). Shared by the layer-based
-        # auto-tiling and the image series launcher (which judges from the first file in the folder).
+        # auto-tiling and the batch launcher (which judges from the first file in the folder).
         from micro_sam.v2.util import needs_default_tiling, DEFAULT_TILE_SHAPE, DEFAULT_HALO
 
         if shape is not None and needs_default_tiling(shape):

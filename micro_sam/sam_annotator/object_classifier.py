@@ -19,8 +19,8 @@ from .. import util
 from ..v2.util import DEFAULT_MODEL
 from ..object_classification import compute_object_features, project_prediction_to_segmentation
 from ._annotator import _ClassifierBase
-from ._series import run_image_series
-from ._classification_series import ClassificationSeriesTask
+from ._batch import run_batch
+from ._batch_classification import ClassificationBatchTask
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from . import _widgets as widgets
@@ -279,10 +279,10 @@ def object_classifier(
     napari.run()
 
 
-class ObjectClassificationSeriesTask(ClassificationSeriesTask):
-    """Series task for the object classifier: per-item segmentation layer + projected prediction."""
+class ObjectClassificationBatchTask(ClassificationBatchTask):
+    """Batch task for the object classifier: per-item segmentation layer + projected prediction."""
 
-    dock_name = "Segment Anything for Microscopy (Image Series Object Classification)"
+    dock_name = "Segment Anything for Microscopy (Batch Object Classification)"
     classifier_class = ObjectClassifier
     features_attr = "object_features"
     aux_attr = "seg_ids"
@@ -307,7 +307,7 @@ class ObjectClassificationSeriesTask(ClassificationSeriesTask):
             viewer.add_labels(seg, name="segmentation")
 
 
-def image_series_object_classifier(
+def batch_object_classifier(
     images: List[np.ndarray],
     segmentations: List[np.ndarray],
     output_folder: str,
@@ -324,7 +324,7 @@ def image_series_object_classifier(
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the object classifier for a list of images and segmentations.
 
-    This function saves the features and labels for annotated objects across the series, so a random
+    This function saves the features and labels for annotated objects across the batch, so a random
     forest can be trained on multiple images, plus the per-image prediction and the trained classifier.
 
     Args:
@@ -359,11 +359,11 @@ def image_series_object_classifier(
         first = images[0] if have_inputs_as_arrays else imageio.imread(images[0])
         ndim = first.ndim - 1 if first.shape[-1] == 3 and first.ndim in (3, 4) else first.ndim
 
-    task = ObjectClassificationSeriesTask(
+    task = ObjectClassificationBatchTask(
         segmentations=segmentations, ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,
         tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
     )
-    return run_image_series(
+    return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
         viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
     )

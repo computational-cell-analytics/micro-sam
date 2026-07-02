@@ -10,8 +10,8 @@ from skimage.measure import label
 
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator._state import AnnotatorState
-from micro_sam.sam_annotator.object_classifier import image_series_object_classifier
-from micro_sam.sam_annotator.pixel_classifier import image_series_pixel_classifier
+from micro_sam.sam_annotator.object_classifier import batch_object_classifier
+from micro_sam.sam_annotator.pixel_classifier import batch_pixel_classifier
 
 MODEL_TYPE = DEFAULT_MODEL
 
@@ -22,8 +22,8 @@ def _images(n, size=256):
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
-def test_image_series_object_classifier_navigation(make_napari_viewer_proxy):
-    """Drive the object-classifier series harness: train, then advance to save the prediction, the
+def test_batch_object_classifier_navigation(make_napari_viewer_proxy):
+    """Drive the object-classifier batch harness: train, then advance to save the prediction, the
     classifier and the accumulated features/labels, and load the next image.
     """
     images = _images(2)
@@ -37,12 +37,12 @@ def test_image_series_object_classifier_navigation(make_napari_viewer_proxy):
     with tempfile.TemporaryDirectory() as tmpdir:
         output_folder = os.path.join(tmpdir, "results")
         viewer = make_napari_viewer_proxy()
-        viewer = image_series_object_classifier(
+        viewer = batch_object_classifier(
             images, segmentations, output_folder, model_type=MODEL_TYPE, viewer=viewer, return_viewer=True,
         )
 
         state = AnnotatorState()
-        # The series starts on the first image with image, segmentation, annotations and prediction layers.
+        # The batch starts on the first image with image, segmentation, annotations and prediction layers.
         for name in ("image", "segmentation", "annotations", "prediction"):
             assert name in viewer.layers
 
@@ -52,7 +52,7 @@ def test_image_series_object_classifier_navigation(make_napari_viewer_proxy):
         assert state.object_rf is not None
         assert viewer.layers["prediction"].data.sum() > 0
 
-        state.widgets["series_next"]()
+        state.widgets["batch_next"]()
 
         # The prediction, the classifier and the accumulated features/labels are saved.
         assert os.path.exists(os.path.join(output_folder, "prediction_00000.tif"))
@@ -75,8 +75,8 @@ def test_image_series_object_classifier_navigation(make_napari_viewer_proxy):
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
-def test_image_series_pixel_classifier_navigation(make_napari_viewer_proxy):
-    """Drive the pixel-classifier series harness through one train + advance cycle."""
+def test_batch_pixel_classifier_navigation(make_napari_viewer_proxy):
+    """Drive the pixel-classifier batch harness through one train + advance cycle."""
     images = _images(2)
     ann = np.zeros((256, 256), dtype="uint32")
     ann[10:60, 10:60] = 1
@@ -85,7 +85,7 @@ def test_image_series_pixel_classifier_navigation(make_napari_viewer_proxy):
     with tempfile.TemporaryDirectory() as tmpdir:
         output_folder = os.path.join(tmpdir, "results")
         viewer = make_napari_viewer_proxy()
-        viewer = image_series_pixel_classifier(
+        viewer = batch_pixel_classifier(
             images, output_folder, model_type=MODEL_TYPE, viewer=viewer, return_viewer=True,
         )
 
@@ -99,7 +99,7 @@ def test_image_series_pixel_classifier_navigation(make_napari_viewer_proxy):
         assert state.pixel_rf is not None
         assert viewer.layers["prediction"].data.sum() > 0
 
-        state.widgets["series_next"]()
+        state.widgets["batch_next"]()
 
         assert os.path.exists(os.path.join(output_folder, "prediction_00000.tif"))
         assert os.path.exists(os.path.join(output_folder, "rf.joblib"))
@@ -126,18 +126,18 @@ def test_object_classifier_forwards_state_by_default(make_napari_viewer_proxy):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         viewer = make_napari_viewer_proxy()
-        viewer = image_series_object_classifier(
+        viewer = batch_object_classifier(
             images, segmentations, os.path.join(tmpdir, "results"),
             model_type=MODEL_TYPE, viewer=viewer, return_viewer=True,
         )
         state = AnnotatorState()
-        assert state.widgets["series_forward_state"].value is True  # on by default
+        assert state.widgets["batch_forward_state"].value is True  # on by default
 
         viewer.layers["annotations"].data = ann
         state.annotator._run_train_and_predict(True)
 
         # Advance without annotating image 1: the forwarded classifier predicts on it.
-        state.widgets["series_next"]()
+        state.widgets["batch_next"]()
         assert viewer.layers["annotations"].data.sum() == 0  # no annotations on image 1
         assert viewer.layers["prediction"].data.sum() > 0    # ...but it is predicted
         assert state.previous_labels is not None and state.previous_labels.shape[0] == 2
@@ -160,7 +160,7 @@ def test_object_classifier_independent_when_forward_off(make_napari_viewer_proxy
 
     with tempfile.TemporaryDirectory() as tmpdir:
         viewer = make_napari_viewer_proxy()
-        viewer = image_series_object_classifier(
+        viewer = batch_object_classifier(
             images, segmentations, os.path.join(tmpdir, "results"),
             model_type=MODEL_TYPE, viewer=viewer, return_viewer=True,
         )
@@ -169,8 +169,8 @@ def test_object_classifier_independent_when_forward_off(make_napari_viewer_proxy
         state.annotator._run_train_and_predict(True)
 
         # Turn off forwarding, then advance.
-        state.widgets["series_forward_state"].value = False
-        state.widgets["series_next"]()
+        state.widgets["batch_forward_state"].value = False
+        state.widgets["batch_next"]()
 
         # The accumulated training set and the classifier are reset; image 1 is not auto-predicted.
         assert state.previous_features is None and state.previous_labels is None
@@ -191,16 +191,16 @@ def test_pixel_classifier_forwards_state_by_default(make_napari_viewer_proxy):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         viewer = make_napari_viewer_proxy()
-        viewer = image_series_pixel_classifier(
+        viewer = batch_pixel_classifier(
             images, os.path.join(tmpdir, "results"), model_type=MODEL_TYPE, viewer=viewer, return_viewer=True,
         )
         state = AnnotatorState()
-        assert state.widgets["series_forward_state"].value is True
+        assert state.widgets["batch_forward_state"].value is True
 
         viewer.layers["annotations"].data = ann
         state.annotator._run_train_and_predict(True)
 
-        state.widgets["series_next"]()
+        state.widgets["batch_next"]()
         assert viewer.layers["annotations"].data.sum() == 0
         assert viewer.layers["prediction"].data.sum() > 0
 

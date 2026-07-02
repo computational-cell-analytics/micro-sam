@@ -32,8 +32,8 @@ class TestCLI(unittest.TestCase):
     def test_annotator_tracking(self):
         self._test_command("micro_sam.annotator_tracking")
 
-    def test_image_series_annotator(self):
-        self._test_command("micro_sam.image_series_annotator")
+    def test_batch_annotator(self):
+        self._test_command("micro_sam.batch_annotator")
 
     @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
     def test_precompute_embeddings(self):
