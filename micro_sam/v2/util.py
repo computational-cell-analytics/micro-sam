@@ -5,12 +5,13 @@ import warnings
 from pathlib import Path
 from typing import Union, Literal, Optional, Tuple
 
-import zarr
 import numpy as np
 
 import torch
 
-from micro_sam.util import get_device, get_cache_directory, microsam_cachedir
+from micro_sam.util import (
+    get_device, get_cache_directory, microsam_cachedir, _open_embeddings, _create_dataset_without_data,
+)
 from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
 
 import sam2
@@ -476,7 +477,6 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
 
 
 def _create_list_dataset_without_data(group, prefix_name, tensors, dtype, z_slices):
-    zarr_major_version = int(zarr.__version__.split(".")[0])
     subgroup = group.require_group(prefix_name)
 
     ds_list = []
@@ -493,12 +493,7 @@ def _create_list_dataset_without_data(group, prefix_name, tensors, dtype, z_slic
             if getattr(ds, "chunks", None) is not None and ds.chunks != chunks:
                 raise RuntimeError(f"Invalid chunks for {prefix_name}/{name}: expected {chunks}, got {ds.chunks}")
         else:
-            if zarr_major_version == 2:
-                ds = subgroup.create_dataset(name, shape=shape, dtype=dtype, chunks=chunks, overwrite=False)
-            elif zarr_major_version == 3:
-                ds = subgroup.create_array(name, shape=shape, chunks=chunks, dtype=dtype, overwrite=False)
-            else:
-                raise RuntimeError(f"Unsupported zarr version: {zarr_major_version}")
+            ds = _create_dataset_without_data(subgroup, name, shape=shape, dtype=dtype, chunks=chunks)
 
         ds_list.append(ds)
 
@@ -700,20 +695,20 @@ def precompute_image_embeddings(
     # Handle the embedding save_path.
     # We don't have a save path, open in memory zarr file to hold tiled embeddings.
     if save_path is None:
-        f = zarr.group()
+        f = _open_embeddings(None)
 
     # We have a save path and it already exists. Embeddings will be loaded from it,
-    # check tha tthe saved embeedidng in there match the parameters of the function call.abs
+    # check that the saved embeddings in there match the parameters of the function call.
     elif os.path.exists(save_path):
-        f = zarr.open(save_path, mode="a")
+        f = _open_embeddings(save_path, mode="a")
         if _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
             # Stale embeddings (model or tiling changed): truncate and recompute, overwriting them.
-            f = zarr.open(save_path, mode="w")
+            f = _open_embeddings(save_path, mode="w")
 
     # We have a save path and it does not exist yet. Create the zarr file to which the
     # embeddings will then be saved.
     else:
-        f = zarr.open(save_path, mode="a")
+        f = _open_embeddings(save_path, mode="a")
 
     from micro_sam.util import handle_pbar
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)

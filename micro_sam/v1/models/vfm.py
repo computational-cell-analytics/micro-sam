@@ -449,22 +449,21 @@ def precompute_vfm_embeddings(
     Returns:
         The image embeddings.
     """
-    import zarr
     ndim = input_.ndim if ndim is None else ndim
     if ndim not in (2, 3):
         raise ValueError(f"Invalid dimensionality {ndim}, expect 2 or 3 dimensional data.")
 
     # Open / create the zarr container and return cached embeddings if they match; otherwise truncate.
     if save_path is None:
-        f = zarr.group()
+        f = util._open_embeddings(None)
     elif os.path.exists(save_path):
-        f = zarr.open(save_path, mode="a")
+        f = util._open_embeddings(save_path, mode="a")
         cached = _load_cached_embeddings(f, predictor, input_)
         if cached is not None:
             return cached
-        f = zarr.open(save_path, mode="w")
+        f = util._open_embeddings(save_path, mode="w")
     else:
-        f = zarr.open(save_path, mode="a")
+        f = util._open_embeddings(save_path, mode="a")
 
     pbar_init, pbar_update, pbar_close = _handle_pbar(verbose, pbar_init, pbar_update)
     is_3d = ndim == 3

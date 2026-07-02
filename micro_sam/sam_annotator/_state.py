@@ -7,7 +7,6 @@ from functools import partial
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-import zarr
 import numpy as np
 
 from napari.layers import Image
@@ -271,7 +270,7 @@ class AnnotatorState(metaclass=Singleton):
         # If we have an embedding path the data signature has already been computed,
         # and we can read it from there.
         if save_path is not None and isinstance(save_path, str):
-            f = zarr.open(save_path, mode="r")
+            f = util._open_embeddings(save_path, mode="r")
             self.data_signature = f.attrs["data_signature"]
 
         # Otherwise we compute it here.
