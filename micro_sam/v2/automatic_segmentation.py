@@ -896,14 +896,13 @@ def get_unisam2_segmentation_generator(
     return UniSAM2InstanceSegmentation(model, device=device)
 
 
-def get_predictor_and_segmenter(
+def get_segmenter(
     model_type: str = DEFAULT_MODEL,
     checkpoint: Optional[Union[str, "os.PathLike"]] = None,
     device: Optional[Union[str, torch.device]] = None,
     is_tiled: bool = False,
-    load_predictor: bool = True,
-) -> tuple:
-    """Load the SAM2 predictor and UniSAM2 instance segmentation generator.
+) -> "UniSAM2InstanceSegmentation":
+    """Load the UniSAM2 instance segmentation generator.
 
     Automatic segmentation with SAM2 needs a UniSAM2 decoder. This is provided either by a
     decoder `checkpoint` or by a finetuned model with a registered decoder (e.g. 'hvit_t_cells').
@@ -911,25 +910,17 @@ def get_predictor_and_segmenter(
     Args:
         model_type: The SAM2 model. Either a finetuned model with a registered decoder (see
             `micro_sam.v2.util.get_model_names`) or a base backbone combined with `checkpoint`.
-        checkpoint: Optional path to a decoder checkpoint. Used both to load the encoder / predictor
-            and to build the UniSAM2 decoder.
+        checkpoint: Optional path to a decoder checkpoint to build the UniSAM2 decoder from.
         device: The device to run inference on. By default the best available device is selected.
         is_tiled: Whether to run tiled inference.
-        load_predictor: Whether to load the SAM2 image predictor. It is only needed to precompute
-            embeddings; set to False to skip loading it (the returned predictor is then None).
 
     Returns:
-        The SAM2 image predictor (used to precompute embeddings, or None) and the UniSAM2 generator.
+        The UniSAM2 instance segmentation generator.
     """
     from ..util import get_device
-    from .util import get_sam2_model, FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
+    from .util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
 
     device = get_device(device)
-    predictor = None
-    if load_predictor:
-        predictor = get_sam2_model(
-            model_type=model_type, checkpoint_path=checkpoint, input_type="images", device=device
-        )
 
     # The decoder is built on the base backbone (first 6 characters, e.g. 'hvit_t_cells' -> 'hvit_t').
     encoder = model_type[:6]
@@ -937,10 +928,6 @@ def get_predictor_and_segmenter(
         decoder_source = checkpoint
     elif model_type in FINETUNED_MODELS and has_registered_decoder(model_type):
         _, _, decoder_source = _download_finetuned_sam2_model(model_type)
-        # Reuse the predictor's already-loaded (finetuned) image encoder for the decoder, if loaded.
-        if predictor is not None:
-            sam2_model = getattr(predictor, "model", predictor)
-            encoder = getattr(sam2_model, "image_encoder", encoder)
     else:
         raise ValueError(
             f"Automatic segmentation with SAM2 requires a finetuned model with a registered decoder "
@@ -948,16 +935,16 @@ def get_predictor_and_segmenter(
         )
 
     model = get_unisam2_model(decoder_source, device=device, encoder=encoder)
-    segmenter = get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
-    return predictor, segmenter
+    return get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
 
 
 def automatic_instance_segmentation(
-    predictor,
     segmenter,
     input_path: Union[str, "os.PathLike", np.ndarray],
     output_path: Optional[Union[str, "os.PathLike"]] = None,
     embedding_path: Optional[Union[str, "os.PathLike"]] = None,
+    model_type: str = DEFAULT_MODEL,
+    checkpoint: Optional[Union[str, "os.PathLike"]] = None,
     key: Optional[str] = None,
     ndim: Optional[int] = None,
     tile_shape: Optional[tuple] = None,
@@ -970,12 +957,14 @@ def automatic_instance_segmentation(
     """Run UniSAM2 automatic instance segmentation for a single input and save the result.
 
     Args:
-        predictor: The SAM2 image predictor (used to precompute embeddings when `embedding_path` is set).
-        segmenter: The UniSAM2 instance segmentation generator.
+        segmenter: The UniSAM2 instance segmentation generator (see `get_segmenter`).
         input_path: The input image, either a filepath (e.g. tif or a container with `key`) or an array.
         output_path: Optional path to save the segmentation as a tif file.
-        embedding_path: Optional path to cache the image embeddings. If given, only the decoder is run
-            on the (cached) embeddings; otherwise the full model is run.
+        embedding_path: Optional path to cache the image embeddings. If given, a SAM2 predictor is built
+            (matching the data dimensionality) to precompute the embeddings, and only the decoder is run
+            on them; otherwise the full model is run.
+        model_type: The SAM2 model. Only used to build the predictor for embedding precomputation.
+        checkpoint: Optional checkpoint for the predictor, used for embedding precomputation.
         key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
         ndim: The number of spatial dimensions (2 or 3). By default inferred from the data.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
@@ -1001,6 +990,13 @@ def automatic_instance_segmentation(
 
     image_embeddings = None
     if embedding_path is not None:
+        # Build a SAM2 predictor matching the data dimensionality (image vs. video predictor), reusing
+        # the annotator's loader so the cached embeddings match the GUI / precompute format.
+        from ..sam_annotator._state import _get_sam_model
+        predictor, _ = _get_sam_model(
+            model_type=model_type, ndim=ndim, device=device, checkpoint_path=checkpoint,
+            decoder_path=None, use_cli=True,
+        )
         image_embeddings = precompute_image_embeddings(
             predictor, raw, save_path=embedding_path, ndim=ndim,
             tile_shape=tile_shape, halo=halo, verbose=verbose,
