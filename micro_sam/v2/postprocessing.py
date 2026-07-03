@@ -21,12 +21,22 @@ from bioimage_cpp.segmentation import label, watershed
 
 FLOW_BACKENDS = ("python", "cpp")
 
-DEFAULT_DENSE_POSTPROCESSING = {
-    "beta": 0.5,
-    "density_threshold": 3.0,
-    "n_iter": 50,
-    "dt": 0.5,
-    "sigma": 1.0,
+DEFAULT_POSTPROCESSING = {
+    "sparse": {
+        "foreground_threshold": 0.7,
+        "density_threshold": 10.0,
+        "min_size": 100,
+        "n_iter": 50,
+        "dt": 0.25,
+        "sigma": 0.5,
+    },
+    "dense": {
+        "beta": 0.5,
+        "density_threshold": 3.0,
+        "n_iter": 50,
+        "dt": 0.5,
+        "sigma": 1.0,
+    },
 }
 
 
@@ -117,13 +127,13 @@ def _compute_flow_density(
 def flow_instance_segmentation(
     foreground: np.ndarray,
     directed_distances: np.ndarray,
-    foreground_threshold: float = 0.6,
-    n_iter: int = 100,
-    dt: float = 0.5,
-    sigma: float = 1.0,
+    foreground_threshold: float = DEFAULT_POSTPROCESSING["sparse"]["foreground_threshold"],
+    n_iter: int = DEFAULT_POSTPROCESSING["sparse"]["n_iter"],
+    dt: float = DEFAULT_POSTPROCESSING["sparse"]["dt"],
+    sigma: float = DEFAULT_POSTPROCESSING["sparse"]["sigma"],
     spacing: Optional[Tuple] = None,
-    density_threshold: float = 10.0,
-    min_size: int = 10,
+    density_threshold: float = DEFAULT_POSTPROCESSING["sparse"]["density_threshold"],
+    min_size: int = DEFAULT_POSTPROCESSING["sparse"]["min_size"],
     verbose: bool = False,
     backend: str = "cpp",
     n_threads: int = 1,
@@ -188,11 +198,11 @@ def flow_instance_segmentation(
 def run_multicut(
     boundary_map: np.ndarray,
     distances: np.ndarray,
-    beta: float = DEFAULT_DENSE_POSTPROCESSING["beta"],
-    density_threshold: float = DEFAULT_DENSE_POSTPROCESSING["density_threshold"],
-    n_iter: int = DEFAULT_DENSE_POSTPROCESSING["n_iter"],
-    dt: float = DEFAULT_DENSE_POSTPROCESSING["dt"],
-    sigma: float = DEFAULT_DENSE_POSTPROCESSING["sigma"],
+    beta: float = DEFAULT_POSTPROCESSING["dense"]["beta"],
+    density_threshold: float = DEFAULT_POSTPROCESSING["dense"]["density_threshold"],
+    n_iter: int = DEFAULT_POSTPROCESSING["dense"]["n_iter"],
+    dt: float = DEFAULT_POSTPROCESSING["dense"]["dt"],
+    sigma: float = DEFAULT_POSTPROCESSING["dense"]["sigma"],
     n_threads: int = 8,
     backend: str = "cpp",
 ) -> np.ndarray:

@@ -376,16 +376,17 @@ class TestAutoSegDefaultMode:
         viewer.close()
 
     def test_dense_autoseg_uses_v2_defaults(self, make_napari_viewer_proxy):
-        from micro_sam.v2.postprocessing import DEFAULT_DENSE_POSTPROCESSING
+        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
+        defaults = DEFAULT_POSTPROCESSING["dense"]
 
         viewer = make_napari_viewer_proxy()
         widget = Annotator(viewer, ndim=2)
         autoseg = widget._widgets["autosegment"]
         autoseg.mode_dropdown.setCurrentText("dense")
         assert autoseg.mode == "dense"
-        assert autoseg.beta == DEFAULT_DENSE_POSTPROCESSING["beta"]
-        assert autoseg.density_threshold == DEFAULT_DENSE_POSTPROCESSING["density_threshold"]
-        assert autoseg.sigma == DEFAULT_DENSE_POSTPROCESSING["sigma"]
-        assert autoseg.n_iter == DEFAULT_DENSE_POSTPROCESSING["n_iter"]
-        assert autoseg.dt == DEFAULT_DENSE_POSTPROCESSING["dt"]
+        assert autoseg.beta == defaults["beta"]
+        assert autoseg.density_threshold == defaults["density_threshold"]
+        assert autoseg.sigma == defaults["sigma"]
+        assert autoseg.n_iter == defaults["n_iter"]
+        assert autoseg.dt == defaults["dt"]
         viewer.close()
