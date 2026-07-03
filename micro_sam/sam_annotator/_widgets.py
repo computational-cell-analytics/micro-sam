@@ -3858,20 +3858,20 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addLayout(row)
 
-    def _add_flow_integration_params(self, settings, n_iter):
+    def _add_flow_integration_params(self, settings, n_iter, dt=0.5, sigma=1.0):
         self.n_iter = n_iter
         self.n_iter_param, layout = self._add_int_param(
             "n_iter", self.n_iter, min_val=1, max_val=1000, tooltip=get_tooltip("autosegment", "n_iter"),
         )
         settings.layout().addLayout(layout)
 
-        self.dt = 0.5
+        self.dt = dt
         self.dt_param, layout = self._add_float_param(
             "dt", self.dt, min_val=0.0, max_val=5.0, step=0.1, tooltip=get_tooltip("autosegment", "dt"),
         )
         settings.layout().addLayout(layout)
 
-        self.sigma = 1.0
+        self.sigma = sigma
         self.sigma_param, layout = self._add_float_param(
             "sigma", self.sigma, min_val=0.0, max_val=10.0, step=0.1, tooltip=get_tooltip("autosegment", "sigma"),
         )
@@ -3919,38 +3919,54 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _sparse_settings(self, settings):
         # Flow-based instance segmentation parameters (LM data).
-        self.foreground_threshold = 0.6
+        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
+        defaults = DEFAULT_POSTPROCESSING["sparse"]
+
+        self.foreground_threshold = defaults["foreground_threshold"]
         self.foreground_threshold_param, layout = self._add_float_param(
             "foreground_threshold", self.foreground_threshold, min_val=0.0, max_val=1.0, step=0.05,
             tooltip=get_tooltip("autosegment", "foreground_threshold"),
         )
         settings.layout().addLayout(layout)
 
-        self.density_threshold = 10.0
+        self.density_threshold = defaults["density_threshold"]
         self._add_density_threshold(settings)
 
-        self.min_object_size = 100
+        self.min_object_size = defaults["min_size"]
         self.min_object_size_param, layout = self._add_int_param(
             "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4),
             tooltip=get_tooltip("autosegment", "min_object_size"),
         )
         settings.layout().addLayout(layout)
 
-        self._add_flow_integration_params(settings, n_iter=100)
+        self._add_flow_integration_params(
+            settings,
+            n_iter=defaults["n_iter"],
+            dt=defaults["dt"],
+            sigma=defaults["sigma"],
+        )
 
     def _dense_settings(self, settings):
         # Multicut-based instance segmentation parameters (EM data, 2d and 3d).
-        self.beta = 0.7
+        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
+        defaults = DEFAULT_POSTPROCESSING["dense"]
+
+        self.beta = defaults["beta"]
         self.beta_param, layout = self._add_float_param(
             "beta", self.beta, min_val=0.0, max_val=1.0, step=0.05,
             tooltip=get_tooltip("autosegment", "beta"),
         )
         settings.layout().addLayout(layout)
 
-        self.density_threshold = 5.0
+        self.density_threshold = defaults["density_threshold"]
         self._add_density_threshold(settings)
 
-        self._add_flow_integration_params(settings, n_iter=50)
+        self._add_flow_integration_params(
+            settings,
+            n_iter=defaults["n_iter"],
+            dt=defaults["dt"],
+            sigma=defaults["sigma"],
+        )
 
     def _postproc_kwargs(self):
         if self.mode == "dense":

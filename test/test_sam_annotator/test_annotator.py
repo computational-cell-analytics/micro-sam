@@ -374,3 +374,52 @@ class TestAutoSegDefaultMode:
         assert autoseg.mode == "sparse"
         assert autoseg.mode_dropdown.currentText() == "sparse"
         viewer.close()
+
+    def test_autoseg_settings_use_v2_defaults(self):
+        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        class _FakeLayout:
+            def addLayout(self, layout):
+                pass
+
+        class _FakeSettings:
+            def __init__(self):
+                self._layout = _FakeLayout()
+
+            def layout(self):
+                return self._layout
+
+        class _FakeAutoSegmentWidget:
+            def _add_float_param(self, *args, **kwargs):
+                return None, None
+
+            def _add_int_param(self, *args, **kwargs):
+                return None, None
+
+            def _add_density_threshold(self, settings):
+                pass
+
+            def _add_flow_integration_params(self, settings, n_iter, dt=0.5, sigma=1.0):
+                self.n_iter = n_iter
+                self.dt = dt
+                self.sigma = sigma
+
+        autoseg = _FakeAutoSegmentWidget()
+        AutoSegmentWidget._sparse_settings(autoseg, _FakeSettings())
+        defaults = DEFAULT_POSTPROCESSING["sparse"]
+        assert autoseg.foreground_threshold == defaults["foreground_threshold"]
+        assert autoseg.density_threshold == defaults["density_threshold"]
+        assert autoseg.min_object_size == defaults["min_size"]
+        assert autoseg.sigma == defaults["sigma"]
+        assert autoseg.n_iter == defaults["n_iter"]
+        assert autoseg.dt == defaults["dt"]
+
+        autoseg = _FakeAutoSegmentWidget()
+        AutoSegmentWidget._dense_settings(autoseg, _FakeSettings())
+        defaults = DEFAULT_POSTPROCESSING["dense"]
+        assert autoseg.beta == defaults["beta"]
+        assert autoseg.density_threshold == defaults["density_threshold"]
+        assert autoseg.sigma == defaults["sigma"]
+        assert autoseg.n_iter == defaults["n_iter"]
+        assert autoseg.dt == defaults["dt"]
