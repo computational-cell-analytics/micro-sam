@@ -6,6 +6,11 @@ import torch.nn as nn
 
 from segment_anything.modeling import Sam
 
+from micro_sam.models.peft import AttentionLoRA, MLPLoRA, ScaleShiftLayer, SelectiveSurgery
+from micro_sam.models.peft import (  # noqa
+    AttentionSurgery, BiasSurgery, LayerNormSurgery, ClassicalSurgery,
+)
+
 try:
     import bitsandbytes as bnb
     _have_bnb = True
@@ -41,108 +46,10 @@ class LoRASurgery(nn.Module):
         block.attn.qkv = AttentionLoRA(rank=rank, block=block.attn.qkv, update_matrices=update_matrices)
 
         if "mlp" in update_matrices:
-            block.mlp = MLPLoRA(rank=rank, mlp_layer=block.mlp)
+            # SAM's MLPBlock exposes its two linear layers as 'lin1'/'lin2' with activation 'act'.
+            block.mlp = MLPLoRA(rank=rank, mlp_layer=block.mlp, get_layers=lambda m: (m.lin1, m.lin2, m.act))
 
     def forward(self, x):
-        return x
-
-
-class AttentionLoRA(nn.Module):
-    """Operates on the attention layers only for performing low-rank adaptation.
-
-    Args:
-        rank: The rank of the decomposition matrices for updating weights in each attention layer.
-        block: The chosen attention blocks for implementing LoRA.
-        update_matrices: Which specific matrices to update in the attention layer. Choice of "q", "k", "v".
-    """
-
-    def __init__(self, rank: int, block: nn.Module, update_matrices: List[str] = ["q", "v"]):
-        super().__init__()
-        self.qkv_proj = block
-        self.dim = self.qkv_proj.in_features
-        self.alpha = 1  # From our experiments, 'alpha' as 1 gives the best performance.
-        self.rank = rank
-
-        # By default, we follow LoRA's recommended setup, i.e. update the "q" and "v" matrices.
-        if "q" in update_matrices:
-            self.w_a_linear_q = nn.Linear(self.dim, self.rank, bias=False)
-            self.w_b_linear_q = nn.Linear(self.rank, self.dim, bias=False)
-
-        if "v" in update_matrices:
-            self.w_a_linear_v = nn.Linear(self.dim, self.rank, bias=False)
-            self.w_b_linear_v = nn.Linear(self.rank, self.dim, bias=False)
-
-        if "k" in update_matrices:
-            self.w_a_linear_k = nn.Linear(self.dim, self.rank, bias=False)
-            self.w_b_linear_k = nn.Linear(self.rank, self.dim, bias=False)
-
-        self.reset_parameters()
-
-        block = self
-
-    def reset_parameters(self):
-        if hasattr(self, "w_a_linear_q"):
-            nn.init.kaiming_uniform_(self.w_a_linear_q.weight, a=math.sqrt(5))
-            nn.init.zeros_(self.w_b_linear_q.weight)
-
-        if hasattr(self, "w_a_linear_v"):
-            nn.init.kaiming_uniform_(self.w_a_linear_v.weight, a=math.sqrt(5))
-            nn.init.zeros_(self.w_b_linear_v.weight)
-
-        if hasattr(self, "w_a_linear_k"):
-            nn.init.kaiming_uniform_(self.w_a_linear_k.weight, a=math.sqrt(5))
-            nn.init.zeros_(self.w_b_linear_k.weight)
-
-    def forward(self, x):
-        qkv = self.qkv_proj(x)  # B, N, N, 3 * org_C
-
-        new_q = self.alpha * self.w_b_linear_q(self.w_a_linear_q(x)) if hasattr(self, "w_a_linear_q") else 0
-        new_v = self.alpha * self.w_b_linear_v(self.w_a_linear_v(x)) if hasattr(self, "w_a_linear_v") else 0
-        new_k = self.alpha * self.w_b_linear_k(self.w_a_linear_k(x)) if hasattr(self, "w_a_linear_k") else 0
-        qkv = torch.cat(
-            [
-                qkv[:, :, :, :self.dim] + new_q,  # replacing new q values.
-                qkv[:, :, :, self.dim:-self.dim] + new_k,  # replacing new k values.
-                qkv[:, :, :, -self.dim:] + new_v  # replacing new v values.
-            ], dim=-1
-        )
-
-        return qkv
-
-
-class MLPLoRA(nn.Module):
-    """Operates on the feed forward layers for performing low-rank adaptation.
-
-    Args:
-        rank: The rank of the decomposition matrices for updating weights in each attention layer.
-        mlp_layer: The chosen MLP layer for implementing LoRA.
-    """
-
-    def __init__(self, rank: int, mlp_layer: nn.Module):
-        super().__init__()
-
-        self.mlp_layer = mlp_layer
-        self.rank = rank
-        self.w_a_linear_1 = nn.Linear(mlp_layer.lin1.in_features, rank, bias=False)
-        self.w_b_linear_1 = nn.Linear(rank, mlp_layer.lin1.out_features, bias=False)
-        self.w_a_linear_2 = nn.Linear(mlp_layer.lin2.in_features, rank, bias=False)
-        self.w_b_linear_2 = nn.Linear(rank, mlp_layer.lin2.out_features, bias=False)
-        self.activation = mlp_layer.act
-
-        self.reset_parameters()
-
-        mlp_layer = self
-
-    def reset_parameters(self):
-        nn.init.kaiming_uniform_(self.w_a_linear_1.weight, a=math.sqrt(5))
-        nn.init.kaiming_uniform_(self.w_a_linear_2.weight, a=math.sqrt(5))
-        nn.init.zeros_(self.w_b_linear_1.weight)
-        nn.init.zeros_(self.w_b_linear_2.weight)
-
-    def forward(self, x):
-        x = self.mlp_layer.lin1(x) + self.w_b_linear_1(self.w_a_linear_1(x))
-        x = self.activation(x)
-        x = self.mlp_layer.lin2(x) + self.w_b_linear_2(self.w_a_linear_2(x))
         return x
 
 
@@ -204,25 +111,6 @@ class FacTSurgery(nn.Module):
         return qkv
 
 
-class ScaleShiftLayer(nn.Module):
-    def __init__(self, layer, dim):
-        super().__init__()
-        self.layer = layer
-        self.scale = nn.Parameter(torch.normal(mean=1.0, std=0.2, size=(dim,)))
-        self.shift = nn.Parameter(torch.normal(mean=0.0, std=0.2, size=(dim,)))
-        layer = self
-
-    def forward(self, x):
-        x = self.layer(x)
-        assert self.scale.shape == self.shift.shape
-        if x.shape[-1] == self.scale.shape[0]:
-            return x * self.scale + self.shift
-        elif x.shape[1] == self.scale.shape[0]:
-            return x * self.scale.view(1, -1, 1, 1) + self.shift.view(1, -1, 1, 1)
-        else:
-            raise ValueError('Input tensors do not match the shape of the scale factors.')
-
-
 class SSFSurgery(nn.Module):
     """Operates on all layers in the transformer block for adding learnable scale and shift parameters.
 
@@ -246,42 +134,6 @@ class SSFSurgery(nn.Module):
         # If we get the embedding block, add one ScaleShiftLayer
         elif hasattr(block, "patch_embed"):
             block.proj = ScaleShiftLayer(block.proj, block.proj.out_channels)
-
-    def forward(self, x):
-        return x
-
-
-class SelectiveSurgery(nn.Module):
-    """Base class for selectively allowing gradient updates for certain parameters.
-    """
-    def __init__(self, block: nn.Module):
-        super().__init__()
-        self.block = block
-
-    def allow_gradient_update_for_parameters(
-        self,
-        prefix: Optional[List[str]] = None,
-        suffix: Optional[List[str]] = None,
-        infix: Optional[List[str]] = None,
-    ):
-        """This function decides the parameter attributes to match for allowing gradient updates.
-
-        Args:
-            prefix: Matches the part of parameter name in front.
-            suffix: Matches the part of parameter name at the end.
-            infix: Matches parts of parameter name occurring in between.
-        """
-        for k, v in self.block.named_parameters():
-            if prefix is not None and k.startswith(tuple(prefix)):
-                v.requires_grad = True
-
-            if suffix is not None and k.endswith(tuple(suffix)):
-                v.requires_grad = True
-
-            if infix is not None:
-                for per_infix in infix:
-                    if k.find(per_infix) != -1:
-                        v.requires_grad = True
 
     def forward(self, x):
         return x
@@ -347,47 +199,6 @@ class AdaptFormer(nn.Module):
         output = up + residual + mlp_output
 
         return output
-
-
-class AttentionSurgery(SelectiveSurgery):
-    """Child class for allowing gradient updates for parameters in attention layers."""
-
-    def __init__(self, block: nn.Module):
-        super().__init__(block=block)
-        # Allow gradient updates for the attention layers in the image encoder.
-        self.allow_gradient_update_for_parameters(prefix=["attn"])
-
-
-class BiasSurgery(SelectiveSurgery):
-    """Child class for allowing gradient updates for bias parameters."""
-
-    def __init__(self, block: nn.Module):
-        super().__init__(block=block)
-        # Allow gradient updates for the bias parameters in the image encoder.
-        self.allow_gradient_update_for_parameters(suffix=["bias"])
-
-
-class LayerNormSurgery(SelectiveSurgery):
-    """Child class for allowing gradient updates in normalization layers."""
-
-    def __init__(self, block: nn.Module):
-        super().__init__(block=block)
-        # Allow gradient updates for the LayerNorm parameters in the image encoder.
-        self.allow_gradient_update_for_parameters(infix=["norm1", "norm2"])
-
-
-class ClassicalSurgery(SelectiveSurgery):
-    """Child class for freezing specific blocks."""
-
-    def __init__(self, block: nn.Module):
-        super().__init__(block=block)
-        self.block = block
-
-        for k, v in self.block.named_parameters():
-            v.requires_grad = True
-
-    def forward(self, x):
-        return x
 
 
 class PEFT_Sam(nn.Module):

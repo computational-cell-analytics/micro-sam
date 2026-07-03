@@ -269,6 +269,10 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         original_model = self.model
         if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
             self.model = self.model.module
+        # Persist the PEFT config (if any) so the model can be reloaded without re-specifying peft_kwargs.
+        peft_config = getattr(self.model, "peft_config", None)
+        if peft_config is not None:
+            extra_save_dict.setdefault("peft_kwargs", peft_config)
         try:
             super().save_checkpoint(name, current_metric, best_metric, **extra_save_dict)
         finally:
@@ -376,6 +380,10 @@ class UniSAM2Trainer(torch_em.trainer.DefaultTrainer):
         original_model = self.model
         if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
             self.model = self.model.module
+        # Persist the PEFT config (if any) so the model can be reloaded without re-specifying peft_kwargs.
+        peft_config = getattr(self.model, "peft_config", None)
+        if peft_config is not None:
+            extra_save_dict.setdefault("peft_kwargs", peft_config)
         try:
             super().save_checkpoint(name, current_metric, best_metric, **extra_save_dict)
         finally:

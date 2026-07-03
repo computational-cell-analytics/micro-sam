@@ -33,7 +33,7 @@ except ImportError:
 
 from bioimage_cpp.utils import Blocking
 
-from ... import util
+from .. import util
 
 # Registry of supported Vision Foundation Model encoders, keyed by the micro-sam `model_type`.
 # 'backend' selects how the model is loaded: 'torch_hub' (DINOv2, auto-download) builds 'repo'/'entrypoint'
@@ -337,7 +337,7 @@ def _load_cached_embeddings(f, encoder, input_):
 
 
 def _compute_vfm_2d(encoder, input_, f, save_path, pbar_init, pbar_update):
-    from ...util import _create_dataset_with_data
+    from ..util import _create_dataset_with_data
     pbar_init(1, "Compute Image Embeddings 2D")
     features, input_size = encoder.encode(input_)
     features = features[None]  # (1, C, h, w), matching the SAM1 2D layout
@@ -353,7 +353,7 @@ def _compute_vfm_2d(encoder, input_, f, save_path, pbar_init, pbar_update):
 
 
 def _compute_vfm_3d(encoder, input_, f, save_path, pbar_init, pbar_update):
-    from ...util import _create_dataset_with_data
+    from ..util import _create_dataset_with_data
     n_slices = input_.shape[0]
     pbar_init(n_slices, "Compute Image Embeddings 3D")
     planes, input_size = [], None
@@ -374,7 +374,7 @@ def _compute_vfm_3d(encoder, input_, f, save_path, pbar_init, pbar_update):
 
 
 def _compute_vfm_tiled(encoder, input_, tile_shape, halo, f, pbar_init, pbar_update, is_3d):
-    from ...util import _create_dataset_with_data
+    from ..util import _create_dataset_with_data
     spatial_shape = input_.shape[1:] if is_3d else input_.shape[:2]
     tiling = Blocking([0, 0], list(spatial_shape), list(tile_shape))
     n_tiles = tiling.number_of_blocks

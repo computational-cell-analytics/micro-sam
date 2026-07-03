@@ -64,6 +64,7 @@ def get_unisam2_model(
     device: Optional[Union[str, torch.device]] = None,
     encoder: Union[str, torch.nn.Module] = _DEFAULT_MODEL,
     output_channels: int = 4,
+    peft_kwargs: Optional[dict] = None,
 ) -> torch.nn.Module:
     """Load a UniSAM2 model for automatic segmentation from a checkpoint.
 
@@ -74,6 +75,9 @@ def get_unisam2_model(
             scratch, e.g. 'hvit_t', or a prebuilt SAM2 image-encoder module to reuse (which avoids
             rebuilding / downloading the base backbone). Its weights are (re)defined by the checkpoint.
         output_channels: The number of output channels (foreground + directed distances).
+        peft_kwargs: Keyword arguments for `micro_sam.v2.models.peft_sam2.PEFT_Sam2`. Needed when the
+            encoder was jointly finetuned with a PEFT method (e.g. LoRA), so the same surgery is applied
+            before loading. If not given, a PEFT config saved in the checkpoint is auto-detected.
 
     Returns:
         The UniSAM2 model in eval mode.
@@ -90,15 +94,32 @@ def get_unisam2_model(
     else:
         model_state = state
 
-    # The standalone UniSAM2 trainer builds the model with a string encoder, so the SAM2 image
-    # encoder lives directly under 'encoder.*'. The joint trainer instead passes the SAM2 image
-    # encoder module, which gets wrapped in 'SAM2EncoderAdapter' and so lives under 'encoder.inner.*'.
-    # Detect the latter and rebuild the matching structure by passing a SAM2 image encoder module.
-    needs_adapter = isinstance(encoder, str) and any(k.startswith("encoder.inner.") for k in model_state)
-    if needs_adapter:
+    # Auto-detect a PEFT config saved alongside the weights (raw joint checkpoints store it).
+    if peft_kwargs is None and isinstance(state, dict) and state.get("peft_kwargs") is not None:
+        from micro_sam.models.peft import deserialize_peft_kwargs
+        from .models.peft_sam2 import PEFT_MODULES
+        peft_kwargs = deserialize_peft_kwargs(state["peft_kwargs"], PEFT_MODULES)
+
+    if peft_kwargs and isinstance(peft_kwargs, dict):
+        # The encoder was finetuned with PEFT, so the checkpoint carries the injected PEFT parameters.
+        # Build the base SAM2 encoder, apply the same PEFT surgery, and reuse it inside UniSAM2 so the
+        # decoder checkpoint keys match ('encoder.inner.*'). The trained weights load via load_state_dict.
         from .util import get_sam2_model
-        sam2_model = get_sam2_model(model_type=encoder, input_type="images", device=device or "cpu")
+        from .models.peft_sam2 import PEFT_Sam2
+        base_model_type = encoder if isinstance(encoder, str) else _DEFAULT_MODEL
+        sam2_model = get_sam2_model(model_type=base_model_type, input_type="images", device=device or "cpu")
+        sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         encoder = sam2_model.image_encoder
+    else:
+        # The standalone UniSAM2 trainer builds the model with a string encoder, so the SAM2 image
+        # encoder lives directly under 'encoder.*'. The joint trainer instead passes the SAM2 image
+        # encoder module, which gets wrapped in 'SAM2EncoderAdapter' and so lives under 'encoder.inner.*'.
+        # Detect the latter and rebuild the matching structure by passing a SAM2 image encoder module.
+        needs_adapter = isinstance(encoder, str) and any(k.startswith("encoder.inner.") for k in model_state)
+        if needs_adapter:
+            from .util import get_sam2_model
+            sam2_model = get_sam2_model(model_type=encoder, input_type="images", device=device or "cpu")
+            encoder = sam2_model.image_encoder
 
     model = UniSAM2(encoder=encoder, output_channels=output_channels)
     model.load_state_dict(model_state)

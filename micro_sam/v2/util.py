@@ -210,11 +210,64 @@ def _get_checkpoint(model_type=_DEFAULT_MODEL):
     return checkpoint_path
 
 
+def _load_peft_finetuned_sam2(build_fn, model_cfg, model_type, finetuned_checkpoint, device, peft_kwargs, state=None):
+    """Build a SAM2 model with parameter efficient finetuning applied and load finetuned weights.
+
+    A PEFT-finetuned checkpoint contains the injected PEFT parameters (e.g. LoRA layers), so the
+    base backbone architecture cannot load it directly. This mirrors the SAM v1 loading path in
+    `micro_sam.v1.util.get_sam_model`: the base backbone is built, the same PEFT surgery used during
+    training is re-applied, and only then are the finetuned weights loaded on top.
+
+    Args:
+        build_fn: The SAM2 build function (image predictor or video predictor).
+        model_cfg: The SAM2 model config path.
+        model_type: The SAM2 model name (the base backbone is derived from the first 6 characters).
+        finetuned_checkpoint: Path to the PEFT-finetuned checkpoint.
+        device: The pytorch device.
+        peft_kwargs: Keyword arguments for `micro_sam.v2.models.peft_sam2.PEFT_Sam2`.
+        state: An already-loaded checkpoint (to avoid reloading it). Loaded from `finetuned_checkpoint` if None.
+
+    Returns:
+        The PEFT SAM2 model with the finetuned weights loaded.
+    """
+    from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
+
+    # Build from the base backbone; the finetuned weights (with the PEFT parameters) are loaded after
+    # the surgery so that the checkpoint keys match the wrapped architecture.
+    base_checkpoint = _get_checkpoint(model_type=model_type[:6])
+    model = build_fn(
+        config_file=model_cfg, ckpt_path=base_checkpoint, device=device, mode="eval", apply_postprocessing=False,
+    )
+    model = PEFT_Sam2(model, **peft_kwargs).sam
+
+    if state is None:
+        state = torch.load(finetuned_checkpoint, map_location="cpu", weights_only=False)
+    if isinstance(state, dict) and "model" in state:  # Exported micro-sam / native SAM2 layout.
+        model_state = state["model"]
+    elif isinstance(state, dict) and "model_state" in state:  # Raw torch-em trainer checkpoint.
+        model_state = state["model_state"]
+    else:
+        model_state = state
+    # Strip a DistributedDataParallel 'module.' prefix if the checkpoint was saved under DDP.
+    model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in model_state.items()}
+
+    try:
+        model.load_state_dict(model_state)
+    except RuntimeError as e:
+        raise RuntimeError(
+            "Failed to load the finetuned PEFT weights. This usually means the given 'peft_kwargs' do not "
+            "match the ones used at training time (e.g. a different rank or PEFT method)."
+        ) from e
+    model.to(device)
+    return model
+
+
 def get_sam2_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[torch.device, str]] = None,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     input_type: Literal["images", "videos"] = "images",
+    peft_kwargs: Optional[dict] = None,
 ):
     """Get the Segment Anything 2 (SAM2) model for interactive segmentation of images and videos.
 
@@ -223,6 +276,10 @@ def get_sam2_model(
         device: The pytorch device.
         checkpoint_path: Filepath to the pretrained model weights.
         input_type: Whether the inputs are images or videos.
+        peft_kwargs: Keyword arguments for `micro_sam.v2.models.peft_sam2.PEFT_Sam2`. If given, the model
+            is loaded as a PEFT-finetuned model, i.e. the base backbone is built, the PEFT surgery is
+            re-applied, and the finetuned weights are loaded on top. If not given, a PEFT config saved in
+            a user-provided `checkpoint_path` (see `get_sam2_train_model`) is auto-detected and applied.
 
     Returns:
         The SAM2 model.
@@ -241,19 +298,39 @@ def get_sam2_model(
     else:
         raise ValueError(f"'{input_type}' is not a valid input type.")
 
+    # Only a user-provided checkpoint can carry a saved PEFT config; the base / registered downloads
+    # never do, so we avoid loading them twice for the common (non-PEFT) path.
+    user_provided_checkpoint = checkpoint_path is not None
+
     if checkpoint_path is None:
         if is_finetuned:
             checkpoint_path, _, _ = _download_finetuned_sam2_model(model_type)
         else:
             checkpoint_path = _get_checkpoint(model_type=model_type)
 
-    model = _build_segment_anything_2(
-        config_file=model_cfg,
-        ckpt_path=checkpoint_path,
-        device=device,
-        mode="eval",
-        apply_postprocessing=False,
-    )
+    # If the caller did not pass peft_kwargs, auto-detect a PEFT config saved in the checkpoint.
+    saved_state = None
+    if not peft_kwargs and user_provided_checkpoint:
+        from micro_sam.models.peft import deserialize_peft_kwargs
+        from micro_sam.v2.models.peft_sam2 import PEFT_MODULES
+        saved_state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if isinstance(saved_state, dict) and saved_state.get("peft_kwargs") is not None:
+            peft_kwargs = deserialize_peft_kwargs(saved_state["peft_kwargs"], PEFT_MODULES)
+        else:
+            saved_state = None  # Not a PEFT checkpoint; let the build function load it normally.
+
+    if peft_kwargs and isinstance(peft_kwargs, dict):
+        model = _load_peft_finetuned_sam2(
+            _build_segment_anything_2, model_cfg, model_type, checkpoint_path, device, peft_kwargs, state=saved_state,
+        )
+    else:
+        model = _build_segment_anything_2(
+            config_file=model_cfg,
+            ckpt_path=checkpoint_path,
+            device=device,
+            mode="eval",
+            apply_postprocessing=False,
+        )
 
     if input_type == "videos":
         model.model_type = model_type

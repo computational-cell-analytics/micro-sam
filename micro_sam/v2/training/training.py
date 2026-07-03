@@ -115,6 +115,7 @@ def train_sam2(
     early_stopping: Optional[int] = 10,
     max_num_objects: int = 20,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
+    peft_kwargs: Optional[Dict] = None,
     device: Optional[Union[str, torch.device]] = None,
     lr: float = 1e-5,
     vision_lr: Optional[float] = None,
@@ -159,6 +160,9 @@ def train_sam2(
         early_stopping: Stop after this many epochs without improvement (None = off).
         max_num_objects: Max objects sampled per image/volume per step.
         checkpoint_path: Custom checkpoint path.  Downloads default weights if None.
+        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper, e.g.
+            `{"rank": 4, "peft_module": LoRASurgery}`. If given, the image encoder is frozen and the
+            chosen PEFT method is applied on top of it.
         device: Training device.  Auto-selects if None.
         lr: Learning rate. SAM2 OG fine-tuning uses 1e-5 (tiny) or 5e-6 (b+).
         vision_lr: Separate LR for the image encoder. If None, uses lr for all parameters.
@@ -207,6 +211,7 @@ def train_sam2(
         model_type=model_type,
         device=device,
         checkpoint_path=checkpoint_path,
+        peft_kwargs=peft_kwargs,
         prob_to_use_pt_input=prob_to_use_pt_input,
         prob_to_use_box_input=prob_to_use_box_input,
         num_frames_to_correct=num_frames_to_correct,
@@ -271,6 +276,7 @@ def _train_sam2_rank(
     early_stopping: Optional[int],
     max_num_objects: int,
     checkpoint_path,
+    peft_kwargs,
     lr: float,
     save_root,
     save_every_kth_epoch: Optional[int],
@@ -351,6 +357,7 @@ def _train_sam2_rank(
         model_type=model_type,
         device=device,
         checkpoint_path=checkpoint_path,
+        peft_kwargs=peft_kwargs,
         prob_to_use_pt_input=prob_to_use_pt_input,
         prob_to_use_box_input=prob_to_use_box_input,
         num_frames_to_correct=num_frames_to_correct,
@@ -419,6 +426,7 @@ def train_sam2_multi_gpu(
     early_stopping: Optional[int] = 10,
     max_num_objects: int = 20,
     checkpoint_path=None,
+    peft_kwargs: Optional[Dict] = None,
     lr: float = 1e-5,
     vision_lr: Optional[float] = None,
     save_root=None,
@@ -467,6 +475,8 @@ def train_sam2_multi_gpu(
         early_stopping: Stop after this many epochs without improvement.
         max_num_objects: Max objects sampled per image/volume per step.
         checkpoint_path: SAM2 checkpoint path. Downloads default if None.
+        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
+            given, the image encoder is frozen and the chosen PEFT method is applied on top of it.
         lr: Learning rate. SAM2 OG fine-tuning uses 1e-5 (tiny) or 5e-6 (b+).
         vision_lr: Separate LR for the image encoder. If None, uses lr for all parameters.
             SAM2 OG fine-tuning uses 6e-6 (tiny) or 3e-6 (b+), i.e. ~0.6x the base lr.
@@ -506,6 +516,7 @@ def train_sam2_multi_gpu(
         early_stopping=early_stopping,
         max_num_objects=max_num_objects,
         checkpoint_path=checkpoint_path,
+        peft_kwargs=peft_kwargs,
         lr=lr,
         save_root=save_root,
         save_every_kth_epoch=save_every_kth_epoch,
@@ -537,6 +548,38 @@ def train_sam2_multi_gpu(
     )
 
 
+def _build_unisam2_model(model_type, device, peft_kwargs=None, output_channels=4):
+    """Build a UniSAM2 model, optionally applying PEFT to its SAM2 image encoder.
+
+    Without `peft_kwargs` the encoder is built from the backbone name. With `peft_kwargs` the base
+    SAM2 encoder is built, the PEFT surgery is applied (freezing the encoder and injecting adapters),
+    and the adapted encoder is reused inside UniSAM2; the config is recorded on the model so the
+    trainer can persist it (see `micro_sam.v2.automatic_segmentation.get_unisam2_model`).
+
+    Args:
+        model_type: SAM2 encoder variant, e.g. "hvit_t".
+        device: The device to build the model on.
+        peft_kwargs: Keyword arguments for `micro_sam.v2.models.peft_sam2.PEFT_Sam2`, or None.
+        output_channels: The number of UniSAM2 output channels.
+
+    Returns:
+        The UniSAM2 model on the given device.
+    """
+    from micro_sam.v2.models.util import UniSAM2
+
+    if peft_kwargs and isinstance(peft_kwargs, dict):
+        from micro_sam.v2.util import get_sam2_model
+        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
+        from micro_sam.models.peft import serialize_peft_kwargs
+        sam2_model = get_sam2_model(model_type=model_type, input_type="images", device=device)
+        sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
+        model = UniSAM2(encoder=sam2_model.image_encoder, output_channels=output_channels).to(device)
+        model.peft_config = serialize_peft_kwargs(peft_kwargs)
+    else:
+        model = UniSAM2(encoder=model_type, output_channels=output_channels).to(device)
+    return model
+
+
 def train_automatic(
     name: str,
     model_type: str,
@@ -550,6 +593,7 @@ def train_automatic(
     save_root: Optional[Union[str, os.PathLike]] = None,
     save_every_kth_epoch: Optional[int] = None,
     overwrite_training: bool = True,
+    peft_kwargs: Optional[Dict] = None,
 ) -> None:
     """Train UniSAM2 for automatic instance segmentation with directed distance targets.
 
@@ -572,12 +616,14 @@ def train_automatic(
         save_root: Root directory for checkpoints and logs.
         save_every_kth_epoch: Save a separate checkpoint every k-th epoch.
         overwrite_training: Overwrite an existing checkpoint at the same path.
+        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
+            given, the SAM2 image encoder is frozen and the chosen PEFT method is applied on top of it
+            while the UniSAM2 decoder is trained.
     """
     import torch_em
-    from micro_sam.v2.models.util import UniSAM2
 
     device = get_device(device)
-    model = UniSAM2(encoder=model_type, output_channels=4).to(device)
+    model = _build_unisam2_model(model_type, device, peft_kwargs=peft_kwargs)
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
     loss = DirectedDistanceLoss(mask_distances_in_bg=True)
@@ -628,6 +674,7 @@ def _train_automatic_rank(
     dataset_choice: str,
     n_workers: int,
     find_unused_parameters: bool,
+    peft_kwargs=None,
 ):
     """Single-rank torchrun worker for train_automatic_multi_gpu."""
     import torch_em
@@ -635,7 +682,6 @@ def _train_automatic_rank(
 
     from micro_sam.v2.datasets.generalist_loader import _build_automatic_datasets
     from micro_sam.v2.datasets.sampler import DistributedUniBatchSampler, _build_group_map
-    from micro_sam.v2.models.util import UniSAM2
 
     dist.init_process_group("nccl")
     world_size = dist.get_world_size()
@@ -675,7 +721,7 @@ def _train_automatic_rank(
     )
     val_loader.shuffle = False
 
-    model = UniSAM2(encoder=model_type, output_channels=4).to(device)
+    model = _build_unisam2_model(model_type, device, peft_kwargs=peft_kwargs)
     ddp_model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
@@ -729,6 +775,7 @@ def train_automatic_multi_gpu(
     save_every_kth_epoch: Optional[int] = None,
     overwrite_training: bool = True,
     find_unused_parameters: bool = True,
+    peft_kwargs: Optional[Dict] = None,
 ) -> None:
     """Train UniSAM2 for automatic segmentation across multiple GPUs with DDP.
 
@@ -753,6 +800,8 @@ def train_automatic_multi_gpu(
         save_every_kth_epoch: Save a checkpoint every k-th epoch.
         overwrite_training: Overwrite an existing checkpoint at the same path.
         find_unused_parameters: Passed to DistributedDataParallel.
+        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
+            given, the SAM2 image encoder is frozen and the chosen PEFT method is applied on top of it.
     """
     if z_slices is None:
         z_slices = [8]
@@ -786,6 +835,7 @@ def train_automatic_multi_gpu(
         dataset_choice=dataset_choice,
         n_workers=n_workers,
         find_unused_parameters=find_unused_parameters,
+        peft_kwargs=peft_kwargs,
     )
 
 
@@ -804,6 +854,7 @@ def train_joint_sam2(
     max_num_objects: int = 20,
     checkpoint_path=None,
     freeze: Optional[List[str]] = None,
+    peft_kwargs: Optional[Dict] = None,
     device: Optional[Union[str, torch.device]] = None,
     lr: float = 1e-5,
     save_root: Optional[Union[str, os.PathLike]] = None,
@@ -848,6 +899,8 @@ def train_joint_sam2(
         max_num_objects: Max objects per interactive step.
         checkpoint_path: SAM2 checkpoint path. Downloads default if None.
         freeze: Component name prefixes to freeze (e.g. ["image_encoder"]).
+        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
+            given, the image encoder is frozen and the chosen PEFT method is applied on top of it.
         device: Training device. Auto-selects if None.
         lr: Learning rate.
         save_root: Root directory for checkpoints and logs.
@@ -892,7 +945,7 @@ def train_joint_sam2(
 
     sam2_model = get_sam2_train_model(
         model_type=model_type, device=device,
-        checkpoint_path=checkpoint_path, freeze=freeze,
+        checkpoint_path=checkpoint_path, freeze=freeze, peft_kwargs=peft_kwargs,
         prob_to_use_pt_input=prob_to_use_pt_input,
         prob_to_use_box_input=prob_to_use_box_input,
         num_frames_to_correct=num_frames_to_correct,
@@ -959,6 +1012,7 @@ def _train_joint_rank(
     max_num_objects: int,
     checkpoint_path,
     freeze,
+    peft_kwargs,
     lr: float,
     save_root,
     scheduler_kwargs: Optional[Dict],
@@ -1028,7 +1082,7 @@ def _train_joint_rank(
 
     sam2_model = get_sam2_train_model(
         model_type=model_type, device=device,
-        checkpoint_path=checkpoint_path, freeze=freeze,
+        checkpoint_path=checkpoint_path, freeze=freeze, peft_kwargs=peft_kwargs,
         prob_to_use_pt_input=prob_to_use_pt_input,
         prob_to_use_box_input=prob_to_use_box_input,
         num_frames_to_correct=num_frames_to_correct,
@@ -1105,6 +1159,7 @@ def train_joint_sam2_multi_gpu(
     max_num_objects: int = 20,
     checkpoint_path=None,
     freeze: Optional[List[str]] = None,
+    peft_kwargs: Optional[Dict] = None,
     lr: float = 1e-5,
     save_root=None,
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
@@ -1152,6 +1207,8 @@ def train_joint_sam2_multi_gpu(
         max_num_objects: Max objects per interactive step.
         checkpoint_path: SAM2 checkpoint path. Downloads default if None.
         freeze: Component name prefixes to freeze (e.g. ["image_encoder"]).
+        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
+            given, the image encoder is frozen and the chosen PEFT method is applied on top of it.
         lr: Learning rate.
         save_root: Root directory for checkpoints and logs.
         scheduler_kwargs: ReduceLROnPlateau kwargs. Defaults to patience=10.
@@ -1198,6 +1255,7 @@ def train_joint_sam2_multi_gpu(
         max_num_objects=max_num_objects,
         checkpoint_path=checkpoint_path,
         freeze=freeze,
+        peft_kwargs=peft_kwargs,
         lr=lr,
         save_root=save_root,
         scheduler_kwargs=scheduler_kwargs,
