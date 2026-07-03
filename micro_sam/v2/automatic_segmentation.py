@@ -104,8 +104,10 @@ def get_unisam2_model(
         # The encoder was finetuned with PEFT, so the checkpoint carries the injected PEFT parameters.
         # Build the base SAM2 encoder, apply the same PEFT surgery, and reuse it inside UniSAM2 so the
         # decoder checkpoint keys match ('encoder.inner.*'). The trained weights load via load_state_dict.
+        # We do not quantize at inference; a QLoRA-trained model is loaded in full precision.
         from .util import get_sam2_model
         from .models.peft_sam2 import PEFT_Sam2
+        peft_kwargs = {k: v for k, v in peft_kwargs.items() if k != "quantize"}
         base_model_type = encoder if isinstance(encoder, str) else _DEFAULT_MODEL
         sam2_model = get_sam2_model(model_type=base_model_type, input_type="images", device=device or "cpu")
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam

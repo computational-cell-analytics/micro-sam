@@ -11,6 +11,47 @@ from typing import Callable, List, Optional
 import torch
 import torch.nn as nn
 
+try:
+    import bitsandbytes as bnb
+    HAVE_BITSANDBYTES = True
+except ImportError:
+    HAVE_BITSANDBYTES = False
+
+
+def quantize_linear_layers(image_encoder: nn.Module):
+    """Replace every `nn.Linear` in `image_encoder` with a 4-bit bitsandbytes `Linear4bit` (for QLoRA).
+
+    This quantizes the frozen backbone so that LoRA adapters can be trained on top at low precision.
+    CUDA-only (requires `bitsandbytes`). Used identically by SAM (`PEFT_Sam`) and SAM2 (`PEFT_Sam2`).
+
+    Args:
+        image_encoder: The image encoder module whose linear layers are quantized in place.
+    """
+    if not HAVE_BITSANDBYTES:
+        raise ModuleNotFoundError("Please install 'bitsandbytes'.")
+
+    for name, module in image_encoder.named_modules():
+        if isinstance(module, torch.nn.Linear):
+            *parent_path, layer_name = name.split(".")
+            parent_module = image_encoder
+
+            for sub_module in parent_path:
+                parent_module = getattr(parent_module, sub_module)
+
+            # Create the new Linear4bit layer.
+            linear_q = bnb.nn.Linear4bit(
+                module.in_features,
+                module.out_features,
+                bias=False if module.bias is None else True,
+            )
+            # Assign weights and bias to the new layer.
+            linear_q.weight = bnb.nn.Params4bit(data=module.weight, requires_grad=False)
+            if module.bias is not None:
+                linear_q.bias = torch.nn.Parameter(module.bias)
+
+            # Replace the original linear layer with the quantized one.
+            setattr(parent_module, layer_name, linear_q)
+
 
 class AttentionLoRA(nn.Module):
     """Low-rank adaptation on a fused qkv projection.

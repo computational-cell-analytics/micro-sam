@@ -320,6 +320,9 @@ def get_sam2_model(
             saved_state = None  # Not a PEFT checkpoint; let the build function load it normally.
 
     if peft_kwargs and isinstance(peft_kwargs, dict):
+        # We do not quantize at inference; a QLoRA-trained model is loaded in full precision (as in
+        # `micro_sam.v1.util.get_sam_model`). Copy first so the caller's dict is not mutated.
+        peft_kwargs = {k: v for k, v in peft_kwargs.items() if k != "quantize"}
         model = _load_peft_finetuned_sam2(
             _build_segment_anything_2, model_cfg, model_type, checkpoint_path, device, peft_kwargs, state=saved_state,
         )
@@ -337,6 +340,79 @@ def get_sam2_model(
         model.model_name = model_type  # TODO: What is this exactly?
 
     return model
+
+
+def export_custom_qlora_sam2_model(
+    checkpoint_path: Optional[Union[str, os.PathLike]],
+    finetuned_path: Union[str, os.PathLike],
+    model_type: str,
+    save_path: Union[str, os.PathLike],
+) -> None:
+    """Export a QLoRA-finetuned SAM2 model to a full-precision LoRA-style checkpoint.
+
+    Mirrors `micro_sam.v1.util.export_custom_qlora_model`. QLoRA freezes the (4-bit quantized) image
+    encoder and only trains the LoRA adapters, so the export keeps the trained full-precision LoRA
+    layers from the finetuned checkpoint and takes every other parameter from the pristine base model
+    (renaming the LoRA-wrapped keys). The exported checkpoint can then be loaded with the LoRA backbone
+    by passing the corresponding `peft_kwargs` to `get_sam2_model` (or auto-detected if stored).
+
+    Args:
+        checkpoint_path: Path to the base SAM2 backbone the model was finetuned from (None -> default download).
+        finetuned_path: Path to the QLoRA-finetuned checkpoint.
+        model_type: The SAM2 model type, e.g. 'hvit_t'.
+        save_path: Where to save the exported checkpoint.
+    """
+    # Step 1: The base (full-precision) SAM2 model that finetuning started from.
+    sam = get_sam2_model(model_type=model_type, checkpoint_path=checkpoint_path, device="cpu")
+
+    # Step 2: Load the QLoRA-finetuned checkpoint.
+    ft_state = torch.load(finetuned_path, map_location="cpu", weights_only=False)
+    if isinstance(ft_state, dict) and "model_state" in ft_state:
+        ft_model_state = ft_state["model_state"]
+    elif isinstance(ft_state, dict) and "model" in ft_state:
+        ft_model_state = ft_state["model"]
+    else:
+        ft_model_state = ft_state
+    ft_model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in ft_model_state.items()}
+
+    # Step 3: Keep the trained (full-precision) LoRA layers from the finetuned model, recording which
+    # blocks have LoRA on the attention and/or feed forward layers.
+    updated_model_state = {}
+    modified_attn_layers = set()
+    modified_mlp_layers = set()
+    for k, v in ft_model_state.items():
+        layer_id = int(k.split("blocks.")[1].split(".")[0]) if "blocks." in k else None
+        if k.find("qkv.w_a_linear") != -1 or k.find("qkv.w_b_linear") != -1:
+            modified_attn_layers.add(layer_id)
+            updated_model_state[k] = v
+        if k.find("mlp.w_a_linear") != -1 or k.find("mlp.w_b_linear") != -1:
+            modified_mlp_layers.add(layer_id)
+            updated_model_state[k] = v
+
+    # Step 4: Take the remaining parameters from the base model, renaming the LoRA-wrapped keys so the
+    # frozen base qkv lives under 'qkv.qkv_proj' and the frozen base MLP under 'mlp.mlp_layer'.
+    for k, v in sam.state_dict().items():
+        layer_id = int(k.split("blocks.")[1].split(".")[0]) if "blocks." in k else None
+        if k.find("attn.qkv.") != -1:
+            if layer_id in modified_attn_layers:
+                k = k.replace("qkv", "qkv.qkv_proj")
+        elif k.find("mlp") != -1 and k.find("image_encoder") != -1:
+            if layer_id in modified_mlp_layers:
+                k = k.replace("mlp.", "mlp.mlp_layer.")
+        updated_model_state[k] = v
+
+    # Step 5: Replace the model state (retaining other checkpoint entries, e.g. a stored peft config).
+    if isinstance(ft_state, dict) and "model_state" in ft_state:
+        ft_state["model_state"] = updated_model_state
+        out_state = ft_state
+    elif isinstance(ft_state, dict) and "model" in ft_state:
+        ft_state["model"] = updated_model_state
+        out_state = ft_state
+    else:
+        out_state = {"model": updated_model_state, "model_type": model_type}
+
+    # Step 6: Store the exported checkpoint.
+    torch.save(out_state, save_path)
 
 
 def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):

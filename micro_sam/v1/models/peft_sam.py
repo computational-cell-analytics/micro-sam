@@ -6,16 +6,12 @@ import torch.nn as nn
 
 from segment_anything.modeling import Sam
 
-from micro_sam.models.peft import AttentionLoRA, MLPLoRA, ScaleShiftLayer, SelectiveSurgery
+from micro_sam.models.peft import (
+    AttentionLoRA, MLPLoRA, ScaleShiftLayer, SelectiveSurgery, quantize_linear_layers,
+)
 from micro_sam.models.peft import (  # noqa
     AttentionSurgery, BiasSurgery, LayerNormSurgery, ClassicalSurgery,
 )
-
-try:
-    import bitsandbytes as bnb
-    _have_bnb = True
-except ImportError:
-    _have_bnb = False
 
 
 class LoRASurgery(nn.Module):
@@ -243,34 +239,7 @@ class PEFT_Sam(nn.Module):
         # Whether to quantize the linear layers to 4 bit precision.
         # NOTE: This is currently supported for CUDA-supported devices only.
         if quantize:
-            if not _have_bnb:
-                raise ModuleNotFoundError("Please install 'bitsandbytes'.")
-
-            for name, module in model.image_encoder.named_modules():
-                if isinstance(module, torch.nn.Linear):
-                    *parent_path, layer_name = name.split(".")
-                    parent_module = model.image_encoder
-
-                    for sub_module in parent_path:
-                        parent_module = getattr(parent_module, sub_module)
-
-                    # Create the new Linear4bit layer
-                    linear_q = bnb.nn.Linear4bit(
-                        module.in_features,
-                        module.out_features,
-                        bias=False if module.bias is None else True,
-                    )
-                    # Assign weights and bias to the new layer
-                    new_weight = bnb.nn.Params4bit(
-                        data=module.weight,
-                        requires_grad=False,
-                    )
-                    linear_q.weight = new_weight
-                    if module.bias is not None:
-                        linear_q.bias = torch.nn.Parameter(module.bias)
-
-                    # Replace the original linear layer with the quantized one
-                    setattr(parent_module, layer_name, linear_q)
+            quantize_linear_layers(model.image_encoder)
 
         # Let's freeze all the pretrained image encoder layers first
         for param in model.image_encoder.parameters():

@@ -2,6 +2,7 @@ from typing import List, Optional
 
 import torch.nn as nn
 
+from micro_sam.models.peft import quantize_linear_layers
 from micro_sam.models.peft import (  # noqa
     AttentionLoRA, MLPLoRA, SelectiveSurgery, AttentionSurgery, BiasSurgery, LayerNormSurgery, ClassicalSurgery,
 )
@@ -49,6 +50,8 @@ class PEFT_Sam2(nn.Module):
         attention_layers_to_update: Which specific blocks we apply PEFT methods to.
             For reference, the total number of blocks is 12 for 'hvit_t'/'hvit_s'/'hvit_b' and 48 for 'hvit_l'.
             By default, applies the PEFT method to all blocks.
+        quantize: Whether to quantize the image encoder to 4 bit precision for QLoRA-style training.
+            Requires 'bitsandbytes' and is supported on CUDA devices only. By default, does not quantize.
         module_kwargs: The additional arguments for the respective PEFT modules.
     """
 
@@ -58,6 +61,7 @@ class PEFT_Sam2(nn.Module):
         rank: Optional[int] = None,
         peft_module: nn.Module = LoRASurgery,
         attention_layers_to_update: Optional[List[int]] = None,
+        quantize: bool = False,
         **module_kwargs
     ):
         super().__init__()
@@ -76,6 +80,11 @@ class PEFT_Sam2(nn.Module):
 
         self.peft_module = peft_module
         self.peft_blocks = []
+
+        # Whether to quantize the linear layers to 4 bit precision (QLoRA).
+        # NOTE: This is currently supported for CUDA-supported devices only.
+        if quantize:
+            quantize_linear_layers(model.image_encoder)
 
         # Let's freeze all the pretrained image encoder layers first.
         for param in model.image_encoder.parameters():
