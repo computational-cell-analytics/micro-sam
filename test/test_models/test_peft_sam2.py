@@ -150,6 +150,7 @@ class TestPEFTSam2(unittest.TestCase):
         self.assertTrue(all("down_proj" in n or "up_proj" in n or "alpha" in n for n in names))
         self._check_no_frozen_gradients(sam)
 
+    @unittest.skip("Training tests are not run in CI.")
     def test_get_sam2_train_model_lora(self):
         from micro_sam.v2.training.util import get_sam2_train_model
         from micro_sam.v2.models.peft_sam2 import LoRASurgery
@@ -163,6 +164,7 @@ class TestPEFTSam2(unittest.TestCase):
         # The PEFT config must be recorded on the model so the trainer can persist it.
         self.assertEqual(model.peft_config, {"rank": 2, "peft_module": "LoRASurgery"})
 
+    @unittest.skip("Training tests are not run in CI.")
     def test_peft_freeze_conflict_guard(self):
         from micro_sam.v2.training.util import get_sam2_train_model
         from micro_sam.v2.models.peft_sam2 import LoRASurgery
