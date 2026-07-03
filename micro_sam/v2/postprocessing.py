@@ -21,6 +21,14 @@ from bioimage_cpp.segmentation import label, watershed
 
 FLOW_BACKENDS = ("python", "cpp")
 
+DEFAULT_DENSE_POSTPROCESSING = {
+    "beta": 0.5,
+    "density_threshold": 3.0,
+    "n_iter": 50,
+    "dt": 0.5,
+    "sigma": 1.0,
+}
+
 
 def _compute_flow_density(
     directed_distances: np.ndarray,
@@ -180,11 +188,11 @@ def flow_instance_segmentation(
 def run_multicut(
     boundary_map: np.ndarray,
     distances: np.ndarray,
-    beta: float = 0.7,
-    density_threshold: float = 5.0,
-    n_iter: int = 50,
-    dt: float = 0.5,
-    sigma: float = 1.0,
+    beta: float = DEFAULT_DENSE_POSTPROCESSING["beta"],
+    density_threshold: float = DEFAULT_DENSE_POSTPROCESSING["density_threshold"],
+    n_iter: int = DEFAULT_DENSE_POSTPROCESSING["n_iter"],
+    dt: float = DEFAULT_DENSE_POSTPROCESSING["dt"],
+    sigma: float = DEFAULT_DENSE_POSTPROCESSING["sigma"],
     n_threads: int = 8,
     backend: str = "cpp",
 ) -> np.ndarray:

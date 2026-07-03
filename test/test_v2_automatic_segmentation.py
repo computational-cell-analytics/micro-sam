@@ -1,4 +1,5 @@
 import types
+import inspect
 
 import numpy as np
 import torch
@@ -7,7 +8,14 @@ from micro_sam.v2.automatic_segmentation import (
     _block_shape_and_halo, run_unisam2_decoder_on_3d_embeddings, run_unisam2_decoder_on_embeddings,
 )
 from micro_sam.v2.instance_segmentation import _set_image_predictor_from_backbone
+from micro_sam.v2.postprocessing import DEFAULT_DENSE_POSTPROCESSING, run_multicut
 from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
+
+
+def test_run_multicut_uses_dense_defaults():
+    signature = inspect.signature(run_multicut)
+    for name, value in DEFAULT_DENSE_POSTPROCESSING.items():
+        assert signature.parameters[name].default == value
 
 
 class _FakeSAM2Model:
