@@ -1,13 +1,11 @@
-import math
 from typing import List, Union, Optional
 
-import torch
 import torch.nn as nn
 
 from segment_anything.modeling import Sam
 
 from micro_sam.models.peft import (
-    AttentionLoRA, MLPLoRA, ScaleShiftLayer, SelectiveSurgery, quantize_linear_layers,
+    AttentionLoRA, MLPLoRA, FacTSurgery, AdaptFormer, ScaleShiftLayer, SelectiveSurgery, quantize_linear_layers,
 )
 from micro_sam.models.peft import (  # noqa
     AttentionSurgery, BiasSurgery, LayerNormSurgery, ClassicalSurgery,
@@ -49,64 +47,6 @@ class LoRASurgery(nn.Module):
         return x
 
 
-class FacTSurgery(nn.Module):
-    """Operates on the attention layers for performing factorized attention.
-
-    (Inspired from: https://github.com/cchen-cc/MA-SAM/blob/main/MA-SAM/sam_fact_tt_image_encoder.py)
-
-    Args:
-        rank: The rank of the decomposition matrices for updating weights in each attention layer.
-        block: The chosen attention blocks for implementing fact.
-        dropout: The dropout rate for the factorized attention.
-    """
-    def __init__(
-        self,
-        rank: int,
-        block: nn.Module,
-        dropout: Optional[float] = 0.1,
-    ):
-        super().__init__()
-        self.qkv_proj = block.attn.qkv
-        self.dim = self.qkv_proj.in_features
-
-        self.q_FacTs = nn.Linear(rank, rank, bias=False)
-        self.v_FacTs = nn.Linear(rank, rank, bias=False)
-
-        self.dropout = dropout
-        if self.dropout is not None:
-            self.dp_q = nn.Dropout(self.dropout)
-            self.dp_v = nn.Dropout(self.dropout)
-
-        self.FacTu = nn.Linear(self.dim, rank, bias=False)
-        self.FacTv = nn.Linear(rank, self.dim, bias=False)
-
-        block.attn.qkv = self
-
-    def forward(self, x):
-        qkv = self.qkv_proj(x)
-
-        new_q = self.q_FacTs(self.FacTu(x))
-        new_v = self.v_FacTs(self.FacTu(x))
-
-        if self.dropout is not None:
-            new_q = self.dp_q(new_q)
-            new_v = self.dp_v(new_v)
-
-        new_q = self.FacTv(new_q)
-        new_v = self.FacTv(new_v)
-
-        # NOTE : Scaling Factor is set to 1 as it can be tuned via the learning rate.
-        qkv = torch.cat(
-            [
-                qkv[:, :, :, :self.dim] + new_q,  # replacing new q values
-                qkv[:, :, :, self.dim:-self.dim],  # leaving the middle part as identical
-                qkv[:, :, :, -self.dim:] + new_v  # replacing new v values
-            ], dim=-1
-        )
-
-        return qkv
-
-
 class SSFSurgery(nn.Module):
     """Operates on all layers in the transformer block for adding learnable scale and shift parameters.
 
@@ -133,68 +73,6 @@ class SSFSurgery(nn.Module):
 
     def forward(self, x):
         return x
-
-
-class AdaptFormer(nn.Module):
-    """Adds AdaptFormer Module in place of the MLP Layers
-
-    Args:
-        rank: The rank is not used in this class but kept here for consistency.
-        block: The chosen encoder block for implementing AdaptFormer.
-        alpha: A parameters that scales the Adapter path. Can be either learnable or some fixed value.
-        dropout: The dropout rate for the dropout layer between down and up projection layer.
-        projection_size: The size of the projection layer.
-    """
-    def __init__(
-        self,
-        rank: int,
-        block: nn.Module,
-        alpha: Optional[Union[str, float]] = "learnable_scalar",  # Stable choice from our preliminary exp.
-        dropout: Optional[float] = None,  # Does not have an obvious advantage.
-        projection_size: int = 64,  # Stable choice from our preliminary exp.
-    ):
-        super().__init__()
-
-        self.mlp_proj = block.mlp
-        self.n_embd = block.mlp.lin1.in_features
-
-        if alpha == 'learnable_scalar':
-            self.alpha = nn.Parameter(torch.ones(1))
-        else:
-            self.alpha = alpha
-
-        self.projection_size = projection_size
-        self.dropout = dropout
-
-        self.down_proj = nn.Linear(self.n_embd, self.projection_size)
-        self.non_linear_func = nn.ReLU()
-        self.up_proj = nn.Linear(self.projection_size, self.n_embd)
-
-        block.mlp = self
-
-        if self.dropout is not None:
-            self.dropout_layer = nn.Dropout(self.dropout)
-
-        nn.init.kaiming_uniform_(self.down_proj.weight, a=math.sqrt(5))
-        nn.init.zeros_(self.up_proj.weight)
-        nn.init.zeros_(self.down_proj.bias)
-        nn.init.zeros_(self.up_proj.bias)
-
-    def forward(self, x):
-        residual = x
-        mlp_output = self.mlp_proj(x)
-
-        down = self.down_proj(x)
-        down = self.non_linear_func(down)
-
-        if self.dropout is not None:
-            down = self.dropout_layer(down)
-
-        up = self.up_proj(down)
-        up = up * self.alpha
-        output = up + residual + mlp_output
-
-        return output
 
 
 class PEFT_Sam(nn.Module):

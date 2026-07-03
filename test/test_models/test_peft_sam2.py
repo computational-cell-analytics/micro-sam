@@ -114,6 +114,42 @@ class TestPEFTSam2(unittest.TestCase):
         self.assertTrue(all(n.endswith("bias") for n in names))
         self._check_no_frozen_gradients(sam)
 
+    def test_fact_sam2(self):
+        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2, FacTSurgery
+
+        model = self._get_model()
+        sam = PEFT_Sam2(model, rank=2, peft_module=FacTSurgery).sam
+        self._check_output(sam)
+
+        names = self._trainable_encoder_params(sam)
+        self.assertTrue(len(names) > 0)
+        self.assertTrue(all("FacT" in n for n in names))
+        self._check_no_frozen_gradients(sam)
+
+    def test_ssf_sam2(self):
+        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2, SSFSurgery
+
+        model = self._get_model()
+        sam = PEFT_Sam2(model, peft_module=SSFSurgery).sam
+        self._check_output(sam)
+
+        names = self._trainable_encoder_params(sam)
+        self.assertTrue(len(names) > 0)
+        self.assertTrue(all("scale" in n or "shift" in n for n in names))
+        self._check_no_frozen_gradients(sam)
+
+    def test_adaptformer_sam2(self):
+        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2, AdaptFormer
+
+        model = self._get_model()
+        sam = PEFT_Sam2(model, rank=2, peft_module=AdaptFormer, projection_size=64, alpha=2.0, dropout=0.5).sam
+        self._check_output(sam)
+
+        names = self._trainable_encoder_params(sam)
+        self.assertTrue(len(names) > 0)
+        self.assertTrue(all("down_proj" in n or "up_proj" in n or "alpha" in n for n in names))
+        self._check_no_frozen_gradients(sam)
+
     def test_get_sam2_train_model_lora(self):
         from micro_sam.v2.training.util import get_sam2_train_model
         from micro_sam.v2.models.peft_sam2 import LoRASurgery
