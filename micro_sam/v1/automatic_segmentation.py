@@ -331,10 +331,9 @@ def _get_inputs_from_paths(paths, pattern):
     for path in paths:
         if os.path.isfile(path):  # It is just one filepath.
             fpaths.append(path)
-        else:  # Otherwise, if the path is a directory, fetch all inputs provided with a pattern.
-            assert pattern is not None, \
-                f"You must provide a pattern to search for files in the directory: '{os.path.abspath(path)}'."
-            fpaths.extend(glob(os.path.join(path, pattern)))
+        else:  # A directory: match files with the pattern, defaulting to all files if none is given.
+            hits = glob(os.path.join(path, pattern if pattern is not None else "*"))
+            fpaths.extend(p for p in hits if os.path.isfile(p))
 
     return fpaths
 

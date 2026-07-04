@@ -1012,3 +1012,72 @@ def automatic_instance_segmentation(
         imageio.imwrite(output_path, segmentation, compression="zlib")
 
     return segmentation
+
+
+def automatic_tracking(
+    segmenter,
+    input_path: Union[str, "os.PathLike", np.ndarray],
+    output_path: Optional[Union[str, "os.PathLike"]] = None,
+    key: Optional[str] = None,
+    tile_shape: Optional[tuple] = None,
+    halo: Optional[tuple] = None,
+    mode: str = "sparse",
+    device: Optional[Union[str, torch.device]] = None,
+    gap_closing: Optional[int] = None,
+    min_time_extent: Optional[int] = None,
+    verbose: bool = True,
+    **generate_kwargs,
+):
+    """Run UniSAM2 automatic tracking for a timeseries.
+
+    Each frame is segmented independently with the UniSAM2 segmenter (`automatic_instance_segmentation`),
+    the per-frame results are relabeled to globally-unique ids, and the objects are linked across frames
+    with Trackastra (see `micro_sam.v1.multi_dimensional_segmentation.track_across_frames`).
+
+    Args:
+        segmenter: The UniSAM2 instance segmentation generator (see `get_segmenter`).
+        input_path: The input timeseries, a filepath (tif / container with `key`) or a (T, Y, X) array.
+        output_path: Optional folder to save the tracking result in CTC format.
+        key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
+        tile_shape: Shape of the tiles for tiled per-frame prediction. By default runs without tiling.
+        halo: Overlap of the tiles for tiled per-frame prediction.
+        mode: The segmentation mode, 'sparse' (flow) or 'dense' (multicut).
+        device: The device to run inference on.
+        gap_closing: If given, close gaps in the tracks over this many frames.
+        min_time_extent: If given, require tracks to span at least this many frames.
+        verbose: Whether to print progress.
+        generate_kwargs: Additional postprocessing parameters forwarded to the segmenter's `generate`.
+
+    Returns:
+        The tracking result, a (T, Y, X) array where each object is labeled by its track id.
+        The lineages, encoding cell divisions.
+    """
+    from tqdm import trange
+
+    from ..util import load_image_data
+    from ..v1.multi_dimensional_segmentation import track_across_frames
+
+    timeseries = input_path if isinstance(input_path, np.ndarray) else load_image_data(input_path, key=key)
+    if timeseries.ndim != 3:
+        raise ValueError(f"Automatic tracking expects a (T, Y, X) timeseries, got shape {timeseries.shape}.")
+
+    # Segment every frame independently and relabel so ids do not overlap across frames.
+    segmentation = np.zeros(timeseries.shape, dtype="uint32")
+    offset = 0
+    for t in trange(timeseries.shape[0], desc="Segment frames", disable=not verbose):
+        frame_seg = automatic_instance_segmentation(
+            segmenter=segmenter, input_path=timeseries[t], ndim=2, tile_shape=tile_shape, halo=halo,
+            mode=mode, device=device, verbose=False, **generate_kwargs,
+        )
+        max_id = int(frame_seg.max())
+        if max_id == 0:
+            continue
+        frame_seg[frame_seg != 0] += offset
+        offset += max_id
+        segmentation[t] = frame_seg
+
+    segmentation, lineage = track_across_frames(
+        timeseries=timeseries, segmentation=segmentation, gap_closing=gap_closing,
+        min_time_extent=min_time_extent, verbose=verbose, output_folder=output_path,
+    )
+    return segmentation, lineage

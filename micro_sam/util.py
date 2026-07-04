@@ -150,16 +150,31 @@ def get_embedding_function(model_type: str) -> callable:
 
     Returns:
         The matching `precompute_image_embeddings` / `precompute_vfm_embeddings` function.
+
+    Raises:
+        ValueError: If `model_type` does not belong to any supported model family.
     """
-    from .v1.models.vfm import is_vfm_model
+    from .v1.models.vfm import is_vfm_model, get_vfm_model_names
+    from .v2.util import SUPPORTED_MODELS as sam2_backbones
+
     if is_vfm_model(model_type):
         from .v1.models.vfm import precompute_vfm_embeddings
         return precompute_vfm_embeddings
-    if model_type.startswith("h"):
+
+    # Finetuned names keep their backbone prefix ('vit_b_lm' -> 'vit_b', 'hvit_t_cells' -> 'hvit_t').
+    if isinstance(model_type, str) and model_type[:6] in sam2_backbones:
         from .v2.util import precompute_image_embeddings
         return precompute_image_embeddings
-    from .v1.util import precompute_image_embeddings
-    return precompute_image_embeddings
+    if isinstance(model_type, str) and model_type[:5] in _MODEL_TYPES:
+        from .v1.util import precompute_image_embeddings
+        return precompute_image_embeddings
+
+    raise ValueError(
+        f"Invalid model_type: '{model_type}'. Expected a SAM1 model (backbone one of {list(_MODEL_TYPES)}), "
+        f"a SAM2 model (backbone one of {sam2_backbones}) or a VFM encoder (one of {list(get_vfm_model_names())}). "
+        "Finetuned models keep their backbone prefix, e.g. 'vit_b_lm' or 'hvit_t_cells'. "
+        "Run 'micro_sam info' to list all available models."
+    )
 
 
 def _available_devices():

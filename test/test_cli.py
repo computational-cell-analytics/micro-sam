@@ -34,11 +34,16 @@ class TestCLI(unittest.TestCase):
 
     def test_help(self):
         self._test_help()
+        self._test_help("annotator")
+        self._test_help("inference")
         for cmd in [
-            "segmentation_annotator", "tracking_annotator", "batch_annotator",
-            "precompute_embeddings", "automatic_segmentation", "train", "info",
+            ["annotator", "segmentation"], ["annotator", "tracking"], ["annotator", "batch"],
+            ["annotator", "pixel-classification"], ["annotator", "object-classification"],
+            ["inference", "segmentation"], ["inference", "tracking"],
+            ["inference", "pixel-classification"], ["inference", "object-classification"],
+            ["precompute-embeddings"], ["train"], ["info"],
         ]:
-            self._test_help(cmd)
+            self._test_help(*cmd)
 
     def test_v1_help(self):
         self._test_help("v1")
@@ -56,7 +61,7 @@ class TestCLI(unittest.TestCase):
 
         # Test precomputation with a single (2d) image.
         emb_path1 = os.path.join(self.tmp_folder, "embedddings1.zarr")
-        _cli("precompute_embeddings", "-i", im_path, "-e", emb_path1, "-m", "hvit_t")
+        _cli("precompute-embeddings", "-i", im_path, "-e", emb_path1, "-m", "hvit_t")
         self.assertTrue(os.path.exists(emb_path1))
         with z5py.File(emb_path1, "r") as f:
             self.assertIn("features", f)
@@ -64,7 +69,7 @@ class TestCLI(unittest.TestCase):
 
         # Test precomputation with an image stack (loaded as a 3d volume).
         emb_path2 = os.path.join(self.tmp_folder, "embedddings2.zarr")
-        _cli("precompute_embeddings", "-i", self.tmp_folder, "-e", emb_path2, "-m", "hvit_t", "-k", "*.tif")
+        _cli("precompute-embeddings", "-i", self.tmp_folder, "-e", emb_path2, "-m", "hvit_t", "-k", "*.tif")
         self.assertTrue(os.path.exists(emb_path2))
         with z5py.File(emb_path2, "r") as f:
             self.assertIn("features", f)
@@ -73,7 +78,7 @@ class TestCLI(unittest.TestCase):
         # Test precomputation with a pattern to process multiple images.
         emb_path3 = os.path.join(self.tmp_folder, "embedddings3")
         _cli(
-            "precompute_embeddings", "-i", self.tmp_folder, "-e", emb_path3, "-m", "hvit_t", "--pattern", "*.tif",
+            "precompute-embeddings", "-i", self.tmp_folder, "-e", emb_path3, "-m", "hvit_t", "--pattern", "*.tif",
         )
         for i in range(n_images):
             self.assertTrue(os.path.exists(os.path.join(emb_path3, f"image-{i}.zarr")))
@@ -126,20 +131,20 @@ class TestCLI(unittest.TestCase):
         out_path = os.path.join(self.tmp_folder, "seg.tif")
 
         # Test 'sparse' (flow) mode with a pass-through postproc param in '--key=value' form.
-        _cli("automatic_segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+        _cli("inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
              "-n", "2", "--mode", "sparse", "--foreground_threshold=0.5")
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
         # Test 'dense' (multicut) mode with a pass-through postproc param in '--key value' form.
-        _cli("automatic_segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+        _cli("inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
              "-n", "2", "--mode", "dense", "--beta", "0.6")
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
         # Test the embedding-reuse path (only the decoder is run on cached embeddings).
         emb_path = os.path.join(self.tmp_folder, "seg-embeddings.zarr")
-        _cli("automatic_segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+        _cli("inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
              "-n", "2", "--mode", "sparse", "-e", emb_path)
         self.assertTrue(os.path.exists(out_path))
         self.assertTrue(os.path.exists(emb_path))
