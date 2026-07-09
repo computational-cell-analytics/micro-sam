@@ -14,7 +14,7 @@ import micro_sam.util as util
 
 
 def _cli(*args):
-    return run([sys.executable, "-m", "micro_sam.cli", *args])
+    return run([sys.executable, "-m", "micro_sam._cli", *args])
 
 
 class TestCLI(unittest.TestCase):
