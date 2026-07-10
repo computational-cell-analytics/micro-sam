@@ -806,7 +806,7 @@ def info(download):
 
 @cli.group("v1")
 def v1():
-    """Legacy microSAM v1 functionality."""
+    """Legacy `micro-sam` v1 functionality."""
 
 
 def _delegate_argv(ctx):
