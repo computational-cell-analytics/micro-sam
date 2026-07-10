@@ -777,7 +777,7 @@ def precompute_embeddings(input_path, embedding_path, pattern, key, model_type, 
 @click.option("--num_gpus", type=int, default=None, help="Number of GPUs per node.")
 @click.option("--num_nodes", type=int, default=None, help="Number of nodes.")
 def train(config, use_cluster, partition, account, qos, num_gpus, num_nodes):
-    """Training a custom microSAM2 model."""
+    """Training a custom `micro-sam2` model."""
     from .v2.train import train_sam2, register_omegaconf_resolvers
 
     register_omegaconf_resolvers()
