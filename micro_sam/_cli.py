@@ -33,17 +33,25 @@ Examples:
 @click.group(context_settings=dict(help_option_names=["-h", "--help"]), epilog=CLI_EPILOG)
 @click.version_option(package_name="micro_sam", prog_name="micro_sam")
 def cli():
-    """Segment Anything for Microscopy: interactive and automatic microscopy segmentation."""
+    """Segment Anything for Microscopy: interactive and automatic microscopy segmentation,
+    classification, and tracking."""
 
 
 @cli.group("annotator")
 def annotator_group():
-    """Interactive annotation tools that open the napari GUI."""
+    """Interactive annotation in napari.
+
+    Open the napari GUI of an interactive annotation tool for given image data
+    and precompute the image embeddings.
+    """
 
 
 @cli.group("inference")
 def inference_group():
-    """Automatic, headless prediction for one or many images."""
+    """Automatic prediction for one or many images.
+
+    Enables automatic segmentation, tracking, object classification, and pixel classification.
+    """
 
 
 def _model_options(f):
@@ -172,7 +180,11 @@ def annotator_tracking(
 def annotator_pixel_classification(
     input_, key, embedding_path, model_type, checkpoint_path, device, tile_shape, halo, ndim,
 ):
-    """Interactively train and apply a pixel classifier on the image embeddings."""
+    """Interactively train and apply a pixel classifier.
+
+    This tool is well suited to segment different tissue types or
+    other areas.
+    """
     from .util import load_image_data
     from .sam_annotator.pixel_classifier import pixel_classifier
     from .v2.util import DEFAULT_MODEL
@@ -207,7 +219,11 @@ def annotator_object_classification(
     input_, key, embedding_path, model_type, checkpoint_path, device, tile_shape, halo,
     segmentation_result, segmentation_key, ndim,
 ):
-    """Interactively train and apply an object classifier for a segmentation."""
+    """Interactively train and apply an object classifier.
+
+    This tool enables classification of already segmented objects into
+    different categories.
+    """
     import numpy as np
     from .util import load_image_data
     from .sam_annotator.object_classifier import object_classifier
@@ -284,7 +300,12 @@ def annotator_batch(
     embedding_path, model_type, checkpoint_path, device, tile_shape, halo, precompute_amg_state, prefer_decoder,
     skip_segmented,
 ):
-    """Annotate a batch of images from a folder with any of the annotators."""
+    """Annotate multiples images within a folder.
+
+    Choose the annotation tool via '--task'.
+    The tools 'segmentation' 'tracking' 'pixel-classification', and 'object-classification'
+    are supported.
+    """
     import os
     from glob import glob
 
@@ -450,7 +471,9 @@ def inference_segmentation(
     ctx, input_path, output_path, embedding_path, pattern, key, model_type, checkpoint_path,
     tile_shape, halo, ndim, mode, device, view, verbose,
 ):
-    """Run SAM2 automatic instance segmentation for 2D or 3D data.
+    """Run automatic instance segmentation.
+
+    Supports both 2D and 3D data.
 
     Additional postprocessing parameters (e.g. '--foreground_threshold' for sparse or '--beta' for
     dense) can be passed through to the segmentation and are forwarded to the segmenter.
@@ -543,7 +566,7 @@ def inference_segmentation(
 def inference_tracking(
     ctx, input_path, output_path, key, model_type, checkpoint_path, tile_shape, halo, mode, device, verbose,
 ):
-    """Run SAM2 automatic tracking for a timeseries.
+    """Run automatic tracking for a timeseries.
 
     Additional postprocessing parameters for the per-frame segmentation (e.g. '--foreground_threshold'
     for sparse or '--beta' for dense) can be passed through and are forwarded.
@@ -651,7 +674,7 @@ def _classifier_common_options(f):
 def inference_pixel_classification(
     input_path, output_path, rf_path, pattern, key, model_type, checkpoint_path, tile_shape, halo, ndim, device,
 ):
-    """Apply a trained pixel classifier to new images."""
+    """Apply a trained pixel classifier."""
     import imageio.v3 as imageio
 
     from .v1.automatic_segmentation import _get_inputs_from_paths
@@ -689,7 +712,7 @@ def inference_object_classification(
     input_path, output_path, rf_path, pattern, key, model_type, checkpoint_path, tile_shape, halo, ndim, device,
     segmentation_path, segmentation_key, segmentation_pattern,
 ):
-    """Apply a trained object classifier to new images and their segmentations."""
+    """Apply a trained object classifier."""
     import imageio.v3 as imageio
 
     from .v1.automatic_segmentation import _get_inputs_from_paths
@@ -734,7 +757,7 @@ def inference_object_classification(
     help="The number of spatial dimensions. Specify this if your data has a channel dimension."
 )
 def precompute_embeddings(input_path, embedding_path, pattern, key, model_type, checkpoint_path, ndim):
-    """Precompute and cache the image embeddings for image data."""
+    """Precompute image embeddings."""
     from .precompute_state import precompute_state
     from .v2.util import _DEFAULT_MODEL
 
@@ -754,7 +777,7 @@ def precompute_embeddings(input_path, embedding_path, pattern, key, model_type, 
 @click.option("--num_gpus", type=int, default=None, help="Number of GPUs per node.")
 @click.option("--num_nodes", type=int, default=None, help="Number of nodes.")
 def train(config, use_cluster, partition, account, qos, num_gpus, num_nodes):
-    """Train a SAM2 model."""
+    """Training a custom `micro-sam2` model."""
     from .v2.train import train_sam2, register_omegaconf_resolvers
 
     register_omegaconf_resolvers()
@@ -776,14 +799,14 @@ def train(config, use_cluster, partition, account, qos, num_gpus, num_nodes):
     "Use '--download all' to download every available model."
 )
 def info(download):
-    """Display micro_sam information (version, cache, models, system, accelerator)."""
+    """Display micro_sam and system information."""
     from .util import micro_sam_info
     micro_sam_info(download=list(download) if download else None)
 
 
 @cli.group("v1")
 def v1():
-    """Legacy SAM1 (micro_sam v1) tooling."""
+    """Legacy `micro-sam` v1 functionality."""
 
 
 def _delegate_argv(ctx):
