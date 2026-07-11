@@ -4,7 +4,6 @@ import os
 import sys
 import random
 import logging
-import argparse
 import traceback
 from typing import Union, Optional
 
@@ -244,34 +243,3 @@ def train_sam2(
         cfg.launcher.num_nodes = 1
         main_port = random.randint(submitit_conf.port_range[0], submitit_conf.port_range[1])
         single_node_runner(cfg, main_port)
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Train SAM2 model.")
-    parser.add_argument(
-        "-c", "--config", required=True, type=str,
-        help="The filepath to config file (e.g. configs/sam2.1_training/sam2.1_hiera_b+_MOSE_finetune.yaml)",
-    )
-    parser.add_argument(
-        "--use-cluster", type=int, default=None,
-        help="whether to launch on a cluster, 0: run locally, 1: run on a cluster",
-    )
-    parser.add_argument("--partition", type=str, default=None, help="SLURM partition")
-    parser.add_argument("--account", type=str, default=None, help="SLURM account")
-    parser.add_argument("--qos", type=str, default=None, help="SLURM qos")
-    parser.add_argument("--num-gpus", type=int, default=None, help="number of GPUS per node")
-    parser.add_argument("--num-nodes", type=int, default=None, help="Number of nodes")
-    args = parser.parse_args()
-
-    args.use_cluster = bool(args.use_cluster) if args.use_cluster is not None else None
-    register_omegaconf_resolvers()
-
-    train_sam2(
-        config=args.config,
-        use_cluster=args.use_cluster,
-        partition=args.partition,
-        account=args.account,
-        qos=args.qos,
-        num_gpus=args.num_gpus,
-        num_nodes=args.num_nodes,
-    )

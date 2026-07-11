@@ -979,7 +979,7 @@ def _parse_segmentation_decoder(segmentation_decoder):
     return with_segmentation_decoder, train_instance_segmentation_only
 
 
-def main():
+def main(argv=None):
     """@private"""
     import argparse
 
@@ -1104,7 +1104,7 @@ def main():
         "Otherwise, choose from either 'normalize_percentile' or 'normalize_minmax'."
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # 1. Get all necessary stuff for training.
     checkpoint_name = args.trained_model_name

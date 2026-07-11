@@ -12,7 +12,6 @@ import napari
 from qtpy import QtWidgets
 from qtpy.QtCore import QTimer
 
-from ..v1.util import get_model_names
 from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
 from ._batch import BatchAnnotatorTask, run_batch
@@ -583,78 +582,3 @@ class BatchAnnotator(widgets._WidgetBase):
             except Exception:
                 pass
         QTimer.singleShot(0, _remove)
-
-
-def main():
-    """@private"""
-    import argparse
-
-    available_models = list(get_model_names())
-    available_models = ", ".join(available_models)
-
-    parser = argparse.ArgumentParser(description="Annotate a batch of images from a folder.")
-    parser.add_argument(
-        "-i", "--input_folder", required=True,
-        help="The folder containing the image data. The data can be stored in any common format (tif, jpg, png, ...)."
-    )
-    parser.add_argument(
-        "-o", "--output_folder", required=True,
-        help="The folder where the segmentation results will be stored."
-    )
-    parser.add_argument(
-        "--ndim", help="The number of spatial dimensions (2 or 3). If None, auto-detected from image shape."
-    )
-    parser.add_argument(
-        "-p", "--pattern", default="*",
-        help="The pattern to select the images to annotator from the input folder. E.g. *.tif to annotate all tifs."
-        "By default all files in the folder will be loaded and annotated."
-    )
-    parser.add_argument(
-        "--initial_segmentation_folder",
-        help="A folder with initial segmentation results. By default no initial segmentations are loaded."
-    )
-    parser.add_argument(
-        "--initial_segmentation_pattern",
-        help="The glob pattern for loading files from `initial_segmentation_folder`."
-    )
-    parser.add_argument(
-        "-e", "--embedding_path",
-        help="The filepath for saving/loading the pre-computed image embeddings. "
-        "NOTE: It is recommended to pass this argument and store the embeddings, "
-        "otherwise they will be recomputed every time (which can take a long time)."
-    )
-    parser.add_argument(
-        "-m", "--model_type", default=DEFAULT_MODEL,
-        help=f"The segment anything model that will be used, one of {available_models}."
-    )
-    parser.add_argument(
-        "-c", "--checkpoint", default=None,
-        help="Checkpoint from which the SAM model will be loaded."
-    )
-    parser.add_argument(
-        "-d", "--device", default=None,
-        help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
-        "By default the most performant available device will be selected."
-    )
-
-    parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
-    )
-    parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
-    )
-    parser.add_argument("--precompute_amg_state", action="store_true")
-    parser.add_argument("--prefer_decoder", action="store_false")
-    parser.add_argument("--skip_segmented", action="store_false")
-
-    args = parser.parse_args()
-
-    image_folder_annotator(
-        args.input_folder, args.output_folder, pattern=args.pattern, ndim=args.ndim,
-        initial_segmentation_folder=args.initial_segmentation_folder,
-        initial_segmentation_pattern=args.initial_segmentation_pattern,
-        embedding_path=args.embedding_path, model_type=args.model_type,
-        tile_shape=args.tile_shape, halo=args.halo, precompute_amg_state=args.precompute_amg_state,
-        checkpoint_path=args.checkpoint, device=args.device,
-        prefer_decoder=args.prefer_decoder, skip_segmented=args.skip_segmented
-    )

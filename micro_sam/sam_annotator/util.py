@@ -1,7 +1,6 @@
 import os
 import pickle
 import warnings
-import argparse
 from glob import glob
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -130,83 +129,6 @@ def toggle_label(prompts):
     prompts.current_properties = current_properties
     prompts.refresh()
     prompts.refresh_colors()
-
-
-def _initialize_parser(description, with_segmentation_result=True, with_instance_segmentation=True):
-
-    from micro_sam.v2.util import SUPPORTED_MODELS, get_model_names, DEFAULT_MODEL
-    available_models = ", ".join(SUPPORTED_MODELS + list(get_model_names()))
-
-    parser = argparse.ArgumentParser(description=description)
-
-    parser.add_argument(
-        "-i", "--input", required=True,
-        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
-        "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
-    )
-    parser.add_argument(
-        "-k", "--key",
-        help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
-        "for an image batch it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
-    )
-    parser.add_argument(
-        "-e", "--embedding_path",
-        help="The filepath for saving/loading the pre-computed image embeddings. "
-        "It is recommended to pass this argument and store the embeddings if you want to open the annotator "
-        "multiple times for this image. Otherwise the embeddings will be recomputed every time."
-    )
-
-    if with_segmentation_result:
-        parser.add_argument(
-            "-s", "--segmentation_result",
-            help="Optional filepath to a precomputed segmentation. If passed this will be used to initialize the "
-            "'committed_objects' layer. This can be useful if you want to correct an existing segmentation or if you "
-            "have saved intermediate results from the annotator and want to continue with your annotations. "
-            "Supports the same file formats as 'input'."
-        )
-        parser.add_argument(
-            "-sk", "--segmentation_key",
-            help="The key for opening the segmentation data. Same rules as for 'key' apply."
-        )
-
-    parser.add_argument(
-        "-m", "--model_type", default=DEFAULT_MODEL,
-        help=f"The segment anything model that will be used, one of {available_models}."
-    )
-    parser.add_argument(
-        "-c", "--checkpoint", default=None,
-        help="Checkpoint from which the SAM model will be loaded."
-    )
-    parser.add_argument(
-        "--decoder_path", default=None,
-        help="Optional checkpoint path to decoder-only weights to enable decoder-based instance segmentation."
-    )
-    parser.add_argument(
-        "-d", "--device", default=None,
-        help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
-        "By default the most performant available device will be selected."
-    )
-    parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
-    )
-    parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
-    )
-
-    if with_instance_segmentation:
-        parser.add_argument(
-            "--precompute_amg_state", action="store_true",
-            help="Whether to precompute the state for automatic instance segmentation. "
-            "This will lead to a longer start-up time, but the automatic instance segmentation can "
-            "be run directly once the tool has started."
-        )
-        parser.add_argument(
-            "--prefer_decoder", action="store_false",
-            help="Whether to use decoder based instance segmentation if the model "
-            "being used has an additional decoder for that purpose."
-        )
-
-    return parser
 
 
 def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:

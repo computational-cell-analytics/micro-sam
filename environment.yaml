@@ -4,6 +4,7 @@ channels:
 dependencies:
     - bioimage-cpp >=0.3
     - bioimageio.core
+    - click
     - imagecodecs
     - magicgui
     - napari >=0.7.1
@@ -27,6 +28,8 @@ dependencies:
     - torch_em >=0.9
     - tqdm
     - timm
+    - transformers >=4.56
+    - huggingface_hub
     - trackastra >=0.5.3
     - xarray
     - z5py >=3

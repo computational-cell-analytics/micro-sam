@@ -527,6 +527,7 @@ def run_prediction_with_pixel_classifier(
     image_key: Optional[str] = None,
     ndim: Optional[int] = None,
     upsampler=None,
+    model_type: Optional[str] = None,
 ) -> List[np.ndarray]:
     """Run prediction with a pretrained pixel classifier on a series of images.
 
@@ -539,20 +540,24 @@ def run_prediction_with_pixel_classifier(
         upsampler: An optional AnyUp model (see `get_anyup_upsampler`) to upsample the embeddings
             with the image as guidance instead of plain interpolation. Use the same setting that
             the classifier was trained with.
+        model_type: The model family of `predictor`, used to pick the matching embedding function
+            (SAM1 / SAM2 / VFM). If not given, the SAM1 embedding function is used.
 
     Returns:
         The pixel level predictions.
     """
-    # Stored as {'rf': ..., 'metadata': ...} by the GUI; older / backend files are a bare classifier.
+    # Stored as {'rf': ..., 'model_spec': ...} by the GUI; older / backend files are a bare classifier.
     obj = load(rf_path)
     rf = obj["rf"] if isinstance(obj, dict) and "rf" in obj else obj
+    compute_embeddings = util.get_embedding_function(model_type) if model_type is not None \
+        else precompute_image_embeddings
     predictions = []
     for image in tqdm(images, total=len(images), desc="Run prediction with pixel classifier"):
         if isinstance(image, (str, os.PathLike)):
             image = util.load_image_data(image, key=image_key)
         this_ndim = ndim if ndim is not None else (image.ndim - 1 if image.shape[-1] == 3 else image.ndim)
         image_shape = image.shape[:this_ndim]
-        embeddings = precompute_image_embeddings(predictor, image, verbose=False, ndim=this_ndim)
+        embeddings = compute_embeddings(predictor, image, verbose=False, ndim=this_ndim)
         features, grid_shape = compute_pixel_features(
             embeddings, image_shape, image=image if upsampler is not None else None,
             upsampler=upsampler, verbose=False,

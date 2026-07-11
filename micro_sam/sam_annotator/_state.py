@@ -16,7 +16,7 @@ import torch.nn as nn
 
 import micro_sam
 import micro_sam.util as util
-from micro_sam.v1.util import get_sam_model, precompute_image_embeddings
+from micro_sam.v1.util import get_sam_model
 from micro_sam.v1.instance_segmentation import AMGBase, get_decoder
 from micro_sam.precompute_state import cache_amg_state, cache_is_state
 
@@ -231,12 +231,7 @@ class AnnotatorState(metaclass=Singleton):
             self.embedding_path = None  # setting this to 'None' as we do not have embeddings cached.
 
         else:  # Otherwise, compute the image embeddings.
-            if self.is_vfm:
-                from micro_sam.v1.models.vfm import precompute_vfm_embeddings as _comp_embed_fn
-            elif self.is_sam2:
-                from micro_sam.v2.util import precompute_image_embeddings as _comp_embed_fn
-            else:
-                _comp_embed_fn = precompute_image_embeddings
+            _comp_embed_fn = util.get_embedding_function(model_type)
 
             # For SAM2 volumes, load the embeddings lazily from the zarr so the high-resolution
             # per-slice features stay on disk and are streamed one slice at a time during tracking.

@@ -338,15 +338,14 @@ def _get_inputs_from_paths(paths, pattern):
     for path in paths:
         if os.path.isfile(path):  # It is just one filepath.
             fpaths.append(path)
-        else:  # Otherwise, if the path is a directory, fetch all inputs provided with a pattern.
-            assert pattern is not None, \
-                f"You must provide a pattern to search for files in the directory: '{os.path.abspath(path)}'."
-            fpaths.extend(glob(os.path.join(path, pattern)))
+        else:  # A directory: match files with the pattern, defaulting to all files if none is given.
+            hits = glob(os.path.join(path, pattern if pattern is not None else "*"))
+            fpaths.extend(p for p in hits if os.path.isfile(p))
 
     return fpaths
 
 
-def main():
+def main(argv=None):
     """@private"""
     import argparse
 
@@ -435,7 +434,7 @@ def main():
         "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
     )
 
-    args, parameter_args = parser.parse_known_args()
+    args, parameter_args = parser.parse_known_args(argv)
 
     def _convert_argval(value):
         # The values for the parsed arguments need to be in the expected input structure as provided.

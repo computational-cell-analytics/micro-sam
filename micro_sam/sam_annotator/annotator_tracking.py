@@ -7,7 +7,6 @@ import imageio.v3 as imageio
 import torch
 from magicgui.widgets import ComboBox, Container
 
-from .. import util
 from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
 from . import util as vutil
@@ -610,40 +609,4 @@ def batch_tracking_annotator(
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
         viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
-    )
-
-
-def main():
-    """@private"""
-    parser = vutil._initialize_parser(
-        description="Run interactive segmentation for an image volume.",
-        with_segmentation_result=False,
-        with_instance_segmentation=False,
-    )
-
-    # Tracking result is not yet supported, we need to also deserialize the lineage.
-    # parser.add_argument(
-    #     "-t", "--tracking_result",
-    #     help="Optional filepath to a precomputed tracking result. If passed this will be used to initialize the "
-    #     "'committed_tracks' layer. This can be useful if you want to correct an existing tracking result or if you "
-    #     "have saved intermediate results from the annotator and want to continue. "
-    #     "Supports the same file formats as 'input'."
-    # )
-    # parser.add_argument(
-    #     "-tk", "--tracking_key",
-    #     help="The key for opening the tracking result. Same rules as for 'key' apply."
-    # )
-
-    args = parser.parse_args()
-    image = util.load_image_data(args.input, key=args.key)
-
-    annotator_tracking(
-        image,
-        embedding_path=args.embedding_path,
-        model_type=args.model_type,
-        tile_shape=args.tile_shape,
-        halo=args.halo,
-        checkpoint_path=args.checkpoint,
-        decoder_path=args.decoder_path,
-        device=args.device,
     )

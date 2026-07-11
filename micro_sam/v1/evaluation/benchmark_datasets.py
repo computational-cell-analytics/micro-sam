@@ -827,7 +827,7 @@ def run_benchmark_evaluations(
     print("Time taken for running benchmarks: ", f"{int(hours)}h {int(minutes)}m {int(seconds)}s")
 
 
-def main():
+def main(argv=None):
     """@private"""
     import argparse
 
@@ -878,7 +878,7 @@ def main():
         "By default, we run all evaluations with 'all'. If 'automatic' is chosen, it runs automatic segmentation only "
         "/ 'interactive' runs interactive segmentation (starting from box and single point) with iterative prompting."
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     run_benchmark_evaluations(
         input_folder=args.input_folder,
