@@ -338,22 +338,19 @@ def segment_volume(
     Returns:
         List of segmentation arrays (one per iteration), each of shape (Z, H, W).
     """
-    raw_proc = raw
-    labels_proc = labels
-
     volume_embeddings = _embedding_tensors_to_numpy(
-        precompute_image_embeddings(predictor=predictor, input_=raw_proc, ndim=3)
+        precompute_image_embeddings(predictor=predictor, input_=raw, ndim=3)
     )
-    inference_state = predictor.init_state(volume=raw_proc, volume_embeddings=volume_embeddings)
+    inference_state = predictor.init_state(volume=raw, volume_embeddings=volume_embeddings)
 
     prompt_generator = IterativePromptGenerator()
-    gt_ids = sorted(np.unique(labels_proc)[1:].tolist())
+    gt_ids = sorted(np.unique(labels)[1:].tolist())
     rng = np.random.default_rng(0)
 
-    seg_per_iter_proc = [np.zeros_like(labels_proc) for _ in range(n_iterations)]
+    seg_per_iter = [np.zeros_like(labels) for _ in range(n_iterations)]
 
     for obj_id in tqdm(gt_ids, desc="Objects", leave=False):
-        gt_3d = labels_proc == obj_id
+        gt_3d = labels == obj_id
         obj_zs = np.where(gt_3d.any(axis=(1, 2)))[0]
 
         if first_frame:
@@ -364,7 +361,7 @@ def segment_volume(
             # midpoint can land in a gap with no object, giving an empty prompt slice.
             z_prompt = int(obj_zs[len(obj_zs) // 2])
 
-        gt_slice = (labels_proc[z_prompt] == obj_id).astype("uint32")
+        gt_slice = (labels[z_prompt] == obj_id).astype("uint32")
         points, point_labels, boxes = _get_batched_prompts(
             gt=gt_slice, gt_ids=[1],
             use_points=not use_box, use_boxes=use_box,
@@ -372,7 +369,7 @@ def segment_volume(
         )
         if use_box and box_jitter:
             boxes = boxes.copy()
-            boxes[0] = _jitter_box(boxes[0], labels_proc.shape[1], labels_proc.shape[2], rng)
+            boxes[0] = _jitter_box(boxes[0], labels.shape[1], labels.shape[2], rng)
 
         corr_points = corr_labels = None
         corr_frame = None
@@ -386,7 +383,7 @@ def segment_volume(
                     box=boxes[0] if use_box else None,
                 )
                 for z_extra in _extra_init_frames(obj_zs, z_prompt, num_init_cond_frames):
-                    gt_extra = (labels_proc[z_extra] == obj_id).astype("uint32")
+                    gt_extra = (labels[z_extra] == obj_id).astype("uint32")
                     extra_pts, extra_lbls, _ = _get_batched_prompts(
                         gt=gt_extra, gt_ids=[1],
                         use_points=True, use_boxes=False,
@@ -408,7 +405,7 @@ def segment_volume(
 
             if chunk_size is not None:
                 video_segments = propagate_chunked(
-                    predictor, inference_state, z_prompt, labels_proc.shape[0], chunk_size,
+                    predictor, inference_state, z_prompt, labels.shape[0], chunk_size,
                     forward_only=forward_only,
                 )
             else:
@@ -418,19 +415,19 @@ def segment_volume(
                 ):
                     video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
 
-                if not forward_only and len(video_segments) < labels_proc.shape[0]:
+                if not forward_only and len(video_segments) < labels.shape[0]:
                     for out_frame, _, out_logits in predictor.propagate_in_video(
                         inference_state, start_frame_idx=z_prompt, reverse=True
                     ):
                         if out_frame not in video_segments:
                             video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
 
-            seg_3d = np.zeros(labels_proc.shape, dtype=bool)
-            H_proc, W_proc = labels_proc.shape[1], labels_proc.shape[2]
+            seg_3d = np.zeros(labels.shape, dtype=bool)
+            height, width = labels.shape[1:]
             for z, mask in video_segments.items():
-                seg_3d[z] = mask[:H_proc, :W_proc]
+                seg_3d[z] = mask[:height, :width]
 
-            seg_per_iter_proc[iteration][seg_3d] = obj_id
+            seg_per_iter[iteration][seg_3d] = obj_id
 
             if iteration < n_iterations - 1:
                 errors = np.array([np.sum(gt_3d[z] != seg_3d[z]) for z in obj_zs])
@@ -448,7 +445,7 @@ def segment_volume(
 
         predictor.reset_state(inference_state)
 
-    return seg_per_iter_proc
+    return seg_per_iter
 
 
 @torch.no_grad()
