@@ -194,6 +194,25 @@ class TestAnnotatorClass:
 
         viewer.close()
 
+    def test_reset_inputs_keeps_optional_paths_unset(self, qapp):
+        """Clearing inputs on an image switch must not create a blank custom checkpoint path."""
+        from micro_sam.sam_annotator._widgets import EmbeddingWidget
+
+        ew = EmbeddingWidget(ndim_choice=True)
+
+        # Optional paths start unset, and whitespace entered in a path field is unset as well.
+        assert ew.custom_weights is None
+        assert ew.custom_weights_param.text() == ""
+        ew.custom_weights_param.setText(" ")
+        assert ew.custom_weights is None
+
+        # Reproduce the input reset used when a different image layer is selected.
+        ew.custom_weights_param.setText("/tmp/custom-weights.pt")
+        assert ew.custom_weights == "/tmp/custom-weights.pt"
+        ew._reset_inputs_to_defaults()
+        assert ew.custom_weights is None
+        assert ew.custom_weights_param.text() == ""
+
     @pytest.mark.parametrize("ndim", [2, 3])
     def test_batched_checkbox_hidden_when_tiled(self, make_napari_viewer_proxy, ndim):
         # Regression for 3c: batched (multi-object) prompting is unsupported with tiling, so the

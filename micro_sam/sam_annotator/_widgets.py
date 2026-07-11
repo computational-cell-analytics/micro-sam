@@ -276,10 +276,16 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(label)
 
         path_textbox = QtWidgets.QLineEdit()
-        path_textbox.setText(str(value))
+        path_textbox.setText("" if value is None else str(value))
         if placeholder is not None:
             path_textbox.setPlaceholderText(placeholder)
-        path_textbox.textChanged.connect(lambda val: setattr(self, name, val))
+
+        # An empty path means that no optional path was selected. Keep this as ``None`` in the
+        # widget state instead of an empty (or whitespace-only) string: downstream model loading
+        # distinguishes ``None`` (use the registered model) from a custom checkpoint path.
+        path_textbox.textChanged.connect(
+            lambda val: setattr(self, name, val if val.strip() else None)
+        )
         if tooltip:
             path_textbox.setToolTip(tooltip)
 
@@ -2717,28 +2723,13 @@ class UnifiedSegmentWidget(_WidgetBase):
                     )
                     is_batched = False
 
-                # Object-id counter for batched multi-object segmentation: each positive point and
-                # each box becomes its own object, so points and boxes draw distinct ids from one
-                # shared counter. In non-batched mode every prompt feeds a single object (id 1).
+                # Object-id counter for batched multi-object segmentation: each box and each point
+                # becomes its own object, so boxes and points draw distinct ids from one shared
+                # counter. In non-batched mode every prompt feeds a single object (id 1).
                 object_id = 0
 
-                # Add the point prompts first. Iterate unique frames so each point is added once.
-                for curr_z in np.unique(z_values_points):
-                    # A slice whose only prompt is a single negative point is a 'stop' annotation; skip it.
-                    prompts = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z)
-                    if prompts is None:
-                        continue
-                    points, labels = prompts
-                    for curr_point, curr_label in zip(points, labels):
-                        object_id += 1
-                        state.interactive_segmenter.add_point_prompts(
-                            frame_ids=curr_z,
-                            points=np.array([curr_point]),
-                            point_labels=np.array([curr_label]),
-                            object_id=object_id if is_batched else None,
-                        )
-
-                # Next, add the box prompts, continuing the counter so boxes keep ids distinct from points.
+                # Add box prompts first: SAM2 requires a box before any point on the same object/frame,
+                # so adding boxes ahead of points lets a box and its correction points combine.
                 for curr_z in np.unique(z_values_boxes):
                     boxes, _ = vutil.shape_layer_to_prompts(layer=box_prompts, shape=state.image_shape, i=curr_z)
                     if not boxes:
@@ -2747,20 +2738,32 @@ class UnifiedSegmentWidget(_WidgetBase):
                     object_id += len(boxes)
                     state.interactive_segmenter.add_box_prompts(frame_ids=curr_z, boxes=boxes, object_id=box_ids)
 
+                # Then add the point prompts. Iterate unique frames so each frame's points are added
+                # together; the segmenter skips points already pushed, so re-runs only add new ones.
+                for curr_z in np.unique(z_values_points):
+                    # A slice whose only prompt is a single negative point is a 'stop' annotation; skip it.
+                    prompts = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z)
+                    if prompts is None:
+                        continue
+                    points, labels = prompts
+                    if is_batched:
+                        point_ids = list(range(object_id + 1, object_id + 1 + len(points)))
+                        object_id += len(points)
+                    else:
+                        point_ids = None
+                    state.interactive_segmenter.add_point_prompts(
+                        frame_ids=curr_z,
+                        points=np.asarray(points),
+                        point_labels=np.asarray(labels),
+                        object_id=point_ids,
+                    )
+
                 # Propagate the prompts throughout the volume and combine the propagated segmentations.
-                # Report per-slice progress so the user can see the propagation advancing.
+                # Report each slice propagation step.
                 # A patience of 0 disables early stopping (propagate through the whole volume).
                 early_stop_patience = self.early_stop_patience if self.early_stop_patience > 0 else None
-                # Use a determinate total = the upper bound on slices the propagation can cover: the
-                # selected z-range width, else the full depth. With early stopping the propagation may
-                # finish before reaching the total (the bar then completes early) - this still shows a
-                # sense of scale / ETA, unlike a vague indeterminate 'busy' bar. 'self.z_range' is a
-                # hard slice bound set by the interactive widget; 'None' means the full volume.
-                if self.z_range is not None:
-                    z_lo, z_hi = self.z_range
-                    n_propagation_steps = z_hi - z_lo + 1
-                else:
-                    n_propagation_steps = shape[0]
+                # Tiled segmenters count one step per slice in each tile activated above.
+                n_propagation_steps = state.interactive_segmenter.get_progress_total(self.z_range)
                 pbar_signals.pbar_total.emit(n_propagation_steps)
                 pbar_signals.pbar_description.emit("Propagate in volume")
                 seg = state.interactive_segmenter.predict(
@@ -2899,7 +2902,9 @@ class UnifiedSegmentWidget(_WidgetBase):
             if z_hi < z_lo:  # The division precedes the track's first frame: nothing to segment.
                 return None
 
-            pbar_signals.pbar_total.emit(z_hi - z_lo + 1)
+            pbar_signals.pbar_total.emit(
+                state.interactive_segmenter.get_progress_total((z_lo, z_hi))
+            )
             seg = state.interactive_segmenter.predict(
                 update_progress=emit_progress,
                 early_stop_patience=None, z_range=(z_lo, z_hi),

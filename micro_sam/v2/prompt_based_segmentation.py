@@ -366,16 +366,11 @@ class PromptableSegmentation3D:
 
         self.init_predictor()
 
-        # Store prompts per instance.
-        self.running_point_frame_ids: Optional[Union[List[int]]] = None
-        self.running_points: Optional[np.ndarray] = None
-        self.running_point_labels: Optional[np.ndarray] = None
-
-        self.running_box_frame_ids: Optional[Union[int, List[int]]] = None
-        self.running_boxes: Optional[np.ndarray] = None
-
-        self.running_mask_frame_ids: Optional[Union[int, List[int]]] = None
-        self.running_masks: Optional[np.ndarray] = None
+        # Track prompts already pushed to the persistent SAM2 state, keyed by (object_id, frame_id),
+        # so a re-run adds only newly placed prompts on top of the existing state (true incremental
+        # refinement) instead of re-adding duplicates. Cleared on 'reset_predictor'.
+        self._pushed_points = {}  # (object_id, frame_id) -> set of (y, x, label)
+        self._pushed_boxes = {}  # (object_id, frame_id) -> set of box corner tuples
 
     def init_predictor(self):
         # Initialize the inference state.
@@ -387,120 +382,27 @@ class PromptableSegmentation3D:
     def reset_predictor(self):
         # Reset the state after finishing the segmentation round.
         self.predictor.reset_state(self.inference_state)
+        self._pushed_points = {}
+        self._pushed_boxes = {}
 
-    def _as_array(self, x):
-        return None if x is None else np.asarray(x)
+    def get_progress_total(self, z_range=None):
+        """Return the number of slice propagation steps for the requested z range."""
+        if z_range is None:
+            return int(self.volume.shape[0])
+        return int(z_range[1] - z_range[0] + 1)
 
-    def _is_array_equal(self, a, b):
-        if a is None and b is None:
-            return True
-        if (a is None) != (b is None):
-            return False
-        a = np.asarray(a)
-        b = np.asarray(b)
-        return a.shape == b.shape and np.array_equal(a, b)
-
-    def _is_prefix(self, old, new) -> bool:
-        """Checks whether the new object is a prefix element of the older object."""
-        if old is None:
-            return True
-        if new is None:
-            return False
-
-        old = np.asarray(old)
-        new = np.asarray(new)
-
-        if old.ndim == 0 or new.ndim == 0:
-            return False
-        if old.shape[1:] != new.shape[1:]:
-            return False
-        if old.shape[0] > new.shape[0]:
-            return False
-        return np.array_equal(old, new[: old.shape[0]])
-
-    def _tail(self, old, new):
-        """Returns the trailing tail by eliminating the prefix from new object."""
-        if old is None:
-            return new
-        old = np.asarray(old)
-        new = np.asarray(new)
-        if old.shape[0] == new.shape[0]:
-            return None
-        return new[old.shape[0]:]
-
-    def get_valid_prompts(self, frame_ids, points=None, labels=None, boxes=None, masks=None):
-        """Returns the valid prompts to add for promptable segmentation.
-
-        This workflow manages and returns prompts to add to make sure of the following:
-        1. Either use new (unused) prompts, or.
-        2. Reprompt all prompts in case an old prompt is deleted.
-        """
-        have_points = (points is not None) or (labels is not None)
-        if have_points and (points is None or labels is None):
-            raise ValueError("For using point prompts, both 'points' and 'labels' must be provided.")
-        have_boxes = boxes is not None
-        have_masks = masks is not None
-
-        valid_prompt_combinations = sum([have_points, have_boxes, have_masks])
-        if valid_prompt_combinations == 0:
-            raise ValueError("You must provide a valid prompt combination.")
-        elif valid_prompt_combinations > 1:
-            raise ValueError("Please choose only one of the prompt combinations.")
-
-        # The core manager for maintaining prompts in memory and returning valid prompts.
-        if have_points:
-            points = self._as_array(points)
-            labels = self._as_array(labels)
-
-            # Let's perform a quick point prompt sanity check.
-            if points.ndim == 0:
-                raise ValueError("'points' must be array-like, not a scalar.")
-            if labels.ndim == 0:
-                raise ValueError("'labels' must be array-like, not a scalar.")
-            if points.shape[0] == 0:
-                raise ValueError("'points' must contain at least one point.")
-            if labels.shape[0] != points.shape[0]:
-                raise ValueError("'labels' must have the same length as 'points'.")
-
-            # If the prompt arrive here for the first time, remember me :)
-            if self.running_point_frame_ids is None:
-                self.running_point_frame_ids = frame_ids
-                self.running_points = points
-                self.running_point_labels = labels
-                return {"mode": "all", "frame_ids": frame_ids, "points": points, "labels": labels}
-
-            # If the 'frame_ids' change, the safest would be to reprompt all and overwrite.
-            if frame_ids != self.running_point_frame_ids:
-                self.running_point_frame_ids = frame_ids
-                self.running_points = points
-                self.running_point_labels = labels
-                return {"mode": "all", "frame_ids": frame_ids, "points": points, "labels": labels}
-
-            # If the prompt arrive and exactly match the stored prompts, return no prompts.
-            if (
-                self._is_array_equal(points, self.running_points) and
-                self._is_array_equal(labels, self.running_point_labels)
-            ):
-                return {}
-
-            # If the prompts arrive and have some new prompts compared to stored ones, only return the new ones.
-            if self._is_prefix(self.running_points, points) and self._is_prefix(self.running_point_labels, labels):
-                new_points = self._tail(self.running_points, points)
-                new_labels = self._tail(self.running_point_labels, labels)
-
-                # Let's update the prompt storage to the full incoming prompts.
-                self.running_points = points
-                self.running_point_labels = labels
-
-                if new_points is None:
-                    return {}
-                return {"mode": "tail", "frame_ids": frame_ids, "points": new_points, "labels": new_labels}
-
-            # If the prompts arrive and have some old stored prompts deleted, return all arrived prompts as is.
-            # NOTE: It could be deletion / modification / reordering, we simply reprompt all prompts again.
-            self.running_points = points
-            self.running_point_labels = labels
-            return {"mode": "all", "frame_ids": frame_ids, "points": points, "labels": labels}
+    def _broadcast(self, value, n):
+        """Broadcast a scalar frame/object id to a length-'n' list (or validate a length-1 or -'n'
+        sequence). Guards against the earlier bug where a single frame id zipped against several
+        points silently dropped all but the first point."""
+        if isinstance(value, (list, tuple, np.ndarray)):
+            values = [int(v) for v in value]
+            if len(values) == 1:
+                values = values * n
+            if len(values) != n:
+                raise ValueError(f"Expected 1 or {n} ids, got {len(values)}.")
+            return values
+        return [int(value)] * n
 
     def add_point_prompts(
         self,
@@ -510,62 +412,42 @@ class PromptableSegmentation3D:
         object_id: Optional[Union[List[int], int]] = None,
         multiple_objects: bool = False,  # Enables multi-object segmentation.
     ):
+        """Add point prompts (in (y, x) order) to the persistent SAM2 state, one object at a time.
+
+        Several points can be added in a single call. A point already pushed in an earlier call (same
+        object, frame, rounded position and label) is skipped, so re-running with the full prompt set
+        only pushes newly placed points. New points are appended ('clear_old_points=False') so they
+        correct the running segmentation instead of replacing it.
         """
-        """
-        # Support multi-object segmentation.
         if multiple_objects and object_id is not None:
-            raise ValueError("Well you can't segment multiple objects and provide a specific id, duh!")
-
-        # In case there is no multi-object segmentation happening and the user forgot to specify object, pin obj_id=1.
-        if object_id is None:
-            object_id = 1
-
-        # If no point prompts are provided, return 'None'.
+            raise ValueError("Cannot enable multi-object segmentation and also pass a fixed object id.")
         if points is None or len(points) == 0:
             return
 
-        # Check what's been provided by the user.
-        if not isinstance(frame_ids, list):
-            frame_ids = [frame_ids]
-
+        points = np.asarray(points)
+        point_labels = np.asarray(point_labels)
+        if points.ndim != 2 or points.shape[1] != 2:
+            raise ValueError("'points' must have shape (N, 2).")
         if len(points) != len(point_labels):
-            raise AssertionError("The number of points and corresponding labels for it are mismatching.")
+            raise AssertionError("The number of points and corresponding labels are mismatching.")
 
-        # Prepare the point prompts.
-        expected_prompts = self.get_valid_prompts(frame_ids=frame_ids, points=points, labels=point_labels)
-        if not expected_prompts:  # If there are no new prompts, we should not add them.
-            return
+        n = len(points)
+        frame_ids = self._broadcast(frame_ids, n)
+        object_ids = self._broadcast(1 if object_id is None else object_id, n)
 
-        mode = expected_prompts["mode"]
-        frame_ids = expected_prompts["frame_ids"]
-        points = expected_prompts["points"]
-        point_labels = expected_prompts["labels"]
-
-        clear_old_points = (mode == "all")  # TODO: Make use of this in a smarter way!
-        points = points[:, ::-1].copy()  # Ensure contiguous array convention so that PyTorch likes it.
-
-        # Make object ids consistent to our per-prompt addition strategy
-        if not isinstance(object_id, list):
-            object_id = [object_id]
-
-        # Now that we have lists, they should match the total number of prompts (hint: going towards multiple objects)
-        if len(object_id) != len(point_labels) and len(object_id == 1):
-            object_id = object_id * len(point_labels)
-
-        # At this stage, the length of points, point_labels and object_id should match.
-        assert len(object_id) == len(point_labels) == len(points), "Number of object ids should match total prompts."
-
-        # Add point prompts in a particular frame.
-        for i, (curr_frame_id, curr_point, curr_point_label, curr_obj_id) in enumerate(
-            zip(frame_ids, points, point_labels, object_id)
-        ):
+        for frame_id, (y, x), label, obj_id in zip(frame_ids, points, point_labels, object_ids):
+            signature = (int(round(float(y))), int(round(float(x))), int(label))
+            seen = self._pushed_points.setdefault((obj_id, frame_id), set())
+            if signature in seen:
+                continue
+            seen.add(signature)
             self.predictor.add_new_points_or_box(
                 inference_state=self.inference_state,
-                frame_idx=int(curr_frame_id),
-                obj_id=curr_obj_id,  # NOTE: Setting a fixed object id, assuming only one object is being segmented.
-                clear_old_points=False,  # HACK: Hard-coded atm # Whether to make use of old points in memory.
-                points=np.array([curr_point]),
-                labels=np.array([curr_point_label]),
+                frame_idx=frame_id,
+                obj_id=obj_id,
+                clear_old_points=False,
+                points=np.array([[x, y]]),  # SAM2 expects (x, y).
+                labels=np.array([label]),
             )
 
     def add_box_prompts(
@@ -574,39 +456,44 @@ class PromptableSegmentation3D:
         boxes: Optional[np.ndarray] = None,
         object_id: Optional[Union[int, List[int]]] = None,
     ):
-        # Check what's been provided by the user.
-        have_boxes = boxes is not None and len(boxes) > 0
+        """Add box prompts (in (y0, x0, y1, x1) order) to the persistent SAM2 state.
 
-        # If no boxes prompts are provided, return 'None'.
-        if not have_boxes:
+        A box is pushed at most once per (object, frame); re-running with the same box is a no-op.
+        SAM2 requires the box before any point on the same object/frame, so a box clears existing
+        points ('clear_old_points=True'); we re-add any already-pushed points afterwards so a box and
+        its correction points combine regardless of the order they were drawn in.
+        """
+        if boxes is None or len(boxes) == 0:
             return
 
-        if not isinstance(frame_ids, list):
-            frame_ids = [frame_ids]
-        # A single frame id applies to every box (the annotator passes one frame with all its boxes).
-        if len(frame_ids) == 1:
-            frame_ids = frame_ids * len(boxes)
+        boxes = [np.asarray(b) for b in boxes]
+        n = len(boxes)
+        frame_ids = self._broadcast(frame_ids, n)
+        object_ids = self._broadcast(1 if object_id is None else object_id, n)
 
-        # One object id per box. Default to a single object (id 1) for non-batched segmentation.
-        if object_id is None:
-            object_id = [1] * len(boxes)
-        elif not isinstance(object_id, list):
-            object_id = [object_id] * len(boxes)
-
-        # Prepare the box prompts.
-        # TODO: Validate based on running prompts.
-        clear_old_points = True  # TODO: Must depend on the running prompt logic.
-        boxes = np.array([_process_box(b, self.volume.shape[-2:]) for b in boxes])
-
-        # Add box prompts in a particular frame.
-        for curr_frame_id, curr_box, curr_obj_id in zip(frame_ids, boxes, object_id):
+        for frame_id, box, obj_id in zip(frame_ids, boxes, object_ids):
+            key = (obj_id, frame_id)
+            signature = tuple(np.round(box).astype(int).tolist())
+            seen = self._pushed_boxes.setdefault(key, set())
+            if signature in seen:
+                continue
+            seen.add(signature)
             self.predictor.add_new_points_or_box(
                 inference_state=self.inference_state,
-                frame_idx=int(curr_frame_id),
-                obj_id=int(curr_obj_id),
-                clear_old_points=clear_old_points,  # Whether to make use of old points in memory.
-                box=np.array([curr_box]),
+                frame_idx=frame_id,
+                obj_id=obj_id,
+                clear_old_points=True,
+                box=np.array([_process_box(box, self.volume.shape[-2:])]),
             )
+            for y, x, label in self._pushed_points.get(key, set()):
+                self.predictor.add_new_points_or_box(
+                    inference_state=self.inference_state,
+                    frame_idx=frame_id,
+                    obj_id=obj_id,
+                    clear_old_points=False,
+                    points=np.array([[x, y]]),
+                    labels=np.array([label]),
+                )
 
     def add_mask_prompts(
         self, frame_ids: Union[int, List[int]], masks: Optional[np.ndarray] = None,
@@ -825,6 +712,11 @@ class TiledPromptableSegmentation3D:
         for segmenter in self._segmenters.values():
             segmenter.reset_predictor()
         self._segmenters = {}
+
+    def get_progress_total(self, z_range=None):
+        """Return tile-slice propagation steps for the currently active tiles."""
+        z_depth = self.shape[0] if z_range is None else z_range[1] - z_range[0] + 1
+        return int(z_depth * len(self._segmenters))
 
     def _tile_index(self, y, x):
         """Return the id of the tile whose inner (halo-free) block contains the point (y, x)."""
