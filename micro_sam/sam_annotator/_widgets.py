@@ -276,10 +276,16 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(label)
 
         path_textbox = QtWidgets.QLineEdit()
-        path_textbox.setText(str(value))
+        path_textbox.setText("" if value is None else str(value))
         if placeholder is not None:
             path_textbox.setPlaceholderText(placeholder)
-        path_textbox.textChanged.connect(lambda val: setattr(self, name, val))
+
+        # An empty path means that no optional path was selected. Keep this as ``None`` in the
+        # widget state instead of an empty (or whitespace-only) string: downstream model loading
+        # distinguishes ``None`` (use the registered model) from a custom checkpoint path.
+        path_textbox.textChanged.connect(
+            lambda val: setattr(self, name, val if val.strip() else None)
+        )
         if tooltip:
             path_textbox.setToolTip(tooltip)
 

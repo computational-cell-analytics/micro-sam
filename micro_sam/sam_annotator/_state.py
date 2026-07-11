@@ -162,6 +162,16 @@ class AnnotatorState(metaclass=Singleton):
         use_cli=False,
     ):
         assert ndim in (2, 3)
+
+        # GUI path inputs are optional. Treat empty and whitespace-only strings like ``None`` so a
+        # cleared custom-weights field cannot override a registered model with an invalid path.
+        # Keep this normalization at the backend boundary as well as in the widget, since this
+        # method is also called directly by the Python API.
+        if isinstance(checkpoint_path, str) and not checkpoint_path.strip():
+            checkpoint_path = None
+        if isinstance(decoder_path, str) and not decoder_path.strip():
+            decoder_path = None
+
         from micro_sam.v1.models.vfm import is_vfm_model
         self.is_sam2 = model_type.startswith("h")
         self.is_vfm = is_vfm_model(model_type)

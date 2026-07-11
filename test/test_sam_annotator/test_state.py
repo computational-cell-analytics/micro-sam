@@ -1,5 +1,6 @@
 import unittest
 
+import numpy as np
 from skimage.data import binary_blobs
 from magicgui.widgets import Container
 from micro_sam.v2.util import DEFAULT_MODEL
@@ -26,6 +27,41 @@ class TestState(unittest.TestCase):
         state.committed_lineages = []
         state.widgets = {"tracking": Container()}
         self.assertTrue(state.initialized_for_tracking())
+
+
+def test_blank_model_paths_are_normalized(monkeypatch):
+    """Blank API paths must fall back to the registered model instead of being loaded as files."""
+    import micro_sam.sam_annotator._state as state_module
+    import micro_sam.v2.util as v2_util
+
+    captured = {}
+
+    def fake_get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_cli):
+        captured["checkpoint_path"] = checkpoint_path
+        captured["decoder_path"] = decoder_path
+        return object(), {}
+
+    def fake_precompute_image_embeddings(**kwargs):
+        return {
+            "features": np.zeros((1, 1, 1, 1), dtype="float32"),
+            "input_size": (8, 8),
+            "original_size": (8, 8),
+        }
+
+    monkeypatch.setattr(state_module, "_get_sam_model", fake_get_sam_model)
+    monkeypatch.setattr(v2_util, "precompute_image_embeddings", fake_precompute_image_embeddings)
+
+    state = state_module.AnnotatorState()
+    state.initialize_predictor(
+        np.zeros((8, 8), dtype="uint8"),
+        model_type="hvit_t",
+        ndim=2,
+        checkpoint_path=" ",
+        decoder_path="\t",
+        prefer_decoder=False,
+    )
+
+    assert captured == {"checkpoint_path": None, "decoder_path": None}
 
 
 if __name__ == "__main__":
