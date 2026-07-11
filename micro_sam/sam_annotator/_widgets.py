@@ -2723,28 +2723,13 @@ class UnifiedSegmentWidget(_WidgetBase):
                     )
                     is_batched = False
 
-                # Object-id counter for batched multi-object segmentation: each positive point and
-                # each box becomes its own object, so points and boxes draw distinct ids from one
-                # shared counter. In non-batched mode every prompt feeds a single object (id 1).
+                # Object-id counter for batched multi-object segmentation: each box and each point
+                # becomes its own object, so boxes and points draw distinct ids from one shared
+                # counter. In non-batched mode every prompt feeds a single object (id 1).
                 object_id = 0
 
-                # Add the point prompts first. Iterate unique frames so each point is added once.
-                for curr_z in np.unique(z_values_points):
-                    # A slice whose only prompt is a single negative point is a 'stop' annotation; skip it.
-                    prompts = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z)
-                    if prompts is None:
-                        continue
-                    points, labels = prompts
-                    for curr_point, curr_label in zip(points, labels):
-                        object_id += 1
-                        state.interactive_segmenter.add_point_prompts(
-                            frame_ids=curr_z,
-                            points=np.array([curr_point]),
-                            point_labels=np.array([curr_label]),
-                            object_id=object_id if is_batched else None,
-                        )
-
-                # Next, add the box prompts, continuing the counter so boxes keep ids distinct from points.
+                # Add box prompts first: SAM2 requires a box before any point on the same object/frame,
+                # so adding boxes ahead of points lets a box and its correction points combine.
                 for curr_z in np.unique(z_values_boxes):
                     boxes, _ = vutil.shape_layer_to_prompts(layer=box_prompts, shape=state.image_shape, i=curr_z)
                     if not boxes:
@@ -2752,6 +2737,26 @@ class UnifiedSegmentWidget(_WidgetBase):
                     box_ids = list(range(object_id + 1, object_id + 1 + len(boxes))) if is_batched else None
                     object_id += len(boxes)
                     state.interactive_segmenter.add_box_prompts(frame_ids=curr_z, boxes=boxes, object_id=box_ids)
+
+                # Then add the point prompts. Iterate unique frames so each frame's points are added
+                # together; the segmenter skips points already pushed, so re-runs only add new ones.
+                for curr_z in np.unique(z_values_points):
+                    # A slice whose only prompt is a single negative point is a 'stop' annotation; skip it.
+                    prompts = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z)
+                    if prompts is None:
+                        continue
+                    points, labels = prompts
+                    if is_batched:
+                        point_ids = list(range(object_id + 1, object_id + 1 + len(points)))
+                        object_id += len(points)
+                    else:
+                        point_ids = None
+                    state.interactive_segmenter.add_point_prompts(
+                        frame_ids=curr_z,
+                        points=np.asarray(points),
+                        point_labels=np.asarray(labels),
+                        object_id=point_ids,
+                    )
 
                 # Propagate the prompts throughout the volume and combine the propagated segmentations.
                 # Report each slice propagation step.

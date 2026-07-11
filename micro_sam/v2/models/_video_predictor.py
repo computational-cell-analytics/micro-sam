@@ -145,6 +145,15 @@ class CustomVideoPredictor(SAM2VideoPredictor):
     propagate_in_video, reset_state, etc.) is inherited unchanged from SAM2VideoPredictor.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Enable responsive interactive correction: a click on an already-tracked frame turns that
+        # frame into a conditioning frame (so the correction sticks and propagates), and stale
+        # non-conditioning memory around it is cleared. Without these, iterative 3D prompts leave the
+        # result unchanged. 'clear_non_cond_mem_around_input' needs the per-object helper we add below.
+        self.add_all_frames_to_correct_as_cond = True
+        self.clear_non_cond_mem_around_input = True
+
     @torch.inference_mode()
     def init_state(
         self,
@@ -294,6 +303,22 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         features = self._prepare_backbone_features(expanded_backbone_out)
         features = (expanded_image,) + features
         return features
+
+    def _clear_obj_non_cond_mem_around_input(self, inference_state, frame_idx, obj_idx):
+        """Clear one object's non-conditioning memory around an interacted frame.
+
+        The installed SAM2 fork calls this per-object variant from 'propagate_in_video' and
+        'propagate_in_video_preflight' (guarded by 'clear_non_cond_mem_around_input') but only ships
+        the global '_clear_non_cond_mem_around_input', so enabling the flag raises AttributeError. We
+        restore the per-object method here rather than editing the fork. Dropping the stale surrounding
+        non-conditioning memory lets correction clicks actually take effect during iterative prompting.
+        """
+        r = self.memory_temporal_stride_for_eval
+        frame_idx_begin = frame_idx - r * self.num_maskmem
+        frame_idx_end = frame_idx + r * self.num_maskmem
+        non_cond_frame_outputs = inference_state["output_dict_per_obj"][obj_idx]["non_cond_frame_outputs"]
+        for t in range(frame_idx_begin, frame_idx_end + 1):
+            non_cond_frame_outputs.pop(t, None)
 
 
 def _build_sam2_video_predictor(
