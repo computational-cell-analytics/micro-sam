@@ -591,9 +591,9 @@ def _filter_lineages(lineages, tracking_result):
     return filtered_lineages
 
 
-def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folder=None):
+def _tracking_impl(timeseries, segmentation, mode, min_time_extent, tracking_model="general_2d", output_folder=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = Trackastra.from_pretrained("general_2d", device=device)
+    model = Trackastra.from_pretrained(tracking_model, device=device)
     result = model.track(timeseries, segmentation, mode=mode)
     try:
         lineage_graph, _ = result
@@ -629,6 +629,8 @@ def track_across_frames(
     segmentation: np.ndarray,
     gap_closing: Optional[int] = None,
     min_time_extent: Optional[int] = None,
+    mode: str = "greedy",
+    tracking_model: str = "general_2d",
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
@@ -646,6 +648,9 @@ def track_across_frames(
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
         min_time_extent: Require a minimal extent in time for the tracked objects.
+        mode: The trackastra linking solver. One of 'greedy_nodiv', 'greedy' or 'ilp'.
+            'ilp' uses the motile solver. By default, set to 'greedy'.
+        tracking_model: The pretrained trackastra model to use. By default, set to 'general_2d'.
         verbose: Verbosity flag. By default, set to 'True'.
         pbar_init: Function to initialize the progress bar.
         pbar_update: Function to update the progress bar.
@@ -670,8 +675,9 @@ def track_across_frames(
     segmentation, lineage = _tracking_impl(
         timeseries=np.asarray(timeseries),
         segmentation=segmentation,
-        mode="greedy",
+        mode=mode,
         min_time_extent=min_time_extent,
+        tracking_model=tracking_model,
         output_folder=output_folder,
     )
     return segmentation, lineage
@@ -684,6 +690,8 @@ def automatic_tracking_implementation(
     embedding_path: Optional[Union[str, os.PathLike]] = None,
     gap_closing: Optional[int] = None,
     min_time_extent: Optional[int] = None,
+    mode: str = "greedy",
+    tracking_model: str = "general_2d",
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
@@ -705,6 +713,9 @@ def automatic_tracking_implementation(
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
         min_time_extent: Require a minimal extent in time for the tracked objects.
+        mode: The trackastra linking solver. One of 'greedy_nodiv', 'greedy' or 'ilp'.
+            'ilp' uses the motile solver. By default, set to 'greedy'.
+        tracking_model: The pretrained trackastra model to use. By default, set to 'general_2d'.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
         verbose: Verbosity flag. By default, set to 'True'.
@@ -735,6 +746,8 @@ def automatic_tracking_implementation(
         segmentation=segmentation,
         gap_closing=gap_closing,
         min_time_extent=min_time_extent,
+        mode=mode,
+        tracking_model=tracking_model,
         verbose=verbose,
         output_folder=output_folder,
     )
