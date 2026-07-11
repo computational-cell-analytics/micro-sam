@@ -150,6 +150,9 @@ class AutomaticMaskGenerationSegmenter:
             output_mode="uncompressed_rle",
             **kwargs,
         )
+        # Use the shared resize-longest transform for AMG.
+        from micro_sam.v2.util import configure_image_predictor
+        configure_image_predictor(self._mask_generator.predictor)
         # The embedding signature written by 'precompute_image_embeddings' reads 'model_type' and
         # 'model_name' off the predictor. The video predictor gets these in 'get_sam2_model', but the
         # image predictor used here does not, so we set them (matching the GUI, see _state.py).

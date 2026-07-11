@@ -82,12 +82,14 @@ class _FakeUNETR:
         self.encoder = types.SimpleNamespace(img_size=img_size)
         self.seen = []       # features the stub returned on the most recent call
         self.call_z = []     # z size of each decoder call (one per z block)
+        self.call_hw = []
 
     def __call__(self, x):  # x: (1, 3, Z, H, W) dummy
         z = x.shape[2]
         self.seen = [self.encoder(x[:, :, i])[0] for i in range(z)]
         self.call_z.append(z)
         h, w = x.shape[-2:]
+        self.call_hw.append((h, w))
         return torch.zeros((1, 4, z, h, w))
 
 
@@ -131,6 +133,17 @@ def test_decoder_2d_squeezes_5d_features():
     assert len(model.seen) == 1
     assert tuple(model.seen[0].shape) == (1, c, h, w)
     assert np.allclose(model.seen[0][0].cpu().numpy(), feats5[0, 0])
+
+
+def test_decoder_2d_uses_original_non_square_shape():
+    features = np.zeros((1, 2, 4, 4), dtype="float32")
+    model = _FakeUNETR(img_size=8)
+    out = run_unisam2_decoder_on_embeddings(
+        model, {"features": features, "original_size": (4, 8)}, device="cpu",
+    )
+
+    assert out.shape == (4, 4, 8)
+    assert model.call_hw == [(4, 8)]
 
 
 def test_decoder_3d_zchunks_deep_volume():

@@ -134,8 +134,6 @@ from skimage.measure import label as connected_components
 
 import torch
 
-from sam2.sam2_image_predictor import SAM2ImagePredictor
-
 from torch_em.transform.raw import normalize
 from torch_em.util.segmentation import size_filter
 
@@ -145,7 +143,7 @@ from micro_sam.util import segmentation_to_one_hot
 from micro_sam.prompt_generators import IterativePromptGenerator
 from micro_sam.v1.evaluation.inference import _get_batched_prompts, _get_batched_iterative_prompts
 
-from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings
+from micro_sam.v2.util import get_sam2_image_predictor, get_sam2_model, precompute_image_embeddings
 from micro_sam.v2.evaluation.inference import _embedding_tensors_to_numpy
 
 
@@ -259,20 +257,6 @@ def load_test_images_livecell(n_images=20, min_size=50):
     return samples
 
 
-def pad_to_square(vol):
-    """Pad (Z, H, W) volume on the right/bottom to make frames square.
-
-    Matches torch_em's ensure_patch_shape convention: content starts at (0, 0),
-    zeros are appended on the right (if W < H) or bottom (if H < W).
-    """
-    _, H, W = vol.shape
-    if H == W:
-        return vol
-    if H > W:
-        return np.pad(vol, ((0, 0), (0, 0), (0, H - W)))
-    return np.pad(vol, ((0, 0), (0, W - H), (0, 0)))
-
-
 def propagate_chunked(predictor, inference_state, z_start, num_frames, chunk_size, forward_only=False):
     """Propagate in fixed-length chunks so memory chain length matches training."""
     video_segments = {}
@@ -354,8 +338,8 @@ def segment_volume(
     Returns:
         List of segmentation arrays (one per iteration), each of shape (Z, H, W).
     """
-    raw_proc = pad_to_square(raw)
-    labels_proc = pad_to_square(labels)
+    raw_proc = raw
+    labels_proc = labels
 
     volume_embeddings = _embedding_tensors_to_numpy(
         precompute_image_embeddings(predictor=predictor, input_=raw_proc, ndim=3)
@@ -464,15 +448,12 @@ def segment_volume(
 
         predictor.reset_state(inference_state)
 
-    # Strip square padding before evaluating against the original label dimensions.
-    _, H_orig, W_orig = labels.shape
-    seg_per_iter = [s[:, :H_orig, :W_orig] for s in seg_per_iter_proc]
-    return seg_per_iter
+    return seg_per_iter_proc
 
 
 @torch.no_grad()
 def segment_image_2d(
-    raw, labels, predictor, n_iterations, use_box=False, batch_size=32, box_jitter=False, pad_square=True,
+    raw, labels, predictor, n_iterations, use_box=False, batch_size=32, box_jitter=False,
 ):
     """Run iterative 2D interactive segmentation using SAM2ImagePredictor.
 
@@ -488,20 +469,9 @@ def segment_image_2d(
         use_box: Use bounding-box prompts instead of points.
         batch_size: Number of objects per inference batch.
         box_jitter: Jitter the box prompts like SAM2 training (only used with use_box).
-        pad_square: Zero-pad the image to a square before inference so SAM2's internal
-            resize to 1024 is aspect-preserving (resize-longest + pad, matching training)
-            instead of stretching. Predictions are cropped back to the original shape.
-            Default True; pass --no_pad_square to use the stretch resize instead.
-
     Returns:
         List of segmentation arrays (one per iteration), each of shape (H, W).
     """
-    H_orig, W_orig = labels.shape
-    if pad_square and H_orig != W_orig:
-        s = max(H_orig, W_orig)
-        raw = np.pad(raw, ((0, s - H_orig), (0, s - W_orig)))
-        labels = np.pad(labels, ((0, s - H_orig), (0, s - W_orig)))
-
     img_uint8 = (raw * 255).astype("uint8")
     if img_uint8.ndim == 2:
         img_uint8 = np.stack([img_uint8] * 3, axis=-1)
@@ -592,8 +562,6 @@ def segment_image_2d(
             else:
                 point_labels = next_labels
 
-    if pad_square:
-        seg_per_iter = [s[:H_orig, :W_orig] for s in seg_per_iter]
     return seg_per_iter
 
 
@@ -658,9 +626,9 @@ def get_image_predictor(model_type, backbone, checkpoint_path):
         if "model_state" in ckpt:
             video_pred = get_sam2_model(model_type=model_type, backbone=backbone, input_type="videos")
             video_pred.load_state_dict(ckpt["model_state"])
-            return SAM2ImagePredictor(video_pred)
+            return get_sam2_image_predictor(video_pred)
     model = get_sam2_model(model_type=model_type, backbone=backbone, checkpoint_path=checkpoint_path)
-    return SAM2ImagePredictor(model)
+    return get_sam2_image_predictor(model)
 
 
 def run_eval_3d(dataset, samples, predictor, args):
@@ -708,7 +676,7 @@ def run_eval_2d(dataset, samples, predictor, args):
         print(f"\nImage: {fname}")
         seg_per_iter = segment_image_2d(
             raw, labels, predictor, n_iterations=args.n_iterations,
-            use_box=args.prompt == "box", box_jitter=args.box_jitter, pad_square=args.pad_square,
+            use_box=args.prompt == "box", box_jitter=args.box_jitter,
         )
         rows = evaluate_volume(labels, seg_per_iter, extra_metrics=args.extra_metrics)
         for row in rows:
@@ -752,7 +720,6 @@ def main():
     parser.add_argument("--first_frame", action="store_true", help="Prompt from first z-frame of each object.")
     parser.add_argument("--forward_only", action="store_true", help="Propagate forward only from the prompt frame.")
     parser.add_argument("--box_jitter", action="store_true", help="Jitter box prompts like SAM2 training.")
-    parser.add_argument("--no_pad_square", dest="pad_square", action="store_false", help="2D: use stretch resize.")
     parser.add_argument(
         "--num_init_cond_frames", type=int, default=1,
         help="Frames to condition on before first propagation (1 = prompt only; 2 matches training).",

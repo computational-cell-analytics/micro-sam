@@ -44,9 +44,8 @@ vos:
           shear: 20
           image_interpolation: bilinear
           consistent_transform: True
-        - _target_: training.dataset.transforms.RandomResizeAPI
-          sizes: ${scratch.resolution}
-          square: true
+        - _target_: micro_sam.v2.transforms.resize.ResizeLongestSideAndPadAPI
+          target_length: ${scratch.resolution}
           consistent_transform: True
         - _target_: training.dataset.transforms.ColorJitter
           consistent_transform: True

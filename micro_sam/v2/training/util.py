@@ -2,7 +2,6 @@ import os
 from typing import Callable, List, Optional, Union
 
 import torch
-import torch.nn.functional as F
 
 from micro_sam.util import get_device
 
@@ -249,29 +248,21 @@ class ConvertToSam2VideoBatch:
     def _to_sam2_size(self, x: torch.Tensor, mode: str) -> torch.Tensor:
         """Resize longest side to SAM2_SIZE then zero-pad to square.
 
-        Matches SAM2's standard preprocessing (RandomResizeAPI + square padding in
-        the MOSE finetune config), preserving aspect ratio rather than stretching.
-        Padding is applied to the right and bottom edges.
+        Padding is applied in image space to the right and bottom edges.
         """
-        H, W = x.shape[-2:]
-        scale = self._SAM2_SIZE / max(H, W)
-        new_h, new_w = int(round(H * scale)), int(round(W * scale))
-        kw = {"align_corners": False} if mode == "bilinear" else {}
-        x = F.interpolate(x, size=(new_h, new_w), mode=mode, **kw)
-        pad_h, pad_w = self._SAM2_SIZE - new_h, self._SAM2_SIZE - new_w
-        if pad_h > 0 or pad_w > 0:
-            x = F.pad(x, (0, pad_w, 0, pad_h))
-        return x
+        from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_tensor
+        return resize_longest_side_and_pad_tensor(x, self._SAM2_SIZE, mode=mode)[0]
 
     def _to_sam2_image(self, x: torch.Tensor) -> torch.Tensor:
         """(B,C,H,W) float [0,1] -> (B,3,1024,1024) ImageNet-normalized."""
         x = x.float()
         if x.shape[1] == 1:
             x = x.expand(-1, 3, -1, -1)
+        # Pad before normalization to keep padding black in image space.
+        x = self._to_sam2_size(x, mode="bilinear")
         mean = torch.tensor(self._PIXEL_MEAN, dtype=x.dtype, device=x.device).view(1, 3, 1, 1)
         std = torch.tensor(self._PIXEL_STD, dtype=x.dtype, device=x.device).view(1, 3, 1, 1)
-        x = (x - mean) / std
-        return self._to_sam2_size(x, mode="bilinear")
+        return (x - mean) / std
 
     def _resize_masks(self, masks: torch.Tensor) -> torch.Tensor:
         """(O,H,W) bool -> (O,1024,1024) bool, aspect-ratio preserving + padded."""

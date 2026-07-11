@@ -262,6 +262,26 @@ def get_sam2_model(
     return model
 
 
+def configure_image_predictor(predictor):
+    """Configure a SAM2 image predictor to always use resize-longest."""
+    from micro_sam.v2.transforms.resize import ResizeLongestSideTransforms
+
+    old = predictor._transforms
+    predictor._transforms = ResizeLongestSideTransforms(
+        resolution=predictor.model.image_size,
+        mask_threshold=predictor.mask_threshold,
+        max_hole_area=getattr(old, "max_hole_area", 0.0),
+        max_sprinkle_area=getattr(old, "max_sprinkle_area", 0.0),
+    )
+    return predictor
+
+
+def get_sam2_image_predictor(model, **kwargs):
+    """Build a SAM2 image predictor with resize-longest preprocessing."""
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+    return configure_image_predictor(SAM2ImagePredictor(model, **kwargs))
+
+
 def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     """Validate saved embeddings against the requested configuration.
 
@@ -691,6 +711,8 @@ def precompute_image_embeddings(
         The image embeddings.
     """
     ndim = input_.ndim if ndim is None else ndim
+    if ndim == 2:
+        configure_image_predictor(predictor)
 
     # Handle the embedding save_path.
     # We don't have a save path, open in memory zarr file to hold tiled embeddings.

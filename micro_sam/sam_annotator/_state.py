@@ -46,15 +46,14 @@ def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_
         return encoder, {}
 
     if model_type.startswith("h"):  # i.e. SAM2 models.
-        from micro_sam.v2.util import get_sam2_model
+        from micro_sam.v2.util import get_sam2_image_predictor, get_sam2_model
 
         # 'device=None' lets 'get_sam2_model' auto-detect the best device (cuda > mps > cpu);
         # an explicit device (e.g. from the '--device' CLI argument) is forwarded and honored.
         if ndim == 2:  # Get the SAM2 model and prepare the image predictor.
             model = get_sam2_model(model_type=model_type, input_type="images", device=device)
-            # Prepare the SAM2 predictor.
-            from sam2.sam2_image_predictor import SAM2ImagePredictor
-            predictor = SAM2ImagePredictor(model)
+            # Use the shared resize-longest predictor.
+            predictor = get_sam2_image_predictor(model)
             # The video predictor gets these set in 'get_sam2_model'; set them here on the image
             # predictor too, so the embedding signature can be written when caching embeddings.
             predictor.model_type = model_type

@@ -31,6 +31,7 @@ from tqdm import tqdm
 import torch
 
 from micro_sam.v1.evaluation.evaluation import run_evaluation
+from micro_sam.v2.util import configure_image_predictor
 from torch_em.transform.raw import normalize
 
 from common import (
@@ -134,7 +135,9 @@ def _load_sam2_amg(model_type, backbone, checkpoint_path, device):
     model = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=checkpoint_path, backbone=backbone,
     )
-    return SAM2AutomaticMaskGenerator(model, pred_iou_thresh=0.6, stability_score_thresh=0.6)
+    generator = SAM2AutomaticMaskGenerator(model, pred_iou_thresh=0.6, stability_score_thresh=0.6)
+    configure_image_predictor(generator.predictor)
+    return generator
 
 
 def _segment_cellpose(image_or_volume, model, ndim, dataset_name=None):

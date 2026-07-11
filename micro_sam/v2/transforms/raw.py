@@ -70,9 +70,9 @@ def _cellpose_raw_trafo(x):
 
 
 def _resize_to_512(x, is_label=False):
-    """Resize (Z, H, W) to (Z, 512, 512) via ResizeLongestSideInputs, then pad to square."""
-    from torch_em.transform.generic import ResizeLongestSideInputs
-    return ResizeLongestSideInputs(target_shape=(512, 512), is_label=is_label)(x)
+    """Resize trailing spatial dimensions to longest side 512 and pad bottom/right."""
+    from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy
+    return resize_longest_side_and_pad_spatial_numpy(x, target_length=512, is_label=is_label)[0]
 
 
 def _resize_raw_to_512(x):
