@@ -138,6 +138,45 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
     return device
 
 
+def get_embedding_function(model_type: str) -> callable:
+    """Get the precompute-embeddings function for the model family of `model_type`.
+
+    Dispatches across the three families: VFM (DINO / UNI) encoders, SAM2 ('hvit_*') and SAM1 ('vit_*').
+    All returned functions share the interface (predictor, input_, save_path, ndim, tile_shape, halo,
+    verbose, lazy_loading, pbar_init, pbar_update).
+
+    Args:
+        model_type: The model name, e.g. 'vit_b_lm', 'hvit_t' or 'dino_v2_vitb'.
+
+    Returns:
+        The matching `precompute_image_embeddings` / `precompute_vfm_embeddings` function.
+
+    Raises:
+        ValueError: If `model_type` does not belong to any supported model family.
+    """
+    from .v1.models.vfm import is_vfm_model, get_vfm_model_names
+    from .v2.util import SUPPORTED_MODELS as sam2_backbones
+
+    if is_vfm_model(model_type):
+        from .v1.models.vfm import precompute_vfm_embeddings
+        return precompute_vfm_embeddings
+
+    # Finetuned names keep their backbone prefix ('vit_b_lm' -> 'vit_b', 'hvit_t_cells' -> 'hvit_t').
+    if isinstance(model_type, str) and model_type[:6] in sam2_backbones:
+        from .v2.util import precompute_image_embeddings
+        return precompute_image_embeddings
+    if isinstance(model_type, str) and model_type[:5] in _MODEL_TYPES:
+        from .v1.util import precompute_image_embeddings
+        return precompute_image_embeddings
+
+    raise ValueError(
+        f"Invalid model_type: '{model_type}'. Expected a SAM1 model (backbone one of {list(_MODEL_TYPES)}), "
+        f"a SAM2 model (backbone one of {sam2_backbones}) or a VFM encoder (one of {list(get_vfm_model_names())}). "
+        "Finetuned models keep their backbone prefix, e.g. 'vit_b_lm' or 'hvit_t_cells'. "
+        "Run 'micro_sam info' to list all available models."
+    )
+
+
 def _available_devices():
     available_devices = []
     for i in ["cuda", "mps", "cpu"]:
@@ -543,12 +582,18 @@ def get_block_shape(shape: Tuple[int]) -> Tuple[int]:
     return block_shape
 
 
-def micro_sam_info() -> None:
-    """Display μSAM information using a rich console."""
+def micro_sam_info(download: Optional[List[str]] = None) -> None:
+    """Display μSAM information using a rich console.
+
+    Args:
+        download: Optional list of pretrained models to download by name (SAM1, SAM2 or their finetuned
+            variants). E.g. ['vit_b_lm', 'hvit_t'] downloads the listed models; ['all'] downloads every
+            available model.
+    """
     import psutil
     import platform
-    import argparse
     from .v1.util import models, _download_sam_model
+    from .v2.util import SUPPORTED_MODELS, get_model_names, _get_checkpoint, _download_finetuned_sam2_model
     from rich import progress
     from rich.panel import Panel
     from rich.table import Table
@@ -556,16 +601,6 @@ def micro_sam_info() -> None:
 
     import torch
     import micro_sam
-
-    parser = argparse.ArgumentParser(description="μSAM Information Booth")
-    parser.add_argument(
-        "--download", nargs="+", metavar=("WHAT", "KIND"),
-        help="Downloads the pretrained SAM models."
-        "'--download models' -> downloads all pretrained models; "
-        "'--download models vit_b_lm vit_b_em_organelles' -> downloads the listed models; "
-        "'--download model/models vit_b_lm' -> downloads a single specified model."
-    )
-    args = parser.parse_args()
 
     # Open up a new console.
     console = Console()
@@ -604,37 +639,48 @@ def micro_sam_info() -> None:
         Panel(f"[bold #009E73]Cache Directory:[/bold #009E73]\n{cache_dir}", title="Cache Directory")
     )
 
-    # We have a simple versioning logic here (which is what I'll follow here for mapping model versions).
-    available_models = []
+    # SAM1 models. 'sam1_display' holds the labeled names shown in the panel (the '(v2/v3/v4)' suffixes
+    # refer to the BioImageIO ModelZoo upload version, not the SAM version); 'sam1_names' holds the bare
+    # names accepted by the downloader.
+    sam1_display, sam1_names = [], []
     for model_name, model_path in models().urls.items():  # We filter out the decoder models.
         if model_name.endswith("decoder"):
             continue
+        sam1_names.append(model_name)
 
         if "https://dl.fbaipublicfiles.com/segment_anything/" in model_path:  # Valid v1 SAM models.
-            available_models.append(model_name)
+            sam1_display.append(model_name)
 
         if "https://owncloud.gwdg.de/" in model_path:  # Our own hosted models (in their v1 mode quite often)
             if model_name == "vit_t":  # MobileSAM model.
-                available_models.append(model_name)
+                sam1_display.append(model_name)
             else:
-                available_models.append(f"{model_name} (v1)")
+                sam1_display.append(f"{model_name} (v1)")
 
         # Now for our models, the BioImageIO ModelZoo upload structure is such that:
         # '/1/files' corresponds to v2 models.
         # '/1.1/files' corresponds to v3 models.
         # '/1.2/files' corresponds to v4 models.
         if "/1/files" in model_path:
-            available_models.append(f"{model_name} (v2)")
+            sam1_display.append(f"{model_name} (v2)")
         if "/1.1/files" in model_path:
-            available_models.append(f"{model_name} (v3)")
+            sam1_display.append(f"{model_name} (v3)")
         if "/1.2/files" in model_path:
-            available_models.append(f"{model_name} (v4)")
+            sam1_display.append(f"{model_name} (v4)")
 
-    model_list = "\n".join(available_models)
+    # SAM2 models: the base backbones plus the finetuned micro-sam models (with a registered decoder).
+    sam2_base = list(SUPPORTED_MODELS)
+    sam2_finetuned = list(get_model_names())
+    sam2_names = sam2_base + sam2_finetuned
+    sam2_display = sam2_base + [f"{name} (DEV)" for name in sam2_finetuned]
 
-    # The available models panel.
+    # The available models panels (SAM1 and SAM2 shown separately to avoid confusing the BioImageIO
+    # version suffixes above with the SAM version).
     console.print(
-        Panel(f"[bold #D55E00]Available Models:[/bold #D55E00]\n{model_list}", title="List of Supported Models")
+        Panel(f"[bold #D55E00]{chr(10).join(sam1_display)}[/bold #D55E00]", title="SAM1 Models")
+    )
+    console.print(
+        Panel(f"[bold #D55E00]{chr(10).join(sam2_display)}[/bold #D55E00]", title="SAM2 Models")
     )
 
     # The system information table.
@@ -649,44 +695,78 @@ def micro_sam_info() -> None:
     table.add_row("Machine", platform.machine())
     table.add_row("Processor", platform.processor())
     table.add_row("Platform", platform.platform())
+    table.add_row("Python", platform.python_version())
+    table.add_row("CPU Count", str(psutil.cpu_count(logical=True)))
     table.add_row("Total RAM (GB)", f"{total_memory:.2f}")
     console.print(table)
 
-    # The device information and check for available GPU acceleration.
-    default_device = _get_default_device()
-
-    if default_device == "cuda":
-        device_index = torch.cuda.current_device()
-        device_name = torch.cuda.get_device_name(device_index)
-        console.print(Panel(f"[bold #000000]CUDA Device:[/bold #000000] {device_name}", title="GPU Information"))
-    elif default_device == "mps":
-        console.print(Panel("[bold #000000]MPS Device is available[/bold #000000]", title="GPU Information"))
+    # Accelerator / device information. This identifies the exact backend, since PyTorch exposes several
+    # (NVIDIA CUDA, AMD ROCm - which also reports through the CUDA API but sets 'torch.version.hip' -,
+    # Apple MPS and Intel XPU) and knowing which one (and the device name / memory) is key for debugging.
+    device_lines = [f"[bold]PyTorch:[/bold] {torch.__version__}"]
+    if torch.cuda.is_available():
+        idx = torch.cuda.current_device()
+        props = torch.cuda.get_device_properties(idx)
+        is_rocm = getattr(torch.version, "hip", None) is not None
+        device_lines.append(f"[bold]Backend:[/bold] {'ROCm (AMD)' if is_rocm else 'CUDA (NVIDIA)'}")
+        device_lines.append(f"[bold]Device:[/bold] {props.name}")
+        device_lines.append(f"[bold]Device count:[/bold] {torch.cuda.device_count()}")
+        device_lines.append(f"[bold]GPU memory (GB):[/bold] {props.total_memory / (1024 ** 3):.2f}")
+        if is_rocm:
+            device_lines.append(f"[bold]HIP version:[/bold] {torch.version.hip}")
+        else:
+            device_lines.append(f"[bold]CUDA (torch build):[/bold] {torch.version.cuda}")
+            device_lines.append(f"[bold]cuDNN:[/bold] {torch.backends.cudnn.version()}")
+    elif torch.backends.mps.is_available():
+        # On Apple Silicon the GPU is the SoC; report the exact chip on a best-effort basis.
+        chip = platform.processor()
+        if platform.system() == "Darwin":
+            try:
+                import subprocess
+                chip = subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"]).decode().strip() or chip
+            except Exception:
+                pass
+        device_lines.append("[bold]Backend:[/bold] MPS (Apple Silicon)")
+        device_lines.append(f"[bold]Device:[/bold] {chip}")
+    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+        idx = torch.xpu.current_device()
+        device_lines.append("[bold]Backend:[/bold] XPU (Intel)")
+        device_lines.append(f"[bold]Device:[/bold] {torch.xpu.get_device_name(idx)}")
+        device_lines.append(f"[bold]Device count:[/bold] {torch.xpu.device_count()}")
     else:
-        console.print(
-            Panel(
-                "[bold #000000]No GPU acceleration device detected. Running on CPU.[/bold #000000]",
-                title="Device Information"
-            )
-        )
+        device_lines.append("[bold]Backend:[/bold] CPU (no GPU acceleration detected)")
+    console.print(Panel("\n".join(device_lines), title="Accelerator Information"))
 
     # The section allowing to download models.
     # NOTE: In future, can be extended to download sample data.
-    if args.download:
-        download_provided_args = [t.lower() for t in args.download]
-        mode, *model_types = download_provided_args
-
-        if mode not in {"models", "model"}:
-            console.print(f"[red]Unknown option for --download: {mode}[/]")
-            return
-
-        if mode in ["model", "models"] and not model_types:  # If user did not specify, we will download all models.
-            download_list = available_models
+    if download:
+        all_names = sam1_names + sam2_names
+        if any(t.lower() == "all" for t in download):  # Download every available model.
+            download_list = all_names
+            # Guard the bulk download (all SAM1 + SAM2 models, several GB) behind a confirmation, but
+            # only when interactive so scripted '--download all' still runs unattended.
+            import sys
+            from rich.prompt import Confirm
+            if sys.stdin.isatty() and not Confirm.ask(
+                f"[yellow]This downloads all {len(download_list)} models (SAM1 + SAM2), several GB. Continue?[/]",
+                console=console, default=False,
+            ):
+                console.print("[red]Download aborted.[/]")
+                return
         else:
-            download_list = model_types
-            incorrect_models = [m for m in download_list if m not in available_models]
+            download_list = list(download)
+            incorrect_models = [m for m in download_list if m not in all_names]
             if incorrect_models:
                 console.print(Panel("[red]Unknown model(s):[/] " + ", ".join(incorrect_models), title="Download Error"))
                 return
+
+        def _download(name):  # Dispatch to the downloader for the model's family.
+            if name in sam2_finetuned:
+                _download_finetuned_sam2_model(name)
+            elif name in sam2_base:
+                _get_checkpoint(name)
+            else:
+                _download_sam_model(model_type=name)
 
         with progress.Progress(
             progress.SpinnerColumn(),
@@ -699,7 +779,7 @@ def micro_sam_info() -> None:
             task = prog.add_task("[green]Downloading μSAM models…", total=len(download_list))
             for model_type in download_list:
                 prog.update(task, description=f"Downloading [cyan]{model_type}[/]…")
-                _download_sam_model(model_type=model_type)
+                _download(model_type)
                 prog.advance(task)
 
         console.print(Panel("[bold green] Downloads complete![/]", title="Finished"))

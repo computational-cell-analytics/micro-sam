@@ -26,7 +26,7 @@ import torch
 
 from bioimage_cpp.utils import Blocking
 
-from .util import _DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z
+from .util import _DEFAULT_MODEL, DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z
 from .postprocessing import flow_instance_segmentation, run_multicut
 
 
@@ -335,7 +335,7 @@ def segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kwa
     return seg.astype("uint32")
 
 
-def automatic_instance_segmentation(
+def segment_instances(
     model: torch.nn.Module,
     raw: np.ndarray,
     ndim: int,
@@ -894,3 +894,190 @@ def get_unisam2_segmentation_generator(
     if is_tiled:
         return TiledUniSAM2InstanceSegmentation(model, device=device)
     return UniSAM2InstanceSegmentation(model, device=device)
+
+
+def get_segmenter(
+    model_type: str = DEFAULT_MODEL,
+    checkpoint: Optional[Union[str, "os.PathLike"]] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    is_tiled: bool = False,
+) -> "UniSAM2InstanceSegmentation":
+    """Load the UniSAM2 instance segmentation generator.
+
+    Automatic segmentation with SAM2 needs a UniSAM2 decoder. This is provided either by a
+    decoder `checkpoint` or by a finetuned model with a registered decoder (e.g. 'hvit_t_cells').
+
+    Args:
+        model_type: The SAM2 model. Either a finetuned model with a registered decoder (see
+            `micro_sam.v2.util.get_model_names`) or a base backbone combined with `checkpoint`.
+        checkpoint: Optional path to a decoder checkpoint to build the UniSAM2 decoder from.
+        device: The device to run inference on. By default the best available device is selected.
+        is_tiled: Whether to run tiled inference.
+
+    Returns:
+        The UniSAM2 instance segmentation generator.
+    """
+    from ..util import get_device
+    from .util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
+
+    device = get_device(device)
+
+    # The decoder is built on the base backbone (first 6 characters, e.g. 'hvit_t_cells' -> 'hvit_t').
+    encoder = model_type[:6]
+    if checkpoint is not None:
+        decoder_source = checkpoint
+    elif model_type in FINETUNED_MODELS and has_registered_decoder(model_type):
+        _, _, decoder_source = _download_finetuned_sam2_model(model_type)
+    else:
+        raise ValueError(
+            f"Automatic segmentation with SAM2 requires a finetuned model with a registered decoder "
+            f"or a decoder '--checkpoint'. '{model_type}' provides neither."
+        )
+
+    model = get_unisam2_model(decoder_source, device=device, encoder=encoder)
+    return get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
+
+
+def automatic_instance_segmentation(
+    segmenter,
+    input_path: Union[str, "os.PathLike", np.ndarray],
+    output_path: Optional[Union[str, "os.PathLike"]] = None,
+    embedding_path: Optional[Union[str, "os.PathLike"]] = None,
+    model_type: str = DEFAULT_MODEL,
+    checkpoint: Optional[Union[str, "os.PathLike"]] = None,
+    key: Optional[str] = None,
+    ndim: Optional[int] = None,
+    tile_shape: Optional[tuple] = None,
+    halo: Optional[tuple] = None,
+    mode: str = "sparse",
+    device: Optional[Union[str, torch.device]] = None,
+    verbose: bool = True,
+    **generate_kwargs,
+) -> np.ndarray:
+    """Run UniSAM2 automatic instance segmentation for a single input and save the result.
+
+    Args:
+        segmenter: The UniSAM2 instance segmentation generator (see `get_segmenter`).
+        input_path: The input image, either a filepath (e.g. tif or a container with `key`) or an array.
+        output_path: Optional path to save the segmentation as a tif file.
+        embedding_path: Optional path to cache the image embeddings. If given, a SAM2 predictor is built
+            (matching the data dimensionality) to precompute the embeddings, and only the decoder is run
+            on them; otherwise the full model is run.
+        model_type: The SAM2 model. Only used to build the predictor for embedding precomputation.
+        checkpoint: Optional checkpoint for the predictor, used for embedding precomputation.
+        key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
+        ndim: The number of spatial dimensions (2 or 3). By default inferred from the data.
+        tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
+        halo: Overlap of the tiles for tiled prediction.
+        mode: The segmentation mode, 'sparse' (flow) or 'dense' (multicut).
+        device: The device to run inference on.
+        verbose: Whether to print progress.
+        generate_kwargs: Additional postprocessing parameters forwarded to the segmenter's `generate`.
+
+    Returns:
+        The instance segmentation, uint32 array.
+    """
+    from ..util import load_image_data
+    from .util import precompute_image_embeddings
+
+    if isinstance(input_path, np.ndarray):
+        raw = input_path
+    else:
+        raw = load_image_data(input_path, key=key)
+
+    if ndim is None:
+        ndim = raw.ndim
+
+    image_embeddings = None
+    if embedding_path is not None:
+        # Build a SAM2 predictor matching the data dimensionality (image vs. video predictor), reusing
+        # the annotator's loader so the cached embeddings match the GUI / precompute format.
+        from ..sam_annotator._state import _get_sam_model
+        predictor, _ = _get_sam_model(
+            model_type=model_type, ndim=ndim, device=device, checkpoint_path=checkpoint,
+            decoder_path=None, use_cli=True,
+        )
+        image_embeddings = precompute_image_embeddings(
+            predictor, raw, save_path=embedding_path, ndim=ndim,
+            tile_shape=tile_shape, halo=halo, verbose=verbose,
+        )
+
+    segmenter.initialize(
+        raw, ndim=ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo,
+    )
+    segmentation = segmenter.generate(mode=mode, **generate_kwargs)
+
+    if output_path is not None:
+        import imageio.v3 as imageio
+        imageio.imwrite(output_path, segmentation, compression="zlib")
+
+    return segmentation
+
+
+def automatic_tracking(
+    segmenter,
+    input_path: Union[str, "os.PathLike", np.ndarray],
+    output_path: Optional[Union[str, "os.PathLike"]] = None,
+    key: Optional[str] = None,
+    tile_shape: Optional[tuple] = None,
+    halo: Optional[tuple] = None,
+    mode: str = "sparse",
+    device: Optional[Union[str, torch.device]] = None,
+    gap_closing: Optional[int] = None,
+    min_time_extent: Optional[int] = None,
+    verbose: bool = True,
+    **generate_kwargs,
+):
+    """Run UniSAM2 automatic tracking for a timeseries.
+
+    Each frame is segmented independently with the UniSAM2 segmenter (`automatic_instance_segmentation`),
+    the per-frame results are relabeled to globally-unique ids, and the objects are linked across frames
+    with Trackastra (see `micro_sam.v1.multi_dimensional_segmentation.track_across_frames`).
+
+    Args:
+        segmenter: The UniSAM2 instance segmentation generator (see `get_segmenter`).
+        input_path: The input timeseries, a filepath (tif / container with `key`) or a (T, Y, X) array.
+        output_path: Optional folder to save the tracking result in CTC format.
+        key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
+        tile_shape: Shape of the tiles for tiled per-frame prediction. By default runs without tiling.
+        halo: Overlap of the tiles for tiled per-frame prediction.
+        mode: The segmentation mode, 'sparse' (flow) or 'dense' (multicut).
+        device: The device to run inference on.
+        gap_closing: If given, close gaps in the tracks over this many frames.
+        min_time_extent: If given, require tracks to span at least this many frames.
+        verbose: Whether to print progress.
+        generate_kwargs: Additional postprocessing parameters forwarded to the segmenter's `generate`.
+
+    Returns:
+        The tracking result, a (T, Y, X) array where each object is labeled by its track id.
+        The lineages, encoding cell divisions.
+    """
+    from tqdm import trange
+
+    from ..util import load_image_data
+    from ..v1.multi_dimensional_segmentation import track_across_frames
+
+    timeseries = input_path if isinstance(input_path, np.ndarray) else load_image_data(input_path, key=key)
+    if timeseries.ndim != 3:
+        raise ValueError(f"Automatic tracking expects a (T, Y, X) timeseries, got shape {timeseries.shape}.")
+
+    # Segment every frame independently and relabel so ids do not overlap across frames.
+    segmentation = np.zeros(timeseries.shape, dtype="uint32")
+    offset = 0
+    for t in trange(timeseries.shape[0], desc="Segment frames", disable=not verbose):
+        frame_seg = automatic_instance_segmentation(
+            segmenter=segmenter, input_path=timeseries[t], ndim=2, tile_shape=tile_shape, halo=halo,
+            mode=mode, device=device, verbose=False, **generate_kwargs,
+        )
+        max_id = int(frame_seg.max())
+        if max_id == 0:
+            continue
+        frame_seg[frame_seg != 0] += offset
+        offset += max_id
+        segmentation[t] = frame_seg
+
+    segmentation, lineage = track_across_frames(
+        timeseries=timeseries, segmentation=segmentation, gap_closing=gap_closing,
+        min_time_extent=min_time_extent, verbose=verbose, output_folder=output_path,
+    )
+    return segmentation, lineage

@@ -328,6 +328,7 @@ def run_prediction_with_object_classifier(
     project_prediction: bool = True,
     ndim: Optional[int] = None,
     upsampler=None,
+    model_type: Optional[str] = None,
 ) -> List[np.ndarray]:
     """Run prediction with a pretrained object classifier on a series of images.
 
@@ -348,14 +349,20 @@ def run_prediction_with_object_classifier(
         The predictions.
     """
     assert len(images) == len(segmentations)
-    # Stored as {'rf': ..., 'metadata': ...}; older files are a bare classifier.
+    # Stored as {'rf': ..., 'model_spec': ...}; older files are a bare classifier.
     obj = load(rf_path)
     rf = obj["rf"] if isinstance(obj, dict) and "rf" in obj else obj
+    compute_embeddings = util.get_embedding_function(model_type) if model_type is not None \
+        else precompute_image_embeddings
     predictions = []
     for image, segmentation in tqdm(
         zip(images, segmentations), total=len(images), desc="Run prediction with object classifier"
     ):
-        embeddings = precompute_image_embeddings(predictor, image, verbose=False, ndim=ndim)
+        if isinstance(image, (str, os.PathLike)):
+            image = util.load_image_data(image, key=image_key)
+        if isinstance(segmentation, (str, os.PathLike)):
+            segmentation = util.load_image_data(segmentation, key=segmentation_key)
+        embeddings = compute_embeddings(predictor, image, verbose=False, ndim=ndim)
         seg_ids, features = compute_object_features(
             embeddings, segmentation, verbose=False, image=image if upsampler is not None else None,
             upsampler=upsampler,

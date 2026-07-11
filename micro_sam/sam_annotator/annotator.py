@@ -12,7 +12,6 @@ from . import util as vutil
 from ._annotator import _AnnotatorBase
 from ._state import AnnotatorState
 from .util import (
-    _initialize_parser,
     _load_amg_state,
     _load_is_state,
     _sync_embedding_widget,
@@ -405,40 +404,3 @@ def annotator(
         return viewer
 
     napari.run()
-
-
-def main():
-    """@private"""
-    parser = _initialize_parser(
-        description="Start the μSAM GUI for image segmentation (2D or 3D)."
-    )
-    parser.add_argument(
-        "--ndim", type=int,
-        help="The number of spatial dimensions (2 or 3). If not given, auto-detected from the image "
-        "shape. Set 2 to read a multi-channel array (e.g. channels-first (C, H, W) or (H, W, C)) as a "
-        "single 2D image, or 3 to force a (Z, H, W) volume."
-    )
-    args = parser.parse_args()
-    image = util.load_image_data(args.input, key=args.key)
-
-    if args.segmentation_result is None:
-        segmentation_result = None
-    else:
-        segmentation_result = util.load_image_data(
-            args.segmentation_result, key=args.segmentation_key
-        )
-
-    annotator(
-        image,
-        ndim=args.ndim,
-        embedding_path=args.embedding_path,
-        segmentation_result=segmentation_result,
-        model_type=args.model_type,
-        tile_shape=args.tile_shape,
-        halo=args.halo,
-        precompute_amg_state=args.precompute_amg_state,
-        checkpoint_path=args.checkpoint,
-        decoder_path=args.decoder_path,
-        device=args.device,
-        prefer_decoder=args.prefer_decoder,
-    )

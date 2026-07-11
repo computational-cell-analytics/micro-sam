@@ -167,7 +167,7 @@ def run_evaluation_for_iterative_prompting(
     return res_df
 
 
-def main():
+def main(argv=None):
     """@private"""
     import argparse
 
@@ -211,7 +211,7 @@ def main():
     #     "for instance segmentation."
     # )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Check whether the inputs are as expected.
     def _get_inputs_from_paths(paths, key):
