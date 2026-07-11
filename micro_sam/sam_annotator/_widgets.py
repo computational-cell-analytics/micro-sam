@@ -2748,19 +2748,11 @@ class UnifiedSegmentWidget(_WidgetBase):
                     state.interactive_segmenter.add_box_prompts(frame_ids=curr_z, boxes=boxes, object_id=box_ids)
 
                 # Propagate the prompts throughout the volume and combine the propagated segmentations.
-                # Report per-slice progress so the user can see the propagation advancing.
+                # Report each slice propagation step.
                 # A patience of 0 disables early stopping (propagate through the whole volume).
                 early_stop_patience = self.early_stop_patience if self.early_stop_patience > 0 else None
-                # Use a determinate total = the upper bound on slices the propagation can cover: the
-                # selected z-range width, else the full depth. With early stopping the propagation may
-                # finish before reaching the total (the bar then completes early) - this still shows a
-                # sense of scale / ETA, unlike a vague indeterminate 'busy' bar. 'self.z_range' is a
-                # hard slice bound set by the interactive widget; 'None' means the full volume.
-                if self.z_range is not None:
-                    z_lo, z_hi = self.z_range
-                    n_propagation_steps = z_hi - z_lo + 1
-                else:
-                    n_propagation_steps = shape[0]
+                # Tiled segmenters count one step per slice in each tile activated above.
+                n_propagation_steps = state.interactive_segmenter.get_progress_total(self.z_range)
                 pbar_signals.pbar_total.emit(n_propagation_steps)
                 pbar_signals.pbar_description.emit("Propagate in volume")
                 seg = state.interactive_segmenter.predict(
@@ -2899,7 +2891,9 @@ class UnifiedSegmentWidget(_WidgetBase):
             if z_hi < z_lo:  # The division precedes the track's first frame: nothing to segment.
                 return None
 
-            pbar_signals.pbar_total.emit(z_hi - z_lo + 1)
+            pbar_signals.pbar_total.emit(
+                state.interactive_segmenter.get_progress_total((z_lo, z_hi))
+            )
             seg = state.interactive_segmenter.predict(
                 update_progress=emit_progress,
                 early_stop_patience=None, z_range=(z_lo, z_hi),

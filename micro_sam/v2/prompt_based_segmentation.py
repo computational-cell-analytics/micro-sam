@@ -388,6 +388,12 @@ class PromptableSegmentation3D:
         # Reset the state after finishing the segmentation round.
         self.predictor.reset_state(self.inference_state)
 
+    def get_progress_total(self, z_range=None):
+        """Return the number of slice propagation steps for the requested z range."""
+        if z_range is None:
+            return int(self.volume.shape[0])
+        return int(z_range[1] - z_range[0] + 1)
+
     def _as_array(self, x):
         return None if x is None else np.asarray(x)
 
@@ -825,6 +831,11 @@ class TiledPromptableSegmentation3D:
         for segmenter in self._segmenters.values():
             segmenter.reset_predictor()
         self._segmenters = {}
+
+    def get_progress_total(self, z_range=None):
+        """Return tile-slice propagation steps for the currently active tiles."""
+        z_depth = self.shape[0] if z_range is None else z_range[1] - z_range[0] + 1
+        return int(z_depth * len(self._segmenters))
 
     def _tile_index(self, y, x):
         """Return the id of the tile whose inner (halo-free) block contains the point (y, x)."""
