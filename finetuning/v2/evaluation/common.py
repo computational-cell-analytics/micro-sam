@@ -467,29 +467,13 @@ def load_unisam2_model(checkpoint_path, device):
 
 
 def predict_unisam2(model, raw, ndim, device):
-    from torch_em.util.prediction import predict_with_halo
-
-    def _preprocess(crop):
-        return np.concatenate([normalize(crop)] * 3, axis=0)
-
+    from micro_sam.v2.automatic_segmentation import run_unisam2_inference
     is_3d = (ndim == 3)
-    block_shape = (4, 384, 384) if is_3d else (1, 384, 384)
-    halo = (2, 64, 64) if is_3d else (0, 64, 64)
-    input_ = raw[np.newaxis].astype("float32") if is_3d else raw[np.newaxis, np.newaxis].astype("float32")
-    out = np.zeros((4, *raw.shape), dtype="float32") if is_3d else np.zeros((4, 1, *raw.shape), dtype="float32")
-    out = predict_with_halo(
-        input_=input_,
-        model=model,
-        block_shape=block_shape,
-        halo=halo,
-        preprocess=_preprocess,
-        gpu_ids=[device],
-        output=out,
-        with_channels=True,
+    tile_shape = (4, 384, 384) if is_3d else (384, 384)
+    halo = (2, 64, 64) if is_3d else (64, 64)
+    return run_unisam2_inference(
+        model=model, raw=raw, ndim=ndim, device=device, tile_shape=tile_shape, halo=halo,
     )
-    if not is_3d:
-        out = out[:, 0]
-    return out
 
 
 def postprocess_unisam2(out, dataset_name, backend="python"):

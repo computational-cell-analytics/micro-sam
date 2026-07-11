@@ -16,7 +16,6 @@ from torch_em.util.segmentation import size_filter
 
 from elf.io import open_file
 
-from sam2.sam2_image_predictor import SAM2ImagePredictor
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
 from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
@@ -25,7 +24,9 @@ from micro_sam.v1.evaluation.inference import (
     _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
 )
 
-from micro_sam.v2.util import _get_device, get_sam2_model, precompute_image_embeddings
+from micro_sam.v2.util import (
+    _get_device, configure_image_predictor, get_sam2_image_predictor, get_sam2_model, precompute_image_embeddings,
+)
 
 
 def _embedding_tensors_to_numpy(embeddings):
@@ -91,6 +92,7 @@ def run_amg(
             pred_iou_thresh=0.6,  # default: 0.8
             stability_score_thresh=0.6,  # default: 0.95
         )
+        configure_image_predictor(mask_generator.predictor)
 
         outputs = mask_generator.generate(image.astype("uint8"))  # NOTE: Done as this is what SAM2 expects as inputs.
 
@@ -267,7 +269,7 @@ def run_interactive_segmentation_2d(
         os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
 
     model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
-    predictor = SAM2ImagePredictor(model)
+    predictor = get_sam2_image_predictor(model)
 
     for image_path, gt_path in tqdm(
         zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with iterative prompting",

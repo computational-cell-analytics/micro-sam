@@ -67,6 +67,8 @@ def promptable_segmentation_2d(
     batched: Optional[bool] = None,
 ):
     """@private"""
+    from micro_sam.v2.util import configure_image_predictor
+    configure_image_predictor(predictor)
 
     if image is not None:
         if image.ndim == 2:

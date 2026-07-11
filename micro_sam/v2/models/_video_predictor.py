@@ -5,8 +5,6 @@ from typing import Optional, Dict, Union
 
 import numpy as np
 from PIL import Image
-from skimage.transform import resize
-
 import torch
 
 from sam2.build_sam import _load_checkpoint
@@ -22,10 +20,8 @@ MAX_CACHED_FRAMES = 8
 def _load_img_as_tensor(img_path, image_size):
     """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
 
-    For file-path inputs: PIL loads the image, resizes via plain square stretch (JPEG convention).
-    For numpy inputs: percentile-normalizes any dtype to [0, 1] (2nd / 98th percentile per channel);
-    resizes using aspect-ratio preserving scale to image_size on the longest side, then zero-pads to a
-    square - matching ConvertToSam2VideoBatch._to_sam2_size used during training.
+    File-path and numpy inputs both preserve aspect ratio: the longest side is resized to
+    ``image_size`` and the remaining bottom/right region is zero-padded.
 
     Returns:
         img: (3, image_size, image_size) float32 tensor, ImageNet-normalised by the caller.
@@ -35,9 +31,7 @@ def _load_img_as_tensor(img_path, image_size):
     """
     if isinstance(img_path, str):
         img_pil = Image.open(img_path)
-        img_np = np.array(img_pil.convert("RGB").resize((image_size, image_size)))
-        video_width, video_height = img_pil.size
-        img_np = img_np / 255.0
+        img_np = np.array(img_pil.convert("RGB"), dtype=np.float32) / 255.0
     else:
         img_np = img_path
         img_np = np.stack([img_np] * 3, axis=-1) if img_np.ndim == 2 else img_np
@@ -49,18 +43,11 @@ def _load_img_as_tensor(img_path, image_size):
         img_np = normalize_percentile(img_np.astype(np.float32), lower=2.0, upper=98.0, axis=(0, 1))
         img_np = np.clip(img_np, 0.0, 1.0)
 
-        # Aspect-ratio preserving scale + zero-pad, matching _to_sam2_size in training.
-        # video_height/video_width are set to max(H, W) so SAM2's coordinate normalization
-        # (which divides by these and scales to image_size) correctly maps original-frame
-        # coordinates into the resized content region rather than the zero-padded area.
-        H, W = img_np.shape[:2]
-        video_height = video_width = max(H, W)
-        scale = image_size / max(H, W)
-        new_h, new_w = int(round(H * scale)), int(round(W * scale))
-        img_np = resize(img_np, output_shape=(new_h, new_w, 3), order=1, anti_aliasing=True, preserve_range=True)
-        pad_h, pad_w = image_size - new_h, image_size - new_w
-        if pad_h > 0 or pad_w > 0:
-            img_np = np.pad(img_np, ((0, pad_h), (0, pad_w), (0, 0)))
+    # The effective square size gives prompts one isotropic scale factor.
+    from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_numpy
+    H, W = img_np.shape[:2]
+    video_height = video_width = max(H, W)
+    img_np, _ = resize_longest_side_and_pad_numpy(img_np, image_size)
 
     img = torch.from_numpy(img_np.astype(np.float32)).permute(2, 0, 1)
     return img, video_height, video_width

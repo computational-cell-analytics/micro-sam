@@ -117,16 +117,8 @@ def _resize_spatial(x: torch.Tensor, size: tuple) -> torch.Tensor:
     return x.reshape(b, z, c, size[0], size[1]).permute(0, 2, 1, 3, 4)
 
 
-class _SquareResizeWrapper(torch.nn.Module):
-    """Run UniSAM2 with SAM2's square (anisotropic) resize convention.
-
-    SAM2 resizes inputs to a fixed square `img_size` (not aspect-preserving), and the UniSAM2 decoder
-    was trained on these square features. The UNETR3D forward instead applies a SAM-style
-    aspect-preserving resize + crop, which disagrees for non-square inputs. Square-resizing each block
-    to `img_size` here makes the inner preprocess/postprocess spatially no-ops, so the full-inference
-    path matches the square convention (and the precomputed-embeddings path); the prediction is then
-    resized back to the block size.
-    """
+class ResizeLongestSideWrapper(torch.nn.Module):
+    """Run UniSAM2 with resize-longest and bottom/right padding."""
 
     def __init__(self, model: torch.nn.Module, img_size: int) -> None:
         super().__init__()
@@ -134,9 +126,12 @@ class _SquareResizeWrapper(torch.nn.Module):
         self.img_size = img_size
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_tensor
+
         spatial = x.shape[-2:]
-        x = _resize_spatial(x, (self.img_size, self.img_size))
+        x, resized = resize_longest_side_and_pad_tensor(x, self.img_size)
         out = self.model(x)
+        out = out[..., :resized[0], :resized[1]]
         return _resize_spatial(out, spatial)
 
 
@@ -280,16 +275,13 @@ def run_unisam2_inference(
         input_ = raw[np.newaxis, np.newaxis].astype("float32")
         output = np.zeros((4, 1, *raw.shape), dtype="float32")
 
-    # Wrap the model so each block is square-resized to 'img_size' before the forward pass, matching
-    # SAM2's square resize (and the precomputed-embeddings path) instead of UNETR3D's aspect-preserving
-    # resize + crop, which would misalign non-square blocks (the whole image when untiled, or edge tiles).
     img_size = getattr(getattr(model, "encoder", None), "img_size", 1024)
-    square_model = _SquareResizeWrapper(model, img_size)
+    resize_model = ResizeLongestSideWrapper(model, img_size)
 
     with _bridge_halo_progress(pbar_update):
         output = predict_with_halo(
             input_=input_,
-            model=square_model,
+            model=resize_model,
             block_shape=block_shape,
             halo=block_halo,
             preprocess=_preprocess,
@@ -430,9 +422,8 @@ def run_unisam2_decoder_on_3d_embeddings(
 
     Reuses the per-slice ``vision_features`` (shape ``(Z, C, h, w)``) produced for the volume by
     `micro_sam.v2.util.precompute_image_embeddings` - the same embeddings used for interactive 3d
-    segmentation. Because those come from the video predictor's aspect-preserving resize + pad, which
-    is exactly what `UNETR3D`'s preprocess/postprocess assume, the model resizes the prediction back
-    to the original ``(Z, H, W)`` itself (no manual resize, unlike the 2d square-stretch path).
+    segmentation. These use the same aspect-preserving resize and padding as the 2d image predictor,
+    and the model resizes the prediction back to the original ``(Z, H, W)`` itself.
 
     The decoder pass is chunked along z (with a halo for 3d-conv context), so a deep volume with a
     small in-plane size - which is not tiled in-plane - does not decode the whole stack at once and
@@ -494,10 +485,7 @@ def run_unisam2_decoder_on_embeddings(
 ) -> np.ndarray:
     """Run only the UniSAM2 decoder on precomputed image embeddings (no encoder pass).
 
-    Reuses 2d embeddings produced by `micro_sam.v2.util.precompute_image_embeddings` (the same ones
-    used for interactive segmentation and AMG). The encoder is temporarily replaced by a stub that
-    returns the precomputed `vision_features`, so the rest of the model (the UNETR decoder) runs
-    exactly as in the full forward pass. Only supported for 2d embeddings.
+    Reuses resize-longest 2d embeddings produced by `micro_sam.v2.util.precompute_image_embeddings`.
 
     Args:
         model: The UniSAM2 model.
@@ -523,21 +511,11 @@ def run_unisam2_decoder_on_embeddings(
     real_encoder = model.encoder
     model.encoder = _StubEncoder(feature, img_size)
     try:
-        # The precomputed SAM2 features come from a square 'img_size x img_size' resize of the image
-        # (SAM2 resizes to a fixed square, not aspect-preserving). The UNETR3D postprocessing instead
-        # assumes the SAM-style aspect-preserving resize + crop, which only matches for square images
-        # and otherwise misaligns the prediction. So we run the decoder on a square dummy (making the
-        # crop a no-op) and resize the square prediction back to the original image size ourselves.
-        dummy = torch.zeros((1, 3, 1, img_size, img_size), device=device)
+        dummy = torch.zeros((1, 3, 1, *original_size), device=device)
         output = model(dummy)
     finally:
         model.encoder = real_encoder
-
-    prediction = output[0, :, 0]  # (4, img_size, img_size)
-    prediction = torch.nn.functional.interpolate(
-        prediction.unsqueeze(0), size=original_size, mode="bilinear", align_corners=False,
-    )[0]
-    return prediction.detach().cpu().numpy()
+    return output[0, :, 0].detach().cpu().numpy()
 
 
 @torch.no_grad()
