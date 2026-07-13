@@ -396,7 +396,7 @@ def main():
     )
     parser.add_argument(
         "--halo", nargs="+", type=int,
-        help="The halo for using tiled prediction. Example: --tile_shape 128 128.", default=None
+        help="The halo for using tiled prediction. Example: --tile_shape 64 64.", default=None
     )
     parser.add_argument(
         "-n", "--ndim", default=None, type=int,
