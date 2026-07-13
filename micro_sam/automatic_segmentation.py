@@ -392,7 +392,7 @@ def main():
     )
     parser.add_argument(
         "--tile_shape", nargs="+", type=int,
-        help="The tile shape for using tiled prediction. Example: --tile_shape 1024 1024.", default=None
+        help="The tile shape for using tiled prediction. Example: --tile_shape 384 384.", default=None
     )
     parser.add_argument(
         "--halo", nargs="+", type=int,
