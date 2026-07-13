@@ -1,6 +1,5 @@
 """Common normalization for SAM2 raw microscopy inputs."""
 
-import warnings
 from typing import Optional, Tuple, Union
 
 import numpy as np
@@ -40,27 +39,6 @@ def normalize_raw(
 
 
 def to_image(image: np.ndarray) -> np.ndarray:
-    """Map a 2D image to percentile-normalized, channel-last uint8 RGB."""
-    input_ = image
-    ndim = input_.ndim
-    n_channels = 1 if ndim == 2 else input_.shape[-1]
-
-    if ndim == 2:
-        input_ = np.concatenate([input_[..., None]] * 3, axis=-1)
-    elif ndim == 3 and n_channels == 1:
-        input_ = np.concatenate([input_] * 3, axis=-1)
-    elif ndim == 3 and n_channels == 2:
-        zero_channel = np.zeros(input_.shape[:2] + (1,), dtype=input_.dtype)
-        input_ = np.concatenate([input_, zero_channel], axis=-1)
-    elif ndim == 3 and n_channels == 3:
-        pass
-    elif ndim == 3 and n_channels > 3:
-        warnings.warn(f"You provided an input with {n_channels} channels. Only the first three will be used.")
-        input_ = input_[..., :3]
-    else:
-        raise ValueError(
-            f"Invalid input dimensionality {ndim}. Expect either a 2D input (=grayscale image) "
-            "or a 3D input (= image with channels)."
-        )
-
-    return normalize_raw(input_, axis=(0, 1), output_range=UINT8_RANGE, dtype="uint8")
+    """Map a 2D or channel-last image to percentile-normalized, channel-last uint8 RGB."""
+    from micro_sam.util import _ensure_rgb
+    return normalize_raw(_ensure_rgb(image), axis=(0, 1), output_range=UINT8_RANGE, dtype="uint8")

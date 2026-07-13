@@ -65,7 +65,7 @@ def _normalize_raw_to_unit(raw):
 
 def _to_sam2_uint8(raw):
     """Convert raw input to uint8 while preserving [0, 1] normalization semantics."""
-    return normalize_raw(raw, output_range=UINT8_RANGE, dtype="uint8")
+    return np.round(normalize_raw(raw, output_range=UINT8_RANGE)).astype("uint8")
 
 
 def _get_corrective_point(gt_mask, pred_mask):

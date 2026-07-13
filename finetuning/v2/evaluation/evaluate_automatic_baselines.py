@@ -75,14 +75,8 @@ _DATASET_ANISOTROPY = {
 }
 
 
-def _normalize_raw_to_unit(raw):
-    if raw.size == 0:
-        return raw.astype("float32", copy=False)
-    return normalize_raw(raw)
-
-
 def _to_sam2_uint8(raw):
-    return normalize_raw(raw, output_range=UINT8_RANGE, dtype="uint8")
+    return np.round(normalize_raw(raw, output_range=UINT8_RANGE)).astype("uint8")
 
 
 def _load_cellpose(model_type, device):
@@ -173,7 +167,7 @@ def _segment_segneuron(volume, model, device, beta=0.25):
     sys.path.insert(0, os.path.join(_SEGNEURON_ROOT, "Postprocess"))
     from FRMC_post import post_mc
 
-    raw = _normalize_raw_to_unit(volume)
+    raw = volume.astype("float32") / 255.0 if volume.max() > 1.0 else volume.astype("float32")  # SegNeuron expects /255
     Z, Y, X = raw.shape
     bz, by, bx = 20, 128, 128
     hz, hy, hx = 4, 32, 32
