@@ -355,7 +355,7 @@ def merge_instance_segmentation_3d(
     if len(edges) == 0:  # Nothing to merge.
         return slice_segmentation
 
-    uv_ids = np.array([[edge["source"], edge["target"]] for edge in edges])
+    uv_ids = np.array([[edge["source"], edge["target"]] for edge in edges], dtype=np.uint64)
     overlaps = np.array([edge["score"] for edge in edges])
 
     n_nodes = int(slice_segmentation.max() + 1)
