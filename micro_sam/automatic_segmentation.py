@@ -391,10 +391,12 @@ def main():
         "-c", "--checkpoint", default=None, type=str, help="Checkpoint from which the SAM model will be loaded."
     )
     parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction.", default=None
+        "--tile_shape", nargs="+", type=int,
+        help="The tile shape for using tiled prediction. Example: --tile_shape 1024 1024.", default=None
     )
     parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction.", default=None
+        "--halo", nargs="+", type=int,
+        help="The halo for using tiled prediction. Example: --tile_shape 128 128.", default=None
     )
     parser.add_argument(
         "-n", "--ndim", default=None, type=int,
