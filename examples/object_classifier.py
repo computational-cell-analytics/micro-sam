@@ -266,9 +266,22 @@ def dino_annotator():
     image = imageio.imread(example_data)
     segmentation = imageio.imread("./clf-test-data/livecell-test-seg.tif")
 
-    # DINOv2 encoder weights download automatically via torch.hub. DINOv3 ('dino_v3_*') weights are
-    # license-gated; supply the emailed URL or local path via the MICROSAM_DINOV3_WEIGHTS env var.
-    object_classifier(image, segmentation, model_type="dino_v2_vitb")
+    # DINOv2 encoder weights download automatically via torch.hub. DINOv3 ('vit_*_dinov3') weights are
+    # license-gated; supply your HuggingFace access via 'huggingface-cli login' or the 'HF_TOKEN' variable.
+    object_classifier(image, segmentation, model_type="vit_b_dinov2")
+
+
+def sam3_object_classifier():
+    from micro_sam.sam_annotator.object_classifier import object_classifier
+
+    example_data = fetch_livecell_example_data(DATA_CACHE)
+    image = imageio.imread(example_data)
+    segmentation = imageio.imread(os.path.join(DATA_CACHE, "livecell-2d-segmentation.tif"))
+
+    # The SAM3 image encoder is gated on HuggingFace (facebook/sam3): accept the license there and
+    # authenticate via 'huggingface-cli login' or the 'HF_TOKEN' variable; the checkpoint then downloads.
+    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-vit_sam3.zarr")
+    object_classifier(image, segmentation, embedding_path=embedding_path, model_type="vit_sam3")
 
 
 def main():

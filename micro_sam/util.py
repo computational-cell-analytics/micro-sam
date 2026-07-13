@@ -146,7 +146,7 @@ def get_embedding_function(model_type: str) -> callable:
     verbose, lazy_loading, pbar_init, pbar_update).
 
     Args:
-        model_type: The model name, e.g. 'vit_b_lm', 'hvit_t' or 'dino_v2_vitb'.
+        model_type: The model name, e.g. 'vit_b_lm', 'hvit_t' or 'vit_b_dinov2'.
 
     Returns:
         The matching `precompute_image_embeddings` / `precompute_vfm_embeddings` function.
