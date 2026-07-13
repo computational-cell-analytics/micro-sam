@@ -103,6 +103,10 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(normalized_uint8.dtype, np.uint8)
         self.assertTrue(np.array_equal(normalized_uint8, normalized_255.astype("uint8")))
 
+        empty = normalize_raw(np.empty((0, 4), dtype="uint16"))
+        self.assertEqual(empty.shape, (0, 4))
+        self.assertEqual(empty.dtype, np.float32)
+
         with self.assertRaises(ValueError):
             normalize_raw(raw, dtype="int16")
         with self.assertRaises(ValueError):
@@ -141,6 +145,21 @@ class TestUtil(unittest.TestCase):
 
         del attrs["normalization"]
         self.assertTrue(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
+
+        class PartialEmbeddings(dict):
+            def __init__(self, normalization=None):
+                super().__init__(features=object())
+                self.attrs = {} if normalization is None else {"normalization": normalization}
+
+        legacy_partial = PartialEmbeddings()
+        self.assertTrue(_check_saved_embeddings(raw, predictor, legacy_partial, "cache.zarr", None, None))
+
+        current_partial = PartialEmbeddings(RAW_NORMALIZATION)
+        self.assertFalse(_check_saved_embeddings(raw, predictor, current_partial, "cache.zarr", None, None))
+
+        empty_cache = PartialEmbeddings(RAW_NORMALIZATION)
+        del empty_cache["features"]
+        self.assertFalse(_check_saved_embeddings(raw, predictor, empty_cache, "cache.zarr", None, None))
 
     def test_apply_nms_tiled_border_masks(self):
         from micro_sam.util import apply_nms

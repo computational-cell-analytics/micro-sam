@@ -30,8 +30,12 @@ def normalize_raw(
     if output_max <= output_min:
         raise ValueError(f"Invalid output range {output_range}. The upper bound must exceed the lower bound.")
 
+    raw = np.asarray(raw)
+    if raw.size == 0:
+        return raw.astype(dtype, copy=False)
+
     normalized = normalize_percentile(
-        np.asarray(raw).astype("float32"), lower=1.0, upper=99.0, axis=axis
+        raw.astype("float32"), lower=1.0, upper=99.0, axis=axis
     )
     normalized = np.clip(np.asarray(normalized), 0.0, 1.0)
     normalized = normalized * (output_max - output_min) + output_min

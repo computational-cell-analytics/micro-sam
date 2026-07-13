@@ -5,6 +5,7 @@ from bioimage_cpp.utils import Blocking
 from micro_sam.v2.prompt_based_segmentation import (
     PromptableSegmentation3D,
     TiledPromptableSegmentation3D,
+    promptable_segmentation_2d,
 )
 
 
@@ -14,6 +15,31 @@ class FakeTileSegmenter:
 
     def add_box_prompts(self, **kwargs):
         pass
+
+
+def test_promptable_segmentation_2d_normalizes_raw(monkeypatch):
+    from micro_sam.v2.normalization import to_image
+
+    class RecordingImagePredictor:
+        def set_image(self, image):
+            self.image = image
+            self._orig_hw = [image.shape[:2]]
+
+        def predict(self, **kwargs):
+            masks = np.ones((1, *self.image.shape[:2]), dtype=bool)
+            return masks, np.ones(1), None
+
+    monkeypatch.setattr("micro_sam.v2.util.configure_image_predictor", lambda predictor: predictor)
+    predictor = RecordingImagePredictor()
+    raw = np.arange(24, dtype="uint16").reshape(3, 8) * 1000
+
+    promptable_segmentation_2d(
+        predictor, image=raw, points=np.array([[2, 2]]), labels=np.array([1]),
+    )
+
+    assert np.array_equal(predictor.image, to_image(raw))
+    assert predictor.image.dtype == np.uint8
+    assert predictor.image.shape == (3, 8, 3)
 
 
 def make_tiled_segmenter():

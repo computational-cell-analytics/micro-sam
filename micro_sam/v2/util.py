@@ -290,10 +290,12 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     normalization changed), False if they can be loaded. Raises if they belong to different image
     data (data signature mismatch).
     """
-    # We may have an empty zarr file that was already created to save the embeddings in.
-    # In this case the embeddings will be computed and we don't need to perform any checks.
+    # We may have an empty zarr file that was already created to save the embeddings in. A
+    # feature-bearing file without the completion metadata is a partial cache: only resume it when
+    # it already records the current normalization policy. Otherwise it may contain legacy min-max
+    # features, which must not be mixed with newly computed percentile-normalized features.
     if "input_size" not in f.attrs:
-        return False
+        return "features" in f and f.attrs.get("normalization") != RAW_NORMALIZATION
 
     # Creates all the metadta that is stored along with the embeddings.
     # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam.v2`?
@@ -739,6 +741,11 @@ def precompute_image_embeddings(
     # embeddings will then be saved.
     else:
         f = _open_embeddings(save_path, mode="a")
+
+    # Persist the policy before writing any feature data. If embedding computation is interrupted,
+    # the partial cache can then be resumed only under the same normalization policy.
+    if save_path is not None:
+        f.attrs["normalization"] = RAW_NORMALIZATION
 
     from micro_sam.util import handle_pbar
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
