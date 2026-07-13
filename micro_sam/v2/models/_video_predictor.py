@@ -29,19 +29,16 @@ def _load_img_as_tensor(img_path, image_size):
             for SAM2's coordinate normalization so prompts map into the resized content region.
         video_width: same as video_height.
     """
+    from micro_sam.v2.normalization import normalize_raw
+
     if isinstance(img_path, str):
         img_pil = Image.open(img_path)
-        img_np = np.array(img_pil.convert("RGB"), dtype=np.float32) / 255.0
+        img_np = np.array(img_pil.convert("RGB"))
     else:
         img_np = img_path
         img_np = np.stack([img_np] * 3, axis=-1) if img_np.ndim == 2 else img_np
 
-        # Percentile-normalize each channel to [0, 1], so any input dtype (e.g. uint16 microscopy data)
-        # is mapped to the range SAM2's ImageNet normalization expects. Clip since percentile
-        # normalization maps the 2nd / 98th percentiles to 0 / 1 and overshoots outside that range.
-        from torch_em.transform.raw import normalize_percentile
-        img_np = normalize_percentile(img_np.astype(np.float32), lower=2.0, upper=98.0, axis=(0, 1))
-        img_np = np.clip(img_np, 0.0, 1.0)
+    img_np = normalize_raw(img_np, axis=(0, 1))
 
     # The effective square size gives prompts one isotropic scale factor.
     from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_numpy

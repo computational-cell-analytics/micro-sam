@@ -32,7 +32,7 @@ import torch
 
 from micro_sam.v1.evaluation.evaluation import run_evaluation
 from micro_sam.v2.util import configure_image_predictor
-from torch_em.transform.raw import normalize
+from micro_sam.v2.normalization import UINT8_RANGE, normalize_raw
 
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_3D_EM,
@@ -76,16 +76,13 @@ _DATASET_ANISOTROPY = {
 
 
 def _normalize_raw_to_unit(raw):
-    raw = raw.astype("float32", copy=False)
     if raw.size == 0:
-        return raw
-    if raw.min() < 0 or raw.max() > 1:
-        raw = normalize(raw)
-    return np.clip(raw, 0, 1)
+        return raw.astype("float32", copy=False)
+    return normalize_raw(raw)
 
 
 def _to_sam2_uint8(raw):
-    return np.round(_normalize_raw_to_unit(raw) * 255).astype("uint8")
+    return normalize_raw(raw, output_range=UINT8_RANGE, dtype="uint8")
 
 
 def _load_cellpose(model_type, device):
@@ -176,7 +173,7 @@ def _segment_segneuron(volume, model, device, beta=0.25):
     sys.path.insert(0, os.path.join(_SEGNEURON_ROOT, "Postprocess"))
     from FRMC_post import post_mc
 
-    raw = volume.astype("float32") / 255.0 if volume.max() > 1.0 else volume.astype("float32")
+    raw = _normalize_raw_to_unit(volume)
     Z, Y, X = raw.shape
     bz, by, bx = 20, 128, 128
     hz, hy, hx = 4, 32, 32

@@ -13,6 +13,7 @@ from micro_sam.util import (
     get_device, get_cache_directory, microsam_cachedir, _open_embeddings, _create_dataset_without_data,
 )
 from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
+from micro_sam.v2.normalization import RAW_NORMALIZATION, to_image
 
 import sam2
 from sam2.build_sam import build_sam2
@@ -285,8 +286,8 @@ def get_sam2_image_predictor(model, **kwargs):
 def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     """Validate saved embeddings against the requested configuration.
 
-    Returns True if the saved embeddings are stale and should be recomputed (the model or tiling
-    configuration changed), False if they can be loaded. Raises if they belong to different image
+    Returns True if the saved embeddings are stale and should be recomputed (the model, tiling or
+    normalization changed), False if they can be loaded. Raises if they belong to different image
     data (data signature mismatch).
     """
     # We may have an empty zarr file that was already created to save the embeddings in.
@@ -298,11 +299,15 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam.v2`?
     from micro_sam.util import _get_embedding_signature
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
+    signature["normalization"] = RAW_NORMALIZATION
 
     stale = False
     for key, val in signature.items():
-        # A key absent from an older file should not invalidate it (it predates that key).
-        if key not in f.attrs or f.attrs[key] == val:
+        # Embeddings without normalization metadata used the former min-max policy.
+        if key not in f.attrs:
+            stale = stale or key == "normalization"
+            continue
+        if f.attrs[key] == val:
             continue
         # Different image data: surface as an error rather than silently overwriting it.
         if key == "data_signature":
@@ -318,9 +323,17 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
                 "But please recompute them if model predictions don't look as expected."
             )
             continue
-        # Model or tiling changed: the saved embeddings are stale and must be recomputed.
+        # Model, tiling or normalization changed: the saved embeddings are stale and must be recomputed.
         stale = True
     return stale
+
+
+def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size, original_size):
+    """Write the common embedding metadata plus the SAM2 normalization policy."""
+    from micro_sam.util import _write_embedding_signature as _write_common_signature
+
+    _write_common_signature(f, input_, predictor, tile_shape, halo, input_size, original_size)
+    f.attrs["normalization"] = RAW_NORMALIZATION
 
 
 def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
@@ -346,10 +359,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     # Otherwise we have to compute the embeddings.
     predictor.reset_predictor()
 
-    from micro_sam.util import _to_image
-    # Min-max normalization, unified across the SAM2 image paths (interactive, AMG and the UniSAM2
-    # decoder when run on precomputed embeddings); the UniSAM2 decoder was trained with min-max.
-    predictor.set_image(_to_image(input_, normalization="minmax"))
+    predictor.set_image(to_image(input_))
     features = predictor.get_image_embedding().cpu().numpy()
     high_res_features = predictor._features.get("high_res_feats")
     original_size = predictor._orig_hw
@@ -360,7 +370,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
-        from micro_sam.util import _create_dataset_with_data, _write_embedding_signature
+        from micro_sam.util import _create_dataset_with_data
         _create_dataset_with_data(f, "features", data=features)
         # Store the high-resolution features (a list of tensors) needed by the SAM2 decoder.
         high_res_group = f.require_group("high_res_feats")
@@ -380,7 +390,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
 
 
 def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update):
-    from micro_sam.util import _to_image, _create_dataset_with_data, _write_embedding_signature
+    from micro_sam.util import _create_dataset_with_data
     from bioimage_cpp.utils import Blocking
 
     features = f.require_group("features")
@@ -402,7 +412,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
     for tile_id in range(n_tiles):
         block = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
         bb = tuple(slice(begin, end) for begin, end in zip(block.begin, block.end))
-        predictor.set_image(_to_image(input_[bb], normalization="minmax"))
+        predictor.set_image(to_image(input_[bb]))
 
         tile_features = predictor.get_image_embedding().cpu().numpy()
         high_res_features = [feat.cpu().numpy() for feat in predictor._features["high_res_feats"]]
@@ -428,7 +438,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
 
 
 def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update):
-    from micro_sam.util import _to_image, _create_dataset_with_data, _write_embedding_signature
+    from micro_sam.util import _create_dataset_with_data
     from bioimage_cpp.utils import Blocking
 
     features = f.require_group("features")
@@ -463,7 +473,7 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
         inference_state = predictor.init_state(
             volume=sub_volume, volume_embeddings=None, ignore_caching_features=True,
         )
-        batched_images = [_to_image(sub_volume[z]) for z in range(n_slices)]
+        batched_images = [to_image(sub_volume[z]) for z in range(n_slices)]
         vision_feats, pos_encs, fpns, original_sizes, input_sizes = _compute_embeddings_batched_3d(
             inference_state, predictor, list(range(n_slices)), batched_images, pbar_update=pbar_update,
         )
@@ -621,8 +631,7 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
             if partial_features and np.count_nonzero(features[z]) != 0:
                 continue
 
-            from micro_sam.util import _to_image
-            tile_input = _to_image(input_[z])
+            tile_input = to_image(input_[z])
             batched_images.append(tile_input)
             batched_z.append(z)
 
@@ -660,7 +669,6 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
             pbar_update(1)
 
     if save_features:
-        from micro_sam.util import _write_embedding_signature
         _write_embedding_signature(
             f, input_, predictor, tile_shape=None, halo=None,
             input_size=input_sizes[-1], original_size=original_sizes[-1],
@@ -724,7 +732,7 @@ def precompute_image_embeddings(
     elif os.path.exists(save_path):
         f = _open_embeddings(save_path, mode="a")
         if _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
-            # Stale embeddings (model or tiling changed): truncate and recompute, overwriting them.
+            # Stale embeddings: truncate and recompute, overwriting them.
             f = _open_embeddings(save_path, mode="w")
 
     # We have a save path and it does not exist yet. Create the zarr file to which the

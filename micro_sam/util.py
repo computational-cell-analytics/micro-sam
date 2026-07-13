@@ -154,11 +154,11 @@ def get_embedding_function(model_type: str) -> callable:
     Raises:
         ValueError: If `model_type` does not belong to any supported model family.
     """
-    from .v1.models.vfm import is_vfm_model, get_vfm_model_names
+    from .models.vfm import is_vfm_model, get_vfm_model_names
     from .v2.util import SUPPORTED_MODELS as sam2_backbones
 
     if is_vfm_model(model_type):
-        from .v1.models.vfm import precompute_vfm_embeddings
+        from .models.vfm import precompute_vfm_embeddings
         return precompute_vfm_embeddings
 
     # Finetuned names keep their backbone prefix ('vit_b_lm' -> 'vit_b', 'hvit_t_cells' -> 'hvit_t').

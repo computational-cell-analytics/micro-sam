@@ -10,12 +10,13 @@ from bioimage_cpp.segmentation import label as connected_components
 import torch
 
 from torch_em.util.image import load_data
-from torch_em.transform.raw import normalize_percentile
 from torch_em.data.datasets import light_microscopy, electron_microscopy
 from torch_em.data.datasets.electron_microscopy import axondeepseg as axondeepseg_module
 from torch_em.data.datasets.light_microscopy import ctc as ctc_module
 
 from training.dataset.vos_raw_dataset import VOSRawDataset, VOSFrame, VOSVideo
+
+from micro_sam.v2.normalization import UINT8_RANGE, normalize_raw
 
 from .segment_loader import ImageSegmentLoader, VolumeSegmentLoader
 
@@ -121,12 +122,8 @@ class VolumeRawDataset(VOSRawDataset):
         # NOTE: This will change this in future to automate this based on the volume.
         assert raw.ndim == 3 and labels.ndim == 3, "We currently only support 3 dimensional inputs for this loader."
 
-        # Normalize non-uint8 volumes (e.g. uint16 LM data) per-volume before slicing,
-        # so all frames share the same intensity scale (Convention 2: output is uint8 [0, 255]).
-        if raw.dtype != np.uint8:
-            raw = normalize_percentile(raw.astype(np.float32))
-            raw = np.clip(raw, 0, 1)
-            raw = (raw * 255).astype(np.uint8)
+        # Normalize per volume before slicing so all frames share the same intensity scale.
+        raw = normalize_raw(raw, output_range=UINT8_RANGE, dtype="uint8")
 
         # Let's expand the one channel images to three channels for training.
         raw = np.repeat(raw[:, np.newaxis, :, :], 3, axis=1)  # (img_num, 3, H, W)
@@ -243,12 +240,9 @@ class ImageRawDataset(VOSRawDataset):
         # We prepare the image in VOSFrame object style for storing it in expected format.
         raw = np.array(load_data(raw_path))
 
-        # Normalize non-uint8 images per-image before RGB conversion
-        # (Convention 2: output uint8 [0, 255] for ToTensorAPI -> NormalizeAPI pipeline).
-        if raw.dtype != np.uint8:
-            raw = normalize_percentile(raw.astype(np.float32))
-            raw = np.clip(raw, 0, 1)
-            raw = (raw * 255).astype(np.uint8)
+        # Normalize per image and independently per channel before RGB conversion.
+        spatial_axes = (0, 1) if raw.ndim == 3 else None
+        raw = normalize_raw(raw, axis=spatial_axes, output_range=UINT8_RANGE, dtype="uint8")
 
         # Ensure the images are in RGB format.
         raw = light_microscopy.neurips_cell_seg.to_rgb(raw)
@@ -302,10 +296,7 @@ class TissueNetDataset(VOSRawDataset):
         raw = np.array(load_data(zarr_path, "raw/rgb"))        # (3, H, W) float64
         labels = np.array(load_data(zarr_path, "labels/cell"))  # (H, W) int32
 
-        # Percentile normalize per channel -> [0, 1] -> uint8
-        raw = normalize_percentile(raw, axis=(1, 2))
-        raw = np.clip(raw, 0, 1)
-        raw = (raw * 255).astype(np.uint8)  # (3, H, W)
+        raw = normalize_raw(raw, axis=(1, 2), output_range=UINT8_RANGE, dtype="uint8")  # (3, H, W)
 
         frames = [VOSFrame(0, image_path=None, data=torch.from_numpy(raw))]
         video = VOSVideo(fname, idx, frames)
@@ -410,14 +401,9 @@ class CTCDataset(VOSRawDataset):
         all_raw = [imageio.imread(f) for f in img_files]
         all_labels = [imageio.imread(f).astype(np.int32) for f in lbl_files]
 
-        # Normalize non-uint8 sequences per-sequence so all frames share the same
-        # intensity scale (avoids frame-to-frame brightness flicker in SAM2 video mode).
-        # Convention 2 -> uint8 [0, 255], consistent with ToTensorAPI -> NormalizeAPI pipeline.
-        if all_raw[0].dtype != np.uint8:
-            seq_stack = np.stack(all_raw).astype(np.float32)  # (T, H, W)
-            seq_stack = normalize_percentile(seq_stack)        # percentiles over whole sequence
-            seq_stack = np.clip(seq_stack, 0, 1)
-            all_raw = [(seq_stack[i] * 255).astype(np.uint8) for i in range(len(all_raw))]
+        # Normalize per sequence so all frames share the same intensity scale and avoid flicker.
+        seq_stack = normalize_raw(np.stack(all_raw), output_range=UINT8_RANGE, dtype="uint8")
+        all_raw = list(seq_stack)
 
         all_frames = []
         for frame_idx, raw_frame in enumerate(all_raw):

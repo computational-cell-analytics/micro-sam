@@ -82,6 +82,66 @@ class TestUtil(unittest.TestCase):
             x1, x2 = (np.random.rand(32, 32) > 0.5), (np.random.rand(32, 32) > 0.5)
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
+    def test_normalize_raw(self):
+        from micro_sam.v2.normalization import UINT8_RANGE, normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+        raw[-1, -1] = 10_000  # An outlier must not determine the useful intensity range.
+
+        normalized = normalize_raw(raw)
+        self.assertEqual(normalized.dtype, np.float32)
+        self.assertGreaterEqual(normalized.min(), 0.0)
+        self.assertLessEqual(normalized.max(), 1.0)
+        self.assertEqual(normalized[-1, -1], 1.0)
+        self.assertGreater(normalized[50, 0], 0.45)
+
+        normalized_255 = normalize_raw(raw, output_range=UINT8_RANGE)
+        self.assertEqual(normalized_255.dtype, np.float32)
+        self.assertTrue(np.allclose(normalized_255, normalized * 255))
+
+        normalized_uint8 = normalize_raw(raw, output_range=UINT8_RANGE, dtype="uint8")
+        self.assertEqual(normalized_uint8.dtype, np.uint8)
+        self.assertTrue(np.array_equal(normalized_uint8, normalized_255.astype("uint8")))
+
+        with self.assertRaises(ValueError):
+            normalize_raw(raw, dtype="int16")
+        with self.assertRaises(ValueError):
+            normalize_raw(raw, output_range=(1, 0))
+
+    def test_normalize_raw_per_channel(self):
+        from micro_sam.v2.normalization import normalize_raw, to_image
+
+        channel = np.arange(100, dtype="float32").reshape(10, 10)
+        image = np.stack([channel, channel * 100 + 42], axis=-1)
+        normalized = normalize_raw(image, axis=(0, 1))
+        self.assertTrue(np.allclose(normalized[..., 0], normalized[..., 1]))
+
+        rgb = to_image(image)
+        self.assertEqual(rgb.shape, (10, 10, 3))
+        self.assertEqual(rgb.dtype, np.uint8)
+        self.assertTrue(np.array_equal(rgb[..., 0], rgb[..., 1]))
+        self.assertFalse(np.any(rgb[..., 2]))
+
+    def test_normalization_invalidates_old_embeddings(self):
+        from types import SimpleNamespace
+
+        from micro_sam.util import _get_embedding_signature
+        from micro_sam.v2.normalization import RAW_NORMALIZATION
+        from micro_sam.v2.util import _check_saved_embeddings
+
+        predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test")
+        raw = np.arange(100).reshape(10, 10)
+        signature = _get_embedding_signature(raw, predictor, tile_shape=None, halo=None)
+        signature["normalization"] = RAW_NORMALIZATION
+        self.assertEqual(signature["normalization"], "percentile_1_99")
+
+        attrs = {"input_size": [10, 10], **signature}
+        embeddings = SimpleNamespace(attrs=attrs)
+        self.assertFalse(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
+
+        del attrs["normalization"]
+        self.assertTrue(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
+
     def test_apply_nms_tiled_border_masks(self):
         from micro_sam.util import apply_nms
 
@@ -344,6 +404,7 @@ class TestSAM2Util(unittest.TestCase):
         # The signature is written so the GUI / CLI can validate a reload.
         self.assertEqual(f.attrs["model_name"], self.model_type)
         self.assertIn("data_signature", f.attrs)
+        self.assertEqual(f.attrs["normalization"], "percentile_1_99")
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=2)

@@ -256,10 +256,10 @@ def run_unisam2_inference(
         Channel 0 is the foreground probability, channels 1-3 the directed distances.
     """
     from torch_em.util.prediction import predict_with_halo
-    from torch_em.transform.raw import normalize
+    from micro_sam.v2.normalization import normalize_raw
 
     def _preprocess(crop):
-        return np.concatenate([normalize(crop)] * 3, axis=0)
+        return np.concatenate([normalize_raw(crop)] * 3, axis=0)
 
     is_3d = ndim == 3
 

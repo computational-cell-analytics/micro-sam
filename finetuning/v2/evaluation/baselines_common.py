@@ -7,9 +7,9 @@ import imageio.v3 as imageio
 from skimage.measure import label as connected_components
 
 from elf.io import open_file
-from torch_em.transform.raw import normalize
 
 from common import get_data_paths, load_volume, _center_crop_roi
+from micro_sam.v2.normalization import UINT8_RANGE, normalize_raw
 
 CROP_SHAPE_2D = (512, 512)
 CROP_SHAPE_3D = (8, 512, 512)
@@ -17,14 +17,9 @@ MAX_EVALUATION_SAMPLES = int(os.environ.get("MICRO_SAM_EVAL_MAX_SAMPLES", "200")
 
 
 def _ensure_8bit_range(raw):
-    raw = raw.astype("float32", copy=False)
     if raw.size == 0:
-        return raw
-    if raw.max() <= 1:
-        raw = raw * 255
-    elif raw.max() > 255 or raw.min() < 0:
-        raw = normalize(raw) * 255
-    return np.clip(raw, 0, 255).astype("float32")
+        return raw.astype("float32", copy=False)
+    return normalize_raw(raw, output_range=UINT8_RANGE)
 
 
 def _read_2d(path, key):
