@@ -1,13 +1,14 @@
-"""Vision Foundation Model (DINO, UNI) encoders for the classification tools.
+"""Vision Foundation Model (DINO, UNI, SAM3) encoders for the classification tools.
 
 The classification tools operate directly on dense image-encoder features, so they can use backbones
 beyond SAM. This module produces embeddings in the same `ImageEmbeddings` format that
 `compute_pixel_features` and `compute_object_features` consume.
 
-Three loading backends are supported:
+Four loading backends are supported:
 - `torch_hub`: DINOv2 (fetches model code + weights at runtime, no auth).
 - `hf`: DINOv3 via the `transformers` library (gated, user provides HuggingFace access).
 - `timm`: the MahmoodLab histopathology models UNI / UNI2-h via `timm` (gated, user provides access).
+- `sam3`: the SAM3 image encoder (the ViT trunk of the SAM3 image model) via the `sam3` package.
 
 The gated models (DINOv3, UNI, UNI2-h) are never hosted or distributed by us: each user provides their
 own HuggingFace access by accepting the license on the model page and authenticating in the terminal
@@ -20,6 +21,9 @@ embeddings are stored in the same zarr layout that SAM uses, so the classificati
 """
 
 import os
+import sys
+import types
+import importlib.util
 from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
@@ -38,30 +42,37 @@ from ... import util
 # Registry of supported Vision Foundation Model encoders, keyed by the micro-sam `model_type`.
 # 'backend' selects how the model is loaded: 'torch_hub' (DINOv2, auto-download) builds 'repo'/'entrypoint'
 # via torch.hub; 'hf' (DINOv3, gated) loads the HuggingFace 'repo' via transformers.AutoModel; 'timm'
-# (UNI/UNI2-h, gated) loads the HuggingFace 'repo' via timm.create_model.
+# (UNI/UNI2-h, gated) loads the HuggingFace 'repo' via timm.create_model; 'sam3' loads the SAM3 image
+# encoder via the sam3 package. A 'mean'/'std' entry overrides the default ImageNet normalization, and an
+# 'img_size' entry overrides the default longest-side input size (used for SAM3's native 1008 resolution).
 VFM_MODELS: Dict[str, Dict] = {
     # DINOv2 (patch size 14); weights auto-download via torch.hub, no authentication.
-    "dino_v2_vits": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vits14", "patch_size": 14, "embed_dim": 384},  # noqa
-    "dino_v2_vitb": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitb14", "patch_size": 14, "embed_dim": 768},  # noqa
-    "dino_v2_vitl": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitl14", "patch_size": 14, "embed_dim": 1024},  # noqa
-    "dino_v2_vitg": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitg14", "patch_size": 14, "embed_dim": 1536},  # noqa
+    "vit_s_dinov2": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vits14", "patch_size": 14, "embed_dim": 384},  # noqa
+    "vit_b_dinov2": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitb14", "patch_size": 14, "embed_dim": 768},  # noqa
+    "vit_l_dinov2": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitl14", "patch_size": 14, "embed_dim": 1024},  # noqa
+    "vit_g_dinov2": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitg14", "patch_size": 14, "embed_dim": 1536},  # noqa
     # DINOv3 (patch size 16); loaded from HuggingFace via transformers. Gated: user provides HF access.
-    "dino_v3_vits": {"backend": "hf", "repo": "facebook/dinov3-vits16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 384},  # noqa
-    "dino_v3_vitb": {"backend": "hf", "repo": "facebook/dinov3-vitb16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 768},  # noqa
-    "dino_v3_vitl": {"backend": "hf", "repo": "facebook/dinov3-vitl16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 1024},  # noqa
+    "vit_s_dinov3": {"backend": "hf", "repo": "facebook/dinov3-vits16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 384},  # noqa
+    "vit_b_dinov3": {"backend": "hf", "repo": "facebook/dinov3-vitb16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 768},  # noqa
+    "vit_l_dinov3": {"backend": "hf", "repo": "facebook/dinov3-vitl16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 1024},  # noqa
     # UNI / UNI2-h (MahmoodLab histopathology); loaded from HuggingFace via timm. Gated: user provides HF access.
-    "uni": {"backend": "timm", "repo": "hf-hub:MahmoodLab/uni", "patch_size": 16, "embed_dim": 1024, "timm_variant": "uni"},  # noqa
-    "uni2_h": {"backend": "timm", "repo": "hf-hub:MahmoodLab/UNI2-h", "patch_size": 14, "embed_dim": 1536, "timm_variant": "uni2_h"},  # noqa
+    "vit_uni": {"backend": "timm", "repo": "hf-hub:MahmoodLab/uni", "patch_size": 16, "embed_dim": 1024, "timm_variant": "uni"},  # noqa
+    "vit_univ2": {"backend": "timm", "repo": "hf-hub:MahmoodLab/UNI2-h", "patch_size": 14, "embed_dim": 1536, "timm_variant": "uni2_h"},  # noqa
+    # SAM3 image encoder (Perception Encoder ViT trunk, patch size 14); the checkpoint auto-downloads from
+    # HuggingFace (facebook/sam3). Normalized to mean/std 0.5 at its native 1008 resolution.
+    "vit_sam3": {"backend": "sam3", "patch_size": 14, "embed_dim": 1024, "img_size": 1008, "mean": (0.5, 0.5, 0.5), "std": (0.5, 0.5, 0.5)},  # noqa
 }
 
 # Map each model to a human-readable size label for the GUI dropdowns.
 VFM_SIZE_LABELS = {
-    "dino_v2_vits": "small", "dino_v2_vitb": "base", "dino_v2_vitl": "large", "dino_v2_vitg": "giant",
-    "dino_v3_vits": "small", "dino_v3_vitb": "base", "dino_v3_vitl": "large",
-    "uni": "large", "uni2_h": "huge",  # UNI is ViT-L, UNI2-h is ViT-H.
+    "vit_s_dinov2": "small", "vit_b_dinov2": "base", "vit_l_dinov2": "large", "vit_g_dinov2": "giant",
+    "vit_s_dinov3": "small", "vit_b_dinov3": "base", "vit_l_dinov3": "large",
+    "vit_uni": "large", "vit_univ2": "huge",  # UNI is ViT-L, UNI2-h is ViT-H.
+    "vit_sam3": "large",  # SAM3 uses a single ViT-L-scale Perception Encoder.
 }
 
 # ImageNet statistics the web-pretrained VFM models expect, applied after mapping the image to [0, 1].
+# A model can override these via its 'mean'/'std' registry entry (e.g. SAM3 uses 0.5).
 VFM_MEAN = (0.485, 0.456, 0.406)
 VFM_STD = (0.229, 0.224, 0.225)
 
@@ -103,6 +114,9 @@ class VFMEncoder(torch.nn.Module):
         self.patch_size = spec["patch_size"]
         self.embed_dim = spec["embed_dim"]
         self.backend = spec["backend"]
+        # Normalization stats; ImageNet by default, overridable per model (SAM3 uses 0.5).
+        self.mean = spec.get("mean", VFM_MEAN)
+        self.std = spec.get("std", VFM_STD)
         # The encoder needs a square input whose side is a multiple of the patch size.
         self.img_size = (img_size // self.patch_size) * self.patch_size
         # Set by 'get_vfm_model' so downstream code can read the model identity like a SAM predictor.
@@ -132,8 +146,8 @@ class VFMEncoder(torch.nn.Module):
 
     def _preprocess(self, image: np.ndarray) -> Tuple[torch.Tensor, Tuple[int, int]]:
         x = self._to_unit_rgb(image)
-        mean = torch.tensor(VFM_MEAN, device=self.device).view(1, 3, 1, 1)
-        std = torch.tensor(VFM_STD, device=self.device).view(1, 3, 1, 1)
+        mean = torch.tensor(self.mean, device=self.device).view(1, 3, 1, 1)
+        std = torch.tensor(self.std, device=self.device).view(1, 3, 1, 1)
 
         new_h, new_w = self._resize_longest_side(x.shape[-2], x.shape[-1], self.img_size)
         x = F.interpolate(x, (new_h, new_w), mode="bilinear", align_corners=False, antialias=True)
@@ -161,6 +175,17 @@ class VFMEncoder(torch.nn.Module):
         h, w = self.img_size // self.patch_size, self.img_size // self.patch_size
         if self.backend == "torch_hub":  # DINOv2 exposes a dense-feature helper directly.
             features = self.model.get_intermediate_layers(x, n=1, reshape=True)[0]  # (1, C, h, w)
+        elif self.backend == "sam3":
+            # SAM3's fused MLP forces bf16. On CPU that bf16 is emulated (slow), so the op is patched to
+            # fp32 (see '_install_sam3_cpu_fp32_mlp') and we run in plain fp32 - no autocast. On CUDA/MPS
+            # bf16 is native, so we keep it and apply the matching bf16 autocast the model's own (CUDA-only)
+            # decorators expect. 'mps' is best-effort (bf16 autocast support is torch/hardware dependent).
+            device_type = torch.device(self.device).type
+            if device_type in ("cuda", "mps"):
+                with torch.autocast(device_type=device_type, dtype=torch.bfloat16):
+                    features = self.model(x)[-1]  # list of (1, C, h, w) feature maps
+            else:  # cpu (and any other device): fp32.
+                features = self.model(x)[-1]
         else:
             # 'hf' (transformers DINOv3) and 'timm' (UNI/UNI2-h) both return a token sequence of the
             # form [prefix tokens..., patch tokens]. The patch tokens are the trailing h*w entries, so
@@ -184,11 +209,13 @@ def get_vfm_model(
     """Load a DINO / UNI encoder for the classification tools.
 
     Args:
-        model_type: One of the keys in `VFM_MODELS`, e.g. 'dino_v2_vitb' or 'dino_v3_vitb'.
+        model_type: One of the keys in `VFM_MODELS`, e.g. 'vit_b_dinov2', 'vit_b_dinov3' or 'vit_sam3'.
         device: The device to load the model on. By default the best available device.
         checkpoint_path: For DINOv3 (HuggingFace), an optional local model directory to load instead of
-            the gated HuggingFace repo. Ignored for DINOv2, whose weights download automatically.
-        img_size: The longest-side input size; snapped down to a multiple of the patch size.
+            the gated HuggingFace repo. For SAM3, an optional local SAM3 checkpoint to load instead of
+            auto-downloading from HuggingFace. Ignored for DINOv2, whose weights download automatically.
+        img_size: The longest-side input size; snapped down to a multiple of the patch size. A model that
+            pins its native size (e.g. SAM3 at 1008) overrides this.
 
     Returns:
         The VFM encoder.
@@ -198,6 +225,8 @@ def get_vfm_model(
             f"Unknown VFM model '{model_type}'. Available models: {sorted(VFM_MODELS)}."
         )
     spec = VFM_MODELS[model_type]
+    # A model may pin its native input size (e.g. SAM3 at 1008), overriding the passed default.
+    img_size = spec.get("img_size", img_size)
     device = util.get_device(device)
 
     # xFormers' memory-efficient attention is CUDA-only; on CPU some backbones (e.g. the torch.hub DINOv2
@@ -210,6 +239,8 @@ def get_vfm_model(
         model = torch.hub.load(spec["repo"], spec["entrypoint"])
     elif spec["backend"] == "hf":  # DINOv3: HuggingFace via transformers, user's own HF access.
         model = _load_hf_model(spec["repo"], checkpoint_path)
+    elif spec["backend"] == "sam3":  # SAM3: the image-model ViT trunk via the sam3 package.
+        model = _load_sam3_model(checkpoint_path)
     else:  # 'timm': UNI / UNI2-h from HuggingFace via timm, user's own HF access.
         model = _load_timm_model(spec)
 
@@ -252,6 +283,123 @@ def _load_timm_model(spec: Dict):
             "and authenticate in your terminal via 'huggingface-cli login' or the 'HF_TOKEN' "
             "environment variable."
         ) from e
+
+
+def _ensure_sam3_importable():
+    """Make the 'sam3' package importable on a machine without 'triton'.
+
+    'sam3/__init__' eagerly imports the video-tracker and perf paths, which import 'triton' (a GPU-only
+    JIT) purely for kernels the image encoder never runs (Euclidean distance transform, NMS, ...). When
+    'triton' is absent (e.g. a CPU-only install) that import chain crashes before the image encoder can be
+    built. torch itself handles a missing 'triton' gracefully, so we first let torch finish its own triton
+    probing (while triton is genuinely absent) and then register a minimal 'triton' shim so those sam3
+    modules import; the shimmed kernels are never launched for image encoding.
+    """
+    if importlib.util.find_spec("triton") is not None:
+        return  # real triton present; nothing to do.
+
+    # Let torch/torchvision run their triton probe now, so torch caches 'no triton' and never later
+    # chokes on the shim's partial submodule tree (torch inductor does 'import triton.backends.compiler').
+    try:
+        import torch._dynamo  # noqa
+    except Exception:
+        pass
+
+    class _Stub(types.ModuleType):
+        # Any non-dunder attribute resolves to a universal no-op that works as a decorator ('@triton.jit'),
+        # a decorator factory ('@triton.autotune(...)') or an annotation value ('tl.constexpr'). Dunders
+        # keep normal module semantics so tools like 'inspect' see a well-formed module.
+        def __getattr__(self, name):
+            if name.startswith("__") and name.endswith("__"):
+                raise AttributeError(name)
+
+            def universal(*args, **kwargs):
+                if len(args) == 1 and callable(args[0]) and not kwargs:
+                    return args[0]
+                return lambda fn: fn
+            return universal
+
+    triton = _Stub("triton")
+    triton.__file__ = "<triton-shim>"
+    triton.__path__ = []  # mark as a package so 'import triton.language' resolves.
+    language = _Stub("triton.language")
+    language.__file__ = "<triton-shim>"
+    triton.language = language
+    sys.modules["triton"] = triton
+    sys.modules["triton.language"] = language
+
+
+def _install_sam3_cpu_fp32_mlp():
+    """Run SAM3's fused MLP op in fp32 on CPU; its hardcoded bf16 is emulated (~4x slower) on CPUs without
+    AVX512-BF16. The replacement is device-aware: CPU inputs take an fp32 linear + activation (features
+    match the bf16 path to ~0.9997 cosine), while CUDA / other devices keep SAM3's native fused bf16 op.
+    """
+    import sam3.model.vitdet as vitdet
+    if getattr(vitdet, "microsam_addmm_fp32_installed", False):
+        return
+    native_addmm_act = vitdet.addmm_act
+
+    def addmm_act(activation, linear, mat1):
+        if mat1.device.type != "cpu":  # keep SAM3's native bf16 fused op off CPU (fast there).
+            return native_addmm_act(activation, linear, mat1)
+        y = F.linear(mat1, linear.weight, linear.bias)
+        if activation in (F.gelu, torch.nn.GELU):
+            return F.gelu(y)
+        if activation in (F.relu, torch.nn.ReLU):
+            return F.relu(y)
+        return native_addmm_act(activation, linear, mat1)  # unknown activation: defer to SAM3.
+
+    vitdet.addmm_act = addmm_act
+    vitdet.microsam_addmm_fp32_installed = True
+
+
+def _extract_trunk_state_dict(ckpt: Dict) -> Dict:
+    """Pull the ViT-trunk weights out of a full SAM3 checkpoint (or pass through a trunk-only one)."""
+    prefix = "backbone.vision_backbone.trunk."
+    state_dict = {}
+    for k, v in ckpt.items():
+        key = k[len("detector."):] if k.startswith("detector.") else k
+        if key.startswith(prefix):
+            state_dict[key[len(prefix):]] = v
+    return state_dict if state_dict else ckpt  # fall back: assume the checkpoint is already trunk-only.
+
+
+def _load_sam3_model(checkpoint_path=None):
+    """Load the SAM3 image encoder: the Perception-Encoder ViT trunk of the SAM3 image model.
+
+    Only the vision-transformer trunk is built (via the SAM3 model builder) and its weights are loaded from
+    the SAM3 checkpoint, which auto-downloads from HuggingFace (facebook/sam3) when no `checkpoint_path` is
+    given. Building only the trunk keeps this CPU-safe: the full image model's neck precomputes position
+    encodings on a hardcoded CUDA device, whereas the trunk runs on CPU and GPU alike. That trunk produces
+    the dense patch features the classification tools consume.
+    """
+    _ensure_sam3_importable()
+    try:
+        from sam3.model_builder import _create_vit_backbone, download_ckpt_from_hf
+    except ImportError as e:
+        raise ImportError(
+            "Loading the SAM3 encoder requires the 'sam3' package. Install segment anything 3 from "
+            "https://github.com/facebookresearch/sam3."
+        ) from e
+
+    _install_sam3_cpu_fp32_mlp()
+    trunk = _create_vit_backbone()
+    try:
+        source = str(checkpoint_path) if checkpoint_path else download_ckpt_from_hf(version="sam3")
+    except Exception as e:
+        raise RuntimeError(
+            "Could not fetch the SAM3 checkpoint; see the chained error above for the exact reason. The "
+            "weights are gated on HuggingFace (facebook/sam3): accept the license there and authenticate "
+            "via 'huggingface-cli login' or the 'HF_TOKEN' environment variable."
+        ) from e
+
+    ckpt = torch.load(source, map_location="cpu", weights_only=True)
+    if "model" in ckpt and isinstance(ckpt["model"], dict):
+        ckpt = ckpt["model"]
+    missing, unexpected = trunk.load_state_dict(_extract_trunk_state_dict(ckpt), strict=False)
+    if missing:
+        raise RuntimeError(f"The SAM3 checkpoint '{source}' is missing {len(missing)} ViT-trunk weights.")
+    return trunk
 
 
 def _load_hf_model(repo: str, checkpoint_path=None):

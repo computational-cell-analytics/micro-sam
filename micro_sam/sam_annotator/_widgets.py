@@ -2151,9 +2151,10 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     # (ordered by size). Sizes/names come from 'micro_sam.v1.models.vfm.VFM_MODELS'/'VFM_SIZE_LABELS', not the
     # SAM1 naming scheme. DINOv2/v3 are natural-image (LVD-1689M) models; UNI/UNI2-h are histopathology.
     _dino_families = {
-        "Natural Images (DINOv2)": ("dino_v2_vits", "dino_v2_vitb", "dino_v2_vitl", "dino_v2_vitg"),
-        "Natural Images (DINOv3)": ("dino_v3_vits", "dino_v3_vitb", "dino_v3_vitl"),
-        "Histopathology (UNI)": ("uni", "uni2_h"),
+        "Natural Images (DINOv2)": ("vit_s_dinov2", "vit_b_dinov2", "vit_l_dinov2", "vit_g_dinov2"),
+        "Natural Images (DINOv3)": ("vit_s_dinov3", "vit_b_dinov3", "vit_l_dinov3"),
+        "Histopathology (UNI)": ("vit_uni", "vit_univ2"),
+        "Natural Images (SAM3)": ("vit_sam3",),
     }
     # Older saved classifiers stored the primary SAM2 families under '(SAM2)' labels; map them to the
     # current names so loading such a classifier still restores the right family.
