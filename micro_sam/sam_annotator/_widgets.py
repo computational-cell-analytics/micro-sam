@@ -2605,7 +2605,7 @@ class UnifiedSegmentWidget(_WidgetBase):
             # Use the segment_slice method for SAM2.
             boxes = [box[[1, 0, 3, 2]] for box in boxes]
             if batched:
-                seg = self._segment_slice_batched(z, points, labels, boxes, shape)
+                seg = self._segment_slice_batched(z, points, labels, boxes, masks, shape)
             else:
                 seg = state.interactive_segmenter.segment_slice(
                     frame_idx=z,
@@ -2638,11 +2638,12 @@ class UnifiedSegmentWidget(_WidgetBase):
         self._viewer.layers["current_object"].data[z] = seg
         self._viewer.layers["current_object"].refresh()
 
-    def _segment_slice_batched(self, z, points, labels, boxes, shape):
+    def _segment_slice_batched(self, z, points, labels, boxes, masks, shape):
         """Batched multi-object segmentation for a single slice with SAM2.
 
         Mirrors the 2d batched convention: one object per positive point (each combined with the
-        shared negative points) and one object per box. The boxes are expected in the reordered
+        shared negative points) and one object per box. A box from a polygon/ellipse (its entry in
+        `masks` is not None) also carries its soft mask cue. The boxes are expected in the reordered
         layout used by `segment_slice`.
         """
         state = AnnotatorState()
@@ -2666,13 +2667,15 @@ class UnifiedSegmentWidget(_WidgetBase):
             if mask is not None:
                 seg[mask > 0] = object_id
 
-        # One object per box, each combined with the shared negative points.
-        for box in boxes:
+        # One object per box (with its mask cue if it is a polygon/ellipse), each combined with the
+        # shared negative points.
+        for bidx, box in enumerate(boxes):
             neg = negative_points[:, ::-1].copy() if n_neg else None
             neg_labels = np.zeros(n_neg, dtype=int) if n_neg else None
             object_id += 1
             mask = state.interactive_segmenter.segment_slice(
-                frame_idx=z, points=neg, labels=neg_labels, boxes=[box], object_id=object_id,
+                frame_idx=z, points=neg, labels=neg_labels, boxes=[box],
+                masks=[masks[bidx]] if masks is not None else None, object_id=object_id,
             )
             if mask is not None:
                 seg[mask > 0] = object_id
@@ -2773,13 +2776,26 @@ class UnifiedSegmentWidget(_WidgetBase):
 
                 # Add box prompts first: SAM2 requires a box before any point on the same object/frame,
                 # so adding boxes ahead of points lets a box and its correction points combine.
+                # Rectangles are box prompts; polygons/ellipses instead carry a filled mask prompt.
+                shape_yx = state.image_shape[-2:]
                 for curr_z in np.unique(z_values_boxes):
-                    boxes, _ = vutil.shape_layer_to_prompts(layer=box_prompts, shape=state.image_shape, i=curr_z)
+                    boxes, shape_masks = vutil.shape_layer_to_prompts(layer=box_prompts, shape=shape_yx, i=curr_z)
                     if not boxes:
                         continue
-                    box_ids = list(range(object_id + 1, object_id + 1 + len(boxes))) if is_batched else None
-                    object_id += len(boxes)
-                    state.interactive_segmenter.add_box_prompts(frame_ids=curr_z, boxes=boxes, object_id=box_ids)
+                    rect_boxes = [b for b, m in zip(boxes, shape_masks) if m is None]
+                    poly_masks = [m for m in shape_masks if m is not None]
+                    if rect_boxes:
+                        box_ids = list(range(object_id + 1, object_id + 1 + len(rect_boxes))) if is_batched else None
+                        object_id += len(rect_boxes)
+                        state.interactive_segmenter.add_box_prompts(
+                            frame_ids=curr_z, boxes=rect_boxes, object_id=box_ids
+                        )
+                    if poly_masks:
+                        mask_ids = list(range(object_id + 1, object_id + 1 + len(poly_masks))) if is_batched else None
+                        object_id += len(poly_masks)
+                        state.interactive_segmenter.add_mask_prompts(
+                            frame_ids=curr_z, masks=poly_masks, object_id=mask_ids
+                        )
 
                 # Then add the point prompts. Iterate unique frames so each frame's points are added
                 # together; the segmenter skips points already pushed, so re-runs only add new ones.
