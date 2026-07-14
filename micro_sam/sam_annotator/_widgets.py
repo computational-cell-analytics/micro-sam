@@ -3300,8 +3300,28 @@ class InteractiveSegmentationWidget(_WidgetBase):
         button_row.addWidget(self.clear_button)
         self.layout().addLayout(button_row)
 
+        # Scribbles describe corrections for one object and cannot be assigned unambiguously to
+        # separate objects in batched mode. Keep the control in sync as scribbles are added or
+        # removed from the shared prompt layer.
+        self._viewer.layers["prompts"].events.data.connect(self._update_batched_visibility)
+
         # Hide the batched control if the (already loaded) embeddings are tiled.
         self._update_batched_visibility()
+
+    def _update_batched_visibility(self, event=None):
+        """Disable batched segmentation while one or more scribble prompts are present."""
+        super()._update_batched_visibility()
+
+        prompt_layer = self._viewer.layers["prompts"]
+        have_scribbles = any(
+            shape_type in vutil.SCRIBBLE_SHAPE_TYPES for shape_type in prompt_layer.shape_type
+        )
+        if have_scribbles and self.batched_checkbox.isChecked():
+            self.batched_checkbox.setChecked(False)
+
+        self.batched_checkbox.setEnabled(not have_scribbles)
+        tooltip_key = "batched_scribble_disabled" if have_scribbles else "batched"
+        self.batched_checkbox.setToolTip(get_tooltip("unified_segment", tooltip_key))
 
     def _create_propagation_settings(self):
         """Build the SAM2 volume-mode propagation controls (early stopping + z-range slider).

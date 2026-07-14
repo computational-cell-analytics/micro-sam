@@ -274,6 +274,50 @@ class TestAnnotatorClass:
 
         viewer.close()
 
+    @pytest.mark.parametrize("ndim", [2, 3])
+    def test_batched_checkbox_disabled_with_scribbles(self, make_napari_viewer_proxy, ndim):
+        """Batched mode is unavailable exactly while the prompt layer contains a scribble."""
+        from micro_sam.sam_annotator._state import AnnotatorState
+
+        image = binary_blobs(256) if ndim == 2 else np.stack(4 * [binary_blobs(256)])
+        shape = (256, 256) if ndim == 2 else (4, 256, 256)
+        scribble = (
+            np.array([[1, 1], [7, 7]])
+            if ndim == 2 else np.array([[1, 1, 1], [1, 7, 7]])
+        )
+
+        viewer = make_napari_viewer_proxy()
+        viewer.add_image(image, name="image")
+        widget = Annotator(viewer)
+        interactive = widget._widgets["interactive"]
+        prompt_layer = viewer.layers["prompts"]
+
+        # Start in the normal, non-tiled state and enable batched mode.
+        AnnotatorState().image_embeddings = {
+            "input_size": (256, 256), "original_size": shape, "features": None,
+        }
+        interactive._update_batched_visibility()
+        assert interactive.batched_checkbox.isEnabled()
+        normal_tooltip = interactive.batched_checkbox.toolTip()
+        interactive.batched_checkbox.setChecked(True)
+
+        # Adding a scribble immediately resets and disables batched mode.
+        prompt_layer.add_paths(scribble)
+        assert not interactive.batched_checkbox.isChecked()
+        assert not interactive.batched_checkbox.isEnabled()
+        assert not interactive.batched
+        assert "unavailable while scribble prompts are present" in interactive.batched_checkbox.toolTip()
+        if ndim == 3:
+            assert not interactive._segment_widget.batched
+
+        # Removing the last scribble restores normal batched availability.
+        prompt_layer.selected_data = {0}
+        prompt_layer.remove_selected()
+        assert interactive.batched_checkbox.isEnabled()
+        assert interactive.batched_checkbox.toolTip() == normal_tooltip
+
+        viewer.close()
+
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
