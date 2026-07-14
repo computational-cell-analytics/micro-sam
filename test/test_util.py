@@ -108,9 +108,62 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(empty.dtype, np.float32)
 
         with self.assertRaises(ValueError):
-            normalize_raw(raw, dtype="int16")
-        with self.assertRaises(ValueError):
             normalize_raw(raw, output_range=(1, 0))
+
+    def test_normalize_raw_dtypes(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+
+        # Floating and 8-/16-bit integer output dtypes are all supported.
+        for dtype in ["float16", "float32", "float64", "uint8", "int8", "uint16", "int16"]:
+            normalized = normalize_raw(raw, output_range=(0.0, 100.0), dtype=dtype)
+            self.assertEqual(normalized.dtype, np.dtype(dtype))
+            self.assertGreaterEqual(normalized.min(), 0)
+            self.assertLessEqual(normalized.max(), 100)
+
+        # 32-/64-bit integer, boolean and complex output dtypes are rejected.
+        for dtype in ["int32", "uint32", "int64", "uint64", "bool", "complex64", "complex128"]:
+            with self.assertRaises(ValueError):
+                normalize_raw(raw, dtype=dtype)
+
+    def test_normalize_raw_input_ranges(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        # Common microscopy input dtypes over sensible ranges normalize to [0, 1].
+        ranges = {
+            "uint8": (0, 255),
+            "int8": (-128, 127),
+            "uint16": (0, 65535),
+            "int16": (-32768, 32767),
+            "float16": (0.0, 1.0),
+            "float32": (0.0, 1.0),
+            "float64": (-5.0, 5.0),
+        }
+        for dtype, (low, high) in ranges.items():
+            raw = np.linspace(low, high, 10_000, dtype=dtype).reshape(100, 100)
+            normalized = normalize_raw(raw)
+            self.assertEqual(normalized.dtype, np.float32)
+            self.assertGreaterEqual(normalized.min(), 0.0)
+            self.assertLessEqual(normalized.max(), 1.0)
+            # A monotonic input ramp stays monotonic after normalization.
+            self.assertTrue(np.all(np.diff(normalized.ravel()) >= 0))
+
+    def test_normalize_raw_percentile_params(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+
+        # Explicit defaults match the hard-coded 2nd/98th percentiles.
+        default = normalize_raw(raw)
+        explicit = normalize_raw(raw, lower_percentile=2.0, upper_percentile=98.0)
+        self.assertTrue(np.array_equal(default, explicit))
+
+        # Wider percentiles clip less, so intermediate values differ.
+        wide = normalize_raw(raw, lower_percentile=0.0, upper_percentile=100.0)
+        self.assertFalse(np.array_equal(default, wide))
+        self.assertGreaterEqual(wide.min(), 0.0)
+        self.assertLessEqual(wide.max(), 1.0)
 
     def test_normalize_raw_per_channel(self):
         from micro_sam.v2.normalization import normalize_raw, to_image
@@ -137,7 +190,7 @@ class TestUtil(unittest.TestCase):
         raw = np.arange(100).reshape(10, 10)
         signature = _get_embedding_signature(raw, predictor, tile_shape=None, halo=None)
         signature["normalization"] = RAW_NORMALIZATION
-        self.assertEqual(signature["normalization"], "percentile_1_99")
+        self.assertEqual(signature["normalization"], "percentile_2_98")
 
         attrs = {"input_size": [10, 10], **signature}
         embeddings = SimpleNamespace(attrs=attrs)
@@ -423,7 +476,7 @@ class TestSAM2Util(unittest.TestCase):
         # The signature is written so the GUI / CLI can validate a reload.
         self.assertEqual(f.attrs["model_name"], self.model_type)
         self.assertIn("data_signature", f.attrs)
-        self.assertEqual(f.attrs["normalization"], "percentile_1_99")
+        self.assertEqual(f.attrs["normalization"], "percentile_2_98")
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=2)
