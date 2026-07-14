@@ -475,15 +475,19 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
         tile_pos = [torch.stack([p[level] for p in pos_encs]).detach().cpu().numpy() for level in range(depth)]
         tile_fpn = [torch.stack([p[level] for p in fpns]).detach().cpu().numpy() for level in range(depth)]
 
-        ds = _create_dataset_with_data(features, str(tile_id), data=tile_features)
+        # Chunk per slice (chunks=(1, ...)), as '_compute_3d' does: a whole tile-column stacked into a
+        # single chunk exceeds Blosc's ~2.1 GB per-chunk limit for deep volumes (e.g. pos_enc level 0
+        # is ~67 MB/slice, so 50 slices is ~3.35 GB) and fails to compress.
+        feat_chunks = (1,) + tile_features.shape[1:]
+        ds = _create_dataset_with_data(features, str(tile_id), data=tile_features, chunks=feat_chunks)
         ds.attrs["input_size"] = input_sizes[-1]
         ds.attrs["original_size"] = list(original_sizes[-1])
         tile_pos_group = pos_enc_group.require_group(str(tile_id))
         for level, level_feat in enumerate(tile_pos):
-            _create_dataset_with_data(tile_pos_group, str(level), data=level_feat)
+            _create_dataset_with_data(tile_pos_group, str(level), data=level_feat, chunks=(1,) + level_feat.shape[1:])
         tile_fpn_group = fpn_group.require_group(str(tile_id))
         for level, level_feat in enumerate(tile_fpn):
-            _create_dataset_with_data(tile_fpn_group, str(level), data=level_feat)
+            _create_dataset_with_data(tile_fpn_group, str(level), data=level_feat, chunks=(1,) + level_feat.shape[1:])
 
     if save_path is not None:
         _write_embedding_signature(
