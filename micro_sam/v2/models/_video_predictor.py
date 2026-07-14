@@ -77,7 +77,11 @@ def _load_video_frames_from_images(
     img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
 
     if video_path is None:
-        assert isinstance(volume, np.ndarray) and volume.ndim == 3, "Something is off with the 'volume'."
+        # Coerce lazy inputs (e.g. dask / zarr / h5py arrays handed over by a napari layer) to a numpy
+        # array; the non-tiled path stacks every slice into a single device tensor anyway.
+        volume = np.asarray(volume)
+        if volume.ndim != 3:
+            raise ValueError(f"Expected a 3D volume of shape (Z, Y, X), got an array of shape {volume.shape}.")
         # Iterate over each slice.
         images = []
         for i, curr_slice in enumerate(volume):
