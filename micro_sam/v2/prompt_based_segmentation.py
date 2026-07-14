@@ -1,8 +1,10 @@
 from typing import Optional, Union, List
 
 import numpy as np
+import torch
 
-from micro_sam.v1.prompt_based_segmentation import _process_box
+from micro_sam.v1.prompt_based_segmentation import _process_box, _compute_logits_from_mask
+from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy, ResizeLongestSideTransforms
 
 
 def _crop_to_original_shape(mask, shape):
@@ -57,6 +59,15 @@ def _box_to_tiles(tiling, halo, box):
     return assignments
 
 
+def _crop_mask_to_tile(tiling, halo, tile_id, mask):
+    """Crop a full-plane 2d mask to a tile's outer (halo-included) block, so it stays aligned with
+    the tile's sub-volume."""
+    outer = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
+    y0, x0 = int(outer.begin[0]), int(outer.begin[1])
+    y1, x1 = int(outer.end[0]), int(outer.end[1])
+    return np.asarray(mask)[y0:y1, x0:x1]
+
+
 def promptable_segmentation_2d(
     predictor,
     image: Optional[np.ndarray] = None,
@@ -90,7 +101,12 @@ def promptable_segmentation_2d(
 
     # Batched multi-object segmentation: each positive point and each box defines a separate object.
     if batched:
-        return _batched_promptable_segmentation_2d(predictor, points, labels, boxes)
+        return _batched_promptable_segmentation_2d(predictor, points, labels, boxes, masks)
+
+    # A napari polygon or ellipse yields a filled mask prompt (from 'shape_layer_to_prompts'); when
+    # any is present, route to the mask-aware path that feeds them to SAM2 as low-res logit prompts.
+    if masks is not None and any(m is not None for m in masks):
+        return _promptable_segmentation_2d_with_masks(predictor, points, labels, boxes, masks)
 
     kwargs = {}
     if have_points:
@@ -102,7 +118,6 @@ def promptable_segmentation_2d(
 
     # Run interactive segmentation.
     masks, scores, logits = predictor.predict(
-        # mask_input=masks,
         multimask_output=False,  # NOTE: Hard-coded to 'False' atm.
         **kwargs
     )
@@ -124,11 +139,52 @@ def promptable_segmentation_2d(
     return out
 
 
-def _batched_promptable_segmentation_2d(predictor, points, labels, boxes):
+def _promptable_segmentation_2d_with_masks(predictor, points, labels, boxes, masks):
+    """Single-image promptable segmentation that uses polygon/ellipse mask prompts.
+
+    A napari polygon or ellipse yields both a bounding box and a filled mask (from
+    'shape_layer_to_prompts'); the mask is passed to SAM2 as a low-res logit prompt ('mask_input')
+    alongside its box, mirroring the SAM v1 behaviour. Objects are segmented one at a time (as in v1)
+    so a mask prompt only conditions its own object.
+    """
+    shape = predictor._orig_hw[0]
+    have_points = points is not None and len(points) > 0
+    have_boxes = boxes is not None and len(boxes) > 0
+
+    def _predict_one(box=None, mask=None, extra_points=None, extra_labels=None):
+        kwargs = {"multimask_output": False}
+        if box is not None:
+            kwargs["box"] = np.array([_process_box(box, shape)])
+        if mask is not None:
+            kwargs["mask_input"] = _compute_logits_from_mask(mask)
+        if extra_points is not None and len(extra_points) > 0:
+            kwargs["point_coords"] = extra_points[:, ::-1].copy()
+            kwargs["point_labels"] = extra_labels
+        out_masks, _, _ = predictor.predict(**kwargs)
+        return out_masks.squeeze()
+
+    # Points combined with a single shape (v1 convention: only one box allowed alongside points).
+    if have_points and have_boxes:
+        if len(boxes) > 1:
+            print("Point prompts can only be combined with a single box/shape prompt. Skipping segmentation.")
+            return None
+        seg = _predict_one(box=boxes[0], mask=masks[0], extra_points=points, extra_labels=labels)
+        return (seg > 0).astype("uint8")
+
+    # One object per shape (each box, with its mask if it is a polygon/ellipse).
+    out = np.zeros(tuple(shape), dtype="uint8")
+    for seg_id, (box, mask) in enumerate(zip(boxes, masks), 1):
+        seg = _predict_one(box=box, mask=mask)
+        out[seg > 0] = seg_id
+    return out
+
+
+def _batched_promptable_segmentation_2d(predictor, points, labels, boxes, masks=None):
     """Batched 2D segmentation where each positive point and each box defines a separate object.
 
-    Negative points are shared as negative prompts for every object. This matches the batched
-    convention of the SAM v1 annotator and the 3D unified segment widget.
+    Negative points are shared as negative prompts for every object. A box that comes from a
+    polygon/ellipse (its entry in 'masks' is not None) also carries a soft mask-logit cue. This
+    matches the batched convention of the SAM v1 annotator and the 3D unified segment widget.
     """
     shape = predictor._orig_hw[0]
 
@@ -168,14 +224,28 @@ def _batched_promptable_segmentation_2d(predictor, points, labels, boxes):
 
     # One object per box, each combined with the shared negative points.
     if boxes is not None and len(boxes) > 0:
-        processed_boxes = np.array([_process_box(b, shape) for b in boxes])
-        kwargs = {"box": processed_boxes, "multimask_output": False}
-        if n_neg:
-            neg = np.repeat(negative_points[None], len(processed_boxes), axis=0)[..., ::-1].copy()
-            kwargs["point_coords"] = neg
-            kwargs["point_labels"] = np.zeros((len(processed_boxes), n_neg), dtype=int)
-        masks, _, _ = predictor.predict(**kwargs)
-        _assign(masks)
+        have_box_masks = masks is not None and any(m is not None for m in masks)
+        if have_box_masks:
+            # A batched predict takes a single shared 'mask_input', so segment per object to give each
+            # box its own soft mask cue (a box without a mask, e.g. a rectangle, uses the box alone).
+            for bidx, box in enumerate(boxes):
+                kwargs = {"box": np.array([_process_box(box, shape)]), "multimask_output": False}
+                if masks[bidx] is not None:
+                    kwargs["mask_input"] = _compute_logits_from_mask(np.asarray(masks[bidx]))
+                if n_neg:
+                    kwargs["point_coords"] = negative_points[None][..., ::-1].copy()
+                    kwargs["point_labels"] = np.zeros((1, n_neg), dtype=int)
+                out_masks, _, _ = predictor.predict(**kwargs)
+                _assign(out_masks)
+        else:
+            processed_boxes = np.array([_process_box(b, shape) for b in boxes])
+            kwargs = {"box": processed_boxes, "multimask_output": False}
+            if n_neg:
+                neg = np.repeat(negative_points[None], len(processed_boxes), axis=0)[..., ::-1].copy()
+                kwargs["point_coords"] = neg
+                kwargs["point_labels"] = np.zeros((len(processed_boxes), n_neg), dtype=int)
+            out_masks, _, _ = predictor.predict(**kwargs)
+            _assign(out_masks)
 
     if object_id == 0:
         return None
@@ -214,18 +284,23 @@ def tiled_promptable_segmentation_2d(
         return None
 
     # Group the prompts by the tile each falls in, so an object spanning multiple tiles is segmented
-    # in every tile it has prompts in. Points are (y, x); boxes are (y0, x0, y1, x1).
-    tile_points, tile_labels, tile_boxes = {}, {}, {}
+    # in every tile it has prompts in. Points are (y, x); boxes are (y0, x0, y1, x1). A polygon/ellipse
+    # box carries a filled mask prompt; it is cropped to each tile's outer block so it stays aligned.
+    tile_points, tile_labels, tile_boxes, tile_masks = {}, {}, {}, {}
     if have_points:
         for point, label in zip(np.asarray(points), np.asarray(labels)):
             tid = _tile_index_for(tiling, halo, int(round(point[0])), int(round(point[1])))
             tile_points.setdefault(tid, []).append(point)
             tile_labels.setdefault(tid, []).append(label)
     if have_boxes:
-        for box in boxes:
+        for bidx, box in enumerate(boxes):
+            box_mask = masks[bidx] if masks is not None else None
             # A box may span several tiles; segment its clipped portion in each (boxes are y0,x0,y1,x1).
             for tid, clipped in _box_to_tiles(tiling, halo, np.asarray(box)).items():
                 tile_boxes.setdefault(tid, []).append(clipped)
+                tile_masks.setdefault(tid, []).append(
+                    None if box_mask is None else _crop_mask_to_tile(tiling, halo, tid, box_mask)
+                )
 
     out = np.zeros(shape, dtype="uint32")
     found = False
@@ -243,10 +318,12 @@ def tiled_promptable_segmentation_2d(
         local_points = (tpoints - np.array([y0, x0])) if len(tpoints) else tpoints
         local_boxes = [b - np.array([y0, x0, y0, x0]) for b in tboxes] if tboxes else None
 
+        local_masks = tile_masks.get(tile_id) if tboxes else None
+
         set_precomputed(predictor, image_embeddings, tile_id=tile_id)
         tile_seg = promptable_segmentation_2d(
             predictor, image=None, points=local_points, labels=tlabels, boxes=local_boxes,
-            masks=masks, batched=batched,
+            masks=local_masks, batched=batched,
         )
         if tile_seg is None:
             continue
@@ -371,6 +448,8 @@ class PromptableSegmentation3D:
         # refinement) instead of re-adding duplicates. Cleared on 'reset_predictor'.
         self._pushed_points = {}  # (object_id, frame_id) -> set of (y, x, label)
         self._pushed_boxes = {}  # (object_id, frame_id) -> set of box corner tuples
+        self._pushed_masks = {}  # (object_id, frame_id) -> set of mask content hashes
+        self._image_style_trafo = None  # lazily built resize-longest transform for per-slice mask refinement
 
     def init_predictor(self):
         # Initialize the inference state.
@@ -384,6 +463,7 @@ class PromptableSegmentation3D:
         self.predictor.reset_state(self.inference_state)
         self._pushed_points = {}
         self._pushed_boxes = {}
+        self._pushed_masks = {}
 
     def get_progress_total(self, z_range=None):
         """Return the number of slice propagation steps for the requested z range."""
@@ -495,10 +575,63 @@ class PromptableSegmentation3D:
                     labels=np.array([label]),
                 )
 
+    def _prepare_mask(self, mask):
+        """Bring a full-resolution 2d boolean mask into the padded-square frame the video predictor
+        sees, so SAM2's own (direct) resize inside 'add_new_mask' is a no-op and the mask stays
+        aligned with the resize-longest-side + pad the frames use."""
+        mask = np.asarray(mask).astype(bool)
+        target = self.predictor.image_size
+        if mask.shape[-2:] == (target, target):
+            return mask
+        prepared, _ = resize_longest_side_and_pad_spatial_numpy(mask, target, is_label=True)
+        return prepared.astype(bool)
+
     def add_mask_prompts(
-        self, frame_ids: Union[int, List[int]], masks: Optional[np.ndarray] = None,
+        self,
+        frame_ids: Union[int, List[int]],
+        masks: Optional[List[np.ndarray]] = None,
+        object_id: Optional[Union[int, List[int]]] = None,
     ):
-        raise NotImplementedError
+        """Add mask prompts (full-resolution 2d boolean masks) to the persistent SAM2 state.
+
+        A napari polygon or ellipse is filled into a mask (from 'shape_layer_to_prompts'). We first
+        refine the drawn shape into the object on its seed frame (box + soft mask-logit cue, as in
+        the per-slice path), then seed propagation with the refined mask - so the seed slice matches
+        the per-slice result instead of reproducing the raw outline. SAM2's video predictor conditions
+        a frame on either a mask or points/box (not both), so a mask prompt does not combine with
+        points on the same object/frame. A mask already pushed (same object, frame, content) is
+        skipped so re-runs only add newly drawn masks.
+        """
+        if masks is None or len(masks) == 0:
+            return
+
+        masks = [np.asarray(m) for m in masks]
+        n = len(masks)
+        frame_ids = self._broadcast(frame_ids, n)
+        object_ids = self._broadcast(1 if object_id is None else object_id, n)
+
+        for frame_id, mask, obj_id in zip(frame_ids, masks, object_ids):
+            key = (obj_id, frame_id)
+            signature = hash(mask.tobytes())
+            seen = self._pushed_masks.setdefault(key, set())
+            if signature in seen:
+                continue
+            seen.add(signature)
+
+            # Refine the drawn shape into the object on the seed frame, then seed propagation with the
+            # refined mask. The box is the shape's bounding box (nonzero extent of the filled mask).
+            ys, xs = np.nonzero(mask)
+            if len(ys) == 0:
+                continue
+            box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype="float32")  # (x0, y0, x1, y1)
+            refined = self._image_style_predict(frame_id, box=box, mask=mask)
+
+            self.predictor.add_new_mask(
+                inference_state=self.inference_state,
+                frame_idx=frame_id,
+                obj_id=obj_id,
+                mask=self._prepare_mask(refined),
+            )
 
     def _propagate_in_direction(
         self, reverse, update_progress=None, early_stop_patience=None, z_range=None, seen_frames=None
@@ -591,6 +724,79 @@ class PromptableSegmentation3D:
         video_segments = {**reverse_video_segments, **forward_video_segments}
         return video_segments
 
+    def _image_features_for_frame(self, frame_idx):
+        """Build (image_embed, high_res_feats) for one slice from its precomputed features.
+
+        Mirrors 'SAM2ImagePredictor.set_image', including the no-memory embedding that marks a
+        memory-free image prediction. Couples to SAM2 predictor internals ('_get_image_feature',
+        'no_mem_embed'), consistent with how the video-predictor subclass already uses them.
+        """
+        predictor = self.predictor
+        _, _, vision_feats, _, feat_sizes = predictor._get_image_feature(self.inference_state, int(frame_idx), 1)
+        if predictor.directly_add_no_mem_embed:
+            vision_feats[-1] = vision_feats[-1] + predictor.no_mem_embed
+        feats = [
+            feat.permute(1, 2, 0).view(1, -1, *fs) for feat, fs in zip(vision_feats[::-1], feat_sizes[::-1])
+        ][::-1]
+        return feats[-1], feats[:-1]
+
+    def _image_style_predict(self, frame_idx, box=None, mask=None, points=None, labels=None):
+        """Image-predictor-style single-slice prediction using this slice's precomputed features.
+
+        Runs the SAM2 prompt encoder + mask decoder with a box + soft mask-logit cue (and any
+        correction points), so the decoder refines the prompt into the object. This reproduces the
+        2d behaviour, unlike the video predictor's 'add_new_mask', which hard-conditions on the drawn
+        mask and returns it unchanged. Returns a full-resolution boolean segmentation for the slice.
+        """
+        predictor = self.predictor
+        device = self.inference_state["device"]
+        orig_hw = tuple(int(s) for s in self.volume.shape[-2:])
+        image_size = predictor.image_size
+        scale = float(image_size) / max(orig_hw)  # resize-longest maps original coords into the model frame
+
+        image_embed, high_res_feats = self._image_features_for_frame(frame_idx)
+
+        # Box (labels 2, 3) plus any correction points, in (x, y), scaled into the model frame.
+        coords, labs = [], []
+        if box is not None:
+            box = np.asarray(box, dtype="float32").reshape(2, 2) * scale
+            coords.append(torch.as_tensor(box, dtype=torch.float, device=device))
+            labs.append(torch.tensor([2, 3], dtype=torch.int, device=device))
+        if points is not None and len(points) > 0:
+            pts = np.asarray(points, dtype="float32") * scale
+            coords.append(torch.as_tensor(pts, dtype=torch.float, device=device))
+            labs.append(torch.as_tensor(np.asarray(labels), dtype=torch.int, device=device))
+        concat_points = (torch.cat(coords)[None], torch.cat(labs)[None]) if coords else None
+
+        # Soft low-res mask logits (1, 256, 256) from the filled shape, matching the frame's resize+pad.
+        mask_input = None
+        if mask is not None:
+            logits = _compute_logits_from_mask(np.asarray(mask))
+            mask_input = torch.as_tensor(logits, dtype=torch.float, device=device)[None]
+
+        sparse, dense = predictor.sam_prompt_encoder(points=concat_points, boxes=None, masks=mask_input)
+        low_res_masks, _, _, _ = predictor.sam_mask_decoder(
+            image_embeddings=image_embed,
+            image_pe=predictor.sam_prompt_encoder.get_dense_pe(),
+            sparse_prompt_embeddings=sparse,
+            dense_prompt_embeddings=dense,
+            multimask_output=False,
+            repeat_image=False,
+            high_res_features=high_res_feats,
+        )
+
+        if self._image_style_trafo is None:
+            self._image_style_trafo = ResizeLongestSideTransforms(resolution=image_size, mask_threshold=0.0)
+        seg = self._image_style_trafo.postprocess_masks(low_res_masks, orig_hw)
+        return (seg.squeeze() > 0.0).cpu().numpy().astype("uint32")
+
+    def _refine_slice_from_mask(self, frame_idx, boxes=None, masks=None, points=None, labels=None):
+        """Per-slice refinement entry: pair the filled mask with its own box (the shape layer's
+        'boxes'/'masks' are index-aligned) and refine it into the object via '_image_style_predict'."""
+        idx = next(i for i, m in enumerate(masks) if m is not None)
+        box = boxes[idx] if boxes is not None and idx < len(boxes) else None
+        return self._image_style_predict(frame_idx, box=box, mask=masks[idx], points=points, labels=labels)
+
     def segment_slice(
         self,
         frame_idx: int,
@@ -616,31 +822,41 @@ class PromptableSegmentation3D:
         # Validate prompts
         have_points = points is not None and len(points) > 0
         have_boxes = boxes is not None and len(boxes) > 0
+        have_masks = masks is not None and any(m is not None for m in masks)
 
-        if not have_points and not have_boxes:
+        if not have_points and not have_boxes and not have_masks:
             return None
 
         try:
-            # Prepare prompts
-            box = boxes[0] if have_boxes else None
+            if have_masks:
+                # A lasso/polygon/ellipse yields a filled mask; refine it into the object the way the
+                # 2d image predictor does (box + soft mask-logit cue through the mask decoder) rather
+                # than 'add_new_mask', which hard-conditions on the drawn shape and returns it verbatim.
+                seg = self._refine_slice_from_mask(
+                    frame_idx, boxes=boxes, masks=masks,
+                    points=points if have_points else None, labels=labels if have_points else None,
+                )
+            else:
+                # Prepare prompts
+                box = boxes[0] if have_boxes else None
 
-            # Add prompts to the specific frame
-            _, out_obj_ids, out_mask_logits = self.predictor.add_new_points_or_box(
-                inference_state=self.inference_state,
-                frame_idx=frame_idx,
-                obj_id=object_id,
-                points=points if have_points else None,
-                labels=labels if have_points else None,
-                box=box,
-            )
+                # Add prompts to the specific frame
+                _, out_obj_ids, out_mask_logits = self.predictor.add_new_points_or_box(
+                    inference_state=self.inference_state,
+                    frame_idx=frame_idx,
+                    obj_id=object_id,
+                    points=points if have_points else None,
+                    labels=labels if have_points else None,
+                    box=box,
+                )
 
-            # Extract the mask from logits
-            # out_mask_logits shape: (num_objects, 1, H, W)
-            mask_logits = out_mask_logits[0]  # Get first object
-            seg = (mask_logits.squeeze() > 0.0).cpu().numpy()
+                # Extract the mask from logits
+                # out_mask_logits shape: (num_objects, 1, H, W)
+                mask_logits = out_mask_logits[0]  # Get first object
+                seg = (mask_logits.squeeze() > 0.0).cpu().numpy()
 
-            # Crop back to the original slice shape (the video predictor pads non-square frames).
-            seg = _crop_to_original_shape(seg, self.volume.shape[-2:]).astype("uint32")
+                # Crop back to the original slice shape (the video predictor pads non-square frames).
+                seg = _crop_to_original_shape(seg, self.volume.shape[-2:]).astype("uint32")
 
         finally:
             # Reset the state to clear this object's prompts
@@ -768,21 +984,26 @@ class TiledPromptableSegmentation3D:
         """
         have_points = points is not None and len(points) > 0
         have_boxes = boxes is not None and len(boxes) > 0
-        if not have_points and not have_boxes:
+        have_masks = masks is not None and any(m is not None for m in masks)
+        if not have_points and not have_boxes and not have_masks:
             return None
 
-        tile_points, tile_labels, tile_boxes = {}, {}, {}
+        tile_points, tile_labels, tile_boxes, tile_masks = {}, {}, {}, {}
         if have_points:
             for point, label in zip(np.asarray(points), np.asarray(labels)):
                 tid = self._tile_index(int(round(point[1])), int(round(point[0])))  # (y, x) from (x, y)
                 tile_points.setdefault(tid, []).append(point)
                 tile_labels.setdefault(tid, []).append(label)
         if have_boxes:
-            for box in boxes:
+            for bidx, box in enumerate(boxes):
                 box = np.asarray(box)  # (x0, y0, x1, y1)
                 box_yx = np.array([box[1], box[0], box[3], box[2]])
+                box_mask = masks[bidx] if masks is not None else None
                 for tid, clipped in _box_to_tiles(self.tiling, self.halo, box_yx).items():
                     tile_boxes.setdefault(tid, []).append(np.array([clipped[1], clipped[0], clipped[3], clipped[2]]))
+                    tile_masks.setdefault(tid, []).append(
+                        None if box_mask is None else _crop_mask_to_tile(self.tiling, self.halo, tid, box_mask)
+                    )
 
         out = np.zeros(self.shape[1:], dtype="uint32")
         found = False
@@ -795,9 +1016,10 @@ class TiledPromptableSegmentation3D:
             y0, x0 = self._outer_offset(tile_id)
             local_points = (tpoints - np.array([x0, y0])) if len(tpoints) else None
             local_boxes = [b - np.array([x0, y0, x0, y0]) for b in tboxes] if tboxes else None
+            local_masks = tile_masks.get(tile_id) if tboxes else None
             tile_seg = self._get_segmenter(tile_id).segment_slice(
                 frame_idx, points=local_points, labels=(tlabels if len(tlabels) else None),
-                boxes=local_boxes, masks=masks, object_id=object_id,
+                boxes=local_boxes, masks=local_masks, object_id=object_id,
             )
             if tile_seg is None:
                 continue
@@ -854,8 +1076,28 @@ class TiledPromptableSegmentation3D:
                 frame_ids=frame_ids, boxes=np.array(local_boxes), object_id=tile_ids[tile_id],
             )
 
-    def add_mask_prompts(self, frame_ids, masks=None):
-        raise NotImplementedError
+    def add_mask_prompts(self, frame_ids, masks=None, object_id=None):
+        """Add mask prompts. Each mask is routed to the tiles its filled region overlaps, cropped to
+        each tile's outer block, and added there (so a mask spanning tiles is added on both sides)."""
+        if masks is None or len(masks) == 0:
+            return
+        masks = [np.asarray(m) for m in masks]
+        # One object id per mask; default to a single object (id 1) when not batched.
+        if object_id is None:
+            object_id = [1] * len(masks)
+        elif not isinstance(object_id, list):
+            object_id = [object_id] * len(masks)
+
+        for mask, obj_id in zip(masks, object_id):
+            ys, xs = np.nonzero(mask)
+            if len(ys) == 0:
+                continue
+            box_yx = np.array([ys.min(), xs.min(), ys.max() + 1, xs.max() + 1])
+            for tid in _box_to_tiles(self.tiling, self.halo, box_yx):
+                self._get_segmenter(tid).add_mask_prompts(
+                    frame_ids=frame_ids, masks=[_crop_mask_to_tile(self.tiling, self.halo, tid, mask)],
+                    object_id=obj_id,
+                )
 
     def predict(self, update_progress=None, early_stop_patience=None, z_range=None):
         """Propagate the prompts in every active tile and stitch the results into the full volume.

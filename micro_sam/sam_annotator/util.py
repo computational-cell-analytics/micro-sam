@@ -700,49 +700,51 @@ def track_from_prompts(
 
 def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, device, tile_shape, halo):
 
-    # VFM families (DINO / UNI) live in the classification widget's advanced tier; let the widget place
-    # the selection. The SAM family/size logic below is a harmless no-op for these names (the family is
-    # not in the SAM dropdowns and the size key does not match), so we do not early-return.
+    # VFM families (DINO / UNI / SAM3) live in the classification widget's advanced tier; let the widget
+    # place the selection. The SAM family/size parsing below is skipped for these names: it parses the
+    # size positionally (vit_<size>), which does not apply and even index-errors on short names ('sam3').
     from ..models.vfm import is_vfm_model
-    if is_vfm_model(model_type) and hasattr(widget, "set_model_family_size"):
+    is_vfm = is_vfm_model(model_type)
+    if is_vfm and hasattr(widget, "set_model_family_size"):
         family, size = widget._family_and_size_for_model(model_type)
         widget.set_model_family_size(family, size)
 
-    # Update the index for model family, eg. 'Natural Images (SAM)', 'Light Microscopy', etc.
-    supported_dropdown_maps = {
-        "lm": "Light Microscopy",
-        "em_organelles": "Electron Microscopy",
-        "medical_imaging": "Medical Imaging",
-        "histopathology": "Histopathology",
-    }
+    if not is_vfm:
+        # Update the index for model family, eg. 'Natural Images (SAM)', 'Light Microscopy', etc.
+        supported_dropdown_maps = {
+            "lm": "Light Microscopy",
+            "em_organelles": "Electron Microscopy",
+            "medical_imaging": "Medical Imaging",
+            "histopathology": "Histopathology",
+        }
 
-    if model_type.startswith("hvit"):  # SAM2 models, eg. 'hvit_t'.
-        # Finetuned SAM2 families carry a suffix (e.g. 'hvit_t_cells' -> 'Microscopy'); the plain
-        # backbones ('hvit_t', ...) are natural-image models.
-        if model_type.endswith("_cells"):
-            model_family = "Microscopy"
+        if model_type.startswith("hvit"):  # SAM2 models, eg. 'hvit_t'.
+            # Finetuned SAM2 families carry a suffix (e.g. 'hvit_t_cells' -> 'Microscopy'); the plain
+            # backbones ('hvit_t', ...) are natural-image models.
+            if model_type.endswith("_cells"):
+                model_family = "Microscopy"
+            else:
+                model_family = "Natural Images"
         else:
-            model_family = "Natural Images"
-    else:
-        model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to 'Natural Images (SAM)' family.
-        for k, v in supported_dropdown_maps.items():
-            if model_type.endswith(k):
-                model_family = v
-                break
+            model_family = "Natural Images (SAM)"  # No suffix match: stick to 'Natural Images (SAM)'.
+            for k, v in supported_dropdown_maps.items():
+                if model_type.endswith(k):
+                    model_family = v
+                    break
 
-    index = widget.model_family_dropdown.findText(model_family)
-    if index >= 0:
-        widget.model_family_dropdown.setCurrentIndex(index)
-
-    # Update the index for model size, eg. 'base', 'tiny', etc.
-    size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
-    size_idx = 5 if model_type.startswith("h") else 4
-    model_size = size_map.get(model_type[size_idx])
-
-    if model_size is not None:
-        index = widget.model_size_dropdown.findText(model_size)
+        index = widget.model_family_dropdown.findText(model_family)
         if index >= 0:
-            widget.model_size_dropdown.setCurrentIndex(index)
+            widget.model_family_dropdown.setCurrentIndex(index)
+
+        # Update the index for model size, eg. 'base', 'tiny', etc.
+        size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
+        size_idx = 5 if model_type.startswith("h") else 4
+        model_size = size_map.get(model_type[size_idx])
+
+        if model_size is not None:
+            index = widget.model_size_dropdown.findText(model_size)
+            if index >= 0:
+                widget.model_size_dropdown.setCurrentIndex(index)
 
     if save_path is not None and isinstance(save_path, str):
         widget.embeddings_save_path_param.setText(str(save_path))
