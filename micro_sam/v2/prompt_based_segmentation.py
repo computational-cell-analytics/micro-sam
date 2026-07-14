@@ -429,16 +429,20 @@ class PromptableSegmentation3D:
     """
     def __init__(
         self, predictor, volume, volume_embeddings, device=None,
-        offload_video_to_cpu=True, offload_state_to_cpu=True,
+        offload_video_to_cpu=None, offload_state_to_cpu=None,
     ):
+        from micro_sam.v2.util import _get_device
         self.predictor = predictor
         self.volume = volume
         self.volume_embeddings = volume_embeddings
-        # 'device=None' uses the predictor's auto-detected device. Offloading the frames and tracking
-        # state to CPU keeps GPU memory bounded for large volumes (a no-op when already on CPU).
+        # 'device=None' uses the predictor's auto-detected device.
         self.device = device
-        self.offload_video_to_cpu = offload_video_to_cpu
-        self.offload_state_to_cpu = offload_state_to_cpu
+        # Offloading frames/state to CPU bounds GPU memory for large volumes on CUDA. On MPS it is off
+        # by default: unified memory saves nothing, and SAM2's CPU->MPS 'non_blocking' transfer of the
+        # consolidated masks races, giving intermittent garbage/NaN masks (patchy interactive results).
+        is_mps = str(_get_device(device)) == "mps"
+        self.offload_video_to_cpu = (not is_mps) if offload_video_to_cpu is None else offload_video_to_cpu
+        self.offload_state_to_cpu = (not is_mps) if offload_state_to_cpu is None else offload_state_to_cpu
 
         if self.volume.ndim != 3:
             raise AssertionError(f"The dimensionality of the volume should be 3, got '{self.volume.ndim}'")
