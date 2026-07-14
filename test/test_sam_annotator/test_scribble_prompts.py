@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from napari.layers import Points, Shapes
 
 from micro_sam.sam_annotator import util as annotator_util
@@ -640,5 +641,76 @@ def test_2d_segmentation_merges_scribbles_with_clicks(monkeypatch):
     assert captured["batched"] is False
     assert "not supported with scribble prompts" in captured["message"]
     assert converted_layers == {"shape": prompt_layer, "scribble": prompt_layer}
+    np.testing.assert_array_equal(current_object.data, 1)
+    assert current_object.refresh_count == 1
+
+
+@pytest.mark.parametrize("is_sam2", [False, True])
+def test_point_and_box_only_segmentation_is_unchanged(monkeypatch, is_sam2):
+    """The scribble integration must be a no-op for the existing point/box-only workflow."""
+    from micro_sam.sam_annotator import _widgets
+    from micro_sam.v2 import prompt_based_segmentation
+
+    class _Layer:
+        def __init__(self, data):
+            self.data = data
+            self.refresh_count = 0
+
+        def refresh(self):
+            self.refresh_count += 1
+
+    current_object = _Layer(np.zeros((32, 32), dtype="uint32"))
+    prompt_layer = _Layer([np.array([[2, 3], [20, 21]])])
+    point_layer = _Layer(np.array([[7.0, 8.0]]))
+    viewer = SimpleNamespace(layers={
+        "current_object": current_object,
+        "prompts": prompt_layer,
+        "point_prompts": point_layer,
+    })
+    state = SimpleNamespace(
+        predictor=object(), image_embeddings={"input_size": (1024, 1024)}, is_sam2=is_sam2,
+    )
+    boxes = np.array([[2.0, 3.0, 20.0, 21.0]])
+    points = np.array([[7.0, 8.0]])
+    labels = np.array([1])
+
+    monkeypatch.setattr(_widgets, "_validate_embeddings", lambda viewer: False)
+    monkeypatch.setattr(_widgets, "_validate_layers", lambda viewer: False)
+    monkeypatch.setattr(_widgets, "AnnotatorState", lambda: state)
+    monkeypatch.setattr(
+        _widgets.vutil, "shape_layer_to_prompts", lambda layer, shape: (boxes, [None]),
+    )
+    monkeypatch.setattr(
+        _widgets.vutil, "point_layer_to_prompts",
+        lambda layer, with_stop_annotation: (points, labels),
+    )
+    monkeypatch.setattr(
+        _widgets.vutil, "scribble_layer_to_prompts",
+        lambda layer, image_shape: (np.empty((0, 2)), np.empty((0,), dtype="int64")),
+    )
+    captured = {}
+
+    if is_sam2:
+        def _predict(**kwargs):
+            captured.update(kwargs)
+            return np.ones((32, 32), dtype="uint8")
+
+        monkeypatch.setattr(prompt_based_segmentation, "promptable_segmentation_2d", _predict)
+    else:
+        def _predict(predictor, points, labels, boxes, masks, shape, **kwargs):
+            captured.update(
+                points=points, labels=labels, boxes=boxes, masks=masks, shape=shape, **kwargs
+            )
+            return np.ones(shape, dtype="uint8")
+
+        monkeypatch.setattr(_widgets.vutil, "prompt_segmentation", _predict)
+
+    _widgets._segment_object_2d(viewer, batched=True)
+
+    np.testing.assert_array_equal(captured["points"], points)
+    np.testing.assert_array_equal(captured["labels"], labels)
+    np.testing.assert_array_equal(captured["boxes"], boxes)
+    assert captured["masks"] == [None]
+    assert captured["batched"] is True
     np.testing.assert_array_equal(current_object.data, 1)
     assert current_object.refresh_count == 1
