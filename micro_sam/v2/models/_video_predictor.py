@@ -53,6 +53,34 @@ def _load_img_as_tensor(img_path, image_size):
     return img, video_height, video_width
 
 
+class _LazyVideoFrames:
+    """Produce per-slice frame tensors from a numpy volume on demand, without stacking the whole volume.
+
+    'inference_state["images"]' is only ever integer-indexed and passed to 'len', so a sequence that
+    resizes + normalises one slice at access time is a drop-in for the eager
+    '(num_frames, 3, image_size, image_size)' tensor. This avoids holding every slice at 'image_size^2'
+    (~12 MB/slice), which otherwise grows unbounded with depth and, after the embeddings were moved to
+    disk, is the dominant per-volume RAM cost. Frames are returned on CPU (the consumer moves the
+    current frame to the device); the upstream <=MAX_CACHED_FRAMES feature cache already retains the
+    frames in active use, so nothing is cached here.
+    """
+
+    def __init__(self, volume, image_size, img_mean, img_std):
+        self._volume = volume
+        self._image_size = image_size
+        self._img_mean = img_mean
+        self._img_std = img_std
+        h, w = volume.shape[1], volume.shape[2]
+        self.video_height = self.video_width = max(h, w)
+
+    def __len__(self):
+        return len(self._volume)
+
+    def __getitem__(self, index):
+        img, _, _ = _load_img_as_tensor(self._volume[index], self._image_size)
+        return (img - self._img_mean) / self._img_std
+
+
 def _load_video_frames_from_images(
     video_path,
     volume,
@@ -78,16 +106,14 @@ def _load_video_frames_from_images(
 
     if video_path is None:
         # Coerce lazy inputs (e.g. dask / zarr / h5py arrays handed over by a napari layer) to a numpy
-        # array; the non-tiled path stacks every slice into a single device tensor anyway.
+        # array (cheap at native resolution; the expensive image_size^2 copy is what we avoid stacking).
         volume = np.asarray(volume)
         if volume.ndim != 3:
             raise ValueError(f"Expected a 3D volume of shape (Z, Y, X), got an array of shape {volume.shape}.")
-        # Iterate over each slice.
-        images = []
-        for i, curr_slice in enumerate(volume):
-            curr_image, video_height, video_width = _load_img_as_tensor(curr_slice, image_size)
-            images.append(curr_image)
-        images = torch.stack(images)  # Stack the inputs in expected format.
+        # Stream slices lazily (resize + normalise on access) instead of stacking the whole volume at
+        # image_size^2, so RAM stays bounded regardless of depth.
+        lazy_images = _LazyVideoFrames(volume, image_size, img_mean, img_std)
+        return lazy_images, lazy_images.video_height, lazy_images.video_width
     else:
         if isinstance(video_path, str) and os.path.isdir(video_path):
             frames_folder = video_path
