@@ -461,7 +461,7 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
 
         # Compute the per-slice video-style features for this tile-column (as in '_compute_3d').
         inference_state = predictor.init_state(
-            volume=sub_volume, volume_embeddings=None, ignore_caching_features=True,
+            volume=sub_volume, volume_embeddings=None, device=predictor.device, ignore_caching_features=True,
         )
         batched_images = [_to_image(sub_volume[z]) for z in range(n_slices)]
         vision_feats, pos_encs, fpns, original_sizes, input_sizes = _compute_embeddings_batched_3d(
@@ -599,9 +599,11 @@ def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_u
             features = _create_dataset_without_data(f, "features", shape=shape, chunks=chunks, dtype="float32")
 
     # We create the 'inference_state' object which keeps all important components in memory.
+    # Pass the predictor's device so encoder inputs match the model when it is not the default device.
     inference_state = predictor.init_state(
         volume=input_,
         volume_embeddings=None,  # NOTE: It's a mandatory argument, but with the argument below, passing 'None' doesn't matter.  # noqa
+        device=predictor.device,
         ignore_caching_features=True
     )
 
