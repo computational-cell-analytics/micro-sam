@@ -3,7 +3,10 @@
 
 import os
 import json
+import uuid
 import pooch
+import shutil
+import atexit
 import xxhash
 import pickle
 import hashlib
@@ -70,6 +73,22 @@ def get_cache_directory() -> None:
     default_cache_directory = os.path.expanduser(pooch.os_cache("micro_sam"))
     cache_directory = Path(os.environ.get("MICROSAM_CACHEDIR", default_cache_directory))
     return cache_directory
+
+
+def make_temp_embedding_path() -> str:
+    """Create a fresh ephemeral on-disk zarr path for streaming image embeddings.
+
+    Used when no explicit embedding save path is given: caching to disk (under the micro-sam cache
+    directory, honoring MICROSAM_CACHEDIR) instead of holding the whole volume in RAM keeps memory
+    bounded on large volumes / tiled images. The cache is disk-backed rather than in /tmp, which is
+    tmpfs (RAM) on many systems. The caller owns eager cleanup; the returned path is also removed on
+    process exit.
+    """
+    parent = get_cache_directory() / "tmp_embeddings"
+    parent.mkdir(parents=True, exist_ok=True)
+    path = str(parent / f"{uuid.uuid4().hex}.zarr")
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    return path
 
 
 #

@@ -963,10 +963,12 @@ class TiledPromptableSegmentation3D:
 
             feats = self.volume_embeddings["features"]
             tile_dataset = feats[str(tile_id)]
+            # Keep the per-tile datasets lazy so the video predictor streams this tile-column one
+            # frame at a time from disk, instead of materialising the whole column (~124 MB/slice).
             tile_embeddings = {
-                "features": np.asarray(tile_dataset),
-                "pos_enc": _load_list_datasets(self.volume_embeddings["pos_enc"], str(tile_id), lazy_loading=False),
-                "fpn": _load_list_datasets(self.volume_embeddings["fpn"], str(tile_id), lazy_loading=False),
+                "features": tile_dataset,
+                "pos_enc": _load_list_datasets(self.volume_embeddings["pos_enc"], str(tile_id), lazy_loading=True),
+                "fpn": _load_list_datasets(self.volume_embeddings["fpn"], str(tile_id), lazy_loading=True),
                 "input_size": tile_dataset.attrs["input_size"],
                 "original_size": tile_dataset.attrs["original_size"],
             }
