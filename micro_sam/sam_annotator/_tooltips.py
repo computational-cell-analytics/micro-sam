@@ -72,7 +72,7 @@ tooltips = {
         "run_tracking": "Choose if to run tracking for the whole timeseries or if to segment only the current timeframe.",  # noqa
     },
     "prompt_menu": {
-        "labels": "Choose positive prompts to inlcude regions or negative ones to exclude regions. Toggle between the settings by pressing [t].",  # noqa
+        "labels": "Choose positive point/scribble prompts to include regions or negative ones to exclude regions. Toggle between the settings by pressing [t]. In 3d, a scribble belongs to the z-slice where it was drawn and can seed or correct volume propagation.",  # noqa
     },
     "annotator_tracking": {
         "track_id": "Select the id of the track you are currently annotating.",

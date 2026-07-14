@@ -119,6 +119,30 @@ class TestAnnotatorClass:
         viewer = make_napari_viewer_proxy()
         widget = Annotator(viewer)
         assert widget._ndim == 2
+        assert "scribble_prompts" not in viewer.layers
+        assert viewer.layers["prompts"].ndim == 2
+        assert viewer.layers["prompts"].current_properties["label"][0] == "positive"
+        viewer.layers["prompts"].mode = "add_polyline"
+        toggle_binding = next(
+            callback for key, callback in viewer.layers["prompts"].keymap.items() if str(key) == "T"
+        )
+        toggle_binding(viewer.layers["prompts"])
+        assert widget._prompt_widget[0].value == "negative"
+        assert viewer.layers["point_prompts"].current_properties["label"][0] == "negative"
+        assert viewer.layers["prompts"].current_properties["label"][0] == "negative"
+        assert viewer.layers["prompts"].current_edge_color == "red"
+        toggle_binding(viewer.layers["prompts"])
+        assert widget._prompt_widget[0].value == "positive"
+        widget._prompt_widget[0].value = "negative"
+        assert viewer.layers["point_prompts"].current_properties["label"][0] == "negative"
+        assert viewer.layers["prompts"].current_properties["label"][0] == "negative"
+        assert viewer.layers["prompts"].current_edge_color == "red"
+        viewer.layers["prompts"].add_rectangles(np.array([[0, 0], [8, 8]]))
+        viewer.layers["prompts"].add_paths(np.array([[1, 1], [7, 7]]))
+        np.testing.assert_array_equal(viewer.layers["prompts"].properties["label"], ["positive", "negative"])
+        viewer.layers["prompts"].selected_data = {1}
+        widget._prompt_widget[0].value = "positive"
+        np.testing.assert_array_equal(viewer.layers["prompts"].properties["label"], ["positive", "positive"])
         viewer.close()
 
     def test_widget_detects_ndim_from_loaded_image(self, make_napari_viewer_proxy):
@@ -141,6 +165,7 @@ class TestAnnotatorClass:
         assert widget._ndim == 3
         # The prompt layers must be recreated with the new dimensionality.
         assert viewer.layers["point_prompts"].ndim == 3
+        assert viewer.layers["prompts"].ndim == 3
         viewer.close()
 
     def test_annotator_3d(self, make_napari_viewer_proxy):
@@ -283,6 +308,7 @@ class TestNdimOverride:
         assert viewer.layers["image"].rgb is True
         assert tuple(viewer.layers["image"].data.shape) == (64, 64, 3)
         assert viewer.layers["point_prompts"].ndim == 2
+        assert viewer.layers["prompts"].ndim == 2
         viewer.close()
 
     def test_channels_last_two_channel_auto(self, make_napari_viewer_proxy):
