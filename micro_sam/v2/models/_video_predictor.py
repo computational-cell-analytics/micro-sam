@@ -94,12 +94,16 @@ def _load_video_frames_from_images(
 ):
     """Based on 'load_video_frames_from_jpg_images'.
 
-    Load the video frames from a directory of image files (eg. "<frame_index>.jpg" format).
+    Returns the frame sequence (resized to image_size x image_size and ImageNet-normalised) plus the
+    effective video height / width, for two input kinds:
 
-    The frames are resized to image_size x image_size and are loaded to GPU if
-    `offload_video_to_cpu` is `False` and to CPU if `offload_video_to_cpu` is `True`.
-
-    You can load a frame asynchronously by setting `async_loading_frames` to `True`.
+    - `volume` (a numpy (Z, Y, X) array, the micro-sam path): returns a lazy `_LazyVideoFrames` that
+      resizes + normalises one slice on demand on CPU, so the whole volume is never stacked at
+      image_size^2 in memory. `offload_video_to_cpu` does not apply here (the consumer moves the
+      current frame to the device per access).
+    - `video_path` (a directory of "<frame_index>.jpg" files): stacks the frames into a single tensor,
+      on the GPU if `offload_video_to_cpu` is `False` else on CPU. Set `async_loading_frames` to `True`
+      to load these frames asynchronously.
     """
     img_mean = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
     img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
