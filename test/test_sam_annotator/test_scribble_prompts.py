@@ -55,6 +55,88 @@ def test_scribble_sampling_is_resolution_independent_and_capped():
     np.testing.assert_allclose(low_points / 256.0, high_points / 2048.0)
 
 
+def test_scribble_sampling_shares_a_global_budget_by_demand():
+    layer = _PromptShapesLayer(
+        data=[
+            np.array([[0.0, 0.0], [0.0, 64.0]]),
+            np.array([[128.0, 0.0], [128.0, 256.0]]),
+            np.array([[256.0, 0.0], [256.0, 512.0]]),
+        ],
+        shape_type=["line", "line", "line"],
+        labels=["positive", "negative", "positive"],
+    )
+
+    points, _ = annotator_util.scribble_layer_to_prompts(
+        layer, image_shape=(1024, 1024), spacing=32.0, max_points=12
+    )
+
+    counts = [np.count_nonzero(points[:, 0] == row) for row in (0.0, 128.0, 256.0)]
+    assert counts == [2, 4, 6]
+    assert len(points) == 12
+
+
+def test_curved_scribble_gets_more_samples_and_preserves_bends():
+    layer = _PromptShapesLayer(
+        data=[
+            np.array([[0.0, 0.0], [0.0, 256.0]]),
+            np.array([[200.0, 0.0], [136.0, 0.0], [136.0, 128.0], [200.0, 128.0]]),
+        ],
+        shape_type=["line", "path"],
+        labels=["positive", "negative"],
+    )
+
+    points, labels = annotator_util.scribble_layer_to_prompts(
+        layer, image_shape=(1024, 1024), spacing=32.0
+    )
+
+    assert np.count_nonzero(labels == 0) > np.count_nonzero(labels == 1)
+    negative_points = points[labels == 0]
+    assert any(np.allclose(point, [136.0, 0.0]) for point in negative_points)
+    assert any(np.allclose(point, [136.0, 128.0]) for point in negative_points)
+
+
+def test_nearby_same_label_strokes_are_deduplicated_but_conflicts_remain():
+    same_label = _PromptShapesLayer(
+        data=[
+            np.array([[0.0, 0.0], [0.0, 64.0]]),
+            np.array([[2.0, 0.0], [2.0, 64.0]]),
+        ],
+        shape_type=["line", "line"],
+        labels=["positive", "positive"],
+    )
+    conflicting = _PromptShapesLayer(
+        data=same_label.data,
+        shape_type=same_label.shape_type,
+        labels=["positive", "negative"],
+    )
+
+    deduplicated, _ = annotator_util.scribble_layer_to_prompts(
+        same_label, image_shape=(1024, 1024), spacing=32.0, deduplication_distance=4.0
+    )
+    conflict_points, conflict_labels = annotator_util.scribble_layer_to_prompts(
+        conflicting, image_shape=(1024, 1024), spacing=32.0, deduplication_distance=4.0
+    )
+
+    assert len(deduplicated) == 3
+    assert len(conflict_points) == 6
+    np.testing.assert_array_equal(conflict_labels, [1, 1, 1, 0, 0, 0])
+
+
+def test_short_scribble_preserves_both_endpoints():
+    layer = _PromptShapesLayer(
+        data=[np.array([[10.0, 10.0], [10.0, 12.0]])],
+        shape_type=["line"],
+        labels=["positive"],
+    )
+
+    points, labels = annotator_util.scribble_layer_to_prompts(
+        layer, image_shape=(1024, 1024), spacing=32.0
+    )
+
+    np.testing.assert_allclose(points, [[10.0, 10.0], [10.0, 12.0]])
+    np.testing.assert_array_equal(labels, [1, 1])
+
+
 def test_scribbles_are_selected_per_volume_slice():
     layer = _PromptShapesLayer(
         data=[
@@ -229,6 +311,23 @@ def test_selected_scribble_is_relabelled_while_polyline_tool_is_active():
     np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])
     _, labels = annotator_util.scribble_layer_to_prompts(layer, image_shape=(16, 16))
     np.testing.assert_array_equal(labels, np.zeros(len(labels), dtype="int64"))
+
+
+def test_prompt_label_change_drops_stale_shape_selection():
+    layer = Shapes(
+        ndim=3,
+        property_choices={"label": ["positive", "negative"]},
+        edge_color="label",
+        edge_color_cycle=annotator_util.LABEL_COLOR_CYCLE,
+    )
+    # Simulate the transient state seen after napari removes the final shape: geometry/features are
+    # already empty, while Selection has not emitted its clearing event yet.
+    layer._selected_data._data = {0: None}
+
+    annotator_util.set_prompt_label(layer, "negative")
+
+    assert layer.selected_data == set()
+    assert layer.current_properties["label"][0] == "negative"
 
 
 def test_merge_point_and_scribble_prompts():
