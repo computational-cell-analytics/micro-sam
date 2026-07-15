@@ -1550,6 +1550,12 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
+    # Whether to show the CPU info popup for expensive (many-tile / 3D) computations.
+    warn_on_cpu = True
+
+    # A tiled 2D image only gets slow on the CPU once it has many tiles; warn from this many on.
+    cpu_warn_tiles = 64
+
     def __init__(self, parent=None, sam2_only=False, ndim_choice=False, is_timeseries=False):
         super().__init__(parent=parent)
         self.sam2_only = sam2_only
@@ -2040,6 +2046,32 @@ class EmbeddingWidget(_WidgetBase):
             "info", "Embeddings have already been precomputed. Press OK to recompute the embeddings."
         )
 
+    def _n_tiles(self, tile_shape, shape):
+        """The number of tiles the embedding computation is split into (1 without tiling)."""
+        if tile_shape is None:
+            return 1
+        from bioimage_cpp.utils import Blocking
+        return Blocking([0, 0], list(shape[:2]), list(tile_shape)).number_of_blocks
+
+    def _maybe_warn_cpu(self, ndim, tile_shape, shape):
+        """Show a one-time-per-session info popup for expensive CPU computations (many tiles or 3D)."""
+        state = AnnotatorState()
+        if state.cpu_info_shown or not self.warn_on_cpu:
+            return
+        # 3D runs the encoder per slice; 2D is a single pass per tile, which only adds up for many tiles.
+        if ndim < 3 and self._n_tiles(tile_shape, shape) < self.cpu_warn_tiles:
+            return
+        if str(util.get_device(self.device)) != "cpu":
+            return
+        state.cpu_info_shown = True
+        data_kind = "timeseries" if self.is_timeseries else "3D"  # A timeseries uses the 3D compute path.
+        QtWidgets.QMessageBox.information(
+            self, "Running on CPU",
+            f"micro_sam is running on the CPU, so computations can be slow for tiled or {data_kind} data. "
+            "Using a GPU is recommended.",
+            QtWidgets.QMessageBox.Ok,
+        )
+
     def __call__(self, skip_validate=False):
         self._validate_model_type_and_custom_weights()
         if self._validate_model_support():
@@ -2102,6 +2134,9 @@ class EmbeddingWidget(_WidgetBase):
         )
         image_data = image.data
 
+        # Warn CPU users once per session that processing can be slow.
+        self._maybe_warn_cpu(ndim, tile_shape, state.image_shape)
+
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
@@ -2157,6 +2192,10 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     """
 
     size_order = ["tiny", "small", "base", "large", "huge", "giant"]
+
+    # The classifiers only run the image encoder and a lightweight classifier on top, so they stay
+    # fast on the CPU and don't need the info popup.
+    warn_on_cpu = False
 
     # Advanced SAM1 families: UI label -> model-name suffix on the SAM1 'vit_' prefix, resolved in
     # '_get_model_size_options'.
