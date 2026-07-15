@@ -20,6 +20,12 @@ from ..v1.multi_dimensional_segmentation import _validate_projection
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 """@private"""
 
+SCRIBBLE_SHAPE_TYPES = ("path", "line")
+"""Napari shape types interpreted as sparse scribble prompts."""
+
+SCRIBBLE_DRAW_MODES = ("add_path", "add_polyline", "add_line")
+"""Napari Shapes modes that create open scribble prompts."""
+
 
 #
 # Misc helper functions
@@ -119,16 +125,104 @@ def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> T
     raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data.")
 
 
-def toggle_label(prompts):
-    """@private"""
-    # get the currently selected label
-    current_properties = prompts.current_properties
-    current_label = current_properties["label"][0]
-    new_label = "negative" if current_label == "positive" else "positive"
+def set_prompt_label(layer, new_label):
+    """Set the current prompt label and relabel selected shapes consistently.
+
+    Napari Points applies ``current_properties`` changes to selected points in all modes. Shapes,
+    however, only applies them to selected shapes in select or pan/zoom mode. Explicitly updating
+    the selected open shapes here keeps changing the prompt menu or pressing ``T`` consistent for
+    both layer types, including immediately after drawing a path, polyline or line.
+    """
+    if isinstance(layer, napari.layers.Shapes):
+        # Napari may briefly retain a selected shape index after the corresponding geometry and
+        # feature row have been removed. Setting current_properties in that state tries to update a
+        # missing pandas row. Drop these stale indices before applying the new drawing label.
+        valid_selection = {
+            index for index in layer.selected_data if 0 <= index < len(layer.data)
+        }
+        if valid_selection != layer.selected_data:
+            layer.selected_data = valid_selection
+
+    current_properties = layer.current_properties
     current_properties["label"] = np.array([new_label])
-    prompts.current_properties = current_properties
-    prompts.refresh()
-    prompts.refresh_colors()
+    layer.current_properties = current_properties
+
+    if isinstance(layer, napari.layers.Shapes) and layer.selected_data:
+        properties = dict(layer.properties)
+        labels = np.asarray(properties.get("label", []), dtype=object).copy()
+        shape_types = list(layer.shape_type)
+        if len(labels) == len(shape_types):
+            for index in layer.selected_data:
+                if shape_types[index] in SCRIBBLE_SHAPE_TYPES:
+                    labels[index] = new_label
+            properties["label"] = labels
+            layer.properties = properties
+
+            # Keep the drawing default on the requested label. Updating the feature table above
+            # may infer a current value from the edited selection.
+            current_properties = layer.current_properties
+            current_properties["label"] = np.array([new_label])
+            layer.current_properties = current_properties
+
+    layer.refresh()
+    if isinstance(layer, napari.layers.Shapes):
+        # During layer reset/teardown napari can briefly clear shape geometry before shrinking the
+        # feature table. Refreshing mapped colors in that transient state raises because the color
+        # array and ShapeList have different lengths; the subsequent data/features event will
+        # refresh once they are aligned again.
+        n_shapes = len(layer.data)
+        if any(len(values) != n_shapes for values in layer.properties.values()):
+            return
+    layer.refresh_colors()
+
+
+def toggle_label(prompts, *linked_prompts):
+    """Toggle the positive/negative label for one or more prompt layers."""
+    # Use the first layer as the source of truth, then keep all linked prompt layers in sync.
+    current_label = prompts.current_properties["label"][0]
+    new_label = "negative" if current_label == "positive" else "positive"
+    for layer in (prompts,) + linked_prompts:
+        set_prompt_label(layer, new_label)
+
+
+def normalize_prompt_shape_labels(layer_or_event):
+    """Keep closed shape prompts positive while preserving labels for open scribbles.
+
+    The shared Shapes layer uses its ``label`` property for edge coloring. Boxes and dense mask
+    shapes do not support negative semantics, so they are normalized to positive after creation.
+    The current label is restored afterwards so drawing a box does not change the label selected
+    for the next point or scribble.
+    """
+    layer = layer_or_event if hasattr(layer_or_event, "shape_type") else layer_or_event.source
+    shape_types = list(layer.shape_type)
+    labels = np.asarray(layer.properties.get("label", []), dtype=object)
+    if len(shape_types) != len(labels):
+        return
+
+    normalized = labels.copy()
+    for index, shape_type in enumerate(shape_types):
+        if shape_type not in SCRIBBLE_SHAPE_TYPES:
+            normalized[index] = "positive"
+    if np.array_equal(labels, normalized):
+        return
+
+    current_label = layer.current_properties.get("label", np.array(["positive"]))[0]
+    properties = dict(layer.properties)
+    properties["label"] = normalized
+    layer.properties = properties
+    current_properties = layer.current_properties
+    current_properties["label"] = np.array([current_label])
+    layer.current_properties = current_properties
+    layer.refresh_colors()
+
+
+def sync_prompt_shape_current_color(layer_or_event):
+    """Synchronize the Shapes drawing color with the current scribble label and tool."""
+    layer = layer_or_event if hasattr(layer_or_event, "shape_type") else layer_or_event.source
+    label = layer.current_properties.get("label", np.array(["positive"]))[0]
+    is_scribble_tool = layer.mode in SCRIBBLE_DRAW_MODES
+    color_index = 1 if is_scribble_tool and label == "negative" else 0
+    layer.current_edge_color = LABEL_COLOR_CYCLE[color_index]
 
 
 def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
@@ -155,10 +249,12 @@ def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=T
     viewer.layers["point_prompts"].data = point_prompts
     viewer.layers["point_prompts"].refresh()
     if "prompts" in viewer.layers:
-        prompts = viewer.layers["prompts"].data
-        prompts = [prompt for prompt in prompts if not (prompt[:, 0] == i).all()]
-        viewer.layers["prompts"].data = prompts
-        viewer.layers["prompts"].refresh()
+        prompt_layer = viewer.layers["prompts"]
+        prompt_layer.selected_data = {
+            index for index, prompt in enumerate(prompt_layer.data) if (prompt[:, 0] == i).all()
+        }
+        prompt_layer.remove_selected()
+        prompt_layer.refresh()
     if not clear_segmentations:
         return
     viewer.layers["current_object"].data[i] = 0
@@ -224,6 +320,335 @@ def point_layer_to_prompts(
     return this_points, this_labels
 
 
+def _scribble_geometry(vertices, image_shape, spacing):
+    """Return normalized stroke geometry and bend information for adaptive sampling."""
+    vertices = np.asarray(vertices, dtype="float64")
+    if vertices.ndim != 2 or vertices.shape[1] != 2 or len(vertices) == 0:
+        raise ValueError("A scribble must have shape (N, 2) with at least one vertex.")
+
+    image_shape = np.asarray(image_shape, dtype="float64")
+    if image_shape.shape != (2,) or np.any(image_shape <= 0):
+        raise ValueError(f"Invalid 2D image shape: {tuple(image_shape)}.")
+
+    # SAM2 embeds prompts in a square 1024-pixel input frame. Measuring the stroke there makes the
+    # sampling density independent of the source image resolution and aspect ratio.
+    model_vertices = vertices * (1024.0 / image_shape)
+
+    # Remove consecutive duplicate vertices before measuring length or curvature. Freehand paths
+    # may contain these when the mouse briefly stops moving.
+    if len(model_vertices) > 1:
+        keep = np.concatenate([[True], np.linalg.norm(np.diff(model_vertices, axis=0), axis=1) > 0])
+        model_vertices = model_vertices[keep]
+
+    segment_lengths = np.linalg.norm(np.diff(model_vertices, axis=0), axis=1)
+    cumulative = np.concatenate([[0.0], np.cumsum(segment_lengths)])
+    total_length = float(cumulative[-1])
+
+    # Ramer-Douglas-Peucker simplification removes freehand jitter before curvature is measured.
+    # The retained inner vertices are meaningful bends that we try to preserve in the samples.
+    bend_indices = np.empty((0,), dtype="int64")
+    bend_angles = np.empty((0,), dtype="float64")
+    if len(model_vertices) > 2 and total_length > 0:
+        tolerance = spacing / 4.0
+        retained = {0, len(model_vertices) - 1}
+        pending = [(0, len(model_vertices) - 1)]
+        while pending:
+            start, stop = pending.pop()
+            if stop <= start + 1:
+                continue
+            start_point, stop_point = model_vertices[start], model_vertices[stop]
+            direction = stop_point - start_point
+            relative = model_vertices[start + 1:stop] - start_point
+            length_squared = float(np.dot(direction, direction))
+            if length_squared == 0:
+                distances = np.linalg.norm(relative, axis=1)
+            else:
+                fractions = np.clip(relative @ direction / length_squared, 0.0, 1.0)
+                projections = start_point + fractions[:, None] * direction
+                distances = np.linalg.norm(model_vertices[start + 1:stop] - projections, axis=1)
+            split = int(np.argmax(distances)) + start + 1
+            if distances[split - start - 1] > tolerance:
+                retained.add(split)
+                pending.extend([(start, split), (split, stop)])
+
+        retained = np.asarray(sorted(retained), dtype="int64")
+        simplified = model_vertices[retained]
+        if len(simplified) > 2:
+            incoming = simplified[1:-1] - simplified[:-2]
+            outgoing = simplified[2:] - simplified[1:-1]
+            cosine = np.sum(incoming * outgoing, axis=1) / (
+                np.linalg.norm(incoming, axis=1) * np.linalg.norm(outgoing, axis=1)
+            )
+            bend_indices = retained[1:-1]
+            bend_angles = np.arccos(np.clip(cosine, -1.0, 1.0))
+
+    return model_vertices, image_shape, cumulative, total_length, bend_indices, bend_angles
+
+
+def _scribble_sample_count(vertices, image_shape, spacing):
+    """Determine the sample demand from a stroke's length and simplified curvature."""
+    geometry = _scribble_geometry(vertices, image_shape, spacing)
+    total_length, bend_angles = geometry[3], geometry[5]
+    if total_length == 0:
+        return 1, total_length
+
+    length_samples = max(2, int(np.ceil(total_length / spacing)) + 1)
+    # Add one sample per 90 degrees of accumulated, de-jittered turning. This gives compact curved
+    # strokes more representation without letting every raw freehand vertex consume the budget.
+    curvature_samples = int(np.ceil(bend_angles.sum() / (np.pi / 2.0))) if len(bend_angles) else 0
+    return length_samples + curvature_samples, total_length
+
+
+def _allocate_scribble_samples(desired_counts, lengths, max_points):
+    """Share a global sample budget fairly, favouring strokes with greater demand."""
+    desired_counts = np.asarray(desired_counts, dtype="int64")
+    lengths = np.asarray(lengths, dtype="float64")
+    if len(desired_counts) == 0:
+        return desired_counts
+
+    # Every stroke must influence the prediction. If there are more strokes than the configured
+    # budget, expand it just enough to retain one representative point from each instead of
+    # silently dropping annotations.
+    budget = max(int(max_points), len(desired_counts))
+    if desired_counts.sum() <= budget:
+        return desired_counts
+
+    allocated = np.ones_like(desired_counts)
+    remaining = budget - len(allocated)
+
+    # Preserve both endpoints where the budget permits, prioritizing longer strokes if it does not.
+    endpoint_candidates = np.flatnonzero(desired_counts > 1)
+    endpoint_candidates = endpoint_candidates[np.argsort(-lengths[endpoint_candidates], kind="stable")]
+    n_endpoints = min(remaining, len(endpoint_candidates))
+    allocated[endpoint_candidates[:n_endpoints]] += 1
+    remaining -= n_endpoints
+    if remaining == 0:
+        return allocated
+
+    # Allocate the rest proportionally to each stroke's unmet length/curvature demand. Largest
+    # remainders make the result deterministic while using the complete budget.
+    demand = desired_counts - allocated
+    quotas = remaining * demand / demand.sum()
+    additions = np.floor(quotas).astype("int64")
+    allocated += additions
+    remaining -= int(additions.sum())
+    if remaining:
+        residual = quotas - additions
+        candidates = np.flatnonzero(demand > additions)
+        candidates = candidates[np.argsort(-residual[candidates], kind="stable")]
+        allocated[candidates[:remaining]] += 1
+    return allocated
+
+
+def _resample_scribble(vertices, image_shape, spacing, n_points):
+    """Resample one stroke while preserving endpoints and its strongest bends."""
+    model_vertices, image_shape, cumulative, total_length, bend_indices, bend_angles = (
+        _scribble_geometry(vertices, image_shape, spacing)
+    )
+    if total_length == 0:
+        return model_vertices[:1] * (image_shape / 1024.0)
+    if n_points == 1:
+        sample_distances = np.array([total_length / 2.0])
+    else:
+        n_bends = min(max(0, n_points - 2), len(bend_indices))
+        if n_bends:
+            strongest = np.argsort(-bend_angles, kind="stable")[:n_bends]
+            mandatory = np.concatenate([[0.0], cumulative[bend_indices[strongest]], [total_length]])
+            mandatory = np.unique(mandatory)
+        else:
+            mandatory = np.array([0.0, total_length])
+
+        n_extra = n_points - len(mandatory)
+        if n_extra > 0:
+            interval_lengths = np.diff(mandatory)
+            quotas = n_extra * interval_lengths / total_length
+            per_interval = np.floor(quotas).astype("int64")
+            remainder = n_extra - int(per_interval.sum())
+            if remainder:
+                order = np.argsort(-(quotas - per_interval), kind="stable")
+                per_interval[order[:remainder]] += 1
+
+            extra_distances = []
+            for start, stop, count in zip(mandatory[:-1], mandatory[1:], per_interval):
+                if count:
+                    extra_distances.extend(np.linspace(start, stop, count + 2)[1:-1])
+            sample_distances = np.sort(np.concatenate([mandatory, extra_distances]))
+        else:
+            sample_distances = mandatory
+
+    segment_ids = np.searchsorted(cumulative, sample_distances, side="right") - 1
+    segment_ids = np.clip(segment_ids, 0, len(model_vertices) - 2)
+
+    local_lengths = sample_distances - cumulative[segment_ids]
+    segment_lengths = np.diff(cumulative)
+    fractions = np.divide(
+        local_lengths,
+        segment_lengths[segment_ids],
+        out=np.zeros_like(local_lengths),
+        where=segment_lengths[segment_ids] > 0,
+    )
+    sampled_model = model_vertices[segment_ids] + fractions[:, None] * (
+        model_vertices[segment_ids + 1] - model_vertices[segment_ids]
+    )
+    return sampled_model * (image_shape / 1024.0)
+
+
+def scribble_layer_to_prompts(
+    layer: napari.layers.Shapes,
+    image_shape: Tuple[int, int],
+    i=None,
+    spacing: float = 32.0,
+    max_points_per_stroke: Optional[int] = None,
+    max_points: int = 64,
+    deduplication_distance: float = 4.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Convert positive/negative open strokes into sparse SAM point prompts.
+
+    Napari stores both its freehand path and click-defined polyline tools as ``path`` shapes; a
+    two-vertex stroke is stored as ``line``. Each accepted stroke is resampled uniformly by arc
+    length in SAM's normalized 1024-pixel input space. A global prompt budget is shared according
+    to stroke length and simplified curvature, and nearby same-label samples from overlapping
+    strokes are collapsed. This keeps prompt density stable across source resolutions without
+    undersampling every long stroke at the same per-stroke cutoff.
+
+    Args:
+        layer: The shared ``prompts`` Shapes layer. Non-scribble shapes are ignored.
+        image_shape: The ``(height, width)`` of the image or volume slice.
+        i: Slice index for a 3D layer. Must be omitted for a 2D layer.
+        spacing: Approximate spacing between samples in SAM's 1024-pixel input space.
+        max_points_per_stroke: Optional compatibility cap for each stroke. By default there is no
+            per-stroke cap and ``max_points`` governs all strokes together.
+        max_points: Target maximum number of samples across all accepted scribbles. If there are
+            more strokes than this limit, it expands to retain one representative per stroke.
+        deduplication_distance: Distance in normalized model pixels below which samples from
+            overlapping strokes with the same label are considered duplicates.
+
+    Returns:
+        Sampled coordinates in ``(y, x)`` order and SAM labels (positive ``1``, negative ``0``).
+    """
+    if spacing <= 0:
+        raise ValueError("'spacing' must be positive.")
+    if max_points_per_stroke is not None and max_points_per_stroke <= 0:
+        raise ValueError("'max_points_per_stroke' must be positive.")
+    if max_points <= 0:
+        raise ValueError("'max_points' must be positive.")
+    if deduplication_distance < 0:
+        raise ValueError("'deduplication_distance' must be non-negative.")
+
+    shape_data = layer.data
+    shape_types = layer.shape_type
+    stroke_labels = layer.properties.get("label", [])
+    if not (len(shape_data) == len(shape_types) == len(stroke_labels)):
+        raise AssertionError("Scribble shapes, shape types and labels must have matching lengths.")
+
+    strokes = []
+    for vertices, shape_type, stroke_label in zip(shape_data, shape_types, stroke_labels):
+        if shape_type in ("rectangle", "ellipse", "polygon"):
+            continue
+        if shape_type not in SCRIBBLE_SHAPE_TYPES:
+            warnings.warn(
+                f"Shape type {shape_type} is not a scribble and will be ignored. "
+                "Use path, polyline or line in the 'prompts' layer.",
+                stacklevel=2,
+            )
+            continue
+        if stroke_label not in ("positive", "negative"):
+            warnings.warn(
+                f"Unknown scribble label {stroke_label!r}; the stroke will be ignored.", stacklevel=2
+            )
+            continue
+
+        vertices = np.asarray(vertices)
+        if i is None:
+            if vertices.ndim != 2 or vertices.shape[1] != 2:
+                raise ValueError("2D scribble vertices must have shape (N, 2).")
+            vertices_yx = vertices
+        else:
+            if vertices.ndim != 2 or vertices.shape[1] != 3:
+                raise ValueError("3D scribble vertices must have shape (N, 3).")
+            stroke_slices = np.round(vertices[:, 0]).astype(int)
+            if not np.all(stroke_slices == i):
+                continue
+            vertices_yx = vertices[:, 1:]
+
+        desired_count, length = _scribble_sample_count(vertices_yx, image_shape, spacing)
+        if max_points_per_stroke is not None:
+            desired_count = min(desired_count, max_points_per_stroke)
+        strokes.append((vertices_yx, stroke_label, desired_count, length))
+
+    if not strokes:
+        return np.empty((0, 2), dtype="float64"), np.empty((0,), dtype="int64")
+
+    sample_counts = _allocate_scribble_samples(
+        [stroke[2] for stroke in strokes], [stroke[3] for stroke in strokes], max_points
+    )
+    image_shape_array = np.asarray(image_shape, dtype="float64")
+    points, labels = [], []
+    previous_model_points = {0: [], 1: []}
+    for (vertices_yx, stroke_label, _, _), sample_count in zip(strokes, sample_counts):
+        sampled = _resample_scribble(
+            vertices_yx, image_shape=image_shape, spacing=spacing, n_points=sample_count
+        )
+        sam_label = 1 if stroke_label == "positive" else 0
+        current_model_points = []
+        for point in sampled:
+            model_point = point * (1024.0 / image_shape_array)
+            # Deduplicate only against earlier strokes so both endpoints of a very short individual
+            # stroke survive. Opposite-label conflicts are intentionally retained.
+            previous = previous_model_points[sam_label]
+            if previous and np.min(np.linalg.norm(np.asarray(previous) - model_point, axis=1)) <= deduplication_distance:
+                continue
+            if current_model_points and np.min(
+                np.linalg.norm(np.asarray(current_model_points) - model_point, axis=1)
+            ) == 0:
+                continue
+            current_model_points.append(model_point)
+            points.append(point)
+            labels.append(sam_label)
+        previous_model_points[sam_label].extend(current_model_points)
+
+    return np.asarray(points), np.asarray(labels, dtype="int64")
+
+
+def get_scribble_slices(layer: napari.layers.Shapes) -> np.ndarray:
+    """Return the sorted z-slices containing open scribble shapes in a 3D Shapes layer."""
+    shape_data = layer.data
+    shape_types = layer.shape_type
+    if len(shape_data) != len(shape_types):
+        raise AssertionError("Scribble shapes and shape types must have matching lengths.")
+
+    slices = []
+    for vertices, shape_type in zip(shape_data, shape_types):
+        if shape_type not in SCRIBBLE_SHAPE_TYPES:
+            continue
+        vertices = np.asarray(vertices)
+        if vertices.ndim != 2 or vertices.shape[1] != 3:
+            continue
+        stroke_slices = np.round(vertices[:, 0]).astype(int)
+        if not np.all(stroke_slices == stroke_slices[0]):
+            warnings.warn("A 3D scribble must stay on one z-slice and will be ignored.", stacklevel=2)
+            continue
+        slices.append(stroke_slices[0])
+
+    return np.unique(slices).astype("int64") if slices else np.empty((0,), dtype="int64")
+
+
+def merge_point_prompts(*prompt_sets):
+    """Merge ``(points, labels)`` prompt tuples, preserving an empty ``(0, 2)`` convention."""
+    point_arrays, label_arrays = [], []
+    for points, labels in prompt_sets:
+        points = np.asarray(points).reshape(-1, 2)
+        labels = np.asarray(labels).reshape(-1)
+        if len(points) != len(labels):
+            raise AssertionError("The number of prompt coordinates and labels must match.")
+        if len(points):
+            point_arrays.append(points)
+            label_arrays.append(labels)
+    if not point_arrays:
+        return np.empty((0, 2), dtype="float64"), np.empty((0,), dtype="int64")
+    return np.concatenate(point_arrays), np.concatenate(label_arrays)
+
+
 def shape_layer_to_prompts(
     layer: napari.layers.Shapes, shape: Tuple[int, int], i=None, track_id=None
 ) -> Tuple[List[np.ndarray], List[Optional[np.ndarray]]]:
@@ -268,6 +693,9 @@ def shape_layer_to_prompts(
                 mask = np.zeros(shape, dtype=bool)
                 mask[rr, cc] = 1
                 masks.append(mask)
+
+            elif type_ in SCRIBBLE_SHAPE_TYPES:
+                continue
 
             else:
                 warnings.warn(f"Shape type {type_} is not supported and will be ignored.")
@@ -381,6 +809,7 @@ def segment_slices_with_prompts(
     z_values = np.round(point_prompts.data[:, 0])
     z_values_boxes = np.concatenate([box[:1, 0] for box in box_prompts.data]) if box_prompts.data else\
         np.zeros(0, dtype="int")
+    z_values_scribbles = get_scribble_slices(box_prompts) if track_id is None else np.zeros(0, dtype="int")
 
     if track_id is not None:
         track_ids_points = np.array(list(map(int, point_prompts.properties["track_id"])))
@@ -392,7 +821,7 @@ def segment_slices_with_prompts(
             assert len(track_ids_boxes) == len(z_values_boxes), f"{len(track_ids_boxes)}, {len(z_values_boxes)}"
             z_values_boxes = z_values_boxes[track_ids_boxes == track_id]
 
-    slices = np.unique(np.concatenate([z_values, z_values_boxes])).astype("int")
+    slices = np.unique(np.concatenate([z_values, z_values_boxes, z_values_scribbles])).astype("int")
     stop_lower, stop_upper = False, False
 
     if update_progress is None:
@@ -400,7 +829,13 @@ def segment_slices_with_prompts(
             pass
 
     for i in slices:
-        points_i = point_layer_to_prompts(point_prompts, i, track_id)
+        scribble_points, scribble_labels = scribble_layer_to_prompts(
+            box_prompts, image_shape=image_shape, i=i
+        )
+        have_scribbles = len(scribble_points) > 0
+        points_i = point_layer_to_prompts(
+            point_prompts, i, track_id, with_stop_annotation=not have_scribbles
+        )
 
         # do we end the segmentation at the outer slices?
         if points_i is None:
@@ -423,7 +858,16 @@ def segment_slices_with_prompts(
             continue
 
         boxes, masks = shape_layer_to_prompts(box_prompts, image_shape, i=i, track_id=track_id)
-        points, labels = points_i
+        points, labels = merge_point_prompts(points_i, (scribble_points, scribble_labels))
+        if have_scribbles and not boxes and not np.any(labels == 1):
+            warnings.warn(
+                f"Ignoring negative-only scribbles on slice {i}: add a positive point, scribble, "
+                "box or mask prompt on the same slice.",
+                stacklevel=2,
+            )
+            slices = np.setdiff1d(slices, i)
+            update_progress(1)
+            continue
 
         seg_i = prompt_segmentation(
             predictor, points, labels, boxes, masks, image_shape, multiple_box_prompts=False,

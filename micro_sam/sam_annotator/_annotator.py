@@ -89,15 +89,40 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             )
             self._point_prompt_layer.border_color_mode = "cycle"
 
-        if "prompts" not in self._viewer.layers:
+        if "prompts" in self._viewer.layers:
+            self._shape_prompt_layer = self._viewer.layers["prompts"]
+        else:
             # Add the shape layer for box and other shape prompts.
-            self._viewer.add_shapes(
+            self._shape_prompt_layer = self._viewer.add_shapes(
                 face_color="transparent",
-                edge_color="green",
+                edge_color="label",
+                edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
                 edge_width=4,
                 name="prompts",
                 ndim=self._ndim,
+                property_choices={"label": self._point_labels},
             )
+            self._shape_prompt_layer.edge_color_mode = "cycle"
+
+        # Migrate a pre-existing prompt layer and keep boxes / dense mask prompts green. Open
+        # paths retain their positive / negative property and use the same colors as point prompts.
+        if "label" not in self._shape_prompt_layer.properties:
+            properties = dict(self._shape_prompt_layer.properties)
+            properties["label"] = np.full(len(self._shape_prompt_layer.data), "positive", dtype=object)
+            self._shape_prompt_layer.properties = properties
+            current_properties = self._shape_prompt_layer.current_properties
+            current_properties["label"] = np.array(["positive"])
+            self._shape_prompt_layer.current_properties = current_properties
+            self._shape_prompt_layer.edge_color_cycle = vutil.LABEL_COLOR_CYCLE
+            self._shape_prompt_layer.edge_color = "label"
+            self._shape_prompt_layer.edge_color_mode = "cycle"
+        if not self._shape_prompt_layer.metadata.get("micro_sam_prompt_labels_configured", False):
+            self._shape_prompt_layer.events.data.connect(vutil.normalize_prompt_shape_labels)
+            self._shape_prompt_layer.events.mode.connect(vutil.sync_prompt_shape_current_color)
+            self._shape_prompt_layer.events.current_properties.connect(vutil.sync_prompt_shape_current_color)
+            self._shape_prompt_layer.metadata["micro_sam_prompt_labels_configured"] = True
+        vutil.normalize_prompt_shape_labels(self._shape_prompt_layer)
+        vutil.sync_prompt_shape_current_color(self._shape_prompt_layer)
 
     # Child classes have to implement this function and create a dictionary with the widgets.
     def _get_widgets(self):
@@ -124,8 +149,10 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Create the prompt widget. (The same for all plugins.)
         # Child plugins decide whether to expose it as a separate group (e.g. tracking) or to
         # embed it into another widget (e.g. the interactive segmentation widget).
+        shape_prompt_layer = self._viewer.layers["prompts"]
+        linked_layers = [shape_prompt_layer] if "label" in shape_prompt_layer.current_properties else None
         self._prompt_widget = widgets.create_prompt_menu(
-            self._point_prompt_layer, self._point_labels
+            self._point_prompt_layer, self._point_labels, linked_layers=linked_layers
         )
 
         # Create the dictionary for the widgets and get the widgets of the child plugin.
@@ -151,13 +178,21 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         def _segment_point_prompts(event):
             self._widgets["segment"](self._viewer)
 
+        @prompt_layer.bind_key("t", overwrite=True)
+        def _toggle_shape_prompt_label(event=None):
+            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
+
+        @point_prompt_layer.bind_key("t", overwrite=True)
+        def _toggle_point_prompt_label(event=None):
+            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
+
         @self._viewer.bind_key("c", overwrite=True)
         def _commit(viewer):
             self._widgets["commit"](viewer)
 
         @self._viewer.bind_key("t", overwrite=True)
         def _toggle_label(event=None):
-            vutil.toggle_label(self._point_prompt_layer)
+            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
 
         @self._viewer.bind_key("Shift-C", overwrite=True)
         def _clear_annotations(viewer):
@@ -281,7 +316,11 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._require_layers()
 
         # The prompt widget is bound to the point prompt layer, so it is recreated alongside it.
-        self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
+        shape_prompt_layer = self._viewer.layers["prompts"]
+        linked_layers = [shape_prompt_layer] if "label" in shape_prompt_layer.current_properties else None
+        self._prompt_widget = widgets.create_prompt_menu(
+            self._point_prompt_layer, self._point_labels, linked_layers=linked_layers
+        )
 
         # Rebuild the dimension-specific widgets, keeping the shared embedding widget.
         self._widgets = {"embeddings": self._embedding_widget}

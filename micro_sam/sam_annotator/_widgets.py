@@ -1215,9 +1215,10 @@ def export_track(
 
 
 def create_prompt_menu(
-    points_layer, labels, menu_name="prompt", label_name="label"
+    points_layer, labels, menu_name="prompt", label_name="label", linked_layers=None,
 ):
-    """Create the menu for toggling point prompt labels."""
+    """Create a menu that keeps point and optional shape prompt labels synchronized."""
+    prompt_layers = [points_layer] + ([] if linked_layers is None else list(linked_layers))
     label_menu = ComboBox(
         label=menu_name,
         choices=labels,
@@ -1226,17 +1227,22 @@ def create_prompt_menu(
     label_widget = Container(widgets=[label_menu])
 
     def update_label_menu(event):
-        new_label = str(points_layer.current_properties[label_name][0])
+        new_label = str(event.source.current_properties[label_name][0])
         if new_label != label_menu.value:
             label_menu.value = new_label
 
-    points_layer.events.current_properties.connect(update_label_menu)
+    for layer in prompt_layers:
+        layer.events.current_properties.connect(update_label_menu)
 
     def label_changed(new_label):
-        current_properties = points_layer.current_properties
-        current_properties[label_name] = np.array([new_label])
-        points_layer.current_properties = current_properties
-        points_layer.refresh_colors()
+        for layer in prompt_layers:
+            if label_name == "label":
+                vutil.set_prompt_label(layer, new_label)
+            else:
+                current_properties = layer.current_properties
+                current_properties[label_name] = np.array([new_label])
+                layer.current_properties = current_properties
+                layer.refresh_colors()
 
     label_menu.changed.connect(label_changed)
 
@@ -1418,18 +1424,33 @@ def _segment_object_2d(viewer, batched=False):
 
     shape = viewer.layers["current_object"].data.shape
 
-    # get the current box and point prompts
+    # Get the current box, point and open-stroke prompts. Scribbles are encoded through SAM's
+    # existing sparse point prompt embeddings, so the predictor interface remains unchanged.
     boxes, masks = vutil.shape_layer_to_prompts(
         viewer.layers["prompts"], shape
     )
     points, labels = vutil.point_layer_to_prompts(
         viewer.layers["point_prompts"], with_stop_annotation=False
     )
+    scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
+        viewer.layers["prompts"], image_shape=shape
+    )
+    points, labels = vutil.merge_point_prompts(
+        (points, labels), (scribble_points, scribble_labels)
+    )
+
+    have_scribbles = len(scribble_points) > 0
+    if have_scribbles and not len(boxes) and not np.any(labels == 1):
+        msg = "A negative scribble needs a positive point, positive scribble, box or mask prompt."
+        return _generate_message("error", msg)
 
     state = AnnotatorState()
     predictor = state.predictor
     image_embeddings = state.image_embeddings
     batched = _batched_disabled_when_tiled(state, batched)
+    if have_scribbles and batched:
+        show_info("Batched segmentation is not supported with scribble prompts. Running single-object.")
+        batched = False
 
     if state.is_sam2:
         # When the embeddings are tiled (top-level 'input_size' is None), route the prompts to the
@@ -2587,20 +2608,35 @@ class UnifiedSegmentWidget(_WidgetBase):
         )
         z = int(position[0])
 
+        prompt_layer = self._viewer.layers["prompts"]
+        scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
+            prompt_layer, image_shape=shape, i=z
+        )
+        have_scribbles = len(scribble_points) > 0
         point_prompts = vutil.point_layer_to_prompts(
-            self._viewer.layers["point_prompts"], z
+            self._viewer.layers["point_prompts"], z, with_stop_annotation=not have_scribbles
         )
         # this is a stop prompt, we do nothing
         if not point_prompts:
             return
 
         boxes, masks = vutil.shape_layer_to_prompts(
-            self._viewer.layers["prompts"], shape, i=z
+            prompt_layer, shape, i=z
         )
-        points, labels = point_prompts
+        points, labels = vutil.merge_point_prompts(
+            point_prompts, (scribble_points, scribble_labels)
+        )
+        if have_scribbles and not boxes and not np.any(labels == 1):
+            return _generate_message(
+                "error",
+                "A negative scribble needs a positive point, positive scribble, box or mask prompt.",
+            )
 
         state = AnnotatorState()
         batched = _batched_disabled_when_tiled(state, bool(self.batched))
+        if have_scribbles and batched:
+            show_info("Batched segmentation is not supported with scribble prompts. Running single-object.")
+            batched = False
 
         if state.is_sam2:
             # Use the segment_slice method for SAM2.
@@ -2753,14 +2789,26 @@ class UnifiedSegmentWidget(_WidgetBase):
                 point_prompts = self._viewer.layers["point_prompts"]
                 box_prompts = self._viewer.layers["prompts"]
                 z_values_points = np.round(point_prompts.data[:, 0])
-                z_values_boxes = (
-                    np.concatenate([box[:1, 0] for box in box_prompts.data])
-                    if box_prompts.data
-                    else np.zeros(0, dtype="int")
-                )
+                z_values_scribbles = vutil.get_scribble_slices(box_prompts)
+                have_scribbles = len(z_values_scribbles) > 0
+                z_values_boxes = np.round(
+                    np.asarray([
+                        shape[0, 0]
+                        for shape, shape_type in zip(box_prompts.data, box_prompts.shape_type)
+                        if shape_type not in vutil.SCRIBBLE_SHAPE_TYPES
+                    ])
+                ).astype("int")
 
                 # Whether the user decide to provide batched prompts for multi-object segmentation.
                 is_batched = _batched_disabled_when_tiled(state, bool(self.batched))
+                if have_scribbles and is_batched:
+                    show_info("Batched segmentation is not supported with scribble prompts. Running single-object.")
+                    is_batched = False
+
+                # A scribble is expanded into several points. Rebuild the persistent video-predictor
+                # state so deleting or relabelling a stroke cannot leave stale samples behind.
+                if have_scribbles:
+                    state.interactive_segmenter.reset_predictor()
 
                 # Check batched mode validity and show warning if needed
                 if is_batched and not state.is_sam2:
@@ -2800,12 +2848,36 @@ class UnifiedSegmentWidget(_WidgetBase):
 
                 # Then add the point prompts. Iterate unique frames so each frame's points are added
                 # together; the segmenter skips points already pushed, so re-runs only add new ones.
-                for curr_z in np.unique(z_values_points):
+                point_slices = np.unique(np.concatenate([z_values_points, z_values_scribbles])).astype("int")
+                merged_prompts = []
+                for curr_z in point_slices:
+                    scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
+                        box_prompts, image_shape=shape_yx, i=curr_z
+                    )
                     # A slice whose only prompt is a single negative point is a 'stop' annotation; skip it.
-                    prompts = vutil.point_layer_to_prompts(layer=point_prompts, i=curr_z)
+                    prompts = vutil.point_layer_to_prompts(
+                        layer=point_prompts,
+                        i=curr_z,
+                        with_stop_annotation=len(scribble_points) == 0,
+                    )
                     if prompts is None:
                         continue
-                    points, labels = prompts
+                    points, labels = vutil.merge_point_prompts(
+                        prompts, (scribble_points, scribble_labels)
+                    )
+                    merged_prompts.append((curr_z, points, labels))
+
+                have_positive_points = any(np.any(labels == 1) for _, _, labels in merged_prompts)
+                have_shape_cue = len(z_values_boxes) > 0
+                if have_scribbles and not have_positive_points and not have_shape_cue:
+                    pbar_signals.pbar_stop.emit()
+                    _generate_message(
+                        "error",
+                        "A negative scribble needs a positive point, positive scribble, box or mask prompt.",
+                    )
+                    return None
+
+                for curr_z, points, labels in merged_prompts:
                     if is_batched:
                         point_ids = list(range(object_id + 1, object_id + 1 + len(points)))
                         object_id += len(points)
@@ -2843,6 +2915,13 @@ class UnifiedSegmentWidget(_WidgetBase):
                         update_progress=emit_progress,
                     )
                 )
+                if len(slices) == 0:
+                    pbar_signals.pbar_stop.emit()
+                    _generate_message(
+                        "error",
+                        "No valid slice prompts remain. Add a positive point, scribble, box or mask prompt.",
+                    )
+                    return None
 
                 # Step 2: Segment the rest of the volume based on projecting prompts.
                 seg, (z_min, z_max) = segment_mask_in_volume(
@@ -2869,6 +2948,8 @@ class UnifiedSegmentWidget(_WidgetBase):
             self._viewer.layers["current_object"].refresh()
 
         seg = volumetric_segmentation_impl()
+        if seg is None:
+            return None
         self._viewer.layers["current_object"].data = seg
         self._viewer.layers["current_object"].refresh()
         # worker = volumetric_segmentation_impl()
@@ -3219,8 +3300,28 @@ class InteractiveSegmentationWidget(_WidgetBase):
         button_row.addWidget(self.clear_button)
         self.layout().addLayout(button_row)
 
+        # Scribbles describe corrections for one object and cannot be assigned unambiguously to
+        # separate objects in batched mode. Keep the control in sync as scribbles are added or
+        # removed from the shared prompt layer.
+        self._viewer.layers["prompts"].events.data.connect(self._update_batched_visibility)
+
         # Hide the batched control if the (already loaded) embeddings are tiled.
         self._update_batched_visibility()
+
+    def _update_batched_visibility(self, event=None):
+        """Disable batched segmentation while one or more scribble prompts are present."""
+        super()._update_batched_visibility()
+
+        prompt_layer = self._viewer.layers["prompts"]
+        have_scribbles = any(
+            shape_type in vutil.SCRIBBLE_SHAPE_TYPES for shape_type in prompt_layer.shape_type
+        )
+        if have_scribbles and self.batched_checkbox.isChecked():
+            self.batched_checkbox.setChecked(False)
+
+        self.batched_checkbox.setEnabled(not have_scribbles)
+        tooltip_key = "batched_scribble_disabled" if have_scribbles else "batched"
+        self.batched_checkbox.setToolTip(get_tooltip("unified_segment", tooltip_key))
 
     def _create_propagation_settings(self):
         """Build the SAM2 volume-mode propagation controls (early stopping + z-range slider).

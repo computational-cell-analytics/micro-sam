@@ -132,13 +132,21 @@ class Annotator(_AnnotatorBase):
         def _segment_point_prompts(event):
             interactive.segment(self._viewer)
 
+        @prompt_layer.bind_key("t", overwrite=True)
+        def _toggle_shape_prompt_label(event=None):
+            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
+
+        @point_prompt_layer.bind_key("t", overwrite=True)
+        def _toggle_point_prompt_label(event=None):
+            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
+
         @self._viewer.bind_key("c", overwrite=True)
         def _commit(viewer):
             self._widgets["commit"](viewer)
 
         @self._viewer.bind_key("t", overwrite=True)
         def _toggle_label(event=None):
-            vutil.toggle_label(self._point_prompt_layer)
+            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
 
         @self._viewer.bind_key("Shift-C", overwrite=True)
         def _clear_annotations(viewer):
