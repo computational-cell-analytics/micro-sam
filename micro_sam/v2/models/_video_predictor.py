@@ -20,8 +20,9 @@ MAX_CACHED_FRAMES = 8
 def _load_img_as_tensor(img_path, image_size):
     """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
 
-    File-path and numpy inputs both preserve aspect ratio: the longest side is resized to
-    ``image_size`` and the remaining bottom/right region is zero-padded.
+    File-path and numpy inputs are both percentile-normalized per channel, so that any input dtype
+    is mapped to the range SAM2's ImageNet normalization expects. Both also preserve aspect ratio:
+    the longest side is resized to ``image_size`` and the remaining bottom/right region is zero-padded.
 
     Returns:
         img: (3, image_size, image_size) float32 tensor, ImageNet-normalised by the caller.

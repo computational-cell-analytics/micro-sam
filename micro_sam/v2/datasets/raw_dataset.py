@@ -16,7 +16,7 @@ from torch_em.data.datasets.light_microscopy import ctc as ctc_module
 
 from training.dataset.vos_raw_dataset import VOSRawDataset, VOSFrame, VOSVideo
 
-from micro_sam.v2.normalization import UINT8_RANGE, normalize_raw
+from micro_sam.v2.normalization import normalize_raw
 
 from .segment_loader import ImageSegmentLoader, VolumeSegmentLoader
 
@@ -123,7 +123,7 @@ class VolumeRawDataset(VOSRawDataset):
         assert raw.ndim == 3 and labels.ndim == 3, "We currently only support 3 dimensional inputs for this loader."
 
         # Normalize per volume before slicing so all frames share the same intensity scale.
-        raw = normalize_raw(raw, output_range=UINT8_RANGE, dtype="uint8")
+        raw = normalize_raw(raw, output_dtype="uint8")
 
         # Let's expand the one channel images to three channels for training.
         raw = np.repeat(raw[:, np.newaxis, :, :], 3, axis=1)  # (img_num, 3, H, W)
@@ -242,7 +242,7 @@ class ImageRawDataset(VOSRawDataset):
 
         # Normalize per image and independently per channel before RGB conversion.
         spatial_axes = (0, 1) if raw.ndim == 3 else None
-        raw = normalize_raw(raw, axis=spatial_axes, output_range=UINT8_RANGE, dtype="uint8")
+        raw = normalize_raw(raw, axis=spatial_axes, output_dtype="uint8")
 
         # Ensure the images are in RGB format.
         raw = light_microscopy.neurips_cell_seg.to_rgb(raw)
@@ -296,7 +296,7 @@ class TissueNetDataset(VOSRawDataset):
         raw = np.array(load_data(zarr_path, "raw/rgb"))        # (3, H, W) float64
         labels = np.array(load_data(zarr_path, "labels/cell"))  # (H, W) int32
 
-        raw = normalize_raw(raw, axis=(1, 2), output_range=UINT8_RANGE, dtype="uint8")  # (3, H, W)
+        raw = normalize_raw(raw, axis=(1, 2), output_dtype="uint8")  # (3, H, W)
 
         frames = [VOSFrame(0, image_path=None, data=torch.from_numpy(raw))]
         video = VOSVideo(fname, idx, frames)
@@ -402,7 +402,7 @@ class CTCDataset(VOSRawDataset):
         all_labels = [imageio.imread(f).astype(np.int32) for f in lbl_files]
 
         # Normalize per sequence so all frames share the same intensity scale and avoid flicker.
-        seq_stack = normalize_raw(np.stack(all_raw), output_range=UINT8_RANGE, dtype="uint8")
+        seq_stack = normalize_raw(np.stack(all_raw), output_dtype="uint8")
         all_raw = list(seq_stack)
 
         all_frames = []

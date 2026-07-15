@@ -237,7 +237,7 @@ def run_unisam2_inference(
 
     Inference is tiled with a halo. For 3d data the tiling is fully 3d (the tile shape and halo
     include the z axis); for 2d it is in-plane. When `tile_shape` is None the whole image is
-    processed as a single block (no tiling).
+    processed as a single block (no tiling). Each block is percentile-normalized before prediction.
 
     Args:
         model: The UniSAM2 model.

@@ -578,9 +578,8 @@ def precompute_vfm_embeddings(
 ) -> util.ImageEmbeddings:
     """Compute VFM image embeddings in the `ImageEmbeddings` format used by the classification tools.
 
-    This mirrors the SAM embedding API (same signature and return contract) so
-    it can be used as a drop-in for VFM (DINO / UNI) encoders. Supports 2D and 3D images, with or without
-    tiling.
+    This mirrors the SAM embedding API (same signature and return contract) so that it can be used as a
+    drop-in for VFM (DINO / UNI) encoders. Supports 2D and 3D images, with or without tiling.
 
     Args:
         predictor: The VFM encoder (named 'predictor' to match the SAM precompute signature).
