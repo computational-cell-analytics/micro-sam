@@ -19,7 +19,7 @@ from micro_sam.v2.instance_segmentation import (
 from micro_sam.v2.automatic_segmentation import UniSAM2InstanceSegmentation
 from micro_sam.precompute_state import (
     _auto_state_path, _save_amg_state_v2, _load_amg_state_v2,
-    _save_ais_state_v2, _load_ais_state_v2, _ais_state_matches,
+    _save_ais_state_v2, _load_ais_state_v2, _ais_state_matches, _signature_matches,
 )
 
 DEFAULT_AMG_PARAMS = {
@@ -164,3 +164,34 @@ def test_ais_serialization_and_staleness_guard(tmp_path):
     assert not _ais_state_matches(loaded, "hvit_t_other")      # different model -> recompute
     assert _ais_state_matches(loaded, None)                    # unknown request -> reuse
     assert _ais_state_matches({"prediction": prediction}, "hvit_t_cells")  # legacy (no signature) -> reuse
+
+
+def test_signature_matches():
+    assert _signature_matches("a", "a")
+    assert not _signature_matches("a", "b")   # both known and different -> stale
+    assert _signature_matches(None, "a")      # cached unknown (legacy) -> reuse
+    assert _signature_matches("a", None)      # requested unknown -> reuse
+    assert _signature_matches(None, None)
+
+
+def test_amg_embedding_signature_roundtrip(tmp_path):
+    m = np.zeros((16, 16), bool)
+    m[3:7, 3:7] = True
+    segmenter = _make_amg_segmenter([_rle_mask(m)], (16, 16))
+    path, _ = _auto_state_path(str(tmp_path), "amg", None)
+    _save_amg_state_v2(segmenter, path, embedding_signature="sig-A")
+    loaded = _load_amg_state_v2(path)
+    assert loaded["embedding_signature"] == "sig-A"
+    assert _signature_matches(loaded.get("embedding_signature"), "sig-A")
+    assert not _signature_matches(loaded.get("embedding_signature"), "sig-B")  # embeddings changed -> stale
+
+
+def test_ais_embedding_signature_roundtrip(tmp_path):
+    segmenter = UniSAM2InstanceSegmentation(model=None)
+    segmenter._prediction = np.zeros((4, 4, 4), dtype="float32")
+    segmenter._is_initialized = True
+    path, key = _auto_state_path(str(tmp_path), "ais", None)
+    _save_ais_state_v2(segmenter, path, key, "hvit_t_cells", embedding_signature="sig-A")
+    loaded = _load_ais_state_v2(path, key)
+    assert loaded["embedding_signature"] == "sig-A"
+    assert not _signature_matches(loaded.get("embedding_signature"), "sig-B")  # embeddings changed -> stale

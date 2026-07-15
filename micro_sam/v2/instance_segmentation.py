@@ -591,12 +591,15 @@ def automatic_3d_segmentation(
         else:
             segmenter.initialize(volume[i], verbose=False, **init_kwargs)
 
+    if state_save_path is not None:
+        from micro_sam.precompute_state import _cache_amg_slice, _embedding_signature
+        state_signature = _embedding_signature(state_save_path)
+
     segmentation = np.zeros(volume.shape, dtype="uint32")
     offset = 0
     for i in range(volume.shape[0]):
         if state_save_path is not None:
-            from micro_sam.precompute_state import _cache_amg_slice
-            _cache_amg_slice(segmenter, state_save_path, i, init_slice)
+            _cache_amg_slice(segmenter, state_save_path, i, init_slice, embedding_signature=state_signature)
         else:
             init_slice(i)
         seg = segmenter.generate(**kwargs)

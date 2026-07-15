@@ -167,10 +167,38 @@ def _auto_state_path(save_path, mode, i):
     return os.path.join(save_path, "auto_state_ais.h5"), ("state" if i is None else f"state-{i}")
 
 
-def _save_amg_state_v2(segmenter, path):
+# Embedding metadata that defines the identity of the embeddings the state was computed from. If any
+# of these change (image, tiling, model, normalization) the cached state is stale and must not be
+# reused. 'micro_sam_version' is deliberately excluded (a version bump alone does not invalidate it).
+EMBEDDING_SIGNATURE_KEYS = ("data_signature", "tile_shape", "halo", "normalization", "model_name", "model_hash")
+
+
+def _embedding_signature(save_path):
+    """A stable signature of the embeddings at `save_path`, or None if it cannot be read.
+
+    Stamped into the cached automatic-segmentation state so it is not reused against embeddings that
+    were recomputed with different settings (e.g. tiling toggled) but the same image data.
+    """
+    if save_path is None:
+        return None
+    try:
+        attrs = dict(util._open_embeddings(save_path, mode="r").attrs)
+    except Exception:
+        return None
+    return "|".join(f"{key}={attrs.get(key)}" for key in EMBEDDING_SIGNATURE_KEYS)
+
+
+def _signature_matches(cached, requested):
+    """Whether a cached signature is compatible: equal, or unknown on either side (lenient)."""
+    return cached is None or requested is None or cached == requested
+
+
+def _save_amg_state_v2(segmenter, path, embedding_signature=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    state = segmenter.get_state()
+    state["embedding_signature"] = embedding_signature
     with open(path, "wb") as f:
-        pickle.dump(segmenter.get_state(), f)
+        pickle.dump(state, f)
 
 
 def _load_amg_state_v2(path):
@@ -178,7 +206,7 @@ def _load_amg_state_v2(path):
         return pickle.load(f)
 
 
-def _save_ais_state_v2(segmenter, path, key, model_type):
+def _save_ais_state_v2(segmenter, path, key, model_type, embedding_signature=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with h5py.File(path, "a") as f:
         if key in f:
@@ -188,6 +216,8 @@ def _save_ais_state_v2(segmenter, path, key, model_type):
         # Record which model produced the prediction so it is not reused with a different decoder.
         if model_type is not None:
             g.attrs["model_type"] = model_type
+        if embedding_signature is not None:
+            g.attrs["embedding_signature"] = embedding_signature
 
 
 def _load_ais_state_v2(path, key):
@@ -195,7 +225,11 @@ def _load_ais_state_v2(path, key):
         if key not in f:
             return None
         g = f[key]
-        return {"prediction": g["prediction"][:], "model_type": g.attrs.get("model_type", None)}
+        return {
+            "prediction": g["prediction"][:],
+            "model_type": g.attrs.get("model_type", None),
+            "embedding_signature": g.attrs.get("embedding_signature", None),
+        }
 
 
 def _ais_state_matches(state, model_type):
@@ -270,12 +304,15 @@ def cache_amg_state_v2(
     )
 
     key_index = i if state_index is None else state_index
-    path = None
+    path, signature = None, None
     if save_path is not None:
         path, _ = _auto_state_path(save_path, "amg", key_index)
+        signature = _embedding_signature(save_path)
         if os.path.exists(path):
             state = _load_amg_state_v2(path)
-            if state.get("params") == segmenter._amg_params:
+            matches = state.get("params") == segmenter._amg_params
+            matches = matches and _signature_matches(state.get("embedding_signature"), signature)
+            if matches:
                 if verbose:
                     print("Load the AMG state from", path)
                 segmenter.set_state(state)
@@ -290,11 +327,11 @@ def cache_amg_state_v2(
         pbar_init=pbar_init, pbar_update=pbar_update, **init_kwargs,
     )
     if path is not None:
-        _save_amg_state_v2(segmenter, path)
+        _save_amg_state_v2(segmenter, path, embedding_signature=signature)
     return segmenter
 
 
-def _cache_amg_slice(segmenter, save_path, i, init_fn):
+def _cache_amg_slice(segmenter, save_path, i, init_fn, embedding_signature=None):
     """Load slice `i`'s AMG state from `save_path` if present and matching, else init and save.
 
     Used by `micro_sam.v2.instance_segmentation.automatic_3d_segmentation` to cache the per-slice
@@ -303,11 +340,13 @@ def _cache_amg_slice(segmenter, save_path, i, init_fn):
     path, _ = _auto_state_path(save_path, "amg", i)
     if os.path.exists(path):
         state = _load_amg_state_v2(path)
-        if state.get("params") == segmenter._amg_params:
+        matches = state.get("params") == segmenter._amg_params
+        matches = matches and _signature_matches(state.get("embedding_signature"), embedding_signature)
+        if matches:
             segmenter.set_state(state)
             return
     init_fn(i)
-    _save_amg_state_v2(segmenter, path)
+    _save_amg_state_v2(segmenter, path, embedding_signature=embedding_signature)
 
 
 def cache_ais_state_v2(
@@ -368,11 +407,14 @@ def cache_ais_state_v2(
     segmenter = get_unisam2_segmentation_generator(decoder, is_tiled=is_tiled, device=device)
 
     key_index = i if state_index is None else state_index
-    path, key = None, None
+    path, key, signature = None, None, None
     if save_path is not None:
         path, key = _auto_state_path(save_path, "ais", key_index)
+        signature = _embedding_signature(save_path)
         state = _load_ais_state_v2(path, key) if os.path.exists(path) else None
-        if state is not None and _ais_state_matches(state, model_type):
+        matches = state is not None and _ais_state_matches(state, model_type)
+        matches = matches and _signature_matches(state.get("embedding_signature"), signature)
+        if matches:
             if verbose:
                 print("Load instance segmentation state from", path, ":", key)
             segmenter.set_state(state)
@@ -386,7 +428,7 @@ def cache_ais_state_v2(
         z_block=z_block, z_halo=z_halo, pbar_init=pbar_init, pbar_update=pbar_update,
     )
     if path is not None:
-        _save_ais_state_v2(segmenter, path, key, model_type)
+        _save_ais_state_v2(segmenter, path, key, model_type, embedding_signature=signature)
     return segmenter
 
 
