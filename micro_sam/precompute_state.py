@@ -5,14 +5,12 @@ import os
 import pickle
 from glob import glob
 from pathlib import Path
-from functools import partial
-from typing import Optional, Tuple, Union, List
+from typing import Optional, Tuple, Union
 
 import h5py
 import numpy as np
 
 import torch
-import torch.nn as nn
 
 from segment_anything.predictor import SamPredictor
 
@@ -22,7 +20,6 @@ except ImportError:
     from tqdm import tqdm
 
 from . import util
-from .v1.util import precompute_image_embeddings
 from .v1 import instance_segmentation
 
 
@@ -157,70 +154,282 @@ def cache_is_state(
     return amg
 
 
-def _precompute_state_for_file(
-    predictor, input_path, output_path, key, ndim, tile_shape, halo, precompute_amg_state, decoder, verbose
-):
-    if isinstance(input_path, np.ndarray):
-        image_data = input_path
-    else:
-        image_data = util.load_image_data(input_path, key)
+def _auto_state_path(save_path, mode, i):
+    """Resolve the on-disk path (and h5 key) for the cached SAM2 automatic-segmentation state.
 
-    # Precompute the image embeddings.
-    output_path = Path(output_path).with_suffix(".zarr")
-    embeddings = precompute_image_embeddings(
-        predictor, image_data, output_path, ndim=ndim, tile_shape=tile_shape, halo=halo, verbose=verbose
-    )
-
-    # Precompute the state for automatic instance segmnetaiton (AMG or AIS).
-    if precompute_amg_state:
-        if decoder is None:
-            cache_function = partial(
-                cache_amg_state, predictor=predictor, image_embeddings=embeddings, save_path=output_path
-            )
-        else:
-            cache_function = partial(
-                cache_is_state, predictor=predictor, decoder=decoder,
-                image_embeddings=embeddings, save_path=output_path
-            )
-
-        if ndim is None:
-            ndim = image_data.ndim
-
-        if ndim == 2:
-            cache_function(raw=image_data, verbose=verbose)
-        else:
-            n = image_data.shape[0]
-            for i in tqdm(range(n), total=n, desc="Precompute instance segmentation state", disable=not verbose):
-                cache_function(raw=image_data, i=i, verbose=False)
+    'mode' is 'amg' (grid masks, pickled) or 'ais' (decoder predictions, h5). 'i' selects a
+    per-slice entry for a volume, or the whole image / volume when None.
+    """
+    if mode == "amg":
+        if i is None:
+            return os.path.join(save_path, "auto_state_amg.pickle"), None
+        return os.path.join(save_path, "auto_state_amg", f"state-{i}.pkl"), None
+    return os.path.join(save_path, "auto_state_ais.h5"), ("state" if i is None else f"state-{i}")
 
 
-def _precompute_state_for_files(
-    predictor: SamPredictor,
-    input_files: Union[List[Union[os.PathLike, str]], List[np.ndarray]],
-    output_path: Union[os.PathLike, str],
-    key: Optional[str] = None,
-    ndim: Optional[int] = None,
+def _save_amg_state_v2(segmenter, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        pickle.dump(segmenter.get_state(), f)
+
+
+def _load_amg_state_v2(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def _save_ais_state_v2(segmenter, path, key, model_type):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with h5py.File(path, "a") as f:
+        if key in f:
+            del f[key]
+        g = f.create_group(key)
+        g.create_dataset("prediction", data=segmenter.get_state()["prediction"], compression="gzip")
+        # Record which model produced the prediction so it is not reused with a different decoder.
+        if model_type is not None:
+            g.attrs["model_type"] = model_type
+
+
+def _load_ais_state_v2(path, key):
+    with h5py.File(path, "r") as f:
+        if key not in f:
+            return None
+        g = f[key]
+        return {"prediction": g["prediction"][:], "model_type": g.attrs.get("model_type", None)}
+
+
+def _ais_state_matches(state, model_type):
+    """Whether a cached AIS state may be reused for `model_type`.
+
+    The AIS prediction depends only on the decoder and the embeddings, so the only staleness risk is
+    reusing it with a different decoder. We reuse the cached state unless both the stored and the
+    requested `model_type` are known and differ (a state written without a signature is reused).
+    """
+    cached = state.get("model_type")
+    return cached is None or model_type is None or cached == model_type
+
+
+def cache_amg_state_v2(
+    model: torch.nn.Module,
+    raw: np.ndarray,
+    image_embeddings: Optional[dict],
+    save_path: Optional[Union[str, os.PathLike]],
+    model_type: Optional[str] = None,
+    i: Optional[int] = None,
+    state_index: Optional[int] = None,
+    is_tiled: Optional[bool] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
-    precompute_amg_state: bool = False,
-    decoder: Optional["nn.Module"] = None,
+    points_per_side: int = 32,
+    pred_iou_thresh: float = 0.8,
+    stability_score_thresh: float = 0.9,
+    verbose: bool = True,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
+    **kwargs,
 ):
-    os.makedirs(output_path, exist_ok=True)
-    idx = 0
-    for file_path in tqdm(input_files, total=len(input_files), desc="Precompute state for files"):
+    """Compute and cache, or load, the SAM2 grid-based (AMG) automatic-segmentation state.
 
-        if isinstance(file_path, np.ndarray):
-            out_path = os.path.join(output_path, f"embedding_{idx:05}.tif")
-        else:
-            out_path = os.path.join(output_path, os.path.basename(file_path))
+    The SAM2 counterpart of `cache_amg_state`. The state (the predicted masks) is stored next to
+    the embeddings at 'save_path/auto_state_amg.pickle' (or 'auto_state_amg/state-{i}.pkl' for a
+    slice). A cached state is reused only if it was computed with the same AMG parameters, otherwise
+    it is recomputed and overwritten. Pass 'save_path=None' to compute in memory without caching.
 
-        _precompute_state_for_file(
-            predictor, file_path, out_path,
-            key=key, ndim=ndim, tile_shape=tile_shape, halo=halo,
-            precompute_amg_state=precompute_amg_state, decoder=decoder,
-            verbose=False,
+    Args:
+        model: The SAM2 model, loaded via `micro_sam.v2.util.get_sam2_model`.
+        raw: The image data.
+        image_embeddings: The (optionally precomputed) image embeddings. When None the segmenter
+            computes them from `raw`.
+        save_path: The embedding save path used to store the state, or None to skip caching.
+        model_type: The SAM2 model type, e.g. 'hvit_t'. Recorded in the cached state.
+        i: The slice index passed to the segmenter's `initialize` (for reusing volume embeddings).
+        state_index: The index used for the on-disk state (defaults to `i`). Set this to identify a
+            slice on disk when `i`/`image_embeddings` do not (e.g. a prebuilt single-slice embedding).
+        is_tiled: Whether to use the tiled segmenter. By default inferred from the embeddings.
+        tile_shape: The tile shape for the tiled segmenter.
+        halo: The tile overlap for the tiled segmenter.
+        points_per_side: The number of grid points sampled per image side.
+        pred_iou_thresh: The predicted-IoU filter threshold.
+        stability_score_thresh: The stability-score filter threshold.
+        verbose: Whether to run verbose.
+        pbar_init: Callback to initialize an external progress bar.
+        pbar_update: Callback to update an external progress bar.
+        kwargs: Additional keyword arguments for the AMG segmenter.
+
+    Returns:
+        The AMG segmenter with the (cached or freshly computed) state set.
+    """
+    from .v2.instance_segmentation import get_amg_segmenter
+
+    if is_tiled is None:
+        is_tiled = image_embeddings is not None and image_embeddings.get("input_size") is None
+
+    segmenter = get_amg_segmenter(
+        model, is_tiled=is_tiled, model_type=model_type, points_per_side=points_per_side,
+        pred_iou_thresh=pred_iou_thresh, stability_score_thresh=stability_score_thresh, **kwargs,
+    )
+
+    key_index = i if state_index is None else state_index
+    path = None
+    if save_path is not None:
+        path, _ = _auto_state_path(save_path, "amg", key_index)
+        if os.path.exists(path):
+            state = _load_amg_state_v2(path)
+            if state.get("params") == segmenter._amg_params:
+                if verbose:
+                    print("Load the AMG state from", path)
+                segmenter.set_state(state)
+                return segmenter
+
+    if verbose:
+        print("Precomputing the state for automatic mask generation.")
+
+    init_kwargs = {"tile_shape": tile_shape, "halo": halo} if is_tiled else {}
+    segmenter.initialize(
+        raw, image_embeddings=image_embeddings, i=i, verbose=verbose,
+        pbar_init=pbar_init, pbar_update=pbar_update, **init_kwargs,
+    )
+    if path is not None:
+        _save_amg_state_v2(segmenter, path)
+    return segmenter
+
+
+def _cache_amg_slice(segmenter, save_path, i, init_fn):
+    """Load slice `i`'s AMG state from `save_path` if present and matching, else init and save.
+
+    Used by `micro_sam.v2.instance_segmentation.automatic_3d_segmentation` to cache the per-slice
+    grid-prediction state of a volume. `init_fn(i)` runs the (expensive) `initialize` for the slice.
+    """
+    path, _ = _auto_state_path(save_path, "amg", i)
+    if os.path.exists(path):
+        state = _load_amg_state_v2(path)
+        if state.get("params") == segmenter._amg_params:
+            segmenter.set_state(state)
+            return
+    init_fn(i)
+    _save_amg_state_v2(segmenter, path)
+
+
+def cache_ais_state_v2(
+    decoder: torch.nn.Module,
+    raw: np.ndarray,
+    image_embeddings: Optional[dict],
+    save_path: Optional[Union[str, os.PathLike]],
+    ndim: int,
+    model_type: Optional[str] = None,
+    i: Optional[int] = None,
+    state_index: Optional[int] = None,
+    is_tiled: Optional[bool] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    device: Optional[str] = None,
+    z_block: Optional[int] = None,
+    z_halo: Optional[int] = None,
+    verbose: bool = True,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
+):
+    """Compute and cache, or load, the SAM2 decoder-based (AIS) automatic-segmentation state.
+
+    The SAM2 counterpart of `cache_is_state`, using the UniSAM2 decoder. The state (the foreground
+    and directed-distance predictions) is stored next to the embeddings at 'save_path/auto_state_ais.h5'
+    under the key 'state' (whole image / volume) or 'state-{i}' (a slice). It is independent of the
+    post-processing parameters, so it is always reusable. Pass 'save_path=None' to skip caching.
+
+    Args:
+        decoder: The UniSAM2 model, loaded via `micro_sam.v2.automatic_segmentation.get_unisam2_model`.
+        raw: The image data.
+        image_embeddings: The (optionally precomputed) image embeddings. When given only the decoder
+            is run on them (no encoder pass).
+        save_path: The embedding save path used to store the state, or None to skip caching.
+        ndim: The number of spatial dimensions (2 or 3).
+        model_type: The SAM2 model type. Recorded in the cached state so it is not reused with a
+            different decoder.
+        i: The slice index passed to the segmenter's `initialize`.
+        state_index: The index used for the on-disk state (defaults to `i`).
+        is_tiled: Whether to use the tiled segmenter. By default inferred from the embeddings.
+        tile_shape: The tile shape for the tiled segmenter.
+        halo: The tile overlap for the tiled segmenter.
+        device: The device to run inference on.
+        z_block: Number of slices to decode per z block for volumes.
+        z_halo: Number of overlapping slices between z blocks for volumes.
+        verbose: Whether to run verbose.
+        pbar_init: Callback to initialize an external progress bar.
+        pbar_update: Callback to update an external progress bar.
+
+    Returns:
+        The AIS segmenter with the (cached or freshly computed) state set.
+    """
+    from .v2.automatic_segmentation import get_unisam2_segmentation_generator
+
+    if is_tiled is None:
+        is_tiled = image_embeddings is not None and image_embeddings.get("input_size") is None
+
+    segmenter = get_unisam2_segmentation_generator(decoder, is_tiled=is_tiled, device=device)
+
+    key_index = i if state_index is None else state_index
+    path, key = None, None
+    if save_path is not None:
+        path, key = _auto_state_path(save_path, "ais", key_index)
+        state = _load_ais_state_v2(path, key) if os.path.exists(path) else None
+        if state is not None and _ais_state_matches(state, model_type):
+            if verbose:
+                print("Load instance segmentation state from", path, ":", key)
+            segmenter.set_state(state)
+            return segmenter
+
+    if verbose:
+        print("Precomputing the state for automatic instance segmentation.")
+
+    segmenter.initialize(
+        raw, ndim, image_embeddings=image_embeddings, i=i, tile_shape=tile_shape, halo=halo,
+        z_block=z_block, z_halo=z_halo, pbar_init=pbar_init, pbar_update=pbar_update,
+    )
+    if path is not None:
+        _save_ais_state_v2(segmenter, path, key, model_type)
+    return segmenter
+
+
+def _resolve_unisam2_decoder(model_type, checkpoint_path, device):
+    """Return a UniSAM2 decoder for the SAM2 model if one is available, else None (fall back to AMG).
+
+    Mirrors `micro_sam.v2.automatic_segmentation.get_segmenter`: a decoder from a custom
+    `checkpoint_path`, or the registered decoder of a finetuned model (e.g. 'hvit_t_cells'). Any
+    failure (e.g. an interactive-only checkpoint without a decoder) returns None.
+    """
+    from .v2.util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
+    from .v2.automatic_segmentation import get_unisam2_model
+
+    encoder = model_type[:6]
+    if checkpoint_path is not None:
+        decoder_source = checkpoint_path
+    elif model_type in FINETUNED_MODELS and has_registered_decoder(model_type):
+        _, _, decoder_source = _download_finetuned_sam2_model(model_type)
+    else:
+        return None
+    try:
+        return get_unisam2_model(decoder_source, device=util.get_device(device), encoder=encoder)
+    except Exception as e:
+        print(f"Could not load a UniSAM2 decoder from '{decoder_source}': {e}")
+        return None
+
+
+def _cache_auto_state_for_file(predictor, decoder, model_type, image_data, embeddings, save_path, ndim, verbose):
+    """Cache the SAM2 automatic-segmentation state for one file: AIS if a decoder is given, else AMG."""
+    if decoder is not None:  # AIS segments the whole image / volume in one pass.
+        device = next(decoder.parameters()).device
+        cache_ais_state_v2(
+            decoder, image_data, embeddings, save_path, ndim=ndim, model_type=model_type,
+            device=device, verbose=verbose,
         )
-        idx += 1
+    elif ndim == 2:  # AMG on a single 2d image.
+        model = getattr(predictor, "model", predictor)
+        cache_amg_state_v2(model, image_data, embeddings, save_path, model_type=model_type, verbose=verbose)
+    else:  # AMG on a volume: cache the per-slice grid state, reusing the 3d embeddings.
+        model = getattr(predictor, "model", predictor)
+        n = image_data.shape[0]
+        for i in tqdm(range(n), total=n, desc="Precompute auto state", disable=not verbose):
+            cache_amg_state_v2(model, image_data[i], embeddings, save_path, model_type=model_type, i=i, verbose=False)
 
 
 def precompute_state(
@@ -231,8 +440,10 @@ def precompute_state(
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     key: Optional[str] = None,
     ndim: Optional[int] = None,
+    precompute_auto_state: bool = False,
+    prefer_decoder: bool = True,
 ) -> None:
-    """Precompute and cache the image embeddings for the input image(s).
+    """Precompute and cache the image embeddings (and, optionally, the automatic-segmentation state).
 
     The embeddings are saved in the same zarr format the annotators use, so the output can be loaded
     directly by the `micro_sam.annotator` CLI and the napari GUI by passing the same path as the
@@ -253,13 +464,30 @@ def precompute_state(
         key: The key to the input file. This is needed for container files (e.g. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob pattern, e.g. "*.tif", for this case.
         ndim: The dimensionality of the data. By default, computed from the input data.
+        precompute_auto_state: Whether to also precompute the automatic-segmentation state next to the
+            embeddings (a longer start-up in exchange for a faster first automatic segmentation).
+            Supported for SAM2 ('hvit_*') models.
+        prefer_decoder: Whether to use the decoder-based state (AIS) when the SAM2 model has a decoder,
+            instead of grid-based mask generation (AMG).
     """
     # Imported lazily to avoid a circular import ('_state' imports from this module).
     from micro_sam.sam_annotator._state import _get_sam_model
 
+    is_sam2 = model_type.startswith("h")
+    if precompute_auto_state and not is_sam2:
+        raise ValueError(
+            "Precomputing the automatic-segmentation state via 'precompute_state' is only supported for "
+            "SAM2 ('hvit_*') models. For SAM1 use the annotator command with '--precompute_amg_state'."
+        )
+
     # Dispatch to the embedding function for the model family (SAM1 / SAM2 / VFM). All share the same
     # interface, so the per-family predictor from '_get_sam_model' feeds directly into it.
     compute_embeddings = util.get_embedding_function(model_type)
+
+    # Resolve the UniSAM2 decoder once (AIS); when none is available the state is cached with AMG.
+    decoder = None
+    if precompute_auto_state and prefer_decoder:
+        decoder = _resolve_unisam2_decoder(model_type, checkpoint_path, device=None)
 
     # Determine the input files and matching output embedding paths.
     single = pattern is None
@@ -289,6 +517,11 @@ def precompute_state(
             current_ndim = file_ndim
 
         save_path = str(Path(out_path).with_suffix(".zarr"))
-        compute_embeddings(
+        embeddings = compute_embeddings(
             predictor=predictor, input_=image_data, save_path=save_path, ndim=file_ndim, verbose=single
         )
+
+        if precompute_auto_state:
+            _cache_auto_state_for_file(
+                predictor, decoder, model_type, image_data, embeddings, save_path, file_ndim, verbose=single,
+            )

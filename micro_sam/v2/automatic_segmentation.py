@@ -791,6 +791,22 @@ class UniSAM2InstanceSegmentation:
             raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
         return segment_from_predictions(self._prediction, mode=mode, **kwargs)
 
+    def get_state(self) -> dict:
+        """Return the cached decoder predictions so they can be serialized and later restored.
+
+        The state holds the (4, *spatial) foreground + directed-distance predictions. Restore it
+        with `set_state` to skip the expensive decoder inference in `initialize`. It is independent
+        of the post-processing parameters (those are applied in `generate`), so it is always reusable.
+        """
+        if not self._is_initialized:
+            raise RuntimeError("Cannot get the state before the segmenter has been initialized.")
+        return {"prediction": self._prediction}
+
+    def set_state(self, state: dict) -> None:
+        """Restore the state produced by `get_state`, marking the segmenter initialized."""
+        self._prediction = np.asarray(state["prediction"])
+        self._is_initialized = True
+
 
 class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
     """Generates a tiled instance segmentation with the UniSAM2 model.

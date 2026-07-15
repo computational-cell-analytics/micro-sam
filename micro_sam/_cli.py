@@ -756,8 +756,19 @@ def inference_object_classification(
     "-n", "--ndim", type=int, default=None,
     help="The number of spatial dimensions. Specify this if your data has a channel dimension."
 )
-def precompute_embeddings(input_path, embedding_path, pattern, key, model_type, checkpoint_path, ndim):
-    """Precompute image embeddings."""
+@click.option(
+    "--precompute_auto_state", "--precompute_amg_state", "precompute_auto_state", is_flag=True, default=False,
+    help="Whether to also precompute the automatic-segmentation state next to the embeddings (SAM2 only). "
+    "Alias: --precompute_amg_state."
+)
+@click.option(
+    "--prefer_decoder", is_flag=True, default=True, flag_value=False,
+    help="Whether to use decoder-based state (AIS) when the model has a decoder, instead of grid-based AMG."
+)
+def precompute_embeddings(
+    input_path, embedding_path, pattern, key, model_type, checkpoint_path, ndim, precompute_auto_state, prefer_decoder,
+):
+    """Precompute image embeddings (and optionally the automatic-segmentation state)."""
     from .precompute_state import precompute_state
     from .v2.util import _DEFAULT_MODEL
 
@@ -765,6 +776,7 @@ def precompute_embeddings(input_path, embedding_path, pattern, key, model_type, 
         input_path, embedding_path,
         model_type=model_type or _DEFAULT_MODEL, checkpoint_path=checkpoint_path,
         pattern=pattern, key=key, ndim=ndim,
+        precompute_auto_state=precompute_auto_state, prefer_decoder=prefer_decoder,
     )
 
 
