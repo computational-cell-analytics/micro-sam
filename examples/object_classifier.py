@@ -303,8 +303,8 @@ def main():
     # wholeslide_annotator()
     # lucchi_annotator()
     # tiled_3d_annotator()
-    sam2_object_classifier()
-    # histopathology_annotator()
+    # sam2_object_classifier()
+    histopathology_annotator()
     # batch_prediction()
 
     # annotator_devel()
