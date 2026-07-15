@@ -428,7 +428,7 @@ def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
 
 
 def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update):
-    from micro_sam.util import _to_image, _create_dataset_with_data, _write_embedding_signature
+    from micro_sam.util import _to_image, _create_dataset_without_data, _write_embedding_signature
     from bioimage_cpp.utils import Blocking
 
     features = f.require_group("features")
@@ -463,31 +463,53 @@ def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_in
         inference_state = predictor.init_state(
             volume=sub_volume, volume_embeddings=None, device=predictor.device, ignore_caching_features=True,
         )
-        batched_images = [_to_image(sub_volume[z]) for z in range(n_slices)]
-        vision_feats, pos_encs, fpns, original_sizes, input_sizes = _compute_embeddings_batched_3d(
-            inference_state, predictor, list(range(n_slices)), batched_images, pbar_update=pbar_update,
-        )
 
-        # Stack the per-slice outputs along z, matching the (n_slices, ...) layout '_compute_3d' saves.
-        stacked = [feat.unsqueeze(0) if feat.ndim == 3 else feat for feat in vision_feats]
-        tile_features = torch.stack(stacked, dim=0).detach().cpu().numpy()
-        depth = len(pos_encs[0])
-        tile_pos = [torch.stack([p[level] for p in pos_encs]).detach().cpu().numpy() for level in range(depth)]
-        tile_fpn = [torch.stack([p[level] for p in fpns]).detach().cpu().numpy() for level in range(depth)]
-
-        # Chunk per slice (chunks=(1, ...)), as '_compute_3d' does: a whole tile-column stacked into a
-        # single chunk exceeds Blosc's ~2.1 GB per-chunk limit for deep volumes (e.g. pos_enc level 0
-        # is ~67 MB/slice, so 50 slices is ~3.35 GB) and fails to compress.
-        feat_chunks = (1,) + tile_features.shape[1:]
-        ds = _create_dataset_with_data(features, str(tile_id), data=tile_features, chunks=feat_chunks)
-        ds.attrs["input_size"] = input_sizes[-1]
-        ds.attrs["original_size"] = list(original_sizes[-1])
+        # Stream one slice at a time into per-tile datasets, moving each slice's features off-device
+        # right away, so peak memory is a single slice rather than the whole tile-column. Buffering all
+        # slices (and then stacking them) held ~200 MB/slice of high-res features on-device and OOMed on
+        # deep volumes even when saving to disk. Datasets are created lazily from the first slice's
+        # shapes with per-slice '(1, ...)' chunking, matching '_compute_3d' and the on-disk layout the
+        # lazy tiled consumer expects (features/<tile>, pos_enc/<tile>/<level>, fpn/<tile>/<level>).
+        feature_ds, pos_enc_dsets, fpn_dsets = None, None, None
         tile_pos_group = pos_enc_group.require_group(str(tile_id))
-        for level, level_feat in enumerate(tile_pos):
-            _create_dataset_with_data(tile_pos_group, str(level), data=level_feat, chunks=(1,) + level_feat.shape[1:])
         tile_fpn_group = fpn_group.require_group(str(tile_id))
-        for level, level_feat in enumerate(tile_fpn):
-            _create_dataset_with_data(tile_fpn_group, str(level), data=level_feat, chunks=(1,) + level_feat.shape[1:])
+        input_size, original_size = None, None
+        for z in range(n_slices):
+            vision_feats, pos_encs, fpns, original_sizes, input_sizes = _compute_embeddings_batched_3d(
+                inference_state, predictor, [z], [_to_image(sub_volume[z])], pbar_update=pbar_update,
+            )
+            curr_feat = vision_feats[0]
+            if curr_feat.ndim == 3:
+                curr_feat = curr_feat.unsqueeze(0)
+            curr_pos, curr_fpn = pos_encs[0], fpns[0]
+
+            if feature_ds is None:
+                feature_ds = _create_dataset_without_data(
+                    features, str(tile_id), shape=(n_slices,) + tuple(curr_feat.shape),
+                    dtype="float32", chunks=(1,) + tuple(curr_feat.shape),
+                )
+                pos_enc_dsets = [
+                    _create_dataset_without_data(
+                        tile_pos_group, str(level), shape=(n_slices,) + tuple(t.shape),
+                        dtype="float32", chunks=(1,) + tuple(t.shape),
+                    ) for level, t in enumerate(curr_pos)
+                ]
+                fpn_dsets = [
+                    _create_dataset_without_data(
+                        tile_fpn_group, str(level), shape=(n_slices,) + tuple(t.shape),
+                        dtype="float32", chunks=(1,) + tuple(t.shape),
+                    ) for level, t in enumerate(curr_fpn)
+                ]
+
+            feature_ds[z] = curr_feat.detach().cpu().numpy()
+            for level, t in enumerate(curr_pos):
+                pos_enc_dsets[level][z] = t.detach().cpu().numpy()
+            for level, t in enumerate(curr_fpn):
+                fpn_dsets[level][z] = t.detach().cpu().numpy()
+            input_size, original_size = input_sizes[-1], original_sizes[-1]
+
+        feature_ds.attrs["input_size"] = input_size
+        feature_ds.attrs["original_size"] = list(original_size)
 
     if save_path is not None:
         _write_embedding_signature(
