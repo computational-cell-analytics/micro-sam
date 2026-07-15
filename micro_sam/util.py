@@ -131,11 +131,14 @@ def _configure_mps_memory(device: Union[str, torch.device]) -> None:
     """Disable the MPS memory watermark so 3d automatic segmentation does not hit a premature OOM.
 
     MPS's default watermark rejects allocations that would still fit in unified memory; '0.0' disables
-    it. ``setdefault`` keeps a user-set value, and it must run before the first MPS allocation to apply.
+    it. We set it only when unset (so a user-provided value is kept) and it must run before the first
+    MPS allocation to apply.
     """
     device_type = device if isinstance(device, str) else getattr(device, "type", "")
-    if isinstance(device_type, str) and device_type.lower() == "mps":
-        os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
+    is_mps = isinstance(device_type, str) and device_type.lower() == "mps"
+    if is_mps and "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in os.environ:
+        os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
+        print("Lifting the MPS memory limit for large 3d segmentation; this may use swap on low-memory Macs.")
 
 
 def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, torch.device]:
