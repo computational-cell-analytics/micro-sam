@@ -237,7 +237,7 @@ def run_unisam2_inference(
 
     Inference is tiled with a halo. For 3d data the tiling is fully 3d (the tile shape and halo
     include the z axis); for 2d it is in-plane. When `tile_shape` is None the whole image is
-    processed as a single block (no tiling).
+    processed as a single block (no tiling). Each block is percentile-normalized before prediction.
 
     Args:
         model: The UniSAM2 model.
@@ -256,10 +256,10 @@ def run_unisam2_inference(
         Channel 0 is the foreground probability, channels 1-3 the directed distances.
     """
     from torch_em.util.prediction import predict_with_halo
-    from torch_em.transform.raw import normalize
+    from micro_sam.v2.normalization import normalize_raw
 
     def _preprocess(crop):
-        return np.concatenate([normalize(crop)] * 3, axis=0)
+        return np.concatenate([normalize_raw(crop)] * 3, axis=0)
 
     is_3d = ndim == 3
 
@@ -447,17 +447,19 @@ def run_unisam2_decoder_on_3d_embeddings(
     z_block = DEFAULT_TILE_Z if z_block is None else int(z_block)
     z_halo = DEFAULT_HALO_Z if z_halo is None else int(z_halo)
 
-    features = np.asarray(image_embeddings["features"])
-    # Per-slice features are (Z, C, h, w); the tiled / save-path layout keeps a singleton batch axis
-    # (Z, 1, C, h, w) - squeeze it so the stub returns a (1, C, h, w) feature per slice.
-    if features.ndim == 5 and features.shape[1] == 1:
-        features = features[:, 0]
-    if features.ndim != 4:
+    # Keep 'features' as the (possibly lazy, on-disk) handle and read only the current z block inside
+    # the loop, so peak memory is one z block instead of the whole feature volume. Use 'len(shape)' as
+    # zarr / z5py datasets and numpy arrays all expose 'shape' (but not always 'ndim').
+    features = image_embeddings["features"]
+    n_dims = len(features.shape)
+    if n_dims not in (4, 5):
         raise ValueError(
-            f"Decoder-from-embeddings (3d) requires 3d embeddings (features with ndim 4 or 5), got {features.ndim}."
+            f"Decoder-from-embeddings (3d) requires 3d embeddings (features with ndim 4 or 5), got {n_dims}."
         )
+    # Per-slice features are (Z, C, h, w); the tiled / save-path layout keeps a singleton batch axis
+    # (Z, 1, C, h, w) - squeeze it per block so the stub returns a (1, C, h, w) feature per slice.
+    squeeze_batch = n_dims == 5 and features.shape[1] == 1
     n_slices = features.shape[0]
-    feature = torch.as_tensor(features, device=device).float()
     original_size = tuple(int(s) for s in np.array(image_embeddings["original_size"]).reshape(-1)[:2])
 
     # Decode in z blocks with a halo and stitch the inner range, bounding peak memory. The whole stack
@@ -471,7 +473,11 @@ def run_unisam2_decoder_on_3d_embeddings(
     for z0 in z_starts:
         z1 = min(z0 + z_block, n_slices)
         c0, c1 = max(0, z0 - z_halo), min(n_slices, z1 + z_halo)
-        pred = _decode_3d_feature_block(model, feature[c0:c1], original_size, device)  # (4, c1-c0, H, W)
+        block = np.asarray(features[c0:c1])
+        if squeeze_batch:
+            block = block[:, 0]
+        feature_block = torch.as_tensor(block, device=device).float()
+        pred = _decode_3d_feature_block(model, feature_block, original_size, device)  # (4, c1-c0, H, W)
         inner = z0 - c0
         output[:, z0:z1] = pred[:, inner:inner + (z1 - z0)]
         if pbar_update is not None:
@@ -614,8 +620,10 @@ def run_unisam2_decoder_on_tiled_3d_embeddings(
 
     output = np.zeros((4, *shape), dtype="float32")
     for tile_id in range(tiling.number_of_blocks):
+        # Keep the tile-column features lazy; 'run_unisam2_decoder_on_3d_embeddings' reads them one z
+        # block at a time from disk rather than materialising the whole column.
         tile_features = feats_group[str(tile_id)]  # (Z, C, h, w)
-        tile_embeddings = {"features": np.asarray(tile_features), "original_size": tile_features.attrs["original_size"]}
+        tile_embeddings = {"features": tile_features, "original_size": tile_features.attrs["original_size"]}
         tile_prediction = run_unisam2_decoder_on_3d_embeddings(
             model, tile_embeddings, device=device, z_block=z_block, z_halo=z_halo, pbar_update=pbar_update,
         )  # (4, Z, ty, tx)
@@ -975,9 +983,11 @@ def automatic_instance_segmentation(
             model_type=model_type, ndim=ndim, device=device, checkpoint_path=checkpoint,
             decoder_path=None, use_cli=True,
         )
+        # Stream 3d embeddings from the cache instead of materialising the whole volume; the 3d
+        # decoder reads them one z block at a time. 'lazy_loading' is a no-op for 2d / tiled.
         image_embeddings = precompute_image_embeddings(
             predictor, raw, save_path=embedding_path, ndim=ndim,
-            tile_shape=tile_shape, halo=halo, verbose=verbose,
+            tile_shape=tile_shape, halo=halo, verbose=verbose, lazy_loading=(ndim == 3),
         )
 
     segmenter.initialize(

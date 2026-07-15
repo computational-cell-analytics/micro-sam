@@ -144,15 +144,14 @@ def _resize_to_grid(embeddings: np.ndarray, target_hw: Tuple[int, int]) -> np.nd
     return resize(feature_image, resize_shape, preserve_range=True).astype("float32")
 
 
-def _block_to_grid(embeddings, block_hw, target_hw, image_region=None, upsampler=None, is_sam2=False, pbar_update=None):
+def _block_to_grid(embeddings, block_hw, target_hw, image_region=None, upsampler=None, pbar_update=None):
     """Crop a block embedding to its aspect ratio and map it to the target grid shape.
 
-    SAM1 pads the image to a square before encoding, so the square embedding has content in a
-    sub-rectangle that we crop out. SAM2 stretches the image to a square, so the full embedding
-    already corresponds to the whole image and must not be cropped. With `upsampler`, AnyUp
-    upsamples the embedding using `image_region` as guidance; otherwise it is plainly interpolated.
+    The encoders pad the image to a square, so the square embedding has content in a sub-rectangle
+    that we crop out. With `upsampler`, AnyUp upsamples the embedding using `image_region` as
+    guidance; otherwise it is plainly interpolated.
     """
-    block = embeddings if is_sam2 else _aspect_crop(embeddings, block_hw)
+    block = _aspect_crop(embeddings, block_hw)
     if upsampler is not None:
         result = _anyup_to_grid(block, image_region, target_hw, upsampler)
         if pbar_update is not None:
@@ -162,7 +161,7 @@ def _block_to_grid(embeddings, block_hw, target_hw, image_region=None, upsampler
 
 
 def _compute_tiled_feature_image(
-    features, image_hw, max_grid_size, z=None, image=None, upsampler=None, is_sam2=False, pbar_update=None
+    features, image_hw, max_grid_size, z=None, image=None, upsampler=None, pbar_update=None
 ):
     """Assemble a downsampled (GH, GW, C) feature image for a single 2d (tiled) plane.
 
@@ -184,9 +183,8 @@ def _compute_tiled_feature_image(
         outer, inner_local = block.outer_block, block.inner_block_local
         outer_hw = (outer.end[0] - outer.begin[0], outer.end[1] - outer.begin[1])
 
-        # SAM1 pads the tile to a square (crop to the outer block aspect); SAM2 stretches it (no crop).
-        if not is_sam2:
-            embeds = _aspect_crop(embeds, outer_hw)
+        # The tile is padded to a square, so crop to the outer block aspect.
+        embeds = _aspect_crop(embeds, outer_hw)
         tile_scale = (embeds.shape[-2] / outer_hw[0], embeds.shape[-1] / outer_hw[1])
         iy0, iy1 = int(round(inner_local.begin[0] * tile_scale[0])), int(round(inner_local.end[0] * tile_scale[0]))
         ix0, ix1 = int(round(inner_local.begin[1] * tile_scale[1])), int(round(inner_local.end[1] * tile_scale[1]))
@@ -248,9 +246,6 @@ def compute_pixel_features(
 
     is_tiled = image_embeddings["input_size"] is None
     is_3d = len(image_shape) == 3
-    # SAM2 embeddings carry the high-resolution decoder features; SAM1 embeddings never do. SAM2
-    # stretches the image to a square (no padding), so its embedding must not be aspect-cropped.
-    is_sam2 = "high_res_feats" in image_embeddings
     features = image_embeddings["features"]
 
     # AnyUp is the slow part, so when it is used we show a dedicated progress bar (which also drives
@@ -274,15 +269,14 @@ def compute_pixel_features(
         for z in tqdm(range(depth), total=depth, disable=slice_disable, desc="Compute pixel features"):
             if is_tiled:
                 plane, grid = _compute_tiled_feature_image(
-                    features, image_hw, max_grid_size, z=z, image=image, upsampler=upsampler,
-                    is_sam2=is_sam2, pbar_update=pbar_update,
+                    features, image_hw, max_grid_size, z=z, image=image, upsampler=upsampler, pbar_update=pbar_update
                 )
             else:
                 embeds = np.asarray(features[z]).squeeze()
                 grid, _ = _grid_shape(image_hw, grid_size)
                 plane = _block_to_grid(
                     embeds, image_hw, grid, image_region=None if image is None else image[z],
-                    upsampler=upsampler, is_sam2=is_sam2, pbar_update=pbar_update,
+                    upsampler=upsampler, pbar_update=pbar_update,
                 )
             planes.append(plane)
         feature_image = np.stack(planes)
@@ -291,15 +285,13 @@ def compute_pixel_features(
         image_hw = (image_shape[0], image_shape[1])
         if is_tiled:
             feature_image, grid = _compute_tiled_feature_image(
-                features, image_hw, max_grid_size, image=image, upsampler=upsampler,
-                is_sam2=is_sam2, pbar_update=pbar_update,
+                features, image_hw, max_grid_size, image=image, upsampler=upsampler, pbar_update=pbar_update
             )
         else:
             embeds = np.asarray(features).squeeze()
             grid, _ = _grid_shape(image_hw, grid_size)
             feature_image = _block_to_grid(
-                embeds, image_hw, grid, image_region=image, upsampler=upsampler,
-                is_sam2=is_sam2, pbar_update=pbar_update,
+                embeds, image_hw, grid, image_region=image, upsampler=upsampler, pbar_update=pbar_update,
             )
         grid_shape = grid
 

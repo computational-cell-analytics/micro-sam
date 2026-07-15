@@ -27,12 +27,12 @@ import tempfile
 import imageio.v3 as imageio
 import numpy as np
 from skimage.measure import label as connected_components
-from torch_em.transform.raw import normalize
 from tqdm import tqdm
 
 import torch
 
 from micro_sam.v1.evaluation.evaluation import run_evaluation
+from micro_sam.v2.normalization import normalize_raw
 
 from common import DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, CHECKPOINT_PATHS, get_data_paths
 from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
@@ -58,17 +58,14 @@ _EM_DATASETS = set(DATASETS_3D_EM)
 
 def _normalize_raw_to_unit(raw):
     """Normalize raw input to float32 [0, 1] for SAM2-style preprocessing."""
-    raw = raw.astype("float32", copy=False)
     if raw.size == 0:
-        return raw
-    if raw.min() < 0 or raw.max() > 1:
-        raw = normalize(raw)
-    return np.clip(raw, 0, 1)
+        return raw.astype("float32", copy=False)
+    return normalize_raw(raw)
 
 
 def _to_sam2_uint8(raw):
     """Convert raw input to uint8 while preserving [0, 1] normalization semantics."""
-    return np.round(_normalize_raw_to_unit(raw) * 255).astype("uint8")
+    return normalize_raw(raw, output_dtype="uint8")
 
 
 def _get_corrective_point(gt_mask, pred_mask):

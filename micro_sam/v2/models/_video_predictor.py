@@ -20,8 +20,9 @@ MAX_CACHED_FRAMES = 8
 def _load_img_as_tensor(img_path, image_size):
     """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
 
-    File-path and numpy inputs both preserve aspect ratio: the longest side is resized to
-    ``image_size`` and the remaining bottom/right region is zero-padded.
+    File-path and numpy inputs are both percentile-normalized per channel, so that any input dtype
+    is mapped to the range SAM2's ImageNet normalization expects. Both also preserve aspect ratio:
+    the longest side is resized to ``image_size`` and the remaining bottom/right region is zero-padded.
 
     Returns:
         img: (3, image_size, image_size) float32 tensor, ImageNet-normalised by the caller.
@@ -29,19 +30,16 @@ def _load_img_as_tensor(img_path, image_size):
             for SAM2's coordinate normalization so prompts map into the resized content region.
         video_width: same as video_height.
     """
+    from micro_sam.v2.normalization import normalize_raw
+
     if isinstance(img_path, str):
         img_pil = Image.open(img_path)
-        img_np = np.array(img_pil.convert("RGB"), dtype=np.float32) / 255.0
+        img_np = np.array(img_pil.convert("RGB"))
     else:
         img_np = img_path
         img_np = np.stack([img_np] * 3, axis=-1) if img_np.ndim == 2 else img_np
 
-        # Percentile-normalize each channel to [0, 1], so any input dtype (e.g. uint16 microscopy data)
-        # is mapped to the range SAM2's ImageNet normalization expects. Clip since percentile
-        # normalization maps the 2nd / 98th percentiles to 0 / 1 and overshoots outside that range.
-        from torch_em.transform.raw import normalize_percentile
-        img_np = normalize_percentile(img_np.astype(np.float32), lower=2.0, upper=98.0, axis=(0, 1))
-        img_np = np.clip(img_np, 0.0, 1.0)
+    img_np = normalize_raw(img_np, axis=(0, 1))
 
     # The effective square size gives prompts one isotropic scale factor.
     from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_numpy
@@ -51,6 +49,34 @@ def _load_img_as_tensor(img_path, image_size):
 
     img = torch.from_numpy(img_np.astype(np.float32)).permute(2, 0, 1)
     return img, video_height, video_width
+
+
+class _LazyVideoFrames:
+    """Produce per-slice frame tensors from a numpy volume on demand, without stacking the whole volume.
+
+    'inference_state["images"]' is only ever integer-indexed and passed to 'len', so a sequence that
+    resizes + normalises one slice at access time is a drop-in for the eager
+    '(num_frames, 3, image_size, image_size)' tensor. This avoids holding every slice at 'image_size^2'
+    (~12 MB/slice), which otherwise grows unbounded with depth and, after the embeddings were moved to
+    disk, is the dominant per-volume RAM cost. Frames are returned on CPU (the consumer moves the
+    current frame to the device); the upstream <=MAX_CACHED_FRAMES feature cache already retains the
+    frames in active use, so nothing is cached here.
+    """
+
+    def __init__(self, volume, image_size, img_mean, img_std):
+        self._volume = volume
+        self._image_size = image_size
+        self._img_mean = img_mean
+        self._img_std = img_std
+        h, w = volume.shape[1], volume.shape[2]
+        self.video_height = self.video_width = max(h, w)
+
+    def __len__(self):
+        return len(self._volume)
+
+    def __getitem__(self, index):
+        img, _, _ = _load_img_as_tensor(self._volume[index], self._image_size)
+        return (img - self._img_mean) / self._img_std
 
 
 def _load_video_frames_from_images(
@@ -66,24 +92,30 @@ def _load_video_frames_from_images(
 ):
     """Based on 'load_video_frames_from_jpg_images'.
 
-    Load the video frames from a directory of image files (eg. "<frame_index>.jpg" format).
+    Returns the frame sequence (resized to image_size x image_size and ImageNet-normalised) plus the
+    effective video height / width, for two input kinds:
 
-    The frames are resized to image_size x image_size and are loaded to GPU if
-    `offload_video_to_cpu` is `False` and to CPU if `offload_video_to_cpu` is `True`.
-
-    You can load a frame asynchronously by setting `async_loading_frames` to `True`.
+    - `volume` (a numpy (Z, Y, X) array, the micro-sam path): returns a lazy `_LazyVideoFrames` that
+      resizes + normalises one slice on demand on CPU, so the whole volume is never stacked at
+      image_size^2 in memory. `offload_video_to_cpu` does not apply here (the consumer moves the
+      current frame to the device per access).
+    - `video_path` (a directory of "<frame_index>.jpg" files): stacks the frames into a single tensor,
+      on the GPU if `offload_video_to_cpu` is `False` else on CPU. Set `async_loading_frames` to `True`
+      to load these frames asynchronously.
     """
     img_mean = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
     img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
 
     if video_path is None:
-        assert isinstance(volume, np.ndarray) and volume.ndim == 3, "Something is off with the 'volume'."
-        # Iterate over each slice.
-        images = []
-        for i, curr_slice in enumerate(volume):
-            curr_image, video_height, video_width = _load_img_as_tensor(curr_slice, image_size)
-            images.append(curr_image)
-        images = torch.stack(images)  # Stack the inputs in expected format.
+        # Coerce lazy inputs (e.g. dask / zarr / h5py arrays handed over by a napari layer) to a numpy
+        # array (cheap at native resolution; the expensive image_size^2 copy is what we avoid stacking).
+        volume = np.asarray(volume)
+        if volume.ndim != 3:
+            raise ValueError(f"Expected a 3D volume of shape (Z, Y, X), got an array of shape {volume.shape}.")
+        # Stream slices lazily (resize + normalise on access) instead of stacking the whole volume at
+        # image_size^2, so RAM stays bounded regardless of depth.
+        lazy_images = _LazyVideoFrames(volume, image_size, img_mean, img_std)
+        return lazy_images, lazy_images.video_height, lazy_images.video_width
     else:
         if isinstance(video_path, str) and os.path.isdir(video_path):
             frames_folder = video_path
@@ -258,14 +290,13 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             if embeddings is None:
                 return super()._get_image_feature(inference_state, frame_idx, batch_size)
 
+            from micro_sam.v2.util import _to_device_tensor
             device = inference_state["device"]
             image = inference_state["images"][frame_idx].to(device).float().unsqueeze(0)
-            vision_pos_enc = [
-                torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in embeddings["pos_enc"]
-            ]
-            backbone_fpn = [
-                torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in embeddings["fpn"]
-            ]
+            # In-memory embeddings keep 'pos_enc'/'fpn' as device tensors, which 'np.asarray' cannot
+            # convert (fails on mps/cuda); '_to_device_tensor' handles both tensors and numpy/zarr.
+            vision_pos_enc = [_to_device_tensor(t[frame_idx], device) for t in embeddings["pos_enc"]]
+            backbone_fpn = [_to_device_tensor(t[frame_idx], device) for t in embeddings["fpn"]]
             backbone_out = {"backbone_fpn": backbone_fpn, "vision_pos_enc": vision_pos_enc}
             # Cache the few most recent frames (not just one) so repeatedly segmenting the same or a
             # nearby slice does not re-read the (possibly zarr-backed, tiled) embeddings and re-upload

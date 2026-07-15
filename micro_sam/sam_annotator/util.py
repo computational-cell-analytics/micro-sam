@@ -1147,7 +1147,7 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
     # VFM families (DINO / UNI / SAM3) live in the classification widget's advanced tier; let the widget
     # place the selection. The SAM family/size parsing below is skipped for these names: it parses the
     # size positionally (vit_<size>), which does not apply and even index-errors on short names ('sam3').
-    from ..v1.models.vfm import is_vfm_model
+    from ..models.vfm import is_vfm_model
     is_vfm = is_vfm_model(model_type)
     if is_vfm and hasattr(widget, "set_model_family_size"):
         family, size = widget._family_and_size_for_model(model_type)

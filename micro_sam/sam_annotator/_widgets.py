@@ -521,7 +521,7 @@ class _WidgetBase(QtWidgets.QWidget):
         # package is importable and HuggingFace access is set up, surfacing a clear message if not. DINOv2
         # ('torch_hub') is ungated and auto-downloads, so it is not checked. A no-op for SAM models.
         import importlib
-        from ..v1.models.vfm import is_vfm_model, VFM_MODELS
+        from ..models.vfm import is_vfm_model, VFM_MODELS
 
         if not is_vfm_model(self.model_type):
             return False
@@ -2169,7 +2169,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     }
     _advanced_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
     # Vision Foundation Model families beyond SAM: UI label -> the registry model_types in that family
-    # (ordered by size). Sizes/names come from 'micro_sam.v1.models.vfm.VFM_MODELS'/'VFM_SIZE_LABELS', not the
+    # (ordered by size). Sizes/names come from 'micro_sam.models.vfm.VFM_MODELS'/'VFM_SIZE_LABELS', not the
     # SAM1 naming scheme. DINOv2/v3 are natural-image (LVD-1689M) models; UNI/UNI2-h are histopathology.
     _dino_families = {
         "Natural Images (DINOv2)": ("vit_s_dinov2", "vit_b_dinov2", "vit_l_dinov2", "vit_g_dinov2"),
@@ -2272,7 +2272,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         full_size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
         for family, models in self._dino_families.items():  # VFM families (DINO / UNI).
             if model_name in models:
-                from ..v1.models.vfm import VFM_SIZE_LABELS
+                from ..models.vfm import VFM_SIZE_LABELS
                 return family, VFM_SIZE_LABELS.get(model_name)
         if model_name.startswith("hvit_"):  # SAM2 (primary families).
             size = full_size_map.get(model_name[5])
@@ -2293,7 +2293,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         if not self._advanced_active():
             return super()._get_model_size_options()
         if self._is_dino_active():
-            from ..v1.models.vfm import VFM_SIZE_LABELS
+            from ..models.vfm import VFM_SIZE_LABELS
             models = self._dino_families[self.model_family]
             self.model_size_mapping = {VFM_SIZE_LABELS[m]: m for m in models}
             self.model_size_options = sorted(self.model_size_mapping.keys(), key=self.size_order.index)

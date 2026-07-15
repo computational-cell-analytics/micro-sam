@@ -3,7 +3,10 @@
 
 import os
 import json
+import uuid
 import pooch
+import shutil
+import atexit
 import xxhash
 import pickle
 import hashlib
@@ -70,6 +73,22 @@ def get_cache_directory() -> None:
     default_cache_directory = os.path.expanduser(pooch.os_cache("micro_sam"))
     cache_directory = Path(os.environ.get("MICROSAM_CACHEDIR", default_cache_directory))
     return cache_directory
+
+
+def make_temp_embedding_path() -> str:
+    """Create a fresh ephemeral on-disk zarr path for streaming image embeddings.
+
+    Used when no explicit embedding save path is given: caching to disk (under the micro-sam cache
+    directory, honoring MICROSAM_CACHEDIR) instead of holding the whole volume in RAM keeps memory
+    bounded on large volumes / tiled images. The cache is disk-backed rather than in /tmp, which is
+    tmpfs (RAM) on many systems. The caller owns eager cleanup; the returned path is also removed on
+    process exit.
+    """
+    parent = get_cache_directory() / "tmp_embeddings"
+    parent.mkdir(parents=True, exist_ok=True)
+    path = str(parent / f"{uuid.uuid4().hex}.zarr")
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    return path
 
 
 #
@@ -154,11 +173,11 @@ def get_embedding_function(model_type: str) -> callable:
     Raises:
         ValueError: If `model_type` does not belong to any supported model family.
     """
-    from .v1.models.vfm import is_vfm_model, get_vfm_model_names
+    from .models.vfm import is_vfm_model, get_vfm_model_names
     from .v2.util import SUPPORTED_MODELS as sam2_backbones
 
     if is_vfm_model(model_type):
-        from .v1.models.vfm import precompute_vfm_embeddings
+        from .models.vfm import precompute_vfm_embeddings
         return precompute_vfm_embeddings
 
     # Finetuned names keep their backbone prefix ('vit_b_lm' -> 'vit_b', 'hvit_t_cells' -> 'hvit_t').
@@ -241,40 +260,36 @@ def _load_checkpoint(checkpoint_path):
 #
 
 
-def _to_image(image, normalization="minmax"):
-    input_ = image
-    ndim = input_.ndim
-    n_channels = 1 if ndim == 2 else input_.shape[-1]
+def _ensure_rgb(image):
+    """Map a 2D or channel-last image to a 3-channel (H, W, 3) array without normalizing."""
+    ndim = image.ndim
+    n_channels = 1 if ndim == 2 else image.shape[-1]
 
-    # Map the input to three channels.
     if ndim == 2:  # Grayscale image -> replicate channels.
-        input_ = np.concatenate([input_[..., None]] * 3, axis=-1)
+        image = np.concatenate([image[..., None]] * 3, axis=-1)
     elif ndim == 3 and n_channels == 1:  # Grayscale image -> replicate channels.
-        input_ = np.concatenate([input_] * 3, axis=-1)
+        image = np.concatenate([image] * 3, axis=-1)
     elif ndim == 3 and n_channels == 2:  # Two channels -> add a zero channel.
-        zero_channel = np.zeros(input_.shape[:2] + (1,), dtype=input_.dtype)
-        input_ = np.concatenate([input_, zero_channel], axis=-1)
-    elif input_.ndim == 3 and n_channels == 3:  # RGB input -> do nothing.
+        zero_channel = np.zeros(image.shape[:2] + (1,), dtype=image.dtype)
+        image = np.concatenate([image, zero_channel], axis=-1)
+    elif ndim == 3 and n_channels == 3:  # RGB input -> do nothing.
         pass
-    elif input_.ndim == 3 and n_channels > 3:  # More than three channels -> select first three.
+    elif ndim == 3 and n_channels > 3:  # More than three channels -> select first three.
         warnings.warn(f"You provided an input with {n_channels} channels. Only the first three will be used.")
-        input_ = input_[..., :3]
+        image = image[..., :3]
     else:
         raise ValueError(
             f"Invalid input dimensionality {ndim}. Expect either a 2D input (=grayscale image) "
             "or a 3D input (= image with channels)."
         )
-    assert input_.ndim == 3 and input_.shape[-1] == 3
 
-    if normalization == "percentile":
-        # Percentile-normalize each channel to [0, 1], matching the SAM2 3D frame normalization.
-        # Clip since percentile normalization maps the 2nd / 98th percentiles to 0 / 1 and overshoots.
-        from torch_em.transform.raw import normalize_percentile
-        input_ = normalize_percentile(input_.astype("float32"), lower=2.0, upper=98.0, axis=(0, 1))
-        return np.clip(np.array(input_), 0.0, 1.0)
+    assert image.ndim == 3 and image.shape[-1] == 3
+    return image
 
-    # Normalize the input per channel and bring it to uint8.
-    input_ = input_.astype("float32")
+
+def _to_image(image):
+    # Map to three channels, then normalize per channel and bring it to uint8.
+    input_ = _ensure_rgb(image).astype("float32")
     input_ -= input_.min(axis=(0, 1))[None, None]
     input_ /= (input_.max(axis=(0, 1))[None, None] + 1e-7)
     input_ = (input_ * 255).astype("uint8")

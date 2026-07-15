@@ -40,7 +40,7 @@ class Singleton(type):
 # TODO: this should be refactored once we have decided on which models to support.
 # (Likely only SAM2 models)
 def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_cli):
-    from micro_sam.v1.models.vfm import is_vfm_model, get_vfm_model
+    from micro_sam.models.vfm import is_vfm_model, get_vfm_model
     if is_vfm_model(model_type):  # VFM encoders (DINO / UNI) for the classification tools.
         encoder = get_vfm_model(model_type, device=device, checkpoint_path=checkpoint_path)
         return encoder, {}
@@ -90,6 +90,9 @@ class AnnotatorState(metaclass=Singleton):
     ndim: Optional[int] = None
     image_name: Optional[str] = None
     embedding_path: Optional[str] = None
+    # Path to an ephemeral on-disk embedding cache created when no save path is given (SAM2 volumes /
+    # tiled images), so embeddings stream from disk instead of filling RAM. Removed on reset / exit.
+    embedding_tmpdir: Optional[str] = None
     data_signature: Optional[str] = None
     skip_recomputing_embeddings: Optional[bool] = None
 
@@ -171,7 +174,7 @@ class AnnotatorState(metaclass=Singleton):
         if isinstance(decoder_path, str) and not decoder_path.strip():
             decoder_path = None
 
-        from micro_sam.v1.models.vfm import is_vfm_model
+        from micro_sam.models.vfm import is_vfm_model
         self.is_sam2 = model_type.startswith("h")
         self.is_vfm = is_vfm_model(model_type)
 
@@ -232,6 +235,17 @@ class AnnotatorState(metaclass=Singleton):
 
         else:  # Otherwise, compute the image embeddings.
             _comp_embed_fn = util.get_embedding_function(model_type)
+
+            # When no save path is given for a SAM2 volume or a tiled image, cache the embeddings to
+            # an ephemeral on-disk zarr instead of holding the whole volume in RAM. Materialising all
+            # slices costs ~200 MB/slice and OOMs on large volumes; the disk cache lets the consumers
+            # stream slices/tiles one at a time. It is removed on 'reset_state' and at process exit.
+            # Small non-tiled 2d stays in memory (a single image is cheap).
+            needs_disk_cache = self.is_sam2 and (ndim == 3 or tile_shape is not None)
+            if needs_disk_cache and not isinstance(save_path, str):
+                self._cleanup_embedding_tmpdir()
+                save_path = util.make_temp_embedding_path()
+                self.embedding_tmpdir = save_path
 
             # For SAM2 volumes, load the embeddings lazily from the zarr so the high-resolution
             # per-slice features stay on disk and are streamed one slice at a time during tracking.
@@ -369,8 +383,16 @@ class AnnotatorState(metaclass=Singleton):
             miss_vars = ", ".join(miss_vars)
             raise RuntimeError(f"Invalid state: the variables {miss_vars} have to be initialized for tracking.")
 
+    def _cleanup_embedding_tmpdir(self):
+        """Remove the ephemeral on-disk embedding cache, if one was created for this image."""
+        if self.embedding_tmpdir is not None:
+            import shutil
+            shutil.rmtree(self.embedding_tmpdir, ignore_errors=True)
+            self.embedding_tmpdir = None
+
     def reset_state(self):
         """Reset state, clear all attributes."""
+        self._cleanup_embedding_tmpdir()
         self.image_embeddings = None
         self.predictor = None
         self.image_shape = None

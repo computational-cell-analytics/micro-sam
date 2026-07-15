@@ -5,7 +5,7 @@ import torch
 import torchvision.transforms.functional as TF
 from torchvision.transforms import ColorJitter
 
-from torch_em.transform.raw import normalize, normalize_percentile
+from micro_sam.v2.normalization import normalize_raw
 
 from .labels import _em_cell_label_trafo  # noqa
 from .labels import _axondeepseg_pre_label_transform  # noqa
@@ -30,19 +30,19 @@ def to_rgb(image):
 
 
 def _to_8bit(raw):
-    "Ensures three channels for inputs and rescales them to [0, 1]."
+    "Ensures three channels for inputs and percentile-normalizes them to [0, 1]."
     if raw.ndim == 3 and raw.shape[0] == 1:  # If the inputs have 1 channel, we triplicate it.
         raw = np.concatenate([raw] * 3, axis=0)
 
     raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
-    raw = normalize(raw)  # [0, 1] - SAM2 model applies ImageNet normalization internally
+    raw = normalize_raw(raw, axis=(1, 2))
     return raw
 
 
 def _identity(x):
-    "Ensures three channels for inputs and normalizes to [0, 1]."
+    "Ensures three channels for inputs and percentile-normalizes them to [0, 1]."
     x = to_rgb(x)
-    x = normalize(x)  # [0, 1] - SAM2 model applies ImageNet normalization internally
+    x = normalize_raw(x, axis=(1, 2))
     return x
 
 
@@ -65,7 +65,7 @@ def _cellpose_raw_trafo(x):
         x = np.stack([g, r, np.zeros_like(b)], axis=0)
 
     x = to_rgb(x)  # Ensures three channels for inputs and avoids rescaling inputs.
-    x = normalize(x)  # [0, 1] - SAM2 model applies ImageNet normalization internally
+    x = normalize_raw(x, axis=(1, 2))
     return x
 
 
@@ -353,6 +353,4 @@ def _normalize_percentile(x, axis=None):
     NOTE: For example, this is a specific input transformation for
     'rgb' format of TissueNet image data for the expected axes.
     """
-    x = normalize_percentile(x, axis=None)  # Use 1st and 99th percentile values for min-max normalization.
-    x = np.clip(x, 0, 1)  # [0, 1] - SAM2 model applies ImageNet normalization internally
-    return x
+    return normalize_raw(x, axis=axis)

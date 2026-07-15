@@ -119,7 +119,7 @@ class AutomaticMaskGenerationSegmenter:
             By default '0.8'.
         stability_score_thresh: Filter threshold in [0, 1] using the stability of the mask under
             changes to the binarization cutoff. By default '0.9'. This is lower than SAM2's native
-            default of '0.95' because the embeddings here come from micro-sam's min-max normalized
+            default of '0.95' because the embeddings here come from micro-sam's percentile-normalized
             inputs, under which masks score marginally lower in stability.
         kwargs: Additional keyword arguments forwarded to `SAM2AutomaticMaskGenerator`.
     """
@@ -382,8 +382,10 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
         self._masks = []
         for tile_id in range(self._tiling.number_of_blocks):
             block = self._tiling.get_block_with_halo(tile_id, list(self._halo)).outer_block
-            fpn_tile = _load_list_datasets(image_embeddings["fpn"], str(tile_id), lazy_loading=False)
-            pos_tile = _load_list_datasets(image_embeddings["pos_enc"], str(tile_id), lazy_loading=False)
+            # Keep the per-tile datasets lazy so '_set_image_predictor_from_backbone' reads only slice
+            # 'i' from disk, instead of pulling the tile's whole z-stack into RAM on every slice.
+            fpn_tile = _load_list_datasets(image_embeddings["fpn"], str(tile_id), lazy_loading=True)
+            pos_tile = _load_list_datasets(image_embeddings["pos_enc"], str(tile_id), lazy_loading=True)
             original_size = feats[str(tile_id)].attrs["original_size"]
             _set_image_predictor_from_backbone(predictor, fpn_tile, pos_tile, original_size, i)
             tile_size = tuple(end - begin for begin, end in zip(block.begin, block.end))
