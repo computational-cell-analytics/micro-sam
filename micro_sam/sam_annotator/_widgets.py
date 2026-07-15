@@ -628,8 +628,8 @@ def _reset_tracking_state(viewer):
     state.lineage = {1: []}
 
     # Reset the layer properties.
-    viewer.layers["point_prompts"].property_choices["track_id"] = ["1"]
-    viewer.layers["prompts"].property_choices["track_id"] = ["1"]
+    viewer.layers["points"].property_choices["track_id"] = ["1"]
+    viewer.layers["geometry"].property_choices["track_id"] = ["1"]
 
     # Reset the choices in the track_id menu (index 2: prompt, track_state, track_id).
     state.annotator._tracking_widget[2].value = "1"
@@ -947,8 +947,8 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
                 ds.attrs["track_state"] = track_state.tolist()
 
     # Get the prompts from the layers.
-    prompts = viewer.layers["prompts"].data
-    point_layer = viewer.layers["point_prompts"]
+    prompts = viewer.layers["geometry"].data
+    point_layer = viewer.layers["points"]
     point_prompts = point_layer.data
     point_labels = point_layer.properties["label"]
     if len(point_prompts) > 0:
@@ -968,7 +968,7 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
     ):  # We have multiple objects from tracking a lineage with divisions.
         track_ids_points = np.array(point_layer.properties["track_id"])
         track_ids_prompts = np.array(
-            viewer.layers["prompts"].properties["track_id"]
+            viewer.layers["geometry"].properties["track_id"]
         )
 
         unique_track_ids = np.unique(track_ids_points)
@@ -1378,8 +1378,8 @@ def _validate_layers(
     if not automatic_segmentation:
         # Check prompts layer.
         if (
-            len(viewer.layers["prompts"].data) == 0
-            and len(viewer.layers["point_prompts"].data) == 0
+            len(viewer.layers["geometry"].data) == 0
+            and len(viewer.layers["points"].data) == 0
         ):
             msg = "No prompts were given. Please provide prompts to run interactive segmentation."
             return _generate_message("error", msg)
@@ -1420,10 +1420,10 @@ def _segment_object_2d(viewer, batched=False):
 
     # get the current box and point prompts
     boxes, masks = vutil.shape_layer_to_prompts(
-        viewer.layers["prompts"], shape
+        viewer.layers["geometry"], shape
     )
     points, labels = vutil.point_layer_to_prompts(
-        viewer.layers["point_prompts"], with_stop_annotation=False
+        viewer.layers["points"], with_stop_annotation=False
     )
 
     state = AnnotatorState()
@@ -1529,9 +1529,18 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
-    def __init__(self, parent=None, sam2_only=False, ndim_choice=False, is_timeseries=False):
+    def __init__(
+        self, parent=None, sam2_only=False, ndim_choice=False, is_timeseries=False,
+        viewer=None, roi_selection=False,
+    ):
         super().__init__(parent=parent)
         self.sam2_only = sam2_only
+        self._viewer = viewer
+        # ROI selection is enabled for segmentation and tracking, which own the 'geometry' layer.
+        # Classification and image-series launchers reuse this widget without exposing this option.
+        self.roi_selection = roi_selection
+        self._last_roi = None
+        self._last_roi_image = None
         # Whether to expose the 'image dimensions' (ndim) override dropdown. Only the segmentation
         # annotator wires it into image normalization, so it is off by default (hidden for tracking
         # and the classifiers, which do not use it).
@@ -1687,6 +1696,14 @@ class EmbeddingWidget(_WidgetBase):
             )
             setting_values.layout().addLayout(ndim_layout)
 
+        if self.roi_selection:
+            self.embedding_region = "full image"
+            self.embedding_region_dropdown, region_layout = self._add_choice_param(
+                "embedding_region", self.embedding_region, ["full image", "selected ROI"],
+                title="embedding region:", tooltip=get_tooltip("embedding", "region"),
+            )
+            setting_values.layout().addLayout(region_layout)
+
         # Create UI for tiling. A dropdown toggles whether tiling is used; when enabled,
         # the tile shape and halo fields are revealed with sensible defaults.
         self.tiling = "no"
@@ -1819,6 +1836,147 @@ class EmbeddingWidget(_WidgetBase):
         mode = dropdown.currentText() if dropdown is not None else "auto"
         return {"auto": None, "2d": 2, "3d": 3}.get(mode)
 
+    @staticmethod
+    def _crop_image(image, roi):
+        if roi is None:
+            return image.data
+        index = roi + ((slice(None),) if image.rgb else ())
+        return image.data[index]
+
+    @staticmethod
+    def _roi_from_bounds(bounds, spatial_shape):
+        """Convert serialized ``[[start, stop], ...]`` bounds to validated slices."""
+        if bounds is None or len(bounds) != len(spatial_shape):
+            return None
+        roi = []
+        for bound, size in zip(bounds, spatial_shape):
+            if len(bound) != 2:
+                return None
+            start, stop = int(bound[0]), int(bound[1])
+            if start < 0 or stop > size or start >= stop:
+                return None
+            roi.append(slice(start, stop))
+        return tuple(roi)
+
+    @staticmethod
+    def _serialize_roi(roi):
+        if roi is None:
+            return None
+        return [[int(s.start or 0), int(s.stop)] for s in roi]
+
+    def _saved_roi(self, spatial_shape):
+        if not self.embeddings_save_path or not os.path.isdir(self.embeddings_save_path):
+            return None
+        try:
+            f = zarr.open(self.embeddings_save_path, mode="r")
+            return self._roi_from_bounds(f.attrs.get("image_roi"), spatial_shape)
+        except (KeyError, RuntimeError, ValueError):
+            return None
+
+    def _resolve_roi(self, image):
+        """Resolve the selected rectangle to an image-data ROI.
+
+        A 3D shape is a rectangle in the current Y/X plane. We intentionally keep the leading
+        z/time axis complete, so one selection works consistently for volumes and timeseries.
+        """
+        if not self.roi_selection or self.embedding_region_dropdown.currentText() == "full image":
+            return None
+
+        spatial_shape = tuple(image.data.shape[:-1] if image.rgb else image.data.shape)
+        geometry = (
+            None
+            if self._viewer is None or "geometry" not in self._viewer.layers
+            else self._viewer.layers["geometry"]
+        )
+        selected = [] if geometry is None else sorted(geometry.selected_data)
+        if geometry is not None and len(selected) != 1 and len(geometry.data) == 1:
+            selected = [0]
+
+        if geometry is not None and len(selected) == 1:
+            index = selected[0]
+            if str(geometry.shape_type[index]) != "rectangle":
+                raise ValueError("The embedding ROI must be a rectangle in the 'geometry' layer.")
+
+            # Convert via world coordinates so non-default layer scale / translation are respected.
+            vertices = np.asarray(geometry.data[index])
+            image_vertices = np.asarray([
+                image.world_to_data(geometry.data_to_world(vertex)) for vertex in vertices
+            ])
+            # Snap transform round-off close to integer pixel coordinates before floor / ceil;
+            # otherwise e.g. 70.00000000001 would add an unintended extra column.
+            lower = np.floor(np.round(image_vertices[:, -2:].min(axis=0), decimals=6)).astype(int)
+            upper = np.ceil(np.round(image_vertices[:, -2:].max(axis=0), decimals=6)).astype(int)
+            lower = np.maximum(lower, 0)
+            upper = np.minimum(upper, spatial_shape[-2:])
+            if np.any(upper <= lower):
+                raise ValueError("The selected embedding ROI does not overlap the image.")
+
+            roi = [slice(0, size) for size in spatial_shape]
+            roi[-2:] = [slice(int(lower[0]), int(upper[0])), slice(int(lower[1]), int(upper[1]))]
+            return tuple(roi)
+
+        # Re-use the last crop after its defining rectangle was cleared on a successful compute.
+        if self._last_roi_image is image and self._last_roi is not None:
+            return self._last_roi
+
+        # This also makes reopening a cached ROI embedding possible without redrawing its rectangle.
+        saved_roi = self._saved_roi(spatial_shape)
+        if saved_roi is not None:
+            return saved_roi
+
+        raise ValueError(
+            "Select one rectangle in the 'geometry' layer before computing embeddings for an ROI."
+        )
+
+    def _create_roi_image_layer(self, image, roi):
+        """Create and select a napari image layer for an embedding ROI."""
+        if self._viewer is None:
+            raise RuntimeError("Creating an ROI image layer requires a napari viewer.")
+
+        data = self._crop_image(image, roi)
+        offset = np.array([s.start or 0 for s in roi], dtype=float)
+        translate = tuple(image.data_to_world(offset))
+
+        base_name = f"{image.name} ROI"
+        name, index = base_name, 2
+        while name in self._viewer.layers:
+            name = f"{base_name} {index}"
+            index += 1
+
+        metadata = {
+            "micro_sam_roi_source": image.name,
+            "micro_sam_roi": self._serialize_roi(roi),
+        }
+        annotator = AnnotatorState().annotator
+        suppress = annotator is not None and getattr(annotator, "_viewer", None) is self._viewer
+        if suppress:
+            annotator._suppress_selection_rebuild = True
+        try:
+            roi_layer = self._viewer.add_image(
+                data, name=name, rgb=image.rgb, scale=tuple(image.scale), translate=translate,
+                metadata=metadata,
+            )
+            roi_layer.contrast_limits = image.contrast_limits
+            roi_layer.gamma = image.gamma
+            if not image.rgb:
+                roi_layer.colormap = image.colormap
+            # Hide the source so the crop is the only image shown; it stays in the viewer.
+            image.visible = False
+            # Move the crop to the bottom so the prompt / segmentation layers render on top of it.
+            self._viewer.layers.move(self._viewer.layers.index(roi_layer), 0)
+            self.image_selection.value = roi_layer
+            self._viewer.layers.selection.active = roi_layer
+            if suppress:
+                # The selection-change callback was intentionally suppressed while materializing the
+                # crop. Record it as current so selecting another source/crop later performs a reset.
+                annotator._last_image_layer = roi_layer
+        finally:
+            if suppress:
+                annotator._suppress_selection_rebuild = False
+
+        self.embedding_region_dropdown.setCurrentText("full image")
+        return roi_layer
+
     def _update_tiling_visibility(self, index=None):
         # Show the in-plane tile shape and halo fields only when tiling is enabled.
         self.tiling = self.tiling_dropdown.currentText()
@@ -1883,6 +2041,11 @@ class EmbeddingWidget(_WidgetBase):
             self.image_ndim_mode = "auto"
             self.image_ndim_dropdown.blockSignals(False)
 
+        if self.roi_selection:
+            self.embedding_region_dropdown.setCurrentText("full image")
+            self._last_roi = None
+            self._last_roi_image = None
+
         self._set_default_tiling()
 
     def _validate_inputs(self):
@@ -1911,6 +2074,11 @@ class EmbeddingWidget(_WidgetBase):
         if image is None:
             return _generate_message("error", "No image has been selected.")
 
+        try:
+            roi = self._resolve_roi(image)
+        except ValueError as e:
+            return _generate_message("error", str(e))
+
         # Check if we have an existing embedding path.
         # If yes we check the data signature of these embeddings against the selected image
         # and we ask the user if they want to load these embeddings.
@@ -1933,8 +2101,7 @@ class EmbeddingWidget(_WidgetBase):
 
                 # Validate image data signature.
                 if "data_signature" in f.attrs:
-                    image = self.image_selection.get_value()
-                    img_signature = util._compute_data_signature(image.data)
+                    img_signature = util._compute_data_signature(self._crop_image(image, roi))
                     if img_signature != f.attrs["data_signature"]:
                         msg = f"The embeddings don't match with the image: {img_signature} {f.attrs['data_signature']}"
                         return _generate_message("error", msg)
@@ -2030,10 +2197,18 @@ class EmbeddingWidget(_WidgetBase):
 
         # Validate user inputs.
         if not skip_validate and self._validate_inputs():
+            # The annotator's layer-update slot is connected to the same button. Keep it from
+            # clearing the ROI / annotations when embedding validation aborted the computation.
+            AnnotatorState().skip_recomputing_embeddings = True
             return
 
         # Get the image.
         image = self.image_selection.get_value()
+        try:
+            roi = self._resolve_roi(image)
+        except ValueError as e:
+            AnnotatorState().skip_recomputing_embeddings = True
+            return _generate_message("error", str(e))
 
         # Update the image embeddings:
         state = AnnotatorState()
@@ -2046,17 +2221,25 @@ class EmbeddingWidget(_WidgetBase):
         # Reset the state.
         state.reset_state()
 
-        # Get image dimensions.
+        source_image, source_roi = image, roi
+        if roi is not None:
+            image = self._create_roi_image_layer(image, roi)
+        image_data = image.data
+
+        # Get image dimensions. The selected ROI only crops Y/X and keeps z/time complete.
         if image.rgb:
-            ndim = image.data.ndim - 1
-            state.image_shape = image.data.shape[:-1]
+            ndim = image_data.ndim - 1
+            state.image_shape = image_data.shape[:-1]
         else:
-            ndim = image.data.ndim
-            state.image_shape = image.data.shape
+            ndim = image_data.ndim
+            state.image_shape = image_data.shape
         state.ndim = ndim
 
-        # Set layer scale
+        # Annotation arrays use local coordinates of the selected image layer. ROI layers carry a
+        # world-space translation so results overlay the corresponding location in the source image.
         state.image_scale = tuple(image.scale)
+        state.image_translate = tuple(image.translate)
+        state.image_name = image.name
 
         # Process tile_shape and halo, set other data. Tiling is only applied when enabled.
         if self.tiling == "yes":
@@ -2079,8 +2262,6 @@ class EmbeddingWidget(_WidgetBase):
             if self.embeddings_save_path == ""
             else self.embeddings_save_path
         )
-        image_data = image.data
-
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
@@ -2117,6 +2298,19 @@ class EmbeddingWidget(_WidgetBase):
             pbar_signals.pbar_stop.emit()
 
         compute_image_embedding()
+        self._last_roi = source_roi
+        self._last_roi_image = source_image
+
+        # Record the crop location alongside cached embeddings. The embedding backend already stores
+        # the crop's data signature and shape; this attribute restores its placement in the full image.
+        if isinstance(save_path, str):
+            f = zarr.open(save_path, mode="a")
+            if source_roi is None:
+                f.attrs.pop("image_roi", None)
+                f.attrs.pop("image_roi_source", None)
+            else:
+                f.attrs["image_roi"] = self._serialize_roi(source_roi)
+                f.attrs["image_roi_source"] = source_image.name
         self._update_model(state)
         # worker = compute_image_embedding()
         # worker.returned.connect(self._update_model)
@@ -2386,8 +2580,8 @@ def _update_lineage(viewer, mother=None):
     track_ids = list(map(str, state.lineage.keys()))
     tracking_widget[2].choices = track_ids
 
-    viewer.layers["point_prompts"].property_choices["track_id"] = list(track_ids)
-    viewer.layers["prompts"].property_choices["track_id"] = list(track_ids)
+    viewer.layers["points"].property_choices["track_id"] = list(track_ids)
+    viewer.layers["geometry"].property_choices["track_id"] = list(track_ids)
 
 
 class UnifiedSegmentWidget(_WidgetBase):
@@ -2582,20 +2776,20 @@ class UnifiedSegmentWidget(_WidgetBase):
         shape = self._viewer.layers["current_object"].data.shape[1:]
 
         position_world = self._viewer.dims.point
-        position = self._viewer.layers["point_prompts"].world_to_data(
+        position = self._viewer.layers["points"].world_to_data(
             position_world
         )
         z = int(position[0])
 
         point_prompts = vutil.point_layer_to_prompts(
-            self._viewer.layers["point_prompts"], z
+            self._viewer.layers["points"], z
         )
         # this is a stop prompt, we do nothing
         if not point_prompts:
             return
 
         boxes, masks = vutil.shape_layer_to_prompts(
-            self._viewer.layers["prompts"], shape, i=z
+            self._viewer.layers["geometry"], shape, i=z
         )
         points, labels = point_prompts
 
@@ -2686,14 +2880,14 @@ class UnifiedSegmentWidget(_WidgetBase):
     def _segment_track_on_frame(self, state, t, track_id, shape):
         """Segment a single track's object on frame 't'. Returns the binary mask or None."""
         point_prompts = vutil.point_layer_to_prompts(
-            self._viewer.layers["point_prompts"], i=t, track_id=track_id,
+            self._viewer.layers["points"], i=t, track_id=track_id,
         )
         # A single negative point is a stop prompt: nothing to segment for this track here.
         if not point_prompts:
             return None
 
         boxes, masks = vutil.shape_layer_to_prompts(
-            self._viewer.layers["prompts"], shape, i=t, track_id=track_id,
+            self._viewer.layers["geometry"], shape, i=t, track_id=track_id,
         )
         points, labels = point_prompts
 
@@ -2750,8 +2944,8 @@ class UnifiedSegmentWidget(_WidgetBase):
 
             if state.is_sam2:
                 # Prepare the prompts
-                point_prompts = self._viewer.layers["point_prompts"]
-                box_prompts = self._viewer.layers["prompts"]
+                point_prompts = self._viewer.layers["points"]
+                box_prompts = self._viewer.layers["geometry"]
                 z_values_points = np.round(point_prompts.data[:, 0])
                 z_values_boxes = (
                     np.concatenate([box[:1, 0] for box in box_prompts.data])
@@ -2836,8 +3030,8 @@ class UnifiedSegmentWidget(_WidgetBase):
                 seg, slices, stop_lower, stop_upper = (
                     vutil.segment_slices_with_prompts(
                         state.predictor,
-                        self._viewer.layers["point_prompts"],
-                        self._viewer.layers["prompts"],
+                        self._viewer.layers["points"],
+                        self._viewer.layers["geometry"],
                         state.image_embeddings,
                         shape,
                         update_progress=emit_progress,
@@ -2900,8 +3094,8 @@ class UnifiedSegmentWidget(_WidgetBase):
             # frames. A frame whose only prompt for this track is a single negative point is a
             # 'stop' annotation; a stop on the highest annotated frame bounds propagation above.
             shape = state.image_shape
-            point_layer = self._viewer.layers["point_prompts"]
-            box_layer = self._viewer.layers["prompts"]
+            point_layer = self._viewer.layers["points"]
+            box_layer = self._viewer.layers["geometry"]
 
             # Reset so a re-run does not accumulate prompts from a previous propagation.
             state.interactive_segmenter.reset_predictor()
@@ -2974,7 +3168,7 @@ class UnifiedSegmentWidget(_WidgetBase):
         def tracking_impl():
             # Propagate the current track. Its propagated mask is labelled with its track id.
             track_ids = [state.current_track_id]
-            point_layer = self._viewer.layers["point_prompts"]
+            point_layer = self._viewer.layers["points"]
             seg_layer = self._viewer.layers["current_object"]
             results = {}
             for track_id in track_ids:

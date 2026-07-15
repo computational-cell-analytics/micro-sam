@@ -73,11 +73,11 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
 
         # Add the point layer for point prompts.
         self._point_labels = ["positive", "negative"]
-        if "point_prompts" in self._viewer.layers:
-            self._point_prompt_layer = self._viewer.layers["point_prompts"]
+        if "points" in self._viewer.layers:
+            self._point_prompt_layer = self._viewer.layers["points"]
         else:
             self._point_prompt_layer = self._viewer.add_points(
-                name="point_prompts",
+                name="points",
                 property_choices={"label": self._point_labels},
                 border_color="label",
                 border_color_cycle=vutil.LABEL_COLOR_CYCLE,
@@ -89,13 +89,13 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             )
             self._point_prompt_layer.border_color_mode = "cycle"
 
-        if "prompts" not in self._viewer.layers:
+        if "geometry" not in self._viewer.layers:
             # Add the shape layer for box and other shape prompts.
             self._viewer.add_shapes(
                 face_color="transparent",
                 edge_color="green",
                 edge_width=4,
-                name="prompts",
+                name="geometry",
                 ndim=self._ndim,
             )
 
@@ -106,7 +106,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         )
 
     def _create_embedding_widget(self):
-        return widgets.EmbeddingWidget()
+        return widgets.EmbeddingWidget(viewer=self._viewer, roi_selection=True)
 
     def _create_widgets(self):
         # Create the embedding widget and connect all events related to it.
@@ -140,8 +140,8 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Note: we also need to over-write the keybindings for specific layers.
         # See https://github.com/napari/napari/issues/7302 for details.
         # Here, we need to over-write the 's' keybinding for both of the prompt layers.
-        prompt_layer = self._viewer.layers["prompts"]
-        point_prompt_layer = self._viewer.layers["point_prompts"]
+        prompt_layer = self._viewer.layers["geometry"]
+        point_prompt_layer = self._viewer.layers["points"]
 
         @prompt_layer.bind_key("s", overwrite=True)
         def _segment_prompts(event):
@@ -274,7 +274,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._shape = PLACEHOLDER_SHAPE[ndim]
 
         # Remove the existing micro_sam layers so they are recreated with the new ndim and shape.
-        layer_names = ("current_object", "auto_segmentation", "committed_objects", "point_prompts", "prompts")
+        layer_names = ("current_object", "auto_segmentation", "committed_objects", "points", "geometry")
         for layer_name in layer_names:
             if layer_name in self._viewer.layers:
                 del self._viewer.layers[layer_name]
@@ -319,6 +319,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
 
         # Update the image scale.
         scale = state.image_scale
+        translate = state.image_translate
 
         # Reset all layers.
         self._viewer.layers["current_object"].data = np.zeros(
@@ -339,8 +340,16 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             self._viewer.layers["committed_objects"].data = segmentation_result
         self._viewer.layers["committed_objects"].scale = scale
 
-        self._viewer.layers["point_prompts"].scale = scale
-        self._viewer.layers["prompts"].scale = scale
+        self._viewer.layers["points"].scale = scale
+        self._viewer.layers["geometry"].scale = scale
+
+        # Keep cropped annotation layers aligned with their location in the full image. The image
+        # itself remains unchanged and visible; only the embeddings and result arrays are cropped.
+        if translate is not None:
+            for layer_name in (
+                "current_object", "auto_segmentation", "committed_objects", "points", "geometry"
+            ):
+                self._viewer.layers[layer_name].translate = translate
 
         vutil.clear_annotations(self._viewer, clear_segmentations=False)
 

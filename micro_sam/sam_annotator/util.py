@@ -133,15 +133,15 @@ def toggle_label(prompts):
 
 def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     """@private"""
-    viewer.layers["point_prompts"].data = []
-    viewer.layers["point_prompts"].refresh()
-    if "prompts" in viewer.layers:
+    viewer.layers["points"].data = []
+    viewer.layers["points"].refresh()
+    if "geometry" in viewer.layers:
         # Select all prompts and then remove them.
         # This is how it worked before napari 0.5.
-        # viewer.layers["prompts"].data = []
-        viewer.layers["prompts"].selected_data = set(range(len(viewer.layers["prompts"].data)))
-        viewer.layers["prompts"].remove_selected()
-        viewer.layers["prompts"].refresh()
+        # viewer.layers["geometry"].data = []
+        viewer.layers["geometry"].selected_data = set(range(len(viewer.layers["geometry"].data)))
+        viewer.layers["geometry"].remove_selected()
+        viewer.layers["geometry"].refresh()
     if not clear_segmentations:
         return
     viewer.layers["current_object"].data = np.zeros(viewer.layers["current_object"].data.shape, dtype="uint32")
@@ -150,15 +150,15 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
 
 def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=True) -> None:
     """@private"""
-    point_prompts = viewer.layers["point_prompts"].data
+    point_prompts = viewer.layers["points"].data
     point_prompts = point_prompts[point_prompts[:, 0] != i]
-    viewer.layers["point_prompts"].data = point_prompts
-    viewer.layers["point_prompts"].refresh()
-    if "prompts" in viewer.layers:
-        prompts = viewer.layers["prompts"].data
+    viewer.layers["points"].data = point_prompts
+    viewer.layers["points"].refresh()
+    if "geometry" in viewer.layers:
+        prompts = viewer.layers["geometry"].data
         prompts = [prompt for prompt in prompts if not (prompt[:, 0] == i).all()]
-        viewer.layers["prompts"].data = prompts
-        viewer.layers["prompts"].refresh()
+        viewer.layers["geometry"].data = prompts
+        viewer.layers["geometry"].refresh()
     if not clear_segmentations:
         return
     viewer.layers["current_object"].data[i] = 0

@@ -154,7 +154,9 @@ def create_tracking_menu(
 class AnnotatorTracking(_AnnotatorBase):
 
     def _create_embedding_widget(self):
-        return widgets.EmbeddingWidget(sam2_only=True, is_timeseries=True)
+        return widgets.EmbeddingWidget(
+            viewer=getattr(self, "_viewer", None), sam2_only=True, is_timeseries=True, roi_selection=True
+        )
 
     # The tracking annotator needs different settings for the prompt layers
     # to support the additional tracking state.
@@ -213,18 +215,18 @@ class AnnotatorTracking(_AnnotatorBase):
         }
 
         point_layer_mismatch = True
-        if "point_prompts" in self._viewer.layers:
+        if "points" in self._viewer.layers:
             # Check whether the 'property_choices' match or not.
             curr_property_choices = self._viewer.layers[
-                "point_prompts"
+                "points"
             ].property_choices
             point_layer_mismatch = set(curr_property_choices.keys()) != set(
                 _point_prompt_property_choices.keys()
             )
 
-        if point_layer_mismatch and "point_prompts" not in self._viewer.layers:
+        if point_layer_mismatch and "points" not in self._viewer.layers:
             self._point_prompt_layer = self._viewer.add_points(
-                name="point_prompts",
+                name="points",
                 property_choices=_point_prompt_property_choices,
                 border_color="label",
                 border_color_cycle=vutil.LABEL_COLOR_CYCLE,
@@ -239,23 +241,23 @@ class AnnotatorTracking(_AnnotatorBase):
             self._point_prompt_layer.face_color_mode = "cycle"
             _new_point_layer = True
         else:
-            self._point_prompt_layer = self._viewer.layers["point_prompts"]
+            self._point_prompt_layer = self._viewer.layers["points"]
             _new_point_layer = False
 
         # Add the point prompts layer.
         _box_prompt_property_choices = {"track_id": ["1"]}
 
         box_layer_mismatch = True
-        if "prompts" in self._viewer.layers:
+        if "geometry" in self._viewer.layers:
             # Check whether the 'property_choices' match or not.
             curr_property_choices = self._viewer.layers[
-                "prompts"
+                "geometry"
             ].property_choices
             box_layer_mismatch = set(curr_property_choices.keys()) != set(
                 _box_prompt_property_choices.keys()
             )
 
-        if box_layer_mismatch and "prompts" not in self._viewer.layers:
+        if box_layer_mismatch and "geometry" not in self._viewer.layers:
             # Using the box layer to set divisions currently doesn't work.
             # That's why some of the code below is commented out.
             self._box_prompt_layer = self._viewer.add_shapes(
@@ -263,7 +265,7 @@ class AnnotatorTracking(_AnnotatorBase):
                 edge_width=4,
                 ndim=self._ndim,
                 face_color="transparent",
-                name="prompts",
+                name="geometry",
                 edge_color="green",
                 property_choices=_box_prompt_property_choices,
                 # property_choices={"track_id": ["1"], "state": self._track_state_labels},
@@ -272,7 +274,7 @@ class AnnotatorTracking(_AnnotatorBase):
             # self._box_prompt_layer.edge_color_mode = "cycle"
             _new_box_layer = True
         else:
-            self._box_prompt_layer = self._viewer.layers["prompts"]
+            self._box_prompt_layer = self._viewer.layers["geometry"]
             _new_box_layer = False
 
         # Trigger a new connection for the tracking state menu only when a new layer is (re)created.
@@ -324,8 +326,8 @@ class AnnotatorTracking(_AnnotatorBase):
 
         # We also need to over-write the keybindings for the prompt layers.
         # See https://github.com/napari/napari/issues/7302 for details.
-        prompt_layer = self._viewer.layers["prompts"]
-        point_prompt_layer = self._viewer.layers["point_prompts"]
+        prompt_layer = self._viewer.layers["geometry"]
+        point_prompt_layer = self._viewer.layers["points"]
 
         @prompt_layer.bind_key("s", overwrite=True)
         def _segment_prompts(event):

@@ -86,7 +86,7 @@ class Annotator(_AnnotatorBase):
     def _create_embedding_widget(self):
         # Expose the 'image dimensions' (ndim) override here: the segmentation annotator is the only
         # one that wires it into image normalization (it handles both 2d and 3d data).
-        return widgets.EmbeddingWidget(ndim_choice=True)
+        return widgets.EmbeddingWidget(viewer=self._viewer, ndim_choice=True, roi_selection=True)
 
     def _get_widgets(self):
         """Create the widgets for the segmentation annotator.
@@ -121,8 +121,8 @@ class Annotator(_AnnotatorBase):
 
         # We also need to over-write the keybindings for the prompt layers.
         # See https://github.com/napari/napari/issues/7302 for details.
-        prompt_layer = self._viewer.layers["prompts"]
-        point_prompt_layer = self._viewer.layers["point_prompts"]
+        prompt_layer = self._viewer.layers["geometry"]
+        point_prompt_layer = self._viewer.layers["points"]
 
         @prompt_layer.bind_key("s", overwrite=True)
         def _segment_prompts(event):
@@ -212,6 +212,9 @@ class Annotator(_AnnotatorBase):
         except ValueError as e:
             show_info(str(e))
             return
+
+        # Re-show the selected image: an ROI crop hides its source, so re-selecting it unhides it.
+        image_layer.visible = True
 
         # Detect an actual change of the selected image, tracked by layer identity (the state's
         # 'image_name' is not reliably set on every code path, so we don't depend on it). The first

@@ -121,6 +121,15 @@ class TestAnnotatorClass:
         assert widget._ndim == 2
         viewer.close()
 
+    def test_shape_prompt_layer_is_named_geometry(self, make_napari_viewer_proxy):
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer)
+
+        assert "geometry" in viewer.layers
+        assert "prompts" not in viewer.layers
+        assert widget._embedding_widget.roi_selection
+        viewer.close()
+
     def test_widget_detects_ndim_from_loaded_image(self, make_napari_viewer_proxy):
         # When an image is loaded before opening the widget, ndim is detected from it.
         viewer = make_napari_viewer_proxy()
@@ -140,7 +149,7 @@ class TestAnnotatorClass:
         widget._embedding_widget.image_selection.reset_choices()
         assert widget._ndim == 3
         # The prompt layers must be recreated with the new dimensionality.
-        assert viewer.layers["point_prompts"].ndim == 3
+        assert viewer.layers["points"].ndim == 3
         viewer.close()
 
     def test_annotator_3d(self, make_napari_viewer_proxy):
@@ -282,7 +291,7 @@ class TestNdimOverride:
         assert widget._ndim == 2
         assert viewer.layers["image"].rgb is True
         assert tuple(viewer.layers["image"].data.shape) == (64, 64, 3)
-        assert viewer.layers["point_prompts"].ndim == 2
+        assert viewer.layers["points"].ndim == 2
         viewer.close()
 
     def test_channels_last_two_channel_auto(self, make_napari_viewer_proxy):
@@ -332,6 +341,111 @@ class TestNdimOverride:
         assert widget._embedding_widget.image_ndim_dropdown.currentText() == "auto"  # reverted
         assert widget._embedding_widget._ndim_override() is None
         assert widget._ndim == 2  # image is still 2D
+        viewer.close()
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+class TestEmbeddingROI:
+
+    def test_compute_2d_roi_updates_state_and_layer_alignment(self, make_napari_viewer_proxy, monkeypatch):
+        from micro_sam.sam_annotator._state import AnnotatorState
+
+        viewer = make_napari_viewer_proxy()
+        image = viewer.add_image(
+            np.zeros((100, 120), dtype="uint8"), name="image", scale=(2, 3), translate=(5, 7)
+        )
+        widget = Annotator(viewer)
+        geometry = viewer.layers["geometry"]
+        geometry.scale = image.scale
+        geometry.translate = image.translate
+        geometry.add_rectangles(np.array([[10, 20], [10, 80], [60, 80], [60, 20]]))
+        geometry.selected_data = {0}
+
+        embedding_widget = widget._embedding_widget
+        embedding_widget.embedding_region_dropdown.setCurrentText("selected ROI")
+        embedding_widget._update_model = lambda state: None
+        captured = {}
+
+        def fake_initialize(state, image_data, **kwargs):
+            captured["shape"] = image_data.shape
+            state.image_embeddings = {"features": np.zeros((1, 1, 1, 1)), "input_size": image_data.shape}
+            state.data_signature = "roi"
+
+        monkeypatch.setattr(AnnotatorState, "initialize_predictor", fake_initialize)
+        embedding_widget(skip_validate=True)
+
+        state = AnnotatorState()
+        assert captured["shape"] == (50, 60)
+        assert state.image_shape == (50, 60)
+        assert state.image_translate == tuple(image.data_to_world((10, 20)))
+        roi_layer = embedding_widget.image_selection.value
+        assert roi_layer.name == "image ROI"
+        assert roi_layer.data.shape == (50, 60)
+        assert roi_layer.metadata["micro_sam_roi_source"] == "image"
+        assert roi_layer.metadata["micro_sam_roi"] == [[10, 60], [20, 80]]
+        assert state.image_name == roi_layer.name
+        assert viewer.layers.selection.active.name == roi_layer.name
+        assert "image" in viewer.layers  # the source layer stays open
+        assert not viewer.layers["image"].visible  # but is hidden so only the crop shows
+        assert viewer.layers.index(roi_layer) == 0  # crop sits at the bottom, under the annotation layers
+
+        widget._update_image()
+        assert viewer.layers["current_object"].data.shape == (50, 60)
+        assert tuple(viewer.layers["current_object"].translate) == state.image_translate
+        assert viewer.layers["geometry"].data == []
+
+        # Select the source again and create another independent crop.
+        embedding_widget.image_selection.value = image
+        assert viewer.layers["image"].visible  # re-selecting the source unhides it
+        geometry = viewer.layers["geometry"]
+        source_vertices = np.array([[20, 30], [20, 70], [50, 70], [50, 30]])
+        geometry_vertices = np.array([
+            geometry.world_to_data(image.data_to_world(vertex)) for vertex in source_vertices
+        ])
+        geometry.add_rectangles(geometry_vertices)
+        geometry.selected_data = {0}
+        embedding_widget.embedding_region_dropdown.setCurrentText("selected ROI")
+        embedding_widget(skip_validate=True)
+
+        second_roi = embedding_widget.image_selection.value
+        assert second_roi.name == "image ROI 2"
+        assert second_roi.data.shape == (30, 40)
+        assert all(name in viewer.layers for name in ("image", "image ROI", "image ROI 2"))
+        viewer.close()
+
+    def test_resolve_2d_roi(self, make_napari_viewer_proxy):
+        viewer = make_napari_viewer_proxy()
+        image = viewer.add_image(np.zeros((100, 120), dtype="uint8"), name="image")
+        widget = Annotator(viewer)
+        geometry = viewer.layers["geometry"]
+        geometry.add_rectangles(np.array([[10, 20], [10, 80], [60, 80], [60, 20]]))
+        geometry.selected_data = {0}
+
+        embedding_widget = widget._embedding_widget
+        embedding_widget.embedding_region_dropdown.setCurrentText("selected ROI")
+        roi = embedding_widget._resolve_roi(image)
+
+        assert [(s.start, s.stop) for s in roi] == [(10, 60), (20, 80)]
+        assert embedding_widget._crop_image(image, roi).shape == (50, 60)
+        viewer.close()
+
+    def test_resolve_3d_roi_keeps_all_slices(self, make_napari_viewer_proxy):
+        viewer = make_napari_viewer_proxy()
+        image = viewer.add_image(np.zeros((8, 100, 120), dtype="uint8"), name="image")
+        widget = Annotator(viewer)
+        geometry = viewer.layers["geometry"]
+        geometry.add_rectangles(
+            np.array([[3, 10, 20], [3, 10, 80], [3, 60, 80], [3, 60, 20]])
+        )
+        geometry.selected_data = {0}
+
+        embedding_widget = widget._embedding_widget
+        embedding_widget.embedding_region_dropdown.setCurrentText("selected ROI")
+        roi = embedding_widget._resolve_roi(image)
+
+        assert [(s.start, s.stop) for s in roi] == [(0, 8), (10, 60), (20, 80)]
+        assert embedding_widget._crop_image(image, roi).shape == (8, 50, 60)
         viewer.close()
 
 
