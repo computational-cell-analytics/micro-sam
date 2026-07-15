@@ -95,6 +95,8 @@ class AnnotatorState(metaclass=Singleton):
     embedding_tmpdir: Optional[str] = None
     data_signature: Optional[str] = None
     skip_recomputing_embeddings: Optional[bool] = None
+    # Whether the one-time CPU info popup has been shown this session (not reset on recompute).
+    cpu_info_shown: Optional[bool] = None
 
     # amg: needs to be initialized for the automatic segmentation functionality.
     # auto_state: cached automatic-segmentation state (grid masks or decoder predictions) for the
