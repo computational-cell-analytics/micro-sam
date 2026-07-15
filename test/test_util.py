@@ -421,6 +421,33 @@ class TestUtil(unittest.TestCase):
         self.assertTrue(isinstance(device, torch.device))
         self.assertEqual(device.type, "cpu")
 
+    def test_configure_mps_memory(self):
+        from micro_sam.util import _configure_mps_memory
+
+        key = "PYTORCH_MPS_HIGH_WATERMARK_RATIO"
+        original = os.environ.get(key)
+        try:
+            # non-mps devices must not touch the watermark
+            os.environ.pop(key, None)
+            _configure_mps_memory("cpu")
+            self.assertNotIn(key, os.environ)
+            _configure_mps_memory(torch.device("cpu"))
+            self.assertNotIn(key, os.environ)
+
+            # mps disables the watermark when it is unset
+            _configure_mps_memory("mps")
+            self.assertEqual(os.environ.get(key), "0.0")
+
+            # an explicit user-provided value is kept
+            os.environ[key] = "1.9"
+            _configure_mps_memory("mps")
+            self.assertEqual(os.environ[key], "1.9")
+        finally:
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+
 
 try:
     import sam2  # noqa
