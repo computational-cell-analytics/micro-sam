@@ -312,7 +312,9 @@ class AnnotatorState(metaclass=Singleton):
                 raise RuntimeError("Require a save path to precompute the automatic segmentation state")
 
             if self.is_sam2:
-                self._precompute_auto_state_sam2(image_data, ndim, save_path, model_type)
+                self._precompute_auto_state_sam2(
+                    image_data, ndim, save_path, model_type, pbar_init=pbar_init, pbar_update=pbar_update,
+                )
             else:
                 self._precompute_auto_state_sam1(image_data, ndim, save_path, skip_load)
 
@@ -334,7 +336,7 @@ class AnnotatorState(metaclass=Singleton):
                     image_embeddings=self.image_embeddings, save_path=save_path, i=i, verbose=False,
                 )
 
-    def _precompute_auto_state_sam2(self, image_data, ndim, save_path, model_type):
+    def _precompute_auto_state_sam2(self, image_data, ndim, save_path, model_type, pbar_init=None, pbar_update=None):
         model = getattr(self.predictor, "model", self.predictor)
         resolved_model_type = getattr(self.predictor, "model_type", model_type)
 
@@ -342,20 +344,29 @@ class AnnotatorState(metaclass=Singleton):
             device = next(self.decoder.parameters()).device
             cache_ais_state_v2(
                 self.decoder, image_data, self.image_embeddings, save_path, ndim=ndim,
-                model_type=resolved_model_type, device=device,
+                model_type=resolved_model_type, device=device, pbar_init=pbar_init, pbar_update=pbar_update,
             )
         elif ndim == 2:  # AMG on a single 2d image.
+            if pbar_init is not None:
+                pbar_init(1, "Precompute automatic segmentation state")
             cache_amg_state_v2(
                 model, image_data, self.image_embeddings, save_path, model_type=resolved_model_type,
             )
+            if pbar_update is not None:
+                pbar_update(1)
         else:  # AMG on a volume: cache the grid-prediction state per slice, reusing the 3d embeddings.
             n_slices = image_data.shape[0] if image_data.ndim == 3 else image_data.shape[1]
-            for i in tqdm(range(n_slices), desc="Precompute auto state"):
+            if pbar_init is not None:
+                pbar_init(n_slices, "Precompute automatic segmentation state")
+            iterator = range(n_slices) if pbar_init is not None else tqdm(range(n_slices), desc="Precompute auto state")
+            for i in iterator:
                 slice_ = np.s_[i] if image_data.ndim == 3 else np.s_[:, i]
                 cache_amg_state_v2(
                     model, image_data[slice_], self.image_embeddings, save_path,
                     model_type=resolved_model_type, i=i, verbose=False,
                 )
+                if pbar_update is not None:
+                    pbar_update(1)
 
     # Get the name of the image layer used to compute the embeddings.
     # If the 'image_name' attribute exists we can just use it.

@@ -337,7 +337,8 @@ def annotator(
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+        precompute_amg_state: Whether to precompute the automatic segmentation state (AMG masks, or
+            decoder predictions if the model has a decoder). Requires an embedding path.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.

@@ -415,7 +415,8 @@ def annotator_tracking(
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+        precompute_amg_state: Whether to precompute the automatic segmentation state (AMG masks, or
+            decoder predictions if the model has a decoder). Requires an embedding path.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
@@ -592,7 +593,8 @@ def batch_tracking_annotator(
         decoder_path: Path to a custom decoder checkpoint from which to load the `micro-sam` decoder.
         device: The computational device to use for the SAM model.
             By default, automatically chooses the best available device.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+        precompute_amg_state: Whether to precompute the automatic segmentation state (AMG masks, or
+            decoder predictions if the model has a decoder). Requires an embedding path.
         viewer: The viewer to which the functionality should be added.
         return_viewer: Whether to return the napari viewer instead of starting the event loop.
         skip_done: Whether to skip videos whose tracking result already exists in `output_folder`.

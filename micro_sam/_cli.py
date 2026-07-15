@@ -286,7 +286,11 @@ def annotator_object_classification(
 )
 @click.option("--tile_shape", type=int, nargs=2, default=None, help="The tile shape for tiled prediction.")
 @click.option("--overlap", "halo", type=int, nargs=2, default=None, help="The tile overlap for tiled prediction.")
-@click.option("--precompute_amg_state", is_flag=True, default=False, help="Whether to precompute the AMG state.")
+@click.option(
+    "--precompute_amg_state", is_flag=True, default=False,
+    help="Whether to precompute the automatic segmentation state (AMG masks, or decoder predictions "
+    "if the model has a decoder)."
+)
 @click.option(
     "--prefer_decoder", is_flag=True, default=True, flag_value=False,
     help="Whether to use decoder based instance segmentation if the model has an additional decoder for that purpose."
