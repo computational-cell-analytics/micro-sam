@@ -2040,6 +2040,20 @@ class EmbeddingWidget(_WidgetBase):
             "info", "Embeddings have already been precomputed. Press OK to recompute the embeddings."
         )
 
+    def _maybe_warn_cpu(self):
+        """Show a one-time-per-session info popup when the annotator runs on the CPU."""
+        state = AnnotatorState()
+        if state.cpu_info_shown:
+            return
+        if str(util.get_device(self.device)) != "cpu":
+            return
+        state.cpu_info_shown = True
+        QtWidgets.QMessageBox.information(
+            self, "Running on CPU",
+            "micro_sam is running on the CPU, so computations can be slow for large or 3D data.",
+            QtWidgets.QMessageBox.Ok,
+        )
+
     def __call__(self, skip_validate=False):
         self._validate_model_type_and_custom_weights()
         if self._validate_model_support():
@@ -2101,6 +2115,9 @@ class EmbeddingWidget(_WidgetBase):
             else self.embeddings_save_path
         )
         image_data = image.data
+
+        # Warn CPU users once per session that processing can be slow.
+        self._maybe_warn_cpu()
 
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = _create_pbar_for_threadworker()
