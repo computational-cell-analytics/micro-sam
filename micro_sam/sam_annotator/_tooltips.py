@@ -2,6 +2,7 @@
 
 tooltips = {
     "embedding": {
+        "cache_state": "Cache the automatic segmentation state to disk for faster (re)runs.",
         "custom_weights": "Select custom model weights. For example for a model you have finetuned",
         "device": "Select the computational device to use for processing.",
         "embeddings_save_path": "Select path to save or load the computed image embeddings.",
@@ -42,7 +43,6 @@ tooltips = {
         "min_extent": "Enter the minimal number of slices for objects in volumetric segmentation. To filter out small segmentation artifacts.",  # noqa
         "min_object_size": "Enter the minimal object size in pixels. This refers to the size per slice for volumetric segmentation.",  # noqa
         "run_button": "Run automatic segmentation.",
-        "cache_state": "Cache the automatic segmentation state (grid masks or decoder predictions) to disk next to the embeddings. When enabled it is precomputed while the embeddings are computed, so the first automatic segmentation - and later sessions reusing the same embeddings - start instantly. Requires an embeddings save path. Off by default.",  # noqa
         "with_background": "Choose if your image has a large background area.",
         "tile_z": "Number of slices per z-block for 3d automatic segmentation. The volume is decoded in z-blocks to bound memory. Set this to the number of slices (or more) to process the whole volume in one block (no z-tiling).",  # noqa
         "halo_z": "Number of overlapping slices between z-blocks for 3d automatic segmentation, used as context and discarded when stitching.",  # noqa

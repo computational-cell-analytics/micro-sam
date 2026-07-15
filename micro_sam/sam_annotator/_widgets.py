@@ -1556,6 +1556,10 @@ class EmbeddingWidget(_WidgetBase):
     # A tiled 2D image only gets slow on the CPU once it has many tiles; warn from this many on.
     cpu_warn_tiles = 64
 
+    # Whether to offer the 'cache automatic segmentation state' option (segmentation / tracking only,
+    # not the classification tools which have no automatic segmentation).
+    supports_state_caching = True
+
     def __init__(self, parent=None, sam2_only=False, ndim_choice=False, is_timeseries=False):
         super().__init__(parent=parent)
         self.sam2_only = sam2_only
@@ -1792,6 +1796,18 @@ class EmbeddingWidget(_WidgetBase):
             tooltip=get_tooltip("embedding", "embeddings_save_path"),
         )
         setting_values.layout().addLayout(save_layout)
+
+        # Opt-in disk caching of the automatic-segmentation state (off by default). When on, the state
+        # is precomputed to disk (next to the embeddings) while the embeddings are computed and reused
+        # across runs / sessions. The automatic segmentation widget reads this flag from here. Not
+        # offered by the classification tools (no automatic segmentation).
+        self.cache_state = False
+        if self.supports_state_caching:
+            self.cache_state_checkbox = self._add_boolean_param(
+                "cache_state", self.cache_state, title="cache automatic segmentation state",
+                tooltip=get_tooltip("embedding", "cache_state"),
+            )
+            setting_values.layout().addWidget(self.cache_state_checkbox)
 
         # Create UI for the custom weights.
         self.custom_weights = None
@@ -2141,13 +2157,15 @@ class EmbeddingWidget(_WidgetBase):
         # Warn CPU users once per session that processing can be slow.
         self._maybe_warn_cpu(ndim, tile_shape, state.image_shape)
 
-        # Eager caching of the automatic-segmentation state: if the autosegment widget's 'Cache' option
-        # is on, precompute the state to disk now (while computing the embeddings). It needs a save path
-        # to persist, so it is skipped (with a hint) when none is set.
-        autosegment = state.widgets.get("autosegment")
-        cache_auto_state = bool(getattr(autosegment, "cache_state", False))
-        precompute_auto_state = cache_auto_state and save_path is not None
-        if cache_auto_state and save_path is None:
+        # Eager caching of the automatic-segmentation state: if the 'cache automatic segmentation state'
+        # option (in these embedding settings) is on, precompute the state to disk while computing the
+        # embeddings. It persists wherever the embeddings live on disk - the given save path, or the
+        # ephemeral zarr the eager setup creates for SAM2 volumes / tiled images (removed on reset).
+        # Plain in-memory 2d has no disk location, so it needs a save path to persist.
+        is_sam2 = self.model_type.startswith("h")
+        embeddings_on_disk = save_path is not None or (is_sam2 and (ndim == 3 or tile_shape is not None))
+        precompute_auto_state = self.cache_state and embeddings_on_disk
+        if self.cache_state and not embeddings_on_disk:
             show_info("Set an embeddings save path to cache the automatic segmentation state.")
 
         # Set up progress bar and signals for using it within a threadworker.
@@ -2204,6 +2222,9 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     dropdown to the advanced families instead of adding a second dropdown. The advanced tier holds both
     the SAM1 families and the VFM (DINO / UNI) families (`_advanced_family_suffixes` and `_dino_families`).
     """
+
+    # The classification tools have no automatic segmentation, so the state-caching option is hidden.
+    supports_state_caching = False
 
     size_order = ["tiny", "small", "base", "large", "huge", "giant"]
 
@@ -3933,9 +3954,9 @@ class AutoSegmentWidget(_WidgetBase):
     offered as a fallback when no decoder is available. A mode dropdown sits next to the 'Apply to
     Volume' switch and the post-processing parameters refresh on mode change.
 
-    A 'Cache automatic segmentation state' checkbox (off by default) opts into disk-backed caching of
-    the state next to the embeddings: when on, it is precomputed while the embeddings are computed and
-    reused across runs and sessions; when off, the state is kept in memory only.
+    Disk-backed caching of the state is opted into via the 'cache automatic segmentation state'
+    checkbox in the embedding settings (read here through the embedding widget); when off, the state
+    is kept in memory only.
 
     Args:
         viewer: The napari viewer.
@@ -3965,10 +3986,6 @@ class AutoSegmentWidget(_WidgetBase):
         # only re-runs 'generate', not the expensive UniSAM2 inference. Keyed by the inputs.
         self._segmenter = None
         self._segmenter_key = None
-        # Opt-in disk caching of the automatic-segmentation state (off by default). When enabled the
-        # state is precomputed while the embeddings are computed (see 'EmbeddingWidget.__call__') and
-        # reused from disk here; when disabled nothing is written and the state is recomputed as needed.
-        self.cache_state = False
         self._create_widget()
 
     def _create_widget(self):
@@ -4002,21 +4019,11 @@ class AutoSegmentWidget(_WidgetBase):
         self.settings = self._make_settings_widget()
         self.layout().addWidget(self.settings)
 
-        # Opt-in disk caching of the automatic-segmentation state.
-        self._add_cache_state_checkbox()
-
         # Run button.
         self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
         self.run_button.clicked.connect(self.__call__)
         self.run_button.setToolTip(get_tooltip("autosegment", "run_button"))
         self.layout().addWidget(self.run_button)
-
-    def _add_cache_state_checkbox(self):
-        self.cache_state_checkbox = self._add_boolean_param(
-            "cache_state", self.cache_state, title="Cache automatic segmentation state",
-            tooltip=get_tooltip("autosegment", "cache_state"),
-        )
-        self.layout().addWidget(self.cache_state_checkbox)
 
     def _reset_segmentation_mode(self, with_decoder):
         # If the decoder availability is unchanged there is nothing to rebuild.
@@ -4236,13 +4243,17 @@ class AutoSegmentWidget(_WidgetBase):
         z_halo = self.halo_z if z_block < n_slices else 0
         return z_block, z_halo
 
+    def _state_save_path(self, state):
+        # The state cache is opted into via the embedding settings' 'cache automatic segmentation state'
+        # checkbox; when on it persists next to the embeddings, else in-memory only ('_segmenter' cache).
+        embed_widget = state.widgets.get("embeddings")
+        return state.embedding_path if getattr(embed_widget, "cache_state", False) else None
+
     def _run_unisam2(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.precompute_state import cache_ais_state_v2
 
         device = next(state.decoder.parameters()).device
-        # With the 'Cache' option on, persist the decoder predictions next to the embeddings; off ->
-        # in-memory only (the '_segmenter' cache below).
-        save_path = state.embedding_path if self.cache_state else None
+        save_path = self._state_save_path(state)
 
         # All decoder auto-seg cases reuse the precomputed embeddings and run the decoder on them (no
         # encoder re-run). The tiling is taken from the embeddings (tiled embeddings have a top-level
@@ -4295,9 +4306,7 @@ class AutoSegmentWidget(_WidgetBase):
         # video predictor itself (3d); both can drive the grid-based mask generator.
         model = getattr(state.predictor, "model", state.predictor)
         model_type = getattr(state.predictor, "model_type", None)
-        # With the 'Cache' option on, the grid-prediction state is cached next to the embeddings so a
-        # later run (or session) reuses it; off -> in-memory only (the '_segmenter' cache below).
-        save_path = state.embedding_path if self.cache_state else None
+        save_path = self._state_save_path(state)
 
         generate_kwargs = dict(min_object_size=self.min_object_size, with_background=True)
         amg_params = dict(
@@ -4444,8 +4453,6 @@ class AutoTrackWidget(AutoSegmentWidget):
 
         self.settings = self._make_settings_widget()
         self.layout().addWidget(self.settings)
-
-        self._add_cache_state_checkbox()
 
         self.run_button = QtWidgets.QPushButton("Automatic Tracking")
         self.run_button.clicked.connect(self.__call__)
