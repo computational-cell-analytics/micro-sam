@@ -119,7 +119,7 @@ class AutomaticMaskGenerationSegmenter:
             By default '0.8'.
         stability_score_thresh: Filter threshold in [0, 1] using the stability of the mask under
             changes to the binarization cutoff. By default '0.9'. This is lower than SAM2's native
-            default of '0.95' because the embeddings here come from micro-sam's min-max normalized
+            default of '0.95' because the embeddings here come from micro-sam's percentile-normalized
             inputs, under which masks score marginally lower in stability.
         kwargs: Additional keyword arguments forwarded to `SAM2AutomaticMaskGenerator`.
     """

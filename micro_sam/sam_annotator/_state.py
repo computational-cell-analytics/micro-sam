@@ -40,7 +40,7 @@ class Singleton(type):
 # TODO: this should be refactored once we have decided on which models to support.
 # (Likely only SAM2 models)
 def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_cli):
-    from micro_sam.v1.models.vfm import is_vfm_model, get_vfm_model
+    from micro_sam.models.vfm import is_vfm_model, get_vfm_model
     if is_vfm_model(model_type):  # VFM encoders (DINO / UNI) for the classification tools.
         encoder = get_vfm_model(model_type, device=device, checkpoint_path=checkpoint_path)
         return encoder, {}
@@ -174,7 +174,7 @@ class AnnotatorState(metaclass=Singleton):
         if isinstance(decoder_path, str) and not decoder_path.strip():
             decoder_path = None
 
-        from micro_sam.v1.models.vfm import is_vfm_model
+        from micro_sam.models.vfm import is_vfm_model
         self.is_sam2 = model_type.startswith("h")
         self.is_vfm = is_vfm_model(model_type)
 

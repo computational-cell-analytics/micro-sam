@@ -237,7 +237,7 @@ def run_unisam2_inference(
 
     Inference is tiled with a halo. For 3d data the tiling is fully 3d (the tile shape and halo
     include the z axis); for 2d it is in-plane. When `tile_shape` is None the whole image is
-    processed as a single block (no tiling).
+    processed as a single block (no tiling). Each block is percentile-normalized before prediction.
 
     Args:
         model: The UniSAM2 model.
@@ -256,10 +256,10 @@ def run_unisam2_inference(
         Channel 0 is the foreground probability, channels 1-3 the directed distances.
     """
     from torch_em.util.prediction import predict_with_halo
-    from torch_em.transform.raw import normalize
+    from micro_sam.v2.normalization import normalize_raw
 
     def _preprocess(crop):
-        return np.concatenate([normalize(crop)] * 3, axis=0)
+        return np.concatenate([normalize_raw(crop)] * 3, axis=0)
 
     is_3d = ndim == 3
 

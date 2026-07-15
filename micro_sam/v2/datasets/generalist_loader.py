@@ -273,7 +273,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "raw_channel": "rgb",
         "label_channel": "cell",
         "patch_shape": patch_shape,
-        "raw_transform": partial(_normalize_percentile, axis=(0, 1)),
+        "raw_transform": partial(_normalize_percentile, axis=(1, 2)),  # TissueNet 'rgb' is (3, H, W)
         **{k: v for k, v in kwargs.items() if k != "raw_transform"}
     }
 
