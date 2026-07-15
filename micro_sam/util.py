@@ -127,6 +127,17 @@ def _get_default_device():
     return device
 
 
+def _configure_mps_memory(device: Union[str, torch.device]) -> None:
+    """Disable the MPS memory watermark so 3d automatic segmentation does not hit a premature OOM.
+
+    MPS's default watermark rejects allocations that would still fit in unified memory; '0.0' disables
+    it. ``setdefault`` keeps a user-set value, and it must run before the first MPS allocation to apply.
+    """
+    device_type = device if isinstance(device, str) else getattr(device, "type", "")
+    if isinstance(device_type, str) and device_type.lower() == "mps":
+        os.environ.setdefault("PYTORCH_MPS_HIGH_WATERMARK_RATIO", "0.0")
+
+
 def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, torch.device]:
     """Get the torch device.
 
@@ -154,6 +165,7 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
         else:
             raise RuntimeError(f"Unsupported device: '{device}'. Please choose from 'cpu', 'cuda', or 'mps'.")
 
+    _configure_mps_memory(device)
     return device
 
 

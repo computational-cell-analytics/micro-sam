@@ -11,6 +11,7 @@ import torch
 
 from micro_sam.util import (
     get_device, get_cache_directory, microsam_cachedir, _open_embeddings, _create_dataset_without_data,
+    _configure_mps_memory,
 )
 from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
 from micro_sam.v2.normalization import RAW_NORMALIZATION, to_image
@@ -185,6 +186,8 @@ def _download_finetuned_sam2_model(model_type, progress_bar_factory=None):
 def _get_device(device=None):
     if device is None or device == "auto":
         device = get_device()
+    else:
+        _configure_mps_memory(device)
 
     if device == "cuda":
         # NOTE: Adapt global variables to work with flash attentions.
