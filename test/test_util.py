@@ -82,6 +82,148 @@ class TestUtil(unittest.TestCase):
             x1, x2 = (np.random.rand(32, 32) > 0.5), (np.random.rand(32, 32) > 0.5)
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
+    def test_normalize_raw(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+        raw[-1, -1] = 10_000  # An outlier must not determine the useful intensity range.
+
+        normalized = normalize_raw(raw)
+        self.assertEqual(normalized.dtype, np.float32)
+        self.assertGreaterEqual(normalized.min(), 0.0)
+        self.assertLessEqual(normalized.max(), 1.0)
+        self.assertEqual(normalized[-1, -1], 1.0)
+        self.assertGreater(normalized[50, 0], 0.45)
+
+        # An integer output dtype rescales the same normalized data to the full dtype range.
+        normalized_uint8 = normalize_raw(raw, output_dtype="uint8")
+        self.assertEqual(normalized_uint8.dtype, np.uint8)
+        self.assertTrue(np.array_equal(normalized_uint8, np.round(normalized * 255).astype("uint8")))
+
+        empty = normalize_raw(np.empty((0, 4), dtype="uint16"))
+        self.assertEqual(empty.shape, (0, 4))
+        self.assertEqual(empty.dtype, np.float32)
+
+    def test_normalize_raw_dtypes(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+
+        # Floating and 8-/16-bit integer output dtypes are all supported.
+        for dtype in ["float16", "float32", "float64", "uint8", "int8", "uint16", "int16"]:
+            normalized = normalize_raw(raw, output_dtype=dtype)
+            self.assertEqual(normalized.dtype, np.dtype(dtype))
+
+        # 32-/64-bit integer, boolean and complex output dtypes are rejected.
+        for dtype in ["int32", "uint32", "int64", "uint64", "bool", "complex64", "complex128"]:
+            with self.assertRaises(ValueError):
+                normalize_raw(raw, output_dtype=dtype)
+
+    def test_normalize_raw_output_ranges(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+
+        # Integer output dtypes are normalized to their full representable range.
+        full_ranges = {"uint8": (0, 255), "int8": (-128, 127), "uint16": (0, 65535), "int16": (-32768, 32767)}
+        for dtype, (low, high) in full_ranges.items():
+            normalized = normalize_raw(raw, output_dtype=dtype)
+            self.assertEqual(normalized.min(), low)
+            self.assertEqual(normalized.max(), high)
+
+        # Floating output dtypes are normalized to [0, 1].
+        for dtype in ["float16", "float32", "float64"]:
+            normalized = normalize_raw(raw, output_dtype=dtype)
+            self.assertAlmostEqual(float(normalized.min()), 0.0, places=3)
+            self.assertAlmostEqual(float(normalized.max()), 1.0, places=3)
+
+    def test_normalize_raw_input_ranges(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        # Common microscopy input dtypes over sensible ranges normalize to [0, 1].
+        ranges = {
+            "uint8": (0, 255),
+            "int8": (-128, 127),
+            "uint16": (0, 65535),
+            "int16": (-32768, 32767),
+            "float16": (0.0, 1.0),
+            "float32": (0.0, 1.0),
+            "float64": (-5.0, 5.0),
+        }
+        for dtype, (low, high) in ranges.items():
+            raw = np.linspace(low, high, 10_000, dtype=dtype).reshape(100, 100)
+            normalized = normalize_raw(raw)
+            self.assertEqual(normalized.dtype, np.float32)
+            self.assertGreaterEqual(normalized.min(), 0.0)
+            self.assertLessEqual(normalized.max(), 1.0)
+            # A monotonic input ramp stays monotonic after normalization.
+            self.assertTrue(np.all(np.diff(normalized.ravel()) >= 0))
+
+    def test_normalize_raw_percentile_params(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+
+        # Explicit defaults match the hard-coded 2nd/98th percentiles.
+        default = normalize_raw(raw)
+        explicit = normalize_raw(raw, lower_percentile=2.0, upper_percentile=98.0)
+        self.assertTrue(np.array_equal(default, explicit))
+
+        # Wider percentiles clip less, so intermediate values differ.
+        wide = normalize_raw(raw, lower_percentile=0.0, upper_percentile=100.0)
+        self.assertFalse(np.array_equal(default, wide))
+        self.assertGreaterEqual(wide.min(), 0.0)
+        self.assertLessEqual(wide.max(), 1.0)
+
+    def test_normalize_raw_per_channel(self):
+        from micro_sam.v2.normalization import normalize_raw, to_image
+
+        channel = np.arange(100, dtype="float32").reshape(10, 10)
+        image = np.stack([channel, channel * 100 + 42], axis=-1)
+        normalized = normalize_raw(image, axis=(0, 1))
+        self.assertTrue(np.allclose(normalized[..., 0], normalized[..., 1]))
+
+        rgb = to_image(image)
+        self.assertEqual(rgb.shape, (10, 10, 3))
+        self.assertEqual(rgb.dtype, np.uint8)
+        self.assertTrue(np.array_equal(rgb[..., 0], rgb[..., 1]))
+        self.assertFalse(np.any(rgb[..., 2]))
+
+    def test_normalization_invalidates_old_embeddings(self):
+        from types import SimpleNamespace
+
+        from micro_sam.util import _get_embedding_signature
+        from micro_sam.v2.normalization import RAW_NORMALIZATION
+        from micro_sam.v2.util import _check_saved_embeddings
+
+        predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test")
+        raw = np.arange(100).reshape(10, 10)
+        signature = _get_embedding_signature(raw, predictor, tile_shape=None, halo=None)
+        signature["normalization"] = RAW_NORMALIZATION
+        self.assertEqual(signature["normalization"], "percentile_2_98")
+
+        attrs = {"input_size": [10, 10], **signature}
+        embeddings = SimpleNamespace(attrs=attrs)
+        self.assertFalse(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
+
+        del attrs["normalization"]
+        self.assertTrue(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
+
+        class PartialEmbeddings(dict):
+            def __init__(self, normalization=None):
+                super().__init__(features=object())
+                self.attrs = {} if normalization is None else {"normalization": normalization}
+
+        legacy_partial = PartialEmbeddings()
+        self.assertTrue(_check_saved_embeddings(raw, predictor, legacy_partial, "cache.zarr", None, None))
+
+        current_partial = PartialEmbeddings(RAW_NORMALIZATION)
+        self.assertFalse(_check_saved_embeddings(raw, predictor, current_partial, "cache.zarr", None, None))
+
+        empty_cache = PartialEmbeddings(RAW_NORMALIZATION)
+        del empty_cache["features"]
+        self.assertFalse(_check_saved_embeddings(raw, predictor, empty_cache, "cache.zarr", None, None))
+
     def test_apply_nms_tiled_border_masks(self):
         from micro_sam.util import apply_nms
 
@@ -344,6 +486,7 @@ class TestSAM2Util(unittest.TestCase):
         # The signature is written so the GUI / CLI can validate a reload.
         self.assertEqual(f.attrs["model_name"], self.model_type)
         self.assertIn("data_signature", f.attrs)
+        self.assertEqual(f.attrs["normalization"], "percentile_2_98")
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=2)

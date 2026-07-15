@@ -11,7 +11,6 @@ from bioimage_cpp.segmentation import label as connected_components
 
 import torch
 
-from torch_em.transform.raw import normalize
 from torch_em.util.segmentation import size_filter
 
 from elf.io import open_file
@@ -19,6 +18,7 @@ from elf.io import open_file
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
 from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
+from micro_sam.v2.normalization import to_image
 from micro_sam.prompt_generators import IterativePromptGenerator
 from micro_sam.v1.evaluation.inference import (
     _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
@@ -79,10 +79,9 @@ def run_amg(
         else:
             image = open_file(image_path)[image_key][:]
 
-        if ensure_8bit and image.max() > 255:
-            image = normalize(image) * 255
-
-        if image.ndim == 2:  # Convert single channel images to RGB images.
+        if ensure_8bit:
+            image = to_image(image)
+        elif image.ndim == 2:  # Convert single channel images to RGB images.
             image = np.stack([image] * 3, axis=-1)
 
         model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
@@ -289,10 +288,9 @@ def run_interactive_segmentation_2d(
         else:
             image = open_file(image_path)[image_key][:]
 
-        if ensure_8bit and image.max() > 255:
-            image = normalize(image) * 255
-
-        if image.ndim == 2:
+        if ensure_8bit:
+            image = to_image(image)
+        elif image.ndim == 2:
             image = np.stack([image] * 3, axis=-1)
 
         if gt_key is None:

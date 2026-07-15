@@ -82,16 +82,14 @@ def promptable_segmentation_2d(
     configure_image_predictor(predictor)
 
     if image is not None:
-        if image.ndim == 2:
-            image = np.stack([image] * 3, axis=-1)
-
-        assert image.ndim == 3
-
-        if image.shape[0] == 3:  # Make channels last, as expected in RGB images.
+        if image.ndim == 3 and image.shape[0] == 3 and image.shape[-1] != 3:
+            # Make channel-first RGB images channel-last. Grayscale and channel-last inputs are
+            # handled by 'to_image' below.
             image = image.transpose(1, 2, 0)
 
         # Set the predictor state.
-        predictor.set_image(image.astype("uint8"))
+        from micro_sam.v2.normalization import to_image
+        predictor.set_image(to_image(image))
 
     assert len(points) == len(labels)
     have_points = points is not None and len(points) > 0

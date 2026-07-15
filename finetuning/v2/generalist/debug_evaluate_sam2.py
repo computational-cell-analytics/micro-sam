@@ -134,12 +134,12 @@ from skimage.measure import label as connected_components
 
 import torch
 
-from torch_em.transform.raw import normalize
 from torch_em.util.segmentation import size_filter
 
 from elf.evaluation import mean_segmentation_accuracy, cremi_score
 
 from micro_sam.util import segmentation_to_one_hot
+from micro_sam.v2.normalization import normalize_raw
 from micro_sam.prompt_generators import IterativePromptGenerator
 from micro_sam.v1.evaluation.inference import _get_batched_prompts, _get_batched_iterative_prompts
 
@@ -174,7 +174,7 @@ def load_test_volumes_skull(min_size=10):
         if not fname.endswith(".tif"):
             continue
         raw = imageio.imread(os.path.join(img_dir, fname))
-        raw = normalize(raw).astype(np.float32)
+        raw = normalize_raw(raw)
         mask_fname = fname.replace("X", "Y")
         labels = imageio.imread(os.path.join(mask_dir, mask_fname))
         labels = connected_components(labels).astype("uint32")
@@ -197,7 +197,7 @@ def load_test_volumes_lucchi(min_size=10):
     with h5py.File(test_path, "r") as f:
         raw = f["raw"][:]
         labels = f["labels"][:]
-    raw = normalize(raw.astype(np.float32))
+    raw = normalize_raw(raw)
     labels = connected_components(labels).astype("uint32")
     labels = size_filter(labels, min_size=min_size)
     fname = "lucchi_test.h5"
@@ -223,7 +223,7 @@ def load_test_volumes_cremi(min_size=500):
     with h5py.File(test_path, "r") as f:
         raw = f["volumes/raw"][CREMI_TEST_ROI]
         labels = f["volumes/labels/neuron_ids"][CREMI_TEST_ROI]
-    raw = normalize(raw.astype(np.float32))
+    raw = normalize_raw(raw)
     _, labels = np.unique(labels, return_inverse=True)
     labels = labels.reshape(raw.shape).astype("uint32")
     labels = size_filter(labels, min_size=min_size)
@@ -249,7 +249,7 @@ def load_test_images_livecell(n_images=20, min_size=50):
     samples = []
     for i in indices:
         fname = os.path.basename(img_paths[i])
-        raw = normalize(imageio.imread(img_paths[i]).astype(np.float32))
+        raw = normalize_raw(imageio.imread(img_paths[i]))
         labels = connected_components(imageio.imread(seg_paths[i])).astype("uint32")
         labels = size_filter(labels, min_size=min_size)
         samples.append((fname, raw, labels))
