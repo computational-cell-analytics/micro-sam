@@ -1,3 +1,7 @@
+import gc
+import ctypes
+import platform
+
 from typing import Optional, Union, List
 
 import numpy as np
@@ -5,6 +9,36 @@ import torch
 
 from micro_sam.v1.prompt_based_segmentation import _process_box, _compute_logits_from_mask
 from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy, ResizeLongestSideTransforms
+
+
+def _trim_cpu_heap():
+    """Return freed CPU heap to the OS on glibc/Linux; no-op elsewhere.
+
+    'gc.collect' drops the Python references and frees the tensors, but glibc keeps the freed pages
+    in its arenas rather than returning them to the OS, so RSS stays high on native CPU systems (the
+    low-RAM target). 'malloc_trim' releases that free heap, so clearing the embedding cache actually
+    lowers RSS.
+    """
+    if platform.system() != "Linux":
+        return
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
+
+
+def _free_device_memory():
+    """Return freed tensor memory to the allocator / OS after clearing cached embeddings.
+
+    Covers GPU (empty the CUDA / MPS caching allocator) and native CPU systems (trim the glibc heap
+    so RSS actually drops, not just the Python-level references).
+    """
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+    _trim_cpu_heap()
 
 
 def _crop_to_original_shape(mask, shape):
@@ -468,6 +502,12 @@ class PromptableSegmentation3D:
         self._pushed_points = {}
         self._pushed_boxes = {}
         self._pushed_masks = {}
+        # Drop the per-frame embedding cache (up to MAX_CACHED_FRAMES slices of high-res features) so
+        # committing / clearing frees its RAM. SAM2's 'reset_state' clears the tracking outputs but not
+        # this cache. The embeddings are disk-backed, so the next prompt re-reads the needed frame
+        # lazily via '_get_image_feature' - the cache stays empty until then.
+        self.inference_state["cached_features"] = {}
+        _free_device_memory()
 
     def get_progress_total(self, z_range=None):
         """Return the number of slice propagation steps for the requested z range."""
@@ -929,9 +969,12 @@ class TiledPromptableSegmentation3D:
         pass
 
     def reset_predictor(self):
+        # Drop the per-tile segmenters (each with its own inference state + embedding cache) so
+        # committing / clearing frees their RAM; they are rebuilt lazily for the next prompt.
         for segmenter in self._segmenters.values():
             segmenter.reset_predictor()
         self._segmenters = {}
+        _free_device_memory()
 
     def get_progress_total(self, z_range=None):
         """Return tile-slice propagation steps for the currently active tiles."""
@@ -961,10 +1004,12 @@ class TiledPromptableSegmentation3D:
 
             feats = self.volume_embeddings["features"]
             tile_dataset = feats[str(tile_id)]
+            # Keep the per-tile datasets lazy so the video predictor streams this tile-column one
+            # frame at a time from disk, instead of materialising the whole column (~124 MB/slice).
             tile_embeddings = {
-                "features": np.asarray(tile_dataset),
-                "pos_enc": _load_list_datasets(self.volume_embeddings["pos_enc"], str(tile_id), lazy_loading=False),
-                "fpn": _load_list_datasets(self.volume_embeddings["fpn"], str(tile_id), lazy_loading=False),
+                "features": tile_dataset,
+                "pos_enc": _load_list_datasets(self.volume_embeddings["pos_enc"], str(tile_id), lazy_loading=True),
+                "fpn": _load_list_datasets(self.volume_embeddings["fpn"], str(tile_id), lazy_loading=True),
                 "input_size": tile_dataset.attrs["input_size"],
                 "original_size": tile_dataset.attrs["original_size"],
             }
