@@ -27,7 +27,7 @@ def _trim_cpu_heap():
         pass
 
 
-def _free_device_memory(device=None):
+def _free_device_memory():
     """Return freed tensor memory to the allocator / OS after clearing cached embeddings.
 
     Covers GPU (empty the CUDA / MPS caching allocator) and native CPU systems (trim the glibc heap
@@ -509,7 +509,7 @@ class PromptableSegmentation3D:
         # this cache. The embeddings are disk-backed, so the next prompt re-reads the needed frame
         # lazily via '_get_image_feature' - the cache stays empty until then.
         self.inference_state["cached_features"] = {}
-        _free_device_memory(self.device)
+        _free_device_memory()
 
     def get_progress_total(self, z_range=None):
         """Return the number of slice propagation steps for the requested z range."""
@@ -976,7 +976,7 @@ class TiledPromptableSegmentation3D:
         for segmenter in self._segmenters.values():
             segmenter.reset_predictor()
         self._segmenters = {}
-        _free_device_memory(self.device)
+        _free_device_memory()
 
     def get_progress_total(self, z_range=None):
         """Return tile-slice propagation steps for the currently active tiles."""
