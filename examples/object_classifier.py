@@ -271,6 +271,17 @@ def dino_annotator():
     object_classifier(image, segmentation, model_type="vit_b_dinov2")
 
 
+def sam2_object_classifier():
+    from micro_sam.sam_annotator.object_classifier import object_classifier
+
+    example_data = fetch_livecell_example_data(DATA_CACHE)
+    image = imageio.imread(example_data)
+    segmentation = imageio.imread(os.path.join(DATA_CACHE, "livecell-2d-segmentation.tif"))
+
+    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-hvit_t_cells.zarr")
+    object_classifier(image, segmentation, embedding_path=embedding_path, model_type="hvit_t_cells")
+
+
 def sam3_object_classifier():
     from micro_sam.sam_annotator.object_classifier import object_classifier
 
@@ -292,7 +303,8 @@ def main():
     # wholeslide_annotator()
     # lucchi_annotator()
     # tiled_3d_annotator()
-    histopathology_annotator()
+    sam2_object_classifier()
+    # histopathology_annotator()
     # batch_prediction()
 
     # annotator_devel()
