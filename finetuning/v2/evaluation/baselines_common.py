@@ -9,7 +9,7 @@ from skimage.measure import label as connected_components
 from elf.io import open_file
 
 from common import get_data_paths, load_volume, _center_crop_roi
-from micro_sam.v2.normalization import UINT8_RANGE, normalize_raw
+from micro_sam.v2.normalization import normalize_raw
 
 CROP_SHAPE_2D = (512, 512)
 CROP_SHAPE_3D = (8, 512, 512)
@@ -19,7 +19,7 @@ MAX_EVALUATION_SAMPLES = int(os.environ.get("MICRO_SAM_EVAL_MAX_SAMPLES", "200")
 def _ensure_8bit_range(raw):
     if raw.size == 0:
         return raw.astype("float32", copy=False)
-    return normalize_raw(raw, output_range=UINT8_RANGE)
+    return normalize_raw(raw) * 255.0
 
 
 def _read_2d(path, key):

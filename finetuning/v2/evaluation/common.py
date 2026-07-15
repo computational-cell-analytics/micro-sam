@@ -11,7 +11,7 @@ from torch_em.data import datasets
 from torch_em.util.image import load_image
 
 from micro_sam.v1.evaluation.livecell import _get_livecell_paths
-from micro_sam.v2.normalization import UINT8_RANGE, normalize_raw
+from micro_sam.v2.normalization import normalize_raw
 
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
@@ -399,7 +399,7 @@ def load_volume(
         labels[labels == -1] = 0
 
     if ensure_8bit:
-        raw = normalize_raw(raw, output_range=UINT8_RANGE)
+        raw = normalize_raw(raw) * 255.0
 
     roi = _center_crop_roi(raw.shape, crop_shape)
     raw, labels = raw[roi], labels[roi]

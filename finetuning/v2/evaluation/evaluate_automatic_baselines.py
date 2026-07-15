@@ -32,7 +32,7 @@ import torch
 
 from micro_sam.v1.evaluation.evaluation import run_evaluation
 from micro_sam.v2.util import configure_image_predictor
-from micro_sam.v2.normalization import UINT8_RANGE, normalize_raw
+from micro_sam.v2.normalization import normalize_raw
 
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_3D_EM,
@@ -76,7 +76,7 @@ _DATASET_ANISOTROPY = {
 
 
 def _to_sam2_uint8(raw):
-    return np.round(normalize_raw(raw, output_range=UINT8_RANGE)).astype("uint8")
+    return normalize_raw(raw, output_dtype="uint8")
 
 
 def _load_cellpose(model_type, device):

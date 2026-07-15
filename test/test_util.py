@@ -83,7 +83,7 @@ class TestUtil(unittest.TestCase):
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
     def test_normalize_raw(self):
-        from micro_sam.v2.normalization import UINT8_RANGE, normalize_raw
+        from micro_sam.v2.normalization import normalize_raw
 
         raw = np.arange(10_000, dtype="float32").reshape(100, 100)
         raw[-1, -1] = 10_000  # An outlier must not determine the useful intensity range.
@@ -95,20 +95,14 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(normalized[-1, -1], 1.0)
         self.assertGreater(normalized[50, 0], 0.45)
 
-        normalized_255 = normalize_raw(raw, output_range=UINT8_RANGE)
-        self.assertEqual(normalized_255.dtype, np.float32)
-        self.assertTrue(np.allclose(normalized_255, normalized * 255))
-
+        # An integer output dtype rescales the same normalized data to the full dtype range.
         normalized_uint8 = normalize_raw(raw, output_dtype="uint8")
         self.assertEqual(normalized_uint8.dtype, np.uint8)
-        self.assertTrue(np.array_equal(normalized_uint8, normalized_255.astype("uint8")))
+        self.assertTrue(np.array_equal(normalized_uint8, np.round(normalized * 255).astype("uint8")))
 
         empty = normalize_raw(np.empty((0, 4), dtype="uint16"))
         self.assertEqual(empty.shape, (0, 4))
         self.assertEqual(empty.dtype, np.float32)
-
-        with self.assertRaises(ValueError):
-            normalize_raw(raw, output_range=(1, 0))
 
     def test_normalize_raw_dtypes(self):
         from micro_sam.v2.normalization import normalize_raw
@@ -130,25 +124,18 @@ class TestUtil(unittest.TestCase):
 
         raw = np.arange(10_000, dtype="float32").reshape(100, 100)
 
-        # Integer output dtypes are normalized to their full range by default.
+        # Integer output dtypes are normalized to their full representable range.
         full_ranges = {"uint8": (0, 255), "int8": (-128, 127), "uint16": (0, 65535), "int16": (-32768, 32767)}
         for dtype, (low, high) in full_ranges.items():
             normalized = normalize_raw(raw, output_dtype=dtype)
             self.assertEqual(normalized.min(), low)
             self.assertEqual(normalized.max(), high)
-            # The full range may also be passed explicitly.
-            explicit = normalize_raw(raw, output_range=(float(low), float(high)), output_dtype=dtype)
-            self.assertTrue(np.array_equal(normalized, explicit))
-            # Any other range does not match the output dtype and is rejected.
-            with self.assertRaises(ValueError):
-                normalize_raw(raw, output_range=(0.0, 1.0), output_dtype=dtype)
-            with self.assertRaises(ValueError):
-                normalize_raw(raw, output_range=(float(low), high / 2), output_dtype=dtype)
 
-        # Floating output dtypes support an arbitrary range and default to [0, 1].
-        normalized = normalize_raw(raw, output_range=(-5.0, 5.0), output_dtype="float32")
-        self.assertAlmostEqual(float(normalized.min()), -5.0, places=5)
-        self.assertAlmostEqual(float(normalized.max()), 5.0, places=5)
+        # Floating output dtypes are normalized to [0, 1].
+        for dtype in ["float16", "float32", "float64"]:
+            normalized = normalize_raw(raw, output_dtype=dtype)
+            self.assertAlmostEqual(float(normalized.min()), 0.0, places=3)
+            self.assertAlmostEqual(float(normalized.max()), 1.0, places=3)
 
     def test_normalize_raw_input_ranges(self):
         from micro_sam.v2.normalization import normalize_raw
