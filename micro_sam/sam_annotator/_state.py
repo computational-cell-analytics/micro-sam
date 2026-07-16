@@ -17,8 +17,8 @@ import torch.nn as nn
 import micro_sam
 import micro_sam.util as util
 from micro_sam.v1.util import get_sam_model
-from micro_sam.v1.instance_segmentation import AMGBase, get_decoder
-from micro_sam.precompute_state import cache_amg_state, cache_is_state, cache_amg_state_v2, cache_ais_state_v2
+from micro_sam.v1.instance_segmentation import AutoSegBase, get_decoder
+from micro_sam.precompute_state import cache_amg_state, cache_is_state, cache_autoseg_state
 
 from segment_anything import SamPredictor
 
@@ -98,12 +98,11 @@ class AnnotatorState(metaclass=Singleton):
     # Whether the one-time CPU info popup has been shown this session (not reset on recompute).
     cpu_info_shown: Optional[bool] = None
 
-    # amg: needs to be initialized for the automatic segmentation functionality.
-    # auto_state: cached automatic-segmentation state (grid masks or decoder predictions) for the
-    #   3d segmentation tool. Formerly 'amg_state'; a back-compat alias property is kept below.
+    # The segmenter and its cached state for automatic segmentation. The state contains grid masks
+    # for AMG or decoder predictions for AIS and is loaded on demand for SAM2.
     # decoder: for direct prediction of instance segmentation
-    amg: Optional[AMGBase] = None
-    auto_state: Optional[Dict] = None
+    automatic_segmenter: Optional[AutoSegBase] = None
+    autoseg_state: Optional[Dict] = None
     decoder: Optional[nn.Module] = None
 
     # current_track_id, lineage, committed_lineages:
@@ -147,13 +146,13 @@ class AnnotatorState(metaclass=Singleton):
     is_vfm: Optional[bool] = None  # Whether this is a VFM (DINO / UNI) encoder (classification tools only).
 
     @property
-    def amg_state(self):
-        """Backwards-compatible alias for `auto_state` (renamed to cover AMG and AIS state)."""
-        return self.auto_state
+    def amg(self):
+        """Backwards-compatible alias for `automatic_segmenter`."""
+        return self.automatic_segmenter
 
-    @amg_state.setter
-    def amg_state(self, value):
-        self.auto_state = value
+    @amg.setter
+    def amg(self, value):
+        self.automatic_segmenter = value
 
     def initialize_predictor(
         self,
@@ -168,7 +167,7 @@ class AnnotatorState(metaclass=Singleton):
         decoder_path=None,
         tile_shape=None,
         halo=None,
-        precompute_amg_state=False,
+        precompute_autoseg_state=False,
         prefer_decoder=True,
         pbar_init=None,
         pbar_update=None,
@@ -309,36 +308,38 @@ class AnnotatorState(metaclass=Singleton):
 
         # Precompute the automatic-segmentation state (if specified). Decoder present -> AIS
         # (decoder predictions), otherwise -> AMG (grid masks); this mirrors the v1 dispatch.
-        if precompute_amg_state:
+        if precompute_autoseg_state:
             if save_path is None:
                 raise RuntimeError("Require a save path to precompute the automatic segmentation state")
 
             if self.is_sam2:
-                self._precompute_auto_state_sam2(
+                self._precompute_autoseg_state_sam2(
                     image_data, ndim, save_path, model_type, pbar_init=pbar_init, pbar_update=pbar_update,
                 )
             else:
-                self._precompute_auto_state_sam1(image_data, ndim, save_path, skip_load)
+                self._precompute_autoseg_state_sam1(image_data, ndim, save_path, skip_load)
 
-    def _precompute_auto_state_sam1(self, image_data, ndim, save_path, skip_load):
+    def _precompute_autoseg_state_sam1(self, image_data, ndim, save_path, skip_load):
         cache_state = cache_amg_state if self.decoder is None else partial(
             cache_is_state, decoder=self.decoder, skip_load=skip_load,
         )
         if ndim == 2:
-            self.amg = cache_state(
+            self.automatic_segmenter = cache_state(
                 predictor=self.predictor, raw=image_data,
                 image_embeddings=self.image_embeddings, save_path=save_path,
             )
         else:
             n_slices = image_data.shape[0] if image_data.ndim == 3 else image_data.shape[1]
-            for i in tqdm(range(n_slices), desc="Precompute auto state"):
+            for i in tqdm(range(n_slices), desc="Precompute automatic segmentation state"):
                 slice_ = np.s_[i] if image_data.ndim == 3 else np.s_[:, i]
                 cache_state(
                     predictor=self.predictor, raw=image_data[slice_],
                     image_embeddings=self.image_embeddings, save_path=save_path, i=i, verbose=False,
                 )
 
-    def _precompute_auto_state_sam2(self, image_data, ndim, save_path, model_type, pbar_init=None, pbar_update=None):
+    def _precompute_autoseg_state_sam2(
+        self, image_data, ndim, save_path, model_type, pbar_init=None, pbar_update=None,
+    ):
         model = getattr(self.predictor, "model", self.predictor)
         resolved_model_type = getattr(self.predictor, "model_type", model_type)
 
@@ -351,15 +352,15 @@ class AnnotatorState(metaclass=Singleton):
 
         if self.decoder is not None:  # AIS: decoder over the whole image / volume (per tile / z-block).
             device = next(self.decoder.parameters()).device
-            cache_ais_state_v2(
-                self.decoder, image_data, self.image_embeddings, save_path, ndim=ndim,
+            cache_autoseg_state(
+                "ais", self.decoder, image_data, self.image_embeddings, save_path, ndim=ndim,
                 model_type=resolved_model_type, device=device, pbar_init=init_cb, pbar_update=pbar_update,
             )
         elif ndim == 2:  # AMG on a single 2d image.
             if pbar_init is not None:
                 pbar_init(1, "Precompute automatic segmentation state")
-            cache_amg_state_v2(
-                model, image_data, self.image_embeddings, save_path, model_type=resolved_model_type,
+            cache_autoseg_state(
+                "amg", model, image_data, self.image_embeddings, save_path, model_type=resolved_model_type,
             )
             if pbar_update is not None:
                 pbar_update(1)
@@ -367,11 +368,13 @@ class AnnotatorState(metaclass=Singleton):
             n_slices = image_data.shape[0] if image_data.ndim == 3 else image_data.shape[1]
             if pbar_init is not None:
                 pbar_init(n_slices, "Precompute automatic segmentation state")
-            iterator = range(n_slices) if pbar_init is not None else tqdm(range(n_slices), desc="Precompute auto state")
+            iterator = range(n_slices) if pbar_init is not None else tqdm(
+                range(n_slices), desc="Precompute automatic segmentation state",
+            )
             for i in iterator:
                 slice_ = np.s_[i] if image_data.ndim == 3 else np.s_[:, i]
-                cache_amg_state_v2(
-                    model, image_data[slice_], self.image_embeddings, save_path,
+                cache_autoseg_state(
+                    "amg", model, image_data[slice_], self.image_embeddings, save_path,
                     model_type=resolved_model_type, i=i, verbose=False,
                 )
                 if pbar_update is not None:
@@ -455,8 +458,8 @@ class AnnotatorState(metaclass=Singleton):
         self.ndim = None
         self.image_name = None
         self.embedding_path = None
-        self.amg = None
-        self.auto_state = None
+        self.automatic_segmenter = None
+        self.autoseg_state = None
         self.decoder = None
         self.current_track_id = None
         self.lineage = None

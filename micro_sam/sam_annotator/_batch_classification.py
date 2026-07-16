@@ -68,7 +68,7 @@ class ClassificationBatchTask(BatchAnnotatorTask):
         kwargs = {"predictor": state.predictor} if (reuse and state.predictor is not None) else {}
         state.initialize_predictor(
             image, model_type=self.model_type, save_path=embedding_path, halo=self.halo,
-            tile_shape=self.tile_shape, precompute_amg_state=False, ndim=self.ndim,
+            tile_shape=self.tile_shape, precompute_autoseg_state=False, ndim=self.ndim,
             checkpoint_path=self.checkpoint_path, device=self.device, skip_load=False, use_cli=True, **kwargs,
         )
         state.image_shape = image.shape if image.ndim == self.ndim else image.shape[:-1]

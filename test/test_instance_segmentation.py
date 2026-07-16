@@ -1,6 +1,7 @@
 import unittest
 from copy import deepcopy
 
+import pytest
 import micro_sam.util as util
 from micro_sam.v1.util import get_sam_model, precompute_image_embeddings
 import numpy as np
@@ -148,6 +149,44 @@ class TestInstanceSegmentation(unittest.TestCase):
             TiledAutomaticPromptGenerator, generate_kwargs=generate_kwargs,
             with_decoder=True, with_tiling=True, check_init=False,
         )
+
+
+def test_autoseg_base_hierarchy_and_contract():
+    """AutoSegBase is the common ABC for both the grid (AMG) and decoder-based families; every leaf
+    generator is a subclass exposing the shared contract, and the abstract bases cannot be built."""
+    from micro_sam.v1.instance_segmentation import (
+        AutoSegBase, AMGBase, AutomaticMaskGenerator, TiledAutomaticMaskGenerator,
+        InstanceSegmentationWithDecoder, TiledInstanceSegmentationWithDecoder,
+        AutomaticPromptGenerator, TiledAutomaticPromptGenerator,
+    )
+
+    # Both family bases descend from the common interface.
+    assert issubclass(AMGBase, AutoSegBase)
+    assert issubclass(InstanceSegmentationWithDecoder, AutoSegBase)
+
+    # Every concrete generator is an AutoSegBase and exposes the full contract.
+    contract = ("is_initialized", "initialize", "generate", "get_state", "set_state", "clear_state")
+    leaves = [
+        AutomaticMaskGenerator, TiledAutomaticMaskGenerator,
+        InstanceSegmentationWithDecoder, TiledInstanceSegmentationWithDecoder,
+        AutomaticPromptGenerator, TiledAutomaticPromptGenerator,
+    ]
+    import inspect
+    for cls in leaves:
+        assert issubclass(cls, AutoSegBase)
+        assert all(hasattr(cls, member) for member in contract)
+        assert not inspect.isabstract(cls)  # every leaf implements the full contract -> instantiable
+
+    # The abstract bases cannot be instantiated (initialize / generate stay abstract).
+    assert inspect.isabstract(AutoSegBase) and inspect.isabstract(AMGBase)
+    with pytest.raises(TypeError):
+        AutoSegBase()
+    with pytest.raises(TypeError):
+        AMGBase()
+
+    # A concrete decoder segmenter constructs without model work and is an AutoSegBase.
+    seg = InstanceSegmentationWithDecoder(predictor=None, decoder=None)
+    assert isinstance(seg, AutoSegBase) and seg.is_initialized is False
 
 
 if __name__ == "__main__":

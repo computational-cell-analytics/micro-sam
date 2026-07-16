@@ -31,7 +31,7 @@ def cache_amg_state(
     verbose: bool = True,
     i: Optional[int] = None,
     **kwargs,
-) -> instance_segmentation.AMGBase:
+) -> instance_segmentation.AutoSegBase:
     """Compute and cache or load the state for the automatic mask generator.
 
     Args:
@@ -96,7 +96,7 @@ def cache_is_state(
     i: Optional[int] = None,
     skip_load: bool = False,
     **kwargs,
-) -> Optional[instance_segmentation.AMGBase]:
+) -> Optional[instance_segmentation.AutoSegBase]:
     """Compute and cache or load the state for the automatic mask generator.
 
     Args:
@@ -154,17 +154,41 @@ def cache_is_state(
     return amg
 
 
-def _auto_state_path(save_path, mode, i):
-    """Resolve the on-disk path (and h5 key) for the cached SAM2 automatic-segmentation state.
+AUTOSEG_STATE_GROUP = "autoseg_state"
+AUTOSEG_STATE_ATTRIBUTE = "autoseg_state"
+AUTOSEG_STATE_VERSION = 1
 
-    'mode' is 'amg' (grid masks, pickled) or 'ais' (decoder predictions, h5). 'i' selects a
-    per-slice entry for a volume, or the whole image / volume when None.
-    """
-    if mode == "amg":
-        if i is None:
-            return os.path.join(save_path, "auto_state_amg.pickle"), None
-        return os.path.join(save_path, "auto_state_amg", f"state-{i}.pkl"), None
-    return os.path.join(save_path, "auto_state_ais.h5"), ("state" if i is None else f"state-{i}")
+
+def _autoseg_state_key(i):
+    """Return the Zarr key for a whole-image/volume state or a per-slice state."""
+    return "state" if i is None else f"state-{i}"
+
+
+def _get_autoseg_state_group(embeddings, mode, create=False):
+    """Return the mode-specific state group from an open embedding Zarr."""
+    if mode not in ("amg", "ais"):
+        raise ValueError(f"Invalid automatic segmentation mode: {mode}")
+
+    if create:
+        root = embeddings.require_group(AUTOSEG_STATE_GROUP)
+        group = root.require_group(mode)
+        group.attrs["version"] = AUTOSEG_STATE_VERSION
+        return group
+
+    if AUTOSEG_STATE_GROUP not in embeddings:
+        return None
+    root = embeddings[AUTOSEG_STATE_GROUP]
+    return root.get(mode, None)
+
+
+def _record_autoseg_state(embeddings, mode, group):
+    """Record which automatic-segmentation states are present in the embedding metadata."""
+    modes = embeddings.attrs.get(AUTOSEG_STATE_ATTRIBUTE, [])
+    if isinstance(modes, str):
+        modes = [modes]
+    modes = sorted(set(modes) | {mode})
+    embeddings.attrs[AUTOSEG_STATE_ATTRIBUTE] = modes
+    group.attrs["state_count"] = len(group)
 
 
 # Embedding metadata that defines the identity of the embeddings the state was computed from. If any
@@ -193,43 +217,87 @@ def _signature_matches(cached, requested):
     return cached is None or requested is None or cached == requested
 
 
-def _save_amg_state_v2(segmenter, path, embedding_signature=None):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+def _save_amg_state_v2(segmenter, save_path, key, embedding_signature=None):
+    """Serialize an AMG state as a byte array inside the embedding Zarr."""
     state = segmenter.get_state()
-    state["embedding_signature"] = embedding_signature
-    with open(path, "wb") as f:
-        pickle.dump(state, f)
+    payload = np.frombuffer(pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL), dtype="uint8")
+
+    embeddings = util._open_embeddings(save_path, mode="a")
+    group = _get_autoseg_state_group(embeddings, "amg", create=True)
+    if key in group:
+        del group[key]
+    chunks = (min(len(payload), 1024 ** 2),)
+    dataset = util._create_dataset_with_data(group, key, data=payload, chunks=chunks)
+    if embedding_signature is not None:
+        dataset.attrs["embedding_signature"] = embedding_signature
+    _record_autoseg_state(embeddings, "amg", group)
 
 
-def _load_amg_state_v2(path):
-    with open(path, "rb") as f:
-        return pickle.load(f)
+def _load_amg_state_v2(save_path, key):
+    """Load one AMG state from the embedding Zarr, without touching other slice states."""
+    embeddings = util._open_embeddings(save_path, mode="r")
+    group = _get_autoseg_state_group(embeddings, "amg")
+    if group is None or key not in group:
+        return None
+    dataset = group[key]
+    state = pickle.loads(np.asarray(dataset[:], dtype="uint8").tobytes())
+    state["embedding_signature"] = dataset.attrs.get("embedding_signature", None)
+    return state
 
 
-def _save_ais_state_v2(segmenter, path, key, model_type, embedding_signature=None):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with h5py.File(path, "a") as f:
-        if key in f:
-            del f[key]
-        g = f.create_group(key)
-        g.create_dataset("prediction", data=segmenter.get_state()["prediction"], compression="gzip")
-        # Record which model produced the prediction so it is not reused with a different decoder.
-        if model_type is not None:
-            g.attrs["model_type"] = model_type
-        if embedding_signature is not None:
-            g.attrs["embedding_signature"] = embedding_signature
+def _save_ais_state_v2(segmenter, save_path, key, model_type, embedding_signature=None):
+    """Store decoder predictions as an array inside the embedding Zarr."""
+    prediction = segmenter.get_state()["prediction"]
+    embeddings = util._open_embeddings(save_path, mode="a")
+    group = _get_autoseg_state_group(embeddings, "ais", create=True)
+    if key in group:
+        del group[key]
+    state_group = group.create_group(key)
+
+    # Keep channel and z chunks independent so writing and later reading volumetric predictions
+    # does not require materializing one very large compressed chunk.
+    chunks = list(prediction.shape)
+    chunks[0] = 1
+    if prediction.ndim == 4:
+        chunks[1] = 1
+    chunks[-2] = min(chunks[-2], 512)
+    chunks[-1] = min(chunks[-1], 512)
+    util._create_dataset_with_data(state_group, "prediction", data=prediction, chunks=tuple(chunks))
+
+    # Record which model produced the prediction so it is not reused with a different decoder.
+    if model_type is not None:
+        state_group.attrs["model_type"] = model_type
+    if embedding_signature is not None:
+        state_group.attrs["embedding_signature"] = embedding_signature
+    _record_autoseg_state(embeddings, "ais", group)
 
 
-def _load_ais_state_v2(path, key):
-    with h5py.File(path, "r") as f:
-        if key not in f:
-            return None
-        g = f[key]
-        return {
-            "prediction": g["prediction"][:],
-            "model_type": g.attrs.get("model_type", None),
-            "embedding_signature": g.attrs.get("embedding_signature", None),
-        }
+def _load_ais_state_v2(save_path, key):
+    """Load one AIS prediction from the embedding Zarr on demand."""
+    embeddings = util._open_embeddings(save_path, mode="r")
+    group = _get_autoseg_state_group(embeddings, "ais")
+    if group is None or key not in group:
+        return None
+    state_group = group[key]
+    return {
+        "prediction": state_group["prediction"][:],
+        "model_type": state_group.attrs.get("model_type", None),
+        "embedding_signature": state_group.attrs.get("embedding_signature", None),
+    }
+
+
+def _has_autoseg_state(save_path, mode, state_count=1):
+    """Check cache completeness from Zarr metadata without loading state arrays or bitstreams."""
+    if save_path is None or not os.path.exists(save_path):
+        return False
+    try:
+        embeddings = util._open_embeddings(save_path, mode="r")
+        group = _get_autoseg_state_group(embeddings, mode)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    if group is None:
+        return False
+    return int(group.attrs.get("state_count", len(group))) >= state_count
 
 
 def _ais_state_matches(state, model_type):
@@ -243,7 +311,52 @@ def _ais_state_matches(state, model_type):
     return cached is None or model_type is None or cached == model_type
 
 
-def cache_amg_state_v2(
+def cache_autoseg_state(mode, model_or_decoder, raw, image_embeddings, save_path, **kwargs):
+    """Compute, cache or load the SAM2 automatic-segmentation state for one image / slice / volume.
+
+    A single entry point over the two modes; both reuse a matching cached state instead of recomputing.
+        - 'amg': grid-based mask generation. `model_or_decoder` is the SAM2 model; extra kwargs are the
+          AMG parameters (see `_cache_amg_state_v2`).
+        - 'ais': UniSAM2 decoder prediction. `model_or_decoder` is the decoder; `ndim` is required
+          (see `_cache_ais_state_v2`).
+
+    Args:
+        mode: The automatic-segmentation mode, 'amg' or 'ais'.
+        model_or_decoder: The SAM2 model (AMG) or the UniSAM2 decoder (AIS).
+        raw: The image data.
+        image_embeddings: The (optionally precomputed) image embeddings.
+        save_path: The embedding save path used to store the state, or None to skip caching.
+        kwargs: Mode-specific keyword arguments forwarded to the underlying cache function.
+
+    Returns:
+        The segmenter with the (cached or freshly computed) state set.
+    """
+    if mode == "amg":
+        return _cache_amg_state_v2(model_or_decoder, raw, image_embeddings, save_path, **kwargs)
+    if mode == "ais":
+        return _cache_ais_state_v2(model_or_decoder, raw, image_embeddings, save_path, **kwargs)
+    raise ValueError(f"Invalid automatic-segmentation state mode: {mode!r} (expected 'amg' or 'ais').")
+
+
+def _save_autoseg_state(mode, segmenter, save_path, key, **kwargs):
+    """Save an autoseg state into the embedding Zarr: 'amg' as pickled masks, 'ais' as a decoder array."""
+    if mode == "amg":
+        return _save_amg_state_v2(segmenter, save_path, key, **kwargs)
+    if mode == "ais":
+        return _save_ais_state_v2(segmenter, save_path, key, **kwargs)
+    raise ValueError(f"Invalid automatic-segmentation state mode: {mode!r} (expected 'amg' or 'ais').")
+
+
+def _load_autoseg_state(mode, save_path, key):
+    """Load one autoseg state (AMG masks or AIS prediction) from the embedding Zarr, or None if absent."""
+    if mode == "amg":
+        return _load_amg_state_v2(save_path, key)
+    if mode == "ais":
+        return _load_ais_state_v2(save_path, key)
+    raise ValueError(f"Invalid automatic-segmentation state mode: {mode!r} (expected 'amg' or 'ais').")
+
+
+def _cache_amg_state_v2(
     model: torch.nn.Module,
     raw: np.ndarray,
     image_embeddings: Optional[dict],
@@ -264,10 +377,10 @@ def cache_amg_state_v2(
 ):
     """Compute and cache, or load, the SAM2 grid-based (AMG) automatic-segmentation state.
 
-    The SAM2 counterpart of `cache_amg_state`. The state (the predicted masks) is stored next to
-    the embeddings at 'save_path/auto_state_amg.pickle' (or 'auto_state_amg/state-{i}.pkl' for a
-    slice). A cached state is reused only if it was computed with the same AMG parameters, otherwise
-    it is recomputed and overwritten. Pass 'save_path=None' to compute in memory without caching.
+    The SAM2 counterpart of `cache_amg_state`. The state (the predicted masks) is stored in the
+    embedding Zarr under 'autoseg_state/amg'. A cached state is reused only if it was
+    computed with the same AMG parameters; otherwise it is recomputed and overwritten. Pass
+    'save_path=None' to compute in memory without caching.
 
     Args:
         model: The SAM2 model, loaded via `micro_sam.v2.util.get_sam2_model`.
@@ -304,17 +417,17 @@ def cache_amg_state_v2(
     )
 
     key_index = i if state_index is None else state_index
-    path, signature = None, None
+    key, signature = None, None
     if save_path is not None:
-        path, _ = _auto_state_path(save_path, "amg", key_index)
+        key = _autoseg_state_key(key_index)
         signature = _embedding_signature(save_path)
-        if os.path.exists(path):
-            state = _load_amg_state_v2(path)
+        state = _load_amg_state_v2(save_path, key)
+        if state is not None:
             matches = state.get("params") == segmenter._amg_params
             matches = matches and _signature_matches(state.get("embedding_signature"), signature)
             if matches:
                 if verbose:
-                    print("Load the AMG state from", path)
+                    print("Load the AMG state from", save_path, ":", key)
                 segmenter.set_state(state)
                 return segmenter
 
@@ -326,8 +439,8 @@ def cache_amg_state_v2(
         raw, image_embeddings=image_embeddings, i=i, verbose=verbose,
         pbar_init=pbar_init, pbar_update=pbar_update, **init_kwargs,
     )
-    if path is not None:
-        _save_amg_state_v2(segmenter, path, embedding_signature=signature)
+    if key is not None:
+        _save_amg_state_v2(segmenter, save_path, key, embedding_signature=signature)
     return segmenter
 
 
@@ -337,19 +450,19 @@ def _cache_amg_slice(segmenter, save_path, i, init_fn, embedding_signature=None)
     Used by `micro_sam.v2.instance_segmentation.automatic_3d_segmentation` to cache the per-slice
     grid-prediction state of a volume. `init_fn(i)` runs the (expensive) `initialize` for the slice.
     """
-    path, _ = _auto_state_path(save_path, "amg", i)
-    if os.path.exists(path):
-        state = _load_amg_state_v2(path)
+    key = _autoseg_state_key(i)
+    state = _load_amg_state_v2(save_path, key)
+    if state is not None:
         matches = state.get("params") == segmenter._amg_params
         matches = matches and _signature_matches(state.get("embedding_signature"), embedding_signature)
         if matches:
             segmenter.set_state(state)
             return
     init_fn(i)
-    _save_amg_state_v2(segmenter, path, embedding_signature=embedding_signature)
+    _save_amg_state_v2(segmenter, save_path, key, embedding_signature=embedding_signature)
 
 
-def cache_ais_state_v2(
+def _cache_ais_state_v2(
     decoder: torch.nn.Module,
     raw: np.ndarray,
     image_embeddings: Optional[dict],
@@ -371,9 +484,10 @@ def cache_ais_state_v2(
     """Compute and cache, or load, the SAM2 decoder-based (AIS) automatic-segmentation state.
 
     The SAM2 counterpart of `cache_is_state`, using the UniSAM2 decoder. The state (the foreground
-    and directed-distance predictions) is stored next to the embeddings at 'save_path/auto_state_ais.h5'
-    under the key 'state' (whole image / volume) or 'state-{i}' (a slice). It is independent of the
-    post-processing parameters, so it is always reusable. Pass 'save_path=None' to skip caching.
+    and directed-distance predictions) is stored in the embedding Zarr under
+    'autoseg_state/ais', using the key 'state' (whole image / volume) or 'state-{i}'
+    (a slice). It is independent of the post-processing parameters, so it is always reusable. Pass
+    'save_path=None' to skip caching.
 
     Args:
         decoder: The UniSAM2 model, loaded via `micro_sam.v2.automatic_segmentation.get_unisam2_model`.
@@ -407,16 +521,16 @@ def cache_ais_state_v2(
     segmenter = get_unisam2_segmentation_generator(decoder, is_tiled=is_tiled, device=device)
 
     key_index = i if state_index is None else state_index
-    path, key, signature = None, None, None
+    key, signature = None, None
     if save_path is not None:
-        path, key = _auto_state_path(save_path, "ais", key_index)
+        key = _autoseg_state_key(key_index)
         signature = _embedding_signature(save_path)
-        state = _load_ais_state_v2(path, key) if os.path.exists(path) else None
+        state = _load_ais_state_v2(save_path, key)
         matches = state is not None and _ais_state_matches(state, model_type)
         matches = matches and _signature_matches(state.get("embedding_signature"), signature)
         if matches:
             if verbose:
-                print("Load instance segmentation state from", path, ":", key)
+                print("Load instance segmentation state from", save_path, ":", key)
             segmenter.set_state(state)
             return segmenter
 
@@ -427,8 +541,8 @@ def cache_ais_state_v2(
         raw, ndim, image_embeddings=image_embeddings, i=i, tile_shape=tile_shape, halo=halo,
         z_block=z_block, z_halo=z_halo, pbar_init=pbar_init, pbar_update=pbar_update,
     )
-    if path is not None:
-        _save_ais_state_v2(segmenter, path, key, model_type, embedding_signature=signature)
+    if key is not None:
+        _save_ais_state_v2(segmenter, save_path, key, model_type, embedding_signature=signature)
     return segmenter
 
 
@@ -456,22 +570,26 @@ def _resolve_unisam2_decoder(model_type, checkpoint_path, device):
         return None
 
 
-def _cache_auto_state_for_file(predictor, decoder, model_type, image_data, embeddings, save_path, ndim, verbose):
+def _cache_autoseg_state_for_file(
+    predictor, decoder, model_type, image_data, embeddings, save_path, ndim, verbose,
+):
     """Cache the SAM2 automatic-segmentation state for one file: AIS if a decoder is given, else AMG."""
     if decoder is not None:  # AIS segments the whole image / volume in one pass.
         device = next(decoder.parameters()).device
-        cache_ais_state_v2(
-            decoder, image_data, embeddings, save_path, ndim=ndim, model_type=model_type,
+        cache_autoseg_state(
+            "ais", decoder, image_data, embeddings, save_path, ndim=ndim, model_type=model_type,
             device=device, verbose=verbose,
         )
     elif ndim == 2:  # AMG on a single 2d image.
         model = getattr(predictor, "model", predictor)
-        cache_amg_state_v2(model, image_data, embeddings, save_path, model_type=model_type, verbose=verbose)
+        cache_autoseg_state("amg", model, image_data, embeddings, save_path, model_type=model_type, verbose=verbose)
     else:  # AMG on a volume: cache the per-slice grid state, reusing the 3d embeddings.
         model = getattr(predictor, "model", predictor)
         n = image_data.shape[0]
-        for i in tqdm(range(n), total=n, desc="Precompute auto state", disable=not verbose):
-            cache_amg_state_v2(model, image_data[i], embeddings, save_path, model_type=model_type, i=i, verbose=False)
+        for i in tqdm(range(n), total=n, desc="Precompute automatic segmentation state", disable=not verbose):
+            cache_autoseg_state(
+                "amg", model, image_data[i], embeddings, save_path, model_type=model_type, i=i, verbose=False,
+            )
 
 
 def precompute_state(
@@ -482,7 +600,7 @@ def precompute_state(
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     key: Optional[str] = None,
     ndim: Optional[int] = None,
-    precompute_auto_state: bool = False,
+    precompute_autoseg_state: bool = False,
     prefer_decoder: bool = True,
 ) -> None:
     """Precompute and cache the image embeddings (and, optionally, the automatic-segmentation state).
@@ -506,7 +624,7 @@ def precompute_state(
         key: The key to the input file. This is needed for container files (e.g. hdf5 or zarr)
             or to load several images as 3d volume. Provide a glob pattern, e.g. "*.tif", for this case.
         ndim: The dimensionality of the data. By default, computed from the input data.
-        precompute_auto_state: Whether to also precompute the automatic-segmentation state next to the
+        precompute_autoseg_state: Whether to also precompute the automatic-segmentation state in the
             embeddings (a longer start-up in exchange for a faster first automatic segmentation).
             Supported for SAM2 ('hvit_*') models.
         prefer_decoder: Whether to use the decoder-based state (AIS) when the SAM2 model has a decoder,
@@ -516,10 +634,11 @@ def precompute_state(
     from micro_sam.sam_annotator._state import _get_sam_model
 
     is_sam2 = model_type.startswith("h")
-    if precompute_auto_state and not is_sam2:
+    if precompute_autoseg_state and not is_sam2:
         raise ValueError(
             "Precomputing the automatic-segmentation state via 'precompute_state' is only supported for "
-            "SAM2 ('hvit_*') models. For SAM1 use the annotator command with '--precompute_amg_state'."
+            "SAM2 ('hvit_*') models. For SAM1 use the annotator command with "
+            "'--precompute_autoseg_state'."
         )
 
     # Dispatch to the embedding function for the model family (SAM1 / SAM2 / VFM). All share the same
@@ -528,7 +647,7 @@ def precompute_state(
 
     # Resolve the UniSAM2 decoder once (AIS); when none is available the state is cached with AMG.
     decoder = None
-    if precompute_auto_state and prefer_decoder:
+    if precompute_autoseg_state and prefer_decoder:
         decoder = _resolve_unisam2_decoder(model_type, checkpoint_path, device=None)
 
     # Determine the input files and matching output embedding paths.
@@ -563,7 +682,7 @@ def precompute_state(
             predictor=predictor, input_=image_data, save_path=save_path, ndim=file_ndim, verbose=single
         )
 
-        if precompute_auto_state:
-            _cache_auto_state_for_file(
+        if precompute_autoseg_state:
+            _cache_autoseg_state_for_file(
                 predictor, decoder, model_type, image_data, embeddings, save_path, file_ndim, verbose=single,
             )

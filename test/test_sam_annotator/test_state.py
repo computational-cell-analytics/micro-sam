@@ -29,6 +29,17 @@ class TestState(unittest.TestCase):
         self.assertTrue(state.initialized_for_tracking())
 
 
+def test_autoseg_state_is_the_only_state_name():
+    """The cached automatic-segmentation state is named 'autoseg_state' only; the former 'amg_state'
+    and 'auto_state' aliases were removed."""
+    from micro_sam.sam_annotator._state import AnnotatorState
+
+    state = AnnotatorState()
+    assert hasattr(state, "autoseg_state")  # canonical name
+    assert not hasattr(state, "amg_state")  # old aliases gone
+    assert not hasattr(state, "auto_state")
+
+
 def test_blank_model_paths_are_normalized(monkeypatch):
     """Blank API paths must fall back to the registered model instead of being loaded as files."""
     import micro_sam.sam_annotator._state as state_module

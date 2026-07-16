@@ -16,7 +16,7 @@ from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy, matching
 
 from ..util import precompute_image_embeddings
-from ..instance_segmentation import AMGBase, InstanceSegmentationWithDecoder
+from ..instance_segmentation import AutoSegBase
 
 
 def _get_range_of_search_values(input_vals, step):
@@ -169,7 +169,7 @@ def default_grid_search_values_apg(
 
 
 def _grid_search_iteration(
-    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
+    segmenter: AutoSegBase,
     gs_combinations: List[Dict],
     gt: np.ndarray,
     image_name: str,
@@ -216,7 +216,7 @@ def _load_image(path, key, roi):
 
 
 def run_instance_segmentation_grid_search(
-    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
+    segmenter: AutoSegBase,
     grid_search_values: Dict[str, List],
     image_paths: List[Union[str, os.PathLike]],
     gt_paths: List[Union[str, os.PathLike]],
@@ -322,7 +322,7 @@ def run_instance_segmentation_grid_search(
 
 
 def run_instance_segmentation_inference(
-    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
+    segmenter: AutoSegBase,
     image_paths: List[Union[str, os.PathLike]],
     embedding_dir: Optional[Union[str, os.PathLike]],
     prediction_dir: Union[str, os.PathLike],
@@ -429,7 +429,7 @@ def save_grid_search_best_params(best_kwargs, best_msa, grid_search_result_dir=N
 
 
 def run_instance_segmentation_grid_search_and_inference(
-    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
+    segmenter: AutoSegBase,
     grid_search_values: Dict[str, List],
     val_image_paths: List[Union[str, os.PathLike]],
     val_gt_paths: List[Union[str, os.PathLike]],

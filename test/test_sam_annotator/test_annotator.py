@@ -443,6 +443,91 @@ class TestZTilingControls:
         viewer.close()
 
 
+class TestAutoSegVolumeDispatch:
+    """'Apply to volume' decides the run dimensionality of automatic segmentation on a 3d volume:
+    off -> only the current slice (2d); on -> the whole volume (3d), segmented slice by slice.
+    This is what makes the state caching happen per-slice, on demand."""
+
+    def _dispatch(self, monkeypatch, *, apply_to_volume, current_slice=2):
+        from types import SimpleNamespace
+        from micro_sam.sam_annotator import _widgets
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        volume = np.zeros((5, 16, 16), dtype="float32")
+        auto_layer = SimpleNamespace(data=np.zeros((5, 16, 16), dtype="uint32"), refresh=lambda: None)
+        viewer = SimpleNamespace(
+            layers={"image": SimpleNamespace(data=volume), "auto_segmentation": auto_layer},
+            dims=SimpleNamespace(point=(current_slice, 0, 0)),
+        )
+
+        calls = {}
+
+        def fake_run_amg(state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
+            calls.update(run_raw_shape=tuple(run_raw.shape), ndim=ndim, z=z)
+            return np.zeros(run_raw.shape if ndim == 3 else run_raw.shape[-2:], dtype="uint32")
+
+        # Duck-typed stand-in so we exercise the '__call__' dispatch without instantiating a QWidget.
+        widget = SimpleNamespace(
+            _viewer=viewer, mode="amg", volumetric=True, apply_to_volume=apply_to_volume,
+            _run_amg=fake_run_amg,
+        )
+
+        def fake_pbar():
+            signal = lambda: SimpleNamespace(emit=lambda *a, **k: None)  # noqa
+            signals = SimpleNamespace(
+                pbar_total=signal(), pbar_description=signal(), pbar_update=signal(), pbar_stop=signal(),
+            )
+            return SimpleNamespace(), signals
+
+        monkeypatch.setattr(_widgets, "AnnotatorState", lambda: SimpleNamespace(get_image_name=lambda v: "image"))
+        monkeypatch.setattr(_widgets, "_validate_layers", lambda *a, **k: False)
+        monkeypatch.setattr(_widgets, "_validate_embeddings", lambda *a, **k: False)
+        monkeypatch.setattr(_widgets, "_select_layer", lambda *a, **k: None)
+        monkeypatch.setattr(_widgets, "_create_pbar_for_threadworker", fake_pbar)
+        monkeypatch.setattr(
+            _widgets, "QtWidgets",
+            SimpleNamespace(QApplication=SimpleNamespace(processEvents=lambda *a, **k: None)),
+        )
+
+        AutoSegmentWidget.__call__(widget)
+        return calls
+
+    def test_apply_to_volume_off_runs_current_slice_only(self, monkeypatch):
+        calls = self._dispatch(monkeypatch, apply_to_volume=False, current_slice=2)
+        assert calls["ndim"] == 2  # a single 2d slice, not the whole volume
+        assert calls["z"] == 2  # the currently viewed slice
+        assert calls["run_raw_shape"] == (16, 16)
+
+    def test_apply_to_volume_on_runs_whole_volume(self, monkeypatch):
+        calls = self._dispatch(monkeypatch, apply_to_volume=True)
+        assert calls["ndim"] == 3  # the whole volume, segmented slice by slice
+        assert calls["z"] is None
+        assert calls["run_raw_shape"] == (5, 16, 16)
+
+
+class TestAutoSegStatePersistence:
+    """By default (caching off) auto-seg persists no state, so the embedding zarr gets no
+    'autoseg_state' group; it is written only when the user opts in. '_state_save_path'
+    is the gate: None means in-memory only, a path means persist into the embedding zarr."""
+
+    def _state_save_path(self, cache_state, embedding_path="/tmp/e.zarr", with_widget=True):
+        from types import SimpleNamespace
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        widgets = {"embeddings": SimpleNamespace(cache_state=cache_state)} if with_widget else {}
+        state = SimpleNamespace(widgets=widgets, embedding_path=embedding_path)
+        return AutoSegmentWidget._state_save_path(SimpleNamespace(), state)
+
+    def test_no_persist_by_default(self):
+        assert self._state_save_path(cache_state=False) is None  # default: in-memory only, no zarr group
+
+    def test_persist_when_opted_in(self):
+        assert self._state_save_path(cache_state=True) == "/tmp/e.zarr"
+
+    def test_no_persist_without_embedding_widget(self):
+        assert self._state_save_path(cache_state=True, with_widget=False) is None
+
+
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 class TestAutoSegDefaultMode:

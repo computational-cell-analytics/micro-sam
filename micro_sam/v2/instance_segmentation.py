@@ -560,9 +560,9 @@ def automatic_3d_segmentation(
         halo: The overlap between the tiles, (y, x). By default 'None'.
         image_embeddings: Optional precomputed 3d (video-style) embeddings for the volume. When given
             (and not tiled), each slice's AMG reuses the precomputed features instead of re-encoding.
-        state_save_path: Optional path (the embedding zarr) to cache the per-slice grid-prediction
-            state under 'auto_state_amg/'. When set, a slice reuses its cached state instead of
-            re-running the grid prediction; freshly computed slices are written back.
+        state_save_path: Optional path to the embedding Zarr in which to cache the per-slice
+            grid-prediction state. When set, a slice reuses its cached state instead of re-running
+            the grid prediction; freshly computed slices are written back.
         verbose: Verbosity flag. By default 'True'.
         pbar_init: Callback to initialize an external progress bar, called with the number of slices.
         pbar_update: Callback to update an external progress bar, called once per segmented slice.

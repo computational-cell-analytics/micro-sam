@@ -1286,13 +1286,13 @@ def _load_is_state(embedding_path):
     return is_state
 
 
-def _load_auto_state(embedding_path, mode):
-    """Descriptor of the SAM2 automatic-segmentation state cache next to the embeddings.
+def _autoseg_state_descriptor(embedding_path, mode):
+    """Descriptor of the SAM2 automatic-segmentation state cache in the embedding Zarr.
 
-    Returns the cache directory and mode ('amg' or 'ais'); the state itself is loaded on demand by
-    `micro_sam.precompute_state.cache_amg_state_v2` / `cache_ais_state_v2`. The SAM2 automatic
-    segmentation widget reads/writes the cache directly, so this only records where it lives.
+    Returns the embedding path and mode ('amg' or 'ais'); the state itself is loaded on demand by
+    `micro_sam.precompute_state.cache_autoseg_state`. The SAM2 automatic segmentation widget
+    reads/writes the cache directly, so this only records where it lives.
     """
     if embedding_path is None or not os.path.exists(embedding_path):
-        return {"cache_dir": None, "mode": mode}
-    return {"cache_dir": embedding_path, "mode": mode}
+        return {"embedding_path": None, "mode": mode}
+    return {"embedding_path": embedding_path, "mode": mode}
