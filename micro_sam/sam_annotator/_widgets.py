@@ -2188,6 +2188,10 @@ class EmbeddingWidget(_WidgetBase):
             def pbar_init(total, description):
                 if self.is_timeseries:  # A timeseries goes through the 3D compute path; relabel it.
                     description = description.replace("3D", "Timeseries")
+                # Reset the counter to 0 so each phase starts fresh: the embeddings, then (when caching
+                # is on) the automatic-segmentation state precompute reuse the same bar, and without a
+                # reset the second phase inherits the first's completed count and sits stuck at full.
+                pbar_signals.pbar_reset.emit()
                 pbar_signals.pbar_total.emit(total)
                 pbar_signals.pbar_description.emit(description)
                 QtWidgets.QApplication.processEvents()

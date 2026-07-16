@@ -342,11 +342,18 @@ class AnnotatorState(metaclass=Singleton):
         model = getattr(self.predictor, "model", self.predictor)
         resolved_model_type = getattr(self.predictor, "model_type", model_type)
 
-        if self.decoder is not None:  # AIS: the decoder segments the whole image / volume in one pass.
+        # The decoder / AMG functions drive the bar per tile / slice / z-block, but label it as if it
+        # were the actual run. Relabel it with a single clear description while keeping the real unit
+        # total, so the precompute phase (after the embeddings) reads meaningfully.
+        def relabel_pbar_init(total, _description):
+            pbar_init(total, "Precompute automatic segmentation state")
+        init_cb = relabel_pbar_init if pbar_init is not None else None
+
+        if self.decoder is not None:  # AIS: decoder over the whole image / volume (per tile / z-block).
             device = next(self.decoder.parameters()).device
             cache_ais_state_v2(
                 self.decoder, image_data, self.image_embeddings, save_path, ndim=ndim,
-                model_type=resolved_model_type, device=device, pbar_init=pbar_init, pbar_update=pbar_update,
+                model_type=resolved_model_type, device=device, pbar_init=init_cb, pbar_update=pbar_update,
             )
         elif ndim == 2:  # AMG on a single 2d image.
             if pbar_init is not None:
