@@ -294,11 +294,12 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     data (data signature mismatch).
     """
     # We may have an empty zarr file that was already created to save the embeddings in. A
-    # feature-bearing file without the completion metadata is a partial cache: only resume it when
-    # it already records the current normalization policy. Otherwise it may contain legacy min-max
-    # features, which must not be mixed with newly computed percentile-normalized features.
+    # feature-bearing file without the completion metadata is a partial cache: only reject it when
+    # it explicitly records a different normalization policy. Caches without this metadata predate
+    # percentile normalization and therefore use the restored min-max policy.
     if "input_size" not in f.attrs:
-        return "features" in f and f.attrs.get("normalization") != RAW_NORMALIZATION
+        normalization = f.attrs.get("normalization")
+        return "features" in f and normalization is not None and normalization != RAW_NORMALIZATION
 
     # Creates all the metadta that is stored along with the embeddings.
     # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam.v2`?
@@ -308,9 +309,9 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
 
     stale = False
     for key, val in signature.items():
-        # Embeddings without normalization metadata used the former min-max policy.
+        # Embeddings without normalization metadata predate percentile normalization and used the
+        # same min-max policy as the released checkpoints, so they remain compatible.
         if key not in f.attrs:
-            stale = stale or key == "normalization"
             continue
         if f.attrs[key] == val:
             continue
