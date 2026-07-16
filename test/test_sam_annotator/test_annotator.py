@@ -512,3 +512,14 @@ class TestAutoSegDefaultMode:
         assert autoseg.sigma == defaults["sigma"]
         assert autoseg.n_iter == defaults["n_iter"]
         assert autoseg.dt == defaults["dt"]
+
+    def test_embedding_recompute_clears_cached_prediction(self):
+        from types import SimpleNamespace
+
+        from micro_sam.sam_annotator._widgets import EmbeddingWidget
+
+        autosegment = SimpleNamespace(_segmenter=object(), _segmenter_key=object())
+        state = SimpleNamespace(widgets={"autosegment": autosegment})
+        EmbeddingWidget._clear_autosegment_cache(state)
+        assert autosegment._segmenter is None
+        assert autosegment._segmenter_key is None

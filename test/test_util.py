@@ -177,6 +177,7 @@ class TestUtil(unittest.TestCase):
 
     def test_normalize_raw_per_channel(self):
         from micro_sam.v2.normalization import normalize_raw, to_image
+        from micro_sam.util import _to_image
 
         channel = np.arange(100, dtype="float32").reshape(10, 10)
         image = np.stack([channel, channel * 100 + 42], axis=-1)
@@ -188,8 +189,9 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(rgb.dtype, np.uint8)
         self.assertTrue(np.array_equal(rgb[..., 0], rgb[..., 1]))
         self.assertFalse(np.any(rgb[..., 2]))
+        self.assertTrue(np.array_equal(rgb, _to_image(image)))
 
-    def test_normalization_invalidates_old_embeddings(self):
+    def test_normalization_invalidates_incompatible_embeddings(self):
         from types import SimpleNamespace
 
         from micro_sam.util import _get_embedding_signature
@@ -200,14 +202,18 @@ class TestUtil(unittest.TestCase):
         raw = np.arange(100).reshape(10, 10)
         signature = _get_embedding_signature(raw, predictor, tile_shape=None, halo=None)
         signature["normalization"] = RAW_NORMALIZATION
-        self.assertEqual(signature["normalization"], "percentile_2_98")
+        self.assertEqual(signature["normalization"], "minmax_per_channel")
 
         attrs = {"input_size": [10, 10], **signature}
         embeddings = SimpleNamespace(attrs=attrs)
         self.assertFalse(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
 
-        del attrs["normalization"]
+        attrs["normalization"] = "percentile_2_98"
         self.assertTrue(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
+
+        # Untagged caches predate percentile normalization and used the same min-max policy.
+        del attrs["normalization"]
+        self.assertFalse(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
 
         class PartialEmbeddings(dict):
             def __init__(self, normalization=None):
@@ -215,7 +221,10 @@ class TestUtil(unittest.TestCase):
                 self.attrs = {} if normalization is None else {"normalization": normalization}
 
         legacy_partial = PartialEmbeddings()
-        self.assertTrue(_check_saved_embeddings(raw, predictor, legacy_partial, "cache.zarr", None, None))
+        self.assertFalse(_check_saved_embeddings(raw, predictor, legacy_partial, "cache.zarr", None, None))
+
+        percentile_partial = PartialEmbeddings("percentile_2_98")
+        self.assertTrue(_check_saved_embeddings(raw, predictor, percentile_partial, "cache.zarr", None, None))
 
         current_partial = PartialEmbeddings(RAW_NORMALIZATION)
         self.assertFalse(_check_saved_embeddings(raw, predictor, current_partial, "cache.zarr", None, None))

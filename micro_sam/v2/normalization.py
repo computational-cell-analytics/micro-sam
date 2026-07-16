@@ -5,7 +5,9 @@ from typing import Optional, Tuple, Union
 import numpy as np
 from torch_em.transform.raw import normalize_percentile
 
-RAW_NORMALIZATION = "percentile_2_98"
+# The released UniSAM2 microscopy checkpoint and the legacy 2D embedding path use min-max normalization.
+# Persist the policy in embedding caches so percentile-normalized features are not silently reused.
+RAW_NORMALIZATION = "minmax_per_channel"
 
 
 def normalize_raw(
@@ -60,7 +62,7 @@ def normalize_raw(
 
 
 def to_image(image: np.ndarray) -> np.ndarray:
-    """Map a 2D or channel-last image to percentile-normalized, channel-last uint8 RGB.
+    """Map a 2D or channel-last image to min-max-normalized, channel-last uint8 RGB.
 
     Args:
         image: The input image. Either 2D or channel-last with up to three channels.
@@ -68,5 +70,5 @@ def to_image(image: np.ndarray) -> np.ndarray:
     Returns:
         The channel-last uint8 RGB image, with each channel normalized independently.
     """
-    from micro_sam.util import _ensure_rgb
-    return normalize_raw(_ensure_rgb(image), axis=(0, 1), output_dtype="uint8")
+    from micro_sam.util import _to_image
+    return _to_image(image)
