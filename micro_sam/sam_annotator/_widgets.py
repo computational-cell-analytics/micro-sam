@@ -2046,6 +2046,14 @@ class EmbeddingWidget(_WidgetBase):
             "info", "Embeddings have already been precomputed. Press OK to recompute the embeddings."
         )
 
+    @staticmethod
+    def _clear_autosegment_cache(state):
+        """Discard predictions derived from the embeddings that were just replaced."""
+        widget = state.widgets.get("autosegment")
+        if widget is not None:
+            widget._segmenter = None
+            widget._segmenter_key = None
+
     def _n_tiles(self, tile_shape, shape):
         """The number of tiles the embedding computation is split into (1 without tiling)."""
         if tile_shape is None:
@@ -2173,6 +2181,7 @@ class EmbeddingWidget(_WidgetBase):
             pbar_signals.pbar_stop.emit()
 
         compute_image_embedding()
+        self._clear_autosegment_cache(state)
         self._update_model(state)
         # worker = compute_image_embedding()
         # worker.returned.connect(self._update_model)
