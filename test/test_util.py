@@ -496,6 +496,7 @@ class TestSAM2Util(unittest.TestCase):
 
     def test_precompute_image_embeddings_2d(self):
         from micro_sam.v2.util import precompute_image_embeddings
+        from micro_sam.v2.normalization import RAW_NORMALIZATION
 
         predictor = self._get_predictor(ndim=2)
         input_ = np.random.rand(512, 512).astype("float32")
@@ -522,7 +523,7 @@ class TestSAM2Util(unittest.TestCase):
         # The signature is written so the GUI / CLI can validate a reload.
         self.assertEqual(f.attrs["model_name"], self.model_type)
         self.assertIn("data_signature", f.attrs)
-        self.assertEqual(f.attrs["normalization"], "percentile_2_98")
+        self.assertEqual(f.attrs["normalization"], RAW_NORMALIZATION)
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=2)
