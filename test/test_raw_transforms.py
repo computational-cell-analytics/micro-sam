@@ -10,12 +10,12 @@ class TestGaussianPercentileNormalization(unittest.TestCase):
         from micro_sam.v2.transforms.raw import GaussianPercentileNormalization
 
         transform = GaussianPercentileNormalization(mean_lower_percentile=2.0, std_lower_percentile=1.0)
-        with patch("micro_sam.v2.transforms.raw.np.random.normal", return_value=3.25) as sample:
+        with patch("micro_sam.v2.transforms.raw.np.random.normal", return_value=3.26) as sample:
             lower, upper = transform.sample_percentiles()
 
         sample.assert_called_once_with(2.0, 1.0)
-        self.assertEqual(lower, 3.25)
-        self.assertEqual(upper, 96.75)
+        self.assertEqual(lower, 3.3)
+        self.assertEqual(upper, 96.7)
         self.assertEqual(lower + upper, 100.0)
 
     def test_sampled_percentiles_are_clipped_to_valid_range(self):
