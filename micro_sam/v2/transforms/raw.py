@@ -383,8 +383,8 @@ class GaussianPercentileNormalization:
 
     A single lower percentile is sampled for each input from a Gaussian distribution. The upper
     percentile is its mirror around the median, so a draw of ``p`` always results in the percentile
-    pair ``(p, 100 - p)``. The draw is rounded to one decimal place and clipped to the valid interval
-    ``[0, 49.9]``. The corresponding intensity values are mapped to ``[0, 1]`` and clipped.
+    pair ``(p, 100 - p)``. The draw is rounded to one decimal place and clipped to ``[0, 5]``, keeping
+    the upper percentile in ``[95, 100]``. The corresponding intensities are mapped to ``[0, 1]`` and clipped.
 
     This transform is intended for the ``raw_transform`` hook of a torch-em dataset. The optional
     preprocessing callable can perform shape or channel conversion before normalization, while the
@@ -399,7 +399,7 @@ class GaussianPercentileNormalization:
         preprocessing: Optional shape/channel preprocessing applied before normalization.
     """
 
-    _MAX_LOWER_PERCENTILE = 49.9
+    _MAX_LOWER_PERCENTILE = 5.0
 
     def __init__(
         self,
@@ -408,8 +408,8 @@ class GaussianPercentileNormalization:
         axis: Optional[Union[int, Tuple[int, ...]]] = (-2, -1),
         preprocessing: Optional[Callable[[np.ndarray], np.ndarray]] = None,
     ):
-        if not np.isfinite(mean_lower_percentile) or not 0.0 <= mean_lower_percentile < 50.0:
-            raise ValueError("mean_lower_percentile must be finite and in the interval [0, 50).")
+        if not np.isfinite(mean_lower_percentile) or not 0.0 <= mean_lower_percentile <= self._MAX_LOWER_PERCENTILE:
+            raise ValueError("mean_lower_percentile must be finite and in the interval [0, 5].")
         if not np.isfinite(std_lower_percentile) or std_lower_percentile < 0.0:
             raise ValueError("std_lower_percentile must be finite and non-negative.")
 

@@ -27,8 +27,8 @@ class TestGaussianPercentileNormalization(unittest.TestCase):
 
         with patch("micro_sam.v2.transforms.raw.np.random.normal", return_value=70.0):
             lower, upper = transform.sample_percentiles()
-        self.assertLess(lower, 50.0)
-        self.assertGreater(upper, 50.0)
+        self.assertEqual(lower, 5.0)
+        self.assertEqual(upper, 95.0)
         self.assertEqual(lower + upper, 100.0)
 
     def test_normalizes_with_sampled_percentiles(self):
@@ -36,10 +36,10 @@ class TestGaussianPercentileNormalization(unittest.TestCase):
         from micro_sam.v2.transforms.raw import GaussianPercentileNormalization
 
         raw = np.arange(200, dtype="uint16").reshape(2, 10, 10) * 100
-        transform = GaussianPercentileNormalization(mean_lower_percentile=10.0, std_lower_percentile=0.0, axis=(1, 2))
+        transform = GaussianPercentileNormalization(mean_lower_percentile=4.0, std_lower_percentile=0.0, axis=(1, 2))
 
         transformed = transform(raw)
-        expected = normalize_raw(raw, axis=(1, 2), lower_percentile=10.0, upper_percentile=90.0)
+        expected = normalize_raw(raw, axis=(1, 2), lower_percentile=4.0, upper_percentile=96.0)
         self.assertTrue(np.allclose(transformed, expected))
         self.assertEqual(transformed.dtype, np.float32)
         self.assertGreaterEqual(transformed.min(), 0.0)
@@ -93,7 +93,7 @@ class TestGaussianPercentileNormalization(unittest.TestCase):
     def test_invalid_distribution_parameters(self):
         from micro_sam.v2.transforms.raw import GaussianPercentileNormalization
 
-        for mean, std in [(-1.0, 1.0), (50.0, 1.0), (np.inf, 1.0), (2.0, -1.0), (2.0, np.nan)]:
+        for mean, std in [(-1.0, 1.0), (5.1, 1.0), (np.inf, 1.0), (2.0, -1.0), (2.0, np.nan)]:
             with self.subTest(mean=mean, std=std), self.assertRaises(ValueError):
                 GaussianPercentileNormalization(mean_lower_percentile=mean, std_lower_percentile=std)
 
