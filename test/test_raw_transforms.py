@@ -65,7 +65,7 @@ class TestGeneralistNormalizationConfiguration(unittest.TestCase):
         self.assertEqual(
             val_leaf.raw_transform.normalizer.lower_percentile_bounds, VALIDATION_LOWER_PERCENTILE_BOUNDS
         )
-        self.assertEqual(val_leaf.raw_transform.normalizer.sample_percentiles(), (1.0, 99.0))
+        self.assertEqual(val_leaf.raw_transform.normalizer.sample_percentiles(), (2.0, 98.0))
 
 
 if __name__ == "__main__":

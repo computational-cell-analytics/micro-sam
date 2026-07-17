@@ -34,9 +34,10 @@ N_SAMPLES_VAL = 50
 # Sam2Trainer._validate_impl, so the validation metric is comparable across epochs.
 VALIDATION_SEED = 42
 
-# Train with uniformly sampled symmetric percentiles; validate deterministically with 1st/99th percentiles.
+# Train with uniformly sampled symmetric percentiles; validate deterministically with 2nd/98th percentiles
+# to match the inference-time normalization in normalize_raw.
 TRAIN_LOWER_PERCENTILE_BOUNDS = (0.0, 5.0)
-VALIDATION_LOWER_PERCENTILE_BOUNDS = (1.0, 1.0)
+VALIDATION_LOWER_PERCENTILE_BOUNDS = (2.0, 2.0)
 
 
 def seed_worker(worker_id):
@@ -84,7 +85,7 @@ def _set_percentile_normalization(dataset, lower_percentile_bounds):
 
 
 def _configure_training_normalization(train_datasets, val_datasets):
-    """Enable random percentile augmentation for training and deterministic 1st/99th validation."""
+    """Enable random percentile augmentation for training and deterministic 2nd/98th validation."""
     _set_percentile_normalization(
         train_datasets, lower_percentile_bounds=TRAIN_LOWER_PERCENTILE_BOUNDS,
     )
