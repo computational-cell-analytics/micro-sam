@@ -17,7 +17,7 @@ from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, _build_group_map
 from ..transforms.raw import (
     _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile, _resize_raw_to_512, _resize_to_512,
-    get_gaussian_percentile_normalization,
+    get_random_percentile_normalization,
 )
 from ..transforms.labels import (
     _em_cell_label_trafo, _joint_em_cell_label_trafo,
@@ -34,9 +34,9 @@ N_SAMPLES_VAL = 50
 # Sam2Trainer._validate_impl, so the validation metric is comparable across epochs.
 VALIDATION_SEED = 42
 
-# Train with random symmetric percentiles; validate with min-max to match inference.
-TRAIN_LOWER_PERCENTILE_MEAN = 2.0
-TRAIN_LOWER_PERCENTILE_STD = 1.0
+# Train with uniformly sampled symmetric percentiles; validate deterministically with 1st/99th percentiles.
+TRAIN_LOWER_PERCENTILE_BOUNDS = (0.0, 5.0)
+VALIDATION_LOWER_PERCENTILE_BOUNDS = (1.0, 1.0)
 
 
 def seed_worker(worker_id):
@@ -58,41 +58,39 @@ def _ensure_native_byte_order(y):
     return y.byteswap().view(y.dtype.newbyteorder()) if not y.dtype.isnative else y
 
 
-def _set_percentile_normalization(dataset, mean_lower_percentile, std_lower_percentile):
+def _set_percentile_normalization(dataset, lower_percentile_bounds):
     """Replace fixed normalization in all torch-em leaves of a dataset tree."""
     if isinstance(dataset, (list, tuple)):
         for ds in dataset:
-            _set_percentile_normalization(ds, mean_lower_percentile, std_lower_percentile)
+            _set_percentile_normalization(ds, lower_percentile_bounds)
         return
 
     if isinstance(dataset, UniDataWrapper):
-        _set_percentile_normalization(dataset.ds, mean_lower_percentile, std_lower_percentile)
+        _set_percentile_normalization(dataset.ds, lower_percentile_bounds)
         return
 
     children = getattr(dataset, "datasets", None)
     if children is not None:
         for ds in children:
-            _set_percentile_normalization(ds, mean_lower_percentile, std_lower_percentile)
+            _set_percentile_normalization(ds, lower_percentile_bounds)
         return
 
     if not hasattr(dataset, "raw_transform"):
         raise TypeError(f"Cannot configure raw normalization for dataset of type {type(dataset).__name__}.")
 
-    dataset.raw_transform = get_gaussian_percentile_normalization(
-        dataset.raw_transform,
-        mean_lower_percentile=mean_lower_percentile,
-        std_lower_percentile=std_lower_percentile,
+    dataset.raw_transform = get_random_percentile_normalization(
+        dataset.raw_transform, lower_percentile_bounds=lower_percentile_bounds
     )
 
 
 def _configure_training_normalization(train_datasets, val_datasets):
-    """Enable Gaussian percentile augmentation for training and min-max normalization for validation."""
+    """Enable random percentile augmentation for training and deterministic 1st/99th validation."""
     _set_percentile_normalization(
-        train_datasets,
-        mean_lower_percentile=TRAIN_LOWER_PERCENTILE_MEAN,
-        std_lower_percentile=TRAIN_LOWER_PERCENTILE_STD,
+        train_datasets, lower_percentile_bounds=TRAIN_LOWER_PERCENTILE_BOUNDS,
     )
-    _set_percentile_normalization(val_datasets, mean_lower_percentile=0.0, std_lower_percentile=0.0)
+    _set_percentile_normalization(
+        val_datasets, lower_percentile_bounds=VALIDATION_LOWER_PERCENTILE_BOUNDS,
+    )
 
 
 def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32, deterministic=False):
@@ -204,7 +202,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                 "Mouse-Organoid-Cells-CBG", "Mouse-Skull-Nuclei-CBG",
                 "Platynereis-ISH-Nuclei-CBG", "Platynereis-Nuclei-CBG",
             ]
-        else:   # Only two datasets have the test split.
+        else:  # Only two datasets have the test split.
             names = ["Mouse-Skull-Nuclei-CBG", "Platynereis-ISH-Nuclei-CBG"]
 
         all_embedseg_datasets = [
@@ -438,8 +436,8 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     """Get all electron microscopy (EM) datasets for generalist training.
 
     Args:
-        _em_label_trafo: EM cell label transform function to use.  Defaults to
-            :func:`_em_cell_label_trafo`.  Pass :func:`_joint_em_cell_label_trafo`
+        _em_label_trafo: EM cell label transform function to use. Defaults to
+            :func:`_em_cell_label_trafo`. Pass :func:`_joint_em_cell_label_trafo`
             when building joint interactive+automatic datasets.
 
     Returns:
@@ -782,7 +780,7 @@ def get_interactive_dataloaders(
 
     Identical dataset composition to :func:`get_dataloaders` but returns raw
     integer instance labels (``label_dtype=torch.int64``) instead of distance
-    transforms.  Used with :class:`micro_sam.v2.training.ConvertToSam2VideoBatch`.
+    transforms. Used with :class:`micro_sam.v2.training.ConvertToSam2VideoBatch`.
 
     Args:
         input_path: Root path to the generalist training data.

@@ -1,11 +1,12 @@
 import random
 from functools import partial
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 from torchvision.transforms import ColorJitter
+from torch_em.transform.raw import RandomPercentileNormalization, RawTransform
 
 from micro_sam.v2.normalization import normalize_raw
 
@@ -378,102 +379,50 @@ def _normalize_percentile(x, axis=None):
     return normalize_raw(x, axis=axis)
 
 
-class GaussianPercentileNormalization:
-    """Normalize raw inputs with randomly sampled symmetric percentiles.
-
-    A single lower percentile is sampled for each input from a Gaussian distribution. The upper
-    percentile is its mirror around the median, so a draw of ``p`` always results in the percentile
-    pair ``(p, 100 - p)``. The draw is rounded to one decimal place and clipped to ``[0, 5]``, keeping
-    the upper percentile in ``[95, 100]``. The corresponding intensities are mapped to ``[0, 1]`` and clipped.
-
-    This transform is intended for the ``raw_transform`` hook of a torch-em dataset. The optional
-    preprocessing callable can perform shape or channel conversion before normalization, while the
-    raw intensity range is preserved until the randomized percentiles are selected.
-
-    Args:
-        mean_lower_percentile: Mean of the Gaussian for the lower percentile.
-        std_lower_percentile: Standard deviation of the Gaussian. Set to zero for deterministic
-            percentile normalization.
-        axis: Axes over which to compute intensity percentiles. The default normalizes each plane or
-            channel independently for channel-first ``(..., H, W)`` inputs.
-        preprocessing: Optional shape/channel preprocessing applied before normalization.
-    """
-
-    _MAX_LOWER_PERCENTILE = 5.0
-
-    def __init__(
-        self,
-        mean_lower_percentile: float = 2.0,
-        std_lower_percentile: float = 1.0,
-        axis: Optional[Union[int, Tuple[int, ...]]] = (-2, -1),
-        preprocessing: Optional[Callable[[np.ndarray], np.ndarray]] = None,
-    ):
-        if not np.isfinite(mean_lower_percentile) or not 0.0 <= mean_lower_percentile <= self._MAX_LOWER_PERCENTILE:
-            raise ValueError("mean_lower_percentile must be finite and in the interval [0, 5].")
-        if not np.isfinite(std_lower_percentile) or std_lower_percentile < 0.0:
-            raise ValueError("std_lower_percentile must be finite and non-negative.")
-
-        self.mean_lower_percentile = float(mean_lower_percentile)
-        self.std_lower_percentile = float(std_lower_percentile)
-        self.axis = axis
-        self.preprocessing = preprocessing
-
-    def sample_percentiles(self) -> Tuple[float, float]:
-        """Sample and return a valid symmetric ``(lower, upper)`` percentile pair."""
-        if self.std_lower_percentile == 0.0:
-            lower = self.mean_lower_percentile
-        else:
-            lower = np.random.normal(self.mean_lower_percentile, self.std_lower_percentile)
-
-        # Gaussian tails may leave the valid percentile interval.
-        lower = round(float(np.clip(lower, 0.0, self._MAX_LOWER_PERCENTILE)), 1)
-        # Mirror one draw instead of sampling both bounds independently, preserving symmetry.
-        return lower, 100.0 - lower
-
-    def __call__(self, raw: np.ndarray) -> np.ndarray:
-        if self.preprocessing is not None:
-            raw = self.preprocessing(raw)
-
-        lower, upper = self.sample_percentiles()
-        return normalize_raw(raw, axis=self.axis, lower_percentile=lower, upper_percentile=upper)
-
-
-def get_gaussian_percentile_normalization(
+def get_random_percentile_normalization(
     raw_transform: Callable,
-    mean_lower_percentile: float = 2.0,
-    std_lower_percentile: float = 1.0,
-) -> GaussianPercentileNormalization:
-    """Convert a generalist raw transform to Gaussian percentile normalization.
+    lower_percentile_bounds: Tuple[float, float] = (0.0, 5.0),
+    distribution: str = "uniform",
+    distribution_kwargs: Optional[Dict[str, float]] = None,
+) -> RawTransform:
+    """Convert a generalist raw transform to random percentile normalization.
 
-    The existing generalist transforms combine data-specific shape/channel preparation with a fixed
-    normalization. This helper retains only their preparation step and replaces the fixed normalization,
-    ensuring that the Gaussian transform receives data in its original intensity range.
+    The data-specific shape/channel preparation is retained as ``RawTransform.augmentation1``, so the
+    normalizer receives data in its original intensity range. An existing ``augmentation2`` is preserved.
     """
-    if isinstance(raw_transform, GaussianPercentileNormalization):
-        preprocessing, axis = raw_transform.preprocessing, raw_transform.axis
+    augmentation2 = None
+    if isinstance(raw_transform, RawTransform):
+        if not isinstance(raw_transform.normalizer, RandomPercentileNormalization):
+            raise ValueError(f"Unsupported generalist raw transform: {raw_transform!r}")
+        augmentation1, augmentation2 = raw_transform.augmentation1, raw_transform.augmentation2
+        axis = raw_transform.normalizer.axis
+    elif isinstance(raw_transform, RandomPercentileNormalization):
+        augmentation1, axis = None, raw_transform.axis
     elif raw_transform is _identity:
-        preprocessing, axis = _prepare_identity, (1, 2)
+        augmentation1, axis = _prepare_identity, (1, 2)
     elif raw_transform is _to_8bit:
-        preprocessing, axis = _prepare_to_8bit, (1, 2)
+        augmentation1, axis = _prepare_to_8bit, (1, 2)
     elif raw_transform is _cellpose_raw_trafo:
-        preprocessing, axis = _prepare_cellpose_raw, (1, 2)
+        augmentation1, axis = _prepare_cellpose_raw, (1, 2)
     elif raw_transform is _resize_raw_to_512:
-        preprocessing, axis = _prepare_resize_raw_to_512, (1, 2)
+        augmentation1, axis = _prepare_resize_raw_to_512, (1, 2)
     elif raw_transform is _normalize_percentile:
-        preprocessing, axis = None, None
+        augmentation1, axis = None, None
     elif isinstance(raw_transform, partial) and raw_transform.func is _normalize_percentile:
         if raw_transform.args:
             raise ValueError("Positional arguments are not supported for _normalize_percentile transforms.")
         unexpected_kwargs = set(raw_transform.keywords) - {"axis"}
         if unexpected_kwargs:
             raise ValueError(f"Unsupported _normalize_percentile arguments: {sorted(unexpected_kwargs)}")
-        preprocessing, axis = None, raw_transform.keywords.get("axis")
+        augmentation1, axis = None, raw_transform.keywords.get("axis")
     else:
         raise ValueError(f"Unsupported generalist raw transform: {raw_transform!r}")
 
-    return GaussianPercentileNormalization(
-        mean_lower_percentile=mean_lower_percentile,
-        std_lower_percentile=std_lower_percentile,
+    normalizer = RandomPercentileNormalization(
+        lower_percentile_bounds=lower_percentile_bounds,
+        distribution=distribution,
+        distribution_kwargs=distribution_kwargs,
+        rounding_decimals=1,
         axis=axis,
-        preprocessing=preprocessing,
     )
+    return RawTransform(normalizer=normalizer, augmentation1=augmentation1, augmentation2=augmentation2)
