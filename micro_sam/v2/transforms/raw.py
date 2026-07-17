@@ -1,4 +1,6 @@
 import random
+from functools import partial
+from typing import Callable, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -29,25 +31,35 @@ def to_rgb(image):
     return image
 
 
-def _to_8bit(raw):
-    "Ensures three channels for inputs and percentile-normalizes them to [0, 1]."
+def _prepare_to_8bit(raw):
+    """Prepare raw inputs for ``_to_8bit`` without changing their dynamic range."""
     if raw.ndim == 3 and raw.shape[0] == 1:  # If the inputs have 1 channel, we triplicate it.
         raw = np.concatenate([raw] * 3, axis=0)
 
-    raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
+    return to_rgb(raw)  # Ensure channel-first RGB without rescaling the original intensities.
+
+
+def _to_8bit(raw):
+    "Ensures three channels for inputs and percentile-normalizes them to [0, 1]."
+    raw = _prepare_to_8bit(raw)
     raw = normalize_raw(raw, axis=(1, 2))
     return raw
 
 
+def _prepare_identity(x):
+    """Prepare raw inputs for ``_identity`` without changing their dynamic range."""
+    return to_rgb(x)
+
+
 def _identity(x):
     "Ensures three channels for inputs and percentile-normalizes them to [0, 1]."
-    x = to_rgb(x)
+    x = _prepare_identity(x)
     x = normalize_raw(x, axis=(1, 2))
     return x
 
 
-def _cellpose_raw_trafo(x):
-    """Transforms input images to desired format.
+def _prepare_cellpose_raw(x):
+    """Prepare CellPose inputs without changing their dynamic range.
 
     NOTE: The input channel logic is arranged a bit strangely in `cyto` dataset.
     This function takes care of it here.
@@ -64,7 +76,12 @@ def _cellpose_raw_trafo(x):
         # The image is 2 channels and we sort the channels such that - 0: cell, 1: nucleus
         x = np.stack([g, r, np.zeros_like(b)], axis=0)
 
-    x = to_rgb(x)  # Ensures three channels for inputs and avoids rescaling inputs.
+    return to_rgb(x)  # Ensures three channels for inputs and avoids rescaling inputs.
+
+
+def _cellpose_raw_trafo(x):
+    """Prepare and percentile-normalize CellPose inputs."""
+    x = _prepare_cellpose_raw(x)
     x = normalize_raw(x, axis=(1, 2))
     return x
 
@@ -77,8 +94,13 @@ def _resize_to_512(x, is_label=False):
 
 def _resize_raw_to_512(x):
     """Resize small raw volume patch to 512×512 and normalize."""
-    x = _resize_to_512(x, is_label=False)
-    return _identity(x)
+    x = _prepare_resize_raw_to_512(x)
+    return normalize_raw(x, axis=(1, 2))
+
+
+def _prepare_resize_raw_to_512(x):
+    """Resize a raw patch without normalizing it."""
+    return _prepare_identity(_resize_to_512(x, is_label=False))
 
 
 class VideoAugment:
@@ -354,3 +376,104 @@ def _normalize_percentile(x, axis=None):
     'rgb' format of TissueNet image data for the expected axes.
     """
     return normalize_raw(x, axis=axis)
+
+
+class GaussianPercentileNormalization:
+    """Normalize raw inputs with randomly sampled symmetric percentiles.
+
+    A single lower percentile is sampled for each input from a Gaussian distribution. The upper
+    percentile is its mirror around the median, so a draw of ``p`` always results in the percentile
+    pair ``(p, 100 - p)``. The draw is clipped to the valid interval ``[0, 50)`` and the corresponding
+    intensity values are mapped to ``[0, 1]``. Values outside this intensity interval are clipped.
+
+    This transform is intended for the ``raw_transform`` hook of a torch-em dataset. The optional
+    preprocessing callable can perform shape or channel conversion before normalization, while the
+    raw intensity range is preserved until the randomized percentiles are selected.
+
+    Args:
+        mean_lower_percentile: Mean of the Gaussian for the lower percentile.
+        std_lower_percentile: Standard deviation of the Gaussian. Set to zero for deterministic
+            percentile normalization.
+        axis: Axes over which to compute intensity percentiles. The default normalizes each plane or
+            channel independently for channel-first ``(..., H, W)`` inputs.
+        preprocessing: Optional shape/channel preprocessing applied before normalization.
+    """
+
+    _MAX_LOWER_PERCENTILE = float(np.nextafter(50.0, 0.0))
+
+    def __init__(
+        self,
+        mean_lower_percentile: float = 2.0,
+        std_lower_percentile: float = 1.0,
+        axis: Optional[Union[int, Tuple[int, ...]]] = (-2, -1),
+        preprocessing: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+    ):
+        if not np.isfinite(mean_lower_percentile) or not 0.0 <= mean_lower_percentile < 50.0:
+            raise ValueError("mean_lower_percentile must be finite and in the interval [0, 50).")
+        if not np.isfinite(std_lower_percentile) or std_lower_percentile < 0.0:
+            raise ValueError("std_lower_percentile must be finite and non-negative.")
+
+        self.mean_lower_percentile = float(mean_lower_percentile)
+        self.std_lower_percentile = float(std_lower_percentile)
+        self.axis = axis
+        self.preprocessing = preprocessing
+
+    def sample_percentiles(self) -> Tuple[float, float]:
+        """Sample and return a valid symmetric ``(lower, upper)`` percentile pair."""
+        if self.std_lower_percentile == 0.0:
+            lower = self.mean_lower_percentile
+        else:
+            lower = np.random.normal(self.mean_lower_percentile, self.std_lower_percentile)
+
+        # Gaussian tails may leave the valid percentile interval.
+        lower = float(np.clip(lower, 0.0, self._MAX_LOWER_PERCENTILE))
+        # Mirror one draw instead of sampling both bounds independently, preserving symmetry.
+        return lower, 100.0 - lower
+
+    def __call__(self, raw: np.ndarray) -> np.ndarray:
+        if self.preprocessing is not None:
+            raw = self.preprocessing(raw)
+
+        lower, upper = self.sample_percentiles()
+        return normalize_raw(raw, axis=self.axis, lower_percentile=lower, upper_percentile=upper)
+
+
+def get_gaussian_percentile_normalization(
+    raw_transform: Callable,
+    mean_lower_percentile: float = 2.0,
+    std_lower_percentile: float = 1.0,
+) -> GaussianPercentileNormalization:
+    """Convert a generalist raw transform to Gaussian percentile normalization.
+
+    The existing generalist transforms combine data-specific shape/channel preparation with a fixed
+    normalization. This helper retains only their preparation step and replaces the fixed normalization,
+    ensuring that the Gaussian transform receives data in its original intensity range.
+    """
+    if isinstance(raw_transform, GaussianPercentileNormalization):
+        preprocessing, axis = raw_transform.preprocessing, raw_transform.axis
+    elif raw_transform is _identity:
+        preprocessing, axis = _prepare_identity, (1, 2)
+    elif raw_transform is _to_8bit:
+        preprocessing, axis = _prepare_to_8bit, (1, 2)
+    elif raw_transform is _cellpose_raw_trafo:
+        preprocessing, axis = _prepare_cellpose_raw, (1, 2)
+    elif raw_transform is _resize_raw_to_512:
+        preprocessing, axis = _prepare_resize_raw_to_512, (1, 2)
+    elif raw_transform is _normalize_percentile:
+        preprocessing, axis = None, None
+    elif isinstance(raw_transform, partial) and raw_transform.func is _normalize_percentile:
+        if raw_transform.args:
+            raise ValueError("Positional arguments are not supported for _normalize_percentile transforms.")
+        unexpected_kwargs = set(raw_transform.keywords) - {"axis"}
+        if unexpected_kwargs:
+            raise ValueError(f"Unsupported _normalize_percentile arguments: {sorted(unexpected_kwargs)}")
+        preprocessing, axis = None, raw_transform.keywords.get("axis")
+    else:
+        raise ValueError(f"Unsupported generalist raw transform: {raw_transform!r}")
+
+    return GaussianPercentileNormalization(
+        mean_lower_percentile=mean_lower_percentile,
+        std_lower_percentile=std_lower_percentile,
+        axis=axis,
+        preprocessing=preprocessing,
+    )

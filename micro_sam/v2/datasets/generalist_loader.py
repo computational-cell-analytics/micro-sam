@@ -17,13 +17,13 @@ from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, _build_group_map
 from ..transforms.raw import (
     _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile, _resize_raw_to_512, _resize_to_512,
+    get_gaussian_percentile_normalization,
 )
 from ..transforms.labels import (
     _em_cell_label_trafo, _joint_em_cell_label_trafo,
     _plantseg_label_trafo, _axondeepseg_pre_label_transform, _instance_labels,
     _JointLabelTransform,
 )
-
 
 # Cap on validation samples drawn per dataset, to keep the per-epoch validation pass cheap.
 # Each access is a random crop (see UniDataWrapper.max_samples), so this is N random samples.
@@ -33,6 +33,10 @@ N_SAMPLES_VAL = 50
 # (prompt sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch) in
 # Sam2Trainer._validate_impl, so the validation metric is comparable across epochs.
 VALIDATION_SEED = 42
+
+# Train with random symmetric percentiles; validate with min-max to match inference.
+TRAIN_LOWER_PERCENTILE_MEAN = 2.0
+TRAIN_LOWER_PERCENTILE_STD = 1.0
 
 
 def seed_worker(worker_id):
@@ -52,6 +56,43 @@ def _ensure_native_byte_order(y):
     # tifffile.memmap returns big-endian >f4 for some TIFFs; byteswap to native so that
     # Kornia augmentation and skimage/vigra C extensions receive correctly ordered bytes.
     return y.byteswap().view(y.dtype.newbyteorder()) if not y.dtype.isnative else y
+
+
+def _set_percentile_normalization(dataset, mean_lower_percentile, std_lower_percentile):
+    """Replace fixed normalization in all torch-em leaves of a dataset tree."""
+    if isinstance(dataset, (list, tuple)):
+        for ds in dataset:
+            _set_percentile_normalization(ds, mean_lower_percentile, std_lower_percentile)
+        return
+
+    if isinstance(dataset, UniDataWrapper):
+        _set_percentile_normalization(dataset.ds, mean_lower_percentile, std_lower_percentile)
+        return
+
+    children = getattr(dataset, "datasets", None)
+    if children is not None:
+        for ds in children:
+            _set_percentile_normalization(ds, mean_lower_percentile, std_lower_percentile)
+        return
+
+    if not hasattr(dataset, "raw_transform"):
+        raise TypeError(f"Cannot configure raw normalization for dataset of type {type(dataset).__name__}.")
+
+    dataset.raw_transform = get_gaussian_percentile_normalization(
+        dataset.raw_transform,
+        mean_lower_percentile=mean_lower_percentile,
+        std_lower_percentile=std_lower_percentile,
+    )
+
+
+def _configure_training_normalization(train_datasets, val_datasets):
+    """Enable Gaussian percentile augmentation for training and min-max normalization for validation."""
+    _set_percentile_normalization(
+        train_datasets,
+        mean_lower_percentile=TRAIN_LOWER_PERCENTILE_MEAN,
+        std_lower_percentile=TRAIN_LOWER_PERCENTILE_STD,
+    )
+    _set_percentile_normalization(val_datasets, mean_lower_percentile=0.0, std_lower_percentile=0.0)
 
 
 def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32, deterministic=False):
@@ -705,6 +746,8 @@ def get_dataloaders(
         train_ds.extend(em_train)
         val_ds.extend(em_val)
 
+    _configure_training_normalization(train_ds, val_ds)
+
     # Finally, we prepare a 'ConcatDataset' for all the available datasets.
     train_ds = ConcatDataset(*train_ds)
     val_ds = ConcatDataset(*val_ds)
@@ -815,6 +858,7 @@ def _build_automatic_datasets(input_path, z_slices, dataset_choice):
         train_ds.extend(em_train)
         val_ds.extend(em_val)
 
+    _configure_training_normalization(train_ds, val_ds)
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
 
 
@@ -848,6 +892,8 @@ def _build_interactive_datasets(input_path, z_slices, dataset_choice):
         em_train, em_val = _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    _configure_training_normalization(train_ds, val_ds)
 
     # Cap each validation dataset to N_SAMPLES_VAL random samples so the per-epoch
     # validation pass stays cheap (train datasets are left at full size).
@@ -896,6 +942,8 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice):
         )
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    _configure_training_normalization(train_ds, val_ds)
 
     # Cap each validation dataset to N_SAMPLES_VAL random samples so the per-epoch
     # validation pass stays cheap (matches the interactive builder; train datasets are full size).
