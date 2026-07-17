@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.8.6**
+
+Support napari 0.8 (which requires Python >=3.11) and switch the PyPI Qt backend to PyQt6.
+
 **New in version 1.8.5**
 
 Add tracking model and solver options, clarify CLI arguments, and fix compatibility with recent bioimage-cpp versions.
