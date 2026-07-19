@@ -1,17 +1,29 @@
-"""Automatic mask generation (AMG) for the SAM2 model.
+"""Automatic instance segmentation backends for the SAM2 model.
 
-This implements the grid-based automatic mask generation (AMG) of SAM2 with the same
-`initialize` / `generate` interface as the micro-sam v1 `AutomaticMaskGenerator`. The expensive
-grid prediction happens in `initialize`, the cheap conversion to an instance segmentation in
-`generate`. AMG is supported for 2d images and for 3d volumes; the 3d segmentation runs AMG
-slice-by-slice and stitches the per-slice results across z with the multi-dimensional segmentation
-stitching (`micro_sam.v1.multi_dimensional_segmentation.merge_instance_segmentation_3d`).
+This module holds all the backend engines for automatic segmentation with SAM2, mirroring the
+micro-sam v1 `instance_segmentation` module (which holds AMG / AIS / APG). Two engines are provided:
 
-For large images a tiled backend (`TiledAutomaticMaskGenerationSegmenter`) splits the image into
-tiles with a halo, runs AMG per tile and stitches the per-tile results, matching the tiled
-interface used elsewhere in micro-sam (and by the GUI).
+- AMG (`AutomaticMaskGenerationSegmenter`, `TiledAutomaticMaskGenerationSegmenter`): grid-based
+  automatic mask generation, no decoder required. The expensive grid prediction happens in
+  `initialize`, the cheap conversion to an instance segmentation in `generate`. Supported for 2d
+  images and, via `automatic_3d_segmentation`, for 3d volumes (run slice-by-slice and stitched
+  across z with `micro_sam.v1.multi_dimensional_segmentation.merge_instance_segmentation_3d`).
+
+- AIS (`UniSAM2InstanceSegmentation`, `TiledUniSAM2InstanceSegmentation`): decoder-based instance
+  segmentation with the UniSAM2 model (a UNETR decoder on top of the SAM2 image encoder, see
+  `micro_sam.v2.models.util.UniSAM2`). The decoder predicts a foreground probability map and three
+  directed distance channels, which `generate` converts into an instance segmentation via
+  `micro_sam.v2.postprocessing` ('sparse' -> flow following for LM data, 'dense' -> multicut for EM
+  data). All UniSAM2 inference is encapsulated in these classes.
+
+Both engines share the `initialize` / `generate` / `get_state` / `set_state` interface of the v1
+`AutoSegBase`, support in-plane (xy) tiling with a halo, and are selected via
+`get_instance_segmentation_generator`.
 """
 
+import sys
+import types
+import contextlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -21,8 +33,15 @@ from bioimage_cpp.utils import Blocking
 
 from micro_sam.util import mask_data_to_segmentation
 from micro_sam.v1.inference import _merge_segmentations
+from micro_sam.v1.instance_segmentation import AutoSegBase
 from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
-from micro_sam.v2.util import precompute_image_embeddings, set_precomputed, _load_list_datasets
+from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
+from micro_sam.v2.util import (
+    precompute_image_embeddings, set_precomputed, _load_list_datasets,
+    _DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z,
+)
+
+DEFAULT_SEGMENTATION_MODE_WITH_DECODER = "ais"
 
 
 def _set_image_predictor_from_backbone(predictor, fpn_list, pos_enc_list, original_size, i):
@@ -87,7 +106,7 @@ class _LazyRLEMask(dict):
         return value
 
 
-class AutomaticMaskGenerationSegmenter:
+class AutomaticMaskGenerationSegmenter(AutoSegBase):
     """Generates an instance segmentation for the SAM2 model using grid-based prompting (AMG).
 
     Wraps the native `sam2.automatic_mask_generator.SAM2AutomaticMaskGenerator` and exposes the
@@ -307,6 +326,12 @@ class AutomaticMaskGenerationSegmenter:
         self._masks = [_LazyRLEMask(mask) for mask in state["masks"]]
         self._original_size = tuple(int(s) for s in state["original_size"])
         self._is_initialized = True
+
+    def clear_state(self) -> None:
+        """Clear the cached masks."""
+        self._masks = None
+        self._original_size = None
+        self._is_initialized = False
 
 
 class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
@@ -622,3 +647,786 @@ def automatic_3d_segmentation(
         verbose=verbose,
     )
     return segmentation
+
+
+#
+# UniSAM2 decoder-based instance segmentation (AIS)
+#
+
+
+def _alias_legacy_namespace():
+    """Alias the modules that were moved out of the old ``micro_sam2`` namespace.
+
+    Older UniSAM2 checkpoints were pickled while this package lived under ``micro_sam2``, so
+    ``torch.load`` needs the moved modules to be importable under their original paths.
+
+    NOTE: This is currently around to debug stuff. This will be gone very soon!
+    """
+    import micro_sam.v2.datasets.sampler as datasets_sampler
+    import micro_sam.v2.datasets.wrapper as datasets_wrapper
+    import micro_sam.v2.transforms.labels as transforms_labels
+    import micro_sam.v2.transforms.raw as transforms_raw
+
+    root = sys.modules.setdefault("micro_sam2", types.ModuleType("micro_sam2"))
+    root.__path__ = []
+    datasets = sys.modules.setdefault("micro_sam2.datasets", types.ModuleType("micro_sam2.datasets"))
+    datasets.__path__ = []
+    transforms = sys.modules.setdefault("micro_sam2.transforms", types.ModuleType("micro_sam2.transforms"))
+    transforms.__path__ = []
+
+    sys.modules["micro_sam2.datasets.sampler"] = datasets_sampler
+    sys.modules["micro_sam2.datasets.wrapper"] = datasets_wrapper
+    sys.modules["micro_sam2.transforms.labels"] = transforms_labels
+    sys.modules["micro_sam2.transforms.raw"] = transforms_raw
+    root.datasets, root.transforms = datasets, transforms
+    datasets.sampler, datasets.wrapper = datasets_sampler, datasets_wrapper
+    transforms.labels, transforms.raw = transforms_labels, transforms_raw
+
+
+def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, output_channels=4):
+    """Load a UniSAM2 model for automatic segmentation from a checkpoint.
+
+    Args:
+        checkpoint_path: Path to the UniSAM2 checkpoint.
+        device: The device to load the model onto.
+        encoder: The SAM2 encoder to build the decoder on. Either the backbone name to build from
+            scratch, e.g. 'hvit_t', or a prebuilt SAM2 image-encoder module to reuse (which avoids
+            rebuilding / downloading the base backbone). Its weights are (re)defined by the checkpoint.
+        output_channels: The number of output channels (foreground + directed distances).
+
+    Returns:
+        The UniSAM2 model in eval mode.
+    """
+    from micro_sam.v2.models.util import UniSAM2
+
+    _alias_legacy_namespace()
+
+    state = torch.load(checkpoint_path, weights_only=False, map_location=device or "cpu")
+    # The standalone trainer saves the full model under 'model_state'; the joint trainer saves it
+    # under 'unetr_state' or 'decoder_state'. We also accept a raw state dict.
+    if isinstance(state, dict):
+        model_state = state.get("model_state", state.get("unetr_state", state.get("decoder_state", state)))
+    else:
+        model_state = state
+
+    # The standalone UniSAM2 trainer builds the model with a string encoder, so the SAM2 image
+    # encoder lives directly under 'encoder.*'. The joint trainer instead passes the SAM2 image
+    # encoder module, which gets wrapped in 'SAM2EncoderAdapter' and so lives under 'encoder.inner.*'.
+    # Detect the latter and rebuild the matching structure by passing a SAM2 image encoder module.
+    needs_adapter = isinstance(encoder, str) and any(k.startswith("encoder.inner.") for k in model_state)
+    if needs_adapter:
+        from micro_sam.v2.util import get_sam2_model
+        sam2_model = get_sam2_model(model_type=encoder, input_type="images", device=device or "cpu")
+        encoder = sam2_model.image_encoder
+
+    model = UniSAM2(encoder=encoder, output_channels=output_channels)
+    model.load_state_dict(model_state)
+
+    if device is not None:
+        model.to(device)
+    model.eval()
+    return model
+
+
+def get_decoder(model_type, checkpoint=None, device=None):
+    """Resolve and load the UniSAM2 decoder for a SAM2 model.
+
+    The decoder is provided either by an explicit `checkpoint` or by a finetuned model with a
+    registered decoder (e.g. 'hvit_t_cells'). Mirrors the micro-sam v1 `get_decoder`.
+
+    Args:
+        model_type: The SAM2 model. A finetuned model with a registered decoder, or a base backbone
+            combined with `checkpoint`.
+        checkpoint: Optional path to a decoder checkpoint to build the UniSAM2 decoder from.
+        device: The device to load the decoder onto.
+
+    Returns:
+        The UniSAM2 decoder model.
+    """
+    from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
+
+    # The decoder is built on the base backbone (first 6 characters, e.g. 'hvit_t_cells' -> 'hvit_t').
+    encoder = model_type[:6]
+    if checkpoint is not None:
+        decoder_source = checkpoint
+    elif model_type in FINETUNED_MODELS and has_registered_decoder(model_type):
+        _, _, decoder_source = _download_finetuned_sam2_model(model_type)
+    else:
+        raise ValueError(
+            f"Automatic segmentation with SAM2 requires a finetuned model with a registered decoder "
+            f"or a decoder checkpoint. '{model_type}' provides neither."
+        )
+    return get_unisam2_model(decoder_source, device=device, encoder=encoder)
+
+
+def _resize_spatial(x: torch.Tensor, size: tuple) -> torch.Tensor:
+    """Resize the trailing (Y, X) of a (B, C, Z, Y, X) tensor to `size`, leaving Z unchanged."""
+    b, c, z, y, x_dim = x.shape
+    x = x.permute(0, 2, 1, 3, 4).reshape(b * z, c, y, x_dim)
+    x = torch.nn.functional.interpolate(x, size=tuple(size), mode="bilinear", align_corners=False)
+    return x.reshape(b, z, c, size[0], size[1]).permute(0, 2, 1, 3, 4)
+
+
+class ResizeLongestSideWrapper(torch.nn.Module):
+    """Run UniSAM2 with resize-longest and bottom/right padding."""
+
+    def __init__(self, model: torch.nn.Module, img_size: int) -> None:
+        super().__init__()
+        self.model = model
+        self.img_size = img_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_tensor
+
+        spatial = x.shape[-2:]
+        x, resized = resize_longest_side_and_pad_tensor(x, self.img_size)
+        out = self.model(x)
+        out = out[..., :resized[0], :resized[1]]
+        return _resize_spatial(out, spatial)
+
+
+@contextlib.contextmanager
+def _bridge_halo_progress(pbar_update):
+    """Bridge `predict_with_halo`'s internal per-block tqdm to an external `pbar_update` callback.
+
+    `predict_with_halo` wraps its thread-pool map in a tqdm (a napari progress bar inside napari)
+    that micro-sam cannot otherwise drive, so 3d/tiled auto-segmentation showed no real progress.
+    This temporarily swaps that module-level tqdm for a thin iterator that fires `pbar_update` once
+    per completed block. It is a no-op fallback if `pbar_update` is None.
+    """
+    if pbar_update is None:
+        yield
+        return
+
+    import torch_em.util.prediction as prediction_module
+    original_tqdm = prediction_module.tqdm
+
+    class _ProgressBridge:
+        def __init__(self, iterable=None, *args, **kwargs):
+            self._iterable = iterable
+
+        def __iter__(self):
+            for item in self._iterable:
+                yield item
+                pbar_update(1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def update(self, n=1):
+            pbar_update(n)
+
+        def set_description(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    prediction_module.tqdm = _ProgressBridge
+    try:
+        yield
+    finally:
+        prediction_module.tqdm = original_tqdm
+
+
+def _n_blocks(spatial_shape, ndim, block_shape):
+    """Number of blocks `predict_with_halo` iterates over, for a determinate progress total."""
+    blocked = spatial_shape if ndim == 3 else (1, *spatial_shape)
+    return int(np.prod([int(np.ceil(s / b)) for s, b in zip(blocked, block_shape)]))
+
+
+def _block_shape_and_halo(spatial_shape, ndim, tile_shape, halo):
+    """Compute the (z, y, x) block shape and halo for `predict_with_halo`.
+
+    For 3d data a volume is always chunked along z - using the explicit z tile when tiling is on,
+    or the default z block when in-plane tiling is off (the whole in-plane plane per chunk). The
+    model is trained on small z crops, so running every slice at once is both out-of-distribution
+    and a memory blow-up (the cause of the 3d 'killed' reports). 2d data is a single (1, y, x) block.
+
+    Args:
+        spatial_shape: The spatial image shape, (Y, X) for 2d or (Z, Y, X) for 3d.
+        ndim: The number of spatial dimensions (2 or 3).
+        tile_shape: The in-plane/3d tile shape, or None for no tiling.
+        halo: The tile halo, or None for no overlap.
+
+    Returns:
+        The (block_shape, block_halo) tuples in (z, y, x) order for `predict_with_halo`.
+    """
+    is_3d = ndim == 3
+    if tile_shape is None and is_3d:
+        n_slices = spatial_shape[0]
+        z_block = min(DEFAULT_TILE_Z, n_slices)
+        block_shape = (z_block, spatial_shape[1], spatial_shape[2])
+        block_halo = (DEFAULT_HALO_Z if z_block < n_slices else 0, 0, 0)
+    elif tile_shape is None:
+        block_shape = (1, *spatial_shape)
+        block_halo = (0, 0, 0)
+    elif is_3d:
+        block_shape = tuple(tile_shape)  # (z, y, x)
+        block_halo = (0, 0, 0) if halo is None else tuple(halo)
+    else:
+        block_shape = (1, *tile_shape)  # (1, y, x)
+        block_halo = (0, *((0, 0) if halo is None else halo))
+    return block_shape, block_halo
+
+
+class _StubEncoder(torch.nn.Module):
+    """Encoder replacement that returns precomputed features, bypassing the SAM2 image encoder.
+
+    `UNETR3D.forward` calls `encoder(slice)[0]` to get the per-slice features and has no encoder
+    skip connections, so returning the precomputed `vision_features` here reproduces the full
+    forward pass without re-running the encoder.
+    """
+
+    def __init__(self, feature: torch.Tensor, img_size: int = 1024) -> None:
+        super().__init__()
+        self.feature = feature
+        self.img_size = img_size
+
+    def forward(self, x):  # noqa
+        return [self.feature]
+
+
+class _StubEncoder3D(torch.nn.Module):
+    """Encoder replacement for 3d that returns precomputed per-slice features in call order.
+
+    `UNETR3D.forward` runs ``torch.stack([self.encoder(x[:, :, i])[0] for i in range(Z)], dim=2)``,
+    i.e. it calls the encoder once per z slice in order, so returning the i-th precomputed slice
+    feature on the i-th call reproduces the full forward without re-running the encoder.
+    """
+
+    def __init__(self, features: torch.Tensor, img_size: int = 1024) -> None:
+        super().__init__()
+        self.features = features  # (Z, C, h, w)
+        self.img_size = img_size
+        self._idx = 0
+
+    def forward(self, x):  # noqa
+        feature = self.features[self._idx:self._idx + 1]
+        self._idx += 1
+        return [feature]
+
+
+def _decode_3d_feature_block(model, feature, original_size, device):
+    """Run the UNETR3D decoder on a ``(z, C, h, w)`` feature block via the stub encoder.
+
+    Temporarily swaps the model's encoder for `_StubEncoder3D` (which returns the precomputed per-slice
+    features in order) and runs the decoder on an original-size dummy, so the model resizes the
+    prediction back to ``(z, H, W)`` itself. Returns the prediction for this z block, shape ``(4, z, H, W)``.
+    """
+    img_size = getattr(model.encoder, "img_size", 1024)
+    real_encoder = model.encoder
+    model.encoder = _StubEncoder3D(feature, img_size)
+    try:
+        dummy = torch.zeros((1, 3, feature.shape[0], *original_size), device=device)
+        output = model(dummy)  # (1, 4, z, H, W)
+    finally:
+        model.encoder = real_encoder
+    return output[0].detach().cpu().numpy()  # (4, z, H, W)
+
+
+def _segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kwargs) -> np.ndarray:
+    """Convert UniSAM2 predictions into an instance segmentation.
+
+    Args:
+        prediction: The UniSAM2 predictions, shape (4, *spatial). Channel 0 is the foreground
+            probability and channels 1-3 are the directed distances.
+        mode: The segmentation mode. 'sparse' uses flow-based segmentation (LM data, 2d and 3d),
+            'dense' uses multicut-based segmentation (EM data, 2d and 3d).
+        kwargs: Additional parameters forwarded to the postprocessing function
+            (`flow_instance_segmentation` for 'sparse', `run_multicut` for 'dense').
+
+    Returns:
+        The instance segmentation, uint32 array with the spatial shape of the prediction.
+    """
+    foreground = prediction[0]
+    if mode == "dense":
+        boundary_map = foreground.max() - foreground
+        denom = boundary_map.max()
+        if denom > 0:
+            boundary_map = boundary_map / denom
+        # Multicut uses the in-plane (y, x) distance channels.
+        distances = np.stack([prediction[2], prediction[3]])
+        # run_multicut expects volumetric inputs. For 2d data we run it on a single-slice volume
+        # (no z-edges), which yields a 2d multicut, and squeeze the result back to 2d.
+        if boundary_map.ndim == 2:
+            seg = run_multicut(boundary_map[None], distances[:, None], **kwargs)[0]
+        else:
+            seg = run_multicut(boundary_map, distances, **kwargs)
+    else:
+        seg = flow_instance_segmentation(foreground, prediction[1:], **kwargs)
+    return seg.astype("uint32")
+
+
+class UniSAM2InstanceSegmentation(AutoSegBase):
+    """Generates an instance segmentation with the UniSAM2 decoder (AIS).
+
+    A concrete `AutoSegBase` (like `AutomaticMaskGenerationSegmenter`), but predicts the segmentation
+    with the UniSAM2 decoder instead of grid prompts. All UniSAM2 inference is encapsulated here (the
+    only way to run it). Use it as follows:
+    ```python
+    segmenter = UniSAM2InstanceSegmentation(model)
+    segmenter.initialize(image, ndim=2)  # Run the UniSAM2 inference.
+    masks = segmenter.generate(mode="sparse", foreground_threshold=0.6)  # Post-process.
+    ```
+
+    Args:
+        model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
+        device: The device to run inference on.
+    """
+
+    def __init__(self, model: torch.nn.Module, device: Optional[Union[str, torch.device]] = None) -> None:
+        self._model = model
+        self._device = device
+        self._prediction = None
+        self._is_initialized = False
+
+    def _run_full_inference(self, raw, ndim, tile_shape=None, halo=None, pbar_init=None, pbar_update=None):
+        """Run the UniSAM2 model (encoder + decoder) to predict foreground and directed distances.
+
+        Inference is tiled with a halo (3d: fully 3d; 2d: in-plane); with `tile_shape=None` the whole
+        image is a single block. Each block is percentile-normalized before prediction. Returns the
+        predictions stacked along the channel axis, shape (4, *spatial).
+        """
+        from torch_em.util.prediction import predict_with_halo
+        from micro_sam.v2.normalization import normalize_raw
+
+        def _preprocess(crop):
+            return np.concatenate([normalize_raw(crop)] * 3, axis=0)
+
+        is_3d = ndim == 3
+        block_shape, block_halo = _block_shape_and_halo(tuple(raw.shape), ndim, tile_shape, halo)
+        if pbar_init is not None:
+            desc = "Automatic segmentation (volume)" if is_3d else "Automatic segmentation"
+            pbar_init(_n_blocks(tuple(raw.shape), ndim, block_shape), desc)
+
+        if is_3d:
+            input_ = raw[np.newaxis].astype("float32")
+            output = np.zeros((4, *raw.shape), dtype="float32")
+        else:
+            input_ = raw[np.newaxis, np.newaxis].astype("float32")
+            output = np.zeros((4, 1, *raw.shape), dtype="float32")
+
+        img_size = getattr(getattr(self._model, "encoder", None), "img_size", 1024)
+        resize_model = ResizeLongestSideWrapper(self._model, img_size)
+
+        with _bridge_halo_progress(pbar_update):
+            output = predict_with_halo(
+                input_=input_,
+                model=resize_model,
+                block_shape=block_shape,
+                halo=block_halo,
+                preprocess=_preprocess,
+                gpu_ids=[self._device] if self._device is not None else None,
+                output=output,
+                with_channels=True,
+            )
+        if not is_3d:
+            output = output[:, 0]
+        return output
+
+    @torch.no_grad()
+    def _run_decoder_2d(self, image_embeddings):
+        """Run only the UniSAM2 decoder on precomputed 2d image embeddings (no encoder pass).
+
+        Reuses resize-longest 2d embeddings produced by `precompute_image_embeddings`. Returns the
+        predictions stacked along the channel axis, shape (4, Y, X).
+        """
+        features = np.asarray(image_embeddings["features"])
+        # A single slice taken from save-path 3d embeddings keeps a singleton batch axis, i.e.
+        # (1, 1, C, h, w); squeeze it back to the (1, C, h, w) a 2d embedding has (the in-memory layout).
+        if features.ndim == 5 and features.shape[1] == 1:
+            features = features[:, 0]
+        if features.ndim != 4:
+            raise ValueError(
+                f"Decoder-from-embeddings requires 2d image embeddings (features with ndim 4), got {features.ndim}."
+            )
+        feature = torch.as_tensor(features, device=self._device).float()
+        original_size = tuple(int(s) for s in np.array(image_embeddings["original_size"]).reshape(-1)[:2])
+
+        model = self._model
+        img_size = getattr(model.encoder, "img_size", 1024)
+        real_encoder = model.encoder
+        model.encoder = _StubEncoder(feature, img_size)
+        try:
+            dummy = torch.zeros((1, 3, 1, *original_size), device=self._device)
+            output = model(dummy)
+        finally:
+            model.encoder = real_encoder
+        return output[0, :, 0].detach().cpu().numpy()
+
+    @torch.no_grad()
+    def _run_decoder_3d(self, image_embeddings, z_block=None, z_halo=None, pbar_init=None, pbar_update=None):
+        """Run only the UniSAM2 decoder on precomputed 3d embeddings (no encoder pass).
+
+        Reuses the per-slice ``vision_features`` (shape ``(Z, C, h, w)``) produced for the volume -
+        the same embeddings used for interactive 3d segmentation. The decoder pass is chunked along z
+        (with a halo for 3d-conv context) so a deep volume does not decode the whole stack at once and
+        run out of memory. Returns predictions stacked along the channel axis, shape ``(4, Z, H, W)``.
+        """
+        z_block = DEFAULT_TILE_Z if z_block is None else int(z_block)
+        z_halo = DEFAULT_HALO_Z if z_halo is None else int(z_halo)
+
+        # Keep 'features' as the (possibly lazy, on-disk) handle and read only the current z block inside
+        # the loop, so peak memory is one z block instead of the whole feature volume. Use 'len(shape)' as
+        # zarr / z5py datasets and numpy arrays all expose 'shape' (but not always 'ndim').
+        features = image_embeddings["features"]
+        n_dims = len(features.shape)
+        if n_dims not in (4, 5):
+            raise ValueError(
+                f"Decoder-from-embeddings (3d) requires 3d embeddings (features with ndim 4 or 5), got {n_dims}."
+            )
+        # Per-slice features are (Z, C, h, w); the tiled / save-path layout keeps a singleton batch axis
+        # (Z, 1, C, h, w) - squeeze it per block so the stub returns a (1, C, h, w) feature per slice.
+        squeeze_batch = n_dims == 5 and features.shape[1] == 1
+        n_slices = features.shape[0]
+        original_size = tuple(int(s) for s in np.array(image_embeddings["original_size"]).reshape(-1)[:2])
+
+        z_starts = list(range(0, n_slices, z_block)) if n_slices > z_block else [0]
+        if pbar_init is not None:
+            pbar_init(n_slices, "Automatic segmentation (volume)")
+
+        output = np.zeros((4, n_slices, *original_size), dtype="float32")
+        for z0 in z_starts:
+            z1 = min(z0 + z_block, n_slices)
+            c0, c1 = max(0, z0 - z_halo), min(n_slices, z1 + z_halo)
+            block = np.asarray(features[c0:c1])
+            if squeeze_batch:
+                block = block[:, 0]
+            feature_block = torch.as_tensor(block, device=self._device).float()
+            pred = _decode_3d_feature_block(self._model, feature_block, original_size, self._device)
+            inner = z0 - c0
+            output[:, z0:z1] = pred[:, inner:inner + (z1 - z0)]
+            if pbar_update is not None:
+                pbar_update(z1 - z0)  # advance by the number of slices in this block
+        return output
+
+    @property
+    def is_initialized(self) -> bool:
+        """Whether the segmenter has already been initialized."""
+        return self._is_initialized
+
+    @torch.no_grad()
+    def initialize(
+        self,
+        image: np.ndarray,
+        ndim: int,
+        image_embeddings: Optional[dict] = None,
+        i: Optional[int] = None,
+        tile_shape: Optional[tuple] = None,
+        halo: Optional[tuple] = None,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
+        z_block: Optional[int] = None,
+        z_halo: Optional[int] = None,
+    ) -> None:
+        """Run the UniSAM2 inference and store the foreground and distance predictions.
+
+        Args:
+            image: The input image, shape (Y, X) for 2d or (Z, Y, X) for 3d.
+            ndim: The number of spatial dimensions (2 or 3).
+            image_embeddings: Optional precomputed image embeddings. If given, only the decoder is run
+                on them (no encoder pass), reusing the embeddings shared with interactive / AMG - for
+                both 2d and 3d. See `precompute_image_embeddings`.
+            i: Index for the image data. Unused here, kept for interface compatibility.
+            tile_shape: Unused for the non-tiled segmenter (no tiling); kept so the interface matches
+                the tiled segmenter.
+            halo: Unused for the non-tiled segmenter; kept for interface compatibility.
+            pbar_init: Callback to initialize an external progress bar. The 2d decoder-on-embeddings
+                path is a single step; the 3d path reports per z block, and the full-inference path
+                reports per block.
+            pbar_update: Callback to update an external progress bar.
+            z_block: Number of slices per z block for the 3d decoder pass (defaults to `DEFAULT_TILE_Z`).
+            z_halo: Overlapping slices between z blocks (defaults to `DEFAULT_HALO_Z`).
+        """
+        if image_embeddings is not None and ndim == 3:
+            # Decoder-only on precomputed 3d embeddings: progress advances per z block.
+            self._prediction = self._run_decoder_3d(
+                image_embeddings, z_block=z_block, z_halo=z_halo, pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+        elif image_embeddings is not None:
+            # Decoder-only on precomputed 2d embeddings is a single step.
+            if pbar_init is not None:
+                pbar_init(1, "Automatic segmentation")
+            self._prediction = self._run_decoder_2d(image_embeddings)
+            if pbar_update is not None:
+                pbar_update(1)
+        else:
+            # Full inference reports per block (per z chunk for 3d).
+            self._prediction = self._run_full_inference(
+                image, ndim, pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+        self._is_initialized = True
+
+    def generate(self, mode: str = "sparse", **kwargs) -> np.ndarray:
+        """Convert the stored predictions into an instance segmentation.
+
+        Args:
+            mode: The segmentation mode, 'sparse' (flow) or 'dense' (multicut).
+            kwargs: Additional parameters forwarded to the postprocessing.
+
+        Returns:
+            The instance segmentation, uint32 array.
+        """
+        if not self._is_initialized:
+            raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
+        return _segment_from_predictions(self._prediction, mode=mode, **kwargs)
+
+    def get_state(self) -> dict:
+        """Return the cached decoder predictions so they can be serialized and later restored.
+
+        The state holds the (4, *spatial) foreground + directed-distance predictions. Restore it
+        with `set_state` to skip the expensive decoder inference in `initialize`. It is independent
+        of the post-processing parameters (those are applied in `generate`), so it is always reusable.
+        """
+        if not self._is_initialized:
+            raise RuntimeError("Cannot get the state before the segmenter has been initialized.")
+        return {"prediction": self._prediction}
+
+    def set_state(self, state: dict) -> None:
+        """Restore the state produced by `get_state`, marking the segmenter initialized."""
+        self._prediction = np.asarray(state["prediction"])
+        self._is_initialized = True
+
+    def clear_state(self) -> None:
+        """Clear the cached decoder predictions."""
+        self._prediction = None
+        self._is_initialized = False
+
+
+class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
+    """Generates a tiled instance segmentation with the UniSAM2 decoder (AIS).
+
+    Like `UniSAM2InstanceSegmentation`, but the model inference is tiled in-plane (xy) with a halo.
+
+    Args:
+        model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
+        device: The device to run inference on.
+    """
+
+    @torch.no_grad()
+    def _run_decoder_tiled_2d(self, image_embeddings, pbar_init=None, pbar_update=None):
+        """Run the UniSAM2 decoder on precomputed tiled 2d embeddings and stitch the tiles.
+
+        For each tile the decoder is run on the precomputed per-tile features (no encoder pass), and
+        the inner block of the per-tile prediction (the halo is used only as context) is written into
+        the full output - the same halo stitching as the micro-sam v1 tiled decoder. Returns the
+        predictions stacked along the channel axis, shape (4, Y, X).
+        """
+        feats_group = image_embeddings["features"]
+        shape = tuple(int(s) for s in feats_group.attrs["shape"])
+        tile_shape = tuple(int(s) for s in feats_group.attrs["tile_shape"])
+        halo = tuple(int(s) for s in feats_group.attrs["halo"])
+        tiling = Blocking([0, 0], list(shape), list(tile_shape))
+
+        if pbar_init is not None:
+            pbar_init(tiling.number_of_blocks, "Automatic segmentation (tiles)")
+
+        output = np.zeros((4, *shape), dtype="float32")
+        for tile_id in range(tiling.number_of_blocks):
+            tile_features = feats_group[str(tile_id)]
+            # The UNETR decoder only needs the vision features, so we pass them as a single-image embedding.
+            tile_embeddings = {
+                "features": np.asarray(tile_features), "original_size": tile_features.attrs["original_size"],
+            }
+            tile_prediction = self._run_decoder_2d(tile_embeddings)
+
+            block = tiling.get_block_with_halo(tile_id, halo=list(halo))
+            local_bb = tuple(slice(b, e) for b, e in zip(block.inner_block_local.begin, block.inner_block_local.end))
+            inner_bb = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
+            output[(slice(None),) + inner_bb] = tile_prediction[(slice(None),) + local_bb]
+            if pbar_update is not None:
+                pbar_update(1)
+
+        return output
+
+    @torch.no_grad()
+    def _run_decoder_tiled_3d(self, image_embeddings, pbar_init=None, pbar_update=None, z_block=None, z_halo=None):
+        """Run the UniSAM2 decoder on precomputed tiled 3d embeddings and stitch the tiles in-plane.
+
+        Like `_run_decoder_tiled_2d`, but each tile holds the per-slice features for a full
+        ``(Z, tile_y, tile_x)`` sub-volume, so the decoder is run in 3d per tile (itself z-chunked)
+        and the inner block is stitched in-plane. Returns predictions of shape ``(4, Z, Y, X)``.
+        """
+        feats_group = image_embeddings["features"]
+        shape = tuple(int(s) for s in feats_group.attrs["shape"])  # (Z, Y, X)
+        tile_shape = tuple(int(s) for s in feats_group.attrs["tile_shape"])  # (y, x)
+        halo = tuple(int(s) for s in feats_group.attrs["halo"])  # (y, x)
+        tiling = Blocking([0, 0], list(shape[1:]), list(tile_shape))  # in-plane only; z is full per tile
+
+        # Progress is reported in (tiles x slices) units: each tile decodes the full z stack (in z blocks),
+        # so the inner per-tile decode advances the shared bar per block (no inner 'pbar_init' that would
+        # reset the total). This matches the granularity of the 3d-tiled embedding bar.
+        if pbar_init is not None:
+            pbar_init(tiling.number_of_blocks * shape[0], "Automatic segmentation (tiles)")
+
+        output = np.zeros((4, *shape), dtype="float32")
+        for tile_id in range(tiling.number_of_blocks):
+            # Keep the tile-column features lazy; '_run_decoder_3d' reads them one z block at a time from
+            # disk rather than materialising the whole column.
+            tile_features = feats_group[str(tile_id)]  # (Z, C, h, w)
+            tile_embeddings = {
+                "features": tile_features, "original_size": tile_features.attrs["original_size"],
+            }
+            tile_prediction = self._run_decoder_3d(
+                tile_embeddings, z_block=z_block, z_halo=z_halo, pbar_update=pbar_update,
+            )  # (4, Z, ty, tx)
+
+            block = tiling.get_block_with_halo(tile_id, halo=list(halo))
+            local_bb = tuple(slice(b, e) for b, e in zip(block.inner_block_local.begin, block.inner_block_local.end))
+            inner_bb = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
+            # Full channel + full z, inner block in-plane.
+            output[(slice(None), slice(None)) + inner_bb] = tile_prediction[(slice(None), slice(None)) + local_bb]
+
+        return output
+
+    @torch.no_grad()
+    def _run_decoder_tiled_3d_slice(self, image_embeddings, i, pbar_init=None, pbar_update=None):
+        """Run the UniSAM2 decoder on a single slice of precomputed tiled 3d embeddings, stitched in-plane.
+
+        For segmenting one slice of a volume without re-encoding: per tile, slice ``i``'s precomputed
+        features are decoded as a single-slice (Z=1) volume via `_run_decoder_3d`, and the inner block
+        is stitched in-plane. Returns the slice predictions of shape ``(4, Y, X)``.
+        """
+        feats_group = image_embeddings["features"]
+        shape = tuple(int(s) for s in feats_group.attrs["shape"])  # (Z, Y, X)
+        tile_shape = tuple(int(s) for s in feats_group.attrs["tile_shape"])  # (y, x)
+        halo = tuple(int(s) for s in feats_group.attrs["halo"])  # (y, x)
+        tiling = Blocking([0, 0], list(shape[1:]), list(tile_shape))
+
+        if pbar_init is not None:
+            pbar_init(tiling.number_of_blocks, "Automatic segmentation (tiles)")
+
+        output = np.zeros((4, *shape[1:]), dtype="float32")  # (4, Y, X)
+        for tile_id in range(tiling.number_of_blocks):
+            tile_features = feats_group[str(tile_id)]  # (Z, 1, C, h, w)
+            # Slice 'i' as a single-slice (Z=1) feature volume for this tile.
+            slice_embeddings = {
+                "features": np.asarray(tile_features[i]), "original_size": tile_features.attrs["original_size"],
+            }
+            tile_prediction = self._run_decoder_3d(slice_embeddings)  # (4, 1, ty, tx)
+            tile_prediction = tile_prediction[:, 0]  # (4, ty, tx)
+
+            block = tiling.get_block_with_halo(tile_id, halo=list(halo))
+            local_bb = tuple(slice(b, e) for b, e in zip(block.inner_block_local.begin, block.inner_block_local.end))
+            inner_bb = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
+            output[(slice(None),) + inner_bb] = tile_prediction[(slice(None),) + local_bb]
+            if pbar_update is not None:
+                pbar_update(1)
+
+        return output
+
+    @torch.no_grad()
+    def initialize(
+        self,
+        image: np.ndarray,
+        ndim: int,
+        tile_shape: Optional[tuple] = None,
+        halo: Optional[tuple] = None,
+        image_embeddings: Optional[dict] = None,
+        i: Optional[int] = None,
+        pbar_init: Optional[callable] = None,
+        pbar_update: Optional[callable] = None,
+        z_block: Optional[int] = None,
+        z_halo: Optional[int] = None,
+    ) -> None:
+        """Run the tiled UniSAM2 inference and store the foreground and distance predictions.
+
+        Args:
+            image: The input image, shape (Y, X) for 2d or (Z, Y, X) for 3d.
+            ndim: The number of spatial dimensions (2 or 3).
+            tile_shape: The tile shape for tiled prediction - (y, x) for 2d, (z, y, x) for 3d.
+            halo: The halo for the overlap between tiles - (y, x) for 2d, (z, y, x) for 3d.
+            image_embeddings: Optional precomputed tiled image embeddings. If given, the decoder is run
+                per tile on them and stitched (no encoder pass), reusing the embeddings shared with
+                interactive / AMG - for both 2d and 3d. See `precompute_image_embeddings`.
+            i: Slice index, for segmenting a single slice of a volume from tiled 3d embeddings
+                (ndim 2); unused otherwise.
+            pbar_init: Callback to initialize an external progress bar, called with the number of
+                tiles (2d) or the number of blocks / z chunks (3d).
+            pbar_update: Callback to update an external progress bar, called once per tile / block.
+            z_block: Number of slices per z block for the per-tile 3d decoder (defaults to `DEFAULT_TILE_Z`).
+            z_halo: Overlapping slices between z blocks (defaults to `DEFAULT_HALO_Z`).
+        """
+        # A single slice of a volume from tiled 3d (video-style) embeddings: reuse slice 'i's features
+        # per tile (no re-encode). 3d tiled embeddings carry an 'fpn' group; 2d tiled ones do not.
+        if image_embeddings is not None and ndim == 2 and "fpn" in image_embeddings and i is not None:
+            self._prediction = self._run_decoder_tiled_3d_slice(
+                image_embeddings, i, pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+        elif image_embeddings is not None and ndim == 3:
+            self._prediction = self._run_decoder_tiled_3d(
+                image_embeddings, pbar_init=pbar_init, pbar_update=pbar_update, z_block=z_block, z_halo=z_halo,
+            )
+        elif image_embeddings is not None and ndim == 2:
+            self._prediction = self._run_decoder_tiled_2d(
+                image_embeddings, pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+        else:
+            # 3d tiled inference runs through 'predict_with_halo'; its per-block tqdm is bridged to the
+            # external progress bar inside '_run_full_inference' so progress is reported per block.
+            self._prediction = self._run_full_inference(
+                image, ndim, tile_shape=tile_shape, halo=halo, pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+        self._is_initialized = True
+
+
+def get_unisam2_segmentation_generator(
+    model: torch.nn.Module,
+    is_tiled: bool = False,
+    device: Optional[Union[str, torch.device]] = None,
+) -> UniSAM2InstanceSegmentation:
+    """Get the UniSAM2 decoder-based (AIS) instance segmentation generator.
+
+    Args:
+        model: The UniSAM2 model.
+        is_tiled: Whether to use tiled inference.
+        device: The device to run inference on.
+
+    Returns:
+        The instance segmentation generator, either `TiledUniSAM2InstanceSegmentation` (if tiled)
+        or `UniSAM2InstanceSegmentation`.
+    """
+    if is_tiled:
+        return TiledUniSAM2InstanceSegmentation(model, device=device)
+    return UniSAM2InstanceSegmentation(model, device=device)
+
+
+def get_instance_segmentation_generator(
+    model: Optional[torch.nn.Module] = None,
+    decoder: Optional[torch.nn.Module] = None,
+    is_tiled: bool = False,
+    segmentation_mode: Optional[str] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    **kwargs,
+) -> AutoSegBase:
+    """Get the automatic instance segmentation generator (AMG or AIS), mirroring the v1 factory.
+
+    Args:
+        model: The SAM2 model, required for the 'amg' mode.
+        decoder: The UniSAM2 decoder model, required for the 'ais' mode.
+        is_tiled: Whether to use the tiled segmenter.
+        segmentation_mode: One of 'amg' or 'ais'. By default 'ais' is used if a decoder is given,
+            otherwise 'amg'.
+        device: The device to run inference on ('ais' only).
+        kwargs: Additional keyword arguments for the AMG segmenter.
+
+    Returns:
+        The segmentation generator instance.
+    """
+    if segmentation_mode is None:
+        segmentation_mode = DEFAULT_SEGMENTATION_MODE_WITH_DECODER if decoder is not None else "amg"
+
+    if segmentation_mode.lower() == "amg":
+        if model is None:
+            raise ValueError("The 'amg' segmentation mode requires a SAM2 'model'.")
+        return get_amg_segmenter(model, is_tiled=is_tiled, **kwargs)
+    elif segmentation_mode.lower() == "ais":
+        if decoder is None:
+            raise ValueError("The 'ais' segmentation mode requires a UniSAM2 'decoder'.")
+        return get_unisam2_segmentation_generator(decoder, is_tiled=is_tiled, device=device)
+    else:
+        raise ValueError(f"Invalid segmentation_mode: {segmentation_mode}. Choose 'amg' or 'ais'.")

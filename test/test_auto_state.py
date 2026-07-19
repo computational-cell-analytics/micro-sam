@@ -27,8 +27,8 @@ from micro_sam.precompute_state import (
     cache_autoseg_state,
 )
 from micro_sam.util import _open_embeddings, _create_dataset_with_data
-from micro_sam.v2.automatic_segmentation import UniSAM2InstanceSegmentation
 from micro_sam.v2.instance_segmentation import (
+    UniSAM2InstanceSegmentation,
     AutomaticMaskGenerationSegmenter,
     TiledAutomaticMaskGenerationSegmenter,
     _LazyRLEMask,

@@ -492,15 +492,16 @@ def inference_segmentation(
 
     from .v2.util import DEFAULT_MODEL
     from .v1.automatic_segmentation import _get_inputs_from_paths
-    from .v2.automatic_segmentation import get_segmenter, automatic_instance_segmentation
+    from .v2.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
     model_type = model_type or DEFAULT_MODEL
     tile_shape = _parse_shape(tile_shape)
     halo = _parse_shape(halo)
     generate_kwargs = _parse_extra(ctx.args)
 
-    segmenter = get_segmenter(
-        model_type=model_type, checkpoint=checkpoint_path, device=device, is_tiled=tile_shape is not None,
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=model_type, checkpoint=checkpoint_path, device=device,
+        segmentation_mode="ais", is_tiled=tile_shape is not None,
     )
 
     input_paths = _get_inputs_from_paths(list(input_path), pattern)
@@ -521,6 +522,7 @@ def inference_segmentation(
             embedding_fpath = os.path.join(embedding_folder, f"{os.path.splitext(os.path.basename(path))[0]}.zarr")
 
         segmentation = automatic_instance_segmentation(
+            predictor=predictor,
             segmenter=segmenter,
             input_path=path,
             output_path=output_fpath,
@@ -580,17 +582,19 @@ def inference_tracking(
     for sparse or '--beta' for dense) can be passed through and are forwarded.
     """
     from .v2.util import DEFAULT_MODEL
-    from .v2.automatic_segmentation import get_segmenter, automatic_tracking
+    from .v2.automatic_segmentation import get_predictor_and_segmenter, automatic_tracking
 
     model_type = model_type or DEFAULT_MODEL
     tile_shape = _parse_shape(tile_shape)
     halo = _parse_shape(halo)
     generate_kwargs = _parse_extra(ctx.args)
 
-    segmenter = get_segmenter(
-        model_type=model_type, checkpoint=checkpoint_path, device=device, is_tiled=tile_shape is not None,
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=model_type, checkpoint=checkpoint_path, device=device,
+        segmentation_mode="ais", is_tiled=tile_shape is not None,
     )
     automatic_tracking(
+        predictor=predictor,
         segmenter=segmenter,
         input_path=input_path,
         output_path=output_path,

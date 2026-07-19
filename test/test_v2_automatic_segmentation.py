@@ -4,12 +4,21 @@ import inspect
 import numpy as np
 import torch
 
-from micro_sam.v2.automatic_segmentation import (
-    _block_shape_and_halo, run_unisam2_decoder_on_3d_embeddings, run_unisam2_decoder_on_embeddings,
+from micro_sam.v2.instance_segmentation import (
+    _block_shape_and_halo, _set_image_predictor_from_backbone, UniSAM2InstanceSegmentation,
 )
-from micro_sam.v2.instance_segmentation import _set_image_predictor_from_backbone
 from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, run_multicut
 from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
+
+
+def _run_decoder_3d(model, image_embeddings, device="cpu"):
+    """Run the UniSAM2 decoder on 3d embeddings through the class (the only inference entry point)."""
+    return UniSAM2InstanceSegmentation(model, device=device)._run_decoder_3d(image_embeddings)
+
+
+def _run_decoder_2d(model, image_embeddings, device="cpu"):
+    """Run the UniSAM2 decoder on 2d embeddings through the class (the only inference entry point)."""
+    return UniSAM2InstanceSegmentation(model, device=device)._run_decoder_2d(image_embeddings)
 
 
 def test_run_multicut_uses_dense_defaults():
@@ -72,7 +81,7 @@ def test_set_image_predictor_from_backbone_reconstructs_features():
 class _FakeUNETR:
     """A stand-in for UNETR3D that mimics its per-slice encoder loop, for model-free tests.
 
-    `run_unisam2_decoder_on_3d_embeddings` swaps in a stub encoder and calls `model(dummy)`. This fake
+    `UniSAM2InstanceSegmentation._run_decoder_3d` swaps in a stub encoder and calls `model(dummy)`. This fake
     reproduces UNETR3D.forward's ``[self.encoder(x[:, :, i])[0] for i in range(Z)]`` loop, records the
     per-slice features the stub returned, and emits a (1, 4, Z, H, W) prediction of the dummy size.
     A plain (non-nn.Module) class so the encoder attribute can be freely swapped and restored.
@@ -99,7 +108,7 @@ def test_decoder_3d_stub_returns_per_slice_features_in_order():
     z, c, h, w = DEFAULT_TILE_Z, 2, 4, 4
     feats = np.arange(z * c * h * w, dtype="float32").reshape(z, c, h, w)
     model = _FakeUNETR(img_size=8)
-    out = run_unisam2_decoder_on_3d_embeddings(model, {"features": feats, "original_size": (8, 8)}, device="cpu")
+    out = _run_decoder_3d(model, {"features": feats, "original_size": (8, 8)})
     assert out.shape == (4, z, 8, 8)
     assert model.call_z == [z]  # single pass
     assert len(model.seen) == z
@@ -114,7 +123,7 @@ def test_decoder_3d_squeezes_5d_features():
     z, c, h, w = 3, 2, 4, 4
     feats5 = np.arange(z * 1 * c * h * w, dtype="float32").reshape(z, 1, c, h, w)
     model = _FakeUNETR(img_size=8)
-    out = run_unisam2_decoder_on_3d_embeddings(model, {"features": feats5, "original_size": (8, 8)}, device="cpu")
+    out = _run_decoder_3d(model, {"features": feats5, "original_size": (8, 8)})
     assert out.shape == (4, z, 8, 8)
     for i, feat in enumerate(model.seen):
         assert tuple(feat.shape) == (1, c, h, w)
@@ -128,7 +137,7 @@ def test_decoder_2d_squeezes_5d_features():
     c, h, w = 2, 4, 4
     feats5 = np.arange(1 * 1 * c * h * w, dtype="float32").reshape(1, 1, c, h, w)
     model = _FakeUNETR(img_size=8)
-    out = run_unisam2_decoder_on_embeddings(model, {"features": feats5, "original_size": (8, 8)}, device="cpu")
+    out = _run_decoder_2d(model, {"features": feats5, "original_size": (8, 8)})
     assert out.shape == (4, 8, 8)
     assert len(model.seen) == 1
     assert tuple(model.seen[0].shape) == (1, c, h, w)
@@ -138,9 +147,7 @@ def test_decoder_2d_squeezes_5d_features():
 def test_decoder_2d_uses_original_non_square_shape():
     features = np.zeros((1, 2, 4, 4), dtype="float32")
     model = _FakeUNETR(img_size=8)
-    out = run_unisam2_decoder_on_embeddings(
-        model, {"features": features, "original_size": (4, 8)}, device="cpu",
-    )
+    out = _run_decoder_2d(model, {"features": features, "original_size": (4, 8)})
 
     assert out.shape == (4, 4, 8)
     assert model.call_hw == [(4, 8)]
@@ -152,7 +159,7 @@ def test_decoder_3d_zchunks_deep_volume():
     z, c, h, w = 10, 2, 4, 4
     feats = np.zeros((z, c, h, w), dtype="float32")
     model = _FakeUNETR(img_size=8)
-    out = run_unisam2_decoder_on_3d_embeddings(model, {"features": feats, "original_size": (8, 8)}, device="cpu")
+    out = _run_decoder_3d(model, {"features": feats, "original_size": (8, 8)})
     assert out.shape == (4, z, 8, 8)
     assert len(model.call_z) > 1  # chunked along z, not a single whole-stack pass
     # Every decoder call stays within one z block plus the halo on each side.
