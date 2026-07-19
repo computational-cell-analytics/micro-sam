@@ -1,9 +1,12 @@
 import random
+from functools import partial
+from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 from torchvision.transforms import ColorJitter
+from torch_em.transform.raw import RandomPercentileNormalization, RawTransform
 
 from micro_sam.v2.normalization import normalize_raw
 
@@ -29,25 +32,35 @@ def to_rgb(image):
     return image
 
 
-def _to_8bit(raw):
-    "Ensures three channels for inputs and percentile-normalizes them to [0, 1]."
+def _prepare_to_8bit(raw):
+    """Prepare raw inputs for ``_to_8bit`` without changing their dynamic range."""
     if raw.ndim == 3 and raw.shape[0] == 1:  # If the inputs have 1 channel, we triplicate it.
         raw = np.concatenate([raw] * 3, axis=0)
 
-    raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
+    return to_rgb(raw)  # Ensure channel-first RGB without rescaling the original intensities.
+
+
+def _to_8bit(raw):
+    "Ensures three channels for inputs and percentile-normalizes them to [0, 1]."
+    raw = _prepare_to_8bit(raw)
     raw = normalize_raw(raw, axis=(1, 2))
     return raw
 
 
+def _prepare_identity(x):
+    """Prepare raw inputs for ``_identity`` without changing their dynamic range."""
+    return to_rgb(x)
+
+
 def _identity(x):
     "Ensures three channels for inputs and percentile-normalizes them to [0, 1]."
-    x = to_rgb(x)
+    x = _prepare_identity(x)
     x = normalize_raw(x, axis=(1, 2))
     return x
 
 
-def _cellpose_raw_trafo(x):
-    """Transforms input images to desired format.
+def _prepare_cellpose_raw(x):
+    """Prepare CellPose inputs without changing their dynamic range.
 
     NOTE: The input channel logic is arranged a bit strangely in `cyto` dataset.
     This function takes care of it here.
@@ -64,7 +77,12 @@ def _cellpose_raw_trafo(x):
         # The image is 2 channels and we sort the channels such that - 0: cell, 1: nucleus
         x = np.stack([g, r, np.zeros_like(b)], axis=0)
 
-    x = to_rgb(x)  # Ensures three channels for inputs and avoids rescaling inputs.
+    return to_rgb(x)  # Ensures three channels for inputs and avoids rescaling inputs.
+
+
+def _cellpose_raw_trafo(x):
+    """Prepare and percentile-normalize CellPose inputs."""
+    x = _prepare_cellpose_raw(x)
     x = normalize_raw(x, axis=(1, 2))
     return x
 
@@ -77,8 +95,13 @@ def _resize_to_512(x, is_label=False):
 
 def _resize_raw_to_512(x):
     """Resize small raw volume patch to 512×512 and normalize."""
-    x = _resize_to_512(x, is_label=False)
-    return _identity(x)
+    x = _prepare_resize_raw_to_512(x)
+    return normalize_raw(x, axis=(1, 2))
+
+
+def _prepare_resize_raw_to_512(x):
+    """Resize a raw patch without normalizing it."""
+    return _prepare_identity(_resize_to_512(x, is_label=False))
 
 
 class VideoAugment:
@@ -354,3 +377,52 @@ def _normalize_percentile(x, axis=None):
     'rgb' format of TissueNet image data for the expected axes.
     """
     return normalize_raw(x, axis=axis)
+
+
+def get_random_percentile_normalization(
+    raw_transform: Callable,
+    lower_percentile_bounds: Tuple[float, float] = (0.0, 5.0),
+    distribution: str = "uniform",
+    distribution_kwargs: Optional[Dict[str, float]] = None,
+) -> RawTransform:
+    """Convert a generalist raw transform to random percentile normalization.
+
+    The data-specific shape/channel preparation is retained as ``RawTransform.augmentation1``, so the
+    normalizer receives data in its original intensity range. An existing ``augmentation2`` is preserved.
+    """
+    augmentation2 = None
+    if isinstance(raw_transform, RawTransform):
+        if not isinstance(raw_transform.normalizer, RandomPercentileNormalization):
+            raise ValueError(f"Unsupported generalist raw transform: {raw_transform!r}")
+        augmentation1, augmentation2 = raw_transform.augmentation1, raw_transform.augmentation2
+        axis = raw_transform.normalizer.axis
+    elif isinstance(raw_transform, RandomPercentileNormalization):
+        augmentation1, axis = None, raw_transform.axis
+    elif raw_transform is _identity:
+        augmentation1, axis = _prepare_identity, (1, 2)
+    elif raw_transform is _to_8bit:
+        augmentation1, axis = _prepare_to_8bit, (1, 2)
+    elif raw_transform is _cellpose_raw_trafo:
+        augmentation1, axis = _prepare_cellpose_raw, (1, 2)
+    elif raw_transform is _resize_raw_to_512:
+        augmentation1, axis = _prepare_resize_raw_to_512, (1, 2)
+    elif raw_transform is _normalize_percentile:
+        augmentation1, axis = None, None
+    elif isinstance(raw_transform, partial) and raw_transform.func is _normalize_percentile:
+        if raw_transform.args:
+            raise ValueError("Positional arguments are not supported for _normalize_percentile transforms.")
+        unexpected_kwargs = set(raw_transform.keywords) - {"axis"}
+        if unexpected_kwargs:
+            raise ValueError(f"Unsupported _normalize_percentile arguments: {sorted(unexpected_kwargs)}")
+        augmentation1, axis = None, raw_transform.keywords.get("axis")
+    else:
+        raise ValueError(f"Unsupported generalist raw transform: {raw_transform!r}")
+
+    normalizer = RandomPercentileNormalization(
+        lower_percentile_bounds=lower_percentile_bounds,
+        distribution=distribution,
+        distribution_kwargs=distribution_kwargs,
+        rounding_decimals=1,
+        axis=axis,
+    )
+    return RawTransform(normalizer=normalizer, augmentation1=augmentation1, augmentation2=augmentation2)

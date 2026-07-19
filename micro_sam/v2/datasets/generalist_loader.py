@@ -17,13 +17,13 @@ from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, _build_group_map
 from ..transforms.raw import (
     _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile, _resize_raw_to_512, _resize_to_512,
+    get_random_percentile_normalization,
 )
 from ..transforms.labels import (
     _em_cell_label_trafo, _joint_em_cell_label_trafo,
     _plantseg_label_trafo, _axondeepseg_pre_label_transform, _instance_labels,
     _JointLabelTransform,
 )
-
 
 # Cap on validation samples drawn per dataset, to keep the per-epoch validation pass cheap.
 # Each access is a random crop (see UniDataWrapper.max_samples), so this is N random samples.
@@ -33,6 +33,11 @@ N_SAMPLES_VAL = 50
 # (prompt sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch) in
 # Sam2Trainer._validate_impl, so the validation metric is comparable across epochs.
 VALIDATION_SEED = 42
+
+# Train with uniformly sampled symmetric percentiles; validate deterministically with 2nd/98th percentiles
+# to match the inference-time normalization in normalize_raw.
+TRAIN_LOWER_PERCENTILE_BOUNDS = (0.0, 5.0)
+VALIDATION_LOWER_PERCENTILE_BOUNDS = (2.0, 2.0)
 
 
 def seed_worker(worker_id):
@@ -52,6 +57,41 @@ def _ensure_native_byte_order(y):
     # tifffile.memmap returns big-endian >f4 for some TIFFs; byteswap to native so that
     # Kornia augmentation and skimage/vigra C extensions receive correctly ordered bytes.
     return y.byteswap().view(y.dtype.newbyteorder()) if not y.dtype.isnative else y
+
+
+def _set_percentile_normalization(dataset, lower_percentile_bounds):
+    """Replace fixed normalization in all torch-em leaves of a dataset tree."""
+    if isinstance(dataset, (list, tuple)):
+        for ds in dataset:
+            _set_percentile_normalization(ds, lower_percentile_bounds)
+        return
+
+    if isinstance(dataset, UniDataWrapper):
+        _set_percentile_normalization(dataset.ds, lower_percentile_bounds)
+        return
+
+    children = getattr(dataset, "datasets", None)
+    if children is not None:
+        for ds in children:
+            _set_percentile_normalization(ds, lower_percentile_bounds)
+        return
+
+    if not hasattr(dataset, "raw_transform"):
+        raise TypeError(f"Cannot configure raw normalization for dataset of type {type(dataset).__name__}.")
+
+    dataset.raw_transform = get_random_percentile_normalization(
+        dataset.raw_transform, lower_percentile_bounds=lower_percentile_bounds
+    )
+
+
+def _configure_training_normalization(train_datasets, val_datasets):
+    """Enable random percentile augmentation for training and deterministic 2nd/98th validation."""
+    _set_percentile_normalization(
+        train_datasets, lower_percentile_bounds=TRAIN_LOWER_PERCENTILE_BOUNDS,
+    )
+    _set_percentile_normalization(
+        val_datasets, lower_percentile_bounds=VALIDATION_LOWER_PERCENTILE_BOUNDS,
+    )
 
 
 def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32, deterministic=False):
@@ -163,7 +203,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                 "Mouse-Organoid-Cells-CBG", "Mouse-Skull-Nuclei-CBG",
                 "Platynereis-ISH-Nuclei-CBG", "Platynereis-Nuclei-CBG",
             ]
-        else:   # Only two datasets have the test split.
+        else:  # Only two datasets have the test split.
             names = ["Mouse-Skull-Nuclei-CBG", "Platynereis-ISH-Nuclei-CBG"]
 
         all_embedseg_datasets = [
@@ -397,8 +437,8 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     """Get all electron microscopy (EM) datasets for generalist training.
 
     Args:
-        _em_label_trafo: EM cell label transform function to use.  Defaults to
-            :func:`_em_cell_label_trafo`.  Pass :func:`_joint_em_cell_label_trafo`
+        _em_label_trafo: EM cell label transform function to use. Defaults to
+            :func:`_em_cell_label_trafo`. Pass :func:`_joint_em_cell_label_trafo`
             when building joint interactive+automatic datasets.
 
     Returns:
@@ -705,6 +745,8 @@ def get_dataloaders(
         train_ds.extend(em_train)
         val_ds.extend(em_val)
 
+    _configure_training_normalization(train_ds, val_ds)
+
     # Finally, we prepare a 'ConcatDataset' for all the available datasets.
     train_ds = ConcatDataset(*train_ds)
     val_ds = ConcatDataset(*val_ds)
@@ -739,7 +781,7 @@ def get_interactive_dataloaders(
 
     Identical dataset composition to :func:`get_dataloaders` but returns raw
     integer instance labels (``label_dtype=torch.int64``) instead of distance
-    transforms.  Used with :class:`micro_sam.v2.training.ConvertToSam2VideoBatch`.
+    transforms. Used with :class:`micro_sam.v2.training.ConvertToSam2VideoBatch`.
 
     Args:
         input_path: Root path to the generalist training data.
@@ -815,6 +857,7 @@ def _build_automatic_datasets(input_path, z_slices, dataset_choice):
         train_ds.extend(em_train)
         val_ds.extend(em_val)
 
+    _configure_training_normalization(train_ds, val_ds)
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
 
 
@@ -848,6 +891,8 @@ def _build_interactive_datasets(input_path, z_slices, dataset_choice):
         em_train, em_val = _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    _configure_training_normalization(train_ds, val_ds)
 
     # Cap each validation dataset to N_SAMPLES_VAL random samples so the per-epoch
     # validation pass stays cheap (train datasets are left at full size).
@@ -896,6 +941,8 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice):
         )
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    _configure_training_normalization(train_ds, val_ds)
 
     # Cap each validation dataset to N_SAMPLES_VAL random samples so the per-epoch
     # validation pass stays cheap (matches the interactive builder; train datasets are full size).
