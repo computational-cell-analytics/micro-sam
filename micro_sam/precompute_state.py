@@ -290,14 +290,16 @@ def _has_autoseg_state(save_path, mode, state_count=1):
     """Check cache completeness from Zarr metadata without loading state arrays or bitstreams."""
     if save_path is None or not os.path.exists(save_path):
         return False
+    # Any failure to read the metadata (unreadable / partial zarr, backend error) means we cannot
+    # confirm a usable cache, so we treat it as absent rather than propagate into the GUI gating.
     try:
         embeddings = util._open_embeddings(save_path, mode="r")
         group = _get_autoseg_state_group(embeddings, mode)
-    except (OSError, RuntimeError, ValueError):
+        if group is None:
+            return False
+        return int(group.attrs.get("state_count", len(group))) >= state_count
+    except Exception:
         return False
-    if group is None:
-        return False
-    return int(group.attrs.get("state_count", len(group))) >= state_count
 
 
 def _ais_state_matches(state, model_type):
