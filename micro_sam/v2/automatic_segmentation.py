@@ -63,7 +63,10 @@ def get_predictor_and_segmenter(
     decoder = None
     if segmentation_mode != "amg":
         try:
-            decoder = get_decoder(model_type, checkpoint=checkpoint, device=device)
+            # Reuse the predictor's already-built image encoder for the decoder (its weights are
+            # redefined by the checkpoint's strict load) to avoid building a second SAM2 backbone.
+            encoder = getattr(getattr(predictor, "model", predictor), "image_encoder", None)
+            decoder = get_decoder(model_type, checkpoint=checkpoint, device=device, encoder=encoder)
         except Exception as e:
             if segmentation_mode == "ais":
                 raise

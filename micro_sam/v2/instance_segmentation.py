@@ -190,11 +190,6 @@ class AutomaticMaskGenerationSegmenter(AutoSegBase):
         self._original_size = None
         self._is_initialized = False
 
-    @property
-    def is_initialized(self) -> bool:
-        """Whether the segmenter has already been initialized."""
-        return self._is_initialized
-
     def _generate_masks_for_shape(self, shape: Tuple[int, int]) -> List[Dict[str, Any]]:
         """Run the grid-based mask prediction reusing the embeddings already set on the predictor.
 
@@ -728,7 +723,7 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, outp
     return model
 
 
-def get_decoder(model_type, checkpoint=None, device=None):
+def get_decoder(model_type, checkpoint=None, device=None, encoder=None):
     """Resolve and load the UniSAM2 decoder for a SAM2 model.
 
     The decoder is provided either by an explicit `checkpoint` or by a finetuned model with a
@@ -739,14 +734,19 @@ def get_decoder(model_type, checkpoint=None, device=None):
             combined with `checkpoint`.
         checkpoint: Optional path to a decoder checkpoint to build the UniSAM2 decoder from.
         device: The device to load the decoder onto.
+        encoder: Optional prebuilt SAM2 image-encoder module to build the decoder on, reused instead
+            of rebuilding the base backbone (its weights are redefined by the checkpoint's strict
+            load). By default the base backbone name (first 6 chars of `model_type`) is used.
 
     Returns:
         The UniSAM2 decoder model.
     """
     from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
 
-    # The decoder is built on the base backbone (first 6 characters, e.g. 'hvit_t_cells' -> 'hvit_t').
-    encoder = model_type[:6]
+    # Reuse a prebuilt encoder module if given, else build the decoder on the base backbone name
+    # (first 6 characters, e.g. 'hvit_t_cells' -> 'hvit_t').
+    if encoder is None:
+        encoder = model_type[:6]
     if checkpoint is not None:
         decoder_source = checkpoint
     elif model_type in FINETUNED_MODELS and has_registered_decoder(model_type):
@@ -1103,11 +1103,6 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
             if pbar_update is not None:
                 pbar_update(z1 - z0)  # advance by the number of slices in this block
         return output
-
-    @property
-    def is_initialized(self) -> bool:
-        """Whether the segmenter has already been initialized."""
-        return self._is_initialized
 
     @torch.no_grad()
     def initialize(
