@@ -18,7 +18,9 @@ import micro_sam
 import micro_sam.util as util
 from micro_sam.v1.util import get_sam_model
 from micro_sam.v1.instance_segmentation import AutoSegBase, get_decoder
-from micro_sam.precompute_state import cache_amg_state, cache_is_state, cache_autoseg_state
+from micro_sam.precompute_state import (
+    cache_amg_state, cache_is_state, cache_autoseg_state, _cache_amg_volume_state
+)
 
 from segment_anything import SamPredictor
 
@@ -45,7 +47,7 @@ def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_
         encoder = get_vfm_model(model_type, device=device, checkpoint_path=checkpoint_path)
         return encoder, {}
 
-    if model_type.startswith("h"):  # i.e. SAM2 models.
+    if model_type.startswith("hvit"):  # i.e. SAM2 models.
         from micro_sam.v2.util import get_sam2_image_predictor, get_sam2_model
 
         # 'device=None' lets 'get_sam2_model' auto-detect the best device (cuda > mps > cpu);
@@ -177,7 +179,7 @@ class AnnotatorState(metaclass=Singleton):
             decoder_path = None
 
         from micro_sam.models.vfm import is_vfm_model
-        self.is_sam2 = model_type.startswith("h")
+        self.is_sam2 = model_type.startswith("hvit")
         self.is_vfm = is_vfm_model(model_type)
 
         # Initialize the model if necessary.
@@ -357,19 +359,14 @@ class AnnotatorState(metaclass=Singleton):
                 pbar_update(1)
         else:  # AMG on a volume: cache the grid-prediction state per slice, reusing the 3d embeddings.
             n_slices = image_data.shape[0] if image_data.ndim == 3 else image_data.shape[1]
-            if pbar_init is not None:
-                pbar_init(n_slices, "Precompute automatic segmentation state")
-            iterator = range(n_slices) if pbar_init is not None else tqdm(
-                range(n_slices), desc="Precompute automatic segmentation state",
+
+            def get_slice(i):
+                return image_data[np.s_[i] if image_data.ndim == 3 else np.s_[:, i]]
+
+            _cache_amg_volume_state(
+                model, get_slice, n_slices, self.image_embeddings, save_path,
+                model_type=resolved_model_type, pbar_init=pbar_init, pbar_update=pbar_update,
             )
-            for i in iterator:
-                slice_ = np.s_[i] if image_data.ndim == 3 else np.s_[:, i]
-                cache_autoseg_state(
-                    "amg", model, image_data[slice_], self.image_embeddings, save_path,
-                    model_type=resolved_model_type, i=i, verbose=False,
-                )
-                if pbar_update is not None:
-                    pbar_update(1)
 
     # Get the name of the image layer used to compute the embeddings.
     # If the 'image_name' attribute exists we can just use it.

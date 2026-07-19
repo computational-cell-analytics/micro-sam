@@ -97,18 +97,18 @@ def cache_is_state(
     skip_load: bool = False,
     **kwargs,
 ) -> Optional[instance_segmentation.AutoSegBase]:
-    """Compute and cache or load the state for the automatic mask generator.
+    """Compute and cache or load the state for the decoder-based instance segmentation.
 
     Args:
         predictor: The Segment Anything predictor.
         decoder: The instance segmentation decoder.
         raw: The image data.
         image_embeddings: The image embeddings.
-        save_path: The embedding save path. The AMG state will be stored in 'save_path/amg_state.pickle'.
+        save_path: The embedding save path. The state will be stored in 'save_path/is_state.h5'.
         verbose: Whether to run the computation verbose. By default, set to 'True'.
         i: The index for which to cache the state.
         skip_load: Skip loading the state if it is precomputed. By default, set to 'False'.
-        kwargs: The keyword arguments for the amg class.
+        kwargs: The keyword arguments for the instance segmentation class.
 
     Returns:
         The instance segmentation class with the cached state.
@@ -462,6 +462,67 @@ def _cache_amg_slice(segmenter, save_path, i, init_fn, embedding_signature=None)
     _save_amg_state_v2(segmenter, save_path, key, embedding_signature=embedding_signature)
 
 
+def _cache_amg_volume_state(
+    model: torch.nn.Module,
+    get_slice: callable,
+    n_slices: int,
+    image_embeddings: Optional[dict],
+    save_path: Union[str, os.PathLike],
+    model_type: Optional[str] = None,
+    is_tiled: Optional[bool] = None,
+    tile_shape: Optional[Tuple[int, int]] = None,
+    halo: Optional[Tuple[int, int]] = None,
+    verbose: bool = True,
+    pbar_init: Optional[callable] = None,
+    pbar_update: Optional[callable] = None,
+    **amg_kwargs,
+):
+    """Cache the per-slice AMG grid-prediction state for a whole volume with one shared segmenter.
+
+    Builds the AMG segmenter and reads the embedding signature once, then caches each slice via
+    `_cache_amg_slice`, reusing the shared 3d embeddings. This avoids rebuilding the segmenter and
+    re-reading the signature on every slice, which a per-slice `cache_autoseg_state` loop would do.
+
+    Args:
+        model: The SAM2 model.
+        get_slice: Callable mapping a slice index to the 2d image for that slice. The image is only
+            used if `image_embeddings` is None; with embeddings the slice is taken from them.
+        n_slices: The number of slices in the volume.
+        image_embeddings: The precomputed 3d (video-style) embeddings for the volume.
+        save_path: The embedding save path used to store the per-slice state.
+        model_type: The SAM2 model type, recorded in the cached state.
+        is_tiled: Whether to use the tiled segmenter. By default inferred from the embeddings.
+        tile_shape: The tile shape for the tiled segmenter.
+        halo: The tile overlap for the tiled segmenter.
+        verbose: Whether to report progress. By default, set to 'True'.
+        pbar_init: Callback to initialize an external progress bar.
+        pbar_update: Callback to update an external progress bar.
+        amg_kwargs: Additional keyword arguments for the AMG segmenter.
+
+    Returns:
+        The AMG segmenter, with the last slice's state set.
+    """
+    from .v2.instance_segmentation import get_amg_segmenter
+
+    if is_tiled is None:
+        is_tiled = image_embeddings is not None and image_embeddings.get("input_size") is None
+
+    segmenter = get_amg_segmenter(model, is_tiled=is_tiled, model_type=model_type, **amg_kwargs)
+    signature = _embedding_signature(save_path)
+    init_kwargs = {"tile_shape": tile_shape, "halo": halo} if is_tiled else {}
+
+    def init_slice(i):
+        segmenter.initialize(get_slice(i), image_embeddings=image_embeddings, i=i, verbose=False, **init_kwargs)
+
+    _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init, pbar_update)
+    pbar_init(n_slices, "Precompute automatic segmentation state")
+    for i in range(n_slices):
+        _cache_amg_slice(segmenter, save_path, i, init_slice, embedding_signature=signature)
+        pbar_update(1)
+    pbar_close()
+    return segmenter
+
+
 def _cache_ais_state_v2(
     decoder: torch.nn.Module,
     raw: np.ndarray,
@@ -583,13 +644,12 @@ def _cache_autoseg_state_for_file(
     elif ndim == 2:  # AMG on a single 2d image.
         model = getattr(predictor, "model", predictor)
         cache_autoseg_state("amg", model, image_data, embeddings, save_path, model_type=model_type, verbose=verbose)
-    else:  # AMG on a volume: cache the per-slice grid state, reusing the 3d embeddings.
+    else:  # AMG on a volume: cache the per-slice grid state, reusing the 3d embeddings and one segmenter.
         model = getattr(predictor, "model", predictor)
-        n = image_data.shape[0]
-        for i in tqdm(range(n), total=n, desc="Precompute automatic segmentation state", disable=not verbose):
-            cache_autoseg_state(
-                "amg", model, image_data[i], embeddings, save_path, model_type=model_type, i=i, verbose=False,
-            )
+        _cache_amg_volume_state(
+            model, lambda i: image_data[i], image_data.shape[0], embeddings, save_path,
+            model_type=model_type, verbose=verbose,
+        )
 
 
 def precompute_state(
@@ -633,7 +693,7 @@ def precompute_state(
     # Imported lazily to avoid a circular import ('_state' imports from this module).
     from micro_sam.sam_annotator._state import _get_sam_model
 
-    is_sam2 = model_type.startswith("h")
+    is_sam2 = model_type.startswith("hvit")
     if precompute_autoseg_state and not is_sam2:
         raise ValueError(
             "Precomputing the automatic-segmentation state via 'precompute_state' is only supported for "

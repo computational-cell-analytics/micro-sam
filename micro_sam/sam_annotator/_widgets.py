@@ -2172,7 +2172,7 @@ class EmbeddingWidget(_WidgetBase):
         # embeddings. It persists wherever the embeddings live on disk - the given save path, or the
         # ephemeral zarr the eager setup creates for SAM2 volumes / tiled images (removed on reset).
         # Plain in-memory 2d has no disk location, so it needs a save path to persist.
-        is_sam2 = self.model_type.startswith("h")
+        is_sam2 = self.model_type.startswith("hvit")
         embeddings_on_disk = save_path is not None or (is_sam2 and (ndim == 3 or tile_shape is not None))
         precompute_autoseg_state = self.cache_state and embeddings_on_disk
         if self.cache_state and not embeddings_on_disk:

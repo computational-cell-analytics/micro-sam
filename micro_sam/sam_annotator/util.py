@@ -1182,7 +1182,7 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
 
         # Update the index for model size, eg. 'base', 'tiny', etc.
         size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
-        size_idx = 5 if model_type.startswith("h") else 4
+        size_idx = 5 if model_type.startswith("hvit") else 4
         model_size = size_map.get(model_type[size_idx])
 
         if model_size is not None:
