@@ -1556,6 +1556,10 @@ class EmbeddingWidget(_WidgetBase):
     # A tiled 2D image only gets slow on the CPU once it has many tiles; warn from this many on.
     cpu_warn_tiles = 64
 
+    # Whether to offer the 'cache automatic segmentation state' option (segmentation / tracking only,
+    # not the classification tools which have no automatic segmentation).
+    supports_state_caching = True
+
     def __init__(self, parent=None, sam2_only=False, ndim_choice=False, is_timeseries=False):
         super().__init__(parent=parent)
         self.sam2_only = sam2_only
@@ -1676,11 +1680,17 @@ class EmbeddingWidget(_WidgetBase):
                 self.custom_weights,
                 update_decoder=with_decoder,
             )
-            # Load the AMG/AIS state if we have a 3d segmentation plugin.
-            if state.widgets["autosegment"].volumetric and with_decoder:
-                state.amg_state = vutil._load_is_state(state.embedding_path)
+            # Load the AMG/AIS state cache. For SAM2 the state cache (grid masks or decoder
+            # predictions) is recorded via '_autoseg_state_descriptor' and the widget reads/writes it
+            # on demand; SAM1 preloads the per-slice 3d state as before.
+            if state.is_sam2:
+                state.autoseg_state = vutil._autoseg_state_descriptor(
+                    state.embedding_path, "ais" if with_decoder else "amg",
+                )
+            elif state.widgets["autosegment"].volumetric and with_decoder:
+                state.autoseg_state = vutil._load_is_state(state.embedding_path)
             elif state.widgets["autosegment"].volumetric and not with_decoder:
-                state.amg_state = vutil._load_amg_state(state.embedding_path)
+                state.autoseg_state = vutil._load_amg_state(state.embedding_path)
 
         # Set the default settings for this model in the nd-segmentation widget if it is part of
         # the currently used plugin.
@@ -1788,6 +1798,18 @@ class EmbeddingWidget(_WidgetBase):
             tooltip=get_tooltip("embedding", "embeddings_save_path"),
         )
         setting_values.layout().addLayout(save_layout)
+
+        # Opt-in disk caching of the automatic-segmentation state (off by default). When on, the state
+        # is precomputed to disk (next to the embeddings) while the embeddings are computed and reused
+        # across runs / sessions. The automatic segmentation widget reads this flag from here. Not
+        # offered by the classification tools (no automatic segmentation).
+        self.cache_state = False
+        if self.supports_state_caching:
+            self.cache_state_checkbox = self._add_boolean_param(
+                "cache_state", self.cache_state, title="cache automatic segmentation state",
+                tooltip=get_tooltip("embedding", "cache_state"),
+            )
+            setting_values.layout().addWidget(self.cache_state_checkbox)
 
         # Create UI for the custom weights.
         self.custom_weights = None
@@ -2145,6 +2167,17 @@ class EmbeddingWidget(_WidgetBase):
         # Warn CPU users once per session that processing can be slow.
         self._maybe_warn_cpu(ndim, tile_shape, state.image_shape)
 
+        # Eager caching of the automatic-segmentation state: if the 'cache automatic segmentation state'
+        # option (in these embedding settings) is on, precompute the state to disk while computing the
+        # embeddings. It persists wherever the embeddings live on disk - the given save path, or the
+        # ephemeral zarr the eager setup creates for SAM2 volumes / tiled images (removed on reset).
+        # Plain in-memory 2d has no disk location, so it needs a save path to persist.
+        is_sam2 = self.model_type.startswith("hvit")
+        embeddings_on_disk = save_path is not None or (is_sam2 and (ndim == 3 or tile_shape is not None))
+        precompute_autoseg_state = self.cache_state and embeddings_on_disk
+        if self.cache_state and not embeddings_on_disk:
+            show_info("Set an embeddings save path to cache the automatic segmentation state.")
+
         # Set up progress bar and signals for using it within a threadworker.
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
@@ -2157,6 +2190,10 @@ class EmbeddingWidget(_WidgetBase):
             def pbar_init(total, description):
                 if self.is_timeseries:  # A timeseries goes through the 3D compute path; relabel it.
                     description = description.replace("3D", "Timeseries")
+                # Reset the counter to 0 so each phase starts fresh: the embeddings, then (when caching
+                # is on) the automatic-segmentation state precompute reuse the same bar, and without a
+                # reset the second phase inherits the first's completed count and sits stuck at full.
+                pbar_signals.pbar_reset.emit()
                 pbar_signals.pbar_total.emit(total)
                 pbar_signals.pbar_description.emit(description)
                 QtWidgets.QApplication.processEvents()
@@ -2175,6 +2212,7 @@ class EmbeddingWidget(_WidgetBase):
                 tile_shape=tile_shape,
                 halo=halo,
                 prefer_decoder=True,
+                precompute_autoseg_state=precompute_autoseg_state,
                 pbar_init=pbar_init,
                 pbar_update=pbar_update,
             )
@@ -2199,6 +2237,9 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     dropdown to the advanced families instead of adding a second dropdown. The advanced tier holds both
     the SAM1 families and the VFM (DINO / UNI) families (`_advanced_family_suffixes` and `_dino_families`).
     """
+
+    # The classification tools have no automatic segmentation, so the state-caching option is hidden.
+    supports_state_caching = False
 
     size_order = ["tiny", "small", "base", "large", "huge", "giant"]
 
@@ -3169,11 +3210,11 @@ class UnifiedSegmentWidget(_WidgetBase):
 #
 
 
-# Messy amg state handling, would be good to refactor this properly at some point.
-def _handle_amg_state(state, i, pbar_init, pbar_update):
-    if state.amg is None:
+# Messy automatic-segmentation state handling, would be good to refactor this properly at some point.
+def _handle_autoseg_state(state, i, pbar_init, pbar_update):
+    if state.automatic_segmenter is None:
         is_tiled = state.image_embeddings["input_size"] is None
-        state.amg = instance_segmentation.get_instance_segmentation_generator(
+        state.automatic_segmenter = instance_segmentation.get_instance_segmentation_generator(
             state.predictor, is_tiled=is_tiled, decoder=state.decoder
         )
 
@@ -3181,15 +3222,15 @@ def _handle_amg_state(state, i, pbar_init, pbar_update):
 
     # Further optimization: refactor parts of this so that we can also use it in the automatic 3d segmentation fucnction
     # For 3D we store the amg state in a dict and check if it is computed already.
-    if state.amg_state is not None:
+    if state.autoseg_state is not None:
         assert i is not None
-        if i in state.amg_state:
-            amg_state_i = state.amg_state[i]
-            state.amg.set_state(amg_state_i)
+        if i in state.autoseg_state:
+            segmentation_state_i = state.autoseg_state[i]
+            state.automatic_segmenter.set_state(segmentation_state_i)
 
         else:
             dummy_image = np.zeros(shape[-2:], dtype="uint8")
-            state.amg.initialize(
+            state.automatic_segmenter.initialize(
                 dummy_image,
                 image_embeddings=state.image_embeddings,
                 i=i,
@@ -3197,43 +3238,43 @@ def _handle_amg_state(state, i, pbar_init, pbar_update):
                 pbar_init=pbar_init,
                 pbar_update=pbar_update,
             )
-            amg_state_i = state.amg.get_state()
-            state.amg_state[i] = amg_state_i
+            segmentation_state_i = state.automatic_segmenter.get_state()
+            state.autoseg_state[i] = segmentation_state_i
 
-            cache_folder = state.amg_state.get("cache_folder", None)
+            cache_folder = state.autoseg_state.get("cache_folder", None)
             if cache_folder is not None:
                 cache_path = os.path.join(cache_folder, f"state-{i}.pkl")
                 with open(cache_path, "wb") as f:
-                    pickle.dump(amg_state_i, f)
+                    pickle.dump(segmentation_state_i, f)
 
-            cache_path = state.amg_state.get("cache_path", None)
+            cache_path = state.autoseg_state.get("cache_path", None)
             if cache_path is not None:
                 save_key = f"state-{i}"
                 with h5py.File(cache_path, "a") as f:
                     g = f.create_group(save_key)
                     g.create_dataset(
                         "foreground",
-                        data=amg_state_i["foreground"],
+                        data=segmentation_state_i["foreground"],
                         compression="gzip",
                     )
                     g.create_dataset(
                         "boundary_distances",
-                        data=amg_state_i["boundary_distances"],
+                        data=segmentation_state_i["boundary_distances"],
                         compression="gzip",
                     )
                     g.create_dataset(
                         "center_distances",
-                        data=amg_state_i["center_distances"],
+                        data=segmentation_state_i["center_distances"],
                         compression="gzip",
                     )
 
     # Otherwise (2d segmentation) we just check if the amg is initialized or not.
-    elif not state.amg.is_initialized:
+    elif not state.automatic_segmenter.is_initialized:
         assert i is None
         # We don't need to pass the actual image data here, since the embeddings are passed.
         # (The image data is only used by the amg to compute image embeddings, so not needed here.)
         dummy_image = np.zeros(shape, dtype="uint8")
-        state.amg.initialize(
+        state.automatic_segmenter.initialize(
             dummy_image,
             image_embeddings=state.image_embeddings,
             verbose=pbar_init is not None,
@@ -3246,8 +3287,8 @@ def _instance_segmentation_impl(
     min_object_size, i=None, pbar_init=None, pbar_update=None, **kwargs
 ):
     state = AnnotatorState()
-    _handle_amg_state(state, i, pbar_init, pbar_update)
-    seg = state.amg.generate(**kwargs)
+    _handle_autoseg_state(state, i, pbar_init, pbar_update)
+    seg = state.automatic_segmenter.generate(**kwargs)
     assert isinstance(seg, np.ndarray)
     return seg
 
@@ -3814,9 +3855,15 @@ class AutoSegmentV1Widget(_WidgetBase):
         predictor = state.predictor
         if str(predictor.device) == "cpu" or str(predictor.device) == "mps":
             n_slices = self._viewer.layers["auto_segmentation"].data.shape[0]
-            embeddings_are_precomputed = (state.amg_state is not None) and (
-                len(state.amg_state) > n_slices
-            )
+            if state.is_sam2:
+                from micro_sam.precompute_state import _has_autoseg_state
+                embeddings_are_precomputed = _has_autoseg_state(
+                    state.embedding_path, "amg", state_count=n_slices,
+                )
+            else:
+                embeddings_are_precomputed = (state.autoseg_state is not None) and (
+                    len(state.autoseg_state) > n_slices
+                )
             if not embeddings_are_precomputed:
                 return False
         return True
@@ -3927,6 +3974,10 @@ class AutoSegmentWidget(_WidgetBase):
     automatic mask generation via `micro_sam.v2.instance_segmentation`, no decoder required) is only
     offered as a fallback when no decoder is available. A mode dropdown sits next to the 'Apply to
     Volume' switch and the post-processing parameters refresh on mode change.
+
+    Disk-backed caching of the state is opted into via the 'cache automatic segmentation state'
+    checkbox in the embedding settings (read here through the embedding widget); when off, the state
+    is kept in memory only.
 
     Args:
         viewer: The napari viewer.
@@ -4213,10 +4264,17 @@ class AutoSegmentWidget(_WidgetBase):
         z_halo = self.halo_z if z_block < n_slices else 0
         return z_block, z_halo
 
+    def _state_save_path(self, state):
+        # The state cache is opted into via the embedding settings' 'cache automatic segmentation state'
+        # checkbox; when on it persists next to the embeddings, else in-memory only ('_segmenter' cache).
+        embed_widget = state.widgets.get("embeddings")
+        return state.embedding_path if getattr(embed_widget, "cache_state", False) else None
+
     def _run_unisam2(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
-        from micro_sam.v2.automatic_segmentation import get_unisam2_segmentation_generator
+        from micro_sam.precompute_state import cache_autoseg_state
 
         device = next(state.decoder.parameters()).device
+        save_path = self._state_save_path(state)
 
         # All decoder auto-seg cases reuse the precomputed embeddings and run the decoder on them (no
         # encoder re-run). The tiling is taken from the embeddings (tiled embeddings have a top-level
@@ -4243,14 +4301,21 @@ class AutoSegmentWidget(_WidgetBase):
             else:
                 image_embeddings, is_tiled = emb3d, True
 
-        # The cache avoids re-running the model when only the post-processing parameters change.
-        cache_key = (state.data_signature, "unisam2", ndim, z, tile_shape, halo, z_block, z_halo,
-                     image_embeddings is not None)
+        # The in-memory cache avoids re-running the model when only the post-processing parameters
+        # change; 'cache_autoseg_state' additionally persists the decoder predictions in the
+        # embedding Zarr so a later run / session reuses them. The whole volume is
+        # cached under one key ('state'); a single segmented slice under 'state-{z}'.
+        cache_key = (
+            state.data_signature, "unisam2", ndim, z, tile_shape, halo, z_block, z_halo,
+            image_embeddings is not None, save_path,
+        )
         if self._segmenter is None or self._segmenter_key != cache_key:
-            self._segmenter = get_unisam2_segmentation_generator(state.decoder, is_tiled=is_tiled, device=device)
-            self._segmenter.initialize(
-                run_raw, ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo, i=z,
-                pbar_init=pbar_init, pbar_update=pbar_update, z_block=z_block, z_halo=z_halo,
+            self._segmenter = cache_autoseg_state(
+                "ais", state.decoder, run_raw, image_embeddings, save_path, ndim=ndim,
+                model_type=getattr(state.predictor, "model_type", None),
+                i=z, state_index=(None if ndim == 3 else z), is_tiled=is_tiled,
+                tile_shape=tile_shape, halo=halo, device=device, z_block=z_block, z_halo=z_halo,
+                pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
             )
             self._segmenter_key = cache_key
 
@@ -4258,27 +4323,28 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _run_amg(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.v2.instance_segmentation import get_amg_segmenter, automatic_3d_segmentation
+        from micro_sam.precompute_state import cache_autoseg_state
 
         # The SAM2 model: 'state.predictor' is the image predictor (2d) wrapping the model, or the
         # video predictor itself (3d); both can drive the grid-based mask generator.
         model = getattr(state.predictor, "model", state.predictor)
         model_type = getattr(state.predictor, "model_type", None)
+        save_path = self._state_save_path(state)
 
         generate_kwargs = dict(min_object_size=self.min_object_size, with_background=True)
-
-        def _build(is_tiled):
-            return get_amg_segmenter(
-                model, is_tiled=is_tiled, model_type=model_type,
-                points_per_side=self.points_per_side, pred_iou_thresh=self.pred_iou_thresh,
-                stability_score_thresh=self.stability_score_thresh,
-            )
+        amg_params = dict(
+            points_per_side=self.points_per_side, pred_iou_thresh=self.pred_iou_thresh,
+            stability_score_thresh=self.stability_score_thresh,
+        )
 
         if ndim == 3:  # Segment slice-by-slice and stitch across z. Tiling is in-plane (None if off).
             tile_shape, halo = self._get_tiling()
-            # Reuse the precomputed 3d embeddings per slice (tiled or not) so AMG does not re-encode.
+            segmenter = get_amg_segmenter(model, is_tiled=tile_shape is not None, model_type=model_type, **amg_params)
+            # Reuse the precomputed 3d embeddings per slice (tiled or not) so AMG does not re-encode,
+            # and cache each slice's grid-prediction state in the embedding Zarr.
             return automatic_3d_segmentation(
-                run_raw, _build(tile_shape is not None), tile_shape=tile_shape, halo=halo,
-                image_embeddings=state.image_embeddings,
+                run_raw, segmenter, tile_shape=tile_shape, halo=halo,
+                image_embeddings=state.image_embeddings, state_save_path=save_path,
                 pbar_init=pbar_init, pbar_update=pbar_update, **generate_kwargs,
             )
 
@@ -4292,20 +4358,26 @@ class AutoSegmentWidget(_WidgetBase):
             tile_shape, halo, image_embeddings = None, None, state.image_embeddings
             is_tiled = image_embeddings["input_size"] is None
 
-        # The cache lets changing the post-processing parameters re-run only the cheap 'generate'.
-        cache_key = (state.data_signature, "amg", z, tile_shape, halo, image_embeddings is not None,
-                     self.points_per_side, self.pred_iou_thresh, self.stability_score_thresh)
+        # The in-memory cache lets changing the post-processing parameters re-run only the cheap
+        # 'generate'; the on-disk cache (via 'cache_autoseg_state') persists the state across sessions.
+        cache_key = (
+            state.data_signature, "amg", z, tile_shape, halo, image_embeddings is not None,
+            self.points_per_side, self.pred_iou_thresh, self.stability_score_thresh, save_path,
+        )
         if self._segmenter is None or self._segmenter_key != cache_key:
-            self._segmenter = _build(is_tiled)
             if is_tiled:  # The tiled segmenter reports per-tile progress.
-                self._segmenter.initialize(
-                    run_raw, tile_shape=tile_shape, halo=halo, image_embeddings=image_embeddings,
-                    pbar_init=pbar_init, pbar_update=pbar_update,
+                self._segmenter = cache_autoseg_state(
+                    "amg", model, run_raw, image_embeddings, save_path, model_type=model_type,
+                    state_index=z, is_tiled=True, tile_shape=tile_shape, halo=halo,
+                    pbar_init=pbar_init, pbar_update=pbar_update, verbose=False, **amg_params,
                 )
             else:  # A single 2d image is one step.
                 if pbar_init is not None:
                     pbar_init(1, "Automatic segmentation")
-                self._segmenter.initialize(run_raw, tile_shape=tile_shape, halo=halo, image_embeddings=image_embeddings)
+                self._segmenter = cache_autoseg_state(
+                    "amg", model, run_raw, image_embeddings, save_path, model_type=model_type,
+                    state_index=z, is_tiled=False, verbose=False, **amg_params,
+                )
                 if pbar_update is not None:
                     pbar_update(1)
             self._segmenter_key = cache_key

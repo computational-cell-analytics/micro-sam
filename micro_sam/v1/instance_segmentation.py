@@ -7,7 +7,7 @@ import os
 import shutil
 import tempfile
 import warnings
-from abc import ABC
+from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from copy import deepcopy
 from collections import OrderedDict
@@ -63,21 +63,49 @@ class _FakeInput:
 #
 
 
-class AMGBase(ABC):
-    """Base class for the automatic mask generators.
+class AutoSegBase(ABC):
+    """Common interface for automatic-segmentation generators.
+
+    Unifies the grid-based mask generators (`AMGBase` and its subclasses) and the decoder-based
+    instance segmentation (`InstanceSegmentationWithDecoder` and its subclasses): both are
+    initialized on an image, produce an instance segmentation via `generate`, and cache / restore
+    their expensive intermediate state via `get_state` / `set_state`.
     """
+
+    @property
+    def is_initialized(self) -> bool:
+        """Whether `initialize` has been run and the state is available."""
+        return self._is_initialized
+
+    @abstractmethod
+    def initialize(self, *args, **kwargs) -> None:
+        """Compute and store the (expensive) state needed by `generate`."""
+
+    @abstractmethod
+    def generate(self, *args, **kwargs):
+        """Produce the instance segmentation from the initialized state."""
+
+    @abstractmethod
+    def get_state(self) -> Dict[str, Any]:
+        """Return the cached state so it can be serialized and later restored."""
+
+    @abstractmethod
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Restore a state produced by `get_state`."""
+
+    @abstractmethod
+    def clear_state(self) -> None:
+        """Clear the cached state."""
+
+
+class AMGBase(AutoSegBase):
+    """Base class for the grid-based (AMG) automatic mask generators."""
     def __init__(self):
         # the state that has to be computed by the 'initialize' method of the child classes
         self._is_initialized = False
         self._crop_list = None
         self._crop_boxes = None
         self._original_size = None
-
-    @property
-    def is_initialized(self):
-        """Whether the mask generator has already been initialized.
-        """
-        return self._is_initialized
 
     @property
     def crop_list(self):
@@ -951,10 +979,11 @@ def _apply_smoothing(foreground, foreground_smoothing, tile_shape, n_threads):
     return foreground
 
 
-class InstanceSegmentationWithDecoder:
+class InstanceSegmentationWithDecoder(AutoSegBase):
     """Generates an instance segmentation without prompts, using a decoder.
 
-    Implements the same interface as `AutomaticMaskGenerator`.
+    A concrete `AutoSegBase` (like `AutomaticMaskGenerator`), but predicts the segmentation with a
+    decoder instead of grid prompts.
 
     Use this class as follows:
     ```python
@@ -977,12 +1006,6 @@ class InstanceSegmentationWithDecoder:
         self._boundary_distances = None
 
         self._is_initialized = False
-
-    @property
-    def is_initialized(self):
-        """Whether the mask generator has already been initialized.
-        """
-        return self._is_initialized
 
     @torch.no_grad()
     def initialize(
@@ -1637,7 +1660,7 @@ def get_instance_segmentation_generator(
     decoder: Optional[torch.nn.Module] = None,
     segmentation_mode: Optional[Literal["amg", "ais", "apg"]] = None,
     **kwargs,
-) -> Union[AMGBase, InstanceSegmentationWithDecoder]:
+) -> AutoSegBase:
     f"""Get the automatic mask generator.
 
     Args:

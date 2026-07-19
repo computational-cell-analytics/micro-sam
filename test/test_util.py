@@ -497,6 +497,7 @@ class TestSAM2Util(unittest.TestCase):
     def test_precompute_image_embeddings_2d(self):
         from micro_sam.v2.normalization import RAW_NORMALIZATION
         from micro_sam.v2.util import precompute_image_embeddings
+        from micro_sam.v2.normalization import RAW_NORMALIZATION
 
         predictor = self._get_predictor(ndim=2)
         input_ = np.random.rand(512, 512).astype("float32")

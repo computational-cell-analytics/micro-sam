@@ -45,14 +45,15 @@ class SegmentationBatchTask(BatchAnnotatorTask):
 
     def __init__(
         self, *, ndim, model_type, embedding_path, tile_shape, halo,
-        precompute_amg_state, checkpoint_path, device, prefer_decoder, initial_segmentations=None,
+        precompute_autoseg_state, checkpoint_path, device, prefer_decoder,
+        initial_segmentations=None,
     ):
         self.ndim = ndim
         self.model_type = model_type
         self.embedding_path = embedding_path
         self.tile_shape = tile_shape
         self.halo = halo
-        self.precompute_amg_state = precompute_amg_state
+        self.precompute_autoseg_state = precompute_autoseg_state
         self.checkpoint_path = checkpoint_path
         self.device = device
         self.prefer_decoder = prefer_decoder
@@ -98,7 +99,9 @@ class SegmentationBatchTask(BatchAnnotatorTask):
             kwargs = dict(prefer_decoder=self.prefer_decoder)
         state.initialize_predictor(
             image, model_type=self.model_type, save_path=embedding_path, halo=self.halo, tile_shape=self.tile_shape,
-            ndim=self.ndim, precompute_amg_state=self.precompute_amg_state, checkpoint_path=self.checkpoint_path,
+            ndim=self.ndim,
+            precompute_autoseg_state=self.precompute_autoseg_state,
+            checkpoint_path=self.checkpoint_path,
             device=self.device, skip_load=False, use_cli=True, **kwargs,
         )
         # Capture the loaded model so subsequent items reuse it instead of reloading.
@@ -131,8 +134,8 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
         segmentation_result = self._resolve_initial_result(entry, index)
         viewer.layers["image"].data = image
-        if state.amg is not None:
-            state.amg.clear_state()
+        if state.automatic_segmenter is not None:
+            state.automatic_segmenter.clear_state()
         self._init_predictor(viewer, image, embedding_path)
         annotator._update_image(segmentation_result=segmentation_result)
 
@@ -156,7 +159,7 @@ def batch_annotator(
     halo: Optional[Tuple[int, int]] = None,
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
-    precompute_amg_state: bool = False,
+    precompute_autoseg_state: bool = False,
     checkpoint_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
     prefer_decoder: bool = True,
@@ -181,7 +184,8 @@ def batch_annotator(
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
             By default, does not return the napari viewer.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+        precompute_autoseg_state: Whether to precompute the automatic segmentation state (AMG masks, or
+            decoder predictions if the model has a decoder). Requires an embedding path.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
@@ -210,7 +214,8 @@ def batch_annotator(
 
     task = SegmentationBatchTask(
         ndim=ndim, model_type=model_type, embedding_path=embedding_path,
-        tile_shape=tile_shape, halo=halo, precompute_amg_state=precompute_amg_state,
+        tile_shape=tile_shape, halo=halo,
+        precompute_autoseg_state=precompute_autoseg_state,
         checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
         initial_segmentations=initial_segmentations,
     )

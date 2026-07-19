@@ -2,6 +2,7 @@
 
 tooltips = {
     "embedding": {
+        "cache_state": "Cache the automatic segmentation state to disk for faster (re)runs.",
         "custom_weights": "Select custom model weights. For example for a model you have finetuned",
         "device": "Select the computational device to use for processing.",
         "embeddings_save_path": "Select path to save or load the computed image embeddings.",

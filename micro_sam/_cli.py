@@ -112,7 +112,8 @@ def _interactive_options(f):
     help="The number of spatial dimensions (2 or 3). If not given, auto-detected from the image shape."
 )
 @click.option(
-    "--precompute_amg_state", is_flag=True, default=False,
+    "--precompute_autoseg_state",
+    "precompute_autoseg_state", is_flag=True, default=False,
     help="Whether to precompute the state for automatic instance segmentation (longer start-up, faster first run)."
 )
 @click.option(
@@ -122,7 +123,7 @@ def _interactive_options(f):
 @_interactive_options
 def annotator_segmentation(
     input_, key, embedding_path, model_type, checkpoint_path, decoder_path, device, tile_shape, halo,
-    segmentation_result, segmentation_key, ndim, precompute_amg_state, prefer_decoder,
+    segmentation_result, segmentation_key, ndim, precompute_autoseg_state, prefer_decoder,
 ):
     """Interactively segment a 2d or 3d image."""
     from .util import load_image_data
@@ -140,7 +141,7 @@ def annotator_segmentation(
         model_type=model_type or DEFAULT_MODEL,
         tile_shape=tile_shape or None,
         halo=halo or None,
-        precompute_amg_state=precompute_amg_state,
+        precompute_autoseg_state=precompute_autoseg_state,
         checkpoint_path=checkpoint_path,
         decoder_path=decoder_path,
         device=device,
@@ -286,7 +287,12 @@ def annotator_object_classification(
 )
 @click.option("--tile_shape", type=int, nargs=2, default=None, help="The tile shape for tiled prediction.")
 @click.option("--overlap", "halo", type=int, nargs=2, default=None, help="The tile overlap for tiled prediction.")
-@click.option("--precompute_amg_state", is_flag=True, default=False, help="Whether to precompute the AMG state.")
+@click.option(
+    "--precompute_autoseg_state",
+    "precompute_autoseg_state", is_flag=True, default=False,
+    help="Whether to precompute the automatic segmentation state (AMG masks, or decoder predictions "
+    "if the model has a decoder)."
+)
 @click.option(
     "--prefer_decoder", is_flag=True, default=True, flag_value=False,
     help="Whether to use decoder based instance segmentation if the model has an additional decoder for that purpose."
@@ -297,8 +303,8 @@ def annotator_object_classification(
 )
 def annotator_batch(
     input_folder, output_folder, task, ndim, pattern, initial_segmentation_folder, initial_segmentation_pattern,
-    embedding_path, model_type, checkpoint_path, device, tile_shape, halo, precompute_amg_state, prefer_decoder,
-    skip_segmented,
+    embedding_path, model_type, checkpoint_path, device, tile_shape, halo,
+    precompute_autoseg_state, prefer_decoder, skip_segmented,
 ):
     """Annotate multiples images within a folder.
 
@@ -322,7 +328,8 @@ def annotator_batch(
             initial_segmentation_folder=initial_segmentation_folder,
             initial_segmentation_pattern=initial_segmentation_pattern,
             embedding_path=embedding_path, model_type=model_type,
-            tile_shape=tile_shape, halo=halo, precompute_amg_state=precompute_amg_state,
+            tile_shape=tile_shape, halo=halo,
+            precompute_autoseg_state=precompute_autoseg_state,
             checkpoint_path=checkpoint_path, device=device,
             prefer_decoder=prefer_decoder, skip_segmented=skip_segmented,
         )
@@ -337,7 +344,8 @@ def annotator_batch(
         batch_tracking_annotator(
             images, output_folder, model_type=model_type, embedding_path=embedding_path,
             tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
-            precompute_amg_state=precompute_amg_state, skip_done=skip_segmented,
+            precompute_autoseg_state=precompute_autoseg_state,
+            skip_done=skip_segmented,
         )
     elif task == "pixel-classification":
         from .sam_annotator.pixel_classifier import batch_pixel_classifier
@@ -756,8 +764,20 @@ def inference_object_classification(
     "-n", "--ndim", type=int, default=None,
     help="The number of spatial dimensions. Specify this if your data has a channel dimension."
 )
-def precompute_embeddings(input_path, embedding_path, pattern, key, model_type, checkpoint_path, ndim):
-    """Precompute image embeddings."""
+@click.option(
+    "--precompute_autoseg_state",
+    "precompute_autoseg_state", is_flag=True, default=False,
+    help="Whether to also precompute the automatic-segmentation state in the embedding Zarr (SAM2 only)."
+)
+@click.option(
+    "--prefer_decoder", is_flag=True, default=True, flag_value=False,
+    help="Whether to use decoder-based state (AIS) when the model has a decoder, instead of grid-based AMG."
+)
+def precompute_embeddings(
+    input_path, embedding_path, pattern, key, model_type, checkpoint_path, ndim,
+    precompute_autoseg_state, prefer_decoder,
+):
+    """Precompute image embeddings (and optionally the automatic-segmentation state)."""
     from .precompute_state import precompute_state
     from .v2.util import _DEFAULT_MODEL
 
@@ -765,6 +785,8 @@ def precompute_embeddings(input_path, embedding_path, pattern, key, model_type, 
         input_path, embedding_path,
         model_type=model_type or _DEFAULT_MODEL, checkpoint_path=checkpoint_path,
         pattern=pattern, key=key, ndim=ndim,
+        precompute_autoseg_state=precompute_autoseg_state,
+        prefer_decoder=prefer_decoder,
     )
 
 

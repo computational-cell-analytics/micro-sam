@@ -159,6 +159,14 @@ class AutomaticMaskGenerationSegmenter:
         predictor = self._mask_generator.predictor
         predictor.model_type = model_type or getattr(model, "model_type", None) or "hvit"
         predictor.model_name = model_type or getattr(model, "model_name", None) or predictor.model_type
+        # The parameters that are baked into the predicted masks during 'initialize'. They are stored
+        # in the cached state so a reused state can be validated against the requested parameters.
+        self._amg_params = {
+            "points_per_side": points_per_side,
+            "pred_iou_thresh": pred_iou_thresh,
+            "stability_score_thresh": stability_score_thresh,
+            "model_type": predictor.model_type,
+        }
         self._masks = None
         self._original_size = None
         self._is_initialized = False
@@ -276,6 +284,30 @@ class AutomaticMaskGenerationSegmenter:
             with_background=with_background,
         )
 
+    def get_state(self) -> Dict[str, Any]:
+        """Return the cached mask-generation state so it can be serialized and later restored.
+
+        The state holds the predicted masks (as compact RLE dicts), the image size and the
+        parameters the masks were generated with (used to validate a reused state). Restore it
+        with `set_state` to skip the expensive grid prediction in `initialize`.
+        """
+        if not self._is_initialized:
+            raise RuntimeError("Cannot get the state before the segmenter has been initialized.")
+        return {
+            "masks": [dict(mask) for mask in self._masks],
+            "original_size": self._original_size,
+            "params": dict(self._amg_params),
+        }
+
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Restore the state produced by `get_state`, marking the segmenter initialized.
+
+        The masks are re-wrapped in `_LazyRLEMask` so `generate` decodes them lazily as before.
+        """
+        self._masks = [_LazyRLEMask(mask) for mask in state["masks"]]
+        self._original_size = tuple(int(s) for s in state["original_size"])
+        self._is_initialized = True
+
 
 class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
     """Generates a tiled instance segmentation for the SAM2 model using grid-based prompting (AMG).
@@ -344,6 +376,7 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
         tile_shape = tuple(int(s) for s in feats.attrs["tile_shape"])
         halo = tuple(int(s) for s in feats.attrs["halo"])
         self._original_size = tuple(int(s) for s in feats.attrs["shape"])
+        self._tile_shape = tile_shape
         self._tiling = Blocking([0, 0], list(self._original_size), list(tile_shape))
         self._halo = tuple(halo)
 
@@ -376,6 +409,7 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
         tile_shape = tuple(int(s) for s in feats.attrs["tile_shape"])
         halo = tuple(int(s) for s in feats.attrs["halo"])
         self._original_size = full_shape[1:]  # in-plane (Y, X); z is not tiled
+        self._tile_shape = tile_shape
         self._tiling = Blocking([0, 0], list(self._original_size), list(tile_shape))
         self._halo = halo
 
@@ -450,6 +484,27 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
 
         return segmentation
 
+    def get_state(self) -> Dict[str, Any]:
+        """Return the cached per-tile mask state, plus the tiling needed to restore it."""
+        if not self._is_initialized:
+            raise RuntimeError("Cannot get the state before the segmenter has been initialized.")
+        return {
+            "masks": [[dict(mask) for mask in tile_masks] for tile_masks in self._masks],
+            "original_size": self._original_size,
+            "tile_shape": self._tile_shape,
+            "halo": self._halo,
+            "params": dict(self._amg_params),
+        }
+
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Restore the per-tile masks and rebuild the tiling from `get_state`."""
+        self._masks = [[_LazyRLEMask(mask) for mask in tile_masks] for tile_masks in state["masks"]]
+        self._original_size = tuple(int(s) for s in state["original_size"])
+        self._tile_shape = tuple(int(s) for s in state["tile_shape"])
+        self._halo = tuple(int(s) for s in state["halo"])
+        self._tiling = Blocking([0, 0], list(self._original_size), list(self._tile_shape))
+        self._is_initialized = True
+
 
 def get_amg_segmenter(
     model: torch.nn.Module, is_tiled: bool = False, **kwargs
@@ -479,6 +534,7 @@ def automatic_3d_segmentation(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     image_embeddings: Optional[dict] = None,
+    state_save_path: Optional[str] = None,
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
@@ -504,6 +560,9 @@ def automatic_3d_segmentation(
         halo: The overlap between the tiles, (y, x). By default 'None'.
         image_embeddings: Optional precomputed 3d (video-style) embeddings for the volume. When given
             (and not tiled), each slice's AMG reuses the precomputed features instead of re-encoding.
+        state_save_path: Optional path to the embedding Zarr in which to cache the per-slice
+            grid-prediction state. When set, a slice reuses its cached state instead of re-running
+            the grid prediction; freshly computed slices are written back.
         verbose: Verbosity flag. By default 'True'.
         pbar_init: Callback to initialize an external progress bar, called with the number of slices.
         pbar_update: Callback to update an external progress bar, called once per segmented slice.
@@ -526,13 +585,23 @@ def automatic_3d_segmentation(
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
     pbar_init(volume.shape[0], "Automatic segmentation (slices)")
 
-    segmentation = np.zeros(volume.shape, dtype="uint32")
-    offset = 0
-    for i in range(volume.shape[0]):
+    def init_slice(i):
         if reuse_embeddings:
             segmenter.initialize(volume[i], image_embeddings=image_embeddings, i=i, verbose=False, **init_kwargs)
         else:
             segmenter.initialize(volume[i], verbose=False, **init_kwargs)
+
+    if state_save_path is not None:
+        from micro_sam.precompute_state import _cache_amg_slice, _embedding_signature
+        state_signature = _embedding_signature(state_save_path)
+
+    segmentation = np.zeros(volume.shape, dtype="uint32")
+    offset = 0
+    for i in range(volume.shape[0]):
+        if state_save_path is not None:
+            _cache_amg_slice(segmenter, state_save_path, i, init_slice, embedding_signature=state_signature)
+        else:
+            init_slice(i)
         seg = segmenter.generate(**kwargs)
 
         # Offset the per-slice instance ids so that they are unique across the whole volume.

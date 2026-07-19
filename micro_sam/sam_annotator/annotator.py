@@ -296,9 +296,9 @@ class Annotator(_AnnotatorBase):
         if self._ndim == 3:
             state = AnnotatorState()
             if state.decoder is not None:
-                state.amg_state = _load_is_state(state.embedding_path)
+                state.autoseg_state = _load_is_state(state.embedding_path)
             else:
-                state.amg_state = _load_amg_state(state.embedding_path)
+                state.autoseg_state = _load_amg_state(state.embedding_path)
 
 
 def annotator(
@@ -312,7 +312,7 @@ def annotator(
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
-    precompute_amg_state: bool = False,
+    precompute_autoseg_state: bool = False,
     checkpoint_path: Optional[str] = None,
     decoder_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
@@ -337,7 +337,8 @@ def annotator(
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+        precompute_autoseg_state: Whether to precompute the automatic segmentation state (AMG masks, or
+            decoder predictions if the model has a decoder). Requires an embedding path.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
@@ -371,7 +372,7 @@ def annotator(
         save_path=embedding_path,
         halo=halo,
         tile_shape=tile_shape,
-        precompute_amg_state=precompute_amg_state,
+        precompute_autoseg_state=precompute_autoseg_state,
         ndim=ndim,
         checkpoint_path=checkpoint_path,
         decoder_path=decoder_path,

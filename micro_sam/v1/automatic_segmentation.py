@@ -14,7 +14,7 @@ from torch_em.data.datasets.util import split_kwargs
 from .. import util
 from .util import get_sam_model, precompute_image_embeddings, get_model_names
 from .instance_segmentation import (
-    get_instance_segmentation_generator, get_decoder, AMGBase,
+    get_instance_segmentation_generator, get_decoder, AutoSegBase,
     AutomaticMaskGenerator, TiledAutomaticMaskGenerator,
     AutomaticPromptGenerator, TiledAutomaticPromptGenerator,
     InstanceSegmentationWithDecoder, TiledInstanceSegmentationWithDecoder,
@@ -32,7 +32,7 @@ def get_predictor_and_segmenter(
     predictor=None,
     state=None,
     **kwargs,
-) -> Tuple[util.SamPredictor, Union[AMGBase, InstanceSegmentationWithDecoder]]:
+) -> Tuple[util.SamPredictor, AutoSegBase]:
     f"""Get the Segment Anything model and class for automatic instance segmentation.
 
     Args:
@@ -88,7 +88,7 @@ def _add_suffix_to_output_path(output_path: Union[str, os.PathLike], suffix: str
 
 def automatic_tracking(
     predictor: util.SamPredictor,
-    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
+    segmenter: AutoSegBase,
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
     embedding_path: Optional[Union[os.PathLike, str]] = None,
@@ -171,7 +171,7 @@ def automatic_tracking(
 
 def automatic_instance_segmentation(
     predictor: util.SamPredictor,
-    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
+    segmenter: AutoSegBase,
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
     embedding_path: Optional[Union[os.PathLike, str]] = None,

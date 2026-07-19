@@ -44,7 +44,7 @@ except ImportError:
 from .. import util
 from .util import precompute_image_embeddings
 from .prompt_based_segmentation import segment_from_mask
-from .instance_segmentation import AMGBase
+from .instance_segmentation import AutoSegBase
 
 
 PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
@@ -424,7 +424,7 @@ def _segment_slices(
 def automatic_3d_segmentation(
     volume: np.ndarray,
     predictor: SamPredictor,
-    segmentor: AMGBase,
+    segmentor: AutoSegBase,
     embedding_path: Optional[Union[str, os.PathLike]] = None,
     with_background: bool = True,
     gap_closing: Optional[int] = None,
@@ -686,7 +686,7 @@ def track_across_frames(
 def automatic_tracking_implementation(
     timeseries: np.ndarray,
     predictor: SamPredictor,
-    segmentor: AMGBase,
+    segmentor: AutoSegBase,
     embedding_path: Optional[Union[str, os.PathLike]] = None,
     gap_closing: Optional[int] = None,
     min_time_extent: Optional[int] = None,

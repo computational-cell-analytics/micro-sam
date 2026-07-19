@@ -104,7 +104,7 @@ def pixel_classifier(
 
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,
-        halo=halo, tile_shape=tile_shape, precompute_amg_state=False,
+        halo=halo, tile_shape=tile_shape, precompute_autoseg_state=False,
         ndim=ndim, checkpoint_path=checkpoint_path, device=device,
         skip_load=False, use_cli=True,
     )

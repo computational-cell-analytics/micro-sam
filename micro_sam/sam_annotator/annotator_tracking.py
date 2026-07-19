@@ -382,9 +382,9 @@ class AnnotatorTracking(_AnnotatorBase):
         self._init_track_state()
         state = AnnotatorState()
         if self._with_decoder:
-            state.amg_state = vutil._load_is_state(state.embedding_path)
+            state.autoseg_state = vutil._load_is_state(state.embedding_path)
         else:
-            state.amg_state = vutil._load_amg_state(state.embedding_path)
+            state.autoseg_state = vutil._load_amg_state(state.embedding_path)
 
 
 def annotator_tracking(
@@ -396,7 +396,7 @@ def annotator_tracking(
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
-    precompute_amg_state: bool = False,
+    precompute_autoseg_state: bool = False,
     checkpoint_path: Optional[str] = None,
     decoder_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
@@ -415,7 +415,8 @@ def annotator_tracking(
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+        precompute_autoseg_state: Whether to precompute the automatic segmentation state (AMG masks, or
+            decoder predictions if the model has a decoder). Requires an embedding path.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
@@ -426,7 +427,6 @@ def annotator_tracking(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
-
     _validate_tracking_model_type(model_type)
 
     # Initialize the predictor state.
@@ -442,7 +442,7 @@ def annotator_tracking(
         checkpoint_path=checkpoint_path,
         decoder_path=decoder_path,
         device=device,
-        precompute_amg_state=precompute_amg_state,
+        precompute_autoseg_state=precompute_autoseg_state,
         use_cli=True,
     )
     state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
@@ -485,7 +485,8 @@ class TrackingBatchTask(BatchAnnotatorTask):
 
     def __init__(
         self, *, model_type, embedding_path=None, tile_shape=None, halo=None,
-        checkpoint_path=None, decoder_path=None, device=None, precompute_amg_state=False,
+        checkpoint_path=None, decoder_path=None, device=None,
+        precompute_autoseg_state=False,
     ):
         _validate_tracking_model_type(model_type)
         self.model_type = model_type
@@ -495,7 +496,7 @@ class TrackingBatchTask(BatchAnnotatorTask):
         self.checkpoint_path = checkpoint_path
         self.decoder_path = decoder_path
         self.device = device
-        self.precompute_amg_state = precompute_amg_state
+        self.precompute_autoseg_state = precompute_autoseg_state
 
     def result_filename(self, entry, index):
         if self.have_inputs_as_arrays:
@@ -526,7 +527,8 @@ class TrackingBatchTask(BatchAnnotatorTask):
             image, model_type=self.model_type, save_path=embedding_path, halo=self.halo,
             tile_shape=self.tile_shape, ndim=3, checkpoint_path=self.checkpoint_path,
             decoder_path=self.decoder_path, device=self.device,
-            precompute_amg_state=self.precompute_amg_state, use_cli=True, **kwargs,
+            precompute_autoseg_state=self.precompute_autoseg_state,
+            use_cli=True, **kwargs,
         )
         state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
 
@@ -573,7 +575,7 @@ def batch_tracking_annotator(
     checkpoint_path: Optional[str] = None,
     decoder_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
-    precompute_amg_state: bool = False,
+    precompute_autoseg_state: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
     skip_done: bool = True,
@@ -592,7 +594,8 @@ def batch_tracking_annotator(
         decoder_path: Path to a custom decoder checkpoint from which to load the `micro-sam` decoder.
         device: The computational device to use for the SAM model.
             By default, automatically chooses the best available device.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+        precompute_autoseg_state: Whether to precompute the automatic segmentation state (AMG masks, or
+            decoder predictions if the model has a decoder). Requires an embedding path.
         viewer: The viewer to which the functionality should be added.
         return_viewer: Whether to return the napari viewer instead of starting the event loop.
         skip_done: Whether to skip videos whose tracking result already exists in `output_folder`.
@@ -604,7 +607,7 @@ def batch_tracking_annotator(
     task = TrackingBatchTask(
         model_type=model_type, embedding_path=embedding_path, tile_shape=tile_shape, halo=halo,
         checkpoint_path=checkpoint_path, decoder_path=decoder_path, device=device,
-        precompute_amg_state=precompute_amg_state,
+        precompute_autoseg_state=precompute_autoseg_state,
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
