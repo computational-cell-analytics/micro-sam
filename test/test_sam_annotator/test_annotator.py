@@ -527,6 +527,47 @@ class TestAutoSegStatePersistence:
     def test_no_persist_without_embedding_widget(self):
         assert self._state_save_path(cache_state=True, with_widget=False) is None
 
+    def test_enabling_persistence_invalidates_the_in_memory_cache(self, monkeypatch):
+        """Turning disk caching on after an in-memory run must route through the cache helper again."""
+        from types import MethodType, SimpleNamespace
+
+        import micro_sam.precompute_state as precompute_state
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        calls = []
+
+        class _Segmenter:
+            def generate(self, **kwargs):
+                return np.zeros((8, 8), dtype="uint32")
+
+        def fake_cache_autoseg_state(*args, **kwargs):
+            calls.append(args[4])  # save_path
+            return _Segmenter()
+
+        monkeypatch.setattr(precompute_state, "cache_autoseg_state", fake_cache_autoseg_state)
+
+        embedding_widget = SimpleNamespace(cache_state=False)
+        state = SimpleNamespace(
+            predictor=SimpleNamespace(model=object(), model_type="hvit_t"),
+            image_embeddings={"input_size": (8, 8)},
+            embedding_path="/tmp/embeddings.zarr",
+            data_signature="data",
+            widgets={"embeddings": embedding_widget},
+        )
+        widget = SimpleNamespace(
+            volumetric=False, min_object_size=0, points_per_side=32,
+            pred_iou_thresh=0.8, stability_score_thresh=0.9,
+            _segmenter=None, _segmenter_key=None,
+        )
+        widget._state_save_path = MethodType(AutoSegmentWidget._state_save_path, widget)
+
+        raw = np.zeros((8, 8), dtype="uint8")
+        AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
+        embedding_widget.cache_state = True
+        AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
+
+        assert calls == [None, "/tmp/embeddings.zarr"]
+
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")

@@ -145,15 +145,6 @@ class AnnotatorState(metaclass=Singleton):
     is_sam2: Optional[bool] = None  # Whether this is a SAM1 or SAM2 model.
     is_vfm: Optional[bool] = None  # Whether this is a VFM (DINO / UNI) encoder (classification tools only).
 
-    @property
-    def amg(self):
-        """Backwards-compatible alias for `automatic_segmenter`."""
-        return self.automatic_segmenter
-
-    @amg.setter
-    def amg(self, value):
-        self.automatic_segmenter = value
-
     def initialize_predictor(
         self,
         image_data,

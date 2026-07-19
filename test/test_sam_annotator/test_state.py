@@ -29,13 +29,14 @@ class TestState(unittest.TestCase):
         self.assertTrue(state.initialized_for_tracking())
 
 
-def test_autoseg_state_is_the_only_state_name():
-    """The cached automatic-segmentation state is named 'autoseg_state' only; the former 'amg_state'
-    and 'auto_state' aliases were removed."""
+def test_autoseg_names_have_no_legacy_aliases():
+    """Only the canonical automatic segmenter and cached-state names are exposed."""
     from micro_sam.sam_annotator._state import AnnotatorState
 
     state = AnnotatorState()
+    assert hasattr(state, "automatic_segmenter")
     assert hasattr(state, "autoseg_state")  # canonical name
+    assert not hasattr(state, "amg")
     assert not hasattr(state, "amg_state")  # old aliases gone
     assert not hasattr(state, "auto_state")
 

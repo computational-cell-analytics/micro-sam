@@ -4305,8 +4305,10 @@ class AutoSegmentWidget(_WidgetBase):
         # change; 'cache_autoseg_state' additionally persists the decoder predictions in the
         # embedding Zarr so a later run / session reuses them. The whole volume is
         # cached under one key ('state'); a single segmented slice under 'state-{z}'.
-        cache_key = (state.data_signature, "unisam2", ndim, z, tile_shape, halo, z_block, z_halo,
-                     image_embeddings is not None)
+        cache_key = (
+            state.data_signature, "unisam2", ndim, z, tile_shape, halo, z_block, z_halo,
+            image_embeddings is not None, save_path,
+        )
         if self._segmenter is None or self._segmenter_key != cache_key:
             self._segmenter = cache_autoseg_state(
                 "ais", state.decoder, run_raw, image_embeddings, save_path, ndim=ndim,
@@ -4358,8 +4360,10 @@ class AutoSegmentWidget(_WidgetBase):
 
         # The in-memory cache lets changing the post-processing parameters re-run only the cheap
         # 'generate'; the on-disk cache (via 'cache_autoseg_state') persists the state across sessions.
-        cache_key = (state.data_signature, "amg", z, tile_shape, halo, image_embeddings is not None,
-                     self.points_per_side, self.pred_iou_thresh, self.stability_score_thresh)
+        cache_key = (
+            state.data_signature, "amg", z, tile_shape, halo, image_embeddings is not None,
+            self.points_per_side, self.pred_iou_thresh, self.stability_score_thresh, save_path,
+        )
         if self._segmenter is None or self._segmenter_key != cache_key:
             if is_tiled:  # The tiled segmenter reports per-tile progress.
                 self._segmenter = cache_autoseg_state(
