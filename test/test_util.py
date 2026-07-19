@@ -495,6 +495,7 @@ class TestSAM2Util(unittest.TestCase):
         predictor.reset_predictor()
 
     def test_precompute_image_embeddings_2d(self):
+        from micro_sam.v2.normalization import RAW_NORMALIZATION
         from micro_sam.v2.util import precompute_image_embeddings
         from micro_sam.v2.normalization import RAW_NORMALIZATION
 

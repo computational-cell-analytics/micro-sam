@@ -11,7 +11,7 @@ markers = [
 
 [tool.black]
 line-length = 79
-target-version = ['py38', 'py39', 'py310']
+target-version = ['py311']
 
 [tool.ruff]
 line-length = 79
@@ -56,5 +56,5 @@ exclude = [
     "*_vendor*",
 ]
 
-target-version = "py38"
+target-version = "py311"
 fix = true
