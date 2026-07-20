@@ -795,27 +795,47 @@ def precompute_embeddings(
 
 
 @cli.command("train")
-@click.option("-c", "--config", required=True, help="The filepath to the SAM2 training config file.")
-@click.option("--use_cluster", type=int, default=None, help="Whether to launch on a cluster: 0 local, 1 cluster.")
-@click.option("--partition", default=None, help="SLURM partition.")
-@click.option("--account", default=None, help="SLURM account.")
-@click.option("--qos", default=None, help="SLURM qos.")
-@click.option("--num_gpus", type=int, default=None, help="Number of GPUs per node.")
-@click.option("--num_nodes", type=int, default=None, help="Number of nodes.")
-def train(config, use_cluster, partition, account, qos, num_gpus, num_nodes):
-    """Training a custom `micro-sam2` model."""
-    from .v2.train import train_sam2, register_omegaconf_resolvers
+@click.option("-i", "--input_path", required=True, help="Root of the generalist training data (dataset subfolders).")
+@click.option("-m", "--model_type", default="hvit_t", help="SAM2 variant: hvit_t, hvit_s, hvit_b, hvit_l.")
+@click.option("-s", "--save_root", default=None, help="Directory for checkpoints and logs. Default: current dir.")
+@click.option("--name", default=None, help="Checkpoint/log folder name. Auto-generated if unset.")
+@click.option("--dataset_choice", default="both", help="Data modality to train on: 'lm', 'em' or 'both'.")
+@click.option("--n_epochs", type=int, default=100, help="Number of training epochs.")
+@click.option("--n_iterations", type=int, default=None, help="Fixed iteration budget (overrides --n_epochs).")
+@click.option("--batch_size", type=int, default=1, help="Batch size per GPU for 3d groups.")
+@click.option("--batch_size_2d", type=int, default=8, help="Batch size per GPU for 2d groups.")
+@click.option("--z_slices", type=int, multiple=True, default=(8,), help="Z-slice counts for 3d groups.")
+@click.option("-c", "--checkpoint_path", default=None, help="SAM2 checkpoint to start from; default downloaded.")
+def train(
+    input_path, model_type, save_root, name, dataset_choice, n_epochs, n_iterations,
+    batch_size, batch_size_2d, z_slices, checkpoint_path,
+):
+    """Train a joint SAM2 + UniSAM2 `micro-sam2` model on the generalist datasets."""
+    import torch
 
-    register_omegaconf_resolvers()
-    train_sam2(
-        config=config,
-        use_cluster=bool(use_cluster) if use_cluster is not None else None,
-        partition=partition,
-        account=account,
-        qos=qos,
-        num_gpus=num_gpus,
-        num_nodes=num_nodes,
+    n_gpus = torch.cuda.device_count()
+    if name is None:
+        name = f"joint_sam2_{model_type}_{'multi' if n_gpus > 1 else 'single'}_gpu"
+
+    # Joint interactive + automatic recipe from finetuning/v2/generalist/train_joint.py.
+    kwargs = dict(
+        name=name, model_type=model_type, input_path=input_path, save_root=save_root,
+        dataset_choice=dataset_choice, n_epochs=n_epochs, n_iterations=n_iterations,
+        batch_size=batch_size, batch_size_2d=batch_size_2d, z_slices=list(z_slices),
+        n_workers=8, checkpoint_path=checkpoint_path, lr=1e-5, max_num_objects=5,
+        prob_to_use_pt_input=1.0, prob_to_use_box_input=0.5, num_frames_to_correct=2,
+        rand_frames_to_correct=True, prob_to_sample_from_gt=0.1, add_all_frames_to_correct_as_cond=True,
+        num_correction_pt_per_frame=7, num_init_cond_frames=2, clip_grad_norm=None, largest_first=True,
+        bidirectional=True, use_focal_loss=True, focal_weight=1.0, use_object_score_loss=True,
+        average_over_frames=False,
     )
+
+    if n_gpus > 1:
+        from .v2.training import train_joint_sam2_multi_gpu
+        train_joint_sam2_multi_gpu(**kwargs)
+    else:
+        from .v2.training import train_joint_sam2
+        train_joint_sam2(**kwargs)
 
 
 @cli.command("info")
