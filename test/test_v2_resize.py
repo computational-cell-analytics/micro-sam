@@ -3,7 +3,7 @@ import types
 import numpy as np
 import torch
 
-from micro_sam.v2.automatic_segmentation import ResizeLongestSideWrapper
+from micro_sam.v2.instance_segmentation import ResizeLongestSideWrapper
 from micro_sam.v2.prompt_based_segmentation import _crop_to_original_shape
 from micro_sam.v2.transforms.resize import (
     ResizeLongestSideTransforms,

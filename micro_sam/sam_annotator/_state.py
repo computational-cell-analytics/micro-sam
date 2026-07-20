@@ -201,7 +201,7 @@ class AnnotatorState(metaclass=Singleton):
         # finetuned checkpoint passed via 'checkpoint_path', or a finetuned model from the download
         # console (e.g. 'hvit_t_cells') whose decoder is downloaded from the SAM2 model registry.
         if self.is_sam2 and prefer_decoder and self.decoder is None:
-            from micro_sam.v2.automatic_segmentation import get_unisam2_model
+            from micro_sam.v2.instance_segmentation import get_unisam2_model
             from micro_sam.v2.util import FINETUNED_MODELS, _download_finetuned_sam2_model
 
             # The decoder is built on the base SAM2 backbone, i.e. the first 6 characters of the

@@ -467,13 +467,13 @@ def load_unisam2_model(checkpoint_path, device):
 
 
 def predict_unisam2(model, raw, ndim, device):
-    from micro_sam.v2.automatic_segmentation import run_unisam2_inference
+    from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
     is_3d = (ndim == 3)
     tile_shape = (4, 384, 384) if is_3d else (384, 384)
     halo = (2, 64, 64) if is_3d else (64, 64)
-    return run_unisam2_inference(
-        model=model, raw=raw, ndim=ndim, device=device, tile_shape=tile_shape, halo=halo,
-    )
+    segmenter = get_unisam2_segmentation_generator(model, is_tiled=True, device=device)
+    segmenter.initialize(raw, ndim=ndim, tile_shape=tile_shape, halo=halo)
+    return segmenter.get_state()["prediction"]
 
 
 def postprocess_unisam2(out, dataset_name, backend="python"):
