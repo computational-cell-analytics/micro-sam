@@ -132,7 +132,8 @@ class DirectedPerObjectBoundaryDistanceTransform:
             labels = labels.byteswap().view(labels.dtype.newbyteorder())
 
         if self.apply_label:
-            labels = connected_components(labels).astype("uint32")
+            # Cast to uint32: connected_components rejects int16 and labels fit uint32.
+            labels = connected_components(labels.astype("uint32")).astype("uint32")
         else:  # Otherwise just relabel the segmentation.
             # Cast to uint32: relabel_sequential rejects uint8/16 and labels fit uint32.
             labels = relabel_sequential(labels.astype("uint32"))[0].astype("uint32")

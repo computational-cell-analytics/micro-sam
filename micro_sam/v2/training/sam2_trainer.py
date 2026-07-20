@@ -128,6 +128,15 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
             return torch.amp.autocast(device_type="cuda", dtype=self.amp_dtype)
         return contextlib.nullcontext()
 
+    def _train_epoch(self, progress):
+        # mixed_precision is disabled on the parent (see __init__), so DefaultTrainer would pass
+        # contextlib.nullcontext as forward_context. Inject our bf16 autocast instead so every
+        # _train_epoch_impl (this trainer and JointSam2Trainer) runs the forward pass under AMP.
+        return self._train_epoch_impl(progress, self._amp_context, self._sam2_backprop)
+
+    def _validate(self):
+        return self._validate_impl(self._amp_context)
+
     def _check_input_normalization(self, x, input_check_done):
         if not input_check_done:
             data_min, data_max = x.min(), x.max()
@@ -182,7 +191,7 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
             input_check_done = self._check_input_normalization(x, input_check_done)
             self.optimizer.zero_grad()
 
-            with self._amp_context():
+            with forward_context():
                 loss, batch, outputs = self._interactive_step(x, y)
 
             grad_norm = self._sam2_backprop(loss)
@@ -235,7 +244,7 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
             with torch.no_grad():
                 for i, (x, y) in enumerate(self.val_loader):
                     input_check_done = self._check_input_normalization(x, input_check_done)
-                    with self._amp_context():
+                    with forward_context():
                         loss, batch, outputs = self._interactive_step(x, y)
                         val_loss += loss.item()
                         val_dice_loss += self.metric(outputs, batch.masks).item()

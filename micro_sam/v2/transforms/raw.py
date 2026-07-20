@@ -392,10 +392,15 @@ def get_random_percentile_normalization(
     """
     augmentation2 = None
     if isinstance(raw_transform, RawTransform):
-        if not isinstance(raw_transform.normalizer, RandomPercentileNormalization):
-            raise ValueError(f"Unsupported generalist raw transform: {raw_transform!r}")
         augmentation1, augmentation2 = raw_transform.augmentation1, raw_transform.augmentation2
-        axis = raw_transform.normalizer.axis
+        if isinstance(raw_transform.normalizer, RandomPercentileNormalization):
+            axis = raw_transform.normalizer.axis
+        elif raw_transform.normalizer is _identity:
+            # Defect-augmented EM datasets (CREMI): the defect pipeline lives in augmentation1 with an
+            # identity normalizer. Preserve it and apply per-channel percentile normalization.
+            axis = (1, 2)
+        else:
+            raise ValueError(f"Unsupported normalizer in generalist raw transform: {raw_transform.normalizer!r}")
     elif isinstance(raw_transform, RandomPercentileNormalization):
         augmentation1, axis = None, raw_transform.axis
     elif raw_transform is _identity:

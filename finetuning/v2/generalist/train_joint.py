@@ -4,13 +4,27 @@ import argparse
 import torch
 
 
+CHOSEN_PARAMETERS = {
+    "hvit_t": (10, 10, 5),
+    "hvit_s": (10, 10, 5),
+    "hvit_b": (8, 10, 5),
+    "hvit_l": (8, 8, 4),
+}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_epochs", type=int, default=100)
     parser.add_argument("--n_iterations", type=int, default=None)
+    parser.add_argument("--model_type", default="hvit_t", choices=["hvit_t", "hvit_s", "hvit_b", "hvit_l"])
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--dataset_choice", default="both", choices=["lm", "em", "both"])
     args = parser.parse_args()
 
-    model_type = "hvit_t"
+    model_type = args.model_type
+    # Pinned per-model config (batch_size_2d, z_slices, max_num_objects); not CLI-tunable.
+    batch_size_2d, z_slice, max_num_objects = CHOSEN_PARAMETERS[model_type]
+    z_slices = [z_slice]
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
     save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v0")
 
@@ -23,17 +37,17 @@ def main():
         name=name,
         model_type=model_type,
         input_path=data_path,
-        batch_size=1,
-        batch_size_2d=8,
-        z_slices=[8],
-        dataset_choice="both",
+        batch_size=args.batch_size,
+        batch_size_2d=batch_size_2d,
+        z_slices=z_slices,
+        dataset_choice=args.dataset_choice,
         n_workers=8,
         n_epochs=args.n_epochs,
         n_iterations=args.n_iterations,
         lr=1e-5,  # single LR for all parameters
         save_root=save_root,
         checkpoint_path=None,  # downloads default SAM2 weights if None
-        max_num_objects=5,  # lower than interactive-only (8): joint also holds the UNETR decoder
+        max_num_objects=max_num_objects,  # lower than interactive-only (8): joint also holds the UNETR decoder
         prob_to_use_pt_input=1.0,  # always point/box prompts, never the GT mask
         prob_to_use_box_input=0.5,  # conditional prob of a box instead of a click
         num_frames_to_correct=2,  # max frames per volume receiving correction clicks
@@ -57,6 +71,17 @@ def main():
     else:
         from micro_sam.v2.training import train_joint_sam2
         train_joint_sam2(**common)
+
+    rank = int(os.environ.get("RANK", "0"))
+    if torch.cuda.is_available() and rank == 0:
+        peak_alloc = torch.cuda.max_memory_allocated() / 1024**3
+        peak_reserved = torch.cuda.max_memory_reserved() / 1024**3
+        print(
+            f"[peak-memory] model_type={model_type} batch_size={args.batch_size} "
+            f"batch_size_2d={batch_size_2d} z_slices={z_slices} "
+            f"max_num_objects={max_num_objects} "
+            f"allocated={peak_alloc:.2f}GiB reserved={peak_reserved:.2f}GiB", flush=True
+        )
 
 
 if __name__ == "__main__":
