@@ -449,7 +449,7 @@ def _cache_amg_state_v2(
 def _cache_amg_slice(segmenter, save_path, i, init_fn, embedding_signature=None):
     """Load slice `i`'s AMG state from `save_path` if present and matching, else init and save.
 
-    Used by `micro_sam.v2.instance_segmentation.automatic_3d_segmentation` to cache the per-slice
+    Used by `micro_sam.v2.instance_segmentation.amg_3d_segmentation` to cache the per-slice
     grid-prediction state of a volume. `init_fn(i)` runs the (expensive) `initialize` for the slice.
     """
     key = _autoseg_state_key(i)
@@ -553,7 +553,7 @@ def _cache_ais_state_v2(
     'save_path=None' to skip caching.
 
     Args:
-        decoder: The UniSAM2 model, loaded via `micro_sam.v2.automatic_segmentation.get_unisam2_model`.
+        decoder: The UniSAM2 model, loaded via `micro_sam.v2.instance_segmentation.get_unisam2_model`.
         raw: The image data.
         image_embeddings: The (optionally precomputed) image embeddings. When given only the decoder
             is run on them (no encoder pass).
@@ -576,7 +576,7 @@ def _cache_ais_state_v2(
     Returns:
         The AIS segmenter with the (cached or freshly computed) state set.
     """
-    from .v2.automatic_segmentation import get_unisam2_segmentation_generator
+    from .v2.instance_segmentation import get_unisam2_segmentation_generator
 
     if is_tiled is None:
         is_tiled = image_embeddings is not None and image_embeddings.get("input_size") is None
@@ -612,12 +612,12 @@ def _cache_ais_state_v2(
 def _resolve_unisam2_decoder(model_type, checkpoint_path, device):
     """Return a UniSAM2 decoder for the SAM2 model if one is available, else None (fall back to AMG).
 
-    Mirrors `micro_sam.v2.automatic_segmentation.get_segmenter`: a decoder from a custom
+    Mirrors `micro_sam.v2.instance_segmentation.get_decoder`: a decoder from a custom
     `checkpoint_path`, or the registered decoder of a finetuned model (e.g. 'hvit_t_cells'). Any
     failure (e.g. an interactive-only checkpoint without a decoder) returns None.
     """
     from .v2.util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
-    from .v2.automatic_segmentation import get_unisam2_model
+    from .v2.instance_segmentation import get_unisam2_model
 
     encoder = model_type[:6]
     if checkpoint_path is not None:

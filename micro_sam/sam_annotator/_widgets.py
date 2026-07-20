@@ -4322,7 +4322,7 @@ class AutoSegmentWidget(_WidgetBase):
         return self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
 
     def _run_amg(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
-        from micro_sam.v2.instance_segmentation import get_amg_segmenter, automatic_3d_segmentation
+        from micro_sam.v2.instance_segmentation import get_amg_segmenter, amg_3d_segmentation
         from micro_sam.precompute_state import cache_autoseg_state
 
         # The SAM2 model: 'state.predictor' is the image predictor (2d) wrapping the model, or the
@@ -4342,7 +4342,7 @@ class AutoSegmentWidget(_WidgetBase):
             segmenter = get_amg_segmenter(model, is_tiled=tile_shape is not None, model_type=model_type, **amg_params)
             # Reuse the precomputed 3d embeddings per slice (tiled or not) so AMG does not re-encode,
             # and cache each slice's grid-prediction state in the embedding Zarr.
-            return automatic_3d_segmentation(
+            return amg_3d_segmentation(
                 run_raw, segmenter, tile_shape=tile_shape, halo=halo,
                 image_embeddings=state.image_embeddings, state_save_path=save_path,
                 pbar_init=pbar_init, pbar_update=pbar_update, **generate_kwargs,

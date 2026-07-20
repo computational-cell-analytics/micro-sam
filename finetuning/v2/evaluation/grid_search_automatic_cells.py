@@ -122,7 +122,7 @@ def load_model(device, checkpoint_path=None, model_name=MODEL_NAME):
     Returns:
         The UniSAM2 model in eval mode.
     """
-    from micro_sam.v2.automatic_segmentation import get_unisam2_model
+    from micro_sam.v2.instance_segmentation import get_unisam2_model
 
     if checkpoint_path is not None:
         print(f"Loading UniSAM2 model from custom checkpoint '{checkpoint_path}'.")
