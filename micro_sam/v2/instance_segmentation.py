@@ -841,33 +841,17 @@ def _block_shape_and_halo(spatial_shape, ndim, tile_shape, halo):
 
 
 class _StubEncoder(torch.nn.Module):
-    """Encoder replacement that returns precomputed features, bypassing the SAM2 image encoder.
+    """Encoder replacement that returns precomputed per-slice features in call order.
 
-    `UNETR3D.forward` calls `encoder(slice)[0]` to get the per-slice features and has no encoder
-    skip connections, so returning the precomputed `vision_features` here reproduces the full
-    forward pass without re-running the encoder.
-    """
-
-    def __init__(self, feature: torch.Tensor, img_size: int = 1024) -> None:
-        super().__init__()
-        self.feature = feature
-        self.img_size = img_size
-
-    def forward(self, x):  # noqa
-        return [self.feature]
-
-
-class _StubEncoder3D(torch.nn.Module):
-    """Encoder replacement for 3d that returns precomputed per-slice features in call order.
-
-    `UNETR3D.forward` runs ``torch.stack([self.encoder(x[:, :, i])[0] for i in range(Z)], dim=2)``,
-    i.e. it calls the encoder once per z slice in order, so returning the i-th precomputed slice
-    feature on the i-th call reproduces the full forward without re-running the encoder.
+    `UNETR3D.forward` runs ``[self.encoder(x[:, :, i])[0] for i in range(Z)]``, i.e. it calls the
+    encoder once per z slice in order (once total for a single 2d slice, the Z=1 case) and has no
+    encoder skip connections. Returning the i-th precomputed slice feature on the i-th call therefore
+    reproduces the full forward without re-running the SAM2 image encoder, for both 2d and 3d.
     """
 
     def __init__(self, features: torch.Tensor, img_size: int = 1024) -> None:
         super().__init__()
-        self.features = features  # (Z, C, h, w)
+        self.features = features  # (Z, C, h, w); a single 2d slice is the Z=1 case
         self.img_size = img_size
         self._idx = 0
 
@@ -880,13 +864,13 @@ class _StubEncoder3D(torch.nn.Module):
 def _decode_3d_feature_block(model, feature, original_size, device):
     """Run the UNETR3D decoder on a ``(z, C, h, w)`` feature block via the stub encoder.
 
-    Temporarily swaps the model's encoder for `_StubEncoder3D` (which returns the precomputed per-slice
+    Temporarily swaps the model's encoder for `_StubEncoder` (which returns the precomputed per-slice
     features in order) and runs the decoder on an original-size dummy, so the model resizes the
     prediction back to ``(z, H, W)`` itself. Returns the prediction for this z block, shape ``(4, z, H, W)``.
     """
     img_size = getattr(model.encoder, "img_size", 1024)
     real_encoder = model.encoder
-    model.encoder = _StubEncoder3D(feature, img_size)
+    model.encoder = _StubEncoder(feature, img_size)
     try:
         dummy = torch.zeros((1, 3, feature.shape[0], *original_size), device=device)
         output = model(dummy)  # (1, 4, z, H, W)
