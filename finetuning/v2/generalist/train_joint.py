@@ -4,19 +4,27 @@ import argparse
 import torch
 
 
+CHOSEN_PARAMETERS = {
+    "hvit_t": (10, 10, 5),
+    "hvit_s": (10, 10, 5),
+    "hvit_b": (8, 10, 5),
+    "hvit_l": (8, 8, 4),
+}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_epochs", type=int, default=100)
     parser.add_argument("--n_iterations", type=int, default=None)
     parser.add_argument("--model_type", default="hvit_t", choices=["hvit_t", "hvit_s", "hvit_b", "hvit_l"])
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--batch_size_2d", type=int, default=8)
-    parser.add_argument("--z_slices", type=int, nargs="+", default=[8])
-    parser.add_argument("--max_num_objects", type=int, default=5)
     parser.add_argument("--dataset_choice", default="both", choices=["lm", "em", "both"])
     args = parser.parse_args()
 
     model_type = args.model_type
+    # Pinned per-model config (batch_size_2d, z_slices, max_num_objects); not CLI-tunable.
+    batch_size_2d, z_slice, max_num_objects = CHOSEN_PARAMETERS[model_type]
+    z_slices = [z_slice]
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
     save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v0")
 
@@ -30,8 +38,8 @@ def main():
         model_type=model_type,
         input_path=data_path,
         batch_size=args.batch_size,
-        batch_size_2d=args.batch_size_2d,
-        z_slices=args.z_slices,
+        batch_size_2d=batch_size_2d,
+        z_slices=z_slices,
         dataset_choice=args.dataset_choice,
         n_workers=8,
         n_epochs=args.n_epochs,
@@ -39,7 +47,7 @@ def main():
         lr=1e-5,  # single LR for all parameters
         save_root=save_root,
         checkpoint_path=None,  # downloads default SAM2 weights if None
-        max_num_objects=args.max_num_objects,  # lower than interactive-only (8): joint also holds the UNETR decoder
+        max_num_objects=max_num_objects,  # lower than interactive-only (8): joint also holds the UNETR decoder
         prob_to_use_pt_input=1.0,  # always point/box prompts, never the GT mask
         prob_to_use_box_input=0.5,  # conditional prob of a box instead of a click
         num_frames_to_correct=2,  # max frames per volume receiving correction clicks
@@ -70,8 +78,8 @@ def main():
         peak_reserved = torch.cuda.max_memory_reserved() / 1024**3
         print(
             f"[peak-memory] model_type={model_type} batch_size={args.batch_size} "
-            f"batch_size_2d={args.batch_size_2d} z_slices={args.z_slices} "
-            f"max_num_objects={args.max_num_objects} "
+            f"batch_size_2d={batch_size_2d} z_slices={z_slices} "
+            f"max_num_objects={max_num_objects} "
             f"allocated={peak_alloc:.2f}GiB reserved={peak_reserved:.2f}GiB", flush=True
         )
 
