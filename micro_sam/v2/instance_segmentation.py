@@ -6,7 +6,7 @@ micro-sam v1 `instance_segmentation` module (which holds AMG / AIS / APG). Two e
 - AMG (`AutomaticMaskGenerationSegmenter`, `TiledAutomaticMaskGenerationSegmenter`): grid-based
   automatic mask generation, no decoder required. The expensive grid prediction happens in
   `initialize`, the cheap conversion to an instance segmentation in `generate`. Supported for 2d
-  images and, via `automatic_3d_segmentation`, for 3d volumes (run slice-by-slice and stitched
+  images and, via `amg_3d_segmentation`, for 3d volumes (run slice-by-slice and stitched
   across z with `micro_sam.v1.multi_dimensional_segmentation.merge_instance_segmentation_3d`).
 
 - AIS (`UniSAM2InstanceSegmentation`, `TiledUniSAM2InstanceSegmentation`): decoder-based instance
@@ -21,8 +21,6 @@ Both engines share the `initialize` / `generate` / `get_state` / `set_state` int
 `get_instance_segmentation_generator`.
 """
 
-import sys
-import types
 import contextlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -111,7 +109,7 @@ class AutomaticMaskGenerationSegmenter(AutoSegBase):
 
     Wraps the native `sam2.automatic_mask_generator.SAM2AutomaticMaskGenerator` and exposes the
     same `initialize` / `generate` interface as the micro-sam v1 `AutomaticMaskGenerator`, so it
-    can be used both for single 2d images and, via `automatic_3d_segmentation`, for 3d volumes.
+    can be used both for single 2d images and, via `amg_3d_segmentation`, for 3d volumes.
 
     The parameters that control the (expensive) mask prediction, e.g. `points_per_side` and the
     quality thresholds, are passed to the constructor. The (cheap) conversion of the predicted
@@ -545,7 +543,7 @@ def get_amg_segmenter(
     return AutomaticMaskGenerationSegmenter(model, **kwargs)
 
 
-def automatic_3d_segmentation(
+def amg_3d_segmentation(
     volume: np.ndarray,
     segmenter: AutomaticMaskGenerationSegmenter,
     with_background: bool = True,
@@ -649,35 +647,6 @@ def automatic_3d_segmentation(
 #
 
 
-def _alias_legacy_namespace():
-    """Alias the modules that were moved out of the old ``micro_sam2`` namespace.
-
-    Older UniSAM2 checkpoints were pickled while this package lived under ``micro_sam2``, so
-    ``torch.load`` needs the moved modules to be importable under their original paths.
-
-    NOTE: This is currently around to debug stuff. This will be gone very soon!
-    """
-    import micro_sam.v2.datasets.sampler as datasets_sampler
-    import micro_sam.v2.datasets.wrapper as datasets_wrapper
-    import micro_sam.v2.transforms.labels as transforms_labels
-    import micro_sam.v2.transforms.raw as transforms_raw
-
-    root = sys.modules.setdefault("micro_sam2", types.ModuleType("micro_sam2"))
-    root.__path__ = []
-    datasets = sys.modules.setdefault("micro_sam2.datasets", types.ModuleType("micro_sam2.datasets"))
-    datasets.__path__ = []
-    transforms = sys.modules.setdefault("micro_sam2.transforms", types.ModuleType("micro_sam2.transforms"))
-    transforms.__path__ = []
-
-    sys.modules["micro_sam2.datasets.sampler"] = datasets_sampler
-    sys.modules["micro_sam2.datasets.wrapper"] = datasets_wrapper
-    sys.modules["micro_sam2.transforms.labels"] = transforms_labels
-    sys.modules["micro_sam2.transforms.raw"] = transforms_raw
-    root.datasets, root.transforms = datasets, transforms
-    datasets.sampler, datasets.wrapper = datasets_sampler, datasets_wrapper
-    transforms.labels, transforms.raw = transforms_labels, transforms_raw
-
-
 def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, output_channels=4):
     """Load a UniSAM2 model for automatic segmentation from a checkpoint.
 
@@ -693,8 +662,6 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, outp
         The UniSAM2 model in eval mode.
     """
     from micro_sam.v2.models.util import UniSAM2
-
-    _alias_legacy_namespace()
 
     state = torch.load(checkpoint_path, weights_only=False, map_location=device or "cpu")
     # The standalone trainer saves the full model under 'model_state'; the joint trainer saves it

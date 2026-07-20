@@ -125,7 +125,7 @@ def automatic_instance_segmentation(
     """
     from ..util import load_image_data
     from .util import precompute_image_embeddings
-    from .instance_segmentation import UniSAM2InstanceSegmentation, automatic_3d_segmentation
+    from .instance_segmentation import UniSAM2InstanceSegmentation, amg_3d_segmentation
 
     raw = input_path if isinstance(input_path, np.ndarray) else load_image_data(input_path, key=key)
     if ndim is None:
@@ -157,7 +157,7 @@ def automatic_instance_segmentation(
 
     elif ndim == 3:
         # Grid-based AMG on a volume: segment slice-by-slice and stitch across z.
-        segmentation = automatic_3d_segmentation(
+        segmentation = amg_3d_segmentation(
             raw, segmenter, tile_shape=tile_shape, halo=halo, state_save_path=embedding_path,
             verbose=verbose, **generate_kwargs,
         )

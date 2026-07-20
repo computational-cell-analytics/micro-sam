@@ -13,7 +13,7 @@ import imageio.v3 as imageio
 from micro_sam.util import get_cache_directory
 from micro_sam.sample_data import fetch_nucleus_3d_example_data, fetch_hela_2d_example_data
 from micro_sam.v2.util import get_sam2_model
-from micro_sam.v2.instance_segmentation import get_amg_segmenter, automatic_3d_segmentation
+from micro_sam.v2.instance_segmentation import get_amg_segmenter, amg_3d_segmentation
 
 
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")
@@ -58,7 +58,7 @@ def run_3d_amg(model_type, tile_shape, halo, crop, view, generate_kwargs):
     model = get_sam2_model(model_type=model_type)
     segmenter = get_amg_segmenter(model, is_tiled=tile_shape is not None, model_type=model_type)
 
-    segmentation = automatic_3d_segmentation(
+    segmentation = amg_3d_segmentation(
         volume=volume, segmenter=segmenter, tile_shape=tile_shape, halo=halo, **generate_kwargs
     )
 

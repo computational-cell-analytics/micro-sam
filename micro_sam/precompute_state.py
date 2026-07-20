@@ -449,7 +449,7 @@ def _cache_amg_state_v2(
 def _cache_amg_slice(segmenter, save_path, i, init_fn, embedding_signature=None):
     """Load slice `i`'s AMG state from `save_path` if present and matching, else init and save.
 
-    Used by `micro_sam.v2.instance_segmentation.automatic_3d_segmentation` to cache the per-slice
+    Used by `micro_sam.v2.instance_segmentation.amg_3d_segmentation` to cache the per-slice
     grid-prediction state of a volume. `init_fn(i)` runs the (expensive) `initialize` for the slice.
     """
     key = _autoseg_state_key(i)
