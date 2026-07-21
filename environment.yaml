@@ -25,7 +25,7 @@ dependencies:
     - pytorch >=2.5
     - segment-anything
     - torchvision
-    - torch_em >=0.9
+    - torch_em >=0.10.1
     - tqdm
     - timm
     - transformers >=4.56

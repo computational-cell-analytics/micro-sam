@@ -1,12 +1,16 @@
 import gc
 import ctypes
 import platform
+import threading
 
-from typing import Optional, Union, List
+from concurrent import futures
+from copy import copy
+from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
 
+from micro_sam.v2.util import Devices
 from micro_sam.v1.prompt_based_segmentation import _process_box, _compute_logits_from_mask
 from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy, ResizeLongestSideTransforms
 
@@ -100,6 +104,35 @@ def _crop_mask_to_tile(tiling, halo, tile_id, mask):
     y0, x0 = int(outer.begin[0]), int(outer.begin[1])
     y1, x1 = int(outer.end[0]), int(outer.end[1])
     return np.asarray(mask)[y0:y1, x0:x1]
+
+
+def _clone_image_predictor(predictor, model: torch.nn.Module):
+    """Copy an image predictor onto a replica model, with per-image state cleared."""
+    from micro_sam.v2.util import configure_image_predictor
+
+    replica = copy(predictor)
+    replica.__dict__.pop("_micro_sam_predictor_devices", None)  # do not share the source cache
+    replica.model = model
+    replica.reset_predictor()
+    return configure_image_predictor(replica)
+
+
+def _get_image_predictor_devices(predictor, devices: Devices) -> List[Tuple]:
+    """Create and cache one image-predictor replica per selected device."""
+    from micro_sam.v2.batched_inference import prepare_models, resolve_devices
+
+    resolved_devices = resolve_devices(predictor.model, devices)
+    cache_key = tuple(str(device) for device in resolved_devices)
+    cached = getattr(predictor, "_micro_sam_predictor_devices", None)
+    if cached is not None and cached[0] == cache_key:
+        return cached[1]
+
+    predictor_devices = [
+        (predictor if model is predictor.model else _clone_image_predictor(predictor, model), device)
+        for model, device in prepare_models(predictor.model, resolved_devices)
+    ]
+    predictor._micro_sam_predictor_devices = (cache_key, predictor_devices)
+    return predictor_devices
 
 
 def promptable_segmentation_2d(
@@ -295,6 +328,7 @@ def tiled_promptable_segmentation_2d(
     boxes: Optional[np.ndarray] = None,
     masks: Optional[np.ndarray] = None,
     batched: Optional[bool] = None,
+    devices: Devices = None,
 ):
     """Tiled 2d promptable segmentation for the SAM2 image predictor.
 
@@ -302,6 +336,9 @@ def tiled_promptable_segmentation_2d(
     the predictor (via `set_precomputed`), runs `promptable_segmentation_2d` on the tile, and
     stitches the per-tile mask into the full image. Points are in (y, x) order, as passed by the
     annotator. Same return convention as `promptable_segmentation_2d`.
+
+    Independent active tiles run concurrently on persistent predictor replicas. By default all
+    visible CUDA devices are used; pass `devices` to select or restrict them.
     """
     from bioimage_cpp.utils import Blocking
     from micro_sam.v2.util import set_precomputed
@@ -336,8 +373,7 @@ def tiled_promptable_segmentation_2d(
                     None if box_mask is None else _crop_mask_to_tile(tiling, halo, tid, box_mask)
                 )
 
-    out = np.zeros(shape, dtype="uint32")
-    found = False
+    tile_jobs = {}
     for tile_id in sorted(set(tile_points) | set(tile_boxes)):
         tpoints = np.asarray(tile_points.get(tile_id, [])).reshape(-1, 2)
         tlabels = np.asarray(tile_labels.get(tile_id, []), dtype=int)
@@ -351,14 +387,40 @@ def tiled_promptable_segmentation_2d(
         y0, x0 = int(outer.begin[0]), int(outer.begin[1])
         local_points = (tpoints - np.array([y0, x0])) if len(tpoints) else tpoints
         local_boxes = [b - np.array([y0, x0, y0, x0]) for b in tboxes] if tboxes else None
-
         local_masks = tile_masks.get(tile_id) if tboxes else None
+        tile_jobs[tile_id] = local_points, tlabels, local_boxes, local_masks
 
-        set_precomputed(predictor, image_embeddings, tile_id=tile_id)
-        tile_seg = promptable_segmentation_2d(
-            predictor, image=None, points=local_points, labels=tlabels, boxes=local_boxes,
-            masks=local_masks, batched=batched,
-        )
+    predictor_devices = _get_image_predictor_devices(predictor, devices)
+    groups = {}
+    for tile_id in tile_jobs:
+        worker_id = tile_id % len(predictor_devices)
+        groups.setdefault(worker_id, []).append(tile_id)
+
+    def run_group(worker_id, tile_ids):
+        local_predictor, _ = predictor_devices[worker_id]
+        results = []
+        for tile_id in tile_ids:
+            local_points, local_labels, local_boxes, local_masks = tile_jobs[tile_id]
+            set_precomputed(local_predictor, image_embeddings, tile_id=tile_id)
+            tile_seg = promptable_segmentation_2d(
+                local_predictor, image=None, points=local_points, labels=local_labels,
+                boxes=local_boxes, masks=local_masks, batched=batched,
+            )
+            results.append((tile_id, tile_seg))
+        return results
+
+    if len(groups) < 2:
+        results = run_group(*next(iter(groups.items()))) if groups else []
+    else:
+        results = []
+        with futures.ThreadPoolExecutor(max_workers=len(groups)) as pool:
+            tasks = [pool.submit(run_group, worker_id, tile_ids) for worker_id, tile_ids in groups.items()]
+            for task in tasks:
+                results.extend(task.result())
+
+    out = np.zeros(shape, dtype="uint32")
+    found = False
+    for tile_id, tile_seg in sorted(results):
         if tile_seg is None:
             continue
 
@@ -944,10 +1006,16 @@ class TiledPromptableSegmentation3D:
         volume_embeddings: The precomputed tiled 3d embeddings (with per-tile `features`/`pos_enc`/
             `fpn` groups and `shape`/`tile_shape`/`halo` attrs). See `precompute_image_embeddings`.
         device: The device to run inference on.
+        devices: Devices used for independent tile columns. By default all visible CUDA devices
+            are used when the predictor is on CUDA.
     """
 
-    def __init__(self, predictor, volume, volume_embeddings, device=None, **kwargs):
+    def __init__(self, predictor, volume, volume_embeddings, device=None, devices: Devices = None, **kwargs):
         from bioimage_cpp.utils import Blocking
+        from micro_sam.v2.batched_inference import prepare_models, resolve_devices
+
+        resolved_devices = resolve_devices(predictor, devices)
+        self._predictor_devices = prepare_models(predictor, resolved_devices)
 
         self.predictor = predictor
         self.volume = volume
@@ -1013,8 +1081,9 @@ class TiledPromptableSegmentation3D:
                 "input_size": tile_dataset.attrs["input_size"],
                 "original_size": tile_dataset.attrs["original_size"],
             }
+            predictor, device = self._predictor_devices[tile_id % len(self._predictor_devices)]
             self._segmenters[tile_id] = PromptableSegmentation3D(
-                self.predictor, sub_volume, tile_embeddings, device=self.device, **self._kwargs
+                predictor, sub_volume, tile_embeddings, device=device, **self._kwargs
             )
         return self._segmenters[tile_id]
 
@@ -1024,6 +1093,26 @@ class TiledPromptableSegmentation3D:
         local = tuple(slice(b, e) for b, e in zip(block.inner_block_local.begin, block.inner_block_local.end))
         glob = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
         return local, glob
+
+    def _run_tile_jobs(self, tile_ids: List[int], function: Callable) -> List[Tuple]:
+        """Run tile jobs concurrently across devices and serially within each device."""
+        groups = {}
+        for tile_id in tile_ids:
+            worker_id = tile_id % len(self._predictor_devices)
+            groups.setdefault(worker_id, []).append(tile_id)
+
+        def run_group(group):
+            return [(tile_id, function(tile_id)) for tile_id in group]
+
+        if len(groups) < 2:
+            return run_group(next(iter(groups.values()))) if groups else []
+
+        results = []
+        with futures.ThreadPoolExecutor(max_workers=len(groups)) as pool:
+            tasks = [pool.submit(run_group, group) for group in groups.values()]
+            for task in tasks:
+                results.extend(task.result())
+        return sorted(results, key=lambda result: result[0])
 
     def segment_slice(self, frame_idx, points=None, labels=None, boxes=None, masks=None, object_id=1):
         """Segment a single slice. Points are (x, y), boxes (x0, y0, x1, y1), as passed by the annotator.
@@ -1054,8 +1143,7 @@ class TiledPromptableSegmentation3D:
                         None if box_mask is None else _crop_mask_to_tile(self.tiling, self.halo, tid, box_mask)
                     )
 
-        out = np.zeros(self.shape[1:], dtype="uint32")
-        found = False
+        tile_jobs = {}
         for tile_id in sorted(set(tile_points) | set(tile_boxes)):
             tpoints = np.asarray(tile_points.get(tile_id, [])).reshape(-1, 2)
             tlabels = np.asarray(tile_labels.get(tile_id, []), dtype=int)
@@ -1066,10 +1154,23 @@ class TiledPromptableSegmentation3D:
             local_points = (tpoints - np.array([x0, y0])) if len(tpoints) else None
             local_boxes = [b - np.array([x0, y0, x0, y0]) for b in tboxes] if tboxes else None
             local_masks = tile_masks.get(tile_id) if tboxes else None
-            tile_seg = self._get_segmenter(tile_id).segment_slice(
-                frame_idx, points=local_points, labels=(tlabels if len(tlabels) else None),
+            tile_jobs[tile_id] = (
+                local_points,
+                tlabels if len(tlabels) else None,
+                local_boxes,
+                local_masks,
+            )
+
+        def segment_tile(tile_id):
+            local_points, local_labels, local_boxes, local_masks = tile_jobs[tile_id]
+            return self._get_segmenter(tile_id).segment_slice(
+                frame_idx, points=local_points, labels=local_labels,
                 boxes=local_boxes, masks=local_masks, object_id=object_id,
             )
+
+        out = np.zeros(self.shape[1:], dtype="uint32")
+        found = False
+        for tile_id, tile_seg in self._run_tile_jobs(sorted(tile_jobs), segment_tile):
             if tile_seg is None:
                 continue
             local, glob = self._inner_slices(tile_id)
@@ -1155,10 +1256,20 @@ class TiledPromptableSegmentation3D:
         prompted in several tiles keeps one id and is merged across the tile boundaries.
         """
         segmentation = np.zeros(self.shape, dtype="uint64")
-        for tile_id in sorted(self._segmenters):
-            tile_seg = self._segmenters[tile_id].predict(
-                update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+        progress_lock = threading.Lock()
+
+        def locked_update(value):
+            if update_progress is None:
+                return
+            with progress_lock:
+                update_progress(value)
+
+        def predict_tile(tile_id):
+            return self._segmenters[tile_id].predict(
+                update_progress=locked_update, early_stop_patience=early_stop_patience, z_range=z_range,
             )
+
+        for tile_id, tile_seg in self._run_tile_jobs(sorted(self._segmenters), predict_tile):
             local, glob = self._inner_slices(tile_id)
             inner = tile_seg[(slice(None),) + local]
             region = segmentation[(slice(None),) + glob]

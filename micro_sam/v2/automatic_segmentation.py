@@ -15,7 +15,7 @@ from typing import Optional, Tuple, Union
 import numpy as np
 import torch
 
-from .util import DEFAULT_MODEL
+from .util import DEFAULT_MODEL, Devices
 
 
 def get_predictor_and_segmenter(
@@ -97,6 +97,10 @@ def automatic_instance_segmentation(
     mode: str = "sparse",
     device: Optional[Union[str, torch.device]] = None,
     verbose: bool = True,
+    batch_size: Optional[int] = None,
+    devices: Devices = None,
+    num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
     **generate_kwargs,
 ) -> np.ndarray:
     """Run automatic instance segmentation for a single input and save the result.
@@ -118,6 +122,10 @@ def automatic_instance_segmentation(
         mode: The AIS post-processing mode, 'sparse' (flow) or 'dense' (multicut). Ignored for AMG.
         device: The device to run inference on.
         verbose: Whether to print progress.
+        batch_size: Explicit tile or slice batch size, or None for automatic capacity probing.
+        devices: Inference device or devices. None uses all visible GPUs when the model is on CUDA.
+        num_prefetch_workers: Number of input reading and preprocessing threads.
+        num_write_workers: Number of output writing threads for full tiled inference.
         generate_kwargs: Additional post-processing parameters forwarded to the segmenter's `generate`.
 
     Returns:
@@ -147,11 +155,28 @@ def automatic_instance_segmentation(
             else:
                 emb_predictor = predictor
             image_embeddings = precompute_image_embeddings(
-                emb_predictor, raw, save_path=embedding_path, ndim=ndim,
-                tile_shape=tile_shape, halo=halo, verbose=verbose, lazy_loading=(ndim == 3),
+                emb_predictor,
+                raw,
+                save_path=embedding_path,
+                ndim=ndim,
+                tile_shape=tile_shape,
+                halo=halo,
+                verbose=verbose,
+                lazy_loading=(ndim == 3),
+                batch_size=batch_size,
+                devices=devices,
+                num_prefetch_workers=num_prefetch_workers,
             )
         segmenter.initialize(
-            raw, ndim=ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo,
+            raw,
+            ndim=ndim,
+            image_embeddings=image_embeddings,
+            tile_shape=tile_shape,
+            halo=halo,
+            batch_size=batch_size,
+            devices=devices,
+            num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
         )
         segmentation = segmenter.generate(mode=mode, **generate_kwargs)
 
