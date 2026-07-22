@@ -71,12 +71,12 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
 
 
 @pytest.mark.gui
-def test_batch_size_visibility_follows_device_and_model(make_napari_viewer_proxy):
+def test_batch_size_visibility_follows_device_and_model(qtbot):
     """The batch size control is only shown where it has an effect (GPU, and not a VFM encoder)."""
     from micro_sam.sam_annotator._widgets import ClassificationEmbeddingWidget
 
-    make_napari_viewer_proxy()
     widget = ClassificationEmbeddingWidget()
+    qtbot.addWidget(widget)
 
     widget.device = "cpu"
     widget.model_type = "hvit_t_cells"
