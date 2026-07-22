@@ -1,3 +1,4 @@
+import threading
 import unittest
 from unittest import mock
 
@@ -68,10 +69,15 @@ class TestBatchedPipeline(unittest.TestCase):
     def test_pipeline_batches_and_writes_all_jobs(self):
         outputs = {}
         progress = []
+        progress_threads = []
 
         def predict(model, items, device):
             self.assertEqual(device, torch.device("cpu"))
             return [value + model for value in items]
+
+        def update_progress(update):
+            progress.append(update)
+            progress_threads.append(threading.get_ident())
 
         run_batched_pipeline(
             jobs=range(7),
@@ -81,11 +87,12 @@ class TestBatchedPipeline(unittest.TestCase):
             predict_fn=predict,
             write_fn=outputs.__setitem__,
             num_prefetch_workers=2,
-            update_progress=progress.append,
+            update_progress=update_progress,
         )
 
         self.assertEqual(outputs, {index: 2 * index + 3 for index in range(7)})
         self.assertEqual(sum(progress), 7)
+        self.assertEqual(set(progress_threads), {threading.get_ident()})
 
     def test_pipeline_retries_ooming_batches(self):
         outputs = {}

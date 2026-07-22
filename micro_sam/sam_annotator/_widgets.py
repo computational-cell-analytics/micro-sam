@@ -601,8 +601,13 @@ class InfoDialog(QtWidgets.QDialog):
 # Set up the progress bar. We handle this via custom signals that are passed as callbacks to the
 # function that does the actual work. We need callbacks for initializing the progress bar,
 # updating it and for stopping the progress bar.
-def _create_pbar_for_threadworker():
-    pbar = progress()
+def _create_pbar_for_threadworker(initial_description=None):
+    """Create a napari progress bar, optionally visible in an indeterminate preparation state.
+
+    Supplying the description at construction time ensures napari can paint meaningful status before
+    a synchronous caller reaches the backend callback that provides the final work-item count.
+    """
+    pbar = progress(desc=initial_description)
     pbar_signals = PBarSignals()
     pbar_signals.pbar_total.connect(
         lambda total: setattr(pbar, "total", total)
@@ -2190,7 +2195,9 @@ class EmbeddingWidget(_WidgetBase):
             show_info("Set an embeddings save path to cache the automatic segmentation state.")
 
         # Set up progress bar and signals for using it within a threadworker.
-        pbar, pbar_signals = _create_pbar_for_threadworker()
+        # Model and decoder preparation happens before the backend knows the tile / slice count, so
+        # start with an indeterminate status instead of leaving napari's activity display empty.
+        pbar, pbar_signals = _create_pbar_for_threadworker("Preparing image embeddings")
 
         # @thread_worker()
         def compute_image_embedding():

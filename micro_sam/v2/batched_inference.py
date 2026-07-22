@@ -318,6 +318,7 @@ def run_batched_pipeline(
 
     input_queue = queue.Queue(maxsize=max(2 * sum(batch_sizes), 2))
     output_queue = queue.Queue(maxsize=max(2 * len(model_devices), 2))
+    progress_queue = queue.Queue()
     stop_event = threading.Event()
     error_box = []
     error_lock = threading.Lock()
@@ -392,7 +393,7 @@ def run_batched_pipeline(
                     break
                 write_fn(item.spec, item.data)
                 if update_progress is not None:
-                    update_progress(1)
+                    progress_queue.put(1)
         except PipelineAborted:
             pass
         except Exception as exc:  # noqa
@@ -409,14 +410,33 @@ def run_batched_pipeline(
     ]
     threads = [writer_thread, *consumer_threads, *producer_threads]
 
+    def forward_progress(block):
+        increments = 0
+        try:
+            increments = progress_queue.get(timeout=0.05 if block else 0)
+        except queue.Empty:
+            return
+        while True:
+            try:
+                increments += progress_queue.get_nowait()
+            except queue.Empty:
+                break
+        update_progress(increments)
+
     try:
         for thread in threads:
             thread.start()
-        for thread in producer_threads:
-            thread.join()
-        for thread in consumer_threads:
-            thread.join()
-        writer_thread.join()
+        if update_progress is None:
+            for thread in threads:
+                thread.join()
+        else:
+            # The writer performs I/O off-thread, but UI progress callbacks must run on the calling
+            # thread. Poll completed writes here instead of queuing Qt signals behind this wait.
+            while any(thread.is_alive() for thread in threads):
+                forward_progress(block=True)
+            for thread in threads:
+                thread.join()
+            forward_progress(block=False)
     finally:
         stop_event.set()
         for thread in threads:

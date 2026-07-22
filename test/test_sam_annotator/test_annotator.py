@@ -9,6 +9,34 @@ from micro_sam.sam_annotator.annotator import annotator, detect_ndim, detect_ndi
 from micro_sam._test_util import check_layer_initialization
 
 
+def test_progress_bar_initial_description(monkeypatch):
+    """A progress description supplied at creation is visible before the backend reports a total."""
+    from micro_sam.sam_annotator import _widgets
+
+    captured = {}
+
+    class FakeProgress:
+        def update(self, value):
+            pass
+
+        def set_description(self, description):
+            pass
+
+        def close(self):
+            pass
+
+        def reset(self):
+            pass
+
+    def fake_progress(**kwargs):
+        captured["kwargs"] = kwargs
+        return FakeProgress()
+
+    monkeypatch.setattr(_widgets, "progress", fake_progress)
+    _widgets._create_pbar_for_threadworker("Preparing image embeddings")
+    assert captured["kwargs"] == {"desc": "Preparing image embeddings"}
+
+
 class TestDetectNdim:
     """Test the detect_ndim helper function."""
 
