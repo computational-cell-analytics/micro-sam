@@ -816,7 +816,8 @@ def _block_shape_and_halo(spatial_shape, ndim, tile_shape, halo):
     Args:
         spatial_shape: The spatial image shape, (Y, X) for 2d or (Z, Y, X) for 3d.
         ndim: The number of spatial dimensions (2 or 3).
-        tile_shape: The in-plane/3d tile shape, or None for no tiling.
+        tile_shape: The tile shape, or None for no tiling. For 3d data either an in-plane (y, x)
+            tile, which keeps the default z chunking, or an explicit (z, y, x) tile.
         halo: The tile halo, or None for no overlap.
 
     Returns:
@@ -832,8 +833,18 @@ def _block_shape_and_halo(spatial_shape, ndim, tile_shape, halo):
         block_shape = (1, *spatial_shape)
         block_halo = (0, 0, 0)
     elif is_3d:
-        block_shape = tuple(tile_shape)  # (z, y, x)
-        block_halo = (0, 0, 0) if halo is None else tuple(halo)
+        # Tiling is in-plane, so the CLI and the annotator pass a 2-entry (y, x) tile. Prepend the
+        # default z block, keeping z chunked exactly as it is without tiling. A 3-entry (z, y, x)
+        # tile is used as given.
+        if len(tile_shape) == 2:
+            n_slices = spatial_shape[0]
+            z_block = min(DEFAULT_TILE_Z, n_slices)
+            block_shape = (z_block, *tile_shape)
+            z_halo = DEFAULT_HALO_Z if z_block < n_slices else 0
+            block_halo = (z_halo, *((0, 0) if halo is None else tuple(halo)[-2:]))
+        else:
+            block_shape = tuple(tile_shape)  # (z, y, x)
+            block_halo = (0, 0, 0) if halo is None else tuple(halo)
     else:
         block_shape = (1, *tile_shape)  # (1, y, x)
         block_halo = (0, *((0, 0) if halo is None else halo))
