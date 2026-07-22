@@ -4453,8 +4453,8 @@ class AutoSegmentWidget(_WidgetBase):
         # plain 2d image. Thread workers are disabled in this tool (see top of module), so the run is
         # synchronous; we drive the bar via callbacks the backends call between units and pump the Qt
         # event loop with 'processEvents' on each update so it repaints live. It is always closed in
-        # the 'finally' block. (3d decoder inference runs through a thread pool and is reported as a
-        # single step, since it cannot update the napari bar live.)
+        # the 'finally' block. Batched 3d inference forwards completed tile-slice increments from its
+        # worker threads to this calling thread so napari can repaint them safely.
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
         def pbar_init(total, description):

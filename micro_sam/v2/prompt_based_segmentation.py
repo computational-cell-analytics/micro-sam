@@ -1,7 +1,7 @@
 import gc
 import ctypes
 import platform
-import threading
+import queue
 
 from concurrent import futures
 from copy import copy
@@ -1094,24 +1094,54 @@ class TiledPromptableSegmentation3D:
         glob = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
         return local, glob
 
-    def _run_tile_jobs(self, tile_ids: List[int], function: Callable) -> List[Tuple]:
+    def _run_tile_jobs(
+        self, tile_ids: List[int], function: Callable, update_progress: Optional[Callable[[int], None]] = None,
+    ) -> List[Tuple]:
         """Run tile jobs concurrently across devices and serially within each device."""
         groups = {}
         for tile_id in tile_ids:
             worker_id = tile_id % len(self._predictor_devices)
             groups.setdefault(worker_id, []).append(tile_id)
 
-        def run_group(group):
-            return [(tile_id, function(tile_id)) for tile_id in group]
+        def run_group(group, worker_update=None):
+            results = []
+            for tile_id in group:
+                if worker_update is None:
+                    result = function(tile_id)
+                else:
+                    result = function(tile_id, worker_update)
+                results.append((tile_id, result))
+            return results
 
         if len(groups) < 2:
-            return run_group(next(iter(groups.values()))) if groups else []
+            if not groups:
+                return []
+            group = next(iter(groups.values()))
+            return run_group(group, update_progress)
+
+        progress_queue = queue.Queue()
+
+        def forward_progress():
+            increment = 0
+            while True:
+                try:
+                    increment += int(progress_queue.get_nowait())
+                except queue.Empty:
+                    break
+            if increment:
+                update_progress(increment)
 
         results = []
         with futures.ThreadPoolExecutor(max_workers=len(groups)) as pool:
-            tasks = [pool.submit(run_group, group) for group in groups.values()]
-            for task in tasks:
-                results.extend(task.result())
+            worker_update = progress_queue.put if update_progress is not None else None
+            tasks = [pool.submit(run_group, group, worker_update) for group in groups.values()]
+            pending = set(tasks)
+            while pending:
+                done, pending = futures.wait(pending, timeout=0.05, return_when=futures.FIRST_COMPLETED)
+                forward_progress()
+                for task in done:
+                    results.extend(task.result())
+        forward_progress()
         return sorted(results, key=lambda result: result[0])
 
     def segment_slice(self, frame_idx, points=None, labels=None, boxes=None, masks=None, object_id=1):
@@ -1256,20 +1286,15 @@ class TiledPromptableSegmentation3D:
         prompted in several tiles keeps one id and is merged across the tile boundaries.
         """
         segmentation = np.zeros(self.shape, dtype="uint64")
-        progress_lock = threading.Lock()
 
-        def locked_update(value):
-            if update_progress is None:
-                return
-            with progress_lock:
-                update_progress(value)
-
-        def predict_tile(tile_id):
+        def predict_tile(tile_id, tile_update=None):
             return self._segmenters[tile_id].predict(
-                update_progress=locked_update, early_stop_patience=early_stop_patience, z_range=z_range,
+                update_progress=tile_update, early_stop_patience=early_stop_patience, z_range=z_range,
             )
 
-        for tile_id, tile_seg in self._run_tile_jobs(sorted(self._segmenters), predict_tile):
+        for tile_id, tile_seg in self._run_tile_jobs(
+            sorted(self._segmenters), predict_tile, update_progress=update_progress,
+        ):
             local, glob = self._inner_slices(tile_id)
             inner = tile_seg[(slice(None),) + local]
             region = segmentation[(slice(None),) + glob]
