@@ -90,9 +90,10 @@ class _FakeUNETR:
     A plain (non-nn.Module) class so the encoder attribute can be freely swapped and restored.
     """
 
-    def __init__(self, img_size=8):
+    def __init__(self, img_size=8, output_dtype=torch.float32):
         self.encoder = types.SimpleNamespace(img_size=img_size)
         self.seen = []       # features the stub returned on the most recent call
+        self.output_dtype = output_dtype
         self.call_z = []     # z size of each decoder call (one per z block)
         self.call_hw = []
 
@@ -102,7 +103,7 @@ class _FakeUNETR:
         self.call_z.append(z)
         h, w = x.shape[-2:]
         self.call_hw.append((h, w))
-        return torch.zeros((1, 4, z, h, w))
+        return torch.zeros((1, 4, z, h, w), dtype=self.output_dtype)
 
 
 def test_decoder_3d_stub_returns_per_slice_features_in_order():
@@ -156,10 +157,19 @@ def test_decoder_2d_uses_original_non_square_shape():
     assert model.call_hw == [(4, 8)]
 
 
+def test_decoder_predictions_are_cached_as_float32():
+    features = np.zeros((1, 2, 4, 4), dtype="float32")
+    model = _FakeUNETR(img_size=8, output_dtype=torch.float16)
+    out = _run_decoder_2d(model, {"features": features, "original_size": (8, 8)})
+
+    assert out.dtype == np.float32
+
+
 def test_decoder_3d_zchunks_deep_volume():
     # Regression for the z-tiling fix: a deep volume (small in-plane, not tiled in-plane) must be
     # decoded in bounded z blocks, not all at once, so peak memory stays bounded.
     z, c, h, w = 10, 2, 4, 4
+
     feats = np.zeros((z, c, h, w), dtype="float32")
     model = _FakeUNETR(img_size=8)
     out = _run_decoder_3d(model, {"features": feats, "original_size": (8, 8)})
