@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from bioimage_cpp.utils import Blocking
 
 from micro_sam.v2.batched_inference import (
+    _run_decoder_jobs,
     _select_throughput_batch_size,
     compute_auto_batch_sizes,
     decode_tiled_3d_embeddings,
@@ -119,6 +120,25 @@ class TestBatchedPipeline(unittest.TestCase):
         self.assertEqual(attempted_batch_sizes[0], 4)
         self.assertTrue(all(batch_size <= 2 for batch_size in attempted_batch_sizes[1:]))
 
+    def test_pipeline_retries_singleton_after_cache_release(self):
+        outputs = {}
+        attempts = 0
+
+        def predict(model, items, device):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise torch.cuda.OutOfMemoryError("synthetic fragmented-cache OOM")
+            return [value + model for value in items]
+
+        run_batched_pipeline(
+            jobs=[0], model_devices=[(3, torch.device("cpu"))], batch_sizes=[1],
+            load_fn=lambda value: 2 * value, predict_fn=predict, write_fn=outputs.__setitem__,
+        )
+
+        self.assertEqual(outputs, {0: 3})
+        self.assertEqual(attempts, 2)
+
 
 class TestAutomaticBatchSizing(unittest.TestCase):
     def test_requires_material_throughput_improvement(self):
@@ -157,6 +177,7 @@ class TestBatchedDecoder(unittest.TestCase):
     def test_volume_decoder_batches_z_blocks(self):
         features = np.arange(8 * 2 * 2 * 2, dtype="float32").reshape(8, 2, 2, 2)
         model = FakeUNETR()
+        progress = []
 
         output = decode_volume_embeddings(
             model,
@@ -166,10 +187,12 @@ class TestBatchedDecoder(unittest.TestCase):
             z_halo=0,
             batch_size=2,
             num_prefetch_workers=2,
+            pbar_update=progress.append,
         )
 
         self.assertEqual(output.shape, (4, 8, 8, 8))
         self.assertEqual(model.batch_sizes, [2, 2])
+        self.assertEqual(sum(progress), 8)
 
     def test_tiled_volume_decoder_batches_tiles_and_z_blocks(self):
         features = Group(
@@ -185,6 +208,7 @@ class TestBatchedDecoder(unittest.TestCase):
             halo=(0, 0),
         )
         model = FakeUNETR()
+        progress = []
 
         output = decode_tiled_3d_embeddings(
             model,
@@ -194,6 +218,7 @@ class TestBatchedDecoder(unittest.TestCase):
             z_halo=0,
             batch_size=2,
             num_prefetch_workers=2,
+            pbar_update=progress.append,
         )
 
         self.assertEqual(output.shape, (4, 4, 8, 8))
@@ -202,6 +227,21 @@ class TestBatchedDecoder(unittest.TestCase):
         self.assertTrue(np.allclose(output[:, :, 4:, :4], 3))
         self.assertTrue(np.allclose(output[:, :, 4:, 4:], 4))
         self.assertEqual(model.batch_sizes, [2, 2, 2, 2])
+        self.assertEqual(sum(progress), 16)
+
+    def test_largest_decoder_shape_runs_first(self):
+        jobs = [
+            {"source": np.ones((2, 2, 2, 2), dtype="float32"), "original_size": (8, 8), "name": "small"},
+            {"source": np.ones((4, 2, 2, 2), dtype="float32"), "original_size": (8, 8), "name": "large"},
+        ]
+        write_order = []
+
+        _run_decoder_jobs(
+            FakeUNETR(), jobs, lambda job, prediction: write_order.append(job["name"]),
+            batch_size=1, devices="cpu", num_prefetch_workers=1,
+        )
+
+        self.assertEqual(write_order, ["large", "small"])
 
 
 class FakeInteractiveTile:
@@ -226,14 +266,20 @@ class TestInteractiveTileScheduling(unittest.TestCase):
             for tile_id in range(4)
         }
         progress = []
+        progress_threads = []
 
-        output = segmenter.predict(update_progress=progress.append)
+        def update_progress(value):
+            progress.append(value)
+            progress_threads.append(threading.get_ident())
+
+        output = segmenter.predict(update_progress=update_progress)
 
         self.assertTrue(np.all(output[:, :4, :4] == 1))
         self.assertTrue(np.all(output[:, :4, 4:] == 2))
         self.assertTrue(np.all(output[:, 4:, :4] == 3))
         self.assertTrue(np.all(output[:, 4:, 4:] == 4))
         self.assertEqual(sum(progress), 8)
+        self.assertEqual(set(progress_threads), {threading.get_ident()})
 
 
 if __name__ == "__main__":

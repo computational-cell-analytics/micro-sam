@@ -126,6 +126,18 @@ def _release_probe_memory(device: torch.device) -> None:
             torch.cuda.empty_cache()
 
 
+def _release_fragmented_cuda_cache(device: torch.device) -> None:
+    """Release inactive cache when it leaves the logical CUDA device with too little free VRAM."""
+    if device.type != "cuda":
+        return
+    free_memory, total_memory = torch.cuda.mem_get_info(device)
+    allocated_memory = torch.cuda.memory_allocated(device)
+    inactive_memory = torch.cuda.memory_reserved(device) - allocated_memory
+    if free_memory < 0.25 * total_memory and inactive_memory > 0.25 * total_memory:
+        with torch.cuda.device(device):
+            torch.cuda.empty_cache()
+
+
 def _measure_batch_throughput(
     model: torch.nn.Module,
     device: torch.device,
@@ -269,10 +281,12 @@ def _predict_with_oom_backoff(
     try:
         return predict_fn(model, items, device), len(items)
     except Exception as exc:
-        if not _is_oom_error(exc) or len(items) == 1:
+        if not _is_oom_error(exc):
             raise
 
     _release_probe_memory(device)
+    if len(items) == 1:
+        return predict_fn(model, items, device), 1
     split = len(items) // 2
     warnings.warn(
         f"Batch size {len(items)} ran out of memory on {device}; retrying with smaller batches.",
@@ -293,6 +307,7 @@ def run_batched_pipeline(
     write_fn: Callable[[Any, Any], None],
     num_prefetch_workers: int = 4,
     update_progress: Optional[Callable[[int], None]] = None,
+    progress_increment: Optional[Callable[[Any], int]] = None,
 ) -> None:
     """Run load/preprocess, batched inference, and writing as a bounded threaded pipeline.
 
@@ -393,7 +408,8 @@ def run_batched_pipeline(
                     break
                 write_fn(item.spec, item.data)
                 if update_progress is not None:
-                    progress_queue.put(1)
+                    increment = 1 if progress_increment is None else int(progress_increment(item.spec))
+                    progress_queue.put(increment)
         except PipelineAborted:
             pass
         except Exception as exc:  # noqa
@@ -895,7 +911,9 @@ def _predict_jobs(model: torch.nn.Module, items: List[Dict], device: torch.devic
         raise RuntimeError("Decoder jobs with different output sizes cannot share a batch.")
     features = torch.stack([item["feature"] for item in items]).to(device, non_blocking=True)
     output = _decode_3d_feature_batch(model, features, original_size, device)
-    return [np.array(value) for value in output]
+    predictions = [np.array(value) for value in output]
+    _release_fragmented_cuda_cache(device)
+    return predictions
 
 
 def _feature_shape(job: Dict) -> Tuple[int, ...]:
@@ -973,6 +991,8 @@ def _run_decoder_jobs(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
+    update_progress: Optional[Callable[[int], None]] = None,
+    progress_increment: Optional[Callable[[Dict], int]] = None,
 ) -> None:
     if len(jobs) == 0:
         return
@@ -982,8 +1002,13 @@ def _run_decoder_jobs(
     for job in jobs:
         groups[(_feature_shape(job), job["original_size"])].append(job)
 
+    # Run the largest shape first so later, smaller groups can reuse its allocator blocks. Starting
+    # with a boundary z-block and growing to the full context fragmented 10 GB MIG allocators.
+    group_keys = sorted(groups, key=lambda key: np.prod(key[0]) * np.prod(key[1]), reverse=True)
+
     try:
-        for group_jobs in groups.values():
+        for group_key in group_keys:
+            group_jobs = groups[group_key]
             run_batched_pipeline(
                 jobs=group_jobs,
                 model_devices=model_devices,
@@ -992,6 +1017,8 @@ def _run_decoder_jobs(
                 predict_fn=_predict_jobs,
                 write_fn=write_fn,
                 num_prefetch_workers=num_prefetch_workers,
+                update_progress=update_progress,
+                progress_increment=progress_increment,
             )
     finally:
         release_model_replicas(model_devices)
@@ -1048,12 +1075,11 @@ def decode_volume_embeddings(
         inner = job["z0"] - job["c0"]
         count = job["z1"] - job["z0"]
         output[:, job["z0"]:job["z1"]] = prediction[:, inner:inner + count]
-        if pbar_update is not None:
-            pbar_update(count)
 
     _run_decoder_jobs(
         model, jobs, write_prediction, batch_size=batch_size, devices=devices,
         num_prefetch_workers=num_prefetch_workers,
+        update_progress=pbar_update, progress_increment=lambda job: job["z1"] - job["z0"],
     )
     return output
 
@@ -1106,12 +1132,11 @@ def decode_tiled_2d_embeddings(
             block.inner_block.begin, block.inner_block.end,
         ))
         output[(slice(None),) + inner] = prediction[(slice(None), slice(0, 1)) + local][:, 0]
-        if pbar_update is not None:
-            pbar_update(1)
 
     _run_decoder_jobs(
         model, jobs, write_prediction, batch_size=batch_size, devices=devices,
         num_prefetch_workers=num_prefetch_workers,
+        update_progress=pbar_update,
     )
     return output
 
@@ -1173,12 +1198,11 @@ def decode_tiled_3d_embeddings(
         local_z = job["z0"] - job["c0"]
         prediction = prediction[:, local_z:local_z + z_count]
         output[(slice(None), slice(job["z0"], job["z1"])) + inner] = prediction[(slice(None), slice(None)) + local]
-        if pbar_update is not None:
-            pbar_update(z_count)
 
     _run_decoder_jobs(
         model, jobs, write_prediction, batch_size=batch_size, devices=devices,
         num_prefetch_workers=num_prefetch_workers,
+        update_progress=pbar_update, progress_increment=lambda job: job["z1"] - job["z0"],
     )
     return output
 
@@ -1220,11 +1244,10 @@ def decode_tiled_3d_slice(
             block.inner_block.begin, block.inner_block.end,
         ))
         output[(slice(None),) + inner] = prediction[(slice(None), 0) + local]
-        if pbar_update is not None:
-            pbar_update(1)
 
     _run_decoder_jobs(
         model, jobs, write_prediction, batch_size=batch_size, devices=devices,
         num_prefetch_workers=num_prefetch_workers,
+        update_progress=pbar_update,
     )
     return output
