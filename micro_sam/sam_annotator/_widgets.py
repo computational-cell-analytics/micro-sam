@@ -1794,14 +1794,21 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.layout().addLayout(layout)
 
         # Use a conservative default and let users opt into larger per-GPU batches when their
-        # workload and available memory benefit from them.
+        # workload and available memory benefit from them. Batching only helps on a GPU, so the
+        # control is hidden whenever the effective device is the CPU (the default of 1 is still
+        # used then). Visibility tracks the device dropdown, so it also updates when the user
+        # switches devices or when 'auto' resolves to the CPU.
         self.batch_size = 1
         self.batch_size_param, batch_size_layout = self._add_int_param(
             "batch_size", self.batch_size, min_val=1, max_val=64,
-            title="batch size per GPU:",
+            title="batch size",
             tooltip=get_tooltip("embedding", "batch_size"),
         )
-        setting_values.layout().addLayout(batch_size_layout)
+        self._batch_size_widget = QtWidgets.QWidget()
+        self._batch_size_widget.setLayout(batch_size_layout)
+        setting_values.layout().addWidget(self._batch_size_widget)
+        self.device_dropdown.currentIndexChanged.connect(self._update_batch_size_visibility)
+        self._update_batch_size_visibility()
 
         # Create UI for the save path.
         self.embeddings_save_path = None
@@ -1887,6 +1894,14 @@ class EmbeddingWidget(_WidgetBase):
         # Show the in-plane tile shape and halo fields only when tiling is enabled.
         self.tiling = self.tiling_dropdown.currentText()
         self._tiling_widget.setVisible(self.tiling == "yes")
+
+    def _update_batch_size_visibility(self, index=None):
+        # Show the batch size field only when the effective device is a GPU. Batching does not help
+        # on the CPU, so 'auto' resolving to the CPU (or an explicit CPU selection) hides the field.
+        device = self.device
+        if device == "auto":
+            device = util._get_default_device()
+        self._batch_size_widget.setVisible(str(device) != "cpu")
 
     def _apply_default_tiling_for_shape(self, shape):
         # Enable tiling by default for large in-plane images, using the central v2 tiling defaults.
