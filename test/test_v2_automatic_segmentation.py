@@ -7,7 +7,7 @@ import torch
 import pytest
 
 from micro_sam.v2.instance_segmentation import (
-    _block_shape_and_halo, _set_image_predictor_from_backbone,
+    _block_shape_and_halo, _set_image_predictor_from_backbone, _decode_3d_feature_batch,
     _get_decoder_autocast, UniSAM2InstanceSegmentation, TiledUniSAM2InstanceSegmentation,
     get_instance_segmentation_generator, get_decoder,
 )
@@ -351,3 +351,66 @@ def test_tiled_decoder_2d_stitches_all_tiles():
     out = segmenter._run_decoder_tiled_2d({"features": feats_group})
     assert out.shape == (4, *shape)
     assert len(model.call_z) == 4  # one decoder pass per tile
+
+
+@pytest.mark.parametrize("devices,expected", [(None, "cuda:1"), ("cpu", "cpu")])
+def test_configured_device_is_used_when_no_devices_are_given(devices, expected, monkeypatch):
+    # Regression: the batched decoder paths only forwarded 'devices', so the device the segmenter was
+    # constructed with was silently replaced by the model's device (or by all visible GPUs).
+    import micro_sam.v2.batched_inference as batched_inference
+
+    forwarded = {}
+
+    def fake_decode(model, image_embeddings, **kwargs):
+        forwarded["devices"] = kwargs["devices"]
+        return np.zeros((4, 1, 8, 8), dtype="float32")
+
+    monkeypatch.setattr(batched_inference, "_decode_volume_embeddings", fake_decode)
+    segmenter = UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cuda:1")
+    segmenter._run_decoder_3d({"features": np.zeros((1, 2, 4, 4), dtype="float32")}, devices=devices)
+    assert forwarded["devices"] == expected
+
+
+class _RecordingOutput:
+    """Stands in for the decoder output tensor and records the conversions applied to it."""
+
+    def __init__(self, array, calls):
+        self._array = array
+        self._calls = calls
+
+    def detach(self):
+        self._calls.append("detach")
+        return self
+
+    def cpu(self):
+        self._calls.append("cpu")
+        return self
+
+    def float(self):
+        self._calls.append("float")
+        return self
+
+    def numpy(self):
+        return self._array
+
+
+class _RecordingModel:
+    def __init__(self, output):
+        self.encoder = types.SimpleNamespace(img_size=8)
+        self._output = output
+
+    def __call__(self, x):
+        return self._output
+
+
+def test_decoder_output_is_moved_to_cpu_before_the_float_cast():
+    # Casting on the device would hold an fp32 copy of the whole output next to the fp16 one,
+    # cancelling out the memory that fp16 inference saves.
+    calls = []
+    array = np.zeros((1, 4, 1, 8, 8), dtype="float32")
+    model = _RecordingModel(_RecordingOutput(array, calls))
+
+    out = _decode_3d_feature_batch(model, torch.zeros((1, 1, 2, 4, 4)), (8, 8), "cpu")
+
+    assert out is array
+    assert calls == ["detach", "cpu", "float"]

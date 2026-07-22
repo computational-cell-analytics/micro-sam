@@ -46,7 +46,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
     def __init__(
         self, *, ndim, model_type, embedding_path, tile_shape, halo,
         precompute_autoseg_state, checkpoint_path, device, prefer_decoder,
-        initial_segmentations=None,
+        initial_segmentations=None, batch_size=1,
     ):
         self.ndim = ndim
         self.model_type = model_type
@@ -58,6 +58,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         self.device = device
         self.prefer_decoder = prefer_decoder
         self.initial_segmentations = initial_segmentations
+        self.batch_size = batch_size
         self.predictor = None
         self.decoder = None
 
@@ -101,7 +102,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
             image, model_type=self.model_type, save_path=embedding_path, halo=self.halo, tile_shape=self.tile_shape,
             ndim=self.ndim,
             precompute_autoseg_state=self.precompute_autoseg_state,
-            checkpoint_path=self.checkpoint_path,
+            checkpoint_path=self.checkpoint_path, batch_size=self.batch_size,
             device=self.device, skip_load=False, use_cli=True, **kwargs,
         )
         # Capture the loaded model so subsequent items reuse it instead of reloading.
@@ -164,6 +165,7 @@ def batch_annotator(
     device: Optional[Union[str, torch.device]] = None,
     prefer_decoder: bool = True,
     skip_segmented: bool = True,
+    batch_size: int = 1,
 ) -> Optional["napari.viewer.Viewer"]:
     """Run the segmentation annotation tool for a batch of images (2d or 3d).
 
@@ -192,6 +194,8 @@ def batch_annotator(
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
             By default, set to 'True'.
+        batch_size: The number of tiles / slices per model call when computing the embeddings.
+            Only has an effect on a GPU. By default a single tile / slice is used.
         skip_segmented: Whether existing output files mark images as completed. If True, resume at
             the first image without an output and skip any later completed images. If False, start
             at the first image and load existing segmentations into the 'committed_objects' layer.
@@ -217,7 +221,7 @@ def batch_annotator(
         tile_shape=tile_shape, halo=halo,
         precompute_autoseg_state=precompute_autoseg_state,
         checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
-        initial_segmentations=initial_segmentations,
+        initial_segmentations=initial_segmentations, batch_size=batch_size,
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
@@ -524,7 +528,7 @@ class BatchAnnotator(widgets._WidgetBase):
 
         common = dict(
             model_type=ew.model_type, tile_shape=tile_shape, halo=halo,
-            checkpoint_path=ew.custom_weights, device=ew.device,
+            checkpoint_path=ew.custom_weights, device=ew.device, batch_size=ew.batch_size,
             viewer=self._viewer, return_viewer=True,
         )
 

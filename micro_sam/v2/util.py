@@ -11,7 +11,7 @@ import torch
 
 from micro_sam.util import (
     get_device, get_cache_directory, microsam_cachedir, _open_embeddings,
-    _configure_mps_memory,
+    _configure_mps_memory, make_temp_embedding_path,
 )
 from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
 from micro_sam.v2.normalization import RAW_NORMALIZATION, to_image
@@ -425,6 +425,7 @@ def precompute_image_embeddings(
     batch_size: Optional[int] = 1,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
 ):
@@ -436,17 +437,21 @@ def precompute_image_embeddings(
         predictor: The SAM2 image or video predictor.
         input_: The input image or volume.
         save_path: Optional zarr path for persistent embedding storage.
-        lazy_loading: Return disk-backed arrays for saved 3D embeddings.
+        lazy_loading: Stream the embeddings from the zarr instead of materializing them in memory.
+            Applies to volumes and to tiled images; if no `save_path` is given an ephemeral on-disk
+            cache is used, which is removed at process exit.
         ndim: The number of spatial dimensions. By default this is inferred from the input.
         tile_shape: Optional in-plane tile shape.
         halo: Optional in-plane tile halo.
         verbose: Whether to show progress.
-        batch_size: Number of independent tiles or slices per encoder call. Defaults to one, which
-            is recommended for 10 GB MIG devices. Pass None to benchmark candidate sizes and select
-            a throughput-efficient value independently on each CUDA device.
+        batch_size: The batch size used when running inference for multiple slices and / or tiles.
+            Defaults to one, which is recommended for 10 GB MIG devices. Pass None to benchmark
+            candidate sizes and select a throughput-efficient value independently on each CUDA device.
         devices: Device or devices used for embedding inference. If None and the predictor is on
             CUDA, all visible CUDA devices are used.
         num_prefetch_workers: Number of threads used to read and preprocess input jobs.
+        num_write_workers: Number of threads used to write the embeddings. Only has an effect for
+            volumes and tiled images, which are written incrementally.
         pbar_init: Optional callback to initialize external progress.
         pbar_update: Optional callback to update external progress.
 
@@ -456,6 +461,12 @@ def precompute_image_embeddings(
     ndim = input_.ndim if ndim is None else ndim
     if ndim == 2:
         configure_image_predictor(predictor)
+
+    is_streamed = ndim == 3 or tile_shape is not None
+    if lazy_loading and is_streamed and save_path is None:
+        # Without a save path the zarr is held in memory, which defeats lazy loading. Back it by an
+        # ephemeral on-disk store so the tiles / slices are streamed from disk instead.
+        save_path = make_temp_embedding_path()
 
     # Handle the embedding save_path.
     # We don't have a save path, open in memory zarr file to hold tiled embeddings.
@@ -481,7 +492,7 @@ def precompute_image_embeddings(
         f.attrs["normalization"] = RAW_NORMALIZATION
 
     from micro_sam.util import handle_pbar
-    from micro_sam.v2.batched_inference import compute_3d, compute_tiled_2d, compute_tiled_3d
+    from micro_sam.v2.batched_inference import _compute_3d, _compute_tiled_2d, _compute_tiled_3d
 
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
 
@@ -490,21 +501,24 @@ def precompute_image_embeddings(
     elif ndim == 2 and tile_shape is not None:
         if halo is None:
             raise ValueError("To compute tiled embeddings the parameter halo has to be passed.")
-        embeddings = compute_tiled_2d(
+        embeddings = _compute_tiled_2d(
             input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update,
             batch_size=batch_size, devices=devices, num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
         )
     elif ndim == 3 and tile_shape is None:
-        embeddings = compute_3d(
+        embeddings = _compute_3d(
             input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update,
             batch_size=batch_size, devices=devices, num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
         )
     elif ndim == 3 and tile_shape is not None:
         if halo is None:
             raise ValueError("To compute tiled embeddings the parameter halo has to be passed.")
-        embeddings = compute_tiled_3d(
+        embeddings = _compute_tiled_3d(
             input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update,
             batch_size=batch_size, devices=devices, num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
         )
     else:
         raise ValueError(f"Invalid dimensionality {input_.ndim}, expect 2 or 3 dim data.")

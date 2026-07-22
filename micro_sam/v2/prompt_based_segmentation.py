@@ -120,9 +120,9 @@ def _clone_image_predictor(predictor, model: torch.nn.Module):
 
 def _get_image_predictor_devices(predictor, devices: Devices) -> List[Tuple]:
     """Create and cache one image-predictor replica per selected device."""
-    from micro_sam.v2.batched_inference import prepare_models, resolve_devices
+    from micro_sam.v2.batched_inference import _prepare_models, _resolve_devices
 
-    resolved_devices = resolve_devices(predictor.model, devices)
+    resolved_devices = _resolve_devices(predictor.model, devices)
     cache_key = tuple(str(device) for device in resolved_devices)
     cached = getattr(predictor, "_micro_sam_predictor_devices", None)
     if cached is not None and cached[0] == cache_key:
@@ -130,7 +130,7 @@ def _get_image_predictor_devices(predictor, devices: Devices) -> List[Tuple]:
 
     predictor_devices = [
         (predictor if model is predictor.model else _clone_image_predictor(predictor, model), device)
-        for model, device in prepare_models(predictor.model, resolved_devices)
+        for model, device in _prepare_models(predictor.model, resolved_devices)
     ]
     predictor._micro_sam_predictor_devices = (cache_key, predictor_devices)
     return predictor_devices
@@ -392,9 +392,11 @@ def tiled_promptable_segmentation_2d(
         tile_jobs[tile_id] = local_points, tlabels, local_boxes, local_masks
 
     predictor_devices = _get_image_predictor_devices(predictor, devices)
+    # Spread the active tiles round-robin. Their ids are sparse, so mapping by 'tile_id % n_devices'
+    # would run e.g. the tiles 0, 2, 4 on one device and leave the others idle.
     groups = {}
-    for tile_id in tile_jobs:
-        worker_id = tile_id % len(predictor_devices)
+    for position, tile_id in enumerate(sorted(tile_jobs)):
+        worker_id = position % len(predictor_devices)
         groups.setdefault(worker_id, []).append(tile_id)
 
     def run_group(worker_id, tile_ids):
@@ -1013,10 +1015,10 @@ class TiledPromptableSegmentation3D:
 
     def __init__(self, predictor, volume, volume_embeddings, device=None, devices: Devices = None, **kwargs):
         from bioimage_cpp.utils import Blocking
-        from micro_sam.v2.batched_inference import prepare_models, resolve_devices
+        from micro_sam.v2.batched_inference import _prepare_models, _resolve_devices
 
-        resolved_devices = resolve_devices(predictor, devices)
-        self._predictor_devices = prepare_models(predictor, resolved_devices)
+        resolved_devices = _resolve_devices(predictor, devices)
+        self._predictor_devices = _prepare_models(predictor, resolved_devices)
 
         self.predictor = predictor
         self.volume = volume
@@ -1032,6 +1034,8 @@ class TiledPromptableSegmentation3D:
 
         # Per-tile state, built lazily for the tiles that actually receive prompts.
         self._segmenters = {}
+        # Device assigned to each active tile, see '_worker_id'.
+        self._tile_workers = {}
 
     def init_predictor(self):
         # Per-tile inference states are created lazily in '_get_segmenter'.
@@ -1043,6 +1047,7 @@ class TiledPromptableSegmentation3D:
         for segmenter in self._segmenters.values():
             segmenter.reset_predictor()
         self._segmenters = {}
+        self._tile_workers = {}
         _free_device_memory()
 
     def get_progress_total(self, z_range=None):
@@ -1057,6 +1062,17 @@ class TiledPromptableSegmentation3D:
             if inner.begin[0] <= y < inner.end[0] and inner.begin[1] <= x < inner.end[1]:
                 return tile_id
         return 0
+
+    def _worker_id(self, tile_id):
+        """Return the device a tile is bound to, assigned round-robin when the tile is first used.
+
+        The tile state (inference state + embedding cache) lives on one device, so the affinity is
+        kept for the tile's lifetime. Assigning by 'tile_id % n_devices' instead would leave devices
+        idle, because the active tile ids are sparse (e.g. the tiles 0, 2, 4 share one residue).
+        """
+        if tile_id not in self._tile_workers:
+            self._tile_workers[tile_id] = len(self._tile_workers) % len(self._predictor_devices)
+        return self._tile_workers[tile_id]
 
     def _outer_offset(self, tile_id):
         """Return the (y0, x0) origin of the tile's outer (halo-included) block."""
@@ -1082,7 +1098,7 @@ class TiledPromptableSegmentation3D:
                 "input_size": tile_dataset.attrs["input_size"],
                 "original_size": tile_dataset.attrs["original_size"],
             }
-            predictor, device = self._predictor_devices[tile_id % len(self._predictor_devices)]
+            predictor, device = self._predictor_devices[self._worker_id(tile_id)]
             self._segmenters[tile_id] = PromptableSegmentation3D(
                 predictor, sub_volume, tile_embeddings, device=device, **self._kwargs
             )
@@ -1101,8 +1117,7 @@ class TiledPromptableSegmentation3D:
         """Run tile jobs concurrently across devices and serially within each device."""
         groups = {}
         for tile_id in tile_ids:
-            worker_id = tile_id % len(self._predictor_devices)
-            groups.setdefault(worker_id, []).append(tile_id)
+            groups.setdefault(self._worker_id(tile_id), []).append(tile_id)
 
         def run_group(group, worker_update=None):
             results = []

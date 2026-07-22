@@ -1,5 +1,6 @@
 """Batched, pipelined, multi-GPU SAM2 inference: scheduling engine, encoder embeddings, and decoder passes."""
 
+import contextlib
 import gc
 import os
 import queue
@@ -14,19 +15,19 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 import numpy as np
 import torch
 
-from micro_sam.util import _create_dataset_with_data, _create_dataset_without_data
+from micro_sam.util import _create_dataset_without_data
 from .normalization import to_image
-from .util import Device, Devices
+from .util import Devices
 
 
 STOP = object()
 
 
-class PipelineAborted(Exception):
+class _PipelineAborted(Exception):
     """Raised inside workers when another pipeline worker has failed."""
 
 
-class AtomicCounter:
+class _AtomicCounter:
     """Lock-guarded counter used to send completion sentinels exactly once."""
 
     def __init__(self, value: int) -> None:
@@ -40,7 +41,7 @@ class AtomicCounter:
 
 
 @dataclass
-class PipelineJob:
+class _PipelineJob:
     """A work item moving from the input loader to inference and output writing."""
 
     spec: Any
@@ -61,12 +62,23 @@ def _model_device(model: torch.nn.Module) -> torch.device:
         return torch.device("cpu")
 
 
-def resolve_devices(model: torch.nn.Module, devices: Devices = None) -> List[torch.device]:
-    """Resolve inference devices, using every visible CUDA device by default.
+def _resolve_devices(model: torch.nn.Module, devices: Devices = None) -> List[torch.device]:
+    """Resolve the inference devices, using every visible CUDA device by default.
 
     Automatic multi-GPU execution is enabled only when the supplied model already lives on CUDA.
-    This preserves an explicitly CPU- or MPS-loaded model. Pass a scalar device to force one device,
-    or a sequence to select an explicit set of devices.
+    This preserves an explicitly CPU- or MPS-loaded model.
+
+    Args:
+        model: The model whose device decides the default. Only used when `devices` is None.
+        devices: A single device to force one device, or a sequence to select an explicit set.
+            By default all visible CUDA devices are used if the model is on CUDA.
+
+    Returns:
+        The resolved devices, in the order they will be assigned to inference workers.
+
+    Raises:
+        ValueError: If no device is given, or if the same device is given more than once.
+        RuntimeError: If a CUDA device is requested but CUDA is unavailable.
     """
     if devices is None:
         device = _model_device(model)
@@ -88,10 +100,19 @@ def resolve_devices(model: torch.nn.Module, devices: Devices = None) -> List[tor
     return resolved
 
 
-def prepare_models(
+def _prepare_models(
     model: torch.nn.Module, devices: Sequence[torch.device],
 ) -> List[Tuple[torch.nn.Module, torch.device]]:
-    """Create one eval-mode model replica per device, reusing the original where possible."""
+    """Create one eval-mode model replica per device, reusing the original where possible.
+
+    Args:
+        model: The model to replicate.
+        devices: The devices to place the replicas on (see `_resolve_devices`).
+
+    Returns:
+        One (model, device) pair per device. The pair for the model's own device holds the original
+        model, all others hold a deep copy. Release them with `_release_model_replicas`.
+    """
     source_device = _model_device(model)
     models = []
     for device in devices:
@@ -102,11 +123,14 @@ def prepare_models(
     return models
 
 
-def release_model_replicas(model_devices: List[Tuple[torch.nn.Module, torch.device]]) -> None:
-    """Drop the replicas built by :func:`prepare_models` and free their GPU memory.
+def _release_model_replicas(model_devices: List[Tuple[torch.nn.Module, torch.device]]) -> None:
+    """Drop the replicas built by `_prepare_models` and free their GPU memory.
 
     Clearing the list releases only the per-device copies; the caller's own model stays alive
     through its other references.
+
+    Args:
+        model_devices: The (model, device) pairs returned by `_prepare_models`. Cleared in place.
     """
     model_devices.clear()
     gc.collect()
@@ -192,7 +216,7 @@ def _select_throughput_batch_size(
     return int(selected_batch)
 
 
-def compute_auto_batch_sizes(
+def _compute_auto_batch_sizes(
     model_devices: Sequence[Tuple[torch.nn.Module, torch.device]],
     n_jobs: int,
     patch_shape: Tuple[int, ...],
@@ -204,6 +228,19 @@ def compute_auto_batch_sizes(
     Powers of two are benchmarked from one upwards. A larger batch is selected only when it improves
     measured throughput by at least 10 percent, and probing stops after two consecutive candidates
     fail to do so. CPU and MPS retain the conservative batch size of one.
+
+    Args:
+        model_devices: The (model, device) pairs to benchmark (see `_prepare_models`).
+        n_jobs: The total number of jobs; caps the candidates so a batch never exceeds the work.
+        patch_shape: The spatial shape of a single input to the model.
+        in_channels: The number of channels of a single input to the model.
+        prediction_function: Called as `prediction_function(model, inputs)` to run one probe batch.
+
+    Returns:
+        One batch size per entry in `model_devices`.
+
+    Raises:
+        RuntimeError: If a device runs out of memory already at batch size one.
     """
     if n_jobs < 1:
         return [1] * len(model_devices)
@@ -258,7 +295,7 @@ def _safe_get(input_queue: queue.Queue, stop_event: threading.Event, timeout: fl
             return input_queue.get(timeout=timeout)
         except queue.Empty:
             continue
-    raise PipelineAborted()
+    raise _PipelineAborted()
 
 
 def _safe_put(output_queue: queue.Queue, item: Any, stop_event: threading.Event, timeout: float = 0.2) -> None:
@@ -268,7 +305,7 @@ def _safe_put(output_queue: queue.Queue, item: Any, stop_event: threading.Event,
             return
         except queue.Full:
             continue
-    raise PipelineAborted()
+    raise _PipelineAborted()
 
 
 def _predict_with_oom_backoff(
@@ -298,7 +335,7 @@ def _predict_with_oom_backoff(
     return left + right, min(left_size, right_size)
 
 
-def run_batched_pipeline(
+def _run_batched_pipeline(
     jobs: Iterable[Any],
     model_devices: Sequence[Tuple[torch.nn.Module, torch.device]],
     batch_sizes: Sequence[int],
@@ -306,13 +343,39 @@ def run_batched_pipeline(
     predict_fn: Callable[[torch.nn.Module, List[Any], torch.device], List[Any]],
     write_fn: Callable[[Any, Any], None],
     num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
     update_progress: Optional[Callable[[int], None]] = None,
     progress_increment: Optional[Callable[[Any], int]] = None,
 ) -> None:
     """Run load/preprocess, batched inference, and writing as a bounded threaded pipeline.
 
-    There is one inference consumer per device and one writer. Keeping output writes on one thread
-    is safe for zarr, N5, HDF5, and in-memory outputs, while still overlapping I/O with GPU work.
+    Loading runs on `num_prefetch_workers` threads, inference on one thread per device, and writing
+    on `num_write_workers` threads, so input I/O and output I/O overlap with the model forward pass.
+    The queues between the stages are bounded, so a slow stage throttles the others instead of
+    growing memory. Jobs are written in completion order, not in input order. If any worker raises,
+    the whole pipeline is stopped and the first error is re-raised on the calling thread.
+
+    Args:
+        jobs: The job specifications, e.g. tile ids or slice indices. Passed to `load_fn` and, with
+            the prediction, to `write_fn`.
+        model_devices: The (model, device) pairs to run inference on (see `_prepare_models`).
+        batch_sizes: One batch size per entry in `model_devices` (see `_compute_auto_batch_sizes`).
+        load_fn: Called as `load_fn(job)` to read and preprocess one job.
+        predict_fn: Called as `predict_fn(model, items, device)` with the loaded data of one batch.
+            It must return one output per input. Batches that run out of memory are automatically
+            retried in halves, and the device's batch size is reduced accordingly.
+        write_fn: Called as `write_fn(job, prediction)` to store one result. It must be safe to call
+            from multiple threads if `num_write_workers` is larger than one.
+        num_prefetch_workers: The number of threads used to read and preprocess jobs.
+        num_write_workers: The number of threads used to write results. Multiple writers speed up
+            compressed / chunked outputs; keep it at one for outputs that are not thread-safe.
+        update_progress: Optional callback advancing external progress by the given number of steps.
+            It is called on the calling thread, so it is safe to use for Qt / napari progress bars.
+        progress_increment: Optional callback returning the number of steps a job contributes.
+            By default every job counts as one step.
+
+    Raises:
+        ValueError: If the batch sizes do not match the devices, or are not positive.
     """
     jobs = list(jobs)
     if len(jobs) == 0:
@@ -323,6 +386,7 @@ def run_batched_pipeline(
         raise ValueError(f"Batch sizes must be positive, got {batch_sizes}.")
 
     num_prefetch_workers = max(1, min(int(num_prefetch_workers), len(jobs)))
+    num_write_workers = max(1, min(int(num_write_workers), len(jobs)))
     batch_sizes = [int(batch_size) for batch_size in batch_sizes]
 
     job_queue = queue.Queue()
@@ -332,13 +396,13 @@ def run_batched_pipeline(
         job_queue.put(STOP)
 
     input_queue = queue.Queue(maxsize=max(2 * sum(batch_sizes), 2))
-    output_queue = queue.Queue(maxsize=max(2 * len(model_devices), 2))
+    output_queue = queue.Queue(maxsize=max(2 * len(model_devices), 2 * num_write_workers, 2))
     progress_queue = queue.Queue()
     stop_event = threading.Event()
     error_box = []
     error_lock = threading.Lock()
-    remaining_producers = AtomicCounter(num_prefetch_workers)
-    remaining_consumers = AtomicCounter(len(model_devices))
+    remaining_producers = _AtomicCounter(num_prefetch_workers)
+    remaining_consumers = _AtomicCounter(len(model_devices))
 
     def record_error(exc):
         with error_lock:
@@ -352,15 +416,18 @@ def run_batched_pipeline(
                 spec = job_queue.get()
                 if spec is STOP or stop_event.is_set():
                     break
-                _safe_put(input_queue, PipelineJob(spec, load_fn(spec)), stop_event)
-        except PipelineAborted:
+                _safe_put(input_queue, _PipelineJob(spec, load_fn(spec)), stop_event)
+        except _PipelineAborted:
             pass
         except Exception as exc:  # noqa
             record_error(exc)
         finally:
-            if remaining_producers.decrement() == 0 and not stop_event.is_set():
-                for _ in model_devices:
-                    input_queue.put(STOP)
+            # A timed put: a consumer that fails while the queue is full leaves nobody to drain it,
+            # and a blocking put would then hang this thread (and the join in the outer cleanup).
+            if remaining_producers.decrement() == 0:
+                with contextlib.suppress(_PipelineAborted):
+                    for _ in model_devices:
+                        _safe_put(input_queue, STOP, stop_event)
 
     def consumer(worker_id):
         model, device = model_devices[worker_id]
@@ -392,13 +459,16 @@ def run_batched_pipeline(
 
                 if got_stop:
                     break
-        except PipelineAborted:
+        except _PipelineAborted:
             pass
         except Exception as exc:  # noqa
             record_error(exc)
         finally:
-            if remaining_consumers.decrement() == 0 and not stop_event.is_set():
-                output_queue.put(STOP)
+            # Timed as well, for the same reason: the writers may already have failed and stopped.
+            if remaining_consumers.decrement() == 0:
+                with contextlib.suppress(_PipelineAborted):
+                    for _ in range(num_write_workers):
+                        _safe_put(output_queue, STOP, stop_event)
 
     def writer():
         try:
@@ -410,12 +480,15 @@ def run_batched_pipeline(
                 if update_progress is not None:
                     increment = 1 if progress_increment is None else int(progress_increment(item.spec))
                     progress_queue.put(increment)
-        except PipelineAborted:
+        except _PipelineAborted:
             pass
         except Exception as exc:  # noqa
             record_error(exc)
 
-    writer_thread = threading.Thread(target=writer, name="sam2-writer")
+    writer_threads = [
+        threading.Thread(target=writer, name=f"sam2-writer-{worker_id}")
+        for worker_id in range(num_write_workers)
+    ]
     consumer_threads = [
         threading.Thread(target=consumer, args=(worker_id,), name=f"sam2-consumer-{worker_id}")
         for worker_id in range(len(model_devices))
@@ -424,7 +497,7 @@ def run_batched_pipeline(
         threading.Thread(target=producer, name=f"sam2-producer-{worker_id}")
         for worker_id in range(num_prefetch_workers)
     ]
-    threads = [writer_thread, *consumer_threads, *producer_threads]
+    threads = [*writer_threads, *consumer_threads, *producer_threads]
 
     def forward_progress(block):
         increments = 0
@@ -462,10 +535,6 @@ def run_batched_pipeline(
         raise error_box[0]
 
 
-IMAGE_MEAN = (0.485, 0.456, 0.406)
-IMAGE_STD = (0.229, 0.224, 0.225)
-
-
 def _clear_group(group) -> None:
     for key in list(group.keys()):
         del group[key]
@@ -479,11 +548,11 @@ def _prepare_encoder_pipeline(
     predictor, n_jobs: int, batch_size: Optional[int], devices: Devices,
 ) -> Tuple[torch.nn.Module, List[Tuple[torch.nn.Module, torch.device]], List[int]]:
     model = getattr(predictor, "model", predictor)
-    resolved_devices = resolve_devices(model, devices)
-    model_devices = prepare_models(model, resolved_devices)
+    resolved_devices = _resolve_devices(model, devices)
+    model_devices = _prepare_models(model, resolved_devices)
     if batch_size is None:
         image_size = int(getattr(model, "image_size", getattr(predictor, "image_size", 1024)))
-        batch_sizes = compute_auto_batch_sizes(
+        batch_sizes = _compute_auto_batch_sizes(
             model_devices=model_devices,
             n_jobs=n_jobs,
             patch_shape=(image_size, image_size),
@@ -522,7 +591,7 @@ def _forward_image_batch(
     ]
 
 
-def compute_tiled_2d(
+def _compute_tiled_2d(
     input_: np.ndarray,
     predictor,
     tile_shape: Tuple[int, int],
@@ -534,8 +603,30 @@ def compute_tiled_2d(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
 ) -> Dict:
-    """Compute 2D tile embeddings with batched encoders and queued input/output I/O."""
+    """Compute 2d tile embeddings with batched encoders and queued input / output I/O.
+
+    Args:
+        input_: The input image, shape (Y, X) or (Y, X, C).
+        predictor: The SAM2 image predictor.
+        tile_shape: The in-plane tile shape.
+        halo: The in-plane tile halo (overlap).
+        root: The zarr container the embeddings are written to (see `micro_sam.util._open_embeddings`).
+        save_path: The path backing `root`, or None for an in-memory container. A complete cache at
+            this path is returned as is instead of being recomputed.
+        pbar_init: Callback to initialize an external progress bar.
+        pbar_update: Callback to update an external progress bar.
+        batch_size: The number of tiles per encoder call. By default candidate sizes are benchmarked
+            and a throughput-efficient value is selected on each CUDA device.
+        devices: The device or devices to run inference on (see `_resolve_devices`).
+        num_prefetch_workers: The number of threads used to read and preprocess tiles.
+        num_write_workers: The number of threads used to write embedding tiles.
+
+    Returns:
+        The tiled image embeddings. 'features' and 'high_res_feats' are the zarr groups holding the
+        per-tile datasets; 'input_size' and 'original_size' are None because they are stored per tile.
+    """
     from bioimage_cpp.utils import Blocking
     from micro_sam.v2.util import _write_embedding_signature
 
@@ -567,18 +658,33 @@ def compute_tiled_2d(
     def predict_tiles(this_model, items, device):
         return _forward_image_batch(this_model, items, device, feature_sizes)
 
+    # Creating a dataset mutates the shared group, so it is serialized; the data (and with it the
+    # compression) is written outside the lock, which is what multiple write workers speed up.
+    creation_lock = threading.Lock()
+
     def write_tile(tile_id, result):
         name = str(tile_id)
-        dataset = _create_dataset_with_data(features, name, data=result["features"])
-        dataset.attrs["input_size"] = model.image_size
-        dataset.attrs["original_size"] = [list(result["original_size"])]
+        tile_features = result["features"]
+        high_res_feats = result["high_res_feats"]
+        with creation_lock:
+            dataset = _create_dataset_without_data(
+                features, name, shape=tile_features.shape, dtype=tile_features.dtype, chunks=tile_features.shape,
+            )
+            dataset.attrs["input_size"] = model.image_size
+            dataset.attrs["original_size"] = [list(result["original_size"])]
+            tile_high_res = high_res_group.require_group(name)
+            high_res_datasets = [
+                _create_dataset_without_data(
+                    tile_high_res, str(level), shape=feature.shape, dtype=feature.dtype, chunks=feature.shape,
+                ) for level, feature in enumerate(high_res_feats)
+            ]
 
-        tile_high_res = high_res_group.require_group(name)
-        for level, feature in enumerate(result["high_res_feats"]):
-            _create_dataset_with_data(tile_high_res, str(level), data=feature)
+        dataset[:] = tile_features
+        for high_res_dataset, feature in zip(high_res_datasets, high_res_feats):
+            high_res_dataset[:] = feature
 
     try:
-        run_batched_pipeline(
+        _run_batched_pipeline(
             jobs=range(n_tiles),
             model_devices=model_devices,
             batch_sizes=batch_sizes,
@@ -586,10 +692,11 @@ def compute_tiled_2d(
             predict_fn=predict_tiles,
             write_fn=write_tile,
             num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
             update_progress=pbar_update,
         )
     finally:
-        release_model_replicas(model_devices)
+        _release_model_replicas(model_devices)
 
     if save_path is not None:
         _write_embedding_signature(
@@ -600,12 +707,9 @@ def compute_tiled_2d(
 
 
 def _prepare_video_frame(raw: np.ndarray, image_size: int) -> torch.Tensor:
-    from micro_sam.v2.models._video_predictor import _load_img_as_tensor
+    from micro_sam.v2.models._video_predictor import _prepare_frame
 
-    image, _, _ = _load_img_as_tensor(np.asarray(raw), image_size)
-    mean = torch.tensor(IMAGE_MEAN, dtype=torch.float32)[:, None, None]
-    std = torch.tensor(IMAGE_STD, dtype=torch.float32)[:, None, None]
-    return (image - mean) / std
+    return _prepare_frame(np.asarray(raw), image_size)
 
 
 def _forward_video_batch(model: torch.nn.Module, items: List[Dict], device: torch.device) -> List[Dict]:
@@ -649,7 +753,7 @@ def _load_feature_levels(group, lazy_loading: bool) -> List:
     return values
 
 
-def compute_3d(
+def _compute_3d(
     input_: np.ndarray,
     predictor,
     root,
@@ -660,8 +764,30 @@ def compute_3d(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
 ) -> Dict:
-    """Compute volume embeddings by batching slices and overlapping preprocessing and zarr writes."""
+    """Compute volume embeddings by batching slices and overlapping preprocessing and zarr writes.
+
+    Args:
+        input_: The input volume, shape (Z, Y, X).
+        predictor: The SAM2 video predictor.
+        root: The zarr container the embeddings are written to (see `micro_sam.util._open_embeddings`).
+        save_path: The path backing `root`, or None to keep the embeddings in memory. A complete cache
+            at this path is returned as is instead of being recomputed.
+        lazy_loading: Whether to return the zarr datasets instead of materializing the embeddings.
+            Only has an effect if `save_path` is given.
+        pbar_init: Callback to initialize an external progress bar.
+        pbar_update: Callback to update an external progress bar.
+        batch_size: The number of slices per encoder call. By default candidate sizes are benchmarked
+            and a throughput-efficient value is selected on each CUDA device.
+        devices: The device or devices to run inference on (see `_resolve_devices`).
+        num_prefetch_workers: The number of threads used to read and preprocess slices.
+        num_write_workers: The number of threads used to write embedding slices.
+
+    Returns:
+        The volume embeddings, with the per-slice 'features', 'pos_enc' and 'fpn' outputs of the
+        image encoder as well as 'input_size' and 'original_size'.
+    """
     from micro_sam.v2.util import _write_embedding_signature
 
     if save_path is not None and "original_size" in root.attrs:
@@ -703,6 +829,10 @@ def compute_3d(
             "original_size": tuple(int(value) for value in raw.shape[:2]),
         }
 
+    # The datasets are created from the first result, so only their creation is serialized; the
+    # per-slice writes run in parallel (they go to separate chunks).
+    creation_lock = threading.Lock()
+
     def write_slice(z, result):
         nonlocal feature_dataset, pos_datasets, fpn_datasets
         if save_path is None:
@@ -711,10 +841,11 @@ def compute_3d(
             fpn_values[z] = [torch.from_numpy(value) for value in result["fpn"]]
             return
 
-        if feature_dataset is None:
-            feature_dataset = _create_feature_dataset(root, "features", n_slices, result["features"])
-            pos_datasets = _create_feature_levels(root.require_group("pos_enc"), n_slices, result["pos_enc"])
-            fpn_datasets = _create_feature_levels(root.require_group("fpn"), n_slices, result["fpn"])
+        with creation_lock:
+            if feature_dataset is None:
+                feature_dataset = _create_feature_dataset(root, "features", n_slices, result["features"])
+                pos_datasets = _create_feature_levels(root.require_group("pos_enc"), n_slices, result["pos_enc"])
+                fpn_datasets = _create_feature_levels(root.require_group("fpn"), n_slices, result["fpn"])
         feature_dataset[z] = result["features"]
         for dataset, value in zip(pos_datasets, result["pos_enc"]):
             dataset[z] = value
@@ -722,7 +853,7 @@ def compute_3d(
             dataset[z] = value
 
     try:
-        run_batched_pipeline(
+        _run_batched_pipeline(
             jobs=range(n_slices),
             model_devices=model_devices,
             batch_sizes=batch_sizes,
@@ -730,10 +861,11 @@ def compute_3d(
             predict_fn=_forward_video_batch,
             write_fn=write_slice,
             num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
             update_progress=pbar_update,
         )
     finally:
-        release_model_replicas(model_devices)
+        _release_model_replicas(model_devices)
 
     original_size = tuple(int(value) for value in input_.shape[-2:])
     if save_path is None:
@@ -759,7 +891,7 @@ def compute_3d(
     }
 
 
-def compute_tiled_3d(
+def _compute_tiled_3d(
     input_: np.ndarray,
     predictor,
     tile_shape: Tuple[int, int],
@@ -771,8 +903,33 @@ def compute_tiled_3d(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
 ) -> Dict:
-    """Compute tile/slice embeddings as one pipelined job stream across all available GPUs."""
+    """Compute tile / slice embeddings as one pipelined job stream across all available GPUs.
+
+    Every (tile, slice) pair is a separate job, so tiles and slices are batched together instead of
+    tile column by tile column. This keeps all devices busy even for few tiles or few slices.
+
+    Args:
+        input_: The input volume, shape (Z, Y, X).
+        predictor: The SAM2 video predictor.
+        tile_shape: The in-plane tile shape. The volume is not tiled along z.
+        halo: The in-plane tile halo (overlap).
+        root: The zarr container the embeddings are written to (see `micro_sam.util._open_embeddings`).
+        save_path: The path backing `root`, or None for an in-memory container. A complete cache at
+            this path is returned as is instead of being recomputed.
+        pbar_init: Callback to initialize an external progress bar.
+        pbar_update: Callback to update an external progress bar.
+        batch_size: The number of tile slices per encoder call. By default candidate sizes are
+            benchmarked and a throughput-efficient value is selected on each CUDA device.
+        devices: The device or devices to run inference on (see `_resolve_devices`).
+        num_prefetch_workers: The number of threads used to read and preprocess tile slices.
+        num_write_workers: The number of threads used to write embedding tile slices.
+
+    Returns:
+        The tiled volume embeddings. 'features', 'pos_enc' and 'fpn' are the zarr groups holding the
+        per-tile datasets; 'input_size' and 'original_size' are None because they are stored per tile.
+    """
     from bioimage_cpp.utils import Blocking
     from micro_sam.v2.util import _write_embedding_signature
 
@@ -821,20 +978,25 @@ def compute_tiled_3d(
             "original_size": tuple(int(value) for value in raw.shape[:2]),
         }
 
+    # A tile's datasets are created from its first slice, so only their creation is serialized; the
+    # per-slice writes run in parallel (they go to separate chunks).
+    creation_lock = threading.Lock()
+
     def write_tile_slice(job, result):
         tile_id, z = job
-        if tile_id not in tile_datasets:
-            name = str(tile_id)
-            feature_dataset = _create_feature_dataset(features, name, n_slices, result["features"])
-            feature_dataset.attrs["input_size"] = image_size
-            feature_dataset.attrs["original_size"] = list(result["original_size"])
-            pos_datasets = _create_feature_levels(
-                pos_enc_group.require_group(name), n_slices, result["pos_enc"],
-            )
-            fpn_datasets = _create_feature_levels(
-                fpn_group.require_group(name), n_slices, result["fpn"],
-            )
-            tile_datasets[tile_id] = feature_dataset, pos_datasets, fpn_datasets
+        with creation_lock:
+            if tile_id not in tile_datasets:
+                name = str(tile_id)
+                feature_dataset = _create_feature_dataset(features, name, n_slices, result["features"])
+                feature_dataset.attrs["input_size"] = image_size
+                feature_dataset.attrs["original_size"] = list(result["original_size"])
+                pos_datasets = _create_feature_levels(
+                    pos_enc_group.require_group(name), n_slices, result["pos_enc"],
+                )
+                fpn_datasets = _create_feature_levels(
+                    fpn_group.require_group(name), n_slices, result["fpn"],
+                )
+                tile_datasets[tile_id] = feature_dataset, pos_datasets, fpn_datasets
 
         feature_dataset, pos_datasets, fpn_datasets = tile_datasets[tile_id]
         feature_dataset[z] = result["features"]
@@ -844,7 +1006,7 @@ def compute_tiled_3d(
             dataset[z] = value
 
     try:
-        run_batched_pipeline(
+        _run_batched_pipeline(
             jobs=jobs,
             model_devices=model_devices,
             batch_sizes=batch_sizes,
@@ -852,10 +1014,11 @@ def compute_tiled_3d(
             predict_fn=_forward_video_batch,
             write_fn=write_tile_slice,
             num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
             update_progress=pbar_update,
         )
     finally:
-        release_model_replicas(model_devices)
+        _release_model_replicas(model_devices)
 
     if save_path is not None:
         _write_embedding_signature(
@@ -871,7 +1034,7 @@ def compute_tiled_3d(
     }
 
 
-class EmptyEncoder(torch.nn.Module):
+class _EmptyEncoder(torch.nn.Module):
     """Lightweight placeholder used while replicating decoder-only UniSAM2 models."""
 
     def __init__(self, img_size: int) -> None:
@@ -935,42 +1098,52 @@ def _feature_shape(job: Dict) -> Tuple[int, ...]:
     return shape
 
 
-def _prepare_decoder_pipeline(
-    model: torch.nn.Module, jobs: List[Dict], batch_size: Optional[int], devices: Devices,
-) -> Tuple[List[Tuple[torch.nn.Module, torch.device]], List[int], torch.nn.Module]:
-    resolved_devices = resolve_devices(model, devices)
+@contextlib.contextmanager
+def _decoder_only(model: torch.nn.Module):
+    """Replace the model's image encoder for the duration of the block, so only the decoder is run.
+
+    The encoder is not needed when decoding precomputed embeddings, and replicating it per device
+    would waste memory. Restoring it is a context manager (rather than scattered cleanup) so the
+    caller's model gets its encoder back on every exit path.
+    """
     encoder = model.encoder
-    model.encoder = EmptyEncoder(getattr(encoder, "img_size", 1024))
+    model.encoder = _EmptyEncoder(getattr(encoder, "img_size", 1024))
     try:
-        model_devices = prepare_models(model, resolved_devices)
-    except Exception:
+        yield
+    finally:
         model.encoder = encoder
-        raise
 
-    if batch_size is not None:
-        if int(batch_size) < 1:
-            release_model_replicas(model_devices)
-            model.encoder = encoder
-            raise ValueError(f"batch_size must be positive or None, got {batch_size}.")
-        return model_devices, [int(batch_size)] * len(model_devices), encoder
 
-    representative = max(
-        jobs,
-        key=lambda job: np.prod(_feature_shape(job)) * np.prod(job["original_size"]),
-    )
-    z, channels, height, width = _feature_shape(representative)
-    original_size = representative["original_size"]
-
-    def prediction_function(this_model, inputs):
-        from micro_sam.v2.instance_segmentation import _decode_3d_feature_batch
-
-        features = inputs.permute(0, 2, 1, 3, 4)
-        return _decode_3d_feature_batch(
-            this_model, features, original_size, inputs.device,
-        )
-
+def _prepare_decoder_pipeline(
+    model: torch.nn.Module,
+    jobs: List[Dict],
+    batch_size: Optional[int],
+    resolved_devices: Sequence[torch.device],
+) -> Tuple[List[Tuple[torch.nn.Module, torch.device]], List[int]]:
+    """Replicate the decoder and select its batch size. Must run inside `_decoder_only`."""
+    model_devices = _prepare_models(model, resolved_devices)
     try:
-        batch_sizes = compute_auto_batch_sizes(
+        if batch_size is not None:
+            if int(batch_size) < 1:
+                raise ValueError(f"batch_size must be positive or None, got {batch_size}.")
+            return model_devices, [int(batch_size)] * len(model_devices)
+
+        representative = max(
+            jobs,
+            key=lambda job: np.prod(_feature_shape(job)) * np.prod(job["original_size"]),
+        )
+        z, channels, height, width = _feature_shape(representative)
+        original_size = representative["original_size"]
+
+        def prediction_function(this_model, inputs):
+            from micro_sam.v2.instance_segmentation import _decode_3d_feature_batch
+
+            features = inputs.permute(0, 2, 1, 3, 4)
+            return _decode_3d_feature_batch(
+                this_model, features, original_size, inputs.device,
+            )
+
+        batch_sizes = _compute_auto_batch_sizes(
             model_devices=model_devices,
             n_jobs=len(jobs),
             patch_shape=(z, height, width),
@@ -978,10 +1151,9 @@ def _prepare_decoder_pipeline(
             prediction_function=prediction_function,
         )
     except Exception:
-        release_model_replicas(model_devices)
-        model.encoder = encoder
+        _release_model_replicas(model_devices)
         raise
-    return model_devices, batch_sizes, encoder
+    return model_devices, batch_sizes
 
 
 def _run_decoder_jobs(
@@ -991,44 +1163,58 @@ def _run_decoder_jobs(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
     update_progress: Optional[Callable[[int], None]] = None,
     progress_increment: Optional[Callable[[Dict], int]] = None,
 ) -> None:
     if len(jobs) == 0:
         return
 
-    model_devices, batch_sizes, encoder = _prepare_decoder_pipeline(model, jobs, batch_size, devices)
-    groups = defaultdict(list)
-    for job in jobs:
-        groups[(_feature_shape(job), job["original_size"])].append(job)
+    # Resolved before the encoder is swapped out, so the device is read off the full model.
+    resolved_devices = _resolve_devices(model, devices)
+    with _decoder_only(model):
+        groups = defaultdict(list)
+        for job in jobs:
+            groups[(_feature_shape(job), job["original_size"])].append(job)
 
-    # Run the largest shape first so later, smaller groups can reuse its allocator blocks. Starting
-    # with a boundary z-block and growing to the full context fragmented 10 GB MIG allocators.
-    group_keys = sorted(groups, key=lambda key: np.prod(key[0]) * np.prod(key[1]), reverse=True)
+        # Run the largest shape first so later, smaller groups can reuse its allocator blocks. Starting
+        # with a boundary z-block and growing to the full context fragmented 10 GB MIG allocators.
+        group_keys = sorted(groups, key=lambda key: np.prod(key[0]) * np.prod(key[1]), reverse=True)
 
-    try:
-        for group_key in group_keys:
-            group_jobs = groups[group_key]
-            run_batched_pipeline(
-                jobs=group_jobs,
-                model_devices=model_devices,
-                batch_sizes=batch_sizes,
-                load_fn=_load_job,
-                predict_fn=_predict_jobs,
-                write_fn=write_fn,
-                num_prefetch_workers=num_prefetch_workers,
-                update_progress=update_progress,
-                progress_increment=progress_increment,
-            )
-    finally:
-        release_model_replicas(model_devices)
-        model.encoder = encoder
+        model_devices, batch_sizes = _prepare_decoder_pipeline(model, jobs, batch_size, resolved_devices)
+        try:
+            for group_key in group_keys:
+                group_jobs = groups[group_key]
+                _run_batched_pipeline(
+                    jobs=group_jobs,
+                    model_devices=model_devices,
+                    batch_sizes=batch_sizes,
+                    load_fn=_load_job,
+                    predict_fn=_predict_jobs,
+                    write_fn=write_fn,
+                    num_prefetch_workers=num_prefetch_workers,
+                    num_write_workers=num_write_workers,
+                    update_progress=update_progress,
+                    progress_increment=progress_increment,
+                )
+        finally:
+            _release_model_replicas(model_devices)
 
 
-def decode_volume_embeddings(
+def _resolve_z_blocking(z_block: Optional[int], z_halo: Optional[int]) -> Tuple[int, int]:
+    """Resolve the z block / halo used to decode a volume, falling back to the defaults."""
+    from micro_sam.v2.util import DEFAULT_HALO_Z, DEFAULT_TILE_Z
+
+    z_block = DEFAULT_TILE_Z if z_block is None else int(z_block)
+    z_halo = DEFAULT_HALO_Z if z_halo is None else int(z_halo)
+    if z_block < 1 or z_halo < 0:
+        raise ValueError(f"z_block must be positive and z_halo non-negative, got {z_block}, {z_halo}.")
+    return z_block, z_halo
+
+
+def _decode_volume_embeddings(
     model: torch.nn.Module,
     image_embeddings: Dict,
-    device: Device = None,
     z_block: Optional[int] = None,
     z_halo: Optional[int] = None,
     pbar_init: Optional[Callable] = None,
@@ -1036,10 +1222,33 @@ def decode_volume_embeddings(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
 ) -> np.ndarray:
-    """Decode z blocks from non-tiled volume embeddings with queued reads and batched inference."""
-    from micro_sam.v2.util import DEFAULT_HALO_Z, DEFAULT_TILE_Z
+    """Decode z blocks from non-tiled volume embeddings with queued reads and batched inference.
 
+    The volume is decoded in blocks of `z_block` slices, each extended by `z_halo` context slices
+    that are cropped away again when the block is written.
+
+    Args:
+        model: The UniSAM2 model. Its encoder is bypassed, only the decoder is run.
+        image_embeddings: The volume embeddings (see `_compute_3d`).
+        device: Unused, kept for interface compatibility. Use `devices` instead.
+        z_block: The number of slices decoded per block. By default `micro_sam.v2.util.DEFAULT_TILE_Z`.
+        z_halo: The number of context slices per block. By default `micro_sam.v2.util.DEFAULT_HALO_Z`.
+        pbar_init: Callback to initialize an external progress bar.
+        pbar_update: Callback to update an external progress bar.
+        batch_size: The number of z blocks per decoder call. By default candidate sizes are
+            benchmarked and a throughput-efficient value is selected on each CUDA device.
+        devices: The device or devices to run inference on (see `_resolve_devices`).
+        num_prefetch_workers: The number of threads used to read embedding blocks.
+        num_write_workers: The number of threads used to write decoded blocks.
+
+    Returns:
+        The decoder predictions, shape (4, Z, Y, X): foreground and the three distance channels.
+
+    Raises:
+        ValueError: If the features are not 3d, if `z_block` is not positive or `z_halo` is negative.
+    """
     features = image_embeddings["features"]
     n_dims = len(features.shape)
     if n_dims not in (4, 5):
@@ -1048,10 +1257,7 @@ def decode_volume_embeddings(
         )
 
     n_slices = int(features.shape[0])
-    z_block = DEFAULT_TILE_Z if z_block is None else int(z_block)
-    z_halo = DEFAULT_HALO_Z if z_halo is None else int(z_halo)
-    if z_block < 1 or z_halo < 0:
-        raise ValueError(f"z_block must be positive and z_halo non-negative, got {z_block}, {z_halo}.")
+    z_block, z_halo = _resolve_z_blocking(z_block, z_halo)
 
     original_size = tuple(int(value) for value in np.asarray(image_embeddings["original_size"]).reshape(-1)[:2])
     output = np.zeros((4, n_slices, *original_size), dtype="float32")
@@ -1078,7 +1284,7 @@ def decode_volume_embeddings(
 
     _run_decoder_jobs(
         model, jobs, write_prediction, batch_size=batch_size, devices=devices,
-        num_prefetch_workers=num_prefetch_workers,
+        num_prefetch_workers=num_prefetch_workers, num_write_workers=num_write_workers,
         update_progress=pbar_update, progress_increment=lambda job: job["z1"] - job["z0"],
     )
     return output
@@ -1096,17 +1302,32 @@ def _tiled_metadata(image_embeddings: Dict, is_3d: bool) -> Tuple:
     return features, shape, halo, tiling
 
 
-def decode_tiled_2d_embeddings(
+def _decode_tiled_2d_embeddings(
     model: torch.nn.Module,
     image_embeddings: Dict,
-    device: Device = None,
     pbar_init: Optional[Callable] = None,
     pbar_update: Optional[Callable] = None,
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
 ) -> np.ndarray:
-    """Decode and stitch 2D embedding tiles in automatically sized batches."""
+    """Decode and stitch 2d embedding tiles in automatically sized batches.
+
+    Args:
+        model: The UniSAM2 model. Its encoder is bypassed, only the decoder is run.
+        image_embeddings: The tiled image embeddings (see `_compute_tiled_2d`).
+        pbar_init: Callback to initialize an external progress bar.
+        pbar_update: Callback to update an external progress bar.
+        batch_size: The number of tiles per decoder call. By default candidate sizes are benchmarked
+            and a throughput-efficient value is selected on each CUDA device.
+        devices: The device or devices to run inference on (see `_resolve_devices`).
+        num_prefetch_workers: The number of threads used to read embedding tiles.
+        num_write_workers: The number of threads used to stitch decoded tiles into the output.
+
+    Returns:
+        The stitched decoder predictions, shape (4, Y, X): foreground and the three distance channels.
+    """
     features, shape, halo, tiling = _tiled_metadata(image_embeddings, is_3d=False)
     output = np.zeros((4, *shape), dtype="float32")
     jobs = []
@@ -1135,7 +1356,7 @@ def decode_tiled_2d_embeddings(
 
     _run_decoder_jobs(
         model, jobs, write_prediction, batch_size=batch_size, devices=devices,
-        num_prefetch_workers=num_prefetch_workers,
+        num_prefetch_workers=num_prefetch_workers, num_write_workers=num_write_workers,
         update_progress=pbar_update,
     )
     return output
@@ -1161,10 +1382,9 @@ def _tiled_3d_jobs(features, tiling, n_slices: int, z_block: int, z_halo: int) -
     return jobs
 
 
-def decode_tiled_3d_embeddings(
+def _decode_tiled_3d_embeddings(
     model: torch.nn.Module,
     image_embeddings: Dict,
-    device: Device = None,
     pbar_init: Optional[Callable] = None,
     pbar_update: Optional[Callable] = None,
     z_block: Optional[int] = None,
@@ -1172,14 +1392,32 @@ def decode_tiled_3d_embeddings(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
 ) -> np.ndarray:
-    """Batch over both tile columns and z blocks while decoding tiled 3D embeddings."""
-    from micro_sam.v2.util import DEFAULT_HALO_Z, DEFAULT_TILE_Z
+    """Batch over both tile columns and z blocks while decoding tiled 3d embeddings.
 
+    Args:
+        model: The UniSAM2 model. Its encoder is bypassed, only the decoder is run.
+        image_embeddings: The tiled volume embeddings (see `_compute_tiled_3d`).
+        pbar_init: Callback to initialize an external progress bar.
+        pbar_update: Callback to update an external progress bar.
+        z_block: The number of slices decoded per block. By default `micro_sam.v2.util.DEFAULT_TILE_Z`.
+        z_halo: The number of context slices per block. By default `micro_sam.v2.util.DEFAULT_HALO_Z`.
+        batch_size: The number of (tile, z block) jobs per decoder call. By default candidate sizes
+            are benchmarked and a throughput-efficient value is selected on each CUDA device.
+        devices: The device or devices to run inference on (see `_resolve_devices`).
+        num_prefetch_workers: The number of threads used to read embedding blocks.
+        num_write_workers: The number of threads used to stitch decoded blocks into the output.
+
+    Returns:
+        The stitched decoder predictions, shape (4, Z, Y, X): foreground and the three distance channels.
+
+    Raises:
+        ValueError: If `z_block` is not positive or `z_halo` is negative.
+    """
     features, shape, halo, tiling = _tiled_metadata(image_embeddings, is_3d=True)
     n_slices = shape[0]
-    z_block = DEFAULT_TILE_Z if z_block is None else int(z_block)
-    z_halo = DEFAULT_HALO_Z if z_halo is None else int(z_halo)
+    z_block, z_halo = _resolve_z_blocking(z_block, z_halo)
     jobs = _tiled_3d_jobs(features, tiling, n_slices, z_block, z_halo)
     output = np.zeros((4, *shape), dtype="float32")
 
@@ -1201,25 +1439,53 @@ def decode_tiled_3d_embeddings(
 
     _run_decoder_jobs(
         model, jobs, write_prediction, batch_size=batch_size, devices=devices,
-        num_prefetch_workers=num_prefetch_workers,
+        num_prefetch_workers=num_prefetch_workers, num_write_workers=num_write_workers,
         update_progress=pbar_update, progress_increment=lambda job: job["z1"] - job["z0"],
     )
     return output
 
 
-def decode_tiled_3d_slice(
+def _decode_tiled_3d_slice(
     model: torch.nn.Module,
     image_embeddings: Dict,
     index: int,
-    device: Device = None,
     pbar_init: Optional[Callable] = None,
     pbar_update: Optional[Callable] = None,
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
+    num_write_workers: int = 1,
 ) -> np.ndarray:
-    """Decode one volume slice across all embedding tiles in batches."""
+    """Decode one volume slice across all embedding tiles in batches.
+
+    Used for slice-wise automatic segmentation of a tiled volume, e.g. when only the current slice
+    is segmented in the annotator.
+
+    Args:
+        model: The UniSAM2 model. Its encoder is bypassed, only the decoder is run.
+        image_embeddings: The tiled volume embeddings (see `_compute_tiled_3d`).
+        index: The index of the slice to decode.
+        pbar_init: Callback to initialize an external progress bar.
+        pbar_update: Callback to update an external progress bar.
+        batch_size: The number of tiles per decoder call. By default candidate sizes are benchmarked
+            and a throughput-efficient value is selected on each CUDA device.
+        devices: The device or devices to run inference on (see `_resolve_devices`).
+        num_prefetch_workers: The number of threads used to read embedding tiles.
+        num_write_workers: The number of threads used to stitch decoded tiles into the output.
+
+    Returns:
+        The stitched decoder predictions for the slice, shape (4, Y, X).
+
+    Raises:
+        ValueError: If `index` is outside the volume.
+    """
     features, shape, halo, tiling = _tiled_metadata(image_embeddings, is_3d=True)
+    n_slices = shape[0]
+    index = int(index)
+    # A negative index would silently decode from the end, an index past the volume nothing at all.
+    if not 0 <= index < n_slices:
+        raise ValueError(f"The slice index must be in [0, {n_slices}), got {index}.")
+
     output = np.zeros((4, *shape[1:]), dtype="float32")
     jobs = []
     for tile_id in range(tiling.number_of_blocks):
@@ -1247,7 +1513,7 @@ def decode_tiled_3d_slice(
 
     _run_decoder_jobs(
         model, jobs, write_prediction, batch_size=batch_size, devices=devices,
-        num_prefetch_workers=num_prefetch_workers,
+        num_prefetch_workers=num_prefetch_workers, num_write_workers=num_write_workers,
         update_progress=pbar_update,
     )
     return output

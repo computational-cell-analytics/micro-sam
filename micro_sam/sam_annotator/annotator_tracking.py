@@ -486,7 +486,7 @@ class TrackingBatchTask(BatchAnnotatorTask):
     def __init__(
         self, *, model_type, embedding_path=None, tile_shape=None, halo=None,
         checkpoint_path=None, decoder_path=None, device=None,
-        precompute_autoseg_state=False,
+        precompute_autoseg_state=False, batch_size=1,
     ):
         _validate_tracking_model_type(model_type)
         self.model_type = model_type
@@ -497,6 +497,7 @@ class TrackingBatchTask(BatchAnnotatorTask):
         self.decoder_path = decoder_path
         self.device = device
         self.precompute_autoseg_state = precompute_autoseg_state
+        self.batch_size = batch_size
 
     def result_filename(self, entry, index):
         if self.have_inputs_as_arrays:
@@ -526,7 +527,7 @@ class TrackingBatchTask(BatchAnnotatorTask):
         state.initialize_predictor(
             image, model_type=self.model_type, save_path=embedding_path, halo=self.halo,
             tile_shape=self.tile_shape, ndim=3, checkpoint_path=self.checkpoint_path,
-            decoder_path=self.decoder_path, device=self.device,
+            decoder_path=self.decoder_path, device=self.device, batch_size=self.batch_size,
             precompute_autoseg_state=self.precompute_autoseg_state,
             use_cli=True, **kwargs,
         )
@@ -579,6 +580,7 @@ def batch_tracking_annotator(
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
     skip_done: bool = True,
+    batch_size: int = 1,
 ) -> Optional["napari.viewer.Viewer"]:
     """Run the tracking annotation tool for a batch of timeseries (each item is one TYX video).
 
@@ -599,6 +601,8 @@ def batch_tracking_annotator(
         viewer: The viewer to which the functionality should be added.
         return_viewer: Whether to return the napari viewer instead of starting the event loop.
         skip_done: Whether to skip videos whose tracking result already exists in `output_folder`.
+        batch_size: The number of tiles / slices per model call when computing the embeddings.
+            Only has an effect on a GPU. By default a single tile / slice is used.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -607,7 +611,7 @@ def batch_tracking_annotator(
     task = TrackingBatchTask(
         model_type=model_type, embedding_path=embedding_path, tile_shape=tile_shape, halo=halo,
         checkpoint_path=checkpoint_path, decoder_path=decoder_path, device=device,
-        precompute_autoseg_state=precompute_autoseg_state,
+        precompute_autoseg_state=precompute_autoseg_state, batch_size=batch_size,
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,

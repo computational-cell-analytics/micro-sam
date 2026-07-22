@@ -1,4 +1,5 @@
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -8,12 +9,13 @@ import torch.nn.functional as F
 from bioimage_cpp.utils import Blocking
 
 from micro_sam.v2.batched_inference import (
+    _compute_auto_batch_sizes,
+    _decode_tiled_3d_embeddings,
+    _decode_tiled_3d_slice,
+    _decode_volume_embeddings,
+    _run_batched_pipeline,
     _run_decoder_jobs,
     _select_throughput_batch_size,
-    compute_auto_batch_sizes,
-    decode_tiled_3d_embeddings,
-    decode_volume_embeddings,
-    run_batched_pipeline,
 )
 from micro_sam.v2.prompt_based_segmentation import TiledPromptableSegmentation3D
 
@@ -80,7 +82,7 @@ class TestBatchedPipeline(unittest.TestCase):
             progress.append(update)
             progress_threads.append(threading.get_ident())
 
-        run_batched_pipeline(
+        _run_batched_pipeline(
             jobs=range(7),
             model_devices=[(3, torch.device("cpu"))],
             batch_sizes=[3],
@@ -95,6 +97,97 @@ class TestBatchedPipeline(unittest.TestCase):
         self.assertEqual(sum(progress), 7)
         self.assertEqual(set(progress_threads), {threading.get_ident()})
 
+    def test_pipeline_writes_with_multiple_workers(self):
+        outputs = {}
+        writer_threads = set()
+        lock = threading.Lock()
+
+        def predict(model, items, device):
+            return [value + model for value in items]
+
+        def write(job, prediction):
+            # Slow writes so the queue actually spreads over the writers.
+            time.sleep(0.01)
+            with lock:
+                outputs[job] = prediction
+                writer_threads.add(threading.get_ident())
+
+        _run_batched_pipeline(
+            jobs=range(16),
+            model_devices=[(3, torch.device("cpu"))],
+            batch_sizes=[2],
+            load_fn=lambda value: 2 * value,
+            predict_fn=predict,
+            write_fn=write,
+            num_prefetch_workers=2,
+            num_write_workers=3,
+        )
+
+        self.assertEqual(outputs, {index: 2 * index + 3 for index in range(16)})
+        self.assertGreater(len(writer_threads), 1)
+        self.assertLessEqual(len(writer_threads), 3)
+        self.assertNotIn(threading.get_ident(), writer_threads)
+
+    def test_pipeline_does_not_deadlock_when_prediction_fails(self):
+        # Regression: the sentinels were sent with a blocking put. A consumer that failed while the
+        # input queue was full left nobody to drain it, so the producer (and the join) hung forever.
+        def predict(model, items, device):
+            time.sleep(0.3)  # let the producers reach their sentinel put with a full queue
+            raise RuntimeError("synthetic prediction failure")
+
+        errors = []
+
+        def run():
+            try:
+                _run_batched_pipeline(
+                    jobs=range(3),
+                    model_devices=[(3, torch.device("cpu"))],
+                    batch_sizes=[1],
+                    load_fn=lambda value: value,
+                    predict_fn=predict,
+                    write_fn=lambda job, prediction: None,
+                    num_prefetch_workers=3,
+                )
+            except Exception as exc:  # noqa
+                errors.append(exc)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(timeout=30)
+
+        self.assertFalse(thread.is_alive(), "the pipeline deadlocked after a worker failure")
+        self.assertEqual([str(error) for error in errors], ["synthetic prediction failure"])
+
+    def test_pipeline_does_not_deadlock_when_a_write_fails(self):
+        # The symmetric case: the consumers' sentinels go to the writers, which may already have died.
+        def write(job, prediction):
+            time.sleep(0.02)
+            raise RuntimeError("synthetic write failure")
+
+        errors = []
+
+        def run():
+            try:
+                _run_batched_pipeline(
+                    jobs=range(12),
+                    model_devices=[(1, torch.device("cpu"))],
+                    batch_sizes=[1],
+                    load_fn=lambda value: value,
+                    predict_fn=lambda model, items, device: list(items),
+                    write_fn=write,
+                    num_prefetch_workers=3,
+                    num_write_workers=4,
+                )
+            except Exception as exc:  # noqa
+                errors.append(exc)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(timeout=30)
+
+        self.assertFalse(thread.is_alive(), "the pipeline deadlocked after a write failure")
+        self.assertEqual([str(error) for error in errors], ["synthetic write failure"])
+
     def test_pipeline_retries_ooming_batches(self):
         outputs = {}
         attempted_batch_sizes = []
@@ -106,7 +199,7 @@ class TestBatchedPipeline(unittest.TestCase):
             return [value + model for value in items]
 
         with self.assertWarnsRegex(RuntimeWarning, "retrying with smaller batches"):
-            run_batched_pipeline(
+            _run_batched_pipeline(
                 jobs=range(7),
                 model_devices=[(3, torch.device("cpu"))],
                 batch_sizes=[4],
@@ -131,7 +224,7 @@ class TestBatchedPipeline(unittest.TestCase):
                 raise torch.cuda.OutOfMemoryError("synthetic fragmented-cache OOM")
             return [value + model for value in items]
 
-        run_batched_pipeline(
+        _run_batched_pipeline(
             jobs=[0], model_devices=[(3, torch.device("cpu"))], batch_sizes=[1],
             load_fn=lambda value: 2 * value, predict_fn=predict, write_fn=outputs.__setitem__,
         )
@@ -158,7 +251,7 @@ class TestAutomaticBatchSizing(unittest.TestCase):
     def test_stops_after_two_non_improving_candidates(self, measure):
         model = torch.nn.Linear(1, 1)
 
-        batch_sizes = compute_auto_batch_sizes(
+        batch_sizes = _compute_auto_batch_sizes(
             model_devices=[(model, torch.device("cuda:0"))],
             n_jobs=64,
             patch_shape=(8, 8),
@@ -179,10 +272,9 @@ class TestBatchedDecoder(unittest.TestCase):
         model = FakeUNETR()
         progress = []
 
-        output = decode_volume_embeddings(
+        output = _decode_volume_embeddings(
             model,
             {"features": features, "original_size": (8, 8)},
-            device="cpu",
             z_block=2,
             z_halo=0,
             batch_size=2,
@@ -210,10 +302,9 @@ class TestBatchedDecoder(unittest.TestCase):
         model = FakeUNETR()
         progress = []
 
-        output = decode_tiled_3d_embeddings(
+        output = _decode_tiled_3d_embeddings(
             model,
             {"features": features},
-            device="cpu",
             z_block=2,
             z_halo=0,
             batch_size=2,
@@ -244,6 +335,40 @@ class TestBatchedDecoder(unittest.TestCase):
         self.assertEqual(write_order, ["large", "small"])
 
 
+class TestDecoderEncoderRestoration(unittest.TestCase):
+    def test_encoder_is_restored_when_job_inspection_fails(self):
+        # Regression: the encoder was swapped for the decoder-only replica before the job shapes were
+        # inspected, so a malformed job left the caller's model with the placeholder encoder.
+        model = FakeUNETR()
+        encoder = model.encoder
+        malformed = [{"source": np.ones((2,) * 6, dtype="float32"), "original_size": (8, 8)}]
+
+        with self.assertRaises(ValueError):
+            _run_decoder_jobs(model, malformed, lambda job, prediction: None, batch_size=1, devices="cpu")
+        self.assertIs(model.encoder, encoder)
+
+    def test_encoder_is_restored_when_batch_size_is_invalid(self):
+        model = FakeUNETR()
+        encoder = model.encoder
+        jobs = [{"source": np.ones((2, 2, 2, 2), dtype="float32"), "original_size": (8, 8)}]
+
+        with self.assertRaisesRegex(ValueError, "batch_size must be positive"):
+            _run_decoder_jobs(model, jobs, lambda job, prediction: None, batch_size=0, devices="cpu")
+        self.assertIs(model.encoder, encoder)
+
+    def test_encoder_is_restored_when_a_write_fails(self):
+        model = FakeUNETR()
+        encoder = model.encoder
+        jobs = [{"source": np.ones((2, 2, 2, 2), dtype="float32"), "original_size": (8, 8)}]
+
+        def write(job, prediction):
+            raise RuntimeError("synthetic write failure")
+
+        with self.assertRaisesRegex(RuntimeError, "synthetic write failure"):
+            _run_decoder_jobs(model, jobs, write, batch_size=1, devices="cpu")
+        self.assertIs(model.encoder, encoder)
+
+
 class FakeInteractiveTile:
     def __init__(self, value):
         self.value = value
@@ -261,6 +386,7 @@ class TestInteractiveTileScheduling(unittest.TestCase):
         segmenter.halo = (0, 0)
         segmenter.tiling = Blocking([0, 0], [8, 8], [4, 4])
         segmenter._predictor_devices = [(None, torch.device("cpu")), (None, torch.device("cpu"))]
+        segmenter._tile_workers = {}
         segmenter._segmenters = {
             tile_id: FakeInteractiveTile(tile_id + 1)
             for tile_id in range(4)
@@ -280,6 +406,74 @@ class TestInteractiveTileScheduling(unittest.TestCase):
         self.assertTrue(np.all(output[:, 4:, 4:] == 4))
         self.assertEqual(sum(progress), 8)
         self.assertEqual(set(progress_threads), {threading.get_ident()})
+
+
+class TestZBlockValidation(unittest.TestCase):
+    def _tiled_embeddings(self):
+        features = Group(
+            {
+                "0": ArrayWithAttrs(np.zeros((4, 1, 2, 2, 2), dtype="float32"), original_size=(4, 4)),
+            },
+            shape=(4, 4, 4),
+            tile_shape=(4, 4),
+            halo=(0, 0),
+        )
+        return {"features": features}
+
+    def test_tiled_decoder_rejects_invalid_z_blocking(self):
+        # Regression: a negative z_block made the job range empty, so an all-zero prediction was
+        # returned without ever running the decoder.
+        model = FakeUNETR()
+        for z_block, z_halo in [(-1, 0), (0, 0), (2, -1)]:
+            with self.assertRaisesRegex(ValueError, "z_block must be positive"):
+                _decode_tiled_3d_embeddings(
+                    model, self._tiled_embeddings(), z_block=z_block, z_halo=z_halo, batch_size=1,
+                )
+
+    def test_volume_decoder_rejects_invalid_z_blocking(self):
+        model = FakeUNETR()
+        embeddings = {"features": np.zeros((4, 2, 2, 2), dtype="float32"), "original_size": (8, 8)}
+        for z_block, z_halo in [(-1, 0), (0, 0), (2, -1)]:
+            with self.assertRaisesRegex(ValueError, "z_block must be positive"):
+                _decode_volume_embeddings(model, embeddings, z_block=z_block, z_halo=z_halo, batch_size=1)
+
+    def test_tiled_slice_decoder_rejects_out_of_range_index(self):
+        # A negative index would decode from the end, an index past the volume nothing at all.
+        model = FakeUNETR()
+        for index in (-1, 4, 10):
+            with self.assertRaisesRegex(ValueError, "slice index must be in"):
+                _decode_tiled_3d_slice(model, self._tiled_embeddings(), index=index, batch_size=1)
+
+    def test_tiled_slice_decoder_accepts_valid_index(self):
+        model = FakeUNETR()
+        output = _decode_tiled_3d_slice(model, self._tiled_embeddings(), index=3, batch_size=1)
+        self.assertEqual(output.shape, (4, 4, 4))
+
+
+class TestTileDeviceAffinity(unittest.TestCase):
+    def _segmenter(self, n_devices):
+        segmenter = TiledPromptableSegmentation3D.__new__(TiledPromptableSegmentation3D)
+        segmenter._predictor_devices = [(None, torch.device("cpu"))] * n_devices
+        segmenter._tile_workers = {}
+        return segmenter
+
+    def test_sparse_tiles_are_spread_over_devices(self):
+        # Regression: 'tile_id % n_devices' mapped the tiles 0, 2, 4, 6 to the same device.
+        segmenter = self._segmenter(2)
+        segmenter._run_tile_jobs([0, 2, 4, 6], lambda tile_id: tile_id)
+        self.assertEqual([segmenter._worker_id(tile_id) for tile_id in (0, 2, 4, 6)], [0, 1, 0, 1])
+
+    def test_tile_affinity_is_kept_across_jobs(self):
+        # The tile state lives on one device, so its assignment must not change between jobs.
+        segmenter = self._segmenter(3)
+        segmenter._run_tile_jobs([3, 6], lambda tile_id: tile_id)
+        assignment = dict(segmenter._tile_workers)
+        self.assertEqual(sorted(assignment.values()), [0, 1])
+
+        segmenter._run_tile_jobs([6, 3, 9], lambda tile_id: tile_id)
+        for tile_id, worker_id in assignment.items():
+            self.assertEqual(segmenter._worker_id(tile_id), worker_id)
+        self.assertEqual(segmenter._worker_id(9), 2)
 
 
 if __name__ == "__main__":

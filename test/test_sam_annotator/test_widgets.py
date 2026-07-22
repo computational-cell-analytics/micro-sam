@@ -68,3 +68,30 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
 
     # Close the viewer at the end of the test.
     viewer.close()
+
+
+@pytest.mark.gui
+def test_batch_size_visibility_follows_device_and_model(make_napari_viewer_proxy):
+    """The batch size control is only shown where it has an effect (GPU, and not a VFM encoder)."""
+    from micro_sam.sam_annotator._widgets import ClassificationEmbeddingWidget
+
+    make_napari_viewer_proxy()
+    widget = ClassificationEmbeddingWidget()
+
+    widget.device = "cpu"
+    widget.model_type = "hvit_t_cells"
+    widget._update_batch_size_visibility()
+    assert widget._batch_size_widget.isHidden()
+
+    widget.device = "cuda"
+    widget._update_batch_size_visibility()
+    assert not widget._batch_size_widget.isHidden()
+
+    # The VFM encoders offered by the classifiers compute their embeddings unbatched.
+    widget.model_type = "vit_b_dinov2"
+    widget._update_batch_size_visibility()
+    assert widget._batch_size_widget.isHidden()
+
+    widget.model_type = "vit_b_lm"
+    widget._update_batch_size_visibility()
+    assert not widget._batch_size_widget.isHidden()

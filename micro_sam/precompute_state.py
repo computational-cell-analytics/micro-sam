@@ -1,11 +1,12 @@
 """Precompute and cache image embeddings for image data (SAM1, SAM2 or VFM encoders).
 """
 
+import inspect
 import os
 import pickle
 from glob import glob
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union
 
 import h5py
 import numpy as np
@@ -664,6 +665,8 @@ def precompute_state(
     ndim: Optional[int] = None,
     precompute_autoseg_state: bool = False,
     prefer_decoder: bool = True,
+    batch_size: Optional[int] = 1,
+    devices: Optional[Union[str, Sequence[str]]] = None,
 ) -> None:
     """Precompute and cache the image embeddings (and, optionally, the automatic-segmentation state).
 
@@ -691,6 +694,10 @@ def precompute_state(
             Supported for SAM2 ('hvit_*') models.
         prefer_decoder: Whether to use the decoder-based state (AIS) when the SAM2 model has a decoder,
             instead of grid-based mask generation (AMG).
+        batch_size: The number of tiles / slices per model call. Pass None to select a throughput-efficient
+            value per device. Ignored by the model families that do not support batching (VFM encoders).
+        devices: The device or devices to compute the embeddings on. By default all visible CUDA devices
+            are used. Only supported for SAM2 ('hvit_*') models.
     """
     # Imported lazily to avoid a circular import ('_state' imports from this module).
     from micro_sam.sam_annotator._state import _get_sam_model
@@ -706,6 +713,14 @@ def precompute_state(
     # Dispatch to the embedding function for the model family (SAM1 / SAM2 / VFM). All share the same
     # interface, so the per-family predictor from '_get_sam_model' feeds directly into it.
     compute_embeddings = util.get_embedding_function(model_type)
+
+    # Only SAM2 supports multi-device inference and only SAM1 / SAM2 support batching, so forward
+    # these settings just to the families whose embedding function accepts them.
+    supported = inspect.signature(compute_embeddings).parameters
+    compute_kwargs = {
+        name: value for name, value in (("batch_size", batch_size), ("devices", devices))
+        if name in supported
+    }
 
     # Resolve the UniSAM2 decoder once (AIS); when none is available the state is cached with AMG.
     decoder = None
@@ -741,7 +756,8 @@ def precompute_state(
 
         save_path = str(Path(out_path).with_suffix(".zarr"))
         embeddings = compute_embeddings(
-            predictor=predictor, input_=image_data, save_path=save_path, ndim=file_ndim, verbose=single
+            predictor=predictor, input_=image_data, save_path=save_path, ndim=file_ndim, verbose=single,
+            **compute_kwargs,
         )
 
         if precompute_autoseg_state:

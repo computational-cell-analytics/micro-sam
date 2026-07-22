@@ -387,7 +387,8 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
             if image.ndim == 3 and image.shape[-1] != 3 and i is not None:
                 image = image[i]
             image_embeddings = precompute_image_embeddings(
-                predictor, image, save_path=save_path, ndim=2, tile_shape=tile_shape, halo=halo, verbose=verbose,
+                predictor, image, save_path=save_path, ndim=2, tile_shape=tile_shape, halo=halo,
+                verbose=verbose, lazy_loading=True,
             )
 
         feats = image_embeddings["features"]
@@ -900,7 +901,9 @@ def _decode_3d_feature_batch(model, features, original_size, device):
             output = model(dummy)
     finally:
         model.encoder = real_encoder
-    return output.detach().float().cpu().numpy()
+    # Move before casting: an fp32 copy of the whole output on the accelerator would cancel out the
+    # memory that fp16 inference saves (and can trigger the OOM backoff).
+    return output.detach().cpu().float().numpy()
 
 
 def _decode_3d_feature_block(model, feature, original_size, device):
@@ -964,6 +967,10 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         self._prediction = None
         self._is_initialized = False
 
+    def _inference_devices(self, devices: Devices) -> Devices:
+        """Fall back to the configured device, so it is not overridden by the multi-GPU default."""
+        return self._device if devices is None else devices
+
     def _run_full_inference(
         self, raw, ndim, tile_shape=None, halo=None, pbar_init=None, pbar_update=None,
         batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=1,
@@ -977,7 +984,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         from torch_em.util.prediction import predict_with_halo_pipelined
         from micro_sam.v2.normalization import normalize_raw
         from micro_sam.v2.batched_inference import (
-            compute_auto_batch_sizes, prepare_models, release_model_replicas, resolve_devices,
+            _compute_auto_batch_sizes, _prepare_models, _release_model_replicas, _resolve_devices,
         )
 
         def _preprocess(crop):
@@ -999,13 +1006,13 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
 
         img_size = getattr(getattr(self._model, "encoder", None), "img_size", 1024)
         resize_model = ResizeLongestSideWrapper(self._model, img_size)
-        resolved_devices = resolve_devices(resize_model, devices)
+        resolved_devices = _resolve_devices(resize_model, self._inference_devices(devices))
 
         if batch_size is None:
-            model_devices = prepare_models(resize_model, resolved_devices)
+            model_devices = _prepare_models(resize_model, resolved_devices)
             patch_shape = tuple(block + 2 * overlap for block, overlap in zip(block_shape, block_halo))
             try:
-                batch_sizes = compute_auto_batch_sizes(
+                batch_sizes = _compute_auto_batch_sizes(
                     model_devices=model_devices,
                     n_jobs=n_blocks,
                     patch_shape=patch_shape,
@@ -1016,7 +1023,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
                 )
                 batch_size = min(batch_sizes)
             finally:
-                release_model_replicas(model_devices)
+                _release_model_replicas(model_devices)
         elif int(batch_size) < 1:
             raise ValueError(f"batch_size must be positive or None, got {batch_size}.")
 
@@ -1064,22 +1071,22 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
     @torch.no_grad()
     def _run_decoder_3d(
         self, image_embeddings, z_block=None, z_halo=None, pbar_init=None, pbar_update=None,
-        batch_size=None, devices: Devices = None, num_prefetch_workers=4,
+        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=1,
     ):
         """Decode queued z blocks from precomputed 3d embeddings."""
-        from micro_sam.v2.batched_inference import decode_volume_embeddings
+        from micro_sam.v2.batched_inference import _decode_volume_embeddings
 
-        return decode_volume_embeddings(
+        return _decode_volume_embeddings(
             model=self._model,
             image_embeddings=image_embeddings,
-            device=self._device,
             z_block=z_block,
             z_halo=z_halo,
             pbar_init=pbar_init,
             pbar_update=pbar_update,
             batch_size=batch_size,
-            devices=devices,
+            devices=self._inference_devices(devices),
             num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
         )
 
     @torch.no_grad()
@@ -1113,11 +1120,11 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
             pbar_update: Callback to update an external progress bar.
             z_block: Number of slices per decoder z block.
             z_halo: Overlapping decoder slices used as context.
-            batch_size: Explicit tile or z-block batch size. Defaults to one; pass None for
-                throughput-based automatic selection.
+            batch_size: The batch size used when running inference for multiple z-blocks and / or tiles.
+                Defaults to one; pass None for throughput-based automatic selection.
             devices: Inference device or devices. None uses all visible GPUs when the model is on CUDA.
             num_prefetch_workers: Number of input reading and preprocessing threads.
-            num_write_workers: Number of output writing threads for full tiled inference.
+            num_write_workers: Number of output writing threads.
         """
         if image_embeddings is not None and ndim == 3:
             self._prediction = self._run_decoder_3d(
@@ -1129,6 +1136,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
                 batch_size=batch_size,
                 devices=devices,
                 num_prefetch_workers=num_prefetch_workers,
+                num_write_workers=num_write_workers,
             )
         elif image_embeddings is not None:
             if pbar_init is not None:
@@ -1198,61 +1206,61 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
     @torch.no_grad()
     def _run_decoder_tiled_2d(
         self, image_embeddings, pbar_init=None, pbar_update=None,
-        batch_size=None, devices: Devices = None, num_prefetch_workers=4,
+        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=1,
     ):
         """Decode and stitch queued 2d embedding tiles."""
-        from micro_sam.v2.batched_inference import decode_tiled_2d_embeddings
+        from micro_sam.v2.batched_inference import _decode_tiled_2d_embeddings
 
-        return decode_tiled_2d_embeddings(
+        return _decode_tiled_2d_embeddings(
             model=self._model,
             image_embeddings=image_embeddings,
-            device=self._device,
             pbar_init=pbar_init,
             pbar_update=pbar_update,
             batch_size=batch_size,
-            devices=devices,
+            devices=self._inference_devices(devices),
             num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
         )
 
     @torch.no_grad()
     def _run_decoder_tiled_3d(
         self, image_embeddings, pbar_init=None, pbar_update=None, z_block=None, z_halo=None,
-        batch_size=None, devices: Devices = None, num_prefetch_workers=4,
+        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=1,
     ):
         """Decode batches spanning tile columns and z blocks, then stitch them."""
-        from micro_sam.v2.batched_inference import decode_tiled_3d_embeddings
+        from micro_sam.v2.batched_inference import _decode_tiled_3d_embeddings
 
-        return decode_tiled_3d_embeddings(
+        return _decode_tiled_3d_embeddings(
             model=self._model,
             image_embeddings=image_embeddings,
-            device=self._device,
             pbar_init=pbar_init,
             pbar_update=pbar_update,
             z_block=z_block,
             z_halo=z_halo,
             batch_size=batch_size,
-            devices=devices,
+            devices=self._inference_devices(devices),
             num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
         )
 
     @torch.no_grad()
     def _run_decoder_tiled_3d_slice(
         self, image_embeddings, i, pbar_init=None, pbar_update=None,
-        batch_size=None, devices: Devices = None, num_prefetch_workers=4,
+        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=1,
     ):
         """Decode one volume slice across all embedding tiles in batches."""
-        from micro_sam.v2.batched_inference import decode_tiled_3d_slice
+        from micro_sam.v2.batched_inference import _decode_tiled_3d_slice
 
-        return decode_tiled_3d_slice(
+        return _decode_tiled_3d_slice(
             model=self._model,
             image_embeddings=image_embeddings,
             index=i,
-            device=self._device,
             pbar_init=pbar_init,
             pbar_update=pbar_update,
             batch_size=batch_size,
-            devices=devices,
+            devices=self._inference_devices(devices),
             num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
         )
 
     @torch.no_grad()
@@ -1277,8 +1285,8 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
 
         `batch_size=None` benchmarks candidate sizes and selects a throughput-efficient batch
         independently on each selected CUDA device.
-        Reads and preprocessing are queued through `num_prefetch_workers`; full inference also overlaps
-        output writes through `num_write_workers`.
+        Reads and preprocessing are queued through `num_prefetch_workers`, output writes through
+        `num_write_workers`.
         """
         decoder_kwargs = {
             "pbar_init": pbar_init,
@@ -1286,6 +1294,7 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
             "batch_size": batch_size,
             "devices": devices,
             "num_prefetch_workers": num_prefetch_workers,
+            "num_write_workers": num_write_workers,
         }
         if image_embeddings is not None and ndim == 2 and "fpn" in image_embeddings and i is not None:
             self._prediction = self._run_decoder_tiled_3d_slice(

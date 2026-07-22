@@ -122,11 +122,11 @@ def automatic_instance_segmentation(
         mode: The AIS post-processing mode, 'sparse' (flow) or 'dense' (multicut). Ignored for AMG.
         device: The device to run inference on.
         verbose: Whether to print progress.
-        batch_size: Explicit tile or slice batch size. Defaults to one; pass None for
-            throughput-based automatic selection.
+        batch_size: The batch size used when running inference for multiple slices and / or tiles.
+            Defaults to one; pass None for throughput-based automatic selection.
         devices: Inference device or devices. None uses all visible GPUs when the model is on CUDA.
         num_prefetch_workers: Number of input reading and preprocessing threads.
-        num_write_workers: Number of output writing threads for full tiled inference.
+        num_write_workers: Number of output writing threads.
         generate_kwargs: Additional post-processing parameters forwarded to the segmenter's `generate`.
 
     Returns:
@@ -163,10 +163,13 @@ def automatic_instance_segmentation(
                 tile_shape=tile_shape,
                 halo=halo,
                 verbose=verbose,
-                lazy_loading=(ndim == 3),
+                # Volumes and tiled images are streamed from the zarr; only small 2d stays in memory.
+                lazy_loading=(ndim == 3 or tile_shape is not None),
                 batch_size=batch_size,
-                devices=devices,
+                # Without an explicit selection, honor 'device' rather than fanning out over all GPUs.
+                devices=devices if devices is not None else device,
                 num_prefetch_workers=num_prefetch_workers,
+                num_write_workers=num_write_workers,
             )
         segmenter.initialize(
             raw,

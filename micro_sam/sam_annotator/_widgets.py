@@ -408,6 +408,10 @@ class _WidgetBase(QtWidgets.QWidget):
         # NOTE: And finally, we should re-enable signals again.
         self.model_size_dropdown.blockSignals(False)
 
+        # Whether the batch size applies depends on the backend, so it follows the model selection.
+        if getattr(self, "_batch_size_widget", None) is not None:
+            self._update_batch_size_visibility()
+
     def _create_model_section(
         self,
         default_model: Optional[str] = None,
@@ -1896,12 +1900,16 @@ class EmbeddingWidget(_WidgetBase):
         self._tiling_widget.setVisible(self.tiling == "yes")
 
     def _update_batch_size_visibility(self, index=None):
-        # Show the batch size field only when the effective device is a GPU. Batching does not help
-        # on the CPU, so 'auto' resolving to the CPU (or an explicit CPU selection) hides the field.
+        # Show the batch size field only where it has an effect: batching does not help on the CPU
+        # (so 'auto' resolving to the CPU hides it), and the VFM encoders offered by the classifiers
+        # compute their embeddings unbatched. The default of 1 is used whenever it is hidden.
+        from micro_sam.models.vfm import is_vfm_model
+
         device = self.device
         if device == "auto":
             device = util._get_default_device()
-        self._batch_size_widget.setVisible(str(device) != "cpu")
+        has_effect = str(device) != "cpu" and not is_vfm_model(getattr(self, "model_type", None))
+        self._batch_size_widget.setVisible(has_effect)
 
     def _apply_default_tiling_for_shape(self, shape):
         # Enable tiling by default for large in-plane images, using the central v2 tiling defaults.
@@ -2212,7 +2220,7 @@ class EmbeddingWidget(_WidgetBase):
         # Set up progress bar and signals for using it within a threadworker.
         # Model and decoder preparation happens before the backend knows the tile / slice count, so
         # start with an indeterminate status instead of leaving napari's activity display empty.
-        pbar, pbar_signals = _create_pbar_for_threadworker("Preparing image embeddings")
+        pbar, pbar_signals = _create_pbar_for_threadworker("Computing image embeddings")
 
         # @thread_worker()
         def compute_image_embedding():
@@ -2454,6 +2462,10 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         self.model_size_dropdown.setCurrentText(self.model_size)
         self.model_size_dropdown.update()
         self.model_size_dropdown.blockSignals(False)
+        # This branch does not go through the inherited update, so refresh the batch size here too:
+        # the advanced families include the VFM encoders, which do not support batching.
+        if getattr(self, "_batch_size_widget", None) is not None:
+            self._update_batch_size_visibility()
 
     def _validate_model_type_and_custom_weights(self):
         # DINO families always resolve from the registry. DINOv3 weights load from HuggingFace using the
