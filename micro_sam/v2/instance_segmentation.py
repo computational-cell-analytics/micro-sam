@@ -863,11 +863,19 @@ class _StubEncoder(torch.nn.Module):
         return [feature]
 
 
+def _get_decoder_autocast(device):
+    """Use FP16 decoder autocast on supported accelerator backends."""
+    device_type = torch.device(device).type
+    if device_type in ("cuda", "mps"):
+        return torch.autocast(device_type=device_type, dtype=torch.float16)
+    return contextlib.nullcontext()
+
+
 def _decode_3d_feature_batch(model, features, original_size, device):
     """Decode precomputed feature volumes with shape (B, Z, C, H, W).
 
-    CUDA decoder inference uses FP16 autocast, matching UniSAM2 training and keeping the largest
-    default annotator tile within a 10 GB MIG partition. Cached predictions remain float32.
+    CUDA and MPS decoder inference use FP16 autocast. This matches UniSAM2 training on CUDA and keeps
+    the largest default annotator tile within a 10 GB MIG partition. Cached predictions remain float32.
     """
     if features.ndim != 5:
         raise ValueError(f"Expected batched features with shape (B, Z, C, H, W), got {features.shape}.")
@@ -877,11 +885,7 @@ def _decode_3d_feature_batch(model, features, original_size, device):
     model.encoder = _StubEncoder(features, img_size)
     try:
         dummy = torch.zeros((features.shape[0], 3, features.shape[1], *original_size), device=device)
-        autocast = (
-            torch.autocast(device_type="cuda", dtype=torch.float16)
-            if device.type == "cuda" else contextlib.nullcontext()
-        )
-        with autocast:
+        with _get_decoder_autocast(device):
             output = model(dummy)
     finally:
         model.encoder = real_encoder

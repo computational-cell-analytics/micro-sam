@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import types
 import inspect
 
@@ -7,7 +8,7 @@ import pytest
 
 from micro_sam.v2.instance_segmentation import (
     _block_shape_and_halo, _set_image_predictor_from_backbone,
-    UniSAM2InstanceSegmentation, TiledUniSAM2InstanceSegmentation,
+    _get_decoder_autocast, UniSAM2InstanceSegmentation, TiledUniSAM2InstanceSegmentation,
     get_instance_segmentation_generator, get_decoder,
 )
 from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, run_multicut
@@ -163,6 +164,30 @@ def test_decoder_predictions_are_cached_as_float32():
     out = _run_decoder_2d(model, {"features": features, "original_size": (8, 8)})
 
     assert out.dtype == np.float32
+
+
+@pytest.mark.parametrize("device_type", ("cuda", "mps"))
+def test_decoder_autocast_uses_fp16_on_accelerators(device_type, monkeypatch):
+    calls = []
+
+    def fake_autocast(device_type, dtype):
+        calls.append((device_type, dtype))
+        return nullcontext()
+
+    monkeypatch.setattr(torch, "autocast", fake_autocast)
+    with _get_decoder_autocast(torch.device(device_type)):
+        pass
+
+    assert calls == [(device_type, torch.float16)]
+
+
+def test_decoder_autocast_leaves_cpu_unchanged(monkeypatch):
+    def fail_autocast(*args, **kwargs):
+        pytest.fail("CPU decoder inference must not enable autocast.")
+
+    monkeypatch.setattr(torch, "autocast", fail_autocast)
+    with _get_decoder_autocast(torch.device("cpu")):
+        pass
 
 
 def test_decoder_3d_zchunks_deep_volume():
