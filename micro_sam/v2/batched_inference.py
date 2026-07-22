@@ -4,6 +4,7 @@ import gc
 import os
 import queue
 import threading
+import time
 import warnings
 from collections import defaultdict
 from copy import deepcopy
@@ -113,6 +114,72 @@ def release_model_replicas(model_devices: List[Tuple[torch.nn.Module, torch.devi
         torch.cuda.empty_cache()
 
 
+def _is_oom_error(exc: Exception) -> bool:
+    oom_type = getattr(torch.cuda, "OutOfMemoryError", ())
+    return isinstance(exc, oom_type) or "out of memory" in str(exc).lower()
+
+
+def _release_probe_memory(device: torch.device) -> None:
+    gc.collect()
+    if device.type == "cuda":
+        with torch.cuda.device(device):
+            torch.cuda.empty_cache()
+
+
+def _measure_batch_throughput(
+    model: torch.nn.Module,
+    device: torch.device,
+    batch_size: int,
+    patch_shape: Tuple[int, ...],
+    in_channels: int,
+    prediction_function: Callable[[torch.nn.Module, torch.Tensor], Any],
+    n_repeats: int = 2,
+) -> Optional[float]:
+    """Measure samples per second for one synthetic batch, returning None on CUDA OOM."""
+    inputs = output = None
+    was_training = model.training
+    model.eval()
+    try:
+        inputs = torch.empty(
+            (batch_size, in_channels, *patch_shape), dtype=torch.float32, device=device,
+        ).normal_()
+        timings = []
+        for repeat in range(n_repeats + 1):
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            start = time.perf_counter()
+            with torch.no_grad():
+                output = prediction_function(model, inputs)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            if repeat > 0:
+                timings.append(time.perf_counter() - start)
+            del output
+            output = None
+        return float(batch_size) / float(np.median(timings))
+    except Exception as exc:
+        if _is_oom_error(exc):
+            return None
+        raise
+    finally:
+        model.train(was_training)
+        del inputs, output
+        _release_probe_memory(device)
+
+
+def _select_throughput_batch_size(
+    measurements: Sequence[Tuple[int, float]], min_relative_improvement: float = 0.1,
+) -> int:
+    """Prefer the smallest batch unless a larger one improves throughput materially."""
+    if not measurements:
+        raise ValueError("At least one batch-throughput measurement is required.")
+    selected_batch, selected_throughput = measurements[0]
+    for batch_size, throughput in measurements[1:]:
+        if throughput >= selected_throughput * (1.0 + min_relative_improvement):
+            selected_batch, selected_throughput = batch_size, throughput
+    return int(selected_batch)
+
+
 def compute_auto_batch_sizes(
     model_devices: Sequence[Tuple[torch.nn.Module, torch.device]],
     n_jobs: int,
@@ -120,40 +187,56 @@ def compute_auto_batch_sizes(
     in_channels: int,
     prediction_function: Callable[[torch.nn.Module, torch.Tensor], Any],
 ) -> List[int]:
-    """Probe the largest safe batch size independently on every CUDA device.
+    """Select a throughput-efficient batch size independently on every CUDA device.
 
-    The probe delegates its exponential and binary OOM search to
-    :func:`torch_em.util.compute_max_batch_size`. CPU and MPS use a conservative batch size of one,
-    because the torch-em probe intentionally supports CUDA OOM detection only.
+    Powers of two are benchmarked from one upwards. A larger batch is selected only when it improves
+    measured throughput by at least 10 percent, and probing stops after two consecutive candidates
+    fail to do so. CPU and MPS retain the conservative batch size of one.
     """
     if n_jobs < 1:
         return [1] * len(model_devices)
 
-    # Cap the probe at the per-device job count and at 256 (no run needs a larger batch).
     jobs_per_device = (int(n_jobs) + len(model_devices) - 1) // len(model_devices)
     upper_bound = min(256, jobs_per_device)
     batch_sizes = []
-    from torch_em.util import compute_max_batch_size
-
     for model, device in model_devices:
         if device.type != "cuda":
             batch_sizes.append(1)
             continue
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", message="The batch size search reached the upper bound.*", category=UserWarning,
+
+        measurements = []
+        non_improving_candidates = 0
+        candidate = 1
+        while candidate <= upper_bound:
+            previous_selection = (
+                _select_throughput_batch_size(measurements) if measurements else None
             )
-            batch_size = compute_max_batch_size(
+            throughput = _measure_batch_throughput(
                 model=model,
+                device=device,
+                batch_size=candidate,
                 patch_shape=patch_shape,
                 in_channels=in_channels,
-                device=device,
-                dtype=torch.float32,
-                safety_factor=0.8,  # leave GPU-memory headroom below the probed maximum
-                max_batch_size=upper_bound,
                 prediction_function=prediction_function,
             )
-        batch_sizes.append(batch_size)
+            if throughput is None:
+                break
+            measurements.append((candidate, throughput))
+            selection = _select_throughput_batch_size(measurements)
+            if previous_selection is not None:
+                if selection == candidate:
+                    non_improving_candidates = 0
+                else:
+                    non_improving_candidates += 1
+            if non_improving_candidates >= 2:
+                break
+            candidate *= 2
+
+        if not measurements:
+            raise RuntimeError(
+                f"The model does not fit batch size 1 on {device}. Reduce the patch shape or use a smaller model."
+            )
+        batch_sizes.append(_select_throughput_batch_size(measurements))
     return batch_sizes
 
 
@@ -174,6 +257,31 @@ def _safe_put(output_queue: queue.Queue, item: Any, stop_event: threading.Event,
         except queue.Full:
             continue
     raise PipelineAborted()
+
+
+def _predict_with_oom_backoff(
+    model: torch.nn.Module,
+    items: List[Any],
+    device: torch.device,
+    predict_fn: Callable[[torch.nn.Module, List[Any], torch.device], List[Any]],
+) -> Tuple[List[Any], int]:
+    """Retry an OOMing batch in halves and return the largest size proven safe."""
+    try:
+        return predict_fn(model, items, device), len(items)
+    except Exception as exc:
+        if not _is_oom_error(exc) or len(items) == 1:
+            raise
+
+    _release_probe_memory(device)
+    split = len(items) // 2
+    warnings.warn(
+        f"Batch size {len(items)} ran out of memory on {device}; retrying with smaller batches.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    left, left_size = _predict_with_oom_backoff(model, items[:split], device, predict_fn)
+    right, right_size = _predict_with_oom_backoff(model, items[split:], device, predict_fn)
+    return left + right, min(left_size, right_size)
 
 
 def run_batched_pipeline(
@@ -254,7 +362,10 @@ def run_batched_pipeline(
 
                 if batch:
                     with torch.no_grad():
-                        predictions = predict_fn(model, [item.data for item in batch], device)
+                        predictions, safe_batch_size = _predict_with_oom_backoff(
+                            model, [item.data for item in batch], device, predict_fn,
+                        )
+                    batch_size = min(batch_size, safe_batch_size)
                     if len(predictions) != len(batch):
                         raise RuntimeError(
                             f"The batch predictor returned {len(predictions)} outputs for {len(batch)} inputs."

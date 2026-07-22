@@ -1788,6 +1788,16 @@ class EmbeddingWidget(_WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
+        # Use a conservative default and let users opt into larger per-GPU batches when their
+        # workload and available memory benefit from them.
+        self.batch_size = 1
+        self.batch_size_param, batch_size_layout = self._add_int_param(
+            "batch_size", self.batch_size, min_val=1, max_val=64,
+            title="batch size per GPU:",
+            tooltip=get_tooltip("embedding", "batch_size"),
+        )
+        setting_values.layout().addLayout(batch_size_layout)
+
         # Create UI for the save path.
         self.embeddings_save_path = None
         self.embeddings_save_path_param, save_layout = self._add_path_param(
@@ -1922,6 +1932,7 @@ class EmbeddingWidget(_WidgetBase):
         self.halo_x_param.setValue(DEFAULT_HALO[0])
         self.halo_y_param.setValue(DEFAULT_HALO[1])
         self.tiling_dropdown.setCurrentText("no")
+        self.batch_size_param.setValue(1)
         self.embeddings_save_path_param.setText("")
 
         # Reset the image-dimensionality override back to 'auto' so a new image is re-detected.
@@ -2211,6 +2222,7 @@ class EmbeddingWidget(_WidgetBase):
                 checkpoint_path=self.custom_weights,
                 tile_shape=tile_shape,
                 halo=halo,
+                batch_size=self.batch_size,
                 prefer_decoder=True,
                 precompute_autoseg_state=precompute_autoseg_state,
                 pbar_init=pbar_init,

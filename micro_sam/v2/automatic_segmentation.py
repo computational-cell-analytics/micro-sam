@@ -97,7 +97,7 @@ def automatic_instance_segmentation(
     mode: str = "sparse",
     device: Optional[Union[str, torch.device]] = None,
     verbose: bool = True,
-    batch_size: Optional[int] = None,
+    batch_size: Optional[int] = 1,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
     num_write_workers: int = 1,
@@ -122,7 +122,8 @@ def automatic_instance_segmentation(
         mode: The AIS post-processing mode, 'sparse' (flow) or 'dense' (multicut). Ignored for AMG.
         device: The device to run inference on.
         verbose: Whether to print progress.
-        batch_size: Explicit tile or slice batch size, or None for automatic capacity probing.
+        batch_size: Explicit tile or slice batch size. Defaults to one; pass None for
+            throughput-based automatic selection.
         devices: Inference device or devices. None uses all visible GPUs when the model is on CUDA.
         num_prefetch_workers: Number of input reading and preprocessing threads.
         num_write_workers: Number of output writing threads for full tiled inference.

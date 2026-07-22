@@ -946,8 +946,8 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         """Run queued, batched UniSAM2 encoder and decoder inference.
 
         Tiled reads and preprocessing, GPU inference, and output writes overlap through the torch-em
-        prediction pipeline. If `batch_size` is None, the largest safe batch is probed independently
-        on every selected CUDA device.
+        prediction pipeline. If `batch_size` is None, candidate sizes are benchmarked and a
+        throughput-efficient batch is selected independently on every CUDA device.
         """
         from torch_em.util.prediction import predict_with_halo_pipelined
         from micro_sam.v2.normalization import normalize_raw
@@ -985,7 +985,9 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
                     n_jobs=n_blocks,
                     patch_shape=patch_shape,
                     in_channels=3,
-                    prediction_function=lambda this_model, inputs: this_model(inputs),
+                    # The probe's synthetic input bypasses `_preprocess`; clamp it into the [0, 1]
+                    # range the model asserts (values are irrelevant to the memory measurement).
+                    prediction_function=lambda this_model, inputs: this_model(inputs.clamp(0.0, 1.0)),
                 )
                 batch_size = min(batch_sizes)
             finally:
@@ -1076,7 +1078,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         pbar_update: Optional[callable] = None,
         z_block: Optional[int] = None,
         z_halo: Optional[int] = None,
-        batch_size: Optional[int] = None,
+        batch_size: Optional[int] = 1,
         devices: Devices = None,
         num_prefetch_workers: int = 4,
         num_write_workers: int = 1,
@@ -1094,7 +1096,8 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
             pbar_update: Callback to update an external progress bar.
             z_block: Number of slices per decoder z block.
             z_halo: Overlapping decoder slices used as context.
-            batch_size: Explicit tile or z-block batch size, or None for automatic capacity probing.
+            batch_size: Explicit tile or z-block batch size. Defaults to one; pass None for
+                throughput-based automatic selection.
             devices: Inference device or devices. None uses all visible GPUs when the model is on CUDA.
             num_prefetch_workers: Number of input reading and preprocessing threads.
             num_write_workers: Number of output writing threads for full tiled inference.
@@ -1248,14 +1251,15 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
         pbar_update: Optional[callable] = None,
         z_block: Optional[int] = None,
         z_halo: Optional[int] = None,
-        batch_size: Optional[int] = None,
+        batch_size: Optional[int] = 1,
         devices: Devices = None,
         num_prefetch_workers: int = 4,
         num_write_workers: int = 1,
     ) -> None:
         """Run tiled UniSAM2 inference and store foreground and distance predictions.
 
-        `batch_size=None` probes the largest safe batch independently on each selected CUDA device.
+        `batch_size=None` benchmarks candidate sizes and selects a throughput-efficient batch
+        independently on each selected CUDA device.
         Reads and preprocessing are queued through `num_prefetch_workers`; full inference also overlaps
         output writes through `num_write_workers`.
         """

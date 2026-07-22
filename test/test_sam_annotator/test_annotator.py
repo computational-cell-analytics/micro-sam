@@ -220,7 +220,7 @@ class TestAnnotatorClass:
         viewer.close()
 
     def test_reset_inputs_keeps_optional_paths_unset(self, qapp):
-        """Clearing inputs on an image switch must not create a blank custom checkpoint path."""
+        """Clearing inputs restores safe defaults without creating a blank custom checkpoint path."""
         from micro_sam.sam_annotator._widgets import EmbeddingWidget
 
         ew = EmbeddingWidget(ndim_choice=True)
@@ -231,12 +231,20 @@ class TestAnnotatorClass:
         ew.custom_weights_param.setText(" ")
         assert ew.custom_weights is None
 
+        # Batching is explicitly user-controlled and starts at the safe single-item default.
+        assert ew.batch_size == 1
+        assert ew.batch_size_param.value() == 1
+
         # Reproduce the input reset used when a different image layer is selected.
         ew.custom_weights_param.setText("/tmp/custom-weights.pt")
+        ew.batch_size_param.setValue(4)
         assert ew.custom_weights == "/tmp/custom-weights.pt"
+        assert ew.batch_size == 4
         ew._reset_inputs_to_defaults()
         assert ew.custom_weights is None
         assert ew.custom_weights_param.text() == ""
+        assert ew.batch_size == 1
+        assert ew.batch_size_param.value() == 1
 
     @pytest.mark.parametrize("ndim", [2, 3])
     def test_batched_checkbox_hidden_when_tiled(self, make_napari_viewer_proxy, ndim):

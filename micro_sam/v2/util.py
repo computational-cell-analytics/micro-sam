@@ -422,7 +422,7 @@ def precompute_image_embeddings(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
-    batch_size: Optional[int] = None,
+    batch_size: Optional[int] = 1,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
     pbar_init: Optional[callable] = None,
@@ -441,8 +441,9 @@ def precompute_image_embeddings(
         tile_shape: Optional in-plane tile shape.
         halo: Optional in-plane tile halo.
         verbose: Whether to show progress.
-        batch_size: Number of independent tiles or slices per encoder call. If None, probe the
-            largest safe value independently on each CUDA device.
+        batch_size: Number of independent tiles or slices per encoder call. Defaults to one, which
+            is recommended for 10 GB MIG devices. Pass None to benchmark candidate sizes and select
+            a throughput-efficient value independently on each CUDA device.
         devices: Device or devices used for embedding inference. If None and the predictor is on
             CUDA, all visible CUDA devices are used.
         num_prefetch_workers: Number of threads used to read and preprocess input jobs.

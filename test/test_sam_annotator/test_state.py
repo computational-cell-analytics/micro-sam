@@ -54,6 +54,7 @@ def test_blank_model_paths_are_normalized(monkeypatch):
         return object(), {}
 
     def fake_precompute_image_embeddings(**kwargs):
+        captured["batch_size"] = kwargs["batch_size"]
         return {
             "features": np.zeros((1, 1, 1, 1), dtype="float32"),
             "input_size": (8, 8),
@@ -71,9 +72,10 @@ def test_blank_model_paths_are_normalized(monkeypatch):
         checkpoint_path=" ",
         decoder_path="\t",
         prefer_decoder=False,
+        batch_size=4,
     )
 
-    assert captured == {"checkpoint_path": None, "decoder_path": None}
+    assert captured == {"checkpoint_path": None, "decoder_path": None, "batch_size": 4}
 
 
 if __name__ == "__main__":

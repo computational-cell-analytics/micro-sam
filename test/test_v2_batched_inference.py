@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 import numpy as np
 import torch
@@ -6,7 +7,11 @@ import torch.nn.functional as F
 from bioimage_cpp.utils import Blocking
 
 from micro_sam.v2.batched_inference import (
-    decode_tiled_3d_embeddings, decode_volume_embeddings, run_batched_pipeline,
+    _select_throughput_batch_size,
+    compute_auto_batch_sizes,
+    decode_tiled_3d_embeddings,
+    decode_volume_embeddings,
+    run_batched_pipeline,
 )
 from micro_sam.v2.prompt_based_segmentation import TiledPromptableSegmentation3D
 
@@ -81,6 +86,64 @@ class TestBatchedPipeline(unittest.TestCase):
 
         self.assertEqual(outputs, {index: 2 * index + 3 for index in range(7)})
         self.assertEqual(sum(progress), 7)
+
+    def test_pipeline_retries_ooming_batches(self):
+        outputs = {}
+        attempted_batch_sizes = []
+
+        def predict(model, items, device):
+            attempted_batch_sizes.append(len(items))
+            if len(items) > 2:
+                raise torch.cuda.OutOfMemoryError("synthetic test OOM")
+            return [value + model for value in items]
+
+        with self.assertWarnsRegex(RuntimeWarning, "retrying with smaller batches"):
+            run_batched_pipeline(
+                jobs=range(7),
+                model_devices=[(3, torch.device("cpu"))],
+                batch_sizes=[4],
+                load_fn=lambda value: 2 * value,
+                predict_fn=predict,
+                write_fn=outputs.__setitem__,
+                num_prefetch_workers=2,
+            )
+
+        self.assertEqual(outputs, {index: 2 * index + 3 for index in range(7)})
+        self.assertEqual(attempted_batch_sizes[0], 4)
+        self.assertTrue(all(batch_size <= 2 for batch_size in attempted_batch_sizes[1:]))
+
+
+class TestAutomaticBatchSizing(unittest.TestCase):
+    def test_requires_material_throughput_improvement(self):
+        self.assertEqual(
+            _select_throughput_batch_size([(1, 10.0), (2, 10.5)]),
+            1,
+        )
+        self.assertEqual(
+            _select_throughput_batch_size([(1, 10.0), (2, 11.5)]),
+            2,
+        )
+
+    @mock.patch(
+        "micro_sam.v2.batched_inference._measure_batch_throughput",
+        side_effect=[10.0, 10.5, 10.6],
+    )
+    def test_stops_after_two_non_improving_candidates(self, measure):
+        model = torch.nn.Linear(1, 1)
+
+        batch_sizes = compute_auto_batch_sizes(
+            model_devices=[(model, torch.device("cuda:0"))],
+            n_jobs=64,
+            patch_shape=(8, 8),
+            in_channels=3,
+            prediction_function=lambda this_model, inputs: this_model(inputs),
+        )
+
+        self.assertEqual(batch_sizes, [1])
+        self.assertEqual(
+            [call.kwargs["batch_size"] for call in measure.call_args_list],
+            [1, 2, 4],
+        )
 
 
 class TestBatchedDecoder(unittest.TestCase):
