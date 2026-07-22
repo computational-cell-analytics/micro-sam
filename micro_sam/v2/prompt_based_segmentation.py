@@ -10,6 +10,7 @@ from typing import Callable, List, Optional, Tuple, Union
 import numpy as np
 import torch
 
+from micro_sam.util import device_type
 from micro_sam.v2.util import Devices
 from micro_sam.v1.prompt_based_segmentation import _process_box, _compute_logits_from_mask
 from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy, ResizeLongestSideTransforms
@@ -534,7 +535,7 @@ class PromptableSegmentation3D:
         # Offloading frames/state to CPU bounds GPU memory for large volumes on CUDA. On MPS it is off
         # by default: unified memory saves nothing, and SAM2's CPU->MPS 'non_blocking' transfer of the
         # consolidated masks races, giving intermittent garbage/NaN masks (patchy interactive results).
-        is_mps = str(_get_device(device)) == "mps"
+        is_mps = device_type(_get_device(device)) == "mps"
         self.offload_video_to_cpu = (not is_mps) if offload_video_to_cpu is None else offload_video_to_cpu
         self.offload_state_to_cpu = (not is_mps) if offload_state_to_cpu is None else offload_state_to_cpu
 

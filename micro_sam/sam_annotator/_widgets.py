@@ -3887,7 +3887,7 @@ class AutoSegmentV1Widget(_WidgetBase):
             return True
         state = AnnotatorState()
         predictor = state.predictor
-        if str(predictor.device) == "cpu" or str(predictor.device) == "mps":
+        if util.device_type(predictor.device) in ("cpu", "mps"):
             n_slices = self._viewer.layers["auto_segmentation"].data.shape[0]
             if state.is_sam2:
                 from micro_sam.precompute_state import _has_autoseg_state

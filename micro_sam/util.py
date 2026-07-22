@@ -127,6 +127,21 @@ def _get_default_device():
     return device
 
 
+def device_type(device: Union[str, torch.device]) -> str:
+    """Get the device type ('cpu', 'cuda' or 'mps'), ignoring any device index.
+
+    Torch reports accelerators with an index (e.g. 'mps:0'), so comparing 'str(device)' against
+    'mps' or 'cuda' silently fails. Compare against this instead.
+
+    Args:
+        device: The device, as a string or torch.device.
+
+    Returns:
+        The device type.
+    """
+    return torch.device(device).type
+
+
 def _configure_mps_memory(device: Union[str, torch.device]) -> None:
     """Disable the MPS memory watermark so 3d automatic segmentation does not hit a premature OOM.
 

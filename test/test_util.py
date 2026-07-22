@@ -430,6 +430,19 @@ class TestUtil(unittest.TestCase):
         self.assertTrue(isinstance(device, torch.device))
         self.assertEqual(device.type, "cpu")
 
+    def test_device_type(self):
+        from micro_sam.util import device_type
+
+        self.assertEqual(device_type("cpu"), "cpu")
+        self.assertEqual(device_type(torch.device("cpu")), "cpu")
+
+        # Indexed accelerators must report the plain type: torch reports a model's parameters as
+        # living on 'mps:0' / 'cuda:0', so 'str(device) == "mps"' silently fails.
+        self.assertEqual(device_type("mps"), "mps")
+        self.assertEqual(device_type(torch.device("mps")), "mps")
+        self.assertEqual(device_type(torch.device("mps", 0)), "mps")
+        self.assertEqual(device_type(torch.device("cuda", 3)), "cuda")
+
     def test_configure_mps_memory(self):
         from micro_sam.util import _configure_mps_memory
 
