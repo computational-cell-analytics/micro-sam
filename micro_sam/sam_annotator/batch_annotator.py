@@ -464,7 +464,7 @@ class BatchAnnotator(widgets._WidgetBase):
         ew = self._embedding_widget
         if ew is None or not self.folder:
             return
-        files = sorted(glob(os.path.join(self.folder, self.pattern)))
+        files = sorted(glob(os.path.join(self.folder, self.pattern or "*")))
         if not files:
             return
         try:
@@ -476,7 +476,7 @@ class BatchAnnotator(widgets._WidgetBase):
         ew._apply_default_tiling_for_shape(spatial)
 
     def _validate_inputs(self):
-        missing_data = self.folder is None or len(glob(os.path.join(self.folder, self.pattern))) == 0
+        missing_data = self.folder is None or len(glob(os.path.join(self.folder, self.pattern or "*"))) == 0
         missing_output = self.output_folder is None
         if missing_data or missing_output:
             msg = ""
@@ -488,7 +488,7 @@ class BatchAnnotator(widgets._WidgetBase):
 
         # For object classification with provided segmentations, the counts must match.
         if self.task == "Object Classification" and self.segmentation_folder:
-            n_img = len(glob(os.path.join(self.folder, self.pattern)))
+            n_img = len(glob(os.path.join(self.folder, self.pattern or "*")))
             n_seg = len(glob(os.path.join(self.segmentation_folder, self.segmentation_pattern)))
             if n_img != n_seg:
                 return widgets._generate_message(
@@ -531,11 +531,11 @@ class BatchAnnotator(widgets._WidgetBase):
         if self.task == "Segmentation":
             launched_viewer = image_folder_annotator(
                 input_folder=self.folder, output_folder=self.output_folder, ndim=ndim,
-                pattern=self.pattern, embedding_path=ew.embeddings_save_path,
+                pattern=self.pattern or "*", embedding_path=ew.embeddings_save_path,
                 skip_segmented=bool(self.continue_annotation), **common,
             )
         else:
-            image_files = sorted(glob(os.path.join(self.folder, self.pattern)))
+            image_files = sorted(glob(os.path.join(self.folder, self.pattern or "*")))
             if self.task == "Tracking":
                 from .annotator_tracking import batch_tracking_annotator
                 launched_viewer = batch_tracking_annotator(

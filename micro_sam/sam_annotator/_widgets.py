@@ -110,7 +110,7 @@ class _WidgetBase(QtWidgets.QWidget):
             label.setToolTip(tooltip)
         layout.addWidget(label)
         param = QtWidgets.QLineEdit()
-        param.setText(value)
+        param.setText("" if value is None else str(value))
         if placeholder is not None:
             param.setPlaceholderText(placeholder)
         param.textChanged.connect(lambda val: setattr(self, name, val))
