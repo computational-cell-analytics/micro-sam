@@ -988,7 +988,14 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         )
 
         def _preprocess(crop):
-            return np.concatenate([normalize_raw(crop)] * 3, axis=0)
+            return np.concatenate([normalize_raw(crop, axis=(-2, -1))] * 3, axis=0)
+
+        def _predict(this_model, inputs):
+            with _get_decoder_autocast(inputs.device):
+                return this_model(inputs)
+
+        def _predict_probe(this_model, inputs):
+            return _predict(this_model, inputs.clamp(0.0, 1.0))
 
         is_3d = ndim == 3
         block_shape, block_halo = _block_shape_and_halo(tuple(raw.shape), ndim, tile_shape, halo)
@@ -1019,7 +1026,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
                     in_channels=3,
                     # The probe's synthetic input bypasses `_preprocess`; clamp it into the [0, 1]
                     # range the model asserts (values are irrelevant to the memory measurement).
-                    prediction_function=lambda this_model, inputs: this_model(inputs.clamp(0.0, 1.0)),
+                    prediction_function=_predict_probe,
                 )
                 batch_size = min(batch_sizes)
             finally:
@@ -1034,6 +1041,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
                 block_shape=block_shape,
                 halo=block_halo,
                 preprocess=_preprocess,
+                prediction_function=_predict,
                 gpu_ids=resolved_devices,
                 output=output,
                 with_channels=True,

@@ -263,9 +263,9 @@ def get_sam2_model(
         apply_postprocessing=False,
     )
 
-    if input_type == "videos":
-        model.model_type = model_type
-        model.model_name = model_type  # TODO: What is this exactly?
+    # Both predictor wrappers and direct model use need this metadata for embedding signatures.
+    model.model_type = model_type
+    model.model_name = model_type  # TODO: What is this exactly?
 
     return model
 
@@ -298,12 +298,12 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     data (data signature mismatch).
     """
     # We may have an empty zarr file that was already created to save the embeddings in. A
-    # feature-bearing file without the completion metadata is a partial cache: only reject it when
-    # it explicitly records a different normalization policy. Caches without this metadata predate
-    # percentile normalization and therefore use the restored min-max policy.
+    # feature-bearing file without the completion metadata is a partial cache: reject it unless it
+    # explicitly records the current preprocessing policy. Untagged caches may use the former video
+    # resize implementation and cannot be safely resumed.
     if "input_size" not in f.attrs:
         normalization = f.attrs.get("normalization")
-        return "features" in f and normalization is not None and normalization != RAW_NORMALIZATION
+        return "features" in f and normalization != RAW_NORMALIZATION
 
     # Creates all the metadta that is stored along with the embeddings.
     # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam.v2`?
@@ -313,9 +313,10 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
 
     stale = False
     for key, val in signature.items():
-        # Embeddings without normalization metadata predate percentile normalization and used the
-        # same min-max policy as the released checkpoints, so they remain compatible.
+        # Missing current preprocessing metadata means stale; other legacy signature fields remain tolerated.
         if key not in f.attrs:
+            if key == "normalization":
+                stale = True
             continue
         if f.attrs[key] == val:
             continue

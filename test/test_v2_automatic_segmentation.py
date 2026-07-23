@@ -190,6 +190,117 @@ def test_decoder_autocast_leaves_cpu_unchanged(monkeypatch):
         pass
 
 
+def test_full_inference_uses_decoder_autocast(monkeypatch):
+    autocast_devices = []
+
+    def fake_autocast(device):
+        autocast_devices.append(device)
+        return nullcontext()
+
+    def fake_predict_with_halo_pipelined(**kwargs):
+        prediction_function = kwargs["prediction_function"]
+        prediction_function(lambda inputs: inputs, torch.zeros(1))
+        return kwargs["output"]
+
+    monkeypatch.setattr(
+        "micro_sam.v2.instance_segmentation._get_decoder_autocast",
+        fake_autocast,
+    )
+    monkeypatch.setattr(
+        "torch_em.util.prediction.predict_with_halo_pipelined",
+        fake_predict_with_halo_pipelined,
+    )
+
+    model = _FakeUNETR(img_size=8)
+    segmenter = UniSAM2InstanceSegmentation(model, device="cpu")
+    output = segmenter._run_full_inference(
+        np.zeros((8, 8), dtype="float32"),
+        ndim=2,
+        batch_size=1,
+        devices="cpu",
+    )
+
+    assert output.shape == (4, 8, 8)
+    assert autocast_devices == [torch.device("cpu")]
+
+
+def test_full_inference_normalizes_each_volume_slice_independently(monkeypatch):
+    from micro_sam.v2.normalization import normalize_raw
+
+    crop = np.array(
+        [[[[0.0, 1.0], [2.0, 3.0]], [[100.0, 110.0], [120.0, 130.0]]]],
+        dtype="float32",
+    )
+    preprocessed = {}
+
+    def fake_predict_with_halo_pipelined(**kwargs):
+        preprocessed["crop"] = kwargs["preprocess"](crop)
+        return kwargs["output"]
+
+    monkeypatch.setattr(
+        "torch_em.util.prediction.predict_with_halo_pipelined",
+        fake_predict_with_halo_pipelined,
+    )
+
+    model = _FakeUNETR(img_size=8)
+    segmenter = UniSAM2InstanceSegmentation(model, device="cpu")
+    output = segmenter._run_full_inference(
+        np.zeros((2, 2, 2), dtype="float32"),
+        ndim=3,
+        batch_size=1,
+        devices="cpu",
+    )
+
+    expected = np.concatenate([normalize_raw(crop, axis=(-2, -1))] * 3, axis=0)
+    assert output.shape == (4, 2, 2, 2)
+    assert np.allclose(preprocessed["crop"], expected)
+    assert np.allclose(preprocessed["crop"].min(axis=(-2, -1)), 0.0)
+    assert np.allclose(preprocessed["crop"].max(axis=(-2, -1)), 1.0)
+
+
+def test_automatic_3d_ais_stages_embeddings_without_save_path(monkeypatch):
+    from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
+
+    calls = {}
+    embedding_model = object()
+    embeddings = {"features": object(), "input_size": 8, "original_size": (8, 8)}
+
+    def fake_precompute(predictor, raw, **kwargs):
+        calls["precompute"] = (predictor, raw, kwargs)
+        return embeddings
+
+    monkeypatch.setattr("micro_sam.v2.util.precompute_image_embeddings", fake_precompute)
+
+    segmenter = UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cpu")
+
+    def fake_initialize(raw, ndim, **kwargs):
+        calls["initialize"] = (raw, ndim, kwargs)
+
+    expected = np.ones((2, 8, 8), dtype="uint32")
+    segmenter.initialize = fake_initialize
+    segmenter.generate = lambda mode, **kwargs: expected
+    raw = np.zeros((2, 8, 8), dtype="uint8")
+    result = automatic_instance_segmentation(
+        predictor=types.SimpleNamespace(model=embedding_model),
+        segmenter=segmenter,
+        input_path=raw,
+        ndim=3,
+        embedding_path=None,
+        verbose=False,
+    )
+
+    predictor, precompute_raw, precompute_kwargs = calls["precompute"]
+    assert predictor is embedding_model
+    assert precompute_raw is raw
+    assert precompute_kwargs["save_path"] is None
+    assert precompute_kwargs["lazy_loading"] is True
+    initialize_raw, initialize_ndim, initialize_kwargs = calls["initialize"]
+    assert initialize_raw is raw
+    assert initialize_ndim == 3
+    assert initialize_kwargs["image_embeddings"] is embeddings
+    assert result is expected
+
+
 def test_decoder_3d_zchunks_deep_volume():
     # Regression for the z-tiling fix: a deep volume (small in-plane, not tiled in-plane) must be
     # decoded in bounded z blocks, not all at once, so peak memory stays bounded.

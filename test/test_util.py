@@ -202,7 +202,7 @@ class TestUtil(unittest.TestCase):
         raw = np.arange(100).reshape(10, 10)
         signature = _get_embedding_signature(raw, predictor, tile_shape=None, halo=None)
         signature["normalization"] = RAW_NORMALIZATION
-        self.assertEqual(signature["normalization"], "minmax_per_channel")
+        self.assertEqual(signature["normalization"], "percentile_2_98_per_channel_torch_resize_v1")
 
         attrs = {"input_size": [10, 10], **signature}
         embeddings = SimpleNamespace(attrs=attrs)
@@ -211,9 +211,9 @@ class TestUtil(unittest.TestCase):
         attrs["normalization"] = "percentile_2_98"
         self.assertTrue(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
 
-        # Untagged caches predate percentile normalization and used the same min-max policy.
+        # Untagged caches may use the former video resize path and must be recomputed.
         del attrs["normalization"]
-        self.assertFalse(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
+        self.assertTrue(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
 
         class PartialEmbeddings(dict):
             def __init__(self, normalization=None):
@@ -221,7 +221,7 @@ class TestUtil(unittest.TestCase):
                 self.attrs = {} if normalization is None else {"normalization": normalization}
 
         legacy_partial = PartialEmbeddings()
-        self.assertFalse(_check_saved_embeddings(raw, predictor, legacy_partial, "cache.zarr", None, None))
+        self.assertTrue(_check_saved_embeddings(raw, predictor, legacy_partial, "cache.zarr", None, None))
 
         percentile_partial = PartialEmbeddings("percentile_2_98")
         self.assertTrue(_check_saved_embeddings(raw, predictor, percentile_partial, "cache.zarr", None, None))
@@ -510,7 +510,6 @@ class TestSAM2Util(unittest.TestCase):
     def test_precompute_image_embeddings_2d(self):
         from micro_sam.v2.normalization import RAW_NORMALIZATION
         from micro_sam.v2.util import precompute_image_embeddings
-        from micro_sam.v2.normalization import RAW_NORMALIZATION
 
         predictor = self._get_predictor(ndim=2)
         input_ = np.random.rand(512, 512).astype("float32")

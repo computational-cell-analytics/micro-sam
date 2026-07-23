@@ -46,12 +46,12 @@ def _load_img_as_tensor(img_path, image_size):
     img_np = normalize_raw(img_np, axis=(0, 1))
 
     # The effective square size gives prompts one isotropic scale factor.
-    from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_numpy
+    from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_tensor
     H, W = img_np.shape[:2]
     video_height = video_width = max(H, W)
-    img_np, _ = resize_longest_side_and_pad_numpy(img_np, image_size)
-
     img = torch.from_numpy(img_np.astype(np.float32)).permute(2, 0, 1)
+    img, _ = resize_longest_side_and_pad_tensor(img[None], image_size)
+    img = img[0]
     return img, video_height, video_width
 
 

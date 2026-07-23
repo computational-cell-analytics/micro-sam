@@ -106,15 +106,16 @@ def automatic_instance_segmentation(
     """Run automatic instance segmentation for a single input and save the result.
 
     Args:
-        predictor: The SAM2 predictor (see `get_predictor_and_segmenter`), used to precompute the
-            image embeddings when `embedding_path` is given.
+        predictor: The SAM2 predictor (see `get_predictor_and_segmenter`), used to precompute image
+            embeddings for 3d AIS or when `embedding_path` is given.
         segmenter: The automatic instance segmentation generator (see `get_predictor_and_segmenter`).
         input_path: The input image, either a filepath (e.g. tif or a container with `key`) or an array.
         output_path: Optional path to save the segmentation as a tif file.
-        embedding_path: Optional path to cache the image embeddings. If given, the embeddings are
-            precomputed with the predictor and only the decoder / grid prediction is run on them.
-        model_type: The SAM2 model. Used to build the 3d video predictor for embedding precomputation.
-        checkpoint: Optional checkpoint for the embedding predictor.
+        embedding_path: Optional path to cache the image embeddings. When given, embeddings are
+            persisted and reused. Decoder-based 3d inference always precomputes embeddings first;
+            without this path it uses an ephemeral cache.
+        model_type: Retained for API compatibility; the loaded predictor determines the embedding model.
+        checkpoint: Retained for API compatibility; the loaded predictor already contains its weights.
         key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
         ndim: The number of spatial dimensions (2 or 3). By default inferred from the data.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction runs without tiling.
@@ -143,18 +144,13 @@ def automatic_instance_segmentation(
     is_ais = isinstance(segmenter, UniSAM2InstanceSegmentation)
 
     if is_ais:
-        # Decoder-based segmentation: optionally precompute embeddings (reusing the predictor) and run
-        # only the decoder on them, otherwise run the full model. A 3d volume needs the video predictor.
+        # Decoder-based 3d segmentation always stages encoder and decoder inference. This avoids
+        # re-encoding overlapping z-halo slices and keeps the decoder's peak separate from the encoder.
+        # Two-dimensional inference keeps the fused path unless persistent embeddings were requested.
         image_embeddings = None
-        if embedding_path is not None:
-            if ndim == 3:
-                from ..sam_annotator._state import _get_sam_model
-                emb_predictor, _ = _get_sam_model(
-                    model_type=model_type, ndim=3, device=device,
-                    checkpoint_path=checkpoint, decoder_path=None, use_cli=True,
-                )
-            else:
-                emb_predictor = predictor
+        if embedding_path is not None or ndim == 3:
+            # Reuse the predictor's underlying SAM2 model to avoid a second accelerator-resident backbone.
+            emb_predictor = getattr(predictor, "model", predictor) if ndim == 3 else predictor
             image_embeddings = precompute_image_embeddings(
                 emb_predictor,
                 raw,
