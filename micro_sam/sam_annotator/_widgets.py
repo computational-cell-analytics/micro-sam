@@ -88,7 +88,7 @@ class _WidgetBase(QtWidgets.QWidget):
         param.setText("" if value is None else str(value))
         if placeholder is not None:
             param.setPlaceholderText(placeholder)
-        param.textChanged.connect(lambda val: setattr(self, name, val if val else None))
+        param.textChanged.connect(lambda val: setattr(self, name, val))
         if tooltip:
             param.setToolTip(tooltip)
         layout.addWidget(param)
@@ -1441,7 +1441,7 @@ class EmbeddingWidget(_WidgetBase):
 
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
-        save_path = self.embeddings_save_path
+        save_path = None if self.embeddings_save_path == "" else self.embeddings_save_path
         image_data = image.data
 
         # Set up progress bar and signals for using it within a threadworker.
