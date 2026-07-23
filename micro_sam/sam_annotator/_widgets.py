@@ -85,7 +85,7 @@ class _WidgetBase(QtWidgets.QWidget):
             label.setToolTip(tooltip)
         layout.addWidget(label)
         param = QtWidgets.QLineEdit()
-        param.setText(value)
+        param.setText("" if value is None else str(value))
         if placeholder is not None:
             param.setPlaceholderText(placeholder)
         param.textChanged.connect(lambda val: setattr(self, name, val))
@@ -184,10 +184,10 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(label)
 
         path_textbox = QtWidgets.QLineEdit()
-        path_textbox.setText(str(value))
+        path_textbox.setText("" if value is None else str(value))
         if placeholder is not None:
             path_textbox.setPlaceholderText(placeholder)
-        path_textbox.textChanged.connect(lambda val: setattr(self, name, val))
+        path_textbox.textChanged.connect(lambda val: setattr(self, name, val if val else None))
         if tooltip:
             path_textbox.setToolTip(tooltip)
 

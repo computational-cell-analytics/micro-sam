@@ -483,7 +483,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         return settings
 
     def _validate_inputs(self):
-        missing_data = self.folder is None or len(glob(os.path.join(self.folder, self.pattern))) == 0
+        missing_data = self.folder is None or len(glob(os.path.join(self.folder, self.pattern or "*"))) == 0
         missing_output = self.output_folder is None
         if missing_data or missing_output:
             msg = ""
@@ -504,7 +504,7 @@ class ImageSeriesAnnotator(widgets._WidgetBase):
         image_folder_annotator(
             input_folder=self.folder,
             output_folder=self.output_folder,
-            pattern=self.pattern,
+            pattern=self.pattern or "*",
             model_type=self.model_type,
             embedding_path=self.embeddings_save_path,
             tile_shape=tile_shape, halo=halo, checkpoint_path=self.custom_weights,

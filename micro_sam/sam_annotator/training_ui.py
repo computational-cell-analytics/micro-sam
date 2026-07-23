@@ -222,7 +222,7 @@ class TrainingWidget(widgets._WidgetBase):
         pbar, pbar_signals = widgets._create_pbar_for_threadworker()
 
         self._get_model_type()
-        if self.custom_weights is None:
+        if not self.custom_weights:
             model_registry = util.models()
             checkpoint_path = model_registry.fetch(self.model_type)
         else:
