@@ -256,7 +256,7 @@ class AnnotatorState(metaclass=Singleton):
             # high-resolution features stay on disk and are streamed one slice / tile at a time.
             # This keeps memory bounded for large volumes (materialising all slices costs
             # ~200 MB/slice and OOMs); it only applies when the embeddings are cached on disk.
-            lazy_loading = needs_disk_cache and isinstance(save_path, str)
+            lazy_loading = needs_disk_cache
 
             self.image_embeddings = _comp_embed_fn(
                 predictor=self.predictor,
