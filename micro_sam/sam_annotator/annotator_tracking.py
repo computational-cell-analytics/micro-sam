@@ -75,10 +75,9 @@ def create_tracking_menu(
             label_menu.value = new_label
 
     def label_changed(new_label):
-        current_properties = points_layer.current_properties
-        current_properties["label"] = np.array([new_label])
-        points_layer.current_properties = current_properties
-        points_layer.refresh_colors()
+        # Keep both prompt layers on the selected label so a scribble drawn next carries it too.
+        vutil.set_prompt_label(points_layer, new_label)
+        vutil.set_prompt_label(box_layer, new_label)
 
     points_layer.events.current_properties.connect(update_label_menu)
     label_menu.changed.connect(label_changed)
@@ -242,8 +241,9 @@ class AnnotatorTracking(_AnnotatorBase):
             self._point_prompt_layer = self._viewer.layers["point_prompts"]
             _new_point_layer = False
 
-        # Add the point prompts layer.
-        _box_prompt_property_choices = {"track_id": ["1"]}
+        # Add the box / scribble prompts layer. It carries a positive/negative 'label' (for open
+        # scribbles) alongside the 'track_id' so the same layer supports boxes and scribbles.
+        _box_prompt_property_choices = {"track_id": ["1"], "label": self._point_labels}
 
         box_layer_mismatch = True
         if "prompts" in self._viewer.layers:
@@ -258,22 +258,44 @@ class AnnotatorTracking(_AnnotatorBase):
         if box_layer_mismatch and "prompts" not in self._viewer.layers:
             # Using the box layer to set divisions currently doesn't work.
             # That's why some of the code below is commented out.
+            # Boxes stay positive (green); open scribbles are green/red via the 'label' color cycle.
             self._box_prompt_layer = self._viewer.add_shapes(
                 shape_type="rectangle",
                 edge_width=4,
                 ndim=self._ndim,
                 face_color="transparent",
                 name="prompts",
-                edge_color="green",
+                edge_color="label",
+                edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
                 property_choices=_box_prompt_property_choices,
                 # property_choices={"track_id": ["1"], "state": self._track_state_labels},
                 # edge_color_cycle=STATE_COLOR_CYCLE,
             )
-            # self._box_prompt_layer.edge_color_mode = "cycle"
+            self._box_prompt_layer.edge_color_mode = "cycle"
             _new_box_layer = True
         else:
             self._box_prompt_layer = self._viewer.layers["prompts"]
             _new_box_layer = False
+
+        # Back-fill the 'label' property for a pre-existing box layer and wire the scribble label
+        # helpers (green/red coloring, non-scribble normalization) exactly as the base annotator does.
+        if "label" not in self._box_prompt_layer.properties:
+            properties = dict(self._box_prompt_layer.properties)
+            properties["label"] = np.full(len(self._box_prompt_layer.data), "positive", dtype=object)
+            self._box_prompt_layer.properties = properties
+            current_properties = self._box_prompt_layer.current_properties
+            current_properties["label"] = np.array(["positive"])
+            self._box_prompt_layer.current_properties = current_properties
+            self._box_prompt_layer.edge_color_cycle = vutil.LABEL_COLOR_CYCLE
+            self._box_prompt_layer.edge_color = "label"
+            self._box_prompt_layer.edge_color_mode = "cycle"
+        if not self._box_prompt_layer.metadata.get("micro_sam_prompt_labels_configured", False):
+            self._box_prompt_layer.events.data.connect(vutil.normalize_prompt_shape_labels)
+            self._box_prompt_layer.events.mode.connect(vutil.sync_prompt_shape_current_color)
+            self._box_prompt_layer.events.current_properties.connect(vutil.sync_prompt_shape_current_color)
+            self._box_prompt_layer.metadata["micro_sam_prompt_labels_configured"] = True
+        vutil.normalize_prompt_shape_labels(self._box_prompt_layer)
+        vutil.sync_prompt_shape_current_color(self._box_prompt_layer)
 
         # Trigger a new connection for the tracking state menu only when a new layer is (re)created.
         if _new_point_layer or _new_box_layer:
@@ -335,13 +357,21 @@ class AnnotatorTracking(_AnnotatorBase):
         def _segment_point_prompts(event):
             interactive.segment(self._viewer)
 
+        @prompt_layer.bind_key("t", overwrite=True)
+        def _toggle_shape_prompt_label(event=None):
+            vutil.toggle_label(self._point_prompt_layer, self._box_prompt_layer)
+
+        @point_prompt_layer.bind_key("t", overwrite=True)
+        def _toggle_point_prompt_label(event=None):
+            vutil.toggle_label(self._point_prompt_layer, self._box_prompt_layer)
+
         @self._viewer.bind_key("c", overwrite=True)
         def _commit(viewer):
             self._widgets["commit"](viewer)
 
         @self._viewer.bind_key("t", overwrite=True)
         def _toggle_label(event=None):
-            vutil.toggle_label(self._point_prompt_layer)
+            vutil.toggle_label(self._point_prompt_layer, self._box_prompt_layer)
 
         @self._viewer.bind_key("Shift-C", overwrite=True)
         def _clear_annotations(viewer):
