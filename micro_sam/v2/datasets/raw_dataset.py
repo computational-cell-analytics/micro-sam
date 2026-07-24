@@ -293,7 +293,7 @@ class TissueNetDataset(VOSRawDataset):
         zarr_path = self.zarr_paths[idx]
         fname = Path(zarr_path).stem
 
-        raw = np.array(load_data(zarr_path, "raw/rgb"))        # (3, H, W) float64
+        raw = np.array(load_data(zarr_path, "raw/rgb"))  # (3, H, W) float64
         labels = np.array(load_data(zarr_path, "labels/cell"))  # (H, W) int32
 
         raw = normalize_raw(raw, axis=(1, 2), output_dtype="uint8")  # (3, H, W)
@@ -335,8 +335,8 @@ class AxonDeepSegDataset(VOSRawDataset):
         h5_path = self.h5_paths[idx]
         fname = Path(h5_path).stem
 
-        raw = np.array(load_data(h5_path, "raw"))        # (H, W) uint8
-        labels = np.array(load_data(h5_path, "labels"))   # (H, W) uint8, semantic 0/1/2
+        raw = np.array(load_data(h5_path, "raw"))  # (H, W) uint8
+        labels = np.array(load_data(h5_path, "labels"))  # (H, W) uint8, semantic 0/1/2
 
         # Stack grayscale to 3-channel CHW
         raw = np.stack([raw, raw, raw], axis=0)  # (3, H, W)

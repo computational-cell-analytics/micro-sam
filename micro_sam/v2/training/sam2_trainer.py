@@ -87,13 +87,13 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
     - T>1: mixes point/box/mask prompts across frames with iterative correction.
 
     The prompting logic (initial point/box/mask selection, iterative correction
-    from error regions) is fully embedded in SAM2Train.forward().  No manual
+    from error regions) is fully embedded in SAM2Train.forward(). No manual
     iterative loop is needed here.
 
     Args:
         convert_inputs: Callable that converts (x, y) torch-em batches to
-            BatchedVideoDatapoint.  Use ConvertToSam2VideoBatch.
-        loss: Loss module compatible with SAM2Train outputs.  Defaults to
+            BatchedVideoDatapoint. Use ConvertToSam2VideoBatch.
+        loss: Loss module compatible with SAM2Train outputs. Defaults to
             MultiStepMultiMasksAndIous when constructed via train_sam2().
         kwargs: Forwarded to torch_em.trainer.DefaultTrainer (model,
             train_loader, val_loader, optimizer, device, lr_scheduler,
@@ -258,7 +258,7 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         val_dice_loss /= max(n_iter, 1)
 
         # Synchronize across DDP ranks so every rank makes the same early-stopping
-        # decision.  Without this, ranks can desync and deadlock.
+        # decision. Without this, ranks can desync and deadlock.
         if dist.is_available() and dist.is_initialized():
             stats = torch.tensor([val_loss, val_dice_loss], device=self.device)
             dist.all_reduce(stats, op=dist.ReduceOp.AVG)
@@ -315,10 +315,10 @@ class Sam2Logger(TorchEmLogger):
 
         batch.masks is (T, O_total, H, W) where O_total spans all batch items.
         batch.obj_to_frame_idx is (T, O_total, 2): [:, :, 1] gives the batch index
-        for each object slot.  Filter to only the objects belonging to batch item b.
+        for each object slot. Filter to only the objects belonging to batch item b.
         """
         b_indices = batch.obj_to_frame_idx[t, :, 1]  # (O_total,)
-        return batch.masks[t][b_indices == b]         # (O_b, H, W)
+        return batch.masks[t][b_indices == b]  # (O_b, H, W)
 
     def _log_images(self, step, x, y, batch, outputs, prefix):
         is_3d = (x.ndim == 5)

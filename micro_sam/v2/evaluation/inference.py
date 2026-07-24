@@ -571,7 +571,7 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
         pred_per_iteration = []
         _corr_points = None  # (x,y) correction points for the next iteration
         _corr_labels = None
-        _corr_frame = None   # z-slice where corrections will be applied
+        _corr_frame = None  # z-slice where corrections will be applied
 
         for iteration in list_of_iterations:
             if iteration == 0:
@@ -643,8 +643,8 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
                 )
                 next_coords = next_coords.detach().cpu().numpy()  # [1, 2, 2]: (obj, pos+neg, xy)
                 next_labels = next_labels.detach().cpu().numpy()  # [1, 2]
-                _corr_points = next_coords[0]   # [[x_pos, y_pos], [x_neg, y_neg]]
-                _corr_labels = next_labels[0]   # [1, 0]
+                _corr_points = next_coords[0]  # [[x_pos, y_pos], [x_neg, y_neg]]
+                _corr_labels = next_labels[0]  # [1, 0]
                 _corr_frame = z_worst
 
         pred_per_object.append(pred_per_iteration)
