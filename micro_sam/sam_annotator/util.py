@@ -26,9 +26,6 @@ SCRIBBLE_SHAPE_TYPES = ("path", "line")
 SCRIBBLE_DRAW_MODES = ("add_path", "add_polyline", "add_line")
 """Napari Shapes modes that create open scribble prompts."""
 
-SHAPE_SELECTION_MODES = ("select", "direct")
-"""Napari Shapes modes in which a shape is explicitly selected for editing."""
-
 
 #
 # Misc helper functions
@@ -129,15 +126,12 @@ def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> T
 
 
 def set_prompt_label(layer, new_label):
-    """Set the current prompt label, relabelling an explicitly selected scribble to match.
+    """Set the current prompt label and relabel selected shapes consistently.
 
-    The label always updates the drawing default so the next point or scribble uses it. For a
-    Shapes layer we additionally rewrite the stored label of selected open scribbles, but only
-    while a selection mode (``select`` or ``direct``) is active. Napari keeps a shape selected
-    after it is drawn, so relabelling on selection alone would retroactively flip the just-drawn
-    scribble when the label is toggled to prepare the next stroke. Gating on the selection mode
-    keeps pressing ``T`` consistent with the Points layer while still allowing a deliberately
-    selected scribble to be corrected.
+    Napari Points applies ``current_properties`` changes to selected points in all modes. Shapes,
+    however, only applies them to selected shapes in select or pan/zoom mode. Explicitly updating
+    the selected open shapes here keeps changing the prompt menu or pressing ``T`` consistent for
+    both layer types, including immediately after drawing a path, polyline or line.
     """
     if isinstance(layer, napari.layers.Shapes):
         # Napari may briefly retain a selected shape index after the corresponding geometry and
@@ -153,7 +147,7 @@ def set_prompt_label(layer, new_label):
     current_properties["label"] = np.array([new_label])
     layer.current_properties = current_properties
 
-    if isinstance(layer, napari.layers.Shapes) and layer.selected_data and layer.mode in SHAPE_SELECTION_MODES:
+    if isinstance(layer, napari.layers.Shapes) and layer.selected_data:
         properties = dict(layer.properties)
         labels = np.asarray(properties.get("label", []), dtype=object).copy()
         shape_types = list(layer.shape_type)

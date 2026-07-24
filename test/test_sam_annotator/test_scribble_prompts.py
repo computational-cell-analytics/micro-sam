@@ -326,7 +326,7 @@ def test_closed_shapes_stay_green_while_negative_scribbles_are_red():
     np.testing.assert_array_equal(labels, np.zeros(len(points), dtype="int64"))
 
 
-def test_selected_scribble_is_relabelled_in_select_mode():
+def test_selected_scribble_is_relabelled_while_polyline_tool_is_active():
     layer = Shapes(
         ndim=2,
         property_choices={"label": ["positive", "negative"]},
@@ -336,7 +336,7 @@ def test_selected_scribble_is_relabelled_in_select_mode():
     layer.edge_color_mode = "cycle"
     annotator_util.set_prompt_label(layer, "negative")
     layer.add_paths(np.array([[2.0, 2.0], [12.0, 12.0]]))
-    layer.mode = "select"
+    layer.mode = "add_polyline"
     layer.selected_data = {0}
 
     annotator_util.set_prompt_label(layer, "positive")
@@ -351,44 +351,6 @@ def test_selected_scribble_is_relabelled_in_select_mode():
     np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])
     _, labels = annotator_util.scribble_layer_to_prompts(layer, image_shape=(16, 16))
     np.testing.assert_array_equal(labels, np.zeros(len(labels), dtype="int64"))
-
-
-def test_toggle_while_drawing_does_not_flip_previous_scribble():
-    """The label toggle after drawing must not retroactively relabel the just-drawn scribble.
-
-    Napari keeps a shape selected after it is drawn, so pressing the toggle should only update the
-    drawing default for the next stroke, matching how the Points layer behaves. Relabelling the
-    selection here would flip the scribble the user just finished (see set_prompt_label).
-    """
-    layer = Shapes(
-        ndim=2,
-        property_choices={"label": ["positive", "negative"]},
-        edge_color="label",
-        edge_color_cycle=annotator_util.LABEL_COLOR_CYCLE,
-    )
-    layer.edge_color_mode = "cycle"
-    layer.mode = "add_path"
-
-    # Draw a positive scribble; napari leaves it selected afterwards.
-    layer.add(np.array([[2.0, 2.0], [2.0, 12.0]]), shape_type="path", gui=True)
-    layer.selected_data = {layer.nshapes - 1}
-    assert list(layer.properties["label"]) == ["positive"]
-
-    # Toggle to negative for the next stroke: the drawn scribble must stay positive.
-    annotator_util.set_prompt_label(layer, "negative")
-    assert list(layer.properties["label"]) == ["positive"]
-    assert layer.current_properties["label"][0] == "negative"
-    np.testing.assert_allclose(layer.edge_color[0], [0, 1, 0, 1])
-
-    # Draw the next scribble: it is negative and the first one is untouched.
-    layer.add(np.array([[8.0, 2.0], [8.0, 12.0]]), shape_type="path", gui=True)
-    layer.selected_data = {layer.nshapes - 1}
-    assert list(layer.properties["label"]) == ["positive", "negative"]
-    np.testing.assert_allclose(layer.edge_color[0], [0, 1, 0, 1])
-    np.testing.assert_allclose(layer.edge_color[1], [1, 0, 0, 1])
-
-    _, labels = annotator_util.scribble_layer_to_prompts(layer, image_shape=(16, 16))
-    assert 1 in labels and 0 in labels
 
 
 def test_prompt_label_change_drops_stale_shape_selection():
