@@ -22,6 +22,7 @@ Both engines share the `initialize` / `generate` / `get_state` / `set_state` int
 """
 
 import contextlib
+import shutil
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -29,7 +30,7 @@ import torch
 
 from bioimage_cpp.utils import Blocking
 
-from micro_sam.util import mask_data_to_segmentation
+from micro_sam.util import make_temp_embedding_path, mask_data_to_segmentation
 from micro_sam.v1.inference import _merge_segmentations
 from micro_sam.v1.instance_segmentation import AutoSegBase
 from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
@@ -40,6 +41,9 @@ from micro_sam.v2.util import (
 )
 
 DEFAULT_SEGMENTATION_MODE_WITH_DECODER = "ais"
+
+# Sentinel: pin the decoder to its model device unless the front end passes an explicit device intent.
+USE_MODEL_DEVICE = object()
 
 
 def _set_image_predictor_from_backbone(predictor, fpn_list, pos_enc_list, original_size, i):
@@ -381,16 +385,39 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
             self._initialize_slice_from_3d_embeddings(image_embeddings, i)
             return
 
-        if image_embeddings is None:
-            if tile_shape is None or halo is None:
-                raise ValueError("Both 'tile_shape' and 'halo' have to be passed for the tiled segmenter.")
-            if image.ndim == 3 and image.shape[-1] != 3 and i is not None:
-                image = image[i]
-            image_embeddings = precompute_image_embeddings(
-                predictor, image, save_path=save_path, ndim=2, tile_shape=tile_shape, halo=halo,
-                verbose=verbose, lazy_loading=True,
-            )
+        temporary_embedding_path = None
+        self._is_initialized = False
+        try:
+            if image_embeddings is None:
+                if tile_shape is None or halo is None:
+                    raise ValueError("Both 'tile_shape' and 'halo' have to be passed for the tiled segmenter.")
+                if image.ndim == 3 and image.shape[-1] != 3 and i is not None:
+                    image = image[i]
+                effective_save_path = save_path
+                if effective_save_path is None:
+                    temporary_embedding_path = make_temp_embedding_path()
+                    effective_save_path = temporary_embedding_path
+                image_embeddings = precompute_image_embeddings(
+                    predictor, image, save_path=effective_save_path, ndim=2, tile_shape=tile_shape, halo=halo,
+                    verbose=verbose, lazy_loading=True,
+                )
 
+            self._initialize_from_tiled_embeddings(
+                predictor, image_embeddings, verbose, pbar_init, pbar_update,
+            )
+        finally:
+            if temporary_embedding_path is not None:
+                try:
+                    if image_embeddings is not None:
+                        image_embeddings.close()
+                finally:
+                    image_embeddings = None
+                    shutil.rmtree(temporary_embedding_path, ignore_errors=True)
+
+    def _initialize_from_tiled_embeddings(
+        self, predictor, image_embeddings, verbose, pbar_init, pbar_update,
+    ) -> None:
+        """Run per-tile AMG from embeddings that remain valid for the duration of this call."""
         feats = image_embeddings["features"]
         tile_shape = tuple(int(s) for s in feats.attrs["tile_shape"])
         halo = tuple(int(s) for s in feats.attrs["halo"])
@@ -405,13 +432,15 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
         self._masks = []
         n_tiles = self._tiling.number_of_blocks
         pbar_init(n_tiles, "Automatic segmentation (tiles)")
-        for tile_id in range(n_tiles):
-            block = self._tiling.get_block_with_halo(tile_id, list(self._halo)).outer_block
-            set_precomputed(predictor, image_embeddings, tile_id=tile_id)
-            tile_size = tuple(end - begin for begin, end in zip(block.begin, block.end))
-            self._masks.append(self._generate_masks_for_shape(tile_size))
-            pbar_update(1)
-        pbar_close()
+        try:
+            for tile_id in range(n_tiles):
+                block = self._tiling.get_block_with_halo(tile_id, list(self._halo)).outer_block
+                set_precomputed(predictor, image_embeddings, tile_id=tile_id)
+                tile_size = tuple(end - begin for begin, end in zip(block.begin, block.end))
+                self._masks.append(self._generate_masks_for_shape(tile_size))
+                pbar_update(1)
+        finally:
+            pbar_close()
 
         self._is_initialized = True
 
@@ -958,22 +987,30 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
 
     Args:
         model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
-        device: The device to run inference on.
+        device: The device the model lives on (used for the non-tiled 2d decoder).
+        inference_device: The device intent used as the `devices=None` fallback. Defaults to the
+            model device (single GPU); pass None to fan out over all visible GPUs, or a device / list.
     """
 
-    def __init__(self, model: torch.nn.Module, device: Optional[Union[str, torch.device]] = None) -> None:
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        device: Optional[Union[str, torch.device]] = None,
+        inference_device: Devices = USE_MODEL_DEVICE,
+    ) -> None:
         self._model = model
         self._device = device
+        self._inference_device = device if inference_device is USE_MODEL_DEVICE else inference_device
         self._prediction = None
         self._is_initialized = False
 
     def _inference_devices(self, devices: Devices) -> Devices:
-        """Fall back to the configured device, so it is not overridden by the multi-GPU default."""
-        return self._device if devices is None else devices
+        """Resolve the inference devices, falling back to the configured device intent."""
+        return devices if devices is not None else self._inference_device
 
     def _run_full_inference(
         self, raw, ndim, tile_shape=None, halo=None, pbar_init=None, pbar_update=None,
-        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=1,
+        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=2,
     ):
         """Run queued, batched UniSAM2 encoder and decoder inference.
 
@@ -1079,7 +1116,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
     @torch.no_grad()
     def _run_decoder_3d(
         self, image_embeddings, z_block=None, z_halo=None, pbar_init=None, pbar_update=None,
-        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=1,
+        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=2,
     ):
         """Decode queued z blocks from precomputed 3d embeddings."""
         from micro_sam.v2.batched_inference import _decode_volume_embeddings
@@ -1113,7 +1150,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         batch_size: Optional[int] = 1,
         devices: Devices = None,
         num_prefetch_workers: int = 4,
-        num_write_workers: int = 1,
+        num_write_workers: int = 2,
     ) -> None:
         """Run the UniSAM2 inference and store foreground and distance predictions.
 
@@ -1214,7 +1251,7 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
     @torch.no_grad()
     def _run_decoder_tiled_2d(
         self, image_embeddings, pbar_init=None, pbar_update=None,
-        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=1,
+        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=2,
     ):
         """Decode and stitch queued 2d embedding tiles."""
         from micro_sam.v2.batched_inference import _decode_tiled_2d_embeddings
@@ -1233,7 +1270,7 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
     @torch.no_grad()
     def _run_decoder_tiled_3d(
         self, image_embeddings, pbar_init=None, pbar_update=None, z_block=None, z_halo=None,
-        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=1,
+        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=2,
     ):
         """Decode batches spanning tile columns and z blocks, then stitch them."""
         from micro_sam.v2.batched_inference import _decode_tiled_3d_embeddings
@@ -1254,7 +1291,7 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
     @torch.no_grad()
     def _run_decoder_tiled_3d_slice(
         self, image_embeddings, i, pbar_init=None, pbar_update=None,
-        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=1,
+        batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=2,
     ):
         """Decode one volume slice across all embedding tiles in batches."""
         from micro_sam.v2.batched_inference import _decode_tiled_3d_slice
@@ -1287,7 +1324,7 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
         batch_size: Optional[int] = 1,
         devices: Devices = None,
         num_prefetch_workers: int = 4,
-        num_write_workers: int = 1,
+        num_write_workers: int = 2,
     ) -> None:
         """Run tiled UniSAM2 inference and store foreground and distance predictions.
 
@@ -1334,21 +1371,22 @@ def get_unisam2_segmentation_generator(
     model: torch.nn.Module,
     is_tiled: bool = False,
     device: Optional[Union[str, torch.device]] = None,
+    inference_device: Devices = USE_MODEL_DEVICE,
 ) -> UniSAM2InstanceSegmentation:
     """Get the UniSAM2 decoder-based (AIS) instance segmentation generator.
 
     Args:
         model: The UniSAM2 model.
         is_tiled: Whether to use tiled inference.
-        device: The device to run inference on.
+        device: The device the model lives on.
+        inference_device: The `devices=None` fallback (see `UniSAM2InstanceSegmentation`).
 
     Returns:
         The instance segmentation generator, either `TiledUniSAM2InstanceSegmentation` (if tiled)
         or `UniSAM2InstanceSegmentation`.
     """
-    if is_tiled:
-        return TiledUniSAM2InstanceSegmentation(model, device=device)
-    return UniSAM2InstanceSegmentation(model, device=device)
+    cls = TiledUniSAM2InstanceSegmentation if is_tiled else UniSAM2InstanceSegmentation
+    return cls(model, device=device, inference_device=inference_device)
 
 
 def get_instance_segmentation_generator(
@@ -1357,6 +1395,7 @@ def get_instance_segmentation_generator(
     is_tiled: bool = False,
     segmentation_mode: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
+    inference_device: Devices = USE_MODEL_DEVICE,
     **kwargs,
 ) -> AutoSegBase:
     """Get the automatic instance segmentation generator (AMG or AIS), mirroring the v1 factory.
@@ -1367,7 +1406,8 @@ def get_instance_segmentation_generator(
         is_tiled: Whether to use the tiled segmenter.
         segmentation_mode: One of 'amg' or 'ais'. By default 'ais' is used if a decoder is given,
             otherwise 'amg'.
-        device: The device to run inference on ('ais' only).
+        device: The device the model lives on ('ais' only).
+        inference_device: The `devices=None` fallback ('ais' only, see `UniSAM2InstanceSegmentation`).
         kwargs: Additional keyword arguments for the AMG segmenter.
 
     Returns:
@@ -1383,6 +1423,8 @@ def get_instance_segmentation_generator(
     elif segmentation_mode.lower() == "ais":
         if decoder is None:
             raise ValueError("The 'ais' segmentation mode requires a UniSAM2 'decoder'.")
-        return get_unisam2_segmentation_generator(decoder, is_tiled=is_tiled, device=device)
+        return get_unisam2_segmentation_generator(
+            decoder, is_tiled=is_tiled, device=device, inference_device=inference_device,
+        )
     else:
         raise ValueError(f"Invalid segmentation_mode: {segmentation_mode}. Choose 'amg' or 'ais'.")

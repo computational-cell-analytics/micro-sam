@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+from pathlib import Path
 import types
 import inspect
 
@@ -9,10 +10,11 @@ import pytest
 from micro_sam.v2.instance_segmentation import (
     _block_shape_and_halo, _set_image_predictor_from_backbone, _decode_3d_feature_batch,
     _get_decoder_autocast, UniSAM2InstanceSegmentation, TiledUniSAM2InstanceSegmentation,
+    TiledAutomaticMaskGenerationSegmenter, amg_3d_segmentation,
     get_instance_segmentation_generator, get_decoder,
 )
 from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, run_multicut
-from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
+from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z, ImageEmbeddings
 
 
 def _run_decoder_3d(model, image_embeddings, device="cpu"):
@@ -57,6 +59,142 @@ class _FakePredictor:
         self._features = None
         self._orig_hw = None
         self._is_image_set = False
+
+
+class _FakeEmbeddingFile:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def _make_tiled_amg_segmenter():
+    segmenter = object.__new__(TiledAutomaticMaskGenerationSegmenter)
+    segmenter._mask_generator = types.SimpleNamespace(predictor=object())
+
+    def no_masks(shape):
+        return []
+
+    segmenter._generate_masks_for_shape = no_masks
+    segmenter._is_initialized = False
+    return segmenter
+
+
+def _mock_tiled_amg_embeddings(monkeypatch, tmp_path, fail_precompute=False):
+    temporary_paths = []
+    embedding_files = []
+    save_paths = []
+
+    def make_temp_path():
+        path = tmp_path / f"implicit-{len(temporary_paths)}.zarr"
+        temporary_paths.append(path)
+        return str(path)
+
+    def fake_precompute(predictor, image, **kwargs):
+        path = Path(kwargs["save_path"])
+        path.mkdir(parents=True, exist_ok=True)
+        save_paths.append(path)
+        if fail_precompute:
+            raise RuntimeError("encoder failed")
+        embedding_file = _FakeEmbeddingFile()
+        embedding_files.append(embedding_file)
+        features = types.SimpleNamespace(
+            attrs={"tile_shape": kwargs["tile_shape"], "halo": kwargs["halo"], "shape": image.shape[:2]},
+            file=embedding_file,
+        )
+        return ImageEmbeddings({"features": features}, store=embedding_file)
+
+    monkeypatch.setattr("micro_sam.v2.instance_segmentation.make_temp_embedding_path", make_temp_path)
+    monkeypatch.setattr("micro_sam.v2.instance_segmentation.precompute_image_embeddings", fake_precompute)
+    monkeypatch.setattr("micro_sam.v2.instance_segmentation.set_precomputed", lambda *args, **kwargs: None)
+    return temporary_paths, embedding_files, save_paths
+
+
+def test_tiled_amg_removes_implicit_embedding_store(monkeypatch, tmp_path):
+    segmenter = _make_tiled_amg_segmenter()
+    temporary_paths, embedding_files, save_paths = _mock_tiled_amg_embeddings(monkeypatch, tmp_path)
+
+    segmenter.initialize(
+        np.zeros((4, 4), dtype="uint8"),
+        tile_shape=(4, 4), halo=(0, 0), verbose=False,
+    )
+
+    assert len(temporary_paths) == 1
+    assert save_paths == temporary_paths
+    assert not temporary_paths[0].exists()
+    assert embedding_files[0].closed
+    assert segmenter._is_initialized
+
+
+def test_tiled_amg_removes_implicit_store_on_mask_error(monkeypatch, tmp_path):
+    segmenter = _make_tiled_amg_segmenter()
+    temporary_paths, embedding_files, _ = _mock_tiled_amg_embeddings(monkeypatch, tmp_path)
+
+    def boom(shape):
+        raise RuntimeError("mask generation failed")
+
+    segmenter._generate_masks_for_shape = boom
+    with pytest.raises(RuntimeError, match="mask generation failed"):
+        segmenter.initialize(
+            np.zeros((4, 4), dtype="uint8"),
+            tile_shape=(4, 4), halo=(0, 0), verbose=False,
+        )
+
+    assert not temporary_paths[0].exists()
+    assert embedding_files[0].closed
+    assert not segmenter._is_initialized
+
+
+def test_tiled_amg_removes_implicit_store_on_encoder_error(monkeypatch, tmp_path):
+    segmenter = _make_tiled_amg_segmenter()
+    temporary_paths, embedding_files, _ = _mock_tiled_amg_embeddings(
+        monkeypatch, tmp_path, fail_precompute=True,
+    )
+
+    with pytest.raises(RuntimeError, match="encoder failed"):
+        segmenter.initialize(
+            np.zeros((4, 4), dtype="uint8"), tile_shape=(4, 4), halo=(0, 0), verbose=False,
+        )
+
+    assert not temporary_paths[0].exists()
+    assert embedding_files == []
+    assert not segmenter._is_initialized
+
+
+def test_tiled_amg_keeps_user_embedding_store(monkeypatch, tmp_path):
+    segmenter = _make_tiled_amg_segmenter()
+    temporary_paths, embedding_files, save_paths = _mock_tiled_amg_embeddings(monkeypatch, tmp_path)
+    user_path = tmp_path / "user-embeddings.zarr"
+
+    segmenter.initialize(
+        np.zeros((4, 4), dtype="uint8"),
+        save_path=str(user_path), tile_shape=(4, 4), halo=(0, 0), verbose=False,
+    )
+
+    assert temporary_paths == []
+    assert save_paths == [user_path]
+    assert user_path.exists()
+    assert embedding_files[0].closed
+
+
+def test_tiled_3d_amg_does_not_accumulate_implicit_stores(monkeypatch, tmp_path):
+    segmenter = _make_tiled_amg_segmenter()
+    temporary_paths, embedding_files, _ = _mock_tiled_amg_embeddings(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "micro_sam.v2.instance_segmentation.merge_instance_segmentation_3d",
+        lambda segmentation, **kwargs: segmentation,
+    )
+
+    result = amg_3d_segmentation(
+        np.zeros((3, 4, 4), dtype="uint8"), segmenter,
+        tile_shape=(4, 4), halo=(0, 0), verbose=False,
+    )
+
+    assert result.shape == (3, 4, 4)
+    assert len(temporary_paths) == 3
+    assert all(not path.exists() for path in temporary_paths)
+    assert all(embedding_file.closed for embedding_file in embedding_files)
 
 
 def test_set_image_predictor_from_backbone_reconstructs_features():
@@ -258,47 +396,116 @@ def test_full_inference_normalizes_each_volume_slice_independently(monkeypatch):
     assert np.allclose(preprocessed["crop"].max(axis=(-2, -1)), 1.0)
 
 
-def test_automatic_3d_ais_stages_embeddings_without_save_path(monkeypatch):
+def _stage_3d_ais(
+    monkeypatch, embedding_path, initialize=None, calls=None, segmenter=None, device=None, devices=None,
+):
+    """Drive `automatic_instance_segmentation` for 3d AIS with fakes, capturing the temp-store calls."""
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
 
-    calls = {}
+    calls = {"removed": []} if calls is None else calls
     embedding_model = object()
-    embeddings = {"features": object(), "input_size": 8, "original_size": (8, 8)}
+    embedding_file = _FakeEmbeddingFile()
+    embeddings = ImageEmbeddings({
+        "features": types.SimpleNamespace(file=embedding_file),
+        "input_size": 8,
+        "original_size": (8, 8),
+    }, store=embedding_file)
+    calls["embedding_file"] = embedding_file
+    temp_path = "ephemeral-embeddings.zarr"
 
     def fake_precompute(predictor, raw, **kwargs):
         calls["precompute"] = (predictor, raw, kwargs)
         return embeddings
 
     monkeypatch.setattr("micro_sam.v2.util.precompute_image_embeddings", fake_precompute)
+    monkeypatch.setattr("micro_sam.util.make_temp_embedding_path", lambda: temp_path)
+    monkeypatch.setattr("shutil.rmtree", lambda path, **kwargs: calls["removed"].append(path))
 
-    segmenter = UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cpu")
-
-    def fake_initialize(raw, ndim, **kwargs):
-        calls["initialize"] = (raw, ndim, kwargs)
-
-    expected = np.ones((2, 8, 8), dtype="uint32")
-    segmenter.initialize = fake_initialize
-    segmenter.generate = lambda mode, **kwargs: expected
+    segmenter = segmenter or UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cpu")
+    segmenter.initialize = initialize or (lambda raw, ndim, **kwargs: calls.__setitem__("initialize", (raw, kwargs)))
+    segmenter.generate = lambda mode, **kwargs: np.ones((2, 8, 8), dtype="uint32")
     raw = np.zeros((2, 8, 8), dtype="uint8")
     result = automatic_instance_segmentation(
         predictor=types.SimpleNamespace(model=embedding_model),
-        segmenter=segmenter,
-        input_path=raw,
-        ndim=3,
-        embedding_path=None,
-        verbose=False,
+        segmenter=segmenter, input_path=raw, ndim=3, embedding_path=embedding_path, verbose=False,
+        device=device, devices=devices,
     )
+    return calls, embeddings, embedding_model, raw, temp_path, result
+
+
+def test_automatic_3d_ais_stages_embeddings_without_save_path(monkeypatch):
+    calls, embeddings, embedding_model, raw, temp_path, result = _stage_3d_ais(monkeypatch, embedding_path=None)
 
     predictor, precompute_raw, precompute_kwargs = calls["precompute"]
     assert predictor is embedding_model
     assert precompute_raw is raw
-    assert precompute_kwargs["save_path"] is None
+    # The front end owns the ephemeral store: it passes the temp path and removes it after decoding.
+    assert precompute_kwargs["save_path"] == temp_path
     assert precompute_kwargs["lazy_loading"] is True
-    initialize_raw, initialize_ndim, initialize_kwargs = calls["initialize"]
-    assert initialize_raw is raw
-    assert initialize_ndim == 3
-    assert initialize_kwargs["image_embeddings"] is embeddings
-    assert result is expected
+    assert calls["initialize"][1]["image_embeddings"] is embeddings
+    assert calls["removed"] == [temp_path]
+    assert calls["embedding_file"].closed
+    assert (result == 1).all()
+
+
+def test_automatic_3d_ais_keeps_user_embedding_path(monkeypatch):
+    calls, _, _, _, _, _ = _stage_3d_ais(monkeypatch, embedding_path="user.zarr")
+    # A caller-provided path is used as-is and never removed.
+    assert calls["precompute"][2]["save_path"] == "user.zarr"
+    assert calls["removed"] == []
+    assert calls["embedding_file"].closed
+
+
+def test_automatic_3d_ais_removes_temp_store_on_error(monkeypatch):
+    calls = {"removed": []}
+
+    def boom(raw, ndim, **kwargs):
+        raise RuntimeError("decoder failed")
+
+    with pytest.raises(RuntimeError, match="decoder failed"):
+        _stage_3d_ais(monkeypatch, embedding_path=None, initialize=boom, calls=calls)
+    # The temp store is removed even when decoding raises.
+    assert calls["removed"] == ["ephemeral-embeddings.zarr"]
+    assert calls["embedding_file"].closed
+
+
+def test_inference_device_intent():
+    # The 'devices=None' fallback: default pins to the model device; the front end's auto (None)
+    # intent fans out (None); an explicit device/list is used as given.
+    pin = UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cuda:1")
+    assert pin._inference_devices(None) == "cuda:1"
+    fan_out = UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cuda:1", inference_device=None)
+    assert fan_out._inference_devices(None) is None
+    explicit = UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cuda:0", inference_device="cuda:1")
+    assert explicit._inference_devices(None) == "cuda:1"
+    assert fan_out._inference_devices(["cuda:0", "cuda:1"]) == ["cuda:0", "cuda:1"]
+
+
+@pytest.mark.parametrize(
+    "configured_device,device,devices,expected",
+    [
+        (None, None, None, None),
+        ("cuda:1", None, None, "cuda:1"),
+        (None, "cuda:1", None, "cuda:1"),
+        ("cuda:0", "cuda:0", ["cuda:1"], ["cuda:1"]),
+    ],
+)
+def test_automatic_ais_uses_same_effective_devices_for_encoder_and_decoder(
+    monkeypatch, configured_device, device, devices, expected,
+):
+    segmenter = UniSAM2InstanceSegmentation(
+        _FakeUNETR(img_size=8), device="cuda:0", inference_device=configured_device,
+    )
+    calls, _, _, _, _, _ = _stage_3d_ais(
+        monkeypatch,
+        embedding_path=None,
+        segmenter=segmenter,
+        device=device,
+        devices=devices,
+    )
+
+    assert calls["precompute"][2]["devices"] == expected
+    assert calls["initialize"][1]["devices"] == expected
 
 
 def test_decoder_3d_zchunks_deep_volume():

@@ -16,7 +16,7 @@ import numpy as np
 import torch
 
 from micro_sam.util import _create_dataset_without_data
-from .normalization import to_image
+from .normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
 from .util import Devices
 
 
@@ -105,6 +105,10 @@ def _prepare_models(
 ) -> List[Tuple[torch.nn.Module, torch.device]]:
     """Create one eval-mode model replica per device, reusing the original where possible.
 
+    Replicas are deep-copied from a CPU copy of the model rather than from the source-device model,
+    so a second full copy is never allocated on the source GPU (which could OOM during setup). This
+    is safe because `_prepare_models` runs only at synchronous pipeline setup, with no concurrent use.
+
     Args:
         model: The model to replicate.
         devices: The devices to place the replicas on (see `_resolve_devices`).
@@ -114,9 +118,20 @@ def _prepare_models(
         model, all others hold a deep copy. Release them with `_release_model_replicas`.
     """
     source_device = _model_device(model)
+    replicas = {}
+    other_devices = [device for device in devices if device != source_device]
+    if other_devices:
+        # Move the original to CPU (in place) so each deepcopy lands in host RAM, then restore it.
+        model.to("cpu")
+        try:
+            for device in other_devices:
+                replicas[device] = deepcopy(model).to(device)
+        finally:
+            model.to(source_device)
+
     models = []
     for device in devices:
-        replica = model if device == source_device else deepcopy(model).to(device)
+        replica = model if device == source_device else replicas[device]
         if hasattr(replica, "eval"):
             replica.eval()
         models.append((replica, device))
@@ -343,7 +358,7 @@ def _run_batched_pipeline(
     predict_fn: Callable[[torch.nn.Module, List[Any], torch.device], List[Any]],
     write_fn: Callable[[Any, Any], None],
     num_prefetch_workers: int = 4,
-    num_write_workers: int = 1,
+    num_write_workers: int = 2,
     update_progress: Optional[Callable[[int], None]] = None,
     progress_increment: Optional[Callable[[Any], int]] = None,
 ) -> None:
@@ -603,7 +618,7 @@ def _compute_tiled_2d(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
-    num_write_workers: int = 1,
+    num_write_workers: int = 2,
 ) -> Dict:
     """Compute 2d tile embeddings with batched encoders and queued input / output I/O.
 
@@ -700,7 +715,8 @@ def _compute_tiled_2d(
 
     if save_path is not None:
         _write_embedding_signature(
-            root, input_, predictor, tile_shape=tile_shape, halo=halo, input_size=None, original_size=None,
+            root, input_, predictor, tile_shape=tile_shape, halo=halo, input_size=None,
+            original_size=None, preprocessing=IMAGE_PREPROCESSING,
         )
     features.attrs["complete"] = True
     return {"features": features, "high_res_feats": high_res_group, "input_size": None, "original_size": None}
@@ -764,7 +780,7 @@ def _compute_3d(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
-    num_write_workers: int = 1,
+    num_write_workers: int = 2,
 ) -> Dict:
     """Compute volume embeddings by batching slices and overlapping preprocessing and zarr writes.
 
@@ -876,7 +892,7 @@ def _compute_3d(
     else:
         _write_embedding_signature(
             root, input_, predictor, tile_shape=None, halo=None,
-            input_size=image_size, original_size=original_size,
+            input_size=image_size, original_size=original_size, preprocessing=VIDEO_PREPROCESSING,
         )
         features = feature_dataset if lazy_loading else feature_dataset[:]
         pos_enc = _load_feature_levels(root["pos_enc"], lazy_loading)
@@ -903,7 +919,7 @@ def _compute_tiled_3d(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
-    num_write_workers: int = 1,
+    num_write_workers: int = 2,
 ) -> Dict:
     """Compute tile / slice embeddings as one pipelined job stream across all available GPUs.
 
@@ -1022,7 +1038,8 @@ def _compute_tiled_3d(
 
     if save_path is not None:
         _write_embedding_signature(
-            root, input_, predictor, tile_shape=tile_shape, halo=halo, input_size=None, original_size=None,
+            root, input_, predictor, tile_shape=tile_shape, halo=halo, input_size=None,
+            original_size=None, preprocessing=VIDEO_PREPROCESSING,
         )
     features.attrs["complete"] = True
     return {
@@ -1163,7 +1180,7 @@ def _run_decoder_jobs(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
-    num_write_workers: int = 1,
+    num_write_workers: int = 2,
     update_progress: Optional[Callable[[int], None]] = None,
     progress_increment: Optional[Callable[[Dict], int]] = None,
 ) -> None:
@@ -1222,7 +1239,7 @@ def _decode_volume_embeddings(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
-    num_write_workers: int = 1,
+    num_write_workers: int = 2,
 ) -> np.ndarray:
     """Decode z blocks from non-tiled volume embeddings with queued reads and batched inference.
 
@@ -1310,7 +1327,7 @@ def _decode_tiled_2d_embeddings(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
-    num_write_workers: int = 1,
+    num_write_workers: int = 2,
 ) -> np.ndarray:
     """Decode and stitch 2d embedding tiles in automatically sized batches.
 
@@ -1392,7 +1409,7 @@ def _decode_tiled_3d_embeddings(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
-    num_write_workers: int = 1,
+    num_write_workers: int = 2,
 ) -> np.ndarray:
     """Batch over both tile columns and z blocks while decoding tiled 3d embeddings.
 
@@ -1454,7 +1471,7 @@ def _decode_tiled_3d_slice(
     batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
-    num_write_workers: int = 1,
+    num_write_workers: int = 2,
 ) -> np.ndarray:
     """Decode one volume slice across all embedding tiles in batches.
 

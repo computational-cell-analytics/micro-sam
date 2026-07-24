@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import pooch
 import warnings
@@ -11,10 +12,10 @@ import torch
 
 from micro_sam.util import (
     get_device, get_cache_directory, microsam_cachedir, _open_embeddings,
-    _configure_mps_memory, make_temp_embedding_path,
+    _configure_mps_memory, device_type, make_temp_embedding_path,
 )
 from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
-from micro_sam.v2.normalization import RAW_NORMALIZATION, to_image
+from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
 
 import sam2
 from sam2.build_sam import build_sam2
@@ -22,6 +23,51 @@ from sam2.build_sam import build_sam2
 
 Device = Optional[Union[str, torch.device]]
 Devices = Optional[Union[str, torch.device, Sequence[Union[str, torch.device]]]]
+
+
+class ImageEmbeddings(dict):
+    """Embedding result with explicit lifetime management for its backing store."""
+
+    def __init__(self, embeddings, store=None, temporary_path=None):
+        super().__init__(embeddings)
+        self._store = store
+        self._temporary_path = temporary_path
+        self._closed = False
+
+    @property
+    def closed(self):
+        """Whether this embedding resource has been closed."""
+        return self._closed
+
+    @property
+    def temporary_path(self):
+        """The owned ephemeral path, or None for memory-backed or persistent embeddings."""
+        return self._temporary_path
+
+    def close(self):
+        """Close the backing store and remove an owned ephemeral path."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            store = getattr(self._store, "file", self._store)
+            close = getattr(store, "close", None)
+            if close is not None:
+                close()
+        finally:
+            self._store = None
+            if self._temporary_path is not None:
+                shutil.rmtree(self._temporary_path, ignore_errors=True)
+                self._temporary_path = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def __del__(self):
+        self.close()
 
 
 # NOTE: The model config is expected to be fetched from the module's relative path location.
@@ -193,7 +239,7 @@ def _get_device(device=None):
     else:
         _configure_mps_memory(device)
 
-    if device == "cuda":
+    if device_type(device) == "cuda":
         # NOTE: Adapt global variables to work with flash attentions.
         sam2.modeling.sam.transformer.OLD_GPU = True
         sam2.modeling.sam.transformer.USE_FLASH_ATTN = True
@@ -290,12 +336,13 @@ def get_sam2_image_predictor(model, **kwargs):
     return configure_image_predictor(SAM2ImagePredictor(model, **kwargs))
 
 
-def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
+def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, preprocessing):
     """Validate saved embeddings against the requested configuration.
 
     Returns True if the saved embeddings are stale and should be recomputed (the model, tiling or
-    normalization changed), False if they can be loaded. Raises if they belong to different image
-    data (data signature mismatch).
+    preprocessing changed), False if they can be loaded. Raises if they belong to different image
+    data (data signature mismatch). `preprocessing` is the policy expected for the current path
+    (2d image or 3d / video, see `micro_sam.v2.normalization`).
     """
     # We may have an empty zarr file that was already created to save the embeddings in. A
     # feature-bearing file without the completion metadata is a partial cache: reject it unless it
@@ -303,13 +350,13 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     # resize implementation and cannot be safely resumed.
     if "input_size" not in f.attrs:
         normalization = f.attrs.get("normalization")
-        return "features" in f and normalization != RAW_NORMALIZATION
+        return "features" in f and normalization != preprocessing
 
     # Creates all the metadta that is stored along with the embeddings.
     # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam.v2`?
     from micro_sam.util import _get_embedding_signature
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
-    signature["normalization"] = RAW_NORMALIZATION
+    signature["normalization"] = preprocessing
 
     stale = False
     for key, val in signature.items():
@@ -339,12 +386,12 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     return stale
 
 
-def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size, original_size):
-    """Write the common embedding metadata plus the SAM2 normalization policy."""
+def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size, original_size, preprocessing):
+    """Write the common embedding metadata plus the SAM2 preprocessing policy."""
     from micro_sam.util import _write_embedding_signature as _write_common_signature
 
     _write_common_signature(f, input_, predictor, tile_shape, halo, input_size, original_size)
-    f.attrs["normalization"] = RAW_NORMALIZATION
+    f.attrs["normalization"] = preprocessing
 
 
 def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
@@ -388,7 +435,8 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
         for i, feat in enumerate(high_res_features):
             _create_dataset_with_data(high_res_group, str(i), data=feat.cpu().numpy())
         _write_embedding_signature(
-            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
+            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size,
+            original_size=original_size, preprocessing=IMAGE_PREPROCESSING,
         )
 
     image_embeddings = {
@@ -426,7 +474,7 @@ def precompute_image_embeddings(
     batch_size: Optional[int] = 1,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
-    num_write_workers: int = 1,
+    num_write_workers: int = 2,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
 ):
@@ -438,9 +486,9 @@ def precompute_image_embeddings(
         predictor: The SAM2 image or video predictor.
         input_: The input image or volume.
         save_path: Optional zarr path for persistent embedding storage.
-        lazy_loading: Stream the embeddings from the zarr instead of materializing them in memory.
-            Applies to volumes and to tiled images; if no `save_path` is given an ephemeral on-disk
-            cache is used, which is removed at process exit.
+        lazy_loading: Stream embeddings from zarr instead of materializing them in memory. Without
+            `save_path`, the returned `ImageEmbeddings` owns an ephemeral on-disk store; use it as a
+            context manager or call `close()` when finished.
         ndim: The number of spatial dimensions. By default this is inferred from the input.
         tile_shape: Optional in-plane tile shape.
         halo: Optional in-plane tile halo.
@@ -457,17 +505,19 @@ def precompute_image_embeddings(
         pbar_update: Optional callback to update external progress.
 
     Returns:
-        The image embeddings.
+        An `ImageEmbeddings` resource. Call `close()` when finished or use it as a context manager.
     """
     ndim = input_.ndim if ndim is None else ndim
+    preprocessing = IMAGE_PREPROCESSING if ndim == 2 else VIDEO_PREPROCESSING
     if ndim == 2:
         configure_image_predictor(predictor)
 
     is_streamed = ndim == 3 or tile_shape is not None
+    temporary_path = None
     if lazy_loading and is_streamed and save_path is None:
         # Without a save path the zarr is held in memory, which defeats lazy loading. Back it by an
         # ephemeral on-disk store so the tiles / slices are streamed from disk instead.
-        save_path = make_temp_embedding_path()
+        temporary_path = save_path = make_temp_embedding_path()
 
     # Handle the embedding save_path.
     # We don't have a save path, open in memory zarr file to hold tiled embeddings.
@@ -478,8 +528,9 @@ def precompute_image_embeddings(
     # check that the saved embeddings in there match the parameters of the function call.
     elif os.path.exists(save_path):
         f = _open_embeddings(save_path, mode="a")
-        if _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
-            # Stale embeddings: truncate and recompute, overwriting them.
+        if _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, preprocessing):
+            # Close the old handle before truncating the store.
+            getattr(f, "file", f).close()
             f = _open_embeddings(save_path, mode="w")
 
     # We have a save path and it does not exist yet. Create the zarr file to which the
@@ -487,16 +538,17 @@ def precompute_image_embeddings(
     else:
         f = _open_embeddings(save_path, mode="a")
 
-    # Persist the policy before writing any feature data. If embedding computation is interrupted,
-    # the partial cache can then be resumed only under the same normalization policy.
+    # Persist the policy before writing any feature data, so an interrupted partial cache can only
+    # be resumed under the same preprocessing policy.
     if save_path is not None:
-        f.attrs["normalization"] = RAW_NORMALIZATION
+        f.attrs["normalization"] = preprocessing
 
     from micro_sam.util import handle_pbar
     from micro_sam.v2.batched_inference import _compute_3d, _compute_tiled_2d, _compute_tiled_3d
 
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
 
+    resource = ImageEmbeddings({}, store=f, temporary_path=temporary_path)
     if ndim == 2 and tile_shape is None:
         embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
     elif ndim == 2 and tile_shape is not None:
@@ -525,7 +577,11 @@ def precompute_image_embeddings(
         raise ValueError(f"Invalid dimensionality {input_.ndim}, expect 2 or 3 dim data.")
 
     pbar_close()
-    return embeddings
+    uses_store = tile_shape is not None or (ndim == 3 and lazy_loading)
+    if not uses_store:
+        resource.close()
+    resource.update(embeddings)
+    return resource
 
 
 def _to_device_tensor(data, device):

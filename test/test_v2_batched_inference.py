@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 from bioimage_cpp.utils import Blocking
 
+import micro_sam.v2.batched_inference as batched_inference
 from micro_sam.v2.batched_inference import (
     _compute_auto_batch_sizes,
     _decode_tiled_3d_embeddings,
@@ -264,6 +265,78 @@ class TestAutomaticBatchSizing(unittest.TestCase):
             [call.kwargs["batch_size"] for call in measure.call_args_list],
             [1, 2, 4],
         )
+
+
+class TestResolveDevices(unittest.TestCase):
+    def test_fans_out_over_all_visible_cuda_devices(self):
+        model = torch.nn.Linear(1, 1)
+        with mock.patch.object(batched_inference, "_model_device", return_value=torch.device("cuda", 0)), \
+                mock.patch.object(torch.cuda, "device_count", return_value=2), \
+                mock.patch.object(torch.cuda, "is_available", return_value=True):
+            devices = batched_inference._resolve_devices(model, None)
+        self.assertEqual(devices, [torch.device("cuda", 0), torch.device("cuda", 1)])
+
+    def test_single_cuda_device_when_only_one_visible(self):
+        model = torch.nn.Linear(1, 1)
+        with mock.patch.object(batched_inference, "_model_device", return_value=torch.device("cuda", 0)), \
+                mock.patch.object(torch.cuda, "device_count", return_value=1), \
+                mock.patch.object(torch.cuda, "is_available", return_value=True):
+            devices = batched_inference._resolve_devices(model, None)
+        self.assertEqual(devices, [torch.device("cuda", 0)])
+
+    def test_cpu_model_stays_single_device(self):
+        model = torch.nn.Linear(1, 1)
+        self.assertEqual(batched_inference._resolve_devices(model, None), [torch.device("cpu")])
+
+    def test_explicit_devices_are_used(self):
+        model = torch.nn.Linear(1, 1)
+        with mock.patch.object(torch.cuda, "is_available", return_value=True):
+            devices = batched_inference._resolve_devices(model, ["cuda:0", "cuda:1"])
+        self.assertEqual(devices, [torch.device("cuda", 0), torch.device("cuda", 1)])
+
+    def test_rejects_empty_and_duplicate_devices(self):
+        model = torch.nn.Linear(1, 1)
+        with self.assertRaises(ValueError):
+            batched_inference._resolve_devices(model, [])
+        with self.assertRaises(ValueError):
+            batched_inference._resolve_devices(model, ["cpu", "cpu"])
+
+
+class TestPrepareModels(unittest.TestCase):
+    def test_reuses_original_for_source_device_and_leaves_it_in_place(self):
+        model = torch.nn.Linear(2, 2)
+        source = batched_inference._model_device(model)
+        pairs = batched_inference._prepare_models(model, [source])
+        self.assertEqual(len(pairs), 1)
+        self.assertIs(pairs[0][0], model)
+        self.assertEqual(batched_inference._model_device(model), source)
+
+    def test_replicas_are_deep_copied_off_the_source_device(self):
+        # F4: the deepcopy must run while the model is on CPU, so a second copy never lands on the
+        # source device. We spoof a two-CUDA setup without hardware by stubbing device moves.
+        from copy import deepcopy as real_deepcopy
+
+        model = torch.nn.Linear(2, 2)
+        source = torch.device("cuda", 0)
+        events = []
+
+        def fake_to(self, device, *args, **kwargs):
+            events.append(("to", str(device)))
+            return self
+
+        def fake_deepcopy(obj):
+            events.append(("deepcopy", None))
+            return real_deepcopy(obj)
+
+        with mock.patch.object(batched_inference, "_model_device", return_value=source), \
+                mock.patch.object(torch.nn.Module, "to", fake_to), \
+                mock.patch.object(batched_inference, "deepcopy", fake_deepcopy):
+            batched_inference._prepare_models(model, [source, torch.device("cuda", 1)])
+
+        # Move to CPU first, then deepcopy there, and restore the original to the source device.
+        self.assertEqual(events[0], ("to", "cpu"))
+        self.assertEqual(events[1], ("deepcopy", None))
+        self.assertIn(("to", "cuda:0"), events)
 
 
 class TestBatchedDecoder(unittest.TestCase):

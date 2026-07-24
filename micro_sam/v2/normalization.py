@@ -5,9 +5,12 @@ from typing import Optional, Tuple, Union
 import numpy as np
 from torch_em.transform.raw import normalize_percentile
 
-# Persist normalization and resize semantics in embedding caches. The resize suffix invalidates video
-# embeddings created by the former skimage path, which did not match the tensor resize used in training.
-RAW_NORMALIZATION = "percentile_2_98_per_channel_torch_resize_v1"
+# Persist the preprocessing (normalization + resize) policy in embedding caches so incompatible
+# features are not silently reused. The 2d image path uses per-channel min-max (via `to_image`); the
+# 3d / video path uses percentile normalization with the tensor resize used in training. The video
+# resize suffix invalidates embeddings created by the former skimage path, which did not match it.
+IMAGE_PREPROCESSING = "minmax_per_channel"
+VIDEO_PREPROCESSING = "percentile_2_98_per_channel_torch_resize_v1"
 
 
 def normalize_raw(
