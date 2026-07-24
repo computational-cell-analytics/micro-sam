@@ -156,6 +156,45 @@ def test_scribbles_are_selected_per_volume_slice():
     np.testing.assert_array_equal(labels, np.zeros(5, dtype="int64"))
 
 
+def test_scribble_layer_to_prompts_filters_by_track_id():
+    layer = _PromptShapesLayer(
+        data=[
+            np.array([[2.0, 0.0, 0.0], [2.0, 0.0, 64.0]]),
+            np.array([[2.0, 0.0, 0.0], [2.0, 64.0, 0.0]]),
+        ],
+        shape_type=["path", "path"],
+        labels=["positive", "negative"],
+    )
+    layer.properties["track_id"] = np.array(["1", "2"])
+
+    points_1, labels_1 = annotator_util.scribble_layer_to_prompts(
+        layer, image_shape=(256, 256), i=2, spacing=64.0, track_id=1
+    )
+    points_2, labels_2 = annotator_util.scribble_layer_to_prompts(
+        layer, image_shape=(256, 256), i=2, spacing=64.0, track_id=2
+    )
+
+    assert len(points_1) > 0 and len(points_2) > 0
+    np.testing.assert_array_equal(labels_1, np.ones(len(labels_1), dtype="int64"))
+    np.testing.assert_array_equal(labels_2, np.zeros(len(labels_2), dtype="int64"))
+
+
+def test_get_scribble_slices_filters_by_track_id():
+    layer = _PromptShapesLayer(
+        data=[
+            np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 32.0]]),
+            np.array([[3.0, 0.0, 0.0], [3.0, 32.0, 0.0]]),
+        ],
+        shape_type=["path", "path"],
+        labels=["positive", "positive"],
+    )
+    layer.properties["track_id"] = np.array(["1", "2"])
+
+    np.testing.assert_array_equal(annotator_util.get_scribble_slices(layer, track_id=1), [1])
+    np.testing.assert_array_equal(annotator_util.get_scribble_slices(layer, track_id=2), [3])
+    np.testing.assert_array_equal(annotator_util.get_scribble_slices(layer), [1, 3])
+
+
 def test_closed_shape_in_shared_prompt_layer_is_ignored_by_scribble_converter():
     layer = _PromptShapesLayer(
         data=[np.array([[0.0, 0.0], [0.0, 8.0], [8.0, 8.0]])],
@@ -420,6 +459,55 @@ def test_slice_segmentation_merges_3d_scribbles_with_points(monkeypatch):
     assert "not supported with scribble prompts" in messages[0]
     np.testing.assert_array_equal(current_object.data[1], 1)
     assert current_object.refresh_count == 1
+
+
+def test_track_frame_segmentation_merges_scribbles_for_the_active_track(monkeypatch):
+    """The per-frame tracking path merges a track's scribble into its point prompts and ignores
+    scribbles that belong to a different track."""
+    from micro_sam.sam_annotator import _widgets
+
+    class _Segmenter:
+        def __init__(self):
+            self.captured = None
+
+        def segment_slice(self, **kwargs):
+            self.captured = kwargs
+            return np.ones((1, 32, 32), dtype="uint32")
+
+    point_layer = Points(
+        data=np.array([[1.0, 3.0, 4.0]]),
+        properties={"label": np.array(["positive"]), "track_id": np.array(["1"])},
+    )
+    prompt_layer = Shapes(
+        data=[
+            np.array([[1.0, 8.0, 8.0], [1.0, 16.0, 16.0]]),
+            np.array([[1.0, 20.0, 20.0], [1.0, 28.0, 28.0]]),
+        ],
+        shape_type=["path", "path"],
+        properties={"label": np.array(["negative", "negative"]), "track_id": np.array(["1", "2"])},
+    )
+    viewer = SimpleNamespace(layers={"point_prompts": point_layer, "prompts": prompt_layer})
+    segmenter = _Segmenter()
+    state = SimpleNamespace(interactive_segmenter=segmenter)
+    widget = SimpleNamespace(_viewer=viewer)
+    monkeypatch.setattr(_widgets, "show_info", lambda message: None)
+
+    mask = _widgets.UnifiedSegmentWidget._segment_track_on_frame(
+        widget, state, t=1, track_id=1, shape=(32, 32)
+    )
+
+    # Only the track-1 scribble is merged; the track-2 stroke is filtered out.
+    exp_scribble, exp_scribble_labels = annotator_util.scribble_layer_to_prompts(
+        prompt_layer, image_shape=(32, 32), i=1, track_id=1
+    )
+    expected_points = np.concatenate([[[3.0, 4.0]], exp_scribble])[:, ::-1]
+    expected_labels = np.concatenate([[1], exp_scribble_labels])
+
+    captured = segmenter.captured
+    np.testing.assert_allclose(captured["points"], expected_points)
+    np.testing.assert_array_equal(captured["labels"], expected_labels)
+    assert captured["boxes"] == []
+    assert mask is not None
 
 
 def test_sam2_volume_propagation_merges_3d_scribbles_points_and_boxes(monkeypatch):

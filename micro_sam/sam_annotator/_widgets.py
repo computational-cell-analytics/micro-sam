@@ -2856,17 +2856,24 @@ class UnifiedSegmentWidget(_WidgetBase):
 
     def _segment_track_on_frame(self, state, t, track_id, shape):
         """Segment a single track's object on frame 't'. Returns the binary mask or None."""
+        prompt_layer = self._viewer.layers["prompts"]
+        scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
+            prompt_layer, image_shape=shape, i=t, track_id=track_id,
+        )
+        have_scribbles = len(scribble_points) > 0
         point_prompts = vutil.point_layer_to_prompts(
             self._viewer.layers["point_prompts"], i=t, track_id=track_id,
+            with_stop_annotation=not have_scribbles,
         )
         # A single negative point is a stop prompt: nothing to segment for this track here.
         if not point_prompts:
             return None
 
-        boxes, masks = vutil.shape_layer_to_prompts(
-            self._viewer.layers["prompts"], shape, i=t, track_id=track_id,
-        )
-        points, labels = point_prompts
+        boxes, masks = vutil.shape_layer_to_prompts(prompt_layer, shape, i=t, track_id=track_id)
+        points, labels = vutil.merge_point_prompts(point_prompts, (scribble_points, scribble_labels))
+        if have_scribbles and not boxes and not np.any(labels == 1):
+            show_info("A negative scribble needs a positive point, positive scribble, box or mask prompt.")
+            return None
 
         # The tracking annotator is SAM2-only: segment the frame via the video predictor.
         # Points are reordered to (x, y) and boxes to (x0, y0, x1, y1), matching the per-slice path.
@@ -3160,6 +3167,21 @@ class UnifiedSegmentWidget(_WidgetBase):
                     state.interactive_segmenter.add_box_prompts(frame_ids=int(t), boxes=[box])
                 if boxes:
                     prompted_frames.append(int(t))
+
+            # Add the scribble prompts for this track. A scribble is expanded into several point
+            # prompts on its slice; the video predictor takes points in (y, x) order (as with the
+            # point prompts above), so no axis reordering is needed.
+            z_scribbles = vutil.get_scribble_slices(box_layer, track_id=track_id)
+            for t in z_scribbles:
+                scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
+                    box_layer, image_shape=shape[1:], i=int(t), track_id=track_id,
+                )
+                if len(scribble_points) == 0:
+                    continue
+                state.interactive_segmenter.add_point_prompts(
+                    frame_ids=int(t), points=scribble_points, point_labels=scribble_labels,
+                )
+                prompted_frames.append(int(t))
 
             if not prompted_frames:
                 return None

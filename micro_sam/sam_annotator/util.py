@@ -190,8 +190,8 @@ def normalize_prompt_shape_labels(layer_or_event):
 
     The shared Shapes layer uses its ``label`` property for edge coloring. Boxes and dense mask
     shapes do not support negative semantics, so they are normalized to positive after creation.
-    The current label is restored afterwards so drawing a box does not change the label selected
-    for the next point or scribble.
+    The current drawing defaults are restored afterwards so drawing a box does not change the label
+    selected for the next point or scribble, nor (in the tracking annotator) the current ``track_id``.
     """
     layer = layer_or_event if hasattr(layer_or_event, "shape_type") else layer_or_event.source
     shape_types = list(layer.shape_type)
@@ -206,12 +206,12 @@ def normalize_prompt_shape_labels(layer_or_event):
     if np.array_equal(labels, normalized):
         return
 
-    current_label = layer.current_properties.get("label", np.array(["positive"]))[0]
+    # Snapshot the drawing defaults first: assigning 'layer.properties' resets every column's
+    # current value, which would otherwise drop the current 'track_id' on the tracking layer.
+    current_properties = dict(layer.current_properties)
     properties = dict(layer.properties)
     properties["label"] = normalized
     layer.properties = properties
-    current_properties = layer.current_properties
-    current_properties["label"] = np.array([current_label])
     layer.current_properties = current_properties
     layer.refresh_colors()
 
@@ -501,6 +501,7 @@ def scribble_layer_to_prompts(
     max_points_per_stroke: Optional[int] = None,
     max_points: int = 64,
     deduplication_distance: float = 4.0,
+    track_id=None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Convert positive/negative open strokes into sparse SAM point prompts.
 
@@ -522,6 +523,8 @@ def scribble_layer_to_prompts(
             more strokes than this limit, it expands to retain one representative per stroke.
         deduplication_distance: Distance in normalized model pixels below which samples from
             overlapping strokes with the same label are considered duplicates.
+        track_id: Id of the current track (required for tracking data). When given, only strokes
+            whose ``track_id`` property matches are converted.
 
     Returns:
         Sampled coordinates in ``(y, x)`` order and SAM labels (positive ``1``, negative ``0``).
@@ -541,8 +544,19 @@ def scribble_layer_to_prompts(
     if not (len(shape_data) == len(shape_types) == len(stroke_labels)):
         raise AssertionError("Scribble shapes, shape types and labels must have matching lengths.")
 
+    if track_id is None:
+        stroke_track_ids = [None] * len(shape_data)
+    else:
+        stroke_track_ids = list(map(int, layer.properties["track_id"]))
+        if len(stroke_track_ids) != len(shape_data):
+            raise AssertionError("Scribble shapes and track ids must have matching lengths.")
+
     strokes = []
-    for vertices, shape_type, stroke_label in zip(shape_data, shape_types, stroke_labels):
+    for vertices, shape_type, stroke_label, stroke_track_id in zip(
+        shape_data, shape_types, stroke_labels, stroke_track_ids
+    ):
+        if track_id is not None and stroke_track_id != track_id:
+            continue
         if shape_type in ("rectangle", "ellipse", "polygon"):
             continue
         if shape_type not in SCRIBBLE_SHAPE_TYPES:
@@ -610,16 +624,26 @@ def scribble_layer_to_prompts(
     return np.asarray(points), np.asarray(labels, dtype="int64")
 
 
-def get_scribble_slices(layer: napari.layers.Shapes) -> np.ndarray:
-    """Return the sorted z-slices containing open scribble shapes in a 3D Shapes layer."""
+def get_scribble_slices(layer: napari.layers.Shapes, track_id=None) -> np.ndarray:
+    """Return the sorted z-slices containing open scribble shapes in a 3D Shapes layer.
+
+    When ``track_id`` is given, only scribbles whose ``track_id`` property matches are considered.
+    """
     shape_data = layer.data
     shape_types = layer.shape_type
     if len(shape_data) != len(shape_types):
         raise AssertionError("Scribble shapes and shape types must have matching lengths.")
 
+    if track_id is None:
+        stroke_track_ids = [None] * len(shape_data)
+    else:
+        stroke_track_ids = list(map(int, layer.properties["track_id"]))
+
     slices = []
-    for vertices, shape_type in zip(shape_data, shape_types):
+    for vertices, shape_type, stroke_track_id in zip(shape_data, shape_types, stroke_track_ids):
         if shape_type not in SCRIBBLE_SHAPE_TYPES:
+            continue
+        if track_id is not None and stroke_track_id != track_id:
             continue
         vertices = np.asarray(vertices)
         if vertices.ndim != 2 or vertices.shape[1] != 3:
