@@ -145,12 +145,8 @@ def main():
     parser.add_argument(
         "--n_objects", type=int, default=25, help="The number of instances (objects) per batch used for finetuning."
     )
-    parser.add_argument(
-        "--n_images", type=int, default=None, help="The number of images used for finetuning."
-    )
-    parser.add_argument(
-        "--lora_rank", type=int, default=None, help="The rank used for low rank adaptation."
-    )
+    parser.add_argument("--n_images", type=int, default=None, help="The number of images used for finetuning.")
+    parser.add_argument("--lora_rank", type=int, default=None, help="The rank used for low rank adaptation.")
     args = parser.parse_args()
     finetune_covid_if(args)
 

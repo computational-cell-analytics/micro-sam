@@ -546,14 +546,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Grid search over postprocessing hyperparameters for UniSAM2 predictions."
     )
-    parser.add_argument(
-        "-d", "--dataset", required=True, choices=DATASETS,
-        help="Dataset to run grid search on.",
-    )
-    parser.add_argument(
-        "-m", "--model", required=True, choices=["automatic", "joint"],
-        help="Model variant.",
-    )
+    parser.add_argument("-d", "--dataset", required=True, choices=DATASETS, help="Dataset to run grid search on.")
+    parser.add_argument("-m", "--model", required=True, choices=["automatic", "joint"], help="Model variant.")
     parser.add_argument(
         "-p", "--predictions_dir", type=str, default=PREDICTIONS_ROOT,
         help="Root directory of H5 prediction files (used by --copy_params_from / --full_volume).",

@@ -342,10 +342,7 @@ def run_livecell_inference() -> None:
     parser = argparse.ArgumentParser()
 
     # the checkpoint, input and experiment folder
-    parser.add_argument(
-        "-c", "--ckpt", type=str, default=None,
-        help="Provide model checkpoints (vanilla / finetuned)."
-    )
+    parser.add_argument("-c", "--ckpt", type=str, default=None, help="Provide model checkpoints (vanilla / finetuned).")
     parser.add_argument(
         "-i", "--input", type=str, required=True,
         help="Provide the data directory for LIVECell Dataset."
@@ -425,9 +422,7 @@ def run_livecell_inference() -> None:
 def run_livecell_evaluation() -> None:
     """Run LIVECell evaluation with command line tool."""
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-i", "--input", required=True, help="Provide the data directory for LIVECell Dataset"
-    )
+    parser.add_argument("-i", "--input", required=True, help="Provide the data directory for LIVECell Dataset")
     parser.add_argument(
         "-e", "--experiment_folder", required=True,
         help="Provide the path where the inference data is stored."

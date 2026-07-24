@@ -114,7 +114,7 @@ def _get_inference_timings_plots():
         x="benchmark", y="runtimes", hue="model", data=df, ax=ax[0, 0], palette=PALETTE
     )
     ax[0, 0].set_xlabel(None)
-    ax[0, 0].set_ylabel("Time Per Image $\it{(in}$ $\it{seconds)}$", fontweight="bold", labelpad=10)
+    ax[0, 0].set_ylabel("Time Per Image $\\it{(in}$ $\\it{seconds)}$", fontweight="bold", labelpad=10)
     ax[0, 0].set_title("GPU", fontweight="bold")
 
     df = pd.DataFrame(VIT_T_CPU_BATCH + VIT_B_CPU_BATCH + VIT_L_CPU_BATCH + VIT_H_CPU_BATCH)
@@ -132,7 +132,7 @@ def _get_inference_timings_plots():
         x="benchmark", y="runtimes", hue="model", data=df, ax=ax[1, 0], palette=PALETTE
     )
     ax[1, 0].set_xlabel(None)
-    ax[1, 0].set_ylabel("Time Per Object $\it{(in}$ $\it{milliseconds)}$", fontweight="bold", labelpad=10)
+    ax[1, 0].set_ylabel("Time Per Object $\\it{(in}$ $\\it{milliseconds)}$", fontweight="bold", labelpad=10)
 
     df = pd.DataFrame(VIT_T_CPU_INT + VIT_B_CPU_INT + VIT_L_CPU_INT + VIT_H_CPU_INT)
     df['model'] = ['ViT Tiny'] * 2 + ['ViT Base'] * 2 + ['ViT Large'] * 2 + ['ViT Huge'] * 2
@@ -163,4 +163,5 @@ def main():
     _get_inference_timings_plots()
 
 
-main()
+if __name__ == "__main__":
+    main()

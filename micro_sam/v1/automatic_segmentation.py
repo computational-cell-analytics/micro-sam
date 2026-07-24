@@ -432,9 +432,7 @@ def main(argv=None):
         "--tracking", action="store_true", help="Run automatic tracking instead of instance segmentation. "
         "NOTE: It is only supported for timeseries inputs."
     )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs.")
 
     args, parameter_args = parser.parse_known_args(argv)
 

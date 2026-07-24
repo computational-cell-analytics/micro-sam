@@ -66,4 +66,5 @@ def main():
     plot_plantseg_ovules()
 
 
-main()
+if __name__ == "__main__":
+    main()

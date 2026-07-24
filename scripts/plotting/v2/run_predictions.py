@@ -350,18 +350,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Cache UniSAM2 distance predictions on snemi, nis3d, and plantseg root."
     )
-    parser.add_argument(
-        "-d", "--dataset", required=True, choices=DATASETS,
-        help="Dataset to run prediction on.",
-    )
+    parser.add_argument("-d", "--dataset", required=True, choices=DATASETS, help="Dataset to run prediction on.")
     parser.add_argument(
         "-m", "--model", required=True, choices=list(CHECKPOINT_PATHS),
         help="Model variant: 'automatic' (single-GPU) or 'joint' (multi-GPU).",
     )
-    parser.add_argument(
-        "-c", "--checkpoint", type=str, default=None,
-        help="Override the default checkpoint path.",
-    )
+    parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Override the default checkpoint path.")
     parser.add_argument(
         "-o", "--output_dir", type=str, default=OUTPUT_ROOT,
         help="Root directory to write H5 prediction files.",
