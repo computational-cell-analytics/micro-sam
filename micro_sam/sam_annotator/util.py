@@ -611,7 +611,9 @@ def scribble_layer_to_prompts(
             # Deduplicate only against earlier strokes so both endpoints of a very short individual
             # stroke survive. Opposite-label conflicts are intentionally retained.
             previous = previous_model_points[sam_label]
-            if previous and np.min(np.linalg.norm(np.asarray(previous) - model_point, axis=1)) <= deduplication_distance:
+            if previous and (
+                np.min(np.linalg.norm(np.asarray(previous) - model_point, axis=1)) <= deduplication_distance
+            ):
                 continue
             if current_model_points and np.min(
                 np.linalg.norm(np.asarray(current_model_points) - model_point, axis=1)
