@@ -69,7 +69,7 @@ def run_amg(
     for image_path in tqdm(image_paths, desc="Run inference for automatic mask generation"):
         image_name = Path(os.path.basename(image_path)).with_suffix(".tif")
 
-        # We skip the images that already have been segmented.
+        # We skip the images that are already segmented.
         prediction_path = os.path.join(prediction_dir, image_name)
         if os.path.exists(prediction_path):
             continue
@@ -502,7 +502,7 @@ def _run_interactive_segmentation_3d_per_object(
         n_iterations=n_iterations,
     )
 
-    assert len(gt_ids) == len(preds_per_object), "The number of label ids should match the number of objects segmented."
+    assert len(gt_ids) == len(preds_per_object), "The number of label ids must match the number of objects segmented."
 
     seg_per_iterations = []
     for gt_id, _preds_per_iters in zip(gt_ids, preds_per_object):  # Access interactive segmentation per object.

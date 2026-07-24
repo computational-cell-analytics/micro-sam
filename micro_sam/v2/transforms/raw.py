@@ -263,8 +263,8 @@ class VideoAugmentTransform:
         Returns:
             Tuple of (augmented raw, augmented labels).
         """
-        # ascontiguousarray with explicit dtype converts byte order (TIFF/HDF5 sources
-        # may use big-endian, which torch.from_numpy cannot handle without conversion).
+        # ascontiguousarray with explicit dtype converts byte order (TIFF and HDF5 sources
+        # can use big-endian, which torch.from_numpy cannot handle without conversion).
         raw_t = torch.from_numpy(np.ascontiguousarray(raw, dtype=np.float32))
         labels_t = torch.from_numpy(np.ascontiguousarray(labels, dtype=np.int64))
 

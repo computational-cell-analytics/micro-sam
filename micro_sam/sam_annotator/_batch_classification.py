@@ -21,7 +21,7 @@ from .util import _sync_embedding_widget
 
 
 class ClassificationBatchTask(BatchAnnotatorTask):
-    """Batch task base for the classifiers; subclasses bind the concrete widget and state attrs."""
+    """Batch task base for the classifiers. Subclasses bind the concrete widget and state attributes."""
 
     # Bound by subclasses.
     classifier_class = None  # ObjectClassifier | PixelClassifier

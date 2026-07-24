@@ -74,7 +74,7 @@ class AutoSegBase(ABC):
 
     @property
     def is_initialized(self) -> bool:
-        """Whether `initialize` has been run and the state is available."""
+        """Whether `initialize` ran and the state is available."""
         return self._is_initialized
 
     @abstractmethod

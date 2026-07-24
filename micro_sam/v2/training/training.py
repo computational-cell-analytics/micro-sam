@@ -18,7 +18,7 @@ from .joint_sam2_trainer import JointSam2Trainer, JointSam2Logger
 
 
 def _no_wd_names(model):
-    """Return the set of parameter names that should have weight_decay=0.
+    """Return the set of parameter names that must have weight_decay=0.
 
     Matches the MOSE finetune config: bias params and all LayerNorm params.
     """
@@ -1041,7 +1041,7 @@ def _train_joint_rank(
     )
     unetr = UniSAM2(encoder=sam2_model.image_encoder, output_channels=4).to(device)
 
-    # Only DDP-wrap sam2_model; unetr decoder grads are synced manually.
+    # Only DDP-wrap sam2_model. We sync the unetr decoder grads manually.
     ddp_model = DDP(sam2_model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
     interactive_loss = CustomSAM2Loss(

@@ -168,7 +168,7 @@ def set_prompt_label(layer, new_label):
     if isinstance(layer, napari.layers.Shapes):
         # During layer reset/teardown napari can briefly clear shape geometry before shrinking the
         # feature table. Refreshing mapped colors in that transient state raises because the color
-        # array and ShapeList have different lengths; the subsequent data/features event will
+        # array and ShapeList have different lengths. The subsequent data/features event will
         # refresh once they are aligned again.
         n_shapes = len(layer.data)
         if any(len(values) != n_shapes for values in layer.properties.values()):
@@ -190,8 +190,9 @@ def normalize_prompt_shape_labels(layer_or_event):
 
     The shared Shapes layer uses its ``label`` property for edge coloring. Boxes and dense mask
     shapes do not support negative semantics, so they are normalized to positive after creation.
-    The current drawing defaults are restored afterwards so drawing a box does not change the label
-    selected for the next point or scribble, nor (in the tracking annotator) the current ``track_id``.
+    The function then restores the current drawing defaults. A box that you draw does not change
+    the label for the next point or scribble. In the tracking annotator it also keeps the current
+    ``track_id``.
     """
     layer = layer_or_event if hasattr(layer_or_event, "shape_type") else layer_or_event.source
     shape_types = list(layer.shape_type)
@@ -206,8 +207,8 @@ def normalize_prompt_shape_labels(layer_or_event):
     if np.array_equal(labels, normalized):
         return
 
-    # Snapshot the drawing defaults first: assigning 'layer.properties' resets every column's
-    # current value, which would otherwise drop the current 'track_id' on the tracking layer.
+    # Save the drawing defaults first. An assignment to 'layer.properties' resets the current
+    # value of every column. This would otherwise drop the current 'track_id' on the tracking layer.
     current_properties = dict(layer.current_properties)
     properties = dict(layer.properties)
     properties["label"] = normalized
@@ -523,8 +524,8 @@ def scribble_layer_to_prompts(
             more strokes than this limit, it expands to retain one representative per stroke.
         deduplication_distance: Distance in normalized model pixels below which samples from
             overlapping strokes with the same label are considered duplicates.
-        track_id: Id of the current track (required for tracking data). When given, only strokes
-            whose ``track_id`` property matches are converted.
+        track_id: Id of the current track. Required for tracking data. When given, the function
+            converts only the strokes whose ``track_id`` property matches.
 
     Returns:
         Sampled coordinates in ``(y, x)`` order and SAM labels (positive ``1``, negative ``0``).
@@ -625,9 +626,9 @@ def scribble_layer_to_prompts(
 
 
 def get_scribble_slices(layer: napari.layers.Shapes, track_id=None) -> np.ndarray:
-    """Return the sorted z-slices containing open scribble shapes in a 3D Shapes layer.
+    """Return the sorted z-slices that contain open scribble shapes in a 3D Shapes layer.
 
-    When ``track_id`` is given, only scribbles whose ``track_id`` property matches are considered.
+    When ``track_id`` is given, the function considers only scribbles whose ``track_id`` property matches.
     """
     shape_data = layer.data
     shape_types = layer.shape_type
@@ -1168,7 +1169,7 @@ def track_from_prompts(
 
 def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, device, tile_shape, halo):
 
-    # VFM families (DINO / UNI / SAM3) live in the classification widget's advanced tier; let the widget
+    # VFM families (DINO / UNI / SAM3) live in the classification widget's advanced tier. Let the widget
     # place the selection. The SAM family/size parsing below is skipped for these names: it parses the
     # size positionally (vit_<size>), which does not apply and even index-errors on short names ('sam3').
     from ..models.vfm import is_vfm_model

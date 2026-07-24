@@ -53,7 +53,7 @@ EM_DATASETS = {"snemi", "cremi", "humanneurons", "mitoem", "liconn", "cremi_padd
 LICONN_EVAL_ROI = (slice(50, 750), slice(2062, 2762), slice(1562, 2262))
 
 # Fixed 100 x 1024 x 1024 sub-volume for mitoem evaluation.
-# The val volume is 100 x 4096 x 4096; global multicut on the full XY is not tractable.
+# The val volume is 100 x 4096 x 4096. Global multicut on the full XY is not tractable.
 # Take all 100 Z slices but crop to a centre 1024 x 1024 XY region.
 MITOEM_EVAL_ROI = (slice(None), slice(1536, 2560), slice(1536, 2560))
 
@@ -62,7 +62,7 @@ MITOEM_EVAL_ROI = (slice(None), slice(1536, 2560), slice(1536, 2560))
 CREMI_PADDED_LABEL_ROI = (slice(37, 162), slice(911, 2161), slice(911, 2161))
 
 # Fixed 100 x 1024 x 1024 sub-volume for microns_minnie65 grid-search evaluation.
-# Each zarr box is 512 x 4096 x 4096; take 100 central Z-slices and centre 1024 x 1024 XY.
+# Each zarr box is 512 x 4096 x 4096. Take 100 central Z-slices and centre 1024 x 1024 XY.
 MICRONS_MINNIE65_EVAL_ROI = (slice(206, 306), slice(1536, 2560), slice(1536, 2560))
 # 200 x 2048 x 2048 central sub-volume for full-volume evaluation (~35 min total).
 MICRONS_MINNIE65_FULL_ROI = (slice(156, 356), slice(1024, 3072), slice(1024, 3072))
@@ -136,7 +136,7 @@ def _get_data_paths_grid_search(dataset_name):
         n5_path = os.path.join(p, "mitoem", "human_val.n5")
         return [n5_path], [n5_path], "raw", "labels"
     if dataset_name == "cremi_padded":
-        # Returns padded sampleB path; _generate_live_predictions switches to cropped for grid search.
+        # Returns padded sampleB path. _generate_live_predictions switches to cropped for grid search.
         import torch_em.data.datasets as datasets
         paths = datasets.cremi.get_cremi_paths(
             path=os.path.join(p, "cremi"), samples=("B",), version="padded",
@@ -183,9 +183,9 @@ def _generate_live_predictions(dataset_name, model, crop_shape=None):
         labels = connected_components(labels).astype("uint32")
         valid_roi = None
     elif dataset_name == "cremi_padded":
-        # Grid search runs on cropped sampleB; full-volume run uses padded sampleB.
+        # Grid search runs on cropped sampleB. The full-volume run uses padded sampleB.
         # For the full-volume run, raw is 200x3072x3072 but labels are 125x1250x1250
-        # (the inner annotated region). Postprocessing runs on the full raw; the
+        # (the inner annotated region). Postprocessing runs on the full raw. The
         # segmentation is cropped to CREMI_PADDED_LABEL_ROI before evaluation.
         cremi_dir = os.path.join(DATA_ROOT, "cremi")
         if crop_shape is not None:
@@ -471,8 +471,8 @@ def run_best_on_full_volume(dataset_name, model_name, output_dir, source_csv=Non
     print("Running postprocessing ...")
     t0 = time.perf_counter()
     if dataset_name == "cremi_padded":
-        # Full raw is 200x3072x3072; use blockwise multicut on the full volume.
-        # seg_full is saved; the labeled-region crop is used only for scoring.
+        # Full raw is 200x3072x3072. Use blockwise multicut on the full volume.
+        # We save seg_full. We use the labeled-region crop only for scoring.
         seg_full = _postprocess_em_blockwise(distances, backend="cpp", **best_params)
         seg = seg_full[CREMI_PADDED_LABEL_ROI]
     elif dataset_name in ("liconn", "microns_minnie65"):

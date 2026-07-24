@@ -153,7 +153,7 @@ class TestInstanceSegmentation(unittest.TestCase):
 
 
 def test_autoseg_base_hierarchy_and_contract():
-    """AutoSegBase is the common ABC for both the grid (AMG) and decoder-based families; every leaf
+    """AutoSegBase is the common ABC for both the grid (AMG) and decoder-based families. Every leaf
     generator is a subclass exposing the shared contract, and the abstract bases cannot be built."""
     from micro_sam.v1.instance_segmentation import (
         AutoSegBase, AMGBase, AutomaticMaskGenerator, TiledAutomaticMaskGenerator,

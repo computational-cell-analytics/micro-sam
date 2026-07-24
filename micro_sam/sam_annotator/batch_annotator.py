@@ -68,9 +68,9 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         return os.path.splitext(os.path.basename(entry))[0] + ".tif"
 
     def precompute(self, images):
-        # Embeddings are computed lazily per item in start/advance (via 'initialize_predictor', which
-        # routes SAM1/SAM2 and loads the model once, reused across items). Here we only build the
-        # per-item embedding paths; 'None' for every item when no embedding folder is given.
+        # The tool computes embeddings lazily per item in start and advance (via 'initialize_predictor',
+        # which routes SAM1 or SAM2 and loads the model once, then reuses it across items). Here we only
+        # build the per-item embedding paths. Each item is 'None' when no embedding folder is given.
         if self.embedding_path is None:
             return [None] * len(images)
         os.makedirs(self.embedding_path, exist_ok=True)
@@ -205,7 +205,7 @@ def batch_annotator(
     """
     if initial_segmentations is not None and len(initial_segmentations) != len(images):
         raise ValueError(
-            "You have passed initial segmentations, but the number of images and segmentations is not the same: "
+            "You passed initial segmentations, but the number of images and segmentations is not the same: "
             f"{len(images)} != {len(initial_segmentations)}."
         )
 
@@ -407,7 +407,7 @@ class BatchAnnotator(widgets._WidgetBase):
 
     def _build_embedding_widget(self):
         # The classifier tasks use the classification embedding widget (which adds the 'Advanced
-        # Models' selector); tracking uses the SAM2-only timeseries widget; segmentation the default.
+        # Models' selector). Tracking uses the SAM2-only timeseries widget. Segmentation uses the default.
         if self.task in ("Object Classification", "Pixel Classification"):
             ew = widgets.ClassificationEmbeddingWidget(ndim_choice=True)
         elif self.task == "Tracking":
@@ -415,8 +415,8 @@ class BatchAnnotator(widgets._WidgetBase):
         else:
             ew = widgets.EmbeddingWidget(ndim_choice=True)
         # The launcher works on a folder and the harness computes embeddings itself, so the
-        # 'Compute Embeddings' button is not needed (the image / model row is hidden in the rebuild,
-        # after the model dropdown has been relocated next to the Task dropdown).
+        # 'Compute Embeddings' button is not needed. The rebuild hides the image and model row,
+        # after it moves the model dropdown next to the Task dropdown.
         ew.run_button.hide()
         return ew
 

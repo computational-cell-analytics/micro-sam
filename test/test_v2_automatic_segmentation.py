@@ -470,7 +470,7 @@ def test_automatic_3d_ais_removes_temp_store_on_error(monkeypatch):
 
 
 def test_inference_device_intent():
-    # The 'devices=None' fallback: default pins to the model device; the front end's auto (None)
+    # The 'devices=None' fallback: default pins to the model device. The front end's auto (None)
     # intent fans out (None); an explicit device/list is used as given.
     pin = UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cuda:1")
     assert pin._inference_devices(None) == "cuda:1"
@@ -552,7 +552,7 @@ def test_block_shape_3d_tiling_uses_tile():
 
 
 def test_block_shape_3d_in_plane_tiling_keeps_default_z_chunking():
-    # The CLI and the annotator only ever pass an in-plane (y, x) tile; it must be combined with the
+    # The CLI and the annotator only ever pass an in-plane (y, x) tile. It must be combined with the
     # default z block instead of being used as a (z, y, x) block shape.
     block, halo = _block_shape_and_halo((50, 1024, 1024), ndim=3, tile_shape=(512, 512), halo=(64, 64))
     assert block == (DEFAULT_TILE_Z, 512, 512)
@@ -586,7 +586,7 @@ def test_block_shape_2d_tiling_uses_tile():
 
 
 def test_factory_dispatch_ais():
-    # A decoder + 'ais' resolves to the (tiled) decoder-based segmenter; construction is model-free.
+    # A decoder + 'ais' resolves to the (tiled) decoder-based segmenter. Construction is model-free.
     decoder = object()
     seg = get_instance_segmentation_generator(decoder=decoder, segmentation_mode="ais")
     assert isinstance(seg, UniSAM2InstanceSegmentation)
@@ -601,7 +601,7 @@ def test_factory_defaults_to_ais_with_decoder():
 
 
 def test_factory_amg_dispatch(monkeypatch):
-    # 'amg' (and the no-decoder default) route to get_amg_segmenter with the SAM2 model; stub it so
+    # 'amg' (and the no-decoder default) route to get_amg_segmenter with the SAM2 model. Stub it so
     # the dispatch is tested without building a real SAM2 mask generator.
     sentinel = object()
     calls = {}

@@ -183,7 +183,7 @@ class TestAnnotatorClass:
 
     def test_widget_rebuilds_when_3d_image_loaded_after_open(self, make_napari_viewer_proxy):
         # Open the widget without an image (defaults to 2D), then load a 3D image.
-        # Selecting it as input should rebuild the annotator for 3D.
+        # Selecting it as input rebuilds the annotator for 3D.
         viewer = make_napari_viewer_proxy()
         widget = Annotator(viewer)
         assert widget._ndim == 2
@@ -376,7 +376,7 @@ class TestNdimOverride:
         viewer.close()
 
     def test_channels_first_forced_2d(self, make_napari_viewer_proxy):
-        # A channels-first (C, H, W) array is auto-detected as a volume; forcing '2d' reads it as a
+        # A channels-first (C, H, W) array is auto-detected as a volume. Forcing '2d' reads it as a
         # 2d multi-channel image (mapped to RGB) and rebuilds the annotator for 2d.
         viewer = make_napari_viewer_proxy()
         viewer.add_image(np.zeros((4, 64, 64), dtype="uint8"), name="image")

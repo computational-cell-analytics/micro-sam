@@ -30,7 +30,7 @@ def _hide_embedding_widget(annotator):
     ew = getattr(annotator, "_embedding_widget", None)
     if ew is None:
         return
-    # Each annotator wraps its widgets in a QGroupBox; hide that wrapper so the whole section (frame
+    # Each annotator wraps its widgets in a QGroupBox. Hide that wrapper so the whole section (frame
     # included) disappears rather than leaving an empty box.
     frame = ew
     while frame is not None and not isinstance(frame, QtWidgets.QGroupBox):
@@ -170,7 +170,7 @@ def run_batch(
     Returns:
         The napari viewer, only if `return_viewer=True`.
     """
-    end_msg = "You have annotated the last image. Do you wish to close napari?"
+    end_msg = "You annotated the last image. Do you want to close napari?"
     os.makedirs(output_folder, exist_ok=True)
     task.output_folder = output_folder
     task.have_inputs_as_arrays = have_inputs_as_arrays

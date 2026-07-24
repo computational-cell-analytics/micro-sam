@@ -277,7 +277,7 @@ def test_cache_autoseg_state_ais_is_on_demand(tmp_path, monkeypatch):
     key = _autoseg_state_key(None)
     _save_ais_state_v2(seed, save_path, key, "hvit_t_cells")
 
-    # Track whether the (expensive) decoder pass runs; it must not run on a cache hit.
+    # Track whether the (expensive) decoder pass runs. It must not run on a cache hit.
     initialize_calls = []
 
     def fake_initialize(self, *args, **kwargs):

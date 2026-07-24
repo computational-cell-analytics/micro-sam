@@ -462,8 +462,8 @@ def test_slice_segmentation_merges_3d_scribbles_with_points(monkeypatch):
 
 
 def test_track_frame_segmentation_merges_scribbles_for_the_active_track(monkeypatch):
-    """The per-frame tracking path merges a track's scribble into its point prompts and ignores
-    scribbles that belong to a different track."""
+    """The per-frame tracking path merges a track's scribble into its point prompts. It ignores
+    the scribbles that belong to a different track."""
     from micro_sam.sam_annotator import _widgets
 
     class _Segmenter:
@@ -496,7 +496,7 @@ def test_track_frame_segmentation_merges_scribbles_for_the_active_track(monkeypa
         widget, state, t=1, track_id=1, shape=(32, 32)
     )
 
-    # Only the track-1 scribble is merged; the track-2 stroke is filtered out.
+    # The merge keeps only the track-1 scribble. It drops the track-2 stroke.
     exp_scribble, exp_scribble_labels = annotator_util.scribble_layer_to_prompts(
         prompt_layer, image_shape=(32, 32), i=1, track_id=1
     )

@@ -193,7 +193,7 @@ def test_launcher_removes_itself_after_launch(make_napari_viewer_proxy, monkeypa
         assert dock in viewer.window._qt_window.findChildren(QDockWidget)
 
         widget(skip_validate=True)
-        # The removal is deferred to the event loop; flush it.
+        # The removal is deferred to the event loop. Flush it.
         for _ in range(3):
             QApplication.processEvents()
 

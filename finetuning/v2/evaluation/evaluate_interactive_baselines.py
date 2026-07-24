@@ -251,7 +251,7 @@ def run_sam_v1_evaluation(
 
     if ndim == 3:
         raise ValueError(
-            "micro-sam v1 3D interactive evaluation should use the volumetric implementation. "
+            "micro-sam v1 3D interactive evaluation must use the volumetric implementation. "
             "Run finetuning/v2/evaluation/evaluate_micro_sam_volumetric.py instead."
         )
 

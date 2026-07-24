@@ -66,8 +66,8 @@ def detect_ndim_from_viewer(viewer: "napari.viewer.Viewer") -> int:
     """
     image_layers = [layer for layer in viewer.layers if isinstance(layer, napari.layers.Image)]
     if image_layers:
-        # Use the normalizer so singletons/channels are accounted for. Unsupported inputs
-        # fall back to 2D here so the widget can open; '_on_image_selection_changed' then
+        # Use the normalizer so it handles singletons and channels. Unsupported inputs
+        # default to 2D here so the widget can open. Then '_on_image_selection_changed'
         # reports the issue to the user instead of crashing construction.
         try:
             return vutil.prepare_annotation_image(image_layers[0].data)[1]
@@ -203,7 +203,7 @@ class Annotator(_AnnotatorBase):
 
     def _on_image_selection_changed(self, *args):
         """Normalize the selected image and rebuild the annotator if its dimensionality changed."""
-        # Skip while we are replacing the image layer ourselves during normalization.
+        # Skip while we replace the image layer ourselves during normalization.
         if self._suppress_selection_rebuild:
             return
         image_layer = self._embedding_widget.image_selection.get_value()
@@ -223,7 +223,7 @@ class Annotator(_AnnotatorBase):
 
         # Detect an actual change of the selected image, tracked by layer identity (the state's
         # 'image_name' is not reliably set on every code path, so we don't depend on it). The first
-        # call (during setup) just records the image and does not reset; a later switch to a
+        # call (during setup) just records the image and does not reset. A later switch to a
         # different image layer triggers the reset below.
         previous_layer = getattr(self, "_last_image_layer", None)
         image_changed = previous_layer is not None and image_layer is not previous_layer
@@ -232,9 +232,9 @@ class Annotator(_AnnotatorBase):
         # When the selected image changes, reset everything so the tool behaves as if it was just
         # opened on the new image: the precomputed embeddings, the model and everything derived from
         # them belong to the previous image and must not be reused (they can even differ in
-        # dimensionality, e.g. 3D volume -> 2D image). 'reset_state' clears the state; resetting the
-        # (shared, kept) embedding widget inputs restores the default model / tiling / save path; and
-        # the forced rebuild recreates the dimension-specific widgets and napari layers, so all
+        # dimensionality, e.g. 3D volume -> 2D image). 'reset_state' clears the state. Resetting the
+        # (shared, kept) embedding widget inputs restores the default model, tiling and save path. The
+        # forced rebuild recreates the dimension-specific widgets and napari layers, so all
         # checkboxes are back to defaults, the autosegment cache is gone and the prompt / segmentation
         # layers are cleared. The user recomputes embeddings for the new image via 'Compute Embeddings'.
         if image_changed:
@@ -357,7 +357,7 @@ def annotator(
     """
     # Normalize the image: squeeze singletons and map the channel axis to RGB. The optional 'ndim'
     # override disambiguates multi-channel inputs (e.g. reads a channels-first (C, H, W) array as a
-    # 2d image), consistent with the GUI's 'image dimensions' control; with ndim=None it is
+    # 2d image), consistent with the GUI's 'image dimensions' control. With ndim=None it is
     # auto-detected. 'prepare_annotation_image' raises if the override cannot be applied to the shape.
     image, ndim, rgb = vutil.prepare_annotation_image(image, ndim=ndim)
 

@@ -65,7 +65,7 @@ def test_batch_object_classifier_navigation(make_napari_viewer_proxy):
         # Two labeled objects were accumulated into the running training set.
         assert np.load(os.path.join(output_folder, "labels.npy")).shape[0] == 2
 
-        # We advanced to the second image; with state forwarding on (the default), the carried-forward
+        # We advanced to the second image. With state forwarding on (the default), the carried-forward
         # classifier auto-predicts on it without any new annotations.
         np.testing.assert_array_equal(viewer.layers["image"].data, images[1])
         assert viewer.layers["prediction"].data.sum() > 0
@@ -172,7 +172,7 @@ def test_object_classifier_independent_when_forward_off(make_napari_viewer_proxy
         state.widgets["batch_forward_state"].value = False
         state.widgets["batch_next"]()
 
-        # The accumulated training set and the classifier are reset; image 1 is not auto-predicted.
+        # The accumulated training set and the classifier are reset. Image 1 is not auto-predicted.
         assert state.previous_features is None and state.previous_labels is None
         assert state.object_rf is None
         assert viewer.layers["prediction"].data.sum() == 0

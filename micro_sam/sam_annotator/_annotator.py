@@ -16,7 +16,7 @@ from ._tooltips import get_tooltip
 from ..__version__ import __version__ as micro_sam_version
 
 # Placeholder shapes used to seed the annotator layers before a real image is loaded.
-# Only the dimensionality matters; the values are reset to the image shape on load.
+# Only the dimensionality matters. The tool resets the values to the image shape on load.
 PLACEHOLDER_SHAPE = {2: (256, 256), 3: (16, 256, 256)}
 
 
@@ -716,7 +716,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         use_anyup.changed.connect(self._invalidate_features)
 
         # Random seed. 'fixed' trains the random forest with a fixed seed so the prediction is
-        # reproducible; 'random' leaves it unseeded so results vary slightly between runs. The exact
+        # reproducible. 'random' leaves it unseeded so results vary slightly between runs. The exact
         # seed value does not matter, so this is a simple two-way choice rather than a numeric field.
         random_seed = ComboBox(value="fixed", choices=["fixed", "random"])
         random_seed_tooltip = get_tooltip("classification", "random_seed")
@@ -754,8 +754,9 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         self._get_random_state = get_random_state
         self._set_options = set_options
 
-        # Classifier load/export. Load takes a stored model file; export chooses a destination folder
-        # (defaulting to the current working directory) where the model is saved with an auto-generated name.
+        # Classifier load and export. Load takes a stored model file. Export chooses a destination
+        # folder (the current working directory by default) and saves the model there with an
+        # auto-generated name.
         load_path = FileEdit(label="load classifier path:", mode="r", filter="*.joblib")
         load_path.line_edit.native.setPlaceholderText("/path/to/stored_model.joblib")
         load_path.native.setToolTip(get_tooltip("classification", "load_path"))
@@ -990,8 +991,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         n_components = self._get_n_components()
         use_anyup = bool(self._get_use_anyup())
         random_seed = "random" if self._get_random_state() is None else "fixed"
-        # 'ew.model_type' is only set once embeddings are computed via the GUI; fall back to the
-        # predictor's model_type (always set) so a CLI-launched session still records the model.
+        # The GUI sets 'ew.model_type' only after it computes embeddings. Use the predictor's
+        # model_type (always set) instead, so a CLI-launched session still records the model.
         model_type = getattr(ew, "model_type", None) or getattr(state.predictor, "model_type", None)
         return {
             "micro_sam_version": micro_sam_version,
@@ -1023,8 +1024,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # the size options are rebuilt when it changes.
         family, size = spec.get("model_family"), spec.get("model_size")
         if ew is not None and family is not None:
-            # The classification widget routes the family to the primary or advanced selector; other
-            # widgets fall back to setting the family dropdown directly.
+            # The classification widget routes the family to the primary or advanced selector. Other
+            # widgets set the family dropdown directly.
             setter = getattr(ew, "set_model_family_size", None)
             if setter is not None:
                 setter(family, size)
@@ -1033,8 +1034,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
                 if size is not None:
                     ew.model_size_dropdown.setCurrentText(size)
 
-        # Tiling, tile/halo params and custom weights via the shared sync helper (these field names match).
-        # 'ew.model_type' may be unset until embeddings are computed, so fall back via getattr.
+        # Tiling, tile and halo params and custom weights via the shared sync helper (these field names match).
+        # 'ew.model_type' can be unset until the GUI computes embeddings, so read it via getattr.
         if ew is not None:
             vutil._sync_embedding_widget(
                 ew, model_type=spec.get("model_type") or getattr(ew, "model_type", None),
@@ -1059,6 +1060,6 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         current_model = getattr(state.predictor, "model_type", None) if state.predictor is not None else None
         if stored_model is not None and current_model is not None and stored_model != current_model:
             show_info(
-                f"Loaded classifier was trained with '{stored_model}', but the current embeddings use "
+                f"The loaded classifier was trained with '{stored_model}', but the current embeddings use "
                 f"'{current_model}'. Recompute the embeddings with the restored settings before predicting."
             )

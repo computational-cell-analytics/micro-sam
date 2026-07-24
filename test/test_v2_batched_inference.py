@@ -160,7 +160,7 @@ class TestBatchedPipeline(unittest.TestCase):
         self.assertEqual([str(error) for error in errors], ["synthetic prediction failure"])
 
     def test_pipeline_does_not_deadlock_when_a_write_fails(self):
-        # The symmetric case: the consumers' sentinels go to the writers, which may already have died.
+        # The symmetric case: the consumers' sentinels go to the writers, which can already be dead.
         def write(job, prediction):
             time.sleep(0.02)
             raise RuntimeError("synthetic write failure")

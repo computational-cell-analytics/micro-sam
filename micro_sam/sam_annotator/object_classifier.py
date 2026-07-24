@@ -63,8 +63,8 @@ def _train_rf(
 
     rf = RandomForestClassifier(random_state=random_state, **rf_kwargs)
 
-    # Optionally reduce the features to the top-n PCA components. n_components is clamped to the
-    # number of features and samples; if it covers all features we skip PCA and use the plain RF.
+    # Optionally reduce the features to the top-n PCA components. We clamp n_components to the
+    # number of features and samples. If it covers all features, we skip PCA and use the plain RF.
     # Object features mix area (large magnitude) with embedding means (small), so we standardize
     # them before PCA to keep area from dominating the components.
     n_features = X.shape[1]

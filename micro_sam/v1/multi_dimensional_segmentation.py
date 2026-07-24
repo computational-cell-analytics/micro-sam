@@ -785,7 +785,7 @@ def get_napari_track_data(
     with futures.ThreadPoolExecutor(n_threads) as tp:
         track_data = list(tp.map(compute_props, range(segmentation.shape[0])))
     track_data = [data for data in track_data if data.size > 0]
-    # The segmentation may be empty, e.g. if all tracks were filtered out via 'min_time_extent'.
+    # The segmentation can be empty, e.g. if 'min_time_extent' filtered out all tracks.
     track_data = np.concatenate(track_data) if track_data else np.zeros((0, 4), dtype="float64")
 
     # The graph representation of napari uses the children as keys and the parents as values,

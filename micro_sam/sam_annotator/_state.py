@@ -39,7 +39,7 @@ class Singleton(type):
         return cls._instances[cls]
 
 
-# TODO: this should be refactored once we have decided on which models to support.
+# TODO: refactor this once we decide which models to support.
 # (Likely only SAM2 models)
 def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_cli):
     from micro_sam.models.vfm import is_vfm_model, get_vfm_model
@@ -56,8 +56,8 @@ def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_
             model = get_sam2_model(model_type=model_type, input_type="images", device=device)
             # Use the shared resize-longest predictor.
             predictor = get_sam2_image_predictor(model)
-            # The video predictor gets these set in 'get_sam2_model'; set them here on the image
-            # predictor too, so the embedding signature can be written when caching embeddings.
+            # 'get_sam2_model' sets these on the video predictor. Set them here on the image
+            # predictor too, so the tool can write the embedding signature when it caches embeddings.
             predictor.model_type = model_type
             predictor.model_name = model_type
         elif ndim == 3:  # Get SAM2 video predictor
@@ -97,7 +97,7 @@ class AnnotatorState(metaclass=Singleton):
     embedding_tmpdir: Optional[str] = None
     data_signature: Optional[str] = None
     skip_recomputing_embeddings: Optional[bool] = None
-    # Whether the one-time CPU info popup has been shown this session (not reset on recompute).
+    # Whether the tool showed the one-time CPU info popup this session (not reset on recompute).
     cpu_info_shown: Optional[bool] = None
 
     # The segmenter and its cached state for automatic segmentation. The state contains grid masks
@@ -215,10 +215,11 @@ class AnnotatorState(metaclass=Singleton):
                 _, _, decoder_source = _download_finetuned_sam2_model(model_type)
                 # Reuse the interactive predictor's already-loaded (finetuned) image encoder as the
                 # decoder's encoder instead of rebuilding it from the base backbone. This avoids a
-                # redundant base-backbone download/build; the strict load inside 'get_unisam2_model'
-                # still fully (re)defines these encoder weights from the decoder checkpoint. The 2d
-                # image predictor holds the SAM2 model under '.model'; the 3d video predictor is
-                # itself a SAM2 model. Fall back to the backbone name if no encoder is exposed.
+                # redundant download and build of the base backbone. The strict load inside
+                # 'get_unisam2_model' still fully redefines these encoder weights from the decoder
+                # checkpoint. The 2d image predictor holds the SAM2 model under '.model'. The 3d
+                # video predictor is itself a SAM2 model. Use the backbone name if the model
+                # exposes no encoder.
                 sam2_model = getattr(self.predictor, "model", self.predictor)
                 encoder = getattr(sam2_model, "image_encoder", encoder)
 
@@ -242,10 +243,10 @@ class AnnotatorState(metaclass=Singleton):
             _comp_embed_fn = util.get_embedding_function(model_type)
 
             # When no save path is given for a SAM2 volume or a tiled image, cache the embeddings to
-            # an ephemeral on-disk zarr instead of holding the whole volume in RAM. Materialising all
-            # slices costs ~200 MB/slice and OOMs on large volumes; the disk cache lets the consumers
-            # stream slices/tiles one at a time. It is removed on 'reset_state' and at process exit.
-            # Small non-tiled 2d stays in memory (a single image is cheap).
+            # an ephemeral on-disk zarr instead of holding the whole volume in RAM. All slices at once
+            # cost about 200 MB per slice and run out of memory on large volumes. The disk cache lets
+            # the consumers stream slices or tiles one at a time. It is removed on 'reset_state' and at
+            # process exit. Small non-tiled 2d stays in memory (a single image is cheap).
             needs_disk_cache = self.is_sam2 and (ndim == 3 or tile_shape is not None)
             if needs_disk_cache and not isinstance(save_path, str):
                 self._cleanup_embedding_tmpdir()

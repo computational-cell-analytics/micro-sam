@@ -246,7 +246,7 @@ def run_multicut(
             backend=backend, n_threads=1,
         )
         seeds = label(density > density_threshold)
-        # watershed requires a float heightmap; boundary maps are usually float already.
+        # watershed requires a float heightmap. Boundary maps are usually float already.
         bd = bd if np.issubdtype(bd.dtype, np.floating) else bd.astype("float32")
         wsz = watershed(bd, markers=seeds)
         overseg[z] = wsz

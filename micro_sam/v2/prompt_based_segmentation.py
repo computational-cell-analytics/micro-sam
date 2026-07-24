@@ -17,7 +17,7 @@ from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_n
 
 
 def _trim_cpu_heap():
-    """Return freed CPU heap to the OS on glibc/Linux; no-op elsewhere.
+    """Return freed CPU heap to the OS on glibc-based Linux. It does nothing elsewhere.
 
     'gc.collect' drops the Python references and frees the tensors, but glibc keeps the freed pages
     in its arenas rather than returning them to the OS, so RSS stays high on native CPU systems (the
@@ -355,9 +355,9 @@ def tiled_promptable_segmentation_2d(
     if not have_points and not have_boxes:
         return None
 
-    # Group the prompts by the tile each falls in, so an object spanning multiple tiles is segmented
-    # in every tile it has prompts in. Points are (y, x); boxes are (y0, x0, y1, x1). A polygon/ellipse
-    # box carries a filled mask prompt; it is cropped to each tile's outer block so it stays aligned.
+    # Group the prompts by the tile each falls in, so the tool segments an object across every tile
+    # that holds its prompts. Points are (y, x). Boxes are (y0, x0, y1, x1). A polygon or ellipse
+    # box carries a filled mask prompt. The tool crops it to each tile's outer block so it stays aligned.
     tile_points, tile_labels, tile_boxes, tile_masks = {}, {}, {}, {}
     if have_points:
         for point, label in zip(np.asarray(points), np.asarray(labels)):
@@ -367,7 +367,7 @@ def tiled_promptable_segmentation_2d(
     if have_boxes:
         for bidx, box in enumerate(boxes):
             box_mask = masks[bidx] if masks is not None else None
-            # A box may span several tiles; segment its clipped portion in each (boxes are y0,x0,y1,x1).
+            # A box can span several tiles. Segment its clipped portion in each (boxes are y0,x0,y1,x1).
             for tid, clipped in _box_to_tiles(tiling, halo, np.asarray(box)).items():
                 tile_boxes.setdefault(tid, []).append(clipped)
                 tile_masks.setdefault(tid, []).append(
@@ -542,7 +542,7 @@ class PromptableSegmentation3D:
         self.offload_state_to_cpu = (not is_mps) if offload_state_to_cpu is None else offload_state_to_cpu
 
         if self.volume.ndim != 3:
-            raise AssertionError(f"The dimensionality of the volume should be 3, got '{self.volume.ndim}'")
+            raise AssertionError(f"The dimensionality of the volume must be 3, got '{self.volume.ndim}'")
 
         self.init_predictor()
 
@@ -618,7 +618,7 @@ class PromptableSegmentation3D:
         if points.ndim != 2 or points.shape[1] != 2:
             raise ValueError("'points' must have shape (N, 2).")
         if len(points) != len(point_labels):
-            raise AssertionError("The number of points and corresponding labels are mismatching.")
+            raise AssertionError("The number of points and labels do not match.")
 
         n = len(points)
         frame_ids = self._broadcast(frame_ids, n)
@@ -788,8 +788,8 @@ class PromptableSegmentation3D:
             if seen_frames is not None:
                 seen_frames.add(out_frame_idx)
 
-            # Early stopping: once every tracked object has been absent for 'early_stop_patience'
-            # consecutive frames, the object has left the volume and there is nothing more to track.
+            # Early stopping: once every tracked object is absent for 'early_stop_patience'
+            # consecutive frames, the object left the volume and there is nothing more to track.
             # A single empty frame is not enough (SAM2 can momentarily drop and recover a mask), so
             # we require a run of empty frames before breaking.
             if early_stop_patience is not None:
@@ -809,9 +809,9 @@ class PromptableSegmentation3D:
         # First, we propagate the masklets forward in time using the input prompts in selected frames.
         # 'update_progress' is an optional callback that is called with the number of newly processed
         # frames, so callers (e.g. the napari annotator) can report propagation progress to the user.
-        # 'early_stop_patience' bounds the propagation by stopping a direction once the object has been
+        # 'early_stop_patience' bounds the propagation by stopping a direction once the object is
         # absent for that many consecutive frames (see '_propagate_in_direction'). 'z_range' is an
-        # inclusive '(z_min, z_max)' hard bound on the slices propagation may cover.
+        # inclusive '(z_min, z_max)' hard bound on the slices that propagation can cover.
         # Shared across both directions so the conditioning frame (yielded by both) is counted once.
         seen_frames = set()
         forward_video_segments = self._propagate_in_direction(
@@ -829,7 +829,7 @@ class PromptableSegmentation3D:
             # NOTE: The order is reversed to stitch the reverse propagation with forward.
             reverse_video_segments = dict(reversed(list(reverse_video_segments.items())))
 
-        # Now, we should stitch the segmented slices together.
+        # Now stitch the segmented slices together.
         video_segments = {**reverse_video_segments, **forward_video_segments}
         return video_segments
 
@@ -938,7 +938,7 @@ class PromptableSegmentation3D:
 
         try:
             if have_masks:
-                # A lasso/polygon/ellipse yields a filled mask; refine it into the object the way the
+                # A lasso, polygon or ellipse yields a filled mask. Refine it into the object the way the
                 # 2d image predictor does (box + soft mask-logit cue through the mask decoder) rather
                 # than 'add_new_mask', which hard-conditions on the drawn shape and returns it verbatim.
                 seg = self._refine_slice_from_mask(
@@ -1043,7 +1043,7 @@ class TiledPromptableSegmentation3D:
 
     def reset_predictor(self):
         # Drop the per-tile segmenters (each with its own inference state + embedding cache) so
-        # committing / clearing frees their RAM; they are rebuilt lazily for the next prompt.
+        # committing or clearing frees their RAM. The tool rebuilds them lazily for the next prompt.
         for segmenter in self._segmenters.values():
             segmenter.reset_predictor()
         self._segmenters = {}
@@ -1229,7 +1229,7 @@ class TiledPromptableSegmentation3D:
         return out if found else None
 
     def add_point_prompts(self, frame_ids, points, point_labels, object_id=None, multiple_objects=False):
-        """Add point prompts. Points are in (y, x) order; each is routed to the tile it falls in, so
+        """Add point prompts. Points are in (y, x) order. Each is routed to the tile it falls in, so
         an object with prompts in several tiles is added to each of those tiles."""
         if points is None or len(points) == 0:
             return
@@ -1254,7 +1254,7 @@ class TiledPromptableSegmentation3D:
         """Add box prompts (y0, x0, y1, x1). A box spanning several tiles is added, clipped, to each."""
         if boxes is None or len(boxes) == 0:
             return
-        # One object id per box; default to a single object (id 1) when not batched.
+        # One object id per box. Default to a single object (id 1) when not batched.
         if object_id is None:
             object_id = [1] * len(boxes)
         elif not isinstance(object_id, list):
@@ -1278,7 +1278,7 @@ class TiledPromptableSegmentation3D:
         if masks is None or len(masks) == 0:
             return
         masks = [np.asarray(m) for m in masks]
-        # One object id per mask; default to a single object (id 1) when not batched.
+        # One object id per mask. Default to a single object (id 1) when not batched.
         if object_id is None:
             object_id = [1] * len(masks)
         elif not isinstance(object_id, list):

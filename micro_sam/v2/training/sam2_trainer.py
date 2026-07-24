@@ -113,7 +113,7 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         # initial SAM2 prompt response). Default to CustomSAM2Metric if none is given.
         if metric is None:
             metric = CustomSAM2Metric()
-        # Sam2Trainer manages AMP internally via amp_dtype; prevent the parent from
+        # Sam2Trainer manages AMP internally via amp_dtype. Prevent the parent from
         # setting up a float16 GradScaler which is incompatible with bfloat16.
         kwargs.pop("mixed_precision", None)
         super().__init__(loss=loss, metric=metric, mixed_precision=False, **kwargs)

@@ -319,8 +319,8 @@ class ConvertToSam2VideoBatch:
 
         y = y.squeeze(1)  # (B,H,W) or (B,Z,H,W)
 
-        # For 3D: sample from the union of IDs across all z-slices so that objects
-        # present in any frame are included (frame 0 alone may be empty at patch boundaries).
+        # For 3D: sample from the union of IDs across all z-slices so that it includes objects
+        # present in any frame (frame 0 alone can be empty at patch boundaries).
         obj_ids_per_b = [
             self._sample_obj_ids(y[b].flatten() if is_3d else y[b]) for b in range(B)
         ]

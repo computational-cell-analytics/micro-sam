@@ -12,8 +12,8 @@ from sam2.sam2_video_predictor import SAM2VideoPredictor
 from sam2.utils.misc import AsyncVideoFrameLoader
 
 
-# Number of recent frames whose precomputed features are cached on the device during inference. >1
-# so repeatedly segmenting the same / nearby slice reuses the upload; small so memory stays bounded.
+# Number of recent frames whose precomputed features stay cached on the device during inference. >1
+# so segmenting the same or nearby slice again reuses the upload. Small so memory stays bounded.
 MAX_CACHED_FRAMES = 8
 
 # The ImageNet statistics SAM2 normalizes its frames with (sam2.utils.misc only has them as defaults).
@@ -287,9 +287,9 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             return inference_state
 
         # Store the precomputed embeddings and load each frame's features lazily during tracking
-        # (see '_get_image_feature'). Materialising every slice's high-resolution features up-front
-        # costs ~200 MB/slice and OOMs for large volumes; the lazy single-frame cache keeps memory
-        # bounded. When the embeddings are backed by a zarr on disk (lazy_loading=True), only one
+        # (see '_get_image_feature'). Loading every slice's high-resolution features up-front costs
+        # about 200 MB per slice and runs out of memory for large volumes. The lazy single-frame cache
+        # keeps memory bounded. When the embeddings are backed by a zarr on disk (lazy_loading=True), only one
         # slice is held in memory at a time.
         inference_state["precomputed_embeddings"] = volume_embeddings
         inference_state["cached_features"] = {}

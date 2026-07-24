@@ -158,7 +158,7 @@ class AutomaticMaskGenerationSegmenter(AutoSegBase):
         from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
         # 'output_mode="uncompressed_rle"' stores each mask as a compact RLE instead of a full-
-        # resolution binary array; we decode them lazily, one at a time, via '_LazyRLEMask' (see
+        # resolution binary array. We decode them lazily, one at a time, via '_LazyRLEMask' (see
         # '_generate_masks_for_shape'). Together with the lower 'points_per_batch' (which bounds the
         # number of masks upscaled to full resolution at once during prediction) this keeps AMG from
         # running out of memory on large images, where the old binary-mask storage got OS-killed.
@@ -308,7 +308,7 @@ class AutomaticMaskGenerationSegmenter(AutoSegBase):
         with `set_state` to skip the expensive grid prediction in `initialize`.
         """
         if not self._is_initialized:
-            raise RuntimeError("Cannot get the state before the segmenter has been initialized.")
+            raise RuntimeError("Cannot get the state before you initialize the segmenter.")
         return {
             "masks": [dict(mask) for mask in self._masks],
             "original_size": self._original_size,
@@ -535,7 +535,7 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
     def get_state(self) -> Dict[str, Any]:
         """Return the cached per-tile mask state, plus the tiling needed to restore it."""
         if not self._is_initialized:
-            raise RuntimeError("Cannot get the state before the segmenter has been initialized.")
+            raise RuntimeError("Cannot get the state before you initialize the segmenter.")
         return {
             "masks": [[dict(mask) for mask in tile_masks] for tile_masks in self._masks],
             "original_size": self._original_size,
@@ -626,7 +626,7 @@ def amg_3d_segmentation(
     if tile_shape is not None and halo is not None:
         init_kwargs = {"tile_shape": tile_shape, "halo": halo}
     # Reuse the precomputed 3d embeddings per slice (no re-encode) for both the tiled and non-tiled
-    # paths; the segmenter reconstructs each slice's features from them.
+    # paths. The segmenter reconstructs each slice's features from them.
     reuse_embeddings = image_embeddings is not None
 
     from micro_sam.util import handle_pbar
@@ -694,7 +694,7 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, outp
     from micro_sam.v2.models.util import UniSAM2
 
     state = torch.load(checkpoint_path, weights_only=False, map_location=device or "cpu")
-    # The standalone trainer saves the full model under 'model_state'; the joint trainer saves it
+    # The standalone trainer saves the full model under 'model_state'. The joint trainer saves it
     # under 'unetr_state' or 'decoder_state'. We also accept a raw state dict.
     if isinstance(state, dict):
         model_state = state.get("model_state", state.get("unetr_state", state.get("decoder_state", state)))
@@ -1224,7 +1224,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         of the post-processing parameters (those are applied in `generate`), so it is always reusable.
         """
         if not self._is_initialized:
-            raise RuntimeError("Cannot get the state before the segmenter has been initialized.")
+            raise RuntimeError("Cannot get the state before you initialize the segmenter.")
         return {"prediction": self._prediction}
 
     def set_state(self, state: dict) -> None:

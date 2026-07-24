@@ -127,7 +127,7 @@ class DirectedPerObjectBoundaryDistanceTransform:
         if labels.ndim == 2:
             labels = labels[None]
 
-        # bioimage-cpp / skimage C extensions read raw bytes assuming native byte order; swap if needed.
+        # bioimage-cpp and skimage C extensions read raw bytes as native byte order. Swap if needed.
         if not labels.dtype.isnative:
             labels = labels.byteswap().view(labels.dtype.newbyteorder())
 

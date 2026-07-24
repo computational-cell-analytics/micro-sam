@@ -82,7 +82,7 @@ def test_batch_navigation(make_napari_viewer_proxy):
         def _result_path(index):
             return os.path.join(output_folder, os.path.splitext(os.path.basename(image_paths[index]))[0] + ".tif")
 
-        # Item 0: paint a segmentation and advance. It should be saved and the next image loaded.
+        # Item 0: paint a segmentation and advance. The tool saves it and loads the next image.
         seg0 = np.full((512, 512), 1, dtype="uint32")
         viewer.layers["committed_objects"].data = seg0
         next_image()

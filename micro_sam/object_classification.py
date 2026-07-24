@@ -282,7 +282,7 @@ def project_prediction_to_segmentation(
     """
     assert len(object_prediction) == len(seg_ids)
 
-    # bioimage_cpp.take_dict only accepts these integer label dtypes. Napari label layers may use
+    # bioimage_cpp.take_dict only accepts these integer label dtypes. Napari label layers can use
     # smaller dtypes such as uint8, so cast only for the relabeling call.
     if segmentation.dtype not in (np.uint32, np.uint64, np.int32, np.int64):
         if segmentation.dtype == bool or np.issubdtype(segmentation.dtype, np.unsignedinteger):

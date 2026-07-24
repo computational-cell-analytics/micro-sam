@@ -23,7 +23,7 @@ from . import util
 from .v1.util import precompute_image_embeddings
 
 # Default in-plane grid size (longest side) for the per-pixel feature grid.
-# Non-tiled images use 'grid_size'; tiled images use the larger 'max_grid_size', since tiling
+# Non-tiled images use 'grid_size'. Tiled images use the larger 'max_grid_size', since tiling
 # yields more genuine embedding detail (n_tiles x the per-tile resolution).
 DEFAULT_GRID_SIZE = 256
 DEFAULT_MAX_GRID_SIZE = 512
@@ -135,8 +135,8 @@ def _resize_to_grid(embeddings: np.ndarray, target_hw: Tuple[int, int]) -> np.nd
     """Resize a (C, H, W) embedding to a (target_h, target_w, C) feature image."""
     n_channels = embeddings.shape[0]
     # An empty target band (a sub-pixel-thin edge strip) has nothing to fill, and a degenerate
-    # zero-size source cannot be interpolated; in both cases return a zero-filled band so the caller's
-    # slice assignment is a no-op instead of resizing to/from a zero-size shape (which raises a NaN).
+    # zero-size source cannot be interpolated. In both cases return a zero-filled band so the caller's
+    # slice assignment does nothing instead of resizing to or from a zero-size shape (which raises a NaN).
     if min(target_hw) == 0 or min(embeddings.shape[-2:]) == 0:
         return np.zeros((target_hw[0], target_hw[1], n_channels), dtype="float32")
     feature_image = embeddings.transpose(1, 2, 0)
@@ -165,7 +165,7 @@ def _compute_tiled_feature_image(
 ):
     """Assemble a downsampled (GH, GW, C) feature image for a single 2d (tiled) plane.
 
-    For 3d data 'z' selects the slice of each tile's embedding; for 2d data 'z' is None.
+    For 3d data 'z' selects the slice of each tile's embedding. For 2d data 'z' is None.
     With `upsampler`, each tile's inner block is upsampled with AnyUp using the matching image crop.
     """
     tile_shape, halo, shape = features.attrs["tile_shape"], features.attrs["halo"], features.attrs["shape"]
@@ -188,8 +188,8 @@ def _compute_tiled_feature_image(
         tile_scale = (embeds.shape[-2] / outer_hw[0], embeds.shape[-1] / outer_hw[1])
         iy0, iy1 = int(round(inner_local.begin[0] * tile_scale[0])), int(round(inner_local.end[0] * tile_scale[0]))
         ix0, ix1 = int(round(inner_local.begin[1] * tile_scale[1])), int(round(inner_local.end[1] * tile_scale[1]))
-        # A thin edge tile can round its inner region to zero feature rows/cols; keep at least one real
-        # row/column so the strip gets coarse (but valid) features instead of an empty, un-resizable block.
+        # A thin edge tile can round its inner region to zero feature rows or columns. Keep at least one
+        # real row or column so the strip gets coarse (but valid) features instead of an empty, un-resizable block.
         iy0, ix0 = min(iy0, embeds.shape[-2] - 1), min(ix0, embeds.shape[-1] - 1)
         iy1, ix1 = max(iy1, iy0 + 1), max(ix1, ix0 + 1)
         inner_embeds = embeds[:, iy0:iy1, ix0:ix1]
@@ -405,8 +405,8 @@ def train_pixel_classifier(
         n_jobs=cpu_count() if n_jobs is None else n_jobs, random_state=random_state, **rf_kwargs,
     )
 
-    # Optionally reduce the features to the top-n PCA components. n_components is clamped to the
-    # number of features and samples; if it covers all features we skip PCA and use the plain RF.
+    # Optionally reduce the features to the top-n PCA components. We clamp n_components to the
+    # number of features and samples. If it covers all features, we skip PCA and use the plain RF.
     n_features = X.shape[1]
     k = min(int(n_components), n_features, len(X)) if n_components else 0
     if 0 < k < n_features:
@@ -538,7 +538,7 @@ def run_prediction_with_pixel_classifier(
     Returns:
         The pixel level predictions.
     """
-    # Stored as {'rf': ..., 'model_spec': ...} by the GUI; older / backend files are a bare classifier.
+    # Stored as {'rf': ..., 'model_spec': ...} by the GUI. Older or backend files are a bare classifier.
     obj = load(rf_path)
     rf = obj["rf"] if isinstance(obj, dict) and "rf" in obj else obj
     compute_embeddings = util.get_embedding_function(model_type) if model_type is not None \
