@@ -9,6 +9,34 @@ from micro_sam.sam_annotator.annotator import annotator, detect_ndim, detect_ndi
 from micro_sam._test_util import check_layer_initialization
 
 
+def test_progress_bar_initial_description(monkeypatch):
+    """A progress description supplied at creation is visible before the backend reports a total."""
+    from micro_sam.sam_annotator import _widgets
+
+    captured = {}
+
+    class FakeProgress:
+        def update(self, value):
+            pass
+
+        def set_description(self, description):
+            pass
+
+        def close(self):
+            pass
+
+        def reset(self):
+            pass
+
+    def fake_progress(**kwargs):
+        captured["kwargs"] = kwargs
+        return FakeProgress()
+
+    monkeypatch.setattr(_widgets, "progress", fake_progress)
+    _widgets._create_pbar_for_threadworker("Preparing image embeddings")
+    assert captured["kwargs"] == {"desc": "Preparing image embeddings"}
+
+
 class TestDetectNdim:
     """Test the detect_ndim helper function."""
 
@@ -220,7 +248,7 @@ class TestAnnotatorClass:
         viewer.close()
 
     def test_reset_inputs_keeps_optional_paths_unset(self, qapp):
-        """Clearing inputs on an image switch must not create a blank custom checkpoint path."""
+        """Clearing inputs restores safe defaults without creating a blank custom checkpoint path."""
         from micro_sam.sam_annotator._widgets import EmbeddingWidget
 
         ew = EmbeddingWidget(ndim_choice=True)
@@ -231,12 +259,20 @@ class TestAnnotatorClass:
         ew.custom_weights_param.setText(" ")
         assert ew.custom_weights is None
 
+        # Batching is explicitly user-controlled and starts at the safe single-item default.
+        assert ew.batch_size == 1
+        assert ew.batch_size_param.value() == 1
+
         # Reproduce the input reset used when a different image layer is selected.
         ew.custom_weights_param.setText("/tmp/custom-weights.pt")
+        ew.batch_size_param.setValue(4)
         assert ew.custom_weights == "/tmp/custom-weights.pt"
+        assert ew.batch_size == 4
         ew._reset_inputs_to_defaults()
         assert ew.custom_weights is None
         assert ew.custom_weights_param.text() == ""
+        assert ew.batch_size == 1
+        assert ew.batch_size_param.value() == 1
 
     @pytest.mark.parametrize("ndim", [2, 3])
     def test_batched_checkbox_hidden_when_tiled(self, make_napari_viewer_proxy, ndim):

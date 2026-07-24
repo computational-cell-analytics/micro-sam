@@ -374,7 +374,7 @@ class AutomaticMaskGenerator(AMGBase):
         # we set the points per batch to 16 for mps for performance reasons
         # and otherwise keep them at the default of 64
         if points_per_batch is None:
-            points_per_batch = 16 if str(predictor.device) == "mps" else 64
+            points_per_batch = 16 if util.device_type(predictor.device) == "mps" else 64
         self._points_per_batch = points_per_batch
 
         self._crop_n_layers = crop_n_layers

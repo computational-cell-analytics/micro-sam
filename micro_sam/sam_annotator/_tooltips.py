@@ -2,6 +2,10 @@
 
 tooltips = {
     "embedding": {
+        "batch_size": (
+            "Number of image slices or tiles encoded together per GPU. Larger values may improve throughput, "
+            "but can be slower or run out of GPU memory. The safe default is 1."
+        ),
         "cache_state": "Cache the automatic segmentation state to disk for faster (re)runs.",
         "custom_weights": "Select custom model weights. For example for a model you have finetuned",
         "device": "Select the computational device to use for processing.",
@@ -15,7 +19,7 @@ tooltips = {
         "automatic_segmentation_mode": "Select the automatic segmentation mode.",
         "run_button": "Compute embeddings or load embeddings if embedding_save_path is specified.",
         "tiling": "Enter tile size for computing tiled embeddings. Enter only x-value for quadratic size or both for non-quadratic.",  # noqa
-        "settings": "Settings for computing the image embeddings: model family and size, tiling, the embedding save path and the compute device.",  # noqa
+        "settings": "Settings for computing the image embeddings: model family and size, tiling, batch size, the embedding save path and the compute device.",  # noqa
     },
     "segmentnd": {
         "box_extension": "Enter factor by which box size is increased when projecting to adjacent slices. Larger factors help if object sizes change between slices.",  # noqa

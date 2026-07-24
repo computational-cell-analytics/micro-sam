@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import torch
 from bioimage_cpp.utils import Blocking
 
 from micro_sam.v2.prompt_based_segmentation import (
@@ -55,6 +56,32 @@ def make_tiled_segmenter():
 
     segmenter._get_segmenter = get_segmenter
     return segmenter
+
+
+@pytest.mark.parametrize("device", ("mps", torch.device("mps"), torch.device("mps", 0)))
+def test_promptable_segmentation_3d_disables_offloading_on_mps(device, monkeypatch):
+    # Offloading to CPU on MPS races and gives garbage masks, so it must stay off for every way the
+    # device can be spelled - in particular the indexed 'mps:0' the tiled variant resolves.
+    monkeypatch.setattr("micro_sam.v2.util._get_device", lambda device=None: device)
+    monkeypatch.setattr(PromptableSegmentation3D, "init_predictor", lambda self: None)
+    segmenter = PromptableSegmentation3D(
+        predictor=None, volume=np.zeros((4, 8, 8), dtype="uint8"), volume_embeddings=None, device=device,
+    )
+
+    assert not segmenter.offload_video_to_cpu
+    assert not segmenter.offload_state_to_cpu
+
+
+def test_promptable_segmentation_3d_keeps_offloading_on_cuda(monkeypatch):
+    monkeypatch.setattr("micro_sam.v2.util._get_device", lambda device=None: device)
+    monkeypatch.setattr(PromptableSegmentation3D, "init_predictor", lambda self: None)
+    segmenter = PromptableSegmentation3D(
+        predictor=None, volume=np.zeros((4, 8, 8), dtype="uint8"), volume_embeddings=None,
+        device=torch.device("cuda", 0),
+    )
+
+    assert segmenter.offload_video_to_cpu
+    assert segmenter.offload_state_to_cpu
 
 
 def test_promptable_segmentation_3d_progress_total():

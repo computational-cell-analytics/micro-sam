@@ -15,7 +15,7 @@ from typing import Optional, Tuple, Union
 import numpy as np
 import torch
 
-from .util import DEFAULT_MODEL
+from .util import DEFAULT_MODEL, Devices
 
 
 def get_predictor_and_segmenter(
@@ -50,12 +50,15 @@ def get_predictor_and_segmenter(
     from ..sam_annotator._state import _get_sam_model
     from .instance_segmentation import get_decoder, get_instance_segmentation_generator
 
-    device = get_device(device)
+    # Keep the un-resolved request (None = 'auto') separate from the concrete model placement, so the
+    # segmenter can tell 'use all visible GPUs' apart from an explicitly selected single device.
+    requested_device = device
+    model_device = get_device(device)
 
     # Load a SAM2 image predictor, used to precompute the image embeddings that the decoder / grid
     # prediction reuses. The video predictor for 3d embeddings is built on demand in the front-end.
     predictor, _ = _get_sam_model(
-        model_type=model_type, ndim=2, device=device, checkpoint_path=None, decoder_path=None, use_cli=True,
+        model_type=model_type, ndim=2, device=model_device, checkpoint_path=None, decoder_path=None, use_cli=True,
     )
 
     # Resolve the UniSAM2 decoder if one is requested / available. 'ais' requires a decoder; 'amg'
@@ -66,7 +69,7 @@ def get_predictor_and_segmenter(
             # Reuse the predictor's already-built image encoder for the decoder (its weights are
             # redefined by the checkpoint's strict load) to avoid building a second SAM2 backbone.
             encoder = getattr(getattr(predictor, "model", predictor), "image_encoder", None)
-            decoder = get_decoder(model_type, checkpoint=checkpoint, device=device, encoder=encoder)
+            decoder = get_decoder(model_type, checkpoint=checkpoint, device=model_device, encoder=encoder)
         except Exception as e:
             if segmentation_mode == "ais":
                 raise
@@ -77,7 +80,7 @@ def get_predictor_and_segmenter(
         kwargs.setdefault("model_type", model_type)
     segmenter = get_instance_segmentation_generator(
         model=predictor.model, decoder=decoder, is_tiled=is_tiled,
-        segmentation_mode=engine, device=device, **kwargs,
+        segmentation_mode=engine, device=model_device, inference_device=requested_device, **kwargs,
     )
     return predictor, segmenter
 
@@ -97,20 +100,25 @@ def automatic_instance_segmentation(
     mode: str = "sparse",
     device: Optional[Union[str, torch.device]] = None,
     verbose: bool = True,
+    batch_size: Optional[int] = 1,
+    devices: Devices = None,
+    num_prefetch_workers: int = 4,
+    num_write_workers: int = 2,
     **generate_kwargs,
 ) -> np.ndarray:
     """Run automatic instance segmentation for a single input and save the result.
 
     Args:
-        predictor: The SAM2 predictor (see `get_predictor_and_segmenter`), used to precompute the
-            image embeddings when `embedding_path` is given.
+        predictor: The SAM2 predictor (see `get_predictor_and_segmenter`), used to precompute image
+            embeddings for 3d AIS or when `embedding_path` is given.
         segmenter: The automatic instance segmentation generator (see `get_predictor_and_segmenter`).
         input_path: The input image, either a filepath (e.g. tif or a container with `key`) or an array.
         output_path: Optional path to save the segmentation as a tif file.
-        embedding_path: Optional path to cache the image embeddings. If given, the embeddings are
-            precomputed with the predictor and only the decoder / grid prediction is run on them.
-        model_type: The SAM2 model. Used to build the 3d video predictor for embedding precomputation.
-        checkpoint: Optional checkpoint for the embedding predictor.
+        embedding_path: Optional path to cache the image embeddings. When given, embeddings are
+            persisted and reused. Decoder-based 3d inference always precomputes embeddings first;
+            without this path it uses an ephemeral cache.
+        model_type: Retained for API compatibility; the loaded predictor determines the embedding model.
+        checkpoint: Retained for API compatibility; the loaded predictor already contains its weights.
         key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
         ndim: The number of spatial dimensions (2 or 3). By default inferred from the data.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction runs without tiling.
@@ -118,12 +126,19 @@ def automatic_instance_segmentation(
         mode: The AIS post-processing mode, 'sparse' (flow) or 'dense' (multicut). Ignored for AMG.
         device: The device to run inference on.
         verbose: Whether to print progress.
+        batch_size: The batch size used when running inference for multiple slices and / or tiles.
+            Defaults to one; pass None for throughput-based automatic selection.
+        devices: Inference device or devices. None uses all visible GPUs when the model is on CUDA.
+        num_prefetch_workers: Number of input reading and preprocessing threads.
+        num_write_workers: Number of output writing threads.
         generate_kwargs: Additional post-processing parameters forwarded to the segmenter's `generate`.
 
     Returns:
         The instance segmentation, uint32 array.
     """
-    from ..util import load_image_data
+    import shutil
+
+    from ..util import load_image_data, make_temp_embedding_path
     from .util import precompute_image_embeddings
     from .instance_segmentation import UniSAM2InstanceSegmentation, amg_3d_segmentation
 
@@ -134,26 +149,62 @@ def automatic_instance_segmentation(
     is_ais = isinstance(segmenter, UniSAM2InstanceSegmentation)
 
     if is_ais:
-        # Decoder-based segmentation: optionally precompute embeddings (reusing the predictor) and run
-        # only the decoder on them, otherwise run the full model. A 3d volume needs the video predictor.
+        # Resolve one device selection for the whole staged workflow. Explicit `devices` takes
+        # precedence over the per-call `device`; when both are omitted, preserve the intent from
+        # `get_predictor_and_segmenter` (None means fan out, an explicit device means stay pinned).
+        requested_devices = devices if devices is not None else device
+        inference_devices = segmenter._inference_devices(requested_devices)
+
+        # Decoder-based 3d segmentation always stages encoder and decoder inference. This avoids
+        # re-encoding overlapping z-halo slices and keeps the decoder's peak separate from the encoder.
+        # Two-dimensional inference keeps the fused path unless persistent embeddings were requested.
         image_embeddings = None
-        if embedding_path is not None:
-            if ndim == 3:
-                from ..sam_annotator._state import _get_sam_model
-                emb_predictor, _ = _get_sam_model(
-                    model_type=model_type, ndim=3, device=device,
-                    checkpoint_path=checkpoint, decoder_path=None, use_cli=True,
+        temp_embedding_path = None
+        try:
+            if embedding_path is not None or ndim == 3:
+                # Volumes and tiled images are streamed from the zarr; only small 2d stays in memory.
+                is_streamed = ndim == 3 or tile_shape is not None
+                # Own the ephemeral store here so it is removed after this input, rather than only at
+                # process exit (which piles up one store per input in a multi-input loop).
+                effective_path = embedding_path
+                if effective_path is None and is_streamed:
+                    temp_embedding_path = make_temp_embedding_path()
+                    effective_path = temp_embedding_path
+                # Reuse the predictor's underlying SAM2 model to avoid a second accelerator-resident backbone.
+                emb_predictor = getattr(predictor, "model", predictor) if ndim == 3 else predictor
+                image_embeddings = precompute_image_embeddings(
+                    emb_predictor,
+                    raw,
+                    save_path=effective_path,
+                    ndim=ndim,
+                    tile_shape=tile_shape,
+                    halo=halo,
+                    verbose=verbose,
+                    lazy_loading=is_streamed,
+                    batch_size=batch_size,
+                    devices=inference_devices,
+                    num_prefetch_workers=num_prefetch_workers,
+                    num_write_workers=num_write_workers,
                 )
-            else:
-                emb_predictor = predictor
-            image_embeddings = precompute_image_embeddings(
-                emb_predictor, raw, save_path=embedding_path, ndim=ndim,
-                tile_shape=tile_shape, halo=halo, verbose=verbose, lazy_loading=(ndim == 3),
+            segmenter.initialize(
+                raw,
+                ndim=ndim,
+                image_embeddings=image_embeddings,
+                tile_shape=tile_shape,
+                halo=halo,
+                batch_size=batch_size,
+                devices=inference_devices,
+                num_prefetch_workers=num_prefetch_workers,
+                num_write_workers=num_write_workers,
             )
-        segmenter.initialize(
-            raw, ndim=ndim, image_embeddings=image_embeddings, tile_shape=tile_shape, halo=halo,
-        )
-        segmentation = segmenter.generate(mode=mode, **generate_kwargs)
+            segmentation = segmenter.generate(mode=mode, **generate_kwargs)
+        finally:
+            # Close all handles; remove only a store created implicitly for this call.
+            if image_embeddings is not None:
+                image_embeddings.close()
+            image_embeddings = None
+            if temp_embedding_path is not None:
+                shutil.rmtree(temp_embedding_path, ignore_errors=True)
 
     elif ndim == 3:
         # Grid-based AMG on a volume: segment slice-by-slice and stitch across z.

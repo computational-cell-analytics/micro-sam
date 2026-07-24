@@ -408,6 +408,10 @@ class _WidgetBase(QtWidgets.QWidget):
         # NOTE: And finally, we should re-enable signals again.
         self.model_size_dropdown.blockSignals(False)
 
+        # Whether the batch size applies depends on the backend, so it follows the model selection.
+        if getattr(self, "_batch_size_widget", None) is not None:
+            self._update_batch_size_visibility()
+
     def _create_model_section(
         self,
         default_model: Optional[str] = None,
@@ -601,8 +605,13 @@ class InfoDialog(QtWidgets.QDialog):
 # Set up the progress bar. We handle this via custom signals that are passed as callbacks to the
 # function that does the actual work. We need callbacks for initializing the progress bar,
 # updating it and for stopping the progress bar.
-def _create_pbar_for_threadworker():
-    pbar = progress()
+def _create_pbar_for_threadworker(initial_description=None):
+    """Create a napari progress bar, optionally visible in an indeterminate preparation state.
+
+    Supplying the description at construction time ensures napari can paint meaningful status before
+    a synchronous caller reaches the backend callback that provides the final work-item count.
+    """
+    pbar = progress(desc=initial_description)
     pbar_signals = PBarSignals()
     pbar_signals.pbar_total.connect(
         lambda total: setattr(pbar, "total", total)
@@ -1788,6 +1797,23 @@ class EmbeddingWidget(_WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
+        # Use a conservative default and let users opt into larger per-GPU batches when their
+        # workload and available memory benefit from them. Batching only helps on a GPU, so the
+        # control is hidden whenever the effective device is the CPU (the default of 1 is still
+        # used then). Visibility tracks the device dropdown, so it also updates when the user
+        # switches devices or when 'auto' resolves to the CPU.
+        self.batch_size = 1
+        self.batch_size_param, batch_size_layout = self._add_int_param(
+            "batch_size", self.batch_size, min_val=1, max_val=64,
+            title="batch size",
+            tooltip=get_tooltip("embedding", "batch_size"),
+        )
+        self._batch_size_widget = QtWidgets.QWidget()
+        self._batch_size_widget.setLayout(batch_size_layout)
+        setting_values.layout().addWidget(self._batch_size_widget)
+        self.device_dropdown.currentIndexChanged.connect(self._update_batch_size_visibility)
+        self._update_batch_size_visibility()
+
         # Create UI for the save path.
         self.embeddings_save_path = None
         self.embeddings_save_path_param, save_layout = self._add_path_param(
@@ -1873,6 +1899,18 @@ class EmbeddingWidget(_WidgetBase):
         self.tiling = self.tiling_dropdown.currentText()
         self._tiling_widget.setVisible(self.tiling == "yes")
 
+    def _update_batch_size_visibility(self, index=None):
+        # Show the batch size field only where it has an effect: batching does not help on the CPU
+        # (so 'auto' resolving to the CPU hides it), and the VFM encoders offered by the classifiers
+        # compute their embeddings unbatched. The default of 1 is used whenever it is hidden.
+        from micro_sam.models.vfm import is_vfm_model
+
+        device = self.device
+        if device == "auto":
+            device = util._get_default_device()
+        has_effect = str(device) != "cpu" and not is_vfm_model(getattr(self, "model_type", None))
+        self._batch_size_widget.setVisible(has_effect)
+
     def _apply_default_tiling_for_shape(self, shape):
         # Enable tiling by default for large in-plane images, using the central v2 tiling defaults.
         # 'shape' is the spatial image shape (channel axis already removed). Shared by the layer-based
@@ -1922,6 +1960,7 @@ class EmbeddingWidget(_WidgetBase):
         self.halo_x_param.setValue(DEFAULT_HALO[0])
         self.halo_y_param.setValue(DEFAULT_HALO[1])
         self.tiling_dropdown.setCurrentText("no")
+        self.batch_size_param.setValue(1)
         self.embeddings_save_path_param.setText("")
 
         # Reset the image-dimensionality override back to 'auto' so a new image is re-detected.
@@ -2179,7 +2218,9 @@ class EmbeddingWidget(_WidgetBase):
             show_info("Set an embeddings save path to cache the automatic segmentation state.")
 
         # Set up progress bar and signals for using it within a threadworker.
-        pbar, pbar_signals = _create_pbar_for_threadworker()
+        # Model and decoder preparation happens before the backend knows the tile / slice count, so
+        # start with an indeterminate status instead of leaving napari's activity display empty.
+        pbar, pbar_signals = _create_pbar_for_threadworker("Computing image embeddings")
 
         # @thread_worker()
         def compute_image_embedding():
@@ -2211,6 +2252,7 @@ class EmbeddingWidget(_WidgetBase):
                 checkpoint_path=self.custom_weights,
                 tile_shape=tile_shape,
                 halo=halo,
+                batch_size=self.batch_size,
                 prefer_decoder=True,
                 precompute_autoseg_state=precompute_autoseg_state,
                 pbar_init=pbar_init,
@@ -2420,6 +2462,10 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         self.model_size_dropdown.setCurrentText(self.model_size)
         self.model_size_dropdown.update()
         self.model_size_dropdown.blockSignals(False)
+        # This branch does not go through the inherited update, so refresh the batch size here too:
+        # the advanced families include the VFM encoders, which do not support batching.
+        if getattr(self, "_batch_size_widget", None) is not None:
+            self._update_batch_size_visibility()
 
     def _validate_model_type_and_custom_weights(self):
         # DINO families always resolve from the registry. DINOv3 weights load from HuggingFace using the
@@ -3853,7 +3899,7 @@ class AutoSegmentV1Widget(_WidgetBase):
             return True
         state = AnnotatorState()
         predictor = state.predictor
-        if str(predictor.device) == "cpu" or str(predictor.device) == "mps":
+        if util.device_type(predictor.device) in ("cpu", "mps"):
             n_slices = self._viewer.layers["auto_segmentation"].data.shape[0]
             if state.is_sam2:
                 from micro_sam.precompute_state import _has_autoseg_state
@@ -4419,8 +4465,8 @@ class AutoSegmentWidget(_WidgetBase):
         # plain 2d image. Thread workers are disabled in this tool (see top of module), so the run is
         # synchronous; we drive the bar via callbacks the backends call between units and pump the Qt
         # event loop with 'processEvents' on each update so it repaints live. It is always closed in
-        # the 'finally' block. (3d decoder inference runs through a thread pool and is reported as a
-        # single step, since it cannot update the napari bar live.)
+        # the 'finally' block. Batched 3d inference forwards completed tile-slice increments from its
+        # worker threads to this calling thread so napari can repaint them safely.
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
         def pbar_init(total, description):

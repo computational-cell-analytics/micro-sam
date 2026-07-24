@@ -5,9 +5,12 @@ from typing import Optional, Tuple, Union
 import numpy as np
 from torch_em.transform.raw import normalize_percentile
 
-# The released UniSAM2 microscopy checkpoint and the legacy 2D embedding path use min-max normalization.
-# Persist the policy in embedding caches so percentile-normalized features are not silently reused.
-RAW_NORMALIZATION = "minmax_per_channel"
+# Persist the preprocessing (normalization + resize) policy in embedding caches so incompatible
+# features are not silently reused. The 2d image path uses per-channel min-max (via `to_image`); the
+# 3d / video path uses percentile normalization with the tensor resize used in training. The video
+# resize suffix invalidates embeddings created by the former skimage path, which did not match it.
+IMAGE_PREPROCESSING = "minmax_per_channel"
+VIDEO_PREPROCESSING = "percentile_2_98_per_channel_torch_resize_v1"
 
 
 def normalize_raw(

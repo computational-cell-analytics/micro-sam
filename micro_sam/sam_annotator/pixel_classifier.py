@@ -160,6 +160,7 @@ def batch_pixel_classifier(
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
     skip_done: bool = False,
+    batch_size: int = 1,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the pixel classifier for a list of images.
 
@@ -182,6 +183,8 @@ def batch_pixel_classifier(
         ndim: The dimensionality of the data. If not given will be derived from the data.
         viewer: The viewer to which the functionality should be added.
         return_viewer: Whether to return the napari viewer instead of starting the event loop.
+        batch_size: The number of tiles / slices per model call when computing the embeddings.
+            Only has an effect on a GPU. By default a single tile / slice is used.
         skip_done: Whether to skip images whose prediction already exists in `output_folder`.
 
     Returns:
@@ -195,6 +198,7 @@ def batch_pixel_classifier(
     task = PixelClassificationBatchTask(
         ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,
         tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
+        batch_size=batch_size,
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,

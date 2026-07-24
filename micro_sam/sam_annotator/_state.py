@@ -160,6 +160,7 @@ class AnnotatorState(metaclass=Singleton):
         decoder_path=None,
         tile_shape=None,
         halo=None,
+        batch_size=1,
         precompute_autoseg_state=False,
         prefer_decoder=True,
         pbar_init=None,
@@ -251,11 +252,11 @@ class AnnotatorState(metaclass=Singleton):
                 save_path = util.make_temp_embedding_path()
                 self.embedding_tmpdir = save_path
 
-            # For SAM2 volumes, load the embeddings lazily from the zarr so the high-resolution
-            # per-slice features stay on disk and are streamed one slice at a time during tracking.
+            # For SAM2 volumes and tiled images, load the embeddings lazily from the zarr so the
+            # high-resolution features stay on disk and are streamed one slice / tile at a time.
             # This keeps memory bounded for large volumes (materialising all slices costs
             # ~200 MB/slice and OOMs); it only applies when the embeddings are cached on disk.
-            lazy_loading = self.is_sam2 and ndim == 3 and isinstance(save_path, str)
+            lazy_loading = needs_disk_cache
 
             self.image_embeddings = _comp_embed_fn(
                 predictor=self.predictor,
@@ -264,6 +265,7 @@ class AnnotatorState(metaclass=Singleton):
                 ndim=ndim,
                 tile_shape=tile_shape,
                 halo=halo,
+                batch_size=batch_size,
                 verbose=True,
                 lazy_loading=lazy_loading,
                 pbar_init=pbar_init,

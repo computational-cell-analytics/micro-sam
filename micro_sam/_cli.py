@@ -371,6 +371,24 @@ def _parse_shape(value):
     return tuple(int(x) for x in value.replace(" ", "").split(","))
 
 
+def _parse_batch_size(value):
+    """Parse the batch size: an integer, or 'auto' to benchmark a throughput-efficient value."""
+    if value is None or str(value).lower() == "auto":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        raise click.UsageError(f"Expected an integer or 'auto' for '--batch_size', got '{value}'.")
+
+
+def _parse_devices(value):
+    """Parse a comma-separated device list like 'cuda:0,cuda:1', or None for all visible devices."""
+    if value is None:
+        return None
+    devices = [device.strip() for device in value.split(",") if device.strip()]
+    return devices or None
+
+
 def _convert_argval(value):
     """Best-effort conversion of a pass-through option value to int / float / str."""
     try:
@@ -472,12 +490,20 @@ def _view_result(image_path, key, segmentation):
     "-d", "--device", default=None,
     help="The device for the predictor: 'cuda', 'cpu' or 'mps'. By default the best available is used."
 )
+@click.option(
+    "--batch_size", default="1",
+    help="The number of tiles / slices per model call, or 'auto' to select it by measured throughput."
+)
+@click.option(
+    "--devices", default=None,
+    help="Comma-separated devices for inference, e.g. 'cuda:0,cuda:1'. By default all visible GPUs are used."
+)
 @click.option("--view", is_flag=True, default=False, help="Whether to open the results in napari after segmentation.")
 @click.option("-v", "--verbose", is_flag=True, default=False, help="Whether to allow verbosity of outputs.")
 @click.pass_context
 def inference_segmentation(
     ctx, input_path, output_path, embedding_path, pattern, key, model_type, checkpoint_path,
-    tile_shape, halo, ndim, mode, device, view, verbose,
+    tile_shape, halo, ndim, mode, device, batch_size, devices, view, verbose,
 ):
     """Run automatic instance segmentation.
 
@@ -497,6 +523,8 @@ def inference_segmentation(
     model_type = model_type or DEFAULT_MODEL
     tile_shape = _parse_shape(tile_shape)
     halo = _parse_shape(halo)
+    batch_size = _parse_batch_size(batch_size)
+    devices = _parse_devices(devices)
     generate_kwargs = _parse_extra(ctx.args)
 
     predictor, segmenter = get_predictor_and_segmenter(
@@ -535,6 +563,8 @@ def inference_segmentation(
             halo=halo,
             mode=mode,
             device=device,
+            batch_size=batch_size,
+            devices=devices,
             verbose=verbose,
             **generate_kwargs,
         )
@@ -777,9 +807,17 @@ def inference_object_classification(
     "--prefer_decoder", is_flag=True, default=True, flag_value=False,
     help="Whether to use decoder-based state (AIS) when the model has a decoder, instead of grid-based AMG."
 )
+@click.option(
+    "--batch_size", default="1",
+    help="The number of tiles / slices per model call, or 'auto' to select it by measured throughput."
+)
+@click.option(
+    "--devices", default=None,
+    help="Comma-separated devices for inference, e.g. 'cuda:0,cuda:1'. By default all visible GPUs are used."
+)
 def precompute_embeddings(
     input_path, embedding_path, pattern, key, model_type, checkpoint_path, ndim,
-    precompute_autoseg_state, prefer_decoder,
+    precompute_autoseg_state, prefer_decoder, batch_size, devices,
 ):
     """Precompute image embeddings (and optionally the automatic-segmentation state)."""
     from .precompute_state import precompute_state
@@ -791,6 +829,7 @@ def precompute_embeddings(
         pattern=pattern, key=key, ndim=ndim,
         precompute_autoseg_state=precompute_autoseg_state,
         prefer_decoder=prefer_decoder,
+        batch_size=_parse_batch_size(batch_size), devices=_parse_devices(devices),
     )
 
 

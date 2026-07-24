@@ -32,7 +32,7 @@ class ClassificationBatchTask(BatchAnnotatorTask):
 
     def __init__(
         self, *, ndim, model_type, embedding_paths=None, tile_shape=None, halo=None,
-        checkpoint_path=None, device=None,
+        checkpoint_path=None, device=None, batch_size=1,
     ):
         self.ndim = ndim
         self.model_type = model_type
@@ -41,6 +41,7 @@ class ClassificationBatchTask(BatchAnnotatorTask):
         self.halo = halo
         self.checkpoint_path = checkpoint_path
         self.device = device
+        self.batch_size = batch_size
 
     def _set_layers(self, viewer, index):
         """Hook: add or update task-specific layers (e.g. the segmentation layer) for this item."""
@@ -69,7 +70,8 @@ class ClassificationBatchTask(BatchAnnotatorTask):
         state.initialize_predictor(
             image, model_type=self.model_type, save_path=embedding_path, halo=self.halo,
             tile_shape=self.tile_shape, precompute_autoseg_state=False, ndim=self.ndim,
-            checkpoint_path=self.checkpoint_path, device=self.device, skip_load=False, use_cli=True, **kwargs,
+            checkpoint_path=self.checkpoint_path, device=self.device, batch_size=self.batch_size,
+            skip_load=False, use_cli=True, **kwargs,
         )
         state.image_shape = image.shape if image.ndim == self.ndim else image.shape[:-1]
         state.ndim = self.ndim

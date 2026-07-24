@@ -1,3 +1,4 @@
+import types
 import unittest
 from copy import deepcopy
 
@@ -187,6 +188,20 @@ def test_autoseg_base_hierarchy_and_contract():
     # A concrete decoder segmenter constructs without model work and is an AutoSegBase.
     seg = InstanceSegmentationWithDecoder(predictor=None, decoder=None)
     assert isinstance(seg, AutoSegBase) and seg.is_initialized is False
+
+
+@pytest.mark.parametrize(
+    "device, expected", [("mps", 16), ("mps:0", 16), ("cpu", 64), ("cuda", 64), ("cuda:1", 64)],
+)
+def test_automatic_mask_generator_points_per_batch_by_device(device, expected):
+    """MPS needs the smaller batch for performance, including when the device carries an index."""
+    import torch
+    from micro_sam.v1.instance_segmentation import AutomaticMaskGenerator
+
+    predictor = types.SimpleNamespace(device=torch.device(device))
+    amg = AutomaticMaskGenerator(predictor)
+
+    assert amg._points_per_batch == expected
 
 
 if __name__ == "__main__":

@@ -195,43 +195,48 @@ class TestUtil(unittest.TestCase):
         from types import SimpleNamespace
 
         from micro_sam.util import _get_embedding_signature
-        from micro_sam.v2.normalization import RAW_NORMALIZATION
+        from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING
         from micro_sam.v2.util import _check_saved_embeddings
+
+        self.assertEqual(IMAGE_PREPROCESSING, "minmax_per_channel")
+        self.assertEqual(VIDEO_PREPROCESSING, "percentile_2_98_per_channel_torch_resize_v1")
 
         predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test")
         raw = np.arange(100).reshape(10, 10)
         signature = _get_embedding_signature(raw, predictor, tile_shape=None, halo=None)
-        signature["normalization"] = RAW_NORMALIZATION
-        self.assertEqual(signature["normalization"], "minmax_per_channel")
 
-        attrs = {"input_size": [10, 10], **signature}
-        embeddings = SimpleNamespace(attrs=attrs)
-        self.assertFalse(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
+        def run(embeddings, preprocessing):
+            return _check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None, preprocessing)
 
-        attrs["normalization"] = "percentile_2_98"
-        self.assertTrue(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
+        def full_cache(normalization):
+            attrs = {"input_size": [10, 10], **signature}
+            if normalization is not None:
+                attrs["normalization"] = normalization
+            return SimpleNamespace(attrs=attrs)
 
-        # Untagged caches predate percentile normalization and used the same min-max policy.
-        del attrs["normalization"]
-        self.assertFalse(_check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None))
+        # A complete cache is reused only under the policy it was written with.
+        self.assertFalse(run(full_cache(IMAGE_PREPROCESSING), IMAGE_PREPROCESSING))
+        self.assertFalse(run(full_cache(VIDEO_PREPROCESSING), VIDEO_PREPROCESSING))
+        # A 2d min-max cache is not reused for the 3d percentile policy and vice versa.
+        self.assertTrue(run(full_cache(IMAGE_PREPROCESSING), VIDEO_PREPROCESSING))
+        self.assertTrue(run(full_cache(VIDEO_PREPROCESSING), IMAGE_PREPROCESSING))
+        # A missing tag is stale.
+        self.assertTrue(run(full_cache(None), IMAGE_PREPROCESSING))
 
         class PartialEmbeddings(dict):
             def __init__(self, normalization=None):
                 super().__init__(features=object())
                 self.attrs = {} if normalization is None else {"normalization": normalization}
 
-        legacy_partial = PartialEmbeddings()
-        self.assertFalse(_check_saved_embeddings(raw, predictor, legacy_partial, "cache.zarr", None, None))
+        # Partial caches (no 'input_size') resume only when the tag matches the requested policy.
+        self.assertTrue(run(PartialEmbeddings(), IMAGE_PREPROCESSING))
+        self.assertTrue(run(PartialEmbeddings(VIDEO_PREPROCESSING), IMAGE_PREPROCESSING))
+        self.assertFalse(run(PartialEmbeddings(IMAGE_PREPROCESSING), IMAGE_PREPROCESSING))
 
-        percentile_partial = PartialEmbeddings("percentile_2_98")
-        self.assertTrue(_check_saved_embeddings(raw, predictor, percentile_partial, "cache.zarr", None, None))
-
-        current_partial = PartialEmbeddings(RAW_NORMALIZATION)
-        self.assertFalse(_check_saved_embeddings(raw, predictor, current_partial, "cache.zarr", None, None))
-
-        empty_cache = PartialEmbeddings(RAW_NORMALIZATION)
+        # An empty cache (no features) is never stale.
+        empty_cache = PartialEmbeddings(IMAGE_PREPROCESSING)
         del empty_cache["features"]
-        self.assertFalse(_check_saved_embeddings(raw, predictor, empty_cache, "cache.zarr", None, None))
+        self.assertFalse(run(empty_cache, IMAGE_PREPROCESSING))
 
     def test_apply_nms_tiled_border_masks(self):
         from micro_sam.util import apply_nms
@@ -416,6 +421,8 @@ class TestUtil(unittest.TestCase):
         self.assertTrue(np.allclose(mask, expected_mask))
 
     def test_get_device(self):
+        from unittest import mock
+
         from micro_sam.util import get_device
 
         # check that device without argument works
@@ -429,6 +436,23 @@ class TestUtil(unittest.TestCase):
         device = get_device(torch.device("cpu"))
         self.assertTrue(isinstance(device, torch.device))
         self.assertEqual(device.type, "cpu")
+
+        # Indexed accelerator strings are valid device selections too.
+        with mock.patch.object(torch.cuda, "is_available", return_value=True):
+            self.assertEqual(get_device("cuda:1"), "cuda:1")
+
+    def test_device_type(self):
+        from micro_sam.util import device_type
+
+        self.assertEqual(device_type("cpu"), "cpu")
+        self.assertEqual(device_type(torch.device("cpu")), "cpu")
+
+        # Indexed accelerators must report the plain type: torch reports a model's parameters as
+        # living on 'mps:0' / 'cuda:0', so 'str(device) == "mps"' silently fails.
+        self.assertEqual(device_type("mps"), "mps")
+        self.assertEqual(device_type(torch.device("mps")), "mps")
+        self.assertEqual(device_type(torch.device("mps", 0)), "mps")
+        self.assertEqual(device_type(torch.device("cuda", 3)), "cuda")
 
     def test_configure_mps_memory(self):
         from micro_sam.util import _configure_mps_memory
@@ -495,9 +519,8 @@ class TestSAM2Util(unittest.TestCase):
         predictor.reset_predictor()
 
     def test_precompute_image_embeddings_2d(self):
-        from micro_sam.v2.normalization import RAW_NORMALIZATION
+        from micro_sam.v2.normalization import IMAGE_PREPROCESSING
         from micro_sam.v2.util import precompute_image_embeddings
-        from micro_sam.v2.normalization import RAW_NORMALIZATION
 
         predictor = self._get_predictor(ndim=2)
         input_ = np.random.rand(512, 512).astype("float32")
@@ -524,7 +547,7 @@ class TestSAM2Util(unittest.TestCase):
         # The signature is written so the GUI / CLI can validate a reload.
         self.assertEqual(f.attrs["model_name"], self.model_type)
         self.assertIn("data_signature", f.attrs)
-        self.assertEqual(f.attrs["normalization"], RAW_NORMALIZATION)
+        self.assertEqual(f.attrs["normalization"], IMAGE_PREPROCESSING)
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=2)
@@ -532,6 +555,7 @@ class TestSAM2Util(unittest.TestCase):
         self._check_predictor_initialization_2d(predictor, embeddings)
 
     def test_precompute_image_embeddings_3d(self):
+        from micro_sam.v2.normalization import VIDEO_PREPROCESSING
         from micro_sam.v2.util import precompute_image_embeddings, set_precomputed
 
         predictor = self._get_predictor(ndim=3)
@@ -563,6 +587,7 @@ class TestSAM2Util(unittest.TestCase):
         self.assertIn("fpn", f)
         self.assertEqual(f["features"].shape, (2, 1, 256, 64, 64))
         self.assertEqual(f.attrs["model_name"], self.model_type)
+        self.assertEqual(f.attrs["normalization"], VIDEO_PREPROCESSING)
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
@@ -592,6 +617,39 @@ class TestEmbeddingBackend(unittest.TestCase):
             group.create_dataset("features", data=data, shape=data.shape, chunks=data.shape)
         for key, val in attrs.items():
             group.attrs[key] = val
+
+    def test_image_embeddings_owns_temporary_store(self):
+        from micro_sam.v2.util import ImageEmbeddings
+
+        class Store:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        temporary_path = os.path.join(self.tmp_folder, "implicit.zarr")
+        os.makedirs(temporary_path)
+        store = Store()
+        resource = ImageEmbeddings({"features": object()}, store=store, temporary_path=temporary_path)
+
+        self.assertTrue(os.path.exists(temporary_path))
+        with resource as embeddings:
+            self.assertIs(embeddings, resource)
+            self.assertFalse(embeddings.closed)
+
+        self.assertTrue(store.closed)
+        self.assertTrue(resource.closed)
+        self.assertFalse(os.path.exists(temporary_path))
+        resource.close()  # Idempotent.
+
+        persistent_path = os.path.join(self.tmp_folder, "persistent.zarr")
+        os.makedirs(persistent_path)
+        persistent_store = Store()
+        with ImageEmbeddings({}, store=persistent_store):
+            pass
+        self.assertTrue(persistent_store.closed)
+        self.assertTrue(os.path.exists(persistent_path))
 
     def test_open_in_memory(self):
         from micro_sam.util import _open_embeddings

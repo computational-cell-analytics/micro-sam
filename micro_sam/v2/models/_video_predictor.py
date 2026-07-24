@@ -16,6 +16,10 @@ from sam2.utils.misc import AsyncVideoFrameLoader
 # so repeatedly segmenting the same / nearby slice reuses the upload; small so memory stays bounded.
 MAX_CACHED_FRAMES = 8
 
+# The ImageNet statistics SAM2 normalizes its frames with (sam2.utils.misc only has them as defaults).
+IMG_MEAN = (0.485, 0.456, 0.406)
+IMG_STD = (0.229, 0.224, 0.225)
+
 
 def _load_img_as_tensor(img_path, image_size):
     """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
@@ -42,13 +46,29 @@ def _load_img_as_tensor(img_path, image_size):
     img_np = normalize_raw(img_np, axis=(0, 1))
 
     # The effective square size gives prompts one isotropic scale factor.
-    from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_numpy
+    from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_tensor
     H, W = img_np.shape[:2]
     video_height = video_width = max(H, W)
-    img_np, _ = resize_longest_side_and_pad_numpy(img_np, image_size)
-
     img = torch.from_numpy(img_np.astype(np.float32)).permute(2, 0, 1)
+    img, _ = resize_longest_side_and_pad_tensor(img[None], image_size)
+    img = img[0]
     return img, video_height, video_width
+
+
+def _prepare_frame(raw, image_size):
+    """Resize and ImageNet-normalize one frame, exactly as the video predictor loads its frames.
+
+    Args:
+        raw: The frame, either a numpy array or a path to an image file.
+        image_size: The size the longest side is resized to.
+
+    Returns:
+        The frame as a (3, image_size, image_size) float32 tensor on the CPU.
+    """
+    image, _, _ = _load_img_as_tensor(raw, image_size)
+    mean = torch.tensor(IMG_MEAN, dtype=torch.float32)[:, None, None]
+    std = torch.tensor(IMG_STD, dtype=torch.float32)[:, None, None]
+    return (image - mean) / std
 
 
 class _LazyVideoFrames:
@@ -84,8 +104,8 @@ def _load_video_frames_from_images(
     volume,
     image_size,
     offload_video_to_cpu,
-    img_mean=(0.485, 0.456, 0.406),
-    img_std=(0.229, 0.224, 0.225),
+    img_mean=IMG_MEAN,
+    img_std=IMG_STD,
     async_loading_frames=False,
     compute_device=torch.device("cuda"),
     verbosity=True,

@@ -127,6 +127,21 @@ def _get_default_device():
     return device
 
 
+def device_type(device: Union[str, torch.device]) -> str:
+    """Get the device type ('cpu', 'cuda' or 'mps'), ignoring any device index.
+
+    Torch reports accelerators with an index (e.g. 'mps:0'), so comparing 'str(device)' against
+    'mps' or 'cuda' silently fails. Compare against this instead.
+
+    Args:
+        device: The device, as a string or torch.device.
+
+    Returns:
+        The device type.
+    """
+    return torch.device(device).type
+
+
 def _configure_mps_memory(device: Union[str, torch.device]) -> None:
     """Disable the MPS memory watermark so 3d automatic segmentation does not hit a premature OOM.
 
@@ -134,8 +149,10 @@ def _configure_mps_memory(device: Union[str, torch.device]) -> None:
     it. We set it only when unset (so a user-provided value is kept) and it must run before the first
     MPS allocation to apply.
     """
-    device_type = device if isinstance(device, str) else getattr(device, "type", "")
-    is_mps = isinstance(device_type, str) and device_type.lower() == "mps"
+    try:
+        is_mps = device_type(device) == "mps"
+    except (RuntimeError, TypeError):
+        is_mps = False
     if is_mps and "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in os.environ:
         os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
         print("Lifting the MPS memory limit for large 3d segmentation; this may use swap on low-memory Macs.")
@@ -156,14 +173,20 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
     if device is None or device == "auto":
         device = _get_default_device()
     else:
-        device_type = device if isinstance(device, str) else device.type
-        if device_type.lower() == "cuda":
+        try:
+            requested_type = device_type(device)
+        except (RuntimeError, TypeError) as e:
+            raise RuntimeError(
+                f"Unsupported device: '{device}'. Please choose from 'cpu', 'cuda', or 'mps'."
+            ) from e
+
+        if requested_type == "cuda":
             if not torch.cuda.is_available():
                 raise RuntimeError("PyTorch CUDA backend is not available.")
-        elif device_type.lower() == "mps":
+        elif requested_type == "mps":
             if not (torch.backends.mps.is_available() and torch.backends.mps.is_built()):
                 raise RuntimeError("PyTorch MPS backend is not available or is not built correctly.")
-        elif device_type.lower() == "cpu":
+        elif requested_type == "cpu":
             pass  # cpu is always available
         else:
             raise RuntimeError(f"Unsupported device: '{device}'. Please choose from 'cpu', 'cuda', or 'mps'.")
