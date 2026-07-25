@@ -12,6 +12,7 @@ from . import util as vutil
 from . import _widgets as widgets
 from ._state import AnnotatorState
 from ..v2.util import DEFAULT_MODEL
+from ._titles import get_dock_title
 from ._annotator import _AnnotatorBase
 from .util import (
     _load_amg_state,
@@ -396,7 +397,7 @@ def annotator(
     annotator_instance._update_image(segmentation_result=segmentation_result)
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator_instance, name="Segment Anything for Microscopy (Segmentation)")
+    viewer.window.add_dock_widget(annotator_instance, name=get_dock_title("segmentation"))
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=(

@@ -12,6 +12,7 @@ from ._batch import run_batch
 from . import _widgets as widgets
 from ._state import AnnotatorState
 from ..v2.util import DEFAULT_MODEL
+from ._titles import get_dock_title
 from ._annotator import _ClassifierBase
 from .util import _sync_embedding_widget
 from ._batch_classification import ClassificationBatchTask
@@ -122,7 +123,7 @@ def pixel_classifier(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Pixel Classification)")
+    viewer.window.add_dock_widget(annotator, name=get_dock_title("pixel_classification"))
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
@@ -142,7 +143,7 @@ def pixel_classifier(
 class PixelClassificationBatchTask(ClassificationBatchTask):
     """Batch task for the pixel classifier."""
 
-    dock_name = "Segment Anything for Microscopy (Batch Pixel Classification)"
+    dock_name = get_dock_title("batch_pixel_classification")
     classifier_class = PixelClassifier
     features_attr = "pixel_features"
     aux_attr = "pixel_grid_shape"

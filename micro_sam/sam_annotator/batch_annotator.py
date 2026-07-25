@@ -16,6 +16,7 @@ from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from ..v2.util import DEFAULT_MODEL
+from ._titles import get_dock_title
 from .util import _sync_embedding_widget
 from .annotator import Annotator, detect_ndim
 from ._batch import BatchAnnotatorTask, run_batch
@@ -120,7 +121,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         annotator._update_image(segmentation_result=self._resolve_initial_result(entry, index))
 
         state = AnnotatorState()
-        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Batch Segmentation)")
+        viewer.window.add_dock_widget(annotator, name=get_dock_title("batch_segmentation"))
         _sync_embedding_widget(
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
@@ -322,6 +323,17 @@ class BatchAnnotator(widgets._WidgetBase):
         scroll.setWidget(self._content)
         self.layout().addWidget(scroll)
 
+        self._rebuilt_on_show = False
+
+    def showEvent(self, event):
+        # The first embedding widget is built before napari styles the console, so its path fields keep
+        # the wider default font and the console opens wider than it is after any task change. Build it
+        # once more here, under the same conditions as a task change, so the width stays the same.
+        super().showEvent(event)
+        if not self._rebuilt_on_show:
+            self._rebuilt_on_show = True
+            self._rebuild_embedding_widget()
+
     def _create_options(self):
         self.folder = None
         self._folder_textbox, layout = self._add_path_param(
@@ -340,20 +352,40 @@ class BatchAnnotator(widgets._WidgetBase):
         self._content.layout().addLayout(layout)
         self._pattern_label = layout.itemAt(0).widget()
 
+        # Segmentation folder (object classification only), toggled by the task selector.
+        self.segmentation_folder = None
+        self.segmentation_pattern = "*"
+        self._seg_folder_container = QtWidgets.QWidget()
+        seg_layout = QtWidgets.QVBoxLayout()
+        seg_layout.setContentsMargins(0, 0, 0, 0)
+        _, path_layout = self._add_path_param(
+            "segmentation_folder", self.segmentation_folder, "directory",
+            title="Segmentation Folder", placeholder="Folder with segmentations (optional) ...",
+            tooltip=get_tooltip("batch_annotator", "segmentation_folder"),
+        )
+        seg_layout.addLayout(path_layout)
+        self._seg_folder_label = path_layout.itemAt(0).widget()
+        self._seg_folder_container.setLayout(seg_layout)
+        self._seg_folder_container.setVisible(False)
+        self._content.layout().addWidget(self._seg_folder_container)
+
         self.output_folder = None
         _, layout = self._add_path_param(
             "output_folder", self.output_folder, "directory",
             title="Output Folder", placeholder="Folder to save the results ...",
             tooltip=get_tooltip("batch_annotator", "output_folder")
         )
+        self._content.layout().addLayout(layout)
+        self._output_label = layout.itemAt(0).widget()
+
+        # 'Continue Annotation' (segmentation only) gets its own row. Inside the output folder row its
+        # width would widen the whole console whenever the segmentation task is selected.
         self.continue_annotation = True
         self.continue_annotation_checkbox = self._add_boolean_param(
             "continue_annotation", self.continue_annotation, title="Continue Annotation",
             tooltip=get_tooltip("batch_annotator", "continue_annotation"),
         )
-        layout.addWidget(self.continue_annotation_checkbox)
-        self._content.layout().addLayout(layout)
-        self._output_label = layout.itemAt(0).widget()
+        self._content.layout().addWidget(self.continue_annotation_checkbox)
 
         # Model dropdown on top, then the Task dropdown below it (stacked). The model dropdown is owned
         # by the embedded embedding widget and relocated into '_model_row' in '_rebuild_embedding_widget'.
@@ -372,22 +404,6 @@ class BatchAnnotator(widgets._WidgetBase):
         self.task_dropdown.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
         self._content.layout().addLayout(task_layout)
         self._task_label = task_layout.itemAt(0).widget()
-
-        # Segmentation folder (object classification only), toggled by the task selector.
-        self.segmentation_folder = None
-        self.segmentation_pattern = "*"
-        self._seg_folder_container = QtWidgets.QWidget()
-        seg_layout = QtWidgets.QVBoxLayout()
-        seg_layout.setContentsMargins(0, 0, 0, 0)
-        _, path_layout = self._add_path_param(
-            "segmentation_folder", self.segmentation_folder, "directory",
-            title="Segmentation Folder", placeholder="Folder with segmentations (optional) ...",
-            tooltip=get_tooltip("batch_annotator", "segmentation_folder"),
-        )
-        seg_layout.addLayout(path_layout)
-        self._seg_folder_container.setLayout(seg_layout)
-        self._seg_folder_container.setVisible(False)
-        self._content.layout().addWidget(self._seg_folder_container)
 
         # Embedded model / embedding settings, reusing the annotator's embedding widget so the model
         # family/size, image-dimensions and tiling controls (and, for the classifier tasks, the
@@ -448,11 +464,12 @@ class BatchAnnotator(widgets._WidgetBase):
         self._model_row.addWidget(self._relocated_model_dropdown)
         _hide_layout_widgets(self._embedding_widget.layout().itemAt(0))
 
-        # Uniform label widths so the input / output / pattern fields and the model / task dropdowns
-        # all start at the same x and span the same width.
-        self._align_widths(
-            [self._folder_label, self._pattern_label, self._output_label, self._task_label, self._model_label]
-        )
+        # Uniform label widths so the input / segmentation / output / pattern fields and the model /
+        # task dropdowns all start at the same x and span the same width.
+        self._align_widths([
+            self._folder_label, self._pattern_label, self._seg_folder_label, self._output_label,
+            self._task_label, self._model_label,
+        ])
 
         self._update_default_tiling()
 

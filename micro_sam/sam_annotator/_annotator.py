@@ -6,7 +6,7 @@ from joblib import dump, hash as joblib_hash, load
 import numpy as np
 
 import napari
-from napari.utils.notifications import show_info
+from napari.utils.notifications import show_info, show_warning
 
 from qtpy import QtWidgets
 from magicgui.widgets import CheckBox, ComboBox, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox, Widget
@@ -251,6 +251,10 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
                 widget_layout.addWidget(widget)
             widget_frame.setLayout(widget_layout)
             annotator_widget.layout().addWidget(widget_frame)
+
+        # Each container keeps the height of its contents. Without this the leftover space of the
+        # dock is spread over the containers, which pulls their rows apart.
+        annotator_widget.layout().addStretch()
 
         self._annotator_widget = annotator_widget
         # Allow widget to resize within scroll area.
@@ -851,6 +855,10 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             widget_frame.setLayout(widget_layout)
             self._annotator_widget.layout().addWidget(widget_frame)
 
+        # Each container keeps the height of its contents. Without this the leftover space of the
+        # dock is spread over the containers, which pulls their rows apart.
+        self._annotator_widget.layout().addStretch()
+
         # Connect the label layer and the refresh function.
         self._refresh_label_widget()
 
@@ -937,9 +945,10 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             layer.refresh()
 
     def _load_rf(self, model_path):
-        model_path = str(model_path)
-        if not model_path or not os.path.exists(model_path):
-            return widgets._generate_message("error", "You have to provide a valid path to load the classifier.")
+        # An empty path field resolves to the current directory, so we check for an actual file here.
+        model_path = str(model_path).strip()
+        if not model_path or not os.path.isfile(model_path):
+            return show_warning("There are no classifier weights to load from. Please select a '.joblib' file.")
 
         # Stored as {'rf': ..., 'model_spec': ...}; older files are a bare classifier (no spec).
         obj = load(model_path)

@@ -1731,6 +1731,9 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
+        # The dropdown rows of this panel, collected so that they get a uniform layout at the end.
+        choice_rows = []
+
         # Optional image dimensionality override. 'auto' detects 2d or 3d (including channels) from the
         # selected image. '2d' and '3d' force the interpretation, e.g. to read a channels-first
         # (C, H, W) array as a 2d multi-channel image.
@@ -1743,11 +1746,12 @@ class EmbeddingWidget(_WidgetBase):
                 "or (H, W, C)) as a single 2d image, or '3d' to force a (Z, H, W) volume.",
             )
             setting_values.layout().addLayout(ndim_layout)
+            choice_rows.append(ndim_layout)
 
         # Create UI for tiling. A dropdown toggles whether the tool uses tiling. When you enable it,
         # the tile shape and halo fields appear with sensible defaults.
         self.tiling = "no"
-        self.tiling_dropdown, layout = self._add_choice_param(
+        self.tiling_dropdown, tiling_layout = self._add_choice_param(
             "tiling",
             self.tiling,
             ["no", "yes"],
@@ -1755,7 +1759,8 @@ class EmbeddingWidget(_WidgetBase):
             update=self._update_tiling_visibility,
             tooltip=get_tooltip("embedding", "tiling"),
         )
-        setting_values.layout().addLayout(layout)
+        setting_values.layout().addLayout(tiling_layout)
+        choice_rows.append(tiling_layout)
 
         # Container holding the tile shape and halo fields (hidden unless tiling is 'yes').
         self._tiling_widget = QtWidgets.QWidget()
@@ -1793,20 +1798,22 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.layout().addWidget(self._tiling_widget)
 
         # Add the model size widget section.
-        layout = self._create_model_size_section()
-        setting_values.layout().addLayout(layout)
+        model_size_layout = self._create_model_size_section()
+        setting_values.layout().addLayout(model_size_layout)
+        choice_rows.append(model_size_layout)
 
         # Create UI for the device.
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
 
-        self.device_dropdown, layout = self._add_choice_param(
+        self.device_dropdown, device_layout = self._add_choice_param(
             "device",
             self.device,
             device_options,
             tooltip=get_tooltip("embedding", "device"),
         )
-        setting_values.layout().addLayout(layout)
+        setting_values.layout().addLayout(device_layout)
+        choice_rows.append(device_layout)
 
         # Use a conservative default and let users opt into larger per-GPU batches when their
         # workload and available memory benefit from them. Batching only helps on a GPU, so the
@@ -1836,18 +1843,6 @@ class EmbeddingWidget(_WidgetBase):
         )
         setting_values.layout().addLayout(save_layout)
 
-        # Opt-in disk caching of the automatic-segmentation state (off by default). When on, the state
-        # is precomputed to disk (next to the embeddings) while the embeddings are computed and reused
-        # across runs / sessions. The automatic segmentation widget reads this flag from here. Not
-        # offered by the classification tools (no automatic segmentation).
-        self.cache_state = False
-        if self.supports_state_caching:
-            self.cache_state_checkbox = self._add_boolean_param(
-                "cache_state", self.cache_state, title="cache automatic segmentation state",
-                tooltip=get_tooltip("embedding", "cache_state"),
-            )
-            setting_values.layout().addWidget(self.cache_state_checkbox)
-
         # Create UI for the custom weights.
         self.custom_weights = None
         self.custom_weights_param, weights_layout = self._add_path_param(
@@ -1870,6 +1865,24 @@ class EmbeddingWidget(_WidgetBase):
         button_width = max(save_button.sizeHint().width(), weights_button.sizeHint().width()) + path_button_extra
         for button in (save_button, weights_button):
             button.setFixedWidth(button_width)
+
+        # Give the dropdowns a slightly larger share of their row than the labels, so that they extend
+        # a bit further to the left (their right edge stays at the panel margin).
+        for row in choice_rows:
+            row.setStretch(0, 4)
+            row.setStretch(1, 5)
+
+        # Opt-in disk caching of the automatic-segmentation state (off by default). When on, the state
+        # is precomputed to disk (next to the embeddings) while the embeddings are computed and reused
+        # across runs / sessions. The automatic segmentation widget reads this flag from here. Not
+        # offered by the classification tools (no automatic segmentation).
+        self.cache_state = False
+        if self.supports_state_caching:
+            self.cache_state_checkbox = self._add_boolean_param(
+                "cache_state", self.cache_state, title="cache automatic segmentation state",
+                tooltip=get_tooltip("embedding", "cache_state"),
+            )
+            setting_values.layout().addWidget(self.cache_state_checkbox)
 
         # Hook for subclasses to add extra model controls at the end of the settings (no-op by default).
         self._add_extra_model_settings(setting_values.layout())
@@ -2304,10 +2317,10 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     # '_get_model_size_options'.
     _advanced_family_suffixes = {
         "Natural Images (SAM1)": "",
-        "Light Microscopy (SAM1)": "_lm",
-        "Electron Microscopy (SAM1)": "_em_organelles",
-        "Medical Imaging (SAM1)": "_medical_imaging",
-        "Histopathology (SAM1)": "_histopathology",
+        "Light Microscopy (µSAM)": "_lm",
+        "Electron Microscopy (µSAM)": "_em_organelles",
+        "Medical Imaging (MedicoSAM)": "_medical_imaging",
+        "Histopathology (PathoSAM)": "_histopathology",
     }
     _advanced_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
     # Vision Foundation Model families beyond SAM: UI label -> the registry model_types in that family
@@ -4096,17 +4109,8 @@ class AutoSegmentWidget(_WidgetBase):
         self._create_widget()
 
     def _create_widget(self):
-        # Top row: the 'Apply to Volume' switch (3d only) next to the mode dropdown.
+        # Top row: the mode dropdown on the left, the 'Apply to Volume' switch (3d only) on the right.
         top_row = QtWidgets.QHBoxLayout()
-        if self.volumetric:
-            self.apply_to_volume = False
-            self.apply_to_volume_checkbox = self._add_boolean_param(
-                "apply_to_volume",
-                self.apply_to_volume,
-                title="Apply to Volume",
-                tooltip=get_tooltip("autosegment", "apply_to_volume"),
-            )
-            top_row.addWidget(self.apply_to_volume_checkbox)
 
         # With a UniSAM2 decoder we only offer the decoder-based 'sparse' (flow, LM) and 'dense'
         # (multicut, EM) modes; 'amg' (grid-based, no decoder) is the fallback when none is loaded.
@@ -4119,7 +4123,22 @@ class AutoSegmentWidget(_WidgetBase):
             update=self._on_mode_changed,
             tooltip=get_tooltip("autosegment", "mode"),
         )
+        # Keep the label at its text width so that the dropdown starts right after it and covers
+        # the rest of the row.
+        mode_layout.setStretch(0, 0)
+        mode_layout.setStretch(1, 1)
         top_row.addLayout(mode_layout)
+
+        if self.volumetric:
+            self.apply_to_volume = False
+            self.apply_to_volume_checkbox = self._add_boolean_param(
+                "apply_to_volume",
+                self.apply_to_volume,
+                title="Apply to Volume",
+                tooltip=get_tooltip("autosegment", "apply_to_volume"),
+            )
+            top_row.addWidget(self.apply_to_volume_checkbox)
+
         self.layout().addLayout(top_row)
 
         # Advanced post-processing settings, shown inline and refreshed on mode change.
@@ -4540,7 +4559,9 @@ class AutoTrackWidget(AutoSegmentWidget):
     _is_tracking = True
 
     def _create_widget(self):
+        # Top row: the 'Track Timeseries' switch on the left, the mode dropdown on the right.
         top_row = QtWidgets.QHBoxLayout()
+
         self.apply_to_volume = False
         self.apply_to_volume_checkbox = self._add_boolean_param(
             "apply_to_volume",
@@ -4555,11 +4576,16 @@ class AutoTrackWidget(AutoSegmentWidget):
             "mode",
             self.mode,
             mode_choices,
-            title="segmentation mode:",
+            title="mode:",
             update=self._on_mode_changed,
             tooltip=get_tooltip("autosegment", "mode"),
         )
+        # Keep the label at its text width so that the dropdown starts right after it and covers
+        # the rest of the row.
+        mode_layout.setStretch(0, 0)
+        mode_layout.setStretch(1, 1)
         top_row.addLayout(mode_layout)
+
         self.layout().addLayout(top_row)
 
         self.settings = self._make_settings_widget()

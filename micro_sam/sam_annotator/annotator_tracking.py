@@ -14,6 +14,7 @@ from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from ..v2.util import DEFAULT_MODEL
+from ._titles import get_dock_title
 from ._annotator import _AnnotatorBase
 from ._batch import BatchAnnotatorTask, run_batch
 
@@ -490,7 +491,7 @@ def annotator_tracking(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Tracking)")
+    viewer.window.add_dock_widget(annotator, name=get_dock_title("tracking"))
     vutil._sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=(
@@ -575,7 +576,7 @@ class TrackingBatchTask(BatchAnnotatorTask):
         annotator._update_image()
 
         state = AnnotatorState()
-        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Batch Tracking)")
+        viewer.window.add_dock_widget(annotator, name=get_dock_title("batch_tracking"))
         vutil._sync_embedding_widget(
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
