@@ -530,9 +530,16 @@ def test_sam2_volume_propagation_merges_3d_scribbles_points_and_boxes(monkeypatc
             self.reset_count = 0
             self.point_calls = []
             self.box_calls = []
+            self.signatures = set()
 
         def reset_predictor(self):
             self.reset_count += 1
+
+        def sync_prompt_state(self, signatures):
+            signatures = set(signatures)
+            if not self.signatures.issubset(signatures):
+                self.reset_predictor()
+            self.signatures = signatures
 
         def add_point_prompts(self, **kwargs):
             self.point_calls.append(kwargs)
@@ -595,7 +602,12 @@ def test_sam2_volume_propagation_merges_3d_scribbles_points_and_boxes(monkeypatc
 
     _widgets.UnifiedSegmentWidget._run_volumetric_segmentation(widget)
 
-    assert segmenter.reset_count == 1
+    # Nothing was pushed before, so the first run has no stale prompts to discard.
+    assert segmenter.reset_count == 0
+    # The signatures cover the scribble-derived points, the point prompt and the rectangle.
+    assert ("point", 1, 3, 4, 1) in segmenter.signatures
+    assert sum(1 for sig in segmenter.signatures if sig[0] == "point") > 1
+    assert sum(1 for sig in segmenter.signatures if sig[0] == "box") == 1
     assert len(segmenter.box_calls) == 1
     assert segmenter.box_calls[0]["frame_ids"] == 2
     assert len(segmenter.point_calls) == 1

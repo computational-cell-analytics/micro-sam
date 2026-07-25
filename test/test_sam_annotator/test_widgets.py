@@ -113,3 +113,34 @@ def test_batch_size_visibility_follows_device_and_model(qtbot):
     widget.model_type = "vit_b_lm"
     widget._update_batch_size_visibility()
     assert not widget._batch_size_widget.isHidden()
+
+
+@pytest.mark.gui
+def test_hidden_batch_size_is_not_applied(qtbot, monkeypatch):
+    """A GPU batch size must not stay in effect after switching to a device that cannot use it."""
+    from micro_sam.sam_annotator._widgets import ClassificationEmbeddingWidget
+
+    widget = ClassificationEmbeddingWidget()
+    qtbot.addWidget(widget)
+
+    widget.model_type = "hvit_t_cells"
+    widget.device = "cuda"
+    widget.batch_size_param.setValue(32)
+    assert widget.batch_size == 32
+    assert widget._effective_batch_size() == 32
+
+    widget.device = "cpu"
+    widget._update_batch_size_visibility()
+    assert widget._batch_size_widget.isHidden()
+    assert widget._effective_batch_size() == 1
+    # The remembered GPU preference survives, so switching back restores it.
+    assert widget.batch_size == 32
+    widget.device = "cuda"
+    assert widget._effective_batch_size() == 32
+
+    # 'auto' follows whatever it resolves to.
+    widget.device = "auto"
+    monkeypatch.setattr("micro_sam.util._get_default_device", lambda: "cpu")
+    assert widget._effective_batch_size() == 1
+    monkeypatch.setattr("micro_sam.util._get_default_device", lambda: "cuda")
+    assert widget._effective_batch_size() == 32

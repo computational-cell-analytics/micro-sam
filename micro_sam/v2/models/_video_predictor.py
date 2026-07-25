@@ -73,7 +73,7 @@ def _prepare_frame(raw, image_size):
 
 
 class _LazyVideoFrames:
-    """Produce per-slice frame tensors from a numpy volume on demand, without stacking the whole volume.
+    """Produce per-slice frame tensors from a volume on demand, without stacking the whole volume.
 
     'inference_state["images"]' is only ever integer-indexed and passed to 'len', so a sequence that
     resizes + normalises one slice at access time is a drop-in for the eager
@@ -81,7 +81,8 @@ class _LazyVideoFrames:
     (~12 MB/slice), which otherwise grows unbounded with depth and, after the embeddings were moved to
     disk, is the dominant per-volume RAM cost. Frames are returned on CPU (the consumer moves the
     current frame to the device); the upstream <=MAX_CACHED_FRAMES feature cache already retains the
-    frames in active use, so nothing is cached here.
+    frames in active use, so nothing is cached here. A lazy volume (dask / zarr / h5py) is kept as it
+    was handed over and read one slice at a time, so it never has to fit in host RAM.
     """
 
     def __init__(self, volume, image_size, img_mean, img_std):
@@ -93,10 +94,11 @@ class _LazyVideoFrames:
         self.video_height = self.video_width = max(h, w)
 
     def __len__(self):
-        return len(self._volume)
+        return int(self._volume.shape[0])
 
     def __getitem__(self, index):
-        img, _, _ = _load_img_as_tensor(self._volume[index], self._image_size)
+        # Read and convert only the requested slice, so a lazy volume stays lazy.
+        img, _, _ = _load_img_as_tensor(np.asarray(self._volume[index]), self._image_size)
         return (img - self._img_mean) / self._img_std
 
 
@@ -116,10 +118,11 @@ def _load_video_frames_from_images(
     Returns the frame sequence (resized to image_size x image_size and ImageNet-normalised) plus the
     effective video height / width, for two input kinds:
 
-    - `volume` (a numpy (Z, Y, X) array, the micro-sam path): returns a lazy `_LazyVideoFrames` that
-      resizes + normalises one slice on demand on CPU, so the whole volume is never stacked at
-      image_size^2 in memory. `offload_video_to_cpu` does not apply here (the consumer moves the
-      current frame to the device per access).
+    - `volume` (a (Z, Y, X) array-like, the micro-sam path): returns a lazy `_LazyVideoFrames` that
+      reads, resizes and normalises one slice on demand on CPU, so the whole volume is never read or
+      stacked at image_size^2 in memory. A lazy input (dask / zarr / h5py) therefore stays lazy.
+      `offload_video_to_cpu` does not apply here (the consumer moves the current frame to the device
+      per access).
     - `video_path` (a directory of "<frame_index>.jpg" files): stacks the frames into a single tensor,
       on the GPU if `offload_video_to_cpu` is `False` else on CPU. Set `async_loading_frames` to `True`
       to load these frames asynchronously.
@@ -128,11 +131,10 @@ def _load_video_frames_from_images(
     img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
 
     if video_path is None:
-        # Coerce lazy inputs (e.g. dask / zarr / h5py arrays handed over by a napari layer) to a numpy
-        # array (cheap at native resolution; the expensive image_size^2 copy is what we avoid stacking).
-        volume = np.asarray(volume)
-        if volume.ndim != 3:
-            raise ValueError(f"Expected a 3D volume of shape (Z, Y, X), got an array of shape {volume.shape}.")
+        # Read the shape instead of the data, so a lazy input (dask / zarr / h5py) stays lazy.
+        shape = tuple(volume.shape)
+        if len(shape) != 3:
+            raise ValueError(f"Expected a 3D volume of shape (Z, Y, X), got an array of shape {shape}.")
         # Stream slices lazily (resize + normalise on access) instead of stacking the whole volume at
         # image_size^2, so RAM stays bounded regardless of depth.
         lazy_images = _LazyVideoFrames(volume, image_size, img_mean, img_std)
@@ -193,6 +195,23 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         # result unchanged. 'clear_non_cond_mem_around_input' needs the per-object helper we add below.
         self.add_all_frames_to_correct_as_cond = True
         self.clear_non_cond_mem_around_input = True
+
+    def _run_single_frame_inference(self, inference_state, *args, **kwargs):
+        """Wait for the offloaded predictions to reach the CPU before anything reads them back.
+
+        With 'offload_state_to_cpu' SAM2 stores 'pred_masks' on the CPU with a 'non_blocking' copy
+        into pageable memory. Consolidating the output reads that tensor straight away, so without a
+        sync it can observe the buffer the allocator recycled from the previous prompt and return
+        that object's mask instead of the current one.
+        """
+        out = super()._run_single_frame_inference(inference_state, *args, **kwargs)
+        if inference_state.get("offload_state_to_cpu"):
+            device = torch.device(inference_state["device"])
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            elif device.type == "mps":
+                torch.mps.synchronize()
+        return out
 
     @torch.inference_mode()
     def init_state(
