@@ -22,6 +22,7 @@ from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from ..v2.util import DEFAULT_MODEL
+from ._titles import get_dock_title
 from ._annotator import _ClassifierBase
 from .util import _sync_embedding_widget
 from ._batch_classification import ClassificationBatchTask
@@ -263,7 +264,7 @@ def object_classifier(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Object Classification)")
+    viewer.window.add_dock_widget(annotator, name=get_dock_title("object_classification"))
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
@@ -283,7 +284,7 @@ def object_classifier(
 class ObjectClassificationBatchTask(ClassificationBatchTask):
     """Batch task for the object classifier: per-item segmentation layer + projected prediction."""
 
-    dock_name = "Segment Anything for Microscopy (Batch Object Classification)"
+    dock_name = get_dock_title("batch_object_classification")
     classifier_class = ObjectClassifier
     features_attr = "object_features"
     aux_attr = "seg_ids"

@@ -18,6 +18,7 @@ from qtpy.QtCore import Qt, QTimer
 
 from . import _widgets as widgets
 from ._state import AnnotatorState
+from ._titles import get_dock_title
 
 
 def _hide_embedding_widget(annotator):
@@ -47,7 +48,7 @@ def _embed_navigation(viewer, annotator, nav_container):
     """
     inner = getattr(annotator, "_annotator_widget", None)
     if inner is None or inner.layout() is None:
-        viewer.window.add_dock_widget(nav_container, name="Batch Navigation")
+        viewer.window.add_dock_widget(nav_container, name=get_dock_title("batch_navigation"))
         return
     group = QtWidgets.QGroupBox("Batch Navigation")
     group_layout = QtWidgets.QVBoxLayout()
