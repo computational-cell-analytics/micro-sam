@@ -2,35 +2,13 @@
 """
 
 import os
-import multiprocessing as mp
 import warnings
+import multiprocessing as mp
+import xml.etree.ElementTree as ET
+from pathlib import Path
 from concurrent import futures
 from collections import defaultdict
-from pathlib import Path
 from typing import Dict, List, Optional, Union, Tuple
-import xml.etree.ElementTree as ET
-
-import imageio.v3 as imageio
-import networkx as nx
-import numpy as np
-import torch
-from scipy.ndimage import binary_closing
-from skimage.measure import regionprops
-
-from bioimage_cpp.segmentation import label, relabel_sequential
-from bioimage_cpp.graph import UndirectedGraph
-from bioimage_cpp.utils import segmentation_overlap
-
-import elf.segmentation as seg_utils
-import elf.tracking.tracking_utils as track_utils
-from elf.tracking.motile_tracking import recolor_segmentation
-
-from segment_anything.predictor import SamPredictor
-
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
 
 try:
     from trackastra.model import Trackastra
@@ -40,11 +18,32 @@ except ImportError:
     graph_to_ctc = None
     graph_to_napari_tracks = None
 
+import numpy as np
+import networkx as nx
+import imageio.v3 as imageio
+from skimage.measure import regionprops
+from scipy.ndimage import binary_closing
+from segment_anything.predictor import SamPredictor
+
+import torch
+
+try:
+    from napari.utils import progress as tqdm
+except ImportError:
+    from tqdm import tqdm
+
+import elf.segmentation as seg_utils
+import elf.tracking.tracking_utils as track_utils
+from elf.tracking.motile_tracking import recolor_segmentation
+
+from bioimage_cpp.graph import UndirectedGraph
+from bioimage_cpp.utils import segmentation_overlap
+from bioimage_cpp.segmentation import label, relabel_sequential
 
 from .. import util
 from .util import precompute_image_embeddings
-from .prompt_based_segmentation import segment_from_mask
 from .instance_segmentation import AutoSegBase
+from .prompt_based_segmentation import segment_from_mask
 
 
 PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")

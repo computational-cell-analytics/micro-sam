@@ -1,18 +1,19 @@
-import contextlib
 import os
-import random
 import time
+import random
 import warnings
+import contextlib
 from typing import Callable, Optional
 
 import numpy as np
+from training.trainer import CORE_LOSS_KEY  # SAM2 repo
+
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
+import torch.distributed as dist
+
 import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
-
-from training.trainer import CORE_LOSS_KEY  # SAM2 repo
 
 from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Metric
 

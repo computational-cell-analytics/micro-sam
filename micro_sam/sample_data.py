@@ -17,6 +17,7 @@ from typing import Union
 
 import numpy as np
 import imageio.v3 as imageio
+
 from skimage.transform import resize
 from skimage.data import binary_blobs
 

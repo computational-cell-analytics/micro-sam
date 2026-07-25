@@ -8,13 +8,12 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 
 from micro_sam.util import get_device
-from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss
-from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Loss
-
 from micro_sam.v2.transforms.raw import VideoAugment
+from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Loss
 from .util import get_sam2_train_model, ConvertToSam2VideoBatch
-from .sam2_trainer import Sam2Trainer, Sam2Logger, UniSAM2Trainer, UniSAM2Logger
 from .joint_sam2_trainer import JointSam2Trainer, JointSam2Logger
+from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss
+from .sam2_trainer import Sam2Trainer, Sam2Logger, UniSAM2Trainer, UniSAM2Logger
 
 
 def _no_wd_names(model):

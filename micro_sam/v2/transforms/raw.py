@@ -3,16 +3,17 @@ from functools import partial
 from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
+
 import torch
 import torchvision.transforms.functional as TF
 from torchvision.transforms import ColorJitter
+
 from torch_em.transform.raw import RandomPercentileNormalization, RawTransform
 
-from micro_sam.v2.normalization import normalize_raw
-
 from .labels import _em_cell_label_trafo  # noqa
-from .labels import _axondeepseg_pre_label_transform  # noqa
 from .labels import _plantseg_label_trafo  # noqa
+from micro_sam.v2.normalization import normalize_raw
+from .labels import _axondeepseg_pre_label_transform  # noqa
 
 
 # NOTE: This is a legacy function: we will keep this for now for unpickling checkpoints saved before the refactor.

@@ -1,33 +1,41 @@
 """Implements the widgets used in the annotation plugins."""
 
 import gc
-import json
-import multiprocessing as mp
 import os
+import json
 import pickle
+import multiprocessing as mp
 from pathlib import Path
 from typing import Optional
 
-import elf.parallel
 import h5py
-import napari
-import numpy as np
 import z5py
+import numpy as np
 
-from bioimage_cpp.utils import segmentation_overlap
-from magicgui import magic_factory
-from magicgui.widgets import ComboBox, Container, create_widget
+import napari
 # We have disabled the thread workers for now because they result in a
 # massive slowdown in napari >= 0.5.
 # See also https://forum.image.sc/t/napari-thread-worker-leads-to-massive-slowdown/103786
 # from napari.qt.threading import thread_worker
 from napari.utils import progress
 from napari.utils.notifications import show_info
+
 from qtpy import QtWidgets
 from qtpy.QtCore import QObject, Signal, Qt
+
+from magicgui import magic_factory
+from magicgui.widgets import ComboBox, Container, create_widget
+
 from superqt import QCollapsible, QLabeledRangeSlider
 
+import elf.parallel
+
+from bioimage_cpp.utils import segmentation_overlap
+
 from .. import util
+from . import util as vutil
+from ._state import AnnotatorState
+from ._tooltips import get_tooltip
 from ..v1 import instance_segmentation
 from ..v1.multi_dimensional_segmentation import (
     PROJECTION_MODES,
@@ -39,9 +47,6 @@ from ..v1.multi_dimensional_segmentation import (
     segment_mask_in_volume,
     track_across_frames,
 )
-from . import util as vutil
-from ._state import AnnotatorState
-from ._tooltips import get_tooltip
 
 #
 # Convenience functionality for creating QT UI and manipulating the napari viewer.

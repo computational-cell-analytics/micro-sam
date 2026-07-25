@@ -2,15 +2,15 @@ import os
 import warnings
 from typing import Optional, Union
 
-import torch
-
-from segment_anything.utils.onnx import SamOnnxModel
-
 try:
     import onnxruntime
     onnxruntime_exists = True
 except ImportError:
     onnxruntime_exists = False
+
+from segment_anything.utils.onnx import SamOnnxModel
+
+import torch
 
 from ..util import get_sam_model
 

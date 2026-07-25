@@ -1,21 +1,23 @@
 from typing import List, Optional, Tuple, Union
 
-import napari
 import numpy as np
 import imageio.v3 as imageio
+
 import torch
 
+import napari
+
 from .. import util
+from ._batch import run_batch
+from . import _widgets as widgets
+from ._state import AnnotatorState
 from ..v2.util import DEFAULT_MODEL
+from ._annotator import _ClassifierBase
+from .util import _sync_embedding_widget
+from ._batch_classification import ClassificationBatchTask
 from ..pixel_classification import (
     accumulate_pixel_labels, compute_pixel_features, project_prediction_to_image, train_pixel_classifier,
 )
-from ._annotator import _ClassifierBase
-from ._batch import run_batch
-from ._batch_classification import ClassificationBatchTask
-from ._state import AnnotatorState
-from . import _widgets as widgets
-from .util import _sync_embedding_widget
 
 # The SAM and SAM2 image encoders project every model size down to a fixed 256-channel image
 # embedding (prompt_embed_dim), so the per-pixel feature dimension is always 256.

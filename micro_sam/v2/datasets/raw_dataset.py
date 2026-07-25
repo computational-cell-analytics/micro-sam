@@ -5,19 +5,18 @@ from typing import Union
 
 import numpy as np
 import imageio.v3 as imageio
-from bioimage_cpp.segmentation import label as connected_components
+from training.dataset.vos_raw_dataset import VOSRawDataset, VOSFrame, VOSVideo
 
 import torch
 
 from torch_em.util.image import load_data
+from torch_em.data.datasets.light_microscopy import ctc as ctc_module
 from torch_em.data.datasets import light_microscopy, electron_microscopy
 from torch_em.data.datasets.electron_microscopy import axondeepseg as axondeepseg_module
-from torch_em.data.datasets.light_microscopy import ctc as ctc_module
 
-from training.dataset.vos_raw_dataset import VOSRawDataset, VOSFrame, VOSVideo
+from bioimage_cpp.segmentation import label as connected_components
 
 from micro_sam.v2.normalization import normalize_raw
-
 from .segment_loader import ImageSegmentLoader, VolumeSegmentLoader
 
 

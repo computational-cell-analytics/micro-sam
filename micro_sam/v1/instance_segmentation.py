@@ -7,39 +7,39 @@ import os
 import shutil
 import tempfile
 import warnings
-from abc import ABC, abstractmethod
-from contextlib import contextmanager
 from copy import deepcopy
+from abc import ABC, abstractmethod
 from collections import OrderedDict
+from contextlib import contextmanager
 from typing import Any, Dict, Literal, List, Optional, Tuple, Union
 
-import numpy as np
 import zarr
+import numpy as np
+
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
-
-from bioimage_cpp import filters as filter_impl
-
-import torch
-from torchvision.ops.boxes import batched_nms, box_area
-
-from torch_em.model import UNETR
-from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
-
-import elf.parallel as parallel_impl
-from elf.parallel.filters import apply_filter
-from elf.wrapper.base import MultiTransformationWrapper
-from elf.wrapper.generic import ThresholdWrapper
-
-from bioimage_cpp.utils import Blocking
 
 import segment_anything.utils.amg as amg_utils
 from segment_anything.predictor import SamPredictor
 
+import torch
+from torchvision.ops.boxes import batched_nms, box_area
+
+import elf.parallel as parallel_impl
+from elf.parallel.filters import apply_filter
+from elf.wrapper.generic import ThresholdWrapper
+from elf.wrapper.base import MultiTransformationWrapper
+
+from torch_em.model import UNETR
+from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
+
+from bioimage_cpp.utils import Blocking
+from bioimage_cpp import filters as filter_impl
+
 from .. import util
-from .util import get_sam_model, precompute_image_embeddings, set_precomputed
-from .inference import batched_inference, batched_tiled_inference
 from .._vendored import batched_mask_to_box, mask_to_rle_pytorch
+from .inference import batched_inference, batched_tiled_inference
+from .util import get_sam_model, precompute_image_embeddings, set_precomputed
 
 # We may change this to 'apg' in version 1.8.
 DEFAULT_SEGMENTATION_MODE_WITH_DECODER = "ais"

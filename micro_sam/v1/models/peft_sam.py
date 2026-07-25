@@ -1,16 +1,16 @@
 import math
 from typing import List, Union, Optional
 
-import torch
-import torch.nn as nn
-
-from segment_anything.modeling import Sam
-
 try:
     import bitsandbytes as bnb
     _have_bnb = True
 except ImportError:
     _have_bnb = False
+
+from segment_anything.modeling import Sam
+
+import torch
+import torch.nn as nn
 
 
 class LoRASurgery(nn.Module):

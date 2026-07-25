@@ -1,19 +1,18 @@
 """Precompute and cache image embeddings for image data (SAM1, SAM2 or VFM encoders).
 """
 
-import inspect
 import os
 import pickle
+import inspect
 from glob import glob
 from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
 import h5py
 import numpy as np
+from segment_anything.predictor import SamPredictor
 
 import torch
-
-from segment_anything.predictor import SamPredictor
 
 try:
     from napari.utils import progress as tqdm

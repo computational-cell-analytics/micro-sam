@@ -8,15 +8,16 @@ segmentation layer).
 """
 
 import os
+from joblib import dump
 
 import numpy as np
 import imageio.v3 as imageio
-from joblib import dump
+
 from magicgui.widgets import CheckBox
 
-from ._batch import BatchAnnotatorTask
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
+from ._batch import BatchAnnotatorTask
 from .util import _sync_embedding_widget
 
 

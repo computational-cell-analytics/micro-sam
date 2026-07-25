@@ -1,17 +1,17 @@
 import gc
+import queue
 import ctypes
 import platform
-import queue
-
-from concurrent import futures
 from copy import copy
+from concurrent import futures
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
+
 import torch
 
-from micro_sam.util import device_type
 from micro_sam.v2.util import Devices
+from micro_sam.util import device_type
 from micro_sam.v1.prompt_based_segmentation import _process_box, _compute_logits_from_mask
 from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy, ResizeLongestSideTransforms
 

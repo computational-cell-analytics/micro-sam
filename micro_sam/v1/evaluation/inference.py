@@ -3,30 +3,29 @@
 
 import os
 import pickle
-import numpy as np
-from tqdm import tqdm
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union, Tuple
 
+import numpy as np
 import imageio.v3 as imageio
-
-from bioimage_cpp.segmentation import relabel_sequential
+from tqdm import tqdm
+from segment_anything import SamPredictor
 
 import torch
 
-from segment_anything import SamPredictor
+from bioimage_cpp.segmentation import relabel_sequential
 
 from ... import util as util
-from ..util import get_sam_model, precompute_image_embeddings
+from . import instance_segmentation
 from ..inference import batched_inference
+from ..util import get_sam_model, precompute_image_embeddings
+from ...prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 from ..instance_segmentation import (
     get_predictor_and_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
     TiledAutomaticMaskGenerator, TiledInstanceSegmentationWithDecoder,
     AutomaticPromptGenerator,
 )
-from . import instance_segmentation
-from ...prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
 
 
 def _load_prompts(

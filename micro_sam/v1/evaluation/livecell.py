@@ -11,13 +11,13 @@ from typing import List, Optional, Union
 
 from segment_anything import SamPredictor
 
+from ..util import get_sam_model
+from ..evaluation import precompute_all_embeddings
+from . import instance_segmentation, inference, evaluation
 from ..instance_segmentation import (
     get_predictor_and_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
 )
-from ..util import get_sam_model
-from ..evaluation import precompute_all_embeddings
-from . import instance_segmentation, inference, evaluation
 
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]

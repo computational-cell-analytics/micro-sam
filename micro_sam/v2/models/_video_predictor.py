@@ -1,15 +1,16 @@
 import os
-from tqdm import tqdm
 from collections import OrderedDict
 from typing import Optional, Dict, Union
 
 import numpy as np
 from PIL import Image
-import torch
+from tqdm import tqdm
 
 from sam2.build_sam import _load_checkpoint
-from sam2.sam2_video_predictor import SAM2VideoPredictor
 from sam2.utils.misc import AsyncVideoFrameLoader
+from sam2.sam2_video_predictor import SAM2VideoPredictor
+
+import torch
 
 
 # Number of recent frames whose precomputed features stay cached on the device during inference. >1

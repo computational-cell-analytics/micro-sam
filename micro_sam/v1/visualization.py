@@ -6,9 +6,9 @@ from typing import Tuple
 import numpy as np
 from skimage.transform import resize
 
-from bioimage_cpp.utils import Blocking
-
 from elf.segmentation.embeddings import embedding_pca
+
+from bioimage_cpp.utils import Blocking
 
 from ..util import ImageEmbeddings
 

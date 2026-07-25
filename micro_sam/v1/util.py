@@ -2,6 +2,7 @@
 """
 
 import os
+import pooch
 import warnings
 import multiprocessing as mp
 from concurrent import futures
@@ -9,11 +10,12 @@ from collections import OrderedDict
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Callable  # noqa
 
 import numpy as np
-import pooch
+
 import torch
 
 from bioimage_cpp.utils import Blocking
 
+from . import models as custom_models  # noqa
 from ..util import (  # noqa
     ImageEmbeddings, SamPredictor, sam_model_registry, VIT_T_SUPPORT,
     _DEFAULT_MODEL, _MODEL_TYPES,
@@ -23,7 +25,6 @@ from ..util import (  # noqa
     _compute_data_signature, _get_embedding_signature, _write_embedding_signature,
     handle_pbar,
 )
-from . import models as custom_models  # noqa
 
 
 def models():

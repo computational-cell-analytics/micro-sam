@@ -4,17 +4,18 @@ and `micro_sam.v1.evaluation.inference`.
 
 import os
 from glob import glob
-from tqdm import tqdm
 from pathlib import Path
-from natsort import natsorted
 from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
+from tqdm import tqdm
+from natsort import natsorted
+
+from elf.evaluation import mean_segmentation_accuracy, matching
 
 from bioimage_cpp.segmentation import label
-from elf.evaluation import mean_segmentation_accuracy, matching
 
 from ...util import load_image_data
 

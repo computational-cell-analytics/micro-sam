@@ -8,9 +8,11 @@ task-agnostic; everything task-specific lives in the concrete adapter.
 
 import os
 
-import napari
 import imageio.v3 as imageio
+
+import napari
 from magicgui.widgets import Container, PushButton
+
 from qtpy import QtWidgets
 from qtpy.QtCore import Qt, QTimer
 

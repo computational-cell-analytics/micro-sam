@@ -1,16 +1,18 @@
 import os
 from datetime import datetime
 from typing import List, Optional
+from joblib import dump, hash as joblib_hash, load
+
+import numpy as np
 
 import napari
-import numpy as np
-from joblib import dump, hash as joblib_hash, load
-from magicgui.widgets import CheckBox, ComboBox, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox, Widget
 from napari.utils.notifications import show_info
-from qtpy import QtWidgets
 
-from . import _widgets as widgets
+from qtpy import QtWidgets
+from magicgui.widgets import CheckBox, ComboBox, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox, Widget
+
 from . import util as vutil
+from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from ..__version__ import __version__ as micro_sam_version

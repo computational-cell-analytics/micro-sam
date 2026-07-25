@@ -13,9 +13,9 @@ from concurrent import futures
 from typing import Optional, Tuple
 
 import numpy as np
+from tqdm import tqdm, trange
 from skimage.filters import gaussian
 from scipy.ndimage import map_coordinates
-from tqdm import tqdm, trange
 
 from bioimage_cpp.segmentation import label, watershed
 

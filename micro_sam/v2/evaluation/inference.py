@@ -1,31 +1,30 @@
 import os
 import shutil
 import warnings
-from tqdm import tqdm
 from pathlib import Path
 from typing import Union, Optional, List
 
 import numpy as np
 import imageio.v3 as imageio
-from bioimage_cpp.segmentation import label as connected_components
+from tqdm import tqdm
+from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
 import torch
 
-from torch_em.util.segmentation import size_filter
-
 from elf.io import open_file
 
-from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+from torch_em.util.segmentation import size_filter
 
-from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
+from bioimage_cpp.segmentation import label as connected_components
+
 from micro_sam.v2.normalization import to_image
 from micro_sam.prompt_generators import IterativePromptGenerator
-from micro_sam.v1.evaluation.inference import (
-    _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
-)
-
+from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
 from micro_sam.v2.util import (
     _get_device, configure_image_predictor, get_sam2_image_predictor, get_sam2_model, precompute_image_embeddings,
+)
+from micro_sam.v1.evaluation.inference import (
+    _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
 )
 
 

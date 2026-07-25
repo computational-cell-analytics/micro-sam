@@ -3,22 +3,22 @@ from glob import glob
 from typing import List, Optional, Union, Tuple
 
 import numpy as np
-
 import imageio.v3 as imageio
 
 import torch
 
 import napari
+
 from qtpy import QtWidgets
 from qtpy.QtCore import QTimer
 
-from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
-from ._batch import BatchAnnotatorTask, run_batch
-from ._tooltips import get_tooltip
 from ._state import AnnotatorState
-from .annotator import Annotator, detect_ndim
+from ._tooltips import get_tooltip
+from ..v2.util import DEFAULT_MODEL
 from .util import _sync_embedding_widget
+from .annotator import Annotator, detect_ndim
+from ._batch import BatchAnnotatorTask, run_batch
 
 # The tasks supported by the unified batch annotator.
 TASKS = ["Segmentation", "Tracking", "Object Classification", "Pixel Classification"]

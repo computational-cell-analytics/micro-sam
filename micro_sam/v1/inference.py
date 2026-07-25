@@ -1,23 +1,26 @@
-import os
 import gc
+import os
 from typing import Any, Dict, List, Optional, Union, Tuple
 
 import numpy as np
-import torch
-import torch.nn.functional as F
-from bioimage_cpp.utils import Blocking, segmentation_overlap
 
 import segment_anything.utils.amg as amg_utils
 from segment_anything import SamPredictor
 from segment_anything.utils.transforms import ResizeLongestSide
+
+import torch
+import torch.nn.functional as F
+
 try:
     from napari.utils import progress as tqdm
 except ImportError:
     from tqdm import tqdm
 
+from bioimage_cpp.utils import Blocking, segmentation_overlap
+
 from .. import util
-from .util import precompute_image_embeddings, set_precomputed
 from .._vendored import batched_mask_to_box
+from .util import precompute_image_embeddings, set_precomputed
 
 
 def _validate_inputs(

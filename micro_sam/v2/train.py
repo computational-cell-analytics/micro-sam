@@ -8,16 +8,14 @@ import traceback
 from typing import Union, Optional
 
 import submitit
-
-import torch
+from omegaconf import OmegaConf
+from iopath.common.file_io import g_pathmgr
+from training.utils.train_utils import makedir, register_omegaconf_resolvers
 
 from hydra.utils import instantiate
 from hydra import compose, initialize_config_dir
 
-from omegaconf import OmegaConf
-from iopath.common.file_io import g_pathmgr
-
-from training.utils.train_utils import makedir, register_omegaconf_resolvers
+import torch
 
 
 os.environ["HYDRA_FULL_ERROR"] = "1"

@@ -1,23 +1,24 @@
 """Batched, pipelined, multi-GPU SAM2 inference: scheduling engine, encoder embeddings, and decoder passes."""
 
-import contextlib
 import gc
 import os
-import queue
-import threading
 import time
+import queue
 import warnings
-from collections import defaultdict
+import threading
+import contextlib
 from copy import deepcopy
 from dataclasses import dataclass
+from collections import defaultdict
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
+
 import torch
 
+from .util import Devices
 from micro_sam.util import _create_dataset_without_data
 from .normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
-from .util import Devices
 
 
 STOP = object()

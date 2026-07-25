@@ -1,19 +1,21 @@
 import os
 from typing import List, Optional, Tuple, Union
 
-import napari
 import numpy as np
 import imageio.v3 as imageio
+
 import torch
+
+import napari
 from magicgui.widgets import ComboBox, Container
 
-from ..v2.util import DEFAULT_MODEL
-from . import _widgets as widgets
 from . import util as vutil
-from ._annotator import _AnnotatorBase
-from ._batch import BatchAnnotatorTask, run_batch
+from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
+from ..v2.util import DEFAULT_MODEL
+from ._annotator import _AnnotatorBase
+from ._batch import BatchAnnotatorTask, run_batch
 
 # Cyan (track) and Magenta (division)
 STATE_COLOR_CYCLE = [

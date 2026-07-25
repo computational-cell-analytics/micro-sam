@@ -1,10 +1,10 @@
 import warnings
 from typing import Optional, Tuple
 
+from segment_anything.predictor import SamPredictor
+
 import torch
 from torch import nn
-
-from segment_anything.predictor import SamPredictor
 
 try:
     # Avoid import warnings from mobile_sam

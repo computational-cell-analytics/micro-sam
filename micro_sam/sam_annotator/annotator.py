@@ -1,16 +1,18 @@
 from typing import Optional, Tuple, Union
 
-import napari
 import numpy as np
+
 import torch
+
+import napari
 from napari.utils.notifications import show_info
 
 from .. import util
-from ..v2.util import DEFAULT_MODEL
-from . import _widgets as widgets
 from . import util as vutil
-from ._annotator import _AnnotatorBase
+from . import _widgets as widgets
 from ._state import AnnotatorState
+from ..v2.util import DEFAULT_MODEL
+from ._annotator import _AnnotatorBase
 from .util import (
     _load_amg_state,
     _load_is_state,

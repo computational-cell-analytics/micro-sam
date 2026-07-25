@@ -1,6 +1,7 @@
 from typing import Optional, Tuple
 
 import numpy as np
+
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 

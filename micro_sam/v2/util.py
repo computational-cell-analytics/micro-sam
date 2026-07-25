@@ -1,24 +1,24 @@
 import os
-import shutil
 import sys
 import pooch
+import shutil
 import warnings
 from pathlib import Path
 from typing import Union, Literal, Optional, Sequence, Tuple
+
+import sam2
+from sam2.build_sam import build_sam2
 
 import numpy as np
 
 import torch
 
+from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
+from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
 from micro_sam.util import (
     get_device, get_cache_directory, microsam_cachedir, _open_embeddings,
     _configure_mps_memory, device_type, make_temp_embedding_path,
 )
-from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
-from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
-
-import sam2
-from sam2.build_sam import build_sam2
 
 
 Device = Optional[Union[str, torch.device]]

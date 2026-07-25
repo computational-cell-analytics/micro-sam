@@ -8,11 +8,17 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-
-from napari.layers import Image
-from qtpy.QtWidgets import QWidget
+from segment_anything import SamPredictor
 
 import torch.nn as nn
+
+try:
+    from napari.utils import progress as tqdm
+except ImportError:
+    from tqdm import tqdm
+from napari.layers import Image
+
+from qtpy.QtWidgets import QWidget
 
 import micro_sam
 import micro_sam.util as util
@@ -21,13 +27,6 @@ from micro_sam.v1.instance_segmentation import AutoSegBase, get_decoder
 from micro_sam.precompute_state import (
     cache_amg_state, cache_is_state, cache_autoseg_state, _cache_amg_volume_state
 )
-
-from segment_anything import SamPredictor
-
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
 
 
 class Singleton(type):

@@ -5,35 +5,33 @@ import os
 import json
 import uuid
 import pooch
-import shutil
 import atexit
-import xxhash
 import pickle
+import shutil
+import xxhash
 import hashlib
 import warnings
 from pathlib import Path
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import z5py
+import zarr
 import numpy as np
 import imageio.v3 as imageio
-
 import segment_anything.utils.amg as amg_utils
-
-import zarr
-import z5py
-
-from elf.io import open_file
-import elf.parallel as parallel_impl
-
-from bioimage_cpp.distance import distance_transform
-from bioimage_cpp.segmentation import relabel_sequential
 
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 
 import torch
 from torchvision.ops.boxes import batched_nms
+
+import elf.parallel as parallel_impl
+from elf.io import open_file
+
+from bioimage_cpp.distance import distance_transform
+from bioimage_cpp.segmentation import relabel_sequential
 
 from .__version__ import __version__
 

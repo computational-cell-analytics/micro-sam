@@ -1,25 +1,25 @@
 import os
 import time
 from glob import glob
-from tqdm import tqdm
-from natsort import natsorted
 from typing import Union, Optional, List, Literal
 
 import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
-from bioimage_cpp.segmentation import label as connected_components
-from bioimage_cpp.utils import Blocking
+from tqdm import tqdm
+from natsort import natsorted
 
 import torch
 
 from torch_em.data import datasets
 
-from micro_sam import util
-from ..util import get_sam_model, get_model_names
+from bioimage_cpp.utils import Blocking
+from bioimage_cpp.segmentation import label as connected_components
 
+from micro_sam import util
 from . import run_evaluation
 from ..training.training import _filter_warnings
+from ..util import get_sam_model, get_model_names
 from .inference import run_inference_with_iterative_prompting
 from .evaluation import run_evaluation_for_iterative_prompting
 from .multi_dimensional_segmentation import segment_slices_from_ground_truth

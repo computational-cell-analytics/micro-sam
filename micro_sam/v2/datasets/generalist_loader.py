@@ -1,5 +1,5 @@
-import json
 import os
+import json
 import random
 from functools import partial
 
@@ -8,10 +8,10 @@ from sklearn.model_selection import train_test_split
 
 import torch
 
+from elf.io import open_file
+
 import torch_em
 from torch_em.data import datasets, MinInstanceSampler, ConcatDataset
-
-from elf.io import open_file
 
 from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, _build_group_map

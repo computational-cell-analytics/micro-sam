@@ -3,7 +3,6 @@
 
 import os
 from glob import glob
-from tqdm import tqdm
 from pathlib import Path
 from itertools import product
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -11,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
+from tqdm import tqdm
 
 from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy, matching

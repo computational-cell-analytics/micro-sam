@@ -21,20 +21,21 @@ Both engines share the `initialize` / `generate` / `get_state` / `set_state` int
 `get_instance_segmentation_generator`.
 """
 
-import contextlib
 import shutil
+import contextlib
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+
 import torch
 
 from bioimage_cpp.utils import Blocking
 
-from micro_sam.util import make_temp_embedding_path, mask_data_to_segmentation
 from micro_sam.v1.inference import _merge_segmentations
 from micro_sam.v1.instance_segmentation import AutoSegBase
-from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
+from micro_sam.util import make_temp_embedding_path, mask_data_to_segmentation
 from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
+from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
 from micro_sam.v2.util import (
     precompute_image_embeddings, set_precomputed, _load_list_datasets,
     _DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, Devices,

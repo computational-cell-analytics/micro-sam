@@ -4,9 +4,11 @@ import random
 from typing import Callable, Optional
 
 import numpy as np
+
 import torch
 import torch.distributed as dist
 from torch.utils.tensorboard import SummaryWriter
+
 from torch_em.trainer.logger_base import TorchEmLogger
 
 from .sam2_trainer import (

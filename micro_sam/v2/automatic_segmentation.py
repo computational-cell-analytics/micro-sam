@@ -13,6 +13,7 @@ import os
 from typing import Optional, Tuple, Union
 
 import numpy as np
+
 import torch
 
 from .util import DEFAULT_MODEL, Devices

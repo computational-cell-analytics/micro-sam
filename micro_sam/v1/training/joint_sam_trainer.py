@@ -1,16 +1,17 @@
 import os
 import time
-import numpy as np
 from collections import OrderedDict
 
-import torch
-from torch.utils.tensorboard import SummaryWriter
-from torchvision.utils import make_grid
+import numpy as np
 
-from .sam_trainer import SamTrainer
+import torch
+from torchvision.utils import make_grid
+from torch.utils.tensorboard import SummaryWriter
 
 from torch_em.trainer.logger_base import TorchEmLogger
 from torch_em.trainer.tensorboard_logger import normalize_im
+
+from .sam_trainer import SamTrainer
 
 
 class JointSamTrainer(SamTrainer):

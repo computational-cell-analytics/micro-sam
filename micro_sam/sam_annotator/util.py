@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import h5py
-import napari
 import numpy as np
 from skimage import draw
 from scipy.ndimage import shift
+
+import napari
 
 from .. import util
 from ..v1 import prompt_based_segmentation

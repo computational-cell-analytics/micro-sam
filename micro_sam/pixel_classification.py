@@ -4,20 +4,20 @@ from multiprocessing import cpu_count
 from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
-import torch
-
-from bioimage_cpp.utils import Blocking
+from skimage.transform import resize
 
 from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
 
-from skimage.transform import resize
+import torch
 
 try:
     from napari.utils import progress as tqdm
 except ImportError:
     from tqdm import tqdm
+
+from bioimage_cpp.utils import Blocking
 
 from . import util
 from .v1.util import precompute_image_embeddings

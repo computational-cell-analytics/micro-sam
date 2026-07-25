@@ -1,30 +1,31 @@
 from multiprocessing import cpu_count
 from typing import List, Optional, Tuple, Union
 
-import imageio.v3 as imageio
-import napari
 import numpy as np
-import torch
-
-from magicgui.widgets import ComboBox
-from qtpy import QtWidgets
-
+import imageio.v3 as imageio
 from skimage.measure import regionprops_table
+
 from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+
+import torch
+
+import napari
+from qtpy import QtWidgets
+from magicgui.widgets import ComboBox
 
 from .. import util
-from ..v2.util import DEFAULT_MODEL
-from ..object_classification import compute_object_features, project_prediction_to_segmentation
-from ._annotator import _ClassifierBase
 from ._batch import run_batch
-from ._batch_classification import ClassificationBatchTask
+from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-from . import _widgets as widgets
+from ..v2.util import DEFAULT_MODEL
+from ._annotator import _ClassifierBase
 from .util import _sync_embedding_widget
+from ._batch_classification import ClassificationBatchTask
+from ..object_classification import compute_object_features, project_prediction_to_segmentation
 
 # Object features are the object area plus the per-channel mean of the 256-channel SAM/SAM2 image
 # embedding, i.e. 257 features. PCA can reduce to at most this many components.

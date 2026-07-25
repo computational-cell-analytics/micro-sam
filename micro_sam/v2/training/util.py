@@ -4,7 +4,6 @@ from typing import Callable, List, Optional, Union
 import torch
 
 from micro_sam.util import get_device
-
 from micro_sam.v2.util import CFG_PATHS, _get_checkpoint
 
 
