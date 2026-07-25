@@ -27,6 +27,7 @@ import importlib.util
 from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
+
 import torch
 import torch.nn.functional as F
 
@@ -76,7 +77,7 @@ VFM_SIZE_LABELS = {
 VFM_MEAN = (0.485, 0.456, 0.406)
 VFM_STD = (0.229, 0.224, 0.225)
 
-# Default longest-side input size; snapped down to a multiple of the patch size per model.
+# Default longest-side input size. The tool snaps it down to a multiple of the patch size per model.
 DEFAULT_VFM_IMG_SIZE = 1024
 
 
@@ -114,7 +115,7 @@ class VFMEncoder(torch.nn.Module):
         self.patch_size = spec["patch_size"]
         self.embed_dim = spec["embed_dim"]
         self.backend = spec["backend"]
-        # Normalization stats; ImageNet by default, overridable per model (SAM3 uses 0.5).
+        # Normalization stats. ImageNet by default, overridable per model (SAM3 uses 0.5).
         self.mean = spec.get("mean", VFM_MEAN)
         self.std = spec.get("std", VFM_STD)
         # The encoder needs a square input whose side is a multiple of the patch size.
@@ -225,11 +226,11 @@ def get_vfm_model(
             f"Unknown VFM model '{model_type}'. Available models: {sorted(VFM_MODELS)}."
         )
     spec = VFM_MODELS[model_type]
-    # A model may pin its native input size (e.g. SAM3 at 1008), overriding the passed default.
+    # A model can pin its native input size (e.g. SAM3 at 1008), which overrides the passed default.
     img_size = spec.get("img_size", img_size)
     device = util.get_device(device)
 
-    # xFormers' memory-efficient attention is CUDA-only; on CPU some backbones (e.g. the torch.hub DINOv2
+    # xFormers' memory-efficient attention is CUDA-only. On CPU some backbones (e.g. the torch.hub DINOv2
     # code) would try it and crash, so disable it there. The DINOv2-derived code reads this env var at
     # import, so it must be set before the backbone is loaded. No-op if xFormers is not installed.
     if str(device) == "cpu":
@@ -330,7 +331,7 @@ def _ensure_sam3_importable():
 
 
 def _install_sam3_cpu_fp32_mlp():
-    """Run SAM3's fused MLP op in fp32 on CPU; its hardcoded bf16 is emulated (~4x slower) on CPUs without
+    """Run SAM3's fused MLP op in fp32 on CPU. Its hardcoded bf16 is emulated (~4x slower) on CPUs without
     AVX512-BF16. The replacement is device-aware: CPU inputs take an fp32 linear + activation (features
     match the bf16 path to ~0.9997 cosine), while CUDA / other devices keep SAM3's native fused bf16 op.
     """
@@ -388,7 +389,7 @@ def _load_sam3_model(checkpoint_path=None):
         source = str(checkpoint_path) if checkpoint_path else download_ckpt_from_hf(version="sam3")
     except Exception as e:
         raise RuntimeError(
-            "Could not fetch the SAM3 checkpoint; see the chained error above for the exact reason. The "
+            "Could not fetch the SAM3 checkpoint. See the chained error above for the exact reason. The "
             "weights are gated on HuggingFace (facebook/sam3): accept the license there and authenticate "
             "via 'huggingface-cli login' or the 'HF_TOKEN' environment variable."
         ) from e
@@ -426,7 +427,7 @@ def _load_hf_model(repo: str, checkpoint_path=None):
         raise RuntimeError(
             f"Could not load the DINOv3 model '{source}' from HuggingFace; see the chained error above "
             f"for the exact reason. The weights are gated by Meta: request access at "
-            f"https://huggingface.co/{repo} (approval by the repo authors may still be pending) and "
+            f"https://huggingface.co/{repo} (approval by the repo authors can still be pending) and "
             "authenticate in your terminal via 'huggingface-cli login' or the 'HF_TOKEN' environment "
             "variable."
         ) from e
@@ -466,7 +467,7 @@ def _write_signature(f, encoder, input_, mode):
 
 
 def _load_cached_embeddings(f, encoder, input_):
-    """Return cached embeddings from an opened zarr group if they match the image and model; else None."""
+    """Return cached embeddings from an opened zarr group if they match the image and model. Return None otherwise."""
     if "features" not in f or f.attrs.get("vfm_mode") is None:
         return None
     matches = (
@@ -600,7 +601,7 @@ def precompute_vfm_embeddings(
     if ndim not in (2, 3):
         raise ValueError(f"Invalid dimensionality {ndim}, expect 2 or 3 dimensional data.")
 
-    # Open / create the zarr container and return cached embeddings if they match; otherwise truncate.
+    # Open or create the zarr container and return cached embeddings if they match. Otherwise truncate.
     if save_path is None:
         f = util._open_embeddings(None)
     elif os.path.exists(save_path):

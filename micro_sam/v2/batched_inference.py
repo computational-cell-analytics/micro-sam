@@ -1,30 +1,31 @@
 """Batched, pipelined, multi-GPU SAM2 inference: scheduling engine, encoder embeddings, and decoder passes."""
 
-import contextlib
 import gc
 import os
-import queue
-import threading
 import time
+import queue
 import warnings
-from collections import defaultdict
+import threading
+import contextlib
 from copy import deepcopy
 from dataclasses import dataclass
+from collections import defaultdict
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
+
 import torch
 
+from .util import Devices
 from micro_sam.util import _create_dataset_without_data
 from .normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
-from .util import Devices
 
 
 STOP = object()
 
 
 class _PipelineAborted(Exception):
-    """Raised inside workers when another pipeline worker has failed."""
+    """Raised inside workers when another pipeline worker fails."""
 
 
 class _AtomicCounter:
@@ -479,7 +480,7 @@ def _run_batched_pipeline(
         except Exception as exc:  # noqa
             record_error(exc)
         finally:
-            # Timed as well, for the same reason: the writers may already have failed and stopped.
+            # Timed as well, for the same reason: the writers can already have failed and stopped.
             if remaining_consumers.decrement() == 0:
                 with contextlib.suppress(_PipelineAborted):
                     for _ in range(num_write_workers):
@@ -673,7 +674,7 @@ def _compute_tiled_2d(
     def predict_tiles(this_model, items, device):
         return _forward_image_batch(this_model, items, device, feature_sizes)
 
-    # Creating a dataset mutates the shared group, so it is serialized; the data (and with it the
+    # Creating a dataset mutates the shared group, so it is serialized. The data (and with it the
     # compression) is written outside the lock, which is what multiple write workers speed up.
     creation_lock = threading.Lock()
 
@@ -845,7 +846,7 @@ def _compute_3d(
             "original_size": tuple(int(value) for value in raw.shape[:2]),
         }
 
-    # The datasets are created from the first result, so only their creation is serialized; the
+    # The tool creates the datasets from the first result, so only their creation is serialized. The
     # per-slice writes run in parallel (they go to separate chunks).
     creation_lock = threading.Lock()
 
@@ -994,7 +995,7 @@ def _compute_tiled_3d(
             "original_size": tuple(int(value) for value in raw.shape[:2]),
         }
 
-    # A tile's datasets are created from its first slice, so only their creation is serialized; the
+    # The tool creates a tile's datasets from its first slice, so only their creation is serialized. The
     # per-slice writes run in parallel (they go to separate chunks).
     creation_lock = threading.Lock()
 

@@ -2,6 +2,7 @@
 """
 
 import os
+import pooch
 import warnings
 import multiprocessing as mp
 from concurrent import futures
@@ -9,11 +10,12 @@ from collections import OrderedDict
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, Callable  # noqa
 
 import numpy as np
-import pooch
+
 import torch
 
 from bioimage_cpp.utils import Blocking
 
+from . import models as custom_models  # noqa
 from ..util import (  # noqa
     ImageEmbeddings, SamPredictor, sam_model_registry, VIT_T_SUPPORT,
     _DEFAULT_MODEL, _MODEL_TYPES,
@@ -23,7 +25,6 @@ from ..util import (  # noqa
     _compute_data_signature, _get_embedding_signature, _write_embedding_signature,
     handle_pbar,
 )
-from . import models as custom_models  # noqa
 
 
 def models():
@@ -136,7 +137,7 @@ def _download_sam_model(model_type, progress_bar_factory=None):
 
     model_hash = model_registry.registry[model_type]
 
-    # If we have a custom model then we may also have a decoder checkpoint.
+    # If we have a custom model then we can also have a decoder checkpoint.
     # Download it here, so that we can add it to the state.
     decoder_name = f"{model_type}_decoder"
     decoder_path = model_registry.fetch(
@@ -217,7 +218,7 @@ def get_sam_model(
         if decoder_path is None:
             decoder_path = downloaded_decoder_path
 
-    # checkpoint_path has been passed, we use it instead of downloading a model.
+    # If checkpoint_path was passed, we use it instead of downloading a model.
     else:
         # Check if the file exists and raise an error otherwise.
         # We can't check any hashes here, and we don't check if the file is actually a valid weight file.
@@ -806,7 +807,7 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     configuration changed), False if they can be loaded. Raises if they belong to different image
     data (data signature mismatch).
     """
-    # We may have an empty zarr file that was already created to save the embeddings in.
+    # We can have an empty zarr file that was already created to save the embeddings in.
     # In this case the embeddings will be computed and we don't need to perform any checks.
     if "input_size" not in f.attrs:
         return False
@@ -814,7 +815,7 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
     stale = False
     for key, val in signature.items():
-        # A key absent from an older file should not invalidate it (it predates that key).
+        # A key absent from an older file must not invalidate it (it predates that key).
         if key not in f.attrs or f.attrs[key] == val:
             continue
         # Different image data: surface as an error rather than silently overwriting it.

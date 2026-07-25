@@ -1,19 +1,21 @@
 import os
 from typing import List, Optional, Tuple, Union
 
-import napari
 import numpy as np
 import imageio.v3 as imageio
+
 import torch
+
+import napari
 from magicgui.widgets import ComboBox, Container
 
-from ..v2.util import DEFAULT_MODEL
-from . import _widgets as widgets
 from . import util as vutil
-from ._annotator import _AnnotatorBase
-from ._batch import BatchAnnotatorTask, run_batch
+from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
+from ..v2.util import DEFAULT_MODEL
+from ._annotator import _AnnotatorBase
+from ._batch import BatchAnnotatorTask, run_batch
 
 # Cyan (track) and Magenta (division)
 STATE_COLOR_CYCLE = [
@@ -75,7 +77,7 @@ def create_tracking_menu(
             label_menu.value = new_label
 
     def label_changed(new_label):
-        # Keep both prompt layers on the selected label so a scribble drawn next carries it too.
+        # Keep both prompt layers on the selected label so the next scribble also uses it.
         vutil.set_prompt_label(points_layer, new_label)
         vutil.set_prompt_label(box_layer, new_label)
 
@@ -241,8 +243,8 @@ class AnnotatorTracking(_AnnotatorBase):
             self._point_prompt_layer = self._viewer.layers["point_prompts"]
             _new_point_layer = False
 
-        # Add the box / scribble prompts layer. It carries a positive/negative 'label' (for open
-        # scribbles) alongside the 'track_id' so the same layer supports boxes and scribbles.
+        # Add the layer for the box and scribble prompts. It carries a positive or negative 'label'
+        # (for open scribbles) next to the 'track_id', so one layer supports boxes and scribbles.
         _box_prompt_property_choices = {"track_id": ["1"], "label": self._point_labels}
 
         box_layer_mismatch = True
@@ -258,7 +260,7 @@ class AnnotatorTracking(_AnnotatorBase):
         if box_layer_mismatch and "prompts" not in self._viewer.layers:
             # Using the box layer to set divisions currently doesn't work.
             # That's why some of the code below is commented out.
-            # Boxes stay positive (green); open scribbles are green/red via the 'label' color cycle.
+            # Boxes stay green (positive). The 'label' color cycle shows open scribbles as green or red.
             self._box_prompt_layer = self._viewer.add_shapes(
                 shape_type="rectangle",
                 edge_width=4,
@@ -277,8 +279,9 @@ class AnnotatorTracking(_AnnotatorBase):
             self._box_prompt_layer = self._viewer.layers["prompts"]
             _new_box_layer = False
 
-        # Back-fill the 'label' property for a pre-existing box layer and wire the scribble label
-        # helpers (green/red coloring, non-scribble normalization) exactly as the base annotator does.
+        # A box layer that already exists has no 'label' property, so fill it in. Then connect the
+        # scribble label helpers (green and red coloring, non-scribble normalization), like the
+        # base annotator does.
         if "label" not in self._box_prompt_layer.properties:
             properties = dict(self._box_prompt_layer.properties)
             properties["label"] = np.full(len(self._box_prompt_layer.data), "positive", dtype=object)
@@ -311,8 +314,8 @@ class AnnotatorTracking(_AnnotatorBase):
     def _get_widgets(self):
         self._require_layers()
 
-        # Ensure the tracking state menu exists ('_require_layers' creates it when the layers are
-        # (re)created; create it here as a fallback otherwise).
+        # Ensure the tracking state menu exists. '_require_layers' creates it when it recreates the
+        # layers. Create it here as a fallback otherwise.
         if getattr(self, "_tracking_widget", None) is None:
             self._tracking_widget = create_tracking_menu(
                 points_layer=self._point_prompt_layer,
@@ -382,7 +385,7 @@ class AnnotatorTracking(_AnnotatorBase):
     ) -> None:
         # Initialize the state for tracking.
         self._init_track_state()
-        # At startup the decoder is not loaded yet; also treat the default model as decoder-capable
+        # At startup the decoder is not loaded yet. Also treat the default model as decoder-capable
         # when it has a registered decoder, so the default mode is correct before 'Compute Embeddings'.
         from ..v2.util import has_registered_decoder
         self._with_decoder = AnnotatorState().decoder is not None or has_registered_decoder(DEFAULT_MODEL)
@@ -536,7 +539,7 @@ class TrackingBatchTask(BatchAnnotatorTask):
 
     def precompute(self, images):
         # The SAM2 video embeddings are computed lazily per video in start/advance. When an embedding
-        # folder is given, derive one per-video zarr path inside it; otherwise keep them in memory.
+        # folder is given, derive one per-video zarr path inside it. Otherwise keep them in memory.
         if self.embedding_path is None:
             return [None] * len(images)
         os.makedirs(self.embedding_path, exist_ok=True)

@@ -1,19 +1,18 @@
 """Precompute and cache image embeddings for image data (SAM1, SAM2 or VFM encoders).
 """
 
-import inspect
 import os
 import pickle
+import inspect
 from glob import glob
 from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
 import h5py
 import numpy as np
+from segment_anything.predictor import SamPredictor
 
 import torch
-
-from segment_anything.predictor import SamPredictor
 
 try:
     from napari.utils import progress as tqdm
@@ -304,7 +303,7 @@ def _has_autoseg_state(save_path, mode, state_count=1):
 
 
 def _ais_state_matches(state, model_type):
-    """Whether a cached AIS state may be reused for `model_type`.
+    """Whether the tool can reuse a cached AIS state for `model_type`.
 
     The AIS prediction depends only on the decoder and the embeddings, so the only staleness risk is
     reusing it with a different decoder. We reuse the cached state unless both the stored and the

@@ -5,17 +5,17 @@ from typing import List, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from bioimage_cpp.utils import Blocking, take_dict
-
-from skimage.measure import regionprops_table
 from skimage.transform import resize
+from skimage.measure import regionprops_table
 
 try:
     from napari.utils import progress as tqdm
 except ImportError:
     from tqdm import tqdm
 
-from .import util
+from bioimage_cpp.utils import Blocking, take_dict
+
+from . import util
 from .v1.util import precompute_image_embeddings
 
 
@@ -282,7 +282,7 @@ def project_prediction_to_segmentation(
     """
     assert len(object_prediction) == len(seg_ids)
 
-    # bioimage_cpp.take_dict only accepts these integer label dtypes. Napari label layers may use
+    # bioimage_cpp.take_dict only accepts these integer label dtypes. Napari label layers can use
     # smaller dtypes such as uint8, so cast only for the relabeling call.
     if segmentation.dtype not in (np.uint32, np.uint64, np.int32, np.int64):
         if segmentation.dtype == bool or np.issubdtype(segmentation.dtype, np.unsignedinteger):

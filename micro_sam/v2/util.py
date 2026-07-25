@@ -1,24 +1,24 @@
 import os
-import shutil
 import sys
 import pooch
+import shutil
 import warnings
 from pathlib import Path
 from typing import Union, Literal, Optional, Sequence, Tuple
+
+import sam2
+from sam2.build_sam import build_sam2
 
 import numpy as np
 
 import torch
 
+from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
+from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
 from micro_sam.util import (
     get_device, get_cache_directory, microsam_cachedir, _open_embeddings,
     _configure_mps_memory, device_type, make_temp_embedding_path,
 )
-from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
-from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
-
-import sam2
-from sam2.build_sam import build_sam2
 
 
 Device = Optional[Union[str, torch.device]]
@@ -36,7 +36,7 @@ class ImageEmbeddings(dict):
 
     @property
     def closed(self):
-        """Whether this embedding resource has been closed."""
+        """Whether this embedding resource is closed."""
         return self._closed
 
     @property
@@ -101,8 +101,8 @@ HASHES = {
 }
 
 
-# Default in-plane tiling for large images. Tiling is enabled when an in-plane axis exceeds
-# DEFAULT_TILING_THRESHOLD; the SAM input patch per axis is then DEFAULT_TILE_SHAPE + 2 * DEFAULT_HALO,
+# Default in-plane tiling for large images. The tool enables tiling when an in-plane axis exceeds
+# DEFAULT_TILING_THRESHOLD. The SAM input patch per axis is then DEFAULT_TILE_SHAPE + 2 * DEFAULT_HALO,
 # which is kept equal to the threshold (512 + 2 * 128 = 768).
 DEFAULT_TILING_THRESHOLD = 768
 DEFAULT_TILE_SHAPE = (512, 512)
@@ -110,14 +110,14 @@ DEFAULT_HALO = (128, 128)
 
 # Default z block / halo for volumetric (3d) tiling. Each decoder pass spans the inner block plus the
 # halo on each side, i.e. DEFAULT_TILE_Z + 2 * DEFAULT_HALO_Z = 8 slices, matching the UniSAM2 8-slice
-# training crop (so the z-convolutions see the z-context they were trained on; do not enlarge this
+# training crop (so the z-convolutions see the z-context they were trained on. Do not enlarge this
 # beyond the training crop). Set the z tile >= the slice count to disable z-tiling.
 DEFAULT_TILE_Z = 4
 DEFAULT_HALO_Z = 2
 
 
 def needs_default_tiling(shape):
-    """Whether default in-plane tiling should be enabled for a given image shape.
+    """Whether to enable default in-plane tiling for a given image shape.
 
     Args:
         shape: The image shape without any channel axis. Either 2d (y, x) or 3d (z, y, x);
@@ -147,7 +147,7 @@ FINETUNED_MODELS = [
 ]
 
 # The default model for the annotation tools (GUI + CLI + Python API). This is the single source of
-# truth for the default; the GUI derives its synthetic 'vit_<size><suffix>' selector string from it.
+# truth for the default. The GUI derives its synthetic 'vit_<size><suffix>' selector string from it.
 DEFAULT_MODEL = "hvit_t_cells"
 
 FINETUNED_URLS = {
@@ -281,8 +281,8 @@ def get_sam2_model(
     Returns:
         The SAM2 model.
     """
-    # The base SAM2 backbone is the first 6 characters of the name, e.g. 'hvit_t_cells' -> 'hvit_t';
-    # finetuned micro-sam weights come from the registry rather than the base SAM2 download.
+    # The base SAM2 backbone is the first 6 characters of the name, e.g. 'hvit_t_cells' -> 'hvit_t'.
+    # Finetuned micro-sam weights come from the registry rather than the base SAM2 download.
     is_finetuned = model_type in FINETUNED_MODELS
     model_cfg = CFG_PATHS[model_type[:6]]
 
@@ -344,15 +344,15 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, p
     data (data signature mismatch). `preprocessing` is the policy expected for the current path
     (2d image or 3d / video, see `micro_sam.v2.normalization`).
     """
-    # We may have an empty zarr file that was already created to save the embeddings in. A
+    # We can have an empty zarr file that was already created to save the embeddings in. A
     # feature-bearing file without the completion metadata is a partial cache: reject it unless it
-    # explicitly records the current preprocessing policy. Untagged caches may use the former video
+    # explicitly records the current preprocessing policy. Untagged caches can use the former video
     # resize implementation and cannot be safely resumed.
     if "input_size" not in f.attrs:
         normalization = f.attrs.get("normalization")
         return "features" in f and normalization != preprocessing
 
-    # Creates all the metadta that is stored along with the embeddings.
+    # Creates all the metadata that is stored along with the embeddings.
     # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam.v2`?
     from micro_sam.util import _get_embedding_signature
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
@@ -360,7 +360,7 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, p
 
     stale = False
     for key, val in signature.items():
-        # Missing current preprocessing metadata means stale; other legacy signature fields remain tolerated.
+        # Missing current preprocessing metadata means stale. We still tolerate other legacy signature fields.
         if key not in f.attrs:
             if key == "normalization":
                 stale = True

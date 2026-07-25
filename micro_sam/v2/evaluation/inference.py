@@ -1,31 +1,30 @@
 import os
 import shutil
 import warnings
-from tqdm import tqdm
 from pathlib import Path
 from typing import Union, Optional, List
 
 import numpy as np
 import imageio.v3 as imageio
-from bioimage_cpp.segmentation import label as connected_components
+from tqdm import tqdm
+from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
 import torch
 
-from torch_em.util.segmentation import size_filter
-
 from elf.io import open_file
 
-from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+from torch_em.util.segmentation import size_filter
 
-from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
+from bioimage_cpp.segmentation import label as connected_components
+
 from micro_sam.v2.normalization import to_image
 from micro_sam.prompt_generators import IterativePromptGenerator
-from micro_sam.v1.evaluation.inference import (
-    _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
-)
-
+from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
 from micro_sam.v2.util import (
     _get_device, configure_image_predictor, get_sam2_image_predictor, get_sam2_model, precompute_image_embeddings,
+)
+from micro_sam.v1.evaluation.inference import (
+    _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
 )
 
 
@@ -69,7 +68,7 @@ def run_amg(
     for image_path in tqdm(image_paths, desc="Run inference for automatic mask generation"):
         image_name = Path(os.path.basename(image_path)).with_suffix(".tif")
 
-        # We skip the images that already have been segmented.
+        # We skip the images that are already segmented.
         prediction_path = os.path.join(prediction_dir, image_name)
         if os.path.exists(prediction_path):
             continue
@@ -502,7 +501,7 @@ def _run_interactive_segmentation_3d_per_object(
         n_iterations=n_iterations,
     )
 
-    assert len(gt_ids) == len(preds_per_object), "The number of label ids should match the number of objects segmented."
+    assert len(gt_ids) == len(preds_per_object), "The number of label ids must match the number of objects segmented."
 
     seg_per_iterations = []
     for gt_id, _preds_per_iters in zip(gt_ids, preds_per_object):  # Access interactive segmentation per object.
@@ -571,7 +570,7 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
         pred_per_iteration = []
         _corr_points = None  # (x,y) correction points for the next iteration
         _corr_labels = None
-        _corr_frame = None   # z-slice where corrections will be applied
+        _corr_frame = None  # z-slice where corrections will be applied
 
         for iteration in list_of_iterations:
             if iteration == 0:
@@ -643,8 +642,8 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
                 )
                 next_coords = next_coords.detach().cpu().numpy()  # [1, 2, 2]: (obj, pos+neg, xy)
                 next_labels = next_labels.detach().cpu().numpy()  # [1, 2]
-                _corr_points = next_coords[0]   # [[x_pos, y_pos], [x_neg, y_neg]]
-                _corr_labels = next_labels[0]   # [1, 0]
+                _corr_points = next_coords[0]  # [[x_pos, y_pos], [x_neg, y_neg]]
+                _corr_labels = next_labels[0]  # [1, 0]
                 _corr_frame = z_worst
 
         pred_per_object.append(pred_per_iteration)

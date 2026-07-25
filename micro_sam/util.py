@@ -5,35 +5,33 @@ import os
 import json
 import uuid
 import pooch
-import shutil
 import atexit
-import xxhash
 import pickle
+import shutil
+import xxhash
 import hashlib
 import warnings
 from pathlib import Path
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import z5py
+import zarr
 import numpy as np
 import imageio.v3 as imageio
-
 import segment_anything.utils.amg as amg_utils
-
-import zarr
-import z5py
-
-from elf.io import open_file
-import elf.parallel as parallel_impl
-
-from bioimage_cpp.distance import distance_transform
-from bioimage_cpp.segmentation import relabel_sequential
 
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 
 import torch
 from torchvision.ops.boxes import batched_nms
+
+import elf.parallel as parallel_impl
+from elf.io import open_file
+
+from bioimage_cpp.distance import distance_transform
+from bioimage_cpp.segmentation import relabel_sequential
 
 from .__version__ import __version__
 
@@ -145,7 +143,7 @@ def device_type(device: Union[str, torch.device]) -> str:
 def _configure_mps_memory(device: Union[str, torch.device]) -> None:
     """Disable the MPS memory watermark so 3d automatic segmentation does not hit a premature OOM.
 
-    MPS's default watermark rejects allocations that would still fit in unified memory; '0.0' disables
+    MPS's default watermark rejects allocations that would still fit in unified memory. '0.0' disables
     it. We set it only when unset (so a user-provided value is kept) and it must run before the first
     MPS allocation to apply.
     """
@@ -155,7 +153,7 @@ def _configure_mps_memory(device: Union[str, torch.device]) -> None:
         is_mps = False
     if is_mps and "PYTORCH_MPS_HIGH_WATERMARK_RATIO" not in os.environ:
         os.environ["PYTORCH_MPS_HIGH_WATERMARK_RATIO"] = "0.0"
-        print("Lifting the MPS memory limit for large 3d segmentation; this may use swap on low-memory Macs.")
+        print("Lifted the MPS memory limit for large 3d segmentation. This can use swap on low-memory Macs.")
 
 
 def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, torch.device]:
@@ -338,10 +336,10 @@ def _to_image(image):
 
 
 # The zarr format used when writing new on-disk embedding caches. Reading auto-detects the format,
-# so existing caches (v2 or v3) still load; this only controls newly created containers.
+# so existing caches (v2 or v3) still load. This only controls newly created containers.
 EMBEDDING_ZARR_FORMAT = 3
-# Compression codec for on-disk embeddings. blosc (byte-shuffle + lz4) is the fastest to read/write
-# and the smallest for float32 features; it is also z5py's default, so this just pins it explicitly.
+# Compression codec for on-disk embeddings. blosc (byte-shuffle + lz4) is the fastest to read and write
+# and the smallest for float32 features. It is also z5py's default, so this just pins it explicitly.
 EMBEDDING_COMPRESSION = "blosc"
 
 
@@ -771,7 +769,7 @@ def micro_sam_info(download: Optional[List[str]] = None) -> None:
             device_lines.append(f"[bold]CUDA (torch build):[/bold] {torch.version.cuda}")
             device_lines.append(f"[bold]cuDNN:[/bold] {torch.backends.cudnn.version()}")
     elif torch.backends.mps.is_available():
-        # On Apple Silicon the GPU is the SoC; report the exact chip on a best-effort basis.
+        # On Apple Silicon the GPU is the SoC. Report the exact chip on a best-effort basis.
         chip = platform.processor()
         if platform.system() == "Darwin":
             try:

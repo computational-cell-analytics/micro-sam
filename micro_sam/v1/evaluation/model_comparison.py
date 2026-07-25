@@ -3,7 +3,6 @@
 
 import os
 from glob import glob
-from tqdm import tqdm
 from pathlib import Path
 from functools import partial
 from typing import Optional, Union, Dict, Any
@@ -12,19 +11,21 @@ import h5py
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from tqdm import tqdm
+from scipy.ndimage import binary_dilation
+
 import skimage.draw as draw
 from skimage import exposure
-from scipy.ndimage import binary_dilation
 from skimage.segmentation import find_boundaries
-
-from bioimage_cpp.segmentation import relabel_sequential
 
 import torch
 
+from bioimage_cpp.segmentation import relabel_sequential
+
 from ... import util
-from ..util import get_sam_model, precompute_image_embeddings, set_precomputed
 from ...prompt_generators import PointAndBoxPromptGenerator
 from ..prompt_based_segmentation import segment_from_box, segment_from_points
+from ..util import get_sam_model, precompute_image_embeddings, set_precomputed
 
 
 #

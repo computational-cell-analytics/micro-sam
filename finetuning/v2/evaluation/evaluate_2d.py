@@ -64,7 +64,7 @@ def _save_2d_crops(
     image_paths, gt_paths, experiment_folder, crop_shape=CROP_SHAPE_2D,
     raw_key=None, label_key=None,
 ):
-    """Save center-cropped 2D images and GT labels; return paths to the crops.
+    """Save center-cropped 2D images and GT labels. Return paths to the crops.
 
     Crops are stored under <experiment_folder>/data_crops/ and are skipped on
     subsequent calls when the files already exist.

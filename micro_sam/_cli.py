@@ -69,8 +69,8 @@ def _model_options(f):
         ),
         click.option(
             "-e", "--embedding_path", default=None,
-            help="Filepath for saving / loading the pre-computed image embeddings. Recommended to reuse embeddings "
-            "across sessions; otherwise they are recomputed every time."
+            help="Filepath for saving or loading the pre-computed image embeddings. Recommended to reuse embeddings "
+            "across sessions. Otherwise the tool recomputes them every time."
         ),
         click.option(
             "-m", "--model_type", default=None,
@@ -456,8 +456,8 @@ def _view_result(image_path, key, segmentation):
 )
 @click.option(
     "-o", "--output", "output_path", required=True,
-    help="The filepath to store the results. For multiple inputs this should be a folder; "
-    "for a single image a tif file."
+    help="The filepath to store the results. For multiple inputs use a folder. "
+    "For a single image use a tif file."
 )
 @click.option("-e", "--embedding_path", default=None, help="Optional path where the embeddings will be cached.")
 @click.option(
@@ -499,7 +499,7 @@ def _view_result(image_path, key, segmentation):
     help="Comma-separated devices for inference, e.g. 'cuda:0,cuda:1'. By default all visible GPUs are used."
 )
 @click.option("--view", is_flag=True, default=False, help="Whether to open the results in napari after segmentation.")
-@click.option("-v", "--verbose", is_flag=True, default=False, help="Whether to allow verbosity of outputs.")
+@click.option("-v", "--verbose", is_flag=True, default=False, help="Whether to print verbose output.")
 @click.pass_context
 def inference_segmentation(
     ctx, input_path, output_path, embedding_path, pattern, key, model_type, checkpoint_path,
@@ -601,7 +601,7 @@ def inference_segmentation(
     "-d", "--device", default=None,
     help="The device for the predictor: 'cuda', 'cpu' or 'mps'. By default the best available is used."
 )
-@click.option("-v", "--verbose", is_flag=True, default=False, help="Whether to allow verbosity of outputs.")
+@click.option("-v", "--verbose", is_flag=True, default=False, help="Whether to print verbose output.")
 @click.pass_context
 def inference_tracking(
     ctx, input_path, output_path, key, model_type, checkpoint_path, tile_shape, halo, mode, device, verbose,
@@ -1001,7 +1001,7 @@ def v1_train(ctx, **kwargs):
 )
 @click.option("--batch_size", type=int, default=None, help="The batch size for computing embeddings over tiles / z.")
 @click.option("--tracking", is_flag=True, default=False, help="Run automatic tracking instead of segmentation.")
-@click.option("-v", "--verbose", is_flag=True, default=False, help="Whether to allow verbosity of outputs.")
+@click.option("-v", "--verbose", is_flag=True, default=False, help="Whether to print verbose output.")
 @click.pass_context
 def v1_automatic_segmentation(ctx, **kwargs):
     """Run SAM1 automatic segmentation or tracking for 2D, 3D or timeseries data.

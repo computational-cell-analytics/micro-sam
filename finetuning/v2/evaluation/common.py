@@ -170,7 +170,7 @@ def _get_2d_data_paths(
         return sorted(img), sorted(gt), None, None
 
     if dataset_name == "segpc":
-        # No test split; use validation.
+        # No test split. Use validation.
         paths = datasets.segpc.get_segpc_paths(
             path=os.path.join(p, "segpc"), split="validation", download=download,
         )
@@ -184,7 +184,7 @@ def _get_2d_data_paths(
         return sorted(paths), sorted(paths), "raw/rgb", "labels/cell"
 
     if dataset_name == "usiigaci":
-        # No test split; use val.
+        # No test split. Use val.
         img, gt = datasets.usiigaci.get_usiigaci_paths(
             path=os.path.join(p, "usiigaci"), split="val", download=download,
         )
@@ -265,7 +265,7 @@ def _get_3d_lm_data_paths(
         return sorted(paths), sorted(paths), "raw/nuclei", "labels/nuclei"
 
     if dataset_name == "mouse_embryo":
-        # No test split; use val.
+        # No test split. Use val.
         paths = datasets.mouse_embryo.get_mouse_embryo_paths(
             path=os.path.join(p, "mouse_embryo"), name="nuclei", split="val", download=download,
         )
@@ -320,7 +320,7 @@ def _get_3d_em_data_paths(
         return sorted(paths), sorted(paths), "volumes/raw", "volumes/labels/neuron_ids"
 
     if dataset_name == "snemi":
-        # The test file has no labels; training used train-slices 70+, so slices [0:70] are holdout.
+        # The test file has no labels. Training used train-slices 70+, so slices [0:70] are holdout.
         path = datasets.snemi.get_snemi_paths(
             path=os.path.join(p, "snemi"), sample="train", download=download,
         )

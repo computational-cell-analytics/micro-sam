@@ -90,7 +90,7 @@ def test_forced_2d(shape, exp_shape, exp_rgb):
 
 
 def test_forced_2d_channels_first_values_preserved():
-    # The leading axis (size 2) is the channel axis: it becomes R, G; B is zero-padded.
+    # The leading axis (size 2) is the channel axis: it becomes R, G. B is zero-padded.
     img = np.zeros((2, 4, 5), dtype="uint8")
     img[0] = 1
     img[1] = 2

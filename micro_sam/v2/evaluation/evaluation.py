@@ -1,14 +1,14 @@
 import os
-from tqdm import tqdm
 from typing import Union, List
 
 import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
-
-from torch_em.util.segmentation import size_filter
+from tqdm import tqdm
 
 from elf.evaluation import mean_segmentation_accuracy
+
+from torch_em.util.segmentation import size_filter
 
 
 def run_evaluation_for_iterative_prompting(

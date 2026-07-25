@@ -66,12 +66,12 @@ EM_GRID = {
 }
 
 # Sparse-flow parameters that determine the (expensive) convergence-density map. Combos that share
-# these reuse a cached density; only 'density_threshold' and 'min_size' (the cheap seed + watershed +
+# these reuse a cached density. Only 'density_threshold' and 'min_size' (the cheap seed + watershed +
 # size-filter steps) then vary on top. See score_image_sparse_cached.
 FLOW_DENSITY_KEYS = ("foreground_threshold", "sigma", "n_iter", "dt")
 
 # Dense-multicut parameters that determine the (expensive) slice-wise oversegmentation and RAG.
-# Combos that share these reuse a cached oversegmentation; only 'beta' (the cheap edge-cost +
+# Combos that share these reuse a cached oversegmentation. Only 'beta' (the cheap edge-cost +
 # multicut-solve step) then varies on top. See score_image_dense_cached.
 OVERSEG_KEYS = ("density_threshold", "sigma", "n_iter", "dt")
 
@@ -83,7 +83,7 @@ CRITERION_ASCENDING = {"msa": False, "cremi": True}
 # Each track: the datasets to evaluate, the postprocessing mode, the spatial dimensionality, the grid,
 # an optional anisotropic voxel 'spacing' for 3d flow smoothing (matching common._DATASET_SPACING), the
 # 3d center-crop 'crop' (None for 2d), and the 'criterion' used to pick the best combo. Crops match the
-# micro-sam v2 eval (evaluate_3d uses (8,512,512) for LM; the EM neuron grid search uses (32,512,512)).
+# micro-sam v2 eval (evaluate_3d uses (8,512,512) for LM, and the EM neuron grid search uses (32,512,512)).
 TRACKS = {
     "lm_cell": {
         "datasets": ["livecell"], "mode": "sparse", "ndim": 2, "grid": LM_GRID,
@@ -155,7 +155,7 @@ def read_image_2d(path, key):
         arr = np.asarray(imageio.imread(path))
     if arr.ndim == 3 and arr.shape[0] <= 4 and arr.shape[1] > arr.shape[0] and arr.shape[2] > arr.shape[0]:
         arr = arr.transpose(1, 2, 0)
-    # The UniSAM2 2d inference path expects single-channel input; reduce a trailing channel axis.
+    # The UniSAM2 2d inference path expects single-channel input. Reduce a trailing channel axis.
     if arr.ndim == 3:
         arr = arr.mean(axis=-1)
     return arr

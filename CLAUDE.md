@@ -10,11 +10,8 @@ You will implement tasks related to this project.
 
 ### Code Quality
 ```bash
-# Format code with black
-black micro_sam/
-
-# Lint with ruff (auto-fixes enabled)
-ruff check micro_sam/
+# Lint with flake8. This is the only linter. Do not use ruff, black, or any other formatter.
+flake8 --max-line-length=120 micro_sam/
 ```
 
 ### Tests

@@ -5,19 +5,18 @@ from typing import Union
 
 import numpy as np
 import imageio.v3 as imageio
-from bioimage_cpp.segmentation import label as connected_components
+from training.dataset.vos_raw_dataset import VOSRawDataset, VOSFrame, VOSVideo
 
 import torch
 
 from torch_em.util.image import load_data
+from torch_em.data.datasets.light_microscopy import ctc as ctc_module
 from torch_em.data.datasets import light_microscopy, electron_microscopy
 from torch_em.data.datasets.electron_microscopy import axondeepseg as axondeepseg_module
-from torch_em.data.datasets.light_microscopy import ctc as ctc_module
 
-from training.dataset.vos_raw_dataset import VOSRawDataset, VOSFrame, VOSVideo
+from bioimage_cpp.segmentation import label as connected_components
 
 from micro_sam.v2.normalization import normalize_raw
-
 from .segment_loader import ImageSegmentLoader, VolumeSegmentLoader
 
 
@@ -293,7 +292,7 @@ class TissueNetDataset(VOSRawDataset):
         zarr_path = self.zarr_paths[idx]
         fname = Path(zarr_path).stem
 
-        raw = np.array(load_data(zarr_path, "raw/rgb"))        # (3, H, W) float64
+        raw = np.array(load_data(zarr_path, "raw/rgb"))  # (3, H, W) float64
         labels = np.array(load_data(zarr_path, "labels/cell"))  # (H, W) int32
 
         raw = normalize_raw(raw, axis=(1, 2), output_dtype="uint8")  # (3, H, W)
@@ -335,8 +334,8 @@ class AxonDeepSegDataset(VOSRawDataset):
         h5_path = self.h5_paths[idx]
         fname = Path(h5_path).stem
 
-        raw = np.array(load_data(h5_path, "raw"))        # (H, W) uint8
-        labels = np.array(load_data(h5_path, "labels"))   # (H, W) uint8, semantic 0/1/2
+        raw = np.array(load_data(h5_path, "raw"))  # (H, W) uint8
+        labels = np.array(load_data(h5_path, "labels"))  # (H, W) uint8, semantic 0/1/2
 
         # Stack grayscale to 3-channel CHW
         raw = np.stack([raw, raw, raw], axis=0)  # (3, H, W)

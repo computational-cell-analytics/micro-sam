@@ -1,5 +1,5 @@
-import json
 import os
+import json
 import random
 from functools import partial
 
@@ -8,10 +8,10 @@ from sklearn.model_selection import train_test_split
 
 import torch
 
+from elf.io import open_file
+
 import torch_em
 from torch_em.data import datasets, MinInstanceSampler, ConcatDataset
-
-from elf.io import open_file
 
 from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, _build_group_map
@@ -34,7 +34,7 @@ N_SAMPLES_VAL = 50
 # Sam2Trainer._validate_impl, so the validation metric is comparable across epochs.
 VALIDATION_SEED = 42
 
-# Train with uniformly sampled symmetric percentiles; validate deterministically with 2nd/98th percentiles
+# Train with uniformly sampled symmetric percentiles. Validate deterministically with the 2nd and 98th percentiles
 # to match the inference-time normalization in normalize_raw.
 TRAIN_LOWER_PERCENTILE_BOUNDS = (0.0, 5.0)
 VALIDATION_LOWER_PERCENTILE_BOUNDS = (2.0, 2.0)
@@ -54,8 +54,8 @@ def seed_worker(worker_id):
 
 
 def _ensure_native_byte_order(y):
-    # tifffile.memmap returns big-endian >f4 for some TIFFs; byteswap to native so that
-    # Kornia augmentation and skimage/vigra C extensions receive correctly ordered bytes.
+    # tifffile.memmap returns big-endian >f4 for some TIFFs. Byteswap to native so that
+    # Kornia augmentation and skimage or vigra C extensions receive correctly ordered bytes.
     return y.byteswap().view(y.dtype.newbyteorder()) if not y.dtype.isnative else y
 
 
@@ -412,7 +412,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
 
     # 13. CTC (cell segmentation from Cell Tracking Challenge)
-    # NOTE: CTC only supports the train split; no validation data added for CTC.
+    # NOTE: CTC only supports the train split. No validation data is added for CTC.
     ctc_kwargs = {
         "path": os.path.join(input_path, "ctc"),
         "patch_shape": (1, *patch_shape),

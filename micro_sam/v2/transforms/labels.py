@@ -1,6 +1,7 @@
 from typing import Optional, Tuple
 
 import numpy as np
+
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 
@@ -12,7 +13,7 @@ def _instance_labels(labels):
     """Relabel each connected region as a unique integer instance.
 
     Wraps a connected-components labeling so that disconnected regions with the
-    same label ID get separate consecutive IDs.  Used as label_transform2 in the
+    same label ID get separate consecutive IDs. Used as label_transform2 in the
     interactive generalist dataloaders.
     """
     return connected_components(labels).astype("int64")
@@ -64,10 +65,10 @@ def _joint_em_cell_label_trafo(y, label_trafo):
 
     Like :func:`_em_cell_label_trafo` but returns
     ``[instance_ids, expected_fg, d_x, d_y, d_z]`` (5 channels) instead of
-    dropping the instance channel.  ``label_trafo`` must produce a 5-channel
+    dropping the instance channel. ``label_trafo`` must produce a 5-channel
     array (i.e. be a :class:`_JointLabelTransform` / ``instances=True``).
     """
-    y = label_trafo(y)          # (5, H, W) or (5, Z, H, W)
+    y = label_trafo(y)  # (5, H, W) or (5, Z, H, W)
     instances = y[0]
     bd = find_boundaries(instances.astype("uint32"), mode="outer").astype("uint8")
     fg = (instances > 0).astype("uint8")
@@ -127,7 +128,7 @@ class DirectedPerObjectBoundaryDistanceTransform:
         if labels.ndim == 2:
             labels = labels[None]
 
-        # bioimage-cpp / skimage C extensions read raw bytes assuming native byte order; swap if needed.
+        # bioimage-cpp and skimage C extensions read raw bytes as native byte order. Swap if needed.
         if not labels.dtype.isnative:
             labels = labels.byteswap().view(labels.dtype.newbyteorder())
 

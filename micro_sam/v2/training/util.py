@@ -4,7 +4,6 @@ from typing import Callable, List, Optional, Union
 import torch
 
 from micro_sam.util import get_device
-
 from micro_sam.v2.util import CFG_PATHS, _get_checkpoint
 
 
@@ -37,7 +36,7 @@ def get_sam2_train_model(
         prob_to_use_pt_input: Probability of using point/box prompts (vs mask propagation).
         prob_to_use_box_input: Conditional probability of using a box instead of a click.
         num_frames_to_correct: Max number of frames per volume that receive iterative
-            correction clicks.  Set to the number of z-slices to correct all frames.
+            correction clicks. Set to the number of z-slices to correct all frames.
         rand_frames_to_correct: If True, randomly sample 1..num_frames_to_correct frames
             to correct per step (more robust than always correcting the maximum).
         prob_to_sample_from_gt: Probability of sampling a correction click from the GT
@@ -319,8 +318,8 @@ class ConvertToSam2VideoBatch:
 
         y = y.squeeze(1)  # (B,H,W) or (B,Z,H,W)
 
-        # For 3D: sample from the union of IDs across all z-slices so that objects
-        # present in any frame are included (frame 0 alone may be empty at patch boundaries).
+        # For 3D: sample from the union of IDs across all z-slices so that it includes objects
+        # present in any frame (frame 0 alone can be empty at patch boundaries).
         obj_ids_per_b = [
             self._sample_obj_ids(y[b].flatten() if is_3d else y[b]) for b in range(B)
         ]
@@ -333,9 +332,9 @@ class ConvertToSam2VideoBatch:
                 ids = obj_ids_per_b[b]
                 if len(ids) == 0:
                     continue
-                lbl = y[b, t] if is_3d else y[b]       # (H,W)
+                lbl = y[b, t] if is_3d else y[b]  # (H,W)
                 raw = torch.stack([lbl == oid for oid in ids])  # (O_i,H,W)
-                obj_masks = self._resize_masks(raw)             # (O_i,1024,1024)
+                obj_masks = self._resize_masks(raw)  # (O_i,1024,1024)
                 for o_i, oid in enumerate(ids):
                     masks_t.append(obj_masks[o_i])
                     obj2frame_t.append(torch.tensor([t, b], dtype=torch.int))
@@ -354,8 +353,8 @@ class ConvertToSam2VideoBatch:
 
         return BatchedVideoDatapoint(
             img_batch=img_batch,
-            obj_to_frame_idx=torch.stack(step_obj2frame),   # (T,O,2)
-            masks=torch.stack(step_masks),                  # (T,O,1024,1024)
+            obj_to_frame_idx=torch.stack(step_obj2frame),  # (T,O,2)
+            masks=torch.stack(step_masks),  # (T,O,1024,1024)
             metadata=BatchedVideoMetaData(
                 unique_objects_identifier=torch.stack(step_identifier),
                 frame_orig_size=torch.stack(step_orig_size),
@@ -369,7 +368,7 @@ class MixedLoader:
     """Round-robin DataLoader wrapper for joint 2D + 3D training.
 
     Each iteration yields one batch from the first loader, then one from the
-    second, cycling until the shorter one is exhausted.  This ensures that every
+    second, cycling until the shorter one is exhausted. This ensures that every
     training step sees both 2D and 3D data.
 
     Args:

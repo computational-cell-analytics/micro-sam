@@ -51,7 +51,7 @@ def benchmark_mode(mode, model, device, em_crop, n_threads, backend):
     plain = gs.score_image(prediction, labels, mode, params_list, backend, use_flow_cache=False, n_threads=n_threads)
     t_plain = time.perf_counter() - t0
 
-    # score_image returns a per-combo metric dict; compare the primary criterion metric.
+    # score_image returns a per-combo metric dict. Compare the primary criterion metric.
     criterion = track_cfg.get("criterion", "msa")
     diffs = [
         abs(c[criterion] - p[criterion]) for c, p in zip(cached, plain) if c is not None and p is not None

@@ -8,19 +8,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import binary_dilation, binary_erosion
 
-import torch
-
 import bioimageio.core
 import bioimageio.spec.model.v0_5 as spec
 from bioimageio.spec import save_bioimageio_package
 from bioimageio.core.digest_spec import create_sample_for_model
 
+import torch
+
 from ... import util
 from ..util import models
-from ...prompt_generators import PointAndBoxPromptGenerator
-from ..evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_box
-from ..prompt_based_segmentation import _compute_logits_from_mask
 from .predictor_adaptor import PredictorAdaptor
+from ...prompt_generators import PointAndBoxPromptGenerator
+from ..prompt_based_segmentation import _compute_logits_from_mask
+from ..evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_box
 
 
 DEFAULTS = {
@@ -246,7 +246,7 @@ def _check_model(model_description, input_paths, result_paths):
         # The masks are binary and thresholded at logit 0 right after a bilinear upsample, so the
         # export round-trip (direct PyTorch vs the reloaded bioimage.io pipeline) can flip pixels in
         # a thin band along the mask boundary due to platform-level float / interpolation differences
-        # (notably on macOS/arm64). Such boundary flips are expected; only a disagreement deeper than
+        # (notably on macOS/arm64). Such boundary flips are expected. Only a disagreement deeper than
         # this band indicates a genuinely wrong export. So we ignore disagreements within 'band' px of
         # the reference mask boundary and require the rest to match exactly.
         mask_bool, predicted_bool = mask.astype(bool), predicted_mask.astype(bool)

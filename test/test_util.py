@@ -676,7 +676,7 @@ class TestEmbeddingBackend(unittest.TestCase):
         self.assertEqual(list(g.attrs["input_size"]), [1024, 1024])
         self.assertIsNone(g.attrs["tile_shape"])
 
-        # z5py-written caches are zarr v3 with blosc; verify via zarr-python where it can read v3
+        # z5py-written caches are zarr v3 with blosc. Verify via zarr-python where it can read v3
         # (zarr-python v2 cannot read the v3 format, so this cross-check only applies on v3).
         if ZARR_MAJOR >= 3:
             z = zarr.open(save_path, mode="r")
@@ -685,7 +685,7 @@ class TestEmbeddingBackend(unittest.TestCase):
             self.assertTrue(any("blosc" in repr(codec).lower() for codec in z["features"].metadata.codecs))
 
     def test_open_metadataless_dir(self):
-        # z5py cannot open a directory without zarr metadata; _open_embeddings must handle it
+        # z5py cannot open a directory without zarr metadata. _open_embeddings must handle it
         # gracefully, as the old zarr-python backend did (implicit group creation).
         from micro_sam.util import _open_embeddings
         save_path = os.path.join(self.tmp_folder, "empty.zarr")

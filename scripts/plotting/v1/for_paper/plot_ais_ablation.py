@@ -54,10 +54,10 @@ COVID_IF_AIS = {
 
 MODEL_NAME_MAPS = {
     "unet": "UNet",
-    "unetr_scratch": "UNETR\n$\it{(scratch)}$",
-    "unetr_sam": "UNETR\n$\it{(SAM)}$",
-    "semanticsam_scratch": "SamDecoder\n$\it{(scratch)}$",
-    "semanticsam_sam": "SamDecoder\n$\it{(SAM)}$"
+    "unetr_scratch": "UNETR\n$\\it{(scratch)}$",
+    "unetr_sam": "UNETR\n$\\it{(SAM)}$",
+    "semanticsam_scratch": "SamDecoder\n$\\it{(scratch)}$",
+    "semanticsam_sam": "SamDecoder\n$\\it{(SAM)}$"
 }
 
 COLORS = {
@@ -150,4 +150,5 @@ def main():
     make_covid_if_lineplot()
 
 
-main()
+if __name__ == "__main__":
+    main()

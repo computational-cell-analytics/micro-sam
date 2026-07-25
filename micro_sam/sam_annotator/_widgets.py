@@ -1,33 +1,41 @@
 """Implements the widgets used in the annotation plugins."""
 
 import gc
-import json
-import multiprocessing as mp
 import os
+import json
 import pickle
+import multiprocessing as mp
 from pathlib import Path
 from typing import Optional
 
-import elf.parallel
 import h5py
-import napari
-import numpy as np
 import z5py
+import numpy as np
 
-from bioimage_cpp.utils import segmentation_overlap
-from magicgui import magic_factory
-from magicgui.widgets import ComboBox, Container, create_widget
+import napari
 # We have disabled the thread workers for now because they result in a
 # massive slowdown in napari >= 0.5.
 # See also https://forum.image.sc/t/napari-thread-worker-leads-to-massive-slowdown/103786
 # from napari.qt.threading import thread_worker
 from napari.utils import progress
 from napari.utils.notifications import show_info
+
 from qtpy import QtWidgets
 from qtpy.QtCore import QObject, Signal, Qt
+
+from magicgui import magic_factory
+from magicgui.widgets import ComboBox, Container, create_widget
+
 from superqt import QCollapsible, QLabeledRangeSlider
 
+import elf.parallel
+
+from bioimage_cpp.utils import segmentation_overlap
+
 from .. import util
+from . import util as vutil
+from ._state import AnnotatorState
+from ._tooltips import get_tooltip
 from ..v1 import instance_segmentation
 from ..v1.multi_dimensional_segmentation import (
     PROJECTION_MODES,
@@ -39,9 +47,6 @@ from ..v1.multi_dimensional_segmentation import (
     segment_mask_in_volume,
     track_across_frames,
 )
-from . import util as vutil
-from ._state import AnnotatorState
-from ._tooltips import get_tooltip
 
 #
 # Convenience functionality for creating QT UI and manipulating the napari viewer.
@@ -350,7 +355,7 @@ class _WidgetBase(QtWidgets.QWidget):
 
     def _get_model_size_options(self):
         # The available model sizes depend on the selected family: the base SAM2 family supports all
-        # sizes, while finetuned families may only be available for specific sizes (e.g. 'Microscopy'
+        # sizes, while finetuned families can be available only for specific sizes (e.g. 'Microscopy'
         # is an 'hvit_t' model). We store the UI labels mapped to the corresponding model names.
         sizes = self.model_family_config[self.model_family]["sizes"]
         self.model_size_options = [self._model_size_map[k] for k in sizes]
@@ -362,7 +367,7 @@ class _WidgetBase(QtWidgets.QWidget):
         )
 
     def _update_model_type(self):
-        # Sync the selected family; both the available sizes and the model-type suffix depend on it.
+        # Sync the selected family. Both the available sizes and the model-type suffix depend on it.
         self.model_family = self.model_family_dropdown.currentText() or self.model_family
 
         # Get currently selected model size (before clearing dropdown)
@@ -432,8 +437,8 @@ class _WidgetBase(QtWidgets.QWidget):
         }
 
         # Per-family backend config: the model-type suffix appended after 'hvit_{size}' and the
-        # available model sizes. The base SAM2 family supports all sizes; finetuned families (e.g.
-        # 'Microscopy', the joint SAM2 + UniSAM2 'hvit_t_cells' model) may exist only for some sizes.
+        # available model sizes. The base SAM2 family supports all sizes. Finetuned families (e.g.
+        # 'Microscopy', the joint SAM2 + UniSAM2 'hvit_t_cells' model) can exist only for some sizes.
         self.model_family_config = {
             "Natural Images": {"suffix": "", "sizes": ["t", "s", "b", "l"]},
             "Microscopy": {"suffix": "_cells", "sizes": ["t"]},
@@ -544,7 +549,7 @@ class _WidgetBase(QtWidgets.QWidget):
                 f"Install it (e.g. 'pip install {package}') and try again."
             )
 
-        # These weights are gated on HuggingFace; warn (but allow continuing, e.g. if already cached).
+        # These weights are gated on HuggingFace. Warn (but allow continuing, e.g. if already cached).
         try:
             from huggingface_hub import get_token
             has_token = get_token() is not None
@@ -555,7 +560,7 @@ class _WidgetBase(QtWidgets.QWidget):
                 "info",
                 f"'{self.model_type}' is a gated model on Hugging Face. Request access on its Hugging Face "
                 "page and authenticate via 'huggingface-cli login' or the 'HF_TOKEN' environment variable. "
-                "If the weights are already downloaded you can continue; otherwise the download will fail."
+                "If the weights are already downloaded you can continue. Otherwise the download will fail."
             )
         return False
 
@@ -575,13 +580,13 @@ class InfoDialog(QtWidgets.QDialog):
         self.setWindowTitle(title)
         # Label of the button the user clicked (None if the dialog was closed without a button).
         self.clicked_label = None
-        # The first button accepts the dialog; the rest reject it.
+        # The first button accepts the dialog. The rest reject it.
         self._accept_label = buttons[0]
 
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(QtWidgets.QLabel(message))
 
-        # Buttons side-by-side; the first is the default so Enter triggers it.
+        # The buttons sit side by side. The first is the default, so Enter triggers it.
         button_box = QtWidgets.QHBoxLayout()
         for i, label in enumerate(buttons):
             button = QtWidgets.QPushButton(label)
@@ -681,8 +686,8 @@ def clear_volume(
         i = int(viewer.dims.point[0])
         vutil.clear_annotations_slice(viewer, i=i)
 
-    # If it's a SAM2 promptable segmentation workflow,
-    # we should reset the prompts after clear annotations has been clicked.
+    # If this is a SAM2 promptable segmentation workflow,
+    # reset the prompts after the user clicks 'clear annotations'.
     if state.interactive_segmenter is not None:
         state.interactive_segmenter.reset_predictor()
 
@@ -785,7 +790,7 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     viewer.layers["committed_objects"].data[bb][mask] = seg[mask]
     viewer.layers["committed_objects"].refresh()
 
-    # If it's a SAM2 promptable segmentation workflow, we should reset the prompts after commit has been clicked.
+    # If this is a SAM2 promptable segmentation workflow, reset the prompts after the user clicks commit.
     if state.interactive_segmenter is not None:
         state.interactive_segmenter.reset_predictor()
 
@@ -1411,7 +1416,10 @@ def _batched_disabled_when_tiled(state, batched):
     """Batched (multi-object) prompting is not supported with tiling: each tile is segmented
     independently, so object ids would collide across tiles. Force single-object and warn."""
     if batched and _embeddings_are_tiled(state):
-        show_info("Batched (multi-object) prompting is not supported with tiling. Running single-object.")
+        show_info(
+            "Batched (multi-object) prompting is not supported with tiling. "
+            "It runs single-object segmentation instead."
+        )
         return False
     return batched
 
@@ -1458,12 +1466,15 @@ def _segment_object_2d(viewer, batched=False):
     image_embeddings = state.image_embeddings
     batched = _batched_disabled_when_tiled(state, batched)
     if have_scribbles and batched:
-        show_info("Batched segmentation is not supported with scribble prompts. Running single-object.")
+        show_info(
+            "Batched segmentation is not supported with scribble prompts. "
+            "It runs single-object segmentation instead."
+        )
         batched = False
 
     if state.is_sam2:
         # When the embeddings are tiled (top-level 'input_size' is None), route the prompts to the
-        # matching tile and stitch; otherwise the predictor already holds the single image embedding.
+        # matching tile and stitch. Otherwise the predictor already holds the single image embedding.
         if image_embeddings is not None and image_embeddings.get("input_size") is None:
             from micro_sam.v2.prompt_based_segmentation import tiled_promptable_segmentation_2d
             seg = tiled_promptable_segmentation_2d(
@@ -1562,7 +1573,7 @@ class EmbeddingWidget(_WidgetBase):
     # Whether to show the CPU info popup for expensive (many-tile / 3D) computations.
     warn_on_cpu = True
 
-    # A tiled 2D image only gets slow on the CPU once it has many tiles; warn from this many on.
+    # A tiled 2D image only gets slow on the CPU once it has many tiles. Warn from this many on.
     cpu_warn_tiles = 64
 
     # Whether to offer the 'cache automatic segmentation state' option (segmentation / tracking only,
@@ -1576,7 +1587,7 @@ class EmbeddingWidget(_WidgetBase):
         # annotator wires it into image normalization, so it is off by default (hidden for tracking
         # and the classifiers, which do not use it).
         self.ndim_choice = ndim_choice
-        # The tracking annotator operates on a (T, H, W) timeseries, not a 3D volume; relabel the
+        # The tracking annotator operates on a (T, H, W) timeseries, not a 3D volume. Relabel the
         # embedding progress accordingly (the underlying compute path is the same as for 3D).
         self.is_timeseries = is_timeseries
 
@@ -1673,7 +1684,7 @@ class EmbeddingWidget(_WidgetBase):
             save_path=self.embeddings_save_path,
             checkpoint_path=self.custom_weights,
             device=self.device,
-            # Only forward tiling params when tiling is actually enabled; otherwise '_sync_embedding_widget'
+            # Only forward tiling params when tiling is actually enabled. Otherwise '_sync_embedding_widget'
             # would force the tiling dropdown to "yes" using the (always-nonzero) default tile values.
             tile_shape=[self.tile_x, self.tile_y] if self.tiling == "yes" else None,
             halo=[self.halo_x, self.halo_y] if self.tiling == "yes" else None,
@@ -1690,8 +1701,8 @@ class EmbeddingWidget(_WidgetBase):
                 update_decoder=with_decoder,
             )
             # Load the AMG/AIS state cache. For SAM2 the state cache (grid masks or decoder
-            # predictions) is recorded via '_autoseg_state_descriptor' and the widget reads/writes it
-            # on demand; SAM1 preloads the per-slice 3d state as before.
+            # predictions) is recorded via '_autoseg_state_descriptor', and the widget reads and writes
+            # it on demand. SAM1 preloads the per-slice 3d state as before.
             if state.is_sam2:
                 state.autoseg_state = vutil._autoseg_state_descriptor(
                     state.embedding_path, "ais" if with_decoder else "amg",
@@ -1720,8 +1731,8 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
-        # Optional image dimensionality override. 'auto' detects 2d/3d (including channels) from the
-        # selected image; '2d'/'3d' force the interpretation, e.g. to read a channels-first
+        # Optional image dimensionality override. 'auto' detects 2d or 3d (including channels) from the
+        # selected image. '2d' and '3d' force the interpretation, e.g. to read a channels-first
         # (C, H, W) array as a 2d multi-channel image.
         if self.ndim_choice:
             self.image_ndim_mode = "auto"
@@ -1733,8 +1744,8 @@ class EmbeddingWidget(_WidgetBase):
             )
             setting_values.layout().addLayout(ndim_layout)
 
-        # Create UI for tiling. A dropdown toggles whether tiling is used; when enabled,
-        # the tile shape and halo fields are revealed with sensible defaults.
+        # Create UI for tiling. A dropdown toggles whether the tool uses tiling. When you enable it,
+        # the tile shape and halo fields appear with sensible defaults.
         self.tiling = "no"
         self.tiling_dropdown, layout = self._add_choice_param(
             "tiling",
@@ -1869,13 +1880,13 @@ class EmbeddingWidget(_WidgetBase):
         return settings
 
     def _add_extra_model_settings(self, layout):
-        """Hook to add extra model controls to the embedding settings. No-op by default; the
-        classification embedding widget uses it to add the optional advanced-model selector."""
+        """Hook to add extra model controls to the embedding settings. It does nothing by default.
+        The classification embedding widget uses it to add the optional advanced-model selector."""
         pass
 
     def _apply_loaded_model_selection(self, model_name):
-        """Reflect a loaded model in the model family / size dropdowns. No-op by default: the
-        post-compute '_sync_embedding_widget' already syncs the SAM2-only widget, whose family
+        """Reflect a loaded model in the model family and size dropdowns. It does nothing by default:
+        the post-compute '_sync_embedding_widget' already syncs the SAM2-only widget, whose family
         names match. Subclasses with custom family handling (classification) override this."""
         pass
 
@@ -1952,8 +1963,8 @@ class EmbeddingWidget(_WidgetBase):
         self.model_family_dropdown.setCurrentText(default_family)
         self.model_size_dropdown.setCurrentText(default_size)
 
-        # Reset the in-plane tiling parameters to their creation defaults and the save path; the on/off
-        # state is then decided by '_set_default_tiling' (auto-enabled for large images, as on a fresh open).
+        # Reset the in-plane tiling parameters to their creation defaults and the save path. Then
+        # '_set_default_tiling' decides the on or off state (auto-enabled for large images, as on a fresh open).
         from micro_sam.v2.util import DEFAULT_TILE_SHAPE, DEFAULT_HALO
         self.tile_x_param.setValue(DEFAULT_TILE_SHAPE[0])
         self.tile_y_param.setValue(DEFAULT_TILE_SHAPE[1])
@@ -2127,7 +2138,7 @@ class EmbeddingWidget(_WidgetBase):
         state = AnnotatorState()
         if state.cpu_info_shown or not self.warn_on_cpu:
             return
-        # 3D runs the encoder per slice; 2D is a single pass per tile, which only adds up for many tiles.
+        # 3D runs the encoder per slice. 2D is a single pass per tile, which only adds up for many tiles.
         if ndim < 3 and self._n_tiles(tile_shape, shape) < self.cpu_warn_tiles:
             return
         if str(util.get_device(self.device)) != "cpu":
@@ -2136,7 +2147,7 @@ class EmbeddingWidget(_WidgetBase):
         data_kind = "timeseries" if self.is_timeseries else "3D"  # A timeseries uses the 3D compute path.
         QtWidgets.QMessageBox.information(
             self, "Running on CPU",
-            f"micro_sam is running on the CPU, so computations can be slow for tiled or {data_kind} data. "
+            f"micro_sam runs on the CPU, so computations can be slow for tiled or {data_kind} data. "
             "Using a GPU is recommended.",
             QtWidgets.QMessageBox.Ok,
         )
@@ -2226,8 +2237,8 @@ class EmbeddingWidget(_WidgetBase):
         def compute_image_embedding():
 
             # The computation runs synchronously on the main thread, so pump the Qt event loop on
-            # every progress step; otherwise the napari progress bar only repaints once at the end
-            # (it just jumps to 100%). This matters most for tiled embeddings (many tiles / slices).
+            # every progress step. Otherwise the napari progress bar only repaints once at the end
+            # (it just jumps to 100%). This matters most for tiled embeddings (many tiles or slices).
             def pbar_init(total, description):
                 if self.is_timeseries:  # A timeseries goes through the 3D compute path; relabel it.
                     description = description.replace("3D", "Timeseries")
@@ -2301,14 +2312,14 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     _advanced_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
     # Vision Foundation Model families beyond SAM: UI label -> the registry model_types in that family
     # (ordered by size). Sizes/names come from 'micro_sam.models.vfm.VFM_MODELS'/'VFM_SIZE_LABELS', not the
-    # SAM1 naming scheme. DINOv2/v3 are natural-image (LVD-1689M) models; UNI/UNI2-h are histopathology.
+    # SAM1 naming scheme. DINOv2/v3 are natural-image (LVD-1689M) models. UNI/UNI2-h are histopathology.
     _dino_families = {
         "Natural Images (DINOv2)": ("vit_s_dinov2", "vit_b_dinov2", "vit_l_dinov2", "vit_g_dinov2"),
         "Natural Images (DINOv3)": ("vit_s_dinov3", "vit_b_dinov3", "vit_l_dinov3"),
         "Histopathology (UNI)": ("vit_uni", "vit_univ2"),
         "Natural Images (SAM3)": ("vit_sam3",),
     }
-    # Older saved classifiers stored the primary SAM2 families under '(SAM2)' labels; map them to the
+    # Older saved classifiers stored the primary SAM2 families under '(SAM2)' labels. Map them to the
     # current names so loading such a classifier still restores the right family.
     _primary_family_aliases = {"Natural Images (SAM2)": "Natural Images", "Microscopy (SAM2)": "Microscopy"}
 
@@ -2339,7 +2350,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         layout.addWidget(self.advanced_checkbox)
 
         # The inherited dropdowns auto-bind their attribute by indexing the option list captured at
-        # creation; we swap those lists (the families, and the per-family sizes), which makes the
+        # creation. We swap those lists (the families, and the per-family sizes), which makes the
         # captured index stale (wrong value, or out of range). Drop that auto-bind and let
         # '_update_model_type' (wired to 'currentTextChanged') sync the attribute from the text.
         for dropdown in (self.model_family_dropdown, self.model_size_dropdown):
@@ -2372,7 +2383,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         )
 
     def _reset_inputs_to_defaults(self):
-        # Switching off advanced restores the primary families; the base reset then selects the default.
+        # Turning off advanced mode restores the primary families. The base reset then selects the default.
         if getattr(self, "advanced_checkbox", None) is not None and self.advanced_checkbox.isChecked():
             self.advanced_checkbox.setChecked(False)
         super()._reset_inputs_to_defaults()
@@ -2388,7 +2399,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     def _validate_model_support(self):
         if super()._validate_model_support():
             return True
-        # The vit-tiny backbone needs MobileSAM; warn (instead of crashing later) if it is selected
+        # The vit-tiny backbone needs MobileSAM. Warn (instead of crashing later) if it is selected
         # without MobileSAM installed. The model stays selectable - we just block this compute.
         from ..util import VIT_T_SUPPORT
         if not VIT_T_SUPPORT and (self.model_type or "").startswith("vit_t"):
@@ -2420,7 +2431,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         self.set_model_family_size(family, size)
 
     def _get_model_size_options(self):
-        # Primary (SAM2) sizes come from the inherited logic; advanced families resolve to SAM1/DINO names.
+        # Primary (SAM2) sizes come from the inherited logic. Advanced families resolve to SAM1/DINO names.
         if not self._advanced_active():
             return super()._get_model_size_options()
         if self._is_dino_active():
@@ -2442,9 +2453,9 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
     def _update_model_type(self):
         # Sync the family from the dropdown first: the inherited auto-bind closure captures the original
         # (primary) option list, so after the dropdown is swapped to the advanced families it can set a
-        # stale value; re-reading the current text here is authoritative and decides the branch below.
+        # stale value. Re-reading the current text here is authoritative and decides the branch below.
         self.model_family = self.model_family_dropdown.currentText() or self.model_family
-        # Primary mode defers to the inherited SAM2 logic; advanced mode rebuilds the size dropdown for
+        # Primary mode defers to the inherited SAM2 logic. Advanced mode rebuilds the size dropdown for
         # the current SAM1 family and resolves its model name.
         if not self._advanced_active():
             return super()._update_model_type()
@@ -2642,7 +2653,7 @@ class UnifiedSegmentWidget(_WidgetBase):
         )
         setting_values.layout().addLayout(layout)
 
-        # SAM2 volume-mode propagation controls. The engine only holds the values; the visible
+        # SAM2 volume-mode propagation controls. The engine only holds the values. The visible
         # InteractiveSegmentationWidget owns the user-facing controls and writes these attributes.
         # 'early_stop_patience': stop after this many consecutive empty slices (0 -> disabled).
         # 'z_range': inclusive (z_min, z_max) hard bound on propagation, or 'None' for the full volume.
@@ -2770,7 +2781,10 @@ class UnifiedSegmentWidget(_WidgetBase):
         state = AnnotatorState()
         batched = _batched_disabled_when_tiled(state, bool(self.batched))
         if have_scribbles and batched:
-            show_info("Batched segmentation is not supported with scribble prompts. Running single-object.")
+            show_info(
+                "Batched segmentation is not supported with scribble prompts. "
+                "It runs single-object segmentation instead."
+            )
             batched = False
 
         if state.is_sam2:
@@ -2872,7 +2886,8 @@ class UnifiedSegmentWidget(_WidgetBase):
         boxes, masks = vutil.shape_layer_to_prompts(prompt_layer, shape, i=t, track_id=track_id)
         points, labels = vutil.merge_point_prompts(point_prompts, (scribble_points, scribble_labels))
         if have_scribbles and not boxes and not np.any(labels == 1):
-            show_info("A negative scribble needs a positive point, positive scribble, box or mask prompt.")
+            show_info("A negative scribble alone cannot segment an object. "
+                      "Add a positive point, positive scribble, box or mask prompt.")
             return None
 
         # The tracking annotator is SAM2-only: segment the frame via the video predictor.
@@ -2944,7 +2959,10 @@ class UnifiedSegmentWidget(_WidgetBase):
                 # Whether the user decide to provide batched prompts for multi-object segmentation.
                 is_batched = _batched_disabled_when_tiled(state, bool(self.batched))
                 if have_scribbles and is_batched:
-                    show_info("Batched segmentation is not supported with scribble prompts. Running single-object.")
+                    show_info(
+                        "Batched segmentation is not supported with scribble prompts. "
+                        "It runs single-object segmentation instead."
+                    )
                     is_batched = False
 
                 # A scribble is expanded into several points. Rebuild the persistent video-predictor
@@ -2956,7 +2974,7 @@ class UnifiedSegmentWidget(_WidgetBase):
                 if is_batched and not state.is_sam2:
                     show_info(
                         "Batched segmentation is only supported with SAM2 models (hvit_*). "
-                        "Running in standard mode."
+                        "It runs in standard mode instead."
                     )
                     is_batched = False
 
@@ -2967,7 +2985,7 @@ class UnifiedSegmentWidget(_WidgetBase):
 
                 # Add box prompts first: SAM2 requires a box before any point on the same object/frame,
                 # so adding boxes ahead of points lets a box and its correction points combine.
-                # Rectangles are box prompts; polygons/ellipses instead carry a filled mask prompt.
+                # Rectangles are box prompts. Polygons and ellipses instead carry a filled mask prompt.
                 shape_yx = state.image_shape[-2:]
                 for curr_z in np.unique(z_values_boxes):
                     boxes, shape_masks = vutil.shape_layer_to_prompts(layer=box_prompts, shape=shape_yx, i=curr_z)
@@ -2988,15 +3006,15 @@ class UnifiedSegmentWidget(_WidgetBase):
                             frame_ids=curr_z, masks=poly_masks, object_id=mask_ids
                         )
 
-                # Then add the point prompts. Iterate unique frames so each frame's points are added
-                # together; the segmenter skips points already pushed, so re-runs only add new ones.
+                # Then add the point prompts. Iterate unique frames so we add each frame's points
+                # together. The segmenter skips points already pushed, so re-runs only add new ones.
                 point_slices = np.unique(np.concatenate([z_values_points, z_values_scribbles])).astype("int")
                 merged_prompts = []
                 for curr_z in point_slices:
                     scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
                         box_prompts, image_shape=shape_yx, i=curr_z
                     )
-                    # A slice whose only prompt is a single negative point is a 'stop' annotation; skip it.
+                    # A slice whose only prompt is a single negative point is a 'stop' annotation. Skip it.
                     prompts = vutil.point_layer_to_prompts(
                         layer=point_prompts,
                         i=curr_z,
@@ -3121,7 +3139,7 @@ class UnifiedSegmentWidget(_WidgetBase):
             # Propagate a single track's prompts forward in time with the SAM2 predictor. Tracking
             # is forward-only: it starts at the first prompted frame and never runs to earlier
             # frames. A frame whose only prompt for this track is a single negative point is a
-            # 'stop' annotation; a stop on the highest annotated frame bounds propagation above.
+            # 'stop' annotation. A stop on the highest annotated frame bounds propagation above.
             shape = state.image_shape
             point_layer = self._viewer.layers["point_prompts"]
             box_layer = self._viewer.layers["prompts"]
@@ -3168,9 +3186,9 @@ class UnifiedSegmentWidget(_WidgetBase):
                 if boxes:
                     prompted_frames.append(int(t))
 
-            # Add the scribble prompts for this track. A scribble is expanded into several point
-            # prompts on its slice; the video predictor takes points in (y, x) order (as with the
-            # point prompts above), so no axis reordering is needed.
+            # Add the scribble prompts for this track. Each scribble expands into several point
+            # prompts on its slice. The video predictor takes points in (y, x) order, like the
+            # point prompts above, so we do not reorder the axes.
             z_scribbles = vutil.get_scribble_slices(box_layer, track_id=track_id)
             for t in z_scribbles:
                 scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
@@ -3411,7 +3429,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
             self.layout().addWidget(self.batched_checkbox)
         else:
             # 3d: use the volumetric segmentation widget purely as the segmentation engine.
-            # Its own controls are not shown; the interactive widget owns the 'Apply to Volume'
+            # It does not show its own controls. The interactive widget owns the 'Apply to Volume'
             # and 'Batched' checkboxes and drives the engine's attributes. The 'Apply to Volume'
             # checkbox governs both segmentation (slice vs. volume) and clearing (current slice
             # vs. all slices). It is kept hidden but parented so it does not float as a window.
@@ -3446,7 +3464,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
             self.layout().addLayout(checkbox_row)
 
             # SAM2 volume-mode propagation controls (early stopping + z-range). Hidden until the
-            # user enables 'Apply to Volume' with a SAM2 model; the controls drive the engine.
+            # user enables 'Apply to Volume' with a SAM2 model. The controls drive the engine.
             self._propagation_settings = self._create_propagation_settings()
             self._propagation_settings.setVisible(False)
             self.layout().addWidget(self._propagation_settings)
@@ -3595,8 +3613,8 @@ class InteractiveSegmentationWidget(_WidgetBase):
             i = int(self._viewer.dims.point[0])
             vutil.clear_annotations_slice(self._viewer, i=i)
 
-        # If it's a SAM2 promptable segmentation workflow,
-        # we reset the prompts after the annotations have been cleared.
+        # If this is a SAM2 promptable segmentation workflow,
+        # reset the prompts after the user clears the annotations.
         state = AnnotatorState()
         if state.interactive_segmenter is not None:
             state.interactive_segmenter.reset_predictor()
@@ -4068,7 +4086,7 @@ class AutoSegmentWidget(_WidgetBase):
         # The flow computation backend is always the (faster) cpp implementation.
         self.backend = "cpp"
         # z block / halo for 3d decoder inference: the volume is decoded in z chunks to bound memory.
-        # These only matter for volumetric decoder modes; set 'tile_z' >= the slice count for no z-tiling.
+        # These only matter for volumetric decoder modes. Set 'tile_z' >= the slice count for no z-tiling.
         from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
         self.tile_z, self.halo_z = DEFAULT_TILE_Z, DEFAULT_HALO_Z
         # Cache of the (initialized) segmentation generator so changing post-processing parameters
@@ -4211,7 +4229,7 @@ class AutoSegmentWidget(_WidgetBase):
         settings.layout().addLayout(layout)
 
         # Default to 8 threads for the post-processing flow/multicut backends (a sensible default that
-        # does not oversubscribe; the user can raise it up to the spinbox maximum).
+        # does not oversubscribe. The user can raise it up to the spinbox maximum).
         self.n_threads = min(8, mp.cpu_count())
         self.n_threads_param, layout = self._add_int_param(
             "n_threads", self.n_threads, min_val=1, max_val=64, tooltip=get_tooltip("autosegment", "n_threads"),
@@ -4220,7 +4238,7 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _amg_settings(self, settings):
         # Grid-based SAM2 AMG parameters (no decoder required). points_per_side / pred_iou_thresh /
-        # stability_score_thresh control the (expensive) mask generation; min_object_size is applied
+        # stability_score_thresh control the (expensive) mask generation. min_object_size is applied
         # in the (cheap) post-processing.
         self.points_per_side = 32
         self.points_per_side_param, layout = self._add_int_param(
@@ -4334,7 +4352,7 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _state_save_path(self, state):
         # The state cache is opted into via the embedding settings' 'cache automatic segmentation state'
-        # checkbox; when on it persists next to the embeddings, else in-memory only ('_segmenter' cache).
+        # checkbox. When on, it persists next to the embeddings, else in-memory only ('_segmenter' cache).
         embed_widget = state.widgets.get("embeddings")
         return state.embedding_path if getattr(embed_widget, "cache_state", False) else None
 
@@ -4357,7 +4375,7 @@ class AutoSegmentWidget(_WidgetBase):
                 z_block, z_halo = self._z_tiling(int(run_raw.shape[0]))
         else:
             # A single slice of a 3d volume: reuse that slice's features (no re-encode). For untiled
-            # embeddings, build the slice's 2d embedding; for tiled embeddings, pass the tiled 3d
+            # embeddings, build the slice's 2d embedding. For tiled embeddings, pass the tiled 3d
             # embeddings + slice index 'z' and let the segmenter reconstruct each tile's slice.
             emb3d = state.image_embeddings
             if emb3d is not None and emb3d.get("input_size") is not None:
@@ -4370,8 +4388,8 @@ class AutoSegmentWidget(_WidgetBase):
                 image_embeddings, is_tiled = emb3d, True
 
         # The in-memory cache avoids re-running the model when only the post-processing parameters
-        # change; 'cache_autoseg_state' additionally persists the decoder predictions in the
-        # embedding Zarr so a later run / session reuses them. The whole volume is
+        # change. 'cache_autoseg_state' additionally persists the decoder predictions in the
+        # embedding Zarr so a later run or session reuses them. The whole volume is
         # cached under one key ('state'); a single segmented slice under 'state-{z}'.
         cache_key = (
             state.data_signature, "unisam2", ndim, z, tile_shape, halo, z_block, z_halo,
@@ -4484,8 +4502,8 @@ class AutoSegmentWidget(_WidgetBase):
 
         # Show a progress bar in the napari activity dock (and the status-bar wheel) that advances
         # with the actual work: per tile for tiled runs, per slice for 3d, and as a single step for a
-        # plain 2d image. Thread workers are disabled in this tool (see top of module), so the run is
-        # synchronous; we drive the bar via callbacks the backends call between units and pump the Qt
+        # plain 2d image. This tool disables thread workers (see top of module), so the run is
+        # synchronous. We drive the bar via callbacks the backends call between units and pump the Qt
         # event loop with 'processEvents' on each update so it repaints live. It is always closed in
         # the 'finally' block. Batched 3d inference forwards completed tile-slice increments from its
         # worker threads to this calling thread so napari can repaint them safely.
@@ -4596,7 +4614,7 @@ class AutoTrackWidget(AutoSegmentWidget):
             pbar_signals.pbar_update.emit(update)
             QtWidgets.QApplication.processEvents()
 
-        # Swallow each frame's 'pbar_init' so it cannot reset the overall total; the per-tile (or
+        # Swallow each frame's 'pbar_init' so it cannot reset the overall total. The per-tile (or
         # per-step) 'pbar_update' calls drive the bar instead.
         def frame_pbar_init(total, description):
             pass
@@ -4605,7 +4623,7 @@ class AutoTrackWidget(AutoSegmentWidget):
         try:
             # One determinate bar over the actual work: n_tiles x n_frames. The per-frame segmentation
             # advances it per tile (tiled) or once per frame (untiled), so a tiled run no longer looks
-            # like it is doing only n_frames steps.
+            # like it does only n_frames steps.
             pbar_signals.pbar_total.emit(n_tiles * len(raw))
             QtWidgets.QApplication.processEvents()
             for frame_id, frame in enumerate(raw):

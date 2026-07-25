@@ -3,6 +3,7 @@
 from typing import Optional, Tuple, Union
 
 import numpy as np
+
 from torch_em.transform.raw import normalize_percentile
 
 # Persist the preprocessing (normalization + resize) policy in embedding caches so incompatible

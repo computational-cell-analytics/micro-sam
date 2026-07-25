@@ -199,4 +199,5 @@ def main():
     # plot_qualitative_ais()
 
 
-main()
+if __name__ == "__main__":
+    main()

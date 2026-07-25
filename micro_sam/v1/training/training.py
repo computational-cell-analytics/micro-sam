@@ -2,35 +2,36 @@ import os
 import time
 import warnings
 from glob import glob
-from tqdm import tqdm
 from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import imageio.v3 as imageio
 import numpy as np
+import imageio.v3 as imageio
+from tqdm import tqdm
+
 import torch
 from torch.optim import Optimizer
 from torch.utils.data import random_split
 from torch.utils.data import DataLoader, Dataset
 from torch.optim.lr_scheduler import _LRScheduler
 
-import torch_em
-from torch_em.util import load_data
-from torch_em.data.datasets.util import split_kwargs
-
-from elf.io import open_file
-
 try:
     from qtpy.QtCore import QObject
 except Exception:
     QObject = Any
 
+from elf.io import open_file
+
+import torch_em
+from torch_em.util import load_data
+from torch_em.data.datasets.util import split_kwargs
+
+from ...util import get_device
 from . import sam_trainer as trainers
 from ..instance_segmentation import get_unetr
 from ..models.peft_sam import ClassicalSurgery
 from . import joint_sam_trainer as joint_trainers
-from ...util import get_device
 from ..util import get_model_names, export_custom_sam_model, get_sam_model
 from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit, get_raw_transform
 

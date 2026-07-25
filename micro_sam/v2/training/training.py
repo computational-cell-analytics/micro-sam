@@ -8,17 +8,16 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 
 from micro_sam.util import get_device
-from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss
-from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Loss
-
 from micro_sam.v2.transforms.raw import VideoAugment
+from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Loss
 from .util import get_sam2_train_model, ConvertToSam2VideoBatch
-from .sam2_trainer import Sam2Trainer, Sam2Logger, UniSAM2Trainer, UniSAM2Logger
 from .joint_sam2_trainer import JointSam2Trainer, JointSam2Logger
+from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss
+from .sam2_trainer import Sam2Trainer, Sam2Logger, UniSAM2Trainer, UniSAM2Logger
 
 
 def _no_wd_names(model):
-    """Return the set of parameter names that should have weight_decay=0.
+    """Return the set of parameter names that must have weight_decay=0.
 
     Matches the MOSE finetune config: bias params and all LayerNorm params.
     """
@@ -144,7 +143,7 @@ def train_sam2(
     Uses SAM2Train (full model with video memory) which handles both 2D (T=1) and
     3D/video (T>1) batches. All prompting logic - initial point/box/mask selection
     and iterative correction from error regions - is embedded in the model forward
-    pass.  Pass a MixedLoader(loader_2d, loader_3d) as train_loader for joint 2D+3D
+    pass. Pass a MixedLoader(loader_2d, loader_3d) as train_loader for joint 2D+3D
     training.
 
     Args:
@@ -158,8 +157,8 @@ def train_sam2(
         n_iterations: Override n_epochs with a fixed iteration budget.
         early_stopping: Stop after this many epochs without improvement (None = off).
         max_num_objects: Max objects sampled per image/volume per step.
-        checkpoint_path: Custom checkpoint path.  Downloads default weights if None.
-        device: Training device.  Auto-selects if None.
+        checkpoint_path: Custom checkpoint path. Downloads default weights if None.
+        device: Training device. Auto-selects if None.
         lr: Learning rate. SAM2 OG fine-tuning uses 1e-5 (tiny) or 5e-6 (b+).
         vision_lr: Separate LR for the image encoder. If None, uses lr for all parameters.
             SAM2 OG fine-tuning uses 6e-6 (tiny) or 3e-6 (b+), i.e. ~0.6x the base lr.
@@ -169,7 +168,7 @@ def train_sam2(
         prob_to_use_pt_input: Probability of using point/box prompts (vs mask propagation).
         prob_to_use_box_input: Conditional probability of using a box instead of a click.
         num_frames_to_correct: Max frames per volume that receive iterative correction
-            clicks.  Set equal to the number of z-slices to correct every frame.
+            clicks. Set equal to the number of z-slices to correct every frame.
         rand_frames_to_correct: Randomly sample 1..num_frames_to_correct frames to
             correct per step rather than always correcting the maximum.
         prob_to_sample_from_gt: Probability of sampling a correction click from GT
@@ -555,7 +554,7 @@ def train_automatic(
 
     Trains the UNETR3D-based UniSAM2 model using
     :class:`~micro_sam.v2.loss.directed_distance_based.DirectedDistanceLoss` on
-    combined 2D + 3D data.  Pass a loader built by
+    combined 2D + 3D data. Pass a loader built by
     :func:`~micro_sam.v2.datasets.generalist_loader.get_dataloaders` with
     ``label_trafo=DirectedPerObjectBoundaryDistanceTransform``.
 
@@ -830,7 +829,7 @@ def train_joint_sam2(
 
     Builds both the interactive (SAM2Train) and automatic (UniSAM2) models from
     ``model_type``, wires the shared image encoder, then interleaves the two
-    losses in each training step.  The interactive loader uses integer instance
+    losses in each training step. The interactive loader uses integer instance
     labels; the automatic loader uses directed-distance targets.
 
     Args:
@@ -1041,7 +1040,7 @@ def _train_joint_rank(
     )
     unetr = UniSAM2(encoder=sam2_model.image_encoder, output_channels=4).to(device)
 
-    # Only DDP-wrap sam2_model; unetr decoder grads are synced manually.
+    # Only DDP-wrap sam2_model. We sync the unetr decoder grads manually.
     ddp_model = DDP(sam2_model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
     interactive_loss = CustomSAM2Loss(
@@ -1134,7 +1133,7 @@ def train_joint_sam2_multi_gpu(
     Example (multi-node):  ``srun torchrun --nnodes=$SLURM_NNODES --nproc_per_node=4 train_joint.py``
 
     Both the interactive and automatic datasets are constructed independently in
-    each rank.  Only the SAM2 model is DDP-wrapped; UniSAM2 decoder gradients are
+    each rank. Only the SAM2 model is DDP-wrapped; UniSAM2 decoder gradients are
     manually all_reduced after each backward so the shared encoder is not double-reduced.
 
     Args:

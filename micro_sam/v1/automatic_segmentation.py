@@ -1,18 +1,19 @@
 import os
 import warnings
 from glob import glob
-from tqdm import tqdm
 from pathlib import Path
 from functools import partial
 from typing import Dict, List, Optional, Union, Tuple, Literal
 
 import numpy as np
 import imageio.v3 as imageio
+from tqdm import tqdm
 
 from torch_em.data.datasets.util import split_kwargs
 
 from .. import util
 from .util import get_sam_model, precompute_image_embeddings, get_model_names
+from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
 from .instance_segmentation import (
     get_instance_segmentation_generator, get_decoder, AutoSegBase,
     AutomaticMaskGenerator, TiledAutomaticMaskGenerator,
@@ -20,7 +21,6 @@ from .instance_segmentation import (
     InstanceSegmentationWithDecoder, TiledInstanceSegmentationWithDecoder,
     DEFAULT_SEGMENTATION_MODE_WITH_DECODER,
 )
-from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
 
 
 def get_predictor_and_segmenter(
@@ -432,9 +432,7 @@ def main(argv=None):
         "--tracking", action="store_true", help="Run automatic tracking instead of instance segmentation. "
         "NOTE: It is only supported for timeseries inputs."
     )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs.")
 
     args, parameter_args = parser.parse_known_args(argv)
 

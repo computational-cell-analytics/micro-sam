@@ -69,7 +69,7 @@ def test_division_frame_detection():
 
 
 def test_mother_division_frame():
-    # A daughter's mask must start the frame after its mother divides; this resolves the bound.
+    # A daughter's mask must start the frame after its mother divides. This resolves the bound.
     from micro_sam.sam_annotator._widgets import _mother_division_frame
 
     data = np.array([[10, 10, 10]])

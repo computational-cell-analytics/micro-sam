@@ -13,6 +13,7 @@ import os
 from typing import Optional, Tuple, Union
 
 import numpy as np
+
 import torch
 
 from .util import DEFAULT_MODEL, Devices
@@ -61,8 +62,8 @@ def get_predictor_and_segmenter(
         model_type=model_type, ndim=2, device=model_device, checkpoint_path=None, decoder_path=None, use_cli=True,
     )
 
-    # Resolve the UniSAM2 decoder if one is requested / available. 'ais' requires a decoder; 'amg'
-    # never uses one; 'auto' (None) prefers a decoder and falls back to AMG when none is found.
+    # Resolve the UniSAM2 decoder if the caller requests one or one is available. 'ais' requires a
+    # decoder. 'amg' never uses one. 'auto' (None) prefers a decoder and uses AMG when none is found.
     decoder = None
     if segmentation_mode != "amg":
         try:
@@ -150,7 +151,7 @@ def automatic_instance_segmentation(
 
     if is_ais:
         # Resolve one device selection for the whole staged workflow. Explicit `devices` takes
-        # precedence over the per-call `device`; when both are omitted, preserve the intent from
+        # precedence over the per-call `device`. When the caller omits both, preserve the intent from
         # `get_predictor_and_segmenter` (None means fan out, an explicit device means stay pinned).
         requested_devices = devices if devices is not None else device
         inference_devices = segmenter._inference_devices(requested_devices)
@@ -162,7 +163,7 @@ def automatic_instance_segmentation(
         temp_embedding_path = None
         try:
             if embedding_path is not None or ndim == 3:
-                # Volumes and tiled images are streamed from the zarr; only small 2d stays in memory.
+                # The tool streams volumes and tiled images from the zarr. Only small 2d stays in memory.
                 is_streamed = ndim == 3 or tile_shape is not None
                 # Own the ephemeral store here so it is removed after this input, rather than only at
                 # process exit (which piles up one store per input in a multi-input loop).
@@ -199,7 +200,7 @@ def automatic_instance_segmentation(
             )
             segmentation = segmenter.generate(mode=mode, **generate_kwargs)
         finally:
-            # Close all handles; remove only a store created implicitly for this call.
+            # Close all handles. Remove only a store created implicitly for this call.
             if image_embeddings is not None:
                 image_embeddings.close()
             image_embeddings = None
@@ -213,7 +214,7 @@ def automatic_instance_segmentation(
             verbose=verbose, **generate_kwargs,
         )
     else:
-        # Grid-based AMG on a single 2d image; the segmenter computes / caches its own embeddings.
+        # Grid-based AMG on a single 2d image. The segmenter computes and caches its own embeddings.
         init_kwargs = {"tile_shape": tile_shape, "halo": halo} if tile_shape is not None else {}
         segmenter.initialize(raw, save_path=embedding_path, verbose=verbose, **init_kwargs)
         segmentation = segmenter.generate(**generate_kwargs)

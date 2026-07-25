@@ -251,7 +251,7 @@ def run_sam_v1_evaluation(
 
     if ndim == 3:
         raise ValueError(
-            "micro-sam v1 3D interactive evaluation should use the volumetric implementation. "
+            "micro-sam v1 3D interactive evaluation must use the volumetric implementation. "
             "Run finetuning/v2/evaluation/evaluate_micro_sam_volumetric.py instead."
         )
 
@@ -475,9 +475,7 @@ def main():
     parser.add_argument(
         "-iter", "--n_iterations", type=int, default=8, help="Number of iterative prompting rounds (default: 8)."
     )
-    parser.add_argument(
-        "-c", "--checkpoint", type=str, default=None, help="Override default checkpoint path."
-    )
+    parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Override default checkpoint path.")
     parser.add_argument(
         "-m", "--model_type", type=str, default=None,
         help="Model type override (e.g. vit_b for sam, hvit_t for sam2/micro_sam2)."
