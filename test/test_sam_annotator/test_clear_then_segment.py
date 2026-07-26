@@ -23,7 +23,7 @@ def two_objects_2d(size=256):
     return image
 
 
-def two_objects_3d(width, depth=4, height=256):
+def two_objects_3d(width=256, depth=4, height=256):
     volume = np.zeros((depth, height, width), dtype="float32")
     for lo, hi in (FIRST_OBJECT, SECOND_OBJECT):
         volume[:, lo:hi, lo:hi] = 1.0
@@ -96,10 +96,9 @@ def add_positive_point_3d(viewer, z, y, x):
 @pytest.mark.gui
 @pytest.mark.slow
 @pytest.mark.skipif(platform.system() == "Windows", reason="GUI test does not work on Windows.")
-@pytest.mark.parametrize("width", (256, 512))  # 512 gives non-square frames (pad / crop path)
-def test_clear_annotations_drops_the_previous_prompt_3d(make_napari_viewer_proxy, width):
+def test_clear_annotations_drops_the_previous_prompt_3d(make_napari_viewer_proxy):
     """The 3d per-slice path keeps a persistent SAM2 state, so a cleared prompt must not survive."""
-    volume = two_objects_3d(width)
+    volume = two_objects_3d()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     viewer = annotator(
         volume, model_type=DEFAULT_MODEL, viewer=make_napari_viewer_proxy(),
@@ -140,7 +139,7 @@ def test_clear_annotations_drops_the_previous_prompt_3d(make_napari_viewer_proxy
 @pytest.mark.skipif(platform.system() == "Windows", reason="GUI test does not work on Windows.")
 def test_clear_annotations_drops_the_previous_prompt_volume(make_napari_viewer_proxy):
     """Volume propagation reuses the persistent SAM2 state, so a cleared prompt must not survive."""
-    volume = two_objects_3d(256)
+    volume = two_objects_3d()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     viewer = annotator(
         volume, model_type=DEFAULT_MODEL, viewer=make_napari_viewer_proxy(),

@@ -1,3 +1,4 @@
+import contextlib
 from types import SimpleNamespace
 
 import numpy as np
@@ -65,12 +66,19 @@ def test_numpy_and_lazy_volumes_give_the_same_frame():
     np.testing.assert_allclose(eager[2].numpy(), lazy[2].numpy())
 
 
-def run_single_frame_inference(monkeypatch, inference_state):
-    """Call the override with the wrapped inference and both CUDA waits recorded instead of run."""
+def run_single_frame_inference(monkeypatch, inference_state, autocasts):
+    """Call the override with the wrapped inference and both CUDA waits recorded instead of run.
+
+    The precision is forced rather than read from the host, so the wait and the dtype restore are
+    tested on a runner without a GPU too. Which hardware selects which precision is covered separately
+    by the '_autocasts' tests below.
+    """
     from sam2.sam2_video_predictor import SAM2VideoPredictor
 
     from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 
+    monkeypatch.setattr(CustomVideoPredictor, "_autocasts", lambda self, state: autocasts)
+    monkeypatch.setattr(CustomVideoPredictor, "_autocast", lambda self, state: contextlib.nullcontext())
     events = []
 
     class Memory:
@@ -98,7 +106,9 @@ def run_single_frame_inference(monkeypatch, inference_state):
 
 def test_offloaded_state_is_awaited_before_it_is_read(monkeypatch):
     """The non-blocking copy to the CPU records no event, so the host readers need an explicit wait."""
-    events = run_single_frame_inference(monkeypatch, {"offload_state_to_cpu": True, "device": "cuda:0"})
+    events = run_single_frame_inference(
+        monkeypatch, {"offload_state_to_cpu": True, "device": "cuda:0"}, autocasts=True
+    )
 
     # The wait covers the current stream only, so a replica on another stream keeps running. Autocast
     # keeps the memory in the dtype SAM2 stores it in, so nothing is cast back on this path.
@@ -106,14 +116,18 @@ def test_offloaded_state_is_awaited_before_it_is_read(monkeypatch):
 
 
 def test_state_kept_on_the_device_is_not_awaited(monkeypatch):
-    events = run_single_frame_inference(monkeypatch, {"offload_state_to_cpu": False, "device": "cuda:0"})
+    events = run_single_frame_inference(
+        monkeypatch, {"offload_state_to_cpu": False, "device": "cuda:0"}, autocasts=True
+    )
 
     assert events == []
 
 
 def test_without_autocast_the_memory_dtype_is_restored_after_the_wait(monkeypatch):
     """The CPU runs in fp32, where SAM2's bfloat16 mask memory has to be cast back before it is used."""
-    events = run_single_frame_inference(monkeypatch, {"offload_state_to_cpu": True, "device": "cpu"})
+    events = run_single_frame_inference(
+        monkeypatch, {"offload_state_to_cpu": True, "device": "cpu"}, autocasts=False
+    )
 
     # No CUDA wait on the CPU, and the restore reads the memory on the host.
     assert events == [f"cast to {torch.float32}"]
@@ -174,6 +188,10 @@ def test_memory_encoder_restores_the_model_dtype_without_autocast(monkeypatch):
     monkeypatch.setattr(
         SAM2VideoPredictor, "_run_memory_encoder", lambda self, state, *args, **kwargs: (features, "pos_enc")
     )
+    monkeypatch.setattr(
+        CustomVideoPredictor, "_autocasts", lambda self, state: state["device"] != "cpu"
+    )
+    monkeypatch.setattr(CustomVideoPredictor, "_autocast", lambda self, state: contextlib.nullcontext())
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
     predictor.parameters = lambda: iter([torch.zeros(1, dtype=torch.float32)])
 
