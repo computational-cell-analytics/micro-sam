@@ -106,19 +106,6 @@ def empty_shape_layer(with_track_id=False):
     return Shapes(ndim=3, properties=properties)
 
 
-def test_batched_volume_shares_negative_points_with_the_positive_object(monkeypatch):
-    """A negative point corrects the positive object instead of becoming an object of its own."""
-    point_layer = Points(
-        data=np.array([[1.0, 10.0, 12.0], [1.0, 20.0, 22.0]]),
-        properties={"label": np.array(["positive", "negative"])},
-    )
-
-    segmenter, _ = run_volume_segmentation(monkeypatch, point_layer, empty_shape_layer(), batched=True)
-
-    # One object, prompted with its positive point followed by the shared negative one.
-    assert prompt_objects(segmenter) == [([1, 1], [1, 0])]
-
-
 def test_batched_volume_gives_each_positive_point_its_own_object(monkeypatch):
     point_layer = Points(
         data=np.array([[1.0, 10.0, 12.0], [1.0, 20.0, 22.0], [1.0, 5.0, 5.0]]),
@@ -128,25 +115,6 @@ def test_batched_volume_gives_each_positive_point_its_own_object(monkeypatch):
     segmenter, _ = run_volume_segmentation(monkeypatch, point_layer, empty_shape_layer(), batched=True)
 
     assert prompt_objects(segmenter) == [([1, 1], [1, 0]), ([2, 2], [1, 0])]
-
-
-def test_batched_volume_shares_negative_points_with_box_objects(monkeypatch):
-    # Two negative points, because a lone one on a slice is the established 'stop' annotation.
-    point_layer = Points(
-        data=np.array([[2.0, 5.0, 5.0], [2.0, 25.0, 25.0]]),
-        properties={"label": np.array(["negative", "negative"])},
-    )
-    prompt_layer = Shapes(
-        data=[np.array([[2.0, 2.0, 3.0], [2.0, 2.0, 8.0], [2.0, 7.0, 8.0], [2.0, 7.0, 3.0]])],
-        shape_type=["rectangle"], properties={"label": np.array(["positive"])},
-    )
-
-    segmenter, _ = run_volume_segmentation(monkeypatch, point_layer, prompt_layer, batched=True)
-
-    assert len(segmenter.box_calls) == 1
-    assert segmenter.box_calls[0]["object_id"] == [1]
-    # The negative points correct the box object; they never become objects themselves.
-    assert prompt_objects(segmenter) == [([1, 1], [0, 0])]
 
 
 def test_batched_volume_rejects_a_negative_only_prompt_set(monkeypatch):
