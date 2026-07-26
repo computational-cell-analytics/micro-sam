@@ -100,19 +100,72 @@ def test_offloaded_state_is_awaited_before_it_is_read(monkeypatch):
     """The non-blocking copy to the CPU records no event, so the host readers need an explicit wait."""
     events = run_single_frame_inference(monkeypatch, {"offload_state_to_cpu": True, "device": "cuda:0"})
 
-    # The wait covers the current stream only, so a replica on another stream keeps running, and it
-    # must come first: the dtype restore reads the offloaded memory on the host.
-    assert events == ["stream", f"cast to {torch.float32}"]
+    # The wait covers the current stream only, so a replica on another stream keeps running. Autocast
+    # keeps the memory in the dtype SAM2 stores it in, so nothing is cast back on this path.
+    assert events == ["stream"]
 
 
 def test_state_kept_on_the_device_is_not_awaited(monkeypatch):
     events = run_single_frame_inference(monkeypatch, {"offload_state_to_cpu": False, "device": "cuda:0"})
 
+    assert events == []
+
+
+def test_without_autocast_the_memory_dtype_is_restored_after_the_wait(monkeypatch):
+    """The CPU runs in fp32, where SAM2's bfloat16 mask memory has to be cast back before it is used."""
+    events = run_single_frame_inference(monkeypatch, {"offload_state_to_cpu": True, "device": "cpu"})
+
+    # No CUDA wait on the CPU, and the restore reads the memory on the host.
     assert events == [f"cast to {torch.float32}"]
 
 
-def test_memory_encoder_restores_the_model_dtype(monkeypatch):
-    """Memory attention runs in the model's dtype, so SAM2's bfloat16 downcast has to be undone."""
+def test_autocast_is_used_on_cuda_only(monkeypatch):
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(major=8))
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    assert predictor._autocasts({"device": "cuda:0"})
+    assert not predictor._autocasts({"device": "cpu"})
+    assert not predictor._autocasts({"device": "mps"})  # no MPS hardware here
+
+
+def test_a_pre_ampere_gpu_keeps_fp32(monkeypatch):
+    """Emulated bfloat16 is slower than the fp32 those GPUs run today, so they keep fp32 - on the GPU."""
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(major=7))
+
+    assert not predictor._autocasts({"device": "cuda:0"})
+
+
+def test_a_cuda_request_without_cuda_keeps_fp32(monkeypatch):
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    assert not predictor._autocasts({"device": "cuda:0"})
+
+
+@pytest.mark.parametrize("macos_14, expected", [(True, True), (False, False)])
+def test_mps_follows_the_macos_version_torch_gates_on(monkeypatch, macos_14, expected):
+    """Below macOS 14 torch disables the autocast itself, so claiming one would skip the dtype restore."""
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(torch.backends.mps, "is_macos_or_newer", lambda major, minor: macos_14)
+
+    assert predictor._autocasts({"device": "mps"}) is expected
+
+
+def test_memory_encoder_restores_the_model_dtype_without_autocast(monkeypatch):
+    """Off CUDA the model runs in fp32, so SAM2's bfloat16 downcast has to be undone."""
     from sam2.sam2_video_predictor import SAM2VideoPredictor
 
     from micro_sam.v2.models._video_predictor import CustomVideoPredictor
@@ -127,6 +180,10 @@ def test_memory_encoder_restores_the_model_dtype(monkeypatch):
     restored, pos_enc = predictor._run_memory_encoder({"offload_state_to_cpu": False, "device": "cpu"})
 
     assert restored.dtype == torch.float32 and pos_enc == "pos_enc"
+
+    # On CUDA autocast makes SAM2's own bfloat16 storage self-consistent, so it is left alone.
+    kept, _ = predictor._run_memory_encoder({"offload_state_to_cpu": False, "device": "cuda:0"})
+    assert kept.dtype == torch.bfloat16
 
 
 def test_missing_memory_features_are_passed_through(monkeypatch):
