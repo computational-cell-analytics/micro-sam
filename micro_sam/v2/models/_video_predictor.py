@@ -196,21 +196,52 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         self.add_all_frames_to_correct_as_cond = True
         self.clear_non_cond_mem_around_input = True
 
-    def _run_single_frame_inference(self, inference_state, *args, **kwargs):
-        """Wait for the offloaded predictions to reach the CPU before anything reads them back.
+    def _wait_for_offloaded_state(self, inference_state):
+        """Wait for the offloaded tensors to reach the CPU before anything reads them back.
 
-        With 'offload_state_to_cpu' SAM2 stores 'pred_masks' on the CPU with a 'non_blocking' copy
-        into pageable memory. Consolidating the output reads that tensor straight away, so without a
-        sync it can observe the buffer the allocator recycled from the previous prompt and return
-        that object's mask instead of the current one.
+        With 'offload_state_to_cpu' SAM2 stores 'pred_masks' and 'maskmem_features' on the CPU with a
+        'non_blocking' copy into pageable memory, which records no event to wait on. The readers are on
+        the host - the consolidation across objects assigns the mask into a CPU buffer, propagation
+        concatenates one CPU tensor per object, and the dtype restore below converts the memory - so
+        without a wait they can observe the buffer the allocator recycled from the previous call.
+
+        We wait on the stream that issued the copy rather than the whole device, so inference on other
+        streams (a second model replica in the batched pipeline) keeps running.
         """
+        if not inference_state.get("offload_state_to_cpu"):
+            return
+        device = torch.device(inference_state["device"])
+        if device.type == "cuda":
+            torch.cuda.current_stream(device).synchronize()
+        elif device.type == "mps":
+            torch.mps.synchronize()
+
+    def _restore_memory_dtype(self, maskmem_features):
+        """Undo SAM2's bfloat16 downcast of the mask memory, so memory attention stays self-consistent.
+
+        SAM2 stores 'maskmem_features' as bfloat16 to shrink the state, which its own inference makes
+        safe by running everything under a bfloat16 autocast. We run the model in fp32, where the cast
+        only survives because 'sam2_base._prepare_memory_conditioned_features' concatenates the fp32
+        object pointers onto the memory and 'torch.cat' promotes the result back to fp32. An object
+        whose only conditioning frame lies ahead of the frame being propagated contributes no object
+        pointers, so its memory stays bfloat16 and hits the fp32 memory-attention projections. That is
+        reachable from the GUI: batched volume segmentation with objects prompted on different slices.
+
+        Only call this once the offloaded copy has landed - it reads the tensor on the host.
+        """
+        if maskmem_features is None:
+            return None
+        return maskmem_features.to(next(self.parameters()).dtype)
+
+    def _run_memory_encoder(self, inference_state, *args, **kwargs):
+        maskmem_features, maskmem_pos_enc = super()._run_memory_encoder(inference_state, *args, **kwargs)
+        self._wait_for_offloaded_state(inference_state)
+        return self._restore_memory_dtype(maskmem_features), maskmem_pos_enc
+
+    def _run_single_frame_inference(self, inference_state, *args, **kwargs):
         out = super()._run_single_frame_inference(inference_state, *args, **kwargs)
-        if inference_state.get("offload_state_to_cpu"):
-            device = torch.device(inference_state["device"])
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            elif device.type == "mps":
-                torch.mps.synchronize()
+        self._wait_for_offloaded_state(inference_state)
+        out[0]["maskmem_features"] = self._restore_memory_dtype(out[0]["maskmem_features"])
         return out
 
     @torch.inference_mode()

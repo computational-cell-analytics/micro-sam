@@ -1,5 +1,8 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
+import torch
 
 from micro_sam.v2.models._video_predictor import _load_video_frames_from_images
 
@@ -60,3 +63,75 @@ def test_numpy_and_lazy_volumes_give_the_same_frame():
     lazy, _, _ = load_lazy_frames(LazyVolume(array))
 
     np.testing.assert_allclose(eager[2].numpy(), lazy[2].numpy())
+
+
+def run_single_frame_inference(monkeypatch, inference_state):
+    """Call the override with the wrapped inference and both CUDA waits recorded instead of run."""
+    from sam2.sam2_video_predictor import SAM2VideoPredictor
+
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    events = []
+
+    class Memory:
+        """Stands in for the offloaded 'maskmem_features', recording when it is read on the host."""
+
+        def to(self, dtype):
+            events.append(f"cast to {dtype}")
+            return self
+
+    monkeypatch.setattr(
+        SAM2VideoPredictor, "_run_single_frame_inference",
+        lambda self, state, **kwargs: ({"maskmem_features": Memory()}, "masks"),
+    )
+    monkeypatch.setattr(
+        torch.cuda, "current_stream", lambda device: SimpleNamespace(synchronize=lambda: events.append("stream"))
+    )
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device=None: events.append("device"))
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    predictor.parameters = lambda: iter([torch.zeros(1, dtype=torch.float32)])
+    out = predictor._run_single_frame_inference(inference_state)
+    assert out[1] == "masks"
+    return events
+
+
+def test_offloaded_state_is_awaited_before_it_is_read(monkeypatch):
+    """The non-blocking copy to the CPU records no event, so the host readers need an explicit wait."""
+    events = run_single_frame_inference(monkeypatch, {"offload_state_to_cpu": True, "device": "cuda:0"})
+
+    # The wait covers the current stream only, so a replica on another stream keeps running, and it
+    # must come first: the dtype restore reads the offloaded memory on the host.
+    assert events == ["stream", f"cast to {torch.float32}"]
+
+
+def test_state_kept_on_the_device_is_not_awaited(monkeypatch):
+    events = run_single_frame_inference(monkeypatch, {"offload_state_to_cpu": False, "device": "cuda:0"})
+
+    assert events == [f"cast to {torch.float32}"]
+
+
+def test_memory_encoder_restores_the_model_dtype(monkeypatch):
+    """Memory attention runs in the model's dtype, so SAM2's bfloat16 downcast has to be undone."""
+    from sam2.sam2_video_predictor import SAM2VideoPredictor
+
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    features = torch.zeros(4, dtype=torch.bfloat16)
+    monkeypatch.setattr(
+        SAM2VideoPredictor, "_run_memory_encoder", lambda self, state, *args, **kwargs: (features, "pos_enc")
+    )
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    predictor.parameters = lambda: iter([torch.zeros(1, dtype=torch.float32)])
+
+    restored, pos_enc = predictor._run_memory_encoder({"offload_state_to_cpu": False, "device": "cpu"})
+
+    assert restored.dtype == torch.float32 and pos_enc == "pos_enc"
+
+
+def test_missing_memory_features_are_passed_through(monkeypatch):
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+
+    assert predictor._restore_memory_dtype(None) is None

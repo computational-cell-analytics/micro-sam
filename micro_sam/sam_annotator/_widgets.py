@@ -1230,7 +1230,7 @@ def export_track(
 
 
 def create_prompt_menu(
-    points_layer, labels, menu_name="prompt", label_name="label", linked_layers=None,
+    points_layer, labels, menu_name="prompt", label_name="label", linked_layers=None, viewer=None,
 ):
     """Create a menu that keeps point and optional shape prompt labels synchronized."""
     prompt_layers = [points_layer] + ([] if linked_layers is None else list(linked_layers))
@@ -1252,7 +1252,10 @@ def create_prompt_menu(
     def label_changed(new_label):
         for layer in prompt_layers:
             if label_name == "label":
-                vutil.set_prompt_label(layer, new_label)
+                # Only the layer in use relabels its selected scribbles, see 'relabels_selection'.
+                vutil.set_prompt_label(
+                    layer, new_label, relabel_selected=vutil.relabels_selection(layer, viewer)
+                )
             else:
                 current_properties = layer.current_properties
                 current_properties[label_name] = np.array([new_label])
@@ -1425,34 +1428,108 @@ def _batched_disabled_when_tiled(state, batched):
     return batched
 
 
-def _volume_prompt_signatures(merged_prompts, shape_prompts):
-    """Hashable descriptors of every volume prompt, used to detect prompts changed since the last run."""
-    signatures = set()
-    for frame_id, (points, labels) in merged_prompts.items():
-        for (y, x), label in zip(points, labels):
-            signatures.add(("point", frame_id, round(float(y)), round(float(x)), int(label)))
+def _plan_volume_prompts(merged_prompts, shape_prompts, is_batched):
+    """Plan every prompt push of a volume segmentation round, in the order they must be pushed.
+
+    Shapes come first: SAM2 requires a box before any point on the same object and frame, so pushing
+    the shapes ahead of the points lets a shape and its correction points combine regardless of the
+    order they were drawn in.
+
+    In batched mode each box, mask and positive point is an object of its own, drawing ids from one
+    shared counter, and a slice's negative points correct every object on that slice. In standard mode
+    every prompt feeds the single object the segmenter defaults to.
+
+    Args:
+        merged_prompts: Per-slice '(points, labels)', including the points a scribble expands into.
+        shape_prompts: Per-slice '(boxes, masks)', with the rectangles separated from the filled shapes.
+        is_batched: Whether each positive prompt defines an object of its own.
+
+    Returns:
+        The pushes as '(kind, frame_id, object_ids, payload)' tuples. The payload is '(points, labels)'
+        for a point push and the list of shapes otherwise; 'object_ids' is None in standard mode.
+    """
+    plan = []
+    object_id = 0
+
+    def negatives_on(frame_id):
+        # Only batched objects need the negatives shared explicitly; in standard mode they already
+        # reach the one object through the point pushes below.
+        if not is_batched:
+            return np.zeros((0, 2))
+        points, labels = merged_prompts.get(frame_id, (np.zeros((0, 2)), np.zeros(0, dtype=int)))
+        return points[labels != 1]
+
     for frame_id, (boxes, masks) in shape_prompts.items():
-        for box in boxes:
-            signatures.add(("box", frame_id) + tuple(np.round(np.asarray(box)).astype(int).tolist()))
-        for mask in masks:
-            digest = hashlib.sha1(np.ascontiguousarray(mask).tobytes()).hexdigest()
-            signatures.add(("mask", frame_id, digest))
+        negatives = negatives_on(frame_id)
+        negative_labels = np.zeros(len(negatives), dtype=int)
+        for kind, shapes in (("box", boxes), ("mask", masks)):
+            if not shapes:
+                continue
+            ids = list(range(object_id + 1, object_id + 1 + len(shapes))) if is_batched else None
+            object_id += len(shapes)
+            plan.append((kind, frame_id, ids, shapes))
+            if ids is not None and len(negatives):
+                for obj_id in ids:
+                    plan.append(("point", frame_id, [obj_id] * len(negatives), (negatives, negative_labels)))
+
+    for frame_id, (points, labels) in merged_prompts.items():
+        if not is_batched:
+            plan.append(("point", frame_id, None, (points, labels)))
+            continue
+        negatives = points[labels != 1]
+        negative_labels = np.zeros(len(negatives), dtype=int)
+        for positive in points[labels == 1]:
+            object_id += 1
+            if len(negatives):
+                pts = np.concatenate([positive[None], negatives])
+                lbs = np.concatenate([[1], negative_labels])
+            else:
+                pts, lbs = positive[None], np.array([1])
+            plan.append(("point", frame_id, [object_id] * len(pts), (pts, lbs)))
+
+    return plan
+
+
+def _volume_prompt_signatures(plan):
+    """Hashable descriptors of every planned push, used to detect prompts changed since the last run.
+
+    The object id is part of the signature. 'sync_prompt_state' keeps the persistent SAM2 state when
+    the new prompt set is a superset of the previous one, and the routing is what makes that safe:
+    adding a box renumbers the objects of every prompt behind it, so without the id an unchanged point
+    would be replayed into a different object and corrupt the state it is deduplicated against.
+    """
+    signatures = set()
+    for kind, frame_id, object_ids, payload in plan:
+        if kind == "point":
+            points, labels = payload
+            ids = [1] * len(points) if object_ids is None else object_ids
+            for (y, x), label, obj_id in zip(points, labels, ids):
+                signatures.add(("point", obj_id, frame_id, round(float(y)), round(float(x)), int(label)))
+            continue
+        ids = [1] * len(payload) if object_ids is None else object_ids
+        for shape, obj_id in zip(payload, ids):
+            if kind == "box":
+                signatures.add(
+                    ("box", obj_id, frame_id) + tuple(np.round(np.asarray(shape)).astype(int).tolist())
+                )
+            else:
+                digest = hashlib.sha1(np.ascontiguousarray(shape).tobytes()).hexdigest()
+                signatures.add(("mask", obj_id, frame_id, digest))
     return signatures
 
 
-def _add_shared_negative_points(segmenter, frame_id, object_ids, negative_points):
-    """Add a slice's negative points as shared corrections for each of its batched objects.
-
-    A no-op in standard mode ('object_ids' is None), where the points already reach the single object.
-    """
-    if object_ids is None or len(negative_points) == 0:
-        return
-    labels = np.zeros(len(negative_points), dtype=int)
-    for object_id in object_ids:
-        segmenter.add_point_prompts(
-            frame_ids=frame_id, points=negative_points, point_labels=labels,
-            object_id=[object_id] * len(negative_points),
-        )
+def _push_volume_prompts(segmenter, plan):
+    """Push a planned prompt round; the segmenter skips the prompts already in its persistent state."""
+    for kind, frame_id, object_ids, payload in plan:
+        if kind == "point":
+            points, labels = payload
+            segmenter.add_point_prompts(
+                frame_ids=frame_id, points=points, point_labels=labels, object_id=object_ids,
+            )
+        elif kind == "box":
+            segmenter.add_box_prompts(frame_ids=frame_id, boxes=payload, object_id=object_ids)
+        else:
+            segmenter.add_mask_prompts(frame_ids=frame_id, masks=payload, object_id=object_ids)
 
 
 def _segment_object_2d(viewer, batched=False):
@@ -1474,20 +1551,13 @@ def _segment_object_2d(viewer, batched=False):
 
     # Get the current box, point and open-stroke prompts. Scribbles are encoded through SAM's
     # existing sparse point prompt embeddings, so the predictor interface remains unchanged.
-    boxes, masks = vutil.shape_layer_to_prompts(
-        viewer.layers["prompts"], shape
+    # 2d has no stop annotation, so a lone negative point stays a normal prompt.
+    prompts = vutil.collect_frame_prompts(
+        viewer.layers["point_prompts"], viewer.layers["prompts"], shape, with_stop_annotation=False,
     )
-    points, labels = vutil.point_layer_to_prompts(
-        viewer.layers["point_prompts"], with_stop_annotation=False
-    )
-    scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
-        viewer.layers["prompts"], image_shape=shape
-    )
-    points, labels = vutil.merge_point_prompts(
-        (points, labels), (scribble_points, scribble_labels)
-    )
+    points, labels, boxes, masks = prompts.points, prompts.labels, prompts.boxes, prompts.masks
 
-    have_scribbles = len(scribble_points) > 0
+    have_scribbles = prompts.have_scribbles
     if have_scribbles and not len(boxes) and not np.any(labels == 1):
         msg = "A negative scribble needs a positive point, positive scribble, box or mask prompt."
         return _generate_message("error", msg)
@@ -2808,23 +2878,15 @@ class UnifiedSegmentWidget(_WidgetBase):
         z = int(position[0])
 
         prompt_layer = self._viewer.layers["prompts"]
-        scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
-            prompt_layer, image_shape=shape, i=z
-        )
-        have_scribbles = len(scribble_points) > 0
-        point_prompts = vutil.point_layer_to_prompts(
-            self._viewer.layers["point_prompts"], z, with_stop_annotation=not have_scribbles
+        prompts = vutil.collect_frame_prompts(
+            self._viewer.layers["point_prompts"], prompt_layer, shape, i=z,
         )
         # this is a stop prompt, we do nothing
-        if not point_prompts:
+        if prompts.is_stop:
             return
 
-        boxes, masks = vutil.shape_layer_to_prompts(
-            prompt_layer, shape, i=z
-        )
-        points, labels = vutil.merge_point_prompts(
-            point_prompts, (scribble_points, scribble_labels)
-        )
+        points, labels, boxes, masks = prompts.points, prompts.labels, prompts.boxes, prompts.masks
+        have_scribbles = prompts.have_scribbles
         if have_scribbles and not boxes and not np.any(labels == 1):
             return _generate_message(
                 "error",
@@ -2924,21 +2986,15 @@ class UnifiedSegmentWidget(_WidgetBase):
     def _segment_track_on_frame(self, state, t, track_id, shape):
         """Segment a single track's object on frame 't'. Returns the binary mask or None."""
         prompt_layer = self._viewer.layers["prompts"]
-        scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
-            prompt_layer, image_shape=shape, i=t, track_id=track_id,
-        )
-        have_scribbles = len(scribble_points) > 0
-        point_prompts = vutil.point_layer_to_prompts(
-            self._viewer.layers["point_prompts"], i=t, track_id=track_id,
-            with_stop_annotation=not have_scribbles,
+        prompts = vutil.collect_frame_prompts(
+            self._viewer.layers["point_prompts"], prompt_layer, shape, i=t, track_id=track_id,
         )
         # A single negative point is a stop prompt: nothing to segment for this track here.
-        if not point_prompts:
+        if prompts.is_stop:
             return None
 
-        boxes, masks = vutil.shape_layer_to_prompts(prompt_layer, shape, i=t, track_id=track_id)
-        points, labels = vutil.merge_point_prompts(point_prompts, (scribble_points, scribble_labels))
-        if have_scribbles and not boxes and not np.any(labels == 1):
+        points, labels, boxes, masks = prompts.points, prompts.labels, prompts.boxes, prompts.masks
+        if prompts.have_scribbles and not boxes and not np.any(labels == 1):
             show_info("A negative scribble alone cannot segment an object. "
                       "Add a positive point, positive scribble, box or mask prompt.")
             return None
@@ -3026,43 +3082,20 @@ class UnifiedSegmentWidget(_WidgetBase):
                     )
                     is_batched = False
 
-                # Batched mode: each box, mask and positive point is its own object, drawing ids from
-                # one shared counter, and a slice's negative points correct every object on it.
-                # In non-batched mode every prompt feeds a single object (id 1).
-                object_id = 0
-
                 # Collect every prompt first: a slice's negative points must be known when the boxes
                 # and masks on that slice are assigned their object ids, and the complete set is
                 # needed to detect prompts that changed since the last run.
                 shape_yx = state.image_shape[-2:]
                 point_slices = np.unique(np.concatenate([z_values_points, z_values_scribbles])).astype("int")
-                merged_prompts = {}
-                for curr_z in point_slices:
-                    scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
-                        box_prompts, image_shape=shape_yx, i=curr_z
-                    )
-                    # A slice whose only prompt is a single negative point is a 'stop' annotation. Skip it.
-                    prompts = vutil.point_layer_to_prompts(
-                        layer=point_prompts,
-                        i=curr_z,
-                        with_stop_annotation=len(scribble_points) == 0,
-                    )
-                    if prompts is None:
-                        continue
-                    points, labels = vutil.merge_point_prompts(
-                        prompts, (scribble_points, scribble_labels)
-                    )
-                    merged_prompts[int(curr_z)] = (np.asarray(points), np.asarray(labels))
-
-                shape_prompts = {}
-                for curr_z in np.unique(z_values_boxes):
-                    boxes, shape_masks = vutil.shape_layer_to_prompts(layer=box_prompts, shape=shape_yx, i=curr_z)
-                    if not boxes:
-                        continue
-                    # Rectangles are box prompts. Polygons and ellipses carry a filled mask prompt.
-                    rect_boxes = [b for b, m in zip(boxes, shape_masks) if m is None]
-                    poly_masks = [m for m in shape_masks if m is not None]
-                    shape_prompts[int(curr_z)] = (rect_boxes, poly_masks)
+                merged_prompts, shape_prompts = {}, {}
+                for curr_z in np.unique(np.concatenate([point_slices, z_values_boxes])).astype("int"):
+                    prompts = vutil.collect_frame_prompts(point_prompts, box_prompts, shape_yx, i=curr_z)
+                    # A slice whose only prompt is a single negative point is a 'stop' annotation.
+                    if not prompts.is_stop and len(prompts.points):
+                        merged_prompts[int(curr_z)] = (prompts.points, prompts.labels)
+                    rect_boxes, poly_masks = prompts.split_shapes()
+                    if rect_boxes or poly_masks:
+                        shape_prompts[int(curr_z)] = (rect_boxes, poly_masks)
 
                 have_positive_points = any(np.any(labels == 1) for _, labels in merged_prompts.values())
                 have_shape_cue = len(shape_prompts) > 0
@@ -3082,62 +3115,15 @@ class UnifiedSegmentWidget(_WidgetBase):
                     )
                     return None
 
-                # Rebuild the persistent state when a prompt was deleted, moved or relabelled since the
-                # last run. Purely additive prompt sets keep it, so only the new prompts are pushed.
-                state.interactive_segmenter.sync_prompt_state(
-                    _volume_prompt_signatures(merged_prompts, shape_prompts)
-                )
+                # Plan the whole round before touching the state: the object each prompt is routed to
+                # depends on the prompt set as a whole, and the sync below needs that routing.
+                plan = _plan_volume_prompts(merged_prompts, shape_prompts, is_batched)
 
-                def negative_points_on(curr_z):
-                    """The negative points of a slice, shared by every batched object on it."""
-                    if not is_batched:
-                        return np.zeros((0, 2))
-                    points, labels = merged_prompts.get(int(curr_z), (np.zeros((0, 2)), np.zeros(0, dtype=int)))
-                    return points[labels != 1]
-
-                # Add box prompts first: SAM2 requires a box before any point on the same object/frame,
-                # so adding boxes ahead of points lets a box and its correction points combine.
-                for curr_z, (rect_boxes, poly_masks) in shape_prompts.items():
-                    negatives = negative_points_on(curr_z)
-                    if rect_boxes:
-                        box_ids = list(range(object_id + 1, object_id + 1 + len(rect_boxes))) if is_batched else None
-                        object_id += len(rect_boxes)
-                        state.interactive_segmenter.add_box_prompts(
-                            frame_ids=curr_z, boxes=rect_boxes, object_id=box_ids
-                        )
-                        _add_shared_negative_points(
-                            state.interactive_segmenter, curr_z, box_ids, negatives
-                        )
-                    if poly_masks:
-                        mask_ids = list(range(object_id + 1, object_id + 1 + len(poly_masks))) if is_batched else None
-                        object_id += len(poly_masks)
-                        state.interactive_segmenter.add_mask_prompts(
-                            frame_ids=curr_z, masks=poly_masks, object_id=mask_ids
-                        )
-                        _add_shared_negative_points(
-                            state.interactive_segmenter, curr_z, mask_ids, negatives
-                        )
-
-                # Then add the point prompts, one slice at a time. The segmenter skips points already
-                # pushed, so re-runs only add new ones.
-                for curr_z, (points, labels) in merged_prompts.items():
-                    if not is_batched:
-                        state.interactive_segmenter.add_point_prompts(
-                            frame_ids=curr_z, points=points, point_labels=labels, object_id=None,
-                        )
-                        continue
-                    negatives = points[labels != 1]
-                    negative_labels = np.zeros(len(negatives), dtype=int)
-                    for positive in points[labels == 1]:
-                        object_id += 1
-                        if len(negatives):
-                            pts = np.concatenate([positive[None], negatives])
-                            lbs = np.concatenate([[1], negative_labels])
-                        else:
-                            pts, lbs = positive[None], np.array([1])
-                        state.interactive_segmenter.add_point_prompts(
-                            frame_ids=curr_z, points=pts, point_labels=lbs, object_id=[object_id] * len(pts),
-                        )
+                # Rebuild the persistent state when a prompt was deleted, moved, relabelled or routed
+                # to a different object since the last run. A round that only adds prompts and leaves
+                # the existing routing intact keeps the state, so only the new prompts are pushed.
+                state.interactive_segmenter.sync_prompt_state(_volume_prompt_signatures(plan))
+                _push_volume_prompts(state.interactive_segmenter, plan)
 
                 # Propagate the prompts throughout the volume and combine the propagated segmentations.
                 # Report each slice propagation step.
@@ -3248,26 +3234,21 @@ class UnifiedSegmentWidget(_WidgetBase):
             z_scribbles = vutil.get_scribble_slices(box_layer, track_id=track_id)
             have_positive_cue = False
             for t in sorted({int(t) for t in z_points} | {int(t) for t in z_scribbles}):
-                scribble_points, scribble_labels = vutil.scribble_layer_to_prompts(
-                    box_layer, image_shape=shape[1:], i=t, track_id=track_id,
-                )
                 # Exclude division markers: they signal a lineage event and bound propagation
                 # (see below), but must not be fed to SAM2 as conditioning prompts - doing so
                 # adds a second conditioning frame that corrupts the mother track's propagation.
-                # A lone negative point is a stop only when it is the frame's sole segmentation cue.
-                prompts = vutil.point_layer_to_prompts(
-                    point_layer, i=t, track_id=track_id, exclude_states=("division",),
-                    with_stop_annotation=len(scribble_points) == 0,
+                prompts = vutil.collect_frame_prompts(
+                    point_layer, box_layer, shape[1:], i=t, track_id=track_id,
+                    exclude_states=("division",),
                 )
-                if prompts is None:  # Single negative point: a stop annotation for this track.
+                if prompts.is_stop:  # Single negative point: a stop annotation for this track.
                     stop_frames.append(t)
                     continue
-                points, labels = vutil.merge_point_prompts(prompts, (scribble_points, scribble_labels))
-                if len(points) == 0:  # This track has no point prompts on this frame.
+                if len(prompts.points) == 0:  # This track has no point prompts on this frame.
                     continue
-                have_positive_cue = have_positive_cue or bool(np.any(labels == 1))
+                have_positive_cue = have_positive_cue or bool(np.any(prompts.labels == 1))
                 state.interactive_segmenter.add_point_prompts(
-                    frame_ids=t, points=points, point_labels=labels,
+                    frame_ids=t, points=prompts.points, point_labels=prompts.labels,
                 )
                 prompted_frames.append(t)
 
@@ -3277,7 +3258,7 @@ class UnifiedSegmentWidget(_WidgetBase):
                 if box_layer.data else np.zeros(0, dtype=int)
             )
             for t in z_boxes:
-                boxes, _ = vutil.shape_layer_to_prompts(box_layer, shape=shape, i=int(t), track_id=track_id)
+                boxes, _ = vutil.shape_layer_to_prompts(box_layer, shape=shape[1:], i=int(t), track_id=track_id)
                 for box in boxes:
                     state.interactive_segmenter.add_box_prompts(frame_ids=int(t), boxes=[box])
                 if boxes:

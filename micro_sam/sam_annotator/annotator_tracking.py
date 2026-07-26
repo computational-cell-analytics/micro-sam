@@ -36,7 +36,7 @@ def _validate_tracking_model_type(model_type):
 
 # This solution is a bit hacky, so I won't move it to _widgets.py yet.
 def create_tracking_menu(
-    points_layer, box_layer, states, track_ids, point_labels=None, tracking_widget=None
+    points_layer, box_layer, states, track_ids, point_labels=None, tracking_widget=None, viewer=None
 ):
     """@private"""
     state = AnnotatorState()
@@ -78,9 +78,12 @@ def create_tracking_menu(
             label_menu.value = new_label
 
     def label_changed(new_label):
-        # Keep both prompt layers on the selected label so the next scribble also uses it.
-        vutil.set_prompt_label(points_layer, new_label)
-        vutil.set_prompt_label(box_layer, new_label)
+        # Keep both prompt layers on the selected label so the next scribble also uses it. Only the
+        # layer in use relabels its selected scribbles, see 'relabels_selection'.
+        for layer in (points_layer, box_layer):
+            vutil.set_prompt_label(
+                layer, new_label, relabel_selected=vutil.relabels_selection(layer, viewer)
+            )
 
     points_layer.events.current_properties.connect(update_label_menu)
     label_menu.changed.connect(label_changed)
@@ -310,6 +313,7 @@ class AnnotatorTracking(_AnnotatorBase):
                 track_ids=list(state.lineage.keys()),
                 point_labels=self._point_labels,
                 tracking_widget=getattr(self, "_tracking_widget", None),
+                viewer=self._viewer,
             )
 
     def _get_widgets(self):
@@ -324,6 +328,7 @@ class AnnotatorTracking(_AnnotatorBase):
                 states=self._track_state_labels,
                 track_ids=list(AnnotatorState().lineage.keys()),
                 point_labels=self._point_labels,
+                viewer=self._viewer,
             )
 
         # The prompt menu, the track id / track state menus and the segment / clear controls all
@@ -361,9 +366,11 @@ class AnnotatorTracking(_AnnotatorBase):
         def _segment_point_prompts(event):
             interactive.segment(self._viewer)
 
+        # The layer the key reached is the active one, so it goes first: only it relabels a selected
+        # scribble. The viewer-level fallback below has no active prompt layer, so it relabels none.
         @prompt_layer.bind_key("t", overwrite=True)
         def _toggle_shape_prompt_label(event=None):
-            vutil.toggle_label(self._point_prompt_layer, self._box_prompt_layer)
+            vutil.toggle_label(self._box_prompt_layer, self._point_prompt_layer)
 
         @point_prompt_layer.bind_key("t", overwrite=True)
         def _toggle_point_prompt_label(event=None):

@@ -3,6 +3,7 @@ import pickle
 import warnings
 from glob import glob
 from pathlib import Path
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import h5py
@@ -126,13 +127,20 @@ def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> T
     raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data.")
 
 
-def set_prompt_label(layer, new_label):
+def set_prompt_label(layer, new_label, relabel_selected: bool = True):
     """Set the current prompt label and relabel selected shapes consistently.
 
     Napari Points applies ``current_properties`` changes to selected points in all modes. Shapes,
     however, only applies them to selected shapes in select or pan/zoom mode. Explicitly updating
     the selected open shapes here keeps changing the prompt menu or pressing ``T`` consistent for
     both layer types, including immediately after drawing a path, polyline or line.
+
+    Args:
+        layer: The prompt layer.
+        new_label: The label to set as the drawing default.
+        relabel_selected: Whether the layer's selected scribbles also take the new label. Pass False
+            for a layer the user is not working in: napari leaves a freshly drawn scribble selected,
+            so a polarity change aimed at another layer would otherwise silently relabel it.
     """
     if isinstance(layer, napari.layers.Shapes):
         # Napari may briefly retain a selected shape index after the corresponding geometry and
@@ -144,11 +152,20 @@ def set_prompt_label(layer, new_label):
         if valid_selection != layer.selected_data:
             layer.selected_data = valid_selection
 
+    is_shapes = isinstance(layer, napari.layers.Shapes)
+    if not relabel_selected and layer.selected_data:
+        # Napari applies current_properties to the selection itself - to selected points in every mode,
+        # and to selected shapes in select and pan/zoom mode - and it selects a prompt right after it is
+        # placed. A prompt that has to keep its own label therefore cannot stay selected while the
+        # drawing default changes. Dropping the selection is right here anyway: that prompt is finished
+        # and the user has moved to the other layer.
+        layer.selected_data = set()
+
     current_properties = layer.current_properties
     current_properties["label"] = np.array([new_label])
     layer.current_properties = current_properties
 
-    if isinstance(layer, napari.layers.Shapes) and layer.selected_data:
+    if relabel_selected and is_shapes and layer.selected_data:
         properties = dict(layer.properties)
         labels = np.asarray(properties.get("label", []), dtype=object).copy()
         shape_types = list(layer.shape_type)
@@ -177,13 +194,45 @@ def set_prompt_label(layer, new_label):
     layer.refresh_colors()
 
 
-def toggle_label(prompts, *linked_prompts):
-    """Toggle the positive/negative label for one or more prompt layers."""
-    # Use the first layer as the source of truth, then keep all linked prompt layers in sync.
-    current_label = prompts.current_properties["label"][0]
+def relabels_selection(layer, viewer) -> bool:
+    """Whether a polarity change may also relabel this layer's selected scribbles.
+
+    Only the layer the user is working in may: napari leaves a freshly drawn scribble selected, so a
+    polarity change aimed at another layer would otherwise reach back and relabel it. Without a viewer
+    to ask, the caller already knows which layer is active and this stays permissive.
+
+    Args:
+        layer: The prompt layer about to take a new label.
+        viewer: The napari viewer, or None when the active layer cannot be determined.
+
+    Returns:
+        Whether the layer's selected scribbles should take the new label too.
+    """
+    if viewer is None:
+        return True
+    # Compare by name: napari hands out layers wrapped in a public-only proxy, so the active layer is
+    # not always the same object as the one in 'viewer.layers'.
+    active = viewer.layers.selection.active
+    return active is not None and layer.name == active.name
+
+
+def toggle_label(active_prompts, *linked_prompts):
+    """Toggle the positive/negative label of the active prompt layer, and follow with the linked ones.
+
+    The polarity itself is global: it becomes the drawing default for every prompt layer, so the shared
+    prompt menu keeps describing all of them. Only the active layer also relabels its selected
+    scribbles - napari leaves a freshly drawn scribble selected, so flipping the polarity for the next
+    point would otherwise reach back and relabel it.
+
+    Args:
+        active_prompts: The prompt layer the toggle came from, and the source of the current label.
+        linked_prompts: The other prompt layers, which follow the new drawing default.
+    """
+    current_label = active_prompts.current_properties["label"][0]
     new_label = "negative" if current_label == "positive" else "positive"
-    for layer in (prompts,) + linked_prompts:
-        set_prompt_label(layer, new_label)
+    set_prompt_label(active_prompts, new_label)
+    for layer in linked_prompts:
+        set_prompt_label(layer, new_label, relabel_selected=False)
 
 
 def normalize_prompt_shape_labels(layer_or_event):
@@ -675,6 +724,84 @@ def merge_point_prompts(*prompt_sets):
     if not point_arrays:
         return np.empty((0, 2), dtype="float64"), np.empty((0,), dtype="int64")
     return np.concatenate(point_arrays), np.concatenate(label_arrays)
+
+
+@dataclass
+class FramePrompts:
+    """Every prompt annotated on a single frame (or on a 2d image), read from the napari layers.
+
+    Attributes:
+        points: The point prompts, including the points a scribble expands into, in (y, x) order.
+        labels: The label (1 positive, 0 negative) of each point.
+        boxes: The box prompts, one per rectangle, ellipse and polygon.
+        masks: The filled mask of each box, or None for a rectangle. Index-aligned with `boxes`.
+        is_stop: Whether the frame's sole segmentation cue is a stop annotation (a lone negative point).
+        have_scribbles: Whether the frame carries any scribble.
+    """
+    points: np.ndarray
+    labels: np.ndarray
+    boxes: List[np.ndarray]
+    masks: List[Optional[np.ndarray]]
+    is_stop: bool
+    have_scribbles: bool
+
+    def split_shapes(self) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+        """Separate the rectangles (box prompts) from the shapes carrying a filled mask."""
+        boxes = [box for box, mask in zip(self.boxes, self.masks) if mask is None]
+        masks = [mask for mask in self.masks if mask is not None]
+        return boxes, masks
+
+
+def collect_frame_prompts(
+    point_layer: napari.layers.Points,
+    shape_layer: napari.layers.Shapes,
+    shape: Tuple[int, int],
+    i=None,
+    track_id=None,
+    exclude_states=None,
+    with_stop_annotation: bool = True,
+) -> FramePrompts:
+    """Read every prompt of one frame from the annotation layers.
+
+    The single place prompts are extracted, so the interactive, volumetric and tracking entry points
+    cannot drift apart. Scribbles and shapes are resolved first, so a lone negative point only counts
+    as a stop annotation when it is the frame's sole segmentation cue - beside a scribble, box or
+    mask it is a correction of that object. The points a scribble expands into are merged into the
+    point prompts.
+
+    Args:
+        point_layer: The napari point layer.
+        shape_layer: The napari shape layer, holding both the shape and the scribble prompts.
+        shape: The image shape (in-plane, without the frame axis).
+        i: Index for the data (required for 3d or timeseries data).
+        track_id: Id of the current track (required for tracking data).
+        exclude_states: Track-states to drop, e.g. ('division',). See `point_layer_to_prompts`.
+        with_stop_annotation: Whether a lone negative point may be read as a stop annotation.
+
+    Returns:
+        The prompts of the frame.
+    """
+    scribble_points, scribble_labels = scribble_layer_to_prompts(
+        shape_layer, image_shape=shape, i=i, track_id=track_id
+    )
+    have_scribbles = len(scribble_points) > 0
+    boxes, masks = shape_layer_to_prompts(shape_layer, shape, i=i, track_id=track_id)
+
+    prompts = point_layer_to_prompts(
+        point_layer, i=i, track_id=track_id, exclude_states=exclude_states,
+        with_stop_annotation=with_stop_annotation and not have_scribbles and not boxes,
+    )
+    if prompts is None:
+        return FramePrompts(
+            points=np.empty((0, 2), dtype="float64"), labels=np.empty((0,), dtype="int64"),
+            boxes=boxes, masks=masks, is_stop=True, have_scribbles=have_scribbles,
+        )
+
+    points, labels = merge_point_prompts(prompts, (scribble_points, scribble_labels))
+    return FramePrompts(
+        points=points, labels=labels, boxes=boxes, masks=masks,
+        is_stop=False, have_scribbles=have_scribbles,
+    )
 
 
 def shape_layer_to_prompts(

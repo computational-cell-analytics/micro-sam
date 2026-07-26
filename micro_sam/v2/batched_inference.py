@@ -63,8 +63,17 @@ def _model_device(model: torch.nn.Module) -> torch.device:
         return torch.device("cpu")
 
 
+def _all_cuda_devices() -> List[torch.device]:
+    return [torch.device("cuda", index) for index in range(torch.cuda.device_count())]
+
+
 def _resolve_devices(model: torch.nn.Module, devices: Devices = None) -> List[torch.device]:
     """Resolve the inference devices, using every visible CUDA device by default.
+
+    An index is what pins inference to one GPU: 'cuda:1' selects that device, while a bare 'cuda'
+    names the backend rather than a device and fans out over all visible GPUs, as `None` does. The GUI
+    only ever offers 'auto', 'cuda' and 'cpu', so pinning a bare 'cuda' would cost multi-GPU users the
+    fan-out with no way to ask for it back.
 
     Automatic multi-GPU execution is enabled only when the supplied model already lives on CUDA.
     This preserves an explicitly CPU- or MPS-loaded model.
@@ -83,12 +92,14 @@ def _resolve_devices(model: torch.nn.Module, devices: Devices = None) -> List[to
     """
     if devices is None:
         device = _model_device(model)
-        if device.type == "cuda" and torch.cuda.device_count() > 1:
-            resolved = [torch.device("cuda", index) for index in range(torch.cuda.device_count())]
-        else:
-            resolved = [device]
+        resolved = _all_cuda_devices() if device.type == "cuda" and torch.cuda.device_count() > 1 else [device]
     elif isinstance(devices, (str, torch.device)):
-        resolved = [_normalize_device(devices)]
+        requested = torch.device(devices)
+        if requested.type == "cuda" and requested.index is None:
+            # Keep the bare request when CUDA is unavailable, so the check below reports that.
+            resolved = _all_cuda_devices() or [requested]
+        else:
+            resolved = [_normalize_device(requested)]
     else:
         resolved = [_normalize_device(device) for device in devices]
 

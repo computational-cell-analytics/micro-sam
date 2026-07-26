@@ -341,6 +341,8 @@ EMBEDDING_ZARR_FORMAT = 3
 # Compression codec for on-disk embeddings. blosc (byte-shuffle + lz4) is the fastest to read and write
 # and the smallest for float32 features. It is also z5py's default, so this just pins it explicitly.
 EMBEDDING_COMPRESSION = "blosc"
+# Upper bound on how much of the input is materialized at once when hashing it for the data signature.
+DATA_SIGNATURE_BLOCK_SIZE = 64 * 1024**2
 
 
 def _open_embeddings(save_path, mode="a"):
@@ -406,8 +408,20 @@ def _create_dataset_without_data(group, name, shape, dtype, chunks):
 
 
 def _compute_data_signature(input_):
-    data_signature = hashlib.sha1(np.asarray(input_).tobytes()).hexdigest()
-    return data_signature
+    # Hash the input in blocks along the leading axis, so a lazy input (dask / zarr / h5py) is never
+    # materialized as a whole. The digest is unchanged: it is the same byte stream, fed in parts.
+    shape = tuple(getattr(input_, "shape", ()))
+    itemsize = getattr(getattr(input_, "dtype", None), "itemsize", None)
+    signature = hashlib.sha1()
+    if len(shape) == 0 or itemsize is None:
+        signature.update(np.asarray(input_).tobytes())
+        return signature.hexdigest()
+
+    bytes_per_slice = itemsize * int(np.prod(shape[1:], dtype="int64"))
+    block = max(1, DATA_SIGNATURE_BLOCK_SIZE // max(bytes_per_slice, 1))
+    for start in range(0, shape[0], block):
+        signature.update(np.asarray(input_[start:start + block]).tobytes())
+    return signature.hexdigest()
 
 
 # Create all metadata that is stored along with the embeddings.
