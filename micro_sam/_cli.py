@@ -650,7 +650,7 @@ def _classifier_model_spec(rf_path):
 
 def _classifier_predictor(rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device):
     """Build the predictor and optional upsampler for classifier inference, defaulting to the training config."""
-    from .sam_annotator._state import _get_sam_model
+    from .util import _get_sam_model
 
     spec = _classifier_model_spec(rf_path)
     model_type = model_type or spec.get("model_type")

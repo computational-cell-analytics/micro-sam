@@ -6,7 +6,7 @@ import pickle
 import inspect
 from glob import glob
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Union
+from typing import Optional, Sequence, Tuple, Union, TYPE_CHECKING
 
 import h5py
 import numpy as np
@@ -20,7 +20,11 @@ except ImportError:
     from tqdm import tqdm
 
 from . import util
-from .v1 import instance_segmentation
+
+# Only needed to annotate the SAM1 cache helpers. Importing it for real pulls in the torch_em
+# training stack, which a SAM2 precompute run never touches, so it stays out of the runtime path.
+if TYPE_CHECKING:
+    from .v1.instance_segmentation import AutoSegBase
 
 
 def cache_amg_state(
@@ -31,7 +35,7 @@ def cache_amg_state(
     verbose: bool = True,
     i: Optional[int] = None,
     **kwargs,
-) -> instance_segmentation.AutoSegBase:
+) -> "AutoSegBase":
     """Compute and cache or load the state for the automatic mask generator.
 
     Args:
@@ -46,6 +50,10 @@ def cache_amg_state(
     Returns:
         The automatic mask generator class with the cached state.
     """
+    # Imported here rather than at module scope: SAM1 instance segmentation pulls in the torch_em
+    # training stack, which a SAM2 precompute run does not need and which dominates its start-up.
+    from .v1 import instance_segmentation
+
     is_tiled = image_embeddings["input_size"] is None
     amg = instance_segmentation.get_instance_segmentation_generator(predictor, is_tiled=is_tiled, **kwargs)
 
@@ -96,7 +104,7 @@ def cache_is_state(
     i: Optional[int] = None,
     skip_load: bool = False,
     **kwargs,
-) -> Optional[instance_segmentation.AutoSegBase]:
+) -> "Optional[AutoSegBase]":
     """Compute and cache or load the state for the decoder-based instance segmentation.
 
     Args:
@@ -113,6 +121,8 @@ def cache_is_state(
     Returns:
         The instance segmentation class with the cached state.
     """
+    from .v1 import instance_segmentation
+
     is_tiled = image_embeddings["input_size"] is None
     amg = instance_segmentation.get_instance_segmentation_generator(
         predictor, is_tiled=is_tiled, decoder=decoder, **kwargs
@@ -704,9 +714,6 @@ def precompute_state(
             automatic-segmentation state on. By default all visible CUDA devices are used. Only
             supported for SAM2 ('hvit_*') models.
     """
-    # Imported lazily to avoid a circular import ('_state' imports from this module).
-    from micro_sam.sam_annotator._state import _get_sam_model
-
     is_sam2 = model_type.startswith("hvit")
     if precompute_autoseg_state and not is_sam2:
         raise ValueError(
@@ -753,7 +760,7 @@ def precompute_state(
         # Build the predictor for the data dimensionality (for SAM2 a 2d image vs. 3d video predictor).
         # We reuse the annotator's model loader so the embeddings match what the GUI / CLI expect.
         if predictor is None or file_ndim != current_ndim:
-            predictor, _ = _get_sam_model(
+            predictor, _ = util._get_sam_model(
                 model_type=model_type, ndim=file_ndim, device=None,
                 checkpoint_path=checkpoint_path, decoder_path=None, use_cli=True,
             )

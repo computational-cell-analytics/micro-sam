@@ -47,24 +47,27 @@ DEFAULT_SEGMENTATION_MODE_WITH_DECODER = "ais"
 USE_MODEL_DEVICE = object()
 
 
-def _set_image_predictor_from_backbone(predictor, fpn_list, pos_enc_list, original_size, i):
+def _set_image_predictor_from_backbone(predictor, fpn_list, pos_enc_list, features, original_size, i):
     """Set a SAM2 image predictor's ``_features`` for slice ``i`` from stored backbone outputs.
 
-    ``fpn_list`` / ``pos_enc_list`` are the per-level backbone FPN outputs and positional encodings,
-    each indexable as ``level[i] -> (1, C, H, W)``. This reconstructs the image predictor's features
-    exactly as ``SAM2ImagePredictor.set_image`` does (``_prepare_backbone_features`` + reshape) but
-    without re-running the (expensive) image encoder.
+    ``fpn_list`` and ``features`` are indexed by the slice, ``level[i] -> (1, C, H, W)``; ``features``
+    is the last FPN level, which is not stored twice. ``pos_enc_list`` is stored once for the whole
+    volume and is always read at index 0. This reconstructs the image predictor's features exactly as
+    ``SAM2ImagePredictor.set_image`` does (``_prepare_backbone_features`` + reshape) but without
+    re-running the (expensive) image encoder.
     """
+    from micro_sam.v2.util import _backbone_fpn
+
     model = predictor.model
     device = next(model.parameters()).device
 
-    def _slice(level):
-        t = torch.as_tensor(np.asarray(level[i]), device=device).float()
+    def _slice(level, index):
+        t = torch.as_tensor(np.asarray(level[index]), device=device).float()
         return t if t.ndim == 4 else t.unsqueeze(0)  # ensure (B, C, H, W)
 
     backbone_out = {
-        "backbone_fpn": [_slice(level) for level in fpn_list],
-        "vision_pos_enc": [_slice(level) for level in pos_enc_list],
+        "backbone_fpn": _backbone_fpn([_slice(level, i) for level in fpn_list], _slice(features, i)),
+        "vision_pos_enc": [_slice(level, 0) for level in pos_enc_list],
     }
     _, vision_feats, _, _ = model._prepare_backbone_features(backbone_out)
     if model.directly_add_no_mem_embed:
@@ -87,7 +90,8 @@ def _set_image_predictor_from_3d_embeddings(predictor, image_embeddings, i):
     per-slice AMG reuses them instead of re-encoding each slice.
     """
     _set_image_predictor_from_backbone(
-        predictor, image_embeddings["fpn"], image_embeddings["pos_enc"], image_embeddings["original_size"], i,
+        predictor, image_embeddings["fpn"], image_embeddings["pos_enc"], image_embeddings["features"],
+        image_embeddings["original_size"], i,
     )
 
 
@@ -470,7 +474,9 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
             fpn_tile = _load_list_datasets(image_embeddings["fpn"], str(tile_id), lazy_loading=True)
             pos_tile = _load_list_datasets(image_embeddings["pos_enc"], str(tile_id), lazy_loading=True)
             original_size = feats[str(tile_id)].attrs["original_size"]
-            _set_image_predictor_from_backbone(predictor, fpn_tile, pos_tile, original_size, i)
+            _set_image_predictor_from_backbone(
+                predictor, fpn_tile, pos_tile, feats[str(tile_id)], original_size, i
+            )
             tile_size = tuple(end - begin for begin, end in zip(block.begin, block.end))
             self._masks.append(self._generate_masks_for_shape(tile_size))
 

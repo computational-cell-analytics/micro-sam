@@ -4,14 +4,43 @@ from typing import Optional, Tuple, Union
 
 import numpy as np
 
-from torch_em.transform.raw import normalize_percentile
-
 # Persist the preprocessing (normalization + resize) policy in embedding caches so incompatible
 # features are not silently reused. The 2d image path uses per-channel min-max (via `to_image`); the
 # 3d / video path uses percentile normalization with the tensor resize used in training. The video
 # resize suffix invalidates embeddings created by the former skimage path, which did not match it.
 IMAGE_PREPROCESSING = "minmax_per_channel"
-VIDEO_PREPROCESSING = "percentile_2_98_per_channel_torch_resize_v1"
+# v2 stores one shared positional encoding per volume / tile instead of one per slice.
+VIDEO_PREPROCESSING = "percentile_2_98_per_channel_torch_resize_v2"
+
+
+def _normalize_percentile(
+    raw: np.ndarray,
+    lower: float,
+    upper: float,
+    axis: Optional[Union[int, Tuple[int, ...]]] = None,
+    eps: float = 1e-7,
+) -> np.ndarray:
+    """Rescale `raw` so that its lower and upper percentile map to 0 and 1.
+
+    Values outside the percentile range are mapped outside [0, 1]; `normalize_raw` clips them. The
+    input is modified in place, so pass a copy to keep the original.
+
+    Args:
+        raw: The input data. Must be a floating dtype, since it is normalized in place.
+        lower: The percentile that is mapped to 0.
+        upper: The percentile that is mapped to 1.
+        axis: The axis or axes to compute the percentiles over. By default they are computed over the
+            full data. Pass the spatial axes to normalize each channel independently.
+        eps: Added to the percentile range to keep constant input from dividing by zero.
+
+    Returns:
+        The normalized data, the same array that was passed in.
+    """
+    v_lower = np.percentile(raw, lower, axis=axis, keepdims=True)
+    v_upper = np.percentile(raw, upper, axis=axis, keepdims=True) - v_lower
+    raw -= v_lower
+    raw /= (v_upper + eps)
+    return raw
 
 
 def normalize_raw(
@@ -54,8 +83,8 @@ def normalize_raw(
     if raw.size == 0:
         return raw.astype(output_dtype, copy=False)
 
-    normalized = normalize_percentile(raw.astype("float32"), lower=lower_percentile, upper=upper_percentile, axis=axis)
-    normalized = np.clip(np.asarray(normalized), 0.0, 1.0)
+    normalized = _normalize_percentile(raw.astype("float32"), lower=lower_percentile, upper=upper_percentile, axis=axis)
+    normalized = np.clip(normalized, 0.0, 1.0)
 
     # Integer dtypes are mapped to their full range. Round so that the cast does not bias values downwards.
     if is_small_int:

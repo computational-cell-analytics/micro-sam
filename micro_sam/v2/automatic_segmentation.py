@@ -47,8 +47,7 @@ def get_predictor_and_segmenter(
     Returns:
         The SAM2 predictor (used to precompute embeddings) and the automatic segmentation generator.
     """
-    from ..util import get_device
-    from ..sam_annotator._state import _get_sam_model
+    from ..util import get_device, _get_sam_model
     from .instance_segmentation import get_decoder, get_instance_segmentation_generator
 
     # Keep the un-resolved request (None = 'auto') separate from the concrete model placement, so the

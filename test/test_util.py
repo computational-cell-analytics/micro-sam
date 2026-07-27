@@ -519,7 +519,7 @@ class TestSAM2Util(unittest.TestCase):
 
     def _get_predictor(self, ndim):
         # Build the SAM2 predictor exactly as the precompute CLI / annotator do.
-        from micro_sam.sam_annotator._state import _get_sam_model
+        from micro_sam.util import _get_sam_model
         predictor, _ = _get_sam_model(
             model_type=self.model_type, ndim=ndim, device="cpu",
             checkpoint_path=None, decoder_path=None, use_cli=True,

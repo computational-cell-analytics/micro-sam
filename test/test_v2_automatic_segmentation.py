@@ -199,14 +199,15 @@ def test_tiled_3d_amg_does_not_accumulate_implicit_stores(monkeypatch, tmp_path)
 
 def test_set_image_predictor_from_backbone_reconstructs_features():
     # The reconstruction must pick slice i's per-level features, in the right order, reshaped back to
-    # (1, C, H, W): image_embed = lowest-res level, high_res_feats = the higher-res levels.
+    # (1, C, H, W). The lowest-res level is stored as 'features', 'pos_enc' once for the volume.
     z, c = 4, 3
     sizes = [(8, 8), (4, 4), (2, 2)]
-    fpn = [np.random.rand(z, 1, c, h, w).astype("float32") for (h, w) in sizes]
-    pos_enc = [np.zeros((z, 1, c, h, w), dtype="float32") for (h, w) in sizes]
+    fpn = [np.random.rand(z, 1, c, h, w).astype("float32") for (h, w) in sizes[:-1]]
+    features = np.random.rand(z, 1, c, *sizes[-1]).astype("float32")
+    pos_enc = [np.zeros((1, 1, c, h, w), dtype="float32") for (h, w) in sizes]
 
     predictor = _FakePredictor()
-    _set_image_predictor_from_backbone(predictor, fpn, pos_enc, original_size=(64, 64), i=2)
+    _set_image_predictor_from_backbone(predictor, fpn, pos_enc, features, original_size=(64, 64), i=2)
 
     assert predictor._is_image_set is True
     assert predictor._orig_hw == [(64, 64)]
@@ -215,7 +216,7 @@ def test_set_image_predictor_from_backbone_reconstructs_features():
     assert tuple(image_embed.shape) == (1, c, 2, 2)
     assert [tuple(f.shape) for f in high_res] == [(1, c, 8, 8), (1, c, 4, 4)]
     # The flatten/permute/reshape round-trips, so the features equal slice i of the input levels.
-    assert np.allclose(image_embed.numpy(), fpn[2][2])
+    assert np.allclose(image_embed.numpy(), features[2])
     assert np.allclose(high_res[0].numpy(), fpn[0][2])
     assert np.allclose(high_res[1].numpy(), fpn[1][2])
 

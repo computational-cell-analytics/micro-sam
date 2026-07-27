@@ -412,13 +412,16 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             if embeddings is None:
                 return super()._get_image_feature(inference_state, frame_idx, batch_size)
 
-            from micro_sam.v2.util import _to_device_tensor
+            from micro_sam.v2.util import _to_device_tensor, _shared_pos_enc, _backbone_fpn
             device = inference_state["device"]
             image = inference_state["images"][frame_idx].to(device).float().unsqueeze(0)
             # In-memory embeddings keep 'pos_enc'/'fpn' as device tensors, which 'np.asarray' cannot
             # convert (fails on mps/cuda); '_to_device_tensor' handles both tensors and numpy/zarr.
-            vision_pos_enc = [_to_device_tensor(t[frame_idx], device) for t in embeddings["pos_enc"]]
-            backbone_fpn = [_to_device_tensor(t[frame_idx], device) for t in embeddings["fpn"]]
+            vision_pos_enc = [_to_device_tensor(_shared_pos_enc(t), device) for t in embeddings["pos_enc"]]
+            vision_features = _to_device_tensor(embeddings["features"][frame_idx], device)
+            backbone_fpn = _backbone_fpn(
+                [_to_device_tensor(t[frame_idx], device) for t in embeddings["fpn"]], vision_features
+            )
             backbone_out = {"backbone_fpn": backbone_fpn, "vision_pos_enc": vision_pos_enc}
             # Cache the few most recent frames (not just one) so repeatedly segmenting the same or a
             # nearby slice does not re-read the (possibly zarr-backed, tiled) embeddings and re-upload

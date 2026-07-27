@@ -23,7 +23,7 @@ from qtpy.QtWidgets import QWidget
 
 import micro_sam
 import micro_sam.util as util
-from micro_sam.v1.util import get_sam_model
+from micro_sam.util import _get_sam_model
 from micro_sam.v1.instance_segmentation import AutoSegBase, get_decoder
 from micro_sam.precompute_state import (
     cache_amg_state, cache_is_state, cache_autoseg_state, _cache_amg_volume_state
@@ -37,47 +37,6 @@ class Singleton(type):
         if cls not in cls._instances:
             cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
         return cls._instances[cls]
-
-
-# TODO: refactor this once we decide which models to support.
-# (Likely only SAM2 models)
-def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_cli):
-    from micro_sam.models.vfm import is_vfm_model, get_vfm_model
-    if is_vfm_model(model_type):  # VFM encoders (DINO / UNI) for the classification tools.
-        encoder = get_vfm_model(model_type, device=device, checkpoint_path=checkpoint_path)
-        return encoder, {}
-
-    if model_type.startswith("hvit"):  # i.e. SAM2 models.
-        from micro_sam.v2.util import get_sam2_image_predictor, get_sam2_model
-
-        # 'device=None' lets 'get_sam2_model' auto-detect the best device (cuda > mps > cpu);
-        # an explicit device (e.g. from the '--device' CLI argument) is forwarded and honored.
-        if ndim == 2:  # Get the SAM2 model and prepare the image predictor.
-            model = get_sam2_model(model_type=model_type, input_type="images", device=device)
-            # Use the shared resize-longest predictor.
-            predictor = get_sam2_image_predictor(model)
-            # 'get_sam2_model' sets these on the video predictor. Set them here on the image
-            # predictor too, so the tool can write the embedding signature when it caches embeddings.
-            predictor.model_type = model_type
-            predictor.model_name = model_type
-        elif ndim == 3:  # Get SAM2 video predictor
-            predictor = get_sam2_model(model_type=model_type, input_type="videos", device=device)
-        else:
-            raise ValueError
-        state = {}
-
-    else:
-        def progress_bar_factory(model_type):
-            pbar = tqdm(desc=f"Downloading '{model_type}'. This may take a while")
-            return pbar
-
-        predictor, state = get_sam_model(
-            device=device, model_type=model_type,
-            checkpoint_path=checkpoint_path, decoder_path=decoder_path, return_state=True,
-            progress_bar_factory=None if use_cli else progress_bar_factory,
-        )
-
-    return predictor, state
 
 
 @dataclass
