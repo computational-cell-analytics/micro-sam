@@ -10,7 +10,7 @@ import z5py
 
 from skimage.data import binary_blobs
 from skimage.measure import label
-from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory, _open_embeddings
+from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory, _compute_data_signature, _open_embeddings
 from micro_sam.v1.util import get_sam_model, set_precomputed
 
 ZARR_MAJOR = int(zarr.__version__.split(".")[0])
@@ -441,6 +441,23 @@ class TestUtil(unittest.TestCase):
         with mock.patch.object(torch.cuda, "is_available", return_value=True):
             self.assertEqual(get_device("cuda:1"), "cuda:1")
 
+    def test_available_devices_lists_every_gpu_by_index(self):
+        """Only an index pins inference to one GPU, so each visible GPU has to be selectable."""
+        from unittest import mock
+
+        from micro_sam.util import _available_devices
+
+        with mock.patch.object(torch.cuda, "is_available", return_value=True), \
+                mock.patch.object(torch.backends.mps, "is_available", return_value=False), \
+                mock.patch.object(torch.cuda, "device_count", return_value=2):
+            self.assertEqual(_available_devices(), ["cuda:0", "cuda:1", "cpu"])
+
+        # A single GPU is unambiguous, so it stays the plain backend name.
+        with mock.patch.object(torch.cuda, "is_available", return_value=True), \
+                mock.patch.object(torch.backends.mps, "is_available", return_value=False), \
+                mock.patch.object(torch.cuda, "device_count", return_value=1):
+            self.assertEqual(_available_devices(), ["cuda", "cpu"])
+
     def test_device_type(self):
         from micro_sam.util import device_type
 
@@ -592,6 +609,33 @@ class TestSAM2Util(unittest.TestCase):
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
         check_slices(embeddings)
+
+    def test_precompute_image_embeddings_3d_keeps_a_lazy_volume_lazy(self):
+        """A dask / zarr / h5py volume must stay lazy end-to-end, including while writing the signature."""
+        from micro_sam.v2.util import precompute_image_embeddings
+
+        class LazyVolume:
+            def __init__(self, array):
+                self._array = array
+                self.shape = array.shape
+                self.dtype = array.dtype
+
+            def __array__(self, *args, **kwargs):
+                raise AssertionError("The whole volume was materialized.")
+
+            def __getitem__(self, index):
+                return self._array[index]
+
+        predictor = self._get_predictor(ndim=3)
+        array = np.random.rand(2, 256, 256).astype("float32")
+        save_path = os.path.join(self.tmp_folder, "embed_3d_lazy.zarr")
+
+        precompute_image_embeddings(predictor, LazyVolume(array), save_path=save_path, ndim=3)
+
+        f = _open_embeddings(save_path, mode="r")
+        self.assertEqual(f["features"].shape, (2, 1, 256, 64, 64))
+        # The signature must be the one the eager volume produces, so the cache is shared.
+        self.assertEqual(f.attrs["data_signature"], _compute_data_signature(array))
 
 
 class TestEmbeddingBackend(unittest.TestCase):

@@ -168,9 +168,78 @@ class TestAnnotatorClass:
         viewer.layers["prompts"].add_rectangles(np.array([[0, 0], [8, 8]]))
         viewer.layers["prompts"].add_paths(np.array([[1, 1], [7, 7]]))
         np.testing.assert_array_equal(viewer.layers["prompts"].properties["label"], ["positive", "negative"])
+        # Selecting a scribble means working in the shape layer, so the menu relabels it.
+        viewer.layers.selection.active = viewer.layers["prompts"]
         viewer.layers["prompts"].selected_data = {1}
         widget._prompt_widget[0].value = "positive"
         np.testing.assert_array_equal(viewer.layers["prompts"].properties["label"], ["positive", "positive"])
+
+        # From the point layer the same menu change leaves the scribble alone.
+        viewer.layers["prompts"].selected_data = {1}
+        viewer.layers.selection.active = viewer.layers["point_prompts"]
+        widget._prompt_widget[0].value = "negative"
+        np.testing.assert_array_equal(viewer.layers["prompts"].properties["label"], ["positive", "positive"])
+        assert viewer.layers["point_prompts"].current_properties["label"][0] == "negative"
+        viewer.close()
+
+    def test_point_layer_toggle_leaves_a_drawn_scribble_alone(self, make_napari_viewer_proxy):
+        """Flipping polarity for the next point must not relabel a scribble drawn earlier."""
+        viewer = make_napari_viewer_proxy()
+        Annotator(viewer)
+        shapes, points = viewer.layers["prompts"], viewer.layers["point_prompts"]
+
+        # Draw a positive scribble, as the user does before moving to the point layer.
+        shapes.mode = "add_path"
+        shapes.add_paths(np.array([[1.0, 1.0], [7.0, 7.0]]))
+        assert shapes.properties["label"][0] == "positive"
+
+        points.add(np.array([[4.0, 4.0]]))
+        toggle = next(cb for key, cb in points.keymap.items() if str(key) == "T")
+        toggle(points)
+
+        # Both layers switch their drawing default, so the shared prompt menu stays truthful.
+        assert points.current_properties["label"][0] == "negative"
+        assert shapes.current_properties["label"][0] == "negative"
+        # The scribble that was already drawn keeps its own label.
+        np.testing.assert_array_equal(shapes.properties["label"], ["positive"])
+        viewer.close()
+
+    def test_shape_layer_toggle_leaves_a_placed_point_alone(self, make_napari_viewer_proxy):
+        """The mirror of the case above: switching back to the shape layer must not relabel the point."""
+        viewer = make_napari_viewer_proxy()
+        Annotator(viewer)
+        shapes, points = viewer.layers["prompts"], viewer.layers["point_prompts"]
+
+        points.add(np.array([[4.0, 4.0]]))
+        points.selected_data = {0}
+        assert points.properties["label"][0] == "positive"
+
+        toggle = next(cb for key, cb in shapes.keymap.items() if str(key) == "T")
+        toggle(shapes)
+
+        assert shapes.current_properties["label"][0] == "negative"
+        assert points.current_properties["label"][0] == "negative"
+        np.testing.assert_array_equal(points.properties["label"], ["positive"])
+        viewer.close()
+
+    def test_tracking_point_layer_toggle_leaves_a_drawn_scribble_alone(self, make_napari_viewer_proxy):
+        """The tracking annotator shares the rule: the toggle only relabels the layer in use."""
+        from micro_sam.sam_annotator.annotator_tracking import AnnotatorTracking
+
+        viewer = make_napari_viewer_proxy()
+        viewer.add_image(np.stack(4 * [binary_blobs(64)]), name="timeseries")
+        AnnotatorTracking(viewer)
+        shapes, points = viewer.layers["prompts"], viewer.layers["point_prompts"]
+
+        shapes.mode = "add_path"
+        shapes.add_paths(np.array([[0.0, 1.0, 1.0], [0.0, 7.0, 7.0]]))
+        assert shapes.properties["label"][0] == "positive"
+
+        toggle = next(cb for key, cb in points.keymap.items() if str(key) == "T")
+        toggle(points)
+
+        assert points.current_properties["label"][0] == "negative"
+        np.testing.assert_array_equal(shapes.properties["label"], ["positive"])
         viewer.close()
 
     def test_widget_detects_ndim_from_loaded_image(self, make_napari_viewer_proxy):

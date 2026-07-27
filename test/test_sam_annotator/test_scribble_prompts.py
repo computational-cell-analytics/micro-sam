@@ -353,6 +353,79 @@ def test_selected_scribble_is_relabelled_while_polyline_tool_is_active():
     np.testing.assert_array_equal(labels, np.zeros(len(labels), dtype="int64"))
 
 
+def scribble_layer_with_one_positive_path():
+    """A shape layer holding one drawn positive scribble, still selected as napari leaves it."""
+    layer = Shapes(
+        ndim=2,
+        property_choices={"label": ["positive", "negative"]},
+        edge_color="label",
+        edge_color_cycle=annotator_util.LABEL_COLOR_CYCLE,
+    )
+    layer.edge_color_mode = "cycle"
+    annotator_util.set_prompt_label(layer, "positive")
+    layer.add_paths(np.array([[2.0, 2.0], [12.0, 12.0]]))
+    layer.selected_data = {0}
+    return layer
+
+
+def point_layer_2d():
+    return Points(ndim=2, property_choices={"label": ["positive", "negative"]})
+
+
+def test_toggling_on_the_point_layer_does_not_relabel_a_drawn_scribble():
+    """A polarity change aimed at the next point must not reach back into the shape layer."""
+    scribbles = scribble_layer_with_one_positive_path()
+    points = point_layer_2d()
+    annotator_util.set_prompt_label(points, "positive")
+
+    annotator_util.toggle_label(points, scribbles)
+
+    # Both layers take the new drawing default, so the shared prompt menu stays truthful.
+    assert points.current_properties["label"][0] == "negative"
+    assert scribbles.current_properties["label"][0] == "negative"
+    # The scribble that was already drawn keeps its own label.
+    assert scribbles.properties["label"][0] == "positive"
+    _, labels = annotator_util.scribble_layer_to_prompts(scribbles, image_shape=(16, 16))
+    np.testing.assert_array_equal(labels, np.ones(len(labels), dtype="int64"))
+
+
+def test_toggling_on_the_shape_layer_does_not_relabel_a_placed_point():
+    """The mirror case: a polarity change aimed at the next scribble must not relabel a placed point."""
+    scribbles = scribble_layer_with_one_positive_path()
+    points = point_layer_2d()
+    annotator_util.set_prompt_label(points, "positive")
+    points.add(np.array([[4.0, 4.0]]))
+    points.selected_data = {0}
+
+    annotator_util.toggle_label(scribbles, points)
+
+    assert points.current_properties["label"][0] == "negative"
+    # The point that was already placed keeps its own label.
+    np.testing.assert_array_equal(points.properties["label"], ["positive"])
+
+
+def test_toggling_on_the_shape_layer_still_relabels_its_selected_scribble():
+    """Fixing a scribble's polarity right after drawing it has to keep working."""
+    scribbles = scribble_layer_with_one_positive_path()
+    points = point_layer_2d()
+
+    annotator_util.toggle_label(scribbles, points)
+
+    assert scribbles.properties["label"][0] == "negative"
+    assert points.current_properties["label"][0] == "negative"
+    _, labels = annotator_util.scribble_layer_to_prompts(scribbles, image_shape=(16, 16))
+    np.testing.assert_array_equal(labels, np.zeros(len(labels), dtype="int64"))
+
+
+def test_set_prompt_label_can_leave_the_selection_alone():
+    scribbles = scribble_layer_with_one_positive_path()
+
+    annotator_util.set_prompt_label(scribbles, "negative", relabel_selected=False)
+
+    assert scribbles.current_properties["label"][0] == "negative"
+    assert scribbles.properties["label"][0] == "positive"
+
+
 def test_prompt_label_change_drops_stale_shape_selection():
     layer = Shapes(
         ndim=3,
@@ -530,9 +603,16 @@ def test_sam2_volume_propagation_merges_3d_scribbles_points_and_boxes(monkeypatc
             self.reset_count = 0
             self.point_calls = []
             self.box_calls = []
+            self.signatures = set()
 
         def reset_predictor(self):
             self.reset_count += 1
+
+        def sync_prompt_state(self, signatures):
+            signatures = set(signatures)
+            if not self.signatures.issubset(signatures):
+                self.reset_predictor()
+            self.signatures = signatures
 
         def add_point_prompts(self, **kwargs):
             self.point_calls.append(kwargs)
@@ -595,7 +675,13 @@ def test_sam2_volume_propagation_merges_3d_scribbles_points_and_boxes(monkeypatc
 
     _widgets.UnifiedSegmentWidget._run_volumetric_segmentation(widget)
 
-    assert segmenter.reset_count == 1
+    # Nothing was pushed before, so the first run has no stale prompts to discard.
+    assert segmenter.reset_count == 0
+    # The signatures cover the scribble-derived points, the point prompt and the rectangle, each
+    # tagged with the object it is routed to ('point', object_id, frame_id, y, x, label).
+    assert ("point", 1, 1, 3, 4, 1) in segmenter.signatures
+    assert sum(1 for sig in segmenter.signatures if sig[0] == "point") > 1
+    assert sum(1 for sig in segmenter.signatures if sig[0] == "box") == 1
     assert len(segmenter.box_calls) == 1
     assert segmenter.box_calls[0]["frame_ids"] == 2
     assert len(segmenter.point_calls) == 1
@@ -658,7 +744,7 @@ def test_negative_only_scribble_is_rejected_before_prediction(monkeypatch):
     monkeypatch.setattr(_widgets, "_validate_layers", lambda viewer: False)
     monkeypatch.setattr(
         _widgets.vutil, "point_layer_to_prompts",
-        lambda layer, with_stop_annotation: (np.empty((0, 2)), np.empty((0,), dtype="int64")),
+        lambda layer, **kwargs: (np.empty((0, 2)), np.empty((0,), dtype="int64")),
     )
     monkeypatch.setattr(_widgets, "_generate_message", lambda message_type, message: (message_type, message))
 
@@ -698,17 +784,17 @@ def test_2d_segmentation_merges_scribbles_with_clicks(monkeypatch):
     monkeypatch.setattr(_widgets, "AnnotatorState", lambda: state)
     converted_layers = {}
 
-    def _shape_prompts(layer, shape):
+    def _shape_prompts(layer, shape, **kwargs):
         converted_layers["shape"] = layer
         return [], []
 
     monkeypatch.setattr(_widgets.vutil, "shape_layer_to_prompts", _shape_prompts)
     monkeypatch.setattr(
         _widgets.vutil, "point_layer_to_prompts",
-        lambda layer, with_stop_annotation: (np.array([[3.0, 4.0]]), np.array([1])),
+        lambda layer, **kwargs: (np.array([[3.0, 4.0]]), np.array([1])),
     )
 
-    def _scribble_prompts(layer, image_shape):
+    def _scribble_prompts(layer, image_shape=None, **kwargs):
         converted_layers["scribble"] = layer
         return np.array([[8.0, 9.0], [10.0, 11.0]]), np.array([1, 0])
 
@@ -766,15 +852,15 @@ def test_point_and_box_only_segmentation_is_unchanged(monkeypatch, is_sam2):
     monkeypatch.setattr(_widgets, "_validate_layers", lambda viewer: False)
     monkeypatch.setattr(_widgets, "AnnotatorState", lambda: state)
     monkeypatch.setattr(
-        _widgets.vutil, "shape_layer_to_prompts", lambda layer, shape: (boxes, [None]),
+        _widgets.vutil, "shape_layer_to_prompts", lambda layer, shape, **kwargs: (boxes, [None]),
     )
     monkeypatch.setattr(
         _widgets.vutil, "point_layer_to_prompts",
-        lambda layer, with_stop_annotation: (points, labels),
+        lambda layer, **kwargs: (points, labels),
     )
     monkeypatch.setattr(
         _widgets.vutil, "scribble_layer_to_prompts",
-        lambda layer, image_shape: (np.empty((0, 2)), np.empty((0,), dtype="int64")),
+        lambda layer, image_shape=None, **kwargs: (np.empty((0, 2)), np.empty((0,), dtype="int64")),
     )
     captured = {}
 
@@ -802,3 +888,96 @@ def test_point_and_box_only_segmentation_is_unchanged(monkeypatch, is_sam2):
     assert captured["batched"] is True
     np.testing.assert_array_equal(current_object.data, 1)
     assert current_object.refresh_count == 1
+
+
+def point_layer_3d(coords, labels):
+    return Points(data=np.asarray(coords, dtype=float), properties={"label": np.asarray(labels)})
+
+
+def shape_layer_3d(data, shape_type, labels):
+    return Shapes(data=data, shape_type=shape_type, properties={"label": np.asarray(labels)})
+
+
+def empty_shapes():
+    return Shapes(ndim=3, properties={"label": np.empty((0,), dtype=str)})
+
+
+def test_collect_frame_prompts_reads_a_lone_negative_point_as_a_stop():
+    layer = point_layer_3d([[1.0, 10.0, 12.0]], ["negative"])
+
+    prompts = annotator_util.collect_frame_prompts(layer, empty_shapes(), (32, 32), i=1)
+
+    assert prompts.is_stop
+    assert len(prompts.points) == 0 and not prompts.boxes
+
+
+def test_collect_frame_prompts_scribble_suppresses_the_stop():
+    """The unified rule: a lone negative point is only a stop when it is the frame's sole cue."""
+    points = point_layer_3d([[1.0, 10.0, 12.0]], ["negative"])
+    scribble = shape_layer_3d(
+        [np.array([[1.0, 2.0, 2.0], [1.0, 8.0, 8.0]])], ["path"], ["positive"],
+    )
+
+    prompts = annotator_util.collect_frame_prompts(points, scribble, (32, 32), i=1)
+
+    assert not prompts.is_stop
+    assert prompts.have_scribbles
+    # The scribble points are merged in alongside the negative point.
+    assert np.any(prompts.labels == 1) and np.any(prompts.labels == 0)
+
+
+def test_collect_frame_prompts_box_suppresses_the_stop():
+    """A box on the frame defines an object, so the lone negative point corrects it instead of stopping."""
+    points = point_layer_3d([[1.0, 10.0, 12.0]], ["negative"])
+    boxes = shape_layer_3d(
+        [np.array([[1.0, 2.0, 3.0], [1.0, 2.0, 8.0], [1.0, 7.0, 8.0], [1.0, 7.0, 3.0]])],
+        ["rectangle"], ["positive"],
+    )
+
+    prompts = annotator_util.collect_frame_prompts(points, boxes, (32, 32), i=1)
+
+    assert not prompts.is_stop
+    assert len(prompts.boxes) == 1
+    np.testing.assert_array_equal(prompts.labels, [0])
+
+
+def test_collect_frame_prompts_mask_shape_suppresses_the_stop():
+    points = point_layer_3d([[1.0, 10.0, 12.0]], ["negative"])
+    shapes = shape_layer_3d(
+        [np.array([[1.0, 2.0, 3.0], [1.0, 2.0, 9.0], [1.0, 8.0, 9.0], [1.0, 8.0, 3.0]])],
+        ["polygon"], ["positive"],
+    )
+
+    prompts = annotator_util.collect_frame_prompts(points, shapes, (32, 32), i=1)
+
+    assert not prompts.is_stop
+    assert prompts.split_shapes()[1]  # the polygon carries a filled mask
+    np.testing.assert_array_equal(prompts.labels, [0])
+
+
+def test_collect_frame_prompts_can_disable_the_stop_annotation():
+    layer = point_layer_3d([[1.0, 10.0, 12.0]], ["negative"])
+
+    prompts = annotator_util.collect_frame_prompts(
+        layer, empty_shapes(), (32, 32), i=1, with_stop_annotation=False,
+    )
+
+    assert not prompts.is_stop
+    np.testing.assert_array_equal(prompts.labels, [0])
+
+
+def test_collect_frame_prompts_splits_rectangles_from_mask_shapes():
+    points = point_layer_3d(np.zeros((0, 3)), [])
+    shapes = shape_layer_3d(
+        [
+            np.array([[1.0, 2.0, 3.0], [1.0, 2.0, 8.0], [1.0, 7.0, 8.0], [1.0, 7.0, 3.0]]),
+            np.array([[1.0, 12.0, 13.0], [1.0, 12.0, 18.0], [1.0, 17.0, 18.0], [1.0, 17.0, 13.0]]),
+        ],
+        ["rectangle", "polygon"], ["positive", "positive"],
+    )
+
+    prompts = annotator_util.collect_frame_prompts(points, shapes, (32, 32), i=1)
+    rect_boxes, poly_masks = prompts.split_shapes()
+
+    assert len(rect_boxes) == 1 and len(poly_masks) == 1
+    assert len(prompts.boxes) == 2  # every shape contributes a box, the polygon also a mask

@@ -8,7 +8,7 @@ tooltips = {
         ),
         "cache_state": "Cache the automatic segmentation state to disk for faster (re)runs.",
         "custom_weights": "Select custom model weights, for example from a model that you finetuned.",
-        "device": "Select the computational device to use for processing.",
+        "device": "Select the computational device to use for processing. 'auto' picks the best available device and uses all visible GPUs; selecting a device runs on that one only.",  # noqa
         "embeddings_save_path": "Select path to save or load the computed image embeddings.",
         "halo": "Enter overlap values to compute tiled embeddings. Enter only the x-value for a square size.\n Active only when you use tiling.",  # noqa
         "image": "Select the napari image layer.",

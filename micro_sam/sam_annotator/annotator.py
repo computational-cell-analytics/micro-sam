@@ -135,9 +135,11 @@ class Annotator(_AnnotatorBase):
         def _segment_point_prompts(event):
             interactive.segment(self._viewer)
 
+        # The layer the key reached is the active one, so it goes first: only it relabels a selected
+        # scribble. The viewer-level fallback below has no active prompt layer, so it relabels none.
         @prompt_layer.bind_key("t", overwrite=True)
         def _toggle_shape_prompt_label(event=None):
-            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
+            vutil.toggle_label(self._shape_prompt_layer, self._point_prompt_layer)
 
         @point_prompt_layer.bind_key("t", overwrite=True)
         def _toggle_point_prompt_label(event=None):

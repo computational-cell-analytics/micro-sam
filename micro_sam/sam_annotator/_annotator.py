@@ -154,7 +154,8 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         shape_prompt_layer = self._viewer.layers["prompts"]
         linked_layers = [shape_prompt_layer] if "label" in shape_prompt_layer.current_properties else None
         self._prompt_widget = widgets.create_prompt_menu(
-            self._point_prompt_layer, self._point_labels, linked_layers=linked_layers
+            self._point_prompt_layer, self._point_labels, linked_layers=linked_layers,
+            viewer=self._viewer,
         )
 
         # Create the dictionary for the widgets and get the widgets of the child plugin.
@@ -180,9 +181,11 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         def _segment_point_prompts(event):
             self._widgets["segment"](self._viewer)
 
+        # The layer the key reached is the active one, so it goes first: only it relabels a selected
+        # scribble. The viewer-level fallback below has no active prompt layer, so it relabels none.
         @prompt_layer.bind_key("t", overwrite=True)
         def _toggle_shape_prompt_label(event=None):
-            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
+            vutil.toggle_label(self._shape_prompt_layer, self._point_prompt_layer)
 
         @point_prompt_layer.bind_key("t", overwrite=True)
         def _toggle_point_prompt_label(event=None):
@@ -325,7 +328,8 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         shape_prompt_layer = self._viewer.layers["prompts"]
         linked_layers = [shape_prompt_layer] if "label" in shape_prompt_layer.current_properties else None
         self._prompt_widget = widgets.create_prompt_menu(
-            self._point_prompt_layer, self._point_labels, linked_layers=linked_layers
+            self._point_prompt_layer, self._point_labels, linked_layers=linked_layers,
+            viewer=self._viewer,
         )
 
         # Rebuild the dimension-specific widgets, keeping the shared embedding widget.

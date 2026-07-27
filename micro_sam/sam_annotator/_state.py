@@ -3,9 +3,10 @@ The singleton is implemented following the metaclass design described here:
 https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 """
 
+import inspect
 from functools import partial
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from segment_anything import SamPredictor
@@ -96,6 +97,9 @@ class AnnotatorState(metaclass=Singleton):
     embedding_tmpdir: Optional[str] = None
     data_signature: Optional[str] = None
     skip_recomputing_embeddings: Optional[bool] = None
+    # The un-resolved device request, forwarded to every batched backend so inference stays on the
+    # selected device. None means 'auto', i.e. fan out over all visible GPUs.
+    inference_devices: Optional[Union[str, List[str]]] = None
     # Whether the tool showed the one-time CPU info popup this session (not reset on recompute).
     cpu_info_shown: Optional[bool] = None
 
@@ -233,6 +237,11 @@ class AnnotatorState(metaclass=Singleton):
                     print(f"Could not load a UniSAM2 decoder from '{decoder_source}': {e}")
                     self.decoder = None
 
+        # The inference devices follow the un-resolved request, not the resolved model placement:
+        # None / 'auto' fans out over every visible GPU, an explicit device stays pinned to it.
+        inference_devices = None if device in (None, "auto") else device
+        self.inference_devices = inference_devices
+
         # Compute the image embeddings.
         if isinstance(save_path, dict) and "features" in save_path:  # i.e. embeddings are precomputed
             self.image_embeddings = save_path
@@ -240,6 +249,11 @@ class AnnotatorState(metaclass=Singleton):
 
         else:  # Otherwise, compute the image embeddings.
             _comp_embed_fn = util.get_embedding_function(model_type)
+
+            # The SAM1 embedding function has no 'devices' parameter.
+            device_kwargs = {}
+            if "devices" in inspect.signature(_comp_embed_fn).parameters:
+                device_kwargs["devices"] = inference_devices
 
             # When no save path is given for a SAM2 volume or a tiled image, cache the embeddings to
             # an ephemeral on-disk zarr instead of holding the whole volume in RAM. All slices at once
@@ -270,6 +284,7 @@ class AnnotatorState(metaclass=Singleton):
                 lazy_loading=lazy_loading,
                 pbar_init=pbar_init,
                 pbar_update=pbar_update,
+                **device_kwargs,
             )
             self.embedding_path = save_path
 
@@ -282,7 +297,7 @@ class AnnotatorState(metaclass=Singleton):
                 from micro_sam.v2.prompt_based_segmentation import TiledPromptableSegmentation3D
                 self.interactive_segmenter = TiledPromptableSegmentation3D(
                     predictor=self.predictor, volume=image_data,
-                    volume_embeddings=self.image_embeddings, device=device,
+                    volume_embeddings=self.image_embeddings, devices=inference_devices,
                 )
             else:
                 from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
@@ -349,7 +364,8 @@ class AnnotatorState(metaclass=Singleton):
             device = next(self.decoder.parameters()).device
             cache_autoseg_state(
                 "ais", self.decoder, image_data, self.image_embeddings, save_path, ndim=ndim,
-                model_type=resolved_model_type, device=device, pbar_init=init_cb, pbar_update=pbar_update,
+                model_type=resolved_model_type, device=device, devices=self.inference_devices,
+                pbar_init=init_cb, pbar_update=pbar_update,
             )
         elif ndim == 2:  # AMG on a single 2d image.
             if pbar_init is not None:
@@ -448,6 +464,7 @@ class AnnotatorState(metaclass=Singleton):
         self.ndim = None
         self.image_name = None
         self.embedding_path = None
+        self.inference_devices = None
         self.automatic_segmenter = None
         self.autoseg_state = None
         self.decoder = None

@@ -1,4 +1,5 @@
 import os
+import contextlib
 from collections import OrderedDict
 from typing import Optional, Dict, Union
 
@@ -73,7 +74,7 @@ def _prepare_frame(raw, image_size):
 
 
 class _LazyVideoFrames:
-    """Produce per-slice frame tensors from a numpy volume on demand, without stacking the whole volume.
+    """Produce per-slice frame tensors from a volume on demand, without stacking the whole volume.
 
     'inference_state["images"]' is only ever integer-indexed and passed to 'len', so a sequence that
     resizes + normalises one slice at access time is a drop-in for the eager
@@ -81,7 +82,8 @@ class _LazyVideoFrames:
     (~12 MB/slice), which otherwise grows unbounded with depth and, after the embeddings were moved to
     disk, is the dominant per-volume RAM cost. Frames are returned on CPU (the consumer moves the
     current frame to the device); the upstream <=MAX_CACHED_FRAMES feature cache already retains the
-    frames in active use, so nothing is cached here.
+    frames in active use, so nothing is cached here. A lazy volume (dask / zarr / h5py) is kept as it
+    was handed over and read one slice at a time, so it never has to fit in host RAM.
     """
 
     def __init__(self, volume, image_size, img_mean, img_std):
@@ -93,10 +95,11 @@ class _LazyVideoFrames:
         self.video_height = self.video_width = max(h, w)
 
     def __len__(self):
-        return len(self._volume)
+        return int(self._volume.shape[0])
 
     def __getitem__(self, index):
-        img, _, _ = _load_img_as_tensor(self._volume[index], self._image_size)
+        # Read and convert only the requested slice, so a lazy volume stays lazy.
+        img, _, _ = _load_img_as_tensor(np.asarray(self._volume[index]), self._image_size)
         return (img - self._img_mean) / self._img_std
 
 
@@ -116,10 +119,11 @@ def _load_video_frames_from_images(
     Returns the frame sequence (resized to image_size x image_size and ImageNet-normalised) plus the
     effective video height / width, for two input kinds:
 
-    - `volume` (a numpy (Z, Y, X) array, the micro-sam path): returns a lazy `_LazyVideoFrames` that
-      resizes + normalises one slice on demand on CPU, so the whole volume is never stacked at
-      image_size^2 in memory. `offload_video_to_cpu` does not apply here (the consumer moves the
-      current frame to the device per access).
+    - `volume` (a (Z, Y, X) array-like, the micro-sam path): returns a lazy `_LazyVideoFrames` that
+      reads, resizes and normalises one slice on demand on CPU, so the whole volume is never read or
+      stacked at image_size^2 in memory. A lazy input (dask / zarr / h5py) therefore stays lazy.
+      `offload_video_to_cpu` does not apply here (the consumer moves the current frame to the device
+      per access).
     - `video_path` (a directory of "<frame_index>.jpg" files): stacks the frames into a single tensor,
       on the GPU if `offload_video_to_cpu` is `False` else on CPU. Set `async_loading_frames` to `True`
       to load these frames asynchronously.
@@ -128,11 +132,10 @@ def _load_video_frames_from_images(
     img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
 
     if video_path is None:
-        # Coerce lazy inputs (e.g. dask / zarr / h5py arrays handed over by a napari layer) to a numpy
-        # array (cheap at native resolution; the expensive image_size^2 copy is what we avoid stacking).
-        volume = np.asarray(volume)
-        if volume.ndim != 3:
-            raise ValueError(f"Expected a 3D volume of shape (Z, Y, X), got an array of shape {volume.shape}.")
+        # Read the shape instead of the data, so a lazy input (dask / zarr / h5py) stays lazy.
+        shape = tuple(volume.shape)
+        if len(shape) != 3:
+            raise ValueError(f"Expected a 3D volume of shape (Z, Y, X), got an array of shape {shape}.")
         # Stream slices lazily (resize + normalise on access) instead of stacking the whole volume at
         # image_size^2, so RAM stays bounded regardless of depth.
         lazy_images = _LazyVideoFrames(volume, image_size, img_mean, img_std)
@@ -193,6 +196,104 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         # result unchanged. 'clear_non_cond_mem_around_input' needs the per-object helper we add below.
         self.add_all_frames_to_correct_as_cond = True
         self.clear_non_cond_mem_around_input = True
+
+    def _wait_for_offloaded_state(self, inference_state):
+        """Wait for the offloaded tensors to reach the CPU before anything reads them back.
+
+        With 'offload_state_to_cpu' SAM2 stores 'pred_masks' and 'maskmem_features' on the CPU with a
+        'non_blocking' copy into pageable memory, which records no event to wait on. Without a wait a
+        host reader can observe the buffer the allocator recycled from the previous call.
+
+        This is a host barrier, so it is called only where a host read follows: the consolidation
+        across objects and the dtype restore below. Propagation hands out the on-device masks and
+        copies the offloaded tensors back on the stream that wrote them, so it needs no wait per object
+        and frame. The wait covers that stream rather than the whole device, so a second model replica
+        in the batched pipeline keeps running.
+        """
+        if not inference_state.get("offload_state_to_cpu"):
+            return
+        device = torch.device(inference_state["device"])
+        if device.type == "cuda":
+            torch.cuda.current_stream(device).synchronize()
+        elif device.type == "mps":
+            torch.mps.synchronize()
+
+    def _autocasts(self, inference_state) -> bool:
+        """Whether this state runs the model in SAM2's trained bfloat16 precision.
+
+        This selects the precision, never the device: hardware excluded here still runs where it ran
+        before, just in fp32. It has to agree with what torch actually does, because '_run_*' below
+        skips the mask-memory restore whenever this is True - claiming an autocast that torch then
+        declines would put bfloat16 memory back in front of fp32 projections.
+
+        CUDA needs *native* bfloat16, which is Ampere and newer (compute capability 8.0): older GPUs
+        emulate it more slowly than the fp32 they run today, and torch raises where even the emulation
+        is missing. MPS has it from macOS 14, which is exactly the version torch gates on - below that
+        it warns and silently disables the autocast. The CPU gains nothing from it and keeps fp32.
+        """
+        device = torch.device(inference_state["device"])
+        if device.type == "cuda":
+            return torch.cuda.is_available() and torch.cuda.get_device_properties(device).major >= 8
+        if device.type == "mps":
+            return torch.backends.mps.is_available() and torch.backends.mps.is_macos_or_newer(14, 0)
+        return False
+
+    def _autocast(self, inference_state):
+        """Run the model in the precision it was trained in.
+
+        SAM2 is trained and officially run under bfloat16 autocast, which is also what makes its
+        bfloat16 mask memory self-consistent. Measured on an A100 MIG partition with 'hvit_t_cells' over
+        a 30 slice volume, it propagates 2.9x faster for one object and 3.7x for four, at a foreground
+        dice of 0.97 / 0.98 against fp32. Only the video predictor is autocast: the image embeddings are
+        precomputed and cached separately, so their stored values - and the cache signature - are
+        unaffected by this choice.
+        """
+        if not self._autocasts(inference_state):
+            return contextlib.nullcontext()
+        device_type = torch.device(inference_state["device"]).type
+        return torch.autocast(device_type=device_type, dtype=torch.bfloat16)
+
+    def _restore_memory_dtype(self, maskmem_features):
+        """Undo SAM2's bfloat16 downcast of the mask memory, for the paths that run without autocast.
+
+        SAM2 stores 'maskmem_features' as bfloat16 to shrink the state, which its own inference makes
+        safe by running under a bfloat16 autocast. Without one the cast only survives because
+        'sam2_base._prepare_memory_conditioned_features' concatenates the fp32 object pointers onto the
+        memory and 'torch.cat' promotes the result back to fp32. An object whose only conditioning frame
+        lies ahead of the frame being propagated contributes no object pointers, so its memory stays
+        bfloat16 and hits the fp32 memory-attention projections. That is reachable from the GUI: batched
+        volume segmentation on the CPU with objects prompted on different slices.
+
+        Only call this once the offloaded copy has landed - it reads the tensor on the host.
+        """
+        if maskmem_features is None:
+            return None
+        return maskmem_features.to(next(self.parameters()).dtype)
+
+    def _run_memory_encoder(self, inference_state, *args, **kwargs):
+        with self._autocast(inference_state):
+            maskmem_features, maskmem_pos_enc = super()._run_memory_encoder(inference_state, *args, **kwargs)
+        if not self._autocasts(inference_state):
+            self._wait_for_offloaded_state(inference_state)
+            maskmem_features = self._restore_memory_dtype(maskmem_features)
+        return maskmem_features, maskmem_pos_enc
+
+    def _run_single_frame_inference(self, inference_state, *args, **kwargs):
+        with self._autocast(inference_state):
+            out = super()._run_single_frame_inference(inference_state, *args, **kwargs)
+        if not self._autocasts(inference_state):
+            self._wait_for_offloaded_state(inference_state)
+            out[0]["maskmem_features"] = self._restore_memory_dtype(out[0]["maskmem_features"])
+        return out
+
+    def _consolidate_temp_output_across_obj(self, inference_state, *args, **kwargs):
+        """Wait once here: this copies every object's offloaded 'pred_masks' into one host buffer.
+
+        It runs when a prompt is added, not inside the propagation loop, so it costs one wait per
+        interaction.
+        """
+        self._wait_for_offloaded_state(inference_state)
+        return super()._consolidate_temp_output_across_obj(inference_state, *args, **kwargs)
 
     @torch.inference_mode()
     def init_state(

@@ -538,6 +538,7 @@ def _cache_ais_state_v2(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     device: Optional[str] = None,
+    devices: Optional[Union[str, torch.device, Sequence[Union[str, torch.device]]]] = None,
     z_block: Optional[int] = None,
     z_halo: Optional[int] = None,
     verbose: bool = True,
@@ -566,7 +567,9 @@ def _cache_ais_state_v2(
         is_tiled: Whether to use the tiled segmenter. By default inferred from the embeddings.
         tile_shape: The tile shape for the tiled segmenter.
         halo: The tile overlap for the tiled segmenter.
-        device: The device to run inference on.
+        device: The device the decoder lives on.
+        devices: The device or devices to run the decoder inference on. By default all visible CUDA
+            devices are used; pass a single device to pin inference to it.
         z_block: Number of slices to decode per z block for volumes.
         z_halo: Number of overlapping slices between z blocks for volumes.
         verbose: Whether to run verbose.
@@ -581,7 +584,9 @@ def _cache_ais_state_v2(
     if is_tiled is None:
         is_tiled = image_embeddings is not None and image_embeddings.get("input_size") is None
 
-    segmenter = get_unisam2_segmentation_generator(decoder, is_tiled=is_tiled, device=device)
+    segmenter = get_unisam2_segmentation_generator(
+        decoder, is_tiled=is_tiled, device=device, inference_device=devices
+    )
 
     key_index = i if state_index is None else state_index
     key, signature = None, None
@@ -634,14 +639,14 @@ def _resolve_unisam2_decoder(model_type, checkpoint_path, device):
 
 
 def _cache_autoseg_state_for_file(
-    predictor, decoder, model_type, image_data, embeddings, save_path, ndim, verbose,
+    predictor, decoder, model_type, image_data, embeddings, save_path, ndim, verbose, devices=None,
 ):
     """Cache the SAM2 automatic-segmentation state for one file: AIS if a decoder is given, else AMG."""
     if decoder is not None:  # AIS segments the whole image / volume in one pass.
         device = next(decoder.parameters()).device
         cache_autoseg_state(
             "ais", decoder, image_data, embeddings, save_path, ndim=ndim, model_type=model_type,
-            device=device, verbose=verbose,
+            device=device, devices=devices, verbose=verbose,
         )
     elif ndim == 2:  # AMG on a single 2d image.
         model = getattr(predictor, "model", predictor)
@@ -695,8 +700,9 @@ def precompute_state(
             instead of grid-based mask generation (AMG).
         batch_size: The number of tiles / slices per model call. Pass None to select a throughput-efficient
             value per device. Ignored by the model families that do not support batching (VFM encoders).
-        devices: The device or devices to compute the embeddings on. By default all visible CUDA devices
-            are used. Only supported for SAM2 ('hvit_*') models.
+        devices: The device or devices to compute the embeddings and the decoder-based (AIS)
+            automatic-segmentation state on. By default all visible CUDA devices are used. Only
+            supported for SAM2 ('hvit_*') models.
     """
     # Imported lazily to avoid a circular import ('_state' imports from this module).
     from micro_sam.sam_annotator._state import _get_sam_model
@@ -762,4 +768,5 @@ def precompute_state(
         if precompute_autoseg_state:
             _cache_autoseg_state_for_file(
                 predictor, decoder, model_type, image_data, embeddings, save_path, file_ndim, verbose=single,
+                devices=devices,
             )

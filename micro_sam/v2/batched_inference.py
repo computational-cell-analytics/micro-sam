@@ -51,7 +51,7 @@ class _PipelineJob:
 
 def _normalize_device(device: Union[str, torch.device]) -> torch.device:
     device = torch.device(device)
-    if device.type == "cuda" and device.index is None:
+    if device.type == "cuda" and device.index is None and torch.cuda.is_available():
         return torch.device("cuda", torch.cuda.current_device())
     return device
 
@@ -63,8 +63,17 @@ def _model_device(model: torch.nn.Module) -> torch.device:
         return torch.device("cpu")
 
 
+def _all_cuda_devices() -> List[torch.device]:
+    return [torch.device("cuda", index) for index in range(torch.cuda.device_count())]
+
+
 def _resolve_devices(model: torch.nn.Module, devices: Devices = None) -> List[torch.device]:
     """Resolve the inference devices, using every visible CUDA device by default.
+
+    Only `devices=None` fans out. Anything given explicitly stays on the one device it names, so a bare
+    'cuda' resolves to the current CUDA device and inference never allocates on a GPU the caller did not
+    select. The GUI passes None for its 'auto' entry and lists the visible GPUs individually, so both
+    intents are reachable from it.
 
     Automatic multi-GPU execution is enabled only when the supplied model already lives on CUDA.
     This preserves an explicitly CPU- or MPS-loaded model.
@@ -83,10 +92,7 @@ def _resolve_devices(model: torch.nn.Module, devices: Devices = None) -> List[to
     """
     if devices is None:
         device = _model_device(model)
-        if device.type == "cuda" and torch.cuda.device_count() > 1:
-            resolved = [torch.device("cuda", index) for index in range(torch.cuda.device_count())]
-        else:
-            resolved = [device]
+        resolved = _all_cuda_devices() if device.type == "cuda" and torch.cuda.device_count() > 1 else [device]
     elif isinstance(devices, (str, torch.device)):
         resolved = [_normalize_device(devices)]
     else:

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import torch
@@ -41,6 +43,116 @@ def test_promptable_segmentation_2d_normalizes_raw(monkeypatch):
     assert np.array_equal(predictor.image, to_image(raw))
     assert predictor.image.dtype == np.uint8
     assert predictor.image.shape == (3, 8, 3)
+
+
+class FakeImagePredictor:
+    """A stand-in SAM2 image predictor that records every 'predict' call and mimics its shapes."""
+
+    def __init__(self, shape=(16, 16)):
+        self._orig_hw = [shape]
+        self.model = SimpleNamespace(image_size=64)
+        self.mask_threshold = 0.0
+        self._transforms = None
+        self.calls = []
+
+    def predict(self, point_coords=None, point_labels=None, box=None, mask_input=None, multimask_output=False):
+        self.calls.append({
+            "point_coords": point_coords, "point_labels": point_labels,
+            "box": box, "mask_input": mask_input,
+        })
+        if box is not None:
+            n_objects = len(np.asarray(box))
+        elif point_coords is not None:
+            coords = np.asarray(point_coords)
+            n_objects = coords.shape[0] if coords.ndim == 3 else 1
+        else:
+            n_objects = 1
+
+        height, width = self._orig_hw[0]
+        masks = np.ones((n_objects, 1, height, width), dtype="float32")
+        if n_objects == 1:  # SAM2 squeezes the batch axis, so one object comes back as (C, H, W).
+            masks = masks[0]
+        return masks, np.ones(n_objects), np.ones((n_objects, 1, 256, 256), dtype="float32")
+
+
+def box_calls_of(predictor):
+    return [call for call in predictor.calls if call["box"] is not None]
+
+
+@pytest.mark.parametrize("n_points", (1, 2, 3))
+def test_batched_2d_rectangle_is_not_conditioned_on_the_point_prediction(n_points):
+    """A rectangle has no mask prompt, so combining it with points must not feed it one."""
+    predictor = FakeImagePredictor()
+    points = np.array([[2 + i, 3] for i in range(n_points)])
+
+    seg = promptable_segmentation_2d(
+        predictor, points=points, labels=np.ones(n_points, dtype=int),
+        boxes=[np.array([1, 1, 8, 8])], masks=[None], batched=True,
+    )
+
+    assert seg is not None
+    assert seg.max() == n_points + 1  # one object per positive point, plus the box.
+    box_calls = box_calls_of(predictor)
+    assert len(box_calls) == 1
+    assert box_calls[0]["mask_input"] is None
+
+
+def test_batched_2d_points_with_multiple_rectangles():
+    predictor = FakeImagePredictor()
+
+    seg = promptable_segmentation_2d(
+        predictor, points=np.array([[2, 3]]), labels=np.array([1]),
+        boxes=[np.array([1, 1, 8, 8]), np.array([9, 9, 14, 14])], masks=[None, None], batched=True,
+    )
+
+    assert seg is not None
+    assert seg.max() == 3  # one object for the point and one per box.
+    assert all(call["mask_input"] is None for call in box_calls_of(predictor))
+
+
+def test_batched_2d_mask_prompt_survives_point_prompts():
+    """A polygon / ellipse cue must still reach its own box when positive points are also present."""
+    predictor = FakeImagePredictor()
+    mask = np.zeros((16, 16), dtype="uint8")
+    mask[2:6, 2:6] = 1
+
+    promptable_segmentation_2d(
+        predictor, points=np.array([[10, 10]]), labels=np.array([1]),
+        boxes=[np.array([2, 2, 6, 6])], masks=[mask], batched=True,
+    )
+
+    box_calls = box_calls_of(predictor)
+    assert len(box_calls) == 1
+    # The cue comes from the drawn mask (mostly background, so negative logits), not from the
+    # all-foreground point prediction.
+    assert box_calls[0]["mask_input"].min() < 0
+
+
+def test_batched_2d_negative_points_are_shared_with_every_object():
+    predictor = FakeImagePredictor()
+
+    promptable_segmentation_2d(
+        predictor, points=np.array([[2, 3], [4, 5], [12, 12]]), labels=np.array([1, 1, 0]),
+        boxes=[np.array([1, 1, 8, 8])], masks=[None], batched=True,
+    )
+
+    point_call = predictor.calls[0]
+    # Two objects, each the positive point followed by the shared negative one.
+    assert np.asarray(point_call["point_labels"]).tolist() == [[1, 0], [1, 0]]
+    assert np.asarray(box_calls_of(predictor)[0]["point_labels"]).tolist() == [[0]]
+
+
+def test_points_with_multiple_boxes_are_rejected():
+    """SAM2 cannot broadcast one point batch over several boxes, so this is skipped, not crashed."""
+    predictor = FakeImagePredictor()
+
+    seg = promptable_segmentation_2d(
+        predictor, points=np.array([[2, 3]]), labels=np.array([1]),
+        boxes=[np.array([1, 1, 8, 8]), np.array([9, 9, 14, 14])], masks=[None, None], batched=False,
+    )
+
+    assert seg is None
+    assert predictor.calls == []
 
 
 def make_tiled_segmenter():
@@ -121,7 +233,7 @@ class RecordingPredictor:
     def __init__(self):
         self.calls = []
 
-    def add_new_points_or_box(self, inference_state, frame_idx, obj_id, clear_old_points,
+    def add_new_points_or_box(self, inference_state, frame_idx, obj_id, clear_old_points=False,
                               points=None, labels=None, box=None):
         self.calls.append({
             "frame_idx": frame_idx, "obj_id": obj_id, "clear_old_points": clear_old_points,
@@ -129,6 +241,7 @@ class RecordingPredictor:
             "labels": None if labels is None else np.asarray(labels).tolist(),
             "box": None if box is None else np.asarray(box).tolist(),
         })
+        return None, [obj_id], torch.zeros((1, 1, 32, 32))
 
     def reset_state(self, inference_state):
         pass
@@ -141,6 +254,8 @@ def make_recording_segmenter():
     segmenter.inference_state = {}
     segmenter._pushed_points = {}
     segmenter._pushed_boxes = {}
+    segmenter._pushed_masks = {}
+    segmenter._prompt_signatures = set()
     return segmenter
 
 
@@ -218,6 +333,65 @@ def test_reset_predictor_clears_pushed_prompts():
     # the same point is pushed again after a reset.
     segmenter.add_point_prompts(frame_ids=3, points=np.array([[10, 12]]), point_labels=np.array([1]))
     assert len(segmenter.predictor.calls) == 2
+
+
+def test_sync_prompt_state_keeps_additive_refinement_incremental():
+    segmenter = make_recording_segmenter()
+    first = {("point", 3, 10, 12, 1)}
+
+    segmenter.sync_prompt_state(first)
+    segmenter.add_point_prompts(frame_ids=3, points=np.array([[10, 12]]), point_labels=np.array([1]))
+    segmenter.sync_prompt_state(first | {("point", 3, 20, 22, 1)})
+    segmenter.add_point_prompts(
+        frame_ids=3, points=np.array([[10, 12], [20, 22]]), point_labels=np.array([1, 1])
+    )
+
+    assert len(segmenter.predictor.calls) == 2  # only the added point was pushed
+
+
+def test_sync_prompt_state_replays_after_a_prompt_is_deleted():
+    segmenter = make_recording_segmenter()
+    kept, deleted = ("point", 3, 10, 12, 1), ("point", 3, 20, 22, 1)
+
+    segmenter.sync_prompt_state({kept, deleted})
+    segmenter.add_point_prompts(
+        frame_ids=3, points=np.array([[10, 12], [20, 22]]), point_labels=np.array([1, 1])
+    )
+    assert len(segmenter.predictor.calls) == 2
+
+    # One point is gone, so the state is stale: it is rebuilt and the remaining point replayed.
+    segmenter.sync_prompt_state({kept})
+    segmenter.add_point_prompts(frame_ids=3, points=np.array([[10, 12]]), point_labels=np.array([1]))
+
+    assert len(segmenter.predictor.calls) == 3
+    assert segmenter.predictor.calls[-1]["points"] == [[12, 10]]
+
+
+def test_sync_prompt_state_replays_after_a_point_is_relabelled():
+    segmenter = make_recording_segmenter()
+
+    segmenter.sync_prompt_state({("point", 3, 10, 12, 1)})
+    segmenter.add_point_prompts(frame_ids=3, points=np.array([[10, 12]]), point_labels=np.array([1]))
+    segmenter.sync_prompt_state({("point", 3, 10, 12, 0)})
+    segmenter.add_point_prompts(frame_ids=3, points=np.array([[10, 12]]), point_labels=np.array([0]))
+
+    assert len(segmenter.predictor.calls) == 2
+    assert segmenter.predictor.calls[-1]["labels"] == [0]
+
+
+def test_segment_slice_clears_the_pushed_prompt_bookkeeping():
+    """'segment_slice' discards the SAM2 state, so the dedup bookkeeping must not outlive it."""
+    segmenter = make_recording_segmenter()
+    segmenter._image_style_trafo = None
+    segmenter.add_point_prompts(frame_ids=3, points=np.array([[10, 12]]), point_labels=np.array([1]))
+    assert segmenter._pushed_points
+
+    segmenter.segment_slice(frame_idx=3, points=np.array([[12, 10]]), labels=np.array([1]))
+    assert segmenter._pushed_points == {}
+
+    # The prompt is pushed again instead of being deduped against a state that no longer exists.
+    segmenter.add_point_prompts(frame_ids=3, points=np.array([[10, 12]]), point_labels=np.array([1]))
+    assert segmenter.predictor.calls[-1]["points"] == [[12, 10]]
 
 
 def test_tracking_pattern_pushes_points_per_frame():
