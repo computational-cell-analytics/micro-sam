@@ -75,18 +75,19 @@ contributions:
       key: micro_sam-segmentation
 
   widgets:
-    # The display names match the dock titles of the CLI / API entry points, so a tool is called the
-    # same way no matter how it was started. They repeat 'sam_annotator/_titles.py', which this static
-    # manifest cannot import, so both have to be changed together.
+    # napari names the dock widget '<display_name> (<the plugin display_name above>)', which is also the
+    # dock title the CLI / API entry points pass to 'add_dock_widget', so a tool is called the same way no
+    # matter how it was started. These names repeat the tool names in 'sam_annotator/_titles.py', which
+    # this static manifest cannot import, so both have to be changed together.
     - command: micro_sam.annotator
-      display_name: Segment Anything for Microscopy (Segmentation)
+      display_name: Segmentation Annotator
     - command: micro_sam.annotator_tracking
-      display_name: Segment Anything for Microscopy (Tracking)
+      display_name: Tracking Annotator
     - command: micro_sam.batch_annotator
-      display_name: Segment Anything for Microscopy (Batch Annotation)
+      display_name: Batch Annotator
     - command: micro_sam.object_classifier
-      display_name: Segment Anything for Microscopy (Object Classification)
+      display_name: Object Classifier
     - command: micro_sam.pixel_classifier
-      display_name: Segment Anything for Microscopy (Pixel Classification)
+      display_name: Pixel Classifier
     - command: micro_sam.settings
-      display_name: Segment Anything for Microscopy (Settings)
+      display_name: Settings
