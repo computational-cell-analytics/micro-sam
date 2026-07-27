@@ -3,7 +3,11 @@ import unittest
 import pytest
 import numpy as np
 from skimage.data import binary_blobs
+
 from magicgui.widgets import Container
+
+import torch
+
 from micro_sam.v2.util import DEFAULT_MODEL
 
 
@@ -93,7 +97,8 @@ def run_initialize_predictor_with_embedding_fn(monkeypatch, embedding_fn, device
 
 
 @pytest.mark.parametrize(
-    "device,expected", [(None, None), ("auto", None), ("cuda:1", "cuda:1"), ("cpu", "cpu")]
+    "device,expected",
+    [(None, None), ("auto", None), ("cuda", "cuda"), ("cuda:1", "cuda:1"), ("cpu", "cpu")],
 )
 def test_annotator_pins_inference_to_the_selected_device(monkeypatch, device, expected):
     """An explicit device must constrain inference; only None / 'auto' may fan out over all GPUs."""
@@ -109,6 +114,35 @@ def test_annotator_pins_inference_to_the_selected_device(monkeypatch, device, ex
 
     run_initialize_predictor_with_embedding_fn(monkeypatch, fake_embedding_fn, device)
     assert captured["devices"] == expected
+
+
+@pytest.mark.parametrize(
+    "device,expected", [("auto", ["cuda:0", "cuda:1"]), ("cuda", ["cuda:1"]), ("cuda:0", ["cuda:0"])]
+)
+def test_selected_device_reaches_the_batched_backend(monkeypatch, device, expected):
+    """The device the annotator forwards has to resolve to the GPUs the user selected, and no others."""
+    from micro_sam.v2 import batched_inference
+
+    captured = {}
+
+    def fake_embedding_fn(devices=None, **kwargs):
+        captured["devices"] = devices
+        return {
+            "features": np.zeros((1, 1, 1, 1), dtype="float32"),
+            "input_size": (8, 8),
+            "original_size": (8, 8),
+        }
+
+    run_initialize_predictor_with_embedding_fn(monkeypatch, fake_embedding_fn, device)
+
+    model = torch.nn.Linear(1, 1)
+    monkeypatch.setattr(batched_inference, "_model_device", lambda model: torch.device("cuda", 0))
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    resolved = batched_inference._resolve_devices(model, captured["devices"])
+
+    assert [str(resolved_device) for resolved_device in resolved] == expected
 
 
 def test_embedding_function_without_devices_is_called_unchanged(monkeypatch):

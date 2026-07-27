@@ -441,6 +441,23 @@ class TestUtil(unittest.TestCase):
         with mock.patch.object(torch.cuda, "is_available", return_value=True):
             self.assertEqual(get_device("cuda:1"), "cuda:1")
 
+    def test_available_devices_lists_every_gpu_by_index(self):
+        """Only an index pins inference to one GPU, so each visible GPU has to be selectable."""
+        from unittest import mock
+
+        from micro_sam.util import _available_devices
+
+        with mock.patch.object(torch.cuda, "is_available", return_value=True), \
+                mock.patch.object(torch.backends.mps, "is_available", return_value=False), \
+                mock.patch.object(torch.cuda, "device_count", return_value=2):
+            self.assertEqual(_available_devices(), ["cuda:0", "cuda:1", "cpu"])
+
+        # A single GPU is unambiguous, so it stays the plain backend name.
+        with mock.patch.object(torch.cuda, "is_available", return_value=True), \
+                mock.patch.object(torch.backends.mps, "is_available", return_value=False), \
+                mock.patch.object(torch.cuda, "device_count", return_value=1):
+            self.assertEqual(_available_devices(), ["cuda", "cpu"])
+
     def test_device_type(self):
         from micro_sam.util import device_type
 

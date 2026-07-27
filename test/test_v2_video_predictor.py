@@ -66,7 +66,7 @@ def test_numpy_and_lazy_volumes_give_the_same_frame():
     np.testing.assert_allclose(eager[2].numpy(), lazy[2].numpy())
 
 
-def run_single_frame_inference(monkeypatch, inference_state, autocasts):
+def run_single_frame_inference(monkeypatch, inference_state, autocasts, calls=1):
     """Call the override with the wrapped inference and both CUDA waits recorded instead of run.
 
     The precision is forced rather than read from the host, so the wait and the dtype restore are
@@ -99,20 +99,23 @@ def run_single_frame_inference(monkeypatch, inference_state, autocasts):
 
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
     predictor.parameters = lambda: iter([torch.zeros(1, dtype=torch.float32)])
-    out = predictor._run_single_frame_inference(inference_state)
-    assert out[1] == "masks"
+    for _ in range(calls):
+        out = predictor._run_single_frame_inference(inference_state)
+        assert out[1] == "masks"
     return events
 
 
-def test_offloaded_state_is_awaited_before_it_is_read(monkeypatch):
-    """The non-blocking copy to the CPU records no event, so the host readers need an explicit wait."""
+def test_propagation_does_not_wait_per_object_and_frame(monkeypatch):
+    """Propagation reads only the on-device masks, so the offload must not put a barrier in its loop.
+
+    SAM2 calls '_run_single_frame_inference' once per object per frame. A host wait there stops the
+    next object from being queued while the previous transfer finishes.
+    """
     events = run_single_frame_inference(
-        monkeypatch, {"offload_state_to_cpu": True, "device": "cuda:0"}, autocasts=True
+        monkeypatch, {"offload_state_to_cpu": True, "device": "cuda:0"}, autocasts=True, calls=4
     )
 
-    # The wait covers the current stream only, so a replica on another stream keeps running. Autocast
-    # keeps the memory in the dtype SAM2 stores it in, so nothing is cast back on this path.
-    assert events == ["stream"]
+    assert events == []
 
 
 def test_state_kept_on_the_device_is_not_awaited(monkeypatch):
@@ -131,6 +134,38 @@ def test_without_autocast_the_memory_dtype_is_restored_after_the_wait(monkeypatc
 
     # No CUDA wait on the CPU, and the restore reads the memory on the host.
     assert events == [f"cast to {torch.float32}"]
+
+
+def test_the_dtype_restore_waits_for_the_offloaded_memory(monkeypatch):
+    """A pre-Ampere GPU offloading its state is the one path that reads the memory on the host."""
+    events = run_single_frame_inference(
+        monkeypatch, {"offload_state_to_cpu": True, "device": "cuda:0"}, autocasts=False
+    )
+
+    # The wait covers the current stream only, so a replica on another stream keeps running.
+    assert events == ["stream", f"cast to {torch.float32}"]
+
+
+def test_consolidation_waits_for_the_offloaded_masks(monkeypatch):
+    """Consolidation copies every object's offloaded 'pred_masks' into one host buffer."""
+    from sam2.sam2_video_predictor import SAM2VideoPredictor
+
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    events = []
+    monkeypatch.setattr(
+        SAM2VideoPredictor, "_consolidate_temp_output_across_obj",
+        lambda self, state, *args, **kwargs: events.append("consolidate") or "consolidated",
+    )
+    monkeypatch.setattr(
+        torch.cuda, "current_stream", lambda device: SimpleNamespace(synchronize=lambda: events.append("stream"))
+    )
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    out = predictor._consolidate_temp_output_across_obj({"offload_state_to_cpu": True, "device": "cuda:0"}, 0)
+
+    assert out == "consolidated"
+    assert events == ["stream", "consolidate"]
 
 
 def test_autocast_is_used_on_cuda_only(monkeypatch):

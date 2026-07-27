@@ -1581,6 +1581,7 @@ def _segment_object_2d(viewer, batched=False):
             seg = tiled_promptable_segmentation_2d(
                 predictor=predictor, image_embeddings=image_embeddings,
                 points=points, labels=labels, boxes=boxes, masks=masks, batched=batched,
+                devices=state.inference_devices,
             )
         else:
             from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
@@ -4476,7 +4477,8 @@ class AutoSegmentWidget(_WidgetBase):
                 "ais", state.decoder, run_raw, image_embeddings, save_path, ndim=ndim,
                 model_type=getattr(state.predictor, "model_type", None),
                 i=z, state_index=(None if ndim == 3 else z), is_tiled=is_tiled,
-                tile_shape=tile_shape, halo=halo, device=device, z_block=z_block, z_halo=z_halo,
+                tile_shape=tile_shape, halo=halo, device=device, devices=state.inference_devices,
+                z_block=z_block, z_halo=z_halo,
                 pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
             )
             self._segmenter_key = cache_key

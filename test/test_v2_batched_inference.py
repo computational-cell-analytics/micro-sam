@@ -294,13 +294,14 @@ class TestResolveDevices(unittest.TestCase):
             devices = batched_inference._resolve_devices(model, ["cuda:0", "cuda:1"])
         self.assertEqual(devices, [torch.device("cuda", 0), torch.device("cuda", 1)])
 
-    def test_bare_cuda_fans_out(self):
-        """'cuda' names the backend, so it fans out; only an index pins inference to one GPU."""
+    def test_bare_cuda_pins_to_the_current_device(self):
+        """The GUI's explicit CUDA choice must not allocate on GPUs the user did not select."""
         model = torch.nn.Linear(1, 1)
         with mock.patch.object(torch.cuda, "device_count", return_value=2), \
+                mock.patch.object(torch.cuda, "current_device", return_value=1), \
                 mock.patch.object(torch.cuda, "is_available", return_value=True):
             devices = batched_inference._resolve_devices(model, "cuda")
-        self.assertEqual(devices, [torch.device("cuda", 0), torch.device("cuda", 1)])
+        self.assertEqual(devices, [torch.device("cuda", 1)])
 
     def test_indexed_cuda_device_pins(self):
         model = torch.nn.Linear(1, 1)

@@ -6,7 +6,7 @@ https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 import inspect
 from functools import partial
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from segment_anything import SamPredictor
@@ -97,6 +97,9 @@ class AnnotatorState(metaclass=Singleton):
     embedding_tmpdir: Optional[str] = None
     data_signature: Optional[str] = None
     skip_recomputing_embeddings: Optional[bool] = None
+    # The un-resolved device request, forwarded to every batched backend so inference stays on the
+    # selected device. None means 'auto', i.e. fan out over all visible GPUs.
+    inference_devices: Optional[Union[str, List[str]]] = None
     # Whether the tool showed the one-time CPU info popup this session (not reset on recompute).
     cpu_info_shown: Optional[bool] = None
 
@@ -237,6 +240,7 @@ class AnnotatorState(metaclass=Singleton):
         # The inference devices follow the un-resolved request, not the resolved model placement:
         # None / 'auto' fans out over every visible GPU, an explicit device stays pinned to it.
         inference_devices = None if device in (None, "auto") else device
+        self.inference_devices = inference_devices
 
         # Compute the image embeddings.
         if isinstance(save_path, dict) and "features" in save_path:  # i.e. embeddings are precomputed
@@ -360,7 +364,8 @@ class AnnotatorState(metaclass=Singleton):
             device = next(self.decoder.parameters()).device
             cache_autoseg_state(
                 "ais", self.decoder, image_data, self.image_embeddings, save_path, ndim=ndim,
-                model_type=resolved_model_type, device=device, pbar_init=init_cb, pbar_update=pbar_update,
+                model_type=resolved_model_type, device=device, devices=self.inference_devices,
+                pbar_init=init_cb, pbar_update=pbar_update,
             )
         elif ndim == 2:  # AMG on a single 2d image.
             if pbar_init is not None:
@@ -459,6 +464,7 @@ class AnnotatorState(metaclass=Singleton):
         self.ndim = None
         self.image_name = None
         self.embedding_path = None
+        self.inference_devices = None
         self.automatic_segmenter = None
         self.autoseg_state = None
         self.decoder = None

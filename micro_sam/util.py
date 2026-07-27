@@ -233,12 +233,20 @@ def get_embedding_function(model_type: str) -> callable:
 
 
 def _available_devices():
+    """List the devices that can be selected explicitly, e.g. in the annotator's device dropdown.
+
+    Every visible GPU is listed by its index when there is more than one, so that a multi-GPU user can
+    choose which GPU to run on. Using all of them is what the annotator's 'auto' entry does.
+    """
     available_devices = []
     for i in ["cuda", "mps", "cpu"]:
         try:
             device = get_device(i)
         except RuntimeError:
-            pass
+            continue
+
+        if device == "cuda" and torch.cuda.device_count() > 1:
+            available_devices.extend(f"cuda:{index}" for index in range(torch.cuda.device_count()))
         else:
             available_devices.append(device)
     return available_devices

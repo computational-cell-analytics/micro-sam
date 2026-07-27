@@ -303,6 +303,29 @@ def test_cache_autoseg_state_ais_is_on_demand(tmp_path, monkeypatch):
     assert initialize_calls == [True]
 
 
+@pytest.mark.parametrize("devices,expected", [(None, None), ("cuda:1", "cuda:1"), ("cpu", "cpu")])
+def test_cache_ais_state_forwards_the_selected_devices(tmp_path, monkeypatch, devices, expected):
+    """AIS must run where the annotator's device selection says: None fans out, a device pins."""
+    import micro_sam.precompute_state as ps
+
+    captured = {}
+
+    def fake_generator(model, is_tiled, device, inference_device):
+        captured["inference_device"] = inference_device
+        segmenter = UniSAM2InstanceSegmentation(model, device=device, inference_device=inference_device)
+        segmenter.initialize = lambda *args, **kwargs: None
+        return segmenter
+
+    monkeypatch.setattr(
+        "micro_sam.v2.instance_segmentation.get_unisam2_segmentation_generator", fake_generator
+    )
+    ps._cache_ais_state_v2(
+        None, np.zeros((8, 8), dtype="uint8"), None, None, ndim=2, devices=devices, verbose=False,
+    )
+
+    assert captured["inference_device"] == expected
+
+
 def test_amg_state_loads_per_slice_on_demand(tmp_path):
     """Each slice's AMG state is a separate on-disk key, loaded one at a time. A volume's state is
     streamed per slice (like the lazy per-slice embeddings), not materialized as one whole array."""

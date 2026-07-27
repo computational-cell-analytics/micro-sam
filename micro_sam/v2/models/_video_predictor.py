@@ -201,13 +201,14 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         """Wait for the offloaded tensors to reach the CPU before anything reads them back.
 
         With 'offload_state_to_cpu' SAM2 stores 'pred_masks' and 'maskmem_features' on the CPU with a
-        'non_blocking' copy into pageable memory, which records no event to wait on. The readers are on
-        the host - the consolidation across objects assigns the mask into a CPU buffer, propagation
-        concatenates one CPU tensor per object, and the dtype restore below converts the memory - so
-        without a wait they can observe the buffer the allocator recycled from the previous call.
+        'non_blocking' copy into pageable memory, which records no event to wait on. Without a wait a
+        host reader can observe the buffer the allocator recycled from the previous call.
 
-        We wait on the stream that issued the copy rather than the whole device, so inference on other
-        streams (a second model replica in the batched pipeline) keeps running.
+        This is a host barrier, so it is called only where a host read follows: the consolidation
+        across objects and the dtype restore below. Propagation hands out the on-device masks and
+        copies the offloaded tensors back on the stream that wrote them, so it needs no wait per object
+        and frame. The wait covers that stream rather than the whole device, so a second model replica
+        in the batched pipeline keeps running.
         """
         if not inference_state.get("offload_state_to_cpu"):
             return
@@ -272,18 +273,27 @@ class CustomVideoPredictor(SAM2VideoPredictor):
     def _run_memory_encoder(self, inference_state, *args, **kwargs):
         with self._autocast(inference_state):
             maskmem_features, maskmem_pos_enc = super()._run_memory_encoder(inference_state, *args, **kwargs)
-        self._wait_for_offloaded_state(inference_state)
         if not self._autocasts(inference_state):
+            self._wait_for_offloaded_state(inference_state)
             maskmem_features = self._restore_memory_dtype(maskmem_features)
         return maskmem_features, maskmem_pos_enc
 
     def _run_single_frame_inference(self, inference_state, *args, **kwargs):
         with self._autocast(inference_state):
             out = super()._run_single_frame_inference(inference_state, *args, **kwargs)
-        self._wait_for_offloaded_state(inference_state)
         if not self._autocasts(inference_state):
+            self._wait_for_offloaded_state(inference_state)
             out[0]["maskmem_features"] = self._restore_memory_dtype(out[0]["maskmem_features"])
         return out
+
+    def _consolidate_temp_output_across_obj(self, inference_state, *args, **kwargs):
+        """Wait once here: this copies every object's offloaded 'pred_masks' into one host buffer.
+
+        It runs when a prompt is added, not inside the propagation loop, so it costs one wait per
+        interaction.
+        """
+        self._wait_for_offloaded_state(inference_state)
+        return super()._consolidate_temp_output_across_obj(inference_state, *args, **kwargs)
 
     @torch.inference_mode()
     def init_state(
