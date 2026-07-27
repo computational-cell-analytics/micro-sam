@@ -17,7 +17,7 @@ from magicgui.widgets import CheckBox
 
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-from ._titles import PREFIX
+from ._titles import PLUGIN_NAME
 from ._batch import BatchAnnotatorTask
 from .util import _sync_embedding_widget
 
@@ -27,7 +27,7 @@ class ClassificationBatchTask(BatchAnnotatorTask):
 
     # Bound by subclasses.
     classifier_class = None  # ObjectClassifier | PixelClassifier
-    dock_name = PREFIX
+    dock_name = PLUGIN_NAME
     features_attr = None  # "object_features" | "pixel_features"
     aux_attr = None  # "seg_ids" | "pixel_grid_shape"
     rf_attr = None  # "object_rf" | "pixel_rf"

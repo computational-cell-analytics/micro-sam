@@ -1,26 +1,29 @@
 """Dock widget titles for the annotation tools.
 
 These are the single source for the titles of the napari dock widgets. The CLI / API entry points pass
-them to `add_dock_widget`. The napari plugin menu cannot import them, because its manifest
-(`micro_sam/napari.yaml`) is static data, so the `display_name` entries there repeat these titles and
-have to be updated together with this file.
+them to `add_dock_widget`. The napari plugin menu builds the same title itself, as
+'<tool name> (<plugin display name>)', from the static manifest (`micro_sam/napari.yaml`). That manifest
+cannot import this module, so the tool names below are repeated as its `display_name` entries and have to
+be updated together with this file.
 """
 
-PREFIX = "Segment Anything for Microscopy"
+PLUGIN_NAME = "Segment Anything for Microscopy"
 
-dock_titles = {
-    "segmentation": f"{PREFIX} (Segmentation)",
-    "tracking": f"{PREFIX} (Tracking)",
-    "pixel_classification": f"{PREFIX} (Pixel Classification)",
-    "object_classification": f"{PREFIX} (Object Classification)",
-    "batch_annotation": f"{PREFIX} (Batch Annotation)",
-    "batch_segmentation": f"{PREFIX} (Batch Segmentation)",
-    "batch_tracking": f"{PREFIX} (Batch Tracking)",
-    "batch_pixel_classification": f"{PREFIX} (Batch Pixel Classification)",
-    "batch_object_classification": f"{PREFIX} (Batch Object Classification)",
-    "settings": f"{PREFIX} (Settings)",
+tool_names = {
+    "segmentation": "Segmentation Annotator",
+    "tracking": "Tracking Annotator",
+    "pixel_classification": "Pixel Classifier",
+    "object_classification": "Object Classifier",
+    "batch_annotation": "Batch Annotator",
+    "batch_segmentation": "Batch Segmentation Annotator",
+    "batch_tracking": "Batch Tracking Annotator",
+    "batch_pixel_classification": "Batch Pixel Classifier",
+    "batch_object_classification": "Batch Object Classifier",
+    "settings": "Settings",
     "batch_navigation": "Batch Navigation",
 }
+
+dock_titles = {name: f"{tool_name} ({PLUGIN_NAME})" for name, tool_name in tool_names.items()}
 
 
 def get_dock_title(name: str) -> str:
