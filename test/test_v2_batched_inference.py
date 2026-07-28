@@ -364,9 +364,26 @@ class TestEncoderBatchSizes(unittest.TestCase):
     def test_an_explicit_batch_size_is_used_on_every_device(self):
         self.assertEqual(self._batch_sizes(n_jobs=16, n_devices=2, batch_size=3), [3, 3])
 
-    def test_an_invalid_batch_size_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "batch_size must be positive"):
-            self._batch_sizes(n_jobs=16, n_devices=2, batch_size=0)
+    def test_an_invalid_batch_size_is_rejected_before_any_replica_is_created(self):
+        model = torch.nn.Linear(1, 1)
+        with mock.patch.object(batched_inference, "_prepare_models") as prepare:
+            with self.assertRaisesRegex(ValueError, "batch_size must be positive"):
+                batched_inference._prepare_encoder_pipeline(model, 16, 0, "cpu")
+        prepare.assert_not_called()
+
+    def test_replicas_are_released_when_the_lookup_fails(self):
+        # The caller only releases what it receives, so a raise here would leak the replicas the
+        # secondary devices already hold.
+        model = torch.nn.Linear(1, 1)
+        devices = [torch.device("cuda", index) for index in range(2)]
+        pairs = [(model, device) for device in devices]
+        with mock.patch.object(batched_inference, "_resolve_devices", return_value=devices), \
+                mock.patch.object(batched_inference, "_prepare_models", return_value=pairs), \
+                mock.patch.object(batched_inference, "recommend_batch_size", side_effect=RuntimeError("boom")), \
+                mock.patch.object(batched_inference, "_release_model_replicas") as release:
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                batched_inference._prepare_encoder_pipeline(model, 16, None, None)
+        release.assert_called_once_with(pairs)
 
 
 class TestResolveDevices(unittest.TestCase):

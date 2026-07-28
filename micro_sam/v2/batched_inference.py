@@ -572,22 +572,28 @@ def _embedding_cache_complete(features, root) -> bool:
 def _prepare_encoder_pipeline(
     predictor, n_jobs: int, batch_size: Optional[int], devices: Devices,
 ) -> Tuple[torch.nn.Module, List[Tuple[torch.nn.Module, torch.device]], List[int]]:
+    # Validated before the replicas are created, so an invalid argument never allocates on a GPU.
+    if batch_size is not None and int(batch_size) < 1:
+        raise ValueError(f"batch_size must be positive or None, got {batch_size}.")
+
     model = getattr(predictor, "model", predictor)
     resolved_devices = _resolve_devices(model, devices)
     model_devices = _prepare_models(model, resolved_devices)
-    if batch_size is None:
-        # Read after the replicas are placed, so their weights already count against the free VRAM.
-        model_type = getattr(model, "model_type", None) or getattr(predictor, "model_type", "")
-        # Cap by the share of the work a device receives, not by the total: a consumer fills its
-        # batch before it runs, so a batch as large as all jobs would keep the other devices idle.
-        jobs_per_device = (max(int(n_jobs), 0) + len(model_devices) - 1) // len(model_devices)
-        batch_sizes = [
-            recommend_batch_size(model_type, device, n_jobs=jobs_per_device) for _, device in model_devices
-        ]
-    else:
-        if int(batch_size) < 1:
-            raise ValueError(f"batch_size must be positive or None, got {batch_size}.")
-        batch_sizes = [int(batch_size)] * len(model_devices)
+    try:
+        if batch_size is None:
+            # Read after the replicas are placed, so their weights already count against the free VRAM.
+            model_type = getattr(model, "model_type", None) or getattr(predictor, "model_type", "")
+            # Cap by the share of the work a device receives, not by the total: a consumer fills its
+            # batch before it runs, so a batch as large as all jobs would keep the other devices idle.
+            jobs_per_device = (max(int(n_jobs), 0) + len(model_devices) - 1) // len(model_devices)
+            batch_sizes = [
+                recommend_batch_size(model_type, device, n_jobs=jobs_per_device) for _, device in model_devices
+            ]
+        else:
+            batch_sizes = [int(batch_size)] * len(model_devices)
+    except Exception:
+        _release_model_replicas(model_devices)
+        raise
     return model, model_devices, batch_sizes
 
 

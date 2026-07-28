@@ -154,9 +154,9 @@ def _get_default_device():
     if torch.cuda.is_available():
         device = "cuda"
     # As second priority use mps.
-    # See https://pytorch.org/docs/stable/notes/mps.html for details
+    # See https://pytorch.org/docs/stable/notes/mps.html for details.
+    # Silent: the GUI resolves the device on every settings change. 'micro_sam info' reports it.
     elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        print("Using apple MPS device.")
         device = "mps"
     # Use the CPU as fallback.
     else:

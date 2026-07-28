@@ -808,8 +808,8 @@ def inference_object_classification(
     help="Whether to use decoder-based state (AIS) when the model has a decoder, instead of grid-based AMG."
 )
 @click.option(
-    "--batch_size", default="1",
-    help="The number of tiles / slices per model call, or 'auto' to select it per device."
+    "--batch_size", default="auto",
+    help="The number of tiles / slices per model call. By default it is selected per device."
 )
 @click.option(
     "--devices", default=None,

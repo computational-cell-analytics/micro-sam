@@ -76,8 +76,8 @@ class TestBands(unittest.TestCase):
                 predicted = fixed + per_sample * batch_size
                 self.assertLess(predicted, band * BAND_TOLERANCE, f"{backbone} at {band} GiB")
 
-    def test_below_the_smallest_band_still_resolves(self):
-        self.assertEqual(_band_for(1.0), min(VRAM_BATCH_SIZES))
+    def test_below_the_smallest_band_reaches_nothing(self):
+        self.assertIsNone(_band_for(1.0))
 
 
 class TestBackboneResolution(unittest.TestCase):
@@ -118,6 +118,13 @@ class TestRecommendBatchSize(unittest.TestCase):
     def test_heavy_model_on_a_small_device(self):
         with mock.patch.object(v2_util, "_free_vram_gib", return_value=4.0):
             self.assertEqual(recommend_batch_size("hvit_l", "cuda"), 1)
+
+    def test_a_device_below_every_band_stays_at_one(self):
+        # The smallest entry is calibrated for the smallest band. Applying it to a device that does
+        # not reach that band would OOM and recover only through the backoff.
+        for backbone in ENCODER_COST:
+            with mock.patch.object(v2_util, "_free_vram_gib", return_value=2.0):
+                self.assertEqual(recommend_batch_size(backbone, "cuda"), 1, backbone)
 
 
 if __name__ == "__main__":

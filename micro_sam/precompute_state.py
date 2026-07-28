@@ -675,7 +675,7 @@ def precompute_state(
     ndim: Optional[int] = None,
     precompute_autoseg_state: bool = False,
     prefer_decoder: bool = True,
-    batch_size: Optional[int] = 1,
+    batch_size: Optional[int] = None,
     devices: Optional[Union[str, Sequence[str]]] = None,
 ) -> None:
     """Precompute and cache the image embeddings (and, optionally, the automatic-segmentation state).
@@ -704,8 +704,9 @@ def precompute_state(
             Supported for SAM2 ('hvit_*') models.
         prefer_decoder: Whether to use the decoder-based state (AIS) when the SAM2 model has a decoder,
             instead of grid-based mask generation (AMG).
-        batch_size: The number of tiles / slices per model call. Pass None to select it per device from
-            the free VRAM (SAM2 only). Ignored by the families without batching (VFM encoders).
+        batch_size: The number of tiles / slices per model call. By default it is selected per device
+            from the free VRAM (SAM2; SAM1 uses a single tile / slice). Ignored by the families
+            without batching (VFM encoders).
         devices: The device or devices to compute the embeddings and the decoder-based (AIS)
             automatic-segmentation state on. By default all visible CUDA devices are used. Only
             supported for SAM2 ('hvit_*') models.

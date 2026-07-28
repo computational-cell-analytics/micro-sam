@@ -140,9 +140,9 @@ BAND_TOLERANCE = 0.95
 
 
 def _band_for(free_gib):
-    """The largest tabulated VRAM band the device reaches, or the smallest if it reaches none."""
+    """The largest tabulated VRAM band the device reaches, or None if it reaches none."""
     reached = [band for band in VRAM_BATCH_SIZES if free_gib >= band * BAND_TOLERANCE]
-    return max(reached) if reached else min(VRAM_BATCH_SIZES)
+    return max(reached) if reached else None
 
 
 def _backbone_of(model_type):
@@ -165,7 +165,8 @@ def recommend_batch_size(model_type, device, n_jobs=None):
     Args:
         model_type: The model name, e.g. 'hvit_t' or 'hvit_t_cells'. Unknown names are treated as the
             most memory-hungry backbone.
-        device: The device the encoder runs on. Non-CUDA devices always get a batch size of one.
+        device: The device the encoder runs on. Non-CUDA devices always get a batch size of one, as
+            does a device with less free VRAM than the smallest tabulated band.
         n_jobs: The total number of tiles / slices, to avoid a batch larger than the work.
 
     Returns:
@@ -175,7 +176,13 @@ def recommend_batch_size(model_type, device, n_jobs=None):
     if free_gib is None:
         return 1
 
-    batch_size = VRAM_BATCH_SIZES[_band_for(free_gib)][_backbone_of(model_type)]
+    band = _band_for(free_gib)
+    if band is None:
+        # The smallest entry is calibrated for the smallest band, not below it, so a device that
+        # reaches no band stays at one instead of relying on the OOM backoff to recover.
+        return 1
+
+    batch_size = VRAM_BATCH_SIZES[band][_backbone_of(model_type)]
     if n_jobs is not None:
         batch_size = min(batch_size, max(1, int(n_jobs)))
     return int(batch_size)
@@ -536,7 +543,7 @@ def precompute_image_embeddings(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
-    batch_size: Optional[int] = 1,
+    batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
     num_write_workers: int = 2,
@@ -559,8 +566,8 @@ def precompute_image_embeddings(
         halo: Optional in-plane tile halo.
         verbose: Whether to show progress.
         batch_size: The batch size used when running inference for multiple slices and / or tiles.
-            Defaults to one, which is recommended for 10 GB MIG devices. Pass None to look it up
-            independently on each CUDA device from its free VRAM (see `recommend_batch_size`).
+            By default it is looked up independently on each CUDA device from its free VRAM (see
+            `recommend_batch_size`). Pass an integer to run every device at that batch size.
         devices: Device or devices used for embedding inference. If None and the predictor is on
             CUDA, all visible CUDA devices are used.
         num_prefetch_workers: Number of threads used to read and preprocess input jobs.

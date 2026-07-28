@@ -2022,13 +2022,18 @@ class EmbeddingWidget(_WidgetBase):
         names match. Subclasses with custom family handling (classification) override this."""
         pass
 
-    def _selected_image_ndim(self):
-        # Spatial dimensionality of the currently selected image layer (2 or 3), or None if no image.
+    def _selected_image_shape(self):
+        # Spatial shape of the currently selected image layer (any channel axis removed), or None if
+        # no image is selected.
         image = self.image_selection.get_value()
         if image is None:
             return None
-        shape = image.data.shape[:-1] if image.rgb else image.data.shape
-        return len(shape)
+        return image.data.shape[:-1] if image.rgb else image.data.shape
+
+    def _selected_image_ndim(self):
+        # Spatial dimensionality of the currently selected image layer (2 or 3), or None if no image.
+        shape = self._selected_image_shape()
+        return None if shape is None else len(shape)
 
     def _ndim_override(self):
         # The user-selected image dimensionality override: None for 'auto', else 2 or 3. Read the
@@ -2083,12 +2088,34 @@ class EmbeddingWidget(_WidgetBase):
             return None
         return self.batch_size
 
+    def _encoder_job_count(self):
+        # The number of encoder calls the selected image needs (tiles, z slices, or both), or None
+        # while no image is selected. Mirrors how the backend splits the input, so the preview is
+        # never larger than the work.
+        from bioimage_cpp.utils import Blocking
+
+        shape = self._selected_image_shape()
+        if shape is None:
+            return None
+
+        ndim = self._ndim_override() or len(shape)
+        n_slices = shape[0] if ndim == 3 else 1
+        if self.tiling != "yes":
+            return n_slices
+
+        tile_shape, _ = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
+        if tile_shape is None:
+            return n_slices
+        in_plane = shape[1:3] if ndim == 3 else shape[:2]
+        return Blocking([0, 0], list(in_plane), list(tile_shape)).number_of_blocks * n_slices
+
     def _recommended_batch_size(self):
         """The batch size the VRAM table suggests here, or one if the model is not tabulated.
 
         This previews what the backend will pick rather than deciding it: it is read before the model
         is loaded, and for 'auto' from the default device only, whereas the backend reads every device
-        it runs on after placing the weights there.
+        it runs on after placing the weights there. It is capped by the total work; the backend also
+        caps it by the share of that work each device receives.
         """
         from micro_sam.v2.util import recommend_batch_size
 
@@ -2098,7 +2125,7 @@ class EmbeddingWidget(_WidgetBase):
         device = self.device
         if device == "auto":
             device = util._get_default_device()
-        return recommend_batch_size(self.model_type, device)
+        return recommend_batch_size(self.model_type, device, n_jobs=self._encoder_job_count())
 
     def _on_batch_size_edited(self, value):
         # A value the user typed is theirs to keep, so stop tracking the model and device.
@@ -2136,11 +2163,9 @@ class EmbeddingWidget(_WidgetBase):
         self._update_tiling_visibility()
 
     def _set_default_tiling(self, *args):
-        image = self.image_selection.get_value()
-        if image is None:
-            return
-        shape = image.data.shape[:-1] if image.rgb else image.data.shape
-        self._apply_default_tiling_for_shape(shape)
+        shape = self._selected_image_shape()
+        if shape is not None:
+            self._apply_default_tiling_for_shape(shape)
 
     def _reset_inputs_to_defaults(self):
         """Reset the user inputs to their fresh-open defaults.
@@ -2376,12 +2401,8 @@ class EmbeddingWidget(_WidgetBase):
         state.reset_state()
 
         # Get image dimensions.
-        if image.rgb:
-            ndim = image.data.ndim - 1
-            state.image_shape = image.data.shape[:-1]
-        else:
-            ndim = image.data.ndim
-            state.image_shape = image.data.shape
+        state.image_shape = self._selected_image_shape()
+        ndim = len(state.image_shape)
         state.ndim = ndim
 
         # Set layer scale

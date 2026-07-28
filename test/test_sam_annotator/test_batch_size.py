@@ -36,11 +36,15 @@ class _FakeContainer:
         self.visible = visible
 
 
-def _make_widget(model_type="hvit_t_cells", device="cuda", ndim=3, tiling="no"):
+def _make_widget(model_type="hvit_t_cells", device="cuda", ndim=3, tiling="no", shape=None):
     """An EmbeddingWidget with only the attributes the batch-size logic touches.
 
     Allocated without '__init__' so no Qt widgets are built, which keeps this runnable headless.
+    The image layer is stood in for by its spatial shape, which is what the logic reads.
     """
+    # Big enough that the work never caps the recommendation, unless a test asks for it.
+    if shape is None:
+        shape = {2: (4096, 4096), 3: (64, 512, 512)}.get(ndim)
     widget = widgets.EmbeddingWidget.__new__(widgets.EmbeddingWidget)
     widget.model_type = model_type
     widget.device = device
@@ -49,8 +53,10 @@ def _make_widget(model_type="hvit_t_cells", device="cuda", ndim=3, tiling="no"):
     widget.batch_size_param = _FakeSpinBox()
     widget._batch_size_widget = _FakeContainer()
     widget.tiling = tiling
+    widget.tile_x, widget.tile_y = 512, 512
+    widget.halo_x, widget.halo_y = 128, 128
     widget._ndim_override = lambda: None
-    widget._selected_image_ndim = lambda: ndim
+    widget._selected_image_shape = lambda: shape
     return widget
 
 
@@ -85,6 +91,43 @@ class TestRecommendedBatchSize(unittest.TestCase):
         with mock.patch.object(widgets.util, "_get_default_device", return_value="cuda"), \
                 mock.patch.object(v2_util, "_free_vram_gib", return_value=92.6):
             self.assertEqual(widget._recommended_batch_size(), VRAM_BATCH_SIZES[80]["hvit_t"])
+
+
+class TestJobCountCap(unittest.TestCase):
+    """The preview must not promise a batch larger than the work the selected image has."""
+
+    def test_a_short_volume_caps_the_recommendation(self):
+        widget = _make_widget(ndim=3, shape=(4, 512, 512))
+        self.assertEqual(widget._encoder_job_count(), 4)
+        with mock.patch.object(v2_util, "_free_vram_gib", return_value=92.6):
+            self.assertEqual(widget._recommended_batch_size(), 4)
+
+    def test_tiles_and_slices_multiply(self):
+        # A tiled volume runs one encoder call per tile and slice.
+        widget = _make_widget(ndim=3, tiling="yes", shape=(4, 1024, 1024))
+        self.assertEqual(widget._encoder_job_count(), 4 * 4)
+
+    def test_a_single_tile_caps_at_one(self):
+        widget = _make_widget(ndim=2, tiling="yes", shape=(512, 512))
+        self.assertEqual(widget._encoder_job_count(), 1)
+        with mock.patch.object(v2_util, "_free_vram_gib", return_value=92.6):
+            self.assertEqual(widget._recommended_batch_size(), 1)
+
+    def test_an_untiled_2d_image_is_a_single_call(self):
+        widget = _make_widget(ndim=2, tiling="no", shape=(4096, 4096))
+        self.assertEqual(widget._encoder_job_count(), 1)
+
+    def test_without_an_image_there_is_no_cap(self):
+        widget = _make_widget(ndim=None, shape=None)
+        self.assertIsNone(widget._encoder_job_count())
+        with mock.patch.object(v2_util, "_free_vram_gib", return_value=92.6):
+            self.assertEqual(widget._recommended_batch_size(), VRAM_BATCH_SIZES[80]["hvit_t"])
+
+    def test_forcing_2d_ignores_the_slices(self):
+        widget = _make_widget(ndim=3, tiling="yes", shape=(4, 1024, 1024))
+        widget._ndim_override = lambda: 2
+        # The leading axis is no longer a slice axis, so it is tiled over instead.
+        self.assertEqual(widget._encoder_job_count(), 1 * 2)
 
 
 class TestRefreshBatchSize(unittest.TestCase):
@@ -281,7 +324,13 @@ def test_widget_tracks_dimensionality_and_tiling(make_napari_viewer_proxy):
     assert not widget._batch_size_has_effect(), "a non-tiled 2d image has nothing to batch"
     assert widget._effective_batch_size() == 1
 
-    widget.tiling_dropdown.setCurrentText("yes")
+    # Large enough to be auto-tiled into several tiles, which is what the batch then spans. A single
+    # tile would (correctly) cap the batch at one, so it would not show that tiles are batched.
+    viewer.add_image(np.zeros((2048, 2048), dtype="uint8"), name="large")
+    widget.image_selection.reset_choices()
+    widget.image_selection.value = viewer.layers["large"]
+    widget._set_default_tiling()
+    assert widget.tiling == "yes"
     assert widget._batch_size_has_effect(), "tiles are what the batch spans"
     assert widget.batch_size > 1
 

@@ -405,6 +405,26 @@ class TestUtil(unittest.TestCase):
             for tile_id in range(4):
                 self._check_predictor_initialization(predictor, embeddings, i=i, tile_id=tile_id)
 
+    def test_precompute_image_embeddings_automatic_batch_size(self):
+        # The automatic batch size ('None', the default of the entry points that dispatch across the
+        # model families) has no per-device lookup for SAM1, so it runs a single tile / slice.
+        from micro_sam.v1.util import precompute_image_embeddings
+
+        predictor = get_sam_model(model_type=self.model_type)
+        tile_shape, halo = (256, 256), (16, 16)
+
+        input_ = np.random.rand(512, 512).astype("float32")
+        embeddings = precompute_image_embeddings(
+            predictor, input_, tile_shape=tile_shape, halo=halo, batch_size=None
+        )
+        for tile_id in range(4):
+            self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
+
+        input_ = np.random.rand(2, 512, 512).astype("float32")
+        embeddings = precompute_image_embeddings(predictor, input_, ndim=3, batch_size=None)
+        for i in range(2):
+            self._check_predictor_initialization(predictor, embeddings, i=i)
+
     def test_segmentation_to_one_hot(self):
         from micro_sam.util import segmentation_to_one_hot
 
