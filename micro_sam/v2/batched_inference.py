@@ -16,7 +16,7 @@ import numpy as np
 
 import torch
 
-from .util import Devices
+from .util import Devices, recommend_batch_size
 from micro_sam.util import _create_dataset_without_data
 from .normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
 
@@ -381,7 +381,8 @@ def _run_batched_pipeline(
         jobs: The job specifications, e.g. tile ids or slice indices. Passed to `load_fn` and, with
             the prediction, to `write_fn`.
         model_devices: The (model, device) pairs to run inference on (see `_prepare_models`).
-        batch_sizes: One batch size per entry in `model_devices` (see `_compute_auto_batch_sizes`).
+        batch_sizes: One batch size per entry in `model_devices` (see `_prepare_encoder_pipeline` for
+            the encoder and `_compute_auto_batch_sizes` for the decoder).
         load_fn: Called as `load_fn(job)` to read and preprocess one job.
         predict_fn: Called as `predict_fn(model, items, device)` with the loaded data of one batch.
             It must return one output per input. Batches that run out of memory are automatically
@@ -418,7 +419,9 @@ def _run_batched_pipeline(
         job_queue.put(STOP)
 
     input_queue = queue.Queue(maxsize=max(2 * sum(batch_sizes), 2))
-    output_queue = queue.Queue(maxsize=max(2 * len(model_devices), 2 * num_write_workers, 2))
+    # Sized to hold a full batch from every device: a consumer that cannot hand off all of its
+    # predictions blocks mid-batch and idles the GPU until the writers catch up.
+    output_queue = queue.Queue(maxsize=max(2 * sum(batch_sizes), 2 * num_write_workers, 2))
     progress_queue = queue.Queue()
     stop_event = threading.Event()
     error_box = []
@@ -569,22 +572,28 @@ def _embedding_cache_complete(features, root) -> bool:
 def _prepare_encoder_pipeline(
     predictor, n_jobs: int, batch_size: Optional[int], devices: Devices,
 ) -> Tuple[torch.nn.Module, List[Tuple[torch.nn.Module, torch.device]], List[int]]:
+    # Validated before the replicas are created, so an invalid argument never allocates on a GPU.
+    if batch_size is not None and int(batch_size) < 1:
+        raise ValueError(f"batch_size must be positive or None, got {batch_size}.")
+
     model = getattr(predictor, "model", predictor)
     resolved_devices = _resolve_devices(model, devices)
     model_devices = _prepare_models(model, resolved_devices)
-    if batch_size is None:
-        image_size = int(getattr(model, "image_size", getattr(predictor, "image_size", 1024)))
-        batch_sizes = _compute_auto_batch_sizes(
-            model_devices=model_devices,
-            n_jobs=n_jobs,
-            patch_shape=(image_size, image_size),
-            in_channels=3,
-            prediction_function=lambda this_model, inputs: this_model.forward_image(inputs),
-        )
-    else:
-        if int(batch_size) < 1:
-            raise ValueError(f"batch_size must be positive or None, got {batch_size}.")
-        batch_sizes = [int(batch_size)] * len(model_devices)
+    try:
+        if batch_size is None:
+            # Read after the replicas are placed, so their weights already count against the free VRAM.
+            model_type = getattr(model, "model_type", None) or getattr(predictor, "model_type", "")
+            # Cap by the share of the work a device receives, not by the total: a consumer fills its
+            # batch before it runs, so a batch as large as all jobs would keep the other devices idle.
+            jobs_per_device = (max(int(n_jobs), 0) + len(model_devices) - 1) // len(model_devices)
+            batch_sizes = [
+                recommend_batch_size(model_type, device, n_jobs=jobs_per_device) for _, device in model_devices
+            ]
+        else:
+            batch_sizes = [int(batch_size)] * len(model_devices)
+    except Exception:
+        _release_model_replicas(model_devices)
+        raise
     return model, model_devices, batch_sizes
 
 
@@ -639,8 +648,8 @@ def _compute_tiled_2d(
             this path is returned as is instead of being recomputed.
         pbar_init: Callback to initialize an external progress bar.
         pbar_update: Callback to update an external progress bar.
-        batch_size: The number of tiles per encoder call. By default candidate sizes are benchmarked
-            and a throughput-efficient value is selected on each CUDA device.
+        batch_size: The number of tiles per encoder call. By default it is looked up from the
+            free VRAM of each CUDA device (see `util.recommend_batch_size`).
         devices: The device or devices to run inference on (see `_resolve_devices`).
         num_prefetch_workers: The number of threads used to read and preprocess tiles.
         num_write_workers: The number of threads used to write embedding tiles.
@@ -740,12 +749,14 @@ def _forward_video_batch(model: torch.nn.Module, items: List[Dict], device: torc
     backbone_out = model.forward_image(batch)
 
     vision_features = backbone_out["vision_features"].detach().cpu().numpy()
-    pos_enc = [value.detach().cpu().numpy() for value in backbone_out["vision_pos_enc"]]
-    fpn = [value.detach().cpu().numpy() for value in backbone_out["backbone_fpn"]]
+    # Positional encodings depend only on the input shape, so every batch element is identical.
+    pos_enc = [value[:1].detach().cpu().numpy() for value in backbone_out["vision_pos_enc"]]
+    # The last FPN level is the same tensor as 'vision_features', so it is not copied or stored twice.
+    fpn = [value.detach().cpu().numpy() for value in backbone_out["backbone_fpn"][:-1]]
     return [
         {
             "features": vision_features[index:index + 1],
-            "pos_enc": [value[index:index + 1] for value in pos_enc],
+            "pos_enc": pos_enc,
             "fpn": [value[index:index + 1] for value in fpn],
             "original_size": items[index]["original_size"],
         }
@@ -757,6 +768,25 @@ def _create_feature_dataset(group, name: str, n_slices: int, tensor: np.ndarray)
     shape = (n_slices,) + tuple(tensor.shape)
     chunks = (1,) + tuple(tensor.shape)
     return _create_dataset_without_data(group, name, shape=shape, dtype="float32", chunks=chunks)
+
+
+def _check_pos_enc_shapes(pos_enc: Sequence[np.ndarray], reference: Sequence) -> None:
+    """Verify a slice's positional encodings match the single stored copy.
+
+    Args:
+        pos_enc: The positional encodings of the slice being written, each (1, C, H, W).
+        reference: The stored encodings, either the datasets or the in-memory tensors.
+
+    Raises:
+        RuntimeError: If the number of levels or any (C, H, W) differs from the stored copy.
+    """
+    expected = [tuple(value.shape[-3:]) for value in reference]
+    actual = [tuple(value.shape[-3:]) for value in pos_enc]
+    if actual != expected:
+        raise RuntimeError(
+            f"The positional encodings differ between slices, got {actual} but stored {expected}. "
+            "A single stored copy is only valid if every frame is encoded at the same resolution."
+        )
 
 
 def _create_feature_levels(group, n_slices: int, tensors: Sequence[np.ndarray]) -> List:
@@ -801,8 +831,8 @@ def _compute_3d(
             Only has an effect if `save_path` is given.
         pbar_init: Callback to initialize an external progress bar.
         pbar_update: Callback to update an external progress bar.
-        batch_size: The number of slices per encoder call. By default candidate sizes are benchmarked
-            and a throughput-efficient value is selected on each CUDA device.
+        batch_size: The number of slices per encoder call. By default it is looked up from the
+            free VRAM of each CUDA device (see `util.recommend_batch_size`).
         devices: The device or devices to run inference on (see `_resolve_devices`).
         num_prefetch_workers: The number of threads used to read and preprocess slices.
         num_write_workers: The number of threads used to write embedding slices.
@@ -834,16 +864,14 @@ def _compute_3d(
 
     if save_path is None:
         feature_values = [None] * n_slices
-        pos_values = [None] * n_slices
         fpn_values = [None] * n_slices
-        feature_dataset = None
-        pos_datasets = None
-        fpn_datasets = None
     else:
-        feature_values = pos_values = fpn_values = None
-        feature_dataset = None
-        pos_datasets = None
-        fpn_datasets = None
+        feature_values = fpn_values = None
+    # Only one positional encoding is kept, whichever slice is written first; they are all equal.
+    pos_shared = None
+    feature_dataset = None
+    pos_datasets = None
+    fpn_datasets = None
 
     def load_slice(z):
         raw = np.asarray(input_[z])
@@ -857,21 +885,26 @@ def _compute_3d(
     creation_lock = threading.Lock()
 
     def write_slice(z, result):
-        nonlocal feature_dataset, pos_datasets, fpn_datasets
+        nonlocal feature_dataset, pos_datasets, fpn_datasets, pos_shared
         if save_path is None:
+            with creation_lock:
+                if pos_shared is None:
+                    pos_shared = [torch.from_numpy(value) for value in result["pos_enc"]]
+            _check_pos_enc_shapes(result["pos_enc"], pos_shared)
             feature_values[z] = torch.from_numpy(result["features"])
-            pos_values[z] = [torch.from_numpy(value) for value in result["pos_enc"]]
             fpn_values[z] = [torch.from_numpy(value) for value in result["fpn"]]
             return
 
         with creation_lock:
             if feature_dataset is None:
                 feature_dataset = _create_feature_dataset(root, "features", n_slices, result["features"])
-                pos_datasets = _create_feature_levels(root.require_group("pos_enc"), n_slices, result["pos_enc"])
+                # One entry, not one per slice: all slices share the same positional encoding.
+                pos_datasets = _create_feature_levels(root.require_group("pos_enc"), 1, result["pos_enc"])
+                for dataset, value in zip(pos_datasets, result["pos_enc"]):
+                    dataset[0] = value
                 fpn_datasets = _create_feature_levels(root.require_group("fpn"), n_slices, result["fpn"])
+        _check_pos_enc_shapes(result["pos_enc"], pos_datasets)
         feature_dataset[z] = result["features"]
-        for dataset, value in zip(pos_datasets, result["pos_enc"]):
-            dataset[z] = value
         for dataset, value in zip(fpn_datasets, result["fpn"]):
             dataset[z] = value
 
@@ -893,8 +926,9 @@ def _compute_3d(
     original_size = tuple(int(value) for value in input_.shape[-2:])
     if save_path is None:
         features = torch.cat(feature_values).numpy()
-        n_levels = len(pos_values[0])
-        pos_enc = [torch.stack([value[level] for value in pos_values]) for level in range(n_levels)]
+        n_levels = len(fpn_values[0])
+        # Shaped like the on-disk layout, (1, 1, C, H, W), so both are read back the same way.
+        pos_enc = [value.unsqueeze(0) for value in pos_shared]
         fpn = [torch.stack([value[level] for value in fpn_values]) for level in range(n_levels)]
     else:
         _write_embedding_signature(
@@ -943,8 +977,8 @@ def _compute_tiled_3d(
             this path is returned as is instead of being recomputed.
         pbar_init: Callback to initialize an external progress bar.
         pbar_update: Callback to update an external progress bar.
-        batch_size: The number of tile slices per encoder call. By default candidate sizes are
-            benchmarked and a throughput-efficient value is selected on each CUDA device.
+        batch_size: The number of tile slices per encoder call. By default it is looked up from
+            the free VRAM of each CUDA device (see `util.recommend_batch_size`).
         devices: The device or devices to run inference on (see `_resolve_devices`).
         num_prefetch_workers: The number of threads used to read and preprocess tile slices.
         num_write_workers: The number of threads used to write embedding tile slices.
@@ -1013,18 +1047,20 @@ def _compute_tiled_3d(
                 feature_dataset = _create_feature_dataset(features, name, n_slices, result["features"])
                 feature_dataset.attrs["input_size"] = image_size
                 feature_dataset.attrs["original_size"] = list(result["original_size"])
+                # One entry per tile rather than one per slice, see `write_slice` in `_compute_3d`.
                 pos_datasets = _create_feature_levels(
-                    pos_enc_group.require_group(name), n_slices, result["pos_enc"],
+                    pos_enc_group.require_group(name), 1, result["pos_enc"],
                 )
+                for dataset, value in zip(pos_datasets, result["pos_enc"]):
+                    dataset[0] = value
                 fpn_datasets = _create_feature_levels(
                     fpn_group.require_group(name), n_slices, result["fpn"],
                 )
                 tile_datasets[tile_id] = feature_dataset, pos_datasets, fpn_datasets
 
         feature_dataset, pos_datasets, fpn_datasets = tile_datasets[tile_id]
+        _check_pos_enc_shapes(result["pos_enc"], pos_datasets)
         feature_dataset[z] = result["features"]
-        for dataset, value in zip(pos_datasets, result["pos_enc"]):
-            dataset[z] = value
         for dataset, value in zip(fpn_datasets, result["fpn"]):
             dataset[z] = value
 

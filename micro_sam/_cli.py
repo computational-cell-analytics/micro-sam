@@ -372,7 +372,7 @@ def _parse_shape(value):
 
 
 def _parse_batch_size(value):
-    """Parse the batch size: an integer, or 'auto' to benchmark a throughput-efficient value."""
+    """Parse the batch size: an integer, or 'auto' to select it independently on every device."""
     if value is None or str(value).lower() == "auto":
         return None
     try:
@@ -492,7 +492,7 @@ def _view_result(image_path, key, segmentation):
 )
 @click.option(
     "--batch_size", default="1",
-    help="The number of tiles / slices per model call, or 'auto' to select it by measured throughput."
+    help="The number of tiles / slices per model call, or 'auto' to select it per device."
 )
 @click.option(
     "--devices", default=None,
@@ -650,7 +650,7 @@ def _classifier_model_spec(rf_path):
 
 def _classifier_predictor(rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device):
     """Build the predictor and optional upsampler for classifier inference, defaulting to the training config."""
-    from .sam_annotator._state import _get_sam_model
+    from .util import _get_sam_model
 
     spec = _classifier_model_spec(rf_path)
     model_type = model_type or spec.get("model_type")
@@ -808,8 +808,8 @@ def inference_object_classification(
     help="Whether to use decoder-based state (AIS) when the model has a decoder, instead of grid-based AMG."
 )
 @click.option(
-    "--batch_size", default="1",
-    help="The number of tiles / slices per model call, or 'auto' to select it by measured throughput."
+    "--batch_size", default="auto",
+    help="The number of tiles / slices per model call. By default it is selected per device."
 )
 @click.option(
     "--devices", default=None,

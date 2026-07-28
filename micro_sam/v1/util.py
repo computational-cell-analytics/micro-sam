@@ -846,7 +846,7 @@ def precompute_image_embeddings(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
-    batch_size: int = 1,
+    batch_size: Optional[int] = 1,
     mask: Optional[np.typing.ArrayLike] = None,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
@@ -869,6 +869,7 @@ def precompute_image_embeddings(
         halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
         verbose: Whether to be verbose in the computation. By default, set to 'True'.
         batch_size: The batch size for precomputing image embeddings over tiles (or planes). By default, set to '1'.
+            Pass None to leave the choice to the backend, which is a single tile / plane for SAM1.
         mask: An optional mask to define areas that are ignored in the computation.
             The mask will be used within tiled embedding computation and tiles that don't contain any foreground
             in the mask will be excluded from the computation. It does not have any effect for non-tiled embeddings.
@@ -881,6 +882,8 @@ def precompute_image_embeddings(
         The image embeddings.
     """
     ndim = input_.ndim if ndim is None else ndim
+    # SAM1 has no per-device batch-size lookup, so the automatic choice is the single tile / slice.
+    batch_size = 1 if batch_size is None else batch_size
 
     # Handle the embedding save_path.
     # We don't have a save path, open in memory zarr file to hold tiled embeddings.

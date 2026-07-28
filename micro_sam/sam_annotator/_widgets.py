@@ -216,9 +216,13 @@ class _WidgetBase(QtWidgets.QWidget):
         dropdown = QtWidgets.QComboBox()
         dropdown.addItems(options)
         if update is None:
-            dropdown.currentIndexChanged.connect(
-                lambda index: setattr(self, name, options[index])
-            )
+            # Read the label off the live dropdown rather than the list captured here: the items are
+            # swapped later (the model sizes depend on the family), which makes that list stale.
+            def bind_selection(index, box=dropdown, attribute=name):
+                if index >= 0:
+                    setattr(self, attribute, box.itemText(index))
+
+            dropdown.currentIndexChanged.connect(bind_selection)
         else:
             dropdown.currentIndexChanged.connect(update)
 
@@ -414,9 +418,9 @@ class _WidgetBase(QtWidgets.QWidget):
         # NOTE: And finally, we should re-enable signals again.
         self.model_size_dropdown.blockSignals(False)
 
-        # Whether the batch size applies depends on the backend, so it follows the model selection.
+        # The batch size depends on the backend and its VRAM cost, so it follows the model selection.
         if getattr(self, "_batch_size_widget", None) is not None:
-            self._update_batch_size_visibility()
+            self._refresh_batch_size()
 
     def _create_model_section(
         self,
@@ -488,6 +492,10 @@ class _WidgetBase(QtWidgets.QWidget):
         # Now, we get the available sizes per model family.
         self._get_model_size_options()
 
+        # Resolve the type for the shown default now. The dropdowns only sync it on a change, and
+        # '_validate_model_type_and_custom_weights' not until the run button, so it would be unset.
+        self.model_type = self._resolve_model_type()
+
         self.model_size_dropdown, layout = self._add_choice_param(
             "model_size",
             self.model_size,
@@ -500,11 +508,13 @@ class _WidgetBase(QtWidgets.QWidget):
         )
         return layout
 
-    def _validate_model_type_and_custom_weights(self):
-        # Map the selected family + size to the SAM2 `model_type`, appending the family suffix
-        # (e.g. 'tiny' + 'Microscopy' -> 'hvit_t_cells'; 'tiny' + base family -> 'hvit_t').
+    def _resolve_model_type(self):
+        """The model type for the selected family and size, e.g. 'tiny' + 'Microscopy' -> 'hvit_t_cells'."""
         suffix = self.model_family_config.get(self.model_family, {}).get("suffix", "")
-        self.model_type = f"hvit_{self.model_size[0]}{suffix}"
+        return f"hvit_{self.model_size[0]}{suffix}"
+
+    def _validate_model_type_and_custom_weights(self):
+        self.model_type = self._resolve_model_type()
 
         # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
         if self.custom_weights:
@@ -628,6 +638,9 @@ def _create_pbar_for_threadworker(initial_description=None):
     )
     pbar_signals.pbar_stop.connect(lambda: pbar.close())
     pbar_signals.pbar_reset.connect(lambda: pbar.reset())
+    # Paint it now. The callers run on the main thread and only reach the next 'processEvents' after
+    # the model is built, so without this the bar stays invisible for the whole preparation.
+    QtWidgets.QApplication.processEvents()
     return pbar, pbar_signals
 
 
@@ -1847,6 +1860,8 @@ class EmbeddingWidget(_WidgetBase):
                 "array is read as a volume); set '2d' to read a multi-channel array (e.g. (C, H, W) "
                 "or (H, W, C)) as a single 2d image, or '3d' to force a (Z, H, W) volume.",
             )
+            # Forcing '2d' on a volume removes the slices the batch would span.
+            self.image_ndim_dropdown.currentIndexChanged.connect(self._refresh_batch_size)
             setting_values.layout().addLayout(ndim_layout)
             choice_rows.append(ndim_layout)
 
@@ -1917,22 +1932,24 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.layout().addLayout(device_layout)
         choice_rows.append(device_layout)
 
-        # Use a conservative default and let users opt into larger per-GPU batches when their
-        # workload and available memory benefit from them. Batching only helps on a GPU, so the
-        # control is hidden whenever the effective device is the CPU (the default of 1 is still
-        # used then). Visibility tracks the device dropdown, so it also updates when the user
-        # switches devices or when 'auto' resolves to the CPU.
+        # The batch size follows the model and the device until the user edits it, after which their
+        # value is kept. Until then it only previews what the backend will pick per device, see
+        # '_effective_batch_size'. Batching only helps on a GPU, so the control is hidden whenever the
+        # effective device is the CPU. Both visibility and value track the device dropdown, so they
+        # also update when the user switches devices or when 'auto' resolves to the CPU.
         self.batch_size = 1
+        self._batch_size_is_auto = True
         self.batch_size_param, batch_size_layout = self._add_int_param(
             "batch_size", self.batch_size, min_val=1, max_val=64,
             title="batch size",
             tooltip=get_tooltip("embedding", "batch_size"),
         )
+        self.batch_size_param.valueChanged.connect(self._on_batch_size_edited)
         self._batch_size_widget = QtWidgets.QWidget()
         self._batch_size_widget.setLayout(batch_size_layout)
         setting_values.layout().addWidget(self._batch_size_widget)
-        self.device_dropdown.currentIndexChanged.connect(self._update_batch_size_visibility)
-        self._update_batch_size_visibility()
+        self.device_dropdown.currentIndexChanged.connect(self._refresh_batch_size)
+        self._refresh_batch_size()
 
         # Create UI for the save path.
         self.embeddings_save_path = None
@@ -2005,13 +2022,18 @@ class EmbeddingWidget(_WidgetBase):
         names match. Subclasses with custom family handling (classification) override this."""
         pass
 
-    def _selected_image_ndim(self):
-        # Spatial dimensionality of the currently selected image layer (2 or 3), or None if no image.
+    def _selected_image_shape(self):
+        # Spatial shape of the currently selected image layer (any channel axis removed), or None if
+        # no image is selected.
         image = self.image_selection.get_value()
         if image is None:
             return None
-        shape = image.data.shape[:-1] if image.rgb else image.data.shape
-        return len(shape)
+        return image.data.shape[:-1] if image.rgb else image.data.shape
+
+    def _selected_image_ndim(self):
+        # Spatial dimensionality of the currently selected image layer (2 or 3), or None if no image.
+        shape = self._selected_image_shape()
+        return None if shape is None else len(shape)
 
     def _ndim_override(self):
         # The user-selected image dimensionality override: None for 'auto', else 2 or 3. Read the
@@ -2024,6 +2046,10 @@ class EmbeddingWidget(_WidgetBase):
         # Show the in-plane tile shape and halo fields only when tiling is enabled.
         self.tiling = self.tiling_dropdown.currentText()
         self._tiling_widget.setVisible(self.tiling == "yes")
+        # Tiling decides whether a 2d image has anything to batch over. This also runs on image
+        # selection, via '_set_default_tiling'.
+        if getattr(self, "_batch_size_widget", None) is not None:
+            self._refresh_batch_size()
 
     def _batch_size_has_effect(self):
         # Batching does not help on the CPU (so 'auto' resolving to the CPU counts as no effect), and
@@ -2033,18 +2059,90 @@ class EmbeddingWidget(_WidgetBase):
         device = self.device
         if device == "auto":
             device = util._get_default_device()
-        return util.device_type(device) != "cpu" and not is_vfm_model(getattr(self, "model_type", None))
+        if util.device_type(device) == "cpu" or is_vfm_model(getattr(self, "model_type", None)):
+            return False
+
+        # A 2d image without tiling is a single encoder call, so there is nothing to batch. Tiles and
+        # z slices are what the batch spans. An unknown dimensionality (no image yet) keeps the field.
+        ndim = self._ndim_override() or self._selected_image_ndim()
+        return not (ndim == 2 and self.tiling != "yes")
+
+    def _batch_size_is_tabulated(self):
+        # Whether the VRAM table covers the selected model. It is calibrated for the SAM2 encoders;
+        # SAM1 and the VFM encoders keep a batch of one.
+        from micro_sam.v2.util import SUPPORTED_MODELS
+
+        model_type = getattr(self, "model_type", None)
+        return bool(model_type) and str(model_type)[:6] in SUPPORTED_MODELS
 
     def _effective_batch_size(self):
-        """The batch size actually used: the selected value where it has an effect, else one.
+        """The batch size handed to the backend, or None for it to choose one per device.
 
-        The widget keeps the user's value so a device switch does not discard their GPU preference.
+        The displayed value is only a preview (see `_recommended_batch_size`), so while the user has
+        not edited it the SAM2 backend picks its own value per device, once the weights are placed
+        there. A value the user typed, or one where batching has no effect, is forwarded verbatim.
         """
-        return self.batch_size if self._batch_size_has_effect() else 1
+        if not self._batch_size_has_effect():
+            return 1
+        if self._batch_size_is_auto and self._batch_size_is_tabulated():
+            return None
+        return self.batch_size
 
-    def _update_batch_size_visibility(self, index=None):
-        # Show the batch size field only where it has an effect.
+    def _encoder_job_count(self):
+        # The number of encoder calls the selected image needs (tiles, z slices, or both), or None
+        # while no image is selected. Mirrors how the backend splits the input, so the preview is
+        # never larger than the work.
+        from bioimage_cpp.utils import Blocking
+
+        shape = self._selected_image_shape()
+        if shape is None:
+            return None
+
+        ndim = self._ndim_override() or len(shape)
+        n_slices = shape[0] if ndim == 3 else 1
+        if self.tiling != "yes":
+            return n_slices
+
+        tile_shape, _ = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
+        if tile_shape is None:
+            return n_slices
+        in_plane = shape[1:3] if ndim == 3 else shape[:2]
+        return Blocking([0, 0], list(in_plane), list(tile_shape)).number_of_blocks * n_slices
+
+    def _recommended_batch_size(self):
+        """The batch size the VRAM table suggests here, or one if the model is not tabulated.
+
+        This previews what the backend will pick rather than deciding it: it is read before the model
+        is loaded, and for 'auto' from the default device only, whereas the backend reads every device
+        it runs on after placing the weights there. It is capped by the total work; the backend also
+        caps it by the share of that work each device receives.
+        """
+        from micro_sam.v2.util import recommend_batch_size
+
+        if not self._batch_size_is_tabulated():
+            return 1
+
+        device = self.device
+        if device == "auto":
+            device = util._get_default_device()
+        return recommend_batch_size(self.model_type, device, n_jobs=self._encoder_job_count())
+
+    def _on_batch_size_edited(self, value):
+        # A value the user typed is theirs to keep, so stop tracking the model and device.
+        self._batch_size_is_auto = False
+
+    def _refresh_batch_size(self, index=None):
+        # Show the field only where it has an effect, and keep its value in step with the model and
+        # the device unless the user has set it themselves.
         self._batch_size_widget.setVisible(self._batch_size_has_effect())
+        if not self._batch_size_is_auto:
+            return
+
+        recommended = self._recommended_batch_size()
+        self.batch_size_param.blockSignals(True)
+        self.batch_size_param.setValue(recommended)
+        self.batch_size_param.blockSignals(False)
+        self.batch_size = recommended
 
     def _apply_default_tiling_for_shape(self, shape):
         # Enable tiling by default for large in-plane images, using the central v2 tiling defaults.
@@ -2065,11 +2163,9 @@ class EmbeddingWidget(_WidgetBase):
         self._update_tiling_visibility()
 
     def _set_default_tiling(self, *args):
-        image = self.image_selection.get_value()
-        if image is None:
-            return
-        shape = image.data.shape[:-1] if image.rgb else image.data.shape
-        self._apply_default_tiling_for_shape(shape)
+        shape = self._selected_image_shape()
+        if shape is not None:
+            self._apply_default_tiling_for_shape(shape)
 
     def _reset_inputs_to_defaults(self):
         """Reset the user inputs to their fresh-open defaults.
@@ -2095,7 +2191,8 @@ class EmbeddingWidget(_WidgetBase):
         self.halo_x_param.setValue(DEFAULT_HALO[0])
         self.halo_y_param.setValue(DEFAULT_HALO[1])
         self.tiling_dropdown.setCurrentText("no")
-        self.batch_size_param.setValue(1)
+        self._batch_size_is_auto = True
+        self._refresh_batch_size()
         self.embeddings_save_path_param.setText("")
 
         # Reset the image-dimensionality override back to 'auto' so a new image is re-detected.
@@ -2304,12 +2401,8 @@ class EmbeddingWidget(_WidgetBase):
         state.reset_state()
 
         # Get image dimensions.
-        if image.rgb:
-            ndim = image.data.ndim - 1
-            state.image_shape = image.data.shape[:-1]
-        else:
-            ndim = image.data.ndim
-            state.image_shape = image.data.shape
+        state.image_shape = self._selected_image_shape()
+        ndim = len(state.image_shape)
         state.ndim = ndim
 
         # Set layer scale
@@ -2600,7 +2693,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
         # This branch does not go through the inherited update, so refresh the batch size here too:
         # the advanced families include the VFM encoders, which do not support batching.
         if getattr(self, "_batch_size_widget", None) is not None:
-            self._update_batch_size_visibility()
+            self._refresh_batch_size()
 
     def _validate_model_type_and_custom_weights(self):
         # DINO families always resolve from the registry. DINOv3 weights load from HuggingFace using the

@@ -98,20 +98,20 @@ def test_batch_size_visibility_follows_device_and_model(qtbot):
 
     widget.device = "cpu"
     widget.model_type = "hvit_t_cells"
-    widget._update_batch_size_visibility()
+    widget._refresh_batch_size()
     assert widget._batch_size_widget.isHidden()
 
     widget.device = "cuda"
-    widget._update_batch_size_visibility()
+    widget._refresh_batch_size()
     assert not widget._batch_size_widget.isHidden()
 
     # The VFM encoders offered by the classifiers compute their embeddings unbatched.
     widget.model_type = "vit_b_dinov2"
-    widget._update_batch_size_visibility()
+    widget._refresh_batch_size()
     assert widget._batch_size_widget.isHidden()
 
     widget.model_type = "vit_b_lm"
-    widget._update_batch_size_visibility()
+    widget._refresh_batch_size()
     assert not widget._batch_size_widget.isHidden()
 
 
@@ -130,7 +130,7 @@ def test_hidden_batch_size_is_not_applied(qtbot, monkeypatch):
     assert widget._effective_batch_size() == 32
 
     widget.device = "cpu"
-    widget._update_batch_size_visibility()
+    widget._refresh_batch_size()
     assert widget._batch_size_widget.isHidden()
     assert widget._effective_batch_size() == 1
     # The remembered GPU preference survives, so switching back restores it.

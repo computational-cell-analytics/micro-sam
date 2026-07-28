@@ -323,7 +323,7 @@ def batch_object_classifier(
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
     skip_done: bool = False,
-    batch_size: int = 1,
+    batch_size: Optional[int] = 1,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the object classifier for a list of images and segmentations.
 
@@ -348,7 +348,8 @@ def batch_object_classifier(
         viewer: The viewer to which the functionality should be added.
         return_viewer: Whether to return the napari viewer instead of starting the event loop.
         batch_size: The number of tiles / slices per model call when computing the embeddings.
-            Only has an effect on a GPU. By default a single tile / slice is used.
+            Only has an effect on a GPU. Pass None to select it per device from the free VRAM
+            (SAM2 only). By default a single tile / slice is used.
         skip_done: Whether to skip images whose prediction already exists in `output_folder`.
 
     Returns:

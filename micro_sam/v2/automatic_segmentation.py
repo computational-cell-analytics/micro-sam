@@ -47,8 +47,7 @@ def get_predictor_and_segmenter(
     Returns:
         The SAM2 predictor (used to precompute embeddings) and the automatic segmentation generator.
     """
-    from ..util import get_device
-    from ..sam_annotator._state import _get_sam_model
+    from ..util import get_device, _get_sam_model
     from .instance_segmentation import get_decoder, get_instance_segmentation_generator
 
     # Keep the un-resolved request (None = 'auto') separate from the concrete model placement, so the
@@ -128,7 +127,8 @@ def automatic_instance_segmentation(
         device: The device to run inference on.
         verbose: Whether to print progress.
         batch_size: The batch size used when running inference for multiple slices and / or tiles.
-            Defaults to one; pass None for throughput-based automatic selection.
+            Defaults to one. Pass None to select it per device: from the free VRAM for the encoder,
+            and benchmarked for the (3d) decoder, which needs the headroom to probe.
         devices: Inference device or devices. None uses all visible GPUs when the model is on CUDA.
         num_prefetch_workers: Number of input reading and preprocessing threads.
         num_write_workers: Number of output writing threads.

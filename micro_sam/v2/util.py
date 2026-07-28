@@ -115,6 +115,78 @@ DEFAULT_HALO = (128, 128)
 DEFAULT_TILE_Z = 4
 DEFAULT_HALO_Z = 2
 
+# Encoder batch size per free-VRAM band in GiB, then per backbone, measured end to end. A device
+# uses the largest band it reaches, see BAND_TOLERANCE.
+VRAM_BATCH_SIZES = {
+    4: {"hvit_t": 2, "hvit_s": 2, "hvit_b": 2, "hvit_l": 1},
+    6: {"hvit_t": 2, "hvit_s": 2, "hvit_b": 2, "hvit_l": 2},
+    8: {"hvit_t": 4, "hvit_s": 4, "hvit_b": 4, "hvit_l": 4},
+    10: {"hvit_t": 4, "hvit_s": 4, "hvit_b": 4, "hvit_l": 4},
+    12: {"hvit_t": 4, "hvit_s": 4, "hvit_b": 4, "hvit_l": 4},
+    16: {"hvit_t": 8, "hvit_s": 8, "hvit_b": 8, "hvit_l": 8},
+    24: {"hvit_t": 8, "hvit_s": 8, "hvit_b": 8, "hvit_l": 8},
+    32: {"hvit_t": 16, "hvit_s": 16, "hvit_b": 16, "hvit_l": 16},
+    40: {"hvit_t": 16, "hvit_s": 16, "hvit_b": 16, "hvit_l": 16},
+    48: {"hvit_t": 16, "hvit_s": 16, "hvit_b": 16, "hvit_l": 16},
+    80: {"hvit_t": 32, "hvit_s": 32, "hvit_b": 32, "hvit_l": 32},
+}
+
+# The backbone assumed for an unknown model name, the most memory-hungry one in the table.
+FALLBACK_BACKBONE = "hvit_l"
+
+# Bands are keyed by nominal card size, but a card never reports all of it as free (CUDA context,
+# ECC reserve): an 80 GB A100 has 79.25 GiB. Without this slack every such card falls a band short.
+BAND_TOLERANCE = 0.95
+
+
+def _band_for(free_gib):
+    """The largest tabulated VRAM band the device reaches, or None if it reaches none."""
+    reached = [band for band in VRAM_BATCH_SIZES if free_gib >= band * BAND_TOLERANCE]
+    return max(reached) if reached else None
+
+
+def _backbone_of(model_type):
+    """Map a model name onto its backbone, e.g. 'hvit_t_cells' -> 'hvit_t'."""
+    backbone = str(model_type)[:6]
+    return backbone if backbone in SUPPORTED_MODELS else FALLBACK_BACKBONE
+
+
+def _free_vram_gib(device):
+    """The free VRAM of a CUDA device in GiB, or None for a non-CUDA device."""
+    device = torch.device(device)
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    return torch.cuda.mem_get_info(device)[0] / 1024 ** 3
+
+
+def recommend_batch_size(model_type, device, n_jobs=None):
+    """Look up the encoder batch size for a model on a device.
+
+    Args:
+        model_type: The model name, e.g. 'hvit_t' or 'hvit_t_cells'. Unknown names are treated as the
+            most memory-hungry backbone.
+        device: The device the encoder runs on. Non-CUDA devices always get a batch size of one, as
+            does a device with less free VRAM than the smallest tabulated band.
+        n_jobs: The total number of tiles / slices, to avoid a batch larger than the work.
+
+    Returns:
+        The batch size to use, at least one.
+    """
+    free_gib = _free_vram_gib(device)
+    if free_gib is None:
+        return 1
+
+    band = _band_for(free_gib)
+    if band is None:
+        # The smallest entry is calibrated for the smallest band, not below it, so a device that
+        # reaches no band stays at one instead of relying on the OOM backoff to recover.
+        return 1
+
+    batch_size = VRAM_BATCH_SIZES[band][_backbone_of(model_type)]
+    if n_jobs is not None:
+        batch_size = min(batch_size, max(1, int(n_jobs)))
+    return int(batch_size)
+
 
 def needs_default_tiling(shape):
     """Whether to enable default in-plane tiling for a given image shape.
@@ -471,7 +543,7 @@ def precompute_image_embeddings(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
-    batch_size: Optional[int] = 1,
+    batch_size: Optional[int] = None,
     devices: Devices = None,
     num_prefetch_workers: int = 4,
     num_write_workers: int = 2,
@@ -494,8 +566,8 @@ def precompute_image_embeddings(
         halo: Optional in-plane tile halo.
         verbose: Whether to show progress.
         batch_size: The batch size used when running inference for multiple slices and / or tiles.
-            Defaults to one, which is recommended for 10 GB MIG devices. Pass None to benchmark
-            candidate sizes and select a throughput-efficient value independently on each CUDA device.
+            By default it is looked up independently on each CUDA device from its free VRAM (see
+            `recommend_batch_size`). Pass an integer to run every device at that batch size.
         devices: Device or devices used for embedding inference. If None and the predictor is on
             CUDA, all visible CUDA devices are used.
         num_prefetch_workers: Number of threads used to read and preprocess input jobs.
@@ -582,6 +654,31 @@ def precompute_image_embeddings(
         resource.close()
     resource.update(embeddings)
     return resource
+
+
+def _shared_pos_enc(level):
+    """Read the positional encoding shared by every slice. Unlike 'features' and 'fpn', it is stored once.
+
+    Args:
+        level: One stored positional-encoding level, shaped (1, 1, C, H, W).
+
+    Returns:
+        The encoding for any slice, shaped (1, C, H, W).
+    """
+    return level[0]
+
+
+def _backbone_fpn(fpn_levels, features):
+    """Rebuild the encoder's FPN levels, whose last one is stored as 'features' rather than twice.
+
+    Args:
+        fpn_levels: The stored FPN levels for one slice, all but the last.
+        features: That slice's 'features', which is the missing last level.
+
+    Returns:
+        The full list of FPN levels, in the order the encoder produced them.
+    """
+    return list(fpn_levels) + [features]
 
 
 def _to_device_tensor(data, device):
@@ -673,8 +770,10 @@ def set_precomputed(
         for slice_id in range(features.shape[0]):
             image = inference_state["images"][slice_id].to(device).float().unsqueeze(0)
             vision_features = _to_device_tensor(features[slice_id], device)
-            vision_pos_enc = [_to_device_tensor(t[slice_id], device) for t in pos_list]
-            backbone_fpn = [_to_device_tensor(t[slice_id], device) for t in fpn_list]
+            vision_pos_enc = [_to_device_tensor(_shared_pos_enc(t), device) for t in pos_list]
+            backbone_fpn = _backbone_fpn(
+                [_to_device_tensor(t[slice_id], device) for t in fpn_list], vision_features
+            )
             backbone_out = {
                 "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
             }

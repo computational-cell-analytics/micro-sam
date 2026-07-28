@@ -4,7 +4,8 @@ tooltips = {
     "embedding": {
         "batch_size": (
             "Number of image slices or tiles encoded together per GPU. Larger values can improve throughput. "
-            "They can also be slower or run out of GPU memory. The safe default is 1."
+            "They can also be slower or run out of GPU memory. The shown value estimates what fits on this "
+            "GPU; it is refined per GPU when the embeddings are computed, unless you enter a value yourself."
         ),
         "cache_state": "Cache the automatic segmentation state to disk for faster (re)runs.",
         "custom_weights": "Select custom model weights, for example from a model that you finetuned.",

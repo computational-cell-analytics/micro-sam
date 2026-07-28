@@ -328,20 +328,27 @@ class TestAnnotatorClass:
         ew.custom_weights_param.setText(" ")
         assert ew.custom_weights is None
 
-        # Batching is explicitly user-controlled and starts at the safe single-item default.
-        assert ew.batch_size == 1
-        assert ew.batch_size_param.value() == 1
+        # Batching starts at the value the VRAM table recommends for the default model and device,
+        # which is one without a GPU. Read from the table rather than from the widget's own helper,
+        # which would agree with it trivially.
+        from micro_sam.util import _get_default_device
+        from micro_sam.v2.util import recommend_batch_size
+
+        device = _get_default_device() if ew.device == "auto" else ew.device
+        recommended = recommend_batch_size(ew.model_type, device)
+        assert ew.batch_size == recommended
+        assert ew.batch_size_param.value() == recommended
 
         # Reproduce the input reset used when a different image layer is selected.
         ew.custom_weights_param.setText("/tmp/custom-weights.pt")
-        ew.batch_size_param.setValue(4)
+        ew.batch_size_param.setValue(recommended + 1)
         assert ew.custom_weights == "/tmp/custom-weights.pt"
-        assert ew.batch_size == 4
+        assert ew.batch_size == recommended + 1
         ew._reset_inputs_to_defaults()
         assert ew.custom_weights is None
         assert ew.custom_weights_param.text() == ""
-        assert ew.batch_size == 1
-        assert ew.batch_size_param.value() == 1
+        assert ew.batch_size == recommended
+        assert ew.batch_size_param.value() == recommended
 
     @pytest.mark.parametrize("ndim", [2, 3])
     def test_batched_checkbox_hidden_when_tiled(self, make_napari_viewer_proxy, ndim):

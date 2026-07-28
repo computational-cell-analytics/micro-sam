@@ -12,10 +12,11 @@ from tqdm import tqdm
 from torch_em.data.datasets.util import split_kwargs
 
 from .. import util
+from ..util import AutoSegBase
 from .util import get_sam_model, precompute_image_embeddings, get_model_names
 from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
 from .instance_segmentation import (
-    get_instance_segmentation_generator, get_decoder, AutoSegBase,
+    get_instance_segmentation_generator, get_decoder,
     AutomaticMaskGenerator, TiledAutomaticMaskGenerator,
     AutomaticPromptGenerator, TiledAutomaticPromptGenerator,
     InstanceSegmentationWithDecoder, TiledInstanceSegmentationWithDecoder,

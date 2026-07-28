@@ -12,6 +12,7 @@ import xxhash
 import hashlib
 import warnings
 from pathlib import Path
+from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -61,6 +62,44 @@ _MODEL_TYPES = ("vit_l", "vit_b", "vit_h", "vit_t")
 
 ImageEmbeddings = Dict[str, Any]
 """@private"""
+
+
+class AutoSegBase(ABC):
+    """Common interface for automatic-segmentation generators.
+
+    Unifies the grid-based mask generators (`micro_sam.v1.instance_segmentation.AMGBase` and its
+    subclasses) and the decoder-based instance segmentation
+    (`micro_sam.v1.instance_segmentation.InstanceSegmentationWithDecoder` and its subclasses), for
+    both SAM1 and SAM2: all of them are initialized on an image, produce an instance segmentation
+    via `generate`, and cache / restore their expensive intermediate state via
+    `get_state` / `set_state`. It lives here, next to the other shared types, so that it can be
+    referenced in annotations without importing an implementation (and with it the training stack).
+    """
+
+    @property
+    def is_initialized(self) -> bool:
+        """Whether `initialize` ran and the state is available."""
+        return self._is_initialized
+
+    @abstractmethod
+    def initialize(self, *args, **kwargs) -> None:
+        """Compute and store the (expensive) state needed by `generate`."""
+
+    @abstractmethod
+    def generate(self, *args, **kwargs):
+        """Produce the instance segmentation from the initialized state."""
+
+    @abstractmethod
+    def get_state(self) -> Dict[str, Any]:
+        """Return the cached state so it can be serialized and later restored."""
+
+    @abstractmethod
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Restore a state produced by `get_state`."""
+
+    @abstractmethod
+    def clear_state(self) -> None:
+        """Clear the cached state."""
 
 
 def get_cache_directory() -> None:
@@ -115,9 +154,9 @@ def _get_default_device():
     if torch.cuda.is_available():
         device = "cuda"
     # As second priority use mps.
-    # See https://pytorch.org/docs/stable/notes/mps.html for details
+    # See https://pytorch.org/docs/stable/notes/mps.html for details.
+    # Silent: the GUI resolves the device on every settings change. 'micro_sam info' reports it.
     elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        print("Using apple MPS device.")
         device = "mps"
     # Use the CPU as fallback.
     else:
@@ -230,6 +269,56 @@ def get_embedding_function(model_type: str) -> callable:
         "Finetuned models keep their backbone prefix, e.g. 'vit_b_lm' or 'hvit_t_cells'. "
         "Run 'micro_sam info' to list all available models."
     )
+
+
+# TODO: refactor this once we decide which models to support.
+# (Likely only SAM2 models)
+def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_cli):
+    """Build the predictor for a model name, dispatching across the VFM, SAM2 and SAM1 families.
+
+    This lives here rather than next to the annotator state that first needed it, so that the CLI and
+    the automatic-segmentation entry points can load a model without importing napari and the Qt
+    widgets. Every family is imported inside its own branch, so loading a SAM2 model does not pull in
+    SAM1 or the training stack either.
+    """
+    from .models.vfm import is_vfm_model, get_vfm_model
+    if is_vfm_model(model_type):  # VFM encoders (DINO / UNI) for the classification tools.
+        encoder = get_vfm_model(model_type, device=device, checkpoint_path=checkpoint_path)
+        return encoder, {}
+
+    if model_type.startswith("hvit"):  # i.e. SAM2 models.
+        from .v2.util import get_sam2_image_predictor, get_sam2_model
+
+        # 'device=None' lets 'get_sam2_model' auto-detect the best device (cuda > mps > cpu);
+        # an explicit device (e.g. from the '--device' CLI argument) is forwarded and honored.
+        if ndim == 2:  # Get the SAM2 model and prepare the image predictor.
+            model = get_sam2_model(model_type=model_type, input_type="images", device=device)
+            # Use the shared resize-longest predictor.
+            predictor = get_sam2_image_predictor(model)
+            # 'get_sam2_model' sets these on the video predictor. Set them here on the image
+            # predictor too, so the tool can write the embedding signature when it caches embeddings.
+            predictor.model_type = model_type
+            predictor.model_name = model_type
+        elif ndim == 3:  # Get SAM2 video predictor
+            predictor = get_sam2_model(model_type=model_type, input_type="videos", device=device)
+        else:
+            raise ValueError
+        state = {}
+
+    else:
+        from .v1.util import get_sam_model
+
+        def progress_bar_factory(model_type):
+            pbar = tqdm(desc=f"Downloading '{model_type}'. This may take a while")
+            return pbar
+
+        predictor, state = get_sam_model(
+            device=device, model_type=model_type,
+            checkpoint_path=checkpoint_path, decoder_path=decoder_path, return_state=True,
+            progress_bar_factory=None if use_cli else progress_bar_factory,
+        )
+
+    return predictor, state
 
 
 def _available_devices():

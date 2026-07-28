@@ -15,8 +15,8 @@ from tqdm import tqdm
 from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy, matching
 
+from ...util import AutoSegBase
 from ..util import precompute_image_embeddings
-from ..instance_segmentation import AutoSegBase
 
 
 def _get_range_of_search_values(input_vals, step):

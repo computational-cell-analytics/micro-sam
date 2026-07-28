@@ -69,6 +69,72 @@ class FakeUNETR(torch.nn.Module):
         return prediction.repeat(1, 4, 1, 1, 1) * self.scale
 
 
+class FakeVideoBackbone(torch.nn.Module):
+    """Stand-in encoder whose positional encodings depend only on the input shape."""
+
+    def __init__(self, channels=2, levels=2):
+        super().__init__()
+        self.channels = channels
+        self.levels = levels
+
+    def forward_image(self, batch):
+        batch_size = batch.shape[0]
+        height, width = batch.shape[-2:]
+        pos_enc, fpn = [], []
+        for level in range(self.levels):
+            size = (height // (2 ** level), width // (2 ** level))
+            grid = torch.arange(size[0] * size[1], dtype=torch.float32).reshape(1, 1, *size)
+            pos_enc.append(grid.repeat(batch_size, self.channels, 1, 1))
+            fpn.append(batch[:, :1, :size[0], :size[1]].repeat(1, self.channels, 1, 1).clone())
+        return {"vision_features": fpn[0].clone(), "vision_pos_enc": pos_enc, "backbone_fpn": fpn}
+
+
+class TestSharedPositionalEncoding(unittest.TestCase):
+    """The encodings are shape-determined, so only one copy is computed, stored and read back."""
+
+    def test_forward_copies_one_encoding_per_batch(self):
+        model = FakeVideoBackbone()
+        items = [{"tensor": torch.full((1, 8, 8), float(index)), "original_size": (8, 8)} for index in range(3)]
+        results = batched_inference._forward_video_batch(model, items, torch.device("cpu"))
+
+        self.assertEqual(len(results), 3)
+        for result in results:
+            for level in result["pos_enc"]:
+                self.assertEqual(level.shape[0], 1)
+        # Every item shares the identical arrays, so nothing is copied per slice.
+        for result in results[1:]:
+            for shared, other in zip(results[0]["pos_enc"], result["pos_enc"]):
+                self.assertIs(shared, other)
+
+    def test_fpn_stays_per_item(self):
+        model = FakeVideoBackbone()
+        items = [{"tensor": torch.full((1, 8, 8), float(index)), "original_size": (8, 8)} for index in range(3)]
+        results = batched_inference._forward_video_batch(model, items, torch.device("cpu"))
+        first, last = results[0]["fpn"][0], results[-1]["fpn"][0]
+        self.assertFalse(np.array_equal(first, last))
+
+    def test_shape_check_accepts_matching_encodings(self):
+        stored = [np.zeros((1, 2, 4, 4), dtype="float32")]
+        batched_inference._check_pos_enc_shapes([np.zeros((1, 2, 4, 4), dtype="float32")], stored)
+
+    def test_shape_check_rejects_a_different_resolution(self):
+        stored = [np.zeros((1, 2, 4, 4), dtype="float32")]
+        with self.assertRaises(RuntimeError):
+            batched_inference._check_pos_enc_shapes([np.zeros((1, 2, 8, 8), dtype="float32")], stored)
+
+    def test_shape_check_rejects_a_different_level_count(self):
+        stored = [np.zeros((1, 2, 4, 4), dtype="float32")] * 2
+        with self.assertRaises(RuntimeError):
+            batched_inference._check_pos_enc_shapes([np.zeros((1, 2, 4, 4), dtype="float32")], stored)
+
+    def test_shared_reader_ignores_the_slice_index(self):
+        from micro_sam.v2.util import _shared_pos_enc
+
+        level = np.arange(2 * 3 * 4, dtype="float32").reshape(1, 1, 2, 3, 4)
+        np.testing.assert_array_equal(_shared_pos_enc(level), level[0])
+        self.assertEqual(_shared_pos_enc(level).shape, (1, 2, 3, 4))
+
+
 class TestBatchedPipeline(unittest.TestCase):
     def test_pipeline_batches_and_writes_all_jobs(self):
         outputs = {}
@@ -265,6 +331,59 @@ class TestAutomaticBatchSizing(unittest.TestCase):
             [call.kwargs["batch_size"] for call in measure.call_args_list],
             [1, 2, 4],
         )
+
+
+class TestEncoderBatchSizes(unittest.TestCase):
+    """The encoder batch size is looked up per device, capped by that device's share of the work."""
+
+    def _batch_sizes(self, n_jobs, n_devices, batch_size=None):
+        model = torch.nn.Linear(1, 1)
+        model.model_type = "hvit_t"
+        devices = [torch.device("cuda", index) for index in range(n_devices)]
+        pairs = [(model, device) for device in devices]
+        # The stand-in returns the cap it was given, so the assertions see the per-device share.
+        with mock.patch.object(batched_inference, "_resolve_devices", return_value=devices), \
+                mock.patch.object(batched_inference, "_prepare_models", return_value=pairs), \
+                mock.patch.object(
+                    batched_inference, "recommend_batch_size", side_effect=lambda model_type, device, n_jobs: n_jobs
+                ):
+            _, _, batch_sizes = batched_inference._prepare_encoder_pipeline(model, n_jobs, batch_size, None)
+        return batch_sizes
+
+    def test_each_device_is_capped_by_its_share_of_the_jobs(self):
+        # Not [16, 16, 16, 16]: a consumer fills its batch before it runs, so a device that waits for
+        # all of the jobs starves the others instead of overlapping with them.
+        self.assertEqual(self._batch_sizes(n_jobs=16, n_devices=4), [4, 4, 4, 4])
+
+    def test_an_uneven_split_rounds_up(self):
+        self.assertEqual(self._batch_sizes(n_jobs=10, n_devices=4), [3, 3, 3, 3])
+
+    def test_a_single_device_takes_all_of_the_jobs(self):
+        self.assertEqual(self._batch_sizes(n_jobs=16, n_devices=1), [16])
+
+    def test_an_explicit_batch_size_is_used_on_every_device(self):
+        self.assertEqual(self._batch_sizes(n_jobs=16, n_devices=2, batch_size=3), [3, 3])
+
+    def test_an_invalid_batch_size_is_rejected_before_any_replica_is_created(self):
+        model = torch.nn.Linear(1, 1)
+        with mock.patch.object(batched_inference, "_prepare_models") as prepare:
+            with self.assertRaisesRegex(ValueError, "batch_size must be positive"):
+                batched_inference._prepare_encoder_pipeline(model, 16, 0, "cpu")
+        prepare.assert_not_called()
+
+    def test_replicas_are_released_when_the_lookup_fails(self):
+        # The caller only releases what it receives, so a raise here would leak the replicas the
+        # secondary devices already hold.
+        model = torch.nn.Linear(1, 1)
+        devices = [torch.device("cuda", index) for index in range(2)]
+        pairs = [(model, device) for device in devices]
+        with mock.patch.object(batched_inference, "_resolve_devices", return_value=devices), \
+                mock.patch.object(batched_inference, "_prepare_models", return_value=pairs), \
+                mock.patch.object(batched_inference, "recommend_batch_size", side_effect=RuntimeError("boom")), \
+                mock.patch.object(batched_inference, "_release_model_replicas") as release:
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                batched_inference._prepare_encoder_pipeline(model, 16, None, None)
+        release.assert_called_once_with(pairs)
 
 
 class TestResolveDevices(unittest.TestCase):

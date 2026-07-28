@@ -41,8 +41,8 @@ from bioimage_cpp.utils import segmentation_overlap
 from bioimage_cpp.segmentation import label, relabel_sequential
 
 from .. import util
+from ..util import AutoSegBase
 from .util import precompute_image_embeddings
-from .instance_segmentation import AutoSegBase
 from .prompt_based_segmentation import segment_from_mask
 
 
