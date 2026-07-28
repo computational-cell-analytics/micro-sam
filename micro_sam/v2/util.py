@@ -559,8 +559,8 @@ def precompute_image_embeddings(
         halo: Optional in-plane tile halo.
         verbose: Whether to show progress.
         batch_size: The batch size used when running inference for multiple slices and / or tiles.
-            Defaults to one, which is recommended for 10 GB MIG devices. Pass None to benchmark
-            candidate sizes and select a throughput-efficient value independently on each CUDA device.
+            Defaults to one, which is recommended for 10 GB MIG devices. Pass None to look it up
+            independently on each CUDA device from its free VRAM (see `recommend_batch_size`).
         devices: Device or devices used for embedding inference. If None and the predictor is on
             CUDA, all visible CUDA devices are used.
         num_prefetch_workers: Number of threads used to read and preprocess input jobs.

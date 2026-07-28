@@ -1933,9 +1933,10 @@ class EmbeddingWidget(_WidgetBase):
         choice_rows.append(device_layout)
 
         # The batch size follows the model and the device until the user edits it, after which their
-        # value is kept. Batching only helps on a GPU, so the control is hidden whenever the effective
-        # device is the CPU. Both visibility and value track the device dropdown, so they also update
-        # when the user switches devices or when 'auto' resolves to the CPU.
+        # value is kept. Until then it only previews what the backend will pick per device, see
+        # '_effective_batch_size'. Batching only helps on a GPU, so the control is hidden whenever the
+        # effective device is the CPU. Both visibility and value track the device dropdown, so they
+        # also update when the user switches devices or when 'auto' resolves to the CPU.
         self.batch_size = 1
         self._batch_size_is_auto = True
         self.batch_size_param, batch_size_layout = self._add_int_param(
@@ -2061,23 +2062,43 @@ class EmbeddingWidget(_WidgetBase):
         ndim = self._ndim_override() or self._selected_image_ndim()
         return not (ndim == 2 and self.tiling != "yes")
 
+    def _batch_size_is_tabulated(self):
+        # Whether the VRAM table covers the selected model. It is calibrated for the SAM2 encoders;
+        # SAM1 and the VFM encoders keep a batch of one.
+        from micro_sam.v2.util import SUPPORTED_MODELS
+
+        model_type = getattr(self, "model_type", None)
+        return bool(model_type) and str(model_type)[:6] in SUPPORTED_MODELS
+
     def _effective_batch_size(self):
-        """The batch size actually used: the selected value where it has an effect, else one."""
-        return self.batch_size if self._batch_size_has_effect() else 1
+        """The batch size handed to the backend, or None for it to choose one per device.
+
+        The displayed value is only a preview (see `_recommended_batch_size`), so while the user has
+        not edited it the SAM2 backend picks its own value per device, once the weights are placed
+        there. A value the user typed, or one where batching has no effect, is forwarded verbatim.
+        """
+        if not self._batch_size_has_effect():
+            return 1
+        if self._batch_size_is_auto and self._batch_size_is_tabulated():
+            return None
+        return self.batch_size
 
     def _recommended_batch_size(self):
-        """The batch size the VRAM table suggests here, or one if the model is not tabulated."""
-        from micro_sam.v2.util import SUPPORTED_MODELS, recommend_batch_size
+        """The batch size the VRAM table suggests here, or one if the model is not tabulated.
 
-        # The table is calibrated for the SAM2 encoders; SAM1 and the VFM encoders keep a batch of one.
-        model_type = getattr(self, "model_type", None)
-        if not model_type or str(model_type)[:6] not in SUPPORTED_MODELS:
+        This previews what the backend will pick rather than deciding it: it is read before the model
+        is loaded, and for 'auto' from the default device only, whereas the backend reads every device
+        it runs on after placing the weights there.
+        """
+        from micro_sam.v2.util import recommend_batch_size
+
+        if not self._batch_size_is_tabulated():
             return 1
 
         device = self.device
         if device == "auto":
             device = util._get_default_device()
-        return recommend_batch_size(model_type, device)
+        return recommend_batch_size(self.model_type, device)
 
     def _on_batch_size_edited(self, value):
         # A value the user typed is theirs to keep, so stop tracking the model and device.

@@ -6,7 +6,7 @@ import pickle
 import inspect
 from glob import glob
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Union, TYPE_CHECKING
+from typing import Optional, Sequence, Tuple, Union
 
 import h5py
 import numpy as np
@@ -20,11 +20,7 @@ except ImportError:
     from tqdm import tqdm
 
 from . import util
-
-# Only needed to annotate the SAM1 cache helpers. Importing it for real pulls in the torch_em
-# training stack, which a SAM2 precompute run never touches, so it stays out of the runtime path.
-if TYPE_CHECKING:
-    from .v1.instance_segmentation import AutoSegBase
+from .util import AutoSegBase
 
 
 def cache_amg_state(
@@ -35,7 +31,7 @@ def cache_amg_state(
     verbose: bool = True,
     i: Optional[int] = None,
     **kwargs,
-) -> "AutoSegBase":
+) -> AutoSegBase:
     """Compute and cache or load the state for the automatic mask generator.
 
     Args:
@@ -104,7 +100,7 @@ def cache_is_state(
     i: Optional[int] = None,
     skip_load: bool = False,
     **kwargs,
-) -> "Optional[AutoSegBase]":
+) -> Optional[AutoSegBase]:
     """Compute and cache or load the state for the decoder-based instance segmentation.
 
     Args:
@@ -708,8 +704,8 @@ def precompute_state(
             Supported for SAM2 ('hvit_*') models.
         prefer_decoder: Whether to use the decoder-based state (AIS) when the SAM2 model has a decoder,
             instead of grid-based mask generation (AMG).
-        batch_size: The number of tiles / slices per model call. Pass None to select a throughput-efficient
-            value per device. Ignored by the model families that do not support batching (VFM encoders).
+        batch_size: The number of tiles / slices per model call. Pass None to select it per device from
+            the free VRAM (SAM2 only). Ignored by the families without batching (VFM encoders).
         devices: The device or devices to compute the embeddings and the decoder-based (AIS)
             automatic-segmentation state on. By default all visible CUDA devices are used. Only
             supported for SAM2 ('hvit_*') models.

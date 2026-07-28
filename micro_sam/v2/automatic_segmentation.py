@@ -127,7 +127,8 @@ def automatic_instance_segmentation(
         device: The device to run inference on.
         verbose: Whether to print progress.
         batch_size: The batch size used when running inference for multiple slices and / or tiles.
-            Defaults to one; pass None for throughput-based automatic selection.
+            Defaults to one; pass None to select it per device (from the free VRAM for the encoder,
+            benchmarked for the decoder).
         devices: Inference device or devices. None uses all visible GPUs when the model is on CUDA.
         num_prefetch_workers: Number of input reading and preprocessing threads.
         num_write_workers: Number of output writing threads.

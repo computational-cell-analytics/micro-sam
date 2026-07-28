@@ -381,7 +381,8 @@ def _run_batched_pipeline(
         jobs: The job specifications, e.g. tile ids or slice indices. Passed to `load_fn` and, with
             the prediction, to `write_fn`.
         model_devices: The (model, device) pairs to run inference on (see `_prepare_models`).
-        batch_sizes: One batch size per entry in `model_devices` (see `_compute_auto_batch_sizes`).
+        batch_sizes: One batch size per entry in `model_devices` (see `_prepare_encoder_pipeline` for
+            the encoder and `_compute_auto_batch_sizes` for the decoder).
         load_fn: Called as `load_fn(job)` to read and preprocess one job.
         predict_fn: Called as `predict_fn(model, items, device)` with the loaded data of one batch.
             It must return one output per input. Batches that run out of memory are automatically
@@ -577,7 +578,12 @@ def _prepare_encoder_pipeline(
     if batch_size is None:
         # Read after the replicas are placed, so their weights already count against the free VRAM.
         model_type = getattr(model, "model_type", None) or getattr(predictor, "model_type", "")
-        batch_sizes = [recommend_batch_size(model_type, device, n_jobs=n_jobs) for _, device in model_devices]
+        # Cap by the share of the work a device receives, not by the total: a consumer fills its
+        # batch before it runs, so a batch as large as all jobs would keep the other devices idle.
+        jobs_per_device = (max(int(n_jobs), 0) + len(model_devices) - 1) // len(model_devices)
+        batch_sizes = [
+            recommend_batch_size(model_type, device, n_jobs=jobs_per_device) for _, device in model_devices
+        ]
     else:
         if int(batch_size) < 1:
             raise ValueError(f"batch_size must be positive or None, got {batch_size}.")

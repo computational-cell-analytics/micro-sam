@@ -372,7 +372,7 @@ def _parse_shape(value):
 
 
 def _parse_batch_size(value):
-    """Parse the batch size: an integer, or 'auto' to benchmark a throughput-efficient value."""
+    """Parse the batch size: an integer, or 'auto' to select it independently on every device."""
     if value is None or str(value).lower() == "auto":
         return None
     try:
@@ -492,7 +492,7 @@ def _view_result(image_path, key, segmentation):
 )
 @click.option(
     "--batch_size", default="1",
-    help="The number of tiles / slices per model call, or 'auto' to select it by measured throughput."
+    help="The number of tiles / slices per model call, or 'auto' to select it per device."
 )
 @click.option(
     "--devices", default=None,
@@ -809,7 +809,7 @@ def inference_object_classification(
 )
 @click.option(
     "--batch_size", default="1",
-    help="The number of tiles / slices per model call, or 'auto' to select it by measured throughput."
+    help="The number of tiles / slices per model call, or 'auto' to select it per device."
 )
 @click.option(
     "--devices", default=None,

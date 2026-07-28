@@ -23,8 +23,8 @@ from qtpy.QtWidgets import QWidget
 
 import micro_sam
 import micro_sam.util as util
-from micro_sam.util import _get_sam_model
-from micro_sam.v1.instance_segmentation import AutoSegBase, get_decoder
+from micro_sam.util import AutoSegBase, _get_sam_model
+from micro_sam.v1.instance_segmentation import get_decoder
 from micro_sam.precompute_state import (
     cache_amg_state, cache_is_state, cache_autoseg_state, _cache_amg_volume_state
 )
@@ -122,7 +122,7 @@ class AnnotatorState(metaclass=Singleton):
         decoder_path=None,
         tile_shape=None,
         halo=None,
-        batch_size=1,
+        batch_size=1,  # None lets the SAM2 backend choose it per device from the free VRAM.
         precompute_autoseg_state=False,
         prefer_decoder=True,
         pbar_init=None,

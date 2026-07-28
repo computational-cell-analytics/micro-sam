@@ -333,6 +333,42 @@ class TestAutomaticBatchSizing(unittest.TestCase):
         )
 
 
+class TestEncoderBatchSizes(unittest.TestCase):
+    """The encoder batch size is looked up per device, capped by that device's share of the work."""
+
+    def _batch_sizes(self, n_jobs, n_devices, batch_size=None):
+        model = torch.nn.Linear(1, 1)
+        model.model_type = "hvit_t"
+        devices = [torch.device("cuda", index) for index in range(n_devices)]
+        pairs = [(model, device) for device in devices]
+        # The stand-in returns the cap it was given, so the assertions see the per-device share.
+        with mock.patch.object(batched_inference, "_resolve_devices", return_value=devices), \
+                mock.patch.object(batched_inference, "_prepare_models", return_value=pairs), \
+                mock.patch.object(
+                    batched_inference, "recommend_batch_size", side_effect=lambda model_type, device, n_jobs: n_jobs
+                ):
+            _, _, batch_sizes = batched_inference._prepare_encoder_pipeline(model, n_jobs, batch_size, None)
+        return batch_sizes
+
+    def test_each_device_is_capped_by_its_share_of_the_jobs(self):
+        # Not [16, 16, 16, 16]: a consumer fills its batch before it runs, so a device that waits for
+        # all of the jobs starves the others instead of overlapping with them.
+        self.assertEqual(self._batch_sizes(n_jobs=16, n_devices=4), [4, 4, 4, 4])
+
+    def test_an_uneven_split_rounds_up(self):
+        self.assertEqual(self._batch_sizes(n_jobs=10, n_devices=4), [3, 3, 3, 3])
+
+    def test_a_single_device_takes_all_of_the_jobs(self):
+        self.assertEqual(self._batch_sizes(n_jobs=16, n_devices=1), [16])
+
+    def test_an_explicit_batch_size_is_used_on_every_device(self):
+        self.assertEqual(self._batch_sizes(n_jobs=16, n_devices=2, batch_size=3), [3, 3])
+
+    def test_an_invalid_batch_size_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "batch_size must be positive"):
+            self._batch_sizes(n_jobs=16, n_devices=2, batch_size=0)
+
+
 class TestResolveDevices(unittest.TestCase):
     def test_fans_out_over_all_visible_cuda_devices(self):
         model = torch.nn.Linear(1, 1)

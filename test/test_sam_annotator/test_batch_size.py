@@ -172,14 +172,14 @@ class TestRefreshBatchSize(unittest.TestCase):
         with mock.patch.object(v2_util, "_free_vram_gib", return_value=92.6):
             widget._refresh_batch_size()
         self.assertTrue(widget._batch_size_widget.visible)
-        self.assertEqual(widget._effective_batch_size(), VRAM_BATCH_SIZES[80]["hvit_t"])
+        self.assertEqual(widget.batch_size, VRAM_BATCH_SIZES[80]["hvit_t"])
 
     def test_shown_for_a_volume_without_tiling(self):
         widget = _make_widget(ndim=3, tiling="no")
         with mock.patch.object(v2_util, "_free_vram_gib", return_value=92.6):
             widget._refresh_batch_size()
         self.assertTrue(widget._batch_size_widget.visible)
-        self.assertEqual(widget._effective_batch_size(), VRAM_BATCH_SIZES[80]["hvit_t"])
+        self.assertEqual(widget.batch_size, VRAM_BATCH_SIZES[80]["hvit_t"])
 
     def test_shown_while_no_image_is_selected(self):
         # Dimensionality is unknown before an image is picked; the field appears once it is known.
@@ -194,6 +194,36 @@ class TestRefreshBatchSize(unittest.TestCase):
         with mock.patch.object(v2_util, "_free_vram_gib", return_value=92.6):
             widget._refresh_batch_size()
         self.assertFalse(widget._batch_size_widget.visible)
+
+
+class TestEffectiveBatchSize(unittest.TestCase):
+    """The displayed value is a preview: it is read before the model is loaded and, for 'auto', from
+    the default device only. So while the user has not edited it, the backend chooses instead."""
+
+    def test_the_recommendation_is_not_forwarded(self):
+        widget = _make_widget()
+        with mock.patch.object(v2_util, "_free_vram_gib", return_value=92.6):
+            widget._refresh_batch_size()
+            self.assertEqual(widget.batch_size, VRAM_BATCH_SIZES[80]["hvit_t"])
+            self.assertIsNone(widget._effective_batch_size())
+
+    def test_a_value_the_user_typed_is_forwarded(self):
+        widget = _make_widget()
+        widget._on_batch_size_edited(7)
+        widget.batch_size = 7
+        with mock.patch.object(v2_util, "_free_vram_gib", return_value=92.6):
+            self.assertEqual(widget._effective_batch_size(), 7)
+
+    def test_a_model_outside_the_table_is_forwarded(self):
+        # SAM1 has no per-device lookup in the backend, and its embedding function needs a number.
+        widget = _make_widget(model_type="vit_b_lm")
+        with mock.patch.object(v2_util, "_free_vram_gib", return_value=92.6):
+            widget._refresh_batch_size()
+            self.assertEqual(widget._effective_batch_size(), 1)
+
+    def test_without_an_effect_it_is_one(self):
+        widget = _make_widget(device="cpu")
+        self.assertEqual(widget._effective_batch_size(), 1)
 
 
 # The tests above drive the methods on a stand-in, so they cannot see whether the widget wires them
@@ -253,14 +283,14 @@ def test_widget_tracks_dimensionality_and_tiling(make_napari_viewer_proxy):
 
     widget.tiling_dropdown.setCurrentText("yes")
     assert widget._batch_size_has_effect(), "tiles are what the batch spans"
-    assert widget._effective_batch_size() > 1
+    assert widget.batch_size > 1
 
     viewer.add_image(np.zeros((8, 64, 64), dtype="uint8"), name="volume")
     widget.image_selection.reset_choices()
     widget.image_selection.value = viewer.layers["volume"]
     widget.tiling_dropdown.setCurrentText("no")
     assert widget._batch_size_has_effect(), "z slices are what the batch spans"
-    assert widget._effective_batch_size() > 1
+    assert widget.batch_size > 1
 
 
 @pytest.mark.gui

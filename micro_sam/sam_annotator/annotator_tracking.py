@@ -621,7 +621,7 @@ def batch_tracking_annotator(
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
     skip_done: bool = True,
-    batch_size: int = 1,
+    batch_size: Optional[int] = 1,
 ) -> Optional["napari.viewer.Viewer"]:
     """Run the tracking annotation tool for a batch of timeseries (each item is one TYX video).
 
@@ -643,7 +643,8 @@ def batch_tracking_annotator(
         return_viewer: Whether to return the napari viewer instead of starting the event loop.
         skip_done: Whether to skip videos whose tracking result already exists in `output_folder`.
         batch_size: The number of tiles / slices per model call when computing the embeddings.
-            Only has an effect on a GPU. By default a single tile / slice is used.
+            Only has an effect on a GPU. Pass None to select it per device from the free VRAM
+            (SAM2 only). By default a single tile / slice is used.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.

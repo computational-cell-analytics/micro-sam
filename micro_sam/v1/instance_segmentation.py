@@ -8,7 +8,6 @@ import shutil
 import tempfile
 import warnings
 from copy import deepcopy
-from abc import ABC, abstractmethod
 from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Any, Dict, Literal, List, Optional, Tuple, Union
@@ -37,6 +36,7 @@ from bioimage_cpp.utils import Blocking
 from bioimage_cpp import filters as filter_impl
 
 from .. import util
+from ..util import AutoSegBase
 from .._vendored import batched_mask_to_box, mask_to_rle_pytorch
 from .inference import batched_inference, batched_tiled_inference
 from .util import get_sam_model, precompute_image_embeddings, set_precomputed
@@ -61,41 +61,6 @@ class _FakeInput:
 #
 # Classes for automatic instance segmentation
 #
-
-
-class AutoSegBase(ABC):
-    """Common interface for automatic-segmentation generators.
-
-    Unifies the grid-based mask generators (`AMGBase` and its subclasses) and the decoder-based
-    instance segmentation (`InstanceSegmentationWithDecoder` and its subclasses): both are
-    initialized on an image, produce an instance segmentation via `generate`, and cache / restore
-    their expensive intermediate state via `get_state` / `set_state`.
-    """
-
-    @property
-    def is_initialized(self) -> bool:
-        """Whether `initialize` ran and the state is available."""
-        return self._is_initialized
-
-    @abstractmethod
-    def initialize(self, *args, **kwargs) -> None:
-        """Compute and store the (expensive) state needed by `generate`."""
-
-    @abstractmethod
-    def generate(self, *args, **kwargs):
-        """Produce the instance segmentation from the initialized state."""
-
-    @abstractmethod
-    def get_state(self) -> Dict[str, Any]:
-        """Return the cached state so it can be serialized and later restored."""
-
-    @abstractmethod
-    def set_state(self, state: Dict[str, Any]) -> None:
-        """Restore a state produced by `get_state`."""
-
-    @abstractmethod
-    def clear_state(self) -> None:
-        """Clear the cached state."""
 
 
 class AMGBase(AutoSegBase):

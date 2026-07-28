@@ -16,8 +16,8 @@ micro-sam v1 `instance_segmentation` module (which holds AMG / AIS / APG). Two e
   `micro_sam.v2.postprocessing` ('sparse' -> flow following for LM data, 'dense' -> multicut for EM
   data). All UniSAM2 inference is encapsulated in these classes.
 
-Both engines share the `initialize` / `generate` / `get_state` / `set_state` interface of the v1
-`AutoSegBase`, support in-plane (xy) tiling with a halo, and are selected via
+Both engines share the `initialize` / `generate` / `get_state` / `set_state` interface of
+`micro_sam.util.AutoSegBase`, support in-plane (xy) tiling with a halo, and are selected via
 `get_instance_segmentation_generator`.
 """
 
@@ -32,8 +32,7 @@ import torch
 from bioimage_cpp.utils import Blocking
 
 from micro_sam.v1.inference import _merge_segmentations
-from micro_sam.v1.instance_segmentation import AutoSegBase
-from micro_sam.util import make_temp_embedding_path, mask_data_to_segmentation
+from micro_sam.util import AutoSegBase, make_temp_embedding_path, mask_data_to_segmentation
 from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
 from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
 from micro_sam.v2.util import (

@@ -12,6 +12,7 @@ import xxhash
 import hashlib
 import warnings
 from pathlib import Path
+from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -61,6 +62,44 @@ _MODEL_TYPES = ("vit_l", "vit_b", "vit_h", "vit_t")
 
 ImageEmbeddings = Dict[str, Any]
 """@private"""
+
+
+class AutoSegBase(ABC):
+    """Common interface for automatic-segmentation generators.
+
+    Unifies the grid-based mask generators (`micro_sam.v1.instance_segmentation.AMGBase` and its
+    subclasses) and the decoder-based instance segmentation
+    (`micro_sam.v1.instance_segmentation.InstanceSegmentationWithDecoder` and its subclasses), for
+    both SAM1 and SAM2: all of them are initialized on an image, produce an instance segmentation
+    via `generate`, and cache / restore their expensive intermediate state via
+    `get_state` / `set_state`. It lives here, next to the other shared types, so that it can be
+    referenced in annotations without importing an implementation (and with it the training stack).
+    """
+
+    @property
+    def is_initialized(self) -> bool:
+        """Whether `initialize` ran and the state is available."""
+        return self._is_initialized
+
+    @abstractmethod
+    def initialize(self, *args, **kwargs) -> None:
+        """Compute and store the (expensive) state needed by `generate`."""
+
+    @abstractmethod
+    def generate(self, *args, **kwargs):
+        """Produce the instance segmentation from the initialized state."""
+
+    @abstractmethod
+    def get_state(self) -> Dict[str, Any]:
+        """Return the cached state so it can be serialized and later restored."""
+
+    @abstractmethod
+    def set_state(self, state: Dict[str, Any]) -> None:
+        """Restore a state produced by `get_state`."""
+
+    @abstractmethod
+    def clear_state(self) -> None:
+        """Clear the cached state."""
 
 
 def get_cache_directory() -> None:

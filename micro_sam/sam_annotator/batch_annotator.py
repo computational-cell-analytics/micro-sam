@@ -166,7 +166,7 @@ def batch_annotator(
     device: Optional[Union[str, torch.device]] = None,
     prefer_decoder: bool = True,
     skip_segmented: bool = True,
-    batch_size: int = 1,
+    batch_size: Optional[int] = 1,
 ) -> Optional["napari.viewer.Viewer"]:
     """Run the segmentation annotation tool for a batch of images (2d or 3d).
 
@@ -196,7 +196,8 @@ def batch_annotator(
             the model used has an additional decoder for instance segmentation.
             By default, set to 'True'.
         batch_size: The number of tiles / slices per model call when computing the embeddings.
-            Only has an effect on a GPU. By default a single tile / slice is used.
+            Only has an effect on a GPU. Pass None to select it per device from the free VRAM
+            (SAM2 only). By default a single tile / slice is used.
         skip_segmented: Whether existing output files mark images as completed. If True, resume at
             the first image without an output and skip any later completed images. If False, start
             at the first image and load existing segmentations into the 'committed_objects' layer.
@@ -545,7 +546,7 @@ class BatchAnnotator(widgets._WidgetBase):
 
         common = dict(
             model_type=ew.model_type, tile_shape=tile_shape, halo=halo,
-            checkpoint_path=ew.custom_weights, device=ew.device, batch_size=ew.batch_size,
+            checkpoint_path=ew.custom_weights, device=ew.device, batch_size=ew._effective_batch_size(),
             viewer=self._viewer, return_viewer=True,
         )
 
