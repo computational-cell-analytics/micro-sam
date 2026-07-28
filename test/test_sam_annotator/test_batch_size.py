@@ -1,3 +1,4 @@
+import platform
 import unittest
 from unittest import mock
 
@@ -236,6 +237,7 @@ def test_widget_follows_the_device_dropdown(qapp):
 
 
 @pytest.mark.gui
+@pytest.mark.skipif(platform.system() == "Windows", reason="GUI test does not work on Windows.")
 def test_widget_tracks_dimensionality_and_tiling(make_napari_viewer_proxy):
     viewer = make_napari_viewer_proxy()
     widget = widgets.EmbeddingWidget()
