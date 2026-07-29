@@ -241,6 +241,131 @@ def _tile_to_full_mask(mask, shape, tile):
     return full_mask
 
 
+def _prepare_tiled_mask_prompt_jobs(mask, shape, tile_shape, halo, box=None, points=None, labels=None):
+    """Prepare local prompts for refining one mask across all relevant embedding tiles."""
+    shape = tuple(shape)
+    mask = np.asarray(mask)
+    if mask.ndim != 2 or mask.shape != shape:
+        raise ValueError(f"The mask shape must match the tiled embedding shape {shape}, got {mask.shape}.")
+    mask = mask.astype(bool, copy=False)
+
+    if box is not None:
+        box = np.asarray(box)
+        if box.shape != (4,):
+            raise ValueError(f"The box must have shape (4,), got {box.shape}.")
+
+    if points is None:
+        if labels is not None:
+            raise ValueError("Point labels were passed without point prompts.")
+        points = np.empty((0, 2), dtype="float64")
+        labels = np.empty((0,), dtype="int64")
+    else:
+        points = np.asarray(points)
+        if points.ndim != 2 or points.shape[1] != 2:
+            raise ValueError(f"The points must have shape (N, 2), got {points.shape}.")
+        if labels is None:
+            raise ValueError("If points are passed you also need to pass labels.")
+        labels = np.asarray(labels)
+        if labels.ndim != 1 or len(labels) != len(points):
+            raise ValueError("The point labels must be a one-dimensional array matching the points.")
+        if len(points) > 0:
+            valid = (
+                (points[:, 0] >= 0) & (points[:, 0] < shape[0]) &
+                (points[:, 1] >= 0) & (points[:, 1] < shape[1])
+            )
+            if not valid.all():
+                raise ValueError("All point prompts must lie inside the tiled image.")
+
+    tiling = Blocking([0, 0], shape, tile_shape)
+    active_tile_ids = set()
+    for tile_id in range(tiling.number_of_blocks):
+        block = tiling.get_block_with_halo(tile_id, list(halo))
+        inner = block.inner_block
+        inner_bb = tuple(slice(beg, end) for beg, end in zip(inner.begin, inner.end))
+        if mask[inner_bb].any():
+            active_tile_ids.add(tile_id)
+
+        if box is not None:
+            y0, x0, y1, x1 = box
+            intersects_inner = not (
+                y1 <= inner.begin[0] or y0 >= inner.end[0] or
+                x1 <= inner.begin[1] or x0 >= inner.end[1]
+            )
+            if intersects_inner:
+                active_tile_ids.add(tile_id)
+
+    # Positive points may deliberately expand the target beyond its existing mask or box. Activate
+    # only the tile that owns the point; once active, a tile receives every sparse cue in its halo.
+    for point, label in zip(points, labels):
+        if label == 1:
+            coordinate = np.round(point).astype("int").tolist()
+            coordinate = [min(coord, sh - 1) for coord, sh in zip(coordinate, shape)]
+            active_tile_ids.add(tiling.coordinates_to_block_id(coordinate))
+
+    jobs = {}
+    for tile_id in sorted(active_tile_ids):
+        block = tiling.get_block_with_halo(tile_id, list(halo))
+        outer = block.outer_block
+        outer_bb = tuple(slice(beg, end) for beg, end in zip(outer.begin, outer.end))
+        local_mask = mask[outer_bb]
+
+        local_box = None
+        if box is not None:
+            y0, x0, y1, x1 = box
+            clipped_box = np.array([
+                max(y0, outer.begin[0]), max(x0, outer.begin[1]),
+                min(y1, outer.end[0]), min(x1, outer.end[1]),
+            ])
+            if clipped_box[0] < clipped_box[2] and clipped_box[1] < clipped_box[3]:
+                local_box = clipped_box - np.array([
+                    outer.begin[0], outer.begin[1], outer.begin[0], outer.begin[1]
+                ])
+
+        if len(points) == 0:
+            local_points, local_labels = None, None
+        else:
+            point_mask = (
+                (points[:, 0] >= outer.begin[0]) & (points[:, 0] < outer.end[0]) &
+                (points[:, 1] >= outer.begin[1]) & (points[:, 1] < outer.end[1])
+            )
+            local_points = points[point_mask] - np.asarray(outer.begin)
+            local_labels = labels[point_mask]
+            if len(local_points) == 0:
+                local_points, local_labels = None, None
+
+        has_positive_point = local_labels is not None and np.any(local_labels == 1)
+        if not (local_mask.any() or local_box is not None or has_positive_point):
+            continue
+
+        jobs[tile_id] = {
+            "block": block,
+            "mask": local_mask,
+            "box": local_box,
+            "points": local_points,
+            "labels": local_labels,
+        }
+
+    return tiling, jobs
+
+
+def _stitch_tiled_mask_predictions(predictions, shape):
+    """Stitch tile predictions through disjoint inner blocks."""
+    output = np.zeros((1,) + tuple(shape), dtype=bool)
+    for block, prediction in predictions:
+        prediction = np.asarray(prediction)
+        if prediction.ndim == 2:
+            prediction = prediction[None]
+        if prediction.shape[0] != 1:
+            raise ValueError(f"Expected one prediction per tile, got shape {prediction.shape}.")
+
+        local = tuple(
+            slice(beg, end) for beg, end in zip(block.inner_block_local.begin, block.inner_block_local.end)
+        )
+        glob = tuple(slice(beg, end) for beg, end in zip(block.inner_block.begin, block.inner_block.end))
+        output[(slice(None),) + glob] = prediction[(slice(None),) + local].astype(bool, copy=False)
+    return output
+
+
 #
 # functions for prompted segmentation:
 # - segment_from_points: use point prompts as input
@@ -407,6 +532,70 @@ def segment_from_mask(
         return mask, scores, logits
     else:
         return mask
+
+
+def segment_from_mask_tiled(
+    predictor: SamPredictor,
+    mask: np.ndarray,
+    image_embeddings: util.ImageEmbeddings,
+    i: Optional[int] = None,
+    box: Optional[np.ndarray] = None,
+    points: Optional[np.ndarray] = None,
+    labels: Optional[np.ndarray] = None,
+):
+    """Refine one binary mask target across all relevant tiled image embeddings.
+
+    Unlike :func:`segment_from_mask`, which routes all prompts to one tile, this function activates
+    every tile whose inner block intersects the dense mask or the optional enclosing box. A positive
+    point also activates its owning tile, so corrections can expand the target beyond the source
+    mask. Each prediction is restricted to the tile's disjoint inner block during stitching.
+
+    The box uses ``(y0, x0, y1, x1)`` coordinates and points use ``(y, x)`` coordinates, consistent
+    with the other tiled prompt routing helpers.
+
+    Args:
+        predictor: The segment anything predictor.
+        mask: The full-size binary mask prompt.
+        image_embeddings: Precomputed tiled image embeddings.
+        i: Index for a 3D image or time series.
+        box: Optional full-image enclosing box.
+        points: Optional full-image point corrections.
+        labels: Positive/negative labels corresponding to the point corrections.
+
+    Returns:
+        The full-size binary prediction with shape ``(1, H, W)``.
+    """
+    if image_embeddings is None or image_embeddings.get("input_size") is not None:
+        raise ValueError("segment_from_mask_tiled requires tiled image embeddings.")
+
+    features = image_embeddings["features"]
+    shape = tuple(features.attrs["shape"])
+    tile_shape = tuple(features.attrs["tile_shape"])
+    halo = tuple(features.attrs["halo"])
+    _, jobs = _prepare_tiled_mask_prompt_jobs(
+        mask, shape, tile_shape, halo, box=box, points=points, labels=labels
+    )
+
+    predictions = []
+    for tile_id, job in jobs.items():
+        set_precomputed(predictor, image_embeddings, i=i, tile_id=tile_id)
+        # ``segment_from_mask`` passes explicit point coordinates directly to SAM, which expects
+        # (x, y). Keep this public tiled helper consistent with napari and the other prompt helpers
+        # by routing in (y, x) above and swapping only at the untiled predictor boundary.
+        local_points = None if job["points"] is None else job["points"][:, ::-1]
+        prediction = segment_from_mask(
+            predictor,
+            job["mask"],
+            use_box=False,
+            use_mask=True,
+            use_points=False,
+            box=job["box"],
+            points=local_points,
+            labels=job["labels"],
+        )
+        predictions.append((job["block"], prediction))
+
+    return _stitch_tiled_mask_predictions(predictions, shape)
 
 
 def segment_from_box(

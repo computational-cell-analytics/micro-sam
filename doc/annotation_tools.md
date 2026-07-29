@@ -56,6 +56,23 @@ When `commit_path` is given the results will automatically be saved there.
 
 Point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time, unless the `batched` mode is activated. With box prompts you can segment several objects at once, both in the normal and `batched` mode.
 
+### Using existing segmentations
+
+The `Existing Segmentation Inputs` section accepts any compatible napari Labels layer, including segmentations created by Cellpose or another napari plugin.
+Use the checkboxes or the `Select all` and `Unselect all` buttons to choose inputs.
+All nonzero label IDs are treated as objects: equal IDs from multiple selected layers are unioned, while overlapping different IDs must be resolved in napari before continuing.
+The selected layers must have the same spatial shape and data-to-world transform as the selected image; micro-sam does not resample them.
+
+`Refine with SAM` processes every selected object independently and writes the merged result to `current_object`.
+If point or shape corrections are present and the inputs contain several objects, choose the single object ID they apply to.
+The normal `Commit` action then replaces those IDs in `committed_objects` without renumbering them.
+SAM converts each 2D mask prompt to its 256 by 256 low-resolution mask representation, so fine structures may be lost during refinement.
+The source Labels layers are never changed.
+
+`Commit input masks unchanged` bypasses SAM and the embedding computation.
+Use it when an input mask is already satisfactory.
+It preserves the input IDs and atomically unions equal IDs into `committed_objects`; a collision with a different committed ID is rejected.
+
 Check out [the video tutorial](https://youtu.be/9xjJBg_Bfuc) for an in-depth explanation on how to use this tool.
 
 
@@ -81,6 +98,12 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 8. The menu for clearing the current annotations. If `all slices` is set all annotations will be cleared, otherwise they are only cleared for the current slice.
 
 You can only segment one object at a time using the interactive segmentation functionality with this tool.
+
+Existing 3D Labels layers can be refined in two ways.
+`Refine all occupied slices` runs 2D mask refinement on each slice where an object exists and preserves the input z-extent.
+`Propagate from seed slices` chooses each object's largest cross-section as its seed (the lowest z wins ties), refines the seed, and propagates it through the selected z-range.
+For SAM-v1 this uses slice-to-slice mask projection; for SAM2 it conditions the video predictor with the already refined seed.
+A 3D point or shape correction is routed to the chosen object ID; in occupied-slice mode it must lie on an occupied slice, while propagation mode can use a positive cue on an empty slice as another anchor.
 
 Check out [the video tutorial](https://youtu.be/nqpyNQSyu74) for an in-depth explanation on how to use this tool.
 

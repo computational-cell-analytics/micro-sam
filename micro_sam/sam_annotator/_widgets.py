@@ -754,6 +754,23 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     # Check whether all layers exist as expected or create new ones automatically.
     state.annotator._require_layers(layer_choices=[layer, "committed_objects"])
 
+    # Refined mask inputs are authoritative replacements for their source IDs. They deliberately
+    # bypass the ordinary id-offset and preservation modes so Cellpose (or other external) IDs stay
+    # stable across the refine/commit round-trip.
+    source = viewer.layers[layer]
+    provenance = source.metadata.get("micro_sam_mask_refinement")
+    if layer == "current_object" and provenance is not None:
+        destination = viewer.layers["committed_objects"]
+        merged = vutil.merge_labels_for_refined_commit(
+            destination.data, source.data, provenance["object_ids"],
+        )
+        destination.data = merged
+        destination.refresh()
+        mask = np.asarray(source.data) != 0
+        if state.interactive_segmenter is not None:
+            state.interactive_segmenter.reset_predictor()
+        return 0, np.asarray(source.data), mask, np.s_[:]
+
     # Check if we have a z_range. If yes, use it to set a bounding box.
     if state.z_range is None:
         bb = np.s_[:]
@@ -1098,10 +1115,16 @@ def commit(
             "Saving committed results to 'commit_path' is not supported yet and will be added in a future release."
         )
 
-    # Commit the segmentation layer.
-    _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
+    # Commit the segmentation layer. Refined-mask conflicts are reported without clearing the
+    # result or prompts, so the user can resolve the conflicting committed object and retry.
+    try:
+        _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
+    except ValueError as error:
+        _generate_message("error", str(error))
+        return
 
     if layer == "current_object":
+        viewer.layers["current_object"].metadata.pop("micro_sam_mask_refinement", None)
         vutil.clear_annotations(viewer)
     else:
         viewer.layers["auto_segmentation"].data = np.zeros(
@@ -1627,8 +1650,10 @@ def _segment_object_2d(viewer, batched=False):
         )
         return
 
-    viewer.layers["current_object"].data = seg
-    viewer.layers["current_object"].refresh()
+    current_object = viewer.layers["current_object"]
+    current_object.metadata.pop("micro_sam_mask_refinement", None)
+    current_object.data = seg
+    current_object.refresh()
 
 
 @magic_factory(call_button="Segment Object [S]")
@@ -3030,8 +3055,10 @@ class UnifiedSegmentWidget(_WidgetBase):
             )
             return
 
-        self._viewer.layers["current_object"].data[z] = seg
-        self._viewer.layers["current_object"].refresh()
+        current_object = self._viewer.layers["current_object"]
+        current_object.metadata.pop("micro_sam_mask_refinement", None)
+        current_object.data[z] = seg
+        current_object.refresh()
 
     def _segment_slice_batched(self, z, points, labels, boxes, masks, shape):
         """Batched multi-object segmentation for a single slice with SAM2.
@@ -3279,8 +3306,10 @@ class UnifiedSegmentWidget(_WidgetBase):
         seg = volumetric_segmentation_impl()
         if seg is None:
             return None
-        self._viewer.layers["current_object"].data = seg
-        self._viewer.layers["current_object"].refresh()
+        current_object = self._viewer.layers["current_object"]
+        current_object.metadata.pop("micro_sam_mask_refinement", None)
+        current_object.data = seg
+        current_object.refresh()
         # worker = volumetric_segmentation_impl()
         # worker.returned.connect(update_segmentation)
         # worker.start()
@@ -3567,11 +3596,17 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self.apply_to_volume = False
         self._segment_widget = None
         self._propagation_settings = None
+        self._mask_layer_items = {}
+        self._connected_mask_layers = set()
+        self._connected_mask_images = set()
         self._create_widget()
 
     def _create_widget(self):
         # Prompt label menu.
         self.layout().addWidget(self._prompt_widget.native)
+
+        self._mask_input_widget = self._create_mask_input_widget()
+        self.layout().addWidget(self._mask_input_widget)
 
         self.clear_button = QtWidgets.QPushButton("Clear Annotations [Shift + C]")
         self.clear_button.setToolTip(get_tooltip("unified_segment", "clear_button"))
@@ -3643,9 +3678,594 @@ class InteractiveSegmentationWidget(_WidgetBase):
         # separate objects in batched mode. Keep the control in sync as scribbles are added or
         # removed from the shared prompt layer.
         self._viewer.layers["prompts"].events.data.connect(self._update_batched_visibility)
+        self._viewer.layers["prompts"].events.data.connect(self._update_mask_input_controls)
+        self._viewer.layers["point_prompts"].events.data.connect(self._update_mask_input_controls)
+        for event_name in ("inserted", "removed", "reordered"):
+            event = getattr(self._viewer.layers.events, event_name, None)
+            if event is not None:
+                event.connect(self._refresh_mask_layer_list)
 
         # Hide the batched control if the (already loaded) embeddings are tiled.
         self._update_batched_visibility()
+        self._refresh_mask_layer_list()
+
+    def _create_mask_input_widget(self):
+        """Build the existing-segmentation input controls."""
+        container = QtWidgets.QWidget()
+        container.setLayout(QtWidgets.QVBoxLayout())
+
+        intro = QtWidgets.QLabel(
+            "Select one or more Labels layers. Equal IDs are unioned; overlapping different IDs are rejected."
+        )
+        intro.setWordWrap(True)
+        container.layout().addWidget(intro)
+
+        self.mask_layer_list = QtWidgets.QListWidget()
+        self.mask_layer_list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.mask_layer_list.itemChanged.connect(self._update_mask_input_controls)
+        container.layout().addWidget(self.mask_layer_list)
+
+        select_row = QtWidgets.QHBoxLayout()
+        select_all = QtWidgets.QPushButton("Select all")
+        select_all.clicked.connect(lambda: self._set_all_mask_layers_checked(True))
+        unselect_all = QtWidgets.QPushButton("Unselect all")
+        unselect_all.clicked.connect(lambda: self._set_all_mask_layers_checked(False))
+        select_row.addWidget(select_all)
+        select_row.addWidget(unselect_all)
+        container.layout().addLayout(select_row)
+
+        self.mask_input_summary = QtWidgets.QLabel("No mask input selected.")
+        self.mask_input_summary.setWordWrap(True)
+        container.layout().addWidget(self.mask_input_summary)
+
+        self.correction_target_row = QtWidgets.QWidget()
+        correction_layout = QtWidgets.QHBoxLayout()
+        correction_layout.setContentsMargins(0, 0, 0, 0)
+        self.correction_target_row.setLayout(correction_layout)
+        correction_layout.addWidget(QtWidgets.QLabel("Corrections apply to object ID"))
+        self.correction_target = QtWidgets.QComboBox()
+        correction_layout.addWidget(self.correction_target)
+        self.correction_target_row.setVisible(False)
+        container.layout().addWidget(self.correction_target_row)
+
+        if self._ndim == 3:
+            strategy_row = QtWidgets.QHBoxLayout()
+            strategy_row.addWidget(QtWidgets.QLabel("3D behavior"))
+            self.mask_3d_strategy = QtWidgets.QComboBox()
+            self.mask_3d_strategy.addItems(["Refine all occupied slices", "Propagate from seed slices"])
+            self.mask_3d_strategy.currentTextChanged.connect(self._update_propagation_visibility)
+            strategy_row.addWidget(self.mask_3d_strategy)
+            container.layout().addLayout(strategy_row)
+
+        self.mask_downsampling_warning = QtWidgets.QLabel(
+            "Refinement warning: every 2D mask prompt is converted to SAM's 256 × 256 low-resolution "
+            "mask representation. Fine structures may be lost. The selected input layers are never modified."
+        )
+        self.mask_downsampling_warning.setWordWrap(True)
+        self.mask_downsampling_warning.setVisible(False)
+        container.layout().addWidget(self.mask_downsampling_warning)
+
+        action_row = QtWidgets.QHBoxLayout()
+        self.refine_masks_button = QtWidgets.QPushButton("Refine with SAM")
+        self.refine_masks_button.clicked.connect(self._refine_selected_masks)
+        self.commit_masks_button = QtWidgets.QPushButton("Commit input masks unchanged")
+        self.commit_masks_button.clicked.connect(self._commit_selected_masks_unchanged)
+        action_row.addWidget(self.refine_masks_button)
+        action_row.addWidget(self.commit_masks_button)
+        container.layout().addLayout(action_row)
+
+        return _make_collapsible(
+            container,
+            title="Existing Segmentation Inputs",
+            tooltip=(
+                "Use compatible napari Labels layers as dense SAM prompts, or commit them directly "
+                "when no refinement is needed."
+            ),
+        )
+
+    def _selected_image_layer(self):
+        state = AnnotatorState()
+        embedding_widget = state.widgets.get("embeddings") if state.widgets is not None else None
+        if embedding_widget is None:
+            return None
+        return embedding_widget.image_selection.get_value()
+
+    def _refresh_mask_layer_list(self, event=None):
+        """Refresh the checklist while preserving checks by layer identity."""
+        checked = {
+            layer_id
+            for layer_id, (_, item) in self._mask_layer_items.items()
+            if item.checkState() == Qt.Checked
+        }
+        self.mask_layer_list.blockSignals(True)
+        self.mask_layer_list.clear()
+        self._mask_layer_items = {}
+        image_layer = self._selected_image_layer()
+        if image_layer is not None and id(image_layer) not in self._connected_mask_images:
+            for event_name in ("data", "scale", "translate", "rotate", "shear", "affine"):
+                image_event = getattr(image_layer.events, event_name, None)
+                if image_event is not None:
+                    image_event.connect(self._refresh_mask_layer_list)
+            self._connected_mask_images.add(id(image_layer))
+        for layer in self._viewer.layers:
+            if not isinstance(layer, napari.layers.Labels):
+                continue
+            layer_id = id(layer)
+            compatibility_error = None
+            if image_layer is None:
+                compatibility_error = "select an image first"
+            else:
+                try:
+                    vutil.collect_mask_inputs([layer], image_layer)
+                except ValueError as error:
+                    # An empty Labels layer is geometrically compatible; it may become a valid
+                    # source as soon as the user paints or pastes an object into it.
+                    if "do not contain any nonzero label IDs" not in str(error):
+                        compatibility_error = str(error)
+            internal_suffix = (
+                " (micro-sam output)"
+                if layer.name in {"current_object", "auto_segmentation", "committed_objects"}
+                else ""
+            )
+            text = f"{layer.name}{internal_suffix}"
+            if compatibility_error is not None:
+                text += " — incompatible"
+            item = QtWidgets.QListWidgetItem(text)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            if compatibility_error is not None:
+                item.setFlags(item.flags() & ~Qt.ItemIsEnabled)
+                item.setToolTip(compatibility_error)
+            item.setCheckState(
+                Qt.Checked if compatibility_error is None and layer_id in checked else Qt.Unchecked
+            )
+            item.setData(Qt.UserRole, layer_id)
+            self.mask_layer_list.addItem(item)
+            self._mask_layer_items[layer_id] = (layer, item)
+            if layer_id not in self._connected_mask_layers:
+                layer.events.data.connect(self._refresh_mask_layer_list)
+                layer.events.name.connect(self._refresh_mask_layer_list)
+                for event_name in ("scale", "translate", "rotate", "shear", "affine"):
+                    transform_event = getattr(layer.events, event_name, None)
+                    if transform_event is not None:
+                        transform_event.connect(self._refresh_mask_layer_list)
+                self._connected_mask_layers.add(layer_id)
+        self.mask_layer_list.blockSignals(False)
+        self._update_mask_input_controls()
+
+    def _set_all_mask_layers_checked(self, checked):
+        value = Qt.Checked if checked else Qt.Unchecked
+        self.mask_layer_list.blockSignals(True)
+        for _, item in self._mask_layer_items.values():
+            if item.flags() & Qt.ItemIsEnabled:
+                item.setCheckState(value)
+        self.mask_layer_list.blockSignals(False)
+        self._update_mask_input_controls()
+
+    def _checked_mask_layers(self):
+        return [
+            layer
+            for layer, item in self._mask_layer_items.values()
+            if item.checkState() == Qt.Checked
+        ]
+
+    def _collect_mask_inputs(self):
+        image_layer = self._selected_image_layer()
+        if image_layer is None:
+            raise ValueError("Select an image layer before using existing segmentations.")
+        return vutil.collect_mask_inputs(self._checked_mask_layers(), image_layer)
+
+    def _have_correction_prompts(self):
+        return bool(
+            len(self._viewer.layers["point_prompts"].data)
+            or len(self._viewer.layers["prompts"].data)
+        )
+
+    def _update_mask_input_controls(self, event=None):
+        """Show live selection validity and correction-target routing."""
+        try:
+            mask_inputs = self._collect_mask_inputs()
+        except ValueError as error:
+            mask_inputs = None
+            self.mask_input_summary.setText(str(error))
+        else:
+            self.mask_input_summary.setText(
+                f"{len(mask_inputs.source_layers)} layer(s), {len(mask_inputs.object_ids)} object(s): "
+                + ", ".join(str(object_id) for object_id in mask_inputs.object_ids)
+            )
+
+        have_corrections = self._have_correction_prompts()
+        self.correction_target_row.setVisible(have_corrections)
+        previous = self.correction_target.currentData()
+        self.correction_target.blockSignals(True)
+        self.correction_target.clear()
+        if mask_inputs is not None:
+            if len(mask_inputs.object_ids) > 1:
+                self.correction_target.addItem("Choose object ID", None)
+            for object_id in mask_inputs.object_ids:
+                self.correction_target.addItem(str(object_id), object_id)
+            if len(mask_inputs.object_ids) == 1:
+                self.correction_target.setCurrentIndex(0)
+                self.correction_target.setEnabled(False)
+            else:
+                index = self.correction_target.findData(previous)
+                self.correction_target.setCurrentIndex(max(index, 0))
+                self.correction_target.setEnabled(True)
+        self.correction_target.blockSignals(False)
+
+        valid = mask_inputs is not None
+        self.refine_masks_button.setEnabled(valid)
+        self.commit_masks_button.setEnabled(valid)
+
+    def _correction_object_id(self, mask_inputs):
+        if not self._have_correction_prompts():
+            return None
+        if len(mask_inputs.object_ids) == 1:
+            return mask_inputs.object_ids[0]
+        object_id = self.correction_target.currentData()
+        if object_id is None:
+            raise ValueError("Choose the object ID that the current point and shape corrections apply to.")
+        return int(object_id)
+
+    def _collect_mask_prompts(self, base_mask, z=None):
+        """Combine one external mask with all corrections for its selected object and frame."""
+        prompts = vutil.collect_frame_prompts(
+            self._viewer.layers["point_prompts"],
+            self._viewer.layers["prompts"],
+            tuple(base_mask.shape),
+            i=z,
+            with_stop_annotation=False,
+        )
+        dense = np.asarray(base_mask, dtype=bool).copy()
+        for shape_mask in prompts.masks:
+            if shape_mask is not None:
+                dense |= np.asarray(shape_mask, dtype=bool)
+
+        coordinates = np.argwhere(dense)
+        bounds = []
+        if len(coordinates):
+            lower = coordinates.min(axis=0)
+            upper = coordinates.max(axis=0)
+            bounds.append(np.array([lower[0], lower[1], upper[0], upper[1]], dtype="float64"))
+        bounds.extend(np.asarray(box, dtype="float64") for box in prompts.boxes)
+        box = None
+        if bounds:
+            stacked = np.stack(bounds)
+            box = np.array([
+                stacked[:, 0].min(), stacked[:, 1].min(),
+                stacked[:, 2].max(), stacked[:, 3].max(),
+            ])
+        return dense, box, prompts
+
+    def _refine_mask_slice(self, base_mask, z=None, with_corrections=False):
+        """Refine one logical mask through the active SAM implementation."""
+        if with_corrections:
+            dense, box, prompts = self._collect_mask_prompts(base_mask, z=z)
+            points, labels = prompts.points, prompts.labels
+        else:
+            dense = np.asarray(base_mask, dtype=bool)
+            coordinates = np.argwhere(dense)
+            if not len(coordinates):
+                return None
+            lower, upper = coordinates.min(axis=0), coordinates.max(axis=0)
+            box = np.array([lower[0], lower[1], upper[0], upper[1]], dtype="float64")
+            points = np.empty((0, 2), dtype="float64")
+            labels = np.empty((0,), dtype="int64")
+
+        state = AnnotatorState()
+        if box is None:
+            # In propagation mode a positive point on an empty source slice is an additional anchor.
+            # A lone negative point is instead a stop annotation and does not create a mask.
+            if not np.any(labels == 1):
+                return None
+            if state.is_sam2:
+                seg = state.interactive_segmenter.segment_slice(
+                    frame_idx=int(z),
+                    points=points[:, ::-1].copy(),
+                    labels=labels,
+                )
+            else:
+                seg = vutil.prompt_segmentation(
+                    state.predictor,
+                    points,
+                    labels,
+                    [],
+                    [],
+                    tuple(base_mask.shape),
+                    image_embeddings=state.image_embeddings,
+                    multiple_box_prompts=False,
+                    batched=False,
+                    i=z,
+                )
+            return None if seg is None else np.asarray(seg).squeeze().astype(bool)
+
+        if state.is_sam2:
+            if self._ndim == 3:
+                seg = state.interactive_segmenter.segment_slice(
+                    frame_idx=int(z),
+                    points=points[:, ::-1].copy() if len(points) else None,
+                    labels=labels if len(labels) else None,
+                    boxes=[box[[1, 0, 3, 2]]],
+                    masks=[dense],
+                )
+            elif state.image_embeddings is not None and state.image_embeddings.get("input_size") is None:
+                from micro_sam.v2.prompt_based_segmentation import tiled_promptable_segmentation_2d
+                seg = tiled_promptable_segmentation_2d(
+                    predictor=state.predictor,
+                    image_embeddings=state.image_embeddings,
+                    points=points,
+                    labels=labels,
+                    boxes=[box],
+                    masks=[dense],
+                    batched=False,
+                    devices=state.inference_devices,
+                )
+            else:
+                from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
+                seg = promptable_segmentation_2d(
+                    predictor=state.predictor,
+                    points=points,
+                    labels=labels,
+                    boxes=[box],
+                    masks=[dense],
+                    batched=False,
+                )
+        else:
+            from micro_sam.v1.prompt_based_segmentation import segment_from_mask, segment_from_mask_tiled
+            if state.image_embeddings.get("input_size") is None:
+                seg = segment_from_mask_tiled(
+                    state.predictor,
+                    dense,
+                    state.image_embeddings,
+                    i=z,
+                    box=box,
+                    points=points,
+                    labels=labels,
+                )
+            else:
+                seg = segment_from_mask(
+                    state.predictor,
+                    dense,
+                    image_embeddings=state.image_embeddings,
+                    i=z,
+                    box=box,
+                    points=points[:, ::-1].copy() if len(points) else None,
+                    labels=labels if len(labels) else None,
+                )
+        return None if seg is None else np.asarray(seg).squeeze().astype(bool)
+
+    def _correction_slices(self):
+        if self._ndim != 3:
+            return set()
+        slices = set()
+        point_data = np.asarray(self._viewer.layers["point_prompts"].data)
+        if point_data.size:
+            slices.update(np.round(point_data[:, 0]).astype(int).tolist())
+        for shape in self._viewer.layers["prompts"].data:
+            slices.add(int(round(float(np.asarray(shape)[0, 0]))))
+        return slices
+
+    def _seed_slice(self, mask_inputs, object_id):
+        slices = mask_inputs.occupied_slices[object_id]
+        areas = {
+            z: int(np.count_nonzero(mask_inputs.labels[z] == object_id))
+            for z in slices
+        }
+        return min(slices, key=lambda z: (-areas[z], z))
+
+    def _refine_masks_occupied(self, mask_inputs, correction_id):
+        candidates = {
+            object_id: np.zeros(mask_inputs.labels.shape, dtype=bool)
+            for object_id in mask_inputs.object_ids
+        }
+        correction_slices = self._correction_slices()
+        if correction_id is not None:
+            absent = correction_slices.difference(mask_inputs.occupied_slices[correction_id])
+            if absent:
+                raise ValueError(
+                    "In 'Refine all occupied slices' mode, corrections must be on a slice occupied "
+                    f"by object ID {correction_id}. Invalid slices: {sorted(absent)}."
+                )
+
+        for object_id, z, mask in vutil.iter_mask_input_masks(mask_inputs):
+            refined = self._refine_mask_slice(
+                mask,
+                z=z,
+                with_corrections=(object_id == correction_id and z in correction_slices),
+            )
+            if refined is None:
+                raise ValueError(f"SAM did not return a mask for object ID {object_id} on slice {z}.")
+            candidates[object_id][z] = refined
+        return candidates
+
+    def _refine_masks_propagated(self, mask_inputs, correction_id):
+        """Refine deterministic seeds, then propagate each object independently."""
+        state = AnnotatorState()
+        correction_slices = self._correction_slices()
+        candidates = {}
+
+        for object_id in mask_inputs.object_ids:
+            seed = self._seed_slice(mask_inputs, object_id)
+            anchor_slices = {seed}
+            if object_id == correction_id:
+                anchor_slices.update(correction_slices)
+
+            seed_volume = np.zeros(mask_inputs.labels.shape, dtype="uint32")
+            valid_anchors = []
+            stop_slices = set()
+            for z in sorted(anchor_slices):
+                base = mask_inputs.labels[z] == object_id
+                refined = self._refine_mask_slice(
+                    base,
+                    z=z,
+                    with_corrections=(object_id == correction_id and z in correction_slices),
+                )
+                if refined is None:
+                    stop_slices.add(z)
+                    continue
+                seed_volume[z][refined] = 1
+                valid_anchors.append(z)
+
+            if not valid_anchors:
+                raise ValueError(f"No positive seed remains for object ID {object_id}.")
+
+            lower_stops = [z for z in stop_slices if z < min(valid_anchors)]
+            upper_stops = [z for z in stop_slices if z > max(valid_anchors)]
+            z_range = (
+                max(lower_stops) + 1 if lower_stops else 0,
+                min(upper_stops) - 1 if upper_stops else mask_inputs.labels.shape[0] - 1,
+            )
+            if self._segment_widget.z_range is not None:
+                z_range = (
+                    max(z_range[0], self._segment_widget.z_range[0]),
+                    min(z_range[1], self._segment_widget.z_range[1]),
+                )
+            if z_range[0] > z_range[1] or not all(z_range[0] <= z <= z_range[1] for z in valid_anchors):
+                raise ValueError(
+                    f"The propagation z-range must include every seed for object ID {object_id}: "
+                    f"{sorted(valid_anchors)}."
+                )
+
+            if state.is_sam2:
+                try:
+                    state.interactive_segmenter.add_pre_refined_masks(
+                        frame_ids=valid_anchors,
+                        masks=[seed_volume[z].astype(bool) for z in valid_anchors],
+                        object_id=object_id,
+                    )
+                    early_stop_patience = (
+                        self._segment_widget.early_stop_patience
+                        if self._segment_widget.early_stop_patience > 0
+                        else None
+                    )
+                    propagated = state.interactive_segmenter.predict(
+                        z_range=z_range,
+                        early_stop_patience=early_stop_patience,
+                    )
+                finally:
+                    state.interactive_segmenter.reset_predictor()
+                candidates[object_id] = np.asarray(propagated) == object_id
+                continue
+
+            if state.image_embeddings.get("input_size") is None:
+                from micro_sam.v1.prompt_based_segmentation import segment_from_mask_tiled
+
+                propagated = seed_volume.astype(bool)
+                lower, upper = z_range
+                first, last = min(valid_anchors), max(valid_anchors)
+                for z in range(first - 1, lower - 1, -1):
+                    propagated[z] = np.asarray(segment_from_mask_tiled(
+                        state.predictor, propagated[z + 1], state.image_embeddings, i=z,
+                    )).squeeze().astype(bool)
+                for z in range(last + 1, upper + 1):
+                    propagated[z] = np.asarray(segment_from_mask_tiled(
+                        state.predictor, propagated[z - 1], state.image_embeddings, i=z,
+                    )).squeeze().astype(bool)
+                for left, right in zip(valid_anchors[:-1], valid_anchors[1:]):
+                    midpoint = (left + right) // 2
+                    for z in range(left + 1, midpoint + 1):
+                        propagated[z] = np.asarray(segment_from_mask_tiled(
+                            state.predictor, propagated[z - 1], state.image_embeddings, i=z,
+                        )).squeeze().astype(bool)
+                    for z in range(right - 1, midpoint, -1):
+                        propagated[z] = np.asarray(segment_from_mask_tiled(
+                            state.predictor, propagated[z + 1], state.image_embeddings, i=z,
+                        )).squeeze().astype(bool)
+                candidates[object_id] = propagated
+            else:
+                propagated, _ = segment_mask_in_volume(
+                    seed_volume,
+                    state.predictor,
+                    state.image_embeddings,
+                    np.asarray(valid_anchors),
+                    stop_lower=bool(lower_stops),
+                    stop_upper=bool(upper_stops),
+                    iou_threshold=self._segment_widget.iou_threshold,
+                    projection=self._segment_widget.projection,
+                    box_extension=self._segment_widget.box_extension,
+                )
+                candidates[object_id] = np.asarray(propagated) != 0
+
+        return candidates
+
+    def _refine_selected_masks(self):
+        """Refine all checked Labels objects atomically into ``current_object``."""
+        show_info(
+            "Mask refinement converts every 2D mask prompt to SAM's 256 × 256 low-resolution "
+            "representation, so fine structures may be lost. Input Labels layers are not modified."
+        )
+        try:
+            mask_inputs = self._collect_mask_inputs()
+            correction_id = self._correction_object_id(mask_inputs)
+            if _validate_embeddings(self._viewer):
+                return
+
+            if self._ndim == 2:
+                candidates = {}
+                for object_id, _, mask in vutil.iter_mask_input_masks(mask_inputs):
+                    refined = self._refine_mask_slice(
+                        mask, with_corrections=(object_id == correction_id),
+                    )
+                    if refined is None:
+                        raise ValueError(f"SAM did not return a mask for object ID {object_id}.")
+                    candidates[object_id] = refined
+            elif self.mask_3d_strategy.currentText() == "Propagate from seed slices":
+                self._sync_propagation_settings()
+                candidates = self._refine_masks_propagated(mask_inputs, correction_id)
+            else:
+                candidates = self._refine_masks_occupied(mask_inputs, correction_id)
+
+            refined_labels = vutil.merge_refined_mask_candidates(mask_inputs.labels, candidates)
+            refined_ids = tuple(int(value) for value in np.unique(refined_labels) if value != 0)
+            if refined_ids != mask_inputs.object_ids:
+                missing = sorted(set(mask_inputs.object_ids).difference(refined_ids))
+                raise ValueError(
+                    f"SAM returned an empty result for input object ID(s) {missing}; "
+                    "the existing current result was left unchanged."
+                )
+        except (ValueError, RuntimeError) as error:
+            _generate_message("error", str(error))
+            return
+
+        current_object = self._viewer.layers["current_object"]
+        current_object.data = refined_labels
+        image_layer = self._selected_image_layer()
+        for transform_name in ("scale", "translate", "rotate", "shear", "affine"):
+            if hasattr(image_layer, transform_name):
+                setattr(current_object, transform_name, getattr(image_layer, transform_name))
+        current_object.metadata["micro_sam_mask_refinement"] = {
+            "object_ids": tuple(mask_inputs.object_ids),
+            "source_layers": tuple(mask_inputs.source_names),
+        }
+        current_object.refresh()
+
+    def _commit_selected_masks_unchanged(self):
+        """Atomically union selected external labels into committed objects without running SAM."""
+        try:
+            mask_inputs = self._collect_mask_inputs()
+            committed = self._viewer.layers["committed_objects"]
+            destination = np.asarray(committed.data)
+            if destination.shape != mask_inputs.labels.shape:
+                if np.any(destination):
+                    raise ValueError(
+                        f"The committed layer has shape {destination.shape}, but mask inputs have "
+                        f"shape {mask_inputs.labels.shape}."
+                    )
+                destination = np.zeros(mask_inputs.labels.shape, dtype="uint32")
+            merged = vutil.merge_labels_for_direct_commit(destination, mask_inputs.labels)
+        except ValueError as error:
+            _generate_message("error", str(error))
+            return
+
+        committed.data = merged
+        image_layer = self._selected_image_layer()
+        for transform_name in ("scale", "translate", "rotate", "shear", "affine"):
+            if hasattr(image_layer, transform_name):
+                setattr(committed, transform_name, getattr(image_layer, transform_name))
+        committed.metadata["micro_sam_direct_mask_commit"] = {
+            "image_layer_id": id(image_layer),
+            "shape": tuple(mask_inputs.labels.shape),
+        }
+        committed.refresh()
 
     def _update_batched_visibility(self, event=None):
         """Disable batched segmentation while one or more scribble prompts are present."""
@@ -3746,15 +4366,23 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self.apply_to_volume = bool(state)
         self._segment_widget.apply_to_volume = self.apply_to_volume
 
-        # Show the propagation controls only in volume mode with a SAM2 model, and size the slider.
-        if self._propagation_settings is not None:
-            annotator_state = AnnotatorState()
-            is_sam2 = bool(annotator_state.is_sam2) if annotator_state.is_sam2 is not None else False
-            show = self.apply_to_volume and is_sam2
-            self._propagation_settings.setVisible(show)
-            if show:
-                self._update_z_range_slider()
-                self._sync_propagation_settings()
+        self._update_propagation_visibility()
+
+    def _update_propagation_visibility(self, *args):
+        """Expose propagation controls for prompt-volume or mask-seed propagation."""
+        if self._propagation_settings is None:
+            return
+        annotator_state = AnnotatorState()
+        is_sam2 = bool(annotator_state.is_sam2) if annotator_state.is_sam2 is not None else False
+        mask_propagation = (
+            hasattr(self, "mask_3d_strategy")
+            and self.mask_3d_strategy.currentText() == "Propagate from seed slices"
+        )
+        show = mask_propagation or (self.apply_to_volume and is_sam2)
+        self._propagation_settings.setVisible(show)
+        if show:
+            self._update_z_range_slider()
+            self._sync_propagation_settings()
 
     def _on_batched_changed(self, state):
         """Sync the batched mode to the segmentation engine."""
@@ -3771,6 +4399,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
 
     def clear(self, viewer=None):
         """Clear the current annotations."""
+        self._viewer.layers["current_object"].metadata.pop("micro_sam_mask_refinement", None)
         if self._ndim == 2 or self.apply_to_volume:
             vutil.clear_annotations(self._viewer)
         else:

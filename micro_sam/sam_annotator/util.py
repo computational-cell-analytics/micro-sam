@@ -4,7 +4,7 @@ import warnings
 from glob import glob
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import h5py
 import numpy as np
@@ -315,6 +315,259 @@ def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=T
 #
 # Helper functions to extract prompts from napari layers.
 #
+
+
+@dataclass
+class MaskInputData:
+    """Validated and merged Labels layers used as dense mask inputs.
+
+    Attributes:
+        labels: The merged 2D or 3D label image. Equal nonzero IDs from different source layers
+            are unioned and unequal IDs never overlap.
+        object_ids: The sorted nonzero IDs in ``labels``.
+        source_layers: The source Labels layer objects, retained for UI provenance.
+        source_names: The source layer names at collection time.
+        occupied_slices: For 3D inputs, the sorted z-slices occupied by each object ID. This is
+            empty for 2D inputs.
+    """
+
+    labels: np.ndarray
+    object_ids: Tuple[int, ...]
+    source_layers: Tuple[object, ...]
+    source_names: Tuple[str, ...]
+    occupied_slices: Dict[int, Tuple[int, ...]]
+
+
+def _spatial_image_shape(image_layer) -> Tuple[int, ...]:
+    """Return the spatial shape of a napari image, excluding an RGB channel axis."""
+    shape = tuple(np.shape(image_layer.data))
+    if bool(getattr(image_layer, "rgb", False)):
+        if len(shape) < 3:
+            raise ValueError(
+                f"RGB image layer '{getattr(image_layer, 'name', '<unnamed>')}' has invalid shape {shape}."
+            )
+        shape = shape[:-1]
+    if len(shape) not in (2, 3):
+        raise ValueError(f"Mask inputs require a 2D or 3D image, got spatial shape {shape}.")
+    return shape
+
+
+def _transform_signature(layer, ndim: int) -> np.ndarray:
+    """Sample a layer's data-to-world transform at the origin and basis vectors."""
+    points = np.concatenate([np.zeros((1, ndim)), np.eye(ndim)], axis=0)
+    if hasattr(layer, "data_to_world"):
+        try:
+            world = np.stack([np.asarray(layer.data_to_world(tuple(point)), dtype="float64") for point in points])
+            if world.shape == points.shape:
+                return world
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+    # This fallback keeps the helper usable with lightweight layer-like objects and covers the
+    # common scale/translate case. Real napari layers take the public data_to_world path above,
+    # which also includes rotate, shear and affine.
+    scale = np.asarray(getattr(layer, "scale", np.ones(ndim)), dtype="float64")
+    translate = np.asarray(getattr(layer, "translate", np.zeros(ndim)), dtype="float64")
+    if scale.shape != (ndim,) or translate.shape != (ndim,):
+        raise ValueError(
+            f"Layer '{getattr(layer, 'name', '<unnamed>')}' has a transform with incompatible dimensionality."
+        )
+    return points * scale + translate
+
+
+def _validated_label_array(data, name: str, expected_shape: Tuple[int, ...]) -> np.ndarray:
+    """Validate one label array and convert it losslessly to uint32."""
+    labels = np.asarray(data)
+    if labels.shape != expected_shape:
+        raise ValueError(
+            f"Mask layer '{name}' has shape {labels.shape}, but the selected image has spatial shape "
+            f"{expected_shape}. Mask inputs are not resampled."
+        )
+    if labels.dtype == np.bool_:
+        return labels.astype("uint32", copy=False)
+    if not np.issubdtype(labels.dtype, np.integer):
+        raise ValueError(f"Mask layer '{name}' must contain boolean or integer labels, got dtype {labels.dtype}.")
+
+    if labels.size:
+        minimum, maximum = int(labels.min()), int(labels.max())
+        if minimum < 0:
+            raise ValueError(f"Mask layer '{name}' contains negative label ID {minimum}.")
+        if maximum > np.iinfo("uint32").max:
+            raise ValueError(
+                f"Mask layer '{name}' contains label ID {maximum}, which exceeds the uint32 limit "
+                f"{np.iinfo('uint32').max}."
+            )
+    return labels.astype("uint32", copy=False)
+
+
+def collect_mask_inputs(layers: Sequence[object], image_layer) -> MaskInputData:
+    """Validate and merge selected Labels layers against the selected image.
+
+    Equal IDs are unioned across layers. Unequal nonzero IDs at the same pixel are rejected rather
+    than resolved implicitly. Shape and data-to-world transform must match exactly (within floating
+    point tolerance); no resampling is performed.
+    """
+    layers = tuple(layers)
+    if not layers:
+        raise ValueError("Select at least one Labels layer as a mask input.")
+
+    image_shape = _spatial_image_shape(image_layer)
+    image_transform = _transform_signature(image_layer, len(image_shape))
+    merged = np.zeros(image_shape, dtype="uint32")
+    owner = np.full(image_shape, -1, dtype="int64")
+    names = tuple(str(getattr(layer, "name", f"layer {index}")) for index, layer in enumerate(layers))
+
+    for index, (layer, name) in enumerate(zip(layers, names)):
+        labels = _validated_label_array(layer.data, name, image_shape)
+        layer_transform = _transform_signature(layer, len(image_shape))
+        if not np.allclose(layer_transform, image_transform, rtol=1e-7, atol=1e-8):
+            raise ValueError(
+                f"Mask layer '{name}' is not aligned with image layer "
+                f"'{getattr(image_layer, 'name', '<unnamed>')}'. Their data-to-world transforms differ; "
+                "mask inputs are not resampled."
+            )
+
+        conflict = (merged != 0) & (labels != 0) & (merged != labels)
+        if np.any(conflict):
+            coordinates = np.argwhere(conflict)
+            first = tuple(int(value) for value in coordinates[0])
+            previous_index = int(owner[first])
+            raise ValueError(
+                f"Mask layers '{names[previous_index]}' (ID {int(merged[first])}) and '{name}' "
+                f"(ID {int(labels[first])}) overlap with different nonzero IDs on "
+                f"{len(coordinates)} pixels; first conflict at coordinate {first}. "
+                "Resolve the label IDs or overlap in napari before using these layers."
+            )
+
+        foreground = labels != 0
+        new_pixels = foreground & (merged == 0)
+        merged[new_pixels] = labels[new_pixels]
+        owner[new_pixels] = index
+
+    object_ids = tuple(int(value) for value in np.unique(merged) if value != 0)
+    if not object_ids:
+        raise ValueError("The selected mask input layers do not contain any nonzero label IDs.")
+
+    occupied_slices = {}
+    if merged.ndim == 3:
+        for object_id in object_ids:
+            occupied = np.flatnonzero(np.any(merged == object_id, axis=(1, 2)))
+            occupied_slices[object_id] = tuple(int(index) for index in occupied)
+
+    return MaskInputData(
+        labels=merged,
+        object_ids=object_ids,
+        source_layers=layers,
+        source_names=names,
+        occupied_slices=occupied_slices,
+    )
+
+
+def iter_mask_input_masks(mask_inputs: MaskInputData) -> Iterator[Tuple[int, Optional[int], np.ndarray]]:
+    """Yield ``(object_id, z, binary_mask)`` for every logical 2D mask prompt."""
+    if mask_inputs.labels.ndim == 2:
+        for object_id in mask_inputs.object_ids:
+            yield object_id, None, mask_inputs.labels == object_id
+        return
+
+    if mask_inputs.labels.ndim != 3:
+        raise ValueError(f"Mask inputs must be 2D or 3D, got shape {mask_inputs.labels.shape}.")
+    for object_id in mask_inputs.object_ids:
+        for z in mask_inputs.occupied_slices[object_id]:
+            yield object_id, z, mask_inputs.labels[z] == object_id
+
+
+def _validated_uint32_labels(labels, name: str, shape: Optional[Tuple[int, ...]] = None) -> np.ndarray:
+    """Validate an internal label image, optionally against a required shape."""
+    array = np.asarray(labels)
+    expected_shape = tuple(array.shape) if shape is None else shape
+    return _validated_label_array(array, name, expected_shape)
+
+
+def merge_refined_mask_candidates(
+    original_labels: np.ndarray, candidates: Mapping[int, np.ndarray]
+) -> np.ndarray:
+    """Merge overlapping refined binary masks deterministically.
+
+    At each pixel the original source owner wins when its candidate still covers that pixel.
+    Otherwise the smallest covering numeric ID wins. Candidate mapping order has no effect.
+    """
+    original = _validated_uint32_labels(original_labels, "original labels")
+    shape = tuple(original.shape)
+    normalized = {}
+    for raw_object_id, candidate in candidates.items():
+        object_id = int(raw_object_id)
+        if object_id <= 0 or object_id > np.iinfo("uint32").max:
+            raise ValueError(f"Candidate object ID {object_id} is outside the valid uint32 foreground range.")
+        candidate = np.asarray(candidate)
+        if candidate.shape != shape:
+            raise ValueError(
+                f"Candidate for object ID {object_id} has shape {candidate.shape}, expected {shape}."
+            )
+        normalized[object_id] = candidate.astype(bool, copy=False)
+
+    result = np.zeros(shape, dtype="uint32")
+    # Sorted assignment establishes the smallest-ID fallback without depending on mapping order.
+    for object_id in sorted(normalized):
+        mask = normalized[object_id]
+        result[mask & (result == 0)] = object_id
+    # Original ownership has higher priority than the fallback.
+    for object_id in sorted(normalized):
+        result[(original == object_id) & normalized[object_id]] = object_id
+    return result
+
+
+def merge_labels_for_direct_commit(destination: np.ndarray, incoming: np.ndarray) -> np.ndarray:
+    """Return a direct-commit merge without mutating either input label image."""
+    destination = _validated_uint32_labels(destination, "committed labels")
+    incoming = _validated_uint32_labels(incoming, "incoming labels", tuple(destination.shape))
+    conflict = (destination != 0) & (incoming != 0) & (destination != incoming)
+    if np.any(conflict):
+        coordinates = np.argwhere(conflict)
+        first = tuple(int(value) for value in coordinates[0])
+        raise ValueError(
+            f"Incoming ID {int(incoming[first])} overlaps committed ID {int(destination[first])} on "
+            f"{len(coordinates)} pixels; first conflict at coordinate {first}."
+        )
+
+    result = destination.copy()
+    foreground = (result == 0) & (incoming != 0)
+    result[foreground] = incoming[foreground]
+    return result
+
+
+def merge_labels_for_refined_commit(
+    destination: np.ndarray, refined: np.ndarray, object_ids: Sequence[int]
+) -> np.ndarray:
+    """Replace authoritative destination objects with refined masks, preserving their IDs."""
+    destination = _validated_uint32_labels(destination, "committed labels")
+    refined = _validated_uint32_labels(refined, "refined labels", tuple(destination.shape))
+    authoritative_ids = tuple(sorted({int(object_id) for object_id in object_ids}))
+    if any(object_id <= 0 or object_id > np.iinfo("uint32").max for object_id in authoritative_ids):
+        raise ValueError("Authoritative object IDs must be nonzero uint32 values.")
+
+    refined_ids = tuple(int(value) for value in np.unique(refined) if value != 0)
+    if refined_ids != authoritative_ids:
+        missing = sorted(set(authoritative_ids).difference(refined_ids))
+        unexpected = sorted(set(refined_ids).difference(authoritative_ids))
+        raise ValueError(
+            "The refined result IDs do not match its authoritative source IDs. "
+            f"Missing IDs: {missing}; unexpected IDs: {unexpected}."
+        )
+
+    result = destination.copy()
+    if authoritative_ids:
+        result[np.isin(result, authoritative_ids)] = 0
+    conflict = (result != 0) & (refined != 0)
+    if np.any(conflict):
+        coordinates = np.argwhere(conflict)
+        first = tuple(int(value) for value in coordinates[0])
+        raise ValueError(
+            f"Refined ID {int(refined[first])} overlaps remaining committed ID {int(result[first])} on "
+            f"{len(coordinates)} pixels; first conflict at coordinate {first}."
+        )
+    result[refined != 0] = refined[refined != 0]
+    return result
 
 
 def point_layer_to_prompts(
