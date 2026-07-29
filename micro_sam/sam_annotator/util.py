@@ -327,6 +327,8 @@ class MaskInputData:
         object_ids: The sorted nonzero IDs in ``labels``.
         source_layers: The source Labels layer objects, retained for UI provenance.
         source_names: The source layer names at collection time.
+        cropped_source_names: Source layers that had one trailing pixel cropped on at least one
+            axis to match the image extent.
         occupied_slices: For 3D inputs, the sorted z-slices occupied by each object ID. This is
             empty for 2D inputs.
     """
@@ -335,6 +337,7 @@ class MaskInputData:
     object_ids: Tuple[int, ...]
     source_layers: Tuple[object, ...]
     source_names: Tuple[str, ...]
+    cropped_source_names: Tuple[str, ...]
     occupied_slices: Dict[int, Tuple[int, ...]]
 
 
@@ -375,14 +378,29 @@ def _transform_signature(layer, ndim: int) -> np.ndarray:
     return points * scale + translate
 
 
-def _validated_label_array(data, name: str, expected_shape: Tuple[int, ...]) -> np.ndarray:
+def _validated_label_array(
+    data,
+    name: str,
+    expected_shape: Tuple[int, ...],
+    allow_trailing_crop: bool = False,
+) -> np.ndarray:
     """Validate one label array and convert it losslessly to uint32."""
     labels = np.asarray(data)
     if labels.shape != expected_shape:
-        raise ValueError(
-            f"Mask layer '{name}' has shape {labels.shape}, but the selected image has spatial shape "
-            f"{expected_shape}. Mask inputs are not resampled."
+        deltas = (
+            tuple(actual - expected for actual, expected in zip(labels.shape, expected_shape))
+            if labels.ndim == len(expected_shape)
+            else ()
         )
+        can_crop = allow_trailing_crop and deltas and all(delta in (0, 1) for delta in deltas)
+        if can_crop:
+            labels = labels[tuple(slice(0, size) for size in expected_shape)]
+        else:
+            raise ValueError(
+                f"Mask layer '{name}' has shape {labels.shape}, but the selected image has spatial shape "
+                f"{expected_shape}. Only one trailing pixel per axis can be cropped automatically; "
+                "mask inputs are otherwise not resampled."
+            )
     if labels.dtype == np.bool_:
         return labels.astype("uint32", copy=False)
     if not np.issubdtype(labels.dtype, np.integer):
@@ -404,8 +422,9 @@ def collect_mask_inputs(layers: Sequence[object], image_layer) -> MaskInputData:
     """Validate and merge selected Labels layers against the selected image.
 
     Equal IDs are unioned across layers. Unequal nonzero IDs at the same pixel are rejected rather
-    than resolved implicitly. Shape and data-to-world transform must match exactly (within floating
-    point tolerance); no resampling is performed.
+    than resolved implicitly. Data-to-world transforms must match (within floating point tolerance).
+    A single surplus pixel at the trailing edge of any axis is cropped to accommodate napari's
+    create-new-Labels behavior; other shape mismatches are rejected and no resampling is performed.
     """
     layers = tuple(layers)
     if not layers:
@@ -416,9 +435,15 @@ def collect_mask_inputs(layers: Sequence[object], image_layer) -> MaskInputData:
     merged = np.zeros(image_shape, dtype="uint32")
     owner = np.full(image_shape, -1, dtype="int64")
     names = tuple(str(getattr(layer, "name", f"layer {index}")) for index, layer in enumerate(layers))
+    cropped_names = []
 
     for index, (layer, name) in enumerate(zip(layers, names)):
-        labels = _validated_label_array(layer.data, name, image_shape)
+        source_shape = tuple(np.shape(layer.data))
+        labels = _validated_label_array(
+            layer.data, name, image_shape, allow_trailing_crop=True,
+        )
+        if source_shape != image_shape:
+            cropped_names.append(name)
         layer_transform = _transform_signature(layer, len(image_shape))
         if not np.allclose(layer_transform, image_transform, rtol=1e-7, atol=1e-8):
             raise ValueError(
@@ -459,6 +484,7 @@ def collect_mask_inputs(layers: Sequence[object], image_layer) -> MaskInputData:
         object_ids=object_ids,
         source_layers=layers,
         source_names=names,
+        cropped_source_names=tuple(cropped_names),
         occupied_slices=occupied_slices,
     )
 

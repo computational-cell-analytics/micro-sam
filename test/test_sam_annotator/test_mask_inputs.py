@@ -50,6 +50,7 @@ def test_collect_2d_inputs_unions_equal_ids_and_preserves_sparse_ids():
     assert inputs.labels.dtype == np.uint32
     assert inputs.object_ids == (3, 91)
     assert inputs.source_names == ("first", "second")
+    assert inputs.cropped_source_names == ()
     assert [layer.name for layer in inputs.source_layers] == ["first", "second"]
     assert inputs.occupied_slices == {}
     assert np.array_equal(inputs.labels == 3, (first == 3) | (second == 3))
@@ -133,6 +134,44 @@ def test_collect_rejects_shape_and_transform_mismatches():
     shifted = Layer(np.ones((3, 4), dtype="uint8"), "shifted", scale=(2, 3), translate=(4, 6))
     with pytest.raises(ValueError, match="data-to-world transforms differ"):
         collect_mask_inputs([shifted], image)
+
+
+@pytest.mark.parametrize(
+    ("image_shape", "labels_shape"),
+    [
+        ((3, 4), (4, 5)),
+        ((2, 3, 4), (3, 4, 5)),
+        ((2, 3, 4), (2, 4, 5)),
+    ],
+)
+def test_collect_crops_one_trailing_pixel_per_oversized_axis(image_shape, labels_shape):
+    image = Layer(np.zeros(image_shape), "image")
+    labels = np.zeros(labels_shape, dtype="uint16")
+    inside = tuple(slice(0, size) for size in image_shape)
+    labels[inside] = 17
+
+    # Foreground in the one-pixel trailing border is outside the selected image and must not
+    # become part of the prompt.
+    trailing_border_coordinate = tuple(
+        image_size if label_size == image_size + 1 else 0
+        for image_size, label_size in zip(image_shape, labels_shape)
+    )
+    labels[trailing_border_coordinate] = 91
+    inputs = collect_mask_inputs([Layer(labels, "napari labels")], image)
+
+    assert inputs.labels.shape == image_shape
+    assert inputs.object_ids == (17,)
+    assert inputs.cropped_source_names == ("napari labels",)
+    assert np.all(inputs.labels == 17)
+
+
+@pytest.mark.parametrize("labels_shape", [(2, 4), (3, 6), (5, 4)])
+def test_collect_rejects_smaller_or_more_than_one_pixel_larger_shapes(labels_shape):
+    image = Layer(np.zeros((3, 4)), "image")
+    labels = Layer(np.ones(labels_shape, dtype="uint8"), "wrong shape")
+
+    with pytest.raises(ValueError, match="has shape"):
+        collect_mask_inputs([labels], image)
 
 
 def test_collect_compares_full_affine_transform_and_rgb_spatial_shape():

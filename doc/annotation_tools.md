@@ -58,12 +58,15 @@ Point prompts and box prompts can be combined. When you're using point prompts y
 
 ### Using existing segmentations
 
-The `Existing Segmentation Inputs` section accepts any compatible napari Labels layer, including segmentations created by Cellpose or another napari plugin.
+The `Existing Segmentation Inputs` section accepts compatible napari Labels layers, including segmentations created by Cellpose or another napari plugin.
+The internal `current_object`, `auto_segmentation` and `committed_objects` output layers are not listed; duplicate one in napari first if you intentionally want to reuse it as an input.
 Use the checkboxes or the `Select all` and `Unselect all` buttons to choose inputs.
 All nonzero label IDs are treated as objects: equal IDs from multiple selected layers are unioned, while overlapping different IDs must be resolved in napari before continuing.
-The selected layers must have the same spatial shape and data-to-world transform as the selected image; micro-sam does not resample them.
+The selected layers must have the same data-to-world transform as the selected image.
+An input that is exactly one trailing pixel larger on one or more axes is cropped to the image extent, which accommodates new Labels layers created by napari; other shape mismatches are rejected and micro-sam does not resample them.
 
-`Refine with SAM` processes every selected object independently and writes the merged result to `current_object`.
+When mask inputs are selected, `Segment Object` (or `S`) processes every selected object independently and writes the merged result to `current_object`.
+When no mask input is selected, the same action uses the normal point and shape prompt workflow.
 If point or shape corrections are present and the inputs contain several objects, choose the single object ID they apply to.
 The normal `Commit` action then replaces those IDs in `committed_objects` without renumbering them.
 SAM converts each 2D mask prompt to its 256 by 256 low-resolution mask representation, so fine structures may be lost during refinement.

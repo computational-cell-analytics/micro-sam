@@ -37,7 +37,10 @@ tooltips = {
         "apply_to_volume": "Choose whether to segment only the current slice or frame, or the full volume or all frames.",  # noqa
         "batched": "Enable to segment multiple objects at once: each positive point and each box defines a separate object. Only available for SAM2 models.",  # noqa
         "batched_scribble_disabled": "Batched segmentation is unavailable while scribble prompts are present. Remove all path, polyline and line prompts to re-enable it.",  # noqa
-        "segment_button": "Run Segment Anything 2 on the current point/box prompts to segment the object. Shortcut: S.",  # noqa
+        "segment_button": (
+            "Run Segment Anything on the selected existing-segmentation inputs, or on the current "
+            "point/shape prompts when no mask input is selected. Shortcut: S."
+        ),
         "clear_button": "Clear the current prompts and the current-object segmentation (whole volume or current slice per 'Apply to Volume' for 3d data). Shortcut: Shift + C.",  # noqa
         "settings": "Settings for interactive segmentation across slices (projection mode and propagation parameters).",  # noqa
     },

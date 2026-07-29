@@ -3599,6 +3599,11 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self._mask_layer_items = {}
         self._connected_mask_layers = set()
         self._connected_mask_images = set()
+        self._excluded_mask_layer_ids = {
+            id(self._viewer.layers[name])
+            for name in ("current_object", "auto_segmentation", "committed_objects")
+            if name in self._viewer.layers
+        }
         self._create_widget()
 
     def _create_widget(self):
@@ -3695,7 +3700,8 @@ class InteractiveSegmentationWidget(_WidgetBase):
         container.setLayout(QtWidgets.QVBoxLayout())
 
         intro = QtWidgets.QLabel(
-            "Select one or more Labels layers. Equal IDs are unioned; overlapping different IDs are rejected."
+            "Select one or more Labels layers, then use Segment Object [S] to refine them with SAM. "
+            "Equal IDs are unioned; overlapping different IDs are rejected."
         )
         intro.setWordWrap(True)
         container.layout().addWidget(intro)
@@ -3737,22 +3743,9 @@ class InteractiveSegmentationWidget(_WidgetBase):
             strategy_row.addWidget(self.mask_3d_strategy)
             container.layout().addLayout(strategy_row)
 
-        self.mask_downsampling_warning = QtWidgets.QLabel(
-            "Refinement warning: every 2D mask prompt is converted to SAM's 256 × 256 low-resolution "
-            "mask representation. Fine structures may be lost. The selected input layers are never modified."
-        )
-        self.mask_downsampling_warning.setWordWrap(True)
-        self.mask_downsampling_warning.setVisible(False)
-        container.layout().addWidget(self.mask_downsampling_warning)
-
-        action_row = QtWidgets.QHBoxLayout()
-        self.refine_masks_button = QtWidgets.QPushButton("Refine with SAM")
-        self.refine_masks_button.clicked.connect(self._refine_selected_masks)
         self.commit_masks_button = QtWidgets.QPushButton("Commit input masks unchanged")
         self.commit_masks_button.clicked.connect(self._commit_selected_masks_unchanged)
-        action_row.addWidget(self.refine_masks_button)
-        action_row.addWidget(self.commit_masks_button)
-        container.layout().addLayout(action_row)
+        container.layout().addWidget(self.commit_masks_button)
 
         return _make_collapsible(
             container,
@@ -3790,6 +3783,8 @@ class InteractiveSegmentationWidget(_WidgetBase):
         for layer in self._viewer.layers:
             if not isinstance(layer, napari.layers.Labels):
                 continue
+            if id(layer) in self._excluded_mask_layer_ids:
+                continue
             layer_id = id(layer)
             compatibility_error = None
             if image_layer is None:
@@ -3802,12 +3797,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
                     # source as soon as the user paints or pastes an object into it.
                     if "do not contain any nonzero label IDs" not in str(error):
                         compatibility_error = str(error)
-            internal_suffix = (
-                " (micro-sam output)"
-                if layer.name in {"current_object", "auto_segmentation", "committed_objects"}
-                else ""
-            )
-            text = f"{layer.name}{internal_suffix}"
+            text = layer.name
             if compatibility_error is not None:
                 text += " — incompatible"
             item = QtWidgets.QListWidgetItem(text)
@@ -3868,10 +3858,16 @@ class InteractiveSegmentationWidget(_WidgetBase):
             mask_inputs = None
             self.mask_input_summary.setText(str(error))
         else:
-            self.mask_input_summary.setText(
+            summary = (
                 f"{len(mask_inputs.source_layers)} layer(s), {len(mask_inputs.object_ids)} object(s): "
                 + ", ".join(str(object_id) for object_id in mask_inputs.object_ids)
             )
+            if mask_inputs.cropped_source_names:
+                summary += (
+                    ". Cropped one trailing pixel on one or more axes to match the image for: "
+                    + ", ".join(mask_inputs.cropped_source_names)
+                )
+            self.mask_input_summary.setText(summary)
 
         have_corrections = self._have_correction_prompts()
         self.correction_target_row.setVisible(have_corrections)
@@ -3893,7 +3889,6 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self.correction_target.blockSignals(False)
 
         valid = mask_inputs is not None
-        self.refine_masks_button.setEnabled(valid)
         self.commit_masks_button.setEnabled(valid)
 
     def _correction_object_id(self, mask_inputs):
@@ -4390,7 +4385,10 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self._segment_widget.batched = self.batched
 
     def segment(self, viewer=None):
-        """Run interactive segmentation for the current prompts."""
+        """Refine selected mask inputs, or run interactive point/shape segmentation."""
+        if self._checked_mask_layers():
+            self._refine_selected_masks()
+            return
         if self._ndim == 2:
             _segment_object_2d(self._viewer, batched=bool(self.batched))
         else:

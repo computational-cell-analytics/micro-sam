@@ -3,6 +3,7 @@ import platform
 import numpy as np
 import pytest
 
+from qtpy import QtWidgets
 from qtpy.QtCore import Qt
 
 from micro_sam.sam_annotator import _widgets
@@ -34,6 +35,10 @@ def _set_only_checked(widget, layer):
         item.setCheckState(Qt.Checked if is_target else Qt.Unchecked)
 
 
+def _listed_mask_layers(widget):
+    return [layer for layer, _ in widget._mask_layer_items.values()]
+
+
 def test_mask_layer_checklist_tracks_compatible_layers(make_napari_viewer_proxy):
     viewer = make_napari_viewer_proxy()
     image = viewer.add_image(np.zeros((16, 16), dtype="uint8"), name="image")
@@ -54,6 +59,14 @@ def test_mask_layer_checklist_tracks_compatible_layers(make_napari_viewer_proxy)
     annotator = Annotator(viewer)
     widget = annotator._widgets["interactive"]
 
+    listed_names = {layer.name for layer in _listed_mask_layers(widget)}
+    assert listed_names.isdisjoint(
+        {"auto_segmentation", "committed_objects", "current_object"}
+    )
+    internal_current_object = viewer.layers["current_object"]
+    internal_current_object.name = "renamed micro-sam output"
+    viewer.add_labels(np.zeros(image.data.shape, dtype="uint32"), name="trigger refresh")
+    assert internal_current_object not in _listed_mask_layers(widget)
     compatible_item = _item_for_layer(widget, compatible)
     incompatible_shape_item = _item_for_layer(widget, incompatible_shape)
     incompatible_transform_item = _item_for_layer(widget, incompatible_transform)
@@ -75,6 +88,77 @@ def test_mask_layer_checklist_tracks_compatible_layers(make_napari_viewer_proxy)
     assert _item_for_layer(widget, compatible).checkState() == Qt.Checked
     assert _item_for_layer(widget, incompatible_shape).checkState() == Qt.Unchecked
     assert _item_for_layer(widget, incompatible_transform).checkState() == Qt.Unchecked
+
+    viewer.close()
+
+
+def test_mask_layer_checklist_accepts_and_crops_napari_trailing_surplus(
+    make_napari_viewer_proxy,
+):
+    viewer = make_napari_viewer_proxy()
+    image = viewer.add_image(np.zeros((12, 12), dtype="uint8"), name="image")
+    annotator = Annotator(viewer)
+    widget = annotator._widgets["interactive"]
+
+    labels = np.zeros((13, 13), dtype="uint32")
+    labels[2:5, 3:6] = 11
+    labels[12, 12] = 99
+    napari_labels = viewer.add_labels(labels, name="Labels")
+
+    item = _item_for_layer(widget, napari_labels)
+    assert item.flags() & Qt.ItemIsEnabled
+    _set_only_checked(widget, napari_labels)
+
+    mask_inputs = widget._collect_mask_inputs()
+    assert mask_inputs.labels.shape == image.data.shape
+    assert mask_inputs.object_ids == (11,)
+    assert mask_inputs.cropped_source_names == ("Labels",)
+    assert "Cropped one trailing pixel on one or more axes" in widget.mask_input_summary.text()
+    assert "Labels" in widget.mask_input_summary.text()
+
+    widget._commit_selected_masks_unchanged()
+    committed = viewer.layers["committed_objects"].data
+    assert committed.shape == image.data.shape
+    assert set(np.unique(committed)) == {0, 11}
+
+    viewer.close()
+
+
+def test_segment_object_routes_selected_masks_to_refinement(
+    make_napari_viewer_proxy,
+    monkeypatch,
+):
+    viewer = make_napari_viewer_proxy()
+    viewer.add_image(np.zeros((12, 12), dtype="uint8"), name="image")
+    annotator = Annotator(viewer)
+    widget = annotator._widgets["interactive"]
+    calls = []
+
+    monkeypatch.setattr(
+        _widgets,
+        "_segment_object_2d",
+        lambda viewer, batched: calls.append(("prompts", batched)),
+    )
+    widget.segment()
+    assert calls == [("prompts", False)]
+
+    labels = np.zeros((12, 12), dtype="uint32")
+    labels[2:5, 3:6] = 11
+    cellpose = viewer.add_labels(labels, name="cellpose")
+    _set_only_checked(widget, cellpose)
+    monkeypatch.setattr(
+        widget,
+        "_refine_selected_masks",
+        lambda: calls.append(("masks", False)),
+    )
+    widget.segment()
+    assert calls[-1] == ("masks", False)
+
+    button_texts = {
+        button.text() for button in widget.findChildren(QtWidgets.QPushButton)
+    }
+    assert "Segment Object [S]" in button_texts
+    assert "Refine with SAM" not in button_texts
 
     viewer.close()
 
