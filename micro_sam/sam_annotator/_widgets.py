@@ -1449,8 +1449,7 @@ def _validate_layers(
     state.annotator._require_layers()
 
     if not automatic_segmentation:
-        # Check prompts layer. A mask seeded from an existing segmentation is a prompt too, even
-        # though it lives in the state rather than in a layer (it is always empty outside tracking).
+        # A seeded mask is a prompt too, but lives in the state rather than in a layer.
         have_seeds = any(seeds for seeds in state.seed_masks.values())
         if (
             len(viewer.layers["prompts"].data) == 0
@@ -3118,16 +3117,12 @@ class UnifiedSegmentWidget(_WidgetBase):
 
     def _segment_track_on_frame(self, state, t, track_id, shape):
         """Segment a single track's object on frame 't'. Returns the binary mask or None."""
-        # A seeded frame is conditioned on its mask (refined into the object by the mask decoder,
-        # like a drawn polygon), so the prompts drawn for this track on this frame are not read.
-        # SAM2 conditions a frame on either a mask or points / boxes, never on both.
+        # SAM2 conditions a frame on either a mask or points / boxes, so a seed replaces the prompts.
         seed = _seed_mask(track_id, t)
         if seed is not None:
-            if not seed.any():  # An empty seed is no cue, and has no bounding box to prompt with.
+            if not seed.any():  # An empty seed has no bounding box to prompt with.
                 return None
-            seg = state.interactive_segmenter.segment_slice(
-                frame_idx=t, boxes=[_mask_to_box(seed)], masks=[seed],
-            )
+            seg = state.interactive_segmenter.segment_slice(frame_idx=t, boxes=[_mask_to_box(seed)], masks=[seed])
             return None if seg is None else (np.asarray(seg).squeeze() > 0)
 
         prompt_layer = self._viewer.layers["prompts"]
@@ -3379,14 +3374,12 @@ class UnifiedSegmentWidget(_WidgetBase):
             z_scribbles = vutil.get_scribble_slices(box_layer, track_id=track_id)
             have_positive_cue = False
 
-            # Frames seeded from an existing segmentation are conditioned on their mask, refined into
-            # the object by the mask decoder first (see 'add_mask_prompts'). SAM2 conditions a frame on
-            # either a mask or points / boxes, so a seeded frame's drawn prompts are skipped below.
+            # A seeded frame is conditioned on its mask, so its drawn prompts are skipped below.
             seeded_frames = set()
             for t in _seed_frames(track_id):
                 seed = _seed_mask(track_id, t)
                 seeded_frames.add(t)
-                if not seed.any():  # An empty seed is no cue: 'add_mask_prompts' skips it as well.
+                if not seed.any():  # 'add_mask_prompts' skips an empty mask as well.
                     continue
                 state.interactive_segmenter.add_mask_prompts(frame_ids=t, masks=[seed])
                 have_positive_cue = True
@@ -3943,7 +3936,7 @@ class InteractiveTrackingWidget(_WidgetBase):
         else:
             i = int(self._viewer.dims.point[0])
             vutil.clear_annotations_slice(self._viewer, i=i)
-            # The seeded masks are prompts too, so clearing a frame's annotations drops its seeds.
+            # Seeds are prompts too, so clearing a frame drops them.
             _drop_seed_masks(frame=i)
             seed_widget = AnnotatorState().widgets.get("seed")
             if seed_widget is not None:
@@ -3958,19 +3951,9 @@ class InteractiveTrackingWidget(_WidgetBase):
 class SeedTrackWidget(_WidgetBase):
     """Seed the current track from an object of an existing segmentation.
 
-    Lets the user pick one object out of a label layer that was loaded into the tool (e.g. a
-    trackastra tracking result) and register its mask as the SAM2 prompt for the current track on the
-    current frame. Seeding is bookkeeping only: the mask is pushed to the video predictor when
-    'Segment Object' runs, so 'Segment Frame' refines the object on this frame and 'Apply to All
-    Frames' propagates it through the timeseries.
-
-    The object is read from the mask layer's selected label, or - when nothing is selected there -
-    from the label under the positive point prompts of the current track on the current frame. So the
-    usual workflow (click the object, hit segment) also works, without having to use the label picker.
-
-    A seeded frame is conditioned on its mask alone: SAM2 conditions a frame on either a mask or
-    points / boxes, so the prompts drawn for the track on a seeded frame are skipped while the seed
-    is registered. Clearing the annotations drops the seeds again.
+    Registers the mask of one object of a label layer as the SAM2 prompt for the current track on the
+    current frame. The object is read from the layer's selected label, or from the label under the
+    track's positive point prompts. The mask is pushed to the predictor when 'Segment Object' runs.
 
     Args:
         viewer: The napari viewer.
@@ -4050,9 +4033,7 @@ class SeedTrackWidget(_WidgetBase):
                 return []
             return [selected]
 
-        # Fall back to the objects under this track's positive point prompts on this frame. A lone
-        # negative point is read as a normal prompt here, not as a stop annotation, so that it is
-        # simply ignored below instead of hiding the frame's positive points.
+        # 'with_stop_annotation=False' so a lone negative point is ignored, not read as a stop.
         points, labels = vutil.point_layer_to_prompts(
             self._viewer.layers["point_prompts"], i=int(self._viewer.dims.point[0]),
             track_id=track_id, with_stop_annotation=False,
@@ -4088,10 +4069,7 @@ class SeedTrackWidget(_WidgetBase):
 
         _set_seed_mask(track_id, t, np.isin(frame, object_ids))
 
-        # The seed is a prompt, so it is deliberately not painted into 'current_object': that layer
-        # holds segmentation results, and the tracking annotator reads it to decide whether a
-        # dividing track still has to be propagated. The selected object is visible in the mask
-        # layer anyway, and the status line below records the seeded frames.
+        # Not painted into 'current_object': the division logic reads that layer for existing results.
         self.refresh_status()
         ids = ", ".join(map(str, object_ids))
         show_info(

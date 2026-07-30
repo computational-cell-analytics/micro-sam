@@ -448,8 +448,7 @@ class AnnotatorTracking(_AnnotatorBase):
     def _set_tracking_result(self, tracking_result):
         """Show an existing tracking result in its own layer, to seed tracks from its masks.
 
-        It is kept separate from 'committed_objects' so that the loaded result stays available as a
-        reference and as a source of seed masks while the refined tracks are committed next to it.
+        Kept separate from 'committed_objects' so it stays a reference while refined tracks commit.
         """
         state = AnnotatorState()
         if state.image_shape is None:

@@ -75,9 +75,7 @@ class AnnotatorState(metaclass=Singleton):
     lineage: Optional[Dict] = None
     committed_lineages: Optional[List[Dict]] = None
 
-    # Mask prompts seeded from an existing segmentation (e.g. a trackastra result) in the tracking
-    # annotator, as '{track_id: {frame: boolean mask}}'. A seeded frame conditions SAM2 on that mask
-    # instead of on the prompts drawn for the track on that frame.
+    # Masks seeded from an existing segmentation, as '{track_id: {frame: boolean mask}}'.
     seed_masks: Dict[int, Dict[int, np.ndarray]] = field(default_factory=dict)
 
     # Dict to keep track of all widgets, so that we can update their states.
