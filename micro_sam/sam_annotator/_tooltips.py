@@ -86,6 +86,11 @@ tooltips = {
         "track_state": "Select the state of the current annotation. Choose 'division' if the object divides in the current frame.",  # noqa
         "export_button": "Export the committed tracking result in the chosen format (CTC, GEFF or TrackMate XML).",  # noqa
     },
+    "seed_track": {
+        "mask_layer": "Select the label layer holding the existing masks to seed a track from, e.g. a tracking result that was loaded into the tool.",  # noqa
+        "seed_button": "Register the selected object of the mask layer as the prompt for the current track on the current frame. Pick the object with the label picker of the mask layer, or place a positive point prompt on it. Then run 'Segment Object' to refine it on this frame or to propagate it through the timeseries.",  # noqa
+        "drop_button": "Drop the seed of the current track on the current frame, so that the prompts drawn for it count again.",  # noqa
+    },
     "batch_annotator": {
         "folder": "Select the folder with the images to annotate.",
         "output_folder": "Select the folder for saving the segmentation results.",
