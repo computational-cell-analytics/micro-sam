@@ -408,7 +408,7 @@ def run_tracking(monkeypatch, point_layer, prompt_layer, shape=(6, 32, 32)):
     })
     segmenter = Segmenter(shape)
     state = SimpleNamespace(
-        is_sam2=True, image_shape=shape, current_track_id=1, lineage={1: {}},
+        is_sam2=True, image_shape=shape, current_track_id=1, lineage={1: {}}, seed_masks={},
         image_embeddings={"input_size": (1024, 1024)}, interactive_segmenter=segmenter,
     )
     widget = SimpleNamespace(_viewer=viewer)

@@ -665,6 +665,12 @@ def _seed_frames(track_id):
     return sorted(AnnotatorState().seed_masks.get(track_id, {}))
 
 
+def _seed_refine_enabled():
+    """Whether the seed widget is set to refine the seeded masks before they condition propagation."""
+    widget = AnnotatorState().widgets.get("seed")
+    return True if widget is None else bool(widget.refine_masks)
+
+
 def _drop_seed_masks(frame=None):
     """Drop the seeded masks, either on one frame or (with 'frame=None') on all frames."""
     state = AnnotatorState()
@@ -1580,7 +1586,8 @@ def _push_volume_prompts(segmenter, plan):
         elif kind == "box":
             segmenter.add_box_prompts(frame_ids=frame_id, boxes=payload, object_id=object_ids)
         else:
-            segmenter.add_mask_prompts(frame_ids=frame_id, masks=payload, object_id=object_ids)
+            # A drawn polygon or ellipse is an outline, so it is refined into the object.
+            segmenter.add_mask_prompts(frame_ids=frame_id, masks=payload, object_id=object_ids, refine=True)
 
 
 def _segment_object_2d(viewer, batched=False):
@@ -3122,6 +3129,8 @@ class UnifiedSegmentWidget(_WidgetBase):
         if seed is not None:
             if not seed.any():  # An empty seed has no bounding box to prompt with.
                 return None
+            if not _seed_refine_enabled():  # Propagation conditions on it unchanged, so show that.
+                return seed
             seg = state.interactive_segmenter.segment_slice(frame_idx=t, boxes=[_mask_to_box(seed)], masks=[seed])
             return None if seg is None else (np.asarray(seg).squeeze() > 0)
 
@@ -3381,7 +3390,9 @@ class UnifiedSegmentWidget(_WidgetBase):
                 seeded_frames.add(t)
                 if not seed.any():  # 'add_mask_prompts' skips an empty mask as well.
                     continue
-                state.interactive_segmenter.add_mask_prompts(frame_ids=t, masks=[seed])
+                state.interactive_segmenter.add_mask_prompts(
+                    frame_ids=t, masks=[seed], object_id=None, refine=_seed_refine_enabled(),
+                )
                 have_positive_cue = True
                 prompted_frames.append(t)
 
@@ -3951,9 +3962,9 @@ class InteractiveTrackingWidget(_WidgetBase):
 class SeedTrackWidget(_WidgetBase):
     """Seed the current track from an object of an existing segmentation.
 
-    Registers the mask of one object of a label layer as the SAM2 prompt for the current track on the
-    current frame. The object is read from the layer's selected label, or from the label under the
-    track's positive point prompts. The mask is pushed to the predictor when 'Segment Object' runs.
+    The object is read from the layer's selected label, or from the label under the track's positive
+    point prompts, and its masks are pushed to the predictor when 'Segment Object' runs. 'All Frames'
+    seeds every frame it appears on, so propagation only fills in the frames the result is missing.
 
     Args:
         viewer: The napari viewer.
@@ -3963,20 +3974,45 @@ class SeedTrackWidget(_WidgetBase):
     def __init__(self, viewer, parent=None):
         super().__init__(parent=parent)
         self._viewer = viewer
+        self.all_frames = True
+        self.refine_masks = True
         self._create_widget()
 
     def _create_widget(self):
-        self.layout().addWidget(QtWidgets.QLabel("Mask Layer:"))
+        # Label left, dropdown right, so the row does not take two lines.
+        layer_label = QtWidgets.QLabel("Mask Layer:")
+        layer_label.setToolTip(get_tooltip("seed_track", "mask_layer"))
         self.mask_selection = create_widget(annotation=napari.layers.Labels)
         self.mask_selection.native.setToolTip(get_tooltip("seed_track", "mask_layer"))
-        self.layout().addWidget(self.mask_selection.native)
+        layer_row = QtWidgets.QHBoxLayout()
+        layer_row.addWidget(layer_label)
+        layer_row.addWidget(self.mask_selection.native, 1)
+        self.layout().addLayout(layer_row)
 
-        self.seed_button = QtWidgets.QPushButton("Seed Track From Mask")
+        self.all_frames_checkbox = self._add_boolean_param(
+            "all_frames", self.all_frames, title="All Frames",
+            tooltip=get_tooltip("seed_track", "all_frames"),
+        )
+        self.all_frames_checkbox.stateChanged.connect(self._on_all_frames_changed)
+        self.refine_masks_checkbox = self._add_boolean_param(
+            "refine_masks", self.refine_masks, title="Refine Masks",
+            tooltip=get_tooltip("seed_track", "refine_masks"),
+        )
+        self.refine_masks_checkbox.stateChanged.connect(self._on_refine_masks_changed)
+
+        self.seed_button = QtWidgets.QPushButton("Seed Mask")
         self.seed_button.setToolTip(get_tooltip("seed_track", "seed_button"))
         self.seed_button.clicked.connect(self.seed)
-        self.drop_button = QtWidgets.QPushButton("Drop Seeds")
+        self.drop_button = QtWidgets.QPushButton("Drop Seed")
         self.drop_button.setToolTip(get_tooltip("seed_track", "drop_button"))
         self.drop_button.clicked.connect(self.drop)
+
+        checkbox_row = QtWidgets.QHBoxLayout()
+        checkbox_row.addWidget(self.all_frames_checkbox)
+        checkbox_row.addStretch()
+        checkbox_row.addWidget(self.refine_masks_checkbox)
+        self.layout().addLayout(checkbox_row)
+
         button_row = QtWidgets.QHBoxLayout()
         button_row.addWidget(self.seed_button)
         button_row.addWidget(self.drop_button)
@@ -3985,6 +4021,12 @@ class SeedTrackWidget(_WidgetBase):
         self.status = QtWidgets.QLabel()
         self.layout().addWidget(self.status)
         self.refresh_status()
+
+    def _on_all_frames_changed(self, state):
+        self.all_frames = bool(state)
+
+    def _on_refine_masks_changed(self, state):
+        self.refine_masks = bool(state)
 
     def set_mask_layer(self, layer):
         """Select 'layer' in the mask layer dropdown, e.g. after a tracking result was loaded."""
@@ -3999,10 +4041,12 @@ class SeedTrackWidget(_WidgetBase):
         state = AnnotatorState()
         track_id = state.current_track_id
         frames = [] if track_id is None else _seed_frames(track_id)
-        if frames:
-            self.status.setText(f"Track {track_id} is seeded on frame(s): {', '.join(map(str, frames))}")
+        if not frames:
+            self.status.setText(f"Track {track_id}: no seeds")
+        elif len(frames) > 6:  # A dense seeding covers too many frames to list.
+            self.status.setText(f"Track {track_id}: {len(frames)} seeds, frames {frames[0]}-{frames[-1]}")
         else:
-            self.status.setText("No seeded frames for the current track.")
+            self.status.setText(f"Track {track_id}: seeds on frame {', '.join(map(str, frames))}")
 
     def _selected_mask_layer(self):
         """The chosen label layer, or None (with a message) if it cannot be used to seed."""
@@ -4051,7 +4095,7 @@ class SeedTrackWidget(_WidgetBase):
         return sorted(ids)
 
     def seed(self):
-        """Register the selected object of the mask layer as the current track's seed on this frame."""
+        """Register the selected object of the mask layer as the current track's seed."""
         state = AnnotatorState()
         if state.image_shape is None:
             _generate_message("error", "There is no timeseries loaded yet.")
@@ -4062,33 +4106,44 @@ class SeedTrackWidget(_WidgetBase):
 
         t = int(self._viewer.dims.point[0])
         track_id = state.current_track_id
-        frame = np.asarray(layer.data[t])
-        object_ids = self._object_ids(frame, layer, track_id)
+        object_ids = self._object_ids(np.asarray(layer.data[t]), layer, track_id)
         if not object_ids:
             return
 
-        _set_seed_mask(track_id, t, np.isin(frame, object_ids))
+        # The object is identified on the current frame, then seeded on every frame it appears on.
+        frames = range(layer.data.shape[0]) if self.all_frames else [t]
+        seeded = []
+        for frame_id in frames:
+            mask = np.isin(np.asarray(layer.data[frame_id]), object_ids)
+            if mask.any():
+                _set_seed_mask(track_id, int(frame_id), mask)
+                seeded.append(int(frame_id))
 
         # Not painted into 'current_object': the division logic reads that layer for existing results.
         self.refresh_status()
         ids = ", ".join(map(str, object_ids))
-        show_info(
-            f"Seeded track {track_id} on frame {t} from object(s) {ids} of '{layer.name}'. "
-            "Run 'Segment Object' to refine or propagate it."
-        )
+        show_info(f"Seeded track {track_id} from object {ids} on {len(seeded)} frame(s).")
 
     def drop(self):
-        """Drop the seed of the current track on this frame, so its drawn prompts count again."""
+        """Drop the current track's seeds, so its drawn prompts count again."""
         state = AnnotatorState()
-        t = int(self._viewer.dims.point[0])
         track_id = state.current_track_id
-        if _seed_mask(track_id, t) is None:
-            show_info(f"Track {track_id} is not seeded on frame {t}.")
-            return
-
-        state.seed_masks[track_id].pop(t)
+        seeds = state.seed_masks.get(track_id, {})
+        if not self.all_frames:
+            t = int(self._viewer.dims.point[0])
+            if t not in seeds:
+                show_info(f"Track {track_id}: no seed on frame {t}.")
+                return
+            seeds.pop(t)
+            show_info(f"Dropped seed of track {track_id} on frame {t}.")
+        else:
+            if not seeds:
+                show_info(f"Track {track_id}: no seeds to drop.")
+                return
+            n = len(seeds)
+            seeds.clear()
+            show_info(f"Dropped {n} seed(s) of track {track_id}.")
         self.refresh_status()
-        show_info(f"Dropped the seed of track {track_id} on frame {t}.")
 
 
 class AutoSegmentV1Widget(_WidgetBase):

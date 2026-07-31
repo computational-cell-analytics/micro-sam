@@ -467,7 +467,8 @@ def test_volume_scribbles_pass_layer_validation(monkeypatch):
         "point_prompts": SimpleNamespace(data=[]),
     })
     annotator = SimpleNamespace(_require_layers=lambda: None)
-    monkeypatch.setattr(_widgets, "AnnotatorState", lambda: SimpleNamespace(annotator=annotator))
+    state = SimpleNamespace(annotator=annotator, seed_masks={})
+    monkeypatch.setattr(_widgets, "AnnotatorState", lambda: state)
     result = _widgets._validate_layers(viewer)
 
     assert result is False

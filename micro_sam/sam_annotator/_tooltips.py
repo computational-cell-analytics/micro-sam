@@ -87,9 +87,11 @@ tooltips = {
         "export_button": "Export the committed tracking result in the chosen format (CTC, GEFF or TrackMate XML).",  # noqa
     },
     "seed_track": {
-        "mask_layer": "Select the label layer holding the existing masks to seed a track from, e.g. a tracking result that was loaded into the tool.",  # noqa
-        "seed_button": "Register the selected object of the mask layer as the prompt for the current track on the current frame. Pick the object with the label picker of the mask layer, or place a positive point prompt on it. Then run 'Segment Object' to refine it on this frame or to propagate it through the timeseries.",  # noqa
-        "drop_button": "Drop the seed of the current track on the current frame, so that the prompts drawn for it count again.",  # noqa
+        "mask_layer": "Select the label layer with the existing masks to seed a track from.",
+        "seed_button": "Use the selected object of the mask layer as the prompt for the current track.",
+        "drop_button": "Drop the seeds of the current track, so that the prompts drawn for it count again.",
+        "all_frames": "Seed every frame the object appears on, instead of only the current frame.",
+        "refine_masks": "Fit the seeded masks to the image before tracking. Uncheck to keep them as they are.",
     },
     "batch_annotator": {
         "folder": "Select the folder with the images to annotate.",
