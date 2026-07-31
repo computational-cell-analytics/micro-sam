@@ -1267,12 +1267,16 @@ def export_track(
 
 def create_prompt_menu(
     points_layer, labels, menu_name="prompt", label_name="label", linked_layers=None, viewer=None,
+    choice_labels=None,
 ):
     """Create a menu that keeps point and optional shape prompt labels synchronized."""
     prompt_layers = [points_layer] + ([] if linked_layers is None else list(linked_layers))
+    choices = labels if choice_labels is None else [
+        (choice_labels.get(label, str(label)), label) for label in labels
+    ]
     label_menu = ComboBox(
         label=menu_name,
-        choices=labels,
+        choices=choices,
         tooltip=get_tooltip("prompt_menu", "labels"),
     )
     label_widget = Container(widgets=[label_menu])
@@ -3599,19 +3603,32 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self._mask_layer_items = {}
         self._connected_mask_layers = set()
         self._connected_mask_images = set()
+        self._updating_prompt_targets = False
+        self._last_prompt_target_id = None
         self._excluded_mask_layer_ids = {
             id(self._viewer.layers[name])
             for name in ("current_object", "auto_segmentation", "committed_objects")
             if name in self._viewer.layers
         }
+        for layer_name in ("point_prompts", "prompts"):
+            vutil.ensure_prompt_object_ids(self._viewer.layers[layer_name])
         self._create_widget()
 
     def _create_widget(self):
-        # Prompt label menu.
-        self.layout().addWidget(self._prompt_widget.native)
-
         self._mask_input_widget = self._create_mask_input_widget()
         self.layout().addWidget(self._mask_input_widget)
+
+        prompt_properties = QtWidgets.QGroupBox("Point and scribble prompts")
+        prompt_properties.setLayout(QtWidgets.QVBoxLayout())
+        prompt_info = QtWidgets.QLabel(
+            "Set selected points or scribbles to foreground or background. With no prompt "
+            "selected, this controls how new points and scribbles are added. Rectangles, "
+            "ellipses and polygons are always positive."
+        )
+        prompt_info.setWordWrap(True)
+        prompt_properties.layout().addWidget(prompt_info)
+        prompt_properties.layout().addWidget(self._prompt_widget.native)
+        self.layout().addWidget(prompt_properties)
 
         self.clear_button = QtWidgets.QPushButton("Clear Annotations [Shift + C]")
         self.clear_button.setToolTip(get_tooltip("unified_segment", "clear_button"))
@@ -3685,6 +3702,18 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self._viewer.layers["prompts"].events.data.connect(self._update_batched_visibility)
         self._viewer.layers["prompts"].events.data.connect(self._update_mask_input_controls)
         self._viewer.layers["point_prompts"].events.data.connect(self._update_mask_input_controls)
+        self._viewer.layers["prompts"].events.current_properties.connect(
+            self._sync_correction_target_from_prompts
+        )
+        self._viewer.layers["point_prompts"].events.current_properties.connect(
+            self._sync_correction_target_from_prompts
+        )
+        self._viewer.layers["prompts"].selected_data.events.items_changed.connect(
+            self._on_prompt_selection_changed
+        )
+        self._viewer.layers["point_prompts"].selected_data.events.items_changed.connect(
+            self._on_prompt_selection_changed
+        )
         for event_name in ("inserted", "removed", "reordered"):
             event = getattr(self._viewer.layers.events, event_name, None)
             if event is not None:
@@ -3700,8 +3729,8 @@ class InteractiveSegmentationWidget(_WidgetBase):
         container.setLayout(QtWidgets.QVBoxLayout())
 
         intro = QtWidgets.QLabel(
-            "Select one or more Labels layers, then use Segment Object [S] to refine them with SAM. "
-            "Equal IDs are unioned; overlapping different IDs are rejected."
+            "Select one or more Labels layers. Segment Object [S] uses every nonzero ID as a "
+            "separate SAM mask prompt. Equal IDs are unioned; overlapping different IDs are rejected."
         )
         intro.setWordWrap(True)
         container.layout().addWidget(intro)
@@ -3724,12 +3753,26 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self.mask_input_summary.setWordWrap(True)
         container.layout().addWidget(self.mask_input_summary)
 
+        self.commit_masks_button = QtWidgets.QPushButton("Commit selected masks unchanged")
+        self.commit_masks_button.clicked.connect(self._commit_selected_masks_unchanged)
+        container.layout().addWidget(self.commit_masks_button)
+
+        self.correction_target_help = QtWidgets.QLabel(
+            "Corrections are assigned per object. Select points or shapes, then assign them to an "
+            "input object ID. With no prompt selected, this ID is used for new corrections."
+        )
+        self.correction_target_help.setWordWrap(True)
+        self.correction_target_help.setVisible(False)
+        container.layout().addWidget(self.correction_target_help)
+
         self.correction_target_row = QtWidgets.QWidget()
         correction_layout = QtWidgets.QHBoxLayout()
         correction_layout.setContentsMargins(0, 0, 0, 0)
         self.correction_target_row.setLayout(correction_layout)
-        correction_layout.addWidget(QtWidgets.QLabel("Corrections apply to object ID"))
+        correction_layout.addWidget(QtWidgets.QLabel("Target object ID"))
         self.correction_target = QtWidgets.QComboBox()
+        self.correction_target.setPlaceholderText("Choose object ID")
+        self.correction_target.currentIndexChanged.connect(self._on_correction_target_changed)
         correction_layout.addWidget(self.correction_target)
         self.correction_target_row.setVisible(False)
         container.layout().addWidget(self.correction_target_row)
@@ -3742,10 +3785,6 @@ class InteractiveSegmentationWidget(_WidgetBase):
             self.mask_3d_strategy.currentTextChanged.connect(self._update_propagation_visibility)
             strategy_row.addWidget(self.mask_3d_strategy)
             container.layout().addLayout(strategy_row)
-
-        self.commit_masks_button = QtWidgets.QPushButton("Commit input masks unchanged")
-        self.commit_masks_button.clicked.connect(self._commit_selected_masks_unchanged)
-        container.layout().addWidget(self.commit_masks_button)
 
         return _make_collapsible(
             container,
@@ -3765,6 +3804,11 @@ class InteractiveSegmentationWidget(_WidgetBase):
 
     def _refresh_mask_layer_list(self, event=None):
         """Refresh the checklist while preserving checks by layer identity."""
+        self._excluded_mask_layer_ids.update(
+            id(self._viewer.layers[name])
+            for name in ("current_object", "auto_segmentation", "committed_objects")
+            if name in self._viewer.layers
+        )
         checked = {
             layer_id
             for layer_id, (_, item) in self._mask_layer_items.items()
@@ -3782,6 +3826,9 @@ class InteractiveSegmentationWidget(_WidgetBase):
             self._connected_mask_images.add(id(image_layer))
         for layer in self._viewer.layers:
             if not isinstance(layer, napari.layers.Labels):
+                continue
+            if layer.name in ("current_object", "auto_segmentation", "committed_objects"):
+                self._excluded_mask_layer_ids.add(id(layer))
                 continue
             if id(layer) in self._excluded_mask_layer_ids:
                 continue
@@ -3850,6 +3897,103 @@ class InteractiveSegmentationWidget(_WidgetBase):
             or len(self._viewer.layers["prompts"].data)
         )
 
+    def _set_only_prompt_target(self, object_id):
+        """Assign every existing and future correction to the only available object."""
+        object_id_string = str(int(object_id))
+        was_updating = self._updating_prompt_targets
+        self._updating_prompt_targets = True
+        try:
+            for layer_name in ("point_prompts", "prompts"):
+                layer = self._viewer.layers[layer_name]
+                vutil.ensure_prompt_object_ids(layer)
+                current_properties = dict(layer.current_properties)
+                properties = dict(layer.properties)
+                properties["object_id"] = np.full(len(layer.data), object_id_string, dtype=object)
+                layer.properties = properties
+                current_properties["object_id"] = np.array([object_id_string])
+                selected_data = set(layer.selected_data)
+                if selected_data:
+                    layer.selected_data = set()
+                layer.current_properties = current_properties
+                if selected_data:
+                    layer.selected_data = selected_data
+        finally:
+            self._updating_prompt_targets = was_updating
+
+    def _on_correction_target_changed(self, index):
+        if self._updating_prompt_targets:
+            return
+        object_id = self.correction_target.itemData(index) if index >= 0 else None
+        if object_id is None:
+            return
+        self._last_prompt_target_id = int(object_id)
+        self._updating_prompt_targets = True
+        try:
+            for layer_name in ("point_prompts", "prompts"):
+                layer = self._viewer.layers[layer_name]
+                vutil.set_prompt_object_id(
+                    layer, object_id, relabel_selected=bool(layer.selected_data),
+                )
+        finally:
+            self._updating_prompt_targets = False
+
+    def _on_prompt_selection_changed(self, *args):
+        self._sync_correction_target_from_prompts()
+
+    def _sync_correction_target_from_prompts(self, event=None):
+        """Reflect selected prompt target IDs in the target object combo box."""
+        if self._updating_prompt_targets or self.correction_target_row.isHidden():
+            return
+
+        selected_ids = []
+        for layer_name in ("point_prompts", "prompts"):
+            layer = self._viewer.layers[layer_name]
+            properties = layer.properties.get("object_id", [])
+            selected_ids.extend(
+                int(properties[index])
+                for index in layer.selected_data
+                if 0 <= index < len(properties)
+            )
+
+        if selected_ids:
+            target_ids = set(selected_ids)
+        elif event is not None and hasattr(event, "source"):
+            current = event.source.current_properties.get(
+                "object_id", np.array([vutil.UNASSIGNED_OBJECT_ID]),
+            )
+            target_ids = {int(current[0])}
+        else:
+            object_id = self.correction_target.currentData()
+            if object_id is None:
+                object_id = self._last_prompt_target_id
+            target_ids = set() if object_id is None else {int(object_id)}
+
+        self.correction_target.blockSignals(True)
+        if len(target_ids) == 1:
+            object_id = next(iter(target_ids))
+            index = self.correction_target.findData(object_id)
+            self.correction_target.setPlaceholderText("Choose object ID")
+            self.correction_target.setCurrentIndex(index)
+            if index >= 0:
+                self._last_prompt_target_id = object_id
+        else:
+            self.correction_target.setPlaceholderText(
+                "Multiple target IDs" if target_ids else "Choose object ID"
+            )
+            self.correction_target.setCurrentIndex(-1)
+        self.correction_target.blockSignals(False)
+
+        if len(target_ids) == 1 and self.correction_target.currentIndex() >= 0:
+            object_id = next(iter(target_ids))
+            self._updating_prompt_targets = True
+            try:
+                for layer_name in ("point_prompts", "prompts"):
+                    layer = self._viewer.layers[layer_name]
+                    if not layer.selected_data:
+                        vutil.set_prompt_object_id(layer, object_id, relabel_selected=False)
+            finally:
+                self._updating_prompt_targets = False
+
     def _update_mask_input_controls(self, event=None):
         """Show live selection validity and correction-target routing."""
         try:
@@ -3869,45 +4013,57 @@ class InteractiveSegmentationWidget(_WidgetBase):
                 )
             self.mask_input_summary.setText(summary)
 
-        have_corrections = self._have_correction_prompts()
-        self.correction_target_row.setVisible(have_corrections)
+        valid = mask_inputs is not None
+        self.correction_target_help.setVisible(valid)
+        self.correction_target_row.setVisible(valid)
         previous = self.correction_target.currentData()
         self.correction_target.blockSignals(True)
         self.correction_target.clear()
         if mask_inputs is not None:
-            if len(mask_inputs.object_ids) > 1:
-                self.correction_target.addItem("Choose object ID", None)
             for object_id in mask_inputs.object_ids:
                 self.correction_target.addItem(str(object_id), object_id)
             if len(mask_inputs.object_ids) == 1:
+                self._set_only_prompt_target(mask_inputs.object_ids[0])
+                self._last_prompt_target_id = mask_inputs.object_ids[0]
                 self.correction_target.setCurrentIndex(0)
                 self.correction_target.setEnabled(False)
             else:
                 index = self.correction_target.findData(previous)
-                self.correction_target.setCurrentIndex(max(index, 0))
+                if index < 0:
+                    index = self.correction_target.findData(self._last_prompt_target_id)
+                self.correction_target.setCurrentIndex(index)
                 self.correction_target.setEnabled(True)
         self.correction_target.blockSignals(False)
 
-        valid = mask_inputs is not None
         self.commit_masks_button.setEnabled(valid)
 
-    def _correction_object_id(self, mask_inputs):
-        if not self._have_correction_prompts():
-            return None
-        if len(mask_inputs.object_ids) == 1:
-            return mask_inputs.object_ids[0]
-        object_id = self.correction_target.currentData()
-        if object_id is None:
-            raise ValueError("Choose the object ID that the current point and shape corrections apply to.")
-        return int(object_id)
+    def _validate_prompt_target_ids(self, mask_inputs):
+        """Require every correction prompt to target one of the selected mask IDs."""
+        valid_ids = set(mask_inputs.object_ids)
+        invalid = []
+        for layer_name in ("point_prompts", "prompts"):
+            layer = self._viewer.layers[layer_name]
+            vutil.ensure_prompt_object_ids(layer)
+            object_ids = list(map(int, layer.properties["object_id"]))
+            invalid.extend(
+                f"{layer_name}[{index}]={object_id}"
+                for index, object_id in enumerate(object_ids)
+                if object_id not in valid_ids
+            )
+        if invalid:
+            raise ValueError(
+                "Assign every correction prompt to one of the selected input object IDs. "
+                "Invalid or unassigned targets: " + ", ".join(invalid)
+            )
 
-    def _collect_mask_prompts(self, base_mask, z=None):
-        """Combine one external mask with all corrections for its selected object and frame."""
+    def _collect_mask_prompts(self, base_mask, object_id, z=None):
+        """Combine one external mask with corrections assigned to its object and frame."""
         prompts = vutil.collect_frame_prompts(
             self._viewer.layers["point_prompts"],
             self._viewer.layers["prompts"],
             tuple(base_mask.shape),
             i=z,
+            object_id=object_id,
             with_stop_annotation=False,
         )
         dense = np.asarray(base_mask, dtype=bool).copy()
@@ -3931,20 +4087,10 @@ class InteractiveSegmentationWidget(_WidgetBase):
             ])
         return dense, box, prompts
 
-    def _refine_mask_slice(self, base_mask, z=None, with_corrections=False):
+    def _refine_mask_slice(self, base_mask, object_id, z=None):
         """Refine one logical mask through the active SAM implementation."""
-        if with_corrections:
-            dense, box, prompts = self._collect_mask_prompts(base_mask, z=z)
-            points, labels = prompts.points, prompts.labels
-        else:
-            dense = np.asarray(base_mask, dtype=bool)
-            coordinates = np.argwhere(dense)
-            if not len(coordinates):
-                return None
-            lower, upper = coordinates.min(axis=0), coordinates.max(axis=0)
-            box = np.array([lower[0], lower[1], upper[0], upper[1]], dtype="float64")
-            points = np.empty((0, 2), dtype="float64")
-            labels = np.empty((0,), dtype="int64")
+        dense, box, prompts = self._collect_mask_prompts(base_mask, object_id=object_id, z=z)
+        points, labels = prompts.points, prompts.labels
 
         state = AnnotatorState()
         if box is None:
@@ -4028,15 +4174,22 @@ class InteractiveSegmentationWidget(_WidgetBase):
                 )
         return None if seg is None else np.asarray(seg).squeeze().astype(bool)
 
-    def _correction_slices(self):
+    def _correction_slices(self, object_id):
         if self._ndim != 3:
             return set()
         slices = set()
-        point_data = np.asarray(self._viewer.layers["point_prompts"].data)
+        point_layer = self._viewer.layers["point_prompts"]
+        point_data = np.asarray(point_layer.data)
         if point_data.size:
-            slices.update(np.round(point_data[:, 0]).astype(int).tolist())
-        for shape in self._viewer.layers["prompts"].data:
-            slices.add(int(round(float(np.asarray(shape)[0, 0]))))
+            point_ids = np.asarray(list(map(int, point_layer.properties["object_id"])))
+            slices.update(
+                np.round(point_data[point_ids == object_id, 0]).astype(int).tolist()
+            )
+        shape_layer = self._viewer.layers["prompts"]
+        shape_ids = list(map(int, shape_layer.properties["object_id"]))
+        for shape, shape_id in zip(shape_layer.data, shape_ids):
+            if shape_id == object_id:
+                slices.add(int(round(float(np.asarray(shape)[0, 0]))))
         return slices
 
     def _seed_slice(self, mask_inputs, object_id):
@@ -4047,53 +4200,46 @@ class InteractiveSegmentationWidget(_WidgetBase):
         }
         return min(slices, key=lambda z: (-areas[z], z))
 
-    def _refine_masks_occupied(self, mask_inputs, correction_id):
+    def _refine_masks_occupied(self, mask_inputs):
         candidates = {
             object_id: np.zeros(mask_inputs.labels.shape, dtype=bool)
             for object_id in mask_inputs.object_ids
         }
-        correction_slices = self._correction_slices()
-        if correction_id is not None:
-            absent = correction_slices.difference(mask_inputs.occupied_slices[correction_id])
+        correction_slices = {
+            object_id: self._correction_slices(object_id)
+            for object_id in mask_inputs.object_ids
+        }
+        for object_id in mask_inputs.object_ids:
+            absent = correction_slices[object_id].difference(mask_inputs.occupied_slices[object_id])
             if absent:
                 raise ValueError(
                     "In 'Refine all occupied slices' mode, corrections must be on a slice occupied "
-                    f"by object ID {correction_id}. Invalid slices: {sorted(absent)}."
+                    f"by object ID {object_id}. Invalid slices: {sorted(absent)}."
                 )
 
         for object_id, z, mask in vutil.iter_mask_input_masks(mask_inputs):
-            refined = self._refine_mask_slice(
-                mask,
-                z=z,
-                with_corrections=(object_id == correction_id and z in correction_slices),
-            )
+            refined = self._refine_mask_slice(mask, object_id=object_id, z=z)
             if refined is None:
                 raise ValueError(f"SAM did not return a mask for object ID {object_id} on slice {z}.")
             candidates[object_id][z] = refined
         return candidates
 
-    def _refine_masks_propagated(self, mask_inputs, correction_id):
+    def _refine_masks_propagated(self, mask_inputs):
         """Refine deterministic seeds, then propagate each object independently."""
         state = AnnotatorState()
-        correction_slices = self._correction_slices()
         candidates = {}
 
         for object_id in mask_inputs.object_ids:
             seed = self._seed_slice(mask_inputs, object_id)
             anchor_slices = {seed}
-            if object_id == correction_id:
-                anchor_slices.update(correction_slices)
+            anchor_slices.update(self._correction_slices(object_id))
 
             seed_volume = np.zeros(mask_inputs.labels.shape, dtype="uint32")
             valid_anchors = []
             stop_slices = set()
             for z in sorted(anchor_slices):
                 base = mask_inputs.labels[z] == object_id
-                refined = self._refine_mask_slice(
-                    base,
-                    z=z,
-                    with_corrections=(object_id == correction_id and z in correction_slices),
-                )
+                refined = self._refine_mask_slice(base, object_id=object_id, z=z)
                 if refined is None:
                     stop_slices.add(z)
                     continue
@@ -4190,24 +4336,22 @@ class InteractiveSegmentationWidget(_WidgetBase):
         )
         try:
             mask_inputs = self._collect_mask_inputs()
-            correction_id = self._correction_object_id(mask_inputs)
+            self._validate_prompt_target_ids(mask_inputs)
             if _validate_embeddings(self._viewer):
                 return
 
             if self._ndim == 2:
                 candidates = {}
                 for object_id, _, mask in vutil.iter_mask_input_masks(mask_inputs):
-                    refined = self._refine_mask_slice(
-                        mask, with_corrections=(object_id == correction_id),
-                    )
+                    refined = self._refine_mask_slice(mask, object_id=object_id)
                     if refined is None:
                         raise ValueError(f"SAM did not return a mask for object ID {object_id}.")
                     candidates[object_id] = refined
             elif self.mask_3d_strategy.currentText() == "Propagate from seed slices":
                 self._sync_propagation_settings()
-                candidates = self._refine_masks_propagated(mask_inputs, correction_id)
+                candidates = self._refine_masks_propagated(mask_inputs)
             else:
-                candidates = self._refine_masks_occupied(mask_inputs, correction_id)
+                candidates = self._refine_masks_occupied(mask_inputs)
 
             refined_labels = vutil.merge_refined_mask_candidates(mask_inputs.labels, candidates)
             refined_ids = tuple(int(value) for value in np.unique(refined_labels) if value != 0)

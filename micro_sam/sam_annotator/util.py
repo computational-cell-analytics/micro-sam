@@ -28,6 +28,9 @@ SCRIBBLE_SHAPE_TYPES = ("path", "line")
 SCRIBBLE_DRAW_MODES = ("add_path", "add_polyline", "add_line")
 """Napari Shapes modes that create open scribble prompts."""
 
+UNASSIGNED_OBJECT_ID = "0"
+"""Sentinel stored on prompts that have not been assigned to an input mask object."""
+
 
 #
 # Misc helper functions
@@ -161,16 +164,21 @@ def set_prompt_label(layer, new_label, relabel_selected: bool = True):
         # and the user has moved to the other layer.
         layer.selected_data = set()
 
-    current_properties = layer.current_properties
+    selected_shapes = set(layer.selected_data) if is_shapes and relabel_selected else set()
+    if selected_shapes:
+        layer.selected_data = set()
+    current_properties = dict(layer.current_properties)
     current_properties["label"] = np.array([new_label])
     layer.current_properties = current_properties
+    if selected_shapes:
+        layer.selected_data = selected_shapes
 
-    if relabel_selected and is_shapes and layer.selected_data:
+    if selected_shapes:
         properties = dict(layer.properties)
         labels = np.asarray(properties.get("label", []), dtype=object).copy()
         shape_types = list(layer.shape_type)
         if len(labels) == len(shape_types):
-            for index in layer.selected_data:
+            for index in selected_shapes:
                 if shape_types[index] in SCRIBBLE_SHAPE_TYPES:
                     labels[index] = new_label
             properties["label"] = labels
@@ -178,9 +186,11 @@ def set_prompt_label(layer, new_label, relabel_selected: bool = True):
 
             # Keep the drawing default on the requested label. Updating the feature table above
             # may infer a current value from the edited selection.
-            current_properties = layer.current_properties
+            layer.selected_data = set()
+            current_properties = dict(layer.current_properties)
             current_properties["label"] = np.array([new_label])
             layer.current_properties = current_properties
+            layer.selected_data = selected_shapes
 
     layer.refresh()
     if isinstance(layer, napari.layers.Shapes):
@@ -192,6 +202,73 @@ def set_prompt_label(layer, new_label, relabel_selected: bool = True):
         if any(len(values) != n_shapes for values in layer.properties.values()):
             return
     layer.refresh_colors()
+
+
+def ensure_prompt_object_ids(layer) -> None:
+    """Add the per-prompt ``object_id`` property to an existing prompt layer.
+
+    The property is stored as a string, matching the tracking annotator's ID properties and
+    avoiding pandas categorical warnings in napari. ``0`` means that the prompt is unassigned.
+
+    Args:
+        layer: A napari Points or Shapes prompt layer.
+    """
+    current_properties = dict(layer.current_properties)
+    needs_current_object_id = "object_id" not in current_properties
+    if "object_id" not in layer.properties:
+        properties = dict(layer.properties)
+        properties["object_id"] = np.full(
+            len(layer.data), UNASSIGNED_OBJECT_ID, dtype=object,
+        )
+        layer.properties = properties
+
+    if needs_current_object_id:
+        current_properties["object_id"] = np.array([UNASSIGNED_OBJECT_ID])
+        selected_data = set(layer.selected_data)
+        if selected_data:
+            layer.selected_data = set()
+        layer.current_properties = current_properties
+        if selected_data:
+            layer.selected_data = selected_data
+
+
+def set_prompt_object_id(layer, object_id: int, relabel_selected: bool = True) -> None:
+    """Set the target object for selected and future prompts in a napari layer.
+
+    Args:
+        layer: A napari Points or Shapes prompt layer.
+        object_id: The positive input segmentation ID to assign.
+        relabel_selected: Whether selected prompts also take the new ID. When false, only the
+            drawing default is changed.
+    """
+    object_id = int(object_id)
+    if object_id <= 0:
+        raise ValueError("Prompt object IDs must be positive.")
+
+    ensure_prompt_object_ids(layer)
+    object_id_string = str(object_id)
+    valid_selection = {
+        index for index in layer.selected_data if 0 <= index < len(layer.data)
+    }
+    if valid_selection != layer.selected_data:
+        layer.selected_data = valid_selection
+
+    current_properties = dict(layer.current_properties)
+    if relabel_selected and valid_selection:
+        properties = dict(layer.properties)
+        object_ids = np.asarray(properties["object_id"], dtype=object).copy()
+        for index in valid_selection:
+            object_ids[index] = object_id_string
+        properties["object_id"] = object_ids
+        layer.properties = properties
+    current_properties["object_id"] = np.array([object_id_string])
+    selected_data = set(layer.selected_data)
+    if selected_data:
+        layer.selected_data = set()
+    layer.current_properties = current_properties
+    if selected_data:
+        layer.selected_data = selected_data
+    layer.refresh()
 
 
 def relabels_selection(layer, viewer) -> bool:
@@ -598,6 +675,7 @@ def merge_labels_for_refined_commit(
 
 def point_layer_to_prompts(
     layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True, exclude_states=None,
+    object_id=None,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Extract point prompts for SAM from a napari point layer.
 
@@ -609,6 +687,8 @@ def point_layer_to_prompts(
             as stop annotation or just returned as normal prompt.
         exclude_states: Track-states to drop (e.g. ('division',)); such points mark a lineage
             event rather than a segmentation prompt and must not be fed to the predictor.
+        object_id: Optional input mask object ID. When given, only points assigned to this ID are
+            returned.
 
     Returns:
         The point coordinates for the prompts.
@@ -623,6 +703,11 @@ def point_layer_to_prompts(
     keep = np.ones(len(points), dtype=bool)
     if exclude_states is not None and "state" in layer.properties:
         keep = ~np.isin(np.asarray(layer.properties["state"]), list(exclude_states))
+    if object_id is not None:
+        if "object_id" not in layer.properties:
+            raise ValueError("Point corrections do not have target object IDs.")
+        object_ids = np.asarray(list(map(int, layer.properties["object_id"])))
+        keep &= object_ids == int(object_id)
 
     if i is None:
         assert points.shape[1] == 2, f"{points.shape}"
@@ -832,6 +917,7 @@ def scribble_layer_to_prompts(
     max_points: int = 64,
     deduplication_distance: float = 4.0,
     track_id=None,
+    object_id=None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Convert positive/negative open strokes into sparse SAM point prompts.
 
@@ -855,6 +941,8 @@ def scribble_layer_to_prompts(
             overlapping strokes with the same label are considered duplicates.
         track_id: Id of the current track. Required for tracking data. When given, the function
             converts only the strokes whose ``track_id`` property matches.
+        object_id: Optional input mask object ID. When given, only scribbles assigned to this ID
+            are converted.
 
     Returns:
         Sampled coordinates in ``(y, x)`` order and SAM labels (positive ``1``, negative ``0``).
@@ -881,11 +969,22 @@ def scribble_layer_to_prompts(
         if len(stroke_track_ids) != len(shape_data):
             raise AssertionError("Scribble shapes and track ids must have matching lengths.")
 
+    if object_id is None:
+        stroke_object_ids = [None] * len(shape_data)
+    else:
+        if "object_id" not in layer.properties:
+            raise ValueError("Shape corrections do not have target object IDs.")
+        stroke_object_ids = list(map(int, layer.properties["object_id"]))
+        if len(stroke_object_ids) != len(shape_data):
+            raise AssertionError("Scribble shapes and object ids must have matching lengths.")
+
     strokes = []
-    for vertices, shape_type, stroke_label, stroke_track_id in zip(
-        shape_data, shape_types, stroke_labels, stroke_track_ids
+    for vertices, shape_type, stroke_label, stroke_track_id, stroke_object_id in zip(
+        shape_data, shape_types, stroke_labels, stroke_track_ids, stroke_object_ids
     ):
         if track_id is not None and stroke_track_id != track_id:
+            continue
+        if object_id is not None and stroke_object_id != int(object_id):
             continue
         if shape_type in ("rectangle", "ellipse", "polygon"):
             continue
@@ -1037,6 +1136,7 @@ def collect_frame_prompts(
     shape: Tuple[int, int],
     i=None,
     track_id=None,
+    object_id=None,
     exclude_states=None,
     with_stop_annotation: bool = True,
 ) -> FramePrompts:
@@ -1054,6 +1154,7 @@ def collect_frame_prompts(
         shape: The image shape (in-plane, without the frame axis).
         i: Index for the data (required for 3d or timeseries data).
         track_id: Id of the current track (required for tracking data).
+        object_id: Optional input mask object ID used to filter correction prompts.
         exclude_states: Track-states to drop, e.g. ('division',). See `point_layer_to_prompts`.
         with_stop_annotation: Whether a lone negative point may be read as a stop annotation.
 
@@ -1061,14 +1162,17 @@ def collect_frame_prompts(
         The prompts of the frame.
     """
     scribble_points, scribble_labels = scribble_layer_to_prompts(
-        shape_layer, image_shape=shape, i=i, track_id=track_id
+        shape_layer, image_shape=shape, i=i, track_id=track_id, object_id=object_id
     )
     have_scribbles = len(scribble_points) > 0
-    boxes, masks = shape_layer_to_prompts(shape_layer, shape, i=i, track_id=track_id)
+    boxes, masks = shape_layer_to_prompts(
+        shape_layer, shape, i=i, track_id=track_id, object_id=object_id,
+    )
 
     prompts = point_layer_to_prompts(
         point_layer, i=i, track_id=track_id, exclude_states=exclude_states,
         with_stop_annotation=with_stop_annotation and not have_scribbles and not boxes,
+        object_id=object_id,
     )
     if prompts is None:
         return FramePrompts(
@@ -1084,7 +1188,7 @@ def collect_frame_prompts(
 
 
 def shape_layer_to_prompts(
-    layer: napari.layers.Shapes, shape: Tuple[int, int], i=None, track_id=None
+    layer: napari.layers.Shapes, shape: Tuple[int, int], i=None, track_id=None, object_id=None,
 ) -> Tuple[List[np.ndarray], List[Optional[np.ndarray]]]:
     """Extract prompts for SAM from a napari shape layer.
 
@@ -1096,6 +1200,8 @@ def shape_layer_to_prompts(
         shape: The image shape.
         i: Index for the data (required for 3d or timeseries data).
         track_id: Id of the current track (required for tracking data).
+        object_id: Optional input mask object ID. When given, only shapes assigned to this ID are
+            returned.
 
     Returns:
         The box prompts.
@@ -1145,18 +1251,29 @@ def shape_layer_to_prompts(
     if len(shape_data) == 0:
         return [], []
 
-    if i is not None:
-        if track_id is None:
-            prompt_selection = [j for j, data in enumerate(shape_data) if (data[:, 0] == i).all()]
-        else:
-            track_ids = np.array(list(map(int, layer.properties["track_id"])))
-            prompt_selection = [
-                j for j, (data, this_track_id) in enumerate(zip(shape_data, track_ids))
-                if ((data[:, 0] == i).all() and this_track_id == track_id)
-            ]
+    track_ids = None if track_id is None else np.asarray(list(map(int, layer.properties["track_id"])))
+    if object_id is None:
+        object_ids = None
+    else:
+        if "object_id" not in layer.properties:
+            raise ValueError("Shape corrections do not have target object IDs.")
+        object_ids = np.asarray(list(map(int, layer.properties["object_id"])))
 
+    prompt_selection = []
+    for j, data in enumerate(shape_data):
+        if i is not None and not (data[:, 0] == i).all():
+            continue
+        if track_ids is not None and track_ids[j] != track_id:
+            continue
+        if object_ids is not None and object_ids[j] != int(object_id):
+            continue
+        prompt_selection.append(j)
+
+    if i is not None:
         shape_data = [shape_data[j][:, 1:] for j in prompt_selection]
-        shape_types = [shape_types[j] for j in prompt_selection]
+    else:
+        shape_data = [shape_data[j] for j in prompt_selection]
+    shape_types = [shape_types[j] for j in prompt_selection]
 
     boxes, masks = _to_prompts(shape_data, shape_types)
     return boxes, masks

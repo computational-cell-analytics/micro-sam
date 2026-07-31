@@ -154,8 +154,15 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         shape_prompt_layer = self._viewer.layers["prompts"]
         linked_layers = [shape_prompt_layer] if "label" in shape_prompt_layer.current_properties else None
         self._prompt_widget = widgets.create_prompt_menu(
-            self._point_prompt_layer, self._point_labels, linked_layers=linked_layers,
+            self._point_prompt_layer,
+            self._point_labels,
+            menu_name="Prompt type",
+            linked_layers=linked_layers,
             viewer=self._viewer,
+            choice_labels={
+                "positive": "Positive (include)",
+                "negative": "Negative (exclude)",
+            },
         )
 
         # Create the dictionary for the widgets and get the widgets of the child plugin.
@@ -328,8 +335,15 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         shape_prompt_layer = self._viewer.layers["prompts"]
         linked_layers = [shape_prompt_layer] if "label" in shape_prompt_layer.current_properties else None
         self._prompt_widget = widgets.create_prompt_menu(
-            self._point_prompt_layer, self._point_labels, linked_layers=linked_layers,
+            self._point_prompt_layer,
+            self._point_labels,
+            menu_name="Prompt type",
+            linked_layers=linked_layers,
             viewer=self._viewer,
+            choice_labels={
+                "positive": "Positive (include)",
+                "negative": "Negative (exclude)",
+            },
         )
 
         # Rebuild the dimension-specific widgets, keeping the shared embedding widget.

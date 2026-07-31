@@ -230,6 +230,96 @@ def test_shared_layer_routes_closed_and_open_shapes_separately():
     np.testing.assert_array_equal(labels, np.zeros(len(points), dtype="int64"))
 
 
+def test_collect_frame_prompts_filters_every_prompt_type_by_object_id():
+    points = Points(
+        data=np.array([[2.0, 3.0], [12.0, 13.0]]),
+        properties={
+            "label": np.array(["positive", "negative"]),
+            "object_id": np.array(["7", "19"]),
+        },
+    )
+    shapes = Shapes(
+        data=[
+            np.array([[1.0, 1.0], [1.0, 8.0], [8.0, 8.0], [8.0, 1.0]]),
+            np.array([[10.0, 10.0], [14.0, 14.0]]),
+        ],
+        shape_type=["rectangle", "path"],
+        properties={
+            "label": np.array(["positive", "positive"]),
+            "object_id": np.array(["7", "19"]),
+        },
+    )
+
+    prompts_7 = annotator_util.collect_frame_prompts(
+        points, shapes, (20, 20), object_id=7, with_stop_annotation=False,
+    )
+    prompts_19 = annotator_util.collect_frame_prompts(
+        points, shapes, (20, 20), object_id=19, with_stop_annotation=False,
+    )
+
+    np.testing.assert_array_equal(prompts_7.points, [[2.0, 3.0]])
+    np.testing.assert_array_equal(prompts_7.labels, [1])
+    assert len(prompts_7.boxes) == 1 and not prompts_7.have_scribbles
+
+    assert len(prompts_19.points) > 1
+    assert np.count_nonzero(prompts_19.labels == 0) == 1
+    assert np.count_nonzero(prompts_19.labels == 1) >= 1
+    assert not prompts_19.boxes and prompts_19.have_scribbles
+
+
+def test_collect_frame_prompts_routes_3d_corrections_by_slice_and_object_id():
+    points = Points(
+        data=np.array([[1.0, 2.0, 3.0], [2.0, 12.0, 13.0]]),
+        properties={
+            "label": np.array(["positive", "negative"]),
+            "object_id": np.array(["7", "19"]),
+        },
+    )
+    shapes = Shapes(
+        data=[
+            np.array([
+                [1.0, 1.0, 1.0], [1.0, 1.0, 8.0],
+                [1.0, 8.0, 8.0], [1.0, 8.0, 1.0],
+            ]),
+            np.array([[2.0, 10.0, 10.0], [2.0, 14.0, 14.0]]),
+        ],
+        shape_type=["rectangle", "path"],
+        properties={
+            "label": np.array(["positive", "positive"]),
+            "object_id": np.array(["7", "19"]),
+        },
+    )
+
+    prompts_7 = annotator_util.collect_frame_prompts(
+        points, shapes, (20, 20), i=1, object_id=7, with_stop_annotation=False,
+    )
+    prompts_19 = annotator_util.collect_frame_prompts(
+        points, shapes, (20, 20), i=2, object_id=19, with_stop_annotation=False,
+    )
+
+    np.testing.assert_array_equal(prompts_7.points, [[2.0, 3.0]])
+    assert len(prompts_7.boxes) == 1 and not prompts_7.have_scribbles
+    assert len(prompts_19.points) > 1
+    assert np.count_nonzero(prompts_19.labels == 0) == 1
+    assert not prompts_19.boxes and prompts_19.have_scribbles
+
+
+def test_prompt_object_id_helpers_preserve_labels_and_edit_selected_prompts():
+    points = Points(
+        data=np.array([[2.0, 3.0], [4.0, 5.0]]),
+        properties={"label": np.array(["positive", "negative"])},
+    )
+    points.selected_data = {1}
+    before_labels = points.properties["label"].copy()
+
+    annotator_util.ensure_prompt_object_ids(points)
+    annotator_util.set_prompt_object_id(points, 23)
+
+    np.testing.assert_array_equal(points.properties["label"], before_labels)
+    np.testing.assert_array_equal(points.properties["object_id"], ["0", "23"])
+    assert points.current_properties["object_id"][0] == "23"
+
+
 def test_existing_point_and_box_prompt_conversion_in_2d_and_3d():
     point_layer_2d = Points(
         data=np.array([[2.0, 3.0], [4.0, 5.0]]),
@@ -351,6 +441,26 @@ def test_selected_scribble_is_relabelled_while_polyline_tool_is_active():
     np.testing.assert_allclose(layer.edge_color[0], [1, 0, 0, 1])
     _, labels = annotator_util.scribble_layer_to_prompts(layer, image_shape=(16, 16))
     np.testing.assert_array_equal(labels, np.zeros(len(labels), dtype="int64"))
+
+
+def test_prompt_type_keeps_selected_closed_shapes_positive():
+    layer = Shapes(
+        data=[
+            np.array([[1.0, 1.0], [1.0, 8.0], [8.0, 8.0], [8.0, 1.0]]),
+            np.array([[2.0, 2.0], [12.0, 12.0]]),
+        ],
+        shape_type=["rectangle", "path"],
+        properties={"label": np.array(["positive", "positive"])},
+        edge_color="label",
+        edge_color_cycle=annotator_util.LABEL_COLOR_CYCLE,
+    )
+    layer.edge_color_mode = "cycle"
+    layer.selected_data = {0, 1}
+
+    annotator_util.set_prompt_label(layer, "negative")
+
+    np.testing.assert_array_equal(layer.properties["label"], ["positive", "negative"])
+    assert layer.current_properties["label"][0] == "negative"
 
 
 def scribble_layer_with_one_positive_path():
@@ -479,6 +589,7 @@ def test_slice_segmentation_merges_3d_scribbles_with_points(monkeypatch):
     class _CurrentObject:
         def __init__(self):
             self.data = np.zeros((3, 32, 32), dtype="uint32")
+            self.metadata = {}
             self.refresh_count = 0
 
         def refresh(self):
@@ -593,6 +704,7 @@ def test_sam2_volume_propagation_merges_3d_scribbles_points_and_boxes(monkeypatc
     class _CurrentObject:
         def __init__(self):
             self.data = np.zeros((3, 32, 32), dtype="uint32")
+            self.metadata = {}
             self.refresh_count = 0
 
         def refresh(self):
@@ -763,6 +875,7 @@ def test_2d_segmentation_merges_scribbles_with_clicks(monkeypatch):
     class _Layer:
         def __init__(self, data):
             self.data = data
+            self.metadata = {}
             self.refresh_count = 0
 
         def refresh(self):
@@ -828,6 +941,7 @@ def test_point_and_box_only_segmentation_is_unchanged(monkeypatch, is_sam2):
     class _Layer:
         def __init__(self, data):
             self.data = data
+            self.metadata = {}
             self.refresh_count = 0
 
         def refresh(self):

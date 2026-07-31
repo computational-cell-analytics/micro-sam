@@ -163,6 +163,129 @@ def test_segment_object_routes_selected_masks_to_refinement(
     viewer.close()
 
 
+def test_prompt_targets_are_stored_per_point_and_shape(
+    make_napari_viewer_proxy,
+):
+    viewer = make_napari_viewer_proxy()
+    viewer.add_image(np.zeros((20, 20), dtype="uint8"), name="image")
+    annotator = Annotator(viewer)
+    widget = annotator._widgets["interactive"]
+
+    labels = np.zeros((20, 20), dtype="uint32")
+    labels[1:8, 1:8] = 7
+    labels[11:18, 11:18] = 19
+    input_layer = viewer.add_labels(labels, name="cellpose")
+    _set_only_checked(widget, input_layer)
+
+    assert not widget.correction_target_row.isHidden()
+    assert not widget.correction_target_help.isHidden()
+    assert widget.correction_target.currentIndex() == -1
+    assert [
+        widget.correction_target.itemData(index)
+        for index in range(widget.correction_target.count())
+    ] == [7, 19]
+
+    points = viewer.layers["point_prompts"]
+    shapes = viewer.layers["prompts"]
+    assert "object_id" in points.properties
+    assert "object_id" in shapes.properties
+
+    widget.correction_target.setCurrentIndex(widget.correction_target.findData(7))
+    points.add(np.array([[3.0, 3.0]]))
+    points.selected_data = set()
+    widget.correction_target.setCurrentIndex(widget.correction_target.findData(19))
+    points.add(np.array([[14.0, 14.0]]))
+    points.selected_data = set()
+    shapes.add_rectangles(np.array([[12.0, 12.0], [16.0, 16.0]]))
+
+    np.testing.assert_array_equal(points.properties["object_id"], ["7", "19"])
+    np.testing.assert_array_equal(shapes.properties["object_id"], ["19"])
+
+    _, _, prompts_7 = widget._collect_mask_prompts(labels == 7, object_id=7)
+    _, _, prompts_19 = widget._collect_mask_prompts(labels == 19, object_id=19)
+    np.testing.assert_array_equal(prompts_7.points, [[3.0, 3.0]])
+    np.testing.assert_array_equal(prompts_19.points, [[14.0, 14.0]])
+    assert len(prompts_7.boxes) == 0
+    assert len(prompts_19.boxes) == 1
+
+    points.selected_data = {0}
+    assert widget.correction_target.currentData() == 7
+    assert shapes.current_properties["object_id"][0] == "7"
+
+    points.selected_data = {0, 1}
+    assert widget.correction_target.currentIndex() == -1
+    assert widget.correction_target.placeholderText() == "Multiple target IDs"
+    points.selected_data = set()
+    assert widget.correction_target.currentData() == 7
+    assert points.current_properties["object_id"][0] == "7"
+    assert shapes.current_properties["object_id"][0] == "7"
+
+    points.selected_data = {0}
+    widget.correction_target.setCurrentIndex(widget.correction_target.findData(19))
+    np.testing.assert_array_equal(points.properties["object_id"], ["19", "19"])
+
+    widget._validate_prompt_target_ids(widget._collect_mask_inputs())
+
+    button_texts = {
+        button.text() for button in widget.findChildren(QtWidgets.QPushButton)
+    }
+    assert "Commit selected masks unchanged" in button_texts
+    assert "Commit input masks unchanged" not in button_texts
+    assert widget._prompt_widget[0].label == "Prompt type"
+
+    viewer.close()
+
+
+def test_single_mask_id_assignment_preserves_selected_prompt_types(
+    make_napari_viewer_proxy,
+):
+    viewer = make_napari_viewer_proxy()
+    viewer.add_image(np.zeros((12, 12), dtype="uint8"), name="image")
+    annotator = Annotator(viewer)
+    widget = annotator._widgets["interactive"]
+    points = viewer.layers["point_prompts"]
+    points.add(np.array([[2.0, 2.0], [8.0, 8.0]]))
+    properties = dict(points.properties)
+    properties["label"] = np.array(["positive", "negative"])
+    points.properties = properties
+    points.selected_data = {0, 1}
+
+    labels = np.zeros((12, 12), dtype="uint32")
+    labels[1:5, 1:5] = 7
+    input_layer = viewer.add_labels(labels, name="cellpose")
+    _set_only_checked(widget, input_layer)
+
+    np.testing.assert_array_equal(points.properties["label"], ["positive", "negative"])
+    np.testing.assert_array_equal(points.properties["object_id"], ["7", "7"])
+    assert points.selected_data == {0, 1}
+
+    viewer.close()
+
+
+def test_multiple_mask_ids_require_every_correction_to_have_a_target(
+    make_napari_viewer_proxy,
+):
+    viewer = make_napari_viewer_proxy()
+    viewer.add_image(np.zeros((12, 12), dtype="uint8"), name="image")
+    annotator = Annotator(viewer)
+    widget = annotator._widgets["interactive"]
+
+    labels = np.zeros((12, 12), dtype="uint32")
+    labels[1:4, 1:4] = 7
+    labels[7:10, 7:10] = 19
+    input_layer = viewer.add_labels(labels, name="cellpose")
+    _set_only_checked(widget, input_layer)
+    viewer.layers["point_prompts"].add(np.array([[2.0, 2.0]]))
+
+    with pytest.raises(ValueError, match="Invalid or unassigned targets"):
+        widget._validate_prompt_target_ids(widget._collect_mask_inputs())
+
+    widget.correction_target.setCurrentIndex(widget.correction_target.findData(7))
+    widget._validate_prompt_target_ids(widget._collect_mask_inputs())
+
+    viewer.close()
+
+
 def test_direct_commit_preserves_ids_unions_same_id_and_is_atomic(
     make_napari_viewer_proxy,
     monkeypatch,
