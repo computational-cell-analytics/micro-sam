@@ -25,13 +25,13 @@ tooltips = {
     "segmentnd": {
         "box_extension": "Enter the factor by which the box size grows when it projects to adjacent slices. Larger factors help if object sizes change between slices.",  # noqa
         "iou_threshold": "Enter the minimal overlap between objects in adjacent slices to continue segmentation.",
-        "early_stop_patience": "SAM2 volume mode: stop propagation once the object is absent for this many slices in a row. Lower values stop sooner (faster). A value of 0 disables early stopping and propagates through the whole volume.",  # noqa
-        "use_full_z_range": "SAM2 volume mode: propagate through all slices along z. Uncheck to restrict propagation to a chosen slice range with the slider below (faster, and a hard guardrail against leaking into neighbouring structures).",  # noqa
-        "z_range": "SAM2 volume mode: the inclusive range of slices (along z) that propagation is allowed to cover. Only used when 'Propagate through full volume' is unchecked.",  # noqa
+        "early_stop_patience": "SAM2 only: stop propagation once the object is absent for this many slices in a row. Lower values stop sooner. A value of 0 disables this automatic stopping. SAM-v1 mask propagation does not use this setting.",  # noqa
+        "use_full_z_range": "Propagate through every z-slice. Uncheck to restrict propagation to the inclusive range selected below. A restricted range is faster and helps prevent propagation into unrelated structures.",  # noqa
+        "z_range": "The inclusive range of z-slices that propagation may cover. This is used by both SAM-v1 and SAM2 when 'Propagate through all slices' is unchecked. Every seed and correction anchor must be inside the range.",  # noqa
         "motion_smoothing": "Enter the motion smoothing factor. It helps to follow objects that have a directed movement. Higher values help for fast objects.",  # noqa
         "projection_dropdown": "Choose the projection mode. It determines which prompts are derived from the masks projected to adjacent frames to rerun SAM.",  # noqa
         "batched": "Enable to segment multiple objects with separate point prompts. The tool tracks each positive point as a separate object. Only available for SAM2 models.",  # noqa
-        "settings": "Settings controlling how a 2d segmentation is propagated through the volume (projection mode, IoU threshold, early stopping and the z-range).",  # noqa
+        "settings": "Settings controlling how 2d masks are propagated through a z-stack. The z-range applies to SAM-v1 and SAM2; stopping after empty slices applies only to SAM2.",  # noqa
     },
     "unified_segment": {
         "apply_to_volume": "Choose whether to segment only the current slice or frame, or the full volume or all frames.",  # noqa
@@ -83,6 +83,14 @@ tooltips = {
     },
     "prompt_menu": {
         "labels": "Choose positive point/scribble prompts to include regions or negative ones to exclude regions. Toggle between the settings by pressing [t]. In 3d, a scribble belongs to the z-slice where it was drawn and can seed or correct volume propagation.",  # noqa
+    },
+    "mask_inputs": {
+        "layer_list": "Select one or more compatible Labels layers. For a 3d image, each selected layer must be a full (z, y, x) volume aligned with the image.",  # noqa
+        "commit_unchanged": "Copy the complete selected Labels data directly into committed objects. This does not run SAM, compute embeddings or downsample the masks, so it is the safest choice when the input segmentation is already correct.",  # noqa
+        "target_object": "Assign selected point or shape corrections to one object ID from the checked Labels layers. With no correction selected, this chooses the ID for new points and shapes.",  # noqa
+        "3d_behavior": "Choose whether Segment Object refines only the z-slices where each ID already exists, or starts from selected seed slices and extends the objects through z. SAM processes 2d slices; it does not receive a native 3d mask prompt.",  # noqa
+        "batched_ignored": "Batched point-prompt segmentation is not used while Labels mask inputs are selected. Each Labels object ID is already processed independently.",  # noqa
+        "apply_to_volume_ignored": "Labels mask inputs always use the selected 3d behavior. Apply to Volume does not change mask refinement; it still controls whether Clear Annotations clears one slice or the whole volume.",  # noqa
     },
     "annotator_tracking": {
         "track_id": "Select the id of the track you are currently annotating.",

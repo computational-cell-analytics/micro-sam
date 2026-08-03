@@ -429,10 +429,72 @@ def test_3d_seed_uses_largest_cross_section_and_lowest_tie(make_napari_viewer_pr
     mask_inputs = widget._collect_mask_inputs()
 
     assert widget._seed_slice(mask_inputs, 13) == 1
-    assert widget.mask_3d_strategy.currentText() == "Refine all occupied slices"
+    assert widget.mask_3d_strategy.currentText() == "Refine existing slices only"
+    assert "z-extent is preserved" in widget.mask_3d_help.text()
+    assert not widget.batched_checkbox.isEnabled()
+    assert "already processed independently" in widget.batched_checkbox.toolTip()
+    assert "does not change mask refinement" in widget.apply_to_volume_checkbox.toolTip()
 
-    widget.mask_3d_strategy.setCurrentText("Propagate from seed slices")
+    widget.mask_3d_strategy.setCurrentText("Refine and extend through z")
+    assert "largest cross-section" in widget.mask_3d_help.text()
+    assert "not used as anchors" in widget.mask_3d_help.text()
     assert not widget._propagation_settings.isHidden()
+
+    widget._set_all_mask_layers_checked(False)
+    assert widget.batched_checkbox.isEnabled()
+    assert "Choose whether to segment" in widget.apply_to_volume_checkbox.toolTip()
+
+    viewer.close()
+
+
+def test_sam_v1_mask_propagation_respects_z_range(
+    make_napari_viewer_proxy,
+    monkeypatch,
+):
+    viewer = make_napari_viewer_proxy()
+    image = viewer.add_image(np.zeros((5, 12, 12), dtype="uint8"), name="volume")
+    annotator = Annotator(viewer, ndim=3)
+    widget = annotator._widgets["interactive"]
+
+    labels = np.zeros(image.data.shape, dtype="uint32")
+    labels[2, 3:7, 3:7] = 13
+    source = viewer.add_labels(labels, name="cellpose")
+    _set_only_checked(widget, source)
+    mask_inputs = widget._collect_mask_inputs()
+    widget._segment_widget.z_range = (1, 3)
+    monkeypatch.setattr(widget, "_refine_mask_slice", lambda mask, object_id, z: mask)
+
+    state = AnnotatorState()
+    monkeypatch.setattr(state, "is_sam2", False)
+    monkeypatch.setattr(state, "predictor", object())
+    monkeypatch.setattr(
+        state,
+        "image_embeddings",
+        {
+            "features": np.zeros((5, 1, 1, 1, 1), dtype="float32"),
+            "input_size": (12, 12),
+            "original_size": (12, 12),
+        },
+    )
+
+    def _fake_segment_mask_in_volume(
+        segmentation,
+        predictor,
+        image_embeddings,
+        segmented_slices,
+        **kwargs,
+    ):
+        assert segmentation.shape == (3, 12, 12)
+        assert image_embeddings["features"].shape[0] == 3
+        np.testing.assert_array_equal(segmented_slices, np.array([1]))
+        return segmentation, (1, 1)
+
+    monkeypatch.setattr(_widgets, "segment_mask_in_volume", _fake_segment_mask_in_volume)
+    candidates = widget._refine_masks_propagated(mask_inputs)
+
+    assert not candidates[13][0].any()
+    assert candidates[13][2].any()
+    assert not candidates[13][4].any()
 
     viewer.close()
 

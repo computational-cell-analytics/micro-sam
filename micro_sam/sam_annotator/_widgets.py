@@ -3576,6 +3576,10 @@ def _instance_segmentation_impl(
     return seg
 
 
+MASK_3D_REFINE_EXISTING = "Refine existing slices only"
+MASK_3D_REFINE_AND_EXTEND = "Refine and extend through z"
+
+
 class InteractiveSegmentationWidget(_WidgetBase):
     """Interactive segmentation widget combining the prompt menu, segmentation and clearing.
 
@@ -3684,8 +3688,8 @@ class InteractiveSegmentationWidget(_WidgetBase):
             checkbox_row.addWidget(self.apply_to_volume_checkbox)
             self.layout().addLayout(checkbox_row)
 
-            # SAM2 volume-mode propagation controls (early stopping + z-range). Hidden until the
-            # user enables 'Apply to Volume' with a SAM2 model. The controls drive the engine.
+            # Volume-propagation controls. These are shown for mask extension with either model
+            # family, or for prompt-volume propagation with SAM2. The controls drive the engine.
             self._propagation_settings = self._create_propagation_settings()
             self._propagation_settings.setVisible(False)
             self.layout().addWidget(self._propagation_settings)
@@ -3737,6 +3741,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
 
         self.mask_layer_list = QtWidgets.QListWidget()
         self.mask_layer_list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.mask_layer_list.setToolTip(get_tooltip("mask_inputs", "layer_list"))
         self.mask_layer_list.itemChanged.connect(self._update_mask_input_controls)
         container.layout().addWidget(self.mask_layer_list)
 
@@ -3749,13 +3754,14 @@ class InteractiveSegmentationWidget(_WidgetBase):
         select_row.addWidget(unselect_all)
         container.layout().addLayout(select_row)
 
+        self.commit_masks_button = QtWidgets.QPushButton("Commit selected masks unchanged")
+        self.commit_masks_button.setToolTip(get_tooltip("mask_inputs", "commit_unchanged"))
+        self.commit_masks_button.clicked.connect(self._commit_selected_masks_unchanged)
+        container.layout().addWidget(self.commit_masks_button)
+
         self.mask_input_summary = QtWidgets.QLabel("No mask input selected.")
         self.mask_input_summary.setWordWrap(True)
         container.layout().addWidget(self.mask_input_summary)
-
-        self.commit_masks_button = QtWidgets.QPushButton("Commit selected masks unchanged")
-        self.commit_masks_button.clicked.connect(self._commit_selected_masks_unchanged)
-        container.layout().addWidget(self.commit_masks_button)
 
         self.correction_target_help = QtWidgets.QLabel(
             "Corrections are assigned per object. Select points or shapes, then assign them to an "
@@ -3772,19 +3778,38 @@ class InteractiveSegmentationWidget(_WidgetBase):
         correction_layout.addWidget(QtWidgets.QLabel("Target object ID"))
         self.correction_target = QtWidgets.QComboBox()
         self.correction_target.setPlaceholderText("Choose object ID")
+        self.correction_target.setToolTip(get_tooltip("mask_inputs", "target_object"))
         self.correction_target.currentIndexChanged.connect(self._on_correction_target_changed)
         correction_layout.addWidget(self.correction_target)
         self.correction_target_row.setVisible(False)
         container.layout().addWidget(self.correction_target_row)
 
         if self._ndim == 3:
+            mask_3d_intro = QtWidgets.QLabel(
+                "A 3D Labels layer is handled as a stack of 2D masks. Refinement is 2D; when "
+                "extending through z, SAM-v1 projects between slices and SAM2 treats z like video "
+                "frames. Neither model treats the data as physical 3D space."
+            )
+            mask_3d_intro.setWordWrap(True)
+            mask_3d_intro.setToolTip(get_tooltip("mask_inputs", "3d_behavior"))
+            container.layout().addWidget(mask_3d_intro)
+
             strategy_row = QtWidgets.QHBoxLayout()
-            strategy_row.addWidget(QtWidgets.QLabel("3D behavior"))
+            strategy_label = QtWidgets.QLabel("3D behavior")
+            strategy_label.setToolTip(get_tooltip("mask_inputs", "3d_behavior"))
+            strategy_row.addWidget(strategy_label)
             self.mask_3d_strategy = QtWidgets.QComboBox()
-            self.mask_3d_strategy.addItems(["Refine all occupied slices", "Propagate from seed slices"])
+            self.mask_3d_strategy.addItems([MASK_3D_REFINE_EXISTING, MASK_3D_REFINE_AND_EXTEND])
+            self.mask_3d_strategy.setToolTip(get_tooltip("mask_inputs", "3d_behavior"))
             self.mask_3d_strategy.currentTextChanged.connect(self._update_propagation_visibility)
+            self.mask_3d_strategy.currentTextChanged.connect(self._update_mask_3d_help)
             strategy_row.addWidget(self.mask_3d_strategy)
             container.layout().addLayout(strategy_row)
+
+            self.mask_3d_help = QtWidgets.QLabel()
+            self.mask_3d_help.setWordWrap(True)
+            container.layout().addWidget(self.mask_3d_help)
+            self._update_mask_3d_help()
 
         return _make_collapsible(
             container,
@@ -4036,6 +4061,33 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self.correction_target.blockSignals(False)
 
         self.commit_masks_button.setEnabled(valid)
+        self._update_batched_visibility()
+        if self._ndim == 3:
+            have_mask_inputs = bool(self._checked_mask_layers())
+            tooltip_key = "apply_to_volume_ignored" if have_mask_inputs else "apply_to_volume"
+            tooltip_group = "mask_inputs" if have_mask_inputs else "unified_segment"
+            self.apply_to_volume_checkbox.setToolTip(get_tooltip(tooltip_group, tooltip_key))
+
+    def _update_mask_3d_help(self, *args):
+        """Explain the selected 3D mask-input behavior in beginner-facing terms."""
+        if self.mask_3d_strategy.currentText() == MASK_3D_REFINE_AND_EXTEND:
+            text = (
+                "For each object ID, SAM first refines its largest cross-section (the lowest z "
+                "wins a tie) and any slices carrying corrections, then extends the object through "
+                "z. Other occupied input slices are not used as anchors. This can fill gaps or "
+                "extend an incomplete object, but the result can drift."
+            )
+        else:
+            text = (
+                "SAM refines every slice where each object ID already exists. Empty slices stay "
+                "empty, so the object's z-extent is preserved. Corrections must be placed on a "
+                "slice occupied by their target object."
+            )
+        text += (
+            " With mask inputs selected, this choice controls Segment Object; Batched and Apply "
+            "to Volume do not change mask refinement."
+        )
+        self.mask_3d_help.setText(text)
 
     def _validate_prompt_target_ids(self, mask_inputs):
         """Require every correction prompt to target one of the selected mask IDs."""
@@ -4213,7 +4265,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
             absent = correction_slices[object_id].difference(mask_inputs.occupied_slices[object_id])
             if absent:
                 raise ValueError(
-                    "In 'Refine all occupied slices' mode, corrections must be on a slice occupied "
+                    f"In '{MASK_3D_REFINE_EXISTING}' mode, corrections must be on a slice occupied "
                     f"by object ID {object_id}. Invalid slices: {sorted(absent)}."
                 )
 
@@ -4313,18 +4365,25 @@ class InteractiveSegmentationWidget(_WidgetBase):
                         )).squeeze().astype(bool)
                 candidates[object_id] = propagated
             else:
-                propagated, _ = segment_mask_in_volume(
-                    seed_volume,
+                lower, upper = z_range
+                cropped_embeddings = dict(state.image_embeddings)
+                cropped_embeddings["features"] = state.image_embeddings["features"][
+                    lower:upper + 1
+                ]
+                cropped, _ = segment_mask_in_volume(
+                    seed_volume[lower:upper + 1].copy(),
                     state.predictor,
-                    state.image_embeddings,
-                    np.asarray(valid_anchors),
+                    cropped_embeddings,
+                    np.asarray(valid_anchors) - lower,
                     stop_lower=bool(lower_stops),
                     stop_upper=bool(upper_stops),
                     iou_threshold=self._segment_widget.iou_threshold,
                     projection=self._segment_widget.projection,
                     box_extension=self._segment_widget.box_extension,
                 )
-                candidates[object_id] = np.asarray(propagated) != 0
+                propagated = np.zeros_like(seed_volume, dtype=bool)
+                propagated[lower:upper + 1] = np.asarray(cropped) != 0
+                candidates[object_id] = propagated
 
         return candidates
 
@@ -4347,7 +4406,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
                     if refined is None:
                         raise ValueError(f"SAM did not return a mask for object ID {object_id}.")
                     candidates[object_id] = refined
-            elif self.mask_3d_strategy.currentText() == "Propagate from seed slices":
+            elif self.mask_3d_strategy.currentText() == MASK_3D_REFINE_AND_EXTEND:
                 self._sync_propagation_settings()
                 candidates = self._refine_masks_propagated(mask_inputs)
             else:
@@ -4407,28 +4466,44 @@ class InteractiveSegmentationWidget(_WidgetBase):
         committed.refresh()
 
     def _update_batched_visibility(self, event=None):
-        """Disable batched segmentation while one or more scribble prompts are present."""
+        """Disable batched segmentation when prompts or mask inputs make it inapplicable."""
         super()._update_batched_visibility()
 
+        # napari emits layer-removal events while closing the viewer. At that point the prompt
+        # layer may already be gone, so there are no controls left to synchronize.
+        if "prompts" not in self._viewer.layers:
+            return
         prompt_layer = self._viewer.layers["prompts"]
         have_scribbles = any(
             shape_type in vutil.SCRIBBLE_SHAPE_TYPES for shape_type in prompt_layer.shape_type
         )
-        if have_scribbles and self.batched_checkbox.isChecked():
+        have_mask_inputs = bool(self._checked_mask_layers())
+        if (have_scribbles or have_mask_inputs) and self.batched_checkbox.isChecked():
             self.batched_checkbox.setChecked(False)
 
-        self.batched_checkbox.setEnabled(not have_scribbles)
-        tooltip_key = "batched_scribble_disabled" if have_scribbles else "batched"
-        self.batched_checkbox.setToolTip(get_tooltip("unified_segment", tooltip_key))
+        self.batched_checkbox.setEnabled(not have_scribbles and not have_mask_inputs)
+        if have_mask_inputs:
+            self.batched_checkbox.setToolTip(get_tooltip("mask_inputs", "batched_ignored"))
+        else:
+            tooltip_key = "batched_scribble_disabled" if have_scribbles else "batched"
+            self.batched_checkbox.setToolTip(get_tooltip("unified_segment", tooltip_key))
 
     def _create_propagation_settings(self):
-        """Build the SAM2 volume-mode propagation controls (early stopping + z-range slider).
+        """Build the volume-propagation controls (early stopping + z-range slider).
 
         The controls live on the visible interactive widget and write their values into the hidden
         'UnifiedSegmentWidget' engine, which reads 'early_stop_patience' and 'z_range' at run time.
         """
         container = QtWidgets.QWidget()
         container.setLayout(QtWidgets.QVBoxLayout())
+
+        propagation_info = QtWidgets.QLabel(
+            "The propagation z-range applies to SAM-v1 and SAM2. Stop after empty slices applies "
+            "only to SAM2; SAM-v1 ignores that setting."
+        )
+        propagation_info.setWordWrap(True)
+        propagation_info.setToolTip(get_tooltip("segmentnd", "settings"))
+        container.layout().addWidget(propagation_info)
 
         # Stop after this many consecutive empty slices (0 disables early stopping).
         self.early_stop_patience = 2
@@ -4515,7 +4590,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
         is_sam2 = bool(annotator_state.is_sam2) if annotator_state.is_sam2 is not None else False
         mask_propagation = (
             hasattr(self, "mask_3d_strategy")
-            and self.mask_3d_strategy.currentText() == "Propagate from seed slices"
+            and self.mask_3d_strategy.currentText() == MASK_3D_REFINE_AND_EXTEND
         )
         show = mask_propagation or (self.apply_to_volume and is_sam2)
         self._propagation_settings.setVisible(show)

@@ -79,6 +79,8 @@ The source Labels layers are never changed.
 `Commit selected masks unchanged` bypasses SAM and the embedding computation.
 Use it when an input mask is already satisfactory.
 It preserves the input IDs and atomically unions equal IDs into `committed_objects`; a collision with a different committed ID is rejected.
+For 3D data, this copies the complete Labels volume without changing its slices.
+See [Using existing 3D segmentations](#using-existing-3d-segmentations) for the refinement choices available for a z-stack.
 
 Check out [the video tutorial](https://youtu.be/9xjJBg_Bfuc) for an in-depth explanation on how to use this tool.
 
@@ -104,13 +106,51 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 7. The menu for committing the current object.
 8. The menu for clearing the current annotations. If `all slices` is set all annotations will be cleared, otherwise they are only cleared for the current slice.
 
-You can only segment one object at a time using the interactive segmentation functionality with this tool.
+In the normal prompt-only workflow, interactive 3D segmentation handles one object at a time.
+Existing segmentation inputs are different: `Segment Object` processes every nonzero Labels ID independently and merges the results while preserving the IDs.
 
-Existing 3D Labels layers can be refined in two ways.
-`Refine all occupied slices` runs 2D mask refinement on each slice where an object exists and preserves the input z-extent.
-`Propagate from seed slices` chooses each object's largest cross-section as its seed (the lowest z wins ties), refines the seed, and propagates it through the selected z-range.
-For SAM-v1 this uses slice-to-slice mask projection; for SAM2 it conditions the video predictor with the already refined seed.
-A 3D point or shape correction is routed to its assigned object ID; in occupied-slice mode it must lie on a slice occupied by that object, while propagation mode can use a positive cue on an empty slice as another anchor.
+### Using existing 3D segmentations
+
+A selected 3D Labels layer is a full `(z, y, x)` volume aligned with the selected image.
+IDs are interpreted across the complete volume, so every voxel with label `7`, for example, belongs to object ID 7 even when the object has gaps along z.
+Prepare and relabel the data in napari before selecting it if this is not the intended meaning.
+
+SAM does not receive this volume as one native 3D mask prompt.
+The plugin splits each object into 2D masks and handles the z-axis as a sequence: SAM-v1 refines or projects masks one slice at a time, while SAM2 treats z like video frames.
+Neither method understands physical depth or voxel spacing as a 3D model would.
+
+If the input is already correct, use `Commit selected masks unchanged`.
+This copies the complete volume without running SAM, computing embeddings or converting masks to SAM's 256 by 256 prompt representation.
+It is both faster and lossless compared with refinement.
+
+If the masks need correction, choose one of the following `3D behavior` options and press `Segment Object` or `S`.
+While Labels inputs are selected, this choice controls how the volume is processed; `Batched` and `Apply to Volume` do not affect mask refinement.
+`Apply to Volume` still controls whether `Clear Annotations` clears the current slice or the complete volume.
+
+#### Refine existing slices only
+
+This option refines every slice where each object ID already has pixels.
+It does not create the object on empty slices, so the input z-extent and any gaps are preserved.
+Corrections for an object must be placed on a slice where that object ID is already present.
+Choose this for a complete 3D segmentation whose slice coverage is correct but whose 2D boundaries need adjustment.
+
+#### Refine and extend through z
+
+This option is intended for a sparse or incomplete 3D segmentation.
+For each object ID, the plugin chooses the slice with the largest mask area as the initial seed; if several slices tie, it chooses the lowest z-index.
+Slices with corrections assigned to that ID are also refined and used as anchors.
+Other occupied input slices are not used as anchors, which keeps the behavior deterministic and easy to understand.
+The object is then extended independently through the selected z-range, so this mode can fill missing slices or expand beyond the original z-extent.
+Because every object is propagated independently, results may drift or overlap and should be reviewed before committing.
+
+SAM-v1 extends the result with slice-to-slice mask projection and may stop when overlap between adjacent slices becomes too small.
+SAM2 conditions its video predictor with the refined anchor masks and propagates them as frames.
+The propagation z-range is an inclusive hard limit for both model families.
+`Stop after empty slices` is used only by SAM2 and is ignored by SAM-v1.
+
+As a practical rule, commit a correct input unchanged, use `Refine existing slices only` when only boundaries need work, and use `Refine and extend through z` when slices are missing.
+In both refinement modes, every 2D input mask is converted to SAM's 256 by 256 low-resolution mask representation, so very thin or fine structures may be lost.
+The source Labels layers are never modified; the refined result is written to `current_object` for review.
 
 Check out [the video tutorial](https://youtu.be/nqpyNQSyu74) for an in-depth explanation on how to use this tool.
 
