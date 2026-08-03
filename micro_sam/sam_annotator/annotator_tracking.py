@@ -32,9 +32,9 @@ TRACKING_RESULT_LAYER = "tracking_result"
 
 def _refresh_seed_status():
     """Re-render the seed widget's status line, e.g. after the current track changed."""
-    seed_widget = AnnotatorState().widgets.get("seed")
-    if seed_widget is not None:
-        seed_widget.refresh_status()
+    panel = widgets.seed_widget()
+    if panel is not None:
+        panel.refresh_status()
 
 
 def _validate_tracking_model_type(model_type):
@@ -355,7 +355,6 @@ class AnnotatorTracking(_AnnotatorBase):
         )
         return {
             "interactive": interactive,
-            "seed": widgets.SeedTrackWidget(self._viewer),
             "autosegment": autotrack,
             "commit": widgets.commit_track(),
             "export": widgets.export_track(),
@@ -469,10 +468,10 @@ class AnnotatorTracking(_AnnotatorBase):
         if state.image_scale is not None:
             layer.scale = state.image_scale
 
-        # Preselect it in the seed widget, so 'Seed Track From Mask' reads the loaded result.
-        seed_widget = state.widgets.get("seed")
-        if seed_widget is not None:
-            seed_widget.set_mask_layer(layer)
+        # Preselect it in the seed widget, so 'Seed Mask' reads the loaded result.
+        panel = widgets.seed_widget()
+        if panel is not None:
+            panel.set_mask_layer(layer)
 
 
 def annotator_tracking(

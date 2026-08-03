@@ -665,9 +665,15 @@ def _seed_frames(track_id):
     return sorted(AnnotatorState().seed_masks.get(track_id, {}))
 
 
+def seed_widget():
+    """The seed panel, which is nested in the interactive tracking widget."""
+    interactive = AnnotatorState().widgets.get("interactive")
+    return getattr(interactive, "seed_panel", None)
+
+
 def _seed_refine_enabled():
     """Whether the seed widget is set to refine the seeded masks before they condition propagation."""
-    widget = AnnotatorState().widgets.get("seed")
+    widget = seed_widget()
     return True if widget is None else bool(widget.refine_masks)
 
 
@@ -701,9 +707,9 @@ def _reset_tracking_state(viewer):
     state.annotator._tracking_widget[2].value = "1"
     state.annotator._tracking_widget[2].choices = ["1"]
 
-    seed_widget = state.widgets.get("seed")
-    if seed_widget is not None:
-        seed_widget.refresh_status()
+    panel = seed_widget()
+    if panel is not None:
+        panel.refresh_status()
 
 
 #
@@ -790,7 +796,7 @@ def _mask_matched_objects(seg, prev_seg, preservation_threshold):
     return preserve_mask
 
 
-def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
+def _commit_impl(viewer, layer, preserve_mode, preservation_threshold, track_ids=None, preserve_ids=False):
     state = AnnotatorState()
 
     # Check whether all layers exist as expected or create new ones automatically.
@@ -807,19 +813,24 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     # Otherwise we run into type conversion errors later.
     dtype = viewer.layers["committed_objects"].data.dtype
     seg = viewer.layers[layer].data[bb].astype(dtype)
+    if track_ids is not None:  # Commit only the selected objects, leaving the others to work on.
+        seg = np.where(np.isin(seg, track_ids), seg, 0)
     shape = seg.shape
 
     # We parallelize these operations because they take quite long for large volumes.
 
-    # Compute the max id in the commited objects.
-    # id_offset = int(viewer.layers["committed_objects"].data.max())
-    full_shape = viewer.layers["committed_objects"].data.shape
-    id_offset = int(
-        elf.parallel.max(
-            viewer.layers["committed_objects"].data,
-            block_shape=util.get_block_shape(full_shape),
+    # Compute the max id in the commited objects. Tracking keeps its ids instead, so that a committed
+    # track is still recognisable by the id it was annotated with.
+    if preserve_ids:
+        id_offset = 0
+    else:
+        full_shape = viewer.layers["committed_objects"].data.shape
+        id_offset = int(
+            elf.parallel.max(
+                viewer.layers["committed_objects"].data,
+                block_shape=util.get_block_shape(full_shape),
+            )
         )
-    )
 
     # Compute the mask for the current object.
     # mask = seg != 0
@@ -1191,9 +1202,33 @@ def commit_track(
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
-    # Commit the segmentation layer.
+    commit_tracks(viewer, layer, preserve_mode, preservation_threshold, commit_path, track_ids=None)
+
+
+def commit_tracks(viewer, layer, preserve_mode, preservation_threshold, commit_path, track_ids):
+    """Commit tracks to the committed-objects layer.
+
+    Args:
+        viewer: The napari viewer.
+        layer: The layer to commit.
+        preserve_mode: How to preserve already committed objects. See `commit_track`.
+        preservation_threshold: The overlap threshold for preserving objects.
+        commit_path: Optional filepath for saving the committed results and prompts.
+        track_ids: The track ids to commit, or None for all of them. The tracks that are not
+            committed stay in the layer, and the tracking state is kept so they can be worked on.
+    """
+    selected_ids = track_ids
+
+    # Warn instead of silently merging a track into a committed object of the same id.
+    if selected_ids is not None:
+        committed = viewer.layers["committed_objects"].data
+        clashing = [i for i in selected_ids if np.any(committed == i)]
+        if clashing:
+            show_info(f"Track(s) {clashing} are already committed. They will be merged.")
+
+    # Commit the segmentation layer. Track ids are kept, see '_commit_impl'.
     id_offset, seg, mask, bb = _commit_impl(
-        viewer, layer, preserve_mode, preservation_threshold
+        viewer, layer, preserve_mode, preservation_threshold, track_ids=selected_ids, preserve_ids=True
     )
 
     # Update the lineages.
@@ -1225,7 +1260,13 @@ def commit_track(
         )
 
     if layer == "current_object":
-        vutil.clear_annotations(viewer)
+        if selected_ids is None:
+            vutil.clear_annotations(viewer)
+        else:
+            # Remove only the committed tracks, so the others stay in the layer to work on.
+            data = viewer.layers["current_object"].data
+            data[np.isin(data, selected_ids)] = 0
+            viewer.layers["current_object"].refresh()
 
     # Create / update the tracking layer.
     layer_name = "tracks"
@@ -1240,8 +1281,10 @@ def commit_track(
     else:
         viewer.add_tracks(track_data, name=layer_name, graph=parent_graph)
 
-    # Reset the tracking state.
-    _reset_tracking_state(viewer)
+    # Reset the tracking state. A partial commit keeps it, since the tracks that were not committed
+    # still need their track ids and seeds.
+    if selected_ids is None:
+        _reset_tracking_state(viewer)
 
     # Perform garbage collection.
     gc.collect()
@@ -2788,6 +2831,31 @@ def _mother_division_frame(point_layer, lineage, track_id):
     return None
 
 
+def _retarget_track_id(viewer, track_id):
+    """Make 'track_id' the current track, registering it in the lineage and the menus if it is new.
+
+    Seeding from an existing result adopts the id of the object it was seeded from, so the committed
+    track carries the id it had in that result instead of the value the menu happened to hold.
+    """
+    state = AnnotatorState()
+    track_id = int(track_id)
+    if state.current_track_id == track_id and track_id in state.lineage:
+        return
+
+    state.lineage.setdefault(track_id, [])
+    state.current_track_id = track_id
+
+    # (index 2: prompt, track_state, track_id). Setting the value fires 'track_id_changed', which
+    # writes the id back to the state and to the prompt layers.
+    track_ids = sorted(state.lineage.keys())
+    menu = state.annotator._tracking_widget[2]
+    menu.choices = list(map(str, track_ids))
+    menu.value = str(track_id)
+
+    viewer.layers["point_prompts"].property_choices["track_id"] = list(map(str, track_ids))
+    viewer.layers["prompts"].property_choices["track_id"] = list(map(str, track_ids))
+
+
 def _update_lineage(viewer, mother=None):
     """Record a division for 'mother' by seeding two daughter track ids and refreshing the menus.
 
@@ -3915,6 +3983,12 @@ class InteractiveTrackingWidget(_WidgetBase):
         button_row.addWidget(self.clear_button)
         self.layout().addLayout(button_row)
 
+        # Seeding a track from an existing segmentation, collapsed by default.
+        self.seed_panel = SeedTrackWidget(self._viewer)
+        self.layout().addWidget(
+            _make_collapsible(self.seed_panel, title="Track Correction", tooltip=get_tooltip("seed_track", "panel"))
+        )
+
     def _align_menu_rows(self):
         # Each menu row is a QHBoxLayout of [QLabel, QComboBox]. Insert a stretch between them so the
         # label stays left and the (fixed-width) combo box is right-aligned. Idempotent, since the
@@ -3949,9 +4023,9 @@ class InteractiveTrackingWidget(_WidgetBase):
             vutil.clear_annotations_slice(self._viewer, i=i)
             # Seeds are prompts too, so clearing a frame drops them.
             _drop_seed_masks(frame=i)
-            seed_widget = AnnotatorState().widgets.get("seed")
-            if seed_widget is not None:
-                seed_widget.refresh_status()
+            panel = seed_widget()
+            if panel is not None:
+                panel.refresh_status()
 
         state = AnnotatorState()
         if state.interactive_segmenter is not None:
@@ -3980,7 +4054,7 @@ class SeedTrackWidget(_WidgetBase):
 
     def _create_widget(self):
         # Label left, dropdown right, so the row does not take two lines.
-        layer_label = QtWidgets.QLabel("Mask Layer:")
+        layer_label = QtWidgets.QLabel("Tracking Result:")
         layer_label.setToolTip(get_tooltip("seed_track", "mask_layer"))
         self.mask_selection = create_widget(annotation=napari.layers.Labels)
         self.mask_selection.native.setToolTip(get_tooltip("seed_track", "mask_layer"))
@@ -4006,6 +4080,9 @@ class SeedTrackWidget(_WidgetBase):
         self.drop_button = QtWidgets.QPushButton("Drop Seed")
         self.drop_button.setToolTip(get_tooltip("seed_track", "drop_button"))
         self.drop_button.clicked.connect(self.drop)
+        self.commit_button = QtWidgets.QPushButton("Commit Track")
+        self.commit_button.setToolTip(get_tooltip("seed_track", "commit_button"))
+        self.commit_button.clicked.connect(self.commit)
 
         checkbox_row = QtWidgets.QHBoxLayout()
         checkbox_row.addWidget(self.all_frames_checkbox)
@@ -4016,6 +4093,7 @@ class SeedTrackWidget(_WidgetBase):
         button_row = QtWidgets.QHBoxLayout()
         button_row.addWidget(self.seed_button)
         button_row.addWidget(self.drop_button)
+        button_row.addWidget(self.commit_button)
         self.layout().addLayout(button_row)
 
         self.status = QtWidgets.QLabel()
@@ -4105,10 +4183,13 @@ class SeedTrackWidget(_WidgetBase):
             return
 
         t = int(self._viewer.dims.point[0])
-        track_id = state.current_track_id
-        object_ids = self._object_ids(np.asarray(layer.data[t]), layer, track_id)
+        object_ids = self._object_ids(np.asarray(layer.data[t]), layer, state.current_track_id)
         if not object_ids:
             return
+
+        # Adopt the object's id as the track id, so the committed track keeps the id it has here.
+        _retarget_track_id(self._viewer, object_ids[0])
+        track_id = state.current_track_id
 
         # The object is identified on the current frame, then seeded on every frame it appears on.
         frames = range(layer.data.shape[0]) if self.all_frames else [t]
@@ -4144,6 +4225,43 @@ class SeedTrackWidget(_WidgetBase):
             seeds.clear()
             show_info(f"Dropped {n} seed(s) of track {track_id}.")
         self.refresh_status()
+
+    def commit(self):
+        """Commit the current track, keeping the other tracks and the tracking state.
+
+        A track that is already correct in the mask layer is copied over as it is, so it does not
+        have to be segmented first. Otherwise the segmentation of the current track is committed.
+        """
+        state = AnnotatorState()
+        track_id = state.current_track_id
+        current_object = self._viewer.layers["current_object"]
+        source = "segmentation"
+
+        if not np.any(current_object.data == track_id):
+            # Nothing segmented for this track: copy the selected object of the mask layer instead.
+            layer = self._selected_mask_layer()
+            if layer is None:
+                return
+            t = int(self._viewer.dims.point[0])
+            object_ids = self._object_ids(np.asarray(layer.data[t]), layer, track_id)
+            if not object_ids:
+                return
+            # Adopt the object's id, so it keeps the id it has in the mask layer.
+            _retarget_track_id(self._viewer, object_ids[0])
+            track_id = state.current_track_id
+            for frame_id in range(layer.data.shape[0]):
+                mask = np.isin(np.asarray(layer.data[frame_id]), object_ids)
+                if mask.any():
+                    current_object.data[frame_id][mask] = track_id
+            current_object.refresh()
+            source = f"'{layer.name}'"
+
+        commit_tracks(
+            self._viewer, "current_object", preserve_mode="pixels", preservation_threshold=0.75,
+            commit_path=None, track_ids=[track_id],
+        )
+        self.refresh_status()
+        show_info(f"Committed track {track_id} from {source}.")
 
 
 class AutoSegmentV1Widget(_WidgetBase):

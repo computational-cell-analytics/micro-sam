@@ -87,11 +87,13 @@ tooltips = {
         "export_button": "Export the committed tracking result in the chosen format (CTC, GEFF or TrackMate XML).",  # noqa
     },
     "seed_track": {
-        "mask_layer": "Select the label layer with the existing masks to seed a track from.",
+        "panel": "Fix an existing tracking result: seed a track from one of its objects, or commit a track that is already correct.",  # noqa
+        "mask_layer": "Select the label layer with the tracking result to fix.",
         "seed_button": "Use the selected object of the mask layer as the prompt for the current track.",
         "drop_button": "Drop the seeds of the current track, so that the prompts drawn for it count again.",
         "all_frames": "Seed every frame the object appears on, instead of only the current frame.",
         "refine_masks": "Fit the seeded masks to the image before tracking. Uncheck to keep them as they are.",
+        "commit_button": "Commit only the current track. A track that needs no fixing is copied straight from the mask layer.",  # noqa
     },
     "batch_annotator": {
         "folder": "Select the folder with the images to annotate.",
