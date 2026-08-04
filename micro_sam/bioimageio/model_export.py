@@ -512,10 +512,10 @@ def export_sam_model(
             authors=kwargs.get("authors", DEFAULTS["authors"]),
             cite=kwargs.get("cite", DEFAULTS["cite"]),
             license=spec.LicenseId("CC-BY-4.0"),
-            documentation=Path(doc_path),
+            documentation=spec.FileDescr(source=Path(doc_path)),
             git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
             tags=kwargs.get("tags", DEFAULTS["tags"]),
-            covers=covers,
+            covers=[spec.FileDescr(source=Path(cover)) for cover in covers],
             **extra_kwargs,
             # TODO write specific settings in the config
             # dict with yaml values, key must be a str
