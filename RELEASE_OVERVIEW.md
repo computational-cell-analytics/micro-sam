@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.8.8**
+
+Fix the bioimage.io model export for bioimageio.spec >=0.5.11.
+
 **New in version 1.8.7**
 
 Fixing minor issues with 1.8.6 related to clearing custom weights / checkpoint paths in the annotator and training widgets.
