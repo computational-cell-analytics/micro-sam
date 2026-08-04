@@ -31,6 +31,9 @@ def _read_2d(path, key):
     # Transpose channel-first (C, H, W) to channel-last (H, W, C).
     if arr.ndim == 3 and arr.shape[0] <= 4 and arr.shape[1] > arr.shape[0] and arr.shape[2] > arr.shape[0]:
         arr = arr.transpose(1, 2, 0)
+    # Some 2d datasets mix in multi-frame stacks, e.g. yeaz. Evaluate their first frame.
+    if arr.ndim == 3 and arr.shape[-1] not in (3, 4):
+        arr = arr[0]
     return arr
 
 

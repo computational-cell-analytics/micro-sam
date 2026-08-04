@@ -6,6 +6,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 from skimage.measure import label as connected_components
 
+import torch
+
 from elf.io import open_file
 from torch_em.data import datasets
 from torch_em.util.image import load_image
@@ -18,20 +20,20 @@ DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 
 _MODELS_DIR = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2"
 
+# The pretrained SAM2 backbones. Only SAM2.1 is supported by micro_sam.v2.
 CHECKPOINT_PATHS = {
-    "sam2.1": {
-        "hvit_t": os.path.join(_MODELS_DIR, "sam2.1_hiera_tiny.pt"),
-        "hvit_s": os.path.join(_MODELS_DIR, "sam2.1_hiera_small.pt"),
-        "hvit_b": os.path.join(_MODELS_DIR, "sam2.1_hiera_base_plus.pt"),
-        "hvit_l": os.path.join(_MODELS_DIR, "sam2.1_hiera_large.pt"),
-    },
-    "sam2.0": {
-        "hvit_t": os.path.join(_MODELS_DIR, "sam2_hiera_tiny.pt"),
-        "hvit_s": os.path.join(_MODELS_DIR, "sam2_hiera_small.pt"),
-        "hvit_b": os.path.join(_MODELS_DIR, "sam2_hiera_base_plus.pt"),
-        "hvit_l": os.path.join(_MODELS_DIR, "sam2_hiera_large.pt"),
-    },
+    "hvit_t": os.path.join(_MODELS_DIR, "sam2.1_hiera_tiny.pt"),
+    "hvit_s": os.path.join(_MODELS_DIR, "sam2.1_hiera_small.pt"),
+    "hvit_b": os.path.join(_MODELS_DIR, "sam2.1_hiera_base_plus.pt"),
+    "hvit_l": os.path.join(_MODELS_DIR, "sam2.1_hiera_large.pt"),
 }
+
+MODEL_TYPES = list(CHECKPOINT_PATHS)
+
+# The jointly finetuned (interactive + automatic) SAM2 models for cell segmentation.
+JOINT_CHECKPOINT_ROOT = os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints")
+# The joint checkpoints are split into loadable weight files here, see 'export_joint_checkpoint'.
+JOINT_EXPORT_ROOT = os.path.join(_MODELS_DIR, "exported", "joint", "v2")
 
 # 2D LM datasets
 DATASETS_2D = [
@@ -327,10 +329,9 @@ def _get_3d_em_data_paths(
         return [path], [path], "volumes/raw", "volumes/labels/neuron_ids"
 
     if dataset_name == "humanneurons":
-        paths = datasets.humanneurons.get_humanneurons_paths(
-            path=os.path.join(p, "humanneurons"), download=download,
-        )
-        return sorted(paths), sorted(paths), "raw", "labels"
+        # Resolved directly: the installed torch-em has no loader for this dataset.
+        paths = sorted(glob(os.path.join(p, "humanneurons", "*.h5")))
+        return paths, paths, "raw", "labels"
 
     raise ValueError(f"Unknown 3D EM dataset: {dataset_name!r}")
 
@@ -406,6 +407,16 @@ def load_volume(
     if valid_roi is not None:
         valid_roi = valid_roi[roi]
 
+    # Restrict to the annotated z-range, so nothing is predicted or scored where there is no
+    # ground-truth. Interior empty slices are kept, otherwise the volume would not be contiguous.
+    annotated = np.any(labels != 0, axis=tuple(range(1, labels.ndim)))
+    if annotated.any():
+        z_start = int(np.argmax(annotated))
+        z_stop = len(annotated) - int(np.argmax(annotated[::-1]))
+        raw, labels = raw[z_start:z_stop], labels[z_start:z_stop]
+        if valid_roi is not None:
+            valid_roi = valid_roi[z_start:z_stop]
+
     if ensure_instances:
         labels = connected_components(labels)
 
@@ -413,37 +424,90 @@ def load_volume(
     return raw.astype("float32"), labels.astype("uint32"), valid_roi
 
 
-# UniSAM2 helpers shared between evaluate_2d and evaluate_3d
+# Model helpers shared between the evaluation scripts
 
 _UNISAM2_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/automatic/v1"
 UNISAM2_CHECKPOINT = os.path.join(_UNISAM2_ROOT, "checkpoints", "unisam2-both", "best.pt")
 
-_EM_DATASETS = {"platynereis_nuclei", "cremi", "snemi", "humanneurons"}
 
-_DATASET_SPACING: dict = {
+def get_joint_checkpoint(model_type: str, checkpoint: str = "best") -> str:
+    """Return the joint trainer checkpoint for a model type, e.g. 'hvit_b'."""
+    path = os.path.join(JOINT_CHECKPOINT_ROOT, f"joint_sam2_{model_type}_multi_gpu", f"{checkpoint}.pt")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"There is no joint '{checkpoint}' checkpoint for '{model_type}' at '{path}'.")
+    return path
+
+
+def _save_atomic(obj, path: str) -> None:
+    """Save to a process-unique temporary file first, so concurrent jobs never read a partial file."""
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    torch.save(obj, tmp_path)
+    os.replace(tmp_path, path)
+
+
+def _strip_ddp_prefix(state_dict):
+    return {(k[len("module."):] if k.startswith("module.") else k): v for k, v in state_dict.items()}
+
+
+def export_joint_checkpoint(
+    model_type: str, checkpoint: str = "best", export_root: str = JOINT_EXPORT_ROOT
+) -> Tuple[str, str]:
+    """Split a joint checkpoint into an interactive and an automatic weight file.
+
+    The joint trainer bundles the SAM2 weights ('model_state'), the UniSAM2 decoder weights
+    ('unetr_state') and pickled trainer state in a single file. That file cannot be loaded by
+    `sam2.build_sam`, which reads `torch.load(...)['model']` with `weights_only=True`. Both
+    exported files are plain tensor dicts, mirroring `scripts/model_export/export_sam2_cells_model.py`.
+    Existing exports are reused.
+
+    Args:
+        model_type: The SAM2 backbone the model was finetuned from, e.g. 'hvit_b'.
+        checkpoint: Which trainer checkpoint to export, 'best' or 'latest'.
+        export_root: The directory the exported weight files are written to.
+
+    Returns:
+        The paths to the interactive (SAM2) and the automatic (UniSAM2 decoder) weight files.
+    """
+    name = f"joint_sam2_{model_type}_{checkpoint}"
+    interactive_path = os.path.join(export_root, f"{name}.pt")
+    decoder_path = os.path.join(export_root, f"{name}_decoder.pt")
+    if os.path.exists(interactive_path) and os.path.exists(decoder_path):
+        return interactive_path, decoder_path
+
+    checkpoint_path = get_joint_checkpoint(model_type, checkpoint)
+    state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    missing = [key for key in ("model_state", "unetr_state") if key not in state]
+    if missing:
+        raise RuntimeError(f"'{checkpoint_path}' is not a joint checkpoint, it is missing {missing}.")
+
+    os.makedirs(export_root, exist_ok=True)
+    _save_atomic({"model": _strip_ddp_prefix(state["model_state"]), "model_type": model_type}, interactive_path)
+    _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
+    print(f"Exported '{checkpoint_path}' to '{interactive_path}' and '{decoder_path}'.")
+    return interactive_path, decoder_path
+
+
+DATASET_SPACING: dict = {
     # z/xy voxel ratios from published acquisition parameters
-    "embedseg": (4, 1, 1),    # Mouse-Skull-Nuclei-CBG: z=1µm, xy=0.25µm
+    "embedseg": (4, 1, 1),  # Mouse-Skull-Nuclei-CBG: z=1µm, xy=0.25µm
     "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
 }
 
 
-def load_unisam2_model(checkpoint_path, device):
+def _alias_micro_sam2_modules():
+    """Alias the moved 'micro_sam2' modules so checkpoints pickled before the package move load."""
     import sys
     import types
-    import torch
     import micro_sam.v2.datasets.sampler as datasets_sampler
     import micro_sam.v2.datasets.wrapper as datasets_wrapper
     import micro_sam.v2.transforms.labels as transforms_labels
     import micro_sam.v2.transforms.raw as transforms_raw
-    from micro_sam.v2.models.util import UniSAM2
 
-    # Older checkpoints were saved while this package lived under the
-    # "micro_sam2" namespace. Alias the moved modules for torch.load.
     root = sys.modules.setdefault("micro_sam2", types.ModuleType("micro_sam2"))
     root.__path__ = []
-    datasets = sys.modules.setdefault("micro_sam2.datasets", types.ModuleType("micro_sam2.datasets"))
-    datasets.__path__ = []
+    datasets_module = sys.modules.setdefault("micro_sam2.datasets", types.ModuleType("micro_sam2.datasets"))
+    datasets_module.__path__ = []
     transforms = sys.modules.setdefault("micro_sam2.transforms", types.ModuleType("micro_sam2.transforms"))
     transforms.__path__ = []
 
@@ -451,23 +515,39 @@ def load_unisam2_model(checkpoint_path, device):
     sys.modules["micro_sam2.datasets.wrapper"] = datasets_wrapper
     sys.modules["micro_sam2.transforms.labels"] = transforms_labels
     sys.modules["micro_sam2.transforms.raw"] = transforms_raw
-    setattr(root, "datasets", datasets)
+    setattr(root, "datasets", datasets_module)
     setattr(root, "transforms", transforms)
-    setattr(datasets, "sampler", datasets_sampler)
-    setattr(datasets, "wrapper", datasets_wrapper)
+    setattr(datasets_module, "sampler", datasets_sampler)
+    setattr(datasets_module, "wrapper", datasets_wrapper)
     setattr(transforms, "labels", transforms_labels)
     setattr(transforms, "raw", transforms_raw)
 
-    model = UniSAM2(encoder="hvit_t", output_channels=4)
-    state = torch.load(checkpoint_path, weights_only=False, map_location=device)
-    model.load_state_dict(state["model_state"])
-    model.to(device)
-    model.eval()
-    return model
+
+def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
+    """Load a UniSAM2 model for automatic segmentation.
+
+    Handles the standalone UniSAM2 checkpoints ('model_state'), the joint checkpoints
+    ('unetr_state', with the SAM2 encoder wrapped in an adapter) and exported decoder weights.
+
+    Args:
+        checkpoint_path: The filepath to the checkpoint.
+        device: The torch device.
+        encoder: The SAM2 backbone the decoder was trained on, e.g. 'hvit_b'.
+
+    Returns:
+        The UniSAM2 model in eval mode.
+    """
+    from micro_sam.v2.instance_segmentation import get_unisam2_model
+    _alias_micro_sam2_modules()
+    return get_unisam2_model(checkpoint_path, device=device, encoder=encoder)
 
 
 def predict_unisam2(model, raw, ndim, device):
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
+    # The UniSAM2 inference path expects single-channel input, so a trailing channel axis is averaged
+    # away. Matches 'read_image_2d' in grid_search_automatic_cells, which tunes the postprocessing.
+    if raw.ndim > ndim:
+        raw = raw.mean(axis=-1)
     is_3d = (ndim == 3)
     tile_shape = (4, 384, 384) if is_3d else (384, 384)
     halo = (2, 64, 64) if is_3d else (64, 64)
@@ -476,17 +556,23 @@ def predict_unisam2(model, raw, ndim, device):
     return segmenter.get_state()["prediction"]
 
 
-def postprocess_unisam2(out, dataset_name, backend="python"):
+def postprocess_unisam2(out, dataset_name, backend="cpp", params=None):
+    """Turn a (4, *spatial) prediction into an instance segmentation.
+
+    EM datasets use the dense (multicut) mode, all others the sparse (flow) mode. 'params' overrides
+    the postprocessing defaults, e.g. with the best combination found by grid_search_automatic_cells.
+    """
     from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
+    params = {} if params is None else params
     fg = out[0]
-    if dataset_name in _EM_DATASETS:
+    if dataset_name in DATASETS_3D_EM:
         boundary_map = fg.max() - fg
         boundary_map /= boundary_map.max()
         distances = np.stack([out[2], out[3]])
-        seg = run_multicut(boundary_map, distances, backend=backend)
+        seg = run_multicut(boundary_map, distances, backend=backend, **params)
     else:
-        spacing = _DATASET_SPACING.get(dataset_name, None)
-        seg = flow_instance_segmentation(fg, out[1:], spacing=spacing, backend=backend)
+        spacing = DATASET_SPACING.get(dataset_name, None)
+        seg = flow_instance_segmentation(fg, out[1:], spacing=spacing, backend=backend, **params)
     return seg.astype("uint32")
 
 

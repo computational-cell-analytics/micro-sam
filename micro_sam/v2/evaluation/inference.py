@@ -432,7 +432,8 @@ def run_interactive_segmentation_3d(
     inference_state = predictor.init_state(volume=raw, volume_embeddings=volume_embeddings)
 
     gt_ids = list(np.unique(labels))[1:]  # Ignoring the background label
-    segmentation = []
+    # An empty volume has nothing to prompt, so all iterations stay empty.
+    segmentation = [np.zeros(labels.shape, dtype="uint64") for _ in range(n_iterations)]
     for gt_id in tqdm(gt_ids, desc="Segmenting per object in the volume"):
         _per_iter_segmentation = _run_interactive_segmentation_3d_per_object(
             gt_ids=gt_id,
@@ -448,11 +449,8 @@ def run_interactive_segmentation_3d(
             n_iterations=n_iterations,
         )
 
-        for _iter in range(n_iterations):
-            if gt_id == gt_ids[0]:  # Add segmentations to the list for first object.
-                segmentation.append(_per_iter_segmentation[_iter])
-            else:  # Merge incoming segmentations per object to existing seg. array.
-                segmentation[_iter] += _per_iter_segmentation[_iter]
+        for _iter in range(n_iterations):  # Merge the incoming segmentation per object.
+            segmentation[_iter] += _per_iter_segmentation[_iter]
 
     for i, prediction_path in enumerate(prediction_paths):
         os.makedirs(Path(prediction_path).parent, exist_ok=True)
@@ -611,11 +609,13 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
 
             video_segments = {**reverse_video_segments, **forward_video_segments}
 
+            height, width = labels.shape[-2:]
             segmentation = []
             for slice_idx in video_segments.keys():
-                per_slice_seg = np.zeros(labels.shape[-2:])
+                per_slice_seg = np.zeros((height, width))
                 for _instance_idx, _instance_mask in video_segments[slice_idx].items():
-                    per_slice_seg[_instance_mask.squeeze()] = _instance_idx
+                    # Non-square frames are padded to a square, see '_load_img_as_tensor'.
+                    per_slice_seg[_instance_mask.squeeze()[:height, :width]] = _instance_idx
                 segmentation.append(per_slice_seg)
 
             segmentation = (np.stack(segmentation) > 0).astype("uint64")

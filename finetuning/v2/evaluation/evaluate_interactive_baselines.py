@@ -5,7 +5,7 @@ Supported methods:
   sam: Pretrained SAM v1 interactive segmentation (2D and 3D)
   sam2: Pretrained SAM2 interactive segmentation (2D and 3D)
   micro-sam: micro-sam v1 finetuned interactive (vit_b_lm LM / vit_b_em_organelles EM)
-  micro_sam2: Finetuned SAM2 interactive segmentation (2D and 3D)
+  micro_sam2: Jointly finetuned SAM2 interactive segmentation (2D and 3D)
   sam3: SAM3 interactive segmentation (2D and 3D)
 
 Usage examples:
@@ -14,7 +14,7 @@ Usage examples:
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method sam
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method sam2
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method micro-sam
-    python evaluate_interactive_baselines.py -d livecell -e <exp> --method micro_sam2
+    python evaluate_interactive_baselines.py -d livecell -e <exp> --method micro_sam2 -m hvit_b
     python evaluate_micro_sam_volumetric.py -d embedseg -e <exp> -m vit_b_lm -p box
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method sam3
     python evaluate_interactive_baselines.py -d embedseg -e <exp> --method sam3 --ndim 3
@@ -34,7 +34,10 @@ import torch
 from micro_sam.v1.evaluation.evaluation import run_evaluation
 from micro_sam.v2.normalization import normalize_raw
 
-from common import DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, CHECKPOINT_PATHS, get_data_paths
+from common import (
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, CHECKPOINT_PATHS,
+    export_joint_checkpoint, get_data_paths,
+)
 from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
 from common import check_data_download
 
@@ -43,11 +46,6 @@ _METHODS = ["nninteractive", "sam3", "sam", "sam2", "micro-sam", "micro_sam2"]
 NNINTERACTIVE_CHECKPOINT = "/mnt/vast-nhr/home/archit/u12090/nnInteractive/pretrained_weights/nnInteractive_v1.0"
 _SAM3_ROOT = "/mnt/vast-nhr/home/archit/u12090/SAM3_Experiments"
 
-MICROSAM2_INTERACTIVE_CHECKPOINT = (
-    "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/interactive/v1/checkpoints/checkpoint.pt"
-)
-
-_SAM2_BACKBONE = "sam2.1"
 _SAM2_MODEL_TYPE = "hvit_t"
 _SAM_V1_MODEL_TYPE = "vit_b"
 _MICROSAM_V1_LM_MODEL = "vit_b_lm"
@@ -217,6 +215,9 @@ def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
     it = tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")
     for sample_id, (raw, labels, _) in enumerate(it):
+        if labels.max() == 0:  # Inference skips these, so they must not be scored either.
+            continue
+
         image_path = os.path.join(input_dir, f"{sample_id:05d}.tif")
         gt_path = os.path.join(gt_dir, f"{sample_id:05d}.tif")
         raw = np.clip(np.round(raw), 0, 255).astype("uint8")
@@ -232,6 +233,9 @@ def _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
     it = tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")
     for sample_id, (raw, labels, _) in enumerate(it):
+        if labels.max() == 0:  # Inference skips these, so they must not be scored either.
+            continue
+
         image_path = os.path.join(input_dir, f"{sample_id:05d}.tif")
         gt_path = os.path.join(gt_dir, f"{sample_id:05d}.tif")
         imageio.imwrite(image_path, _to_sam2_uint8(raw), compression="zlib")
@@ -363,13 +367,13 @@ def run_sam3_evaluation(
 
 def run_sam2_evaluation(
     dataset_name, data_root, experiment_folder, device,
-    model_type=_SAM2_MODEL_TYPE, backbone=_SAM2_BACKBONE, checkpoint_path=None,
+    model_type=_SAM2_MODEL_TYPE, checkpoint_path=None,
     start_with_box=True, n_iterations=8, ndim=None, name_tag="sam2", use_masks=False,
 ):
     if ndim is None:
         ndim = 3 if dataset_name in DATASETS_3D else 2
     if checkpoint_path is None:
-        checkpoint_path = CHECKPOINT_PATHS[backbone][model_type]
+        checkpoint_path = CHECKPOINT_PATHS[model_type]
 
     prompt_str = "box" if start_with_box else "point"
     dim_suffix = "" if ndim == 2 else "_3d"
@@ -400,7 +404,6 @@ def run_sam2_evaluation(
                 gt_key=None,
                 prediction_dir=prediction_dir,
                 model_type=model_type,
-                backbone=backbone,
                 checkpoint_path=checkpoint_path,
                 start_with_box_prompt=start_with_box,
                 device=device,
@@ -419,7 +422,9 @@ def run_sam2_evaluation(
                 print(f"Iteration {it:02d}: {results}")
     else:
         n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
-        prediction_root = os.path.join(experiment_folder, "predictions", name_tag)
+        # Keyed by model type and dataset, since cached predictions are reused across runs and the
+        # per-sample names are otherwise identical for every dataset.
+        prediction_root = os.path.join(experiment_folder, "predictions", f"{name_tag}_{model_type}", dataset_name)
         all_gt = []
         all_valid_rois = []
         pred_paths_per_iter = [[] for _ in range(n_iterations)]
@@ -427,11 +432,13 @@ def run_sam2_evaluation(
         for sample_id, (raw, labels, valid_roi) in enumerate(
             tqdm(_load_data(dataset_name, data_root, ndim=3), total=n, desc=f"{name_tag}-3d")
         ):
+            if labels.max() == 0:  # Skip empty crops, as the 2d path does.
+                continue
+
             sample_prediction_dir = run_interactive_segmentation_3d(
                 raw=np.stack([_to_sam2_uint8(frame) for frame in raw]),
                 labels=labels,
                 model_type=model_type,
-                backbone=backbone,
                 checkpoint_path=checkpoint_path,
                 start_with_box_prompt=start_with_box,
                 prediction_dir=os.path.join(prediction_root, f"sample_{sample_id:05d}"),
@@ -479,6 +486,10 @@ def main():
     parser.add_argument(
         "-m", "--model_type", type=str, default=None,
         help="Model type override (e.g. vit_b for sam, hvit_t for sam2/micro_sam2)."
+    )
+    parser.add_argument(
+        "--joint_checkpoint", type=str, default="best", choices=["best", "latest"],
+        help="Which joint trainer checkpoint the micro_sam2 weights are taken from (default: best)."
     )
     parser.add_argument(
         "--ndim", type=int, default=None, choices=[2, 3],
@@ -532,18 +543,18 @@ def main():
         mt = args.model_type or _SAM2_MODEL_TYPE
         run_sam2_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            device=device, model_type=mt, backbone=_SAM2_BACKBONE,
-            checkpoint_path=args.checkpoint,
+            device=device, model_type=mt, checkpoint_path=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim,
             name_tag="sam2", use_masks=args.use_masks,
         )
 
     elif args.method == "micro_sam2":
         mt = args.model_type or _SAM2_MODEL_TYPE
+        # The joint checkpoint bundles both branches, so it is split on first use.
+        checkpoint = args.checkpoint or export_joint_checkpoint(mt, args.joint_checkpoint)[0]
         run_sam2_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            device=device, model_type=mt, backbone=_SAM2_BACKBONE,
-            checkpoint_path=args.checkpoint or MICROSAM2_INTERACTIVE_CHECKPOINT,
+            device=device, model_type=mt, checkpoint_path=checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim,
             name_tag="micro_sam2", use_masks=args.use_masks,
         )
