@@ -3,7 +3,7 @@ channels:
     - conda-forge
 dependencies:
     - bioimage-cpp >=0.7
-    - bioimageio.core
+    - bioimageio.core >=0.11
     - click
     - imagecodecs
     - magicgui
