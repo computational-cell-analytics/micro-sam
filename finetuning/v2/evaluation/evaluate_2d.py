@@ -144,7 +144,7 @@ def run_interactive_evaluation_2d(
     model_type,
     device,
     start_with_box=True,
-    use_masks=False,
+    use_masks=True,
     checkpoint_path=None,
     n_iterations=8,
     raw_key=None,
@@ -271,7 +271,10 @@ def main():
     parser.add_argument("-c", "--checkpoint_path", type=str, default=None)
     parser.add_argument("--automatic_checkpoint", type=str, default=None)
     parser.add_argument("-iter", "--n_iterations", type=int, default=8)
-    parser.add_argument("--use_masks", action="store_true", help="Use logits masks across iterations.")
+    parser.add_argument(
+        "--use_masks", action=argparse.BooleanOptionalAction, default=True,
+        help="Use logits masks across iterations. SAM2 is trained with them."
+    )
     parser.add_argument("--cleanup_predictions", action="store_true",
                         help="Delete stored predictions after CSV is saved.")
     parser.add_argument(

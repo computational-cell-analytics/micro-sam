@@ -22,7 +22,7 @@ Usage examples:
 
 import os
 import sys
-import tempfile
+import shutil
 
 import imageio.v3 as imageio
 import numpy as np
@@ -206,7 +206,7 @@ def run_nninteractive_evaluation(
 
 
 def _load_sam_v1(model_type, checkpoint, device):
-    from micro_sam.util import get_sam_model
+    from micro_sam.v1.util import get_sam_model
     return get_sam_model(model_type=model_type, checkpoint_path=checkpoint, device=device)
 
 
@@ -263,9 +263,10 @@ def run_sam_v1_evaluation(
         raise ValueError(f"micro-sam interactive does not support EM datasets (LM model only); got '{dataset_name}'.")
 
     prompt_str = "box" if start_with_box else "point"
+    mask_str = "with_masks" if use_masks else "without_masks"
     results_dir = os.path.join(experiment_folder, "results")
     save_paths = [
-        os.path.join(results_dir, f"{dataset_name}_{name_tag}_{model_type}_{prompt_str}_iter{it:02d}.csv")
+        os.path.join(results_dir, f"{dataset_name}_{name_tag}_{model_type}_{prompt_str}_{mask_str}_iter{it:02d}.csv")
         for it in range(n_iterations)
     ]
     if all(os.path.exists(p) for p in save_paths):
@@ -275,34 +276,40 @@ def run_sam_v1_evaluation(
     predictor = _load_sam_v1(model_type, checkpoint, device)
     from micro_sam.v1.evaluation.inference import run_inference_with_iterative_prompting
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_dir = os.path.join(tmpdir, "images")
-        gt_dir = os.path.join(tmpdir, "labels")
-        prediction_dir = os.path.join(tmpdir, "predictions")
-        embedding_dir = os.path.join(tmpdir, "embeddings")
-        os.makedirs(input_dir, exist_ok=True)
-        os.makedirs(gt_dir, exist_ok=True)
-        image_paths, gt_paths = _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir)
+    # Inputs, embeddings and predictions outlive the process so a preempted or timed-out job resumes
+    # per image. '/tmp' is a small RAM-backed tmpfs on the compute nodes, so it is avoided here.
+    work_dir = os.path.join(
+        experiment_folder, "predictions", f"{name_tag}_{model_type}", dataset_name, f"{prompt_str}_{mask_str}"
+    )
+    input_dir = os.path.join(work_dir, "inputs", "images")
+    gt_dir = os.path.join(work_dir, "inputs", "labels")
+    embedding_dir = os.path.join(work_dir, "embeddings")
+    prediction_dir = os.path.join(work_dir, "predictions")
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(gt_dir, exist_ok=True)
+    image_paths, gt_paths = _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir)
 
-        run_inference_with_iterative_prompting(
-            predictor=predictor,
-            image_paths=image_paths,
-            gt_paths=gt_paths,
-            embedding_dir=embedding_dir,
-            prediction_dir=prediction_dir,
-            start_with_box_prompt=start_with_box,
-            n_iterations=n_iterations,
-            use_masks=use_masks,
-        )
+    run_inference_with_iterative_prompting(
+        predictor=predictor,
+        image_paths=image_paths,
+        gt_paths=gt_paths,
+        embedding_dir=embedding_dir,
+        prediction_dir=prediction_dir,
+        start_with_box_prompt=start_with_box,
+        n_iterations=n_iterations,
+        use_masks=use_masks,
+    )
 
-        os.makedirs(results_dir, exist_ok=True)
-        for it, save_path in enumerate(save_paths):
-            if os.path.exists(save_path):
-                continue
-            pred_dir = os.path.join(prediction_dir, f"iteration{it:02d}")
-            pred_paths = [os.path.join(pred_dir, os.path.basename(path)) for path in image_paths]
-            results = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=save_path)
-            print(f"Iteration {it:02d}: {results}")
+    os.makedirs(results_dir, exist_ok=True)
+    for it, save_path in enumerate(save_paths):
+        if os.path.exists(save_path):
+            continue
+        pred_dir = os.path.join(prediction_dir, f"iteration{it:02d}")
+        pred_paths = [os.path.join(pred_dir, os.path.basename(path)) for path in image_paths]
+        results = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=save_path)
+        print(f"Iteration {it:02d}: {results}")
+
+    shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def run_sam3_evaluation(
@@ -368,7 +375,7 @@ def run_sam3_evaluation(
 def run_sam2_evaluation(
     dataset_name, data_root, experiment_folder, device,
     model_type=_SAM2_MODEL_TYPE, checkpoint_path=None,
-    start_with_box=True, n_iterations=8, ndim=None, name_tag="sam2", use_masks=False,
+    start_with_box=True, n_iterations=8, ndim=None, name_tag="sam2", use_masks=True, mask_threshold=0.0,
 ):
     if ndim is None:
         ndim = 3 if dataset_name in DATASETS_3D else 2
@@ -377,9 +384,15 @@ def run_sam2_evaluation(
 
     prompt_str = "box" if start_with_box else "point"
     dim_suffix = "" if ndim == 2 else "_3d"
+    # The 3d path always feeds the logits masks through the video predictor, so it has no mask tag.
+    mask_str = "" if ndim == 3 else ("_with_masks" if use_masks else "_without_masks")
+    if ndim == 2 and mask_threshold != 0.0:
+        mask_str += f"_t{mask_threshold:g}"
     results_dir = os.path.join(experiment_folder, "results")
     save_paths = [
-        os.path.join(results_dir, f"{dataset_name}_{name_tag}_{model_type}{dim_suffix}_{prompt_str}_iter{it:02d}.csv")
+        os.path.join(
+            results_dir, f"{dataset_name}_{name_tag}_{model_type}{dim_suffix}_{prompt_str}{mask_str}_iter{it:02d}.csv"
+        )
         for it in range(n_iterations)
     ]
     if all(os.path.exists(p) for p in save_paths):
@@ -389,37 +402,45 @@ def run_sam2_evaluation(
     from micro_sam.v2.evaluation.inference import run_interactive_segmentation_2d, run_interactive_segmentation_3d
 
     if ndim == 2:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            input_dir = os.path.join(tmpdir, "images")
-            gt_dir = os.path.join(tmpdir, "labels")
-            prediction_dir = os.path.join(tmpdir, "predictions")
-            os.makedirs(input_dir, exist_ok=True)
-            os.makedirs(gt_dir, exist_ok=True)
-            image_paths, gt_paths = _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir)
+        # Inputs and predictions outlive the process so a preempted or timed-out job resumes per
+        # image. '/tmp' is a small RAM-backed tmpfs on the compute nodes, so it is avoided here.
+        # Keyed by prompt and mask settings too, so concurrent runs of the same model and dataset do
+        # not share a tree and delete each other's predictions on cleanup.
+        prediction_root = os.path.join(
+            experiment_folder, "predictions", f"{name_tag}_{model_type}", dataset_name, f"{prompt_str}{mask_str}"
+        )
+        input_dir = os.path.join(prediction_root, "inputs", "images")
+        gt_dir = os.path.join(prediction_root, "inputs", "labels")
+        os.makedirs(input_dir, exist_ok=True)
+        os.makedirs(gt_dir, exist_ok=True)
+        image_paths, gt_paths = _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir)
 
-            prediction_dir = run_interactive_segmentation_2d(
-                image_paths=image_paths,
-                gt_paths=gt_paths,
-                image_key=None,
-                gt_key=None,
-                prediction_dir=prediction_dir,
-                model_type=model_type,
-                checkpoint_path=checkpoint_path,
-                start_with_box_prompt=start_with_box,
-                device=device,
-                n_iterations=n_iterations,
-                use_masks=use_masks,
-                ensure_8bit=False,
-            )
+        prediction_dir = run_interactive_segmentation_2d(
+            image_paths=image_paths,
+            gt_paths=gt_paths,
+            image_key=None,
+            gt_key=None,
+            prediction_dir=prediction_root,
+            model_type=model_type,
+            checkpoint_path=checkpoint_path,
+            start_with_box_prompt=start_with_box,
+            device=device,
+            n_iterations=n_iterations,
+            use_masks=use_masks,
+            ensure_8bit=False,
+            mask_threshold=mask_threshold,
+        )
 
-            os.makedirs(results_dir, exist_ok=True)
-            for it, save_path in enumerate(save_paths):
-                if os.path.exists(save_path):
-                    continue
-                pred_dir = os.path.join(prediction_dir, f"iteration{it:02d}")
-                pred_paths = [os.path.join(pred_dir, os.path.basename(path)) for path in image_paths]
-                results = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=save_path)
-                print(f"Iteration {it:02d}: {results}")
+        os.makedirs(results_dir, exist_ok=True)
+        for it, save_path in enumerate(save_paths):
+            if os.path.exists(save_path):
+                continue
+            pred_dir = os.path.join(prediction_dir, f"iteration{it:02d}")
+            pred_paths = [os.path.join(pred_dir, os.path.basename(path)) for path in image_paths]
+            results = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=save_path)
+            print(f"Iteration {it:02d}: {results}")
+
+        shutil.rmtree(prediction_root, ignore_errors=True)
     else:
         n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
         # Keyed by model type and dataset, since cached predictions are reused across runs and the
@@ -496,10 +517,19 @@ def main():
         help="Dimensionality override (default: inferred from dataset)."
     )
     parser.add_argument(
-        "--use_masks", action="store_true",
-        help="Use previous logits/masks as mask prompts during SAM2 iterative prompting."
+        "--mask_threshold", type=float, default=0.0,
+        help="Threshold on the predicted mask logits (SAM2 default 0.0). The best value is dataset "
+             "dependent, so tune it rather than assuming a global optimum."
+    )
+    parser.add_argument(
+        "--use_masks", action=argparse.BooleanOptionalAction, default=None,
+        help="Feed the previous logits masks as mask prompts. Defaults to on for SAM2, off for SAM v1."
     )
     args = parser.parse_args()
+
+    # SAM2 is trained with mask logits on every correction click, SAM v1 only with a probability.
+    use_masks_sam2 = True if args.use_masks is None else args.use_masks
+    use_masks_sam_v1 = bool(args.use_masks)
 
     check_data_download(args.dataset_name, args.input_path)
 
@@ -526,7 +556,7 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=mt, checkpoint=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, name_tag="sam",
-            use_masks=args.use_masks,
+            use_masks=use_masks_sam_v1,
         )
 
     elif args.method == "micro-sam":
@@ -536,7 +566,7 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=mt, checkpoint=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, name_tag="micro-sam",
-            use_masks=args.use_masks,
+            use_masks=use_masks_sam_v1,
         )
 
     elif args.method == "sam2":
@@ -545,18 +575,20 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=mt, checkpoint_path=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim,
-            name_tag="sam2", use_masks=args.use_masks,
+            name_tag="sam2", use_masks=use_masks_sam2, mask_threshold=args.mask_threshold,
         )
 
     elif args.method == "micro_sam2":
         mt = args.model_type or _SAM2_MODEL_TYPE
         # The joint checkpoint bundles both branches, so it is split on first use.
         checkpoint = args.checkpoint or export_joint_checkpoint(mt, args.joint_checkpoint)[0]
+        # 'best' keeps the plain tag so existing results stay addressable.
+        tag = "micro_sam2" if args.joint_checkpoint == "best" else f"micro_sam2_{args.joint_checkpoint}"
         run_sam2_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=mt, checkpoint_path=checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim,
-            name_tag="micro_sam2", use_masks=args.use_masks,
+            name_tag=tag, use_masks=use_masks_sam2, mask_threshold=args.mask_threshold,
         )
 
     else:

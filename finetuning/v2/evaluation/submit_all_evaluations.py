@@ -33,9 +33,13 @@ DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 # ~3 GiB VRAM for interactive segmentation, and the automatic encoder batch adapts to the free VRAM,
 # so any GPU works and both the H100 and the A100 pool are used. The time limit is kept close to the
 # observed worst case, since an oversized request makes a job ineligible for backfill.
-PARTITION = "grete-h100:shared,grete:shared"
+# 'grete:preemptible' is usually free and starts within minutes, where the shared pools queue for
+# days. It is MIG only, so the GPU needs a type. A 1g.10gb slice covers interactive segmentation,
+# which peaks at ~3 GiB. Preemption is safe because predictions persist and jobs are requeued.
+# Note that 'grete-h100:shared' does not offer this slice; override --gpu with '1' to use it.
+PARTITION = "grete:preemptible"
 ACCOUNT = "nim00007"
-GPU = "1"
+GPU = "1g.10gb:1"
 CPUS = 4
 MEMORY = "16G"
 TIME_LIMIT = "08:00:00"
@@ -165,8 +169,8 @@ def _command(args: argparse.Namespace, dataset_name: str, model_type: Optional[s
         command.extend(["-p", args.prompt_choice, "-iter", str(args.n_iterations)])
         if args.ndim is not None:
             command.extend(["--ndim", str(args.ndim)])
-        if args.use_masks:
-            command.append("--use_masks")
+        if args.use_masks is not None:
+            command.append("--use_masks" if args.use_masks else "--no-use_masks")
 
     return command
 
@@ -190,6 +194,7 @@ def _write_batch_script(
     tag = _job_tag(args, datasets, model_type, chunk_index)
     script_path = job_folder / f"{tag}.sh"
     env = _METHOD_ENV.get(args.method, "super")
+    qos_line = f"\n#SBATCH --qos={args.qos}" if args.qos is not None else ""
     # The datasets of a chunk run sequentially, and one failure must not skip the rest.
     commands = "\n".join(" ".join(_command(args, dataset, model_type)) for dataset in datasets)
 
@@ -197,10 +202,11 @@ def _write_batch_script(
 #SBATCH -c {CPUS}
 #SBATCH --mem {MEMORY}
 #SBATCH -t {args.time_limit}
-#SBATCH -p {PARTITION}
-#SBATCH -G {GPU}
+#SBATCH -p {args.partition}
+#SBATCH -G {args.gpu}
 #SBATCH -A {ACCOUNT}
 #SBATCH --job-name={tag}
+#SBATCH --requeue{qos_line}
 #SBATCH --constraint=inet
 #SBATCH -o {job_folder}/logs/{tag}_%j.out
 #SBATCH -e {job_folder}/logs/{tag}_%j.err
@@ -272,11 +278,19 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--datasets_per_job", type=int, default=1,
                         help="Datasets per Slurm job. Batching trades queue slots for walltime.")
     parser.add_argument("--time_limit", type=str, default=TIME_LIMIT, help="Slurm time limit per job.")
+    parser.add_argument("--partition", type=str, default=PARTITION, help="Slurm partition(s) to submit to.")
+    parser.add_argument(
+        "--gpu", type=str, default=GPU,
+        help="Slurm GPU spec. MIG partitions need a type, e.g. '1g.10gb:1' on grete:preemptible."
+    )
+    parser.add_argument("--qos", type=str, default=None, help="Slurm QoS. Use '2h' with --time_limit 02:00:00.")
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=PROMPT_CHOICES)
     parser.add_argument("-iter", "--n_iterations", type=int, default=8)
     parser.add_argument("--ndim", type=int, default=None, choices=(2, 3))
-    parser.add_argument("--use_masks", action="store_true",
-                        help="Pass --use_masks to the interactive evaluation script (SAM/SAM2 2D only).")
+    parser.add_argument(
+        "--use_masks", action=argparse.BooleanOptionalAction, default=None,
+        help="Override the mask-prompt default of the interactive evaluation script (SAM/SAM2 2D only)."
+    )
     parser.add_argument("--dry", action="store_true", help="Only write the Slurm scripts; do not submit them.")
     args = parser.parse_args(argv)
 

@@ -123,6 +123,7 @@ def _run_interactive_segmentation_2d_per_image(
     n_iterations: int = 8,
     use_masks: bool = False,
     batch_size: int = 32,
+    mask_threshold: float = 0.0,
 ) -> None:
     """Functionality for interactive segmentation per 2d image.
     """
@@ -156,7 +157,8 @@ def _run_interactive_segmentation_2d_per_image(
         dilation=dilation,
     )
 
-    sampled_binary_y = segmentation_to_one_hot(segmentation=gt.astype("int64"), segmentation_ids=gt_ids)
+    # The prompt generator scans the full masks per object, which is ~7x faster on the GPU.
+    sampled_binary_y = segmentation_to_one_hot(segmentation=gt.astype("int64"), segmentation_ids=gt_ids).to(device)
 
     for iteration in range(n_iterations):
         if iteration == 0:  # logits masks cannot be used for the first iteration.
@@ -188,6 +190,7 @@ def _run_interactive_segmentation_2d_per_image(
                 box=batch_boxes,
                 mask_input=batch_logits_masks,
                 multimask_output=multimasking,
+                return_logits=True,
             )
 
             if batch_scores.ndim == 2:
@@ -206,7 +209,9 @@ def _run_interactive_segmentation_2d_per_image(
             masks.append(batch_masks)
             logits.append(batch_logits)
 
-        masks = np.concatenate(masks)
+        # 'masks' holds logits so far, since a threshold above the SAM2 default of 0 counteracts
+        # the over-segmentation that the mask feedback otherwise compounds across iterations.
+        masks = np.concatenate(masks) > mask_threshold
         logits_masks = np.concatenate(logits)
 
         # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
@@ -214,7 +219,7 @@ def _run_interactive_segmentation_2d_per_image(
 
         next_coords, next_labels = _get_batched_iterative_prompts(
             sampled_binary_gt=sampled_binary_y,
-            masks=torch.from_numpy(masks).to(torch.float32),
+            masks=torch.from_numpy(masks).to(device=device, dtype=torch.float32),
             batch_size=batch_size,
             prompt_generator=prompt_generator
         )
@@ -246,10 +251,15 @@ def run_interactive_segmentation_2d(
     n_iterations: int = 8,
     dilation: int = 5,
     batch_size: int = 32,
-    use_masks: bool = False,
+    use_masks: bool = True,
     ensure_8bit: bool = True,
+    mask_threshold: float = 0.0,
 ):
     """Functionality for interactive segmentation in 2d images using iterative prompting.
+
+    `use_masks` defaults to True because SAM2 is trained with the previous mask logits alongside every
+    correction click, see 'SAM2Train._iter_correct_pt_sampling'. Without them the predictions degrade
+    with each iteration.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -314,6 +324,7 @@ def run_interactive_segmentation_2d(
             n_iterations=n_iterations,
             use_masks=use_masks,
             batch_size=batch_size,
+            mask_threshold=mask_threshold,
         )
 
     return prediction_dir

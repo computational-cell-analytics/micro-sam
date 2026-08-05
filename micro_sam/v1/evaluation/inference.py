@@ -348,7 +348,8 @@ def _save_segmentation(masks, prediction_path):
     # masks to segmentation
     masks = masks.cpu().numpy().squeeze(1).astype("bool")
     masks = [{"segmentation": mask, "area": mask.sum()} for mask in masks]
-    segmentation = util.mask_data_to_segmentation(masks)
+    # One mask per object already, so connected components would only merge touching objects.
+    segmentation = util.mask_data_to_segmentation(masks, label_masks=False)
     imageio.imwrite(prediction_path, segmentation, compression=5)
 
 
