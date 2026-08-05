@@ -30,6 +30,12 @@ CHECKPOINT_PATHS = {
 
 MODEL_TYPES = list(CHECKPOINT_PATHS)
 
+# The 2d patch shape the models were trained on, see 'generalist_loader'.
+TRAINING_PATCH_SHAPE = (512, 512)
+
+# Test images per LIVECell cell type. Eight cell types, so this fills MAX_EVALUATION_SAMPLES.
+LIVECELL_PER_CELL_TYPE = 25
+
 # The jointly finetuned (interactive + automatic) SAM2 models for cell segmentation.
 JOINT_CHECKPOINT_ROOT = os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints")
 # The joint checkpoints are split into loadable weight files here, see 'export_joint_checkpoint'.
@@ -56,38 +62,58 @@ DATASETS_3D_EM = ["platynereis_nuclei", "cremi", "snemi", "humanneurons"]
 DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
 
+def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
+    """Sort raw and label paths as pairs.
+
+    Sorting the two lists on their own breaks the pairing whenever the label names sort differently,
+    which happens when one image name is a prefix of another, e.g. 'x_1.tif' and 'x_11.tif' with
+    labels 'x_1_masks.tif' and 'x_11_masks.tif'.
+    """
+    if len(raw_paths) != len(label_paths):
+        raise RuntimeError(
+            f"Expect as many raw as label paths, got {len(raw_paths)} and {len(label_paths)}."
+        )
+    pairs = sorted(zip(raw_paths, label_paths), key=lambda pair: str(pair[0]))
+    return [pair[0] for pair in pairs], [pair[1] for pair in pairs]
+
+
 def _get_2d_data_paths(
     dataset_name: str, data_root: str, download: bool = False
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
 
     if dataset_name == "livecell":
-        img, gt = _get_livecell_paths(input_folder=os.path.join(p, "livecell"), split="test")
-        return sorted(img), sorted(gt), None, None
+        # Stratified over the cell types. The test set is sorted by cell type, so heading it would
+        # evaluate two of the eight types.
+        img, gt = _get_livecell_paths(
+            input_folder=os.path.join(p, "livecell"), split="test",
+            n_val_per_cell_type=LIVECELL_PER_CELL_TYPE,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "arvidsson":
         img, gt = datasets.arvidsson.get_arvidsson_paths(
             path=os.path.join(p, "arvidsson"), split="test", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "bitdepth_nucseg":
         img, gt = datasets.bitdepth_nucseg.get_bitdepth_nucseg_paths(
             path=os.path.join(p, "bitdepth_nucseg"), download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "cellbindb":
         img, gt = datasets.cellbindb.get_cellbindb_paths(
             path=os.path.join(p, "cellbindb"), download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "cellpose_data":
         img, gt = datasets.cellpose.get_cellpose_paths(
             path=os.path.join(p, "cellpose"), split="test", choice="cyto", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "covid_if":
         paths = datasets.covid_if.get_covid_if_paths(
@@ -103,7 +129,7 @@ def _get_2d_data_paths(
             )
             img.extend(i)
             gt.extend(g)
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "deepbacs":
         img_folder, label_folder = datasets.deepbacs.get_deepbacs_paths(
@@ -111,25 +137,25 @@ def _get_2d_data_paths(
         )
         img = sorted(glob(os.path.join(img_folder, "*.tif")))
         gt = sorted(glob(os.path.join(label_folder, "*.tif")))
-        return img, gt, None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "deepseas":
         img, gt = datasets.deepseas.get_deepseas_paths(
             path=os.path.join(p, "deepseas"), split="test", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "dic_hepg2":
         img, gt = datasets.dic_hepg2.get_dic_hepg2_paths(
             path=os.path.join(p, "dic_hepg2"), split="test", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "dsb":
         img, gt = datasets.dsb.get_dsb_paths(
             path=os.path.join(p, "dsb"), source="full", split=None, download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "dynamicnuclearnet":
         paths = datasets.dynamicnuclearnet.get_dynamicnuclearnet_paths(
@@ -149,13 +175,13 @@ def _get_2d_data_paths(
             path=os.path.join(p, "microbeseg"), split="test",
             annotation_type="30min-man", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "neurips_cellseg":
         img, gt = datasets.neurips_cell_seg.get_neurips_cellseg_paths(
             root=os.path.join(p, "neurips_cellseg"), split="test", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "omnipose":
         img, gt = [], []
@@ -169,7 +195,7 @@ def _get_2d_data_paths(
                 gt.extend(g)
             except Exception as e:
                 warnings.warn(f"Skipping omnipose choice '{choice}': {e}")
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "segpc":
         # No test split. Use validation.
@@ -190,13 +216,13 @@ def _get_2d_data_paths(
         img, gt = datasets.usiigaci.get_usiigaci_paths(
             path=os.path.join(p, "usiigaci"), split="val", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "vicar":
         img, gt = datasets.vicar.get_vicar_paths(
             path=os.path.join(p, "vicar"), download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "yeaz":
         img, gt = [], []
@@ -206,7 +232,7 @@ def _get_2d_data_paths(
             )
             img.extend(i)
             gt.extend(g)
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     raise ValueError(f"Unknown 2D dataset: {dataset_name!r}")
 
@@ -239,26 +265,26 @@ def _get_3d_lm_data_paths(
                     gt.extend(g)
                 except Exception as e:
                     warnings.warn(f"Skipping cartocell name '{name}': {e}")
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "celegans_atlas":
         img, gt = datasets.celegans_atlas.get_celegans_atlas_paths(
             path=os.path.join(p, "celegans_atlas"), split="test", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "cellseg_3d":
         img, gt = datasets.cellseg_3d.get_cellseg_3d_paths(
             path=os.path.join(p, "cellseg_3d"), download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "embedseg":
         img, gt = datasets.embedseg_data.get_embedseg_paths(
             path=os.path.join(p, "embedseg"),
             name="Mouse-Skull-Nuclei-CBG", split="test", download=download,
         )
-        return list(img), list(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "gonuclear":
         paths = datasets.gonuclear.get_gonuclear_paths(
@@ -277,7 +303,7 @@ def _get_3d_lm_data_paths(
         img, gt = datasets.nis3d.get_nis3d_paths(
             path=os.path.join(p, "nis3d"), split="test", split_type="cross-image", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "plantseg":
         all_paths = []
@@ -542,17 +568,24 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
     return get_unisam2_model(checkpoint_path, device=device, encoder=encoder)
 
 
-def predict_unisam2(model, raw, ndim, device):
+def predict_unisam2(model, raw, ndim, device, normalization=None):
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
     # The UniSAM2 inference path expects single-channel input, so a trailing channel axis is averaged
     # away. Matches 'read_image_2d' in grid_search_automatic_cells, which tunes the postprocessing.
     if raw.ndim > ndim:
         raw = raw.mean(axis=-1)
+
     is_3d = (ndim == 3)
-    tile_shape = (4, 384, 384) if is_3d else (384, 384)
-    halo = (2, 64, 64) if is_3d else (64, 64)
-    segmenter = get_unisam2_segmentation_generator(model, is_tiled=True, device=device)
-    segmenter.initialize(raw, ndim=ndim, tile_shape=tile_shape, halo=halo)
+    # Tiling a 2d image that fits the training patch would change both the scale the encoder sees
+    # and the window the normalization is computed over.
+    is_tiled = is_3d or any(size > TRAINING_PATCH_SHAPE[-1] for size in raw.shape[:2])
+    segmenter = get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
+    if is_tiled:
+        tile_shape = (4, 384, 384) if is_3d else (384, 384)
+        halo = (2, 64, 64) if is_3d else (64, 64)
+        segmenter.initialize(raw, ndim=ndim, tile_shape=tile_shape, halo=halo, normalization=normalization)
+    else:
+        segmenter.initialize(raw, ndim=ndim, normalization=normalization)
     return segmenter.get_state()["prediction"]
 
 

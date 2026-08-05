@@ -186,14 +186,37 @@ def load_model(device, checkpoint_path=None, model_type=None, model_name=MODEL_N
     return get_unisam2_model(decoder_source, device=device, encoder=encoder)
 
 
-def predict(model, raw, ndim, device):
+NORMALIZATIONS = ("minmax", "percentile_1_99", "percentile_2_98")
+
+
+def get_normalization(choice):
+    """Return the input normalization callable for a choice, or None for the inference default."""
+    from micro_sam.v2.normalization import normalize_raw
+
+    if choice == "percentile_2_98":  # The default of the inference path.
+        return None
+
+    if choice == "minmax":
+        def normalization(crop):
+            lower = crop.min(axis=(-2, -1), keepdims=True)
+            upper = crop.max(axis=(-2, -1), keepdims=True)
+            return (crop - lower) / (upper - lower + 1e-7)
+        return normalization
+
+    if choice == "percentile_1_99":
+        return lambda crop: normalize_raw(crop, axis=(-2, -1), lower_percentile=1.0, upper_percentile=99.0)
+
+    raise ValueError(f"Unknown normalization: '{choice}'. Choose from {NORMALIZATIONS}.")
+
+
+def predict(model, raw, ndim, device, normalization=None):
     """Run the UniSAM2 model to predict foreground + directed distances, shape (4, *spatial).
 
-    Uses the same tiled inference path as the micro-sam v2 evaluation (common.predict_unisam2), so
-    the tuned parameters transfer directly to the evaluation scripts.
+    Uses the same inference path as the micro-sam v2 evaluation (common.predict_unisam2), so the
+    tuned parameters transfer directly to the evaluation scripts.
     """
     from common import predict_unisam2
-    return predict_unisam2(model, raw, ndim=ndim, device=device)
+    return predict_unisam2(model, raw, ndim=ndim, device=device, normalization=normalization)
 
 
 def read_image_2d(path, key):
@@ -349,22 +372,23 @@ def score_image_sparse_cached(prediction, labels, params_list, backend, n_thread
     hmap = np.linalg.norm(directed, axis=0)
     hmap = hmap.max() - hmap
 
+    # The convergence densities are built up front, so the scoring below only reads them.
     fg_mask_cache, density_cache = {}, {}
-    scores = []
     for params in params_list:
         ft, sigma, n_iter, dt = (params[k] for k in FLOW_DENSITY_KEYS)
         if ft not in fg_mask_cache:
             fg_mask_cache[ft] = foreground > ft
-        fg_mask = fg_mask_cache[ft]
-
         key = (ft, sigma, n_iter, dt)
         if key not in density_cache:
             density_cache[key] = _compute_flow_density(
-                directed, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma, spacing=spacing,
+                directed, fg_mask_cache[ft], n_iter=int(n_iter), dt=dt, sigma=sigma, spacing=spacing,
                 backend=backend, n_threads=n_threads,
             )
-        density = density_cache[key]
 
+    def score(params):
+        ft, sigma, n_iter, dt = (params[k] for k in FLOW_DENSITY_KEYS)
+        fg_mask = fg_mask_cache[ft]
+        density = density_cache[(ft, sigma, n_iter, dt)]
         try:
             seeds = connected_components(density > params["density_threshold"])
             seg = watershed(hmap, markers=seeds, mask=fg_mask)
@@ -374,11 +398,14 @@ def score_image_sparse_cached(prediction, labels, params_list, backend, n_thread
                 discard = ids[(sizes < min_size) & (ids > 0)]
                 seg[np.isin(seg, discard)] = 0
                 seg = watershed(hmap, markers=seg, mask=fg_mask)
-            scores.append(compute_metrics(seg.astype("uint32"), labels, "sparse"))
+            return compute_metrics(seg.astype("uint32"), labels, "sparse")
         except Exception as e:
             warnings.warn(f"Sparse postprocessing failed for {params}: {e}")
-            scores.append(None)
-    return scores
+            return None
+
+    # Scoring a combination is independent of the others, and dominates the runtime of the sweep.
+    with futures.ThreadPoolExecutor(n_threads) as tp:
+        return list(tp.map(score, params_list))
 
 
 def _dense_boundary_and_distances(prediction):
@@ -496,7 +523,7 @@ def score_image(
 
 def run_track(
     track_name, track_cfg, model, n_images, livecell_per_celltype, output_dir, backend, device,
-    crop_override=None, use_flow_cache=True, n_threads=POSTPROC_THREADS,
+    crop_override=None, use_flow_cache=True, n_threads=POSTPROC_THREADS, normalization=None,
 ):
     """Run the full grid search for one track and save the results CSV.
 
@@ -533,7 +560,7 @@ def run_track(
         for item in tqdm(items, desc=f"{track_name} samples"):
             try:
                 raw, labels = load_sample(item, ndim, crop)
-                prediction = predict(model, raw, ndim=ndim, device=device)
+                prediction = predict(model, raw, ndim=ndim, device=device, normalization=normalization)
             except Exception as e:
                 warnings.warn(f"Skipping sample '{item[1]}': {e}")
                 continue
@@ -585,6 +612,8 @@ def main():
     parser.add_argument("-c", "--checkpoint_path", default=None, help="Custom checkpoint instead of registry model.")
     parser.add_argument("-m", "--model_type", default=None, help="Backbone of the jointly finetuned model to tune.")
     parser.add_argument("--backend", default="cpp", choices=["cpp", "python"], help="Flow computation backend.")
+    parser.add_argument("--normalization", default="percentile_2_98", choices=NORMALIZATIONS,
+                        help="Input normalization used for inference.")
     parser.add_argument("--no_flow_cache", action="store_true", help="Disable the lazy postprocessing caching.")
     parser.add_argument("--n_threads", type=int, default=POSTPROC_THREADS, help="Threads for postprocessing.")
     args = parser.parse_args()
@@ -608,6 +637,7 @@ def main():
             name, config, model, args.n_images, args.livecell_per_celltype,
             args.output_dir, args.backend, device, crop_override=crop_override,
             use_flow_cache=(not args.no_flow_cache), n_threads=args.n_threads,
+            normalization=get_normalization(args.normalization),
         )
 
     print("\nBest parameters:")

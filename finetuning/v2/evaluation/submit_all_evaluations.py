@@ -13,6 +13,7 @@ Usage examples:
 import re
 import csv
 import json
+import math
 import shlex
 import argparse
 import subprocess
@@ -30,13 +31,14 @@ DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 
 # Slurm resources per job. The account only has access to the grete partitions. The jobs peak at
 # ~3 GiB VRAM for interactive segmentation, and the automatic encoder batch adapts to the free VRAM,
-# so any GPU works and both the H100 and the A100 pool are used.
+# so any GPU works and both the H100 and the A100 pool are used. The time limit is kept close to the
+# observed worst case, since an oversized request makes a job ineligible for backfill.
 PARTITION = "grete-h100:shared,grete:shared"
 ACCOUNT = "nim00007"
 GPU = "1"
 CPUS = 4
 MEMORY = "16G"
-TIME_LIMIT = "24:00:00"
+TIME_LIMIT = "08:00:00"
 
 # Keep these in sync with the argparse choices in the evaluation scripts.
 AUTOMATIC_METHODS = (
@@ -169,8 +171,12 @@ def _command(args: argparse.Namespace, dataset_name: str, model_type: Optional[s
     return command
 
 
-def _job_tag(args: argparse.Namespace, dataset_name: str, model_type: Optional[str]) -> str:
-    parts = [args.segmentation_mode, dataset_name, args.method]
+def _job_tag(
+    args: argparse.Namespace, datasets: tuple, model_type: Optional[str], chunk_index: int
+) -> str:
+    # A batched job spans several datasets, so it is named after its chunk instead.
+    name = datasets[0] if len(datasets) == 1 else f"chunk{chunk_index:02d}"
+    parts = [args.segmentation_mode, name, args.method]
     if args.segmentation_mode == "interactive":
         parts.append(args.prompt_choice)
     if model_type is not None:
@@ -179,17 +185,18 @@ def _job_tag(args: argparse.Namespace, dataset_name: str, model_type: Optional[s
 
 
 def _write_batch_script(
-    args: argparse.Namespace, job_folder: Path, dataset_name: str, model_type: Optional[str]
+    args: argparse.Namespace, job_folder: Path, datasets: tuple, model_type: Optional[str], chunk_index: int = 0
 ) -> Path:
-    tag = _job_tag(args, dataset_name, model_type)
+    tag = _job_tag(args, datasets, model_type, chunk_index)
     script_path = job_folder / f"{tag}.sh"
-    command = _command(args, dataset_name, model_type)
     env = _METHOD_ENV.get(args.method, "super")
+    # The datasets of a chunk run sequentially, and one failure must not skip the rest.
+    commands = "\n".join(" ".join(_command(args, dataset, model_type)) for dataset in datasets)
 
     batch_script = f"""#!/bin/bash
 #SBATCH -c {CPUS}
 #SBATCH --mem {MEMORY}
-#SBATCH -t {TIME_LIMIT}
+#SBATCH -t {args.time_limit}
 #SBATCH -p {PARTITION}
 #SBATCH -G {GPU}
 #SBATCH -A {ACCOUNT}
@@ -201,7 +208,7 @@ def _write_batch_script(
 source ~/.bashrc
 micromamba activate {env}
 
-{" ".join(command)}
+{commands}
 """
 
     with open(script_path, "w") as f:
@@ -262,6 +269,9 @@ def main(argv: Optional[list[str]] = None) -> None:
                         help="Which joint trainer checkpoint the micro_sam2 weights are taken from.")
     parser.add_argument("--grid_search_root", type=str, default=None,
                         help="Run automatic segmentation with the best parameters found under this root.")
+    parser.add_argument("--datasets_per_job", type=int, default=1,
+                        help="Datasets per Slurm job. Batching trades queue slots for walltime.")
+    parser.add_argument("--time_limit", type=str, default=TIME_LIMIT, help="Slurm time limit per job.")
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=PROMPT_CHOICES)
     parser.add_argument("-iter", "--n_iterations", type=int, default=8)
     parser.add_argument("--ndim", type=int, default=None, choices=(2, 3))
@@ -283,9 +293,14 @@ def main(argv: Optional[list[str]] = None) -> None:
     (job_folder / "logs").mkdir(parents=True, exist_ok=True)
 
     model_types = args.model_type if args.model_type else [None]
+    datasets = _select_datasets(args)
+    # Strided rather than contiguous chunks, so the few slow datasets spread over the jobs instead
+    # of landing in the same one.
+    n_chunks = math.ceil(len(datasets) / args.datasets_per_job)
+    chunks = [datasets[i::n_chunks] for i in range(n_chunks)]
     scripts = [
-        _write_batch_script(args, job_folder, dataset, model_type)
-        for model_type in model_types for dataset in _select_datasets(args)
+        _write_batch_script(args, job_folder, chunk, model_type, chunk_index)
+        for model_type in model_types for chunk_index, chunk in enumerate(chunks)
     ]
     print(f"Wrote {len(scripts)} Slurm scripts to '{job_folder}'.")
 

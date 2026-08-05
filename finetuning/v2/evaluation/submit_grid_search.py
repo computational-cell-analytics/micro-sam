@@ -46,7 +46,7 @@ ACCOUNT = "nim00007"
 GPU = "1"
 CPUS = 8
 MEMORY = "32G"
-TIME_LIMIT = "24:00:00"
+TIME_LIMIT = "12:00:00"
 
 
 def _command(args: argparse.Namespace, model_type: str, dataset_name: str) -> list[str]:

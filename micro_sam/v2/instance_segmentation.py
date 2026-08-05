@@ -1017,12 +1017,14 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
     def _run_full_inference(
         self, raw, ndim, tile_shape=None, halo=None, pbar_init=None, pbar_update=None,
         batch_size=None, devices: Devices = None, num_prefetch_workers=4, num_write_workers=2,
+        normalization=None,
     ):
         """Run queued, batched UniSAM2 encoder and decoder inference.
 
         Tiled reads and preprocessing, GPU inference, and output writes overlap through the torch-em
         prediction pipeline. If `batch_size` is None, candidate sizes are benchmarked and a
-        throughput-efficient batch is selected independently on every CUDA device.
+        throughput-efficient batch is selected independently on every CUDA device. `normalization`
+        overrides the per-block input normalization, which defaults to the 2nd / 98th percentile.
         """
         from torch_em.util.prediction import predict_with_halo_pipelined
         from micro_sam.v2.normalization import normalize_raw
@@ -1030,8 +1032,13 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
             _compute_auto_batch_sizes, _prepare_models, _release_model_replicas, _resolve_devices,
         )
 
+        def _normalize(crop):
+            if normalization is None:
+                return normalize_raw(crop, axis=(-2, -1))
+            return normalization(crop)
+
         def _preprocess(crop):
-            return np.concatenate([normalize_raw(crop, axis=(-2, -1))] * 3, axis=0)
+            return np.concatenate([_normalize(crop)] * 3, axis=0)
 
         def _predict(this_model, inputs):
             with _get_decoder_autocast(inputs.device):
@@ -1157,6 +1164,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         devices: Devices = None,
         num_prefetch_workers: int = 4,
         num_write_workers: int = 2,
+        normalization: Optional[callable] = None,
     ) -> None:
         """Run the UniSAM2 inference and store foreground and distance predictions.
 
@@ -1167,6 +1175,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
             i: Index for the image data. Unused here, kept for interface compatibility.
             tile_shape: Unused for the non-tiled segmenter.
             halo: Unused for the non-tiled segmenter.
+            normalization: Overrides the input normalization, which defaults to the 2nd / 98th percentile.
             pbar_init: Callback to initialize an external progress bar.
             pbar_update: Callback to update an external progress bar.
             z_block: Number of slices per decoder z block.
@@ -1205,6 +1214,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
                 devices=devices,
                 num_prefetch_workers=num_prefetch_workers,
                 num_write_workers=num_write_workers,
+                normalization=normalization,
             )
         self._is_initialized = True
 
@@ -1331,13 +1341,15 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
         devices: Devices = None,
         num_prefetch_workers: int = 4,
         num_write_workers: int = 2,
+        normalization: Optional[callable] = None,
     ) -> None:
         """Run tiled UniSAM2 inference and store foreground and distance predictions.
 
         `batch_size=None` benchmarks candidate sizes and selects a throughput-efficient batch
         independently on each selected CUDA device.
         Reads and preprocessing are queued through `num_prefetch_workers`, output writes through
-        `num_write_workers`.
+        `num_write_workers`. `normalization` overrides the per-tile input normalization, which
+        defaults to the 2nd / 98th percentile.
         """
         decoder_kwargs = {
             "pbar_init": pbar_init,
@@ -1369,6 +1381,7 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
                 devices=devices,
                 num_prefetch_workers=num_prefetch_workers,
                 num_write_workers=num_write_workers,
+                normalization=normalization,
             )
         self._is_initialized = True
 
