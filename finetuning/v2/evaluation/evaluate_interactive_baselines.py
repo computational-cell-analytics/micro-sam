@@ -38,7 +38,9 @@ from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, CHECKPOINT_PATHS,
     export_joint_checkpoint, get_data_paths,
 )
-from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
+from baselines_common import (
+    MAX_EVALUATION_SAMPLES, _load_data, interactive_result_name, interactive_run_tag,
+)
 from common import check_data_download
 
 _METHODS = ["nninteractive", "sam3", "sam", "sam2", "micro-sam", "micro_sam2"]
@@ -210,10 +212,10 @@ def _load_sam_v1(model_type, checkpoint, device):
     return get_sam_model(model_type=model_type, checkpoint_path=checkpoint, device=device)
 
 
-def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
+def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
     image_paths, gt_paths = [], []
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
-    it = tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")
+    it = tqdm(_load_data(dataset_name, data_root, 2, min_size), total=n, desc="save-crops")
     for sample_id, (raw, labels, _) in enumerate(it):
         if labels.max() == 0:  # Inference skips these, so they must not be scored either.
             continue
@@ -228,10 +230,10 @@ def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
     return image_paths, gt_paths
 
 
-def _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
+def _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
     image_paths, gt_paths = [], []
     n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
-    it = tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")
+    it = tqdm(_load_data(dataset_name, data_root, 2, min_size), total=n, desc="save-crops")
     for sample_id, (raw, labels, _) in enumerate(it):
         if labels.max() == 0:  # Inference skips these, so they must not be scored either.
             continue
@@ -248,7 +250,7 @@ def _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
 def run_sam_v1_evaluation(
     dataset_name, data_root, experiment_folder, device,
     model_type="vit_b_lm", checkpoint=None, start_with_box=True, n_iterations=8, ndim=None, name_tag="micro-sam",
-    use_masks=False,
+    use_masks=False, min_size=0,
 ):
     if ndim is None:
         ndim = 3 if dataset_name in DATASETS_3D else 2
@@ -263,10 +265,13 @@ def run_sam_v1_evaluation(
         raise ValueError(f"micro-sam interactive does not support EM datasets (LM model only); got '{dataset_name}'.")
 
     prompt_str = "box" if start_with_box else "point"
-    mask_str = "with_masks" if use_masks else "without_masks"
+    run_tag = interactive_run_tag(ndim=2, use_masks=use_masks, min_size=min_size)
     results_dir = os.path.join(experiment_folder, "results")
     save_paths = [
-        os.path.join(results_dir, f"{dataset_name}_{name_tag}_{model_type}_{prompt_str}_{mask_str}_iter{it:02d}.csv")
+        os.path.join(results_dir, interactive_result_name(
+            dataset_name, name_tag, model_type, prompt_str, it,
+            ndim=2, use_masks=use_masks, min_size=min_size,
+        ))
         for it in range(n_iterations)
     ]
     if all(os.path.exists(p) for p in save_paths):
@@ -279,7 +284,7 @@ def run_sam_v1_evaluation(
     # Inputs, embeddings and predictions outlive the process so a preempted or timed-out job resumes
     # per image. '/tmp' is a small RAM-backed tmpfs on the compute nodes, so it is avoided here.
     work_dir = os.path.join(
-        experiment_folder, "predictions", f"{name_tag}_{model_type}", dataset_name, f"{prompt_str}_{mask_str}"
+        experiment_folder, "predictions", f"{name_tag}_{model_type}", dataset_name, f"{prompt_str}{run_tag}"
     )
     input_dir = os.path.join(work_dir, "inputs", "images")
     gt_dir = os.path.join(work_dir, "inputs", "labels")
@@ -287,7 +292,9 @@ def run_sam_v1_evaluation(
     prediction_dir = os.path.join(work_dir, "predictions")
     os.makedirs(input_dir, exist_ok=True)
     os.makedirs(gt_dir, exist_ok=True)
-    image_paths, gt_paths = _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir)
+    image_paths, gt_paths = _write_sam_v1_2d_inputs(
+        dataset_name, data_root, input_dir, gt_dir, min_size,
+    )
 
     run_inference_with_iterative_prompting(
         predictor=predictor,
@@ -375,7 +382,7 @@ def run_sam3_evaluation(
 def run_sam2_evaluation(
     dataset_name, data_root, experiment_folder, device,
     model_type=_SAM2_MODEL_TYPE, checkpoint_path=None,
-    start_with_box=True, n_iterations=8, ndim=None, name_tag="sam2", use_masks=True, mask_threshold=0.0,
+    start_with_box=True, n_iterations=8, ndim=None, name_tag="sam2", use_masks=True, mask_threshold=0.0, min_size=0,
 ):
     if ndim is None:
         ndim = 3 if dataset_name in DATASETS_3D else 2
@@ -383,16 +390,12 @@ def run_sam2_evaluation(
         checkpoint_path = CHECKPOINT_PATHS[model_type]
 
     prompt_str = "box" if start_with_box else "point"
-    dim_suffix = "" if ndim == 2 else "_3d"
-    # The 3d path always feeds the logits masks through the video predictor, so it has no mask tag.
-    mask_str = "" if ndim == 3 else ("_with_masks" if use_masks else "_without_masks")
-    if ndim == 2 and mask_threshold != 0.0:
-        mask_str += f"_t{mask_threshold:g}"
     results_dir = os.path.join(experiment_folder, "results")
     save_paths = [
-        os.path.join(
-            results_dir, f"{dataset_name}_{name_tag}_{model_type}{dim_suffix}_{prompt_str}{mask_str}_iter{it:02d}.csv"
-        )
+        os.path.join(results_dir, interactive_result_name(
+            dataset_name, name_tag, model_type, prompt_str, it,
+            ndim=ndim, use_masks=use_masks, mask_threshold=mask_threshold, min_size=min_size,
+        ))
         for it in range(n_iterations)
     ]
     if all(os.path.exists(p) for p in save_paths):
@@ -407,13 +410,16 @@ def run_sam2_evaluation(
         # Keyed by prompt and mask settings too, so concurrent runs of the same model and dataset do
         # not share a tree and delete each other's predictions on cleanup.
         prediction_root = os.path.join(
-            experiment_folder, "predictions", f"{name_tag}_{model_type}", dataset_name, f"{prompt_str}{mask_str}"
+            experiment_folder, "predictions", f"{name_tag}_{model_type}", dataset_name,
+            f"{prompt_str}{interactive_run_tag(2, use_masks, mask_threshold, min_size)}",
         )
         input_dir = os.path.join(prediction_root, "inputs", "images")
         gt_dir = os.path.join(prediction_root, "inputs", "labels")
         os.makedirs(input_dir, exist_ok=True)
         os.makedirs(gt_dir, exist_ok=True)
-        image_paths, gt_paths = _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir)
+        image_paths, gt_paths = _write_sam2_2d_inputs(
+            dataset_name, data_root, input_dir, gt_dir, min_size,
+        )
 
         prediction_dir = run_interactive_segmentation_2d(
             image_paths=image_paths,
@@ -444,14 +450,19 @@ def run_sam2_evaluation(
     else:
         n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
         # Keyed by model type and dataset, since cached predictions are reused across runs and the
-        # per-sample names are otherwise identical for every dataset.
-        prediction_root = os.path.join(experiment_folder, "predictions", f"{name_tag}_{model_type}", dataset_name)
+        # per-sample names are otherwise identical for every dataset. 'min_size' changes the ground
+        # truth and therefore the prompts, so it has to key the cache too.
+        prediction_root = os.path.join(
+            experiment_folder, "predictions", f"{name_tag}_{model_type}",
+            dataset_name if not min_size else f"{dataset_name}_min{min_size}",
+        )
         all_gt = []
         all_valid_rois = []
         pred_paths_per_iter = [[] for _ in range(n_iterations)]
 
         for sample_id, (raw, labels, valid_roi) in enumerate(
-            tqdm(_load_data(dataset_name, data_root, ndim=3), total=n, desc=f"{name_tag}-3d")
+            tqdm(_load_data(dataset_name, data_root, ndim=3, min_size=min_size),
+                 total=n, desc=f"{name_tag}-3d")
         ):
             if labels.max() == 0:  # Skip empty crops, as the 2d path does.
                 continue
@@ -517,6 +528,11 @@ def main():
         help="Dimensionality override (default: inferred from dataset)."
     )
     parser.add_argument(
+        "--min_size", type=int, default=0,
+        help="Drop ground-truth objects below this many pixels, from both prompting and scoring. "
+             "Cropping leaves unrecoverable slivers at the crop faces."
+    )
+    parser.add_argument(
         "--mask_threshold", type=float, default=0.0,
         help="Threshold on the predicted mask logits (SAM2 default 0.0). The best value is dataset "
              "dependent, so tune it rather than assuming a global optimum."
@@ -556,7 +572,7 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=mt, checkpoint=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, name_tag="sam",
-            use_masks=use_masks_sam_v1,
+            use_masks=use_masks_sam_v1, min_size=args.min_size,
         )
 
     elif args.method == "micro-sam":
@@ -566,7 +582,7 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=mt, checkpoint=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, name_tag="micro-sam",
-            use_masks=use_masks_sam_v1,
+            use_masks=use_masks_sam_v1, min_size=args.min_size,
         )
 
     elif args.method == "sam2":
@@ -575,7 +591,7 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=mt, checkpoint_path=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim,
-            name_tag="sam2", use_masks=use_masks_sam2, mask_threshold=args.mask_threshold,
+            name_tag="sam2", use_masks=use_masks_sam2, mask_threshold=args.mask_threshold, min_size=args.min_size,
         )
 
     elif args.method == "micro_sam2":
@@ -588,7 +604,7 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=mt, checkpoint_path=checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim,
-            name_tag=tag, use_masks=use_masks_sam2, mask_threshold=args.mask_threshold,
+            name_tag=tag, use_masks=use_masks_sam2, mask_threshold=args.mask_threshold, min_size=args.min_size,
         )
 
     else:

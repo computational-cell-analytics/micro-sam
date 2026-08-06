@@ -171,6 +171,8 @@ def _command(args: argparse.Namespace, dataset_name: str, model_type: Optional[s
             command.extend(["--ndim", str(args.ndim)])
         if args.use_masks is not None:
             command.append("--use_masks" if args.use_masks else "--no-use_masks")
+        if args.min_size:
+            command.extend(["--min_size", str(args.min_size)])
 
     return command
 
@@ -282,6 +284,10 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument(
         "--gpu", type=str, default=GPU,
         help="Slurm GPU spec. MIG partitions need a type, e.g. '1g.10gb:1' on grete:preemptible."
+    )
+    parser.add_argument(
+        "--min_size", type=int, default=0,
+        help="Drop ground-truth objects below this many pixels. The right value is dataset specific."
     )
     parser.add_argument("--qos", type=str, default=None, help="Slurm QoS. Use '2h' with --time_limit 02:00:00.")
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=PROMPT_CHOICES)
