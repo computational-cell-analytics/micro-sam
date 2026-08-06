@@ -39,7 +39,6 @@ def run_interactive_evaluation_3d(
     dataset_name,
     data_root,
     model_type,
-    backbone,
     experiment_folder,
     prompt_choice="box",
     n_iterations=8,
@@ -54,7 +53,7 @@ def run_interactive_evaluation_3d(
         device = util.get_device()
 
     if checkpoint_path is None:
-        checkpoint_path = CHECKPOINT_PATHS[backbone][model_type]
+        checkpoint_path = CHECKPOINT_PATHS[model_type]
 
     start_with_box = (prompt_choice == "box")
 
@@ -78,7 +77,6 @@ def run_interactive_evaluation_3d(
             raw=raw,
             labels=labels,
             model_type=model_type,
-            backbone=backbone,
             checkpoint_path=checkpoint_path,
             start_with_box_prompt=start_with_box,
             prediction_dir=experiment_folder,
@@ -113,7 +111,7 @@ def run_automatic_evaluation_3d(
     device,
     checkpoint_path=None,
     crop_shape=CROP_SHAPE_3D,
-    backend="python",
+    backend="cpp",
 ):
     """Run automatic segmentation (directed distances) and evaluate on 3D volumes."""
     if checkpoint_path is None:
@@ -162,8 +160,6 @@ def main():
     parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT)
     parser.add_argument("-m", "--model_type", type=str, default="hvit_t",
                         help="SAM2 model size (interactive mode only).")
-    parser.add_argument("-b", "--backbone", type=str, default="sam2.1",
-                        help="SAM2 backbone version (interactive mode only).")
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=["box", "point"])
     parser.add_argument("-c", "--checkpoint_path", type=str, default=None)
@@ -190,7 +186,6 @@ def main():
             dataset_name=args.dataset_name,
             data_root=args.input_path,
             model_type=args.model_type,
-            backbone=args.backbone,
             experiment_folder=args.experiment_folder,
             prompt_choice=args.prompt_choice,
             n_iterations=args.n_iterations,

@@ -104,7 +104,6 @@ def run_amg_evaluation(
     gt_paths,
     experiment_folder,
     model_type,
-    backbone,
     device,
     checkpoint_path=None,
     raw_key=None,
@@ -113,7 +112,7 @@ def run_amg_evaluation(
 ):
     """Run automatic mask generation (AMG) and evaluate on 2D crops."""
     if checkpoint_path is None:
-        checkpoint_path = CHECKPOINT_PATHS[backbone][model_type]
+        checkpoint_path = CHECKPOINT_PATHS[model_type]
 
     cropped_image_paths, cropped_gt_paths = _save_2d_crops(
         image_paths, gt_paths, experiment_folder, raw_key=raw_key, label_key=label_key,
@@ -124,7 +123,6 @@ def run_amg_evaluation(
         image_key=None,
         experiment_folder=experiment_folder,
         model_type=model_type,
-        backbone=backbone,
         checkpoint_path=checkpoint_path,
         device=device,
     )
@@ -144,10 +142,9 @@ def run_interactive_evaluation_2d(
     gt_paths,
     experiment_folder,
     model_type,
-    backbone,
     device,
     start_with_box=True,
-    use_masks=False,
+    use_masks=True,
     checkpoint_path=None,
     n_iterations=8,
     raw_key=None,
@@ -156,7 +153,7 @@ def run_interactive_evaluation_2d(
 ):
     """Run iterative-prompting interactive segmentation and evaluate on 2D crops."""
     if checkpoint_path is None:
-        checkpoint_path = CHECKPOINT_PATHS[backbone][model_type]
+        checkpoint_path = CHECKPOINT_PATHS[model_type]
 
     cropped_image_paths, cropped_gt_paths = _save_2d_crops(
         image_paths, gt_paths, experiment_folder, raw_key=raw_key, label_key=label_key,
@@ -169,7 +166,6 @@ def run_interactive_evaluation_2d(
         gt_key=None,
         prediction_dir=experiment_folder,
         model_type=model_type,
-        backbone=backbone,
         checkpoint_path=checkpoint_path,
         start_with_box_prompt=start_with_box,
         device=device,
@@ -228,7 +224,7 @@ def run_automatic_evaluation_2d(
     crop_shape=CROP_SHAPE_2D,
     raw_key=None,
     label_key=None,
-    backend="python",
+    backend="cpp",
 ):
     """Run automatic segmentation (directed distances) and evaluate on 2D crops."""
     if checkpoint_path is None:
@@ -270,14 +266,15 @@ def main():
     parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT)
     parser.add_argument("-m", "--model_type", type=str, default="hvit_t",
                         help="SAM2 model size (amg/interactive modes only).")
-    parser.add_argument("-b", "--backbone", type=str, default="sam2.1",
-                        help="SAM2 backbone version (amg/interactive modes only).")
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=["box", "point"])
     parser.add_argument("-c", "--checkpoint_path", type=str, default=None)
     parser.add_argument("--automatic_checkpoint", type=str, default=None)
     parser.add_argument("-iter", "--n_iterations", type=int, default=8)
-    parser.add_argument("--use_masks", action="store_true", help="Use logits masks across iterations.")
+    parser.add_argument(
+        "--use_masks", action=argparse.BooleanOptionalAction, default=True,
+        help="Use logits masks across iterations. SAM2 is trained with them."
+    )
     parser.add_argument("--cleanup_predictions", action="store_true",
                         help="Delete stored predictions after CSV is saved.")
     parser.add_argument(
@@ -300,7 +297,6 @@ def main():
             gt_paths=gt_paths,
             experiment_folder=args.experiment_folder,
             model_type=args.model_type,
-            backbone=args.backbone,
             device=device,
             checkpoint_path=args.checkpoint_path,
             raw_key=raw_key,
@@ -314,7 +310,6 @@ def main():
             gt_paths=gt_paths,
             experiment_folder=args.experiment_folder,
             model_type=args.model_type,
-            backbone=args.backbone,
             device=device,
             start_with_box=(args.prompt_choice == "box"),
             use_masks=args.use_masks,

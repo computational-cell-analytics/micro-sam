@@ -1,9 +1,14 @@
-"""Grid search over automatic-segmentation postprocessing parameters for the hvit_t_cells model.
+"""Grid search over the automatic-segmentation postprocessing parameters.
 
-Loads the finetuned SAM2 'hvit_t_cells' model from the micro-sam v2 download registry (the same
-model the annotator uses by default), runs the UniSAM2 decoder once per image, then sweeps the
-postprocessing hyperparameters and averages the mean segmentation accuracy (mSA) over the images
-of each track. Three tracks are supported:
+Loads a finetuned SAM2 model (the 'hvit_t_cells' registry model, a jointly finetuned model selected
+with '-m', or a checkpoint given with '-c'), runs the UniSAM2 decoder once per image, then sweeps the
+postprocessing hyperparameters and averages the mean segmentation accuracy (mSA) over the images.
+
+With '-d' the sweep runs on a single dataset, over the same samples the evaluation scores, and writes
+'<output_dir>/<dataset>.csv'. EM datasets are tuned in dense (multicut) mode and ranked by the CREMI
+score, all others in sparse (flow) mode and ranked by mSA.
+
+Alternatively '--track' sweeps one of the predefined dataset groups:
 
     lm_cell     LM cell segmentation, sparse (flow) mode, 2d (livecell).
     lm_nucleus  LM nucleus segmentation, sparse (flow) mode, 2d (dsb).
@@ -13,9 +18,9 @@ For each track the best parameter combination is written to '<output_dir>/<track
 the full sweep, and the best row is printed.
 
 Usage:
+    python grid_search_automatic_cells.py -d livecell -m hvit_b -o /path/to/results
     python grid_search_automatic_cells.py --track lm_cell
-    python grid_search_automatic_cells.py --track em_neurons --em_crop 16 512 512
-    python grid_search_automatic_cells.py --track all -o /path/to/results
+    python grid_search_automatic_cells.py --track em_neurons --crop_3d 16 512 512
 """
 
 import os
@@ -38,7 +43,11 @@ from bioimage_cpp.segmentation import label as connected_components, watershed
 from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut, _compute_flow_density
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from common import DATA_ROOT, get_data_paths, load_volume  # noqa
+from common import (  # noqa
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, DATASET_SPACING,
+    get_data_paths, load_volume, export_joint_checkpoint,
+)
+from baselines_common import MAX_EVALUATION_SAMPLES  # noqa
 
 
 OUTPUT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/grid-search-hvit-t-cells"
@@ -105,18 +114,53 @@ TRACKS = {
 
 POSTPROC_THREADS = 4
 
+# The 3d center crop for the per-dataset mode. Matches the crop the evaluation uses, so the tuned
+# parameters transfer directly.
+CROP_SHAPE_3D = (8, 512, 512)
 
-def load_model(device, checkpoint_path=None, model_name=MODEL_NAME):
-    """Load the UniSAM2 model for the finetuned hvit_t_cells registry model.
 
-    Mirrors the annotator's decoder-loading path: the finetuned decoder is fetched from the
-    micro-sam v2 download registry and loaded via get_unisam2_model, which rebuilds the matching
-    SAM2 encoder and (re)defines all weights from the decoder checkpoint.
+def dataset_config(dataset_name, criterion=None):
+    """Build the grid-search config for a single dataset.
+
+    EM datasets are tuned in dense (multicut) mode and ranked by the CREMI score, all others in
+    sparse (flow) mode and ranked by mSA.
+
+    Args:
+        dataset_name: The dataset to tune on.
+        criterion: The metric to rank the grid by. Defaults to the mode-specific choice.
+
+    Returns:
+        The config dict, in the same shape as an entry of TRACKS.
+    """
+    is_em = dataset_name in DATASETS_3D_EM
+    is_3d = dataset_name in DATASETS_3D
+    if criterion is None:
+        criterion = "cremi" if is_em else "msa"
+    return {
+        "datasets": [dataset_name],
+        "mode": "dense" if is_em else "sparse",
+        "ndim": 3 if is_3d else 2,
+        "grid": EM_GRID if is_em else LM_GRID,
+        "spacing": DATASET_SPACING.get(dataset_name, None),
+        "crop": CROP_SHAPE_3D if is_3d else None,
+        "criterion": criterion,
+        "match_evaluation": True,
+    }
+
+
+def load_model(device, checkpoint_path=None, model_type=None, model_name=MODEL_NAME):
+    """Load the UniSAM2 model to tune the postprocessing for.
+
+    Mirrors the annotator's decoder-loading path: the decoder is loaded via get_unisam2_model, which
+    rebuilds the matching SAM2 encoder and (re)defines all weights from the checkpoint. The decoder
+    comes from an explicit checkpoint, from the jointly finetuned model for 'model_type', or from the
+    micro-sam v2 download registry.
 
     Args:
         device: The device to load the model onto.
-        checkpoint_path: Optional path to a custom UniSAM2 / joint checkpoint. If given, it is used
-            instead of the registry model.
+        checkpoint_path: Optional path to a custom UniSAM2 / joint checkpoint.
+        model_type: The SAM2 backbone, e.g. 'hvit_b'. Selects the jointly finetuned model when no
+            checkpoint is given, and defines the encoder a custom checkpoint is built on.
         model_name: The registry model name, e.g. 'hvit_t_cells'.
 
     Returns:
@@ -124,9 +168,14 @@ def load_model(device, checkpoint_path=None, model_name=MODEL_NAME):
     """
     from micro_sam.v2.instance_segmentation import get_unisam2_model
 
+    encoder = model_type or model_name[:6]
+
+    if checkpoint_path is None and model_type is not None:
+        checkpoint_path = export_joint_checkpoint(model_type)[1]
+
     if checkpoint_path is not None:
-        print(f"Loading UniSAM2 model from custom checkpoint '{checkpoint_path}'.")
-        return get_unisam2_model(checkpoint_path, device=device, encoder=model_name[:6])
+        print(f"Loading the UniSAM2 model from '{checkpoint_path}' with the '{encoder}' encoder.")
+        return get_unisam2_model(checkpoint_path, device=device, encoder=encoder)
 
     from micro_sam.v2.util import FINETUNED_MODELS, _download_finetuned_sam2_model
     assert model_name in FINETUNED_MODELS, f"'{model_name}' is not a registered model: {FINETUNED_MODELS}."
@@ -134,17 +183,40 @@ def load_model(device, checkpoint_path=None, model_name=MODEL_NAME):
     _, _, decoder_source = _download_finetuned_sam2_model(model_name)
     if decoder_source is None:
         raise RuntimeError(f"The registry model '{model_name}' has no registered decoder.")
-    return get_unisam2_model(decoder_source, device=device, encoder=model_name[:6])
+    return get_unisam2_model(decoder_source, device=device, encoder=encoder)
 
 
-def predict(model, raw, ndim, device):
+NORMALIZATIONS = ("minmax", "percentile_1_99", "percentile_2_98")
+
+
+def get_normalization(choice):
+    """Return the input normalization callable for a choice, or None for the inference default."""
+    from micro_sam.v2.normalization import normalize_raw
+
+    if choice == "percentile_2_98":  # The default of the inference path.
+        return None
+
+    if choice == "minmax":
+        def normalization(crop):
+            lower = crop.min(axis=(-2, -1), keepdims=True)
+            upper = crop.max(axis=(-2, -1), keepdims=True)
+            return (crop - lower) / (upper - lower + 1e-7)
+        return normalization
+
+    if choice == "percentile_1_99":
+        return lambda crop: normalize_raw(crop, axis=(-2, -1), lower_percentile=1.0, upper_percentile=99.0)
+
+    raise ValueError(f"Unknown normalization: '{choice}'. Choose from {NORMALIZATIONS}.")
+
+
+def predict(model, raw, ndim, device, normalization=None):
     """Run the UniSAM2 model to predict foreground + directed distances, shape (4, *spatial).
 
-    Uses the same tiled inference path as the micro-sam v2 evaluation (common.predict_unisam2), so
-    the tuned parameters transfer directly to the evaluation scripts.
+    Uses the same inference path as the micro-sam v2 evaluation (common.predict_unisam2), so the
+    tuned parameters transfer directly to the evaluation scripts.
     """
     from common import predict_unisam2
-    return predict_unisam2(model, raw, ndim=ndim, device=device)
+    return predict_unisam2(model, raw, ndim=ndim, device=device, normalization=normalization)
 
 
 def read_image_2d(path, key):
@@ -155,6 +227,9 @@ def read_image_2d(path, key):
         arr = np.asarray(imageio.imread(path))
     if arr.ndim == 3 and arr.shape[0] <= 4 and arr.shape[1] > arr.shape[0] and arr.shape[2] > arr.shape[0]:
         arr = arr.transpose(1, 2, 0)
+    # Some 2d datasets mix in multi-frame stacks, e.g. yeaz. Evaluate their first frame.
+    if arr.ndim == 3 and arr.shape[-1] not in (3, 4):
+        arr = arr[0]
     # The UniSAM2 2d inference path expects single-channel input. Reduce a trailing channel axis.
     if arr.ndim == 3:
         arr = arr.mean(axis=-1)
@@ -171,13 +246,17 @@ def center_crop_2d(arr, crop_shape):
     return arr[tuple(roi)]
 
 
-def resolve_data_paths(dataset_name, livecell_per_celltype=None):
+def resolve_data_paths(dataset_name, livecell_per_celltype=None, match_evaluation=False):
     """Return (raw_paths, label_paths, raw_key, label_key) for a dataset's evaluation split.
 
     Special-cases dsb to use the smaller 'reduced' fluorescence test split (50 images) and livecell to
     use the built-in per-cell-type stratification ('n_val_per_cell_type' in _get_livecell_paths), rather
     than the full sets that common.get_data_paths returns; all other datasets defer to common.
+    'match_evaluation' skips both special cases, so the tuned parameters are selected on exactly the
+    samples the evaluation scores.
     """
+    if match_evaluation:
+        return get_data_paths(dataset_name, DATA_ROOT)
     if dataset_name == "dsb":
         from torch_em.data import datasets
         img, gt = datasets.dsb.get_dsb_paths(
@@ -201,17 +280,25 @@ def build_work_items(track_cfg, n_images, livecell_per_celltype):
     skipped with a warning rather than aborting the whole track. livecell is stratified to
     'livecell_per_celltype' images per cell type (built into _get_livecell_paths); other 2d datasets use
     every test image (optionally capped to the first 'n_images'); 3d tracks use every available volume.
+    A config with 'match_evaluation' instead takes the same sorted samples as the evaluation, capped
+    the same way, so the tuned parameters transfer.
     """
+    match_evaluation = track_cfg.get("match_evaluation", False)
     items = []
     for dataset_name in track_cfg["datasets"]:
         try:
-            raw_paths, label_paths, raw_key, label_key = resolve_data_paths(dataset_name, livecell_per_celltype)
+            raw_paths, label_paths, raw_key, label_key = resolve_data_paths(
+                dataset_name, livecell_per_celltype, match_evaluation,
+            )
         except Exception as e:
             warnings.warn(f"Skipping dataset '{dataset_name}': {e}")
             continue
 
         pairs = list(zip(raw_paths, label_paths))
-        if track_cfg["ndim"] == 2 and dataset_name != "livecell" and n_images is not None:
+        if match_evaluation:
+            pairs = sorted(pairs, key=lambda pair: (str(pair[0]), str(pair[1])))
+            pairs = pairs[:(n_images or MAX_EVALUATION_SAMPLES)]
+        elif track_cfg["ndim"] == 2 and dataset_name != "livecell" and n_images is not None:
             pairs = pairs[:n_images]
         for raw_path, label_path in pairs:
             items.append((dataset_name, raw_path, label_path, raw_key, label_key))
@@ -285,22 +372,23 @@ def score_image_sparse_cached(prediction, labels, params_list, backend, n_thread
     hmap = np.linalg.norm(directed, axis=0)
     hmap = hmap.max() - hmap
 
+    # The convergence densities are built up front, so the scoring below only reads them.
     fg_mask_cache, density_cache = {}, {}
-    scores = []
     for params in params_list:
         ft, sigma, n_iter, dt = (params[k] for k in FLOW_DENSITY_KEYS)
         if ft not in fg_mask_cache:
             fg_mask_cache[ft] = foreground > ft
-        fg_mask = fg_mask_cache[ft]
-
         key = (ft, sigma, n_iter, dt)
         if key not in density_cache:
             density_cache[key] = _compute_flow_density(
-                directed, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma, spacing=spacing,
+                directed, fg_mask_cache[ft], n_iter=int(n_iter), dt=dt, sigma=sigma, spacing=spacing,
                 backend=backend, n_threads=n_threads,
             )
-        density = density_cache[key]
 
+    def score(params):
+        ft, sigma, n_iter, dt = (params[k] for k in FLOW_DENSITY_KEYS)
+        fg_mask = fg_mask_cache[ft]
+        density = density_cache[(ft, sigma, n_iter, dt)]
         try:
             seeds = connected_components(density > params["density_threshold"])
             seg = watershed(hmap, markers=seeds, mask=fg_mask)
@@ -310,11 +398,14 @@ def score_image_sparse_cached(prediction, labels, params_list, backend, n_thread
                 discard = ids[(sizes < min_size) & (ids > 0)]
                 seg[np.isin(seg, discard)] = 0
                 seg = watershed(hmap, markers=seg, mask=fg_mask)
-            scores.append(compute_metrics(seg.astype("uint32"), labels, "sparse"))
+            return compute_metrics(seg.astype("uint32"), labels, "sparse")
         except Exception as e:
             warnings.warn(f"Sparse postprocessing failed for {params}: {e}")
-            scores.append(None)
-    return scores
+            return None
+
+    # Scoring a combination is independent of the others, and dominates the runtime of the sweep.
+    with futures.ThreadPoolExecutor(n_threads) as tp:
+        return list(tp.map(score, params_list))
 
 
 def _dense_boundary_and_distances(prediction):
@@ -431,8 +522,8 @@ def score_image(
 
 
 def run_track(
-    track_name, model, n_images, livecell_per_celltype, output_dir, backend, device,
-    crop_override=None, use_flow_cache=True, n_threads=POSTPROC_THREADS,
+    track_name, track_cfg, model, n_images, livecell_per_celltype, output_dir, backend, device,
+    crop_override=None, use_flow_cache=True, n_threads=POSTPROC_THREADS, normalization=None,
 ):
     """Run the full grid search for one track and save the results CSV.
 
@@ -441,7 +532,6 @@ def run_track(
     then averaged over all images of the track. Datasets or images that fail to load are skipped with
     a warning. 'crop_override' replaces the track's default 3d crop when given.
     """
-    track_cfg = TRACKS[track_name]
     ndim = track_cfg["ndim"]
     mode = track_cfg["mode"]
     spacing = track_cfg.get("spacing")
@@ -470,7 +560,7 @@ def run_track(
         for item in tqdm(items, desc=f"{track_name} samples"):
             try:
                 raw, labels = load_sample(item, ndim, crop)
-                prediction = predict(model, raw, ndim=ndim, device=device)
+                prediction = predict(model, raw, ndim=ndim, device=device, normalization=normalization)
             except Exception as e:
                 warnings.warn(f"Skipping sample '{item[1]}': {e}")
                 continue
@@ -510,13 +600,20 @@ def run_track(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--track", default="all", choices=list(TRACKS) + ["all"], help="Which track to run.")
+    parser.add_argument("--track", default=None, choices=list(TRACKS) + ["all"], help="Which track to run.")
+    parser.add_argument("-d", "--dataset_name", default=None, choices=sorted(DATASETS_2D + DATASETS_3D),
+                        help="Tune on a single dataset instead of a track.")
+    parser.add_argument("--criterion", default=None, choices=list(CRITERION_ASCENDING),
+                        help="Metric the grid is ranked by. Defaults to mSA, or CREMI for EM data.")
     parser.add_argument("-o", "--output_dir", default=OUTPUT_ROOT, help="Directory to write result CSVs.")
     parser.add_argument("-n", "--n_images", type=int, default=None, help="Cap images per 2d dataset (default: all).")
     parser.add_argument("--livecell_per_celltype", type=int, default=50, help="Images per livecell cell type.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
     parser.add_argument("-c", "--checkpoint_path", default=None, help="Custom checkpoint instead of registry model.")
+    parser.add_argument("-m", "--model_type", default=None, help="Backbone of the jointly finetuned model to tune.")
     parser.add_argument("--backend", default="cpp", choices=["cpp", "python"], help="Flow computation backend.")
+    parser.add_argument("--normalization", default="percentile_2_98", choices=NORMALIZATIONS,
+                        help="Input normalization used for inference.")
     parser.add_argument("--no_flow_cache", action="store_true", help="Disable the lazy postprocessing caching.")
     parser.add_argument("--n_threads", type=int, default=POSTPROC_THREADS, help="Threads for postprocessing.")
     args = parser.parse_args()
@@ -525,21 +622,27 @@ def main():
     device = DEVICE if torch.cuda.is_available() else "cpu"
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
 
-    model = load_model(device, checkpoint_path=args.checkpoint_path)
+    model = load_model(device, checkpoint_path=args.checkpoint_path, model_type=args.model_type)
 
     crop_override = tuple(args.crop_3d) if args.crop_3d is not None else None
-    tracks = list(TRACKS) if args.track == "all" else [args.track]
+    if args.dataset_name is not None:
+        configs = {args.dataset_name: dataset_config(args.dataset_name, args.criterion)}
+    else:
+        track_names = list(TRACKS) if args.track in (None, "all") else [args.track]
+        configs = {name: TRACKS[name] for name in track_names}
+
     summary = {}
-    for track_name in tracks:
-        summary[track_name] = run_track(
-            track_name, model, args.n_images, args.livecell_per_celltype,
+    for name, config in configs.items():
+        summary[name] = run_track(
+            name, config, model, args.n_images, args.livecell_per_celltype,
             args.output_dir, args.backend, device, crop_override=crop_override,
             use_flow_cache=(not args.no_flow_cache), n_threads=args.n_threads,
+            normalization=get_normalization(args.normalization),
         )
 
-    print("\nBest parameters per track:")
-    for track_name, params in summary.items():
-        print(f"{track_name}: {params}")
+    print("\nBest parameters:")
+    for name, params in summary.items():
+        print(f"{name}: {params}")
 
 
 if __name__ == "__main__":

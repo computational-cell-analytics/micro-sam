@@ -6,6 +6,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 from skimage.measure import label as connected_components
 
+import torch
+
 from elf.io import open_file
 from torch_em.data import datasets
 from torch_em.util.image import load_image
@@ -18,20 +20,26 @@ DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 
 _MODELS_DIR = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2"
 
+# The pretrained SAM2 backbones. Only SAM2.1 is supported by micro_sam.v2.
 CHECKPOINT_PATHS = {
-    "sam2.1": {
-        "hvit_t": os.path.join(_MODELS_DIR, "sam2.1_hiera_tiny.pt"),
-        "hvit_s": os.path.join(_MODELS_DIR, "sam2.1_hiera_small.pt"),
-        "hvit_b": os.path.join(_MODELS_DIR, "sam2.1_hiera_base_plus.pt"),
-        "hvit_l": os.path.join(_MODELS_DIR, "sam2.1_hiera_large.pt"),
-    },
-    "sam2.0": {
-        "hvit_t": os.path.join(_MODELS_DIR, "sam2_hiera_tiny.pt"),
-        "hvit_s": os.path.join(_MODELS_DIR, "sam2_hiera_small.pt"),
-        "hvit_b": os.path.join(_MODELS_DIR, "sam2_hiera_base_plus.pt"),
-        "hvit_l": os.path.join(_MODELS_DIR, "sam2_hiera_large.pt"),
-    },
+    "hvit_t": os.path.join(_MODELS_DIR, "sam2.1_hiera_tiny.pt"),
+    "hvit_s": os.path.join(_MODELS_DIR, "sam2.1_hiera_small.pt"),
+    "hvit_b": os.path.join(_MODELS_DIR, "sam2.1_hiera_base_plus.pt"),
+    "hvit_l": os.path.join(_MODELS_DIR, "sam2.1_hiera_large.pt"),
 }
+
+MODEL_TYPES = list(CHECKPOINT_PATHS)
+
+# The 2d patch shape the models were trained on, see 'generalist_loader'.
+TRAINING_PATCH_SHAPE = (512, 512)
+
+# Test images per LIVECell cell type. Eight cell types, so this fills MAX_EVALUATION_SAMPLES.
+LIVECELL_PER_CELL_TYPE = 25
+
+# The jointly finetuned (interactive + automatic) SAM2 models for cell segmentation.
+JOINT_CHECKPOINT_ROOT = os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints")
+# The joint checkpoints are split into loadable weight files here, see 'export_joint_checkpoint'.
+JOINT_EXPORT_ROOT = os.path.join(_MODELS_DIR, "exported", "joint", "v2")
 
 # 2D LM datasets
 DATASETS_2D = [
@@ -54,38 +62,58 @@ DATASETS_3D_EM = ["platynereis_nuclei", "cremi", "snemi", "humanneurons"]
 DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
 
+def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
+    """Sort raw and label paths as pairs.
+
+    Sorting the two lists on their own breaks the pairing whenever the label names sort differently,
+    which happens when one image name is a prefix of another, e.g. 'x_1.tif' and 'x_11.tif' with
+    labels 'x_1_masks.tif' and 'x_11_masks.tif'.
+    """
+    if len(raw_paths) != len(label_paths):
+        raise RuntimeError(
+            f"Expect as many raw as label paths, got {len(raw_paths)} and {len(label_paths)}."
+        )
+    pairs = sorted(zip(raw_paths, label_paths), key=lambda pair: str(pair[0]))
+    return [pair[0] for pair in pairs], [pair[1] for pair in pairs]
+
+
 def _get_2d_data_paths(
     dataset_name: str, data_root: str, download: bool = False
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
 
     if dataset_name == "livecell":
-        img, gt = _get_livecell_paths(input_folder=os.path.join(p, "livecell"), split="test")
-        return sorted(img), sorted(gt), None, None
+        # Stratified over the cell types. The test set is sorted by cell type, so heading it would
+        # evaluate two of the eight types.
+        img, gt = _get_livecell_paths(
+            input_folder=os.path.join(p, "livecell"), split="test",
+            n_val_per_cell_type=LIVECELL_PER_CELL_TYPE,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "arvidsson":
         img, gt = datasets.arvidsson.get_arvidsson_paths(
             path=os.path.join(p, "arvidsson"), split="test", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "bitdepth_nucseg":
         img, gt = datasets.bitdepth_nucseg.get_bitdepth_nucseg_paths(
             path=os.path.join(p, "bitdepth_nucseg"), download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "cellbindb":
         img, gt = datasets.cellbindb.get_cellbindb_paths(
             path=os.path.join(p, "cellbindb"), download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "cellpose_data":
         img, gt = datasets.cellpose.get_cellpose_paths(
             path=os.path.join(p, "cellpose"), split="test", choice="cyto", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "covid_if":
         paths = datasets.covid_if.get_covid_if_paths(
@@ -101,7 +129,7 @@ def _get_2d_data_paths(
             )
             img.extend(i)
             gt.extend(g)
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "deepbacs":
         img_folder, label_folder = datasets.deepbacs.get_deepbacs_paths(
@@ -109,25 +137,25 @@ def _get_2d_data_paths(
         )
         img = sorted(glob(os.path.join(img_folder, "*.tif")))
         gt = sorted(glob(os.path.join(label_folder, "*.tif")))
-        return img, gt, None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "deepseas":
         img, gt = datasets.deepseas.get_deepseas_paths(
             path=os.path.join(p, "deepseas"), split="test", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "dic_hepg2":
         img, gt = datasets.dic_hepg2.get_dic_hepg2_paths(
             path=os.path.join(p, "dic_hepg2"), split="test", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "dsb":
         img, gt = datasets.dsb.get_dsb_paths(
             path=os.path.join(p, "dsb"), source="full", split=None, download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "dynamicnuclearnet":
         paths = datasets.dynamicnuclearnet.get_dynamicnuclearnet_paths(
@@ -147,13 +175,13 @@ def _get_2d_data_paths(
             path=os.path.join(p, "microbeseg"), split="test",
             annotation_type="30min-man", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "neurips_cellseg":
         img, gt = datasets.neurips_cell_seg.get_neurips_cellseg_paths(
             root=os.path.join(p, "neurips_cellseg"), split="test", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "omnipose":
         img, gt = [], []
@@ -167,7 +195,7 @@ def _get_2d_data_paths(
                 gt.extend(g)
             except Exception as e:
                 warnings.warn(f"Skipping omnipose choice '{choice}': {e}")
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "segpc":
         # No test split. Use validation.
@@ -188,13 +216,13 @@ def _get_2d_data_paths(
         img, gt = datasets.usiigaci.get_usiigaci_paths(
             path=os.path.join(p, "usiigaci"), split="val", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "vicar":
         img, gt = datasets.vicar.get_vicar_paths(
             path=os.path.join(p, "vicar"), download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "yeaz":
         img, gt = [], []
@@ -204,7 +232,7 @@ def _get_2d_data_paths(
             )
             img.extend(i)
             gt.extend(g)
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     raise ValueError(f"Unknown 2D dataset: {dataset_name!r}")
 
@@ -237,26 +265,26 @@ def _get_3d_lm_data_paths(
                     gt.extend(g)
                 except Exception as e:
                     warnings.warn(f"Skipping cartocell name '{name}': {e}")
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "celegans_atlas":
         img, gt = datasets.celegans_atlas.get_celegans_atlas_paths(
             path=os.path.join(p, "celegans_atlas"), split="test", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "cellseg_3d":
         img, gt = datasets.cellseg_3d.get_cellseg_3d_paths(
             path=os.path.join(p, "cellseg_3d"), download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "embedseg":
         img, gt = datasets.embedseg_data.get_embedseg_paths(
             path=os.path.join(p, "embedseg"),
             name="Mouse-Skull-Nuclei-CBG", split="test", download=download,
         )
-        return list(img), list(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "gonuclear":
         paths = datasets.gonuclear.get_gonuclear_paths(
@@ -275,7 +303,7 @@ def _get_3d_lm_data_paths(
         img, gt = datasets.nis3d.get_nis3d_paths(
             path=os.path.join(p, "nis3d"), split="test", split_type="cross-image", download=download,
         )
-        return sorted(img), sorted(gt), None, None
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "plantseg":
         all_paths = []
@@ -327,10 +355,9 @@ def _get_3d_em_data_paths(
         return [path], [path], "volumes/raw", "volumes/labels/neuron_ids"
 
     if dataset_name == "humanneurons":
-        paths = datasets.humanneurons.get_humanneurons_paths(
-            path=os.path.join(p, "humanneurons"), download=download,
-        )
-        return sorted(paths), sorted(paths), "raw", "labels"
+        # Resolved directly: the installed torch-em has no loader for this dataset.
+        paths = sorted(glob(os.path.join(p, "humanneurons", "*.h5")))
+        return paths, paths, "raw", "labels"
 
     raise ValueError(f"Unknown 3D EM dataset: {dataset_name!r}")
 
@@ -406,6 +433,16 @@ def load_volume(
     if valid_roi is not None:
         valid_roi = valid_roi[roi]
 
+    # Restrict to the annotated z-range, so nothing is predicted or scored where there is no
+    # ground-truth. Interior empty slices are kept, otherwise the volume would not be contiguous.
+    annotated = np.any(labels != 0, axis=tuple(range(1, labels.ndim)))
+    if annotated.any():
+        z_start = int(np.argmax(annotated))
+        z_stop = len(annotated) - int(np.argmax(annotated[::-1]))
+        raw, labels = raw[z_start:z_stop], labels[z_start:z_stop]
+        if valid_roi is not None:
+            valid_roi = valid_roi[z_start:z_stop]
+
     if ensure_instances:
         labels = connected_components(labels)
 
@@ -413,37 +450,90 @@ def load_volume(
     return raw.astype("float32"), labels.astype("uint32"), valid_roi
 
 
-# UniSAM2 helpers shared between evaluate_2d and evaluate_3d
+# Model helpers shared between the evaluation scripts
 
 _UNISAM2_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/automatic/v1"
 UNISAM2_CHECKPOINT = os.path.join(_UNISAM2_ROOT, "checkpoints", "unisam2-both", "best.pt")
 
-_EM_DATASETS = {"platynereis_nuclei", "cremi", "snemi", "humanneurons"}
 
-_DATASET_SPACING: dict = {
+def get_joint_checkpoint(model_type: str, checkpoint: str = "best") -> str:
+    """Return the joint trainer checkpoint for a model type, e.g. 'hvit_b'."""
+    path = os.path.join(JOINT_CHECKPOINT_ROOT, f"joint_sam2_{model_type}_multi_gpu", f"{checkpoint}.pt")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"There is no joint '{checkpoint}' checkpoint for '{model_type}' at '{path}'.")
+    return path
+
+
+def _save_atomic(obj, path: str) -> None:
+    """Save to a process-unique temporary file first, so concurrent jobs never read a partial file."""
+    tmp_path = f"{path}.tmp.{os.getpid()}"
+    torch.save(obj, tmp_path)
+    os.replace(tmp_path, path)
+
+
+def _strip_ddp_prefix(state_dict):
+    return {(k[len("module."):] if k.startswith("module.") else k): v for k, v in state_dict.items()}
+
+
+def export_joint_checkpoint(
+    model_type: str, checkpoint: str = "best", export_root: str = JOINT_EXPORT_ROOT
+) -> Tuple[str, str]:
+    """Split a joint checkpoint into an interactive and an automatic weight file.
+
+    The joint trainer bundles the SAM2 weights ('model_state'), the UniSAM2 decoder weights
+    ('unetr_state') and pickled trainer state in a single file. That file cannot be loaded by
+    `sam2.build_sam`, which reads `torch.load(...)['model']` with `weights_only=True`. Both
+    exported files are plain tensor dicts, mirroring `scripts/model_export/export_sam2_cells_model.py`.
+    Existing exports are reused.
+
+    Args:
+        model_type: The SAM2 backbone the model was finetuned from, e.g. 'hvit_b'.
+        checkpoint: Which trainer checkpoint to export, 'best' or 'latest'.
+        export_root: The directory the exported weight files are written to.
+
+    Returns:
+        The paths to the interactive (SAM2) and the automatic (UniSAM2 decoder) weight files.
+    """
+    name = f"joint_sam2_{model_type}_{checkpoint}"
+    interactive_path = os.path.join(export_root, f"{name}.pt")
+    decoder_path = os.path.join(export_root, f"{name}_decoder.pt")
+    if os.path.exists(interactive_path) and os.path.exists(decoder_path):
+        return interactive_path, decoder_path
+
+    checkpoint_path = get_joint_checkpoint(model_type, checkpoint)
+    state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    missing = [key for key in ("model_state", "unetr_state") if key not in state]
+    if missing:
+        raise RuntimeError(f"'{checkpoint_path}' is not a joint checkpoint, it is missing {missing}.")
+
+    os.makedirs(export_root, exist_ok=True)
+    _save_atomic({"model": _strip_ddp_prefix(state["model_state"]), "model_type": model_type}, interactive_path)
+    _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
+    print(f"Exported '{checkpoint_path}' to '{interactive_path}' and '{decoder_path}'.")
+    return interactive_path, decoder_path
+
+
+DATASET_SPACING: dict = {
     # z/xy voxel ratios from published acquisition parameters
-    "embedseg": (4, 1, 1),    # Mouse-Skull-Nuclei-CBG: z=1µm, xy=0.25µm
+    "embedseg": (4, 1, 1),  # Mouse-Skull-Nuclei-CBG: z=1µm, xy=0.25µm
     "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
 }
 
 
-def load_unisam2_model(checkpoint_path, device):
+def _alias_micro_sam2_modules():
+    """Alias the moved 'micro_sam2' modules so checkpoints pickled before the package move load."""
     import sys
     import types
-    import torch
     import micro_sam.v2.datasets.sampler as datasets_sampler
     import micro_sam.v2.datasets.wrapper as datasets_wrapper
     import micro_sam.v2.transforms.labels as transforms_labels
     import micro_sam.v2.transforms.raw as transforms_raw
-    from micro_sam.v2.models.util import UniSAM2
 
-    # Older checkpoints were saved while this package lived under the
-    # "micro_sam2" namespace. Alias the moved modules for torch.load.
     root = sys.modules.setdefault("micro_sam2", types.ModuleType("micro_sam2"))
     root.__path__ = []
-    datasets = sys.modules.setdefault("micro_sam2.datasets", types.ModuleType("micro_sam2.datasets"))
-    datasets.__path__ = []
+    datasets_module = sys.modules.setdefault("micro_sam2.datasets", types.ModuleType("micro_sam2.datasets"))
+    datasets_module.__path__ = []
     transforms = sys.modules.setdefault("micro_sam2.transforms", types.ModuleType("micro_sam2.transforms"))
     transforms.__path__ = []
 
@@ -451,42 +541,71 @@ def load_unisam2_model(checkpoint_path, device):
     sys.modules["micro_sam2.datasets.wrapper"] = datasets_wrapper
     sys.modules["micro_sam2.transforms.labels"] = transforms_labels
     sys.modules["micro_sam2.transforms.raw"] = transforms_raw
-    setattr(root, "datasets", datasets)
+    setattr(root, "datasets", datasets_module)
     setattr(root, "transforms", transforms)
-    setattr(datasets, "sampler", datasets_sampler)
-    setattr(datasets, "wrapper", datasets_wrapper)
+    setattr(datasets_module, "sampler", datasets_sampler)
+    setattr(datasets_module, "wrapper", datasets_wrapper)
     setattr(transforms, "labels", transforms_labels)
     setattr(transforms, "raw", transforms_raw)
 
-    model = UniSAM2(encoder="hvit_t", output_channels=4)
-    state = torch.load(checkpoint_path, weights_only=False, map_location=device)
-    model.load_state_dict(state["model_state"])
-    model.to(device)
-    model.eval()
-    return model
+
+def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
+    """Load a UniSAM2 model for automatic segmentation.
+
+    Handles the standalone UniSAM2 checkpoints ('model_state'), the joint checkpoints
+    ('unetr_state', with the SAM2 encoder wrapped in an adapter) and exported decoder weights.
+
+    Args:
+        checkpoint_path: The filepath to the checkpoint.
+        device: The torch device.
+        encoder: The SAM2 backbone the decoder was trained on, e.g. 'hvit_b'.
+
+    Returns:
+        The UniSAM2 model in eval mode.
+    """
+    from micro_sam.v2.instance_segmentation import get_unisam2_model
+    _alias_micro_sam2_modules()
+    return get_unisam2_model(checkpoint_path, device=device, encoder=encoder)
 
 
-def predict_unisam2(model, raw, ndim, device):
+def predict_unisam2(model, raw, ndim, device, normalization=None):
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
+    # The UniSAM2 inference path expects single-channel input, so a trailing channel axis is averaged
+    # away. Matches 'read_image_2d' in grid_search_automatic_cells, which tunes the postprocessing.
+    if raw.ndim > ndim:
+        raw = raw.mean(axis=-1)
+
     is_3d = (ndim == 3)
-    tile_shape = (4, 384, 384) if is_3d else (384, 384)
-    halo = (2, 64, 64) if is_3d else (64, 64)
-    segmenter = get_unisam2_segmentation_generator(model, is_tiled=True, device=device)
-    segmenter.initialize(raw, ndim=ndim, tile_shape=tile_shape, halo=halo)
+    # Tiling a 2d image that fits the training patch would change both the scale the encoder sees
+    # and the window the normalization is computed over.
+    is_tiled = is_3d or any(size > TRAINING_PATCH_SHAPE[-1] for size in raw.shape[:2])
+    segmenter = get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
+    if is_tiled:
+        tile_shape = (4, 384, 384) if is_3d else (384, 384)
+        halo = (2, 64, 64) if is_3d else (64, 64)
+        segmenter.initialize(raw, ndim=ndim, tile_shape=tile_shape, halo=halo, normalization=normalization)
+    else:
+        segmenter.initialize(raw, ndim=ndim, normalization=normalization)
     return segmenter.get_state()["prediction"]
 
 
-def postprocess_unisam2(out, dataset_name, backend="python"):
+def postprocess_unisam2(out, dataset_name, backend="cpp", params=None):
+    """Turn a (4, *spatial) prediction into an instance segmentation.
+
+    EM datasets use the dense (multicut) mode, all others the sparse (flow) mode. 'params' overrides
+    the postprocessing defaults, e.g. with the best combination found by grid_search_automatic_cells.
+    """
     from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
+    params = {} if params is None else params
     fg = out[0]
-    if dataset_name in _EM_DATASETS:
+    if dataset_name in DATASETS_3D_EM:
         boundary_map = fg.max() - fg
         boundary_map /= boundary_map.max()
         distances = np.stack([out[2], out[3]])
-        seg = run_multicut(boundary_map, distances, backend=backend)
+        seg = run_multicut(boundary_map, distances, backend=backend, **params)
     else:
-        spacing = _DATASET_SPACING.get(dataset_name, None)
-        seg = flow_instance_segmentation(fg, out[1:], spacing=spacing, backend=backend)
+        spacing = DATASET_SPACING.get(dataset_name, None)
+        seg = flow_instance_segmentation(fg, out[1:], spacing=spacing, backend=backend, **params)
     return seg.astype("uint32")
 
 
