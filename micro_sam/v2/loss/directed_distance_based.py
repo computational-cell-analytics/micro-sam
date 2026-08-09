@@ -4,27 +4,35 @@ import torch.nn as nn
 from torch_em.loss import DiceLoss
 
 
+def _masked_mse(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Mean squared error over the masked elements only, normalized per sample.
+
+    Deliberately differs from torch_em's DistanceLoss, which averages over the whole patch and
+    so scales the distance gradient by the foreground fraction.
+    """
+    error = (prediction - target).square() * mask
+    dims = tuple(range(1, error.ndim))
+    return (error.sum(dims) / mask.sum(dims).clamp_min(1.0)).mean()
+
+
 class DirectedDistanceLoss(nn.Module):
     """Loss for directed distance based instance segmentation.
 
-    Expects input and targets with three channels: foreground and three distance channels.
-    Typically the distance channels are in three directions, i.e. x, y and z.
+    Expects input and targets with four channels: foreground and three distance channels.
+    Typically the distance channels are in three directions, i.e. z, y and x.
 
     Args:
         mask_distances_in_bg: whether to mask the loss for distance predictions in the background.
         foreground_loss: the loss for comparing foreground predictions and target.
-        distance_loss: the loss for comparing distance predictions and target.
     """
     def __init__(
         self,
         mask_distances_in_bg: bool = True,
         foreground_loss: nn.Module = DiceLoss(),
-        distance_loss: nn.Module = nn.MSELoss(reduction="mean")
     ) -> None:
         super().__init__()
 
         self.foreground_loss = foreground_loss
-        self.distance_loss = distance_loss
         self.mask_distances_in_bg = mask_distances_in_bg
 
         self.init_kwargs = {"mask_distances_in_bg": mask_distances_in_bg}
@@ -45,26 +53,16 @@ class DirectedDistanceLoss(nn.Module):
         # For 2d inputs, we avoid computing gradients for masked (pseudo) z-distances.
         is_3d = (target.shape[2] != 1)
 
-        zdist_input, zdist_target = input_[:, 1:2], target[:, 1:2]
         if self.mask_distances_in_bg:
-            mask = fg_target if is_3d else torch.zeros_like(fg_target)  # We do this to avoid any gradients in z-chan.
-            zdist_loss = self.distance_loss(zdist_input * mask, zdist_target * mask)
+            # The all-zero mask zeroes out the z-term (and its gradient) for 2d inputs.
+            z_mask = fg_target if is_3d else torch.zeros_like(fg_target)
+            yx_mask = fg_target
         else:
-            zdist_loss = self.distance_loss(zdist_input, zdist_target)
+            z_mask = yx_mask = torch.ones_like(fg_target)
 
-        ydist_input, ydist_target = input_[:, 2:3], target[:, 2:3]
-        if self.mask_distances_in_bg:
-            mask = fg_target
-            ydist_loss = self.distance_loss(ydist_input * mask, ydist_target * mask)
-        else:
-            ydist_loss = self.distance_loss(ydist_input, ydist_target)
-
-        xdist_input, xdist_target = input_[:, 3:4], target[:, 3:4]
-        if self.mask_distances_in_bg:
-            mask = fg_target
-            xdist_loss = self.distance_loss(xdist_input * mask, xdist_target * mask)
-        else:
-            xdist_loss = self.distance_loss(xdist_input, xdist_target)
+        zdist_loss = _masked_mse(input_[:, 1:2], target[:, 1:2], z_mask)
+        ydist_loss = _masked_mse(input_[:, 2:3], target[:, 2:3], yx_mask)
+        xdist_loss = _masked_mse(input_[:, 3:4], target[:, 3:4], yx_mask)
 
         overall_loss = fg_loss + zdist_loss + ydist_loss + xdist_loss
         return overall_loss
