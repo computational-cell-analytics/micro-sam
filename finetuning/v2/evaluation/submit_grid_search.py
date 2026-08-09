@@ -49,47 +49,62 @@ MEMORY = "32G"
 TIME_LIMIT = "12:00:00"
 
 
-def _command(args: argparse.Namespace, model_type: str, dataset_name: str) -> list[str]:
-    return [
+def _command(
+    args: argparse.Namespace, model_type: str, dataset_name: str,
+    shard: Optional[int] = None, merge: bool = False,
+) -> list[str]:
+    command = [
         "python", str(GRID_SEARCH_SCRIPT),
         "-d", dataset_name,
         "-m", model_type,
         "-o", str(Path(args.output_root) / model_type),
-        "--n_threads", str(CPUS),
+        "--split", args.split,
+        "--livecell_per_celltype", str(args.livecell_per_celltype),
+        "--n_threads", str(args.cpus),
     ]
+    if args.n_shards > 1:
+        command.extend(["--n_shards", str(args.n_shards)])
+        command.extend(["--merge"] if merge else ["--shard", str(shard)])
+    return command
 
 
-def _write_batch_script(args: argparse.Namespace, job_folder: Path, model_type: str, dataset_name: str) -> Path:
-    tag = f"grid_search_{dataset_name}_{model_type}"
+def _write_batch_script(
+    args: argparse.Namespace, job_folder: Path, tag: str, command: list[str],
+    heavy: bool = True, dependency: Optional[str] = None,
+) -> Path:
+    """Write one Slurm script. 'heavy' sizes a scoring job; a merge job only reads CSVs.
+
+    The GPU is requested either way, because the gpu partitions reject a job without one.
+    """
     script_path = job_folder / f"{tag}.sh"
-    command = _command(args, model_type, dataset_name)
+    directives = [
+        f"#SBATCH -c {args.cpus if heavy else 2}",
+        f"#SBATCH --mem {args.memory}",
+        f"#SBATCH -t {TIME_LIMIT if heavy else '00:30:00'}",
+        f"#SBATCH -p {args.partition}",
+        f"#SBATCH -G {GPU}",
+        f"#SBATCH -A {ACCOUNT}",
+        f"#SBATCH --job-name={tag}",
+        "#SBATCH --constraint=inet",
+        f"#SBATCH -o {job_folder}/logs/{tag}_%j.out",
+        f"#SBATCH -e {job_folder}/logs/{tag}_%j.err",
+    ]
+    if dependency is not None:
+        directives.append(f"#SBATCH --dependency=afterok:{dependency}")
 
-    batch_script = f"""#!/bin/bash
-#SBATCH -c {CPUS}
-#SBATCH --mem {MEMORY}
-#SBATCH -t {TIME_LIMIT}
-#SBATCH -p {PARTITION}
-#SBATCH -G {GPU}
-#SBATCH -A {ACCOUNT}
-#SBATCH --job-name={tag}
-#SBATCH --constraint=inet
-#SBATCH -o {job_folder}/logs/{tag}_%j.out
-#SBATCH -e {job_folder}/logs/{tag}_%j.err
-
-source ~/.bashrc
-micromamba activate super
-
-{" ".join(command)}
-"""
-
+    batch_script = "#!/bin/bash\n{}\n\nsource ~/.bashrc\nmicromamba activate super\n\n{}\n".format(
+        "\n".join(directives), " ".join(command)
+    )
     with open(script_path, "w") as f:
         f.write(batch_script)
     return script_path
 
 
-def _submit_job(script: Path) -> None:
+def _submit_job(script: Path) -> Optional[str]:
     result = subprocess.run(["sbatch", str(script)], capture_output=True, text=True)
-    print(result.stdout.strip() if result.stdout else result.stderr.strip())
+    output = result.stdout.strip() if result.stdout else result.stderr.strip()
+    print(output)
+    return output.split()[-1] if output.startswith("Submitted batch job") else None
 
 
 def main(argv: Optional[list[str]] = None) -> None:
@@ -101,6 +116,12 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--all_datasets", action="store_true", help="Tune on every dataset.")
     parser.add_argument("--lm_only", action="store_true", help="Skip the 3d EM datasets.")
     parser.add_argument("-o", "--output_root", default=OUTPUT_ROOT, help="Root directory for the result CSVs.")
+    parser.add_argument("--split", default="test", choices=["val", "test"], help="Split to tune on (livecell only).")
+    parser.add_argument("--partition", default=PARTITION, help="Slurm partition(s) to submit to.")
+    parser.add_argument("--cpus", type=int, default=CPUS, help="Cores per job, also the postprocessing thread count.")
+    parser.add_argument("--memory", default=MEMORY, help="Memory per job.")
+    parser.add_argument("--livecell_per_celltype", type=int, default=25, help="Images per livecell cell type.")
+    parser.add_argument("--n_shards", type=int, default=1, help="Split each sweep over this many jobs.")
     parser.add_argument("--dry", action="store_true", help="Only write the Slurm scripts; do not submit them.")
     args = parser.parse_args(argv)
 
@@ -116,15 +137,47 @@ def main(argv: Optional[list[str]] = None) -> None:
     job_folder = EVAL_ROOT / "gpu_jobs_grid_search" / datetime.now().strftime("%Y%m%d_%H%M%S")
     (job_folder / "logs").mkdir(parents=True, exist_ok=True)
 
-    scripts = [
-        _write_batch_script(args, job_folder, model_type, dataset_name)
-        for model_type in args.model_type for dataset_name in datasets
-    ]
-    print(f"Wrote {len(scripts)} Slurm scripts to '{job_folder}'.")
+    # One job per shard, plus a CPU-only merge job that Slurm starts once every shard of that
+    # (model, dataset) has finished successfully.
+    plans = []
+    for model_type in args.model_type:
+        for dataset_name in datasets:
+            base = f"grid_search_{dataset_name}_{model_type}"
+            if args.n_shards == 1:
+                shards = [(base, _command(args, model_type, dataset_name))]
+            else:
+                shards = [
+                    (f"{base}_shard{i}", _command(args, model_type, dataset_name, shard=i))
+                    for i in range(args.n_shards)
+                ]
+            merge = None
+            if args.n_shards > 1:
+                merge = (f"{base}_merge", _command(args, model_type, dataset_name, merge=True))
+            plans.append((shards, merge))
+
+    n_scripts = sum(len(shards) + (merge is not None) for shards, merge in plans)
+    print(f"Writing {n_scripts} Slurm scripts to '{job_folder}'.")
 
     if args.dry:
+        for shards, merge in plans:
+            for tag, command in shards:
+                _write_batch_script(args, job_folder, tag, command)
+            if merge is not None:
+                _write_batch_script(args, job_folder, merge[0], merge[1], heavy=False, dependency="PENDING")
         return
-    for script in scripts:
+
+    for shards, merge in plans:
+        job_ids = []
+        for tag, command in shards:
+            job_id = _submit_job(_write_batch_script(args, job_folder, tag, command))
+            if job_id is not None:
+                job_ids.append(job_id)
+        if merge is None:
+            continue
+        if len(job_ids) != len(shards):
+            print(f"Not all shards of '{merge[0]}' were submitted, skipping the merge job.")
+            continue
+        script = _write_batch_script(args, job_folder, merge[0], merge[1], heavy=False, dependency=":".join(job_ids))
         _submit_job(script)
 
 

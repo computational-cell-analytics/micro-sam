@@ -29,6 +29,7 @@ import time
 import argparse
 import warnings
 import itertools
+import threading
 from concurrent import futures
 
 import numpy as np
@@ -40,12 +41,14 @@ from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy
 from bioimage_cpp.segmentation import label as connected_components, watershed
 
-from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut, _compute_flow_density
+from micro_sam.v2.postprocessing import (
+    flow_instance_segmentation, run_multicut, watershed_heightmap, _compute_flow_density
+)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (  # noqa
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, DATASET_SPACING,
-    get_data_paths, load_volume, export_joint_checkpoint,
+    get_data_paths, load_volume, export_joint_checkpoint, drop_excluded_livecell,
 )
 from baselines_common import MAX_EVALUATION_SAMPLES  # noqa
 
@@ -58,12 +61,13 @@ CROP_SHAPE_2D = (512, 512)
 
 # Sparse (flow) grid for LM data. Keys map to flow_instance_segmentation arguments.
 LM_GRID = {
-    "foreground_threshold": [0.3, 0.5, 0.7],
+    "foreground_threshold": [0.3, 0.4, 0.5, 0.6, 0.7],
     "density_threshold": [5.0, 10.0, 20.0],
-    "min_size": [10, 100, 500],
-    "sigma": [0.5, 1.0, 2.0],
+    "min_size": [10, 25, 50, 100, 200, 500],
+    "sigma": [0.25, 0.5, 1.0, 2.0],
     "n_iter": [50, 100, 200],
     "dt": [0.25, 0.5, 1.0],
+    "foreground_weight": [0.0, 0.25, 0.5, 0.65, 0.75, 0.9],
 }
 
 # Dense (multicut) grid for EM data. Keys map to run_multicut arguments.
@@ -75,8 +79,8 @@ EM_GRID = {
 }
 
 # Sparse-flow parameters that determine the (expensive) convergence-density map. Combos that share
-# these reuse a cached density. Only 'density_threshold' and 'min_size' (the cheap seed + watershed +
-# size-filter steps) then vary on top. See score_image_sparse_cached.
+# these reuse a cached density. Only 'density_threshold', 'foreground_weight' and 'min_size' (the cheap
+# seed + watershed + size-filter steps) then vary on top. See score_image_sparse_cached.
 FLOW_DENSITY_KEYS = ("foreground_threshold", "sigma", "n_iter", "dt")
 
 # Dense-multicut parameters that determine the (expensive) slice-wise oversegmentation and RAG.
@@ -119,7 +123,7 @@ POSTPROC_THREADS = 4
 CROP_SHAPE_3D = (8, 512, 512)
 
 
-def dataset_config(dataset_name, criterion=None):
+def dataset_config(dataset_name, criterion=None, split="test"):
     """Build the grid-search config for a single dataset.
 
     EM datasets are tuned in dense (multicut) mode and ranked by the CREMI score, all others in
@@ -128,6 +132,7 @@ def dataset_config(dataset_name, criterion=None):
     Args:
         dataset_name: The dataset to tune on.
         criterion: The metric to rank the grid by. Defaults to the mode-specific choice.
+        split: The split to tune on. 'val' keeps the tuning off the samples the evaluation scores.
 
     Returns:
         The config dict, in the same shape as an entry of TRACKS.
@@ -144,7 +149,8 @@ def dataset_config(dataset_name, criterion=None):
         "spacing": DATASET_SPACING.get(dataset_name, None),
         "crop": CROP_SHAPE_3D if is_3d else None,
         "criterion": criterion,
-        "match_evaluation": True,
+        "match_evaluation": split == "test",
+        "split": split,
     }
 
 
@@ -246,7 +252,7 @@ def center_crop_2d(arr, crop_shape):
     return arr[tuple(roi)]
 
 
-def resolve_data_paths(dataset_name, livecell_per_celltype=None, match_evaluation=False):
+def resolve_data_paths(dataset_name, livecell_per_celltype=None, match_evaluation=False, split="test"):
     """Return (raw_paths, label_paths, raw_key, label_key) for a dataset's evaluation split.
 
     Special-cases dsb to use the smaller 'reduced' fluorescence test split (50 images) and livecell to
@@ -254,7 +260,21 @@ def resolve_data_paths(dataset_name, livecell_per_celltype=None, match_evaluatio
     than the full sets that common.get_data_paths returns; all other datasets defer to common.
     'match_evaluation' skips both special cases, so the tuned parameters are selected on exactly the
     samples the evaluation scores.
+
+    With split='val' the parameters are tuned on held-out data instead, which keeps the evaluation on
+    the test split honest. Only livecell has a validation split wired up.
     """
+    if split == "val":
+        if dataset_name != "livecell":
+            raise ValueError(f"There is no validation split for '{dataset_name}', only for livecell.")
+        from micro_sam.v1.evaluation.livecell import _get_livecell_paths
+        # 0 means every val image. Passing 0 straight through would match the '>= 0' cap and select none.
+        img, gt = _get_livecell_paths(
+            input_folder=os.path.join(DATA_ROOT, "livecell"), split="val",
+            n_val_per_cell_type=livecell_per_celltype or None,
+        )
+        return sorted(img), sorted(gt), None, None
+
     if match_evaluation:
         return get_data_paths(dataset_name, DATA_ROOT)
     if dataset_name == "dsb":
@@ -269,6 +289,7 @@ def resolve_data_paths(dataset_name, livecell_per_celltype=None, match_evaluatio
             input_folder=os.path.join(DATA_ROOT, "livecell"), split="test",
             n_val_per_cell_type=livecell_per_celltype,
         )
+        img, gt = drop_excluded_livecell(img, gt)
         return sorted(img), sorted(gt), None, None
     return get_data_paths(dataset_name, DATA_ROOT)
 
@@ -284,11 +305,12 @@ def build_work_items(track_cfg, n_images, livecell_per_celltype):
     the same way, so the tuned parameters transfer.
     """
     match_evaluation = track_cfg.get("match_evaluation", False)
+    split = track_cfg.get("split", "test")
     items = []
     for dataset_name in track_cfg["datasets"]:
         try:
             raw_paths, label_paths, raw_key, label_key = resolve_data_paths(
-                dataset_name, livecell_per_celltype, match_evaluation,
+                dataset_name, livecell_per_celltype, match_evaluation, split,
             )
         except Exception as e:
             warnings.warn(f"Skipping dataset '{dataset_name}': {e}")
@@ -355,6 +377,29 @@ def postprocess(prediction, mode, params, backend="cpp", n_threads=POSTPROC_THRE
     return seg.astype("uint32")
 
 
+def deduplicate_flow_travel(params_list):
+    """Drop sparse combos whose flow travel duplicates a cheaper one.
+
+    'n_iter' and 'dt' act on the segmentation only through their product, the distance a pixel is
+    advected: on livecell val, 10 x 0.25 and 50 x 0.05 both scored 0.0287, and 100 x 0.25 and
+    50 x 0.50 both scored 0.285. Keeping the smallest 'n_iter' per product therefore covers the same
+    travel distances with fewer combos and fewer integration steps. The equivalence is empirical
+    rather than exact, since the integrator's discretization error still depends on 'dt'.
+    """
+    best, order = {}, []
+    for params in params_list:
+        if "n_iter" not in params or "dt" not in params:
+            return params_list
+        others = tuple(sorted((k, v) for k, v in params.items() if k not in ("n_iter", "dt")))
+        key = (others, round(params["n_iter"] * params["dt"], 6))
+        if key not in best:
+            best[key] = params
+            order.append(key)
+        elif params["n_iter"] < best[key]["n_iter"]:
+            best[key] = params
+    return [best[key] for key in order]
+
+
 def score_image_sparse_cached(prediction, labels, params_list, backend, n_threads=POSTPROC_THREADS, spacing=None):
     """Score all sparse combos on one image, caching the flow density across shared combos.
 
@@ -369,11 +414,9 @@ def score_image_sparse_cached(prediction, labels, params_list, backend, n_thread
     ndim = foreground.ndim
     if directed.shape[0] > ndim:
         directed = directed[-ndim:]
-    hmap = np.linalg.norm(directed, axis=0)
-    hmap = hmap.max() - hmap
 
-    # The convergence densities are built up front, so the scoring below only reads them.
-    fg_mask_cache, density_cache = {}, {}
+    # The convergence densities and the height maps are built up front, so the scoring below only reads them.
+    fg_mask_cache, density_cache, hmap_cache = {}, {}, {}
     for params in params_list:
         ft, sigma, n_iter, dt = (params[k] for k in FLOW_DENSITY_KEYS)
         if ft not in fg_mask_cache:
@@ -384,16 +427,34 @@ def score_image_sparse_cached(prediction, labels, params_list, backend, n_thread
                 directed, fg_mask_cache[ft], n_iter=int(n_iter), dt=dt, sigma=sigma, spacing=spacing,
                 backend=backend, n_threads=n_threads,
             )
+        fw = params["foreground_weight"]
+        if fw not in hmap_cache:
+            hmap_cache[fw] = watershed_heightmap(foreground, directed, fw)
+
+    # The base watershed does not depend on min_size, so all min_size values of a combo reuse it.
+    base_cache, base_lock = {}, threading.Lock()
+
+    def base_segmentation(key, fg_mask, density, density_threshold, hmap):
+        with base_lock:
+            cached = base_cache.get(key)
+        if cached is None:
+            seeds = connected_components(density > density_threshold)
+            cached = watershed(hmap, markers=seeds, mask=fg_mask)
+            with base_lock:
+                base_cache[key] = cached
+        return cached
 
     def score(params):
         ft, sigma, n_iter, dt = (params[k] for k in FLOW_DENSITY_KEYS)
+        fw, density_threshold = params["foreground_weight"], params["density_threshold"]
         fg_mask = fg_mask_cache[ft]
-        density = density_cache[(ft, sigma, n_iter, dt)]
+        hmap = hmap_cache[fw]
         try:
-            seeds = connected_components(density > params["density_threshold"])
-            seg = watershed(hmap, markers=seeds, mask=fg_mask)
+            key = (ft, sigma, n_iter, dt, density_threshold, fw)
+            seg = base_segmentation(key, fg_mask, density_cache[(ft, sigma, n_iter, dt)], density_threshold, hmap)
             min_size = params["min_size"]
             if min_size > 0:
+                seg = seg.copy()
                 ids, sizes = np.unique(seg, return_counts=True)
                 discard = ids[(sizes < min_size) & (ids > 0)]
                 seg[np.isin(seg, discard)] = 0
@@ -521,9 +582,47 @@ def score_image(
     return scores
 
 
+def shard_csv_path(output_dir, track_name, shard, n_shards):
+    """Path of one shard's partial results."""
+    return os.path.join(output_dir, f"{track_name}.shard{shard}of{n_shards}.csv")
+
+
+def merge_shards(output_dir, track_name, criterion, n_shards):
+    """Combine the per-shard partial results into the final CSV and return it.
+
+    Each shard stores a per-combo sample count plus the sum and the sum of squares of every metric, so
+    the pooled mean and (population) standard deviation are exact, not an average of averages.
+    """
+    paths = [shard_csv_path(output_dir, track_name, i, n_shards) for i in range(n_shards)]
+    missing = [os.path.basename(p) for p in paths if not os.path.exists(p)]
+    if missing:
+        raise FileNotFoundError(f"Cannot merge '{track_name}', these shards are missing: {missing}.")
+
+    frames = [pd.read_csv(p) for p in paths]
+    accumulated = [c for c in frames[0].columns if c.endswith(("_sum", "_sumsq")) or c == "n_images"]
+    param_keys = [c for c in frames[0].columns if c not in accumulated]
+
+    merged = pd.concat(frames, ignore_index=True).groupby(param_keys, as_index=False)[accumulated].sum()
+    metrics = [c[:-len("_sum")] for c in accumulated if c.endswith("_sum")]
+    for metric in metrics:
+        n = merged["n_images"]
+        mean = merged[f"{metric}_sum"] / n
+        merged[f"{metric}_mean"] = mean
+        merged[f"{metric}_std"] = np.sqrt((merged[f"{metric}_sumsq"] / n - mean ** 2).clip(lower=0.0))
+    merged = merged.drop(columns=[f"{m}_{s}" for m in metrics for s in ("sum", "sumsq")])
+
+    ascending = CRITERION_ASCENDING[criterion]
+    merged = merged.sort_values(f"{criterion}_mean", ascending=ascending).reset_index(drop=True)
+    csv_path = os.path.join(output_dir, f"{track_name}.csv")
+    merged.to_csv(csv_path, index=False)
+    print(f"Merged {n_shards} shards into {csv_path}.")
+    return merged
+
+
 def run_track(
     track_name, track_cfg, model, n_images, livecell_per_celltype, output_dir, backend, device,
     crop_override=None, use_flow_cache=True, n_threads=POSTPROC_THREADS, normalization=None,
+    shard=0, n_shards=1,
 ):
     """Run the full grid search for one track and save the results CSV.
 
@@ -531,13 +630,19 @@ def run_track(
     and every parameter combination is scored on that image before moving on. The per-image mSA is
     then averaged over all images of the track. Datasets or images that fail to load are skipped with
     a warning. 'crop_override' replaces the track's default 3d crop when given.
+
+    With 'n_shards' > 1 this scores only every n_shards-th sample, starting at 'shard', and writes a
+    partial CSV of accumulated metrics. The per-image scores are independent, so the shards are
+    combined afterwards by merge_shards. Best-parameter reporting is skipped for a partial run.
     """
     ndim = track_cfg["ndim"]
     mode = track_cfg["mode"]
     spacing = track_cfg.get("spacing")
     crop = crop_override if crop_override is not None else track_cfg.get("crop")
     os.makedirs(output_dir, exist_ok=True)
-    csv_path = os.path.join(output_dir, f"{track_name}.csv")
+    is_shard = n_shards > 1
+    csv_path = shard_csv_path(output_dir, track_name, shard, n_shards) if is_shard \
+        else os.path.join(output_dir, f"{track_name}.csv")
 
     if os.path.exists(csv_path):
         print(f"Results already exist at '{csv_path}', loading.")
@@ -547,14 +652,22 @@ def run_track(
         if not items:
             warnings.warn(f"No usable data for track '{track_name}', skipping.")
             return None
+        if is_shard:
+            # Striding, not slicing: the samples are sorted by cell type, so every shard sees all of them.
+            items = items[shard::n_shards]
 
         keys = list(track_cfg["grid"].keys())
         combos = list(itertools.product(*[track_cfg["grid"][k] for k in keys]))
         params_list = [dict(zip(keys, combo)) for combo in combos]
-        metric_lists = [[] for _ in combos]  # per combo: a list of per-image metric dicts
+        if mode == "sparse":
+            n_full = len(params_list)
+            params_list = deduplicate_flow_travel(params_list)
+            if len(params_list) < n_full:
+                print(f"Deduplicated {n_full} combos to {len(params_list)} by flow travel (n_iter * dt).")
+        metric_lists = [[] for _ in params_list]  # per combo: a list of per-image metric dicts
         criterion = track_cfg.get("criterion", "msa")
         ascending = CRITERION_ASCENDING[criterion]
-        print(f"{track_name}: {len(combos)} combinations over {len(items)} sample(s), mode='{mode}'.")
+        print(f"{track_name}: {len(params_list)} combinations over {len(items)} sample(s), mode='{mode}'.")
 
         t0 = time.perf_counter()
         for item in tqdm(items, desc=f"{track_name} samples"):
@@ -578,15 +691,29 @@ def run_track(
                 continue
             row = {**params, "n_images": len(per_image)}
             for metric_key in per_image[0]:
-                values = [m[metric_key] for m in per_image]
-                row[f"{metric_key}_mean"] = float(np.mean(values))
-                row[f"{metric_key}_std"] = float(np.std(values))
+                values = np.asarray([m[metric_key] for m in per_image], dtype="float64")
+                if is_shard:
+                    row[f"{metric_key}_sum"] = float(values.sum())
+                    row[f"{metric_key}_sumsq"] = float((values ** 2).sum())
+                else:
+                    row[f"{metric_key}_mean"] = float(values.mean())
+                    row[f"{metric_key}_std"] = float(values.std())
             rows.append(row)
-        sort_col = f"{criterion}_mean"
-        df = pd.DataFrame(rows).sort_values(sort_col, ascending=ascending).reset_index(drop=True)
+        df = pd.DataFrame(rows)
+        if not is_shard:
+            df = df.sort_values(f"{criterion}_mean", ascending=ascending).reset_index(drop=True)
         df.to_csv(csv_path, index=False)
         print(f"Saved {csv_path} ({time.perf_counter() - t0:.0f}s).")
 
+    if is_shard:
+        print(f"Shard {shard}/{n_shards} done. Merge with --merge once every shard has finished.")
+        return None
+
+    return report_best(df, track_name, track_cfg)
+
+
+def report_best(df, track_name, track_cfg):
+    """Print and return the best parameter combination of a finished grid."""
     criterion = track_cfg.get("criterion", "msa")
     ascending = CRITERION_ASCENDING[criterion]
     best = df.sort_values(f"{criterion}_mean", ascending=ascending).iloc[0]
@@ -605,6 +732,8 @@ def main():
                         help="Tune on a single dataset instead of a track.")
     parser.add_argument("--criterion", default=None, choices=list(CRITERION_ASCENDING),
                         help="Metric the grid is ranked by. Defaults to mSA, or CREMI for EM data.")
+    parser.add_argument("--split", default="test", choices=["val", "test"],
+                        help="Split to tune on. 'val' keeps the tuning off the evaluated samples (livecell only).")
     parser.add_argument("-o", "--output_dir", default=OUTPUT_ROOT, help="Directory to write result CSVs.")
     parser.add_argument("-n", "--n_images", type=int, default=None, help="Cap images per 2d dataset (default: all).")
     parser.add_argument("--livecell_per_celltype", type=int, default=50, help="Images per livecell cell type.")
@@ -614,22 +743,39 @@ def main():
     parser.add_argument("--backend", default="cpp", choices=["cpp", "python"], help="Flow computation backend.")
     parser.add_argument("--normalization", default="percentile_2_98", choices=NORMALIZATIONS,
                         help="Input normalization used for inference.")
+    parser.add_argument("--shard", type=int, default=0, help="Index of this shard, in [0, n_shards).")
+    parser.add_argument("--n_shards", type=int, default=1, help="Split the samples over this many jobs.")
+    parser.add_argument("--merge", action="store_true", help="Merge finished shards instead of scoring.")
     parser.add_argument("--no_flow_cache", action="store_true", help="Disable the lazy postprocessing caching.")
     parser.add_argument("--n_threads", type=int, default=POSTPROC_THREADS, help="Threads for postprocessing.")
     args = parser.parse_args()
+
+    if not 0 <= args.shard < args.n_shards:
+        raise ValueError(f"--shard must be in [0, {args.n_shards}), got {args.shard}.")
+
+    crop_override = tuple(args.crop_3d) if args.crop_3d is not None else None
+    if args.dataset_name is not None:
+        configs = {args.dataset_name: dataset_config(args.dataset_name, args.criterion, args.split)}
+    else:
+        track_names = list(TRACKS) if args.track in (None, "all") else [args.track]
+        configs = {name: TRACKS[name] for name in track_names}
+
+    # Merging only reads the partial CSVs, so it needs neither a GPU nor the model.
+    if args.merge:
+        summary = {}
+        for name, config in configs.items():
+            df = merge_shards(args.output_dir, name, config.get("criterion", "msa"), args.n_shards)
+            summary[name] = report_best(df, name, config)
+        print("\nBest parameters:")
+        for name, params in summary.items():
+            print(f"{name}: {params}")
+        return
 
     import torch
     device = DEVICE if torch.cuda.is_available() else "cpu"
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
 
     model = load_model(device, checkpoint_path=args.checkpoint_path, model_type=args.model_type)
-
-    crop_override = tuple(args.crop_3d) if args.crop_3d is not None else None
-    if args.dataset_name is not None:
-        configs = {args.dataset_name: dataset_config(args.dataset_name, args.criterion)}
-    else:
-        track_names = list(TRACKS) if args.track in (None, "all") else [args.track]
-        configs = {name: TRACKS[name] for name in track_names}
 
     summary = {}
     for name, config in configs.items():
@@ -638,6 +784,7 @@ def main():
             args.output_dir, args.backend, device, crop_override=crop_override,
             use_flow_cache=(not args.no_flow_cache), n_threads=args.n_threads,
             normalization=get_normalization(args.normalization),
+            shard=args.shard, n_shards=args.n_shards,
         )
 
     print("\nBest parameters:")
