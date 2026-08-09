@@ -33,8 +33,28 @@ MODEL_TYPES = list(CHECKPOINT_PATHS)
 # The 2d patch shape the models were trained on, see 'generalist_loader'.
 TRAINING_PATCH_SHAPE = (512, 512)
 
-# Test images per LIVECell cell type. Eight cell types, so this fills MAX_EVALUATION_SAMPLES.
-LIVECELL_PER_CELL_TYPE = 25
+# Test images per LIVECell cell type; eight types fill MAX_EVALUATION_SAMPLES. 0 takes the whole split.
+LIVECELL_PER_CELL_TYPE = int(os.environ.get("MICRO_SAM_LIVECELL_PER_CELL_TYPE", "25")) or None
+
+# LIVECell test images whose annotation is incomplete: 2 labelled objects in a confluent crop, with
+# predicted-to-annotated foreground ratios of 348x and 24x. Both are outside the stratified subset.
+LIVECELL_EXCLUDED_TEST_IMAGES = frozenset({
+    "BV2_Phase_A4_2_02d04h00m_3.tif",
+    "BV2_Phase_A4_2_00d00h00m_1.tif",
+})
+
+
+def drop_excluded_livecell(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
+    """Remove the incompletely annotated LIVECell test images from a path pair list."""
+    keep = [
+        (raw, label) for raw, label in zip(raw_paths, label_paths)
+        if os.path.basename(raw) not in LIVECELL_EXCLUDED_TEST_IMAGES
+    ]
+    if not keep:
+        return [], []
+    kept_raw, kept_label = zip(*keep)
+    return list(kept_raw), list(kept_label)
+
 
 # The jointly finetuned (interactive + automatic) SAM2 models for cell segmentation.
 JOINT_CHECKPOINT_ROOT = os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints")
@@ -49,6 +69,14 @@ DATASETS_2D = [
     "dynamicnuclearnet", "hpa", "microbeseg", "neurips_cellseg", "omnipose",
     "segpc", "tissuenet", "usiigaci", "vicar", "yeaz",
 ]
+
+# Ground-truth size floor, applied by `baselines_common._load_data` to drop the crop-severed slivers
+# that relabelling promotes to objects. Defines the ground truth, so it is measured, never tuned.
+GT_MIN_SIZE_2D = {
+    "livecell": 50,
+    "cellpose": 20, "deepbacs": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
+    "u20s": 10, "vicar": 25, "yeaz": 10,
+}
 
 # 3D LM datasets
 DATASETS_3D_LM = [
@@ -83,12 +111,12 @@ def _get_2d_data_paths(
     p = data_root
 
     if dataset_name == "livecell":
-        # Stratified over the cell types. The test set is sorted by cell type, so heading it would
-        # evaluate two of the eight types.
+        # Stratified: the test set is sorted by cell type, so heading it covers two of the eight.
         img, gt = _get_livecell_paths(
             input_folder=os.path.join(p, "livecell"), split="test",
             n_val_per_cell_type=LIVECELL_PER_CELL_TYPE,
         )
+        img, gt = drop_excluded_livecell(img, gt)
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "arvidsson":
@@ -433,8 +461,7 @@ def load_volume(
     if valid_roi is not None:
         valid_roi = valid_roi[roi]
 
-    # Restrict to the annotated z-range, so nothing is predicted or scored where there is no
-    # ground-truth. Interior empty slices are kept, otherwise the volume would not be contiguous.
+    # Restrict to the annotated z-range. Interior empty slices stay, or the volume is not contiguous.
     annotated = np.any(labels != 0, axis=tuple(range(1, labels.ndim)))
     if annotated.any():
         z_start = int(np.argmax(annotated))
@@ -570,14 +597,14 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
 
 def predict_unisam2(model, raw, ndim, device, normalization=None):
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
-    # The UniSAM2 inference path expects single-channel input, so a trailing channel axis is averaged
-    # away. Matches 'read_image_2d' in grid_search_automatic_cells, which tunes the postprocessing.
+    # UniSAM2 expects single-channel input, so a trailing channel axis is averaged away, as in
+    # 'read_image_2d'.
     if raw.ndim > ndim:
         raw = raw.mean(axis=-1)
 
     is_3d = (ndim == 3)
-    # Tiling a 2d image that fits the training patch would change both the scale the encoder sees
-    # and the window the normalization is computed over.
+    # Tiling an image that fits the training patch changes the encoder's scale and the normalization
+    # window.
     is_tiled = is_3d or any(size > TRAINING_PATCH_SHAPE[-1] for size in raw.shape[:2])
     segmenter = get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
     if is_tiled:

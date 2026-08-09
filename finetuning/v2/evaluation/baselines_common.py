@@ -11,7 +11,7 @@ from elf.io import open_file
 
 from torch_em.util.segmentation import size_filter
 
-from common import get_data_paths, load_volume, _center_crop_roi
+from common import get_data_paths, load_volume, GT_MIN_SIZE_2D, _center_crop_roi
 from micro_sam.v2.normalization import normalize_raw
 
 CROP_SHAPE_2D = (512, 512)
@@ -95,7 +95,7 @@ def _apply_min_size(labels, min_size, dataset_name):
     return filtered
 
 
-def _load_data(dataset_name, data_root, ndim, min_size=0):
+def _load_data(dataset_name, data_root, ndim, min_size=None):
     """Yield (image_or_volume, labels, valid_roi) triples for the given dataset.
 
     valid_roi is a boolean mask (True = annotated) for partially annotated datasets
@@ -104,8 +104,12 @@ def _load_data(dataset_name, data_root, ndim, min_size=0):
     `min_size` drops ground-truth objects below that many pixels. Cropping cuts objects at the crop
     faces, which leaves slivers of a few pixels that no prompt can recover. Filtering must happen
     here, the single source of the labels used for both prompting and scoring: filtering only the
-    prompting copy would leave the slivers in the scored ground truth as unmatched objects.
+    prompting copy would leave the slivers in the scored ground truth as unmatched objects. None
+    resolves to `GT_MIN_SIZE_2D` for 2d, and to 0 otherwise.
     """
+    if min_size is None:
+        min_size = GT_MIN_SIZE_2D.get(dataset_name, 0) if ndim == 2 else 0
+
     if ndim == 3:
         raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root)
         path_pairs = _sorted_path_pairs(raw_paths, label_paths)[:MAX_EVALUATION_SAMPLES]
