@@ -4,8 +4,8 @@ The flow post-processing thresholds the decoder's convergence density to get ins
 candidates *below* that threshold, prompts the interactive branch with each one, and keeps the masks it
 scores highly, so the model does the discrimination that thresholding cannot. Worth +0.085 mSA on livecell.
 
-The parameter surface is deliberately small. Levers that were tried and dropped are recorded in
-`finetuning/v2/evaluation/APG.md`, which is the place to look before adding one back.
+The parameter surface is deliberately small: everything here was measured to matter on at least one
+dataset, and a good many other levers were tried and dropped.
 """
 
 import shutil

@@ -1,13 +1,13 @@
 """Cross-dataset phase 1 for APG: does the livecell tuning transfer, and does v2 APG beat v1?
 
-Everything about APG so far is measured on livecell, see APG.md. This runs the same question on other 2d
-datasets, each with its own val grid-search and a test evaluation, against micro-sam v1's AIS and APG at
-their library defaults.
+APG was developed and tuned on livecell alone. This asks the same question on other 2d datasets, each
+with its own val grid-search and a test evaluation, against micro-sam v1's AIS and APG at their library
+defaults.
 
 The data comes from `scripts/apg_experiments/util.py`, which prepares 512x512 crops with val and test
 splits for the v1 APG manuscript. The v2 evaluation pipeline (`common.py`) exposes only test splits, so
 tuning through it would fit to test. livecell is the exception: it is read through the v2 evaluation's
-centre crop, so that its whole 570-image val split is available and its numbers match APG.md.
+centre crop, so that its whole 570-image val split is available.
 
 Stages, in order:
     tune      - grid-search plain APG (no box refinement) on val, sharded, then merged.
@@ -181,8 +181,7 @@ def get_paths(dataset, split, limit=None):
     """The image and label paths of one split.
 
     livecell is resolved directly rather than through the manuscript's prepared crops, because those
-    hold only 5 val images per cell type. Reading it through the v2 evaluation's centre crop instead
-    also makes its numbers directly comparable to the val and test numbers in APG.md.
+    hold only 5 val images per cell type, and read through the v2 evaluation's centre crop instead.
     """
     if dataset == "livecell":
         image_paths, label_paths = _get_livecell_paths(
