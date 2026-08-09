@@ -16,6 +16,9 @@ def _instance_labels(labels):
     same label ID get separate consecutive IDs. Used as label_transform2 in the
     interactive generalist dataloaders.
     """
+    # bioimage-cpp reads raw bytes as native byte order; some EmbedSeg masks are big-endian.
+    if not labels.dtype.isnative:
+        labels = labels.byteswap().view(labels.dtype.newbyteorder())
     return connected_components(labels).astype("int64")
 
 
