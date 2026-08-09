@@ -48,16 +48,33 @@ def _center_crop_roi_2d(shape, crop_shape):
     return tuple(roi)
 
 
-def _read_2d(path, key):
-    """Read a 2D (or 2D+channel) array from an image file or from an H5/zarr file using key."""
+def _read_2d(path, key, is_label=False):
+    """Read a 2D (or 2D+channel) array from an image file or from an H5/zarr file using key.
+
+    Labels are never multi-channel, so the channel-first transpose is skipped for them.
+    """
     if key is not None:
         arr = open_file(path, mode="r")[key][:]
     else:
         arr = np.asarray(imageio.imread(path))
     # Transpose channel-first (C, H, W) arrays to channel-last (H, W, C).
-    if arr.ndim == 3 and arr.shape[0] <= 4 and arr.shape[1] > arr.shape[0] and arr.shape[2] > arr.shape[0]:
+    if not is_label and arr.ndim == 3 and \
+            arr.shape[0] <= 4 and arr.shape[1] > arr.shape[0] and arr.shape[2] > arr.shape[0]:
         arr = arr.transpose(1, 2, 0)
     return arr
+
+
+def _select_frame(image, labels):
+    """Reduce a time series to a single frame, keeping image and labels registered.
+
+    A 3D label array always means a stack, since labels carry no channels.
+    """
+    if labels.ndim != 3:
+        return image, labels
+    index = labels.shape[0] // 2
+    if image.ndim == 3 and image.shape[0] == labels.shape[0]:
+        image = image[index]
+    return image, labels[index]
 
 
 def _save_2d_crops(
@@ -83,15 +100,11 @@ def _save_2d_crops(
         out_img = os.path.join(img_dir, fname)
         out_gt = os.path.join(gt_dir, fname)
 
-        if not os.path.exists(out_img):
-            image = _read_2d(img_path, raw_key)
-            roi = _center_crop_roi_2d(image.shape, crop_shape)
-            imageio.imwrite(out_img, image[roi], compression=5)
-
-        if not os.path.exists(out_gt):
-            gt = _read_2d(gt_path, label_key)
-            roi = _center_crop_roi_2d(gt.shape, crop_shape)
-            imageio.imwrite(out_gt, gt[roi], compression=5)
+        if not (os.path.exists(out_img) and os.path.exists(out_gt)):
+            # Both are read together so a time series picks the same frame for each.
+            image, gt = _select_frame(_read_2d(img_path, raw_key), _read_2d(gt_path, label_key, is_label=True))
+            imageio.imwrite(out_img, image[_center_crop_roi_2d(image.shape, crop_shape)], compression=5)
+            imageio.imwrite(out_gt, gt[_center_crop_roi_2d(gt.shape, crop_shape)], compression=5)
 
         cropped_image_paths.append(out_img)
         cropped_gt_paths.append(out_gt)
