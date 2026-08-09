@@ -113,6 +113,9 @@ class VideoAugment:
     (consistent_transform=True in the original YAML). The second ColorJitter is applied
     independently per frame (consistent_transform=False).
 
+    Spatial transforms are applied to the instance labels as well, with nearest-neighbour
+    interpolation, so image and label stay registered. Color transforms touch the raw only.
+
     Args:
         p_hflip: Probability of horizontal flip.
         degrees: Max rotation magnitude for RandomAffine.
@@ -159,8 +162,12 @@ class VideoAugment:
                 frame = TF.adjust_saturation(frame, s_f)
         return frame
 
-    def _augment_frames(self, frames):
-        """Apply consistent-then-per-frame augmentation to a list of (C, H, W) tensors."""
+    def _augment_frames(self, frames, label_frames):
+        """Apply consistent-then-per-frame augmentation to lists of (C, H, W) raw and label frames.
+
+        Returns the augmented (raw frames, label frames). The spatial parameters are drawn once
+        and reused for every frame and for the labels.
+        """
         do_flip = random.random() < self.p_hflip
         angle = random.uniform(-self.degrees, self.degrees)
         shear_x = random.uniform(-self.shear, self.shear)
@@ -169,14 +176,20 @@ class VideoAugment:
         )
         do_gray = random.random() < self.p_grayscale
 
-        out = []
-        for frame in frames:
+        out, label_out = [], []
+        for frame, label in zip(frames, label_frames):
             if do_flip:
                 frame = TF.hflip(frame)
+                label = TF.hflip(label)
             frame = TF.affine(
                 frame, angle=angle, translate=[0, 0], scale=1.0, shear=[shear_x, 0.0],
                 interpolation=TF.InterpolationMode.BILINEAR,
             )
+            # affine needs a float tensor; NEAREST keeps the instance IDs exact.
+            label = TF.affine(
+                label.float(), angle=angle, translate=[0, 0], scale=1.0, shear=[shear_x, 0.0],
+                interpolation=TF.InterpolationMode.NEAREST,
+            ).to(label.dtype)
             frame = self._cj_apply(frame, fn_idx_v, b_f_v, c_f_v, s_f_v)
             if do_gray:
                 frame = TF.rgb_to_grayscale(frame, num_output_channels=frame.shape[0])
@@ -185,38 +198,44 @@ class VideoAugment:
             )
             frame = self._cj_apply(frame, fn_idx_f, b_f_f, c_f_f, s_f_f)
             out.append(frame.clamp(0.0, 1.0))
-        return out
+            label_out.append(label)
+        return out, label_out
 
-    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+    def __call__(self, x: torch.Tensor, y: torch.Tensor):
         """
         Args:
             x: (B, C, H, W) or (B, C, Z, H, W) float tensor in [0, 1].
+            y: (B, 1, H, W) or (B, 1, Z, H, W) integer instance labels.
         Returns:
-            Augmented tensor of the same shape in [0, 1].
+            Augmented (x, y) with the same shapes and dtypes. Spatial transforms are shared
+            between the two, so the labels stay registered to the image.
         """
         is_3d = x.ndim == 5
         B = x.shape[0]
-        out = []
+        out, label_out = [], []
         for b in range(B):
             if is_3d:
                 Z = x.shape[2]
                 frames = [x[b, :, z] for z in range(Z)]
-                aug = self._augment_frames(frames)
+                labels = [y[b, :, z] for z in range(Z)]
+                aug, aug_label = self._augment_frames(frames, labels)
                 out.append(torch.stack(aug, dim=1))  # (C, Z, H, W)
+                label_out.append(torch.stack(aug_label, dim=1))  # (1, Z, H, W)
             else:
-                aug = self._augment_frames([x[b]])
+                aug, aug_label = self._augment_frames([x[b]], [y[b]])
                 out.append(aug[0])  # (C, H, W)
-        return torch.stack(out)
+                label_out.append(aug_label[0])  # (1, H, W)
+        return torch.stack(out), torch.stack(label_out)
 
 
 class VideoAugmentTransform:
     """torch-em dataset transform with MOSE-style augmentation for 3D microscopy.
 
-    Unlike VideoAugment (which runs in the training loop on raw only), this class
+    Unlike VideoAugment (which runs in the training loop, on whole batches), this class
     is designed for the dataloader transform argument and therefore:
     - Runs in DataLoader workers, in parallel with the GPU forward pass.
-    - Applies spatial transforms to both raw and labels consistently.
-    - Applies color transforms only to raw.
+    - Operates on a single sample rather than a batch.
+    Both apply spatial transforms to raw and labels consistently, and color only to raw.
 
     Designed for (C, Z, H, W) raw arrays and (1, Z, H, W) label arrays
     from torch-em 3D segmentation datasets.

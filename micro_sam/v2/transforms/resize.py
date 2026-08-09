@@ -158,26 +158,3 @@ class ResizeLongestSideTransforms(torch.nn.Module):
         )
         masks = masks[..., :new_h, :new_w]
         return F.interpolate(masks, orig_hw, mode="bilinear", align_corners=False)
-
-
-class ResizeLongestSideAndPadAPI:
-    """SAM2 training transform that resizes longest side and pads bottom/right."""
-
-    def __init__(self, target_length: int, consistent_transform: bool = True, v2: bool = False):
-        self.target_length = target_length
-        self.consistent_transform = consistent_transform
-        self.v2 = v2
-
-    def __call__(self, datapoint, **kwargs):
-        from training.dataset.transforms import pad, resize
-
-        indices = range(len(datapoint.frames))
-        for index in indices:
-            frame = datapoint.frames[index]
-            old_h, old_w = frame.data.shape[-2:] if self.v2 else (frame.data.height, frame.data.width)
-            new_h, new_w = get_preprocess_shape(old_h, old_w, self.target_length)
-            datapoint = resize(datapoint, index, (new_w, new_h), square=False, v2=self.v2)
-            datapoint = pad(
-                datapoint, index, (self.target_length - new_w, self.target_length - new_h), v2=self.v2,
-            )
-        return datapoint
