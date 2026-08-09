@@ -6,7 +6,6 @@ import contextlib
 from typing import Callable, Optional
 
 import numpy as np
-from training.trainer import CORE_LOSS_KEY  # SAM2 repo
 
 import torch
 import torch.nn.functional as F
@@ -15,7 +14,7 @@ import torch.distributed as dist
 import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
 
-from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Metric
+from micro_sam.v2.loss.custom_sam2_loss import CORE_LOSS_KEY, CustomSAM2Metric
 
 # Fixed seed for the main-process randomness during validation (prompt/correction-click
 # sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch). Worker-side crop
@@ -46,6 +45,33 @@ def _seed_all(seed):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+def _sam2_model_rng(model):
+    """Return SAM2Train's private numpy Generator, unwrapping DDP. None if the model has none."""
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        model = model.module
+    return getattr(model, "rng", None)
+
+
+@contextlib.contextmanager
+def _pinned_validation_rng(model):
+    """Pin every RNG that affects validation, then restore it on exit.
+
+    Covers SAM2Train's own ``numpy.random.Generator``, which ``np.random.seed`` does not reach.
+    """
+    rng_state = _snapshot_rng()
+    model_rng = _sam2_model_rng(model)
+    model_rng_state = None if model_rng is None else model_rng.bit_generator.state
+    _seed_all(VALIDATION_SEED)
+    if model_rng is not None:
+        model_rng.bit_generator.state = np.random.default_rng(VALIDATION_SEED).bit_generator.state
+    try:
+        yield
+    finally:
+        _restore_rng(rng_state)
+        if model_rng is not None:
+            model_rng.bit_generator.state = model_rng_state
 
 
 def _get_cmap():
@@ -79,7 +105,33 @@ def _overlay_binary_masks(masks_ohw, target_hw=None):
     return result
 
 
-class Sam2Trainer(torch_em.trainer.DefaultTrainer):
+class CheckpointAdapter:
+    """Mixin that saves and loads checkpoints against the module a DDP wrapper holds.
+
+    Gives one on-disk format regardless of how training ran, so checkpoints transfer between
+    single-GPU and DDP in both directions.
+    """
+
+    def save_checkpoint(self, name, current_metric, best_metric, **extra_save_dict):
+        original_model = self.model
+        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+            self.model = self.model.module
+        try:
+            super().save_checkpoint(name, current_metric, best_metric, **extra_save_dict)
+        finally:
+            self.model = original_model
+
+    def load_checkpoint(self, checkpoint="best"):
+        original_model = self.model
+        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+            self.model = self.model.module
+        try:
+            return super().load_checkpoint(checkpoint)
+        finally:
+            self.model = original_model
+
+
+class Sam2Trainer(CheckpointAdapter, torch_em.trainer.DefaultTrainer):
     """torch-em style trainer for interactive segmentation with SAM2Train.
 
     Uses SAM2Train (full model with video memory) and SAM2's native prompting
@@ -106,7 +158,7 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         convert_inputs: Callable,
         loss: torch.nn.Module,
         metric: Optional[torch.nn.Module] = None,
-        clip_grad_norm: Optional[float] = 0.1,
+        clip_grad_norm: Optional[float] = None,
         amp_dtype: Optional[torch.dtype] = torch.bfloat16,
         **kwargs,
     ):
@@ -171,6 +223,11 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         return None if grad_norm is None else grad_norm.item()
 
     def _interactive_step(self, x, y):
+        # Convert on the device: the 1024x1024 resize dominates and is ~13x faster there, and
+        # the source patches transfer 4x less data than the resized ones. The trailing .to()
+        # only moves the metadata tensors, which are built on the host.
+        x = x.to(self.device, non_blocking=True)
+        y = y.to(self.device, non_blocking=True)
         batch = self.convert_inputs(x, y)
         batch = batch.to(self.device, non_blocking=True)
         outputs = self.model(batch)
@@ -234,14 +291,9 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         # stays reproducible while the logged sample varies.
         log_rng = random.Random(VALIDATION_SEED + self._epoch)
 
-        # Pin the main-process RNG so the per-frame prompts and correction clicks sampled inside
-        # SAM2Train (and object subsampling in ConvertToSam2VideoBatch) are identical every epoch,
-        # making the validation metric comparable across epochs. Restore the state afterwards so
-        # training randomness is unaffected. Worker-side crop randomness is pinned via the val
-        # loader's deterministic worker_init_fn.
-        rng_state = _snapshot_rng()
-        _seed_all(VALIDATION_SEED)
-        try:
+        # Pin the RNGs so the sampled prompts are identical every epoch. Worker-side crop
+        # randomness is pinned via the val loader's deterministic worker_init_fn.
+        with _pinned_validation_rng(self.model):
             with torch.no_grad():
                 for i, (x, y) in enumerate(self.val_loader):
                     input_check_done = self._check_input_normalization(x, input_check_done)
@@ -252,8 +304,6 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
                     n_iter += 1
                     if log_rng.random() < 1.0 / (i + 1):
                         log_x, log_y, log_batch, log_outputs = x, y, batch, outputs
-        finally:
-            _restore_rng(rng_state)
 
         val_loss /= max(n_iter, 1)
         val_dice_loss /= max(n_iter, 1)
@@ -273,16 +323,6 @@ class Sam2Trainer(torch_em.trainer.DefaultTrainer):
         # Return the v1-style best-mask Dice loss (lower is better) so checkpoint and
         # early-stopping selection track segmentation quality rather than the raw loss.
         return val_dice_loss
-
-    def save_checkpoint(self, name, current_metric, best_metric, **extra_save_dict):
-        # Unwrap DDP before saving so checkpoints load directly into non-DDP models.
-        original_model = self.model
-        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-            self.model = self.model.module
-        try:
-            super().save_checkpoint(name, current_metric, best_metric, **extra_save_dict)
-        finally:
-            self.model = original_model
 
 
 class Sam2Logger(TorchEmLogger):
@@ -371,25 +411,16 @@ class Sam2Logger(TorchEmLogger):
             self._log_images(step, x, y, batch, outputs, "validation")
 
 
-class UniSAM2Trainer(torch_em.trainer.DefaultTrainer):
+class UniSAM2Trainer(CheckpointAdapter, torch_em.trainer.DefaultTrainer):
     """DefaultTrainer subclass for UniSAM2 automatic segmentation.
 
-    Adds two DDP-compatible overrides on top of DefaultTrainer:
-    - :meth:`save_checkpoint` unwraps the DDP wrapper before saving so
-      checkpoints load directly into non-DDP models.
+    Adds two DDP-compatible behaviours on top of DefaultTrainer:
+    - :class:`CheckpointAdapter` saves and loads checkpoints unwrapped, so they
+      transfer between DDP and non-DDP models.
     - :meth:`_validate_impl` all_reduces the validation loss across ranks
       so every rank makes the same early-stopping decision, and passes
       the last batch to the logger for image visualization.
     """
-
-    def save_checkpoint(self, name, current_metric, best_metric, **extra_save_dict):
-        original_model = self.model
-        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-            self.model = self.model.module
-        try:
-            super().save_checkpoint(name, current_metric, best_metric, **extra_save_dict)
-        finally:
-            self.model = original_model
 
     def _validate_impl(self, forward_context):
         self.model.eval()

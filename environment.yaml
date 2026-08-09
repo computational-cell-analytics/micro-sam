@@ -24,6 +24,7 @@ dependencies:
     # - "pytorch=*=cpu*"
     - pytorch >=2.5
     - segment-anything
+    - tensordict
     - torchvision
     - torch_em >=0.10.1
     - tqdm

@@ -120,6 +120,7 @@ def train_sam2(
     save_root: Optional[Union[str, os.PathLike]] = None,
     save_every_kth_epoch: Optional[int] = None,
     overwrite_training: bool = True,
+    load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     prob_to_use_pt_input: float = 0.5,
     prob_to_use_box_input: float = 0.5,
     num_frames_to_correct: int = 1,
@@ -128,8 +129,9 @@ def train_sam2(
     add_all_frames_to_correct_as_cond: bool = True,
     num_correction_pt_per_frame: int = 7,
     num_init_cond_frames: int = 2,
-    clip_grad_norm: Optional[float] = 0.1,
+    clip_grad_norm: Optional[float] = None,
     layer_decay: float = 1.0,
+    scheduler_kwargs: Optional[Dict[str, Any]] = None,
     largest_first: bool = False,
     augment: bool = False,
     bidirectional: bool = False,
@@ -165,6 +167,9 @@ def train_sam2(
         save_root: Root directory for checkpoints and logs.
         save_every_kth_epoch: Save a separate checkpoint every k-th epoch.
         overwrite_training: Overwrite an existing checkpoint at the same path.
+        load_from_checkpoint: Trainer checkpoint to resume from, restoring the model, optimizer,
+            scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
+            the pretrained SAM2 weights to start from.
         prob_to_use_pt_input: Probability of using point/box prompts (vs mask propagation).
         prob_to_use_box_input: Conditional probability of using a box instead of a click.
         num_frames_to_correct: Max frames per volume that receive iterative correction
@@ -179,8 +184,10 @@ def train_sam2(
             round. SAM2 default is 7.
         num_init_cond_frames: Number of initial conditioning frames (frames that receive
             the first prompt before any correction round). The MOSE finetune config uses 2.
-        clip_grad_norm: Max gradient norm for clipping (None = disabled). Matches
-            SAM2's own finetuning default of 0.1.
+        clip_grad_norm: Max gradient norm for clipping. Disabled by default; SAM2's own
+            finetuning uses 0.1.
+        scheduler_kwargs: ReduceLROnPlateau kwargs (mode, factor, patience). Defaults to
+            factor=0.9, patience=5.
         layer_decay: Multiplicative LR decay applied per trunk block toward shallower
             layers (block 0 gets vision_lr * layer_decay^n_blocks). The MOSE finetune
             config uses 0.9. Only active when vision_lr is set. Default 1.0 = no decay.
@@ -228,7 +235,7 @@ def train_sam2(
     )
 
     optimizer = _build_optimizer(model, lr=lr, vision_lr=vision_lr, layer_decay=layer_decay)
-    scheduler = _build_scheduler(optimizer)
+    scheduler = _build_scheduler(optimizer, **(scheduler_kwargs or {}))
 
     trainer = Sam2Trainer(
         name=name,
@@ -252,6 +259,7 @@ def train_sam2(
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
     fit_kwargs["overwrite_training"] = overwrite_training
+    fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
     trainer.fit(**fit_kwargs)
 
     elapsed = time.time() - t_start
@@ -274,6 +282,7 @@ def _train_sam2_rank(
     save_root,
     save_every_kth_epoch: Optional[int],
     overwrite_training: bool,
+    load_from_checkpoint: Optional[Union[str, os.PathLike]],
     prob_to_use_pt_input: float,
     prob_to_use_box_input: float,
     num_frames_to_correct: int,
@@ -284,6 +293,7 @@ def _train_sam2_rank(
     num_init_cond_frames: int,
     clip_grad_norm: Optional[float],
     layer_decay: float,
+    scheduler_kwargs: Optional[Dict[str, Any]],
     vision_lr: Optional[float],
     batch_size: int,
     batch_size_2d: int,
@@ -335,7 +345,7 @@ def _train_sam2_rank(
 
     train_loader = torch.utils.data.DataLoader(
         train_ds, batch_sampler=train_sampler, num_workers=n_workers,
-        pin_memory=True, persistent_workers=True,
+        pin_memory=True, persistent_workers=n_workers > 0,
     )
     train_loader.shuffle = True
     # Non-persistent workers + a deterministic worker_init_fn re-seed each epoch, so the
@@ -373,7 +383,7 @@ def _train_sam2_rank(
     )
 
     optimizer = _build_optimizer(model, lr=lr, vision_lr=vision_lr, layer_decay=layer_decay)
-    scheduler = _build_scheduler(optimizer)
+    scheduler = _build_scheduler(optimizer, **(scheduler_kwargs or {}))
 
     trainer = Sam2Trainer(
         name=name,
@@ -398,6 +408,7 @@ def _train_sam2_rank(
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
     fit_kwargs["overwrite_training"] = overwrite_training
+    fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
     try:
         trainer.fit(**fit_kwargs)
     finally:
@@ -423,6 +434,7 @@ def train_sam2_multi_gpu(
     save_root=None,
     save_every_kth_epoch: Optional[int] = None,
     overwrite_training: bool = True,
+    load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     prob_to_use_pt_input: float = 0.5,
     prob_to_use_box_input: float = 0.5,
     num_frames_to_correct: int = 1,
@@ -431,8 +443,9 @@ def train_sam2_multi_gpu(
     add_all_frames_to_correct_as_cond: bool = True,
     num_correction_pt_per_frame: int = 7,
     num_init_cond_frames: int = 2,
-    clip_grad_norm: Optional[float] = 0.1,
+    clip_grad_norm: Optional[float] = None,
     layer_decay: float = 1.0,
+    scheduler_kwargs: Optional[Dict[str, Any]] = None,
     find_unused_parameters: bool = True,
     largest_first: bool = False,
     augment: bool = False,
@@ -472,13 +485,17 @@ def train_sam2_multi_gpu(
         save_root: Root directory for checkpoints and logs.
         save_every_kth_epoch: Save a checkpoint every k-th epoch.
         overwrite_training: Overwrite an existing checkpoint at the same path.
+        load_from_checkpoint: Trainer checkpoint to resume from, restoring the model, optimizer,
+            scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
+            the pretrained SAM2 weights to start from.
         prob_to_use_pt_input: P(point/box prompt) vs P(mask propagation).
         prob_to_use_box_input: Conditional P(box) given point/box mode.
         num_frames_to_correct: Max frames per volume receiving correction clicks.
         rand_frames_to_correct: Randomly sample how many frames to correct.
         prob_to_sample_from_gt: P(correction click from GT vs error region).
         add_all_frames_to_correct_as_cond: Add corrected frames as cond frames.
-        clip_grad_norm: Max gradient norm for clipping (None = disabled).
+        clip_grad_norm: Max gradient norm for clipping. Disabled by default; SAM2's own
+            finetuning uses 0.1.
         find_unused_parameters: Passed to DistributedDataParallel.
     """
     if z_slices is None:
@@ -509,6 +526,7 @@ def train_sam2_multi_gpu(
         save_root=save_root,
         save_every_kth_epoch=save_every_kth_epoch,
         overwrite_training=overwrite_training,
+        load_from_checkpoint=load_from_checkpoint,
         prob_to_use_pt_input=prob_to_use_pt_input,
         prob_to_use_box_input=prob_to_use_box_input,
         num_frames_to_correct=num_frames_to_correct,
@@ -519,6 +537,7 @@ def train_sam2_multi_gpu(
         num_init_cond_frames=num_init_cond_frames,
         clip_grad_norm=clip_grad_norm,
         layer_decay=layer_decay,
+        scheduler_kwargs=scheduler_kwargs,
         vision_lr=vision_lr,
         batch_size=batch_size,
         batch_size_2d=batch_size_2d,
@@ -549,6 +568,7 @@ def train_automatic(
     save_root: Optional[Union[str, os.PathLike]] = None,
     save_every_kth_epoch: Optional[int] = None,
     overwrite_training: bool = True,
+    load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
 ) -> None:
     """Train UniSAM2 for automatic instance segmentation with directed distance targets.
 
@@ -571,6 +591,9 @@ def train_automatic(
         save_root: Root directory for checkpoints and logs.
         save_every_kth_epoch: Save a separate checkpoint every k-th epoch.
         overwrite_training: Overwrite an existing checkpoint at the same path.
+        load_from_checkpoint: Trainer checkpoint to resume from, restoring the model, optimizer,
+            scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
+            the pretrained SAM2 weights to start from.
     """
     import torch_em
     from micro_sam.v2.models.util import UniSAM2
@@ -603,6 +626,7 @@ def train_automatic(
 
     fit_kwargs = {"epochs": n_epochs} if n_iterations is None else {"iterations": n_iterations}
     fit_kwargs["overwrite_training"] = overwrite_training
+    fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
     trainer.fit(**fit_kwargs)
@@ -621,6 +645,7 @@ def _train_automatic_rank(
     save_root,
     save_every_kth_epoch: Optional[int],
     overwrite_training: bool,
+    load_from_checkpoint: Optional[Union[str, os.PathLike]],
     batch_size: int,
     batch_size_2d: int,
     z_slices: List[int],
@@ -632,7 +657,7 @@ def _train_automatic_rank(
     import torch_em
     from torch_em.multi_gpu_training import DDP
 
-    from micro_sam.v2.datasets.generalist_loader import _build_automatic_datasets
+    from micro_sam.v2.datasets.generalist_loader import _build_automatic_datasets, seed_worker
     from micro_sam.v2.datasets.sampler import DistributedUniBatchSampler, _build_group_map
     from micro_sam.v2.models.util import UniSAM2
 
@@ -665,12 +690,14 @@ def _train_automatic_rank(
 
     train_loader = torch.utils.data.DataLoader(
         train_ds, batch_sampler=train_sampler, num_workers=n_workers,
-        pin_memory=True, persistent_workers=True,
+        pin_memory=True, persistent_workers=n_workers > 0,
     )
     train_loader.shuffle = True
+    # Deterministic validation crops, matching the interactive path: the underlying datasets
+    # draw random crops per __getitem__, so without this the metric changes every epoch.
     val_loader = torch.utils.data.DataLoader(
         val_ds, batch_sampler=val_sampler, num_workers=n_workers,
-        pin_memory=True, persistent_workers=True,
+        pin_memory=True, persistent_workers=False, worker_init_fn=seed_worker,
     )
     val_loader.shuffle = False
 
@@ -703,6 +730,7 @@ def _train_automatic_rank(
 
     fit_kwargs = {"epochs": n_epochs} if n_iterations is None else {"iterations": n_iterations}
     fit_kwargs["overwrite_training"] = overwrite_training
+    fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
     try:
@@ -727,6 +755,7 @@ def train_automatic_multi_gpu(
     save_root=None,
     save_every_kth_epoch: Optional[int] = None,
     overwrite_training: bool = True,
+    load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     find_unused_parameters: bool = True,
 ) -> None:
     """Train UniSAM2 for automatic segmentation across multiple GPUs with DDP.
@@ -751,6 +780,9 @@ def train_automatic_multi_gpu(
         save_root: Root directory for checkpoints and logs.
         save_every_kth_epoch: Save a checkpoint every k-th epoch.
         overwrite_training: Overwrite an existing checkpoint at the same path.
+        load_from_checkpoint: Trainer checkpoint to resume from, restoring the model, optimizer,
+            scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
+            the pretrained SAM2 weights to start from.
         find_unused_parameters: Passed to DistributedDataParallel.
     """
     if z_slices is None:
@@ -779,6 +811,7 @@ def train_automatic_multi_gpu(
         save_root=save_root,
         save_every_kth_epoch=save_every_kth_epoch,
         overwrite_training=overwrite_training,
+        load_from_checkpoint=load_from_checkpoint,
         batch_size=batch_size,
         batch_size_2d=batch_size_2d,
         z_slices=z_slices,
@@ -809,6 +842,7 @@ def train_joint_sam2(
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
     save_every_kth_epoch: Optional[int] = None,
     overwrite_training: bool = True,
+    load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     prob_to_use_pt_input: float = 0.5,
     prob_to_use_box_input: float = 0.5,
     num_frames_to_correct: int = 1,
@@ -817,13 +851,14 @@ def train_joint_sam2(
     add_all_frames_to_correct_as_cond: bool = True,
     num_correction_pt_per_frame: int = 7,
     num_init_cond_frames: int = 2,
-    clip_grad_norm: Optional[float] = 0.1,
+    clip_grad_norm: Optional[float] = None,
     largest_first: bool = False,
     bidirectional: bool = False,
     use_focal_loss: bool = False,
     focal_weight: float = 20.0,
     use_object_score_loss: bool = False,
     average_over_frames: bool = False,
+    automatic_metric_weight: float = 0.25,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly with a shared image encoder (single GPU).
 
@@ -853,6 +888,9 @@ def train_joint_sam2(
         scheduler_kwargs: ReduceLROnPlateau kwargs. Defaults to patience=10.
         save_every_kth_epoch: Save a checkpoint every k-th epoch.
         overwrite_training: Overwrite an existing checkpoint at the same path.
+        load_from_checkpoint: Trainer checkpoint to resume from, restoring the model, optimizer,
+            scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
+            the pretrained SAM2 weights to start from.
         prob_to_use_pt_input: P(point/box prompt) vs P(mask propagation).
         prob_to_use_box_input: Conditional P(box) given point/box mode.
         num_frames_to_correct: Max frames per volume receiving correction clicks.
@@ -861,12 +899,17 @@ def train_joint_sam2(
         add_all_frames_to_correct_as_cond: Add corrected frames as cond frames.
         num_correction_pt_per_frame: Correction clicks per frame per round (SAM2 default 7).
         num_init_cond_frames: Initial conditioning frames before the first correction round.
-        clip_grad_norm: Max gradient norm for clipping (None = disabled).
+        clip_grad_norm: Max gradient norm for clipping. Disabled by default; SAM2's own
+            finetuning uses 0.1.
         bidirectional: Bidirectional propagation during training for 3D z-stacks.
         use_focal_loss: Add SAM2's focal mask loss on top of Dice in CustomSAM2Loss.
         focal_weight: Weight of the focal mask loss when enabled.
         use_object_score_loss: Supervise SAM2's object-presence score with a BCE loss.
         average_over_frames: Average the interactive loss over frames instead of summing.
+        automatic_metric_weight: Weight of the automatic metric in the combined validation
+            metric used for checkpointing, LR scheduling and early stopping. Defaults to 1/4,
+            which puts DirectedDistanceLoss's 4 summed terms on the scale of the interactive
+            Dice metric. Set to 0 to select purely on the interactive task.
     """
     from micro_sam.v2.datasets.generalist_loader import _build_joint_datasets, _prepare_data_loader
     from micro_sam.v2.models.util import UniSAM2
@@ -886,7 +929,7 @@ def train_joint_sam2(
     )
     val_loader = _prepare_data_loader(
         val_ds, batch_size=batch_size, shuffle=False,
-        batch_size_per_group=bpg, num_workers=n_workers,
+        batch_size_per_group=bpg, num_workers=n_workers, deterministic=True,
     )
 
     sam2_model = get_sam2_train_model(
@@ -936,11 +979,13 @@ def train_joint_sam2(
         convert_inputs=convert_inputs,
         interactive_loss=interactive_loss,
         automatic_loss=automatic_loss,
+        automatic_metric_weight=automatic_metric_weight,
         clip_grad_norm=clip_grad_norm,
     )
 
     fit_kwargs = {"epochs": n_epochs} if n_iterations is None else {"iterations": n_iterations}
     fit_kwargs["overwrite_training"] = overwrite_training
+    fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
     trainer.fit(**fit_kwargs)
@@ -963,6 +1008,7 @@ def _train_joint_rank(
     scheduler_kwargs: Optional[Dict],
     save_every_kth_epoch: Optional[int],
     overwrite_training: bool,
+    load_from_checkpoint: Optional[Union[str, os.PathLike]],
     prob_to_use_pt_input: float,
     prob_to_use_box_input: float,
     num_frames_to_correct: int,
@@ -984,11 +1030,12 @@ def _train_joint_rank(
     focal_weight: float = 20.0,
     use_object_score_loss: bool = False,
     average_over_frames: bool = False,
+    automatic_metric_weight: float = 0.25,
 ):
     """Single-rank torchrun worker for train_joint_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
 
-    from micro_sam.v2.datasets.generalist_loader import _build_joint_datasets
+    from micro_sam.v2.datasets.generalist_loader import _build_joint_datasets, seed_worker
     from micro_sam.v2.datasets.sampler import DistributedUniBatchSampler, _build_group_map
     from micro_sam.v2.models.util import UniSAM2
 
@@ -1016,12 +1063,13 @@ def _train_joint_rank(
     )
     train_loader = torch.utils.data.DataLoader(
         train_ds, batch_sampler=train_sampler, num_workers=n_workers,
-        pin_memory=True, persistent_workers=True,
+        pin_memory=True, persistent_workers=n_workers > 0,
     )
     train_loader.shuffle = True
+    # Deterministic validation crops, matching the interactive path.
     val_loader = torch.utils.data.DataLoader(
         val_ds, batch_sampler=val_sampler, num_workers=n_workers,
-        pin_memory=True, persistent_workers=True,
+        pin_memory=True, persistent_workers=False, worker_init_fn=seed_worker,
     )
     val_loader.shuffle = False
 
@@ -1076,11 +1124,13 @@ def _train_joint_rank(
         convert_inputs=convert_inputs,
         interactive_loss=interactive_loss,
         automatic_loss=automatic_loss,
+        automatic_metric_weight=automatic_metric_weight,
         clip_grad_norm=clip_grad_norm,
     )
 
     fit_kwargs = {"epochs": n_epochs} if n_iterations is None else {"iterations": n_iterations}
     fit_kwargs["overwrite_training"] = overwrite_training
+    fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
     try:
@@ -1109,6 +1159,7 @@ def train_joint_sam2_multi_gpu(
     scheduler_kwargs: Optional[Dict[str, Any]] = None,
     save_every_kth_epoch: Optional[int] = None,
     overwrite_training: bool = True,
+    load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     prob_to_use_pt_input: float = 0.5,
     prob_to_use_box_input: float = 0.5,
     num_frames_to_correct: int = 1,
@@ -1117,7 +1168,7 @@ def train_joint_sam2_multi_gpu(
     add_all_frames_to_correct_as_cond: bool = True,
     num_correction_pt_per_frame: int = 7,
     num_init_cond_frames: int = 2,
-    clip_grad_norm: Optional[float] = 0.1,
+    clip_grad_norm: Optional[float] = None,
     find_unused_parameters: bool = True,
     largest_first: bool = False,
     bidirectional: bool = False,
@@ -1125,6 +1176,7 @@ def train_joint_sam2_multi_gpu(
     focal_weight: float = 20.0,
     use_object_score_loss: bool = False,
     average_over_frames: bool = False,
+    automatic_metric_weight: float = 0.25,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly across multiple GPUs with DDP.
 
@@ -1156,6 +1208,9 @@ def train_joint_sam2_multi_gpu(
         scheduler_kwargs: ReduceLROnPlateau kwargs. Defaults to patience=10.
         save_every_kth_epoch: Save a checkpoint every k-th epoch.
         overwrite_training: Overwrite an existing checkpoint at the same path.
+        load_from_checkpoint: Trainer checkpoint to resume from, restoring the model, optimizer,
+            scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
+            the pretrained SAM2 weights to start from.
         prob_to_use_pt_input: P(point/box prompt) vs P(mask propagation).
         prob_to_use_box_input: Conditional P(box) given point/box mode.
         num_frames_to_correct: Max frames per volume receiving correction clicks.
@@ -1164,13 +1219,18 @@ def train_joint_sam2_multi_gpu(
         add_all_frames_to_correct_as_cond: Add corrected frames as cond frames.
         num_correction_pt_per_frame: Correction clicks per frame per round (SAM2 default 7).
         num_init_cond_frames: Initial conditioning frames before the first correction round.
-        clip_grad_norm: Max gradient norm for clipping (None = disabled).
+        clip_grad_norm: Max gradient norm for clipping. Disabled by default; SAM2's own
+            finetuning uses 0.1.
         find_unused_parameters: Passed to DistributedDataParallel.
         bidirectional: Bidirectional propagation during training for 3D z-stacks.
         use_focal_loss: Add SAM2's focal mask loss on top of Dice in CustomSAM2Loss.
         focal_weight: Weight of the focal mask loss when enabled.
         use_object_score_loss: Supervise SAM2's object-presence score with a BCE loss.
         average_over_frames: Average the interactive loss over frames instead of summing.
+        automatic_metric_weight: Weight of the automatic metric in the combined validation
+            metric used for checkpointing, LR scheduling and early stopping. Defaults to 1/4,
+            which puts DirectedDistanceLoss's 4 summed terms on the scale of the interactive
+            Dice metric. Set to 0 to select purely on the interactive task.
     """
     if z_slices is None:
         z_slices = [8]
@@ -1202,6 +1262,7 @@ def train_joint_sam2_multi_gpu(
         scheduler_kwargs=scheduler_kwargs,
         save_every_kth_epoch=save_every_kth_epoch,
         overwrite_training=overwrite_training,
+        load_from_checkpoint=load_from_checkpoint,
         prob_to_use_pt_input=prob_to_use_pt_input,
         prob_to_use_box_input=prob_to_use_box_input,
         num_frames_to_correct=num_frames_to_correct,
@@ -1223,4 +1284,5 @@ def train_joint_sam2_multi_gpu(
         focal_weight=focal_weight,
         use_object_score_loss=use_object_score_loss,
         average_over_frames=average_over_frames,
+        automatic_metric_weight=automatic_metric_weight,
     )

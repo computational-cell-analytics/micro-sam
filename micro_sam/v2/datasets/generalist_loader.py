@@ -97,7 +97,8 @@ def _configure_training_normalization(train_datasets, val_datasets):
 def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32, deterministic=False):
     # For deterministic validation, re-seed workers every epoch via worker_init_fn.
     # This requires non-persistent workers, since persistent workers run worker_init_fn only once.
-    persistent = not deterministic
+    # Persistent workers also require num_workers > 0.
+    persistent = (num_workers > 0) and not deterministic
     worker_init = seed_worker if deterministic else None
     if isinstance(dataset, ConcatDataset) and (batch_size > 1 or batch_size_per_group):
         batch_sampler = UniBatchSampler(
@@ -763,7 +764,7 @@ def get_dataloaders(
     )
     val_loader = _prepare_data_loader(
         val_ds, batch_size=batch_size, shuffle=False,
-        batch_size_per_group=batch_size_per_group, num_workers=n_workers,
+        batch_size_per_group=batch_size_per_group, num_workers=n_workers, deterministic=True,
     )
 
     return train_loader, val_loader
