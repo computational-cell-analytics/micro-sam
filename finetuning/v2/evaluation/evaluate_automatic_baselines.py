@@ -7,6 +7,8 @@ Supported methods:
   sam: Pretrained SAM v1 with Automatic Mask Generation (AMG)
   sam2: Pretrained SAM2 with Automatic Mask Generation (AMG)
   micro_sam2: Jointly finetuned UniSAM2 decoder (directed distance model)
+  micro_sam2_apg: The same joint model, with prompts generated from the decoder and scored by the
+    interactive branch (see micro_sam.v2.automatic_prompt_generation)
   microsam_ais: micro-sam v1 Automatic Instance Segmentation
   microsam_apg: micro-sam v1 Automatic Prompt Generation
   segneuron: SegNeuron (3D EM only)
@@ -18,6 +20,7 @@ Usage examples:
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method sam
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method sam2
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method micro_sam2 -m hvit_b
+    python evaluate_automatic_baselines.py -d livecell -e <exp> --method micro_sam2_apg -m hvit_b
     python evaluate_automatic_baselines.py -d embedseg -e <exp> --method microsam_ais -m vit_b
     python evaluate_automatic_baselines.py -d cremi -e <exp> --method segneuron
 """
@@ -47,7 +50,7 @@ _LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
 _EM_DATASETS = set(DATASETS_3D_EM)
 _METHODS = [
     "cellpose", "stardist", "cellsam",
-    "sam", "sam2", "micro_sam2",
+    "sam", "sam2", "micro_sam2", "micro_sam2_apg",
     "microsam_ais", "microsam_apg",
     "segneuron",
 ]
@@ -79,12 +82,26 @@ def _to_sam2_uint8(raw):
 
 
 def _load_cellpose(model_type, device):
+    """Load a CellPose model, supporting both the CellPose 3 and the CellPose 4 APIs.
+
+    CellPose 4 dropped the `models.Cellpose` wrapper along with the cyto/nuclei checkpoints, and takes its
+    own generalist models ('cpsam', 'cpsam_v2', 'cpdino', 'cpdino-vitb') through `pretrained_model`.
+    """
     from cellpose import models
     use_gpu = (device != "cpu") and torch.cuda.is_available()
+
+    if model_type in getattr(models, "MODEL_NAMES", ()):
+        return models.CellposeModel(gpu=use_gpu, pretrained_model=model_type)
+
     if model_type in ("cyto", "cyto2", "cyto3", "nuclei"):
+        if not hasattr(models, "Cellpose"):
+            raise RuntimeError(
+                f"'{model_type}' needs CellPose 3; the installed CellPose only provides "
+                f"{getattr(models, 'MODEL_NAMES', ())}."
+            )
         return models.Cellpose(gpu=use_gpu, model_type=model_type)
-    else:
-        return models.CellposeModel(gpu=use_gpu, model_type=model_type)
+
+    return models.CellposeModel(gpu=use_gpu, model_type=model_type)
 
 
 def _load_stardist(ndim):
@@ -353,6 +370,56 @@ def run_microsam2_auto_evaluation(
     )
 
 
+def _params_digest(params):
+    """Short stable digest of a parameter dict, used to keep one result file per parameter set."""
+    import hashlib
+    encoded = json.dumps(params, sort_keys=True).encode()
+    return hashlib.sha1(encoded).hexdigest()[:8]
+
+
+def run_microsam2_apg_evaluation(
+    dataset_name, data_root, experiment_folder, device, model_type=_SAM2_MODEL_TYPE,
+    checkpoint_path=None, joint_checkpoint="best", apg_params=None,
+):
+    """Evaluate automatic prompt generation, which needs both halves of the joint model.
+
+    The decoder supplies the convergence density the candidates are proposed from, and the interactive
+    branch scores each candidate. Both come from the same joint checkpoint.
+    """
+    from micro_sam.v2.util import get_sam2_model
+    from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
+
+    if dataset_name in DATASETS_3D:
+        warnings.warn(f"APG is 2d-only and does not support 3d dataset '{dataset_name}'. Skipping.",
+                      UserWarning, stacklevel=2)
+        return
+
+    interactive_path, decoder_path = export_joint_checkpoint(model_type, joint_checkpoint)
+    if checkpoint_path is not None:
+        decoder_path = checkpoint_path
+    model = load_unisam2_model(decoder_path, device, encoder=model_type)
+    # Built through the library factory rather than by hand, so that this evaluation measures the code
+    # path the CLI and the Python API use.
+    segmenter = get_instance_segmentation_generator(
+        model=get_sam2_model(model_type=model_type, device=device, checkpoint_path=interactive_path),
+        decoder=model, segmentation_mode="apg", device=device,
+    )
+
+    params = {} if apg_params is None else apg_params
+    # The parameters go into the file name, because '_run_evaluation' reuses an existing result file.
+    # A fixed 'tuned' tag would make every parameter set after the first one read back the first result.
+    tag = "apg" if not params else f"apg_{_params_digest(params)}"
+    save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_micro_sam2_{model_type}_{tag}.csv")
+    if params:
+        print(f"Automatic prompt generation with tuned parameters: {params}")
+
+    def segment(image):
+        segmenter.initialize(image, ndim=2)
+        return segmenter.generate(**params)
+
+    _run_evaluation(segment, dataset_name, data_root, 2, save_path, desc=f"micro_sam2-apg-{model_type}")
+
+
 def main():
     import argparse
 
@@ -376,6 +443,10 @@ def main():
     parser.add_argument(
         "--backend", type=str, default="cpp", choices=["cpp", "python"],
         help="Backend for the micro_sam2 postprocessing (default: cpp)."
+    )
+    parser.add_argument(
+        "--apg_params", type=str, default=None,
+        help="JSON dict of automatic-prompt-generation parameters, e.g. the best combination of a sweep."
     )
     parser.add_argument(
         "--postprocessing_params", type=str, default=None,
@@ -421,6 +492,14 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=args.model_type or _SAM2_MODEL_TYPE, checkpoint_path=args.checkpoint,
             joint_checkpoint=args.joint_checkpoint, backend=args.backend, postprocessing_params=params,
+        )
+
+    elif args.method == "micro_sam2_apg":
+        params = json.loads(args.apg_params) if args.apg_params else None
+        run_microsam2_apg_evaluation(
+            args.dataset_name, args.input_path, args.experiment_folder,
+            device=device, model_type=args.model_type or _SAM2_MODEL_TYPE, checkpoint_path=args.checkpoint,
+            joint_checkpoint=args.joint_checkpoint, apg_params=params,
         )
 
     elif args.method in ("microsam_ais", "microsam_apg"):
