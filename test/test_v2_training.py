@@ -4,9 +4,11 @@ import random
 import socket
 import tempfile
 import unittest
+import contextlib
 import unittest.mock
 
 import pytest
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -437,6 +439,56 @@ class TestDdpCheckpointRoundTrip(unittest.TestCase):
                 with self.subTest(rank=rank):
                     resumed = torch.load(os.path.join(result_dir, f"resumed{rank}.pt"), weights_only=False)
                     self.assertTrue(torch.allclose(resumed, torch.full((4, 4), 5.0)))
+
+
+class TestAutomaticValidationRng(unittest.TestCase):
+    """Automatic validation must also be deterministic when data loading is synchronous."""
+
+    def test_zero_worker_validation_is_deterministic_and_restores_rng(self):
+        from micro_sam.v2.training.sam2_trainer import UniSAM2Trainer
+
+        class RandomValidationDataset(torch.utils.data.Dataset):
+            def __len__(self):
+                return 6
+
+            def __getitem__(self, index):
+                # With num_workers=0 all three draws happen in the trainer process.
+                sample = torch.tensor(
+                    [random.random(), np.random.random(), torch.rand(()).item()],
+                    dtype=torch.float32,
+                )
+                return sample, torch.zeros_like(sample)
+
+        trainer = types.SimpleNamespace(
+            model=nn.Identity(),
+            val_loader=torch.utils.data.DataLoader(
+                RandomValidationDataset(), batch_size=2, num_workers=0,
+            ),
+            device=torch.device("cpu"),
+            logger=None,
+            _iteration=0,
+            _forward_and_loss=lambda x, y: (x, x.mean()),
+        )
+
+        # Validation must leave the training RNG streams exactly where it found them.
+        random.seed(123)
+        np.random.seed(123)
+        torch.manual_seed(123)
+        first_metric = UniSAM2Trainer._validate_impl(trainer, contextlib.nullcontext)
+        actual_next = (random.random(), np.random.random(), torch.rand(()).item())
+
+        random.seed(123)
+        np.random.seed(123)
+        torch.manual_seed(123)
+        expected_next = (random.random(), np.random.random(), torch.rand(()).item())
+        self.assertEqual(actual_next, expected_next)
+
+        # The validation samples and metric must not depend on the surrounding training RNG.
+        random.seed(987)
+        np.random.seed(987)
+        torch.manual_seed(987)
+        second_metric = UniSAM2Trainer._validate_impl(trainer, contextlib.nullcontext)
+        self.assertEqual(first_metric, second_metric)
 
 
 class TestInstanceLabels(unittest.TestCase):

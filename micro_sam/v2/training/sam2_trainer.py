@@ -428,14 +428,16 @@ class UniSAM2Trainer(CheckpointAdapter, torch_em.trainer.DefaultTrainer):
         n_iter = 0
         last_x = last_y = last_pred = None
 
-        with torch.no_grad():
-            for x, y in self.val_loader:
-                x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
-                with forward_context():
-                    pred, loss = self._forward_and_loss(x, y)
-                metric_val += loss.item()
-                n_iter += 1
-                last_x, last_y, last_pred = x, y, pred
+        # Pin synchronous crop sampling without advancing the training RNG state.
+        with _pinned_validation_rng(self.model):
+            with torch.no_grad():
+                for x, y in self.val_loader:
+                    x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+                    with forward_context():
+                        pred, loss = self._forward_and_loss(x, y)
+                    metric_val += loss.item()
+                    n_iter += 1
+                    last_x, last_y, last_pred = x, y, pred
 
         metric_val /= max(n_iter, 1)
 
