@@ -1417,16 +1417,17 @@ def get_instance_segmentation_generator(
     inference_device: Devices = USE_MODEL_DEVICE,
     **kwargs,
 ) -> AutoSegBase:
-    """Get the automatic instance segmentation generator (AMG or AIS), mirroring the v1 factory.
+    """Get the automatic instance segmentation generator (AMG, AIS or APG), mirroring the v1 factory.
 
     Args:
-        model: The SAM2 model, required for the 'amg' mode.
-        decoder: The UniSAM2 decoder model, required for the 'ais' mode.
+        model: The SAM2 model, required for the 'amg' and 'apg' modes.
+        decoder: The UniSAM2 decoder model, required for the 'ais' and 'apg' modes.
         is_tiled: Whether to use the tiled segmenter.
-        segmentation_mode: One of 'amg' or 'ais'. By default 'ais' is used if a decoder is given,
-            otherwise 'amg'.
-        device: The device the model lives on ('ais' only).
-        inference_device: The `devices=None` fallback ('ais' only, see `UniSAM2InstanceSegmentation`).
+        segmentation_mode: One of 'amg', 'ais' or 'apg'. By default 'ais' is used if a decoder is
+            given, otherwise 'amg'.
+        device: The device the model lives on ('ais' and 'apg' only).
+        inference_device: The `devices=None` fallback ('ais' and 'apg' only, see
+            `UniSAM2InstanceSegmentation`).
         kwargs: Additional keyword arguments for the AMG segmenter.
 
     Returns:
@@ -1445,5 +1446,25 @@ def get_instance_segmentation_generator(
         return get_unisam2_segmentation_generator(
             decoder, is_tiled=is_tiled, device=device, inference_device=inference_device,
         )
+    elif segmentation_mode.lower() == "apg":
+        # Imported here because the APG module builds on this one.
+        from micro_sam.v2.automatic_prompt_generation import (
+            AutomaticPromptGenerator, TiledAutomaticPromptGenerator,
+        )
+        from micro_sam.v2.util import get_sam2_image_predictor
+
+        if decoder is None:
+            raise ValueError("The 'apg' segmentation mode requires a UniSAM2 'decoder'.")
+        if model is None:
+            raise ValueError(
+                "The 'apg' segmentation mode requires a SAM2 'model', which it prompts to turn the "
+                "decoder's candidates into masks."
+            )
+        cls = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
+        return cls(
+            decoder, get_sam2_image_predictor(model), device=device, inference_device=inference_device,
+        )
     else:
-        raise ValueError(f"Invalid segmentation_mode: {segmentation_mode}. Choose 'amg' or 'ais'.")
+        raise ValueError(
+            f"Invalid segmentation_mode: {segmentation_mode}. Choose 'amg', 'ais' or 'apg'."
+        )

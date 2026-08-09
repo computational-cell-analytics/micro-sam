@@ -29,18 +29,19 @@ def get_predictor_and_segmenter(
 ) -> Tuple[object, object]:
     """Get the SAM2 predictor and the generator for automatic instance segmentation.
 
-    Automatic segmentation with SAM2 uses one of two engines, selected via `segmentation_mode`:
+    Automatic segmentation with SAM2 uses one of three engines, selected via `segmentation_mode`:
     the decoder-based AIS (with a UniSAM2 decoder from a finetuned model, e.g. 'hvit_t_cells', or a
-    `checkpoint`) or the grid-based AMG (no decoder). By default AIS is used when a decoder is
-    available and AMG otherwise.
+    `checkpoint`), the grid-based AMG (no decoder), or APG, which derives candidates from the decoder
+    and prompts the interactive branch with them. By default AIS is used when a decoder is available
+    and AMG otherwise. APG is 2d only and costs several forward passes per image, so it is opt-in.
 
     Args:
         model_type: The SAM2 model. Either a finetuned model with a registered decoder (see
             `micro_sam.v2.util.get_model_names`) or a base backbone combined with `checkpoint`.
         checkpoint: Optional path to a decoder checkpoint to build the UniSAM2 decoder from.
         device: The torch device. By default the best available device is selected.
-        segmentation_mode: The segmentation engine, one of 'amg' or 'ais'. By default 'ais' is used
-            if a decoder is available, otherwise 'amg'.
+        segmentation_mode: The segmentation engine, one of 'amg', 'ais' or 'apg'. By default 'ais' is
+            used if a decoder is available, otherwise 'amg'.
         is_tiled: Whether to return a segmenter for in-plane (xy) tiled segmentation.
         kwargs: Keyword arguments for the automatic mask generation (AMG) class.
 
@@ -61,8 +62,8 @@ def get_predictor_and_segmenter(
         model_type=model_type, ndim=2, device=model_device, checkpoint_path=None, decoder_path=None, use_cli=True,
     )
 
-    # Resolve the UniSAM2 decoder if the caller requests one or one is available. 'ais' requires a
-    # decoder. 'amg' never uses one. 'auto' (None) prefers a decoder and uses AMG when none is found.
+    # Resolve the UniSAM2 decoder if the caller requests one or one is available. 'ais' and 'apg'
+    # require one. 'amg' never uses one. 'auto' (None) prefers a decoder and uses AMG when none is found.
     decoder = None
     if segmentation_mode != "amg":
         try:
@@ -71,11 +72,15 @@ def get_predictor_and_segmenter(
             encoder = getattr(getattr(predictor, "model", predictor), "image_encoder", None)
             decoder = get_decoder(model_type, checkpoint=checkpoint, device=model_device, encoder=encoder)
         except Exception as e:
-            if segmentation_mode == "ais":
+            if segmentation_mode in ("ais", "apg"):
                 raise
             print(f"Could not load a UniSAM2 decoder for '{model_type}', falling back to AMG: {e}")
 
-    engine = "ais" if decoder is not None else "amg"
+    # An explicit mode is honored; only the automatic choice falls back to what the decoder allows.
+    if segmentation_mode is None:
+        engine = "ais" if decoder is not None else "amg"
+    else:
+        engine = segmentation_mode
     if engine == "amg":  # tag cached embeddings with the model so the AMG state is not reused across models.
         kwargs.setdefault("model_type", model_type)
     segmenter = get_instance_segmentation_generator(
@@ -147,9 +152,12 @@ def automatic_instance_segmentation(
     if ndim is None:
         ndim = raw.ndim
 
-    is_ais = isinstance(segmenter, UniSAM2InstanceSegmentation)
+    # AIS and APG share the decoder path but differ in what makes the instances: AIS post-processes the
+    # prediction and 'mode' picks how, APG prompts instead. Asked of the segmenter to avoid importing it.
+    is_decoder_based = isinstance(segmenter, UniSAM2InstanceSegmentation)
+    takes_mode = getattr(segmenter, "_has_postprocessing_mode", True)
 
-    if is_ais:
+    if is_decoder_based:
         # Resolve one device selection for the whole staged workflow. Explicit `devices` takes
         # precedence over the per-call `device`. When the caller omits both, preserve the intent from
         # `get_predictor_and_segmenter` (None means fan out, an explicit device means stay pinned).
@@ -198,7 +206,10 @@ def automatic_instance_segmentation(
                 num_prefetch_workers=num_prefetch_workers,
                 num_write_workers=num_write_workers,
             )
-            segmentation = segmenter.generate(mode=mode, **generate_kwargs)
+            if takes_mode:
+                segmentation = segmenter.generate(mode=mode, **generate_kwargs)
+            else:
+                segmentation = segmenter.generate(**generate_kwargs)
         finally:
             # Close all handles. Remove only a store created implicitly for this call.
             if image_embeddings is not None:
