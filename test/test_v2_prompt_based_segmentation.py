@@ -199,6 +199,7 @@ def test_promptable_segmentation_3d_keeps_offloading_on_cuda(monkeypatch):
 def test_promptable_segmentation_3d_progress_total():
     segmenter = PromptableSegmentation3D.__new__(PromptableSegmentation3D)
     segmenter.volume = np.zeros((8, 16, 16), dtype="uint8")
+    segmenter._clear_pushed_prompts()  # normally done in '__init__', which '__new__' skips
 
     assert segmenter.get_progress_total() == 8
     assert segmenter.get_progress_total((2, 5)) == 4
