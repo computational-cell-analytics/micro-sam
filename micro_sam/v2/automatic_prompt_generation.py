@@ -4,16 +4,27 @@ The flow post-processing thresholds the decoder's convergence density to get ins
 candidates *below* that threshold, prompts the interactive branch with each one, and keeps the masks it
 scores highly, so the model does the discrimination that thresholding cannot. Worth +0.085 mSA on livecell.
 
+A volume works the same way, with the SAM2 video predictor in place of the image predictor: the flow
+is integrated in 3d so a density component is a whole object, each is scored in 2d on the slice it
+converges on, and the survivors are propagated through the volume. Worth +0.06 mSA over AIS on ten
+volumetric LM datasets and +0.27 on four EM ones.
+
 The parameter surface is deliberately small: everything here was measured to matter on at least one
-dataset, and a good many other levers were tried and dropped.
+dataset, and a good many other levers were tried and dropped. For volumes those were: re-prompting
+every instance with the prompts the merge grouped onto it (+0.001), negative prompts from the
+adjacent instances (+0.001), conditioning the anchor slice with a box or the 2d mask instead of the
+point (+0.001 and -0.005), and sampling further positive prompts from an instance's own mask
+(-0.034, because a prompt on a propagated slice turns it into a conditioning frame and replaces the
+mask there with a single-point one). Selection is not what limits the result: an oracle that hands
+every object its best-matching propagated mask scores 0.006 above the merge.
 """
 
 import shutil
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 from tqdm import tqdm
-from scipy.ndimage import find_objects, distance_transform_edt
+from scipy.ndimage import find_objects
 
 import torch
 
@@ -48,14 +59,9 @@ DEFAULT_PROMPT_GENERATION = {
     # Off by default until the box stage is swept beyond livecell.
     "refine_with_box_prompts": False,
     "box_extension": 0,
-    # Volumes only. The second round, see `AutomaticPromptGenerator._refine_candidates`.
-    "refine_prompts": False,
-    # Suppression is not proof of identity, so grouping asks for containment instead.
-    "group_threshold": 0.7,
-    "max_positive_prompts": 4,
-    "max_negative_prompts": 2,
-    # Volumes only. What conditions an object on its anchor slice: 'point', 'box' or 'mask'.
-    "anchor_prompt": "point",
+    # Volumes only. A single threshold merges the peaks of touching objects into one component,
+    # which the coarser level of the ladder separates again. Worth 0.009 mSA over three backbones.
+    "candidate_threshold_3d": (1.5, 10.0),
     # Volumes only. The objects of a pass propagate together, trading memory against the pass count.
     "n_objects_per_pass": 16,
     # Volumes only. Full propagation by default: stopping early takes every object of a pass to leave.
@@ -247,13 +253,11 @@ def merge_by_score(
         max_overlap: Reject a candidate when more than this fraction of it is already claimed. This is
             the duplicate suppression of the merge.
         min_size: Minimum object size to keep.
-        return_matches: Whether to also return which records were suppressed by which kept record.
+        return_matches: Whether to also return which record made each instance.
 
     Returns:
-        The instance segmentation, uint32 array. If `return_matches`, additionally the matches: one
-        entry per instance in the segmentation, mapping its id to {'record': the index of the record
-        that made it, 'suppressed': (index, containment) for every record it suppressed}. A suppressed
-        record with a high containment is the same object seen again, so its prompts describe it too.
+        The instance segmentation, uint32 array. If `return_matches`, additionally a mapping from
+        every instance id to the index of the record that made it.
     """
     out = np.zeros(shape, dtype="uint32")
     scores = np.array([record["predicted_iou"] * record["stability_score"] for record in records])
@@ -271,19 +275,12 @@ def merge_by_score(
         target = out[record.get("bounding_box", full_box)]
         claimed = target[mask]
         if int(np.count_nonzero(claimed)) / area > max_overlap:
-            if return_matches:
-                # The instance that claimed most of it is the one this candidate is a duplicate of,
-                # and how much of it that instance holds is how sure that is.
-                counts = np.bincount(claimed.astype("int64"))
-                counts[0] = 0
-                instance_id = int(counts.argmax())
-                matches[instance_id]["suppressed"].append((int(index), float(counts[instance_id] / area)))
             continue
         fresh = mask & (target == 0)
         if int(fresh.sum()) < min_size:
             continue
         target[fresh] = next_id
-        matches[next_id] = {"record": int(index), "suppressed": []}
+        matches[next_id] = int(index)
         next_id += 1
     return (out, matches) if return_matches else out
 
@@ -337,62 +334,6 @@ def refine_with_boxes(
     return refined
 
 
-def _interior_points(mask: np.ndarray) -> Dict[int, tuple]:
-    """The most interior point of every slice of a volumetric object mask, keyed by the slice index.
-
-    The deepest point rather than the centroid, which a curved cross-section puts outside the object.
-
-    Args:
-        mask: The object mask, shape (Z, Y, X).
-
-    Returns:
-        {slice index: (y, x)} for every slice the object appears on.
-    """
-    # Padded, so an object touching the crop border does not have its deepest point put on that border.
-    distances = distance_transform_edt(np.pad(mask, 1))[1:-1, 1:-1, 1:-1]
-    points = {}
-    for z in range(mask.shape[0]):
-        plane = distances[z]
-        if not plane.any():
-            continue
-        y, x = np.unravel_index(int(np.argmax(plane)), plane.shape)
-        points[z] = (int(y), int(x))
-    return points
-
-
-def _farthest_point_sampling(points: np.ndarray, n_samples: int, spacing: Optional[tuple] = None) -> np.ndarray:
-    """Greedily pick the points that lie furthest apart, always keeping the first one.
-
-    Args:
-        points: The points, shape (N, D).
-        n_samples: The number of points to keep.
-        spacing: Optional per-axis scale, so that an anisotropic axis is not over- or under-weighted.
-
-    Returns:
-        The indices of the kept points, starting with 0.
-    """
-    points = np.asarray(points, dtype="float32")
-    if len(points) <= n_samples:
-        return np.arange(len(points))
-
-    scaled = points if spacing is None else points * np.asarray(spacing, dtype="float32")
-    chosen = [0]
-    distances = np.linalg.norm(scaled - scaled[0], axis=1)
-    for _ in range(n_samples - 1):
-        index = int(np.argmax(distances))
-        chosen.append(index)
-        distances = np.minimum(distances, np.linalg.norm(scaled - scaled[index], axis=1))
-    return np.array(chosen)
-
-
-def _boxes_touch(first: tuple, second: tuple, margin: int = 1) -> bool:
-    """Whether two bounding boxes overlap, or come within `margin` of each other on every axis."""
-    return all(
-        (one.start - margin) < other.stop and (other.start - margin) < one.stop
-        for one, other in zip(first, second)
-    )
-
-
 def _volume_records(
     video_segments: Dict[int, Dict[int, np.ndarray]], candidates: List[dict], shape: tuple,
 ) -> List[Dict[str, Any]]:
@@ -441,9 +382,6 @@ def _volume_records(
             "bounding_box": (slice(z0, z1), slice(y0, y1), slice(x0, x1)),
             "predicted_iou": candidate["score"],
             "stability_score": candidate["stability"],
-            # The prompts that made this mask, so a second round can re-use them, see
-            # `AutomaticPromptGenerator._refine_candidates`.
-            "candidate": candidate,
         })
     return records
 
@@ -638,7 +576,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     @torch.no_grad()
     def generate(
         self,
-        candidate_threshold: float = DEFAULT_PROMPT_GENERATION["candidate_threshold"],
+        candidate_threshold: Optional[Union[float, Sequence[float]]] = None,
         foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
         n_iter: int = DEFAULT_PROMPT_GENERATION["n_iter"],
         dt: float = DEFAULT_PROMPT_GENERATION["dt"],
@@ -651,11 +589,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         refine_with_box_prompts: bool = DEFAULT_PROMPT_GENERATION["refine_with_box_prompts"],
         box_extension: int = DEFAULT_PROMPT_GENERATION["box_extension"],
         multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
-        refine_prompts: bool = DEFAULT_PROMPT_GENERATION["refine_prompts"],
-        group_threshold: float = DEFAULT_PROMPT_GENERATION["group_threshold"],
-        max_positive_prompts: int = DEFAULT_PROMPT_GENERATION["max_positive_prompts"],
-        max_negative_prompts: int = DEFAULT_PROMPT_GENERATION["max_negative_prompts"],
-        anchor_prompt: str = DEFAULT_PROMPT_GENERATION["anchor_prompt"],
         n_objects_per_pass: int = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"],
         early_stop_patience: Optional[int] = DEFAULT_PROMPT_GENERATION["early_stop_patience"],
         batch_size: int = 64,
@@ -664,8 +597,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         """Derive prompts from the stored predictions, apply them and merge the masks.
 
         Args:
-            candidate_threshold: Density threshold for proposing candidates, or several of them.
-                Lower proposes more, but merges the peaks of touching objects; see
+            candidate_threshold: Density threshold for proposing candidates, or several of them for
+                a volume. By default 1.5 for an image and (1.5, 10.0) for a volume, see
                 `derive_volume_prompts`.
             foreground_threshold: Foreground binarisation threshold. Here it only limits which pixels can
                 be proposed from, since the masks come from the interactive branch, so it trades candidate
@@ -686,13 +619,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             box_extension: Number of pixels every box of that second stage is grown by.
             multimasking: Whether to predict several masks per point and keep the best scoring one. A
                 single point is ambiguous between one object and a cluster, so this is on by default.
-            refine_prompts: Whether to propagate a volume a second time, from the grouped prompts of
-                the first round, see `_refine_candidates`.
-            group_threshold: How much of a suppressed mask has to lie inside the instance that claimed
-                it for their prompts to be grouped.
-            max_positive_prompts: Number of positive prompts kept per instance in that second round.
-            max_negative_prompts: Number of negative prompts added per instance in that second round.
-            anchor_prompt: What conditions an object on its anchor slice, see `_seed_object`.
             n_objects_per_pass: Number of objects propagated together through a volume. The video
                 predictor runs them as one batch, so this trades device memory against the pass count.
             early_stop_patience: Stop a propagation pass after this many consecutive slices in which
@@ -708,7 +634,12 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
         shape = self._prediction[0].shape
         # The prediction carries the dimensionality it was run at: (4, Y, X) or (4, Z, Y, X).
-        if self._prediction.ndim == 4:
+        is_volume = self._prediction.ndim == 4
+        if candidate_threshold is None:
+            candidate_threshold = DEFAULT_PROMPT_GENERATION[
+                "candidate_threshold_3d" if is_volume else "candidate_threshold"
+            ]
+        if is_volume:
             prompts = derive_volume_prompts(
                 self._prediction[0], self._prediction[1:], candidate_threshold=candidate_threshold,
                 foreground_threshold=foreground_threshold, n_iter=n_iter, dt=dt, sigma=sigma,
@@ -717,26 +648,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             if prompts is None:
                 return np.zeros(shape, dtype="uint32")
             candidates = self._score_candidates(
-                prompts, multimasking=multimasking, batch_size=batch_size, score_threshold=score_threshold,
-                max_overlap=max_overlap, group_threshold=group_threshold,
+                prompts, multimasking=multimasking, batch_size=batch_size,
+                score_threshold=score_threshold, max_overlap=max_overlap,
             )
             records = self._propagate_candidates(
-                candidates, n_objects_per_pass=n_objects_per_pass, anchor_prompt=anchor_prompt,
-                early_stop_patience=early_stop_patience, verbose=verbose,
-            )
-            segmentation, matches = merge_by_score(
-                records, shape, max_overlap=max_overlap, min_size=min_size, return_matches=True,
-            )
-            if not refine_prompts or segmentation.max() == 0:
-                return segmentation
-
-            refined = self._refine_candidates(
-                segmentation, records, matches, group_threshold=group_threshold,
-                max_positive_prompts=max_positive_prompts, max_negative_prompts=max_negative_prompts,
-                spacing=spacing,
-            )
-            records = self._propagate_candidates(
-                refined, n_objects_per_pass=n_objects_per_pass, anchor_prompt=anchor_prompt,
+                candidates, n_objects_per_pass=n_objects_per_pass,
                 early_stop_patience=early_stop_patience, verbose=verbose,
             )
             return merge_by_score(records, shape, max_overlap=max_overlap, min_size=min_size)
@@ -814,7 +730,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
     def _score_candidates(
         self, prompts: dict, multimasking: bool, batch_size: int, score_threshold: float,
-        max_overlap: float, group_threshold: float,
+        max_overlap: float,
     ) -> List[dict]:
         """Prompt every candidate in 2d on its anchor slice, and keep the strong, non-duplicate ones.
 
@@ -823,9 +739,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         also gives every surviving candidate the predicted IoU that orders the volumetric merge.
 
         Returns:
-            The surviving candidates. Each carries the prompt it will be propagated with, and the
-            prompts of the candidates it turned out to be a duplicate of, which a second round groups
-            with it rather than throwing away.
+            The surviving candidates, each with the prompt it will be propagated with.
         """
         points, point_labels, frames = prompts["points"], prompts["point_labels"], prompts["frames"]
         candidates = []
@@ -842,71 +756,24 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             if not records:
                 continue
 
-            _, matches = merge_by_score(
+            _, kept = merge_by_score(
                 records, tuple(records[0]["segmentation"].shape), max_overlap=max_overlap,
                 min_size=DEFAULT_PROMPT_GENERATION["min_size"], return_matches=True,
             )
-
-            def point_of(record):
-                return points[indices[record["prompt_index"]], 0]
-
-            for entry in matches.values():
-                record = records[entry["record"]]
-                x, y = point_of(record)
-                mask = np.asarray(record["segmentation"])
-                rows, columns = np.nonzero(mask)
+            for record_index in kept.values():
+                record = records[record_index]
+                x, y = points[indices[record["prompt_index"]], 0]
                 candidates.append({
                     "frame": int(frame),
-                    "prompts": [(int(frame), float(x), float(y), 1)],
-                    "duplicates": [
-                        (int(frame), *(float(value) for value in point_of(records[index])))
-                        for index, containment in entry["suppressed"] if containment >= group_threshold
-                    ],
-                    # What the model made of the anchor prompt in 2d, which is a far less ambiguous
-                    # thing to condition the propagation on than the point itself.
-                    "box": (
-                        float(columns.min()), float(rows.min()),
-                        float(columns.max() + 1), float(rows.max() + 1),
-                    ),
-                    "mask": mask,
+                    "point": (float(x), float(y)),
                     "score": record["predicted_iou"],
                     "stability": record["stability_score"],
                 })
         return candidates
 
-    def _seed_object(self, candidate: dict, object_id: int, anchor_prompt: str) -> List[tuple]:
-        """Condition the object on its anchor slice with what the 2d scoring already made of it.
-
-        A point leaves the video predictor to decide again what that point meant, which is the
-        ambiguity the 2d stage has already resolved. A box or the mask itself carries that answer over.
-
-        Returns:
-            The prompts that still have to be pushed as points. A mask conditions a slice on its own,
-            so the prompts on the anchor slice are dropped rather than replacing it.
-        """
-        prompts = candidate["prompts"]
-        if anchor_prompt == "point":
-            return prompts
-        if anchor_prompt == "box":
-            x0, y0, x1, y1 = candidate["box"]
-            self._propagator.add_box_prompts(
-                # The propagator takes (y0, x0, y1, x1).
-                frame_ids=candidate["frame"], boxes=[np.array([y0, x0, y1, x1])], object_id=object_id,
-            )
-            return prompts
-        if anchor_prompt == "mask":
-            self._video_predictor.add_new_mask(
-                inference_state=self._propagator.inference_state,
-                frame_idx=candidate["frame"],
-                obj_id=object_id,
-                mask=self._propagator._prepare_mask(candidate["mask"]),
-            )
-            return [prompt for prompt in prompts if prompt[0] != candidate["frame"]]
-        raise ValueError(f"anchor_prompt must be 'point', 'box' or 'mask', got '{anchor_prompt}'.")
-
     def _propagate_candidates(
         self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
-        verbose: bool, anchor_prompt: str,
+        verbose: bool,
     ) -> List[Dict[str, Any]]:
         """Turn every candidate into a volumetric mask by propagating its prompts through the volume.
 
@@ -927,14 +794,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         for batch in tqdm(passes, desc="Propagate prompts", disable=not verbose):
             self._propagator.reset_predictor()
             for object_id, candidate in enumerate(batch, start=1):
-                prompts = self._seed_object(candidate, object_id, anchor_prompt)
-                if not prompts:
-                    continue
+                x, y = candidate["point"]
                 self._propagator.add_point_prompts(
-                    frame_ids=[frame for frame, x, y, label in prompts],
-                    # The propagator takes YX, the prompts are stored in the XY the model wants.
-                    points=np.array([[y, x] for frame, x, y, label in prompts], dtype="float32"),
-                    point_labels=np.array([label for frame, x, y, label in prompts], dtype="int32"),
+                    frame_ids=candidate["frame"],
+                    points=np.array([[y, x]], dtype="float32"),  # The propagator takes YX.
+                    point_labels=np.array([1], dtype="int32"),
                     object_id=object_id,
                 )
             video_segments = self._propagator.propagate_prompts(early_stop_patience=early_stop_patience)
@@ -942,113 +806,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
         self._propagator.reset_predictor()
         return records
-
-    def _refine_candidates(
-        self, segmentation: np.ndarray, records: List[Dict[str, Any]], matches: dict,
-        group_threshold: float, max_positive_prompts: int, max_negative_prompts: int,
-        spacing: Optional[tuple],
-    ) -> List[dict]:
-        """Re-derive one prompt set per merged instance, from the prompts that were grouped onto it.
-
-        Every prompt the merge put on an instance describes it, so a second round gives the object all
-        of them at once instead of only the one that won. The nearest adjacent instances contribute
-        negative prompts, against which leaking into a touching neighbour is the other failure.
-
-        Sampling further positives from the instance's own mask was tried and dropped: a prompt on a
-        slice the object was only propagated onto turns that slice into a conditioning frame, which
-        replaces the propagated mask there with a single-point one. It cost 0.034 mSA over nine
-        volumetric datasets.
-
-        Args:
-            segmentation: The instance segmentation of the first round.
-            records: The propagated records of the first round.
-            matches: The merge's matches, see `merge_by_score`.
-            group_threshold: How much of a suppressed mask has to lie inside an instance for its
-                prompts to be grouped with it.
-            max_positive_prompts: Number of positive prompts kept per instance.
-            max_negative_prompts: Number of negative prompts added per instance.
-            spacing: Anisotropic voxel spacing, used when sampling the positives.
-
-        Returns:
-            The refined candidates, to be propagated in a second round.
-        """
-        boxes = find_objects(segmentation)
-
-        # The interior point of every instance on every slice, from which its neighbours draw the
-        # negative prompts that say where it is.
-        interior = {}
-        for instance_id in matches:
-            box = boxes[instance_id - 1]
-            points = _interior_points(segmentation[box] == instance_id)
-            interior[instance_id] = {
-                box[0].start + z: (box[1].start + y, box[2].start + x) for z, (y, x) in points.items()
-            }
-
-        refined = []
-        for instance_id, entry in matches.items():
-            record = records[entry["record"]]
-            candidate = record["candidate"]
-
-            positives = [(frame, x, y) for frame, x, y, label in candidate["prompts"] if label == 1]
-            positives += candidate["duplicates"]
-            for index, containment in entry["suppressed"]:
-                if containment < group_threshold:
-                    continue
-                other = records[index]["candidate"]
-                positives += [(frame, x, y) for frame, x, y, label in other["prompts"] if label == 1]
-                positives += other["duplicates"]
-
-            # The anchor is the first prompt and the sampling starts from it, so it is always kept.
-            keep = _farthest_point_sampling(
-                [(frame, y, x) for frame, x, y in positives], max_positive_prompts, spacing=spacing,
-            )
-            positives = [positives[index] for index in keep]
-
-            negatives = self._adjacent_points(
-                instance_id, positives, interior, boxes, max_negative_prompts,
-            )
-            refined.append({
-                # The earliest slice the object is conditioned on, which is where its pass propagates
-                # from, see `_propagate_candidates`.
-                "frame": min(frame for frame, x, y in positives),
-                "prompts": (
-                    [(frame, x, y, 1) for frame, x, y in positives]
-                    + [(frame, x, y, 0) for frame, x, y in negatives]
-                ),
-                "duplicates": [],
-                # The anchor moved to the earliest grouped slice, so its seed moves with it.
-                "box": candidate["box"],
-                "mask": candidate["mask"],
-                "score": record["predicted_iou"],
-                "stability": record["stability_score"],
-            })
-        return refined
-
-    @staticmethod
-    def _adjacent_points(instance_id, positives, interior, boxes, max_negative_prompts) -> List[tuple]:
-        """The interior points of the nearest instances that touch this one, on the slices it is prompted on.
-
-        A negative only helps where the object is conditioned, so it is placed on a slice that already
-        carries a positive prompt. Only instances whose bounding box touches this one are considered:
-        a distant object is not what a mask leaks into.
-        """
-        anchors = {frame: (x, y) for frame, x, y in positives}
-        neighbours = [
-            other_id for other_id in interior
-            if other_id != instance_id and _boxes_touch(boxes[instance_id - 1], boxes[other_id - 1])
-        ]
-
-        found = []
-        for other_id in neighbours:
-            for frame, (y, x) in interior[other_id].items():
-                if frame not in anchors:
-                    continue
-                anchor_x, anchor_y = anchors[frame]
-                distance = np.hypot(x - anchor_x, y - anchor_y)
-                found.append((float(distance), frame, float(x), float(y)))
-
-        found.sort()
-        return [(frame, x, y) for _, frame, x, y in found[:max_negative_prompts]]
 
 
 class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2InstanceSegmentation):

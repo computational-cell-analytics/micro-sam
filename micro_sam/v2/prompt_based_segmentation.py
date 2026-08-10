@@ -495,6 +495,44 @@ class PromptableSegmentation3D:
         self._pushed_masks = {}
         self._prompt_signatures = set()
 
+    def _anchor_per_object(self):
+        """The earliest slice each object is conditioned on, keyed by its object id."""
+        anchors = {}
+        for key in (*self._pushed_points, *self._pushed_boxes, *self._pushed_masks):
+            object_id, frame_id = key
+            anchors[object_id] = min(anchors.get(object_id, frame_id), frame_id)
+        return anchors
+
+    def _replay_prompts(self, snapshot, object_ids):
+        """Push the recorded prompts of these objects onto a fresh state, in the order they were added.
+
+        The snapshot is taken before the first replay, because resetting the state also clears the
+        bookkeeping this reads, and a later group's prompts would be gone by then.
+
+        A box has to precede the points of its object and frame, which 'add_box_prompts' takes care of
+        by re-adding the points it clears.
+        """
+        points, boxes, masks = snapshot
+        self.reset_predictor()
+        for (object_id, frame_id), pushed in points.items():
+            if object_id not in object_ids:
+                continue
+            for y, x, label in pushed:
+                self.add_point_prompts(
+                    frame_ids=frame_id, points=np.array([[y, x]]),
+                    point_labels=np.array([label]), object_id=object_id,
+                )
+        for (object_id, frame_id), pushed in boxes.items():
+            if object_id in object_ids:
+                self.add_box_prompts(frame_ids=frame_id, boxes=[np.array(box) for box in pushed], object_id=object_id)
+        for (object_id, frame_id), pushed in masks.items():
+            if object_id not in object_ids:
+                continue
+            for mask in pushed.values():
+                self.predictor.add_new_mask(
+                    inference_state=self.inference_state, frame_idx=frame_id, obj_id=object_id, mask=mask,
+                )
+
     def sync_prompt_state(self, signatures):
         """Discard the persistent state when prompts were removed or changed since the last round.
 
@@ -522,10 +560,12 @@ class PromptableSegmentation3D:
         _free_device_memory()
 
     def get_progress_total(self, z_range=None):
-        """Return the number of slice propagation steps for the requested z range."""
-        if z_range is None:
-            return int(self.volume.shape[0])
-        return int(z_range[1] - z_range[0] + 1)
+        """Return the number of slice propagation steps for the requested z range.
+
+        Objects conditioned on different slices take one propagation pass each, see 'propagate_prompts'.
+        """
+        slices = int(self.volume.shape[0]) if z_range is None else int(z_range[1] - z_range[0] + 1)
+        return slices * max(1, len(set(self._anchor_per_object().values())))
 
     def _broadcast(self, value, n):
         """Broadcast a scalar frame/object id to a length-'n' list (or validate a length-1 or -'n'
@@ -670,10 +710,9 @@ class PromptableSegmentation3D:
             key = (obj_id, frame_id)
             # A stable digest, so the signature does not change between processes.
             signature = hashlib.sha1(np.ascontiguousarray(mask).tobytes()).hexdigest()
-            seen = self._pushed_masks.setdefault(key, set())
+            seen = self._pushed_masks.setdefault(key, {})
             if signature in seen:
                 continue
-            seen.add(signature)
 
             # Refine the drawn shape into the object on the seed frame, then seed propagation with the
             # refined mask. The box is the shape's bounding box (nonzero extent of the filled mask).
@@ -683,11 +722,13 @@ class PromptableSegmentation3D:
             box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype="float32")  # (x0, y0, x1, y1)
             refined = self._image_style_predict(frame_id, box=box, mask=mask)
 
+            prepared = self._prepare_mask(refined)
+            seen[signature] = prepared
             self.predictor.add_new_mask(
                 inference_state=self.inference_state,
                 frame_idx=frame_id,
                 obj_id=obj_id,
-                mask=self._prepare_mask(refined),
+                mask=prepared,
             )
 
     def _propagate_in_direction(
@@ -754,6 +795,31 @@ class PromptableSegmentation3D:
         return video_segments
 
     def propagate_prompts(self, update_progress=None, early_stop_patience=None, z_range=None):
+        """Propagate the pushed prompts through the volume, one pass per conditioned slice.
+
+        SAM2 propagates every object of a state from the earliest slice any of them is conditioned on,
+        and skips the backward pass entirely when that slice is 0. Objects anchored later would be
+        tracked - and have those results written into their memory - before they are conditioned, and
+        would never be propagated backwards at all. So objects that share an anchor are propagated
+        together and the rest get a state of their own.
+        """
+        groups = {}
+        for object_id, frame in self._anchor_per_object().items():
+            groups.setdefault(frame, []).append(object_id)
+        if len(groups) <= 1:
+            return self._propagate_both_directions(update_progress, early_stop_patience, z_range)
+
+        snapshot = (dict(self._pushed_points), dict(self._pushed_boxes), dict(self._pushed_masks))
+        video_segments = {}
+        for object_ids in groups.values():
+            self._replay_prompts(snapshot, set(object_ids))
+            for frame, per_object in self._propagate_both_directions(
+                update_progress, early_stop_patience, z_range
+            ).items():
+                video_segments.setdefault(frame, {}).update(per_object)
+        return video_segments
+
+    def _propagate_both_directions(self, update_progress=None, early_stop_patience=None, z_range=None):
         # First, we propagate the masklets forward in time using the input prompts in selected frames.
         # 'update_progress' is an optional callback that is called with the number of newly processed
         # frames, so callers (e.g. the napari annotator) can report propagation progress to the user.
