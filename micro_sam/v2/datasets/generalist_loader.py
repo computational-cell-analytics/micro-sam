@@ -1,6 +1,7 @@
 import os
 import json
 import random
+from glob import glob
 from functools import partial
 
 import numpy as np
@@ -681,6 +682,39 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             UniDataWrapper(
                 datasets.get_axondeepseg_dataset(name=name, val_fraction=0.2, split="val", **axondeepseg_kwargs),
                 source_ndim=2,
+            )
+        )
+
+    # 6. Igor cells (cell segmentation in vEM)
+    # NOTE: This data is used for training only. No validation data is added for it.
+    # The volumes are (16, 1024, 1024) uint8 blocks with dense uint32 instance labels.
+    igor_cells_root = os.path.join(input_path, "igor_cells")
+    all_igor_cells_paths = sorted(glob(os.path.join(igor_cells_root, "data_block_*.tif")))
+    igor_cells_raw_paths = [p for p in all_igor_cells_paths if not p.endswith("_seg.tif")]
+    igor_cells_label_paths = [p.replace(".tif", "_seg.tif") for p in igor_cells_raw_paths]
+    assert igor_cells_raw_paths, f"Did not find any volumes in '{igor_cells_root}'."
+    assert all(os.path.exists(p) for p in igor_cells_label_paths)
+
+    for z in z_slices:
+        igor_cells_kwargs = {
+            "patch_shape": (z, *patch_shape),
+            "n_samples": max(1, 500 // n_z),
+            # sampling=None: the volumes are isotropic.
+            "label_transform2": (
+                partial(_em_label_trafo, label_trafo=label_trafo(instances=True))
+                if label_trafo is not None else kwargs.get("label_transform2")
+            ),
+            "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]}
+        }
+
+        train_ds.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=igor_cells_raw_paths, raw_key=None,
+                    label_paths=igor_cells_label_paths, label_key=None,
+                    is_seg_dataset=True, **igor_cells_kwargs,
+                ), source_ndim=3, group_key=(3, z),
             )
         )
 
