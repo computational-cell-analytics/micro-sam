@@ -1415,12 +1415,14 @@ def get_instance_segmentation_generator(
     segmentation_mode: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
     inference_device: Devices = USE_MODEL_DEVICE,
+    ndim: int = 2,
     **kwargs,
 ) -> AutoSegBase:
     """Get the automatic instance segmentation generator (AMG, AIS or APG), mirroring the v1 factory.
 
     Args:
-        model: The SAM2 model, required for the 'amg' and 'apg' modes.
+        model: The SAM2 model, required for the 'amg' and 'apg' modes. For volumetric APG this must
+            be the SAM2 video predictor, which propagates the derived prompts through the volume.
         decoder: The UniSAM2 decoder model, required for the 'ais' and 'apg' modes.
         is_tiled: Whether to use the tiled segmenter.
         segmentation_mode: One of 'amg', 'ais' or 'apg'. By default 'ais' is used if a decoder is
@@ -1428,6 +1430,8 @@ def get_instance_segmentation_generator(
         device: The device the model lives on ('ais' and 'apg' only).
         inference_device: The `devices=None` fallback ('ais' and 'apg' only, see
             `UniSAM2InstanceSegmentation`).
+        ndim: The number of spatial dimensions. Only 'apg' has a separate volumetric segmenter; the
+            other modes handle a volume in their front-end (see `automatic_instance_segmentation`).
         kwargs: Additional keyword arguments for the AMG segmenter.
 
     Returns:
@@ -1460,6 +1464,12 @@ def get_instance_segmentation_generator(
                 "The 'apg' segmentation mode requires a SAM2 'model', which it prompts to turn the "
                 "decoder's candidates into masks."
             )
+        if ndim == 3:
+            if is_tiled:
+                raise NotImplementedError("Volumetric prompt generation does not support tiling yet.")
+            # A volume is prompted through the video predictor, which propagates its prompts, rather
+            # than through an image predictor built on it.
+            return AutomaticPromptGenerator(decoder, model, device=device, inference_device=inference_device)
         cls = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
         return cls(
             decoder, get_sam2_image_predictor(model), device=device, inference_device=inference_device,

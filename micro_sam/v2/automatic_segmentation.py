@@ -25,6 +25,7 @@ def get_predictor_and_segmenter(
     device: Optional[Union[str, torch.device]] = None,
     segmentation_mode: Optional[str] = None,
     is_tiled: bool = False,
+    ndim: int = 2,
     **kwargs,
 ) -> Tuple[object, object]:
     """Get the SAM2 predictor and the generator for automatic instance segmentation.
@@ -33,7 +34,7 @@ def get_predictor_and_segmenter(
     the decoder-based AIS (with a UniSAM2 decoder from a finetuned model, e.g. 'hvit_t_cells', or a
     `checkpoint`), the grid-based AMG (no decoder), or APG, which derives candidates from the decoder
     and prompts the interactive branch with them. By default AIS is used when a decoder is available
-    and AMG otherwise. APG is 2d only and costs several forward passes per image, so it is opt-in.
+    and AMG otherwise. APG costs several forward passes per image, so it is opt-in.
 
     Args:
         model_type: The SAM2 model. Either a finetuned model with a registered decoder (see
@@ -43,6 +44,8 @@ def get_predictor_and_segmenter(
         segmentation_mode: The segmentation engine, one of 'amg', 'ais' or 'apg'. By default 'ais' is
             used if a decoder is available, otherwise 'amg'.
         is_tiled: Whether to return a segmenter for in-plane (xy) tiled segmentation.
+        ndim: The number of spatial dimensions the segmenter is built for. Only APG needs to know:
+            it propagates its prompts through a volume, which needs the video predictor.
         kwargs: Keyword arguments for the automatic mask generation (AMG) class.
 
     Returns:
@@ -57,9 +60,11 @@ def get_predictor_and_segmenter(
     model_device = get_device(device)
 
     # Load a SAM2 image predictor, used to precompute the image embeddings that the decoder / grid
-    # prediction reuses. The video predictor for 3d embeddings is built on demand in the front-end.
+    # prediction reuses. Volumetric APG propagates its prompts, so it loads the video predictor
+    # instead - which also encodes the volume, so this stays one model on the device.
     predictor, _ = _get_sam_model(
-        model_type=model_type, ndim=2, device=model_device, checkpoint_path=None, decoder_path=None, use_cli=True,
+        model_type=model_type, ndim=3 if (segmentation_mode == "apg" and ndim == 3) else 2,
+        device=model_device, checkpoint_path=None, decoder_path=None, use_cli=True,
     )
 
     # Resolve the UniSAM2 decoder if the caller requests one or one is available. 'ais' and 'apg'
@@ -84,8 +89,9 @@ def get_predictor_and_segmenter(
     if engine == "amg":  # tag cached embeddings with the model so the AMG state is not reused across models.
         kwargs.setdefault("model_type", model_type)
     segmenter = get_instance_segmentation_generator(
-        model=predictor.model, decoder=decoder, is_tiled=is_tiled,
-        segmentation_mode=engine, device=model_device, inference_device=requested_device, **kwargs,
+        # The video predictor is the SAM2 model itself, an image predictor wraps one.
+        model=getattr(predictor, "model", predictor), decoder=decoder, is_tiled=is_tiled,
+        segmentation_mode=engine, device=model_device, inference_device=requested_device, ndim=ndim, **kwargs,
     )
     return predictor, segmenter
 
