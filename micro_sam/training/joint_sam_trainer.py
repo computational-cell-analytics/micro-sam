@@ -218,6 +218,6 @@ class JointSamLogger(TorchEmLogger):
         self.tb.add_scalar(tag="validation/mask_loss", scalar_value=mask_loss, global_step=step)
         self.tb.add_scalar(tag="validation/iou_loss", scalar_value=iou_regression_loss, global_step=step)
         self.tb.add_scalar(tag="validation/model_iou", scalar_value=model_iou, global_step=step)
-        self.tb.add_scalar(tag="train/instance_loss", scalar_value=instance_loss, global_step=step)
+        self.tb.add_scalar(tag="validation/instance_loss", scalar_value=instance_loss, global_step=step)
         self.tb.add_scalar(tag="validation/metric", scalar_value=metric, global_step=step)
         self.add_image(x, y, samples, "validation", step)
