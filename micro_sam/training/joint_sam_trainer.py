@@ -84,6 +84,7 @@ class JointSamTrainer(SamTrainer):
 
     def _train_epoch_impl(self, progress, forward_context, backprop):
         self.model.train()
+        self.unetr.train()
 
         input_check_done = False
 
@@ -131,6 +132,7 @@ class JointSamTrainer(SamTrainer):
 
     def _validate_impl(self, forward_context):
         self.model.eval()
+        self.unetr.eval()
 
         input_check_done = False
 
