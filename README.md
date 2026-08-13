@@ -31,10 +31,10 @@ Please check [the documentation](https://computational-cell-analytics.github.io/
 
 ## Contributing
 
-We welcome new contributions!
+We always welcome new contributions!
 
 If you just want to suggest a documentation edit, [you can do this directly here, on GitHub][edit-files-on-github].
-For more complex changes, see [CONTRIBUTING.md][contributing] for details, or the [contributing guide](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#contribution-guide) in our documentation. The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
+For more complex changes, see [CONTRIBUTING.md][contributing] or the [contributing guide](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#contribution-guide) in our documentation for details. The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
 
 Everyone participating in this project is expected to follow our [Code of Conduct][code-of-conduct].
 
