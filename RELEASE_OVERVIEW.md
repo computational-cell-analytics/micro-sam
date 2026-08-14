@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.8.9**
+
+Pin `napari<0.9` and minor updates to joint training.
+
 **New in version 1.8.8**
 
 Fix the bioimage.io model export for bioimageio.spec >=0.5.11.
