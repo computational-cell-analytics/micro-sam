@@ -11,6 +11,8 @@ Usage examples:
     python submit_grid_search.py -m hvit_b -d cremi --dry
 """
 
+import os
+import shlex
 import argparse
 import subprocess
 from pathlib import Path
@@ -20,6 +22,21 @@ from datetime import datetime
 
 EVAL_ROOT = Path(__file__).resolve().parent
 GRID_SEARCH_SCRIPT = EVAL_ROOT / "grid_search_automatic_cells.py"
+
+# Written into every job script, so a queued job sees the configuration the submission had rather than
+# whatever the environment holds when it starts. The sample caps are global, so lift them per dataset.
+PINNED_ENV_VARS = (
+    "MICRO_SAM2_JOINT_CHECKPOINT_ROOT",
+    "MICRO_SAM2_JOINT_EXPORT_ROOT",
+    "MICRO_SAM_EVAL_MAX_SAMPLES",
+    "MICRO_SAM_LIVECELL_PER_CELL_TYPE",
+)
+
+
+def env_exports() -> str:
+    """Return 'export' lines pinning the run configuration, or an empty string if none is set."""
+    return "".join(f"export {name}={shlex.quote(os.environ[name])}\n" for name in PINNED_ENV_VARS if name in os.environ)
+
 
 OUTPUT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/grid-search-joint-v2"
 
@@ -41,9 +58,11 @@ DATASETS_3D_EM = ("platynereis_nuclei", "cremi", "snemi", "humanneurons")
 DATASETS = tuple(sorted(set(DATASETS_2D + DATASETS_3D_LM + DATASETS_3D_EM)))
 
 # The grid search is postprocessing bound, so it gets more cores than the evaluation jobs.
-PARTITION = "grete-h100:shared,grete:shared"
+# 'grete:preemptible' is MIG only, so the GPU needs a type. Preemption is safe: a finished sweep
+# writes its CSV, and a requeued job restarts the one it did not finish.
+PARTITION = "grete:preemptible"
 ACCOUNT = "nim00007"
-GPU = "1"
+GPU = "2g.20gb:1"
 CPUS = 8
 MEMORY = "32G"
 TIME_LIMIT = "12:00:00"
@@ -59,9 +78,13 @@ def _command(
         "-m", model_type,
         "-o", str(Path(args.output_root) / model_type),
         "--split", args.split,
+        "--tune", args.tune,
+        "--joint_checkpoint", args.joint_checkpoint,
         "--livecell_per_celltype", str(args.livecell_per_celltype),
         "--n_threads", str(args.cpus),
     ]
+    if args.n_images is not None:
+        command.extend(["-n", str(args.n_images)])
     if args.n_shards > 1:
         command.extend(["--n_shards", str(args.n_shards)])
         command.extend(["--merge"] if merge else ["--shard", str(shard)])
@@ -82,9 +105,10 @@ def _write_batch_script(
         f"#SBATCH --mem {args.memory}",
         f"#SBATCH -t {TIME_LIMIT if heavy else '00:30:00'}",
         f"#SBATCH -p {args.partition}",
-        f"#SBATCH -G {GPU}",
-        f"#SBATCH -A {ACCOUNT}",
+        f"#SBATCH -G {args.gpu}",
+        f"#SBATCH -A {args.account}",
         f"#SBATCH --job-name={tag}",
+        "#SBATCH --requeue",
         "#SBATCH --constraint=inet",
         f"#SBATCH -o {job_folder}/logs/{tag}_%j.out",
         f"#SBATCH -e {job_folder}/logs/{tag}_%j.err",
@@ -92,8 +116,8 @@ def _write_batch_script(
     if dependency is not None:
         directives.append(f"#SBATCH --dependency=afterok:{dependency}")
 
-    batch_script = "#!/bin/bash\n{}\n\nsource ~/.bashrc\nmicromamba activate super\n\n{}\n".format(
-        "\n".join(directives), " ".join(command)
+    batch_script = "#!/bin/bash\n{}\n\nsource ~/.bashrc\nmicromamba activate super\n{}\n{}\n".format(
+        "\n".join(directives), env_exports(), " ".join(command)
     )
     with open(script_path, "w") as f:
         f.write(batch_script)
@@ -116,8 +140,16 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--all_datasets", action="store_true", help="Tune on every dataset.")
     parser.add_argument("--lm_only", action="store_true", help="Skip the 3d EM datasets.")
     parser.add_argument("-o", "--output_root", default=OUTPUT_ROOT, help="Root directory for the result CSVs.")
-    parser.add_argument("--split", default="test", choices=["val", "test"], help="Split to tune on (livecell only).")
+    parser.add_argument("--split", default="test", choices=["val", "test"], help="Split to tune on.")
+    parser.add_argument("--tune", default="ais", choices=["ais", "apg"],
+                        help="What to tune: the AIS postprocessing or the automatic prompt generation.")
+    parser.add_argument("--joint_checkpoint", default="best",
+                        help="Name of the joint trainer checkpoint to tune, without the '.pt' suffix.")
+    parser.add_argument("-n", "--n_images", type=int, default=None, help="Cap images per 2d dataset.")
     parser.add_argument("--partition", default=PARTITION, help="Slurm partition(s) to submit to.")
+    parser.add_argument("--account", default=ACCOUNT, help="Slurm account to charge the jobs to.")
+    parser.add_argument("--gpu", default=GPU,
+                        help="Slurm GPU spec. MIG partitions need a type, e.g. '2g.20gb:1' on grete:preemptible.")
     parser.add_argument("--cpus", type=int, default=CPUS, help="Cores per job, also the postprocessing thread count.")
     parser.add_argument("--memory", default=MEMORY, help="Memory per job.")
     parser.add_argument("--livecell_per_celltype", type=int, default=25, help="Images per livecell cell type.")

@@ -25,12 +25,11 @@ from tqdm import tqdm
 from micro_sam import util
 
 from micro_sam.v2.evaluation import inference, evaluation
-from micro_sam.v1.evaluation.evaluation import run_evaluation
 
 from common import (
     CHECKPOINT_PATHS, DATA_ROOT, DATASETS_3D, DATASET_SPACING, get_data_paths, load_volume,
     UNISAM2_CHECKPOINT, load_unisam2_model, predict_unisam2, postprocess_unisam2,
-    export_joint_checkpoint,
+    export_joint_checkpoint, run_dataset_evaluation,
 )
 from common import check_data_download
 
@@ -151,7 +150,7 @@ def run_automatic_evaluation_3d(
         all_seg.append(seg)
 
     os.makedirs(os.path.join(experiment_folder, "results"), exist_ok=True)
-    results = run_evaluation(gt_paths=all_gt, prediction_paths=all_seg, save_path=save_path)
+    results = run_dataset_evaluation(all_gt, all_seg, dataset_name, save_path)
     print(results)
 
 
@@ -166,6 +165,7 @@ def run_apg_evaluation_3d(
     variants=None,
     tag="apg",
     n_volumes=None,
+    ais_params=None,
 ):
     """Run automatic prompt generation on volumes and compare it with AIS on the same predictions.
 
@@ -173,6 +173,9 @@ def run_apg_evaluation_3d(
     volume. AIS post-processes the very same decoder prediction, so the two differ only in what turns
     the prediction into instances. Every variant is generated from one initialization of each volume,
     so a sweep pays for the encoder and the decoder once.
+
+    'ais_params' overrides the AIS postprocessing defaults, so that the AIS column is a tuned reference
+    rather than an untuned one.
     """
     from micro_sam.v2.util import get_sam2_model
     from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
@@ -215,7 +218,9 @@ def run_apg_evaluation_3d(
 
         segmenter.clear_state()
         segmenter.initialize(raw, ndim=3)
-        segmentations = {"ais": postprocess_unisam2(segmenter.get_state()["prediction"], dataset_name)}
+        segmentations = {
+            "ais": postprocess_unisam2(segmenter.get_state()["prediction"], dataset_name, params=ais_params)
+        }
         for name, params in variants.items():
             # The anisotropy the AIS reference is post-processed with, so both see the same volume.
             segmentations[name] = segmenter.generate(**{"spacing": spacing, **params})
@@ -229,7 +234,7 @@ def run_apg_evaluation_3d(
 
     os.makedirs(os.path.join(experiment_folder, "results"), exist_ok=True)
     for key, path in save_paths.items():
-        results = run_evaluation(gt_paths=all_gt, prediction_paths=all_seg[key], save_path=path)
+        results = run_dataset_evaluation(all_gt, all_seg[key], dataset_name, path)
         print(f"{key}:\n{results}")
 
 
@@ -257,6 +262,10 @@ def main():
         help="JSON mapping a variant name to the 'generate' overrides it is evaluated with.",
     )
     parser.add_argument("--tag", type=str, default="apg", help="Name of the APG result files.")
+    parser.add_argument("--joint_checkpoint", type=str, default="best",
+                        help="Name of the joint trainer checkpoint, without the '.pt' suffix.")
+    parser.add_argument("--ais_params", type=str, default=None,
+                        help="JSON dict of AIS postprocessing parameters, e.g. from grid_search_automatic_cells.")
     parser.add_argument("--n_volumes", type=int, default=None, help="Evaluate only this many volumes.")
     parser.add_argument("--crop_depth", type=int, default=CROP_SHAPE_3D[0], help="Number of slices to crop to.")
     args = parser.parse_args()
@@ -297,10 +306,12 @@ def main():
             experiment_folder=args.experiment_folder,
             device=device,
             model_type=args.model_type,
+            joint_checkpoint=args.joint_checkpoint,
             crop_shape=(args.crop_depth, *CROP_SHAPE_3D[1:]),
             variants=json.loads(args.apg_params) if args.apg_params else None,
             tag=args.tag,
             n_volumes=args.n_volumes,
+            ais_params=json.loads(args.ais_params) if args.ais_params else None,
         )
 
 

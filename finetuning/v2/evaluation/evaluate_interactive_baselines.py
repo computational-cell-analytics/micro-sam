@@ -31,12 +31,11 @@ from tqdm import tqdm
 
 import torch
 
-from micro_sam.v1.evaluation.evaluation import run_evaluation
 from micro_sam.v2.normalization import normalize_raw
 
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, CHECKPOINT_PATHS,
-    export_joint_checkpoint, get_data_paths,
+    export_joint_checkpoint, get_data_paths, run_dataset_evaluation,
 )
 from baselines_common import (
     MAX_EVALUATION_SAMPLES, _load_data, interactive_result_name, interactive_run_tag,
@@ -203,7 +202,7 @@ def run_nninteractive_evaluation(
     for it, save_path in enumerate(save_paths):
         if os.path.exists(save_path):
             continue
-        results = run_evaluation(gt_paths=all_gt, prediction_paths=all_seg_per_iter[it], save_path=save_path)
+        results = run_dataset_evaluation(all_gt, all_seg_per_iter[it], dataset_name, save_path)
         print(f"Iteration {it:02d}: {results}")
 
 
@@ -313,7 +312,7 @@ def run_sam_v1_evaluation(
             continue
         pred_dir = os.path.join(prediction_dir, f"iteration{it:02d}")
         pred_paths = [os.path.join(pred_dir, os.path.basename(path)) for path in image_paths]
-        results = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=save_path)
+        results = run_dataset_evaluation(gt_paths, pred_paths, dataset_name, save_path)
         print(f"Iteration {it:02d}: {results}")
 
     shutil.rmtree(work_dir, ignore_errors=True)
@@ -375,7 +374,7 @@ def run_sam3_evaluation(
     for it, save_path in enumerate(save_paths):
         if os.path.exists(save_path):
             continue
-        results = run_evaluation(gt_paths=all_gt, prediction_paths=all_seg_per_iter[it], save_path=save_path)
+        results = run_dataset_evaluation(all_gt, all_seg_per_iter[it], dataset_name, save_path)
         print(f"Iteration {it:02d}: {results}")
 
 
@@ -443,7 +442,7 @@ def run_sam2_evaluation(
                 continue
             pred_dir = os.path.join(prediction_dir, f"iteration{it:02d}")
             pred_paths = [os.path.join(pred_dir, os.path.basename(path)) for path in image_paths]
-            results = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=save_path)
+            results = run_dataset_evaluation(gt_paths, pred_paths, dataset_name, save_path)
             print(f"Iteration {it:02d}: {results}")
 
         shutil.rmtree(prediction_root, ignore_errors=True)
@@ -495,7 +494,7 @@ def run_sam2_evaluation(
                 if valid_roi is not None:
                     pred[~valid_roi] = 0
                 preds.append(pred)
-            results = run_evaluation(gt_paths=all_gt, prediction_paths=preds, save_path=save_path)
+            results = run_dataset_evaluation(all_gt, preds, dataset_name, save_path)
             print(f"Iteration {it:02d}: {results}")
 
 
@@ -520,8 +519,9 @@ def main():
         help="Model type override (e.g. vit_b for sam, hvit_t for sam2/micro_sam2)."
     )
     parser.add_argument(
-        "--joint_checkpoint", type=str, default="best", choices=["best", "latest"],
-        help="Which joint trainer checkpoint the micro_sam2 weights are taken from (default: best)."
+        "--joint_checkpoint", type=str, default="best",
+        help="Name of the joint trainer checkpoint the micro_sam2 weights are taken from, without the "
+             "'.pt' suffix, e.g. 'best', 'latest' or the name of a frozen copy."
     )
     parser.add_argument(
         "--ndim", type=int, default=None, choices=[2, 3],

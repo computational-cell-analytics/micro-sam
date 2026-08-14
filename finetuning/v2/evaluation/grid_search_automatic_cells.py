@@ -17,8 +17,15 @@ Alternatively '--track' sweeps one of the predefined dataset groups:
 For each track the best parameter combination is written to '<output_dir>/<track>.csv' together with
 the full sweep, and the best row is printed.
 
+'--tune apg' sweeps the automatic prompt generation instead of the postprocessing. Every combination
+re-prompts SAM2, so that grid is much smaller and needs both halves of the joint model.
+
+'--split val' tunes on data held out from the samples the evaluation scores, which is what keeps the
+evaluation honest. See 'common.VAL_SPLITS' for what counts as held out per dataset.
+
 Usage:
     python grid_search_automatic_cells.py -d livecell -m hvit_b -o /path/to/results
+    python grid_search_automatic_cells.py -d livecell -m hvit_b --split val --tune apg -o /path/to/apg
     python grid_search_automatic_cells.py --track lm_cell
     python grid_search_automatic_cells.py --track em_neurons --crop_3d 16 512 512
 """
@@ -47,7 +54,7 @@ from micro_sam.v2.postprocessing import (
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (  # noqa
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, DATASET_SPACING,
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, DATASET_SPACING, VAL_Z_RANGE,
     get_data_paths, load_volume, export_joint_checkpoint, drop_excluded_livecell,
 )
 from baselines_common import MAX_EVALUATION_SAMPLES  # noqa
@@ -68,6 +75,23 @@ LM_GRID = {
     "n_iter": [50, 100, 200],
     "dt": [0.25, 0.5, 1.0],
     "foreground_weight": [0.0, 0.25, 0.5, 0.65, 0.75, 0.9],
+}
+
+# Keys map to AutomaticPromptGenerator.generate. Every combination re-prompts SAM2, unlike the grids
+# above which only re-run CPU postprocessing, so this one stays small.
+APG_GRID_2D = {
+    "candidate_threshold": [1.0, 1.5, 2.5],
+    "sigma": [0.5, 1.0, 2.0],
+    "score_threshold": [0.5, 0.6, 0.7],
+    "min_size": [50, 100],
+}
+
+# Drops a level of 'score_threshold', since a volume pays for propagation on top of scoring.
+APG_GRID_3D = {
+    "candidate_threshold": [(1.5, 10.0), (1.0, 5.0), (2.5, 10.0)],
+    "sigma": [1.0, 2.0],
+    "score_threshold": [0.5, 0.6],
+    "min_size": [50, 100],
 }
 
 # Dense (multicut) grid for EM data. Keys map to run_multicut arguments.
@@ -123,16 +147,19 @@ POSTPROC_THREADS = 4
 CROP_SHAPE_3D = (8, 512, 512)
 
 
-def dataset_config(dataset_name, criterion=None, split="test"):
+def dataset_config(dataset_name, criterion=None, split="test", tune="ais"):
     """Build the grid-search config for a single dataset.
 
     EM datasets are tuned in dense (multicut) mode and ranked by the CREMI score, all others in
-    sparse (flow) mode and ranked by mSA.
+    sparse (flow) mode and ranked by mSA. With tune='apg' the postprocessing is replaced by automatic
+    prompt generation, which is swept over its own grid; the ranking metric is unchanged, so an APG
+    result is directly comparable with the AIS result of the same dataset.
 
     Args:
         dataset_name: The dataset to tune on.
         criterion: The metric to rank the grid by. Defaults to the mode-specific choice.
         split: The split to tune on. 'val' keeps the tuning off the samples the evaluation scores.
+        tune: What is tuned, 'ais' (the postprocessing) or 'apg' (the prompt generation).
 
     Returns:
         The config dict, in the same shape as an entry of TRACKS.
@@ -141,20 +168,31 @@ def dataset_config(dataset_name, criterion=None, split="test"):
     is_3d = dataset_name in DATASETS_3D
     if criterion is None:
         criterion = "cremi" if is_em else "msa"
+
+    if tune == "apg":
+        mode, grid = "apg", (APG_GRID_3D if is_3d else APG_GRID_2D)
+    else:
+        mode, grid = ("dense", EM_GRID) if is_em else ("sparse", LM_GRID)
+
     return {
         "datasets": [dataset_name],
-        "mode": "dense" if is_em else "sparse",
+        "mode": mode,
+        # Which metrics compute_metrics reports. Follows the data, not the mode, so that an APG run on
+        # EM is still ranked by the CREMI score.
+        "metric_mode": "dense" if is_em else "sparse",
         "ndim": 3 if is_3d else 2,
-        "grid": EM_GRID if is_em else LM_GRID,
+        "grid": grid,
         "spacing": DATASET_SPACING.get(dataset_name, None),
         "crop": CROP_SHAPE_3D if is_3d else None,
         "criterion": criterion,
         "match_evaluation": split == "test",
         "split": split,
+        # Only set for the EM volumes on the val split, which have no split of their own.
+        "z_range": VAL_Z_RANGE.get(dataset_name) if split == "val" else None,
     }
 
 
-def load_model(device, checkpoint_path=None, model_type=None, model_name=MODEL_NAME):
+def load_model(device, checkpoint_path=None, model_type=None, model_name=MODEL_NAME, joint_checkpoint="best"):
     """Load the UniSAM2 model to tune the postprocessing for.
 
     Mirrors the annotator's decoder-loading path: the decoder is loaded via get_unisam2_model, which
@@ -168,6 +206,7 @@ def load_model(device, checkpoint_path=None, model_type=None, model_name=MODEL_N
         model_type: The SAM2 backbone, e.g. 'hvit_b'. Selects the jointly finetuned model when no
             checkpoint is given, and defines the encoder a custom checkpoint is built on.
         model_name: The registry model name, e.g. 'hvit_t_cells'.
+        joint_checkpoint: Name of the joint trainer checkpoint the decoder is taken from.
 
     Returns:
         The UniSAM2 model in eval mode.
@@ -177,7 +216,7 @@ def load_model(device, checkpoint_path=None, model_type=None, model_name=MODEL_N
     encoder = model_type or model_name[:6]
 
     if checkpoint_path is None and model_type is not None:
-        checkpoint_path = export_joint_checkpoint(model_type)[1]
+        checkpoint_path = export_joint_checkpoint(model_type, joint_checkpoint)[1]
 
     if checkpoint_path is not None:
         print(f"Loading the UniSAM2 model from '{checkpoint_path}' with the '{encoder}' encoder.")
@@ -190,6 +229,59 @@ def load_model(device, checkpoint_path=None, model_type=None, model_name=MODEL_N
     if decoder_source is None:
         raise RuntimeError(f"The registry model '{model_name}' has no registered decoder.")
     return get_unisam2_model(decoder_source, device=device, encoder=encoder)
+
+
+def build_apg_segmenter(device, ndim, model_type, joint_checkpoint="best"):
+    """Build the automatic prompt generator, which needs both halves of the joint model.
+
+    The decoder proposes the candidates and the SAM2 branch turns each of them into a mask, so unlike
+    the postprocessing sweep this cannot be scored off a cached decoder prediction alone. A volume is
+    prompted through the video predictor, which propagates the prompts across slices.
+
+    Args:
+        device: The device to load the models onto.
+        ndim: The number of spatial dimensions, 2 or 3.
+        model_type: The SAM2 backbone of the jointly finetuned model, e.g. 'hvit_t'.
+        joint_checkpoint: Name of the joint trainer checkpoint both halves are taken from.
+
+    Returns:
+        The prompt generator, ready to be initialized on a sample.
+    """
+    from micro_sam.v2.util import get_sam2_model
+    from micro_sam.v2.instance_segmentation import get_unisam2_model, get_instance_segmentation_generator
+
+    if model_type is None:
+        raise ValueError("Tuning the prompt generation needs the joint model, so -m/--model_type is required.")
+
+    interactive_path, decoder_path = export_joint_checkpoint(model_type, joint_checkpoint)
+    print(f"Loading the prompt generator from '{interactive_path}' and '{decoder_path}'.")
+    decoder = get_unisam2_model(decoder_path, device=device, encoder=model_type)
+    model = get_sam2_model(
+        model_type=model_type, device=device, checkpoint_path=interactive_path,
+        **({"input_type": "videos"} if ndim == 3 else {}),
+    )
+    return get_instance_segmentation_generator(
+        model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
+    )
+
+
+def score_sample_apg(segmenter, raw, labels, params_list, ndim, metric_mode, spacing=None):
+    """Return a per-combo list of metric dicts for one sample, aligned with params_list.
+
+    The encoder and the decoder run once per sample; every combo then only re-derives the prompts and
+    re-prompts SAM2, which is what makes sweeping this affordable at all.
+    """
+    segmenter.clear_state()
+    segmenter.initialize(raw, ndim=ndim)
+    scores = []
+    for params in params_list:
+        try:
+            seg = segmenter.generate(spacing=spacing, **params)
+            scores.append(compute_metrics(seg.astype("uint32"), labels, metric_mode))
+        except Exception as e:
+            warnings.warn(f"Prompt generation failed for {params}: {e}")
+            scores.append(None)
+    return scores
 
 
 NORMALIZATIONS = ("minmax", "percentile_1_99", "percentile_2_98")
@@ -262,18 +354,19 @@ def resolve_data_paths(dataset_name, livecell_per_celltype=None, match_evaluatio
     samples the evaluation scores.
 
     With split='val' the parameters are tuned on held-out data instead, which keeps the evaluation on
-    the test split honest. Only livecell has a validation split wired up.
+    the test split honest. common.get_data_paths resolves that split; see common.VAL_SPLITS for what
+    counts as held out per dataset. livecell keeps its stratification here either way.
     """
     if split == "val":
-        if dataset_name != "livecell":
-            raise ValueError(f"There is no validation split for '{dataset_name}', only for livecell.")
-        from micro_sam.v1.evaluation.livecell import _get_livecell_paths
-        # 0 means every val image. Passing 0 straight through would match the '>= 0' cap and select none.
-        img, gt = _get_livecell_paths(
-            input_folder=os.path.join(DATA_ROOT, "livecell"), split="val",
-            n_val_per_cell_type=livecell_per_celltype or None,
-        )
-        return sorted(img), sorted(gt), None, None
+        if dataset_name == "livecell":
+            from micro_sam.v1.evaluation.livecell import _get_livecell_paths
+            # 0 means every val image. Passing 0 straight through would match the '>= 0' cap and select none.
+            img, gt = _get_livecell_paths(
+                input_folder=os.path.join(DATA_ROOT, "livecell"), split="val",
+                n_val_per_cell_type=livecell_per_celltype or None,
+            )
+            return sorted(img), sorted(gt), None, None
+        return get_data_paths(dataset_name, DATA_ROOT, split="val")
 
     if match_evaluation:
         return get_data_paths(dataset_name, DATA_ROOT)
@@ -327,8 +420,12 @@ def build_work_items(track_cfg, n_images, livecell_per_celltype):
     return items
 
 
-def load_sample(item, ndim, em_crop):
-    """Load and preprocess one work item into (raw, labels), matching the micro-sam v2 eval crops."""
+def load_sample(item, ndim, em_crop, z_range=None):
+    """Load and preprocess one work item into (raw, labels), matching the micro-sam v2 eval crops.
+
+    'z_range' restricts a volume to a z-slab before cropping, which is how the EM datasets get tuning
+    data disjoint from the slab the evaluation scores.
+    """
     dataset_name, raw_path, label_path, raw_key, label_key = item
     if ndim == 2:
         raw = center_crop_2d(read_image_2d(raw_path, raw_key), CROP_SHAPE_2D).astype("float32")
@@ -337,7 +434,7 @@ def load_sample(item, ndim, em_crop):
     else:
         raw, labels, _ = load_volume(
             raw_path=raw_path, label_path=label_path, raw_key=raw_key, label_key=label_key,
-            dataset_name=dataset_name, crop_shape=tuple(em_crop),
+            dataset_name=dataset_name, crop_shape=tuple(em_crop), z_range=z_range,
         )
     return raw, labels
 
@@ -637,7 +734,9 @@ def run_track(
     """
     ndim = track_cfg["ndim"]
     mode = track_cfg["mode"]
+    metric_mode = track_cfg.get("metric_mode", mode)
     spacing = track_cfg.get("spacing")
+    z_range = track_cfg.get("z_range")
     crop = crop_override if crop_override is not None else track_cfg.get("crop")
     os.makedirs(output_dir, exist_ok=True)
     is_shard = n_shards > 1
@@ -672,15 +771,19 @@ def run_track(
         t0 = time.perf_counter()
         for item in tqdm(items, desc=f"{track_name} samples"):
             try:
-                raw, labels = load_sample(item, ndim, crop)
-                prediction = predict(model, raw, ndim=ndim, device=device, normalization=normalization)
+                raw, labels = load_sample(item, ndim, crop, z_range=z_range)
+                if mode == "apg":
+                    # 'model' is the prompt generator here, which holds both halves of the joint model.
+                    scores = score_sample_apg(model, raw, labels, params_list, ndim, metric_mode, spacing=spacing)
+                else:
+                    prediction = predict(model, raw, ndim=ndim, device=device, normalization=normalization)
+                    scores = score_image(
+                        prediction, labels, mode, params_list, backend,
+                        use_flow_cache=use_flow_cache, n_threads=n_threads, spacing=spacing,
+                    )
             except Exception as e:
                 warnings.warn(f"Skipping sample '{item[1]}': {e}")
                 continue
-            scores = score_image(
-                prediction, labels, mode, params_list, backend,
-                use_flow_cache=use_flow_cache, n_threads=n_threads, spacing=spacing,
-            )
             for i, metrics in enumerate(scores):
                 if metrics is not None:
                     metric_lists[i].append(metrics)
@@ -733,7 +836,11 @@ def main():
     parser.add_argument("--criterion", default=None, choices=list(CRITERION_ASCENDING),
                         help="Metric the grid is ranked by. Defaults to mSA, or CREMI for EM data.")
     parser.add_argument("--split", default="test", choices=["val", "test"],
-                        help="Split to tune on. 'val' keeps the tuning off the evaluated samples (livecell only).")
+                        help="Split to tune on. 'val' keeps the tuning off the evaluated samples.")
+    parser.add_argument("--tune", default="ais", choices=["ais", "apg"],
+                        help="What to tune: the AIS postprocessing or the automatic prompt generation.")
+    parser.add_argument("--joint_checkpoint", default="best",
+                        help="Name of the joint trainer checkpoint to tune, without the '.pt' suffix.")
     parser.add_argument("-o", "--output_dir", default=OUTPUT_ROOT, help="Directory to write result CSVs.")
     parser.add_argument("-n", "--n_images", type=int, default=None, help="Cap images per 2d dataset (default: all).")
     parser.add_argument("--livecell_per_celltype", type=int, default=50, help="Images per livecell cell type.")
@@ -755,8 +862,10 @@ def main():
 
     crop_override = tuple(args.crop_3d) if args.crop_3d is not None else None
     if args.dataset_name is not None:
-        configs = {args.dataset_name: dataset_config(args.dataset_name, args.criterion, args.split)}
+        configs = {args.dataset_name: dataset_config(args.dataset_name, args.criterion, args.split, args.tune)}
     else:
+        if args.tune == "apg":
+            raise ValueError("Tuning the prompt generation is per dataset, use -d rather than --track.")
         track_names = list(TRACKS) if args.track in (None, "all") else [args.track]
         configs = {name: TRACKS[name] for name in track_names}
 
@@ -775,7 +884,14 @@ def main():
     device = DEVICE if torch.cuda.is_available() else "cpu"
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
 
-    model = load_model(device, checkpoint_path=args.checkpoint_path, model_type=args.model_type)
+    if args.tune == "apg":
+        ndim = next(iter(configs.values()))["ndim"]
+        model = build_apg_segmenter(device, ndim, args.model_type, joint_checkpoint=args.joint_checkpoint)
+    else:
+        model = load_model(
+            device, checkpoint_path=args.checkpoint_path, model_type=args.model_type,
+            joint_checkpoint=args.joint_checkpoint,
+        )
 
     summary = {}
     for name, config in configs.items():

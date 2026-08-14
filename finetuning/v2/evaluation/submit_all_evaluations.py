@@ -10,8 +10,9 @@ Usage examples:
         -m hvit_t hvit_s hvit_b --all_datasets --lm_only
 """
 
+import os
 import re
-import csv
+import sys
 import json
 import math
 import shlex
@@ -20,6 +21,20 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+
+# Written into every job script, so a queued job sees the configuration the submission had rather than
+# whatever the environment holds when it starts. The sample caps are global, so lift them per dataset.
+PINNED_ENV_VARS = (
+    "MICRO_SAM2_JOINT_CHECKPOINT_ROOT",
+    "MICRO_SAM2_JOINT_EXPORT_ROOT",
+    "MICRO_SAM_EVAL_MAX_SAMPLES",
+    "MICRO_SAM_LIVECELL_PER_CELL_TYPE",
+)
+
+
+def env_exports() -> str:
+    """Return 'export' lines pinning the run configuration, or an empty string if none is set."""
+    return "".join(f"export {name}={shlex.quote(os.environ[name])}\n" for name in PINNED_ENV_VARS if name in os.environ)
 
 
 EVAL_ROOT = Path(__file__).resolve().parent
@@ -52,6 +67,7 @@ AUTOMATIC_METHODS = (
     "sam",
     "sam2",
     "micro_sam2",
+    "micro_sam2_apg",
     "microsam_ais",
     "microsam_apg",
     "segneuron",
@@ -85,8 +101,8 @@ DATASETS = tuple(sorted(set(DATASETS_2D + DATASETS_3D_LM + DATASETS_3D_EM)))
 
 # Automatic methods that cannot run on EM datasets.
 _MICROSAM_V1_METHODS = ("sam", "microsam_ais", "microsam_apg")
-# Automatic methods that are 2D-only.
-_2D_ONLY_AUTO_METHODS = ("cellsam", "sam2")
+# Automatic methods that are 2D-only. Volumetric APG has its own script, see submit_apg_3d.py.
+_2D_ONLY_AUTO_METHODS = ("cellsam", "sam2", "micro_sam2_apg")
 # Interactive methods that are 2D-only.
 _SAM_V1_INTERACTIVE_METHODS = ("sam", "micro-sam", "sam3")
 # Interactive methods that are 3D-only.
@@ -104,30 +120,11 @@ def _sanitize(name: str) -> str:
 
 
 def _tuned_params(grid_search_root: str, dataset_name: str, model_type: str) -> str:
-    """Return the best parameter combination of a grid search as a JSON string.
+    """Return the best parameter combination of a grid search as a JSON string."""
+    sys.path.insert(0, str(EVAL_ROOT))
+    from common import read_tuned_params
 
-    Reads '<grid_search_root>/<model_type>/<dataset_name>.csv', whose first row is the best one, and
-    keeps the parameter columns, i.e. everything that is not a metric or the sample count.
-    """
-    csv_path = Path(grid_search_root) / model_type / f"{dataset_name}.csv"
-    if not csv_path.exists():
-        raise FileNotFoundError(f"There is no grid search result at '{csv_path}'.")
-
-    with open(csv_path) as f:
-        rows = list(csv.DictReader(f))
-    if not rows:
-        raise RuntimeError(f"The grid search result at '{csv_path}' is empty.")
-
-    best = rows[0]
-    params = {
-        key: float(value) for key, value in best.items()
-        if not (key.endswith("_mean") or key.endswith("_std") or key == "n_images")
-    }
-    # 'min_size' and 'n_iter' are counts, the postprocessing expects them as integers.
-    for key in ("min_size", "n_iter"):
-        if key in params:
-            params[key] = int(params[key])
-    return json.dumps(params)
+    return json.dumps(read_tuned_params(grid_search_root, dataset_name, model_type))
 
 
 def _command(args: argparse.Namespace, dataset_name: str, model_type: Optional[str]) -> list[str]:
@@ -161,9 +158,10 @@ def _command(args: argparse.Namespace, dataset_name: str, model_type: Optional[s
     if args.method == "micro_sam2":
         command.extend(["--joint_checkpoint", args.joint_checkpoint])
     if args.grid_search_root is not None:
-        command.extend(["--postprocessing_params", shlex.quote(_tuned_params(
-            args.grid_search_root, dataset_name, model_type,
-        ))])
+        # APG is tuned over its own grid and takes its parameters on a different flag, which is why
+        # the AIS and the APG sweeps have to be given separate roots.
+        flag = "--apg_params" if args.method == "micro_sam2_apg" else "--postprocessing_params"
+        command.extend([flag, shlex.quote(_tuned_params(args.grid_search_root, dataset_name, model_type))])
 
     if args.segmentation_mode == "interactive":
         command.extend(["-p", args.prompt_choice, "-iter", str(args.n_iterations)])
@@ -206,7 +204,7 @@ def _write_batch_script(
 #SBATCH -t {args.time_limit}
 #SBATCH -p {args.partition}
 #SBATCH -G {args.gpu}
-#SBATCH -A {ACCOUNT}
+#SBATCH -A {args.account}
 #SBATCH --job-name={tag}
 #SBATCH --requeue{qos_line}
 #SBATCH --constraint=inet
@@ -215,7 +213,7 @@ def _write_batch_script(
 
 source ~/.bashrc
 micromamba activate {env}
-
+{env_exports()}
 {commands}
 """
 
@@ -273,14 +271,16 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("-m", "--model_type", type=str, nargs="+", default=None,
                         help="Model types to evaluate. One job is submitted per model type.")
     parser.add_argument("-c", "--checkpoint", type=str, default=None)
-    parser.add_argument("--joint_checkpoint", type=str, default="best", choices=("best", "latest"),
-                        help="Which joint trainer checkpoint the micro_sam2 weights are taken from.")
+    parser.add_argument("--joint_checkpoint", type=str, default="best",
+                        help="Name of the joint trainer checkpoint the micro_sam2 weights are taken from, "
+                             "without the '.pt' suffix, e.g. 'best' or the name of a frozen copy.")
     parser.add_argument("--grid_search_root", type=str, default=None,
                         help="Run automatic segmentation with the best parameters found under this root.")
     parser.add_argument("--datasets_per_job", type=int, default=1,
                         help="Datasets per Slurm job. Batching trades queue slots for walltime.")
     parser.add_argument("--time_limit", type=str, default=TIME_LIMIT, help="Slurm time limit per job.")
     parser.add_argument("--partition", type=str, default=PARTITION, help="Slurm partition(s) to submit to.")
+    parser.add_argument("--account", default=ACCOUNT, help="Slurm account to charge the jobs to.")
     parser.add_argument(
         "--gpu", type=str, default=GPU,
         help="Slurm GPU spec. MIG partitions need a type, e.g. '1g.10gb:1' on grete:preemptible."

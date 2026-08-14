@@ -34,14 +34,13 @@ from tqdm import tqdm
 
 import torch
 
-from micro_sam.v1.evaluation.evaluation import run_evaluation
 from micro_sam.v2.util import configure_image_predictor
 from micro_sam.v2.normalization import normalize_raw
 
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_3D_EM, CHECKPOINT_PATHS,
     export_joint_checkpoint, load_unisam2_model, predict_unisam2, postprocess_unisam2,
-    get_data_paths,
+    get_data_paths, run_dataset_evaluation,
 )
 from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
 from common import check_data_download
@@ -257,7 +256,7 @@ def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc):
         all_seg.append(seg)
 
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    results = run_evaluation(gt_paths=all_gt, prediction_paths=all_seg, save_path=save_path)
+    results = run_dataset_evaluation(all_gt, all_seg, dataset_name, save_path)
     print(results)
 
 
@@ -437,8 +436,9 @@ def main():
         help="Checkpoint path for micro-sam v1 / segneuron / micro_sam2 / sam2 methods."
     )
     parser.add_argument(
-        "--joint_checkpoint", type=str, default="best", choices=["best", "latest"],
-        help="Which joint trainer checkpoint the micro_sam2 decoder is taken from (default: best)."
+        "--joint_checkpoint", type=str, default="best",
+        help="Name of the joint trainer checkpoint the micro_sam2 decoder is taken from, without the "
+             "'.pt' suffix, e.g. 'best', 'latest' or the name of a frozen copy."
     )
     parser.add_argument(
         "--backend", type=str, default="cpp", choices=["cpp", "python"],

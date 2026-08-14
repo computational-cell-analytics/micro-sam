@@ -1,7 +1,9 @@
 import os
+import ast
+import csv
 import warnings
 from glob import glob
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from skimage.measure import label as connected_components
@@ -56,10 +58,15 @@ def drop_excluded_livecell(raw_paths, label_paths) -> Tuple[List[str], List[str]
     return list(kept_raw), list(kept_label)
 
 
-# The jointly finetuned (interactive + automatic) SAM2 models for cell segmentation.
-JOINT_CHECKPOINT_ROOT = os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints")
+# Overridable, so a run can point at another training version without editing this file. A checkpoint
+# that is still training needs a frozen copy, because the trainer overwrites 'best.pt' while jobs queue.
+JOINT_CHECKPOINT_ROOT = os.environ.get(
+    "MICRO_SAM2_JOINT_CHECKPOINT_ROOT", os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints")
+)
 # The joint checkpoints are split into loadable weight files here, see 'export_joint_checkpoint'.
-JOINT_EXPORT_ROOT = os.path.join(_MODELS_DIR, "exported", "joint", "v2")
+JOINT_EXPORT_ROOT = os.environ.get(
+    "MICRO_SAM2_JOINT_EXPORT_ROOT", os.path.join(_MODELS_DIR, "exported", "joint", "v2")
+)
 
 # 2D LM datasets
 DATASETS_2D = [
@@ -89,6 +96,31 @@ DATASETS_3D_EM = ["platynereis_nuclei", "cremi", "snemi", "humanneurons"]
 
 DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
+# The split to tune on per dataset, or None where the loader has no splits and VAL_Z_RANGE holds out a
+# z-slab instead. Datasets whose 'val' is already the evaluated split are absent on purpose: tuning
+# there would select the parameters on the scored samples.
+VAL_SPLITS = {
+    "livecell": "val",
+    "tissuenet": "val",
+    "dynamicnuclearnet": "val",
+    "deepbacs": "val",
+    "dic_hepg2": "val",
+    "celegans_atlas": "val",
+    "embedseg": "train",
+    "gonuclear": None,
+    "cremi": None,
+    "snemi": None,
+}
+
+# The tuning slab for volumes with no splits, disjoint from the centered slab the evaluation scores.
+# Indices are relative to what load_volume keeps, so snemi counts from slice 70. gonuclear takes the
+# middle band because the first slices are sparsely annotated, one volume having no objects there.
+VAL_Z_RANGE = {
+    "cremi": (0, 32),
+    "snemi": (0, 8),
+    "gonuclear": (32, 96),
+}
+
 
 def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
     """Sort raw and label paths as pairs.
@@ -106,14 +138,14 @@ def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
 
 
 def _get_2d_data_paths(
-    dataset_name: str, data_root: str, download: bool = False
+    dataset_name: str, data_root: str, download: bool = False, split: str = "test"
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
 
     if dataset_name == "livecell":
         # Stratified: the test set is sorted by cell type, so heading it covers two of the eight.
         img, gt = _get_livecell_paths(
-            input_folder=os.path.join(p, "livecell"), split="test",
+            input_folder=os.path.join(p, "livecell"), split=split,
             n_val_per_cell_type=LIVECELL_PER_CELL_TYPE,
         )
         img, gt = drop_excluded_livecell(img, gt)
@@ -161,7 +193,7 @@ def _get_2d_data_paths(
 
     if dataset_name == "deepbacs":
         img_folder, label_folder = datasets.deepbacs.get_deepbacs_paths(
-            path=os.path.join(p, "deepbacs"), bac_type="mixed", split="test", download=download,
+            path=os.path.join(p, "deepbacs"), bac_type="mixed", split=split, download=download,
         )
         img = sorted(glob(os.path.join(img_folder, "*.tif")))
         gt = sorted(glob(os.path.join(label_folder, "*.tif")))
@@ -175,7 +207,7 @@ def _get_2d_data_paths(
 
     if dataset_name == "dic_hepg2":
         img, gt = datasets.dic_hepg2.get_dic_hepg2_paths(
-            path=os.path.join(p, "dic_hepg2"), split="test", download=download,
+            path=os.path.join(p, "dic_hepg2"), split=split, download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
@@ -187,7 +219,7 @@ def _get_2d_data_paths(
 
     if dataset_name == "dynamicnuclearnet":
         paths = datasets.dynamicnuclearnet.get_dynamicnuclearnet_paths(
-            path=os.path.join(p, "dynamicnuclearnet"), split="test", download=download,
+            path=os.path.join(p, "dynamicnuclearnet"), split=split, download=download,
         )
         return sorted(paths), sorted(paths), "raw", "labels"
 
@@ -234,7 +266,7 @@ def _get_2d_data_paths(
 
     if dataset_name == "tissuenet":
         paths = datasets.tissuenet.get_tissuenet_paths(
-            path=os.path.join(p, "tissuenet"), split="test", download=download,
+            path=os.path.join(p, "tissuenet"), split=split, download=download,
         )
         # rgb composite + cell labels matches training convention
         return sorted(paths), sorted(paths), "raw/rgb", "labels/cell"
@@ -266,7 +298,7 @@ def _get_2d_data_paths(
 
 
 def _get_3d_lm_data_paths(
-    dataset_name: str, data_root: str, download: bool = False
+    dataset_name: str, data_root: str, download: bool = False, split: str = "test"
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
 
@@ -297,7 +329,7 @@ def _get_3d_lm_data_paths(
 
     if dataset_name == "celegans_atlas":
         img, gt = datasets.celegans_atlas.get_celegans_atlas_paths(
-            path=os.path.join(p, "celegans_atlas"), split="test", download=download,
+            path=os.path.join(p, "celegans_atlas"), split=split, download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
@@ -310,7 +342,7 @@ def _get_3d_lm_data_paths(
     if dataset_name == "embedseg":
         img, gt = datasets.embedseg_data.get_embedseg_paths(
             path=os.path.join(p, "embedseg"),
-            name="Mouse-Skull-Nuclei-CBG", split="test", download=download,
+            name="Mouse-Skull-Nuclei-CBG", split=split, download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
@@ -370,13 +402,15 @@ def _get_3d_em_data_paths(
         return paths, paths, "volumes/raw", "volumes/labels/nucleus_instance_labels"
 
     if dataset_name == "cremi":
+        # The joint training used samples A and B, so only C is held out.
         paths = datasets.cremi.get_cremi_paths(
-            path=os.path.join(p, "cremi"), samples=("A", "B", "C"), download=download,
+            path=os.path.join(p, "cremi"), samples=("C",), download=download,
         )
         return sorted(paths), sorted(paths), "volumes/raw", "volumes/labels/neuron_ids"
 
     if dataset_name == "snemi":
-        # The test file has no labels. Training used train-slices 70+, so slices [0:70] are holdout.
+        # The test file has no labels, so the holdout is the part of the train file that the joint
+        # training did not use, see load_volume.
         path = datasets.snemi.get_snemi_paths(
             path=os.path.join(p, "snemi"), sample="train", download=download,
         )
@@ -391,20 +425,34 @@ def _get_3d_em_data_paths(
 
 
 def get_data_paths(
-    dataset_name: str, data_root: str, download: bool = False
+    dataset_name: str, data_root: str, download: bool = False, split: str = "test"
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
-    """Return (raw_paths, label_paths, raw_key, label_key) for a dataset's test split.
+    """Return (raw_paths, label_paths, raw_key, label_key) for a dataset's evaluation split.
 
     raw_key / label_key are None for plain image files and non-None for H5 / zarr.
+
+    With split='val' this returns data held out from what the evaluation scores, which is what a
+    parameter search has to run on, see VAL_SPLITS. Only the datasets listed there support it.
     """
     all_datasets = DATASETS_2D + DATASETS_3D
     assert dataset_name in all_datasets, (
         f"Unsupported dataset: '{dataset_name}'. Choose from {all_datasets}."
     )
+
+    if split == "val":
+        if dataset_name not in VAL_SPLITS:
+            raise ValueError(
+                f"There is no data held out from the evaluation for '{dataset_name}', so it cannot be "
+                f"tuned on a validation split. Datasets that can: {sorted(VAL_SPLITS)}."
+            )
+        # None means the loader has no split of its own; the holdout is the z-slab in VAL_Z_RANGE,
+        # which load_volume applies to the very same volumes.
+        split = VAL_SPLITS[dataset_name] or "test"
+
     if dataset_name in DATASETS_2D:
-        return _get_2d_data_paths(dataset_name, data_root, download=download)
+        return _get_2d_data_paths(dataset_name, data_root, download=download, split=split)
     if dataset_name in DATASETS_3D_LM:
-        return _get_3d_lm_data_paths(dataset_name, data_root, download=download)
+        return _get_3d_lm_data_paths(dataset_name, data_root, download=download, split=split)
     return _get_3d_em_data_paths(dataset_name, data_root, download=download)
 
 
@@ -427,11 +475,15 @@ def load_volume(
     crop_shape: Tuple[int, ...] = (8, 512, 512),
     ensure_8bit: bool = True,
     ensure_instances: bool = True,
+    z_range: Optional[Tuple[int, int]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
 
     Returns (raw, labels, valid_roi) where valid_roi is a boolean mask (True = annotated)
     for partially annotated datasets (platynereis_nuclei), or None for all others.
+
+    'z_range' restricts the volume to a z-slab before the center crop, which is how a dataset without
+    splits provides tuning data held out from the evaluated slab. See VAL_Z_RANGE.
     """
     if raw_key is None:
         raw = load_image(raw_path)
@@ -444,8 +496,12 @@ def load_volume(
         labels = open_file(label_path, mode="r")[label_key][:]
 
     if dataset_name == "snemi":
-        # Restrict to holdout slices [0:70]; training used slices 70+.
-        raw, labels = raw[:70], labels[:70]
+        # Training used slices [0:70], so only slices 70+ are held out.
+        raw, labels = raw[70:], labels[70:]
+
+    if z_range is not None:
+        z_start, z_stop = z_range
+        raw, labels = raw[z_start:z_stop], labels[z_start:z_stop]
 
     valid_roi = None
     if dataset_name == "platynereis_nuclei":
@@ -634,6 +690,86 @@ def postprocess_unisam2(out, dataset_name, backend="cpp", params=None):
         spacing = DATASET_SPACING.get(dataset_name, None)
         seg = flow_instance_segmentation(fg, out[1:], spacing=spacing, backend=backend, **params)
     return seg.astype("uint32")
+
+
+def run_dataset_evaluation(gt_paths, prediction_paths, dataset_name: str, save_path: str):
+    """Score a dataset and write the results to 'save_path'.
+
+    Neuron segmentation in EM is ranked by the CREMI score, not by mSA, so those datasets report the
+    VI and adapted-Rand components instead.
+
+    Args:
+        gt_paths: The ground-truth label arrays, or the paths to them.
+        prediction_paths: The predicted segmentations, or the paths to them.
+        dataset_name: The dataset the segmentations belong to.
+        save_path: The filepath to write the result CSV to.
+
+    Returns:
+        The results as a DataFrame.
+    """
+    from micro_sam.v1.evaluation.evaluation import run_evaluation
+
+    if dataset_name not in DATASETS_3D_EM:
+        return run_evaluation(gt_paths=gt_paths, prediction_paths=prediction_paths, save_path=save_path)
+
+    import pandas as pd
+    from elf.evaluation import cremi_score
+
+    rows = []
+    for gt, seg in zip(gt_paths, prediction_paths):
+        vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, gt)
+        rows.append({
+            "cremi": float(cremi),
+            "vi_split": float(vi_split),
+            "vi_merge": float(vi_merge),
+            "adapted_rand": float(adapted_rand),
+        })
+
+    results = pd.DataFrame(rows).mean().to_frame().T
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    results.to_csv(save_path, index=False)
+    return results
+
+
+def read_tuned_params(grid_search_root: str, dataset_name: str, model_type: str) -> Dict[str, Any]:
+    """Return the best parameter combination of a grid search as a dict.
+
+    Reads '<grid_search_root>/<model_type>/<dataset_name>.csv', whose first row is the best one, and
+    keeps the parameter columns, i.e. everything that is not a metric or the sample count. Values are
+    parsed as Python literals rather than floats, so the volumetric prompt generation's tuple-valued
+    'candidate_threshold' survives the round trip through the CSV.
+
+    Args:
+        grid_search_root: The root the grid search wrote its per-model directories to.
+        dataset_name: The dataset whose tuned parameters are read.
+        model_type: The SAM2 backbone, which names the subdirectory.
+
+    Returns:
+        The best combination, ready to be passed to the postprocessing or to 'generate'.
+    """
+    csv_path = os.path.join(grid_search_root, model_type, f"{dataset_name}.csv")
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"There is no grid search result at '{csv_path}'.")
+
+    with open(csv_path) as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        raise RuntimeError(f"The grid search result at '{csv_path}' is empty.")
+
+    params = {}
+    for key, value in rows[0].items():
+        if key.endswith(("_mean", "_std")) or key == "n_images":
+            continue
+        try:
+            params[key] = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            params[key] = value
+
+    # These are counts, and a column that ever held a NaN comes back as a float.
+    for key in ("min_size", "n_iter", "min_candidate_size", "n_objects_per_pass"):
+        if key in params:
+            params[key] = int(params[key])
+    return params
 
 
 def _check_key(path: str, key: Optional[str], kind: str) -> None:
