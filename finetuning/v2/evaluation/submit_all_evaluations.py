@@ -155,7 +155,7 @@ def _command(args: argparse.Namespace, dataset_name: str, model_type: Optional[s
         command.extend(["-m", model_type])
     if args.checkpoint is not None:
         command.extend(["-c", args.checkpoint])
-    if args.method == "micro_sam2":
+    if args.method in ("micro_sam2", "micro_sam2_apg"):
         command.extend(["--joint_checkpoint", args.joint_checkpoint])
     if args.grid_search_root is not None:
         # APG is tuned over its own grid and takes its parameters on a different flag, which is why
@@ -200,7 +200,7 @@ def _write_batch_script(
 
     batch_script = f"""#!/bin/bash
 #SBATCH -c {CPUS}
-#SBATCH --mem {MEMORY}
+#SBATCH --mem {args.memory}
 #SBATCH -t {args.time_limit}
 #SBATCH -p {args.partition}
 #SBATCH -G {args.gpu}
@@ -281,6 +281,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--time_limit", type=str, default=TIME_LIMIT, help="Slurm time limit per job.")
     parser.add_argument("--partition", type=str, default=PARTITION, help="Slurm partition(s) to submit to.")
     parser.add_argument("--account", default=ACCOUNT, help="Slurm account to charge the jobs to.")
+    parser.add_argument("--memory", default=MEMORY, help="Memory per job.")
     parser.add_argument(
         "--gpu", type=str, default=GPU,
         help="Slurm GPU spec. MIG partitions need a type, e.g. '1g.10gb:1' on grete:preemptible."
