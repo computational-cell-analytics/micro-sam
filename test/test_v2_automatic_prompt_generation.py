@@ -119,6 +119,48 @@ def test_merge_by_score_truncates_to_the_unclaimed_pixels():
     assert int((segmentation == 2).sum()) == int(low.sum()) - 4
 
 
+def test_merge_by_score_reports_why_each_record_was_dropped():
+    shape = (16, 16)
+    high = np.zeros(shape, dtype=bool)
+    high[2:12, 2:12] = True
+    inside = np.zeros(shape, dtype=bool)
+    inside[3:9, 3:9] = True  # entirely inside the better-scoring mask
+    tiny = np.zeros(shape, dtype=bool)
+    tiny[14, 14] = True
+    records = [
+        {"segmentation": inside, "predicted_iou": 0.5, "stability_score": 0.5},
+        {"segmentation": high, "predicted_iou": 0.9, "stability_score": 0.9},
+        {"segmentation": tiny, "predicted_iou": 0.8, "stability_score": 0.8},
+    ]
+
+    segmentation, reasons = merge_by_score(
+        records, shape, max_overlap=0.3, min_size=4, return_reasons=True
+    )
+    # The reasons are in the order the records were given, not in merge order.
+    assert reasons == ["duplicate", "kept", "too small"]
+    assert set(np.unique(segmentation)) == {0, 1}
+
+
+def test_merge_by_score_reasons_do_not_change_the_segmentation():
+    shape = (16, 16)
+    first = np.zeros(shape, dtype=bool)
+    first[2:10, 2:10] = True
+    second = np.zeros(shape, dtype=bool)
+    second[8:14, 8:14] = True
+    records = [
+        {"segmentation": second, "predicted_iou": 0.5, "stability_score": 0.5},
+        {"segmentation": first, "predicted_iou": 0.9, "stability_score": 0.9},
+    ]
+
+    plain = merge_by_score(records, shape, max_overlap=0.3, min_size=1)
+    with_extras, matches, reasons = merge_by_score(
+        records, shape, max_overlap=0.3, min_size=1, return_matches=True, return_reasons=True
+    )
+    assert np.array_equal(plain, with_extras)
+    assert matches == {1: 1, 2: 0}
+    assert reasons == ["kept", "kept"]
+
+
 def test_merge_by_score_rejects_a_candidate_that_is_mostly_claimed():
     shape = (16, 16)
     high = np.zeros(shape, dtype=bool)

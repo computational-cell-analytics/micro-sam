@@ -117,6 +117,85 @@ def drop_severed_objects(labels, min_size):
     return np.where(np.isin(labels, severed), 0, labels).astype(labels.dtype)
 
 
+def severed_objects(gt, max_span=2):
+    """The ground-truth objects that occupy no more than 'max_span' slices of a volume.
+
+    A volumetric object is anchored on the slice its density converges on, and that density scales
+    with the object's size. An object that the crop reduced to one or two slices never reaches
+    'candidate_threshold', so it is never proposed. Separating these says how much of the gap to the
+    ground truth is the crop rather than the method.
+
+    Args:
+        gt: The ground-truth labels, shape (Z, Y, X).
+        max_span: The largest number of slices a severed object may span.
+
+    Returns:
+        The labels of the severed objects with everything else zeroed, and their ids.
+    """
+    ids = np.unique(gt)
+    ids = ids[ids != 0]
+    if len(ids) == 0:
+        return np.zeros_like(gt), np.array([], dtype=gt.dtype)
+    spans = np.array([int((gt == index).any(axis=(1, 2)).sum()) for index in ids])
+    thin = ids[spans <= max_span]
+    return np.where(np.isin(gt, thin), gt, 0).astype(gt.dtype), thin
+
+
+def unmatched_objects(gt, segmentation, iou_threshold=0.5):
+    """The ground-truth objects that no predicted instance matches at the given IoU.
+
+    Matched the way `mean_segmentation_accuracy` matches at its lowest threshold, so these are the
+    objects the result genuinely lost rather than segmented imprecisely.
+
+    Args:
+        gt: The ground-truth labels.
+        segmentation: The predicted instance segmentation.
+        iou_threshold: The IoU a prediction must reach to count as a match.
+
+    Returns:
+        The labels of the unmatched objects, with everything else zeroed.
+    """
+    ids = np.unique(gt)
+    ids = ids[ids != 0]
+    missed = []
+    for index in ids:
+        mask = gt == index
+        overlapping = segmentation[mask]
+        overlapping = overlapping[overlapping != 0]
+        if overlapping.size == 0:
+            missed.append(index)
+            continue
+        candidates, counts = np.unique(overlapping, return_counts=True)
+        best = int(np.argmax(counts))
+        intersection = int(counts[best])
+        union = int(mask.sum()) + int((segmentation == candidates[best]).sum()) - intersection
+        if intersection / union < iou_threshold:
+            missed.append(index)
+    return np.where(np.isin(gt, missed), gt, 0).astype(gt.dtype)
+
+
+def genuine_misses(gt, segmentation, iou_threshold=0.5, max_span=2):
+    """How many ground-truth objects the result lost that the crop did not sever.
+
+    An aggregate metric hides which objects went missing. A run that recovers objects while costing
+    precision elsewhere is not the same as one that does neither, so this counts the losses the
+    method is answerable for.
+
+    Args:
+        gt: The ground-truth labels, shape (Z, Y, X).
+        segmentation: The predicted instance segmentation.
+        iou_threshold: The IoU a prediction must reach to count as a match.
+        max_span: The largest number of slices a severed object may span.
+
+    Returns:
+        The number of unmatched objects, and how many of those the crop did not sever.
+    """
+    unmatched_ids = np.unique(unmatched_objects(gt, segmentation, iou_threshold))
+    unmatched_ids = unmatched_ids[unmatched_ids != 0]
+    _, thin = severed_objects(gt, max_span)
+    return len(unmatched_ids), int((~np.isin(unmatched_ids, thin)).sum())
+
+
 def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name):
     """Load one 2d sample the way the evaluation scores it.
 

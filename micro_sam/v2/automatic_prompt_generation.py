@@ -280,7 +280,7 @@ def derive_volume_prompts(
 
 def merge_by_score(
     records: List[Dict[str, Any]], shape: tuple, max_overlap: float = 0.3, min_size: int = 50,
-    return_matches: bool = False,
+    return_matches: bool = False, return_reasons: bool = False,
 ) -> Union[np.ndarray, tuple]:
     """Merge prediction records in descending score order, each claiming only unclaimed pixels.
 
@@ -298,15 +298,21 @@ def merge_by_score(
             the duplicate suppression of the merge.
         min_size: Minimum object size to keep.
         return_matches: Whether to also return which record made each instance.
+        return_reasons: Whether to also return why each record was kept or dropped. A candidate is
+            'too small', a 'duplicate' when a better-scoring mask already claims more than
+            'max_overlap' of it, 'truncated below min size' when too few of its pixels are free, or
+            'kept'. This is what the merge does, reported rather than recomputed.
 
     Returns:
         The instance segmentation, uint32 array. If `return_matches`, additionally a mapping from
-        every instance id to the index of the record that made it.
+        every instance id to the index of the record that made it. If `return_reasons`, additionally
+        the reason per record, in the order the records were given.
     """
     out = np.zeros(shape, dtype="uint32")
     scores = np.array([record["predicted_iou"] * record["stability_score"] for record in records])
     full_box = tuple(slice(None) for _ in shape)
     matches = {}
+    reasons = ["" for _ in records]
     next_id = 1
     for index in np.argsort(-scores):
         record = records[index]
@@ -314,19 +320,29 @@ def merge_by_score(
         mask = mask.numpy() if hasattr(mask, "numpy") else np.asarray(mask)
         area = int(mask.sum())
         if area < min_size:
+            reasons[index] = "too small"
             continue
         # A view, so painting the fresh pixels below writes straight into the output.
         target = out[record.get("bounding_box", full_box)]
         claimed = target[mask]
         if int(np.count_nonzero(claimed)) / area > max_overlap:
+            reasons[index] = "duplicate"
             continue
         fresh = mask & (target == 0)
         if int(fresh.sum()) < min_size:
+            reasons[index] = "truncated below min size"
             continue
         target[fresh] = next_id
+        reasons[index] = "kept"
         matches[next_id] = int(index)
         next_id += 1
-    return (out, matches) if return_matches else out
+
+    result = (out,)
+    if return_matches:
+        result += (matches,)
+    if return_reasons:
+        result += (reasons,)
+    return result[0] if len(result) == 1 else result
 
 
 def refine_with_boxes(

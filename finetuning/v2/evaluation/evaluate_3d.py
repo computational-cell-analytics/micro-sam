@@ -26,6 +26,7 @@ import torch
 from micro_sam import util
 from micro_sam.v2.evaluation import inference, evaluation
 
+from baselines_common import genuine_misses
 from common import (
     CHECKPOINT_PATHS, DATA_ROOT, DATASETS_3D, DATASET_SPACING, get_data_paths, load_volume,
     UNISAM2_CHECKPOINT, load_unisam2_model, predict_unisam2, postprocess_unisam2,
@@ -196,6 +197,7 @@ def run_apg_evaluation_3d(
         raw_paths, label_paths = raw_paths[:n_volumes], label_paths[:n_volumes]
     all_gt = []
     all_seg = {key: [] for key in save_paths}
+    misses = {key: [] for key in save_paths}
     for raw_path, label_path in tqdm(zip(raw_paths, label_paths), total=len(raw_paths), desc="apg 3D"):
         raw, labels, valid_roi = load_volume(
             raw_path=raw_path,
@@ -220,12 +222,17 @@ def run_apg_evaluation_3d(
             if valid_roi is not None:
                 seg[~valid_roi] = 0
             all_seg[key].append(seg)
+            misses[key].append(genuine_misses(labels, seg))
         all_gt.append(labels)
         print("instances: " + ", ".join(f"{key} {int(seg.max())}" for key, seg in segmentations.items()))
 
     os.makedirs(os.path.join(experiment_folder, "results"), exist_ok=True)
     for key, path in save_paths.items():
         results = run_dataset_evaluation(all_gt, all_seg[key], dataset_name, path)
+        # The aggregate metric hides which objects went missing.
+        results["unmatched"] = sum(count[0] for count in misses[key])
+        results["genuine_misses"] = sum(count[1] for count in misses[key])
+        results.to_csv(path, index=False)
         print(f"{key}:\n{results}")
 
 
