@@ -27,11 +27,11 @@ from elf.evaluation import mean_segmentation_accuracy
 from micro_sam.v2.util import get_sam2_model
 from micro_sam.v2 import automatic_prompt_generation as apg
 from micro_sam.v1.evaluation.livecell import _get_livecell_paths
-from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
 from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
 
 from common import (
     DATA_ROOT, DATASET_SPACING, drop_excluded_livecell, export_joint_checkpoint, load_unisam2_model,
+    resolve_params,
 )
 from baselines_common import _load_data, load_evaluation_sample_2d
 
@@ -52,13 +52,6 @@ VARIANTS = {
     "nopp32": {"n_objects_per_pass": 32},
     "on_device": {"offload_to_cpu": False},
 }
-
-# The generation parameters, taken from the library defaults so a run measures what ships.
-GENERATE_KEYS = (
-    "candidate_threshold", "foreground_threshold", "n_iter", "dt", "sigma", "min_candidate_size",
-    "score_threshold", "max_overlap", "min_size", "refine_with_box_prompts", "box_extension",
-    "multimasking", "n_objects_per_pass", "early_stop_patience", "n_threads",
-)
 
 # Variant settings that `generate` takes directly. The others change how the model runs, not what it does.
 GENERATE_OVERRIDES = ("n_threads", "batch_size", "n_objects_per_pass")
@@ -226,18 +219,6 @@ def load_samples(dataset_name, ndim, n_samples=None, n_per_cell_type=25):
         if n_samples is not None and len(samples) >= n_samples:
             break
     return samples
-
-
-def resolve_params(overrides, ndim):
-    """The generation parameters for one run, with 'overrides' applied on top of the library defaults."""
-    params = {key: DEFAULT_PROMPT_GENERATION[key] for key in GENERATE_KEYS}
-    params.update(overrides)
-    if ndim == 3:
-        # A candidate's density scales with the object's size, so a volume has its own threshold.
-        default_3d = DEFAULT_PROMPT_GENERATION["candidate_threshold_3d"]
-        params["candidate_threshold"] = overrides.get("candidate_threshold_3d", default_3d)
-    params.pop("candidate_threshold_3d", None)
-    return params
 
 
 def run_variant(segmenter, samples, variant, params, ndim, device, spacing):

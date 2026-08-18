@@ -621,6 +621,41 @@ DATASET_SPACING: dict = {
 }
 
 
+# The parameters `AutomaticPromptGenerator.generate` accepts, so a run can be described by one dict.
+GENERATE_PARAM_KEYS = (
+    "candidate_threshold", "foreground_threshold", "n_iter", "dt", "sigma", "min_candidate_size",
+    "score_threshold", "max_overlap", "min_size", "refine_with_box_prompts", "box_extension",
+    "multimasking", "n_objects_per_pass", "early_stop_patience", "n_threads",
+)
+
+
+def resolve_params(overrides=None, ndim=2):
+    """The generation parameters for one run, with 'overrides' applied on top of the library defaults.
+
+    The single definition of what a run's parameters are, so that a benchmark, a walk-through and a
+    sweep all describe the same run. The result is ready to pass to `generate` as keyword arguments.
+
+    Args:
+        overrides: The parameters to change, by the name `generate` gives them. A volume also accepts
+            'candidate_threshold_3d', which is the name the defaults give its own threshold.
+        ndim: The number of spatial dimensions, 2 or 3.
+
+    Returns:
+        The parameters, keyed as `generate` takes them.
+    """
+    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+
+    overrides = overrides or {}
+    params = {key: DEFAULT_PROMPT_GENERATION[key] for key in GENERATE_PARAM_KEYS}
+    params.update(overrides)
+    if ndim == 3:
+        # A candidate's density scales with the object's size, so a volume has its own threshold.
+        default_3d = DEFAULT_PROMPT_GENERATION["candidate_threshold_3d"]
+        params["candidate_threshold"] = overrides.get("candidate_threshold_3d", default_3d)
+    params.pop("candidate_threshold_3d", None)
+    return params
+
+
 def _alias_micro_sam2_modules():
     """Alias the moved 'micro_sam2' modules so checkpoints pickled before the package move load."""
     import sys
