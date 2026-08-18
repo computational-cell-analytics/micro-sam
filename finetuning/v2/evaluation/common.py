@@ -36,8 +36,8 @@ MODEL_TYPES = list(CHECKPOINT_PATHS)
 # The 2d patch shape the models were trained on, see 'generalist_loader'.
 TRAINING_PATCH_SHAPE = (512, 512)
 
-# LIVECell test images whose annotation is incomplete: 2 labelled objects in a confluent crop, with
-# predicted-to-annotated foreground ratios of 348x and 24x. Both are outside the stratified subset.
+# LIVECell test images whose annotation is incomplete: 2 labelled objects in a confluent crop, at
+# 348x and 24x the annotated foreground. Both lie outside the stratified subset.
 LIVECELL_EXCLUDED_TEST_IMAGES = frozenset({
     "BV2_Phase_A4_2_02d04h00m_3.tif",
     "BV2_Phase_A4_2_00d00h00m_1.tif",
@@ -56,8 +56,8 @@ def drop_excluded_livecell(raw_paths, label_paths) -> Tuple[List[str], List[str]
     return list(kept_raw), list(kept_label)
 
 
-# Overridable, so a run can point at another training version without editing this file. A checkpoint
-# that is still training needs a frozen copy, because the trainer overwrites 'best.pt' while jobs queue.
+# Overridable, so a run can point at another training version. A checkpoint that still trains needs
+# a frozen copy, because the trainer overwrites 'best.pt' while jobs queue.
 JOINT_CHECKPOINT_ROOT = os.environ.get(
     "MICRO_SAM2_JOINT_CHECKPOINT_ROOT", os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints")
 )
@@ -66,7 +66,6 @@ JOINT_EXPORT_ROOT = os.environ.get(
     "MICRO_SAM2_JOINT_EXPORT_ROOT", os.path.join(_MODELS_DIR, "exported", "joint", "v2")
 )
 
-# 2D LM datasets
 DATASETS_2D = [
     "livecell",
     "arvidsson", "bitdepth_nucseg", "cellbindb", "cellpose_data",
@@ -75,28 +74,25 @@ DATASETS_2D = [
     "segpc", "tissuenet", "usiigaci", "vicar", "yeaz",
 ]
 
-# Ground-truth size floor, applied by `baselines_common._load_data` to drop the crop-severed slivers
-# that relabelling promotes to objects. Defines the ground truth, so it is measured, never tuned.
+# Ground-truth size floor that drops the crop-severed slivers relabelling promotes to objects. It
+# defines the ground truth, so it is measured, never tuned.
 GT_MIN_SIZE_2D = {
     "livecell": 50,
     "cellpose": 20, "deepbacs": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
     "u20s": 10, "vicar": 25, "yeaz": 10,
 }
 
-# 3D LM datasets
 DATASETS_3D_LM = [
     "blastospim", "cartocell", "celegans_atlas", "cellseg_3d", "embedseg",
     "gonuclear", "mouse_embryo", "nis3d", "plantseg", "pnas_arabidopsis",
 ]
 
-# 3D EM datasets
 DATASETS_3D_EM = ["platynereis_nuclei", "cremi", "snemi", "humanneurons"]
 
 DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
-# The split to tune on per dataset, or None where the loader has no splits and VAL_Z_RANGE holds out a
-# z-slab instead. Datasets whose 'val' is already the evaluated split are absent on purpose: tuning
-# there would select the parameters on the scored samples.
+# The split to tune on, or None where the loader has no splits and VAL_Z_RANGE holds out a z-slab.
+# A dataset whose 'val' is the evaluated split is absent: tuning there would select on scored samples.
 VAL_SPLITS = {
     "livecell": "val",
     "tissuenet": "val",
@@ -110,9 +106,8 @@ VAL_SPLITS = {
     "snemi": None,
 }
 
-# The tuning slab for volumes with no splits, disjoint from the centered slab the evaluation scores.
-# Indices are relative to what load_volume keeps, so snemi counts from slice 70. gonuclear takes the
-# middle band because the first slices are sparsely annotated, one volume having no objects there.
+# The tuning slab for volumes with no splits, disjoint from the slab the evaluation scores. Indices
+# count from what load_volume keeps, so snemi starts at slice 70, and gonuclear skips its sparse start.
 VAL_Z_RANGE = {
     "cremi": (0, 32),
     "snemi": (0, 8),
@@ -252,7 +247,7 @@ def _get_2d_data_paths(
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "segpc":
-        # No test split. Use validation.
+        # The dataset has no test split, so the evaluation uses the validation split.
         paths = datasets.segpc.get_segpc_paths(
             path=os.path.join(p, "segpc"), split="validation", download=download,
         )
@@ -262,11 +257,11 @@ def _get_2d_data_paths(
         paths = datasets.tissuenet.get_tissuenet_paths(
             path=os.path.join(p, "tissuenet"), split=split, download=download,
         )
-        # rgb composite + cell labels matches training convention
+        # The rgb composite and the cell labels are what the training used.
         return sorted(paths), sorted(paths), "raw/rgb", "labels/cell"
 
     if dataset_name == "usiigaci":
-        # No test split. Use val.
+        # The dataset has no test split, so the evaluation uses the validation split.
         img, gt = datasets.usiigaci.get_usiigaci_paths(
             path=os.path.join(p, "usiigaci"), split="val", download=download,
         )
@@ -347,7 +342,7 @@ def _get_3d_lm_data_paths(
         return sorted(paths), sorted(paths), "raw/nuclei", "labels/nuclei"
 
     if dataset_name == "mouse_embryo":
-        # No test split. Use val.
+        # The dataset has no test split, so the evaluation uses the validation split.
         paths = datasets.mouse_embryo.get_mouse_embryo_paths(
             path=os.path.join(p, "mouse_embryo"), name="nuclei", split="val", download=download,
         )
@@ -473,11 +468,11 @@ def load_volume(
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
 
-    Returns (raw, labels, valid_roi) where valid_roi is a boolean mask (True = annotated)
-    for partially annotated datasets (platynereis_nuclei), or None for all others.
+    valid_roi is a boolean mask that is True where the data is annotated. It is None for every
+    dataset except platynereis_nuclei, which is annotated only in part.
 
     'z_range' restricts the volume to a z-slab before the center crop, which is how a dataset without
-    splits provides tuning data held out from the evaluated slab. See VAL_Z_RANGE.
+    splits holds tuning data out of the evaluated slab. See VAL_Z_RANGE.
     """
     if raw_key is None:
         raw = load_image(raw_path)
@@ -527,8 +522,6 @@ def load_volume(
     return raw.astype("float32"), labels.astype("uint32"), valid_roi
 
 
-# Model helpers shared between the evaluation scripts
-
 _UNISAM2_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/automatic/v1"
 UNISAM2_CHECKPOINT = os.path.join(_UNISAM2_ROOT, "checkpoints", "unisam2-both", "best.pt")
 
@@ -555,8 +548,8 @@ def _strip_ddp_prefix(state_dict):
 def _checkpoint_digest(path: str) -> str:
     """A short digest of a checkpoint's identity: where it lives, when it was written and how large.
 
-    Hashing 700 MB of weights would cost more than the export this guards, and the three together
-    already change whenever the weights do, including when training overwrites a checkpoint in place.
+    Hashing 700 MB of weights would cost more than the export this guards. The three change whenever
+    the weights do, including when training overwrites a checkpoint in place.
     """
     stat = os.stat(path)
     identity = f"{os.path.realpath(path)}:{stat.st_mtime_ns}:{stat.st_size}"
@@ -573,10 +566,9 @@ def export_joint_checkpoint(
     `sam2.build_sam`, which reads `torch.load(...)['model']` with `weights_only=True`. Both
     exported files are plain tensor dicts, mirroring `scripts/model_export/export_sam2_cells_model.py`.
 
-    An export is reused only when it came from the very checkpoint that is being asked for, which the
-    digest in its name records. A name like 'joint_sam2_hvit_t_best' is not enough on its own: every
-    training version has a 'best' checkpoint, so pointing JOINT_CHECKPOINT_ROOT at another version
-    would otherwise hand back the export of the previous one without reading the new weights at all.
+    The digest in the name records which checkpoint an export came from, so an export is reused only
+    for that one. Every training version has a 'best' checkpoint, so a plain 'joint_sam2_hvit_t_best'
+    would hand back the previous version's export instead.
 
     Args:
         model_type: The SAM2 backbone the model was finetuned from, e.g. 'hvit_b'.
@@ -605,11 +597,8 @@ def export_joint_checkpoint(
     return interactive_path, decoder_path
 
 
-# The volumetric option a script run should take: the tracking state stays on the device rather than
-# being round-tripped through the host, which propagates the very same masks 1.2-1.3x faster for about
-# 17 MB of device memory per slice. A batch job can spend that; an interactive session on a small
-# partition cannot, which is why it is not the library default. The feature cache sizes itself to the
-# volume now, so it needs no option here.
+# Keep a volume's tracking state on the device: the same masks propagate 1.2-1.3x faster, for about
+# 17 MB of device memory per slice. That is a batch job's to spend, which is why it is not the default.
 VOLUME_SPEED_OPTIONS = {"offload_to_cpu": False}
 
 
@@ -705,14 +694,12 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
 
 def predict_unisam2(model, raw, ndim, device, normalization=None):
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
-    # UniSAM2 expects single-channel input, so a trailing channel axis is averaged away, as in
-    # 'read_image_2d'.
+    # UniSAM2 takes single-channel input, so a trailing channel axis is averaged away.
     if raw.ndim > ndim:
         raw = raw.mean(axis=-1)
 
     is_3d = (ndim == 3)
-    # Tiling an image that fits the training patch changes the encoder's scale and the normalization
-    # window.
+    # Tiling an image that fits the training patch changes the encoder's scale and the normalization.
     is_tiled = is_3d or any(size > TRAINING_PATCH_SHAPE[-1] for size in raw.shape[:2])
     segmenter = get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
     if is_tiled:
@@ -787,9 +774,8 @@ def read_tuned_params(grid_search_root: str, dataset_name: str, model_type: str)
     """Return the best parameter combination of a grid search as a dict.
 
     Reads '<grid_search_root>/<model_type>/<dataset_name>.csv', whose first row is the best one, and
-    keeps the parameter columns, i.e. everything that is not a metric or the sample count. Values are
-    parsed as Python literals rather than floats, so the volumetric prompt generation's tuple-valued
-    'candidate_threshold' survives the round trip through the CSV.
+    keeps every column that is not a metric or the sample count. The values are parsed as Python
+    literals, so a tuple-valued 'candidate_threshold' survives the round trip through the CSV.
 
     Args:
         grid_search_root: The root the grid search wrote its per-model directories to.
@@ -838,11 +824,9 @@ def _check_key(path: str, key: Optional[str], kind: str) -> None:
 def check_data_download(dataset_name: str, data_root: str, download: bool = True) -> None:
     """Fail fast if a dataset cannot be resolved from the local data root.
 
-    This intentionally calls the dataset-specific torch-em `get_*_paths` helpers
-    via `get_data_paths(..., download=download)`, so missing downloads, invalid
-    splits, and unavailable cached files are caught before model loading. By
-    default this check is allowed to download missing datasets once, while the
-    actual evaluation code still reads cached local data afterwards.
+    The check goes through `get_data_paths(..., download=download)`, so it catches a missing download,
+    an invalid split and an unavailable cached file before the model loads. It may download a missing
+    dataset once. The evaluation itself reads the cached local data afterwards.
     """
     try:
         raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root, download=download)
