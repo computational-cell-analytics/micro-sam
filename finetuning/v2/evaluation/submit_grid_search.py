@@ -24,12 +24,10 @@ EVAL_ROOT = Path(__file__).resolve().parent
 GRID_SEARCH_SCRIPT = EVAL_ROOT / "grid_search_automatic_cells.py"
 
 # Written into every job script, so a queued job sees the configuration the submission had rather than
-# whatever the environment holds when it starts. The sample caps are global, so lift them per dataset.
+# whatever the environment holds when it starts.
 PINNED_ENV_VARS = (
     "MICRO_SAM2_JOINT_CHECKPOINT_ROOT",
     "MICRO_SAM2_JOINT_EXPORT_ROOT",
-    "MICRO_SAM_EVAL_MAX_SAMPLES",
-    "MICRO_SAM_LIVECELL_PER_CELL_TYPE",
 )
 
 
@@ -61,8 +59,7 @@ DATASETS = tuple(sorted(set(DATASETS_2D + DATASETS_3D_LM + DATASETS_3D_EM)))
 # 'grete:preemptible' is MIG only, so the GPU needs a type. Preemption is safe: a finished sweep
 # writes its CSV, and a requeued job restarts the one it did not finish.
 PARTITION = "grete:preemptible"
-ACCOUNT = "nim00007"
-GPU = "2g.20gb:1"
+GPU = "1g.10gb:1"
 CPUS = 8
 MEMORY = "32G"
 TIME_LIMIT = "12:00:00"
@@ -106,7 +103,6 @@ def _write_batch_script(
         f"#SBATCH -t {TIME_LIMIT if heavy else '00:30:00'}",
         f"#SBATCH -p {args.partition}",
         f"#SBATCH -G {args.gpu}",
-        f"#SBATCH -A {args.account}",
         f"#SBATCH --job-name={tag}",
         "#SBATCH --requeue",
         "#SBATCH --constraint=inet",
@@ -147,9 +143,8 @@ def main(argv: Optional[list[str]] = None) -> None:
                         help="Name of the joint trainer checkpoint to tune, without the '.pt' suffix.")
     parser.add_argument("-n", "--n_images", type=int, default=None, help="Cap images per 2d dataset.")
     parser.add_argument("--partition", default=PARTITION, help="Slurm partition(s) to submit to.")
-    parser.add_argument("--account", default=ACCOUNT, help="Slurm account to charge the jobs to.")
     parser.add_argument("--gpu", default=GPU,
-                        help="Slurm GPU spec. MIG partitions need a type, e.g. '2g.20gb:1' on grete:preemptible.")
+                        help="Slurm GPU spec. MIG partitions need a type, e.g. '1g.10gb:1' on grete:preemptible.")
     parser.add_argument("--cpus", type=int, default=CPUS, help="Cores per job, also the postprocessing thread count.")
     parser.add_argument("--memory", default=MEMORY, help="Memory per job.")
     parser.add_argument("--livecell_per_celltype", type=int, default=25, help="Images per livecell cell type.")

@@ -20,11 +20,12 @@ every object its best-matching propagated mask scores 0.006 above the merge.
 """
 
 import shutil
+import contextlib
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 from tqdm import tqdm
-from scipy.ndimage import find_objects
+from scipy.ndimage import find_objects, distance_transform_edt
 
 import torch
 
@@ -33,7 +34,6 @@ from bioimage_cpp.segmentation import label
 
 from .normalization import normalize_raw
 from ..v1.inference import _merge_segmentations
-from ..v1.instance_segmentation import _get_centers
 from ..util import make_temp_embedding_path, _ensure_rgb
 from .postprocessing import DEFAULT_POSTPROCESSING, _compute_flow_density
 from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
@@ -73,7 +73,51 @@ DEFAULT_PROMPT_GENERATION = {
     "dt": DEFAULT_POSTPROCESSING["sparse"]["dt"],
     "sigma": DEFAULT_POSTPROCESSING["sparse"]["sigma"],
     "min_size": DEFAULT_POSTPROCESSING["sparse"]["min_size"],
+    # Throughput only, the density is the same either way. Eight threads cut the flow integration by
+    # a factor of five, sixteen bought nothing more.
+    "n_threads": 8,
 }
+
+
+def sam2_autocast(device):
+    """Run the SAM2 branch in half precision, as the UniSAM2 decoder already does.
+
+    Worth 1.15x end to end on livecell, for -0.0004 mSA, which is inside the noise of the merge.
+
+    Args:
+        device: The device the branch runs on. Half precision is used on cuda and mps only.
+
+    Returns:
+        The autocast context, or a null context where half precision does not apply.
+    """
+    device_type = torch.device(device).type
+    if device_type in ("cuda", "mps"):
+        return torch.autocast(device_type=device_type, dtype=torch.float16)
+    return contextlib.nullcontext()
+
+
+def interior_points(labels: np.ndarray) -> np.ndarray:
+    """The deepest interior point of every labelled component, in ascending label order.
+
+    The v1 counterpart transforms a `find_boundaries` image, whose 'outer' mode marks a thin
+    component's own pixels as boundary. Its maximum then falls on the bounding box's first pixel,
+    which need not lie in the component at all.
+
+    Args:
+        labels: A labelled image or volume.
+
+    Returns:
+        The points as (N, ndim), one per component, in the array's own axis order.
+    """
+    points = []
+    for index, bounding_box in enumerate(find_objects(labels), start=1):
+        if bounding_box is None:
+            continue
+        # Padded, so a component reaching the border is measured from that border too.
+        distances = distance_transform_edt(np.pad(labels[bounding_box] == index, 1))
+        coordinates = np.unravel_index(int(np.argmax(distances)), distances.shape)
+        points.append(tuple(int(c) + box.start - 1 for c, box in zip(coordinates, bounding_box)))
+    return np.array(points, dtype="int64").reshape(-1, labels.ndim)
 
 
 def derive_point_prompts(
@@ -86,7 +130,7 @@ def derive_point_prompts(
     sigma: float = DEFAULT_PROMPT_GENERATION["sigma"],
     min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
     backend: str = "cpp",
-    n_threads: int = 1,
+    n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
 ) -> Optional[Dict[str, np.ndarray]]:
     """Derive one positive point prompt per convergence-density component.
 
@@ -133,7 +177,7 @@ def derive_point_prompts(
 
     # The interior point rather than the centroid: a curved or elongated object's centroid can lie
     # outside it, and a prompt outside the object segments the wrong thing.
-    centers = _get_centers(candidates)
+    centers = interior_points(candidates)
     if len(centers) == 0:
         return None
 
@@ -154,7 +198,7 @@ def derive_volume_prompts(
     spacing: Optional[tuple] = None,
     min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
     backend: str = "cpp",
-    n_threads: int = 1,
+    n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
 ) -> Optional[Dict[str, np.ndarray]]:
     """Derive one positive point prompt, on one slice, per volumetric convergence-density component.
 
@@ -243,9 +287,9 @@ def merge_by_score(
     Linear in the number of candidates, where `micro_sam.util.apply_nms` is quadratic, and marginally
     better on livecell: truncating a later mask preserves the better-scoring instance's boundary.
 
-    A record may carry a 'bounding_box' (a tuple of slices), in which case its mask is only the crop
-    inside that box. A volumetric mask per object would otherwise scale with the object count times
-    the volume, which is what makes the 3d generator run out of memory.
+    A record carries a 'bounding_box' (a tuple of slices) and its mask is only the crop inside that
+    box, so both the merge and the records themselves scale with the objects rather than with the
+    image. A volumetric mask per object would otherwise make the 3d generator run out of memory.
 
     Args:
         records: The prediction records, as produced by `AutomaticPromptGenerator._apply_prompts`.
@@ -332,6 +376,12 @@ def refine_with_boxes(
     for index in np.argsort(scores):
         refined[masks[index]] = ids[index]
     return refined
+
+
+def _records_shape(records: List[Dict[str, Any]]) -> tuple:
+    """The smallest canvas that holds every record, which is all a merge of cropped masks needs."""
+    boxes = [record["bounding_box"] for record in records]
+    return tuple(max(box[axis].stop for box in boxes) for axis in range(len(boxes[0])))
 
 
 def _volume_records(
@@ -441,6 +491,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._image_embeddings = None
         self._volume = None
         self._propagator = None
+        self._offload_to_cpu = None
+        self._max_cached_frames = None
         self._temporary_embedding_path = None
         # The embedding cache is keyed on these, which a SAM2 image predictor does not carry itself.
         sam2_model = getattr(predictor, "model", None)
@@ -452,7 +504,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     def _encode(self, image: np.ndarray) -> dict:
         """Run the image encoder once and return the embeddings that both branches use."""
         self._predictor.reset_predictor()
-        self._predictor.set_image(_ensure_rgb(normalize_raw(image, output_dtype="uint8")))
+        with sam2_autocast(self._predictor.device):
+            self._predictor.set_image(_ensure_rgb(normalize_raw(image, output_dtype="uint8")))
         return {
             "features": self._predictor.get_image_embedding().cpu().numpy(),
             "high_res_feats": self._predictor._features["high_res_feats"],
@@ -467,6 +520,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         image_embeddings: Optional[dict] = None,
         save_path: Optional[str] = None,
         verbose: bool = False,
+        offload_to_cpu: Optional[bool] = None,
+        cache_all_slices: bool = False,
+        lazy_embeddings: bool = True,
         **kwargs,
     ) -> None:
         """Encode the input, run the decoder on that encoding and leave the predictor ready to be prompted.
@@ -481,10 +537,24 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             save_path: Optional path to cache the embeddings of a volume in a zarr container. Without
                 one an ephemeral store is used, which `clear_state` removes.
             verbose: Whether to print progress while the embeddings of a volume are computed.
+            offload_to_cpu: Whether a volume's tracking state is held on the host rather than on the
+                device. False propagates the same masks 6-11% faster, for the memory of one pass of
+                objects across the volume, which is about 17 MB per slice at the default pass size.
+                None leaves the choice to `PromptableSegmentation3D`, which offloads on cuda.
+            cache_all_slices: Whether every slice's features stay on the device while a volume is
+                propagated. A pass walks the whole volume, so a cache shorter than it is never hit
+                and every slice is fetched again on every pass - which is most of the run on a deep
+                volume. Costs about 90 MB of device memory per slice.
+            lazy_embeddings: Whether a volume's embeddings are read from their store slice by slice.
+                False holds them in host memory instead, which makes the fetch above much cheaper
+                without spending device memory.
             kwargs: Additional arguments for `UniSAM2InstanceSegmentation.initialize`.
         """
         if ndim == 3:
-            self._initialize_volume(image, image_embeddings, save_path, verbose, **kwargs)
+            self._initialize_volume(
+                image, image_embeddings, save_path, verbose, offload_to_cpu, cache_all_slices,
+                lazy_embeddings, **kwargs
+            )
             return
         if ndim != 2:
             raise ValueError(f"Automatic prompt generation supports 2d and 3d inputs, got ndim={ndim}.")
@@ -496,7 +566,19 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         super().initialize(image, ndim=ndim, image_embeddings=image_embeddings, **kwargs)
         self._image_embeddings = image_embeddings
 
-    def _initialize_volume(self, volume, image_embeddings, save_path, verbose, **kwargs) -> None:
+    def _build_propagator(self, volume, image_embeddings) -> PromptableSegmentation3D:
+        """The video predictor this volume is propagated with, holding its state where asked to."""
+        offload = self._offload_to_cpu
+        return PromptableSegmentation3D(
+            self._video_predictor, volume, image_embeddings,
+            offload_video_to_cpu=offload, offload_state_to_cpu=offload,
+            max_cached_frames=self._max_cached_frames,
+        )
+
+    def _initialize_volume(
+        self, volume, image_embeddings, save_path, verbose, offload_to_cpu, cache_all_slices,
+        lazy_embeddings, **kwargs
+    ) -> None:
         """Encode the volume, run the decoder on that encoding and initialize the video predictor."""
         if self._video_predictor is None:
             raise ValueError(
@@ -512,13 +594,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 self._temporary_embedding_path = make_temp_embedding_path()
                 path = self._temporary_embedding_path
             image_embeddings = precompute_image_embeddings(
-                self._video_predictor, volume, save_path=path, ndim=3, verbose=verbose, lazy_loading=True,
+                self._video_predictor, volume, save_path=path, ndim=3, verbose=verbose,
+                lazy_loading=lazy_embeddings,
             )
 
         UniSAM2InstanceSegmentation.initialize(self, volume, ndim=3, image_embeddings=image_embeddings, **kwargs)
         self._image_embeddings = image_embeddings
         self._volume = volume
-        self._propagator = PromptableSegmentation3D(self._video_predictor, volume, image_embeddings)
+        self._offload_to_cpu = offload_to_cpu
+        self._max_cached_frames = int(volume.shape[0]) if cache_all_slices else None
+        self._propagator = self._build_propagator(volume, image_embeddings)
 
     def get_state(self) -> dict:
         """Return the decoder predictions and the image embeddings, so that both branches can be restored.
@@ -549,7 +634,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 raise ValueError("A volumetric state must hold the 'image_embeddings' of its volume.")
             super().set_state(state)
             self._volume = volume
-            self._propagator = PromptableSegmentation3D(self._video_predictor, volume, image_embeddings)
+            self._propagator = self._build_propagator(volume, image_embeddings)
         else:
             if image_embeddings is None:
                 if "image" not in state:
@@ -592,6 +677,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         n_objects_per_pass: int = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"],
         early_stop_patience: Optional[int] = DEFAULT_PROMPT_GENERATION["early_stop_patience"],
         batch_size: int = 64,
+        n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
         verbose: bool = False,
     ) -> np.ndarray:
         """Derive prompts from the stored predictions, apply them and merge the masks.
@@ -624,6 +710,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             early_stop_patience: Stop a propagation pass after this many consecutive slices in which
                 every object of the pass is empty. None propagates through the whole volume.
             batch_size: Number of prompts per forward pass.
+            n_threads: Number of threads for the flow integration the candidates come from.
             verbose: Whether to show progress over the propagation passes of a volume.
 
         Returns:
@@ -643,7 +730,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             prompts = derive_volume_prompts(
                 self._prediction[0], self._prediction[1:], candidate_threshold=candidate_threshold,
                 foreground_threshold=foreground_threshold, n_iter=n_iter, dt=dt, sigma=sigma,
-                spacing=spacing, min_candidate_size=min_candidate_size,
+                spacing=spacing, min_candidate_size=min_candidate_size, n_threads=n_threads,
             )
             if prompts is None:
                 return np.zeros(shape, dtype="uint32")
@@ -657,38 +744,119 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             )
             return merge_by_score(records, shape, max_overlap=max_overlap, min_size=min_size)
 
+        proposals = self.propose(
+            candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
+            n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size,
+            multimasking=multimasking, batch_size=batch_size, n_threads=n_threads,
+        )
+        return self.select(
+            proposals, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
+            refine_with_box_prompts=refine_with_box_prompts, box_extension=box_extension, batch_size=batch_size,
+        )
+
+    @torch.no_grad()
+    def propose(
+        self,
+        candidate_threshold: Optional[float] = DEFAULT_PROMPT_GENERATION["candidate_threshold"],
+        foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
+        n_iter: int = DEFAULT_PROMPT_GENERATION["n_iter"],
+        dt: float = DEFAULT_PROMPT_GENERATION["dt"],
+        sigma: float = DEFAULT_PROMPT_GENERATION["sigma"],
+        min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
+        multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
+        batch_size: int = 64,
+        n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
+    ) -> list:
+        """Derive the prompts and turn them into scored mask proposals, without selecting any of them.
+
+        This is the half of `generate` that needs the model. Splitting it off lets a parameter sweep
+        reuse one set of proposals across every value of 'score_threshold', 'max_overlap' and
+        'min_size', which only filter and merge. Images only: a volume gates its propagation on the
+        score, so its proposals depend on those parameters too.
+
+        Args:
+            candidate_threshold: Density threshold for proposing candidates, see `derive_point_prompts`.
+            foreground_threshold: Foreground binarisation threshold.
+            n_iter: Number of flow-integration steps for the candidate density.
+            dt: Integration step size.
+            sigma: Gaussian sigma for smoothing the candidate density.
+            min_candidate_size: Discard density components smaller than this.
+            multimasking: Whether to predict several masks per point and keep the best scoring one.
+            batch_size: Number of prompts per forward pass.
+            n_threads: Number of threads for the flow integration the candidates come from.
+
+        Returns:
+            The proposals, to be passed to `select`. Their layout is an implementation detail of the
+            generator that produced them.
+        """
+        if not self._is_initialized:
+            raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
+        if self._prediction.ndim == 4:
+            raise ValueError("Proposals can only be reused for an image, because a volume gates its propagation.")
+
         prompts = derive_point_prompts(
             self._prediction[0], self._prediction[1:], candidate_threshold=candidate_threshold,
             foreground_threshold=foreground_threshold, n_iter=n_iter, dt=dt, sigma=sigma,
-            min_candidate_size=min_candidate_size,
+            min_candidate_size=min_candidate_size, n_threads=n_threads,
         )
         if prompts is None:
+            return []
+        return self._apply(prompts, multimasking=multimasking, batch_size=batch_size)
+
+    def select(
+        self,
+        proposals: list,
+        score_threshold: float = DEFAULT_PROMPT_GENERATION["score_threshold"],
+        max_overlap: float = DEFAULT_PROMPT_GENERATION["max_overlap"],
+        min_size: int = DEFAULT_PROMPT_GENERATION["min_size"],
+        refine_with_box_prompts: bool = DEFAULT_PROMPT_GENERATION["refine_with_box_prompts"],
+        box_extension: int = DEFAULT_PROMPT_GENERATION["box_extension"],
+        batch_size: int = 64,
+    ) -> np.ndarray:
+        """Merge the proposals of `propose` into an instance segmentation.
+
+        Args:
+            proposals: The proposals, as returned by `propose` on the same generator.
+            score_threshold: Discard proposals whose predicted IoU is below this.
+            max_overlap: Reject a proposal when more than this fraction of it is already claimed.
+            min_size: Minimum object size in the result.
+            refine_with_box_prompts: Whether to re-prompt every merged instance with its bounding box.
+            box_extension: Number of pixels every box of that second stage is grown by.
+            batch_size: Number of boxes per forward pass of the refinement.
+
+        Returns:
+            The instance segmentation, uint32 array with the spatial shape of the prediction.
+        """
+        shape = self._prediction[0].shape
+        if not proposals:
             return np.zeros(shape, dtype="uint32")
 
-        segmentation = self._apply_and_merge(
-            prompts, shape, multimasking=multimasking, batch_size=batch_size,
-            score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
+        segmentation = self._merge(
+            proposals, shape, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
         )
         if refine_with_box_prompts and segmentation.max() > 0:
             segmentation = self._refine_boxes(segmentation, batch_size, box_extension)
         return segmentation
 
-    def _apply_and_merge(
-        self, prompts: dict, shape: tuple, multimasking: bool, batch_size: int,
-        score_threshold: float, max_overlap: float, min_size: int,
+    def _apply(self, prompts: dict, multimasking: bool, batch_size: int) -> list:
+        """Turn the prompts into mask proposals."""
+        return self._apply_prompts(prompts, multimasking=multimasking, batch_size=batch_size)
+
+    def _merge(
+        self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
     ) -> np.ndarray:
-        """Turn the prompts into masks and merge them into an instance segmentation."""
-        records = self._apply_prompts(prompts, multimasking=multimasking, batch_size=batch_size)
-        records = [record for record in records if record["predicted_iou"] >= score_threshold]
+        """Merge the mask proposals into an instance segmentation."""
+        records = [record for record in proposals if record["predicted_iou"] >= score_threshold]
         if not records:
             return np.zeros(shape, dtype="uint32")
         return merge_by_score(records, shape, max_overlap=max_overlap, min_size=min_size)
 
     def _refine_boxes(self, segmentation: np.ndarray, batch_size: int, box_extension: int) -> np.ndarray:
         """Re-prompt every instance with its bounding box, see `refine_with_boxes`."""
-        return refine_with_boxes(
-            self._predictor, segmentation, batch_size=batch_size, box_extension=box_extension,
-        )
+        with sam2_autocast(self._predictor.device):
+            return refine_with_boxes(
+                self._predictor, segmentation, batch_size=batch_size, box_extension=box_extension,
+            )
 
     def _apply_prompts(self, prompts, multimasking: bool, batch_size: int) -> List[Dict[str, Any]]:
         """Prompt the interactive branch in batches, returning records for the merge."""
@@ -701,26 +869,44 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         for start in range(0, len(points), batch_size):
             stop = start + batch_size
             batch_points, batch_labels = points[start:stop], point_labels[start:stop]
-            masks, scores, _ = self._predictor.predict(
-                point_coords=batch_points, point_labels=batch_labels,
-                multimask_output=multimasking, return_logits=True,
-            )
-            # 'predict' squeezes the prompt axis away for a single prompt, so it is restored here before
-            # the multimask proposals of each prompt are reduced to the best-scoring one.
             n_prompts = len(batch_points)
-            logits = np.asarray(masks).reshape(n_prompts, -1, *masks.shape[-2:])
-            scores = np.asarray(scores).reshape(n_prompts, -1)
-            best = scores.argmax(axis=1)
-            index = np.arange(n_prompts)
+            # The predictor's own 'predict' brings every multimask proposal back as a full-resolution
+            # float mask, of which all but the best-scoring one is then dropped. Reducing on the device
+            # first leaves only the kept mask to transfer, as one byte per pixel rather than twelve.
+            mask_input, coords, labels, _ = self._predictor._prep_prompts(
+                batch_points, batch_labels, None, None, True,
+            )
+            with sam2_autocast(self._predictor.device):
+                logits, scores, _ = self._predictor._predict(
+                    coords, labels, None, mask_input, multimasking, return_logits=True,
+                )
+            logits = logits.reshape(n_prompts, -1, *logits.shape[-2:])
+            scores = scores.reshape(n_prompts, -1)
+            index = torch.arange(n_prompts, device=scores.device)
+            best = scores.argmax(dim=1)
             logits, scores = logits[index, best], scores[index, best]
 
-            logits = torch.from_numpy(np.ascontiguousarray(logits))
             stability = calculate_stability_score(logits, mask_threshold, STABILITY_SCORE_OFFSET)
-            for offset, (mask, score, stable) in enumerate(zip(logits > mask_threshold, scores, stability)):
-                if not mask.any():
+            binary = logits > mask_threshold
+            # The extents as two reductions on the device: an np.nonzero per mask builds index arrays
+            # over the whole image, which costs more than everything else in this loop together.
+            rows_any = binary.any(dim=2).cpu().numpy()
+            columns_any = binary.any(dim=1).cpu().numpy()
+            masks = binary.cpu().numpy()
+            scores = scores.float().cpu().numpy()
+            stability = stability.float().cpu().numpy()
+            for offset, (mask, row_any, column_any, score, stable) in enumerate(
+                zip(masks, rows_any, columns_any, scores, stability)
+            ):
+                if not row_any.any():
                     continue
+                y0, y1 = int(row_any.argmax()), len(row_any) - int(row_any[::-1].argmax())
+                x0, x1 = int(column_any.argmax()), len(column_any) - int(column_any[::-1].argmax())
                 records.append({
-                    "segmentation": mask,
+                    # The crop rather than the full mask: the merge is linear in the mask's size, and an
+                    # object covers a small part of the image, so this is where its cost actually is.
+                    "segmentation": mask[y0:y1, x0:x1].copy(),
+                    "bounding_box": (slice(y0, y1), slice(x0, x1)),
                     "predicted_iou": float(score),
                     "stability_score": float(stable),
                     # Empty masks are dropped, so the record order does not track the prompts.
@@ -757,7 +943,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 continue
 
             _, kept = merge_by_score(
-                records, tuple(records[0]["segmentation"].shape), max_overlap=max_overlap,
+                records, _records_shape(records), max_overlap=max_overlap,
                 min_size=DEFAULT_PROMPT_GENERATION["min_size"], return_matches=True,
             )
             for record_index in kept.values():
@@ -792,7 +978,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
         records = []
         for batch in tqdm(passes, desc="Propagate prompts", disable=not verbose):
-            self._propagator.reset_predictor()
+            # Only the objects: every pass reads the same volume, so re-reading its features and
+            # flushing the allocator each time costs more than the propagation. Freed after the loop.
+            self._propagator.reset_tracking()
             for object_id, candidate in enumerate(batch, start=1):
                 x, y = candidate["point"]
                 self._propagator.add_point_prompts(
@@ -907,18 +1095,13 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             assignment.setdefault(tile_id, []).append(index)
         return assignment
 
-    def _apply_and_merge(
-        self, prompts: dict, shape: tuple, multimasking: bool, batch_size: int,
-        score_threshold: float, max_overlap: float, min_size: int,
-    ) -> np.ndarray:
-        """Prompt each tile with the candidates that belong to it, then stitch the per-tile merges."""
+    def _apply(self, prompts: dict, multimasking: bool, batch_size: int) -> list:
+        """Prompt each tile with the candidates that belong to it, keeping the tiles apart."""
         points, point_labels = prompts["points"], prompts["point_labels"]
-        segmentation = np.zeros(shape, dtype="uint32")
-        offset = 0
 
+        proposals = []
         for tile_id, indices in sorted(self._tiles_for_points(points).items()):
             bounding_box = self._tile_bounding_box(tile_id)
-            tile_shape = tuple(box.stop - box.start for box in bounding_box)
             # The prompts are in the full image's frame, the tile's embeddings in the tile's.
             origin = np.array([bounding_box[1].start, bounding_box[0].start], dtype="float32")
 
@@ -927,22 +1110,32 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
                 {"points": points[indices] - origin, "point_labels": point_labels[indices]},
                 multimasking=multimasking, batch_size=batch_size,
             )
-            records = [record for record in records if record["predicted_iou"] >= score_threshold]
+            if records:
+                proposals.append({"bounding_box": bounding_box, "records": records})
+        return proposals
+
+    def _merge(
+        self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
+    ) -> np.ndarray:
+        """Stitch the per-tile merges into one segmentation, resolving the halo overlaps."""
+        segmentation = np.zeros(shape, dtype="uint32")
+        offset = 0
+
+        for proposal in proposals:
+            bounding_box = proposal["bounding_box"]
+            tile_shape = tuple(box.stop - box.start for box in bounding_box)
+            records = [record for record in proposal["records"] if record["predicted_iou"] >= score_threshold]
             if not records:
                 continue
 
-            tile_segmentation = merge_by_score(
-                records, tile_shape, max_overlap=max_overlap, min_size=min_size,
-            )
+            tile_segmentation = merge_by_score(records, tile_shape, max_overlap=max_overlap, min_size=min_size)
             max_id = int(tile_segmentation.max())
             if max_id == 0:
                 continue
             # Keep the instance ids unique across tiles before the halo overlaps are resolved.
             tile_segmentation[tile_segmentation != 0] += offset
             offset += max_id
-            segmentation[bounding_box] = _merge_segmentations(
-                tile_segmentation, segmentation[bounding_box]
-            )
+            segmentation[bounding_box] = _merge_segmentations(tile_segmentation, segmentation[bounding_box])
         return segmentation
 
     def _refine_boxes(self, segmentation: np.ndarray, batch_size: int, box_extension: int) -> np.ndarray:
@@ -955,7 +1148,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         if ids.size == 0:
             return segmentation
 
-        centers = _get_centers(segmentation)
+        centers = interior_points(segmentation)
         if len(centers) != len(ids):
             raise RuntimeError(f"Got {len(centers)} interior points for {len(ids)} instances.")
         assignment = {}

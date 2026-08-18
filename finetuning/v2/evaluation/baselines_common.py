@@ -1,6 +1,5 @@
 """Shared data-loading utilities for evaluate_automatic_baselines and evaluate_interactive_baselines."""
 
-import os
 import warnings
 
 import numpy as np
@@ -11,12 +10,12 @@ from elf.io import open_file
 
 from torch_em.util.segmentation import size_filter
 
-from common import get_data_paths, load_volume, GT_MIN_SIZE_2D, _center_crop_roi
 from micro_sam.v2.normalization import normalize_raw
+
+from common import get_data_paths, load_volume, GT_MIN_SIZE_2D, _center_crop_roi
 
 CROP_SHAPE_2D = (512, 512)
 CROP_SHAPE_3D = (8, 512, 512)
-MAX_EVALUATION_SAMPLES = int(os.environ.get("MICRO_SAM_EVAL_MAX_SAMPLES", "200"))
 
 
 def _ensure_8bit_range(raw):
@@ -95,36 +94,81 @@ def _apply_min_size(labels, min_size, dataset_name):
     return filtered
 
 
-def _load_data(dataset_name, data_root, ndim, min_size=None):
+def drop_severed_objects(labels, min_size):
+    """Drop the objects that a crop face cut down to a sliver, in a ground truth or a prediction alike.
+
+    An object touching a face is only partly in the image, but one that is still large is perfectly
+    segmentable, so only the small remnants go. Both sides are filtered the same way, so removing a
+    remnant from the ground truth does not turn the prediction of it into a false positive.
+
+    Both conditions are needed. A bare size threshold also deletes whole interior objects that
+    simply are small: half of the livecell objects below 50 pixels are those, while on
+    dynamicnuclearnet every one of them does touch a face. Contact alone would instead delete large,
+    perfectly usable cells that merely reach the edge.
+    """
+    if not min_size:
+        return labels
+    if labels.ndim == 2:
+        edges = (labels[0], labels[-1], labels[:, 0], labels[:, -1])
+    else:
+        # In-plane faces only. A thin z-crop touches nearly every object on its top and bottom slice.
+        edges = (labels[:, 0], labels[:, -1], labels[:, :, 0], labels[:, :, -1])
+    border_ids = np.unique(np.concatenate([np.unique(edge) for edge in edges]))
+    border_ids = border_ids[border_ids != 0]
+    if border_ids.size == 0:
+        return labels
+
+    ids, sizes = np.unique(labels[labels != 0], return_counts=True)
+    severed = np.intersect1d(border_ids, ids[sizes < min_size], assume_unique=True)
+    if severed.size == 0:
+        return labels
+    return np.where(np.isin(labels, severed), 0, labels).astype(labels.dtype)
+
+
+def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name):
+    """Load one 2d sample the way the evaluation scores it.
+
+    The single source of truth for what an image and its ground truth are, so that a parameter
+    search selects on exactly the data the evaluation measures.
+    """
+    # Normalized before cropping: the percentiles are taken over the whole image.
+    image = _ensure_8bit_range(_read_2d(raw_path, raw_key))
+    roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
+    gt = connected_components(_read_2d(label_path, label_key)[roi]).astype("uint32")
+    return image[roi], drop_severed_objects(gt, GT_MIN_SIZE_2D.get(dataset_name, 0))
+
+
+def load_evaluation_sample_3d(
+    raw_path, label_path, raw_key, label_key, dataset_name,
+    crop_shape=CROP_SHAPE_3D, z_range=None, min_size=0,
+):
+    """Load one volumetric sample the way the evaluation scores it."""
+    raw, labels, valid_roi = load_volume(
+        raw_path, label_path, raw_key, label_key, dataset_name, crop_shape, z_range=z_range
+    )
+    return _ensure_8bit_range(raw), _apply_min_size(labels, min_size, dataset_name), valid_roi
+
+
+def _load_data(dataset_name, data_root, ndim, min_size=0):
     """Yield (image_or_volume, labels, valid_roi) triples for the given dataset.
 
     valid_roi is a boolean mask (True = annotated) for partially annotated datasets
     (platynereis_nuclei), or None for all others.
 
-    `min_size` drops ground-truth objects below that many pixels. Cropping cuts objects at the crop
-    faces, which leaves slivers of a few pixels that no prompt can recover. Filtering must happen
-    here, the single source of the labels used for both prompting and scoring: filtering only the
-    prompting copy would leave the slivers in the scored ground truth as unmatched objects. None
-    resolves to `GT_MIN_SIZE_2D` for 2d, and to 0 otherwise.
+    A 2d ground truth is filtered by `drop_border_objects`, which is what cropping makes necessary.
+    `min_size` additionally drops volumetric objects below that many voxels, and defaults to keeping
+    all of them. Filtering must happen here, the single source of the labels used for both prompting
+    and scoring: filtering only the prompting copy would leave the dropped objects in the scored
+    ground truth as unmatched ones.
     """
-    if min_size is None:
-        min_size = GT_MIN_SIZE_2D.get(dataset_name, 0) if ndim == 2 else 0
-
     if ndim == 3:
         raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root)
-        path_pairs = _sorted_path_pairs(raw_paths, label_paths)[:MAX_EVALUATION_SAMPLES]
-        for raw_path, label_path in path_pairs:
-            raw, labels, valid_roi = load_volume(raw_path, label_path, raw_key, label_key, dataset_name, CROP_SHAPE_3D)
-            raw = _ensure_8bit_range(raw)
-            yield raw, _apply_min_size(labels, min_size, dataset_name), valid_roi
+        for raw_path, label_path in _sorted_path_pairs(raw_paths, label_paths):
+            yield load_evaluation_sample_3d(
+                raw_path, label_path, raw_key, label_key, dataset_name, min_size=min_size
+            )
     else:
         image_paths, gt_paths, raw_key, label_key = get_data_paths(dataset_name, data_root)
-        path_pairs = _sorted_path_pairs(image_paths, gt_paths)[:MAX_EVALUATION_SAMPLES]
-        for img_path, gt_path in path_pairs:
-            image = _read_2d(img_path, raw_key)
-            image = _ensure_8bit_range(image)
-            roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
-            image = image[roi]
-            gt = _read_2d(gt_path, label_key)
-            gt = connected_components(gt[roi]).astype("uint32")
-            yield image, _apply_min_size(gt, min_size, dataset_name), None
+        for img_path, gt_path in _sorted_path_pairs(image_paths, gt_paths):
+            image, gt = load_evaluation_sample_2d(img_path, gt_path, raw_key, label_key, dataset_name)
+            yield image, gt, None

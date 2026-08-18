@@ -29,7 +29,7 @@ from micro_sam.v2.evaluation import inference, evaluation
 from common import (
     CHECKPOINT_PATHS, DATA_ROOT, DATASETS_3D, DATASET_SPACING, get_data_paths, load_volume,
     UNISAM2_CHECKPOINT, load_unisam2_model, predict_unisam2, postprocess_unisam2,
-    export_joint_checkpoint, run_dataset_evaluation,
+    export_joint_checkpoint, run_dataset_evaluation, VOLUME_SPEED_OPTIONS,
 )
 from common import check_data_download
 
@@ -217,7 +217,7 @@ def run_apg_evaluation_3d(
         print(f"{fname}: raw {raw.shape}, {len(np.unique(labels)) - 1} instances")
 
         segmenter.clear_state()
-        segmenter.initialize(raw, ndim=3)
+        segmenter.initialize(raw, ndim=3, **VOLUME_SPEED_OPTIONS)
         segmentations = {
             "ais": postprocess_unisam2(segmenter.get_state()["prediction"], dataset_name, params=ais_params)
         }

@@ -41,10 +41,8 @@ from concurrent import futures
 
 import numpy as np
 import pandas as pd
-import imageio.v3 as imageio
 from tqdm import tqdm
 
-from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy
 from bioimage_cpp.segmentation import label as connected_components, watershed
 
@@ -55,16 +53,17 @@ from micro_sam.v2.postprocessing import (
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (  # noqa
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, DATASET_SPACING, VAL_Z_RANGE,
-    get_data_paths, load_volume, export_joint_checkpoint, drop_excluded_livecell,
+    GT_MIN_SIZE_2D, get_data_paths, export_joint_checkpoint, drop_excluded_livecell,
+    VOLUME_SPEED_OPTIONS,
 )
-from baselines_common import MAX_EVALUATION_SAMPLES  # noqa
+from baselines_common import (  # noqa
+    load_evaluation_sample_2d, load_evaluation_sample_3d, drop_severed_objects,
+)
 
 
 OUTPUT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/grid-search-hvit-t-cells"
 DEVICE = "cuda"
 MODEL_NAME = "hvit_t_cells"
-
-CROP_SHAPE_2D = (512, 512)
 
 # Sparse (flow) grid for LM data. Keys map to flow_instance_segmentation arguments.
 LM_GRID = {
@@ -77,22 +76,51 @@ LM_GRID = {
     "foreground_weight": [0.0, 0.25, 0.5, 0.65, 0.75, 0.9],
 }
 
-# Keys map to AutomaticPromptGenerator.generate. Every combination re-prompts SAM2, unlike the grids
-# above which only re-run CPU postprocessing, so this one stays small.
+# Keys map to AutomaticPromptGenerator.generate. Only 'candidate_threshold' and 'sigma' re-prompt
+# SAM2; the rest select among proposals that are already there, so they are swept densely for free.
+# See APG_PROPOSAL_KEYS and score_sample_apg_cached.
+# The ranges bracket the values a previous sweep already selected ('sigma' 1.0 and 'score_threshold'
+# 0.7 on dynamicnuclearnet, 'candidate_threshold' 2.5 on livecell), because an optimum on the edge of
+# a grid says the grid is too small rather than that the edge is best. 'score_threshold' and
+# 'candidate_threshold' both won at their upper end last time, so both reach further up now.
+# 'foreground_threshold' and 'min_size' are pinned to their defaults: each moved the result by less
+# than 0.001 over both datasets, which does not pay for doubling the sweep.
 APG_GRID_2D = {
-    "candidate_threshold": [1.0, 1.5, 2.5],
+    "foreground_threshold": [0.7],
+    "candidate_threshold": [1.0, 1.5, 2.25, 3.0],
+    "n_iter": [50],
     "sigma": [0.5, 1.0, 2.0],
-    "score_threshold": [0.5, 0.6, 0.7],
-    "min_size": [50, 100],
+    "min_candidate_size": [1, 4],
+    "score_threshold": [0.5, 0.6, 0.7, 0.8],
+    "max_overlap": [0.15, 0.3],
+    "min_size": [50],
+    "refine_with_box_prompts": [False, True],
 }
 
-# Drops a level of 'score_threshold', since a volume pays for propagation on top of scoring.
+# A volume gates its propagation on the score, so none of its axes are free and this grid stays small.
+# Aimed at where the volumetric diagnostic says the objects go: on gonuclear 17% never get a candidate
+# at all, while the merge loses none, and the unseeded objects average 654 px against 2863 px for the
+# seeded ones. A component's convergence density scales with the object's size, so the small nuclei
+# never clear the ladder - hence a lower bottom rung, less smoothing and a smaller component floor.
+# 'score_threshold' and 'min_size' are pinned to the values a previous sweep chose, so this round
+# isolates the seeding axes; every combination re-propagates, which is what keeps the grid this small.
+# 'max_overlap' is swept here and pinned in the 2d grid, because of the failure it causes on a volume:
+# a neighbour clips a fifth of an object, the object's own well-propagated mask is then rejected
+# wholesale, and the object is left unclaimed. Raising it to 0.5 recovers 5 of cremi's 17 genuinely
+# missed objects. 0.3 is not swept: it moved cremi by one object and neither of the other two EM
+# volumes at all, and every combination here re-propagates, so an axis that buys nothing is expensive.
 APG_GRID_3D = {
-    "candidate_threshold": [(1.5, 10.0), (1.0, 5.0), (2.5, 10.0)],
-    "sigma": [1.0, 2.0],
-    "score_threshold": [0.5, 0.6],
-    "min_size": [50, 100],
+    "candidate_threshold": [(1.5, 10.0), (1.0, 5.0), (0.5, 5.0), (0.25, 1.0, 5.0)],
+    "sigma": [0.25, 0.5, 1.0],
+    "min_candidate_size": [1, 4],
+    "score_threshold": [0.6],
+    "max_overlap": [0.15, 0.5],
+    "min_size": [100],
 }
+
+# The APG parameters that decide the mask proposals, which is the half that needs the model. Combos
+# that share these reuse one set of proposals, as the sparse grid reuses a cached flow density.
+APG_PROPOSAL_KEYS = ("candidate_threshold", "sigma", "foreground_threshold", "n_iter", "dt", "min_candidate_size")
 
 # Dense (multicut) grid for EM data. Keys map to run_multicut arguments.
 EM_GRID = {
@@ -265,22 +293,51 @@ def build_apg_segmenter(device, ndim, model_type, joint_checkpoint="best"):
     )
 
 
-def score_sample_apg(segmenter, raw, labels, params_list, ndim, metric_mode, spacing=None):
+def score_sample_apg(segmenter, raw, labels, params_list, ndim, metric_mode, spacing=None, border_min_size=0):
     """Return a per-combo list of metric dicts for one sample, aligned with params_list.
 
-    The encoder and the decoder run once per sample; every combo then only re-derives the prompts and
-    re-prompts SAM2, which is what makes sweeping this affordable at all.
+    The encoder and the decoder run once per sample. An image then reuses its mask proposals across
+    every combo that only selects among them; a volume gates its propagation on the score, so it has
+    to run every combo in full.
     """
     segmenter.clear_state()
-    segmenter.initialize(raw, ndim=ndim)
+    # A volume takes the options that stop it re-reading its features on every propagation pass.
+    segmenter.initialize(raw, ndim=ndim, **(VOLUME_SPEED_OPTIONS if ndim == 3 else {}))
+    if ndim == 2:
+        return score_sample_apg_cached(segmenter, labels, params_list, metric_mode, border_min_size)
+
     scores = []
     for params in params_list:
         try:
             seg = segmenter.generate(spacing=spacing, **params)
-            scores.append(compute_metrics(seg.astype("uint32"), labels, metric_mode))
+            scores.append(compute_metrics(seg.astype("uint32"), labels, metric_mode, border_min_size))
         except Exception as e:
             warnings.warn(f"Prompt generation failed for {params}: {e}")
             scores.append(None)
+    return scores
+
+
+def score_sample_apg_cached(segmenter, labels, params_list, metric_mode, border_min_size=0):
+    """Score every combo of an image, prompting SAM2 once per distinct set of proposal parameters."""
+    groups = {}
+    for index, params in enumerate(params_list):
+        key = tuple(sorted((k, v) for k, v in params.items() if k in APG_PROPOSAL_KEYS))
+        groups.setdefault(key, []).append(index)
+
+    scores = [None] * len(params_list)
+    for key, indices in groups.items():
+        try:
+            proposals = segmenter.propose(**dict(key))
+        except Exception as e:
+            warnings.warn(f"Prompt generation failed for {dict(key)}: {e}")
+            continue
+        for index in indices:
+            selection = {k: v for k, v in params_list[index].items() if k not in APG_PROPOSAL_KEYS}
+            try:
+                seg = segmenter.select(proposals, **selection)
+                scores[index] = compute_metrics(seg.astype("uint32"), labels, metric_mode, border_min_size)
+            except Exception as e:
+                warnings.warn(f"Selection failed for {params_list[index]}: {e}")
     return scores
 
 
@@ -315,33 +372,6 @@ def predict(model, raw, ndim, device, normalization=None):
     """
     from common import predict_unisam2
     return predict_unisam2(model, raw, ndim=ndim, device=device, normalization=normalization)
-
-
-def read_image_2d(path, key):
-    """Read a 2d (grayscale) image from a plain image file or an H5/zarr key."""
-    if key is not None:
-        arr = np.asarray(open_file(path, mode="r")[key][:])
-    else:
-        arr = np.asarray(imageio.imread(path))
-    if arr.ndim == 3 and arr.shape[0] <= 4 and arr.shape[1] > arr.shape[0] and arr.shape[2] > arr.shape[0]:
-        arr = arr.transpose(1, 2, 0)
-    # Some 2d datasets mix in multi-frame stacks, e.g. yeaz. Evaluate their first frame.
-    if arr.ndim == 3 and arr.shape[-1] not in (3, 4):
-        arr = arr[0]
-    # The UniSAM2 2d inference path expects single-channel input. Reduce a trailing channel axis.
-    if arr.ndim == 3:
-        arr = arr.mean(axis=-1)
-    return arr
-
-
-def center_crop_2d(arr, crop_shape):
-    """Return a center crop of a 2d array along its first two axes."""
-    roi = []
-    for size, crop in zip(arr.shape[:2], crop_shape):
-        crop = min(crop, size)
-        start = (size - crop) // 2
-        roi.append(slice(start, start + crop))
-    return arr[tuple(roi)]
 
 
 def resolve_data_paths(dataset_name, livecell_per_celltype=None, match_evaluation=False, split="test"):
@@ -393,9 +423,12 @@ def build_work_items(track_cfg, n_images, livecell_per_celltype):
     Datasets whose paths cannot be resolved (e.g. a loader missing from the installed torch-em) are
     skipped with a warning rather than aborting the whole track. livecell is stratified to
     'livecell_per_celltype' images per cell type (built into _get_livecell_paths); other 2d datasets use
-    every test image (optionally capped to the first 'n_images'); 3d tracks use every available volume.
-    A config with 'match_evaluation' instead takes the same sorted samples as the evaluation, capped
-    the same way, so the tuned parameters transfer.
+    every image (optionally capped to the first 'n_images'); 3d tracks use every available volume.
+    A config with 'match_evaluation' instead takes the same sorted samples as the evaluation, which
+    scores its whole split, so only an explicit 'n_images' caps it.
+
+    Capping belongs to tuning alone: the evaluation always scores the full test split, so a cap here
+    that the evaluation does not share would tune on samples the reported score is not measured on.
     """
     match_evaluation = track_cfg.get("match_evaluation", False)
     split = track_cfg.get("split", "test")
@@ -412,7 +445,8 @@ def build_work_items(track_cfg, n_images, livecell_per_celltype):
         pairs = list(zip(raw_paths, label_paths))
         if match_evaluation:
             pairs = sorted(pairs, key=lambda pair: (str(pair[0]), str(pair[1])))
-            pairs = pairs[:(n_images or MAX_EVALUATION_SAMPLES)]
+            if n_images is not None:
+                pairs = pairs[:n_images]
         elif track_cfg["ndim"] == 2 and dataset_name != "livecell" and n_images is not None:
             pairs = pairs[:n_images]
         for raw_path, label_path in pairs:
@@ -421,31 +455,35 @@ def build_work_items(track_cfg, n_images, livecell_per_celltype):
 
 
 def load_sample(item, ndim, em_crop, z_range=None):
-    """Load and preprocess one work item into (raw, labels), matching the micro-sam v2 eval crops.
+    """Load one work item exactly as the evaluation loads it.
+
+    Shared with `baselines_common`, so the sweep selects on the same images and the same ground
+    truth the evaluation scores. Tuning against unfiltered labels rewarded recovering objects the
+    evaluation deletes, which bought recall the reported score cannot credit.
 
     'z_range' restricts a volume to a z-slab before cropping, which is how the EM datasets get tuning
     data disjoint from the slab the evaluation scores.
     """
     dataset_name, raw_path, label_path, raw_key, label_key = item
     if ndim == 2:
-        raw = center_crop_2d(read_image_2d(raw_path, raw_key), CROP_SHAPE_2D).astype("float32")
-        labels = center_crop_2d(read_image_2d(label_path, label_key), CROP_SHAPE_2D)
-        labels = connected_components(labels).astype("uint32")
-    else:
-        raw, labels, _ = load_volume(
-            raw_path=raw_path, label_path=label_path, raw_key=raw_key, label_key=label_key,
-            dataset_name=dataset_name, crop_shape=tuple(em_crop), z_range=z_range,
-        )
+        return load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name)
+    raw, labels, _ = load_evaluation_sample_3d(
+        raw_path, label_path, raw_key, label_key, dataset_name,
+        crop_shape=tuple(em_crop), z_range=z_range,
+    )
     return raw, labels
 
 
-def compute_metrics(seg, labels, mode):
+def compute_metrics(seg, labels, mode, border_min_size=0):
     """Compute the evaluation metrics for one segmentation.
 
     Always reports mSA. For dense (EM neuron) mode it additionally reports the CREMI score and its
     VI-split / VI-merge / adapted-Rand components, since neuron segmentation is ranked by CREMI
     (lower is better) rather than mSA.
     """
+    if seg.ndim == 2:
+        # Symmetric with the ground truth, which `load_evaluation_sample_2d` filtered the same way.
+        seg = drop_severed_objects(seg, border_min_size)
     metrics = {"msa": float(mean_segmentation_accuracy(seg, labels))}
     if mode == "dense":
         from elf.evaluation import cremi_score
@@ -497,7 +535,9 @@ def deduplicate_flow_travel(params_list):
     return [best[key] for key in order]
 
 
-def score_image_sparse_cached(prediction, labels, params_list, backend, n_threads=POSTPROC_THREADS, spacing=None):
+def score_image_sparse_cached(
+    prediction, labels, params_list, backend, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
+):
     """Score all sparse combos on one image, caching the flow density across shared combos.
 
     Faithfully reproduces flow_instance_segmentation: the height map and each convergence-density map
@@ -556,7 +596,7 @@ def score_image_sparse_cached(prediction, labels, params_list, backend, n_thread
                 discard = ids[(sizes < min_size) & (ids > 0)]
                 seg[np.isin(seg, discard)] = 0
                 seg = watershed(hmap, markers=seg, mask=fg_mask)
-            return compute_metrics(seg.astype("uint32"), labels, "sparse")
+            return compute_metrics(seg.astype("uint32"), labels, "sparse", border_min_size)
         except Exception as e:
             warnings.warn(f"Sparse postprocessing failed for {params}: {e}")
             return None
@@ -629,7 +669,7 @@ def _dense_solve(rag, feats, z_edges, overseg, n_slices, beta):
     return seg.astype("uint32")
 
 
-def score_image_dense_cached(prediction, labels, params_list, backend, n_threads=POSTPROC_THREADS):
+def score_image_dense_cached(prediction, labels, params_list, backend, n_threads=POSTPROC_THREADS, border_min_size=0):
     """Score all dense combos on one image, caching the oversegmentation + RAG across shared combos.
 
     Faithfully reproduces run_multicut: the slice-wise oversegmentation and region-adjacency graph (the
@@ -651,7 +691,7 @@ def score_image_dense_cached(prediction, labels, params_list, backend, n_threads
         overseg, rag, feats, z_edges, n_slices = overseg_cache[key]
         try:
             seg = _dense_solve(rag, feats, z_edges, overseg, n_slices, params["beta"])
-            scores.append(compute_metrics(seg, labels, "dense"))
+            scores.append(compute_metrics(seg, labels, "dense", border_min_size))
         except Exception as e:
             warnings.warn(f"Dense multicut solve failed for {params}: {e}")
             scores.append(None)
@@ -660,19 +700,23 @@ def score_image_dense_cached(prediction, labels, params_list, backend, n_threads
 
 def score_image(
     prediction, labels, mode, params_list, backend, use_flow_cache=True, n_threads=POSTPROC_THREADS, spacing=None,
+    border_min_size=0,
 ):
     """Return a per-combo list of metric dicts for one image (None where a combo failed), aligned with params_list."""
     if use_flow_cache and mode == "sparse":
         return score_image_sparse_cached(
             prediction, labels, params_list, backend, n_threads=n_threads, spacing=spacing,
+            border_min_size=border_min_size,
         )
     if use_flow_cache and mode == "dense":
-        return score_image_dense_cached(prediction, labels, params_list, backend, n_threads=n_threads)
+        return score_image_dense_cached(
+            prediction, labels, params_list, backend, n_threads=n_threads, border_min_size=border_min_size
+        )
     scores = []
     for params in params_list:
         try:
             seg = postprocess(prediction, mode, params, backend=backend, n_threads=n_threads, spacing=spacing)
-            scores.append(compute_metrics(seg, labels, mode))
+            scores.append(compute_metrics(seg, labels, mode, border_min_size))
         except Exception as e:
             warnings.warn(f"Postprocessing failed for {params}: {e}")
             scores.append(None)
@@ -695,7 +739,17 @@ def merge_shards(output_dir, track_name, criterion, n_shards):
     if missing:
         raise FileNotFoundError(f"Cannot merge '{track_name}', these shards are missing: {missing}.")
 
-    frames = [pd.read_csv(p) for p in paths]
+    frames = []
+    for path in paths:
+        try:
+            frames.append(pd.read_csv(path))
+        except pd.errors.EmptyDataError:
+            # A shard that got no samples at all, which happens when a split holds fewer volumes than
+            # there are shards. It contributes nothing to the pooled sums, so it is simply skipped.
+            print(f"Skipping '{os.path.basename(path)}', which scored no samples.")
+    if not frames:
+        raise RuntimeError(f"Cannot merge '{track_name}': every shard scored no samples.")
+
     accumulated = [c for c in frames[0].columns if c.endswith(("_sum", "_sumsq")) or c == "n_images"]
     param_keys = [c for c in frames[0].columns if c not in accumulated]
 
@@ -772,14 +826,21 @@ def run_track(
         for item in tqdm(items, desc=f"{track_name} samples"):
             try:
                 raw, labels = load_sample(item, ndim, crop, z_range=z_range)
+                # The threshold the ground truth of this sample was filtered with, so a prediction
+                # is scored without the severed objects the ground truth no longer holds either.
+                border_min_size = GT_MIN_SIZE_2D.get(item[0], 0) if ndim == 2 else 0
                 if mode == "apg":
                     # 'model' is the prompt generator here, which holds both halves of the joint model.
-                    scores = score_sample_apg(model, raw, labels, params_list, ndim, metric_mode, spacing=spacing)
+                    scores = score_sample_apg(
+                        model, raw, labels, params_list, ndim, metric_mode, spacing=spacing,
+                        border_min_size=border_min_size,
+                    )
                 else:
                     prediction = predict(model, raw, ndim=ndim, device=device, normalization=normalization)
                     scores = score_image(
                         prediction, labels, mode, params_list, backend,
                         use_flow_cache=use_flow_cache, n_threads=n_threads, spacing=spacing,
+                        border_min_size=border_min_size,
                     )
             except Exception as e:
                 warnings.warn(f"Skipping sample '{item[1]}': {e}")

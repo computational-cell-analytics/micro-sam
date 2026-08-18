@@ -16,7 +16,7 @@ from tqdm import tqdm
 
 from micro_sam.v1.evaluation.multi_dimensional_segmentation import run_multi_dimensional_segmentation_grid_search
 
-from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
+from baselines_common import _load_data
 from common import DATA_ROOT, DATASETS_3D, DATASETS_3D_EM, get_data_paths
 from common import check_data_download
 
@@ -58,7 +58,7 @@ def run_micro_sam_volumetric_evaluation(
     interactive_seg_mode = "points" if prompt_choice == "point" else "box"
     grid_search_values = None if full_grid_search else _default_grid_values()
 
-    n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
+    n = len(get_data_paths(dataset_name, data_root)[0])
     rows = []
     it = tqdm(_load_data(dataset_name, data_root, 3), total=n, desc="micro-sam-3d")
     for sample_id, (raw, labels, _) in enumerate(it):

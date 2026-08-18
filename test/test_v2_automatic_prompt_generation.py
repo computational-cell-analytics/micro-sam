@@ -10,6 +10,7 @@ from micro_sam.v2.instance_segmentation import (
 )
 from micro_sam.v2.automatic_prompt_generation import (
     AutomaticPromptGenerator, TiledAutomaticPromptGenerator, derive_point_prompts, merge_by_score,
+    interior_points,
 )
 
 
@@ -74,6 +75,32 @@ def test_derive_point_prompts_returns_none_without_candidates():
     assert derive_point_prompts(foreground, distances, candidate_threshold=1.0) is None
 
 
+def test_interior_points_lie_in_their_own_component():
+    labels = np.zeros((32, 32), dtype="uint32")
+    labels[4:14, 4:20] = 1  # A solid block, whose deepest point is its middle.
+    labels[np.arange(20, 28), np.arange(20, 28)] = 2  # A one pixel wide diagonal.
+    labels[0, 30] = 3  # A single pixel on the image border.
+
+    points = interior_points(labels)
+    assert len(points) == 3
+    # The v1 helper places the thin ones outside the component they were derived for.
+    for label_id, point in enumerate(points, start=1):
+        assert labels[tuple(point)] == label_id
+    # Ten rows high, so five is as deep as it gets, and the first such pixel wins.
+    assert tuple(points[0]) == (8, 8)
+
+
+def test_interior_points_skips_missing_labels():
+    labels = np.zeros((16, 16), dtype="uint32")
+    labels[2:6, 2:6] = 1
+    labels[10:14, 10:14] = 3  # Label 2 is absent, as it is once the size filter has run.
+
+    points = interior_points(labels)
+    assert len(points) == 2
+    assert labels[tuple(points[0])] == 1
+    assert labels[tuple(points[1])] == 3
+
+
 def test_merge_by_score_truncates_to_the_unclaimed_pixels():
     shape = (16, 16)
     high = np.zeros(shape, dtype=bool)
@@ -136,7 +163,7 @@ def test_tiles_for_points_assigns_every_prompt_to_exactly_one_tile(monkeypatch):
     assert assignment[3] == [3]
 
 
-def test_tiled_apply_and_merge_maps_prompts_and_masks_between_frames(monkeypatch):
+def test_tiled_apply_and_select_maps_prompts_and_masks_between_frames(monkeypatch):
     shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
     segmenter = _make_tiled_generator(shape, tile_shape, halo, monkeypatch)
 
@@ -166,10 +193,8 @@ def test_tiled_apply_and_merge_maps_prompts_and_masks_between_frames(monkeypatch
     # Two prompts in different tiles, in XY.
     points = np.array([[[10, 10]], [[50, 50]]], dtype="float32")
     prompts = {"points": points, "point_labels": np.ones((2, 1), dtype="int32")}
-    segmentation = segmenter._apply_and_merge(
-        prompts, shape, multimasking=False, batch_size=8, score_threshold=0.0,
-        max_overlap=0.3, min_size=1,
-    )
+    proposals = segmenter._apply(prompts, multimasking=False, batch_size=8)
+    segmentation = segmenter._merge(proposals, shape, score_threshold=0.0, max_overlap=0.3, min_size=1)
 
     assert segmentation.shape == shape
     assert segmentation.dtype == np.dtype("uint32")

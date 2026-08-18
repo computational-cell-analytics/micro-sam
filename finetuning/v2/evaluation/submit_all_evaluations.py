@@ -23,12 +23,10 @@ from typing import Optional
 from datetime import datetime
 
 # Written into every job script, so a queued job sees the configuration the submission had rather than
-# whatever the environment holds when it starts. The sample caps are global, so lift them per dataset.
+# whatever the environment holds when it starts.
 PINNED_ENV_VARS = (
     "MICRO_SAM2_JOINT_CHECKPOINT_ROOT",
     "MICRO_SAM2_JOINT_EXPORT_ROOT",
-    "MICRO_SAM_EVAL_MAX_SAMPLES",
-    "MICRO_SAM_LIVECELL_PER_CELL_TYPE",
 )
 
 
@@ -44,7 +42,7 @@ VOLUMETRIC_SCRIPT = EVAL_ROOT / "evaluate_micro_sam_volumetric.py"
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 
-# Slurm resources per job. The account only has access to the grete partitions. The jobs peak at
+# Slurm resources per job. Only the grete partitions are available. The jobs peak at
 # ~3 GiB VRAM for interactive segmentation, and the automatic encoder batch adapts to the free VRAM,
 # so any GPU works and both the H100 and the A100 pool are used. The time limit is kept close to the
 # observed worst case, since an oversized request makes a job ineligible for backfill.
@@ -53,7 +51,6 @@ DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 # which peaks at ~3 GiB. Preemption is safe because predictions persist and jobs are requeued.
 # Note that 'grete-h100:shared' does not offer this slice; override --gpu with '1' to use it.
 PARTITION = "grete:preemptible"
-ACCOUNT = "nim00007"
 GPU = "1g.10gb:1"
 CPUS = 4
 MEMORY = "16G"
@@ -204,7 +201,6 @@ def _write_batch_script(
 #SBATCH -t {args.time_limit}
 #SBATCH -p {args.partition}
 #SBATCH -G {args.gpu}
-#SBATCH -A {args.account}
 #SBATCH --job-name={tag}
 #SBATCH --requeue{qos_line}
 #SBATCH --constraint=inet
@@ -280,7 +276,6 @@ def main(argv: Optional[list[str]] = None) -> None:
                         help="Datasets per Slurm job. Batching trades queue slots for walltime.")
     parser.add_argument("--time_limit", type=str, default=TIME_LIMIT, help="Slurm time limit per job.")
     parser.add_argument("--partition", type=str, default=PARTITION, help="Slurm partition(s) to submit to.")
-    parser.add_argument("--account", default=ACCOUNT, help="Slurm account to charge the jobs to.")
     parser.add_argument("--memory", default=MEMORY, help="Memory per job.")
     parser.add_argument(
         "--gpu", type=str, default=GPU,

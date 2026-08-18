@@ -38,7 +38,7 @@ from common import (
     export_joint_checkpoint, get_data_paths, run_dataset_evaluation,
 )
 from baselines_common import (
-    MAX_EVALUATION_SAMPLES, _load_data, interactive_result_name, interactive_run_tag,
+    _load_data, interactive_result_name, interactive_run_tag,
 )
 from common import check_data_download
 
@@ -186,7 +186,7 @@ def run_nninteractive_evaluation(
         return
 
     session = _load_nninteractive(checkpoint_path, device)
-    n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
+    n = len(get_data_paths(dataset_name, data_root)[0])
     all_gt = []
     all_seg_per_iter = [[] for _ in range(n_iterations)]
 
@@ -213,7 +213,7 @@ def _load_sam_v1(model_type, checkpoint, device):
 
 def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
     image_paths, gt_paths = [], []
-    n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
+    n = len(get_data_paths(dataset_name, data_root)[0])
     it = tqdm(_load_data(dataset_name, data_root, 2, min_size), total=n, desc="save-crops")
     for sample_id, (raw, labels, _) in enumerate(it):
         if labels.max() == 0:  # Inference skips these, so they must not be scored either.
@@ -231,7 +231,7 @@ def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size
 
 def _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
     image_paths, gt_paths = [], []
-    n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
+    n = len(get_data_paths(dataset_name, data_root)[0])
     it = tqdm(_load_data(dataset_name, data_root, 2, min_size), total=n, desc="save-crops")
     for sample_id, (raw, labels, _) in enumerate(it):
         if labels.max() == 0:  # Inference skips these, so they must not be scored either.
@@ -349,7 +349,7 @@ def run_sam3_evaluation(
         predictor = build_sam3_video_predictor()
         model, processor = None, None
 
-    n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
+    n = len(get_data_paths(dataset_name, data_root)[0])
     all_gt = []
     all_seg_per_iter = [[] for _ in range(n_iterations)]
 
@@ -447,7 +447,7 @@ def run_sam2_evaluation(
 
         shutil.rmtree(prediction_root, ignore_errors=True)
     else:
-        n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
+        n = len(get_data_paths(dataset_name, data_root)[0])
         # Keyed by model type and dataset, since cached predictions are reused across runs and the
         # per-sample names are otherwise identical for every dataset. 'min_size' changes the ground
         # truth and therefore the prompts, so it has to key the cache too.

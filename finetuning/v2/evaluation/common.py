@@ -1,6 +1,7 @@
 import os
 import ast
 import csv
+import hashlib
 import warnings
 from glob import glob
 from typing import Any, Dict, List, Optional, Tuple
@@ -34,9 +35,6 @@ MODEL_TYPES = list(CHECKPOINT_PATHS)
 
 # The 2d patch shape the models were trained on, see 'generalist_loader'.
 TRAINING_PATCH_SHAPE = (512, 512)
-
-# Test images per LIVECell cell type; eight types fill MAX_EVALUATION_SAMPLES. 0 takes the whole split.
-LIVECELL_PER_CELL_TYPE = int(os.environ.get("MICRO_SAM_LIVECELL_PER_CELL_TYPE", "25")) or None
 
 # LIVECell test images whose annotation is incomplete: 2 labelled objects in a confluent crop, with
 # predicted-to-annotated foreground ratios of 348x and 24x. Both are outside the stratified subset.
@@ -143,11 +141,7 @@ def _get_2d_data_paths(
     p = data_root
 
     if dataset_name == "livecell":
-        # Stratified: the test set is sorted by cell type, so heading it covers two of the eight.
-        img, gt = _get_livecell_paths(
-            input_folder=os.path.join(p, "livecell"), split=split,
-            n_val_per_cell_type=LIVECELL_PER_CELL_TYPE,
-        )
+        img, gt = _get_livecell_paths(input_folder=os.path.join(p, "livecell"), split=split)
         img, gt = drop_excluded_livecell(img, gt)
         return (*_sorted_pairs(img, gt), None, None)
 
@@ -558,6 +552,17 @@ def _strip_ddp_prefix(state_dict):
     return {(k[len("module."):] if k.startswith("module.") else k): v for k, v in state_dict.items()}
 
 
+def _checkpoint_digest(path: str) -> str:
+    """A short digest of a checkpoint's identity: where it lives, when it was written and how large.
+
+    Hashing 700 MB of weights would cost more than the export this guards, and the three together
+    already change whenever the weights do, including when training overwrites a checkpoint in place.
+    """
+    stat = os.stat(path)
+    identity = f"{os.path.realpath(path)}:{stat.st_mtime_ns}:{stat.st_size}"
+    return hashlib.sha256(identity.encode()).hexdigest()[:8]
+
+
 def export_joint_checkpoint(
     model_type: str, checkpoint: str = "best", export_root: str = JOINT_EXPORT_ROOT
 ) -> Tuple[str, str]:
@@ -567,7 +572,11 @@ def export_joint_checkpoint(
     ('unetr_state') and pickled trainer state in a single file. That file cannot be loaded by
     `sam2.build_sam`, which reads `torch.load(...)['model']` with `weights_only=True`. Both
     exported files are plain tensor dicts, mirroring `scripts/model_export/export_sam2_cells_model.py`.
-    Existing exports are reused.
+
+    An export is reused only when it came from the very checkpoint that is being asked for, which the
+    digest in its name records. A name like 'joint_sam2_hvit_t_best' is not enough on its own: every
+    training version has a 'best' checkpoint, so pointing JOINT_CHECKPOINT_ROOT at another version
+    would otherwise hand back the export of the previous one without reading the new weights at all.
 
     Args:
         model_type: The SAM2 backbone the model was finetuned from, e.g. 'hvit_b'.
@@ -577,13 +586,13 @@ def export_joint_checkpoint(
     Returns:
         The paths to the interactive (SAM2) and the automatic (UniSAM2 decoder) weight files.
     """
-    name = f"joint_sam2_{model_type}_{checkpoint}"
+    checkpoint_path = get_joint_checkpoint(model_type, checkpoint)
+    name = f"joint_sam2_{model_type}_{checkpoint}_{_checkpoint_digest(checkpoint_path)}"
     interactive_path = os.path.join(export_root, f"{name}.pt")
     decoder_path = os.path.join(export_root, f"{name}_decoder.pt")
     if os.path.exists(interactive_path) and os.path.exists(decoder_path):
         return interactive_path, decoder_path
 
-    checkpoint_path = get_joint_checkpoint(model_type, checkpoint)
     state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     missing = [key for key in ("model_state", "unetr_state") if key not in state]
     if missing:
@@ -594,6 +603,14 @@ def export_joint_checkpoint(
     _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
     print(f"Exported '{checkpoint_path}' to '{interactive_path}' and '{decoder_path}'.")
     return interactive_path, decoder_path
+
+
+# The volumetric option a script run should take: the tracking state stays on the device rather than
+# being round-tripped through the host, which propagates the very same masks 1.2-1.3x faster for about
+# 17 MB of device memory per slice. A batch job can spend that; an interactive session on a small
+# partition cannot, which is why it is not the library default. The feature cache sizes itself to the
+# volume now, so it needs no option here.
+VOLUME_SPEED_OPTIONS = {"offload_to_cpu": False}
 
 
 DATASET_SPACING: dict = {

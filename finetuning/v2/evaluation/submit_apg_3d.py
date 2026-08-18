@@ -24,12 +24,10 @@ EVAL_ROOT = Path(__file__).resolve().parent
 EVALUATION_SCRIPT = EVAL_ROOT / "evaluate_3d.py"
 
 # Written into every job script, so a queued job sees the configuration the submission had rather than
-# whatever the environment holds when it starts. The sample caps are global, so lift them per dataset.
+# whatever the environment holds when it starts.
 PINNED_ENV_VARS = (
     "MICRO_SAM2_JOINT_CHECKPOINT_ROOT",
     "MICRO_SAM2_JOINT_EXPORT_ROOT",
-    "MICRO_SAM_EVAL_MAX_SAMPLES",
-    "MICRO_SAM_LIVECELL_PER_CELL_TYPE",
 )
 
 
@@ -61,7 +59,6 @@ DEFAULT_VARIANTS = {
 VOLUME_CAP = {"blastospim": 20, "pnas_arabidopsis": 20}
 
 PARTITION = "grete:preemptible"
-ACCOUNT = "nim00007"
 GPU = "1"
 CPUS = 8
 MEMORY = "64G"
@@ -124,7 +121,6 @@ def _write_batch_script(args: argparse.Namespace, job_folder: Path, tag: str, co
         f"#SBATCH -t {args.time_limit}",
         f"#SBATCH -p {args.partition}",
         f"#SBATCH -G {args.gpu}",
-        f"#SBATCH -A {args.account}",
         f"#SBATCH --job-name={tag}",
         "#SBATCH --constraint=inet",
         *([f"#SBATCH --exclude={args.exclude}"] if args.exclude else []),
@@ -168,7 +164,6 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--joint_checkpoint", default="best",
                         help="Name of the joint trainer checkpoint, without the '.pt' suffix.")
     parser.add_argument("--partition", default=PARTITION, help="Slurm partition(s) to submit to.")
-    parser.add_argument("--account", default=ACCOUNT, help="Slurm account to charge the jobs to.")
     parser.add_argument("--gpu", default=GPU,
                         help="Slurm GPU request. '1' takes any, including a MIG slice too small for "
                              "a large backbone or a deep volume; name a type, e.g. 'A100:1', to avoid that.")

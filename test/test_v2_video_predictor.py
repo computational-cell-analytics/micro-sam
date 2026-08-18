@@ -245,3 +245,123 @@ def test_missing_memory_features_are_passed_through(monkeypatch):
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
 
     assert predictor._restore_memory_dtype(None) is None
+
+
+def frame_output(value, n_objects=1, mem_dim=2, size=2):
+    """A frame's stored output, shaped as SAM2 stores it."""
+    return {
+        "maskmem_features": torch.full((n_objects, mem_dim, size, size), float(value)),
+        "maskmem_pos_enc": [torch.full((n_objects, mem_dim, size, size), 0.5)],
+        "pred_masks": torch.full((n_objects, 1, size, size), float(value)),
+        "obj_ptr": torch.full((n_objects, mem_dim), float(value)),
+        "object_score_logits": torch.full((n_objects, 1), float(value)),
+    }
+
+
+def test_batched_memory_concatenates_only_the_frames_that_are_read():
+    from micro_sam.v2.models._video_predictor import _BatchedMemory
+
+    per_object = [{0: frame_output(1.0), 3: frame_output(2.0)}, {0: frame_output(3.0), 3: frame_output(4.0)}]
+    memory = _BatchedMemory(per_object)
+
+    assert len(memory) == 2
+    assert set(memory) == {0, 3}
+    assert memory.get(7) is None
+
+    batched = memory[0]
+    assert batched["maskmem_features"].shape[0] == 2
+    assert batched["maskmem_features"][0].flatten()[0] == 1.0
+    assert batched["maskmem_features"][1].flatten()[0] == 3.0
+    # Shared across objects, so it only carries the batch axis of the group.
+    assert batched["maskmem_pos_enc"][0].shape[0] == 2
+    # The unread frame was never concatenated.
+    assert list(memory._batched) == [0]
+
+
+def test_a_batched_frame_output_splits_back_into_its_objects():
+    from micro_sam.v2.models._video_predictor import _batch_frame_outputs, _slice_frame_output
+
+    entries = [frame_output(1.0), frame_output(2.0), frame_output(3.0)]
+    batched = _batch_frame_outputs(entries)
+
+    for index, entry in enumerate(entries):
+        restored = _slice_frame_output(batched, index)
+        for key in ("maskmem_features", "pred_masks", "obj_ptr", "object_score_logits"):
+            assert torch.equal(restored[key], entry[key])
+        assert torch.equal(restored["maskmem_pos_enc"][0], entry["maskmem_pos_enc"][0])
+
+
+def test_absent_memory_features_survive_the_batching():
+    from micro_sam.v2.models._video_predictor import _batch_frame_outputs, _slice_frame_output
+
+    entries = [frame_output(1.0), frame_output(2.0)]
+    for entry in entries:
+        entry["maskmem_features"] = None
+        entry["maskmem_pos_enc"] = None
+
+    batched = _batch_frame_outputs(entries)
+    assert batched["maskmem_features"] is None
+    assert batched["maskmem_pos_enc"] is None
+    assert _slice_frame_output(batched, 1)["maskmem_features"] is None
+
+
+def test_objects_share_a_batch_only_when_they_read_the_same_frames():
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    # The first two are prompted on slice 0 and tracked equally far; the third was prompted on slice 5.
+    inference_state = {"output_dict_per_obj": {
+        0: {"cond_frame_outputs": {0: None}, "non_cond_frame_outputs": {1: None}},
+        1: {"cond_frame_outputs": {0: None}, "non_cond_frame_outputs": {1: None}},
+        2: {"cond_frame_outputs": {5: None}, "non_cond_frame_outputs": {1: None}},
+    }}
+
+    groups = predictor._memory_groups(inference_state, [0, 1, 2])
+
+    assert sorted(sorted(group) for group in groups) == [[0, 1], [2]]
+
+
+def test_skipping_the_prompt_output_consolidates_nothing(monkeypatch):
+    from sam2.sam2_video_predictor import SAM2VideoPredictor
+
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    events = []
+    monkeypatch.setattr(
+        SAM2VideoPredictor, "_consolidate_temp_output_across_obj",
+        lambda self, state, *args, **kwargs: events.append("consolidate") or "consolidated",
+    )
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    state = {"offload_state_to_cpu": False, "device": "cpu"}
+
+    with predictor.skip_prompt_output():
+        out = predictor._consolidate_temp_output_across_obj(state, 0)
+        assert out["pred_masks_video_res"] is None
+        # Nothing to resize, so the masks pass straight through.
+        assert predictor._get_orig_video_res_output(state, out["pred_masks_video_res"]) == (None, None)
+    assert events == []
+
+    # The flag is per use, so the next caller gets its masks.
+    assert predictor._consolidate_temp_output_across_obj(state, 0) == "consolidated"
+    assert events == ["consolidate"]
+
+
+def test_the_cache_is_sized_to_the_volume_when_it_fits(monkeypatch):
+    from micro_sam.v2.models._video_predictor import _cache_capacity
+
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (8 * 10**9, 16 * 10**9))
+    # A quarter of 8 GB holds 20 slices of 100 MB, so a 12 slice volume is covered entirely.
+    assert _cache_capacity("cuda:0", 100 * 10**6, 12) == 12
+    # A 40 slice volume is not, and the fixed cap is kept rather than a useless part of it.
+    assert _cache_capacity("cuda:0", 100 * 10**6, 40) == 20
+
+
+def test_the_cache_falls_back_to_the_fixed_cap(monkeypatch):
+    from micro_sam.v2.models._video_predictor import _cache_capacity, MAX_CACHED_FRAMES
+
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda device: (1 * 10**9, 16 * 10**9))
+    # Nothing like a slice fits, so it never goes below what it cached before.
+    assert _cache_capacity("cuda:0", 10 * 10**9, 40) == MAX_CACHED_FRAMES
+    # Off the accelerator there is nothing to size against.
+    assert _cache_capacity("cpu", 100 * 10**6, 40) == MAX_CACHED_FRAMES
+    assert _cache_capacity("cuda:0", None, 40) == MAX_CACHED_FRAMES

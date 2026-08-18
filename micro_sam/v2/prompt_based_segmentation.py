@@ -3,6 +3,7 @@ import queue
 import ctypes
 import hashlib
 import platform
+import contextlib
 from copy import copy
 from concurrent import futures
 from typing import Callable, List, Optional, Tuple, Union
@@ -451,7 +452,7 @@ class PromptableSegmentation3D:
     """
     def __init__(
         self, predictor, volume, volume_embeddings, device=None,
-        offload_video_to_cpu=None, offload_state_to_cpu=None,
+        offload_video_to_cpu=None, offload_state_to_cpu=None, max_cached_frames=None,
     ):
         from micro_sam.v2.util import _get_device
         self.predictor = predictor
@@ -465,6 +466,8 @@ class PromptableSegmentation3D:
         is_mps = device_type(_get_device(device)) == "mps"
         self.offload_video_to_cpu = (not is_mps) if offload_video_to_cpu is None else offload_video_to_cpu
         self.offload_state_to_cpu = (not is_mps) if offload_state_to_cpu is None else offload_state_to_cpu
+        # A pass walks every slice, so a feature cache shorter than the volume is never hit.
+        self.max_cached_frames = max_cached_frames
 
         if self.volume.ndim != 3:
             raise AssertionError(f"The dimensionality of the volume must be 3, got '{self.volume.ndim}'")
@@ -486,6 +489,7 @@ class PromptableSegmentation3D:
         self.inference_state = self.predictor.init_state(
             volume=self.volume, volume_embeddings=self.volume_embeddings, device=self.device,
             offload_video_to_cpu=self.offload_video_to_cpu, offload_state_to_cpu=self.offload_state_to_cpu,
+            max_cached_frames=self.max_cached_frames,
         )
 
     def _clear_pushed_prompts(self):
@@ -559,6 +563,17 @@ class PromptableSegmentation3D:
         self.inference_state["cached_features"] = {}
         _free_device_memory()
 
+    def reset_tracking(self):
+        """Clear the tracked objects, keeping the features of the volume they were tracked on.
+
+        What a further propagation pass over the same volume needs, and all it needs: those features
+        are a function of the volume's embeddings, not of the objects. `reset_predictor` drops them
+        as well and hands the memory back to the allocator, which together cost more than the passes
+        themselves once there are many. The cache stays bounded by MAX_CACHED_FRAMES either way.
+        """
+        self.predictor.reset_state(self.inference_state)
+        self._clear_pushed_prompts()
+
     def get_progress_total(self, z_range=None):
         """Return the number of slice propagation steps for the requested z range.
 
@@ -611,20 +626,24 @@ class PromptableSegmentation3D:
         frame_ids = self._broadcast(frame_ids, n)
         object_ids = self._broadcast(1 if object_id is None else object_id, n)
 
-        for frame_id, (y, x), label, obj_id in zip(frame_ids, points, point_labels, object_ids):
-            signature = (int(round(float(y))), int(round(float(x))), int(label))
-            seen = self._pushed_points.setdefault((obj_id, frame_id), set())
-            if signature in seen:
-                continue
-            seen.add(signature)
-            self.predictor.add_new_points_or_box(
-                inference_state=self.inference_state,
-                frame_idx=frame_id,
-                obj_id=obj_id,
-                clear_old_points=False,
-                points=np.array([[x, y]]),  # SAM2 expects (x, y).
-                labels=np.array([label]),
-            )
+        # The masks SAM2 returns per prompt are not read here, and consolidating them costs more than
+        # the prompt itself once a pass holds many objects, see 'skip_prompt_output'.
+        skip_output = getattr(self.predictor, "skip_prompt_output", None)
+        with (skip_output() if skip_output is not None else contextlib.nullcontext()):
+            for frame_id, (y, x), label, obj_id in zip(frame_ids, points, point_labels, object_ids):
+                signature = (int(round(float(y))), int(round(float(x))), int(label))
+                seen = self._pushed_points.setdefault((obj_id, frame_id), set())
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                self.predictor.add_new_points_or_box(
+                    inference_state=self.inference_state,
+                    frame_idx=frame_id,
+                    obj_id=obj_id,
+                    clear_old_points=False,
+                    points=np.array([[x, y]]),  # SAM2 expects (x, y).
+                    labels=np.array([label]),
+                )
 
     def add_box_prompts(
         self,
@@ -766,9 +785,10 @@ class PromptableSegmentation3D:
             if z_range is not None and not (z_range[0] <= out_frame_idx <= z_range[1]):
                 break
 
-            per_object = {
-                out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
-            }
+            # One transfer for the whole frame: the masks arrive as a single tensor, so binarising and
+            # fetching them per object pays a host round trip for each of them instead of one.
+            binary = (out_mask_logits > 0.0).cpu().numpy()
+            per_object = {out_obj_id: binary[i] for i, out_obj_id in enumerate(out_obj_ids)}
             video_segments[out_frame_idx] = per_object
             # Count each slice at most once across both directions (the conditioning frame is yielded
             # by both), so the progress bar reaches its total exactly on a full pass without overshoot.

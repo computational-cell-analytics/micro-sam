@@ -39,10 +39,10 @@ from micro_sam.v2.normalization import normalize_raw
 
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_3D_EM, CHECKPOINT_PATHS,
-    export_joint_checkpoint, load_unisam2_model, predict_unisam2, postprocess_unisam2,
+    GT_MIN_SIZE_2D, export_joint_checkpoint, load_unisam2_model, predict_unisam2, postprocess_unisam2,
     get_data_paths, run_dataset_evaluation,
 )
-from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
+from baselines_common import _load_data, drop_severed_objects
 from common import check_data_download
 
 _LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
@@ -243,7 +243,7 @@ def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc):
         print(f"Results already stored at '{save_path}'.")
         return
 
-    n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
+    n = len(get_data_paths(dataset_name, data_root)[0])
     all_gt, all_seg = [], []
     for image_or_volume, labels, valid_roi in tqdm(_load_data(dataset_name, data_root, ndim), total=n, desc=desc):
         if labels.max() == 0:  # Nothing to score without ground-truth.
@@ -252,6 +252,9 @@ def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc):
         seg = segment_fn(image_or_volume)
         if valid_roi is not None:
             seg[~valid_roi] = 0
+        if ndim == 2:
+            # The ground truth has no severed objects either, so predicting one is not a false positive.
+            seg = drop_severed_objects(seg, GT_MIN_SIZE_2D.get(dataset_name, 0))
         all_gt.append(labels)
         all_seg.append(seg)
 

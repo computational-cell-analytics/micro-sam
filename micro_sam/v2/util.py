@@ -768,7 +768,6 @@ def set_precomputed(
         # There's an easy assumption made here. The first dimension of 'features' corresponds to n-slices.
         running_features = {}
         for slice_id in range(features.shape[0]):
-            image = inference_state["images"][slice_id].to(device).float().unsqueeze(0)
             vision_features = _to_device_tensor(features[slice_id], device)
             vision_pos_enc = [_to_device_tensor(_shared_pos_enc(t), device) for t in pos_list]
             backbone_fpn = _backbone_fpn(
@@ -777,7 +776,8 @@ def set_precomputed(
             backbone_out = {
                 "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
             }
-            running_features[slice_id] = (image, backbone_out)
+            # The frame itself is not cached: every consumer of '_get_image_feature' discards it.
+            running_features[slice_id] = backbone_out
 
         inference_state["cached_features"] = running_features
         return predictor, inference_state
