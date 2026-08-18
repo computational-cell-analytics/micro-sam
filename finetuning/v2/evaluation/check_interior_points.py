@@ -20,7 +20,7 @@ from micro_sam.v2.automatic_prompt_generation import interior_points, DEFAULT_PR
 
 from bioimage_cpp.segmentation import label
 
-from benchmark_apg_2d import build_segmenter, load_livecell_subset
+from evaluate_apg import build_segmenter, load_samples
 
 
 def candidate_map(prediction, params):
@@ -69,8 +69,8 @@ def main():
     args = parser.parse_args()
 
     params = dict(DEFAULT_PROMPT_GENERATION)
-    segmenter = build_segmenter(args.model_type, args.device)
-    samples = load_livecell_subset(1)[:args.n_images]
+    segmenter = build_segmenter(args.model_type, 2, args.device)
+    samples = load_samples("livecell", 2, n_samples=args.n_images, n_per_cell_type=1)
 
     keys = ("points", "different", "outside_v1", "outside_v2")
     totals = {kind: dict.fromkeys(keys, 0) for kind in ("candidates", "segmentation")}

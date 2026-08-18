@@ -24,7 +24,7 @@ from bioimage_cpp.segmentation import label as connected_components
 
 from common import DATA_ROOT, DATASET_SPACING, VOLUME_SPEED_OPTIONS
 from baselines_common import _load_data
-from profile_apg import build_segmenter
+from evaluate_apg import build_segmenter
 
 
 def match_iou(mask: np.ndarray, gt_crop: np.ndarray, gt_sizes: dict) -> tuple:

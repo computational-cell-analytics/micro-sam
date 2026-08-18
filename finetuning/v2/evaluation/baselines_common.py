@@ -47,13 +47,10 @@ def interactive_result_name(
     dataset_name, method, model_type, prompt, iteration,
     ndim=2, use_masks=True, mask_threshold=0.0, min_size=0,
 ):
-    """Name of the result CSV for one iteration of an interactive run.
+    """Build the name of the result CSV for one iteration of an interactive run.
 
-    The single definition of this convention. The evaluation writes these names, the status check and
-    the aggregation read them, so all three must import this rather than rebuild the name. Every
-    setting that changes the numbers is encoded, otherwise a run would silently reuse another's
-    results. The 3d path has no mask tag, since its logits masks always go through the video
-    predictor, and no threshold tag, since only the 2d path binarizes mask logits itself.
+    The evaluation writes these names, and the status check and the aggregation read them. The name
+    encodes every setting that changes the numbers, so one run cannot reuse the results of another.
     """
     dim_suffix = "" if ndim == 2 else "_3d"
     tag = interactive_run_tag(ndim, use_masks, mask_threshold, min_size)
@@ -61,10 +58,11 @@ def interactive_result_name(
 
 
 def interactive_run_tag(ndim=2, use_masks=True, mask_threshold=0.0, min_size=0):
-    """The settings suffix shared by an interactive run's result names and prediction directory.
+    """Build the settings suffix for an interactive run's result names and prediction directory.
 
-    Keeping both on one tag means a run can never read back another run's cached predictions.
+    Both use one tag, so a run can never read back the cached predictions of another run.
     """
+    # Only the 2d path chooses between mask logits and binarized masks.
     tag = "" if ndim == 3 else ("_with_masks" if use_masks else "_without_masks")
     if ndim == 2 and mask_threshold != 0.0:
         tag += f"_t{mask_threshold:g}"
@@ -74,11 +72,10 @@ def interactive_run_tag(ndim=2, use_masks=True, mask_threshold=0.0, min_size=0):
 
 
 def _apply_min_size(labels, min_size, dataset_name):
-    """Drop ground-truth objects below 'min_size' pixels, warning if that guts the dataset.
+    """Drop ground-truth objects below 'min_size' pixels, and warn if that removes too many.
 
-    A single threshold does not suit every dataset: gonuclear nuclei have a median of ~3200 pixels
-    per object, while cremi neurite cross-sections in a thin crop have a median of ~6, where the
-    same threshold would remove most of the genuine annotations.
+    No single threshold suits every dataset. Gonuclear nuclei have a median of about 3200 pixels per
+    object, while cremi neurite cross-sections in a thin crop have a median of about 6.
     """
     if not min_size:
         return labels
@@ -95,23 +92,18 @@ def _apply_min_size(labels, min_size, dataset_name):
 
 
 def drop_severed_objects(labels, min_size):
-    """Drop the objects that a crop face cut down to a sliver, in a ground truth or a prediction alike.
+    """Drop the objects that a crop face cut down to a sliver, in a ground truth or a prediction.
 
-    An object touching a face is only partly in the image, but one that is still large is perfectly
-    segmentable, so only the small remnants go. Both sides are filtered the same way, so removing a
-    remnant from the ground truth does not turn the prediction of it into a false positive.
-
-    Both conditions are needed. A bare size threshold also deletes whole interior objects that
-    simply are small: half of the livecell objects below 50 pixels are those, while on
-    dynamicnuclearnet every one of them does touch a face. Contact alone would instead delete large,
-    perfectly usable cells that merely reach the edge.
+    Both conditions are needed. A size threshold alone also deletes small interior objects, and
+    border contact alone deletes large cells that only reach the edge. The caller filters the ground
+    truth and the prediction the same way, so a dropped remnant never becomes a false positive.
     """
     if not min_size:
         return labels
     if labels.ndim == 2:
         edges = (labels[0], labels[-1], labels[:, 0], labels[:, -1])
     else:
-        # In-plane faces only. A thin z-crop touches nearly every object on its top and bottom slice.
+        # In-plane faces only, since a thin z-crop cuts almost every object on the first and last slice.
         edges = (labels[:, 0], labels[:, -1], labels[:, :, 0], labels[:, :, -1])
     border_ids = np.unique(np.concatenate([np.unique(edge) for edge in edges]))
     border_ids = border_ids[border_ids != 0]
@@ -128,10 +120,9 @@ def drop_severed_objects(labels, min_size):
 def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name):
     """Load one 2d sample the way the evaluation scores it.
 
-    The single source of truth for what an image and its ground truth are, so that a parameter
-    search selects on exactly the data the evaluation measures.
+    The parameter search and the evaluation both call this function, so both use the same data.
     """
-    # Normalized before cropping: the percentiles are taken over the whole image.
+    # Normalize before cropping, so that the percentiles cover the whole image.
     image = _ensure_8bit_range(_read_2d(raw_path, raw_key))
     roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
     gt = connected_components(_read_2d(label_path, label_key)[roi]).astype("uint32")
@@ -152,14 +143,12 @@ def load_evaluation_sample_3d(
 def _load_data(dataset_name, data_root, ndim, min_size=0):
     """Yield (image_or_volume, labels, valid_roi) triples for the given dataset.
 
-    valid_roi is a boolean mask (True = annotated) for partially annotated datasets
-    (platynereis_nuclei), or None for all others.
+    valid_roi is a boolean mask that is True where the data is annotated. It is None for every
+    dataset except platynereis_nuclei, which is annotated only in part.
 
-    A 2d ground truth is filtered by `drop_border_objects`, which is what cropping makes necessary.
-    `min_size` additionally drops volumetric objects below that many voxels, and defaults to keeping
-    all of them. Filtering must happen here, the single source of the labels used for both prompting
-    and scoring: filtering only the prompting copy would leave the dropped objects in the scored
-    ground truth as unmatched ones.
+    The filtering happens here, in the single source of the labels used for both prompting and
+    scoring. If only the prompting copy were filtered, the dropped objects would stay in the scored
+    ground truth and count as unmatched.
     """
     if ndim == 3:
         raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root)
