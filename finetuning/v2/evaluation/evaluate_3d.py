@@ -19,19 +19,18 @@ import shutil
 from pathlib import Path
 
 import numpy as np
-import torch
 from tqdm import tqdm
 
-from micro_sam import util
+import torch
 
+from micro_sam import util
 from micro_sam.v2.evaluation import inference, evaluation
 
 from common import (
     CHECKPOINT_PATHS, DATA_ROOT, DATASETS_3D, DATASET_SPACING, get_data_paths, load_volume,
     UNISAM2_CHECKPOINT, load_unisam2_model, predict_unisam2, postprocess_unisam2,
-    export_joint_checkpoint, run_dataset_evaluation, VOLUME_SPEED_OPTIONS,
+    export_joint_checkpoint, run_dataset_evaluation, VOLUME_SPEED_OPTIONS, check_data_download,
 )
-from common import check_data_download
 
 CROP_SHAPE_3D = (8, 512, 512)
 
@@ -127,9 +126,7 @@ def run_automatic_evaluation_3d(
     raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root)
 
     all_gt, all_seg = [], []
-    for raw_path, label_path in tqdm(
-        zip(raw_paths, label_paths), total=len(raw_paths), desc="automatic 3D"
-    ):
+    for raw_path, label_path in tqdm(zip(raw_paths, label_paths), total=len(raw_paths), desc="automatic 3D"):
         raw, labels, valid_roi = load_volume(
             raw_path=raw_path,
             label_path=label_path,
@@ -139,7 +136,7 @@ def run_automatic_evaluation_3d(
             crop_shape=crop_shape,
         )
         fname = Path(raw_path).stem
-        print(f"  {fname}: raw {raw.shape}, {len(np.unique(labels)) - 1} instances")
+        print(f"{fname}: raw {raw.shape}, {len(np.unique(labels)) - 1} instances")
 
         out = predict_unisam2(model, raw, ndim=3, device=device)
         seg = postprocess_unisam2(out, dataset_name, backend=backend)
@@ -169,13 +166,8 @@ def run_apg_evaluation_3d(
 ):
     """Run automatic prompt generation on volumes and compare it with AIS on the same predictions.
 
-    The decoder proposes the candidates and the SAM2 video predictor propagates them through the
-    volume. AIS post-processes the very same decoder prediction, so the two differ only in what turns
-    the prediction into instances. Every variant is generated from one initialization of each volume,
-    so a sweep pays for the encoder and the decoder once.
-
-    'ais_params' overrides the AIS postprocessing defaults, so that the AIS column is a tuned reference
-    rather than an untuned one.
+    Both consume the same decoder prediction, so they differ only in how it becomes instances. All
+    variants reuse one initialization per volume, so a sweep runs the encoder and the decoder once.
     """
     from micro_sam.v2.util import get_sam2_model
     from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
@@ -222,7 +214,6 @@ def run_apg_evaluation_3d(
             "ais": postprocess_unisam2(segmenter.get_state()["prediction"], dataset_name, params=ais_params)
         }
         for name, params in variants.items():
-            # The anisotropy the AIS reference is post-processed with, so both see the same volume.
             segmentations[name] = segmenter.generate(**{"spacing": spacing, **params})
 
         for key, seg in segmentations.items():
@@ -243,16 +234,14 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate micro_sam2 for 3D segmentation.")
     parser.add_argument("-d", "--dataset_name", type=str, required=True, choices=DATASETS_3D)
     parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT)
-    parser.add_argument("-m", "--model_type", type=str, default="hvit_t",
-                        help="SAM2 model size (interactive mode only).")
+    parser.add_argument("-m", "--model_type", type=str, default="hvit_t", help="SAM2 model size.")
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=["box", "point"])
     parser.add_argument("-c", "--checkpoint_path", type=str, default=None)
     parser.add_argument("--automatic_checkpoint", type=str, default=None)
     parser.add_argument("-iter", "--n_iterations", type=int, default=8)
     parser.add_argument("--use_masks", action="store_true", help="Use logits masks across iterations.")
-    parser.add_argument("--cleanup_predictions", action="store_true",
-                        help="Delete stored predictions after CSV is saved.")
+    parser.add_argument("--cleanup_predictions", action="store_true", help="Delete predictions after the CSV is saved.")
     parser.add_argument(
         "--mode", type=str, default="all", choices=["all", "interactive", "automatic", "apg"],
         help="Which evaluations to run: 'all' runs interactive + automatic, or pick one.",
@@ -262,10 +251,8 @@ def main():
         help="JSON mapping a variant name to the 'generate' overrides it is evaluated with.",
     )
     parser.add_argument("--tag", type=str, default="apg", help="Name of the APG result files.")
-    parser.add_argument("--joint_checkpoint", type=str, default="best",
-                        help="Name of the joint trainer checkpoint, without the '.pt' suffix.")
-    parser.add_argument("--ais_params", type=str, default=None,
-                        help="JSON dict of AIS postprocessing parameters, e.g. from grid_search_automatic_cells.")
+    parser.add_argument("--joint_checkpoint", type=str, default="best", help="Joint checkpoint name, without '.pt'.")
+    parser.add_argument("--ais_params", type=str, default=None, help="JSON dict of AIS postprocessing parameters.")
     parser.add_argument("--n_volumes", type=int, default=None, help="Evaluate only this many volumes.")
     parser.add_argument("--crop_depth", type=int, default=CROP_SHAPE_3D[0], help="Number of slices to crop to.")
     args = parser.parse_args()
