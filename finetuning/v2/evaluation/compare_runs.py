@@ -17,6 +17,7 @@ from pathlib import Path
 import pandas as pd
 
 from common import DATASETS_2D, DATASETS_3D_EM
+from baselines_common import interactive_result_name
 
 EXPERIMENT_ROOT = Path("/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments")
 
@@ -116,16 +117,15 @@ def collect_interactive(model_type: str) -> pd.DataFrame:
     rows = []
     for dataset_name in DATASETS:
         metric = metric_for(dataset_name)
-        is_3d = dataset_kind(dataset_name) != "2d LM"
-        # The 3d path has no mask tag, since its logits masks always go through the video predictor.
-        suffix = "_3d" if is_3d else ""
-        mask_tag = "" if is_3d else "_with_masks"
+        ndim = 2 if dataset_kind(dataset_name) == "2d LM" else 3
         for prompt in PROMPTS:
             for iteration in range(N_ITERATIONS):
                 scores = {}
                 for run, cfg in RUNS.items():
-                    stem = f"{dataset_name}_{cfg['tag']}_{model_type}{suffix}_{prompt}{mask_tag}"
-                    scores[run] = read_score(cfg["results"] / f"{stem}_iter{iteration:02d}.csv", metric)
+                    name = interactive_result_name(
+                        dataset_name, cfg["tag"], model_type, prompt, iteration, ndim=ndim
+                    )
+                    scores[run] = read_score(cfg["results"] / name, metric)
                 rows.append(comparison_row(dataset_name, scores, {"prompt": prompt, "iteration": iteration}))
     return pd.DataFrame(rows)
 
