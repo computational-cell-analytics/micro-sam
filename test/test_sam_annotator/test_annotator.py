@@ -612,6 +612,9 @@ class TestAutoSegStatePersistence:
             def generate(self, **kwargs):
                 return np.zeros((8, 8), dtype="uint32")
 
+            def clear_state(self):
+                pass
+
         def fake_cache_autoseg_state(*args, **kwargs):
             calls.append(args[4])  # save_path
             return _Segmenter()
@@ -632,6 +635,7 @@ class TestAutoSegStatePersistence:
             _segmenter=None, _segmenter_key=None,
         )
         widget._state_save_path = MethodType(AutoSegmentWidget._state_save_path, widget)
+        widget._release_segmenter = MethodType(AutoSegmentWidget._release_segmenter, widget)
 
         raw = np.zeros((8, 8), dtype="uint8")
         AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
@@ -641,7 +645,7 @@ class TestAutoSegStatePersistence:
 
 
 def test_apg_widget_reuses_the_decoder_state(monkeypatch):
-    from types import SimpleNamespace
+    from types import MethodType, SimpleNamespace
 
     import micro_sam.precompute_state as precompute_state
     import micro_sam.v2.instance_segmentation as instance_segmentation
@@ -658,11 +662,20 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch):
             return {"prediction": np.ones((4, 8, 8), dtype="float32")}
 
     class PromptGenerator:
+        def __init__(self):
+            self.propose_calls = 0
+
         def set_state(self, state):
             self.state = state
 
-        def generate(self, **kwargs):
-            self.generate_kwargs = kwargs
+        def propose(self, **kwargs):
+            self.propose_calls += 1
+            self.propose_kwargs = kwargs
+            return ["proposal"]
+
+        def select(self, proposals, **kwargs):
+            self.proposals = proposals
+            self.select_kwargs = kwargs
             return np.ones((8, 8), dtype="uint32")
 
     prompt_generator = PromptGenerator()
@@ -691,17 +704,23 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch):
         data_signature="image", widgets={}, embedding_path=None,
     )
     widget = SimpleNamespace(
-        _segmenter=None, _segmenter_key=None,
+        _segmenter=None, _segmenter_key=None, _decoder_state=None, _decoder_state_key=None,
+        _proposals=None, _proposals_key=None,
         _state_save_path=lambda state: None,
-        _apg_kwargs=lambda ndim: {"score_threshold": 0.6},
+        _apg_propose_kwargs=lambda: {"candidate_threshold": 1.5},
+        _apg_select_kwargs=lambda: {"score_threshold": 0.6},
     )
+    for name in ("_release_segmenter", "_decoder_key", "_cached_decoder_state", "_store_decoder_state"):
+        setattr(widget, name, MethodType(getattr(AutoSegmentWidget, name), widget))
 
     result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=None)
     second_result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=None)
 
     assert calls == {"cache": 1, "factory": 1}
     assert prompt_generator.state["image_embeddings"] is image_embeddings
-    assert prompt_generator.generate_kwargs == {"score_threshold": 0.6}
+    # The prompting stage runs once; the second run only replays the merge.
+    assert prompt_generator.propose_calls == 1
+    assert prompt_generator.select_kwargs == {"score_threshold": 0.6}
     assert np.array_equal(result, second_result)
 
 
@@ -765,6 +784,30 @@ class TestAutoSegDefaultMode:
         assert autoseg._apg_kwargs(ndim=3)["early_stop_patience"] == 3
         viewer.close()
 
+    def test_apg_kwargs_split_matches_propose_and_select(self, make_napari_viewer_proxy):
+        """The 2d run calls 'propose' and 'select' separately, so each must get exactly its own
+        arguments and the two together must still cover everything 'generate' was given."""
+        import inspect
+
+        from micro_sam.v2.automatic_prompt_generation import AutomaticPromptGenerator
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=2)
+        autoseg = widget._widgets["autosegment"]
+        autoseg.mode_dropdown.setCurrentText("apg")
+
+        propose_kwargs = autoseg._apg_propose_kwargs()
+        select_kwargs = autoseg._apg_select_kwargs()
+
+        propose_params = set(inspect.signature(AutomaticPromptGenerator.propose).parameters) - {"self"}
+        select_params = set(inspect.signature(AutomaticPromptGenerator.select).parameters) - {"self", "proposals"}
+        assert set(propose_kwargs) == propose_params
+        assert set(select_kwargs) == select_params
+
+        # Together they are what the single-call form would have passed.
+        assert set(propose_kwargs) | set(select_kwargs) == set(autoseg._apg_kwargs(ndim=2))
+        viewer.close()
+
     def test_autoseg_settings_use_v2_defaults(self):
         from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
         from micro_sam.sam_annotator._widgets import AutoSegmentWidget
@@ -819,8 +862,20 @@ class TestAutoSegDefaultMode:
 
         from micro_sam.sam_annotator._widgets import EmbeddingWidget
 
-        autosegment = SimpleNamespace(_segmenter=object(), _segmenter_key=object())
+        from types import MethodType
+
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        autosegment = SimpleNamespace(
+            _segmenter=None, _segmenter_key=object(),
+            _decoder_state={"prediction": 1}, _decoder_state_key=object(),
+        )
+        autosegment._release_segmenter = MethodType(AutoSegmentWidget._release_segmenter, autosegment)
+        autosegment._drop_decoder_state = MethodType(AutoSegmentWidget._drop_decoder_state, autosegment)
         state = SimpleNamespace(widgets={"autosegment": autosegment})
         EmbeddingWidget._clear_autosegment_cache(state)
         assert autosegment._segmenter is None
         assert autosegment._segmenter_key is None
+        # The prediction belongs to the embeddings that were just replaced.
+        assert autosegment._decoder_state is None
+        assert autosegment._decoder_state_key is None

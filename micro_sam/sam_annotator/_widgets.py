@@ -2344,8 +2344,8 @@ class EmbeddingWidget(_WidgetBase):
         """Discard predictions derived from the embeddings that were just replaced."""
         widget = state.widgets.get("autosegment")
         if widget is not None:
-            widget._segmenter = None
-            widget._segmenter_key = None
+            widget._release_segmenter()
+            widget._drop_decoder_state()
 
     def _n_tiles(self, tile_shape, shape):
         """The number of tiles the embedding computation is split into (1 without tiling)."""
@@ -4255,6 +4255,13 @@ class AutoSegmentWidget(_WidgetBase):
         # only re-runs 'generate', not the expensive UniSAM2 inference. Keyed by the inputs.
         self._segmenter = None
         self._segmenter_key = None
+        # The decoder prediction the generator is built from. It does not depend on the mode, so it
+        # outlives the generator and is shared by 'sparse', 'dense' and 'apg'.
+        self._decoder_state = None
+        self._decoder_state_key = None
+        # The APG proposals, so that changing only the merge parameters skips the prompting.
+        self._proposals = None
+        self._proposals_key = None
         self._create_widget()
 
     def _create_widget(self):
@@ -4313,10 +4320,10 @@ class AutoSegmentWidget(_WidgetBase):
         self.mode_dropdown.setCurrentText("sparse" if with_decoder else "amg")
         self.mode_dropdown.blockSignals(False)
 
-        # Drop the cached segmenter, since the loaded model (and so its predictions) changed, and
-        # refresh the settings panel to match the new default mode.
-        self._segmenter = None
-        self._segmenter_key = None
+        # Drop the cached segmenter and the decoder prediction, since the loaded model (and so its
+        # predictions) changed, and refresh the settings panel to match the new default mode.
+        self._release_segmenter()
+        self._drop_decoder_state()
         self._on_mode_changed()
 
     def _on_mode_changed(self, index=None):
@@ -4616,6 +4623,22 @@ class AutoSegmentWidget(_WidgetBase):
             kwargs["early_stop_patience"] = self.early_stop_patience or None
         return kwargs
 
+    def _apg_propose_kwargs(self):
+        # The prompting stage: everything that decides which candidates are prompted, and how.
+        return dict(
+            candidate_threshold=self.candidate_threshold, foreground_threshold=self.foreground_threshold,
+            n_iter=self.n_iter, dt=self.dt, sigma=self.sigma, min_candidate_size=self.min_candidate_size,
+            multimasking=bool(self.multimasking), batch_size=self.prompt_batch_size, n_threads=self.n_threads,
+        )
+
+    def _apg_select_kwargs(self):
+        # The merge stage: post-processing of the proposals, cheap next to the prompting.
+        return dict(
+            score_threshold=self.score_threshold, max_overlap=self.max_overlap, min_size=self.min_object_size,
+            refine_with_box_prompts=bool(self.refine_with_box_prompts), box_extension=self.box_extension,
+            batch_size=self.prompt_batch_size,
+        )
+
     def _get_tiling(self):
         # In-plane (xy) tiling for automatic segmentation, taken from the embedding widget (where the
         # embeddings' tiling is configured). Returns (None, None) when tiling is off. z-tiling is not
@@ -4640,6 +4663,33 @@ class AutoSegmentWidget(_WidgetBase):
         # checkbox. When on, it persists next to the embeddings, else in-memory only ('_segmenter' cache).
         embed_widget = state.widgets.get("embeddings")
         return state.embedding_path if getattr(embed_widget, "cache_state", False) else None
+
+    def _release_segmenter(self):
+        # Dropping the reference is not enough: the volumetric prompt generator holds a SAM2 video
+        # inference state and an ephemeral embedding store, which only 'clear_state' releases.
+        if self._segmenter is not None:
+            self._segmenter.clear_state()
+        self._segmenter = None
+        self._segmenter_key = None
+        self._proposals = None
+        self._proposals_key = None
+
+    def _decoder_key(self, state, ndim, z, is_tiled, z_block, z_halo):
+        # What the decoder prediction depends on. The mode is deliberately absent: the same
+        # prediction feeds the 'sparse' and 'dense' post-processing and the 'apg' prompt generation.
+        return (state.data_signature, ndim, z, is_tiled, z_block, z_halo)
+
+    def _cached_decoder_state(self, key):
+        return self._decoder_state if self._decoder_state_key == key else None
+
+    def _store_decoder_state(self, key, decoder_state):
+        self._decoder_state = dict(decoder_state)
+        self._decoder_state_key = key
+
+    def _drop_decoder_state(self):
+        # Only for a new input or a new model: the prediction is derived from both.
+        self._decoder_state = None
+        self._decoder_state_key = None
 
     def _run_unisam2(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.precompute_state import cache_autoseg_state
@@ -4680,15 +4730,26 @@ class AutoSegmentWidget(_WidgetBase):
             state.data_signature, "unisam2", ndim, z, tile_shape, halo, z_block, z_halo,
             image_embeddings is not None, save_path,
         )
+        decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
         if self._segmenter is None or self._segmenter_key != cache_key:
-            self._segmenter = cache_autoseg_state(
-                "ais", state.decoder, run_raw, image_embeddings, save_path, ndim=ndim,
-                model_type=getattr(state.predictor, "model_type", None),
-                i=z, state_index=(None if ndim == 3 else z), is_tiled=is_tiled,
-                tile_shape=tile_shape, halo=halo, device=device, devices=state.inference_devices,
-                z_block=z_block, z_halo=z_halo,
-                pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
-            )
+            self._release_segmenter()
+            decoder_state = self._cached_decoder_state(decoder_key)
+            if decoder_state is None:
+                self._segmenter = cache_autoseg_state(
+                    "ais", state.decoder, run_raw, image_embeddings, save_path, ndim=ndim,
+                    model_type=getattr(state.predictor, "model_type", None),
+                    i=z, state_index=(None if ndim == 3 else z), is_tiled=is_tiled,
+                    tile_shape=tile_shape, halo=halo, device=device, devices=state.inference_devices,
+                    z_block=z_block, z_halo=z_halo,
+                    pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
+                )
+                self._store_decoder_state(decoder_key, self._segmenter.get_state())
+            else:
+                from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
+                self._segmenter = get_unisam2_segmentation_generator(
+                    state.decoder, is_tiled=is_tiled, device=device, inference_device=state.inference_devices,
+                )
+                self._segmenter.set_state(decoder_state)
             self._segmenter_key = cache_key
 
         return self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
@@ -4725,7 +4786,9 @@ class AutoSegmentWidget(_WidgetBase):
             state.data_signature, "apg", ndim, z, tile_shape, halo, z_block, z_halo,
             image_embeddings is not None, save_path,
         )
+        decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
         if self._segmenter is None or self._segmenter_key != cache_key:
+            self._release_segmenter()
             self._segmenter = get_instance_segmentation_generator(
                 model=model, decoder=state.decoder, is_tiled=is_tiled, segmentation_mode="apg",
                 device=device, inference_device=state.inference_devices, ndim=ndim,
@@ -4739,14 +4802,18 @@ class AutoSegmentWidget(_WidgetBase):
             if is_tiled:
                 self._segmenter.initialize(run_raw, **initialize_kwargs)
             else:
-                decoder_segmenter = cache_autoseg_state(
-                    "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
-                    model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
-                    is_tiled=False, device=device, devices=state.inference_devices,
-                    z_block=z_block, z_halo=z_halo, pbar_init=pbar_init,
-                    pbar_update=pbar_update, verbose=False,
-                )
-                apg_state = decoder_segmenter.get_state()
+                decoder_state = self._cached_decoder_state(decoder_key)
+                if decoder_state is None:
+                    decoder_segmenter = cache_autoseg_state(
+                        "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
+                        model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
+                        is_tiled=False, device=device, devices=state.inference_devices,
+                        z_block=z_block, z_halo=z_halo, pbar_init=pbar_init,
+                        pbar_update=pbar_update, verbose=False,
+                    )
+                    decoder_state = decoder_segmenter.get_state()
+                    self._store_decoder_state(decoder_key, decoder_state)
+                apg_state = dict(decoder_state)
                 apg_state["image_embeddings"] = image_embeddings
                 if z is not None:
                     apg_state["i"] = z
@@ -4755,7 +4822,17 @@ class AutoSegmentWidget(_WidgetBase):
                 self._segmenter.set_state(apg_state)
             self._segmenter_key = cache_key
 
-        return self._segmenter.generate(**self._apg_kwargs(ndim))
+        if ndim == 3:  # One pass: the volumetric stages are not separable the way the 2d ones are.
+            return self._segmenter.generate(**self._apg_kwargs(ndim))
+
+        # 'propose' does the prompting and 'select' only merges, so re-running with a different
+        # score / overlap / size replays the merge instead of prompting the model again.
+        propose_kwargs = self._apg_propose_kwargs()
+        proposals_key = (cache_key, tuple(sorted(propose_kwargs.items())))
+        if self._proposals is None or self._proposals_key != proposals_key:
+            self._proposals = self._segmenter.propose(**propose_kwargs)
+            self._proposals_key = proposals_key
+        return self._segmenter.select(self._proposals, **self._apg_select_kwargs())
 
     def _run_amg(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.v2.instance_segmentation import get_amg_segmenter, amg_3d_segmentation
@@ -4801,6 +4878,7 @@ class AutoSegmentWidget(_WidgetBase):
             self.points_per_side, self.pred_iou_thresh, self.stability_score_thresh, save_path,
         )
         if self._segmenter is None or self._segmenter_key != cache_key:
+            self._release_segmenter()
             if is_tiled:  # The tiled segmenter reports per-tile progress.
                 self._segmenter = cache_autoseg_state(
                     "amg", model, run_raw, image_embeddings, save_path, model_type=model_type,
