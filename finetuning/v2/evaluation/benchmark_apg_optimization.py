@@ -1,7 +1,7 @@
 """Run a small, deterministic APG optimization benchmark on ten validation datasets.
 
 The benchmark is deliberately bounded: one invocation evaluates one parameter configuration on
-24 representative 2d images and two representative crops from each of five 3d datasets. The
+240 representative 2d images and two representative crops from each of five 3d datasets. The
 default configuration is the current library default for APG with the best joint hvit_t checkpoint.
 
 No data is downloaded and the data root is treated as read-only. All manifests, checkpoint exports
@@ -77,8 +77,16 @@ LIVECELL_TYPES = ("A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SKOV3", "Sk
 DEFAULT_DATA_ROOT = Path("/mnt/vast-nhr/projects/cidas/cca/data")
 DEFAULT_OUTPUT_ROOT = Path("/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization")
 
-MANIFEST_SCHEMA_VERSION = 2
-TARGETS_2D = (0.2, 0.4, 0.6, 0.8)
+MANIFEST_SCHEMA_VERSION = 3
+# DeepBacs only has 30 validation images. Keep all of them and use the ten remaining slots for DIC,
+# whose initially surprising score benefits most from additional coverage.
+SAMPLE_COUNTS_2D = {
+    "livecell": 80,
+    "tissuenet": 40,
+    "dynamicnuclearnet": 40,
+    "deepbacs": 30,
+    "dic_hepg2": 50,
+}
 TARGETS_3D = (0.5, 0.8)
 CROP_SHAPE_3D = (8, 256, 256)
 # An 8-slice crop is thinner than a typical C. elegans nucleus (about 11-13 slices in this
@@ -232,34 +240,44 @@ def _select_nearest(
     candidates: List[Dict[str, Any]], targets: Sequence[float], prefer_distinct_sources: bool = False,
 ) -> List[Dict[str, Any]]:
     selected: List[Dict[str, Any]] = []
+    # Track candidate indices explicitly. Selected entries gain `target_quantile`, so comparing the
+    # copied dictionaries would no longer exclude their source candidate on the next iteration.
+    remaining = list(enumerate(candidates))
     for target in targets:
-        pool = [candidate for candidate in candidates if candidate not in selected]
+        pool = remaining
         if prefer_distinct_sources and selected:
             used_sources = {entry["label_path"] for entry in selected}
-            distinct = [entry for entry in pool if entry["label_path"] not in used_sources]
+            distinct = [item for item in pool if item[1]["label_path"] not in used_sources]
             if distinct:
                 pool = distinct
             else:
                 non_overlapping = [
-                    entry for entry in pool
-                    if all(_roi_overlap_fraction(entry["roi"], other["roi"]) == 0 for other in selected)
+                    item for item in pool
+                    if all(_roi_overlap_fraction(item[1]["roi"], other["roi"]) == 0 for other in selected)
                 ]
                 if non_overlapping:
                     pool = non_overlapping
         if not pool:
             raise RuntimeError(f"Could not select {len(targets)} distinct samples from {len(candidates)} candidates.")
-        chosen = min(
+        chosen_index, source = min(
             pool,
-            key=lambda entry: (
-                abs(entry["complexity"] - target),
-                abs(entry["foreground_fraction"] - 0.5),
-                entry["label_path"],
-                entry["roi"],
+            key=lambda item: (
+                abs(item[1]["complexity"] - target),
+                abs(item[1]["foreground_fraction"] - 0.5),
+                item[1]["label_path"],
+                item[1]["roi"],
             ),
-        ).copy()
+        )
+        remaining = [item for item in remaining if item[0] != chosen_index]
+        chosen = source.copy()
         chosen["target_quantile"] = float(target)
         selected.append(chosen)
     return selected
+
+
+def _quantile_targets(n_samples: int) -> Tuple[float, ...]:
+    """Return evenly spaced quantile midpoints without selecting the distribution endpoints."""
+    return tuple((index + 0.5) / n_samples for index in range(n_samples))
 
 
 def _roi_overlap_fraction(first: Sequence[Sequence[int]], second: Sequence[Sequence[int]]) -> float:
@@ -327,15 +345,19 @@ def _select_2d_samples(data_root: Path) -> List[Dict[str, Any]]:
             if missing:
                 raise RuntimeError(f"LIVECell validation data is missing cell types: {missing}.")
             selected = []
+            n_per_type, remainder = divmod(SAMPLE_COUNTS_2D[dataset], len(LIVECELL_TYPES))
+            if remainder:
+                raise RuntimeError("The LIVECell sample count must be divisible by its cell-type count.")
             for cell_type in LIVECELL_TYPES:
                 group = by_type[cell_type]
                 _add_complexity(group)
-                choice = _select_nearest(group, (0.5,))[0]
-                choice["stratum"] = cell_type
-                selected.append(choice)
+                choices = _select_nearest(group, _quantile_targets(n_per_type))
+                for choice in choices:
+                    choice["stratum"] = cell_type
+                    selected.append(choice)
         else:
             _add_complexity(candidates)
-            selected = _select_nearest(candidates, TARGETS_2D)
+            selected = _select_nearest(candidates, _quantile_targets(SAMPLE_COUNTS_2D[dataset]))
         for sample in selected:
             sample["sample_id"] = _sample_identity(sample)
             samples.append(sample)
@@ -485,7 +507,7 @@ def _validate_manifest(manifest: Dict[str, Any], data_root: Path) -> None:
         _source_path(sample["label_path"], data_root)
         if sample["object_count"] <= 0:
             raise RuntimeError(f"Manifest sample '{sample['sample_id']}' has empty ground truth.")
-    expected = {(dataset, 2): (8 if dataset == "livecell" else 4) for dataset in DATASETS_2D}
+    expected = {(dataset, 2): SAMPLE_COUNTS_2D[dataset] for dataset in DATASETS_2D}
     expected.update({(dataset, 3): 2 for dataset in DATASETS_3D})
     if dict(counts) != expected:
         raise RuntimeError(f"Unexpected manifest sample counts: got {dict(counts)}, expected {expected}.")
@@ -504,7 +526,8 @@ def prepare_manifest(data_root: Path, manifest_path: Path) -> Dict[str, Any]:
         "data_root": str(data_root),
         "selection_policy": {
             "2d_crop_shape": list(CROP_SHAPE_2D),
-            "2d_complexity_targets": list(TARGETS_2D),
+            "2d_sample_counts": SAMPLE_COUNTS_2D,
+            "2d_complexity_targets": "even quantile midpoints within each dataset and LIVECell cell type",
             "3d_crop_shapes": {
                 dataset: list(CROP_SHAPE_3D_OVERRIDES.get(dataset, CROP_SHAPE_3D))
                 for dataset in DATASETS_3D
