@@ -637,8 +637,72 @@ class TestAutoSegStatePersistence:
         AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
         embedding_widget.cache_state = True
         AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
-
         assert calls == [None, "/tmp/embeddings.zarr"]
+
+
+def test_apg_widget_reuses_the_decoder_state(monkeypatch):
+    from types import SimpleNamespace
+
+    import micro_sam.precompute_state as precompute_state
+    import micro_sam.v2.instance_segmentation as instance_segmentation
+    from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+    calls = {"cache": 0, "factory": 0}
+
+    class Decoder:
+        def parameters(self):
+            yield SimpleNamespace(device="cpu")
+
+    class DecoderSegmenter:
+        def get_state(self):
+            return {"prediction": np.ones((4, 8, 8), dtype="float32")}
+
+    class PromptGenerator:
+        def set_state(self, state):
+            self.state = state
+
+        def generate(self, **kwargs):
+            self.generate_kwargs = kwargs
+            return np.ones((8, 8), dtype="uint32")
+
+    prompt_generator = PromptGenerator()
+
+    def fake_cache(*args, **kwargs):
+        calls["cache"] += 1
+        assert args[0] == "ais"
+        return DecoderSegmenter()
+
+    def fake_factory(**kwargs):
+        calls["factory"] += 1
+        assert kwargs["segmentation_mode"] == "apg"
+        return prompt_generator
+
+    monkeypatch.setattr(precompute_state, "cache_autoseg_state", fake_cache)
+    monkeypatch.setattr(instance_segmentation, "get_instance_segmentation_generator", fake_factory)
+
+    image_embeddings = {
+        "features": np.zeros((1, 4, 8, 8), dtype="float32"),
+        "input_size": 1024,
+        "original_size": (8, 8),
+    }
+    state = SimpleNamespace(
+        predictor=SimpleNamespace(model=object(), model_type="hvit_t_cells"),
+        decoder=Decoder(), image_embeddings=image_embeddings, inference_devices=None,
+        data_signature="image", widgets={}, embedding_path=None,
+    )
+    widget = SimpleNamespace(
+        _segmenter=None, _segmenter_key=None,
+        _state_save_path=lambda state: None,
+        _apg_kwargs=lambda ndim: {"score_threshold": 0.6},
+    )
+
+    result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=None)
+    second_result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=None)
+
+    assert calls == {"cache": 1, "factory": 1}
+    assert prompt_generator.state["image_embeddings"] is image_embeddings
+    assert prompt_generator.generate_kwargs == {"score_threshold": 0.6}
+    assert np.array_equal(result, second_result)
 
 
 @pytest.mark.gui
@@ -660,6 +724,45 @@ class TestAutoSegDefaultMode:
         assert autoseg.with_decoder is True
         assert autoseg.mode == "sparse"
         assert autoseg.mode_dropdown.currentText() == "sparse"
+        choices = [autoseg.mode_dropdown.itemText(i) for i in range(autoseg.mode_dropdown.count())]
+        assert choices == ["sparse", "dense", "apg"]
+        viewer.close()
+
+    def test_apg_controls_use_backend_defaults(self, make_napari_viewer_proxy):
+        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=2)
+        autoseg = widget._widgets["autosegment"]
+        autoseg.mode_dropdown.setCurrentText("apg")
+
+        defaults = DEFAULT_PROMPT_GENERATION
+        assert autoseg.mode == "apg"
+        assert autoseg.candidate_threshold_param.value() == defaults["candidate_threshold"]
+        assert autoseg.foreground_threshold_param.value() == defaults["foreground_threshold"]
+        assert autoseg.min_candidate_size_param.value() == defaults["min_candidate_size"]
+        assert autoseg.score_threshold_param.value() == defaults["score_threshold"]
+        assert autoseg.max_overlap_param.value() == defaults["max_overlap"]
+        assert autoseg.min_object_size_param.value() == defaults["min_size"]
+        assert autoseg.multimasking_checkbox.isChecked() == defaults["multimasking"]
+        assert autoseg.refine_with_box_prompts_checkbox.isChecked() == defaults["refine_with_box_prompts"]
+        viewer.close()
+
+    def test_volumetric_apg_controls_build_generate_kwargs(self, make_napari_viewer_proxy):
+        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=3)
+        autoseg = widget._widgets["autosegment"]
+        autoseg.mode_dropdown.setCurrentText("apg")
+
+        kwargs = autoseg._apg_kwargs(ndim=3)
+        assert kwargs["candidate_threshold"] == DEFAULT_PROMPT_GENERATION["candidate_threshold_3d"]
+        assert kwargs["n_objects_per_pass"] == DEFAULT_PROMPT_GENERATION["n_objects_per_pass"]
+        assert kwargs["early_stop_patience"] is None
+
+        autoseg.early_stop_patience_param.setValue(3)
+        assert autoseg._apg_kwargs(ndim=3)["early_stop_patience"] == 3
         viewer.close()
 
     def test_autoseg_settings_use_v2_defaults(self):
