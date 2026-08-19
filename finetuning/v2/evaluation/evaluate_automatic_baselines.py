@@ -4,8 +4,6 @@ Supported methods:
   cellpose: CellPose generalist models (cyto3, cpsam)
   stardist: StarDist pretrained (2D_versatile_fluo / 3D_demo)
   cellsam: CellSAM pipeline (2d only)
-  sam: Pretrained SAM v1 with automatic mask generation (AMG)
-  sam2: Pretrained SAM2 with automatic mask generation (AMG)
   microsam_ais: micro-sam v1 automatic instance segmentation
   microsam_apg: micro-sam v1 automatic prompt generation
   segneuron: SegNeuron (3d EM only)
@@ -16,8 +14,6 @@ Usage examples:
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method cellpose -m cyto3
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method stardist
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method cellsam
-    python evaluate_automatic_baselines.py -d livecell -e <exp> --method sam
-    python evaluate_automatic_baselines.py -d livecell -e <exp> --method sam2 -m hvit_t
     python evaluate_automatic_baselines.py -d embedseg -e <exp> --method microsam_ais -m vit_b
     python evaluate_automatic_baselines.py -d cremi -e <exp> --method segneuron
 """
@@ -31,29 +27,21 @@ from tqdm import tqdm
 
 import torch
 
-from micro_sam.v2.util import configure_image_predictor
-from micro_sam.v2.normalization import normalize_raw
-
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_3D_EM, CHECKPOINT_PATHS,
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_3D_EM,
     GT_MIN_SIZE_2D, check_data_download, drop_severed_objects, load_data, n_samples,
     run_dataset_evaluation,
 )
 
 LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
 EM_DATASETS = set(DATASETS_3D_EM)
-METHODS = [
-    "cellpose", "stardist", "cellsam", "sam", "sam2", "microsam_ais", "microsam_apg", "segneuron",
-]
+METHODS = ["cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron"]
 
 SEGNEURON_ROOT = "/mnt/vast-nhr/home/archit/u12090/SegNeuron"
 SEGNEURON_CHECKPOINT = "/mnt/vast-nhr/projects/cidas/cca/models/segneuron/SegNeuronModel.ckpt"
 
 STARDIST_2D_MODEL = "2D_versatile_fluo"
 STARDIST_3D_MODEL = "3D_demo"
-
-# SAM2 defaults.
-SAM2_MODEL_TYPE = "hvit_t"
 
 # micro-sam v1 model types
 SAM_V1_MODEL_TYPE = "vit_b_lm"
@@ -66,10 +54,6 @@ DATASET_ANISOTROPY = {
     "cremi": 10.0,   # z=40nm, xy=4nm
     "snemi": 5.0,    # z=30nm, xy=6nm
 }
-
-
-def _to_sam2_uint8(raw):
-    return normalize_raw(raw, output_dtype="uint8")
 
 
 def _load_cellpose(model_type, device):
@@ -121,19 +105,10 @@ def _load_segneuron(checkpoint_path, device):
 
 def _load_microsam_v1(method, model_type, checkpoint, device):
     from micro_sam.v1.automatic_segmentation import get_predictor_and_segmenter
-    mode = {"microsam_amg": "amg", "microsam_ais": "ais", "microsam_apg": "apg"}[method]
+    mode = {"microsam_ais": "ais", "microsam_apg": "apg"}[method]
     return get_predictor_and_segmenter(
         model_type=model_type, checkpoint=checkpoint, device=device, segmentation_mode=mode,
     )
-
-
-def _load_sam2_amg(model_type, checkpoint_path, device):
-    from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
-    from micro_sam.v2.util import get_sam2_model
-    model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
-    generator = SAM2AutomaticMaskGenerator(model, pred_iou_thresh=0.6, stability_score_thresh=0.6)
-    configure_image_predictor(generator.predictor)
-    return generator
 
 
 def _segment_cellpose(image_or_volume, model, ndim, dataset_name=None):
@@ -217,17 +192,6 @@ def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
         predictor=predictor, segmenter=segmenter, input_path=image_or_volume, ndim=ndim, verbose=False,
     )
     return seg.astype("uint32") if seg is not None else np.zeros(image_or_volume.shape, dtype="uint32")
-
-
-def _segment_sam2_amg(image, amg):
-    from micro_sam.util import mask_data_to_segmentation
-    image = _to_sam2_uint8(image)
-    if image.ndim == 2:
-        image = np.stack([image] * 3, axis=-1)
-    outputs = amg.generate(image)
-    if not outputs:
-        return np.zeros(image.shape[:2], dtype="uint32")
-    return mask_data_to_segmentation(outputs, with_background=True, min_object_size=0)
 
 
 def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc):
@@ -322,27 +286,6 @@ def run_microsam_v1_evaluation(dataset_name, data_root, experiment_folder, metho
     )
 
 
-def run_sam2_auto_evaluation(
-    dataset_name, data_root, experiment_folder, device, model_type=SAM2_MODEL_TYPE, checkpoint_path=None,
-):
-    if dataset_name in DATASETS_3D:
-        warnings.warn(
-            f"SAM2 AMG is 2D-only and does not support 3D dataset '{dataset_name}'. Skipping.",
-            UserWarning, stacklevel=2,
-        )
-        return
-
-    if checkpoint_path is None:
-        checkpoint_path = CHECKPOINT_PATHS[model_type]
-
-    amg = _load_sam2_amg(model_type, checkpoint_path, device)
-    save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_sam2_{model_type}_amg.csv")
-    _run_evaluation(
-        lambda x: _segment_sam2_amg(x, amg),
-        dataset_name, data_root, ndim=2, save_path=save_path, desc=f"sam2-amg-{model_type}",
-    )
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-d", "--dataset_name", required=True, choices=(sorted(LM_DATASETS) + sorted(EM_DATASETS)))
@@ -351,11 +294,11 @@ def main():
     parser.add_argument("--method", type=str, required=True, choices=METHODS)
     parser.add_argument(
         "-m", "--model_type", type=str, default=None,
-        help="Model type override, e.g. cyto3 for cellpose, vit_b for sam, hvit_t for sam2."
+        help="Model type override, e.g. cyto3 for cellpose or vit_b for the micro-sam v1 methods."
     )
     parser.add_argument(
         "-c", "--checkpoint", type=str, default=None,
-        help="Checkpoint path for the micro-sam v1, segneuron and sam2 methods."
+        help="Checkpoint path for the micro-sam v1 and segneuron methods."
     )
     args = parser.parse_args()
 
@@ -375,18 +318,6 @@ def main():
 
     elif args.method == "cellsam":
         run_cellsam_evaluation(args.dataset_name, args.input_path, args.experiment_folder)
-
-    elif args.method == "sam":
-        run_microsam_v1_evaluation(
-            args.dataset_name, args.input_path, args.experiment_folder, method="microsam_amg",
-            model_type=args.model_type or SAM_V1_MODEL_TYPE, checkpoint=args.checkpoint, device=device,
-        )
-
-    elif args.method == "sam2":
-        run_sam2_auto_evaluation(
-            args.dataset_name, args.input_path, args.experiment_folder,
-            device=device, model_type=args.model_type or SAM2_MODEL_TYPE, checkpoint_path=args.checkpoint,
-        )
 
     elif args.method in ("microsam_ais", "microsam_apg"):
         run_microsam_v1_evaluation(

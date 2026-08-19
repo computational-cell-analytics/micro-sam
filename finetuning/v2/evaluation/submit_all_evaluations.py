@@ -4,7 +4,7 @@ Four controls pick what runs:
     --data              which datasets, by name or with --all_datasets
     --modality          lm or em (or both)
     --segmentation_type automatic or interactive
-    --segmentation_mode ais, apg or amg, for micro-sam2
+    --segmentation_mode ais or apg, for micro-sam2
 
 A run without --method evaluates micro-sam2 itself, through evaluate_automatic_segmentation.py or
 evaluate_interactive_segmentation.py. With --method it evaluates the baselines instead, through
@@ -55,15 +55,17 @@ DATASETS_EM = tuple(DATASETS_3D_EM)
 DATASETS = tuple(sorted(set(DATASETS_LM + DATASETS_EM)))
 DATASETS_3D = tuple(sorted(set(DATASETS_3D_LM + DATASETS_3D_EM)))
 
-SEGMENTATION_MODES = ("ais", "apg", "amg")
-AUTOMATIC_METHODS = ("cellpose", "stardist", "cellsam", "sam", "sam2", "microsam_ais", "microsam_apg", "segneuron")
+SEGMENTATION_MODES = ("ais", "apg")
+AUTOMATIC_METHODS = ("cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron")
 INTERACTIVE_METHODS = ("nninteractive", "sam3", "sam", "sam2", "micro-sam", "microsam_vol")
+
+# Interactive 'sam2' is the pretrained backbone of the very engine micro-sam2 finetunes, so it runs
+# through the same script rather than a second copy of the same inference.
+SHARED_ENGINE_METHODS = {"sam2"}
 
 # What each method can actually be run on. A method that is absent runs on everything.
 METHOD_SUPPORT = {
     ("automatic", "cellsam"): {"ndim": (2,)},
-    ("automatic", "sam2"): {"ndim": (2,)},
-    ("automatic", "sam"): {"modality": ("lm",)},
     ("automatic", "microsam_ais"): {"modality": ("lm",)},
     ("automatic", "microsam_apg"): {"modality": ("lm",)},
     ("automatic", "segneuron"): {"modality": ("em",), "ndim": (3,)},
@@ -166,10 +168,12 @@ def select_datasets(args: argparse.Namespace, method: Optional[str], mode: Optio
         datasets = tuple(d for d in datasets if modality_of(d) in support["modality"])
     if "ndim" in support:
         datasets = tuple(d for d in datasets if ndim_of(d) in support["ndim"])
-    # Automatic mask generation has no volumetric front-end in micro-sam2.
-    if method is None and mode == "amg":
-        datasets = tuple(d for d in datasets if ndim_of(d) == 2)
     return datasets
+
+
+def uses_shared_engine(args: argparse.Namespace, method: Optional[str]) -> bool:
+    """Whether a method runs through the micro-sam2 script rather than the baseline one."""
+    return args.segmentation_type == "interactive" and method in SHARED_ENGINE_METHODS
 
 
 def build_command(
@@ -177,15 +181,18 @@ def build_command(
     method: Optional[str], mode: Optional[str],
 ) -> list:
     """The python command one dataset of one job runs."""
-    script = SCRIPTS[(args.segmentation_type, "baseline" if method else "micro_sam2")]
+    shared_engine = uses_shared_engine(args, method)
+    script = SCRIPTS[(args.segmentation_type, "baseline" if (method and not shared_engine) else "micro_sam2")]
     command = [
         "python", str(script),
         "-d", dataset_name,
         "-i", args.data_root,
         "-e", args.experiment_folder,
     ]
-    if method:
+    if method and not shared_engine:
         command.extend(["--method", method])
+    if shared_engine:
+        command.extend(["--weights", "pretrained"])
     if model_type is not None:
         command.extend(["-m", model_type])
     if args.checkpoint is not None:
@@ -206,6 +213,8 @@ def build_command(
         command.extend(["-p", args.prompt_choice, "-iter", str(args.n_iterations)])
         if args.min_size:
             command.extend(["--min_size", str(args.min_size)])
+        if shared_engine and model_type is None:
+            command.extend(["-m", "hvit_t"])
 
     return command
 
@@ -232,7 +241,7 @@ def write_batch_script(
     """Write the Slurm script of one job and return its path."""
     tag = job_tag(args, datasets, model_type, method, mode, chunk_index)
     script_path = job_folder / f"{tag}.sh"
-    env = resolve_env(args, method)
+    env = DEFAULT_ENV if uses_shared_engine(args, method) else resolve_env(args, method)
     qos_line = f"\n#SBATCH --qos={args.qos}" if args.qos is not None else ""
     is_3d = any(ndim_of(dataset) == 3 for dataset in datasets)
     gpu = args.gpu or (GPU_3D if is_3d else GPU_2D)
@@ -358,7 +367,7 @@ def main():
                     )
 
     print(f"Wrote {len(scripts)} Slurm scripts to '{job_folder}'.")
-    warn_missing_envs({resolve_env(args, method) for method in methods})
+    warn_missing_envs({resolve_env(args, method) for method in methods if not uses_shared_engine(args, method)})
     if args.dry:
         return
     for script in scripts:

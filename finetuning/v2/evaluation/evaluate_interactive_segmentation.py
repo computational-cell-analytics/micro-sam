@@ -1,6 +1,10 @@
-"""Evaluation of micro-sam2 interactive segmentation, for 2d and 3d, LM and EM.
+"""Evaluation of SAM2 interactive segmentation, for 2d and 3d, LM and EM.
 
-The jointly finetuned SAM2 branch is prompted iteratively: the first prompt is a box or a point on
+Runs the jointly finetuned micro-sam2 branch by default, and the pretrained SAM2 backbone with
+'--weights pretrained'. Both go through the same inference, so the finetuning is the only difference
+between the two numbers, which is what makes them comparable.
+
+The model is prompted iteratively: the first prompt is a box or a point on
 every ground-truth object, and every later iteration adds a correction click derived from the error
 of the previous one. One CSV is written per iteration, so the whole correction curve is reported.
 
@@ -13,6 +17,7 @@ Usage examples:
     python evaluate_interactive_segmentation.py -d livecell -m hvit_b -e <exp> -p box
     python evaluate_interactive_segmentation.py -d livecell -m hvit_b -e <exp> -p point --no-use_masks
     python evaluate_interactive_segmentation.py -d embedseg -m hvit_b -e <exp> -p box
+    python evaluate_interactive_segmentation.py -d livecell -m hvit_t -e <exp> --weights pretrained
 """
 
 import os
@@ -29,18 +34,31 @@ from micro_sam.v2.normalization import normalize_raw
 from micro_sam.v2.evaluation.inference import run_interactive_segmentation_2d, run_interactive_segmentation_3d
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, MODEL_TYPES, CROP_SHAPE_3D,
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, MODEL_TYPES, CROP_SHAPE_3D, CHECKPOINT_PATHS,
     check_data_download, export_joint_checkpoint, interactive_result_name, interactive_run_tag,
     load_data, n_samples, run_dataset_evaluation,
 )
 
 
-def method_tag(joint_checkpoint: str) -> str:
-    """The name the results of a joint checkpoint are filed under.
+def resolve_weights(weights: str, model_type: str, joint_checkpoint: str, checkpoint=None):
+    """The checkpoint to prompt with, and the name its results are filed under.
 
     'best' keeps the plain tag, so the results of the current model stay addressable under one name.
+
+    Args:
+        weights: 'joint' for the finetuned branch, 'pretrained' for the SAM2 backbone.
+        model_type: The SAM2 backbone, e.g. 'hvit_t'.
+        joint_checkpoint: The joint trainer checkpoint, without the '.pt' suffix.
+        checkpoint: An explicit checkpoint path, which overrides both.
+
+    Returns:
+        The checkpoint path and the result tag.
     """
-    return "micro_sam2" if joint_checkpoint == "best" else f"micro_sam2_{joint_checkpoint}"
+    if weights == "pretrained":
+        return checkpoint or CHECKPOINT_PATHS[model_type], "sam2"
+    # The joint checkpoint bundles both branches, so it is split on first use.
+    path = checkpoint or export_joint_checkpoint(model_type, joint_checkpoint)[0]
+    return path, ("micro_sam2" if joint_checkpoint == "best" else f"micro_sam2_{joint_checkpoint}")
 
 
 def to_uint8(raw):
@@ -207,6 +225,8 @@ def main():
     parser.add_argument("-iter", "--n_iterations", type=int, default=8, help="Iterative prompting rounds.")
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Weights instead of the joint export.")
     parser.add_argument("--joint_checkpoint", type=str, default="best", help="Joint checkpoint name, without '.pt'.")
+    parser.add_argument("--weights", type=str, default="joint", choices=("joint", "pretrained"),
+                        help="Prompt the finetuned joint branch, or the pretrained SAM2 backbone.")
     parser.add_argument("--ndim", type=int, default=None, choices=(2, 3), help="Defaults to the dataset's own.")
     parser.add_argument(
         "--min_size", type=int, default=0,
@@ -230,9 +250,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     ndim = args.ndim or (3 if args.dataset_name in DATASETS_3D else 2)
-    # The joint checkpoint bundles both branches, so it is split on first use.
-    checkpoint = args.checkpoint or export_joint_checkpoint(args.model_type, args.joint_checkpoint)[0]
-    tag = method_tag(args.joint_checkpoint)
+    checkpoint, tag = resolve_weights(args.weights, args.model_type, args.joint_checkpoint, args.checkpoint)
 
     if ndim == 2:
         run_interactive_evaluation_2d(

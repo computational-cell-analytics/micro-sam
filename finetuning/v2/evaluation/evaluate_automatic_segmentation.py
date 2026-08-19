@@ -1,14 +1,13 @@
 """Evaluation of micro-sam2 automatic segmentation, for 2d and 3d, LM and EM.
 
-Three modes share one pipeline:
+Two modes share one pipeline:
   ais: the jointly finetuned UniSAM2 decoder, turned into instances by the flow / multicut postprocessing.
   apg: the same decoder proposes candidates, which the interactive branch turns into masks.
-  amg: the finetuned SAM2 branch with grid-based automatic mask generation, 2d only.
 
 One invocation tunes on the validation split and then scores the test split with the parameters it
 selected. A dataset with no data held out from the evaluation keeps the library defaults, because a
 sweep there would select its parameters on the very samples the reported score is measured on. See
-`common.VAL_SPLITS` for what counts as held out. AMG has no grid and always runs with its defaults.
+`common.VAL_SPLITS` for what counts as held out.
 
 EM datasets are tuned in dense (multicut) mode and ranked by the CREMI score, all others in sparse
 (flow) mode and ranked by mSA.
@@ -48,7 +47,7 @@ from common import (
     predict_unisam2, read_tuned_params, run_dataset_evaluation,
 )
 
-MODES = ("ais", "apg", "amg")
+MODES = ("ais", "apg")
 
 # Sparse (flow) grid for LM data. Keys map to flow_instance_segmentation arguments.
 LM_GRID = {
@@ -416,21 +415,13 @@ def build_model(mode, model_type, device, ndim, joint_checkpoint="best", checkpo
         checkpoint_path: Decoder weights to use instead of the ones exported from the joint checkpoint.
 
     Returns:
-        The UniSAM2 decoder (ais), the prompt generator (apg) or the mask generator (amg).
+        The UniSAM2 decoder for 'ais', or the prompt generator for 'apg'.
     """
     if mode == "apg":
         return build_apg_segmenter(model_type, ndim, device, joint_checkpoint, decoder_path=checkpoint_path)
 
-    if mode == "ais":
-        decoder_path = checkpoint_path or export_joint_checkpoint(model_type, joint_checkpoint)[1]
-        return load_unisam2_model(decoder_path, device, encoder=model_type)
-
-    from micro_sam.v2.util import get_sam2_model
-    from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
-
-    interactive_path = checkpoint_path or export_joint_checkpoint(model_type, joint_checkpoint)[0]
-    model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=interactive_path)
-    return get_instance_segmentation_generator(model=model, segmentation_mode="amg", device=device)
+    decoder_path = checkpoint_path or export_joint_checkpoint(model_type, joint_checkpoint)[1]
+    return load_unisam2_model(decoder_path, device, encoder=model_type)
 
 
 def segment(model, mode, raw, ndim, dataset_name, params, device, backend="cpp", spacing=None):
@@ -441,16 +432,8 @@ def segment(model, mode, raw, ndim, dataset_name, params, device, backend="cpp",
         volume_params = {"spacing": spacing} if ndim == 3 else {}
         return model.generate(**{**volume_params, **params}).astype("uint32")
 
-    if mode == "ais":
-        prediction = predict_unisam2(model, raw, ndim=ndim, device=device)
-        return postprocess_unisam2(prediction, dataset_name, backend=backend, params=params)
-
-    image = np.clip(np.round(raw), 0, 255).astype("uint8")
-    if image.ndim == 2:
-        image = np.stack([image] * 3, axis=-1)
-    model.clear_state()
-    model.initialize(image)
-    return model.generate().astype("uint32")
+    prediction = predict_unisam2(model, raw, ndim=ndim, device=device)
+    return postprocess_unisam2(prediction, dataset_name, backend=backend, params=params)
 
 
 def tune_parameters(
@@ -684,9 +667,6 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     ndim = 3 if args.dataset_name in DATASETS_3D else 2
-    if args.mode == "amg" and ndim == 3:
-        raise ValueError(f"Automatic mask generation is 2d only; '{args.dataset_name}' is volumetric.")
-
     crop_shape = tuple(args.crop_3d) if args.crop_3d else None
     model = build_model(
         args.mode, args.model_type, device, ndim,
@@ -694,7 +674,7 @@ def main():
     )
 
     params = None
-    if args.mode != "amg" and not args.skip_tuning:
+    if not args.skip_tuning:
         tuning_root = args.tuning_root or os.path.join(args.experiment_folder, "tuning", args.mode)
         params = tune_parameters(
             model, args.mode, args.dataset_name, args.input_path, args.model_type, tuning_root, device,
