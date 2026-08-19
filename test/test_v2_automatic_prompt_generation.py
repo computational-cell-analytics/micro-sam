@@ -2,7 +2,6 @@ import types
 
 import numpy as np
 import pytest
-
 import torch
 
 from bioimage_cpp.utils import Blocking
@@ -14,6 +13,7 @@ from micro_sam.v2.automatic_prompt_generation import (
     AutomaticPromptGenerator, TiledAutomaticPromptGenerator, derive_point_prompts, merge_by_score,
     interior_points,
 )
+from micro_sam.v2.normalization import to_image
 
 
 def test_apg_declares_no_postprocessing_mode():
@@ -48,6 +48,34 @@ def test_factory_returns_the_apg_classes(monkeypatch, is_tiled, expected):
     # The embedding cache is keyed on these, which a SAM2 image predictor does not carry by itself.
     assert predictor.model_type == "hvit_b"
     assert predictor.model_name == "hvit_b"
+
+
+def test_apg_encodes_multichannel_images_with_per_channel_normalization():
+    class Predictor:
+        device = "cpu"
+        model = types.SimpleNamespace(image_size=1024)
+        _features = {"high_res_feats": []}
+        _orig_hw = [(2, 3)]
+
+        def reset_predictor(self):
+            pass
+
+        def set_image(self, image):
+            self.image = image
+
+        def get_image_embedding(self):
+            return torch.zeros((1, 1, 1, 1))
+
+    values = np.arange(6, dtype="float32").reshape(2, 3)
+    image = np.stack([values, 1000.0 + 100.0 * values, 10.0 - values], axis=-1)
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._predictor = Predictor()
+
+    segmenter._encode(image)
+
+    assert np.array_equal(segmenter._predictor.image, to_image(image))
+    assert np.array_equal(segmenter._predictor.image.min(axis=(0, 1)), [0, 0, 0])
+    assert np.array_equal(segmenter._predictor.image.max(axis=(0, 1)), [255, 255, 255])
 
 
 def test_derive_point_prompts_returns_xy_points_inside_the_candidates():
