@@ -950,7 +950,10 @@ def ensure_8bit_range(raw):
     """Scale raw data into the [0, 255] range the evaluation feeds the models with."""
     if raw.size == 0:
         return raw.astype("float32", copy=False)
-    return normalize_raw(raw) * 255.0
+    # `read_2d` returns channel-last images. Preserve the contrast of every microscopy channel
+    # instead of letting the channel with the largest values determine the shared percentile range.
+    spatial_axes = (0, 1) if raw.ndim == 3 and raw.shape[-1] in (1, 2, 3, 4) else None
+    return normalize_raw(raw, axis=spatial_axes) * 255.0
 
 
 def read_2d(path, key):

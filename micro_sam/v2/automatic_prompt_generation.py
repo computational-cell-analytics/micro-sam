@@ -32,9 +32,9 @@ import torch
 from bioimage_cpp.utils import Blocking
 from bioimage_cpp.segmentation import label
 
-from .normalization import normalize_raw
+from .normalization import to_image
 from ..v1.inference import _merge_segmentations
-from ..util import make_temp_embedding_path, _ensure_rgb
+from ..util import make_temp_embedding_path
 from .postprocessing import DEFAULT_POSTPROCESSING, _compute_flow_density
 from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
 from .util import precompute_image_embeddings, set_precomputed, get_sam2_image_predictor
@@ -514,7 +514,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         """Run the image encoder once and return the embeddings that both branches use."""
         self._predictor.reset_predictor()
         with sam2_autocast(self._predictor.device):
-            self._predictor.set_image(_ensure_rgb(normalize_raw(image, output_dtype="uint8")))
+            # Match the standard 2d embedding path. In particular, normalize each microscopy
+            # channel independently so that a low-intensity channel is not suppressed by a brighter
+            # one before SAM2 sees the image.
+            self._predictor.set_image(to_image(image))
         return {
             "features": self._predictor.get_image_embedding().cpu().numpy(),
             "high_res_feats": self._predictor._features["high_res_feats"],
