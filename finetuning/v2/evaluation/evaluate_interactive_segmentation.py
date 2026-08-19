@@ -23,6 +23,7 @@ Usage examples:
 import os
 import shutil
 import argparse
+import warnings
 
 import numpy as np
 import imageio.v3 as imageio
@@ -35,15 +36,16 @@ from micro_sam.v2.evaluation.inference import run_interactive_segmentation_2d, r
 
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, MODEL_TYPES, CROP_SHAPE_3D, CHECKPOINT_PATHS,
-    check_data_download, export_joint_checkpoint, interactive_result_name, interactive_run_tag,
-    load_data, n_samples, run_dataset_evaluation,
+    check_data_download, checkpoint_checksum, export_joint_checkpoint, get_joint_checkpoint,
+    interactive_result_name, interactive_run_tag, load_data, n_samples, run_dataset_evaluation,
 )
 
 
 def resolve_weights(weights: str, model_type: str, joint_checkpoint: str, checkpoint=None):
     """The checkpoint to prompt with, and the name its results are filed under.
 
-    'best' keeps the plain tag, so the results of the current model stay addressable under one name.
+    New results include a content checksum. The plain tag is also returned so finished evaluation
+    runs from before checksum-based naming remain usable.
 
     Args:
         weights: 'joint' for the finetuned branch, 'pretrained' for the SAM2 backbone.
@@ -52,13 +54,34 @@ def resolve_weights(weights: str, model_type: str, joint_checkpoint: str, checkp
         checkpoint: An explicit checkpoint path, which overrides both.
 
     Returns:
-        The checkpoint path and the result tag.
+        The checkpoint path, checksum-qualified result tag and legacy result tag.
     """
     if weights == "pretrained":
-        return checkpoint or CHECKPOINT_PATHS[model_type], "sam2"
+        path = checkpoint or CHECKPOINT_PATHS[model_type]
+        legacy_tag = "sam2"
+        return path, f"{legacy_tag}_ckpt-{checkpoint_checksum(path)}", legacy_tag
+
+    legacy_tag = "micro_sam2" if joint_checkpoint == "best" else f"micro_sam2_{joint_checkpoint}"
+    if checkpoint is not None:
+        return checkpoint, f"{legacy_tag}_ckpt-{checkpoint_checksum(checkpoint)}", legacy_tag
+
     # The joint checkpoint bundles both branches, so it is split on first use.
-    path = checkpoint or export_joint_checkpoint(model_type, joint_checkpoint)[0]
-    return path, ("micro_sam2" if joint_checkpoint == "best" else f"micro_sam2_{joint_checkpoint}")
+    source_checksum = checkpoint_checksum(get_joint_checkpoint(model_type, joint_checkpoint))
+    path = export_joint_checkpoint(model_type, joint_checkpoint, source_checksum=source_checksum)[0]
+    return path, f"{legacy_tag}_ckpt-{source_checksum}", legacy_tag
+
+
+def completed_result_paths(save_paths, legacy_paths):
+    """Return a complete exact or legacy result set, preferring checksum-qualified results."""
+    if all(os.path.exists(path) for path in save_paths):
+        return save_paths
+    if all(os.path.exists(path) for path in legacy_paths):
+        warnings.warn(
+            f"Using legacy evaluation results in '{os.path.dirname(legacy_paths[0])}'. They have no "
+            "checkpoint checksum, so their weights cannot be verified."
+        )
+        return legacy_paths
+    return None
 
 
 def to_uint8(raw):
@@ -88,7 +111,7 @@ def write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
 
 
 def run_interactive_evaluation_2d(
-    dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag,
+    dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag, legacy_tag,
     start_with_box=True, n_iterations=8, use_masks=True, mask_threshold=0.0, min_size=0,
 ):
     """Run iterative prompting on the 2d test split and write one result CSV per iteration."""
@@ -101,7 +124,14 @@ def run_interactive_evaluation_2d(
         ))
         for iteration in range(n_iterations)
     ]
-    if all(os.path.exists(path) for path in save_paths):
+    legacy_paths = [
+        os.path.join(results_dir, interactive_result_name(
+            dataset_name, legacy_tag, model_type, prompt, iteration,
+            ndim=2, use_masks=use_masks, mask_threshold=mask_threshold, min_size=min_size,
+        ))
+        for iteration in range(n_iterations)
+    ]
+    if completed_result_paths(save_paths, legacy_paths) is not None:
         print(f"Results already stored at '{results_dir}'.")
         return
 
@@ -147,7 +177,7 @@ def run_interactive_evaluation_2d(
 
 
 def run_interactive_evaluation_3d(
-    dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag,
+    dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag, legacy_tag,
     start_with_box=True, n_iterations=8, min_size=0, crop_shape=CROP_SHAPE_3D,
 ):
     """Run iterative prompting on the 3d test split and write one result CSV per iteration.
@@ -163,7 +193,13 @@ def run_interactive_evaluation_3d(
         ))
         for iteration in range(n_iterations)
     ]
-    if all(os.path.exists(path) for path in save_paths):
+    legacy_paths = [
+        os.path.join(results_dir, interactive_result_name(
+            dataset_name, legacy_tag, model_type, prompt, iteration, ndim=3, min_size=min_size,
+        ))
+        for iteration in range(n_iterations)
+    ]
+    if completed_result_paths(save_paths, legacy_paths) is not None:
         print(f"Results already stored at '{results_dir}'.")
         return
 
@@ -250,17 +286,21 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     ndim = args.ndim or (3 if args.dataset_name in DATASETS_3D else 2)
-    checkpoint, tag = resolve_weights(args.weights, args.model_type, args.joint_checkpoint, args.checkpoint)
+    checkpoint, tag, legacy_tag = resolve_weights(
+        args.weights, args.model_type, args.joint_checkpoint, args.checkpoint
+    )
 
     if ndim == 2:
         run_interactive_evaluation_2d(
-            args.dataset_name, args.input_path, args.experiment_folder, device, args.model_type, checkpoint, tag,
+            args.dataset_name, args.input_path, args.experiment_folder, device, args.model_type,
+            checkpoint, tag, legacy_tag,
             start_with_box=(args.prompt_choice == "box"), n_iterations=args.n_iterations,
             use_masks=args.use_masks, mask_threshold=args.mask_threshold, min_size=args.min_size,
         )
     else:
         run_interactive_evaluation_3d(
-            args.dataset_name, args.input_path, args.experiment_folder, device, args.model_type, checkpoint, tag,
+            args.dataset_name, args.input_path, args.experiment_folder, device, args.model_type,
+            checkpoint, tag, legacy_tag,
             start_with_box=(args.prompt_choice == "box"), n_iterations=args.n_iterations,
             min_size=args.min_size, crop_shape=tuple(args.crop_3d) if args.crop_3d else CROP_SHAPE_3D,
         )

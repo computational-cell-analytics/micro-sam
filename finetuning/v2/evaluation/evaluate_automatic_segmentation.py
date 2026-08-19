@@ -42,9 +42,10 @@ from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_densi
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, DATASET_SPACING, VAL_Z_RANGE,
     GT_MIN_SIZE_2D, CROP_SHAPE_3D, VOLUME_SPEED_OPTIONS, MODEL_TYPES,
-    build_apg_segmenter, check_data_download, drop_severed_objects, export_joint_checkpoint,
-    genuine_misses, has_val_split, load_data, load_unisam2_model, n_samples, postprocess_unisam2,
-    predict_unisam2, read_tuned_params, run_dataset_evaluation,
+    build_apg_segmenter, check_data_download, checkpoint_checksum, combine_checkpoint_checksums,
+    drop_severed_objects, export_joint_checkpoint, genuine_misses, get_joint_checkpoint, has_val_split,
+    load_data, load_unisam2_model, n_samples, postprocess_unisam2, predict_unisam2, read_tuned_params,
+    run_dataset_evaluation,
 )
 
 MODES = ("ais", "apg")
@@ -403,7 +404,25 @@ def score_sample_apg_cached(segmenter, labels, params_list, metric_mode, border_
     return scores
 
 
-def build_model(mode, model_type, device, ndim, joint_checkpoint="best", checkpoint_path=None):
+def resolve_checkpoint_identity(mode, model_type, joint_checkpoint="best", checkpoint_path=None):
+    """Return the content identity of the effective weights and, if needed, the joint checkpoint."""
+    joint_checksum = None
+    if checkpoint_path is None or mode == "apg":
+        joint_path = get_joint_checkpoint(model_type, joint_checkpoint)
+        joint_checksum = checkpoint_checksum(joint_path)
+
+    if checkpoint_path is None:
+        return joint_checksum, joint_checksum
+
+    decoder_checksum = checkpoint_checksum(checkpoint_path)
+    if mode == "apg":
+        return combine_checkpoint_checksums(joint_checksum, decoder_checksum), joint_checksum
+    return decoder_checksum, None
+
+
+def build_model(
+    mode, model_type, device, ndim, joint_checkpoint="best", checkpoint_path=None, joint_checksum=None,
+):
     """Load the model a mode runs on, from the two halves of the joint checkpoint.
 
     Args:
@@ -418,9 +437,14 @@ def build_model(mode, model_type, device, ndim, joint_checkpoint="best", checkpo
         The UniSAM2 decoder for 'ais', or the prompt generator for 'apg'.
     """
     if mode == "apg":
-        return build_apg_segmenter(model_type, ndim, device, joint_checkpoint, decoder_path=checkpoint_path)
+        return build_apg_segmenter(
+            model_type, ndim, device, joint_checkpoint, decoder_path=checkpoint_path,
+            joint_checksum=joint_checksum,
+        )
 
-    decoder_path = checkpoint_path or export_joint_checkpoint(model_type, joint_checkpoint)[1]
+    decoder_path = checkpoint_path or export_joint_checkpoint(
+        model_type, joint_checkpoint, source_checksum=joint_checksum
+    )[1]
     return load_unisam2_model(decoder_path, device, encoder=model_type)
 
 
@@ -439,6 +463,7 @@ def segment(model, mode, raw, ndim, dataset_name, params, device, backend="cpp",
 def tune_parameters(
     model, mode, dataset_name, data_root, model_type, output_root, device,
     backend="cpp", n_threads=POSTPROC_THREADS, n_tuning_samples=None, crop_shape=None, criterion=None,
+    checkpoint_id=None,
 ):
     """Sweep the grid of a mode on the validation split and return the best parameter combination.
 
@@ -447,7 +472,7 @@ def tune_parameters(
     Inference runs once per sample and every combination is scored on it before moving on, so the
     predictions are never all held in memory at once.
 
-    The result is written to '<output_root>/<model_type>/<dataset_name>.csv', which is the layout
+    The result is written below '<output_root>/<model_type>/<checkpoint_id>', which is the layout
     `common.read_tuned_params` reads. An existing file is loaded rather than recomputed, so a
     preempted job resumes at the evaluation instead of sweeping again.
 
@@ -464,6 +489,7 @@ def tune_parameters(
         n_tuning_samples: Cap the sweep to this many validation samples.
         crop_shape: The 3d center crop.
         criterion: The metric the grid is ranked by.
+        checkpoint_id: The checksum of all model weights used by the mode.
 
     Returns:
         The best parameter combination, or None when the dataset has nothing held out to tune on.
@@ -473,14 +499,19 @@ def tune_parameters(
         return None
 
     config = tuning_config(dataset_name, mode, criterion=criterion, crop_shape=crop_shape)
-    output_dir = os.path.join(output_root, model_type)
+    output_dir = os.path.join(output_root, model_type, checkpoint_id) if checkpoint_id else os.path.join(
+        output_root, model_type
+    )
     csv_path = os.path.join(output_dir, f"{dataset_name}.csv")
     os.makedirs(output_dir, exist_ok=True)
 
-    if os.path.exists(csv_path):
-        print(f"Loading the finished sweep at '{csv_path}'.")
-        report_best(pd.read_csv(csv_path), dataset_name, config)
-        return read_tuned_params(output_root, dataset_name, model_type)
+    legacy_path = os.path.join(output_root, model_type, f"{dataset_name}.csv")
+    if os.path.exists(csv_path) or (checkpoint_id is not None and os.path.exists(legacy_path)):
+        params = read_tuned_params(output_root, dataset_name, model_type, checkpoint_id)
+        cached_path = csv_path if os.path.exists(csv_path) else legacy_path
+        print(f"Loading the finished sweep at '{cached_path}'.")
+        report_best(pd.read_csv(cached_path), dataset_name, config)
+        return params
 
     ndim, postproc_mode = config["ndim"], config["mode"]
     keys = list(config["grid"])
@@ -546,7 +577,7 @@ def tune_parameters(
     df.to_csv(csv_path, index=False)
     print(f"Saved {csv_path} ({time.perf_counter() - t0:.0f}s).")
     report_best(df, dataset_name, config)
-    return read_tuned_params(output_root, dataset_name, model_type)
+    return read_tuned_params(output_root, dataset_name, model_type, checkpoint_id)
 
 
 def score_image(
@@ -580,7 +611,7 @@ def report_best(df, dataset_name, config):
 
 def run_evaluation(
     model, mode, dataset_name, data_root, experiment_folder, model_type, params, device,
-    backend="cpp", crop_shape=None,
+    backend="cpp", crop_shape=None, checkpoint_id=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -598,15 +629,25 @@ def run_evaluation(
         device: The torch device.
         backend: The backend for the flow computation.
         crop_shape: The 3d center crop.
+        checkpoint_id: The checksum of all model weights used by the mode.
 
     Returns:
         The results as a DataFrame.
     """
     tag = "tuned" if params else "default"
-    save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_micro_sam2_{model_type}_{mode}_{tag}.csv")
+    legacy_path = os.path.join(
+        experiment_folder, "results", f"{dataset_name}_micro_sam2_{model_type}_{mode}_{tag}.csv"
+    )
+    save_path = legacy_path if checkpoint_id is None else legacy_path[:-4] + f"_ckpt-{checkpoint_id}.csv"
     if os.path.exists(save_path):
         print(f"Results already stored at '{save_path}'.")
         return pd.read_csv(save_path)
+    if checkpoint_id is not None and os.path.exists(legacy_path):
+        warnings.warn(
+            f"Using legacy evaluation result '{legacy_path}'. It has no checkpoint checksum, so its "
+            "weights cannot be verified."
+        )
+        return pd.read_csv(legacy_path)
 
     ndim = 3 if dataset_name in DATASETS_3D else 2
     spacing = DATASET_SPACING.get(dataset_name)
@@ -668,9 +709,13 @@ def main():
 
     ndim = 3 if args.dataset_name in DATASETS_3D else 2
     crop_shape = tuple(args.crop_3d) if args.crop_3d else None
+    checkpoint_id, joint_checksum = resolve_checkpoint_identity(
+        args.mode, args.model_type, args.joint_checkpoint, args.checkpoint,
+    )
     model = build_model(
         args.mode, args.model_type, device, ndim,
         joint_checkpoint=args.joint_checkpoint, checkpoint_path=args.checkpoint,
+        joint_checksum=joint_checksum,
     )
 
     params = None
@@ -679,12 +724,12 @@ def main():
         params = tune_parameters(
             model, args.mode, args.dataset_name, args.input_path, args.model_type, tuning_root, device,
             backend=args.backend, n_threads=args.n_threads, n_tuning_samples=args.n_tuning_samples,
-            crop_shape=crop_shape, criterion=args.criterion,
+            crop_shape=crop_shape, criterion=args.criterion, checkpoint_id=checkpoint_id,
         )
 
     run_evaluation(
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,
-        params, device, backend=args.backend, crop_shape=crop_shape,
+        params, device, backend=args.backend, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
     )
 
 

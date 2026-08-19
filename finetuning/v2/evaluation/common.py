@@ -1,11 +1,11 @@
 import os
 import ast
 import csv
-import hashlib
 import warnings
 from glob import glob
 from typing import Any, Dict, List, Optional, Tuple
 
+import xxhash
 import numpy as np
 import imageio.v3 as imageio
 from skimage.measure import label as connected_components
@@ -548,19 +548,29 @@ def _strip_ddp_prefix(state_dict):
     return {(k[len("module."):] if k.startswith("module.") else k): v for k, v in state_dict.items()}
 
 
-def _checkpoint_digest(path: str) -> str:
-    """A short digest of a checkpoint's identity: where it lives, when it was written and how large.
+def checkpoint_checksum(path: str) -> str:
+    """Return the xxh128 checksum of a checkpoint without loading it into memory."""
+    checksum = xxhash.xxh128()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            checksum.update(block)
+    return checksum.hexdigest()
 
-    Hashing 700 MB of weights would cost more than the export this guards. The three change whenever
-    the weights do, including when training overwrites a checkpoint in place.
-    """
-    stat = os.stat(path)
-    identity = f"{os.path.realpath(path)}:{stat.st_mtime_ns}:{stat.st_size}"
-    return hashlib.sha256(identity.encode()).hexdigest()[:8]
+
+def combine_checkpoint_checksums(*checksums: str) -> str:
+    """Combine the content checksums of all weights that determine one evaluation run."""
+    if len(checksums) == 1:
+        return checksums[0]
+    combined = xxhash.xxh128()
+    for checksum in checksums:
+        combined.update(checksum.encode("ascii"))
+        combined.update(b"\0")
+    return combined.hexdigest()
 
 
 def export_joint_checkpoint(
-    model_type: str, checkpoint: str = "best", export_root: str = JOINT_EXPORT_ROOT
+    model_type: str, checkpoint: str = "best", export_root: str = JOINT_EXPORT_ROOT,
+    source_checksum: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Split a joint checkpoint into an interactive and an automatic weight file.
 
@@ -569,20 +579,22 @@ def export_joint_checkpoint(
     `sam2.build_sam`, which reads `torch.load(...)['model']` with `weights_only=True`. Both
     exported files are plain tensor dicts, mirroring `scripts/model_export/export_sam2_cells_model.py`.
 
-    The digest in the name records which checkpoint an export came from, so an export is reused only
-    for that one. Every training version has a 'best' checkpoint, so a plain 'joint_sam2_hvit_t_best'
-    would hand back the previous version's export instead.
+    The checksum in the name records which checkpoint an export came from, so an export is reused
+    only for that content. Every training version has a 'best' checkpoint, so a plain
+    'joint_sam2_hvit_t_best' would hand back the previous version's export instead.
 
     Args:
         model_type: The SAM2 backbone the model was finetuned from, e.g. 'hvit_b'.
         checkpoint: Which trainer checkpoint to export, 'best' or 'latest'.
         export_root: The directory the exported weight files are written to.
+        source_checksum: A previously computed checksum, to avoid reading the checkpoint twice.
 
     Returns:
         The paths to the interactive (SAM2) and the automatic (UniSAM2 decoder) weight files.
     """
     checkpoint_path = get_joint_checkpoint(model_type, checkpoint)
-    name = f"joint_sam2_{model_type}_{checkpoint}_{_checkpoint_digest(checkpoint_path)}"
+    source_checksum = source_checksum or checkpoint_checksum(checkpoint_path)
+    name = f"joint_sam2_{model_type}_{checkpoint}_{source_checksum}"
     interactive_path = os.path.join(export_root, f"{name}.pt")
     decoder_path = os.path.join(export_root, f"{name}_decoder.pt")
     if os.path.exists(interactive_path) and os.path.exists(decoder_path):
@@ -695,7 +707,9 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
     return get_unisam2_model(checkpoint_path, device=device, encoder=encoder)
 
 
-def build_apg_segmenter(model_type, ndim, device, joint_checkpoint="best", decoder_path=None):
+def build_apg_segmenter(
+    model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None,
+):
     """Build the automatic prompt generator from both halves of a joint checkpoint.
 
     The decoder proposes the candidates and the interactive branch scores them, so a run needs both.
@@ -714,7 +728,9 @@ def build_apg_segmenter(model_type, ndim, device, joint_checkpoint="best", decod
     from micro_sam.v2.util import get_sam2_model
     from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
 
-    interactive_path, exported_decoder = export_joint_checkpoint(model_type, joint_checkpoint)
+    interactive_path, exported_decoder = export_joint_checkpoint(
+        model_type, joint_checkpoint, source_checksum=joint_checksum
+    )
     decoder = load_unisam2_model(decoder_path or exported_decoder, device, encoder=model_type)
     model = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=interactive_path,
@@ -803,22 +819,37 @@ def run_dataset_evaluation(gt_paths, prediction_paths, dataset_name: str, save_p
     return results
 
 
-def read_tuned_params(grid_search_root: str, dataset_name: str, model_type: str) -> Dict[str, Any]:
+def read_tuned_params(
+    grid_search_root: str, dataset_name: str, model_type: str, checkpoint_checksum: Optional[str] = None,
+) -> Dict[str, Any]:
     """Return the best parameter combination of a grid search as a dict.
 
-    Reads '<grid_search_root>/<model_type>/<dataset_name>.csv', whose first row is the best one, and
-    keeps every column that is not a metric or the sample count. The values are parsed as Python
-    literals, so a tuple-valued 'candidate_threshold' survives the round trip through the CSV.
+    New sweeps are keyed by checkpoint checksum. If no such sweep exists, an old checksum-less sweep
+    is still accepted with a warning. The first row is the best combination and values are parsed as
+    Python literals, so a tuple-valued 'candidate_threshold' survives the CSV round trip.
 
     Args:
         grid_search_root: The root the grid search wrote its per-model directories to.
         dataset_name: The dataset whose tuned parameters are read.
         model_type: The SAM2 backbone, which names the subdirectory.
+        checkpoint_checksum: The effective weights, for an exact cache lookup. If omitted, read the
+            legacy checksum-less location.
 
     Returns:
         The best combination, ready to be passed to the postprocessing or to 'generate'.
     """
-    csv_path = os.path.join(grid_search_root, model_type, f"{dataset_name}.csv")
+    legacy_path = os.path.join(grid_search_root, model_type, f"{dataset_name}.csv")
+    csv_path = (
+        legacy_path if checkpoint_checksum is None else
+        os.path.join(grid_search_root, model_type, checkpoint_checksum, f"{dataset_name}.csv")
+    )
+    if not os.path.exists(csv_path) and checkpoint_checksum is not None and os.path.exists(legacy_path):
+        warnings.warn(
+            f"Using legacy parameter sweep '{legacy_path}'. It has no checkpoint checksum, so its "
+            "weights cannot be verified.",
+            stacklevel=2,
+        )
+        csv_path = legacy_path
     if not os.path.exists(csv_path):
         raise FileNotFoundError(f"There is no grid search result at '{csv_path}'.")
 
