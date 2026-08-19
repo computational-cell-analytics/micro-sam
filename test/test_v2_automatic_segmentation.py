@@ -305,8 +305,7 @@ def test_decoder_predictions_are_cached_as_float32():
     assert out.dtype == np.float32
 
 
-@pytest.mark.parametrize("device_type", ("cuda", "mps"))
-def test_decoder_autocast_uses_fp16_on_accelerators(device_type, monkeypatch):
+def test_decoder_autocast_uses_fp16_on_cuda(monkeypatch):
     calls = []
 
     def fake_autocast(device_type, dtype):
@@ -314,18 +313,19 @@ def test_decoder_autocast_uses_fp16_on_accelerators(device_type, monkeypatch):
         return nullcontext()
 
     monkeypatch.setattr(torch, "autocast", fake_autocast)
-    with _get_decoder_autocast(torch.device(device_type)):
+    with _get_decoder_autocast(torch.device("cuda")):
         pass
 
-    assert calls == [(device_type, torch.float16)]
+    assert calls == [("cuda", torch.float16)]
 
 
-def test_decoder_autocast_leaves_cpu_unchanged(monkeypatch):
+@pytest.mark.parametrize("device_type", ("cpu", "mps"))
+def test_decoder_autocast_is_disabled_outside_cuda(device_type, monkeypatch):
     def fail_autocast(*args, **kwargs):
-        pytest.fail("CPU decoder inference must not enable autocast.")
+        pytest.fail(f"Decoder inference on {device_type} must not enable autocast.")
 
     monkeypatch.setattr(torch, "autocast", fail_autocast)
-    with _get_decoder_autocast(torch.device("cpu")):
+    with _get_decoder_autocast(torch.device(device_type)):
         pass
 
 
