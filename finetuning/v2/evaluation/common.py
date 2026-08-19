@@ -731,10 +731,12 @@ def build_apg_segmenter(
     interactive_path, exported_decoder = export_joint_checkpoint(
         model_type, joint_checkpoint, source_checksum=joint_checksum
     )
-    decoder = load_unisam2_model(decoder_path or exported_decoder, device, encoder=model_type)
     model = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=interactive_path,
         **({"input_type": "videos"} if ndim == 3 else {}),
+    )
+    decoder = load_unisam2_model(
+        decoder_path or exported_decoder, device, encoder=model.image_encoder
     )
     return get_instance_segmentation_generator(
         model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
