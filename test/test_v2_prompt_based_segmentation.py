@@ -19,6 +19,9 @@ class FakeTileSegmenter:
     def add_box_prompts(self, **kwargs):
         pass
 
+    def get_progress_total(self, z_range=None):
+        return 8 if z_range is None else z_range[1] - z_range[0] + 1
+
 
 def test_promptable_segmentation_2d_normalizes_raw(monkeypatch):
     from micro_sam.v2.normalization import to_image
