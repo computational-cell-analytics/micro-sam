@@ -56,6 +56,32 @@ When `commit_path` is given the results will automatically be saved there.
 
 Point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time, unless the `batched` mode is activated. With box prompts you can segment several objects at once, both in the normal and `batched` mode.
 
+### Using existing segmentations
+
+The `Existing Segmentation Inputs` section accepts compatible napari Labels layers, including segmentations created by Cellpose or another napari plugin.
+The internal `current_object`, `auto_segmentation` and `committed_objects` output layers are not listed; duplicate one in napari first if you intentionally want to reuse it as an input.
+Use the checkboxes or the `Select all` and `Unselect all` buttons to choose inputs.
+All nonzero label IDs are treated as objects: equal IDs from multiple selected layers are unioned, while overlapping different IDs must be resolved in napari before continuing.
+The selected layers must have the same data-to-world transform as the selected image.
+An input that is exactly one trailing pixel larger on one or more axes is cropped to the image extent, which accommodates new Labels layers created by napari; other shape mismatches are rejected and micro-sam does not resample them.
+
+When mask inputs are selected, `Segment Object` (or `S`) uses every nonzero ID as a separate SAM mask prompt and writes the merged result to `current_object`.
+When no mask input is selected, the same action uses the normal point and shape prompt workflow.
+Point, scribble and shape corrections carry their own target object ID, so several input objects can receive different corrections in one operation.
+Select prompts in napari and use `Target object ID` to assign them; with no prompt selected, the control sets the target for new corrections.
+Every correction must target one of the IDs in the selected input layers.
+The `Prompt type` control sets selected or new points and scribbles to `Positive (include)` or `Negative (exclude)`.
+Rectangles, ellipses and polygons are always positive because SAM box and dense shape prompts do not have negative semantics.
+The normal `Commit` action then replaces those IDs in `committed_objects` without renumbering them.
+SAM converts each 2D mask prompt to its 256 by 256 low-resolution mask representation, so fine structures may be lost during refinement.
+The source Labels layers are never changed.
+
+`Commit selected masks unchanged` bypasses SAM and the embedding computation.
+Use it when an input mask is already satisfactory.
+It preserves the input IDs and atomically unions equal IDs into `committed_objects`; a collision with a different committed ID is rejected.
+For 3D data, this copies the complete Labels volume without changing its slices.
+See [Using existing 3D segmentations](#using-existing-3d-segmentations) for the refinement choices available for a z-stack.
+
 Check out [the video tutorial](https://youtu.be/9xjJBg_Bfuc) for an in-depth explanation on how to use this tool.
 
 
@@ -80,7 +106,51 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 7. The menu for committing the current object.
 8. The menu for clearing the current annotations. If `all slices` is set all annotations will be cleared, otherwise they are only cleared for the current slice.
 
-You can only segment one object at a time using the interactive segmentation functionality with this tool.
+In the normal prompt-only workflow, interactive 3D segmentation handles one object at a time.
+Existing segmentation inputs are different: `Segment Object` processes every nonzero Labels ID independently and merges the results while preserving the IDs.
+
+### Using existing 3D segmentations
+
+A selected 3D Labels layer is a full `(z, y, x)` volume aligned with the selected image.
+IDs are interpreted across the complete volume, so every voxel with label `7`, for example, belongs to object ID 7 even when the object has gaps along z.
+Prepare and relabel the data in napari before selecting it if this is not the intended meaning.
+
+SAM does not receive this volume as one native 3D mask prompt.
+The plugin splits each object into 2D masks and handles the z-axis as a sequence: SAM-v1 refines or projects masks one slice at a time, while SAM2 treats z like video frames.
+Neither method understands physical depth or voxel spacing as a 3D model would.
+
+If the input is already correct, use `Commit selected masks unchanged`.
+This copies the complete volume without running SAM, computing embeddings or converting masks to SAM's 256 by 256 prompt representation.
+It is both faster and lossless compared with refinement.
+
+If the masks need correction, choose one of the following `3D behavior` options and press `Segment Object` or `S`.
+While Labels inputs are selected, this choice controls how the volume is processed; `Batched` and `Apply to Volume` do not affect mask refinement.
+`Apply to Volume` still controls whether `Clear Annotations` clears the current slice or the complete volume.
+
+#### Refine existing slices only
+
+This option refines every slice where each object ID already has pixels.
+It does not create the object on empty slices, so the input z-extent and any gaps are preserved.
+Corrections for an object must be placed on a slice where that object ID is already present.
+Choose this for a complete 3D segmentation whose slice coverage is correct but whose 2D boundaries need adjustment.
+
+#### Refine and extend through z
+
+This option is intended for a sparse or incomplete 3D segmentation.
+For each object ID, the plugin chooses the slice with the largest mask area as the initial seed; if several slices tie, it chooses the lowest z-index.
+Slices with corrections assigned to that ID are also refined and used as anchors.
+Other occupied input slices are not used as anchors, which keeps the behavior deterministic and easy to understand.
+The object is then extended independently through the selected z-range, so this mode can fill missing slices or expand beyond the original z-extent.
+Because every object is propagated independently, results may drift or overlap and should be reviewed before committing.
+
+SAM-v1 extends the result with slice-to-slice mask projection and may stop when overlap between adjacent slices becomes too small.
+SAM2 conditions its video predictor with the refined anchor masks and propagates them as frames.
+The propagation z-range is an inclusive hard limit for both model families.
+`Stop after empty slices` is used only by SAM2 and is ignored by SAM-v1.
+
+As a practical rule, commit a correct input unchanged, use `Refine existing slices only` when only boundaries need work, and use `Refine and extend through z` when slices are missing.
+In both refinement modes, every 2D input mask is converted to SAM's 256 by 256 low-resolution mask representation, so very thin or fine structures may be lost.
+The source Labels layers are never modified; the refined result is written to `current_object` for review.
 
 Check out [the video tutorial](https://youtu.be/nqpyNQSyu74) for an in-depth explanation on how to use this tool.
 

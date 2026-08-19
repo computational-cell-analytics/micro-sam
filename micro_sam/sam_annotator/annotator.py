@@ -251,6 +251,10 @@ class Annotator(_AnnotatorBase):
         if ndim != self._ndim:
             self._rebuild_for_ndim(ndim)
 
+        interactive = self._widgets.get("interactive")
+        if interactive is not None:
+            interactive._refresh_mask_layer_list()
+
     def _on_ndim_mode_changed(self, *args):
         """Re-interpret the current image when the 'image dimensions' override changes.
 
@@ -295,7 +299,29 @@ class Annotator(_AnnotatorBase):
 
     def _update_image(self, segmentation_result=None):
         """Update the image and load AMG state for 3D."""
+        # Direct mask commits are allowed before embeddings exist. Preserve them when embedding
+        # initialization updates the helper layers for the same selected image. A real image-layer
+        # change rebuilds the layers first, so this marker cannot leak to another image.
+        preserved_direct_commit = False
+        image_layer = self._embedding_widget.image_selection.get_value()
+        if segmentation_result is None and "committed_objects" in self._viewer.layers:
+            committed = self._viewer.layers["committed_objects"]
+            direct_commit = committed.metadata.get("micro_sam_direct_mask_commit")
+            if (
+                direct_commit is not None
+                and image_layer is not None
+                and direct_commit.get("image_layer_id") == id(image_layer)
+                and tuple(committed.data.shape) == tuple(AnnotatorState().image_shape or ())
+            ):
+                segmentation_result = np.asarray(committed.data).copy()
+                preserved_direct_commit = True
         super()._update_image(segmentation_result=segmentation_result)
+
+        if preserved_direct_commit:
+            committed = self._viewer.layers["committed_objects"]
+            for transform_name in ("scale", "translate", "rotate", "shear", "affine"):
+                if hasattr(image_layer, transform_name):
+                    setattr(committed, transform_name, getattr(image_layer, transform_name))
 
         # Load the AMG state from the embedding path (3D only)
         if self._ndim == 3:

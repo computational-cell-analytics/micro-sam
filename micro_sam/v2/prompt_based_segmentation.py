@@ -108,6 +108,74 @@ def _crop_mask_to_tile(tiling, halo, tile_id, mask):
     return np.asarray(mask)[y0:y1, x0:x1]
 
 
+def _validate_pre_refined_masks(volume_shape, frame_ids, masks, object_id):
+    """Validate full-resolution masks before they are added to the persistent video state."""
+    if masks is None:
+        return []
+    if isinstance(masks, np.ndarray) and masks.ndim == 2:
+        masks = [masks]
+    else:
+        masks = list(masks)
+    if len(masks) == 0:
+        return []
+
+    def broadcast_ids(value, default, name):
+        value = default if value is None else value
+        if isinstance(value, (list, tuple, np.ndarray)):
+            values = np.asarray(value)
+            if values.ndim == 0:
+                values = [values.item()]
+            elif values.ndim == 1:
+                values = values.tolist()
+            else:
+                raise ValueError(f"'{name}' must be a scalar or one-dimensional sequence.")
+            if len(values) == 1:
+                values = values * len(masks)
+            if len(values) != len(masks):
+                raise ValueError(f"Expected 1 or {len(masks)} {name}, got {len(values)}.")
+        else:
+            values = [value] * len(masks)
+
+        if any(isinstance(value, (bool, np.bool_)) or not isinstance(value, (int, np.integer)) for value in values):
+            raise TypeError(f"'{name}' must contain integer IDs.")
+        return [int(value) for value in values]
+
+    frame_ids = broadcast_ids(frame_ids, None, "frame_ids")
+    object_ids = broadcast_ids(object_id, 1, "object_id")
+    depth, height, width = (int(size) for size in volume_shape)
+
+    prepared = []
+    keys = set()
+    for frame_id, mask, obj_id in zip(frame_ids, masks, object_ids):
+        if not 0 <= frame_id < depth:
+            raise ValueError(f"Frame ID {frame_id} is outside the valid range [0, {depth - 1}].")
+        if obj_id <= 0:
+            raise ValueError(f"Object ID must be positive, got {obj_id}.")
+
+        mask = np.asarray(mask)
+        if mask.ndim != 2 or mask.shape != (height, width):
+            raise ValueError(
+                f"Each pre-refined mask must have shape {(height, width)}, got {mask.shape}."
+            )
+        if not np.issubdtype(mask.dtype, np.bool_) and not np.issubdtype(mask.dtype, np.number):
+            raise TypeError("Pre-refined masks must have a boolean or numeric dtype.")
+        if not np.isin(mask, (0, 1)).all():
+            raise ValueError("Pre-refined masks must be binary (contain only 0 and 1).")
+        mask = mask.astype(bool, copy=False)
+        if not mask.any():
+            raise ValueError("Pre-refined masks must contain at least one foreground pixel.")
+
+        key = (obj_id, frame_id)
+        if key in keys:
+            raise ValueError(
+                f"Only one pre-refined mask can be supplied for object {obj_id} on frame {frame_id}."
+            )
+        keys.add(key)
+        prepared.append((frame_id, mask, obj_id))
+
+    return prepared
+
+
 def _clone_image_predictor(predictor, model: torch.nn.Module):
     """Copy an image predictor onto a replica model, with per-image state cleared."""
     from micro_sam.v2.util import configure_image_predictor
@@ -477,6 +545,7 @@ class PromptableSegmentation3D:
         self._pushed_points = {}  # (object_id, frame_id) -> set of (y, x, label)
         self._pushed_boxes = {}  # (object_id, frame_id) -> set of box corner tuples
         self._pushed_masks = {}  # (object_id, frame_id) -> set of mask content digests
+        self._pushed_pre_refined_masks = {}  # (object_id, frame_id) -> set of mask content digests
         # Signature of the prompt set of the previous round, see 'sync_prompt_state'.
         self._prompt_signatures = set()
         self._image_style_trafo = None  # lazily built resize-longest transform for per-slice mask refinement
@@ -493,6 +562,7 @@ class PromptableSegmentation3D:
         self._pushed_points = {}
         self._pushed_boxes = {}
         self._pushed_masks = {}
+        self._pushed_pre_refined_masks = {}
         self._prompt_signatures = set()
 
     def sync_prompt_state(self, signatures):
@@ -689,6 +759,43 @@ class PromptableSegmentation3D:
                 obj_id=obj_id,
                 mask=self._prepare_mask(refined),
             )
+
+    def add_pre_refined_masks(
+        self,
+        frame_ids: Union[int, List[int]],
+        masks: Optional[List[np.ndarray]] = None,
+        object_id: Optional[Union[int, List[int]]] = None,
+    ):
+        """Condition propagation directly on already-refined full-resolution binary masks.
+
+        Unlike :meth:`add_mask_prompts`, this method does not run the image-style SAM2 decoder.
+        The masks are assumed to be final seed-frame segmentations and are passed directly to the
+        video predictor's mask-conditioning path.
+        """
+        prepared = _validate_pre_refined_masks(self.volume.shape, frame_ids, masks, object_id)
+        if not prepared:
+            return
+
+        pending = []
+        for frame_id, mask, obj_id in prepared:
+            signature = hashlib.sha1(np.ascontiguousarray(mask).tobytes()).hexdigest()
+            if signature not in self._pushed_pre_refined_masks.get((obj_id, frame_id), set()):
+                pending.append((frame_id, mask, obj_id, signature))
+
+        try:
+            for frame_id, mask, obj_id, signature in pending:
+                self.predictor.add_new_mask(
+                    inference_state=self.inference_state,
+                    frame_idx=frame_id,
+                    obj_id=obj_id,
+                    mask=self._prepare_mask(mask),
+                )
+                self._pushed_pre_refined_masks.setdefault((obj_id, frame_id), set()).add(signature)
+        except Exception:
+            # A batch can fail after earlier masks have changed the persistent SAM2 state. Reset all
+            # state so bookkeeping and predictor conditioning cannot disagree on the next run.
+            self.reset_predictor()
+            raise
 
     def _propagate_in_direction(
         self, reverse, update_progress=None, early_stop_patience=None, z_range=None, seen_frames=None
@@ -1258,6 +1365,45 @@ class TiledPromptableSegmentation3D:
                     frame_ids=frame_ids, masks=[_crop_mask_to_tile(self.tiling, self.halo, tid, mask)],
                     object_id=obj_id,
                 )
+
+    def add_pre_refined_masks(self, frame_ids, masks=None, object_id=None):
+        """Condition active tile columns directly on already-refined full-resolution masks.
+
+        A tile is active only when foreground intersects its halo-free inner block. The full-plane
+        mask is cropped to that tile's outer block before it is forwarded with the original object
+        and frame IDs.
+        """
+        prepared = _validate_pre_refined_masks(self.shape, frame_ids, masks, object_id)
+        if not prepared:
+            return
+
+        tile_jobs = []
+        for frame_id, mask, obj_id in prepared:
+            for tile_id in range(self.tiling.number_of_blocks):
+                block = self.tiling.get_block_with_halo(tile_id, list(self.halo))
+                inner = block.inner_block
+                inner_slice = (
+                    slice(int(inner.begin[0]), int(inner.end[0])),
+                    slice(int(inner.begin[1]), int(inner.end[1])),
+                )
+                if not mask[inner_slice].any():
+                    continue
+                tile_jobs.append((
+                    tile_id,
+                    frame_id,
+                    _crop_mask_to_tile(self.tiling, self.halo, tile_id, mask),
+                    obj_id,
+                ))
+
+        try:
+            for tile_id, frame_id, local_mask, obj_id in tile_jobs:
+                self._get_segmenter(tile_id).add_pre_refined_masks(
+                    frame_ids=frame_id, masks=[local_mask], object_id=obj_id,
+                )
+        except Exception:
+            # Avoid retaining only a prefix of the tile-conditioning jobs.
+            self.reset_predictor()
+            raise
 
     def predict(self, update_progress=None, early_stop_patience=None, z_range=None):
         """Propagate the prompts in every active tile and stitch the results into the full volume.

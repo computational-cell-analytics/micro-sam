@@ -13,11 +13,17 @@ from micro_sam.v2.prompt_based_segmentation import (
 
 
 class FakeTileSegmenter:
+    def __init__(self):
+        self.pre_refined_calls = []
+
     def add_point_prompts(self, **kwargs):
         pass
 
     def add_box_prompts(self, **kwargs):
         pass
+
+    def add_pre_refined_masks(self, **kwargs):
+        self.pre_refined_calls.append(kwargs)
 
 
 def test_promptable_segmentation_2d_normalizes_raw(monkeypatch):
@@ -232,6 +238,8 @@ class RecordingPredictor:
 
     def __init__(self):
         self.calls = []
+        self.mask_calls = []
+        self.image_size = 32
 
     def add_new_points_or_box(self, inference_state, frame_idx, obj_id, clear_old_points=False,
                               points=None, labels=None, box=None):
@@ -246,6 +254,12 @@ class RecordingPredictor:
     def reset_state(self, inference_state):
         pass
 
+    def add_new_mask(self, inference_state, frame_idx, obj_id, mask):
+        self.mask_calls.append({
+            "frame_idx": frame_idx, "obj_id": obj_id, "mask": np.asarray(mask).copy(),
+        })
+        return None, [obj_id], torch.zeros((1, 1, 32, 32))
+
 
 def make_recording_segmenter():
     segmenter = PromptableSegmentation3D.__new__(PromptableSegmentation3D)
@@ -255,6 +269,7 @@ def make_recording_segmenter():
     segmenter._pushed_points = {}
     segmenter._pushed_boxes = {}
     segmenter._pushed_masks = {}
+    segmenter._pushed_pre_refined_masks = {}
     segmenter._prompt_signatures = set()
     return segmenter
 
@@ -377,6 +392,95 @@ def test_sync_prompt_state_replays_after_a_point_is_relabelled():
 
     assert len(segmenter.predictor.calls) == 2
     assert segmenter.predictor.calls[-1]["labels"] == [0]
+
+
+def test_add_pre_refined_mask_conditions_without_decoding():
+    segmenter = make_recording_segmenter()
+    segmenter._image_style_predict = lambda *args, **kwargs: pytest.fail("The mask was decoded again.")
+    mask = np.zeros((32, 32), dtype=bool)
+    mask[5:12, 7:14] = True
+
+    segmenter.add_pre_refined_masks(frame_ids=3, masks=[mask], object_id=17)
+    segmenter.add_pre_refined_masks(frame_ids=3, masks=[mask], object_id=17)
+
+    assert len(segmenter.predictor.mask_calls) == 1
+    call = segmenter.predictor.mask_calls[0]
+    assert call["frame_idx"] == 3
+    assert call["obj_id"] == 17
+    np.testing.assert_array_equal(call["mask"], mask)
+
+
+def test_add_mask_prompts_still_decodes_before_conditioning():
+    segmenter = make_recording_segmenter()
+    raw_mask = np.zeros((32, 32), dtype=bool)
+    raw_mask[2:8, 3:9] = True
+    refined_mask = np.zeros_like(raw_mask)
+    refined_mask[10:20, 11:21] = True
+    decodes = []
+
+    def image_style_predict(frame_id, **kwargs):
+        decodes.append((frame_id, kwargs))
+        return refined_mask
+
+    segmenter._image_style_predict = image_style_predict
+    segmenter.add_mask_prompts(frame_ids=4, masks=[raw_mask], object_id=23)
+
+    assert len(decodes) == 1
+    assert decodes[0][0] == 4
+    np.testing.assert_array_equal(decodes[0][1]["mask"], raw_mask)
+    assert len(segmenter.predictor.mask_calls) == 1
+    assert segmenter.predictor.mask_calls[0]["obj_id"] == 23
+    np.testing.assert_array_equal(segmenter.predictor.mask_calls[0]["mask"], refined_mask)
+
+
+@pytest.mark.parametrize(
+    "frame_id, object_id, mask, error",
+    [
+        (8, 1, np.ones((32, 32), dtype=bool), "outside the valid range"),
+        (1, 0, np.ones((32, 32), dtype=bool), "must be positive"),
+        (1, 1, np.ones((16, 32), dtype=bool), "must have shape"),
+        (1, 1, np.zeros((32, 32), dtype=bool), "foreground pixel"),
+        (1, 1, np.full((32, 32), 2, dtype=np.uint8), "must be binary"),
+    ],
+)
+def test_add_pre_refined_masks_validates_before_conditioning(frame_id, object_id, mask, error):
+    segmenter = make_recording_segmenter()
+
+    with pytest.raises(ValueError, match=error):
+        segmenter.add_pre_refined_masks(frame_ids=frame_id, masks=[mask], object_id=object_id)
+
+    assert segmenter.predictor.mask_calls == []
+
+
+def test_tiled_add_pre_refined_masks_routes_exact_active_tiles_and_crops():
+    segmenter = make_tiled_segmenter()
+    mask = np.zeros((16, 16), dtype=bool)
+    mask[1:3, 2:5] = True
+    mask[11:14, 12:15] = True
+
+    segmenter.add_pre_refined_masks(frame_ids=6, masks=[mask], object_id=31)
+
+    assert set(segmenter._segmenters) == {0, 3}
+    for tile_id, expected in ((0, mask[:8, :8]), (3, mask[8:, 8:])):
+        calls = segmenter._segmenters[tile_id].pre_refined_calls
+        assert len(calls) == 1
+        assert calls[0]["frame_ids"] == 6
+        assert calls[0]["object_id"] == 31
+        np.testing.assert_array_equal(calls[0]["masks"][0], expected)
+
+
+def test_tiled_add_pre_refined_masks_validates_all_inputs_before_creating_tiles():
+    segmenter = make_tiled_segmenter()
+    valid = np.zeros((16, 16), dtype=bool)
+    valid[1:3, 1:3] = True
+    invalid = np.zeros((16, 16), dtype=bool)
+
+    with pytest.raises(ValueError, match="foreground pixel"):
+        segmenter.add_pre_refined_masks(
+            frame_ids=[1, 2], masks=[valid, invalid], object_id=[7, 8],
+        )
+
+    assert segmenter._segmenters == {}
 
 
 def test_segment_slice_clears_the_pushed_prompt_bookkeeping():

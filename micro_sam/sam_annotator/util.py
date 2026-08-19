@@ -4,7 +4,7 @@ import warnings
 from glob import glob
 from pathlib import Path
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import h5py
 import numpy as np
@@ -27,6 +27,9 @@ SCRIBBLE_SHAPE_TYPES = ("path", "line")
 
 SCRIBBLE_DRAW_MODES = ("add_path", "add_polyline", "add_line")
 """Napari Shapes modes that create open scribble prompts."""
+
+UNASSIGNED_OBJECT_ID = "0"
+"""Sentinel stored on prompts that have not been assigned to an input mask object."""
 
 
 #
@@ -161,16 +164,21 @@ def set_prompt_label(layer, new_label, relabel_selected: bool = True):
         # and the user has moved to the other layer.
         layer.selected_data = set()
 
-    current_properties = layer.current_properties
+    selected_shapes = set(layer.selected_data) if is_shapes and relabel_selected else set()
+    if selected_shapes:
+        layer.selected_data = set()
+    current_properties = dict(layer.current_properties)
     current_properties["label"] = np.array([new_label])
     layer.current_properties = current_properties
+    if selected_shapes:
+        layer.selected_data = selected_shapes
 
-    if relabel_selected and is_shapes and layer.selected_data:
+    if selected_shapes:
         properties = dict(layer.properties)
         labels = np.asarray(properties.get("label", []), dtype=object).copy()
         shape_types = list(layer.shape_type)
         if len(labels) == len(shape_types):
-            for index in layer.selected_data:
+            for index in selected_shapes:
                 if shape_types[index] in SCRIBBLE_SHAPE_TYPES:
                     labels[index] = new_label
             properties["label"] = labels
@@ -178,9 +186,11 @@ def set_prompt_label(layer, new_label, relabel_selected: bool = True):
 
             # Keep the drawing default on the requested label. Updating the feature table above
             # may infer a current value from the edited selection.
-            current_properties = layer.current_properties
+            layer.selected_data = set()
+            current_properties = dict(layer.current_properties)
             current_properties["label"] = np.array([new_label])
             layer.current_properties = current_properties
+            layer.selected_data = selected_shapes
 
     layer.refresh()
     if isinstance(layer, napari.layers.Shapes):
@@ -192,6 +202,73 @@ def set_prompt_label(layer, new_label, relabel_selected: bool = True):
         if any(len(values) != n_shapes for values in layer.properties.values()):
             return
     layer.refresh_colors()
+
+
+def ensure_prompt_object_ids(layer) -> None:
+    """Add the per-prompt ``object_id`` property to an existing prompt layer.
+
+    The property is stored as a string, matching the tracking annotator's ID properties and
+    avoiding pandas categorical warnings in napari. ``0`` means that the prompt is unassigned.
+
+    Args:
+        layer: A napari Points or Shapes prompt layer.
+    """
+    current_properties = dict(layer.current_properties)
+    needs_current_object_id = "object_id" not in current_properties
+    if "object_id" not in layer.properties:
+        properties = dict(layer.properties)
+        properties["object_id"] = np.full(
+            len(layer.data), UNASSIGNED_OBJECT_ID, dtype=object,
+        )
+        layer.properties = properties
+
+    if needs_current_object_id:
+        current_properties["object_id"] = np.array([UNASSIGNED_OBJECT_ID])
+        selected_data = set(layer.selected_data)
+        if selected_data:
+            layer.selected_data = set()
+        layer.current_properties = current_properties
+        if selected_data:
+            layer.selected_data = selected_data
+
+
+def set_prompt_object_id(layer, object_id: int, relabel_selected: bool = True) -> None:
+    """Set the target object for selected and future prompts in a napari layer.
+
+    Args:
+        layer: A napari Points or Shapes prompt layer.
+        object_id: The positive input segmentation ID to assign.
+        relabel_selected: Whether selected prompts also take the new ID. When false, only the
+            drawing default is changed.
+    """
+    object_id = int(object_id)
+    if object_id <= 0:
+        raise ValueError("Prompt object IDs must be positive.")
+
+    ensure_prompt_object_ids(layer)
+    object_id_string = str(object_id)
+    valid_selection = {
+        index for index in layer.selected_data if 0 <= index < len(layer.data)
+    }
+    if valid_selection != layer.selected_data:
+        layer.selected_data = valid_selection
+
+    current_properties = dict(layer.current_properties)
+    if relabel_selected and valid_selection:
+        properties = dict(layer.properties)
+        object_ids = np.asarray(properties["object_id"], dtype=object).copy()
+        for index in valid_selection:
+            object_ids[index] = object_id_string
+        properties["object_id"] = object_ids
+        layer.properties = properties
+    current_properties["object_id"] = np.array([object_id_string])
+    selected_data = set(layer.selected_data)
+    if selected_data:
+        layer.selected_data = set()
+    layer.current_properties = current_properties
+    if selected_data:
+        layer.selected_data = selected_data
+    layer.refresh()
 
 
 def relabels_selection(layer, viewer) -> bool:
@@ -317,8 +394,288 @@ def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=T
 #
 
 
+@dataclass
+class MaskInputData:
+    """Validated and merged Labels layers used as dense mask inputs.
+
+    Attributes:
+        labels: The merged 2D or 3D label image. Equal nonzero IDs from different source layers
+            are unioned and unequal IDs never overlap.
+        object_ids: The sorted nonzero IDs in ``labels``.
+        source_layers: The source Labels layer objects, retained for UI provenance.
+        source_names: The source layer names at collection time.
+        cropped_source_names: Source layers that had one trailing pixel cropped on at least one
+            axis to match the image extent.
+        occupied_slices: For 3D inputs, the sorted z-slices occupied by each object ID. This is
+            empty for 2D inputs.
+    """
+
+    labels: np.ndarray
+    object_ids: Tuple[int, ...]
+    source_layers: Tuple[object, ...]
+    source_names: Tuple[str, ...]
+    cropped_source_names: Tuple[str, ...]
+    occupied_slices: Dict[int, Tuple[int, ...]]
+
+
+def _spatial_image_shape(image_layer) -> Tuple[int, ...]:
+    """Return the spatial shape of a napari image, excluding an RGB channel axis."""
+    shape = tuple(np.shape(image_layer.data))
+    if bool(getattr(image_layer, "rgb", False)):
+        if len(shape) < 3:
+            raise ValueError(
+                f"RGB image layer '{getattr(image_layer, 'name', '<unnamed>')}' has invalid shape {shape}."
+            )
+        shape = shape[:-1]
+    if len(shape) not in (2, 3):
+        raise ValueError(f"Mask inputs require a 2D or 3D image, got spatial shape {shape}.")
+    return shape
+
+
+def _transform_signature(layer, ndim: int) -> np.ndarray:
+    """Sample a layer's data-to-world transform at the origin and basis vectors."""
+    points = np.concatenate([np.zeros((1, ndim)), np.eye(ndim)], axis=0)
+    if hasattr(layer, "data_to_world"):
+        try:
+            world = np.stack([np.asarray(layer.data_to_world(tuple(point)), dtype="float64") for point in points])
+            if world.shape == points.shape:
+                return world
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+    # This fallback keeps the helper usable with lightweight layer-like objects and covers the
+    # common scale/translate case. Real napari layers take the public data_to_world path above,
+    # which also includes rotate, shear and affine.
+    scale = np.asarray(getattr(layer, "scale", np.ones(ndim)), dtype="float64")
+    translate = np.asarray(getattr(layer, "translate", np.zeros(ndim)), dtype="float64")
+    if scale.shape != (ndim,) or translate.shape != (ndim,):
+        raise ValueError(
+            f"Layer '{getattr(layer, 'name', '<unnamed>')}' has a transform with incompatible dimensionality."
+        )
+    return points * scale + translate
+
+
+def _validated_label_array(
+    data,
+    name: str,
+    expected_shape: Tuple[int, ...],
+    allow_trailing_crop: bool = False,
+) -> np.ndarray:
+    """Validate one label array and convert it losslessly to uint32."""
+    labels = np.asarray(data)
+    if labels.shape != expected_shape:
+        deltas = (
+            tuple(actual - expected for actual, expected in zip(labels.shape, expected_shape))
+            if labels.ndim == len(expected_shape)
+            else ()
+        )
+        can_crop = allow_trailing_crop and deltas and all(delta in (0, 1) for delta in deltas)
+        if can_crop:
+            labels = labels[tuple(slice(0, size) for size in expected_shape)]
+        else:
+            raise ValueError(
+                f"Mask layer '{name}' has shape {labels.shape}, but the selected image has spatial shape "
+                f"{expected_shape}. Only one trailing pixel per axis can be cropped automatically; "
+                "mask inputs are otherwise not resampled."
+            )
+    if labels.dtype == np.bool_:
+        return labels.astype("uint32", copy=False)
+    if not np.issubdtype(labels.dtype, np.integer):
+        raise ValueError(f"Mask layer '{name}' must contain boolean or integer labels, got dtype {labels.dtype}.")
+
+    if labels.size:
+        minimum, maximum = int(labels.min()), int(labels.max())
+        if minimum < 0:
+            raise ValueError(f"Mask layer '{name}' contains negative label ID {minimum}.")
+        if maximum > np.iinfo("uint32").max:
+            raise ValueError(
+                f"Mask layer '{name}' contains label ID {maximum}, which exceeds the uint32 limit "
+                f"{np.iinfo('uint32').max}."
+            )
+    return labels.astype("uint32", copy=False)
+
+
+def collect_mask_inputs(layers: Sequence[object], image_layer) -> MaskInputData:
+    """Validate and merge selected Labels layers against the selected image.
+
+    Equal IDs are unioned across layers. Unequal nonzero IDs at the same pixel are rejected rather
+    than resolved implicitly. Data-to-world transforms must match (within floating point tolerance).
+    A single surplus pixel at the trailing edge of any axis is cropped to accommodate napari's
+    create-new-Labels behavior; other shape mismatches are rejected and no resampling is performed.
+    """
+    layers = tuple(layers)
+    if not layers:
+        raise ValueError("Select at least one Labels layer as a mask input.")
+
+    image_shape = _spatial_image_shape(image_layer)
+    image_transform = _transform_signature(image_layer, len(image_shape))
+    merged = np.zeros(image_shape, dtype="uint32")
+    owner = np.full(image_shape, -1, dtype="int64")
+    names = tuple(str(getattr(layer, "name", f"layer {index}")) for index, layer in enumerate(layers))
+    cropped_names = []
+
+    for index, (layer, name) in enumerate(zip(layers, names)):
+        source_shape = tuple(np.shape(layer.data))
+        labels = _validated_label_array(
+            layer.data, name, image_shape, allow_trailing_crop=True,
+        )
+        if source_shape != image_shape:
+            cropped_names.append(name)
+        layer_transform = _transform_signature(layer, len(image_shape))
+        if not np.allclose(layer_transform, image_transform, rtol=1e-7, atol=1e-8):
+            raise ValueError(
+                f"Mask layer '{name}' is not aligned with image layer "
+                f"'{getattr(image_layer, 'name', '<unnamed>')}'. Their data-to-world transforms differ; "
+                "mask inputs are not resampled."
+            )
+
+        conflict = (merged != 0) & (labels != 0) & (merged != labels)
+        if np.any(conflict):
+            coordinates = np.argwhere(conflict)
+            first = tuple(int(value) for value in coordinates[0])
+            previous_index = int(owner[first])
+            raise ValueError(
+                f"Mask layers '{names[previous_index]}' (ID {int(merged[first])}) and '{name}' "
+                f"(ID {int(labels[first])}) overlap with different nonzero IDs on "
+                f"{len(coordinates)} pixels; first conflict at coordinate {first}. "
+                "Resolve the label IDs or overlap in napari before using these layers."
+            )
+
+        foreground = labels != 0
+        new_pixels = foreground & (merged == 0)
+        merged[new_pixels] = labels[new_pixels]
+        owner[new_pixels] = index
+
+    object_ids = tuple(int(value) for value in np.unique(merged) if value != 0)
+    if not object_ids:
+        raise ValueError("The selected mask input layers do not contain any nonzero label IDs.")
+
+    occupied_slices = {}
+    if merged.ndim == 3:
+        for object_id in object_ids:
+            occupied = np.flatnonzero(np.any(merged == object_id, axis=(1, 2)))
+            occupied_slices[object_id] = tuple(int(index) for index in occupied)
+
+    return MaskInputData(
+        labels=merged,
+        object_ids=object_ids,
+        source_layers=layers,
+        source_names=names,
+        cropped_source_names=tuple(cropped_names),
+        occupied_slices=occupied_slices,
+    )
+
+
+def iter_mask_input_masks(mask_inputs: MaskInputData) -> Iterator[Tuple[int, Optional[int], np.ndarray]]:
+    """Yield ``(object_id, z, binary_mask)`` for every logical 2D mask prompt."""
+    if mask_inputs.labels.ndim == 2:
+        for object_id in mask_inputs.object_ids:
+            yield object_id, None, mask_inputs.labels == object_id
+        return
+
+    if mask_inputs.labels.ndim != 3:
+        raise ValueError(f"Mask inputs must be 2D or 3D, got shape {mask_inputs.labels.shape}.")
+    for object_id in mask_inputs.object_ids:
+        for z in mask_inputs.occupied_slices[object_id]:
+            yield object_id, z, mask_inputs.labels[z] == object_id
+
+
+def _validated_uint32_labels(labels, name: str, shape: Optional[Tuple[int, ...]] = None) -> np.ndarray:
+    """Validate an internal label image, optionally against a required shape."""
+    array = np.asarray(labels)
+    expected_shape = tuple(array.shape) if shape is None else shape
+    return _validated_label_array(array, name, expected_shape)
+
+
+def merge_refined_mask_candidates(
+    original_labels: np.ndarray, candidates: Mapping[int, np.ndarray]
+) -> np.ndarray:
+    """Merge overlapping refined binary masks deterministically.
+
+    At each pixel the original source owner wins when its candidate still covers that pixel.
+    Otherwise the smallest covering numeric ID wins. Candidate mapping order has no effect.
+    """
+    original = _validated_uint32_labels(original_labels, "original labels")
+    shape = tuple(original.shape)
+    normalized = {}
+    for raw_object_id, candidate in candidates.items():
+        object_id = int(raw_object_id)
+        if object_id <= 0 or object_id > np.iinfo("uint32").max:
+            raise ValueError(f"Candidate object ID {object_id} is outside the valid uint32 foreground range.")
+        candidate = np.asarray(candidate)
+        if candidate.shape != shape:
+            raise ValueError(
+                f"Candidate for object ID {object_id} has shape {candidate.shape}, expected {shape}."
+            )
+        normalized[object_id] = candidate.astype(bool, copy=False)
+
+    result = np.zeros(shape, dtype="uint32")
+    # Sorted assignment establishes the smallest-ID fallback without depending on mapping order.
+    for object_id in sorted(normalized):
+        mask = normalized[object_id]
+        result[mask & (result == 0)] = object_id
+    # Original ownership has higher priority than the fallback.
+    for object_id in sorted(normalized):
+        result[(original == object_id) & normalized[object_id]] = object_id
+    return result
+
+
+def merge_labels_for_direct_commit(destination: np.ndarray, incoming: np.ndarray) -> np.ndarray:
+    """Return a direct-commit merge without mutating either input label image."""
+    destination = _validated_uint32_labels(destination, "committed labels")
+    incoming = _validated_uint32_labels(incoming, "incoming labels", tuple(destination.shape))
+    conflict = (destination != 0) & (incoming != 0) & (destination != incoming)
+    if np.any(conflict):
+        coordinates = np.argwhere(conflict)
+        first = tuple(int(value) for value in coordinates[0])
+        raise ValueError(
+            f"Incoming ID {int(incoming[first])} overlaps committed ID {int(destination[first])} on "
+            f"{len(coordinates)} pixels; first conflict at coordinate {first}."
+        )
+
+    result = destination.copy()
+    foreground = (result == 0) & (incoming != 0)
+    result[foreground] = incoming[foreground]
+    return result
+
+
+def merge_labels_for_refined_commit(
+    destination: np.ndarray, refined: np.ndarray, object_ids: Sequence[int]
+) -> np.ndarray:
+    """Replace authoritative destination objects with refined masks, preserving their IDs."""
+    destination = _validated_uint32_labels(destination, "committed labels")
+    refined = _validated_uint32_labels(refined, "refined labels", tuple(destination.shape))
+    authoritative_ids = tuple(sorted({int(object_id) for object_id in object_ids}))
+    if any(object_id <= 0 or object_id > np.iinfo("uint32").max for object_id in authoritative_ids):
+        raise ValueError("Authoritative object IDs must be nonzero uint32 values.")
+
+    refined_ids = tuple(int(value) for value in np.unique(refined) if value != 0)
+    if refined_ids != authoritative_ids:
+        missing = sorted(set(authoritative_ids).difference(refined_ids))
+        unexpected = sorted(set(refined_ids).difference(authoritative_ids))
+        raise ValueError(
+            "The refined result IDs do not match its authoritative source IDs. "
+            f"Missing IDs: {missing}; unexpected IDs: {unexpected}."
+        )
+
+    result = destination.copy()
+    if authoritative_ids:
+        result[np.isin(result, authoritative_ids)] = 0
+    conflict = (result != 0) & (refined != 0)
+    if np.any(conflict):
+        coordinates = np.argwhere(conflict)
+        first = tuple(int(value) for value in coordinates[0])
+        raise ValueError(
+            f"Refined ID {int(refined[first])} overlaps remaining committed ID {int(result[first])} on "
+            f"{len(coordinates)} pixels; first conflict at coordinate {first}."
+        )
+    result[refined != 0] = refined[refined != 0]
+    return result
+
+
 def point_layer_to_prompts(
     layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True, exclude_states=None,
+    object_id=None,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Extract point prompts for SAM from a napari point layer.
 
@@ -330,6 +687,8 @@ def point_layer_to_prompts(
             as stop annotation or just returned as normal prompt.
         exclude_states: Track-states to drop (e.g. ('division',)); such points mark a lineage
             event rather than a segmentation prompt and must not be fed to the predictor.
+        object_id: Optional input mask object ID. When given, only points assigned to this ID are
+            returned.
 
     Returns:
         The point coordinates for the prompts.
@@ -344,6 +703,11 @@ def point_layer_to_prompts(
     keep = np.ones(len(points), dtype=bool)
     if exclude_states is not None and "state" in layer.properties:
         keep = ~np.isin(np.asarray(layer.properties["state"]), list(exclude_states))
+    if object_id is not None:
+        if "object_id" not in layer.properties:
+            raise ValueError("Point corrections do not have target object IDs.")
+        object_ids = np.asarray(list(map(int, layer.properties["object_id"])))
+        keep &= object_ids == int(object_id)
 
     if i is None:
         assert points.shape[1] == 2, f"{points.shape}"
@@ -553,6 +917,7 @@ def scribble_layer_to_prompts(
     max_points: int = 64,
     deduplication_distance: float = 4.0,
     track_id=None,
+    object_id=None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Convert positive/negative open strokes into sparse SAM point prompts.
 
@@ -576,6 +941,8 @@ def scribble_layer_to_prompts(
             overlapping strokes with the same label are considered duplicates.
         track_id: Id of the current track. Required for tracking data. When given, the function
             converts only the strokes whose ``track_id`` property matches.
+        object_id: Optional input mask object ID. When given, only scribbles assigned to this ID
+            are converted.
 
     Returns:
         Sampled coordinates in ``(y, x)`` order and SAM labels (positive ``1``, negative ``0``).
@@ -602,11 +969,22 @@ def scribble_layer_to_prompts(
         if len(stroke_track_ids) != len(shape_data):
             raise AssertionError("Scribble shapes and track ids must have matching lengths.")
 
+    if object_id is None:
+        stroke_object_ids = [None] * len(shape_data)
+    else:
+        if "object_id" not in layer.properties:
+            raise ValueError("Shape corrections do not have target object IDs.")
+        stroke_object_ids = list(map(int, layer.properties["object_id"]))
+        if len(stroke_object_ids) != len(shape_data):
+            raise AssertionError("Scribble shapes and object ids must have matching lengths.")
+
     strokes = []
-    for vertices, shape_type, stroke_label, stroke_track_id in zip(
-        shape_data, shape_types, stroke_labels, stroke_track_ids
+    for vertices, shape_type, stroke_label, stroke_track_id, stroke_object_id in zip(
+        shape_data, shape_types, stroke_labels, stroke_track_ids, stroke_object_ids
     ):
         if track_id is not None and stroke_track_id != track_id:
+            continue
+        if object_id is not None and stroke_object_id != int(object_id):
             continue
         if shape_type in ("rectangle", "ellipse", "polygon"):
             continue
@@ -758,6 +1136,7 @@ def collect_frame_prompts(
     shape: Tuple[int, int],
     i=None,
     track_id=None,
+    object_id=None,
     exclude_states=None,
     with_stop_annotation: bool = True,
 ) -> FramePrompts:
@@ -775,6 +1154,7 @@ def collect_frame_prompts(
         shape: The image shape (in-plane, without the frame axis).
         i: Index for the data (required for 3d or timeseries data).
         track_id: Id of the current track (required for tracking data).
+        object_id: Optional input mask object ID used to filter correction prompts.
         exclude_states: Track-states to drop, e.g. ('division',). See `point_layer_to_prompts`.
         with_stop_annotation: Whether a lone negative point may be read as a stop annotation.
 
@@ -782,14 +1162,17 @@ def collect_frame_prompts(
         The prompts of the frame.
     """
     scribble_points, scribble_labels = scribble_layer_to_prompts(
-        shape_layer, image_shape=shape, i=i, track_id=track_id
+        shape_layer, image_shape=shape, i=i, track_id=track_id, object_id=object_id
     )
     have_scribbles = len(scribble_points) > 0
-    boxes, masks = shape_layer_to_prompts(shape_layer, shape, i=i, track_id=track_id)
+    boxes, masks = shape_layer_to_prompts(
+        shape_layer, shape, i=i, track_id=track_id, object_id=object_id,
+    )
 
     prompts = point_layer_to_prompts(
         point_layer, i=i, track_id=track_id, exclude_states=exclude_states,
         with_stop_annotation=with_stop_annotation and not have_scribbles and not boxes,
+        object_id=object_id,
     )
     if prompts is None:
         return FramePrompts(
@@ -805,7 +1188,7 @@ def collect_frame_prompts(
 
 
 def shape_layer_to_prompts(
-    layer: napari.layers.Shapes, shape: Tuple[int, int], i=None, track_id=None
+    layer: napari.layers.Shapes, shape: Tuple[int, int], i=None, track_id=None, object_id=None,
 ) -> Tuple[List[np.ndarray], List[Optional[np.ndarray]]]:
     """Extract prompts for SAM from a napari shape layer.
 
@@ -817,6 +1200,8 @@ def shape_layer_to_prompts(
         shape: The image shape.
         i: Index for the data (required for 3d or timeseries data).
         track_id: Id of the current track (required for tracking data).
+        object_id: Optional input mask object ID. When given, only shapes assigned to this ID are
+            returned.
 
     Returns:
         The box prompts.
@@ -866,18 +1251,29 @@ def shape_layer_to_prompts(
     if len(shape_data) == 0:
         return [], []
 
-    if i is not None:
-        if track_id is None:
-            prompt_selection = [j for j, data in enumerate(shape_data) if (data[:, 0] == i).all()]
-        else:
-            track_ids = np.array(list(map(int, layer.properties["track_id"])))
-            prompt_selection = [
-                j for j, (data, this_track_id) in enumerate(zip(shape_data, track_ids))
-                if ((data[:, 0] == i).all() and this_track_id == track_id)
-            ]
+    track_ids = None if track_id is None else np.asarray(list(map(int, layer.properties["track_id"])))
+    if object_id is None:
+        object_ids = None
+    else:
+        if "object_id" not in layer.properties:
+            raise ValueError("Shape corrections do not have target object IDs.")
+        object_ids = np.asarray(list(map(int, layer.properties["object_id"])))
 
+    prompt_selection = []
+    for j, data in enumerate(shape_data):
+        if i is not None and not (data[:, 0] == i).all():
+            continue
+        if track_ids is not None and track_ids[j] != track_id:
+            continue
+        if object_ids is not None and object_ids[j] != int(object_id):
+            continue
+        prompt_selection.append(j)
+
+    if i is not None:
         shape_data = [shape_data[j][:, 1:] for j in prompt_selection]
-        shape_types = [shape_types[j] for j in prompt_selection]
+    else:
+        shape_data = [shape_data[j] for j in prompt_selection]
+    shape_types = [shape_types[j] for j in prompt_selection]
 
     boxes, masks = _to_prompts(shape_data, shape_types)
     return boxes, masks
