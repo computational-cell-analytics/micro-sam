@@ -360,11 +360,7 @@ def get_sam2_model(
 
     device = _get_device(device)
 
-    if input_type == "images":
-        _build_segment_anything_2 = build_sam2
-    elif input_type == "videos":
-        _build_segment_anything_2 = _build_sam2_video_predictor
-    else:
+    if input_type not in ("images", "videos"):
         raise ValueError(f"'{input_type}' is not a valid input type.")
 
     if checkpoint_path is None:
@@ -373,13 +369,12 @@ def get_sam2_model(
         else:
             checkpoint_path = _get_checkpoint(model_type=model_type)
 
-    model = _build_segment_anything_2(
-        config_file=model_cfg,
-        ckpt_path=checkpoint_path,
-        device=device,
-        mode="eval",
-        apply_postprocessing=False,
-    )
+    if input_type == "images":
+        model = build_sam2(
+            config_file=model_cfg, ckpt_path=checkpoint_path, device=device, mode="eval", apply_postprocessing=False,
+        )
+    else:
+        model = _build_sam2_video_predictor(config_file=model_cfg, ckpt_path=checkpoint_path, device=device)
 
     # Both predictor wrappers and direct model use need this metadata for embedding signatures.
     model.model_type = model_type
@@ -699,13 +694,7 @@ def _to_device_tensor(data, device):
     return torch.as_tensor(np.asarray(data), device=device).float()
 
 
-def set_precomputed(
-    predictor,
-    image_embeddings,
-    i: Optional[int] = None,
-    tile_id: Optional[int] = None,
-    input_: Optional[np.ndarray] = None,
-):
+def set_precomputed(predictor, image_embeddings, i: Optional[int] = None, tile_id: Optional[int] = None):
     """Set the precomputed image embeddings for a predictor.
 
     Args:
@@ -716,21 +705,6 @@ def set_precomputed(
     """
     if tile_id is not None:
         tile_features = image_embeddings["features"][str(tile_id)]
-        if "pos_enc" in image_embeddings:
-            # 3D tiled embeddings: the per-tile positional encodings and FPN outputs (stored under
-            # 'pos_enc/{tile_id}/{level}' and 'fpn/{tile_id}/{level}') are needed to set up the video
-            # inference state for this tile-column. 'input_' must be the tile sub-volume.
-            pos_enc = _load_list_datasets(image_embeddings["pos_enc"], str(tile_id), lazy_loading=False)
-            fpn = _load_list_datasets(image_embeddings["fpn"], str(tile_id), lazy_loading=False)
-            tile_image_embeddings = {
-                "features": np.asarray(tile_features),
-                "pos_enc": pos_enc,
-                "fpn": fpn,
-                "input_size": tile_features.attrs["input_size"],
-                "original_size": tile_features.attrs["original_size"],
-            }
-            return set_precomputed(predictor, tile_image_embeddings, i=i, input_=input_)
-
         # The SAM2 image predictor also needs the high-resolution features (used by the decoder),
         # which are stored per tile under 'high_res_feats/{tile_id}/{level}'.
         high_res_feats = _load_list_datasets(image_embeddings["high_res_feats"], str(tile_id), lazy_loading=False)
@@ -748,48 +722,14 @@ def set_precomputed(
         device = predictor.device  # Otherwise, for image predictor.
 
     features = image_embeddings["features"]
-    assert features.ndim in (4, 5), f"{features.ndim}"
-    if features.ndim == 5:
-        if i is None:
-            raise ValueError("The data is 3D so an index i is needed.")
+    assert features.ndim == 4, f"{features.ndim}"
+    if i is not None:
+        raise ValueError("The data is 2D so an index is not needed.")
 
-        if input_ is None:
-            raise AssertionError("For 3D inputs, you must provide the original multi-dimensional array.")
-
-        # Prepare the inference state
-        inference_state = predictor.init_state(
-            volume=input_, volume_embeddings=image_embeddings, ignore_caching_features=True,
-        )
-
-        # Get other visual features, eg. positional embeddings and FPN outputs to prepare 'backbone_out'.
-        pos_list = image_embeddings["pos_enc"]
-        fpn_list = image_embeddings["fpn"]
-
-        # There's an easy assumption made here. The first dimension of 'features' corresponds to n-slices.
-        running_features = {}
-        for slice_id in range(features.shape[0]):
-            vision_features = _to_device_tensor(features[slice_id], device)
-            vision_pos_enc = [_to_device_tensor(_shared_pos_enc(t), device) for t in pos_list]
-            backbone_fpn = _backbone_fpn(
-                [_to_device_tensor(t[slice_id], device) for t in fpn_list], vision_features
-            )
-            backbone_out = {
-                "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
-            }
-            # The frame itself is not cached: every consumer of '_get_image_feature' discards it.
-            running_features[slice_id] = backbone_out
-
-        inference_state["cached_features"] = running_features
-        return predictor, inference_state
-
-    elif features.ndim == 4:
-        if i is not None:
-            raise ValueError("The data is 2D so an index is not needed.")
-
-        # Convert to tensors on the predictor device, as 'predictor.set_image' would for the decoder.
-        image_embed = _to_device_tensor(features, device)
-        high_res_feats = [_to_device_tensor(feat, device) for feat in image_embeddings["high_res_feats"]]
-        predictor._features = {"image_embed": image_embed, "high_res_feats": high_res_feats}
-        predictor._is_image_set = True
-        predictor._orig_hw = image_embeddings["original_size"]
-        return predictor
+    # Convert to tensors on the predictor device, as 'predictor.set_image' would for the decoder.
+    image_embed = _to_device_tensor(features, device)
+    high_res_feats = [_to_device_tensor(feat, device) for feat in image_embeddings["high_res_feats"]]
+    predictor._features = {"image_embed": image_embed, "high_res_feats": high_res_feats}
+    predictor._is_image_set = True
+    predictor._orig_hw = image_embeddings["original_size"]
+    return predictor

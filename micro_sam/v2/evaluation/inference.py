@@ -625,7 +625,7 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
             for slice_idx in video_segments.keys():
                 per_slice_seg = np.zeros((height, width))
                 for _instance_idx, _instance_mask in video_segments[slice_idx].items():
-                    # Non-square frames are padded to a square, see '_load_img_as_tensor'.
+                    # Non-square frames are padded to a square, see '_load_frame_as_tensor'.
                     per_slice_seg[_instance_mask.squeeze()[:height, :width]] = _instance_idx
                 segmentation.append(per_slice_seg)
 

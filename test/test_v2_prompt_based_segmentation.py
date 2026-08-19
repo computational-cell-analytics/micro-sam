@@ -180,7 +180,6 @@ def test_promptable_segmentation_3d_disables_offloading_on_mps(device, monkeypat
         predictor=None, volume=np.zeros((4, 8, 8), dtype="uint8"), volume_embeddings=None, device=device,
     )
 
-    assert not segmenter.offload_video_to_cpu
     assert not segmenter.offload_state_to_cpu
 
 
@@ -192,7 +191,6 @@ def test_promptable_segmentation_3d_keeps_offloading_on_cuda(monkeypatch):
         device=torch.device("cuda", 0),
     )
 
-    assert segmenter.offload_video_to_cpu
     assert segmenter.offload_state_to_cpu
 
 

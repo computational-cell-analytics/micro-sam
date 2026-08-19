@@ -452,7 +452,7 @@ class PromptableSegmentation3D:
     """
     def __init__(
         self, predictor, volume, volume_embeddings, device=None,
-        offload_video_to_cpu=None, offload_state_to_cpu=None, max_cached_frames=None,
+        offload_state_to_cpu=None, max_cached_frames=None,
     ):
         from micro_sam.v2.util import _get_device
         self.predictor = predictor
@@ -460,11 +460,10 @@ class PromptableSegmentation3D:
         self.volume_embeddings = volume_embeddings
         # 'device=None' uses the predictor's auto-detected device.
         self.device = device
-        # Offloading frames/state to CPU bounds GPU memory for large volumes on CUDA. On MPS it is off
+        # Offloading the state to CPU bounds GPU memory for large volumes on CUDA. On MPS it is off
         # by default: unified memory saves nothing, and SAM2's CPU->MPS 'non_blocking' transfer of the
         # consolidated masks races, giving intermittent garbage/NaN masks (patchy interactive results).
         is_mps = device_type(_get_device(device)) == "mps"
-        self.offload_video_to_cpu = (not is_mps) if offload_video_to_cpu is None else offload_video_to_cpu
         self.offload_state_to_cpu = (not is_mps) if offload_state_to_cpu is None else offload_state_to_cpu
         # A pass walks every slice, so a feature cache shorter than the volume is never hit.
         self.max_cached_frames = max_cached_frames
@@ -488,8 +487,7 @@ class PromptableSegmentation3D:
         # Initialize the inference state.
         self.inference_state = self.predictor.init_state(
             volume=self.volume, volume_embeddings=self.volume_embeddings, device=self.device,
-            offload_video_to_cpu=self.offload_video_to_cpu, offload_state_to_cpu=self.offload_state_to_cpu,
-            max_cached_frames=self.max_cached_frames,
+            offload_state_to_cpu=self.offload_state_to_cpu, max_cached_frames=self.max_cached_frames,
         )
 
     def _clear_pushed_prompts(self):

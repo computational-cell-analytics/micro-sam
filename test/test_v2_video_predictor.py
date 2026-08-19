@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import torch
 
-from micro_sam.v2.models._video_predictor import _load_video_frames_from_images
+from micro_sam.v2.models._video_predictor import _volume_geometry
 
 
 class LazyVolume:
@@ -24,46 +24,21 @@ class LazyVolume:
         return self._array[index]
 
 
-def load_lazy_frames(volume, image_size=64):
-    return _load_video_frames_from_images(
-        video_path=None, volume=volume, image_size=image_size, offload_video_to_cpu=False,
-    )
-
-
-def test_lazy_volume_is_not_materialized_on_init():
+def test_lazy_volume_is_not_materialized():
     volume = LazyVolume(np.random.rand(6, 32, 48).astype("float32"))
 
-    images, video_height, video_width = load_lazy_frames(volume)
+    num_frames, video_size = _volume_geometry(volume)
 
-    assert len(images) == 6
-    assert video_height == video_width == 48
-    assert volume.reads == []  # setting up the frame sequence must not read any data
-
-
-def test_only_the_requested_slice_is_read():
-    volume = LazyVolume(np.random.rand(6, 32, 48).astype("float32"))
-    images, _, _ = load_lazy_frames(volume)
-
-    frame = images[3]
-
-    assert volume.reads == [3]
-    assert tuple(frame.shape) == (3, 64, 64)
+    assert num_frames == 6
+    assert video_size == 48
+    assert volume.reads == []  # only the shape is needed, never the data
 
 
-def test_lazy_volume_rejects_a_non_3d_shape():
+def test_volume_geometry_rejects_a_non_3d_shape():
     volume = LazyVolume(np.zeros((4, 4), dtype="float32"))
 
     with pytest.raises(ValueError, match="3D volume"):
-        load_lazy_frames(volume)
-
-
-def test_numpy_and_lazy_volumes_give_the_same_frame():
-    array = np.random.rand(4, 16, 16).astype("float32")
-
-    eager, _, _ = load_lazy_frames(array)
-    lazy, _, _ = load_lazy_frames(LazyVolume(array))
-
-    np.testing.assert_allclose(eager[2].numpy(), lazy[2].numpy())
+        _volume_geometry(volume)
 
 
 def run_single_frame_inference(monkeypatch, inference_state, autocasts, calls=1):

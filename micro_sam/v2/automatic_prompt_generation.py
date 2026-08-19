@@ -584,11 +584,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
     def _build_propagator(self, volume, image_embeddings) -> PromptableSegmentation3D:
         """The video predictor this volume is propagated with, holding its state where asked to."""
-        offload = self._offload_to_cpu
         return PromptableSegmentation3D(
             self._video_predictor, volume, image_embeddings,
-            offload_video_to_cpu=offload, offload_state_to_cpu=offload,
-            max_cached_frames=self._max_cached_frames,
+            offload_state_to_cpu=self._offload_to_cpu, max_cached_frames=self._max_cached_frames,
         )
 
     def _initialize_volume(
