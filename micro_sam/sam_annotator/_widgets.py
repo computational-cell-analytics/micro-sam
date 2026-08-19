@@ -4259,6 +4259,7 @@ class AutoSegmentWidget(_WidgetBase):
         # outlives the generator and is shared by 'sparse', 'dense' and 'apg'.
         self._decoder_state = None
         self._decoder_state_key = None
+        self._decoder_state_save_path = None
         # The APG proposals, so that changing only the merge parameters skips the prompting.
         self._proposals = None
         self._proposals_key = None
@@ -4682,19 +4683,29 @@ class AutoSegmentWidget(_WidgetBase):
     def _cached_decoder_state(self, key):
         return self._decoder_state if self._decoder_state_key == key else None
 
-    def _store_decoder_state(self, key, decoder_state):
+    def _store_decoder_state(self, key, decoder_state, save_path=None):
         self._decoder_state = dict(decoder_state)
         self._decoder_state_key = key
+        self._decoder_state_save_path = save_path
+
+    def _persist_decoder_state(self, decoder_state, save_path, state_index, model_type):
+        if save_path is None or getattr(self, "_decoder_state_save_path", None) == save_path:
+            return
+        from micro_sam.precompute_state import save_ais_state
+        save_ais_state(decoder_state, save_path, state_index=state_index, model_type=model_type)
+        self._decoder_state_save_path = save_path
 
     def _drop_decoder_state(self):
         # Only for a new input or a new model: the prediction is derived from both.
         self._decoder_state = None
         self._decoder_state_key = None
+        self._decoder_state_save_path = None
 
     def _run_unisam2(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.precompute_state import cache_autoseg_state
 
         device = next(state.decoder.parameters()).device
+        model_type = getattr(state.predictor, "model_type", None)
         save_path = self._state_save_path(state)
 
         # All decoder auto-seg cases reuse the precomputed embeddings and run the decoder on them (no
@@ -4737,19 +4748,23 @@ class AutoSegmentWidget(_WidgetBase):
             if decoder_state is None:
                 self._segmenter = cache_autoseg_state(
                     "ais", state.decoder, run_raw, image_embeddings, save_path, ndim=ndim,
-                    model_type=getattr(state.predictor, "model_type", None),
+                    model_type=model_type,
                     i=z, state_index=(None if ndim == 3 else z), is_tiled=is_tiled,
                     tile_shape=tile_shape, halo=halo, device=device, devices=state.inference_devices,
                     z_block=z_block, z_halo=z_halo,
                     pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
                 )
-                self._store_decoder_state(decoder_key, self._segmenter.get_state())
+                decoder_state = self._segmenter.get_state()
+                self._store_decoder_state(decoder_key, decoder_state, save_path=save_path)
             else:
                 from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
                 self._segmenter = get_unisam2_segmentation_generator(
                     state.decoder, is_tiled=is_tiled, device=device, inference_device=state.inference_devices,
                 )
                 self._segmenter.set_state(decoder_state)
+            self._persist_decoder_state(
+                decoder_state, save_path, state_index=(None if ndim == 3 else z), model_type=model_type,
+            )
             self._segmenter_key = cache_key
 
         return self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
@@ -4794,32 +4809,27 @@ class AutoSegmentWidget(_WidgetBase):
                 device=device, inference_device=state.inference_devices, ndim=ndim,
             )
 
-            initialize_kwargs = dict(
-                ndim=ndim, image_embeddings=image_embeddings, i=z, tile_shape=tile_shape, halo=halo,
-                z_block=z_block, z_halo=z_halo, devices=state.inference_devices,
-                pbar_init=pbar_init, pbar_update=pbar_update,
+            decoder_state = self._cached_decoder_state(decoder_key)
+            if decoder_state is None:
+                decoder_segmenter = cache_autoseg_state(
+                    "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
+                    model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
+                    is_tiled=is_tiled, tile_shape=tile_shape, halo=halo, device=device,
+                    devices=state.inference_devices, z_block=z_block, z_halo=z_halo,
+                    pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
+                )
+                decoder_state = decoder_segmenter.get_state()
+                self._store_decoder_state(decoder_key, decoder_state, save_path=save_path)
+            self._persist_decoder_state(
+                decoder_state, save_path, state_index=(None if ndim == 3 else z), model_type=model_type,
             )
-            if is_tiled:
-                self._segmenter.initialize(run_raw, **initialize_kwargs)
-            else:
-                decoder_state = self._cached_decoder_state(decoder_key)
-                if decoder_state is None:
-                    decoder_segmenter = cache_autoseg_state(
-                        "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
-                        model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
-                        is_tiled=False, device=device, devices=state.inference_devices,
-                        z_block=z_block, z_halo=z_halo, pbar_init=pbar_init,
-                        pbar_update=pbar_update, verbose=False,
-                    )
-                    decoder_state = decoder_segmenter.get_state()
-                    self._store_decoder_state(decoder_key, decoder_state)
-                apg_state = dict(decoder_state)
-                apg_state["image_embeddings"] = image_embeddings
-                if z is not None:
-                    apg_state["i"] = z
-                if ndim == 3:
-                    apg_state["volume"] = run_raw
-                self._segmenter.set_state(apg_state)
+            apg_state = dict(decoder_state)
+            apg_state["image_embeddings"] = image_embeddings
+            if z is not None:
+                apg_state["i"] = z
+            if ndim == 3:
+                apg_state["volume"] = run_raw
+            self._segmenter.set_state(apg_state)
             self._segmenter_key = cache_key
 
         if ndim == 3:  # One pass: the volumetric stages are not separable the way the 2d ones are.

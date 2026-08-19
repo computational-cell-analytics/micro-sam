@@ -535,7 +535,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             raise ValueError("A slice index requires video-style embeddings with FPN features.")
         _set_image_predictor_from_3d_embeddings(self._predictor, image_embeddings, i)
         return {
-            "features": self._predictor.get_image_embedding(),
+            "features": self._predictor.get_image_embedding().detach().cpu().numpy(),
             "high_res_feats": self._predictor._features["high_res_feats"],
             "input_size": self._predictor.model.image_size,
             "original_size": self._predictor._orig_hw,
@@ -1125,7 +1125,9 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         self._image_embeddings = image_embeddings
         self._i = i
         self._owns_image_embeddings = owns_image_embeddings
+        self._set_tiling(image_embeddings)
 
+    def _set_tiling(self, image_embeddings: dict) -> None:
         # From the embeddings, not the arguments, so the prompting cannot disagree with the encoding.
         features = image_embeddings["features"]
         self._tiling = Blocking(
@@ -1249,10 +1251,16 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         )
 
     def set_state(self, state: dict) -> None:
-        """@private"""
-        raise NotImplementedError(
-            "The tiled prompt generator cannot restore its state, because it holds tiled embeddings."
-        )
+        """Restore a stitched decoder prediction and the tiled embeddings used for prompting."""
+        image_embeddings = state.get("image_embeddings")
+        if image_embeddings is None:
+            raise ValueError("A tiled prompt-generator state must hold its 'image_embeddings'.")
+
+        TiledUniSAM2InstanceSegmentation.set_state(self, state)
+        self._image_embeddings = image_embeddings
+        self._i = state.get("i")
+        self._owns_image_embeddings = False
+        self._set_tiling(image_embeddings)
 
     def clear_state(self) -> None:
         """Clear the decoder predictions and the tiled embeddings, removing an ephemeral store."""

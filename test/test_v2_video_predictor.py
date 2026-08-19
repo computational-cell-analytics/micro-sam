@@ -210,16 +210,16 @@ def test_a_cuda_request_without_cuda_keeps_fp32(monkeypatch):
     assert not predictor._autocasts({"device": "cuda:0"})
 
 
-@pytest.mark.parametrize("macos_14, expected", [(True, True), (False, False)])
-def test_mps_follows_the_macos_version_torch_gates_on(monkeypatch, macos_14, expected):
-    """Below macOS 14 torch disables the autocast itself, so claiming one would skip the dtype restore."""
+@pytest.mark.parametrize("macos_14", [True, False])
+def test_mps_keeps_fp32(monkeypatch, macos_14):
+    """MPS keeps fp32 regardless of whether the OS supports bfloat16 autocast."""
     from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
     monkeypatch.setattr(torch.backends.mps, "is_macos_or_newer", lambda major, minor: macos_14)
 
-    assert predictor._autocasts({"device": "mps"}) is expected
+    assert not predictor._autocasts({"device": "mps"})
 
 
 def test_memory_encoder_restores_the_model_dtype_without_autocast(monkeypatch):
