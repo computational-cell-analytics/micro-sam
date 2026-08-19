@@ -1060,8 +1060,7 @@ class TiledPromptableSegmentation3D:
 
     def get_progress_total(self, z_range=None):
         """Return tile-slice propagation steps for the currently active tiles."""
-        z_depth = self.shape[0] if z_range is None else z_range[1] - z_range[0] + 1
-        return int(z_depth * len(self._segmenters))
+        return sum(segmenter.get_progress_total(z_range) for segmenter in self._segmenters.values())
 
     def _tile_index(self, y, x):
         """Return the id of the tile whose inner (halo-free) block contains the point (y, x)."""

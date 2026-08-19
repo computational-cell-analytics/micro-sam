@@ -502,6 +502,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._offload_to_cpu = None
         self._max_cached_frames = None
         self._temporary_embedding_path = None
+        self._owns_image_embeddings = False
         # The embedding cache is keyed on these, which a SAM2 image predictor does not carry itself.
         sam2_model = getattr(predictor, "model", None)
         if getattr(predictor, "model_type", None) is None:
@@ -558,21 +559,29 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 without spending device memory.
             kwargs: Additional arguments for `UniSAM2InstanceSegmentation.initialize`.
         """
+        if ndim not in (2, 3):
+            raise ValueError(f"Automatic prompt generation supports 2d and 3d inputs, got ndim={ndim}.")
+
+        # A volume leaves a propagator and possibly a temporary embedding store behind. Release both
+        # before replacing its state, including when the next input is a 2d image.
+        if self._volume is not None or self._temporary_embedding_path is not None:
+            self.clear_state()
+
         if ndim == 3:
             self._initialize_volume(
                 image, image_embeddings, save_path, verbose, offload_to_cpu, cache_all_slices,
                 lazy_embeddings, **kwargs
             )
             return
-        if ndim != 2:
-            raise ValueError(f"Automatic prompt generation supports 2d and 3d inputs, got ndim={ndim}.")
 
+        owns_image_embeddings = image_embeddings is None
         if image_embeddings is None:
             image_embeddings = self._encode(image)
         else:
             set_precomputed(self._predictor, image_embeddings)
         super().initialize(image, ndim=ndim, image_embeddings=image_embeddings, **kwargs)
         self._image_embeddings = image_embeddings
+        self._owns_image_embeddings = owns_image_embeddings
 
     def _build_propagator(self, volume, image_embeddings) -> PromptableSegmentation3D:
         """The video predictor this volume is propagated with, holding its state where asked to."""
@@ -594,6 +603,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if volume.ndim != 3:
             raise ValueError(f"Volumetric prompt generation expects a (Z, Y, X) volume, got shape {volume.shape}.")
 
+        owns_image_embeddings = image_embeddings is None
         if image_embeddings is None:
             path = save_path
             if path is None:
@@ -606,6 +616,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
         UniSAM2InstanceSegmentation.initialize(self, volume, ndim=3, image_embeddings=image_embeddings, **kwargs)
         self._image_embeddings = image_embeddings
+        self._owns_image_embeddings = owns_image_embeddings
         self._volume = volume
         self._offload_to_cpu = offload_to_cpu
         self._max_cached_frames = int(volume.shape[0]) if cache_all_slices else None
@@ -650,19 +661,27 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 set_precomputed(self._predictor, image_embeddings)
             super().set_state(state)
         self._image_embeddings = image_embeddings
+        self._owns_image_embeddings = False
 
     def clear_state(self) -> None:
         """Clear the decoder predictions and the input that is set on the predictor."""
+        owned_embeddings = self._image_embeddings if getattr(self, "_owns_image_embeddings", False) else None
         super().clear_state()
         self._image_embeddings = None
+        self._owns_image_embeddings = False
         self._predictor.reset_predictor()
         self._volume = None
         if self._propagator is not None:
             self._propagator.reset_predictor()
             self._propagator = None
-        if self._temporary_embedding_path is not None:
-            shutil.rmtree(self._temporary_embedding_path, ignore_errors=True)
-            self._temporary_embedding_path = None
+        try:
+            close = getattr(owned_embeddings, "close", None)
+            if close is not None:
+                close()
+        finally:
+            if self._temporary_embedding_path is not None:
+                shutil.rmtree(self._temporary_embedding_path, ignore_errors=True)
+                self._temporary_embedding_path = None
 
     @torch.no_grad()
     def generate(
@@ -1060,6 +1079,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         if self._temporary_embedding_path is not None:
             self.clear_state()
 
+        owns_image_embeddings = image_embeddings is None
         if image_embeddings is None:
             path = save_path
             if path is None:
@@ -1074,6 +1094,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             self, image, ndim=2, image_embeddings=image_embeddings, **kwargs
         )
         self._image_embeddings = image_embeddings
+        self._owns_image_embeddings = owns_image_embeddings
 
         # From the embeddings, not the arguments, so the prompting cannot disagree with the encoding.
         features = image_embeddings["features"]

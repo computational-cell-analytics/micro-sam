@@ -256,6 +256,84 @@ def test_tiled_generator_cannot_serialize_its_state(monkeypatch):
         segmenter.set_state({})
 
 
+def test_reinitializing_generator_releases_owned_volume_embeddings(monkeypatch):
+    closed, removed, precompute_paths, propagators = [], [], [], []
+
+    class Embeddings(dict):
+        def __init__(self, path):
+            super().__init__()
+            self.path = path
+
+        def close(self):
+            closed.append(self.path)
+
+    class Propagator:
+        def __init__(self):
+            self.was_reset = False
+
+        def reset_predictor(self):
+            self.was_reset = True
+
+    paths = iter(["first.zarr", "second.zarr"])
+
+    def precompute(predictor, image, **kwargs):
+        path = kwargs["save_path"]
+        precompute_paths.append(path)
+        return Embeddings(path)
+
+    def build_propagator(self, volume, image_embeddings):
+        propagator = Propagator()
+        propagators.append(propagator)
+        return propagator
+
+    monkeypatch.setattr("micro_sam.v2.automatic_prompt_generation.make_temp_embedding_path", lambda: next(paths))
+    monkeypatch.setattr("micro_sam.v2.automatic_prompt_generation.precompute_image_embeddings", precompute)
+    monkeypatch.setattr("micro_sam.v2.automatic_prompt_generation.set_precomputed", lambda *args: None)
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.UniSAM2InstanceSegmentation.initialize",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(AutomaticPromptGenerator, "_build_propagator", build_propagator)
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.shutil.rmtree",
+        lambda path, **kwargs: removed.append(path),
+    )
+
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._predictor = types.SimpleNamespace(reset_predictor=lambda: None)
+    segmenter._video_predictor = types.SimpleNamespace()
+    segmenter._prediction = None
+    segmenter._is_initialized = False
+    segmenter._image_embeddings = None
+    segmenter._owns_image_embeddings = False
+    segmenter._volume = None
+    segmenter._propagator = None
+    segmenter._temporary_embedding_path = None
+    volume = np.zeros((2, 16, 16), dtype="uint8")
+
+    segmenter.initialize(volume, ndim=3)
+    segmenter.initialize(volume, ndim=3)
+    assert precompute_paths == ["first.zarr", "second.zarr"]
+    assert closed == ["first.zarr"]
+    assert removed == ["first.zarr"]
+    assert propagators[0].was_reset
+
+    external_embeddings = Embeddings("external.zarr")
+    segmenter.initialize(volume[0], ndim=2, image_embeddings=external_embeddings)
+    assert closed == ["first.zarr", "second.zarr"]
+    assert removed == ["first.zarr", "second.zarr"]
+    assert propagators[1].was_reset
+    assert segmenter._volume is None
+    assert segmenter._propagator is None
+    segmenter.clear_state()
+    assert "external.zarr" not in closed
+
+    segmenter.initialize(volume, ndim=3, save_path="user.zarr")
+    segmenter.clear_state()
+    assert closed[-1] == "user.zarr"
+    assert "user.zarr" not in removed
+
+
 def test_reinitializing_tiled_generator_removes_the_previous_temporary_store(monkeypatch):
     class Features:
         attrs = {"shape": (32, 32), "tile_shape": (16, 16), "halo": (4, 4)}
