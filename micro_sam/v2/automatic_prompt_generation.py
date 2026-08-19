@@ -78,16 +78,18 @@ def sam2_autocast(device):
     """Run the SAM2 branch in half precision, as the UniSAM2 decoder already does.
 
     Worth 1.15x end to end on livecell, for -0.0004 mSA, which is inside the noise of the merge.
+    Only on cuda: MPS has no tensor cores, so half precision buys no throughput there and only costs
+    the conversions. Measured on an M-series Mac, fp16 makes the prompting 1.35x slower and `generate`
+    1.26x slower than fp32, which is also the more accurate of the two.
 
     Args:
-        device: The device the branch runs on. Half precision is used on cuda and mps only.
+        device: The device the branch runs on. Half precision is used on cuda only.
 
     Returns:
         The autocast context, or a null context where half precision does not apply.
     """
-    device_type = torch.device(device).type
-    if device_type in ("cuda", "mps"):
-        return torch.autocast(device_type=device_type, dtype=torch.float16)
+    if torch.device(device).type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=torch.float16)
     return contextlib.nullcontext()
 
 

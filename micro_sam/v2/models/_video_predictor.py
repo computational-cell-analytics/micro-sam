@@ -213,14 +213,13 @@ class CustomVideoPredictor(SAM2VideoPredictor):
 
         CUDA needs *native* bfloat16, which is Ampere and newer (compute capability 8.0): older GPUs
         emulate it more slowly than the fp32 they run today, and torch raises where even the emulation
-        is missing. MPS has it from macOS 14, which is exactly the version torch gates on - below that
-        it warns and silently disables the autocast. The CPU gains nothing from it and keeps fp32.
+        is missing. MPS runs bfloat16 from macOS 14, but without tensor cores it gains no throughput
+        from it: measured on an M-series Mac over an 8 slice volume it propagates in 2.48s against
+        1.84s in fp32, at a foreground IoU of 0.98. The CPU gains nothing from it either.
         """
         device = torch.device(inference_state["device"])
         if device.type == "cuda":
             return torch.cuda.is_available() and torch.cuda.get_device_properties(device).major >= 8
-        if device.type == "mps":
-            return torch.backends.mps.is_available() and torch.backends.mps.is_macos_or_newer(14, 0)
         return False
 
     def _autocast(self, inference_state):

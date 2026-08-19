@@ -889,10 +889,13 @@ class _StubEncoder(torch.nn.Module):
 
 
 def _get_decoder_autocast(device):
-    """Use FP16 decoder autocast on supported accelerator backends."""
-    device_type = torch.device(device).type
-    if device_type in ("cuda", "mps"):
-        return torch.autocast(device_type=device_type, dtype=torch.float16)
+    """Use FP16 decoder autocast on cuda.
+
+    Not on MPS: without tensor cores half precision buys no throughput there, and the decoder measured
+    within 1.3% of fp32, which is the more accurate of the two.
+    """
+    if torch.device(device).type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=torch.float16)
     return contextlib.nullcontext()
 
 
