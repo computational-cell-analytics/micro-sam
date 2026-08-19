@@ -81,7 +81,7 @@ DATASETS_2D = [
 # defines the ground truth, so it is measured, never tuned.
 GT_MIN_SIZE_2D = {
     "livecell": 50,
-    "cellpose": 20, "deepbacs": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
+    "cellpose_data": 20, "deepbacs": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
     "u20s": 10, "vicar": 25, "yeaz": 10,
 }
 
