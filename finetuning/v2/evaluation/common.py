@@ -1141,7 +1141,7 @@ def load_evaluation_sample_3d(
     raw, labels, valid_roi = load_volume(
         raw_path, label_path, raw_key, label_key, dataset_name, crop_shape, z_range=z_range
     )
-    return ensure_8bit_range(raw), apply_min_size(labels, min_size, dataset_name), valid_roi
+    return raw, apply_min_size(labels, min_size, dataset_name), valid_roi
 
 
 def load_data(dataset_name, data_root, ndim, min_size=0, split="test", crop_shape=None, z_range=None):
