@@ -631,7 +631,7 @@ DATASET_SPACING: dict = {
 GENERATE_PARAM_KEYS = (
     "candidate_threshold", "foreground_threshold", "n_iter", "dt", "sigma", "min_candidate_size",
     "score_threshold", "max_overlap", "min_size", "refine_with_box_prompts", "box_extension",
-    "multimasking", "n_objects_per_pass", "early_stop_patience", "n_threads",
+    "multimasking", "n_objects_per_pass", "early_stop_patience", "batch_size", "n_threads",
 )
 
 
