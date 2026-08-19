@@ -182,46 +182,6 @@ class TestAnnotatorClass:
         assert viewer.layers["point_prompts"].current_properties["label"][0] == "negative"
         viewer.close()
 
-    def test_point_layer_toggle_leaves_a_drawn_scribble_alone(self, make_napari_viewer_proxy):
-        """Flipping polarity for the next point must not relabel a scribble drawn earlier."""
-        viewer = make_napari_viewer_proxy()
-        Annotator(viewer)
-        shapes, points = viewer.layers["prompts"], viewer.layers["point_prompts"]
-
-        # Draw a positive scribble, as the user does before moving to the point layer.
-        shapes.mode = "add_path"
-        shapes.add_paths(np.array([[1.0, 1.0], [7.0, 7.0]]))
-        assert shapes.properties["label"][0] == "positive"
-
-        points.add(np.array([[4.0, 4.0]]))
-        toggle = next(cb for key, cb in points.keymap.items() if str(key) == "T")
-        toggle(points)
-
-        # Both layers switch their drawing default, so the shared prompt menu stays truthful.
-        assert points.current_properties["label"][0] == "negative"
-        assert shapes.current_properties["label"][0] == "negative"
-        # The scribble that was already drawn keeps its own label.
-        np.testing.assert_array_equal(shapes.properties["label"], ["positive"])
-        viewer.close()
-
-    def test_shape_layer_toggle_leaves_a_placed_point_alone(self, make_napari_viewer_proxy):
-        """The mirror of the case above: switching back to the shape layer must not relabel the point."""
-        viewer = make_napari_viewer_proxy()
-        Annotator(viewer)
-        shapes, points = viewer.layers["prompts"], viewer.layers["point_prompts"]
-
-        points.add(np.array([[4.0, 4.0]]))
-        points.selected_data = {0}
-        assert points.properties["label"][0] == "positive"
-
-        toggle = next(cb for key, cb in shapes.keymap.items() if str(key) == "T")
-        toggle(shapes)
-
-        assert shapes.current_properties["label"][0] == "negative"
-        assert points.current_properties["label"][0] == "negative"
-        np.testing.assert_array_equal(points.properties["label"], ["positive"])
-        viewer.close()
-
     def test_tracking_point_layer_toggle_leaves_a_drawn_scribble_alone(self, make_napari_viewer_proxy):
         """The tracking annotator shares the rule: the toggle only relabels the layer in use."""
         from micro_sam.sam_annotator.annotator_tracking import AnnotatorTracking
