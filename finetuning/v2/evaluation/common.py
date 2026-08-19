@@ -711,7 +711,7 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
 
 def build_apg_segmenter(
     model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None,
-    interactive_checkpoint_path=None,
+    interactive_checkpoint_path=None, export_root=None,
 ):
     """Build the automatic prompt generator from both halves of a joint checkpoint.
 
@@ -727,6 +727,7 @@ def build_apg_segmenter(
         interactive_checkpoint_path: Standalone interactive weights (e.g. a downloaded registry
             checkpoint) to use instead of the interactive half exported from the joint checkpoint.
             Requires 'decoder_path' too, since there is then no joint checkpoint to export it from.
+        export_root: Optional directory for the split checkpoint files. Defaults to JOINT_EXPORT_ROOT.
 
     Returns:
         The prompt generator, built through the library factory that the CLI and the API use.
@@ -739,8 +740,9 @@ def build_apg_segmenter(
             raise ValueError("'interactive_checkpoint_path' requires 'decoder_path' too.")
         interactive_path, exported_decoder = interactive_checkpoint_path, None
     else:
+        export_kwargs = {} if export_root is None else {"export_root": export_root}
         interactive_path, exported_decoder = export_joint_checkpoint(
-            model_type, joint_checkpoint, source_checksum=joint_checksum
+            model_type, joint_checkpoint, source_checksum=joint_checksum, **export_kwargs
         )
     model = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=interactive_path,
