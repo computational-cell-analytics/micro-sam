@@ -3,7 +3,8 @@
 The findings of the automatic prompt generation (APG) diagnostics, kept here because the scripts that
 produced them are gone. `visualize_apg_2d.py`, `visualize_apg_3d.py` and `sweep_apg_3d_overlap.py`
 were deleted on 2026-08-18. They walked the pipeline stage by stage in napari, which needs a desktop,
-so they could not run on the cluster where the data and the checkpoints are.
+so they could not run on the cluster where the data and the checkpoints are. `evaluate_apg.py` was
+deleted on the same day, once the settings it found had moved into the library defaults.
 
 Everything below is measured, not assumed. Where a number has no dataset next to it, it held on every
 dataset that was tried.
@@ -67,7 +68,7 @@ These bit us more than once.
 - **Severed objects.** A crop cuts objects at its faces, and relabelling promotes each sliver to its own
   object. In a volume an object reduced to one or two slices never reaches `candidate_threshold`, so it
   is never proposed. Counting those as misses blames the method for the crop. `severed_objects` in
-  `baselines_common.py` separates them.
+  `common.py` separates them.
 - **Do not fix it with `min_size`.** On cremi a neurite cross-section in a thin crop has a median of
   about six voxels, so a size floor deletes genuine annotations instead. Separate the severed objects,
   do not drop them.
@@ -88,7 +89,7 @@ These bit us more than once.
 
 ## Cost
 
-Measured with `evaluate_apg.py` on one A100 40GB MIG slice, hvit_t, joint v3 checkpoint.
+Measured on one A100 40GB MIG slice, hvit_t, joint v3 checkpoint.
 
 2d, livecell, seconds per image:
 
@@ -119,16 +120,38 @@ Holding the tracking state on the device rather than on the host (`offload_to_cp
 here for about 17 MB of device memory per slice, with bit-identical output. It is a batch job's to
 spend, which is why it is not the library default.
 
+## What the speed sweep kept
+
+`evaluate_apg.py` timed the pipeline stage by stage and paired every setting against the mean score
+delta over the same samples, so that a faster run had to keep its mSA. It swept the thread count, the
+prompt batch size, TF32 matmuls, bfloat16 autocast, bfloat16 and float16 backbone weights, the number
+of objects per propagation pass, and holding the tracking state on the device rather than on the host.
+
+Two settings were worth keeping, and both are now defaults rather than knobs:
+
+- `n_threads = 8` in `DEFAULT_PROMPT_GENERATION`.
+- `offload_to_cpu = False` in `common.VOLUME_SPEED_OPTIONS`, which every volumetric evaluation passes
+  to `initialize`. It is not the library default, because it spends device memory a batch job has and
+  an interactive session does not.
+
+Nothing else was adopted. The stage tables above are the reason: prompting and propagation dominate,
+so a knob that does not touch them cannot pay for itself.
+
 ## What moved into the code
 
 The reusable parts of the deleted scripts now live in tracked modules:
 
-- `baselines_common.severed_objects`, `.unmatched_objects` and `.genuine_misses`.
+- `common.severed_objects`, `.unmatched_objects` and `.genuine_misses`.
 - `micro_sam.v2.automatic_prompt_generation.merge_by_score(..., return_reasons=True)` reports why every
   candidate was kept or dropped: `kept`, `too small`, `duplicate`, or `truncated below min size`. This
   replaces the `merge_with_reasons` fork that the visualizers carried, which had already drifted from
   the function it mirrored.
-- `evaluate_3d.py` records `unmatched` and `genuine_misses` next to mSA for every APG variant.
+- `evaluate_automatic_segmentation.py` records `unmatched` and `genuine_misses` next to mSA for every
+  volumetric run.
+- `common.build_apg_segmenter` builds the generator from both halves of a joint checkpoint, for an
+  image or for a volume. It replaces the `build_segmenter` of the deleted benchmark.
+- APG and AIS share one pipeline: `evaluate_automatic_segmentation.py --mode apg` and `--mode ais`
+  tune on the validation split and score the test split of the same joint model, in 2d and in 3d.
 
 The deleted scripts checked their mirrors against the library on every run (`anchors_match`,
 `scoring_matches`, `merge_matches`) and the mirrors agreed. That is why folding the merge fork back into
@@ -177,4 +200,5 @@ each step named. Points are sized in pixels of the image, so a zoomed step had t
 The v3 joint checkpoint improved APG on four of eight datasets but regressed AIS on seven of eight, with
 dynamicnuclearnet down 0.166 mSA and embedseg down 0.128 mSA. The decoder got worse for the
 post-processing path while the interactive branch improved. Nobody has localised that to a stage yet.
-`diagnose_apg_recall.py` is the instrument for it.
+The recall diagnostic that measured it was deleted on 2026-08-18 with the rest of the one-off scripts;
+its findings are the two sections above.
