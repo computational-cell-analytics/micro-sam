@@ -1,7 +1,7 @@
 """Run a small, deterministic APG optimization benchmark on ten validation datasets.
 
 The benchmark is deliberately bounded: one invocation evaluates one parameter configuration on
-240 representative 2d images and two representative crops from each of five 3d datasets. The
+240 representative 2d images and one representative crop from each of five 3d datasets. The
 default configuration is the current library default for APG with the best joint hvit_t checkpoint.
 
 No data is downloaded and the data root is treated as read-only. All manifests, checkpoint exports
@@ -77,7 +77,7 @@ LIVECELL_TYPES = ("A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SKOV3", "Sk
 DEFAULT_DATA_ROOT = Path("/mnt/vast-nhr/projects/cidas/cca/data")
 DEFAULT_OUTPUT_ROOT = Path("/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization")
 
-MANIFEST_SCHEMA_VERSION = 3
+MANIFEST_SCHEMA_VERSION = 5
 # DeepBacs only has 30 validation images. Keep all of them and use the ten remaining slots for DIC,
 # whose initially surprising score benefits most from additional coverage.
 SAMPLE_COUNTS_2D = {
@@ -87,11 +87,15 @@ SAMPLE_COUNTS_2D = {
     "deepbacs": 30,
     "dic_hepg2": 50,
 }
-TARGETS_3D = (0.5, 0.8)
-CROP_SHAPE_3D = (8, 256, 256)
-# An 8-slice crop is thinner than a typical C. elegans nucleus (about 11-13 slices in this
-# validation data), so it mainly measures objects severed by the benchmark itself.
-CROP_SHAPE_3D_OVERRIDES = {"celegans_atlas": (32, 256, 256)}
+TARGETS_3D = (0.5,)
+# Match the 512 x 512 training field of view and use enough depth to contain representative 3d
+# structure. C. elegans keeps the deeper crop needed to contain its 11-13-slice nuclei; its source
+# volumes are only 140 pixels wide in Y.
+CROP_SHAPE_3D = (12, 512, 512)
+CROP_SHAPE_3D_OVERRIDES = {"celegans_atlas": (32, 140, 512)}
+# SNEMI has 30 held-out slices after the training range. The general tuning code historically used
+# eight of them; this benchmark needs twelve to meet the minimum representative crop depth.
+VALIDATION_Z_RANGE_OVERRIDES = {"snemi": (0, 12)}
 CANDIDATE_GRID_3D = (4, 3, 3)
 
 # Conservative first-run estimates from the current A100. Observed times replace them as samples run.
@@ -390,7 +394,7 @@ def _even_starts(start: int, stop: int, crop_size: int, n_positions: int) -> Lis
 def _validation_z_range(dataset: str, depth: int) -> Tuple[int, int]:
     base_start = 70 if dataset == "snemi" else 0
     base_stop = depth
-    z_range = VAL_Z_RANGE.get(dataset)
+    z_range = VALIDATION_Z_RANGE_OVERRIDES.get(dataset, VAL_Z_RANGE.get(dataset))
     if z_range is None:
         return base_start, base_stop
     return base_start + z_range[0], min(base_start + z_range[1], base_stop)
@@ -412,8 +416,11 @@ def _scan_3d_source(
         raise RuntimeError(f"Expected a 3d label volume for '{dataset}', got shape {shape} at '{label_source}'.")
     z_start, z_stop = _validation_z_range(dataset, shape[0])
     valid_shape = (z_stop - z_start, shape[1], shape[2])
-    requested_crop_shape = CROP_SHAPE_3D_OVERRIDES.get(dataset, CROP_SHAPE_3D)
-    crop_shape = tuple(min(size, crop) for size, crop in zip(valid_shape, requested_crop_shape))
+    crop_shape = CROP_SHAPE_3D_OVERRIDES.get(dataset, CROP_SHAPE_3D)
+    # Do not silently shrink a crop and distort the encoder scale. A dataset may expose multiple
+    # source volumes (as EmbedSeg does), so skip undersized sources and select from those that fit.
+    if any(size < crop for size, crop in zip(valid_shape, crop_shape)):
+        return []
     starts = (
         _even_starts(z_start, z_stop, crop_shape[0], CANDIDATE_GRID_3D[0]),
         _even_starts(0, shape[1], crop_shape[1], CANDIDATE_GRID_3D[1]),
@@ -508,7 +515,7 @@ def _validate_manifest(manifest: Dict[str, Any], data_root: Path) -> None:
         if sample["object_count"] <= 0:
             raise RuntimeError(f"Manifest sample '{sample['sample_id']}' has empty ground truth.")
     expected = {(dataset, 2): SAMPLE_COUNTS_2D[dataset] for dataset in DATASETS_2D}
-    expected.update({(dataset, 3): 2 for dataset in DATASETS_3D})
+    expected.update({(dataset, 3): 1 for dataset in DATASETS_3D})
     if dict(counts) != expected:
         raise RuntimeError(f"Unexpected manifest sample counts: got {dict(counts)}, expected {expected}.")
 
@@ -534,6 +541,7 @@ def prepare_manifest(data_root: Path, manifest_path: Path) -> Dict[str, Any]:
             },
             "3d_candidate_grid": list(CANDIDATE_GRID_3D),
             "3d_complexity_targets": list(TARGETS_3D),
+            "3d_validation_z_range_overrides": VALIDATION_Z_RANGE_OVERRIDES,
             "complexity": "mean percentile rank of object count and foreground fraction",
         },
         "samples": samples,
