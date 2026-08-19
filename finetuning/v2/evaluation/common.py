@@ -709,6 +709,7 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
 
 def build_apg_segmenter(
     model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None,
+    export_root=None,
 ):
     """Build the automatic prompt generator from both halves of a joint checkpoint.
 
@@ -721,6 +722,7 @@ def build_apg_segmenter(
         device: The torch device.
         joint_checkpoint: The joint trainer checkpoint, without the '.pt' suffix.
         decoder_path: Decoder weights to use instead of the ones exported from the joint checkpoint.
+        export_root: Optional directory for the split checkpoint files. Defaults to JOINT_EXPORT_ROOT.
 
     Returns:
         The prompt generator, built through the library factory that the CLI and the API use.
@@ -728,8 +730,9 @@ def build_apg_segmenter(
     from micro_sam.v2.util import get_sam2_model
     from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
 
+    export_kwargs = {} if export_root is None else {"export_root": export_root}
     interactive_path, exported_decoder = export_joint_checkpoint(
-        model_type, joint_checkpoint, source_checksum=joint_checksum
+        model_type, joint_checkpoint, source_checksum=joint_checksum, **export_kwargs
     )
     model = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=interactive_path,
