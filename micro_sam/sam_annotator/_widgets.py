@@ -644,6 +644,49 @@ def _create_pbar_for_threadworker(initial_description=None):
     return pbar, pbar_signals
 
 
+def _mask_to_box(mask):
+    """The (x0, y0, x1, y1) bounding box of a boolean mask, in the order the SAM2 paths expect."""
+    ys, xs = np.nonzero(mask)
+    return np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype="float32")
+
+
+def _seed_mask(track_id, frame):
+    """The mask seeded for 'track_id' on 'frame', or None if the frame is not seeded."""
+    return AnnotatorState().seed_masks.get(track_id, {}).get(frame)
+
+
+def _set_seed_mask(track_id, frame, mask):
+    """Register 'mask' as the seed of 'track_id' on 'frame'."""
+    AnnotatorState().seed_masks.setdefault(track_id, {})[frame] = mask
+
+
+def _seed_frames(track_id):
+    """The frames seeded for 'track_id', in ascending order."""
+    return sorted(AnnotatorState().seed_masks.get(track_id, {}))
+
+
+def seed_widget():
+    """The seed panel, which is nested in the interactive tracking widget."""
+    interactive = AnnotatorState().widgets.get("interactive")
+    return getattr(interactive, "seed_panel", None)
+
+
+def _seed_refine_enabled():
+    """Whether the seed widget is set to refine the seeded masks before they condition propagation."""
+    widget = seed_widget()
+    return True if widget is None else bool(widget.refine_masks)
+
+
+def _drop_seed_masks(frame=None):
+    """Drop the seeded masks, either on one frame or (with 'frame=None') on all frames."""
+    state = AnnotatorState()
+    if frame is None:
+        state.seed_masks = {}
+        return
+    for seeds in state.seed_masks.values():
+        seeds.pop(frame, None)
+
+
 def _reset_tracking_state(viewer):
     """Reset the tracking state.
 
@@ -654,6 +697,7 @@ def _reset_tracking_state(viewer):
     # Reset the lineage and track id.
     state.current_track_id = 1
     state.lineage = {1: []}
+    _drop_seed_masks()
 
     # Reset the layer properties.
     viewer.layers["point_prompts"].property_choices["track_id"] = ["1"]
@@ -662,6 +706,10 @@ def _reset_tracking_state(viewer):
     # Reset the choices in the track_id menu (index 2: prompt, track_state, track_id).
     state.annotator._tracking_widget[2].value = "1"
     state.annotator._tracking_widget[2].choices = ["1"]
+
+    panel = seed_widget()
+    if panel is not None:
+        panel.refresh_status()
 
 
 #
@@ -748,7 +796,7 @@ def _mask_matched_objects(seg, prev_seg, preservation_threshold):
     return preserve_mask
 
 
-def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
+def _commit_impl(viewer, layer, preserve_mode, preservation_threshold, track_ids=None, preserve_ids=False):
     state = AnnotatorState()
 
     # Check whether all layers exist as expected or create new ones automatically.
@@ -765,19 +813,24 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     # Otherwise we run into type conversion errors later.
     dtype = viewer.layers["committed_objects"].data.dtype
     seg = viewer.layers[layer].data[bb].astype(dtype)
+    if track_ids is not None:  # Commit only the selected objects, leaving the others to work on.
+        seg = np.where(np.isin(seg, track_ids), seg, 0)
     shape = seg.shape
 
     # We parallelize these operations because they take quite long for large volumes.
 
-    # Compute the max id in the commited objects.
-    # id_offset = int(viewer.layers["committed_objects"].data.max())
-    full_shape = viewer.layers["committed_objects"].data.shape
-    id_offset = int(
-        elf.parallel.max(
-            viewer.layers["committed_objects"].data,
-            block_shape=util.get_block_shape(full_shape),
+    # Compute the max id in the commited objects. Tracking keeps its ids instead, so that a committed
+    # track is still recognisable by the id it was annotated with.
+    if preserve_ids:
+        id_offset = 0
+    else:
+        full_shape = viewer.layers["committed_objects"].data.shape
+        id_offset = int(
+            elf.parallel.max(
+                viewer.layers["committed_objects"].data,
+                block_shape=util.get_block_shape(full_shape),
+            )
         )
-    )
 
     # Compute the mask for the current object.
     # mask = seg != 0
@@ -1149,9 +1202,33 @@ def commit_track(
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
-    # Commit the segmentation layer.
+    commit_tracks(viewer, layer, preserve_mode, preservation_threshold, commit_path, track_ids=None)
+
+
+def commit_tracks(viewer, layer, preserve_mode, preservation_threshold, commit_path, track_ids):
+    """Commit tracks to the committed-objects layer.
+
+    Args:
+        viewer: The napari viewer.
+        layer: The layer to commit.
+        preserve_mode: How to preserve already committed objects. See `commit_track`.
+        preservation_threshold: The overlap threshold for preserving objects.
+        commit_path: Optional filepath for saving the committed results and prompts.
+        track_ids: The track ids to commit, or None for all of them. The tracks that are not
+            committed stay in the layer, and the tracking state is kept so they can be worked on.
+    """
+    selected_ids = track_ids
+
+    # Warn instead of silently merging a track into a committed object of the same id.
+    if selected_ids is not None:
+        committed = viewer.layers["committed_objects"].data
+        clashing = [i for i in selected_ids if np.any(committed == i)]
+        if clashing:
+            show_info(f"Track(s) {clashing} are already committed. They will be merged.")
+
+    # Commit the segmentation layer. Track ids are kept, see '_commit_impl'.
     id_offset, seg, mask, bb = _commit_impl(
-        viewer, layer, preserve_mode, preservation_threshold
+        viewer, layer, preserve_mode, preservation_threshold, track_ids=selected_ids, preserve_ids=True
     )
 
     # Update the lineages.
@@ -1183,7 +1260,13 @@ def commit_track(
         )
 
     if layer == "current_object":
-        vutil.clear_annotations(viewer)
+        if selected_ids is None:
+            vutil.clear_annotations(viewer)
+        else:
+            # Remove only the committed tracks, so the others stay in the layer to work on.
+            data = viewer.layers["current_object"].data
+            data[np.isin(data, selected_ids)] = 0
+            viewer.layers["current_object"].refresh()
 
     # Create / update the tracking layer.
     layer_name = "tracks"
@@ -1198,8 +1281,10 @@ def commit_track(
     else:
         viewer.add_tracks(track_data, name=layer_name, graph=parent_graph)
 
-    # Reset the tracking state.
-    _reset_tracking_state(viewer)
+    # Reset the tracking state. A partial commit keeps it, since the tracks that were not committed
+    # still need their track ids and seeds.
+    if selected_ids is None:
+        _reset_tracking_state(viewer)
 
     # Perform garbage collection.
     gc.collect()
@@ -1413,10 +1498,12 @@ def _validate_layers(
     state.annotator._require_layers()
 
     if not automatic_segmentation:
-        # Check prompts layer.
+        # A seeded mask is a prompt too, but lives in the state rather than in a layer.
+        have_seeds = any(seeds for seeds in state.seed_masks.values())
         if (
             len(viewer.layers["prompts"].data) == 0
             and len(viewer.layers["point_prompts"].data) == 0
+            and not have_seeds
         ):
             msg = "No prompts were given. Please provide prompts to run interactive segmentation."
             return _generate_message("error", msg)
@@ -1542,7 +1629,8 @@ def _push_volume_prompts(segmenter, plan):
         elif kind == "box":
             segmenter.add_box_prompts(frame_ids=frame_id, boxes=payload, object_id=object_ids)
         else:
-            segmenter.add_mask_prompts(frame_ids=frame_id, masks=payload, object_id=object_ids)
+            # A drawn polygon or ellipse is an outline, so it is refined into the object.
+            segmenter.add_mask_prompts(frame_ids=frame_id, masks=payload, object_id=object_ids, refine=True)
 
 
 def _segment_object_2d(viewer, batched=False):
@@ -2743,6 +2831,31 @@ def _mother_division_frame(point_layer, lineage, track_id):
     return None
 
 
+def _retarget_track_id(viewer, track_id):
+    """Make 'track_id' the current track, registering it in the lineage and the menus if it is new.
+
+    Seeding from an existing result adopts the id of the object it was seeded from, so the committed
+    track carries the id it had in that result instead of the value the menu happened to hold.
+    """
+    state = AnnotatorState()
+    track_id = int(track_id)
+    if state.current_track_id == track_id and track_id in state.lineage:
+        return
+
+    state.lineage.setdefault(track_id, [])
+    state.current_track_id = track_id
+
+    # (index 2: prompt, track_state, track_id). Setting the value fires 'track_id_changed', which
+    # writes the id back to the state and to the prompt layers.
+    track_ids = sorted(state.lineage.keys())
+    menu = state.annotator._tracking_widget[2]
+    menu.choices = list(map(str, track_ids))
+    menu.value = str(track_id)
+
+    viewer.layers["point_prompts"].property_choices["track_id"] = list(map(str, track_ids))
+    viewer.layers["prompts"].property_choices["track_id"] = list(map(str, track_ids))
+
+
 def _update_lineage(viewer, mother=None):
     """Record a division for 'mother' by seeding two daughter track ids and refreshing the menus.
 
@@ -3079,6 +3192,16 @@ class UnifiedSegmentWidget(_WidgetBase):
 
     def _segment_track_on_frame(self, state, t, track_id, shape):
         """Segment a single track's object on frame 't'. Returns the binary mask or None."""
+        # SAM2 conditions a frame on either a mask or points / boxes, so a seed replaces the prompts.
+        seed = _seed_mask(track_id, t)
+        if seed is not None:
+            if not seed.any():  # An empty seed has no bounding box to prompt with.
+                return None
+            if not _seed_refine_enabled():  # Propagation conditions on it unchanged, so show that.
+                return seed
+            seg = state.interactive_segmenter.segment_slice(frame_idx=t, boxes=[_mask_to_box(seed)], masks=[seed])
+            return None if seg is None else (np.asarray(seg).squeeze() > 0)
+
         prompt_layer = self._viewer.layers["prompts"]
         prompts = vutil.collect_frame_prompts(
             self._viewer.layers["point_prompts"], prompt_layer, shape, i=t, track_id=track_id,
@@ -3327,7 +3450,23 @@ class UnifiedSegmentWidget(_WidgetBase):
             )
             z_scribbles = vutil.get_scribble_slices(box_layer, track_id=track_id)
             have_positive_cue = False
+
+            # A seeded frame is conditioned on its mask, so its drawn prompts are skipped below.
+            seeded_frames = set()
+            for t in _seed_frames(track_id):
+                seed = _seed_mask(track_id, t)
+                seeded_frames.add(t)
+                if not seed.any():  # 'add_mask_prompts' skips an empty mask as well.
+                    continue
+                state.interactive_segmenter.add_mask_prompts(
+                    frame_ids=t, masks=[seed], object_id=None, refine=_seed_refine_enabled(),
+                )
+                have_positive_cue = True
+                prompted_frames.append(t)
+
             for t in sorted({int(t) for t in z_points} | {int(t) for t in z_scribbles}):
+                if t in seeded_frames:
+                    continue
                 # Exclude division markers: they signal a lineage event and bound propagation
                 # (see below), but must not be fed to SAM2 as conditioning prompts - doing so
                 # adds a second conditioning frame that corrupts the mother track's propagation.
@@ -3352,6 +3491,8 @@ class UnifiedSegmentWidget(_WidgetBase):
                 if box_layer.data else np.zeros(0, dtype=int)
             )
             for t in z_boxes:
+                if int(t) in seeded_frames:
+                    continue
                 boxes, _ = vutil.shape_layer_to_prompts(box_layer, shape=shape[1:], i=int(t), track_id=track_id)
                 for box in boxes:
                     state.interactive_segmenter.add_box_prompts(frame_ids=int(t), boxes=[box])
@@ -3842,6 +3983,12 @@ class InteractiveTrackingWidget(_WidgetBase):
         button_row.addWidget(self.clear_button)
         self.layout().addLayout(button_row)
 
+        # Seeding a track from an existing segmentation, collapsed by default.
+        self.seed_panel = SeedTrackWidget(self._viewer)
+        self.layout().addWidget(
+            _make_collapsible(self.seed_panel, title="Track Correction", tooltip=get_tooltip("seed_track", "panel"))
+        )
+
     def _align_menu_rows(self):
         # Each menu row is a QHBoxLayout of [QLabel, QComboBox]. Insert a stretch between them so the
         # label stays left and the (fixed-width) combo box is right-aligned. Idempotent, since the
@@ -3874,11 +4021,247 @@ class InteractiveTrackingWidget(_WidgetBase):
         else:
             i = int(self._viewer.dims.point[0])
             vutil.clear_annotations_slice(self._viewer, i=i)
+            # Seeds are prompts too, so clearing a frame drops them.
+            _drop_seed_masks(frame=i)
+            panel = seed_widget()
+            if panel is not None:
+                panel.refresh_status()
 
         state = AnnotatorState()
         if state.interactive_segmenter is not None:
             state.interactive_segmenter.reset_predictor()
         gc.collect()
+
+
+class SeedTrackWidget(_WidgetBase):
+    """Seed the current track from an object of an existing segmentation.
+
+    The object is read from the layer's selected label, or from the label under the track's positive
+    point prompts, and its masks are pushed to the predictor when 'Segment Object' runs. 'All Frames'
+    seeds every frame it appears on, so propagation only fills in the frames the result is missing.
+
+    Args:
+        viewer: The napari viewer.
+        parent: The parent Qt widget.
+    """
+
+    def __init__(self, viewer, parent=None):
+        super().__init__(parent=parent)
+        self._viewer = viewer
+        self.all_frames = True
+        self.refine_masks = True
+        self._create_widget()
+
+    def _create_widget(self):
+        # Label left, dropdown right, so the row does not take two lines.
+        layer_label = QtWidgets.QLabel("Tracking Result:")
+        layer_label.setToolTip(get_tooltip("seed_track", "mask_layer"))
+        self.mask_selection = create_widget(annotation=napari.layers.Labels)
+        self.mask_selection.native.setToolTip(get_tooltip("seed_track", "mask_layer"))
+        layer_row = QtWidgets.QHBoxLayout()
+        layer_row.addWidget(layer_label)
+        layer_row.addWidget(self.mask_selection.native, 1)
+        self.layout().addLayout(layer_row)
+
+        self.all_frames_checkbox = self._add_boolean_param(
+            "all_frames", self.all_frames, title="All Frames",
+            tooltip=get_tooltip("seed_track", "all_frames"),
+        )
+        self.all_frames_checkbox.stateChanged.connect(self._on_all_frames_changed)
+        self.refine_masks_checkbox = self._add_boolean_param(
+            "refine_masks", self.refine_masks, title="Refine Masks",
+            tooltip=get_tooltip("seed_track", "refine_masks"),
+        )
+        self.refine_masks_checkbox.stateChanged.connect(self._on_refine_masks_changed)
+
+        self.seed_button = QtWidgets.QPushButton("Seed Mask")
+        self.seed_button.setToolTip(get_tooltip("seed_track", "seed_button"))
+        self.seed_button.clicked.connect(self.seed)
+        self.drop_button = QtWidgets.QPushButton("Drop Seed")
+        self.drop_button.setToolTip(get_tooltip("seed_track", "drop_button"))
+        self.drop_button.clicked.connect(self.drop)
+        self.commit_button = QtWidgets.QPushButton("Commit Track")
+        self.commit_button.setToolTip(get_tooltip("seed_track", "commit_button"))
+        self.commit_button.clicked.connect(self.commit)
+
+        checkbox_row = QtWidgets.QHBoxLayout()
+        checkbox_row.addWidget(self.all_frames_checkbox)
+        checkbox_row.addStretch()
+        checkbox_row.addWidget(self.refine_masks_checkbox)
+        self.layout().addLayout(checkbox_row)
+
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addWidget(self.seed_button)
+        button_row.addWidget(self.drop_button)
+        button_row.addWidget(self.commit_button)
+        self.layout().addLayout(button_row)
+
+        self.status = QtWidgets.QLabel()
+        self.layout().addWidget(self.status)
+        self.refresh_status()
+
+    def _on_all_frames_changed(self, state):
+        self.all_frames = bool(state)
+
+    def _on_refine_masks_changed(self, state):
+        self.refine_masks = bool(state)
+
+    def set_mask_layer(self, layer):
+        """Select 'layer' in the mask layer dropdown, e.g. after a tracking result was loaded."""
+        self.mask_selection.reset_choices()
+        try:
+            self.mask_selection.value = layer
+        except ValueError:  # The layer is not among the choices (it is not a label layer).
+            pass
+
+    def refresh_status(self):
+        """Update the line reporting which frames the current track is seeded on."""
+        state = AnnotatorState()
+        track_id = state.current_track_id
+        frames = [] if track_id is None else _seed_frames(track_id)
+        if not frames:
+            self.status.setText(f"Track {track_id}: no seeds")
+        elif len(frames) > 6:  # A dense seeding covers too many frames to list.
+            self.status.setText(f"Track {track_id}: {len(frames)} seeds, frames {frames[0]}-{frames[-1]}")
+        else:
+            self.status.setText(f"Track {track_id}: seeds on frame {', '.join(map(str, frames))}")
+
+    def _selected_mask_layer(self):
+        """The chosen label layer, or None (with a message) if it cannot be used to seed."""
+        layer = self.mask_selection.value
+        if layer is None:
+            _generate_message("error", "There is no label layer to seed the track from.")
+            return None
+        state = AnnotatorState()
+        if state.image_shape is not None and tuple(layer.data.shape) != tuple(state.image_shape):
+            _generate_message(
+                "error",
+                f"The layer '{layer.name}' has shape {tuple(layer.data.shape)}, which does not match "
+                f"the timeseries shape {tuple(state.image_shape)}."
+            )
+            return None
+        return layer
+
+    def _object_ids(self, frame, layer, track_id):
+        """The ids to seed from: the layer's selected label, else the labels under the point prompts."""
+        selected = int(layer.selected_label)
+        if selected != 0:
+            if not np.any(frame == selected):
+                _generate_message(
+                    "error",
+                    f"The selected label {selected} of '{layer.name}' is not present on this frame. "
+                    "Pick an object with the label picker, or place a positive point prompt on it."
+                )
+                return []
+            return [selected]
+
+        # 'with_stop_annotation=False' so a lone negative point is ignored, not read as a stop.
+        points, labels = vutil.point_layer_to_prompts(
+            self._viewer.layers["point_prompts"], i=int(self._viewer.dims.point[0]),
+            track_id=track_id, with_stop_annotation=False,
+        )
+        ids = {
+            int(frame[y, x]) for y, x in np.round(points[labels == 1]).astype(int)
+            if 0 <= y < frame.shape[0] and 0 <= x < frame.shape[1] and frame[y, x] != 0
+        }
+        if not ids:
+            _generate_message(
+                "error",
+                "No object was selected. Either pick a label of the mask layer with the label picker, "
+                "or place a positive point prompt on the object you want to seed the track from."
+            )
+        return sorted(ids)
+
+    def seed(self):
+        """Register the selected object of the mask layer as the current track's seed."""
+        state = AnnotatorState()
+        if state.image_shape is None:
+            _generate_message("error", "There is no timeseries loaded yet.")
+            return
+        layer = self._selected_mask_layer()
+        if layer is None:
+            return
+
+        t = int(self._viewer.dims.point[0])
+        object_ids = self._object_ids(np.asarray(layer.data[t]), layer, state.current_track_id)
+        if not object_ids:
+            return
+
+        # Adopt the object's id as the track id, so the committed track keeps the id it has here.
+        _retarget_track_id(self._viewer, object_ids[0])
+        track_id = state.current_track_id
+
+        # The object is identified on the current frame, then seeded on every frame it appears on.
+        frames = range(layer.data.shape[0]) if self.all_frames else [t]
+        seeded = []
+        for frame_id in frames:
+            mask = np.isin(np.asarray(layer.data[frame_id]), object_ids)
+            if mask.any():
+                _set_seed_mask(track_id, int(frame_id), mask)
+                seeded.append(int(frame_id))
+
+        # Not painted into 'current_object': the division logic reads that layer for existing results.
+        self.refresh_status()
+        ids = ", ".join(map(str, object_ids))
+        show_info(f"Seeded track {track_id} from object {ids} on {len(seeded)} frame(s).")
+
+    def drop(self):
+        """Drop the current track's seeds, so its drawn prompts count again."""
+        state = AnnotatorState()
+        track_id = state.current_track_id
+        seeds = state.seed_masks.get(track_id, {})
+        if not self.all_frames:
+            t = int(self._viewer.dims.point[0])
+            if t not in seeds:
+                show_info(f"Track {track_id}: no seed on frame {t}.")
+                return
+            seeds.pop(t)
+            show_info(f"Dropped seed of track {track_id} on frame {t}.")
+        else:
+            if not seeds:
+                show_info(f"Track {track_id}: no seeds to drop.")
+                return
+            n = len(seeds)
+            seeds.clear()
+            show_info(f"Dropped {n} seed(s) of track {track_id}.")
+        self.refresh_status()
+
+    def commit(self):
+        """Commit the current track, keeping the other tracks and the tracking state.
+
+        A track that is already correct in the mask layer is copied over as it is, so it does not
+        have to be segmented first. Otherwise the segmentation of the current track is committed.
+        """
+        state = AnnotatorState()
+        track_id = state.current_track_id
+        current_object = self._viewer.layers["current_object"]
+        source = "segmentation"
+
+        if not np.any(current_object.data == track_id):
+            # Nothing segmented for this track: copy the selected object of the mask layer instead.
+            layer = self._selected_mask_layer()
+            if layer is None:
+                return
+            t = int(self._viewer.dims.point[0])
+            object_ids = self._object_ids(np.asarray(layer.data[t]), layer, track_id)
+            if not object_ids:
+                return
+            # Adopt the object's id, so it keeps the id it has in the mask layer.
+            _retarget_track_id(self._viewer, object_ids[0])
+            track_id = state.current_track_id
+            for frame_id in range(layer.data.shape[0]):
+                mask = np.isin(np.asarray(layer.data[frame_id]), object_ids)
+                if mask.any():
+                    current_object.data[frame_id][mask] = track_id
+            current_object.refresh()
+            source = f"'{layer.name}'"
+
+        commit_tracks(
+            self._viewer, "current_object", preserve_mode="pixels", preservation_threshold=0.75,
+            commit_path=None, track_ids=[track_id],
+        )
+        self.refresh_status()
+        show_info(f"Committed track {track_id} from {source}.")
 
 
 class AutoSegmentV1Widget(_WidgetBase):

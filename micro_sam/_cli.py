@@ -150,9 +150,19 @@ def annotator_segmentation(
 
 
 @annotator_group.command("tracking")
+@click.option(
+    "-t", "--tracking_result",
+    help="Optional filepath to an existing tracking result (a TYX label volume, e.g. from trackastra). "
+    "Its objects can be used to seed a track, so that SAM2 refines and propagates an existing mask."
+)
+@click.option(
+    "-tk", "--tracking_key", default=None,
+    help="The key for opening the tracking result. Same rules as '--key'."
+)
 @_interactive_options
 def annotator_tracking(
     input_, key, embedding_path, model_type, checkpoint_path, decoder_path, device, tile_shape, halo,
+    tracking_result, tracking_key,
 ):
     """Interactively track cells in a timeseries."""
     from .util import load_image_data
@@ -160,9 +170,11 @@ def annotator_tracking(
     from .v2.util import DEFAULT_MODEL
 
     image = load_image_data(input_, key=key)
+    tracks = None if tracking_result is None else load_image_data(tracking_result, key=tracking_key)
     run_annotator_tracking(
         image,
         embedding_path=embedding_path,
+        tracking_result=tracks,
         model_type=model_type or DEFAULT_MODEL,
         tile_shape=tile_shape or None,
         halo=halo or None,

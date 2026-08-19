@@ -75,6 +75,9 @@ class AnnotatorState(metaclass=Singleton):
     lineage: Optional[Dict] = None
     committed_lineages: Optional[List[Dict]] = None
 
+    # Masks seeded from an existing segmentation, as '{track_id: {frame: boolean mask}}'.
+    seed_masks: Dict[int, Dict[int, np.ndarray]] = field(default_factory=dict)
+
     # Dict to keep track of all widgets, so that we can update their states.
     widgets: Dict[str, QWidget] = field(default_factory=dict)
 
@@ -430,6 +433,7 @@ class AnnotatorState(metaclass=Singleton):
         self.current_track_id = None
         self.lineage = None
         self.committed_lineages = None
+        self.seed_masks = {}
         self.z_range = None
         self.data_signature = None
         self.interactive_segmenter = None

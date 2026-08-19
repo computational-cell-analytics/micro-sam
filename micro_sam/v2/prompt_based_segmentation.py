@@ -645,18 +645,24 @@ class PromptableSegmentation3D:
     def add_mask_prompts(
         self,
         frame_ids: Union[int, List[int]],
-        masks: Optional[List[np.ndarray]] = None,
-        object_id: Optional[Union[int, List[int]]] = None,
+        masks: Optional[List[np.ndarray]],
+        object_id: Optional[Union[int, List[int]]],
+        refine: bool,
     ):
         """Add mask prompts (full-resolution 2d boolean masks) to the persistent SAM2 state.
 
-        A napari polygon or ellipse is filled into a mask (from 'shape_layer_to_prompts'). We first
-        refine the drawn shape into the object on its seed frame (box + soft mask-logit cue, as in
-        the per-slice path), then seed propagation with the refined mask - so the seed slice matches
-        the per-slice result instead of reproducing the raw outline. SAM2's video predictor conditions
-        a frame on either a mask or points/box (not both), so a mask prompt does not combine with
-        points on the same object/frame. A mask already pushed (same object, frame, content) is
-        skipped so re-runs only add newly drawn masks.
+        SAM2 conditions a frame on either a mask or points / box, so a mask does not combine with
+        points on the same object and frame. A mask already pushed is skipped, so a re-run only adds
+        the new ones.
+
+        Args:
+            frame_ids: The frame(s) to add the mask(s) to.
+            masks: The full-resolution 2d boolean masks.
+            object_id: The object id(s) the masks belong to.
+            refine: Whether to refine the mask into the object, cued by its bounding box and mask
+                logits, before it conditions propagation. Pass False for a mask that is already a
+                segmentation, so that it conditions propagation as it is. A refined mask matches the
+                per-slice result, which suits a drawn outline.
         """
         if masks is None or len(masks) == 0:
             return
@@ -675,19 +681,20 @@ class PromptableSegmentation3D:
                 continue
             seen.add(signature)
 
-            # Refine the drawn shape into the object on the seed frame, then seed propagation with the
-            # refined mask. The box is the shape's bounding box (nonzero extent of the filled mask).
             ys, xs = np.nonzero(mask)
             if len(ys) == 0:
                 continue
-            box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype="float32")  # (x0, y0, x1, y1)
-            refined = self._image_style_predict(frame_id, box=box, mask=mask)
+
+            if refine:
+                # Refine the drawn shape into the object, cued by its bounding box and mask logits.
+                box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype="float32")  # (x0, y0, x1, y1)
+                mask = self._image_style_predict(frame_id, box=box, mask=mask)
 
             self.predictor.add_new_mask(
                 inference_state=self.inference_state,
                 frame_idx=frame_id,
                 obj_id=obj_id,
-                mask=self._prepare_mask(refined),
+                mask=self._prepare_mask(mask),
             )
 
     def _propagate_in_direction(
@@ -1236,7 +1243,7 @@ class TiledPromptableSegmentation3D:
                 frame_ids=frame_ids, boxes=np.array(local_boxes), object_id=tile_ids[tile_id],
             )
 
-    def add_mask_prompts(self, frame_ids, masks=None, object_id=None):
+    def add_mask_prompts(self, frame_ids, masks, object_id, refine):
         """Add mask prompts. Each mask is routed to the tiles its filled region overlaps, cropped to
         each tile's outer block, and added there (so a mask spanning tiles is added on both sides)."""
         if masks is None or len(masks) == 0:
@@ -1256,7 +1263,7 @@ class TiledPromptableSegmentation3D:
             for tid in _box_to_tiles(self.tiling, self.halo, box_yx):
                 self._get_segmenter(tid).add_mask_prompts(
                     frame_ids=frame_ids, masks=[_crop_mask_to_tile(self.tiling, self.halo, tid, mask)],
-                    object_id=obj_id,
+                    object_id=obj_id, refine=refine,
                 )
 
     def predict(self, update_progress=None, early_stop_patience=None, z_range=None):

@@ -26,6 +26,17 @@ STATE_COLOR_CYCLE = [
 """@private"""
 
 
+TRACKING_RESULT_LAYER = "tracking_result"
+"""@private"""
+
+
+def _refresh_seed_status():
+    """Re-render the seed widget's status line, e.g. after the current track changed."""
+    panel = widgets.seed_widget()
+    if panel is not None:
+        panel.refresh_status()
+
+
 def _validate_tracking_model_type(model_type):
     if not model_type.startswith("hvit_"):
         raise ValueError(
@@ -100,6 +111,7 @@ def create_tracking_menu(
             if new_id != track_id_menu.value:
                 track_id_menu.value = new_id
                 state.current_track_id = int(new_id)
+                _refresh_seed_status()
 
     # def update_state_boxes(event):
     #     new_state = str(box_layer.current_properties["state"][0])
@@ -112,6 +124,7 @@ def create_tracking_menu(
             if new_id != track_id_menu.value:
                 track_id_menu.value = new_id
                 state.current_track_id = int(new_id)
+                _refresh_seed_status()
 
     points_layer.events.current_properties.connect(update_state)
     points_layer.events.current_properties.connect(update_track_id)
@@ -134,6 +147,7 @@ def create_tracking_menu(
         except KeyError:
             pass
         state.current_track_id = int(new_track_id)
+        _refresh_seed_status()
 
     # def state_changed_boxes(new_state):
     #     current_properties = box_layer.current_properties
@@ -418,7 +432,7 @@ class AnnotatorTracking(_AnnotatorBase):
         state.lineage = {1: []}
         state.committed_lineages = []
 
-    def _update_image(self):
+    def _update_image(self, tracking_result=None):
         super()._update_image()
         self._init_track_state()
         state = AnnotatorState()
@@ -427,11 +441,43 @@ class AnnotatorTracking(_AnnotatorBase):
         else:
             state.autoseg_state = vutil._load_amg_state(state.embedding_path)
 
+        if tracking_result is not None:
+            self._set_tracking_result(tracking_result)
+
+    def _set_tracking_result(self, tracking_result):
+        """Show an existing tracking result in its own layer, to seed tracks from its masks.
+
+        Kept separate from 'committed_objects' so it stays a reference while refined tracks commit.
+        """
+        state = AnnotatorState()
+        if state.image_shape is None:
+            raise RuntimeError("A tracking result can only be loaded once a timeseries is selected.")
+
+        tracking_result = np.asarray(tracking_result)
+        if tuple(tracking_result.shape) != tuple(state.image_shape):
+            raise ValueError(
+                f"The tracking result of shape {tracking_result.shape} does not match "
+                f"the timeseries shape {tuple(state.image_shape)}."
+            )
+
+        if TRACKING_RESULT_LAYER in self._viewer.layers:
+            layer = self._viewer.layers[TRACKING_RESULT_LAYER]
+            layer.data = tracking_result
+        else:
+            layer = self._viewer.add_labels(data=tracking_result, name=TRACKING_RESULT_LAYER)
+        if state.image_scale is not None:
+            layer.scale = state.image_scale
+
+        # Preselect it in the seed widget, so 'Seed Mask' reads the loaded result.
+        panel = widgets.seed_widget()
+        if panel is not None:
+            panel.set_mask_layer(layer)
+
 
 def annotator_tracking(
     image: np.ndarray,
     embedding_path: Optional[str] = None,
-    # tracking_result: Optional[str] = None,
+    tracking_result: Optional[np.ndarray] = None,
     model_type: str = DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
@@ -447,6 +493,9 @@ def annotator_tracking(
     Args:
         image: The image data.
         embedding_path: Filepath for saving the precomputed embeddings.
+        tracking_result: An existing tracking result (a TYX label volume, e.g. from trackastra) to
+            load into the tool. It is shown in the 'tracking_result' layer and its objects can be
+            used to seed a track, so SAM2 refines and propagates an existing mask.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         tile_shape: Shape of tiles for tiled embedding prediction.
@@ -495,7 +544,8 @@ def annotator_tracking(
     annotator = AnnotatorTracking(viewer, reset_state=False)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
-    annotator._update_image()
+    # And load the tracking result into its own layer if one was given.
+    annotator._update_image(tracking_result=tracking_result)
 
     # Add the annotator widget to the viewer and sync widgets.
     viewer.window.add_dock_widget(annotator, name=get_dock_title("tracking"))
