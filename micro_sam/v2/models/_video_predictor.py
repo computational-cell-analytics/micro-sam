@@ -191,10 +191,9 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         host reader can observe the buffer the allocator recycled from the previous call.
 
         This is a host barrier, so it is called only where a host read follows: the consolidation
-        across objects and the dtype restore below. Propagation hands out the on-device masks and
-        copies the offloaded tensors back on the stream that wrote them, so it needs no wait per object
-        and frame. The wait covers that stream rather than the whole device, so a second model replica
-        in the batched pipeline keeps running.
+        across objects, the dtype restore below and the batched-memory concatenation during propagation.
+        The wait covers the current stream rather than the whole device, so a second model replica in
+        the batched pipeline keeps running.
         """
         if not inference_state.get("offload_state_to_cpu"):
             return
@@ -520,6 +519,9 @@ class CustomVideoPredictor(SAM2VideoPredictor):
                 else:
                     to_track.append(obj_idx)
 
+            if to_track:
+                # '_BatchedMemory' concatenates offloaded entries on the host.
+                self._wait_for_offloaded_state(inference_state)
             for group in self._memory_groups(inference_state, to_track):
                 pred_masks = self._track_frame_batch(inference_state, group, frame_idx, reverse)
                 for index, obj_idx in enumerate(group):

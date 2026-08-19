@@ -1054,10 +1054,13 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         """
         if ndim != 2:
             raise ValueError(f"Tiled prompt generation supports 2d images only, got ndim={ndim}.")
+        if image_embeddings is None and (tile_shape is None or halo is None):
+            raise ValueError("Both 'tile_shape' and 'halo' have to be passed for the tiled generator.")
+
+        if self._temporary_embedding_path is not None:
+            self.clear_state()
 
         if image_embeddings is None:
-            if tile_shape is None or halo is None:
-                raise ValueError("Both 'tile_shape' and 'halo' have to be passed for the tiled generator.")
             path = save_path
             if path is None:
                 self._temporary_embedding_path = make_temp_embedding_path()

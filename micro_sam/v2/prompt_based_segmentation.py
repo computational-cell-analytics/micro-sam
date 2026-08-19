@@ -514,7 +514,9 @@ class PromptableSegmentation3D:
         for (object_id, frame_id), pushed in masks.items():
             if object_id not in object_ids:
                 continue
-            for mask in pushed.values():
+            seen = self._pushed_masks.setdefault((object_id, frame_id), {})
+            for signature, mask in pushed.items():
+                seen[signature] = mask
                 self.predictor.add_new_mask(
                     inference_state=self.inference_state, frame_idx=frame_id, obj_id=object_id, mask=mask,
                 )
@@ -802,6 +804,7 @@ class PromptableSegmentation3D:
             return self._propagate_both_directions(update_progress, early_stop_patience, z_range)
 
         snapshot = (dict(self._pushed_points), dict(self._pushed_boxes), dict(self._pushed_masks))
+        prompt_signatures = set(self._prompt_signatures)
         video_segments = {}
         for object_ids in groups.values():
             self._replay_prompts(snapshot, set(object_ids))
@@ -809,6 +812,9 @@ class PromptableSegmentation3D:
                 update_progress, early_stop_patience, z_range
             ).items():
                 video_segments.setdefault(frame, {}).update(per_object)
+
+        self._replay_prompts(snapshot, set().union(*groups.values()))
+        self._prompt_signatures = prompt_signatures
         return video_segments
 
     def _propagate_both_directions(self, update_progress=None, early_stop_patience=None, z_range=None):

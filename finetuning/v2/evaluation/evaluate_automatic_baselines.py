@@ -65,9 +65,6 @@ def _load_cellpose(model_type, device):
     from cellpose import models
     use_gpu = (device != "cpu") and torch.cuda.is_available()
 
-    if model_type in getattr(models, "MODEL_NAMES", ()):
-        return models.CellposeModel(gpu=use_gpu, pretrained_model=model_type)
-
     if model_type in ("cyto", "cyto2", "cyto3", "nuclei"):
         if not hasattr(models, "Cellpose"):
             raise RuntimeError(
@@ -75,6 +72,9 @@ def _load_cellpose(model_type, device):
                 f"{getattr(models, 'MODEL_NAMES', ())}."
             )
         return models.Cellpose(gpu=use_gpu, model_type=model_type)
+
+    if model_type in getattr(models, "MODEL_NAMES", ()):
+        return models.CellposeModel(gpu=use_gpu, pretrained_model=model_type)
 
     return models.CellposeModel(gpu=use_gpu, model_type=model_type)
 

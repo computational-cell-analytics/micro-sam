@@ -80,8 +80,8 @@ def run_single_frame_inference(monkeypatch, inference_state, autocasts, calls=1)
     return events
 
 
-def test_propagation_does_not_wait_per_object_and_frame(monkeypatch):
-    """Propagation reads only the on-device masks, so the offload must not put a barrier in its loop.
+def test_single_frame_inference_does_not_wait_after_each_offload(monkeypatch):
+    """Returning on-device masks does not require waiting for the offloaded state.
 
     SAM2 calls '_run_single_frame_inference' once per object per frame. A host wait there stops the
     next object from being queued while the previous transfer finishes.
@@ -91,6 +91,40 @@ def test_propagation_does_not_wait_per_object_and_frame(monkeypatch):
     )
 
     assert events == []
+
+
+def test_propagation_waits_before_batching_offloaded_memory(monkeypatch):
+    """The host concatenation must not read an unfinished device-to-host copy."""
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    events = []
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    predictor.clear_non_cond_mem_around_input = False
+    monkeypatch.setattr(predictor, "propagate_in_video_preflight", lambda state: None)
+    monkeypatch.setattr(predictor, "_get_obj_num", lambda state: 1)
+    monkeypatch.setattr(
+        torch.cuda, "current_stream", lambda device: SimpleNamespace(synchronize=lambda: events.append("wait"))
+    )
+    monkeypatch.setattr(
+        predictor, "_track_frame_batch",
+        lambda state, group, frame_idx, reverse: events.append("batch") or torch.zeros(1, 1, 2, 2),
+    )
+    monkeypatch.setattr(predictor, "_get_orig_video_res_output", lambda state, masks: (masks, masks))
+    inference_state = {
+        "num_frames": 2,
+        "obj_ids": [1],
+        "device": "cuda:0",
+        "offload_state_to_cpu": True,
+        "output_dict_per_obj": {
+            0: {"cond_frame_outputs": {0: frame_output(1.0)}, "non_cond_frame_outputs": {}}
+        },
+        "frames_tracked_per_obj": {0: {}},
+    }
+
+    outputs = list(predictor.propagate_in_video(inference_state, start_frame_idx=1, max_frame_num_to_track=1))
+
+    assert len(outputs) == 1
+    assert events == ["wait", "batch"]
 
 
 def test_state_kept_on_the_device_is_not_awaited(monkeypatch):

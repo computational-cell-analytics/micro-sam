@@ -254,3 +254,55 @@ def test_tiled_generator_cannot_serialize_its_state(monkeypatch):
         segmenter.get_state()
     with pytest.raises(NotImplementedError):
         segmenter.set_state({})
+
+
+def test_reinitializing_tiled_generator_removes_the_previous_temporary_store(monkeypatch):
+    class Features:
+        attrs = {"shape": (32, 32), "tile_shape": (16, 16), "halo": (4, 4)}
+
+    paths = iter(["first.zarr", "second.zarr"])
+    removed = []
+    precompute_paths = []
+
+    def precompute(predictor, image, **kwargs):
+        precompute_paths.append(kwargs["save_path"])
+        return {"features": Features()}
+
+    monkeypatch.setattr("micro_sam.v2.automatic_prompt_generation.make_temp_embedding_path", lambda: next(paths))
+    monkeypatch.setattr("micro_sam.v2.automatic_prompt_generation.precompute_image_embeddings", precompute)
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.TiledUniSAM2InstanceSegmentation.initialize",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.shutil.rmtree",
+        lambda path, **kwargs: removed.append(path),
+    )
+
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._predictor = types.SimpleNamespace(reset_predictor=lambda: None)
+    segmenter._prediction = None
+    segmenter._is_initialized = False
+    segmenter._image_embeddings = None
+    segmenter._volume = None
+    segmenter._propagator = None
+    segmenter._temporary_embedding_path = None
+    segmenter._tiling = None
+    segmenter._halo = None
+    image = np.zeros((32, 32), dtype="uint8")
+
+    segmenter.initialize(image, tile_shape=(16, 16), halo=(4, 4))
+    segmenter.initialize(image, tile_shape=(16, 16), halo=(4, 4))
+
+    assert precompute_paths == ["first.zarr", "second.zarr"]
+    assert removed == ["first.zarr"]
+    assert segmenter._temporary_embedding_path == "second.zarr"
+
+    segmenter.initialize(image, tile_shape=(16, 16), halo=(4, 4), save_path="user.zarr")
+
+    assert precompute_paths == ["first.zarr", "second.zarr", "user.zarr"]
+    assert removed == ["first.zarr", "second.zarr"]
+    assert segmenter._temporary_embedding_path is None
+
+    segmenter.clear_state()
+    assert removed == ["first.zarr", "second.zarr"]
