@@ -555,6 +555,30 @@ class TestSAM2Util(unittest.TestCase):
         self.assertIsNotNone(predictor._orig_hw)
         predictor.reset_predictor()
 
+    def _check_video_predictor_initialization_3d(self, predictor, embeddings, volume):
+        """Read every frame's features back out of the embeddings, the way propagation does.
+
+        The saved form stores a frame as (1, C, h, w) where the in-memory form stores (C, h, w), so
+        this is the layout that only reaches '_get_image_feature' through a store.
+        """
+        state = predictor.init_state(volume=volume, volume_embeddings=embeddings, device="cpu")
+        self.assertEqual(state["num_frames"], volume.shape[0])
+        self.assertEqual(state["cached_features"], {})
+
+        batch_size = 2
+        for i in range(volume.shape[0]):
+            _, _, feats, pos_embeds, feat_sizes = predictor._get_image_feature(state, i, batch_size)
+            self.assertEqual(len(feats), len(pos_embeds))
+            self.assertEqual(len(feats), len(feat_sizes))
+            for feat, pos, (h, w) in zip(feats, pos_embeds, feat_sizes):
+                # Flattened to (h * w, batch, channels) and expanded to the tracked object count.
+                self.assertEqual(tuple(feat.shape[:2]), (h * w, batch_size))
+                self.assertEqual(tuple(pos.shape[:2]), (h * w, batch_size))
+                self.assertTrue(torch.isfinite(feat).all())
+            self.assertIn(i, state["cached_features"])
+
+        predictor.reset_state(state)
+
     def test_precompute_image_embeddings_2d(self):
         from micro_sam.v2.normalization import IMAGE_PREPROCESSING
         from micro_sam.v2.util import precompute_image_embeddings
@@ -593,15 +617,10 @@ class TestSAM2Util(unittest.TestCase):
 
     def test_precompute_image_embeddings_3d(self):
         from micro_sam.v2.normalization import VIDEO_PREPROCESSING
-        from micro_sam.v2.util import precompute_image_embeddings, set_precomputed
+        from micro_sam.v2.util import precompute_image_embeddings
 
         predictor = self._get_predictor(ndim=3)
         input_ = np.random.rand(2, 256, 256).astype("float32")
-
-        def check_slices(embeddings):
-            for i in range(input_.shape[0]):
-                _, inference_state = set_precomputed(predictor, embeddings, i=i, input_=input_)
-                self.assertIn("cached_features", inference_state)
 
         # Compute the image embeddings without save path.
         # Note: the in-memory form stacks the per-slice features along z (4 dims),
@@ -614,7 +633,8 @@ class TestSAM2Util(unittest.TestCase):
         # Compute the image embeddings with save path.
         save_path = os.path.join(self.tmp_folder, "embed_3d.zarr")
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
-        check_slices(embeddings)
+        self.assertEqual(embeddings["features"].shape, (2, 1, 256, 64, 64))
+        self._check_video_predictor_initialization_3d(predictor, embeddings, input_)
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
@@ -628,7 +648,18 @@ class TestSAM2Util(unittest.TestCase):
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
-        check_slices(embeddings)
+        self._check_video_predictor_initialization_3d(predictor, embeddings, input_)
+
+    def test_set_precomputed_rejects_volumetric_embeddings(self):
+        """A volume's embeddings are read per frame by 'init_state', never set on an image predictor."""
+        from micro_sam.v2.util import set_precomputed
+
+        class Predictor:
+            device = "cpu"
+
+        embeddings = {"features": np.zeros((2, 1, 256, 64, 64), dtype="float32")}
+        with self.assertRaises(ValueError):
+            set_precomputed(Predictor(), embeddings)
 
     def test_precompute_image_embeddings_3d_keeps_a_lazy_volume_lazy(self):
         """A dask / zarr / h5py volume must stay lazy end-to-end, including while writing the signature."""

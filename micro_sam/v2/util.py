@@ -695,13 +695,21 @@ def _to_device_tensor(data, device):
 
 
 def set_precomputed(predictor, image_embeddings, i: Optional[int] = None, tile_id: Optional[int] = None):
-    """Set the precomputed image embeddings for a predictor.
+    """Set precomputed image embeddings on a SAM2 image predictor.
+
+    Only 2d embeddings are set this way. A volume's embeddings are not: the video predictor reads
+    them per frame while it tracks, see `CustomVideoPredictor.init_state`.
 
     Args:
-        ...
+        predictor: The SAM2 image predictor to set the embeddings on.
+        image_embeddings: The precomputed embeddings, as returned by `precompute_image_embeddings`.
+        i: The slice index, which 2d embeddings do not have. Passing one raises, so that a volumetric
+            call routed here by mistake fails instead of segmenting the wrong thing.
+        tile_id: The tile to set, for tiled embeddings. That tile's features are read from the store
+            and set as if they were those of a whole image.
 
     Returns:
-        ...
+        The predictor, with the embeddings set on it.
     """
     if tile_id is not None:
         tile_features = image_embeddings["features"][str(tile_id)]
@@ -722,7 +730,11 @@ def set_precomputed(predictor, image_embeddings, i: Optional[int] = None, tile_i
         device = predictor.device  # Otherwise, for image predictor.
 
     features = image_embeddings["features"]
-    assert features.ndim == 4, f"{features.ndim}"
+    if features.ndim != 4:
+        raise ValueError(
+            f"Expected 2d embeddings, whose features have 4 dimensions, got {features.ndim}. The "
+            "embeddings of a volume are read by the video predictor's 'init_state' instead."
+        )
     if i is not None:
         raise ValueError("The data is 2D so an index is not needed.")
 
