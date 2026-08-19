@@ -77,10 +77,13 @@ LIVECELL_TYPES = ("A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SKOV3", "Sk
 DEFAULT_DATA_ROOT = Path("/mnt/vast-nhr/projects/cidas/cca/data")
 DEFAULT_OUTPUT_ROOT = Path("/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization")
 
-MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
 TARGETS_2D = (0.2, 0.4, 0.6, 0.8)
 TARGETS_3D = (0.5, 0.8)
 CROP_SHAPE_3D = (8, 256, 256)
+# An 8-slice crop is thinner than a typical C. elegans nucleus (about 11-13 slices in this
+# validation data), so it mainly measures objects severed by the benchmark itself.
+CROP_SHAPE_3D_OVERRIDES = {"celegans_atlas": (32, 256, 256)}
 CANDIDATE_GRID_3D = (4, 3, 3)
 
 # Conservative first-run estimates from the current A100. Observed times replace them as samples run.
@@ -387,7 +390,8 @@ def _scan_3d_source(
         raise RuntimeError(f"Expected a 3d label volume for '{dataset}', got shape {shape} at '{label_source}'.")
     z_start, z_stop = _validation_z_range(dataset, shape[0])
     valid_shape = (z_stop - z_start, shape[1], shape[2])
-    crop_shape = tuple(min(size, crop) for size, crop in zip(valid_shape, CROP_SHAPE_3D))
+    requested_crop_shape = CROP_SHAPE_3D_OVERRIDES.get(dataset, CROP_SHAPE_3D)
+    crop_shape = tuple(min(size, crop) for size, crop in zip(valid_shape, requested_crop_shape))
     starts = (
         _even_starts(z_start, z_stop, crop_shape[0], CANDIDATE_GRID_3D[0]),
         _even_starts(0, shape[1], crop_shape[1], CANDIDATE_GRID_3D[1]),
@@ -501,7 +505,10 @@ def prepare_manifest(data_root: Path, manifest_path: Path) -> Dict[str, Any]:
         "selection_policy": {
             "2d_crop_shape": list(CROP_SHAPE_2D),
             "2d_complexity_targets": list(TARGETS_2D),
-            "3d_crop_shape": list(CROP_SHAPE_3D),
+            "3d_crop_shapes": {
+                dataset: list(CROP_SHAPE_3D_OVERRIDES.get(dataset, CROP_SHAPE_3D))
+                for dataset in DATASETS_3D
+            },
             "3d_candidate_grid": list(CANDIDATE_GRID_3D),
             "3d_complexity_targets": list(TARGETS_3D),
             "complexity": "mean percentile rank of object count and foreground fraction",
@@ -842,7 +849,7 @@ def main() -> None:
     parser.add_argument("--prepare-only", action="store_true", help="Create and validate the subset, then stop.")
     args = parser.parse_args()
 
-    manifest_path = args.manifest or (args.output_root / "subset_manifest.json")
+    manifest_path = args.manifest or (args.output_root / f"subset_manifest_v{MANIFEST_SCHEMA_VERSION}.json")
     data_root, output_root, manifest_path = _validate_roots(args.data_root, args.output_root, manifest_path)
     if args.time_budget_minutes <= 0:
         parser.error("--time-budget-minutes must be positive.")
