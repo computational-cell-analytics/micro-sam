@@ -63,6 +63,8 @@ DEFAULT_PROMPT_GENERATION = {
     "n_objects_per_pass": 16,
     # Volumes only. None propagates through the whole volume.
     "early_stop_patience": None,
+    # Number of image prompts (or refinement boxes) evaluated per forward pass.
+    "batch_size": 64,
     # Shared with the sparse post-processing, but tuned there for one peak per object, not for recall.
     "foreground_threshold": DEFAULT_POSTPROCESSING["sparse"]["foreground_threshold"],
     "n_iter": DEFAULT_POSTPROCESSING["sparse"]["n_iter"],
@@ -704,7 +706,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
         n_objects_per_pass: int = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"],
         early_stop_patience: Optional[int] = DEFAULT_PROMPT_GENERATION["early_stop_patience"],
-        batch_size: int = 64,
+        batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
         n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
         verbose: bool = False,
     ) -> np.ndarray:
@@ -792,7 +794,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         sigma: float = DEFAULT_PROMPT_GENERATION["sigma"],
         min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
         multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
-        batch_size: int = 64,
+        batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
         n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
     ) -> list:
         """Derive the prompts and turn them into scored mask proposals, without selecting any of them.
@@ -839,7 +841,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         min_size: int = DEFAULT_PROMPT_GENERATION["min_size"],
         refine_with_box_prompts: bool = DEFAULT_PROMPT_GENERATION["refine_with_box_prompts"],
         box_extension: int = DEFAULT_PROMPT_GENERATION["box_extension"],
-        batch_size: int = 64,
+        batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
     ) -> np.ndarray:
         """Merge the proposals of `propose` into an instance segmentation.
 

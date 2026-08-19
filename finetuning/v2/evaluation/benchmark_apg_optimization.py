@@ -1,7 +1,8 @@
 """Run a small, deterministic APG optimization benchmark on ten validation datasets.
 
 The benchmark is deliberately bounded: one invocation evaluates one parameter configuration on
-240 representative 2d images and one representative crop from each of five 3d datasets. The
+240 representative 2d images and one representative crop from each of five 3d datasets. A run may
+select either dimension without constructing the other dimension's segmenter. The
 default configuration is the current library default for APG with the best joint hvit_t checkpoint.
 
 No data is downloaded and the data root is treated as read-only. All manifests, checkpoint exports
@@ -12,7 +13,7 @@ Examples:
     python benchmark_apg_optimization.py --prepare-only
 
     # Run the current APG defaults.
-    python benchmark_apg_optimization.py
+    python benchmark_apg_optimization.py --ndim 2 --trial-id baseline-1
 
     # Run one alternative configuration.
     python benchmark_apg_optimization.py --config apg_candidate_thresholds.json
@@ -645,6 +646,9 @@ def _summarize(samples: pd.DataFrame) -> pd.DataFrame:
             "initialization_seconds": float(group["initialization_seconds"].sum()),
             "generation_seconds": float(group["generation_seconds"].sum()),
         }
+        if "peak_cuda_memory_bytes" in group:
+            values = group["peak_cuda_memory_bytes"].dropna()
+            row["peak_cuda_memory_bytes"] = int(values.max()) if len(values) else np.nan
         for metric in metric_columns:
             values = group[metric].dropna()
             row[f"{metric}_mean"] = float(values.mean()) if len(values) else np.nan
@@ -662,6 +666,9 @@ def _summarize(samples: pd.DataFrame) -> pd.DataFrame:
         "initialization_seconds": float(samples["initialization_seconds"].sum()),
         "generation_seconds": float(samples["generation_seconds"].sum()),
     }
+    if "peak_cuda_memory_bytes" in samples:
+        values = samples["peak_cuda_memory_bytes"].dropna()
+        overall["peak_cuda_memory_bytes"] = int(values.max()) if len(values) else np.nan
     for metric in metric_columns:
         values = summary[f"{metric}_mean"].dropna()
         overall[f"{metric}_mean"] = float(values.mean()) if len(values) else np.nan
@@ -687,7 +694,7 @@ def _runtime_projection(
 
 def _sample_row(
     sample: Dict[str, Any], segmentation: np.ndarray, labels: np.ndarray,
-    initialization_seconds: float, generation_seconds: float,
+    initialization_seconds: float, generation_seconds: float, peak_cuda_memory_bytes: Optional[int],
 ) -> Dict[str, Any]:
     metric_mode = "dense" if sample["dataset"] in DATASETS_3D_EM else "sparse"
     border_min_size = GT_MIN_SIZE_2D.get(sample["dataset"], 0) if sample["ndim"] == 2 else 0
@@ -703,6 +710,7 @@ def _sample_row(
         "initialization_seconds": initialization_seconds,
         "generation_seconds": generation_seconds,
         "total_seconds": initialization_seconds + generation_seconds,
+        "peak_cuda_memory_bytes": peak_cuda_memory_bytes,
         **metrics,
     }
     if sample["ndim"] == 3:
@@ -712,9 +720,12 @@ def _sample_row(
 
 def _run_sample(
     segmenter: Any, sample: Dict[str, Any], raw: np.ndarray, labels: np.ndarray,
-    params: Dict[str, Any],
+    params: Dict[str, Any], device: str,
 ) -> Dict[str, Any]:
     segmenter.clear_state()
+    cuda_device = torch.device(device) if device.startswith("cuda") else None
+    if cuda_device is not None:
+        torch.cuda.reset_peak_memory_stats(cuda_device)
     start = time.perf_counter()
     segmenter.initialize(raw, ndim=sample["ndim"], **(VOLUME_SPEED_OPTIONS if sample["ndim"] == 3 else {}))
     initialized = time.perf_counter()
@@ -723,10 +734,14 @@ def _run_sample(
         generation_kwargs["spacing"] = DATASET_SPACING.get(sample["dataset"])
     segmentation = segmenter.generate(**generation_kwargs).astype("uint32")
     generated = time.perf_counter()
+    peak_cuda_memory_bytes = (
+        int(torch.cuda.max_memory_allocated(cuda_device)) if cuda_device is not None else None
+    )
     return _sample_row(
         sample, segmentation, labels,
         initialization_seconds=initialized - start,
         generation_seconds=generated - initialized,
+        peak_cuda_memory_bytes=peak_cuda_memory_bytes,
     )
 
 
@@ -777,7 +792,7 @@ def _run_dimension(
                     normalized_source = _load_normalized_3d_source(sample, data_root)
                     current_source = source
                 raw, labels = _load_3d_sample(sample, data_root, normalized_source)
-            row = _run_sample(segmenter, sample, raw, labels, params)
+            row = _run_sample(segmenter, sample, raw, labels, params, device)
             completed = pd.concat([completed, pd.DataFrame([row])], ignore_index=True)
             _atomic_write_csv(samples_path, completed)
     finally:
@@ -791,13 +806,24 @@ def _run_dimension(
 def run_benchmark(
     manifest: Dict[str, Any], data_root: Path, output_root: Path, model_type: str,
     joint_checkpoint: str, config_name: str, params_2d: Dict[str, Any], params_3d: Dict[str, Any],
-    device: str, time_budget_minutes: float, started: Optional[float] = None,
+    device: str, time_budget_minutes: float, dimensions: Sequence[int] = (2, 3),
+    trial_id: str = "trial-1", started: Optional[float] = None,
 ) -> Tuple[Path, pd.DataFrame, Dict[str, Any]]:
     started = time.perf_counter() if started is None else started
     checkpoint_path = get_joint_checkpoint(model_type, joint_checkpoint)
     checkpoint_id = checkpoint_checksum(checkpoint_path)
     implementation_checksum = _implementation_checksum()
-    config_identity = {"params_2d": params_2d, "params_3d": params_3d}
+    dimensions = tuple(sorted(set(dimensions)))
+    if not dimensions or not set(dimensions).issubset({2, 3}):
+        raise ValueError(f"Dimensions must be a non-empty subset of (2, 3), got {dimensions}.")
+    if not trial_id:
+        raise ValueError("The timing trial id must not be empty.")
+    config_identity = {
+        "params_2d": params_2d,
+        "params_3d": params_3d,
+        "dimensions": dimensions,
+        "trial_id": trial_id,
+    }
     config_checksum = _content_checksum(config_identity)
     manifest_checksum = manifest["manifest_checksum"]
     run_dir = output_root / model_type / checkpoint_id / (
@@ -828,6 +854,8 @@ def run_benchmark(
         "model_type": model_type,
         "params_2d": params_2d,
         "params_3d": params_3d,
+        "dimensions": list(dimensions),
+        "trial_id": trial_id,
         "device": device,
         "gpu": torch.cuda.get_device_name(torch.device(device)) if device.startswith("cuda") else None,
         "platform": platform.platform(),
@@ -839,13 +867,16 @@ def run_benchmark(
     _atomic_write_json(metadata_path, metadata)
 
     try:
-        for ndim, params in ((2, params_2d), (3, params_3d)):
+        params_by_dimension = {2: params_2d, 3: params_3d}
+        for ndim in dimensions:
             completed = _run_dimension(
                 ndim, manifest["samples"], completed, samples_path, data_root, model_type,
-                joint_checkpoint, checkpoint_id, export_root, params, device, started,
+                joint_checkpoint, checkpoint_id, export_root, params_by_dimension[ndim], device, started,
                 time_budget_minutes * 60,
             )
-        expected_ids = {sample["sample_id"] for sample in manifest["samples"]}
+        expected_ids = {
+            sample["sample_id"] for sample in manifest["samples"] if sample["ndim"] in dimensions
+        }
         completed_ids = set(completed["sample_id"])
         if completed_ids != expected_ids:
             raise RuntimeError(
@@ -873,6 +904,14 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--manifest", type=Path, default=None, help="Subset manifest; defaults below output-root.")
     parser.add_argument("--config", type=Path, default=None, help="One JSON APG configuration to evaluate.")
+    parser.add_argument(
+        "--ndim", choices=("2", "3", "both"), default="both",
+        help="Evaluate only images, only volumes, or both (default).",
+    )
+    parser.add_argument(
+        "--trial-id", default="trial-1",
+        help="Identity of this serialized timing trial; changing it creates an independent result.",
+    )
     parser.add_argument("--model-type", default="hvit_t", choices=common.MODEL_TYPES)
     parser.add_argument("--joint-checkpoint", default="best", help="Joint checkpoint name without '.pt'.")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -901,9 +940,11 @@ def main() -> None:
         return
 
     config_name, params_2d, params_3d = _load_config(args.config)
+    dimensions = (2, 3) if args.ndim == "both" else (int(args.ndim),)
     run_dir, summary, metadata = run_benchmark(
         manifest, data_root, output_root, args.model_type, args.joint_checkpoint,
-        config_name, params_2d, params_3d, args.device, args.time_budget_minutes, started=started,
+        config_name, params_2d, params_3d, args.device, args.time_budget_minutes,
+        dimensions=dimensions, trial_id=args.trial_id, started=started,
     )
     print(summary.to_string(index=False))
     print(f"Run directory: {run_dir}")
