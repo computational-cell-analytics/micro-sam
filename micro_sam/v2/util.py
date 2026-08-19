@@ -223,13 +223,13 @@ FINETUNED_MODELS = [
 DEFAULT_MODEL = "hvit_t_cells"
 
 FINETUNED_URLS = {
-    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/PJRPRXC3BNOLJ6X/download",
-    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/URqdbdzJiUtUiq1/download",
+    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/iqNv2cjhPMGOo9J/download",
+    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/VlXsFg16Qh2SsiA/download",
 }
 
 FINETUNED_HASHES = {
-    "hvit_t_cells": "xxh128:385a8521cbadad2536b2e7950c394f80",
-    "hvit_t_cells_decoder": "xxh128:842add10a67e4c7827d97f033e62a6f5",
+    "hvit_t_cells": "xxh128:0d1873746eda30f2c1b1fd3edd9a82d0",
+    "hvit_t_cells_decoder": "xxh128:301163dbb748519da1e03057789f1ccf",
 }
 
 
