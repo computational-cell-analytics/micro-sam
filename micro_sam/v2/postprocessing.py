@@ -81,9 +81,7 @@ def _compute_flow_density(
 
     if backend == "cpp":
         from bioimage_cpp.flow import compute_flow_density
-        # cpp backend uses RK2 (midpoint) integration vs Euler in the python backend.
-        # This gives slightly different (and marginally better) density maps at the same
-        # n_iter/dt, so scores are not bit-identical across backends.
+        # RK2 integration rather than the python backend's Euler, so the densities are not identical.
         return compute_flow_density(
             -directed_distances, fg_mask,
             n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing, number_of_threads=n_threads,

@@ -54,26 +54,21 @@ def get_predictor_and_segmenter(
     from ..util import get_device, _get_sam_model
     from .instance_segmentation import get_decoder, get_instance_segmentation_generator
 
-    # Keep the un-resolved request (None = 'auto') separate from the concrete model placement, so the
-    # segmenter can tell 'use all visible GPUs' apart from an explicitly selected single device.
+    # Kept apart from the placement below, so 'use all visible GPUs' stays distinct from one device.
     requested_device = device
     model_device = get_device(device)
 
-    # Load a SAM2 image predictor, used to precompute the image embeddings that the decoder / grid
-    # prediction reuses. Volumetric APG propagates its prompts, so it loads the video predictor
-    # instead - which also encodes the volume, so this stays one model on the device.
+    # Volumetric APG propagates its prompts, so it needs the video predictor, which also encodes.
     predictor, _ = _get_sam_model(
         model_type=model_type, ndim=3 if (segmentation_mode == "apg" and ndim == 3) else 2,
         device=model_device, checkpoint_path=None, decoder_path=None, use_cli=True,
     )
 
-    # Resolve the UniSAM2 decoder if the caller requests one or one is available. 'ais' and 'apg'
-    # require one. 'amg' never uses one. 'auto' (None) prefers a decoder and uses AMG when none is found.
+    # 'ais' and 'apg' require a decoder, 'amg' never uses one, and 'auto' prefers one if it loads.
     decoder = None
     if segmentation_mode != "amg":
         try:
-            # Reuse the predictor's already-built image encoder for the decoder (its weights are
-            # redefined by the checkpoint's strict load) to avoid building a second SAM2 backbone.
+            # Reuse the predictor's encoder, so no second SAM2 backbone is built.
             encoder = getattr(getattr(predictor, "model", predictor), "image_encoder", None)
             decoder = get_decoder(model_type, checkpoint=checkpoint, device=model_device, encoder=encoder)
         except Exception as e:
@@ -86,7 +81,7 @@ def get_predictor_and_segmenter(
         engine = "ais" if decoder is not None else "amg"
     else:
         engine = segmentation_mode
-    if engine == "amg":  # tag cached embeddings with the model so the AMG state is not reused across models.
+    if engine == "amg":  # Tags the cached embeddings, so the AMG state is not reused across models.
         kwargs.setdefault("model_type", model_type)
     segmenter = get_instance_segmentation_generator(
         # The video predictor is the SAM2 model itself, an image predictor wraps one.
@@ -158,34 +153,28 @@ def automatic_instance_segmentation(
     if ndim is None:
         ndim = raw.ndim
 
-    # AIS and APG share the decoder path but differ in what makes the instances: AIS post-processes the
-    # prediction and 'mode' picks how, APG prompts instead. Asked of the segmenter to avoid importing it.
+    # AIS post-processes the prediction and 'mode' picks how, APG prompts instead.
     is_decoder_based = isinstance(segmenter, UniSAM2InstanceSegmentation)
     takes_mode = getattr(segmenter, "_has_postprocessing_mode", True)
 
     if is_decoder_based:
-        # Resolve one device selection for the whole staged workflow. Explicit `devices` takes
-        # precedence over the per-call `device`. When the caller omits both, preserve the intent from
-        # `get_predictor_and_segmenter` (None means fan out, an explicit device means stay pinned).
+        # One selection for the whole staged workflow; without either the segmenter's intent stands.
         requested_devices = devices if devices is not None else device
         inference_devices = segmenter._inference_devices(requested_devices)
 
-        # Decoder-based 3d segmentation always stages encoder and decoder inference. This avoids
-        # re-encoding overlapping z-halo slices and keeps the decoder's peak separate from the encoder.
-        # Two-dimensional inference keeps the fused path unless persistent embeddings were requested.
+        # 3d stages the encoder and the decoder, so the z-halo is encoded once and the peaks do not add up.
         image_embeddings = None
         temp_embedding_path = None
         try:
             if embedding_path is not None or ndim == 3:
                 # The tool streams volumes and tiled images from the zarr. Only small 2d stays in memory.
                 is_streamed = ndim == 3 or tile_shape is not None
-                # Own the ephemeral store here so it is removed after this input, rather than only at
-                # process exit (which piles up one store per input in a multi-input loop).
+                # Owned here, so a multi-input loop does not pile up one store per input.
                 effective_path = embedding_path
                 if effective_path is None and is_streamed:
                     temp_embedding_path = make_temp_embedding_path()
                     effective_path = temp_embedding_path
-                # Reuse the predictor's underlying SAM2 model to avoid a second accelerator-resident backbone.
+                # The underlying SAM2 model, so no second backbone lands on the device.
                 emb_predictor = getattr(predictor, "model", predictor) if ndim == 3 else predictor
                 image_embeddings = precompute_image_embeddings(
                     emb_predictor,

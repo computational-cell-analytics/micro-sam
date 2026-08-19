@@ -43,13 +43,11 @@ from .instance_segmentation import (
     _set_image_predictor_from_3d_embeddings,
 )
 
-# Only enters the merge order, never a cutoff, so it is a constant rather than a parameter.
+# Only enters the merge order, never a cutoff, so it is a constant.
 STABILITY_SCORE_OFFSET = 1.0
 
 DEFAULT_PROMPT_GENERATION = {
     # Below the flow post-processing's 'density_threshold': the model rejects the surplus candidates.
-    # 1.5 is the modal per-dataset optimum over twelve datasets, on six of them. A candidate's
-    # density scales with the object's size, so a volume needs its own value.
     "candidate_threshold": 1.5,
     "min_candidate_size": 4,
     "score_threshold": 0.6,
@@ -59,22 +57,19 @@ DEFAULT_PROMPT_GENERATION = {
     # Off by default until the box stage is swept beyond livecell.
     "refine_with_box_prompts": False,
     "box_extension": 0,
-    # Volumes only. A single threshold merges the peaks of touching objects into one component,
-    # which the coarser level of the ladder separates again. Worth 0.009 mSA over three backbones.
+    # Volumes only. A ladder separates the peaks that a single threshold merges into one component.
     "candidate_threshold_3d": (1.5, 10.0),
-    # Volumes only. The objects of a pass propagate together, trading memory against the pass count.
+    # Volumes only. Trades device memory against the pass count.
     "n_objects_per_pass": 16,
-    # Volumes only. Full propagation by default: stopping early takes every object of a pass to leave.
+    # Volumes only. None propagates through the whole volume.
     "early_stop_patience": None,
-    # Shared with the sparse post-processing, but tuned there for one clean peak per object rather than
-    # for candidate recall, so they are exposed rather than pinned.
+    # Shared with the sparse post-processing, but tuned there for one peak per object, not for recall.
     "foreground_threshold": DEFAULT_POSTPROCESSING["sparse"]["foreground_threshold"],
     "n_iter": DEFAULT_POSTPROCESSING["sparse"]["n_iter"],
     "dt": DEFAULT_POSTPROCESSING["sparse"]["dt"],
     "sigma": DEFAULT_POSTPROCESSING["sparse"]["sigma"],
     "min_size": DEFAULT_POSTPROCESSING["sparse"]["min_size"],
-    # Throughput only, the density is the same either way. Eight threads cut the flow integration by
-    # a factor of five, sixteen bought nothing more.
+    # Throughput only, the density is the same either way.
     "n_threads": 8,
 }
 
@@ -175,8 +170,7 @@ def derive_point_prompts(
     if candidates.max() == 0:
         return None
 
-    # The interior point rather than the centroid: a curved or elongated object's centroid can lie
-    # outside it, and a prompt outside the object segments the wrong thing.
+    # The interior point rather than the centroid, which can lie outside a curved object.
     centers = interior_points(candidates)
     if len(centers) == 0:
         return None
@@ -254,11 +248,10 @@ def derive_volume_prompts(
                 continue
             component = candidates[bounding_box] == (index + 1)
             component_density = np.where(component, density[bounding_box], 0.0)
-            # The most converged slice of the component, i.e. the one closest to the object's centre.
+            # The most converged slice, i.e. the one closest to the object's centre.
             z = int(np.argmax(component_density.sum(axis=(1, 2))))
             plane = component_density[z]
-            # The density peak rather than the component's interior point: the flow converges onto the
-            # object's centre, so the peak is both inside the component and the least ambiguous prompt.
+            # The density peak: it is inside the component and the least ambiguous prompt.
             y, x = np.unravel_index(int(np.argmax(plane)), plane.shape)
             anchor = (bounding_box[0].start + z, bounding_box[1].start + y, bounding_box[2].start + x)
             # A component that no lower threshold has merged peaks at the same voxel at every level.
@@ -495,8 +488,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         inference_device: Devices = USE_MODEL_DEVICE,
     ) -> None:
         super().__init__(model, device=device, inference_device=inference_device)
-        # A video predictor is a SAM2 model, so the image predictor that scores the candidates is
-        # built on its own weights: prompting a volume does not put a second backbone on the device.
+        # The image predictor is built on the video predictor's own weights: no second backbone.
         self._video_predictor = predictor if hasattr(predictor, "propagate_in_video") else None
         if self._video_predictor is None:
             self._predictor = predictor
@@ -884,9 +876,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             stop = start + batch_size
             batch_points, batch_labels = points[start:stop], point_labels[start:stop]
             n_prompts = len(batch_points)
-            # The predictor's own 'predict' brings every multimask proposal back as a full-resolution
-            # float mask, of which all but the best-scoring one is then dropped. Reducing on the device
-            # first leaves only the kept mask to transfer, as one byte per pixel rather than twelve.
+            # Reduced on the device, so only the kept mask is transferred rather than every proposal.
             mask_input, coords, labels, _ = self._predictor._prep_prompts(
                 batch_points, batch_labels, None, None, True,
             )
@@ -902,8 +892,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
             stability = calculate_stability_score(logits, mask_threshold, STABILITY_SCORE_OFFSET)
             binary = logits > mask_threshold
-            # The extents as two reductions on the device: an np.nonzero per mask builds index arrays
-            # over the whole image, which costs more than everything else in this loop together.
+            # Two reductions on the device: an np.nonzero per mask costs more than the rest of the loop.
             rows_any = binary.any(dim=2).cpu().numpy()
             columns_any = binary.any(dim=1).cpu().numpy()
             masks = binary.cpu().numpy()
@@ -917,8 +906,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 y0, y1 = int(row_any.argmax()), len(row_any) - int(row_any[::-1].argmax())
                 x0, x1 = int(column_any.argmax()), len(column_any) - int(column_any[::-1].argmax())
                 records.append({
-                    # The crop rather than the full mask: the merge is linear in the mask's size, and an
-                    # object covers a small part of the image, so this is where its cost actually is.
+                    # The crop rather than the full mask: the merge is linear in the mask's size.
                     "segmentation": mask[y0:y1, x0:x1].copy(),
                     "bounding_box": (slice(y0, y1), slice(x0, x1)),
                     "predicted_iou": float(score),
@@ -945,8 +933,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         candidates = []
         for frame in np.unique(frames):
             indices = np.where(frames == frame)[0]
-            # The image predictor reads the slice's features out of the volume's embeddings, so
-            # scoring the candidates does not re-encode anything.
+            # Reads the slice's features out of the volume's embeddings, so nothing is re-encoded.
             _set_image_predictor_from_3d_embeddings(self._predictor, self._image_embeddings, int(frame))
             records = self._apply_prompts(
                 {"points": points[indices], "point_labels": point_labels[indices]},
@@ -992,8 +979,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
         records = []
         for batch in tqdm(passes, desc="Propagate prompts", disable=not verbose):
-            # Only the objects: every pass reads the same volume, so re-reading its features and
-            # flushing the allocator each time costs more than the propagation. Freed after the loop.
+            # Only the objects: re-reading the volume's features each pass costs more than the propagation.
             self._propagator.reset_tracking()
             for object_id, candidate in enumerate(batch, start=1):
                 x, y = candidate["point"]
