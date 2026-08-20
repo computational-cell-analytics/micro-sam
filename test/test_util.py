@@ -201,7 +201,7 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(IMAGE_PREPROCESSING, "minmax_per_channel")
         self.assertEqual(VIDEO_PREPROCESSING, "percentile_2_98_per_channel_torch_resize_v2")
 
-        predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test")
+        predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test", device="cpu")
         raw = np.arange(100).reshape(10, 10)
         signature = _get_embedding_signature(raw, predictor, tile_shape=None, halo=None)
 
@@ -209,7 +209,7 @@ class TestUtil(unittest.TestCase):
             return _check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None, preprocessing)
 
         def full_cache(normalization):
-            attrs = {"input_size": [10, 10], **signature}
+            attrs = {"input_size": [10, 10], "precision": "fp32", **signature}
             if normalization is not None:
                 attrs["normalization"] = normalization
             return SimpleNamespace(attrs=attrs)
