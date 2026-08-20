@@ -18,6 +18,9 @@ Examples:
     # Run one alternative configuration.
     python benchmark_apg_optimization.py --config apg_candidate_thresholds.json
 
+    # Opt in to the 32-slice 3d crops, which keep their own manifest beside the standard one.
+    python benchmark_apg_optimization.py --ndim 3 --crops-3d deep --trial-id baseline-3d-1
+
 The optional JSON configuration has this shape:
     {
       "name": "candidate-threshold-experiment",
@@ -98,6 +101,17 @@ CROP_SHAPE_3D_OVERRIDES = {"celegans_atlas": (32, 140, 512)}
 # eight of them; this benchmark needs twelve to meet the minimum representative crop depth.
 VALIDATION_Z_RANGE_OVERRIDES = {"snemi": (0, 12)}
 CANDIDATE_GRID_3D = (4, 3, 3)
+
+# Opt-in deep 3d crop set. A propagation pass costs one frame step per slice, so a 12-slice crop
+# leaves a depth-dependent optimization like early stopping almost nothing to skip and measures the
+# crop rather than the mechanism. C. elegans keeps its Y extent of 140, and SNEMI stops at 30 because
+# 30 is its entire held-out range: slices before 70 were used for training.
+CROP_SHAPE_3D_DEEP = (32, 512, 512)
+CROP_SHAPE_3D_DEEP_OVERRIDES = {"celegans_atlas": (32, 140, 512), "snemi": (30, 512, 512)}
+VALIDATION_Z_RANGE_DEEP_OVERRIDES = {"snemi": (0, 30)}
+# The candidate grid is deliberately shared with the standard set, so the two variants differ only in
+# depth and in the annotation rule below. That is what makes a deep result attributable to depth.
+CROP_VARIANTS_3D = ("standard", "deep")
 
 # Conservative first-run estimates from the current A100. Observed times replace them as samples run.
 INITIAL_SAMPLE_SECONDS = {2: 5.0, 3: 35.0}
@@ -186,6 +200,17 @@ def _validate_roots(data_root: Path, output_root: Path, manifest_path: Path) -> 
     if manifest_path != output_root and output_root not in manifest_path.parents:
         raise ValueError(f"The manifest must be stored below the output root: '{output_root}'.")
     return data_root, output_root, manifest_path
+
+
+def _default_manifest_path(output_root: Path, variant: str) -> Path:
+    """Where a crop variant keeps its manifest.
+
+    Each variant gets its own file so both crop sets stay reproducible from one revision, and the
+    schema version is not bumped: `_validate_manifest` requires an exact match, so a bump would make
+    the existing standard manifest unloadable and orphan every result measured against it.
+    """
+    suffix = "" if variant == "standard" else f"_{variant}3d"
+    return output_root / f"subset_manifest_v{MANIFEST_SCHEMA_VERSION}{suffix}.json"
 
 
 def _relative_data_path(path: str, data_root: Path) -> str:
@@ -396,10 +421,22 @@ def _even_starts(start: int, stop: int, crop_size: int, n_positions: int) -> Lis
     return sorted({int(round(value)) for value in np.linspace(start, last_start, n_positions)})
 
 
-def _validation_z_range(dataset: str, depth: int) -> Tuple[int, int]:
+def _crop_shape_3d(dataset: str, variant: str) -> Tuple[int, ...]:
+    """The 3d crop shape a dataset uses in the given crop variant."""
+    if variant == "deep":
+        return CROP_SHAPE_3D_DEEP_OVERRIDES.get(dataset, CROP_SHAPE_3D_DEEP)
+    return CROP_SHAPE_3D_OVERRIDES.get(dataset, CROP_SHAPE_3D)
+
+
+def _z_range_overrides_3d(variant: str) -> Dict[str, Tuple[int, int]]:
+    """The per-dataset validation z-slab overrides of the given crop variant."""
+    return VALIDATION_Z_RANGE_DEEP_OVERRIDES if variant == "deep" else VALIDATION_Z_RANGE_OVERRIDES
+
+
+def _validation_z_range(dataset: str, depth: int, variant: str) -> Tuple[int, int]:
     base_start = 70 if dataset == "snemi" else 0
     base_stop = depth
-    z_range = VALIDATION_Z_RANGE_OVERRIDES.get(dataset, VAL_Z_RANGE.get(dataset))
+    z_range = _z_range_overrides_3d(variant).get(dataset, VAL_Z_RANGE.get(dataset))
     if z_range is None:
         return base_start, base_stop
     return base_start + z_range[0], min(base_start + z_range[1], base_stop)
@@ -412,6 +449,7 @@ def _scan_3d_source(
     raw_key: Optional[str],
     label_key: Optional[str],
     data_root: Path,
+    variant: str,
 ) -> List[Dict[str, Any]]:
     raw_relative = _relative_data_path(raw_path, data_root)
     label_relative = _relative_data_path(label_path, data_root)
@@ -419,9 +457,9 @@ def _scan_3d_source(
     shape = _array_shape(label_source, label_key)
     if len(shape) != 3:
         raise RuntimeError(f"Expected a 3d label volume for '{dataset}', got shape {shape} at '{label_source}'.")
-    z_start, z_stop = _validation_z_range(dataset, shape[0])
+    z_start, z_stop = _validation_z_range(dataset, shape[0], variant)
     valid_shape = (z_stop - z_start, shape[1], shape[2])
-    crop_shape = CROP_SHAPE_3D_OVERRIDES.get(dataset, CROP_SHAPE_3D)
+    crop_shape = _crop_shape_3d(dataset, variant)
     # Do not silently shrink a crop and distort the encoder scale. A dataset may expose multiple
     # source volumes (as EmbedSeg does), so skip undersized sources and select from those that fit.
     if any(size < crop for size, crop in zip(valid_shape, crop_shape)):
@@ -446,6 +484,11 @@ def _scan_3d_source(
                     object_count, foreground_fraction = _object_statistics(labels)
                     if object_count == 0:
                         continue
+                    # _load_3d_sample trims unannotated end slices, so a crop whose first or last
+                    # slice is empty propagates fewer slices than its declared depth. The deep set
+                    # exists to test depth, so it only accepts crops the trim leaves alone.
+                    if variant == "deep" and not (labels[0].any() and labels[-1].any()):
+                        continue
                     candidates.append({
                         "dataset": dataset,
                         "ndim": 3,
@@ -468,7 +511,7 @@ def _scan_3d_source(
         return collect(lambda roi: np.asarray(labels[roi]))
 
 
-def _select_3d_samples(data_root: Path) -> List[Dict[str, Any]]:
+def _select_3d_samples(data_root: Path, variant: str) -> List[Dict[str, Any]]:
     samples = []
     for dataset in DATASETS_3D:
         raw_paths, label_paths, raw_key, label_key = get_data_paths(
@@ -479,10 +522,13 @@ def _select_3d_samples(data_root: Path) -> List[Dict[str, Any]]:
             sorted_path_pairs(raw_paths, label_paths), desc=f"select-{dataset}", leave=False
         ):
             candidates.extend(
-                _scan_3d_source(dataset, raw_path, label_path, raw_key, label_key, data_root)
+                _scan_3d_source(dataset, raw_path, label_path, raw_key, label_key, data_root, variant)
             )
         if len(candidates) < len(TARGETS_3D):
-            raise RuntimeError(f"Only {len(candidates)} occupied 3d candidates found for '{dataset}'.")
+            raise RuntimeError(
+                f"Only {len(candidates)} eligible 3d candidates found for '{dataset}' "
+                f"in the '{variant}' crop variant."
+            )
         _add_complexity(candidates)
         selected = _select_nearest(candidates, TARGETS_3D, prefer_distinct_sources=True)
         for sample in selected:
@@ -499,7 +545,16 @@ def _manifest_identity(manifest: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _validate_manifest(manifest: Dict[str, Any], data_root: Path) -> None:
+def _selection_policy_3d(variant: str) -> Dict[str, Any]:
+    """The part of the selection policy the 3d crop variant determines."""
+    return {
+        "3d_crop_shapes": {dataset: list(_crop_shape_3d(dataset, variant)) for dataset in DATASETS_3D},
+        "3d_candidate_grid": list(CANDIDATE_GRID_3D),
+        "3d_validation_z_range_overrides": _z_range_overrides_3d(variant),
+    }
+
+
+def _validate_manifest(manifest: Dict[str, Any], data_root: Path, variant: str) -> None:
     if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
         raise RuntimeError(
             f"Unsupported manifest schema {manifest.get('schema_version')}; expected {MANIFEST_SCHEMA_VERSION}."
@@ -507,6 +562,18 @@ def _validate_manifest(manifest: Dict[str, Any], data_root: Path) -> None:
     expected_checksum = _content_checksum(_manifest_identity(manifest))
     if manifest.get("manifest_checksum") != expected_checksum:
         raise RuntimeError("The subset manifest content does not match its checksum.")
+    # prepare_manifest reuses an existing manifest instead of rebuilding it, so a stored subset has
+    # to be checked against the active crop variant. Otherwise a deep run pointed at the standard
+    # manifest would silently benchmark 12-slice crops. Both sides go through JSON because a manifest
+    # is validated twice: once freshly built, still holding tuples, and once loaded back as lists.
+    expected_policy = json.loads(_json_bytes(_selection_policy_3d(variant)))
+    policy = manifest.get("selection_policy", {})
+    stored_policy = json.loads(_json_bytes({key: policy.get(key) for key in expected_policy}))
+    if stored_policy != expected_policy:
+        raise RuntimeError(
+            f"The subset manifest was not built for the '{variant}' 3d crop variant: "
+            f"{stored_policy} != {expected_policy}."
+        )
     samples = manifest.get("samples", [])
     counts = defaultdict(int)
     identifiers = set()
@@ -525,14 +592,16 @@ def _validate_manifest(manifest: Dict[str, Any], data_root: Path) -> None:
         raise RuntimeError(f"Unexpected manifest sample counts: got {dict(counts)}, expected {expected}.")
 
 
-def prepare_manifest(data_root: Path, manifest_path: Path) -> Dict[str, Any]:
+def prepare_manifest(data_root: Path, manifest_path: Path, variant: str = "standard") -> Dict[str, Any]:
+    if variant not in CROP_VARIANTS_3D:
+        raise ValueError(f"Unknown 3d crop variant '{variant}'; expected one of {list(CROP_VARIANTS_3D)}.")
     if manifest_path.exists():
         with open(manifest_path) as f:
             manifest = json.load(f)
-        _validate_manifest(manifest, data_root)
+        _validate_manifest(manifest, data_root, variant)
         return manifest
 
-    samples = _select_2d_samples(data_root) + _select_3d_samples(data_root)
+    samples = _select_2d_samples(data_root) + _select_3d_samples(data_root, variant)
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "data_root": str(data_root),
@@ -540,19 +609,14 @@ def prepare_manifest(data_root: Path, manifest_path: Path) -> Dict[str, Any]:
             "2d_crop_shape": list(CROP_SHAPE_2D),
             "2d_sample_counts": SAMPLE_COUNTS_2D,
             "2d_complexity_targets": "even quantile midpoints within each dataset and LIVECell cell type",
-            "3d_crop_shapes": {
-                dataset: list(CROP_SHAPE_3D_OVERRIDES.get(dataset, CROP_SHAPE_3D))
-                for dataset in DATASETS_3D
-            },
-            "3d_candidate_grid": list(CANDIDATE_GRID_3D),
             "3d_complexity_targets": list(TARGETS_3D),
-            "3d_validation_z_range_overrides": VALIDATION_Z_RANGE_OVERRIDES,
             "complexity": "mean percentile rank of object count and foreground fraction",
+            **_selection_policy_3d(variant),
         },
         "samples": samples,
     }
     manifest["manifest_checksum"] = _content_checksum(_manifest_identity(manifest))
-    _validate_manifest(manifest, data_root)
+    _validate_manifest(manifest, data_root, variant)
     _atomic_write_json(manifest_path, manifest)
     return manifest
 
@@ -625,6 +689,21 @@ def _load_3d_sample(
     if raw.shape != labels.shape:
         raise RuntimeError(f"Shape mismatch for '{sample['sample_id']}': raw {raw.shape}, labels {labels.shape}.")
     return raw.astype("float32", copy=False), labels
+
+
+def _realized_depth_3d(sample: Dict[str, Any], data_root: Path) -> int:
+    """The number of slices a 3d sample actually propagates through.
+
+    The manifest roi always has the declared crop depth, but `_load_3d_sample` drops unannotated end
+    slices, so the depth a run really sees can be smaller. Reported by --prepare-only, because a crop
+    set chosen for its depth is only worth running once the depth is known to survive the trim.
+    """
+    source_roi = _roi_from_json(sample["roi"])
+    labels = _read_array(_source_path(sample["label_path"], data_root), sample["label_key"], roi=source_roi)
+    annotated = np.any(labels != 0, axis=(1, 2))
+    if not annotated.any():
+        return 0
+    return int(len(annotated) - int(np.argmax(annotated[::-1])) - int(np.argmax(annotated)))
 
 
 def _git_revision() -> Optional[str]:
@@ -815,7 +894,7 @@ def run_benchmark(
     manifest: Dict[str, Any], data_root: Path, output_root: Path, model_type: str,
     joint_checkpoint: str, config_name: str, params_2d: Dict[str, Any], params_3d: Dict[str, Any],
     device: str, time_budget_minutes: float, dimensions: Sequence[int] = (2, 3),
-    trial_id: str = "trial-1", started: Optional[float] = None,
+    trial_id: str = "trial-1", started: Optional[float] = None, crops_3d: str = "standard",
 ) -> Tuple[Path, pd.DataFrame, Dict[str, Any]]:
     started = time.perf_counter() if started is None else started
     checkpoint_path = get_joint_checkpoint(model_type, joint_checkpoint)
@@ -864,6 +943,9 @@ def run_benchmark(
         "params_3d": params_3d,
         "dimensions": list(dimensions),
         "trial_id": trial_id,
+        # Recorded for attribution only. The crop variant already reaches the run directory through
+        # the manifest checksum, so it must not enter a checksum of its own.
+        "crops_3d": crops_3d,
         "device": device,
         "gpu": torch.cuda.get_device_name(torch.device(device)) if device.startswith("cuda") else None,
         "platform": platform.platform(),
@@ -925,9 +1007,14 @@ def main() -> None:
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--time-budget-minutes", type=float, default=30.0)
     parser.add_argument("--prepare-only", action="store_true", help="Create and validate the subset, then stop.")
+    parser.add_argument(
+        "--crops-3d", choices=CROP_VARIANTS_3D, default="standard",
+        help="The 3d crop set. 'deep' opts in to 32-slice crops, the depth a depth-dependent "
+             "optimization needs to be measurable, and keeps its own manifest beside the standard one.",
+    )
     args = parser.parse_args()
 
-    manifest_path = args.manifest or (args.output_root / f"subset_manifest_v{MANIFEST_SCHEMA_VERSION}.json")
+    manifest_path = args.manifest or _default_manifest_path(args.output_root, args.crops_3d)
     data_root, output_root, manifest_path = _validate_roots(args.data_root, args.output_root, manifest_path)
     if args.time_budget_minutes <= 0:
         parser.error("--time-budget-minutes must be positive.")
@@ -937,22 +1024,32 @@ def main() -> None:
         print("Warning: the 30-minute runtime target was calibrated on an A100, not on CPU.", file=sys.stderr)
 
     output_root.mkdir(parents=True, exist_ok=True)
-    manifest = prepare_manifest(data_root, manifest_path)
+    manifest = prepare_manifest(data_root, manifest_path, args.crops_3d)
     print(
         f"Manifest: {manifest_path}\n"
         f"Checksum: {manifest['manifest_checksum']}\n"
+        f"3d crops: {args.crops_3d}\n"
         f"Samples: {sum(sample['ndim'] == 2 for sample in manifest['samples'])} 2d + "
         f"{sum(sample['ndim'] == 3 for sample in manifest['samples'])} 3d"
     )
+    dimensions = (2, 3) if args.ndim == "both" else (int(args.ndim),)
+    if args.prepare_only:
+        for sample in manifest["samples"]:
+            if sample["ndim"] != 3:
+                continue
+            declared = _crop_shape_3d(sample["dataset"], args.crops_3d)[0]
+            realized = _realized_depth_3d(sample, data_root)
+            flag = "" if realized == declared else f"  <- trimmed from the declared depth {declared}"
+            print(f"  {sample['dataset']:16s} roi {sample['roi']} depth {realized} "
+                  f"objects {sample['object_count']}{flag}")
     if args.prepare_only:
         return
 
     config_name, params_2d, params_3d = _load_config(args.config)
-    dimensions = (2, 3) if args.ndim == "both" else (int(args.ndim),)
     run_dir, summary, metadata = run_benchmark(
         manifest, data_root, output_root, args.model_type, args.joint_checkpoint,
         config_name, params_2d, params_3d, args.device, args.time_budget_minutes,
-        dimensions=dimensions, trial_id=args.trial_id, started=started,
+        dimensions=dimensions, trial_id=args.trial_id, started=started, crops_3d=args.crops_3d,
     )
     print(summary.to_string(index=False))
     print(f"Run directory: {run_dir}")
