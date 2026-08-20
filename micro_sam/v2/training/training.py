@@ -7,10 +7,9 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 
-from micro_sam.util import get_device
-from micro_sam.v2.util import training_autocast_dtype
 from micro_sam.v2.transforms.raw import VideoAugment
 from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Loss
+from micro_sam.util import get_device, training_autocast_dtype
 from .util import get_sam2_train_model, ConvertToSam2VideoBatch
 from .joint_sam2_trainer import JointSam2Trainer, JointSam2Logger
 from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss

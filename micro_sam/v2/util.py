@@ -19,17 +19,14 @@ from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
 from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
 from micro_sam.util import (
     get_device, get_cache_directory, microsam_cachedir, _open_embeddings,
-    _configure_mps_memory, device_type, make_temp_embedding_path,
+    _configure_mps_memory, device_type, make_temp_embedding_path, BF16_MIN_CAPABILITY,
 )
 
 
 Device = Optional[Union[str, torch.device]]
 Devices = Optional[Union[str, torch.device, Sequence[Union[str, torch.device]]]]
 
-# Precision preference on cuda: bf16, then fp16, then fp32. Gated on the compute capability and not
-# on 'torch.cuda.is_bf16_supported', whose default counts emulation and reports bf16 on Volta, where
-# it is slower than fp32 and needs more memory.
-BF16_MIN_CAPABILITY = (8, 0)
+# Precision preference on cuda: bf16, then fp16, then fp32. See `micro_sam.util.BF16_MIN_CAPABILITY`.
 FP16_MIN_CAPABILITY = (7, 0)
 
 
@@ -72,21 +69,6 @@ def autocast(device: Device = None):
     if dtype is None:
         return contextlib.nullcontext()
     return torch.autocast(device_type=device.type, dtype=dtype)
-
-
-def training_autocast_dtype(device: Device = None) -> Optional[torch.dtype]:
-    """The dtype that training runs in on a device.
-
-    Training uses the same device gate as inference, but not its float16 tier. SAM2 finetunes in
-    bfloat16. Training in float16 needs loss scaling and can still diverge.
-
-    Args:
-        device: The device the forward pass runs on. Defaults to the best available one.
-
-    Returns:
-        bfloat16 where the device runs it natively, or None where training stays in fp32.
-    """
-    return torch.bfloat16 if autocast_dtype(device) is torch.bfloat16 else None
 
 
 def precision_name(device: Device = None) -> str:

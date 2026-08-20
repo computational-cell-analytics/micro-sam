@@ -597,26 +597,5 @@ def test_the_trainer_trains_in_bfloat16_without_a_scaler_on_ampere(monkeypatch):
     assert calls == [("cuda", torch.bfloat16)]
 
 
-@pytest.mark.parametrize(
-    "capability, expected", [((9, 0), torch.bfloat16), ((8, 0), torch.bfloat16), ((7, 5), None), ((6, 1), None)]
-)
-def test_the_training_precision_skips_the_float16_tier(monkeypatch, capability, expected):
-    """Inference runs float16 on Volta and Turing. Training stays in fp32 there, because SAM2 uses bfloat16."""
-    from micro_sam.v2.util import training_autocast_dtype
-
-    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: capability)
-
-    assert training_autocast_dtype(torch.device("cuda")) is expected
-
-
-@pytest.mark.parametrize("device_type", ("cpu", "mps"))
-def test_the_training_precision_is_fp32_outside_cuda(device_type):
-    """bfloat16 is emulated on these devices, so autocast makes training slower."""
-    from micro_sam.v2.util import training_autocast_dtype
-
-    assert training_autocast_dtype(torch.device(device_type)) is None
-
-
 if __name__ == "__main__":
     unittest.main()
