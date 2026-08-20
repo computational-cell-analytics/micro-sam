@@ -8,6 +8,7 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 
 from micro_sam.util import get_device
+from micro_sam.v2.util import training_autocast_dtype
 from micro_sam.v2.transforms.raw import VideoAugment
 from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Loss
 from .util import get_sam2_train_model, ConvertToSam2VideoBatch
@@ -618,7 +619,9 @@ def train_automatic(
         compile_model=False,
         scheduler_kwargs=scheduler_kwargs,
         optimizer_kwargs={"weight_decay": 0.1},
-        mixed_precision=True,
+        # The hardware decides the precision. SAM2 trains in bfloat16 only.
+        mixed_precision=training_autocast_dtype(device) is not None,
+        mixed_precision_dtype="bfloat16",
         device=device,
         early_stopping=early_stopping,
         trainer_class=UniSAM2Trainer,
@@ -721,7 +724,9 @@ def _train_automatic_rank(
         compile_model=False,
         scheduler_kwargs=scheduler_kwargs,
         optimizer_kwargs={"weight_decay": 0.1},
-        mixed_precision=True,
+        # The hardware decides the precision. SAM2 trains in bfloat16 only.
+        mixed_precision=training_autocast_dtype(device) is not None,
+        mixed_precision_dtype="bfloat16",
         device=device,
         early_stopping=early_stopping,
         trainer_class=UniSAM2Trainer,
@@ -971,7 +976,6 @@ def train_joint_sam2(
         lr_scheduler=scheduler,
         logger=JointSam2Logger,
         log_image_interval=100,
-        mixed_precision=True,
         compile_model=False,
         early_stopping=early_stopping,
         save_root=save_root,
@@ -1115,7 +1119,6 @@ def _train_joint_rank(
         lr_scheduler=scheduler,
         logger=JointSam2Logger,
         log_image_interval=100,
-        mixed_precision=True,
         compile_model=False,
         early_stopping=early_stopping,
         save_root=save_root,

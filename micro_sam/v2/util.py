@@ -74,6 +74,21 @@ def autocast(device: Device = None):
     return torch.autocast(device_type=device.type, dtype=dtype)
 
 
+def training_autocast_dtype(device: Device = None) -> Optional[torch.dtype]:
+    """The dtype that training runs in on a device.
+
+    Training uses the same device gate as inference, but not its float16 tier. SAM2 finetunes in
+    bfloat16. Training in float16 needs loss scaling and can still diverge.
+
+    Args:
+        device: The device the forward pass runs on. Defaults to the best available one.
+
+    Returns:
+        bfloat16 where the device runs it natively, or None where training stays in fp32.
+    """
+    return torch.bfloat16 if autocast_dtype(device) is torch.bfloat16 else None
+
+
 def precision_name(device: Device = None) -> str:
     """The precision name of a device, for the embedding cache signature.
 

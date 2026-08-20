@@ -14,6 +14,7 @@ import torch.distributed as dist
 import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
 
+from micro_sam.v2.util import training_autocast_dtype
 from micro_sam.v2.loss.custom_sam2_loss import CORE_LOSS_KEY, CustomSAM2Metric
 
 # Fixed seed for the main-process randomness during validation (prompt/correction-click
@@ -150,7 +151,9 @@ class Sam2Trainer(CheckpointAdapter, torch_em.trainer.DefaultTrainer):
             MultiStepMultiMasksAndIous when constructed via train_sam2().
         kwargs: Forwarded to torch_em.trainer.DefaultTrainer (model,
             train_loader, val_loader, optimizer, device, lr_scheduler,
-            logger, save_root, etc.).
+            logger, save_root, etc.). mixed_precision and mixed_precision_dtype
+            default to what the device runs natively, see
+            `micro_sam.v2.util.training_autocast_dtype`.
     """
 
     def __init__(
@@ -159,35 +162,36 @@ class Sam2Trainer(CheckpointAdapter, torch_em.trainer.DefaultTrainer):
         loss: torch.nn.Module,
         metric: Optional[torch.nn.Module] = None,
         clip_grad_norm: Optional[float] = None,
-        amp_dtype: Optional[torch.dtype] = torch.bfloat16,
         **kwargs,
     ):
         # The validation metric mirrors v1 SamTrainer: a best-mask Dice score (here on the
         # initial SAM2 prompt response). Default to CustomSAM2Metric if none is given.
         if metric is None:
             metric = CustomSAM2Metric()
-        # Sam2Trainer manages AMP internally via amp_dtype. Prevent the parent from
-        # setting up a float16 GradScaler which is incompatible with bfloat16.
-        kwargs.pop("mixed_precision", None)
-        super().__init__(loss=loss, metric=metric, mixed_precision=False, **kwargs)
+        # The hardware decides the precision. SAM2 trains in bfloat16 only.
+        dtype = training_autocast_dtype(kwargs.get("device"))
+        kwargs.setdefault("mixed_precision", dtype is not None)
+        kwargs.setdefault("mixed_precision_dtype", "bfloat16")
+        super().__init__(loss=loss, metric=metric, **kwargs)
         self.convert_inputs = convert_inputs
         self.clip_grad_norm = clip_grad_norm
-        self.amp_dtype = amp_dtype
         self.interactive_loss = loss
         self._kwargs = kwargs
 
     def _amp_context(self):
-        if self.amp_dtype is not None:
-            return torch.amp.autocast(device_type="cuda", dtype=self.amp_dtype)
-        return contextlib.nullcontext()
+        return torch.autocast(device_type=self._device_type, dtype=getattr(torch, self.mixed_precision_dtype))
 
+    # The parent pairs its mixed epoch with _backprop_mixed. SAM2 needs _sam2_backprop in both.
     def _train_epoch(self, progress):
-        # mixed_precision is disabled on the parent (see __init__), so DefaultTrainer would pass
-        # contextlib.nullcontext as forward_context. Inject our bf16 autocast instead so every
-        # _train_epoch_impl (this trainer and JointSam2Trainer) runs the forward pass under AMP.
+        return self._train_epoch_impl(progress, contextlib.nullcontext, self._sam2_backprop)
+
+    def _train_epoch_mixed(self, progress):
         return self._train_epoch_impl(progress, self._amp_context, self._sam2_backprop)
 
     def _validate(self):
+        return self._validate_impl(contextlib.nullcontext)
+
+    def _validate_mixed(self):
         return self._validate_impl(self._amp_context)
 
     def _check_input_normalization(self, x, input_check_done):
