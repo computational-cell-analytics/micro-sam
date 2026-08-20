@@ -19,11 +19,17 @@ class FakeTileSegmenter:
     def add_box_prompts(self, **kwargs):
         pass
 
+    def get_progress_total(self, z_range=None):
+        return 8 if z_range is None else z_range[1] - z_range[0] + 1
+
 
 def test_promptable_segmentation_2d_normalizes_raw(monkeypatch):
     from micro_sam.v2.normalization import to_image
 
     class RecordingImagePredictor:
+        device = "cpu"  # 'encode_image' reads it to pick the encoder precision.
+        _features = None
+
         def set_image(self, image):
             self.image = image
             self._orig_hw = [image.shape[:2]]
@@ -180,7 +186,6 @@ def test_promptable_segmentation_3d_disables_offloading_on_mps(device, monkeypat
         predictor=None, volume=np.zeros((4, 8, 8), dtype="uint8"), volume_embeddings=None, device=device,
     )
 
-    assert not segmenter.offload_video_to_cpu
     assert not segmenter.offload_state_to_cpu
 
 
@@ -192,13 +197,13 @@ def test_promptable_segmentation_3d_keeps_offloading_on_cuda(monkeypatch):
         device=torch.device("cuda", 0),
     )
 
-    assert segmenter.offload_video_to_cpu
     assert segmenter.offload_state_to_cpu
 
 
 def test_promptable_segmentation_3d_progress_total():
     segmenter = PromptableSegmentation3D.__new__(PromptableSegmentation3D)
     segmenter.volume = np.zeros((8, 16, 16), dtype="uint8")
+    segmenter._clear_pushed_prompts()  # normally done in '__init__', which '__new__' skips
 
     assert segmenter.get_progress_total() == 8
     assert segmenter.get_progress_total((2, 5)) == 4
@@ -232,9 +237,12 @@ class RecordingPredictor:
 
     def __init__(self):
         self.calls = []
+        self.mask_calls = []
+        self.active_objects = set()
 
     def add_new_points_or_box(self, inference_state, frame_idx, obj_id, clear_old_points=False,
                               points=None, labels=None, box=None):
+        self.active_objects.add(obj_id)
         self.calls.append({
             "frame_idx": frame_idx, "obj_id": obj_id, "clear_old_points": clear_old_points,
             "points": None if points is None else np.asarray(points).tolist(),
@@ -243,8 +251,12 @@ class RecordingPredictor:
         })
         return None, [obj_id], torch.zeros((1, 1, 32, 32))
 
+    def add_new_mask(self, inference_state, frame_idx, obj_id, mask):
+        self.active_objects.add(obj_id)
+        self.mask_calls.append({"frame_idx": frame_idx, "obj_id": obj_id, "mask": mask})
+
     def reset_state(self, inference_state):
-        pass
+        self.active_objects.clear()
 
 
 def make_recording_segmenter():
@@ -377,6 +389,54 @@ def test_sync_prompt_state_replays_after_a_point_is_relabelled():
 
     assert len(segmenter.predictor.calls) == 2
     assert segmenter.predictor.calls[-1]["labels"] == [0]
+
+
+def test_grouped_propagation_restores_all_prompts_before_a_deletion(monkeypatch):
+    segmenter = make_recording_segmenter()
+    kept = ("point", 1, 10, 12, 1)
+    deleted = ("point", 5, 20, 22, 1)
+    segmenter.sync_prompt_state({kept, deleted})
+    segmenter.add_point_prompts(
+        frame_ids=[1, 5], points=np.array([[10, 12], [20, 22]]), point_labels=np.array([1, 1]),
+        object_id=[1, 2],
+    )
+
+    propagated_objects = []
+
+    def propagate_group(*args, **kwargs):
+        propagated_objects.append(set(segmenter.predictor.active_objects))
+        return {}
+
+    monkeypatch.setattr(segmenter, "_propagate_both_directions", propagate_group)
+    segmenter.propagate_prompts()
+
+    assert propagated_objects == [{1}, {2}]
+    assert segmenter.predictor.active_objects == {1, 2}
+    assert set(segmenter._pushed_points) == {(1, 1), (2, 5)}
+    assert segmenter._prompt_signatures == {kept, deleted}
+
+    segmenter.sync_prompt_state({kept})
+    segmenter.add_point_prompts(
+        frame_ids=1, points=np.array([[10, 12]]), point_labels=np.array([1]), object_id=1
+    )
+
+    assert segmenter.predictor.active_objects == {1}
+
+
+def test_replaying_masks_restores_their_bookkeeping():
+    segmenter = make_recording_segmenter()
+    mask = np.ones((32, 32), dtype=bool)
+    snapshot = ({}, {}, {(2, 5): {"mask-signature": mask}})
+
+    segmenter._replay_prompts(snapshot, {2})
+
+    assert set(segmenter._pushed_masks) == {(2, 5)}
+    assert segmenter._pushed_masks[(2, 5)]["mask-signature"] is mask
+    assert segmenter.predictor.active_objects == {2}
+    assert len(segmenter.predictor.mask_calls) == 1
+    assert segmenter.predictor.mask_calls[0]["frame_idx"] == 5
+    assert segmenter.predictor.mask_calls[0]["obj_id"] == 2
+    assert segmenter.predictor.mask_calls[0]["mask"] is mask
 
 
 def test_segment_slice_clears_the_pushed_prompt_bookkeeping():

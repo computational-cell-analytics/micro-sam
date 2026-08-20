@@ -3,11 +3,13 @@ import sys
 import pooch
 import shutil
 import warnings
+import contextlib
 from pathlib import Path
-from typing import Union, Literal, Optional, Sequence, Tuple
+from typing import Any, Union, Literal, Optional, Sequence, Tuple
 
 import sam2
 from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 import numpy as np
 
@@ -23,6 +25,97 @@ from micro_sam.util import (
 
 Device = Optional[Union[str, torch.device]]
 Devices = Optional[Union[str, torch.device, Sequence[Union[str, torch.device]]]]
+
+# Precision preference on cuda: bf16, then fp16, then fp32. Gated on the compute capability and not
+# on 'torch.cuda.is_bf16_supported', whose default counts emulation and reports bf16 on Volta, where
+# it is slower than fp32 and needs more memory.
+BF16_MIN_CAPABILITY = (8, 0)
+FP16_MIN_CAPABILITY = (7, 0)
+
+
+def _precision_device(device: Device = None) -> torch.device:
+    """The device a precision decision is made for, unvalidated so a missing backend answers fp32."""
+    return torch.device(get_device()) if device is None else torch.device(device)
+
+
+def autocast_dtype(device: Device = None) -> Optional[torch.dtype]:
+    """The dtype SAM2 and UniSAM2 inference runs in on a device.
+
+    Args:
+        device: The device the forward pass runs on. Defaults to the best available one.
+
+    Returns:
+        The half precision dtype the device runs natively, or None where inference stays in fp32.
+    """
+    device = _precision_device(device)
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    capability = torch.cuda.get_device_capability(device)
+    if capability >= BF16_MIN_CAPABILITY:
+        return torch.bfloat16
+    if capability >= FP16_MIN_CAPABILITY:
+        return torch.float16
+    return None
+
+
+def autocast(device: Device = None):
+    """The autocast context inference runs in on a device.
+
+    Args:
+        device: The device the forward pass runs on. Defaults to the best available one.
+
+    Returns:
+        The autocast context, or a null context for fp32.
+    """
+    device = _precision_device(device)
+    dtype = autocast_dtype(device)
+    if dtype is None:
+        return contextlib.nullcontext()
+    return torch.autocast(device_type=device.type, dtype=dtype)
+
+
+def precision_name(device: Device = None) -> str:
+    """The precision name of a device, for the embedding cache signature.
+
+    Args:
+        device: The device the forward pass runs on.
+
+    Returns:
+        One of 'bf16', 'fp16' or 'fp32'.
+    """
+    return {torch.bfloat16: "bf16", torch.float16: "fp16", None: "fp32"}[autocast_dtype(device)]
+
+
+def to_float32(value: Any) -> Any:
+    """Cast the floating point tensors of a nested structure to fp32.
+
+    Autocast returns half precision, but the embedding cache is fp32 and numpy has no bfloat16.
+
+    Args:
+        value: A tensor, or a dict, list or tuple containing tensors.
+
+    Returns:
+        The same structure with its floating point tensors in fp32.
+    """
+    if isinstance(value, torch.Tensor):
+        return value.float() if value.is_floating_point() else value
+    if isinstance(value, dict):
+        return {key: to_float32(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(to_float32(item) for item in value)
+    return value
+
+
+def encode_image(predictor, image: np.ndarray) -> None:
+    """Run the image encoder in the device precision, keeping the cached features in fp32.
+
+    Args:
+        predictor: The SAM2 image predictor.
+        image: The image to encode.
+    """
+    with autocast(predictor.device):
+        predictor.set_image(image)
+    predictor._features = to_float32(predictor._features)
 
 
 class ImageEmbeddings(dict):
@@ -360,11 +453,7 @@ def get_sam2_model(
 
     device = _get_device(device)
 
-    if input_type == "images":
-        _build_segment_anything_2 = build_sam2
-    elif input_type == "videos":
-        _build_segment_anything_2 = _build_sam2_video_predictor
-    else:
+    if input_type not in ("images", "videos"):
         raise ValueError(f"'{input_type}' is not a valid input type.")
 
     if checkpoint_path is None:
@@ -373,19 +462,26 @@ def get_sam2_model(
         else:
             checkpoint_path = _get_checkpoint(model_type=model_type)
 
-    model = _build_segment_anything_2(
-        config_file=model_cfg,
-        ckpt_path=checkpoint_path,
-        device=device,
-        mode="eval",
-        apply_postprocessing=False,
-    )
+    if input_type == "images":
+        model = build_sam2(
+            config_file=model_cfg, ckpt_path=checkpoint_path, device=device, mode="eval", apply_postprocessing=False,
+        )
+    else:
+        model = _build_sam2_video_predictor(config_file=model_cfg, ckpt_path=checkpoint_path, device=device)
 
     # Both predictor wrappers and direct model use need this metadata for embedding signatures.
     model.model_type = model_type
     model.model_name = model_type  # TODO: What is this exactly?
 
     return model
+
+
+class _PrecisionImagePredictor(SAM2ImagePredictor):
+    """A SAM2 image predictor whose prompt encoder and mask decoder run in the device precision."""
+
+    def _predict(self, *args, **kwargs):
+        with autocast(self.device):
+            return to_float32(super()._predict(*args, **kwargs))
 
 
 def configure_image_predictor(predictor):
@@ -403,9 +499,18 @@ def configure_image_predictor(predictor):
 
 
 def get_sam2_image_predictor(model, **kwargs):
-    """Build a SAM2 image predictor with resize-longest preprocessing."""
-    from sam2.sam2_image_predictor import SAM2ImagePredictor
-    return configure_image_predictor(SAM2ImagePredictor(model, **kwargs))
+    """Build a SAM2 image predictor with resize-longest preprocessing and the device precision."""
+    return configure_image_predictor(_PrecisionImagePredictor(model, **kwargs))
+
+
+def _predictor_device(predictor) -> torch.device:
+    """The device a predictor runs on, whether it exposes it as an attribute or as a method."""
+    device = getattr(predictor, "device", None)
+    if callable(device):
+        device = device()
+    if device is None:
+        device = next(predictor.parameters()).device
+    return torch.device(device)
 
 
 def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, preprocessing):
@@ -429,12 +534,13 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, p
     from micro_sam.util import _get_embedding_signature
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
     signature["normalization"] = preprocessing
+    signature["precision"] = precision_name(_predictor_device(predictor))
 
     stale = False
     for key, val in signature.items():
         # Missing current preprocessing metadata means stale. We still tolerate other legacy signature fields.
         if key not in f.attrs:
-            if key == "normalization":
+            if key in ("normalization", "precision"):
                 stale = True
             continue
         if f.attrs[key] == val:
@@ -459,11 +565,13 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, p
 
 
 def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size, original_size, preprocessing):
-    """Write the common embedding metadata plus the SAM2 preprocessing policy."""
+    """Write the common embedding metadata plus the SAM2 preprocessing policy and precision."""
     from micro_sam.util import _write_embedding_signature as _write_common_signature
 
     _write_common_signature(f, input_, predictor, tile_shape, halo, input_size, original_size)
     f.attrs["normalization"] = preprocessing
+    # The encoder precision changes the stored values, so another one is stale.
+    f.attrs["precision"] = precision_name(_predictor_device(predictor))
 
 
 def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
@@ -489,7 +597,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     # Otherwise we have to compute the embeddings.
     predictor.reset_predictor()
 
-    predictor.set_image(to_image(input_))
+    encode_image(predictor, to_image(input_))
     features = predictor.get_image_embedding().cpu().numpy()
     high_res_features = predictor._features.get("high_res_feats")
     original_size = predictor._orig_hw
@@ -699,38 +807,25 @@ def _to_device_tensor(data, device):
     return torch.as_tensor(np.asarray(data), device=device).float()
 
 
-def set_precomputed(
-    predictor,
-    image_embeddings,
-    i: Optional[int] = None,
-    tile_id: Optional[int] = None,
-    input_: Optional[np.ndarray] = None,
-):
-    """Set the precomputed image embeddings for a predictor.
+def set_precomputed(predictor, image_embeddings, i: Optional[int] = None, tile_id: Optional[int] = None):
+    """Set precomputed image embeddings on a SAM2 image predictor.
+
+    Only 2d embeddings are set this way. A volume's embeddings are not: the video predictor reads
+    them per frame while it tracks, see `CustomVideoPredictor.init_state`.
 
     Args:
-        ...
+        predictor: The SAM2 image predictor to set the embeddings on.
+        image_embeddings: The precomputed embeddings, as returned by `precompute_image_embeddings`.
+        i: The slice index, which 2d embeddings do not have. Passing one raises, so that a volumetric
+            call routed here by mistake fails instead of segmenting the wrong thing.
+        tile_id: The tile to set, for tiled embeddings. That tile's features are read from the store
+            and set as if they were those of a whole image.
 
     Returns:
-        ...
+        The predictor, with the embeddings set on it.
     """
     if tile_id is not None:
         tile_features = image_embeddings["features"][str(tile_id)]
-        if "pos_enc" in image_embeddings:
-            # 3D tiled embeddings: the per-tile positional encodings and FPN outputs (stored under
-            # 'pos_enc/{tile_id}/{level}' and 'fpn/{tile_id}/{level}') are needed to set up the video
-            # inference state for this tile-column. 'input_' must be the tile sub-volume.
-            pos_enc = _load_list_datasets(image_embeddings["pos_enc"], str(tile_id), lazy_loading=False)
-            fpn = _load_list_datasets(image_embeddings["fpn"], str(tile_id), lazy_loading=False)
-            tile_image_embeddings = {
-                "features": np.asarray(tile_features),
-                "pos_enc": pos_enc,
-                "fpn": fpn,
-                "input_size": tile_features.attrs["input_size"],
-                "original_size": tile_features.attrs["original_size"],
-            }
-            return set_precomputed(predictor, tile_image_embeddings, i=i, input_=input_)
-
         # The SAM2 image predictor also needs the high-resolution features (used by the decoder),
         # which are stored per tile under 'high_res_feats/{tile_id}/{level}'.
         high_res_feats = _load_list_datasets(image_embeddings["high_res_feats"], str(tile_id), lazy_loading=False)
@@ -748,48 +843,18 @@ def set_precomputed(
         device = predictor.device  # Otherwise, for image predictor.
 
     features = image_embeddings["features"]
-    assert features.ndim in (4, 5), f"{features.ndim}"
-    if features.ndim == 5:
-        if i is None:
-            raise ValueError("The data is 3D so an index i is needed.")
-
-        if input_ is None:
-            raise AssertionError("For 3D inputs, you must provide the original multi-dimensional array.")
-
-        # Prepare the inference state
-        inference_state = predictor.init_state(
-            volume=input_, volume_embeddings=image_embeddings, ignore_caching_features=True,
+    if features.ndim != 4:
+        raise ValueError(
+            f"Expected 2d embeddings, whose features have 4 dimensions, got {features.ndim}. The "
+            "embeddings of a volume are read by the video predictor's 'init_state' instead."
         )
+    if i is not None:
+        raise ValueError("The data is 2D so an index is not needed.")
 
-        # Get other visual features, eg. positional embeddings and FPN outputs to prepare 'backbone_out'.
-        pos_list = image_embeddings["pos_enc"]
-        fpn_list = image_embeddings["fpn"]
-
-        # There's an easy assumption made here. The first dimension of 'features' corresponds to n-slices.
-        running_features = {}
-        for slice_id in range(features.shape[0]):
-            image = inference_state["images"][slice_id].to(device).float().unsqueeze(0)
-            vision_features = _to_device_tensor(features[slice_id], device)
-            vision_pos_enc = [_to_device_tensor(_shared_pos_enc(t), device) for t in pos_list]
-            backbone_fpn = _backbone_fpn(
-                [_to_device_tensor(t[slice_id], device) for t in fpn_list], vision_features
-            )
-            backbone_out = {
-                "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
-            }
-            running_features[slice_id] = (image, backbone_out)
-
-        inference_state["cached_features"] = running_features
-        return predictor, inference_state
-
-    elif features.ndim == 4:
-        if i is not None:
-            raise ValueError("The data is 2D so an index is not needed.")
-
-        # Convert to tensors on the predictor device, as 'predictor.set_image' would for the decoder.
-        image_embed = _to_device_tensor(features, device)
-        high_res_feats = [_to_device_tensor(feat, device) for feat in image_embeddings["high_res_feats"]]
-        predictor._features = {"image_embed": image_embed, "high_res_feats": high_res_feats}
-        predictor._is_image_set = True
-        predictor._orig_hw = image_embeddings["original_size"]
-        return predictor
+    # Convert to tensors on the predictor device, as 'predictor.set_image' would for the decoder.
+    image_embed = _to_device_tensor(features, device)
+    high_res_feats = [_to_device_tensor(feat, device) for feat in image_embeddings["high_res_feats"]]
+    predictor._features = {"image_embed": image_embed, "high_res_feats": high_res_feats}
+    predictor._is_image_set = True
+    predictor._orig_hw = image_embeddings["original_size"]
+    return predictor

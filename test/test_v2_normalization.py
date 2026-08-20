@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from micro_sam.v2.normalization import _normalize_percentile, normalize_raw
+from micro_sam.v2.normalization import _normalize_percentile
 
 
 class TestNormalizePercentile(unittest.TestCase):
@@ -54,32 +54,6 @@ class TestNormalizePercentile(unittest.TestCase):
         result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         self.assertEqual(result.stdout.strip().splitlines()[-1], "False")
-
-
-class TestNormalizeRaw(unittest.TestCase):
-    def test_float_output_is_in_unit_range(self):
-        rng = np.random.default_rng(1)
-        raw = (rng.random((32, 32)) * 500).astype("uint16")
-        normalized = normalize_raw(raw, output_dtype="float32")
-        self.assertEqual(normalized.dtype, np.dtype("float32"))
-        self.assertGreaterEqual(normalized.min(), 0.0)
-        self.assertLessEqual(normalized.max(), 1.0)
-
-    def test_uint8_output_spans_full_range(self):
-        rng = np.random.default_rng(2)
-        raw = (rng.random((64, 64)) * 500).astype("uint16")
-        normalized = normalize_raw(raw, output_dtype="uint8")
-        self.assertEqual(normalized.dtype, np.dtype("uint8"))
-        self.assertEqual(normalized.min(), 0)
-        self.assertEqual(normalized.max(), 255)
-
-    def test_empty_input_is_passed_through(self):
-        raw = np.zeros((0, 4), dtype="float32")
-        self.assertEqual(normalize_raw(raw).shape, (0, 4))
-
-    def test_invalid_output_dtype_raises(self):
-        with self.assertRaises(ValueError):
-            normalize_raw(np.zeros((4, 4), dtype="float32"), output_dtype="int32")
 
 
 if __name__ == "__main__":

@@ -44,10 +44,10 @@ def test_resize_longest_side_numpy_keeps_z_and_pads():
 
 def test_video_frame_uses_shared_normalization():
     from micro_sam.v2.normalization import normalize_raw
-    from micro_sam.v2.models._video_predictor import _load_img_as_tensor
+    from micro_sam.v2.models._video_predictor import _load_frame_as_tensor
 
     raw = np.arange(32, dtype="uint16").reshape(4, 8)
-    image, video_height, video_width = _load_img_as_tensor(raw, image_size=8)
+    image = _load_frame_as_tensor(raw, image_size=8)
 
     rgb = np.stack([raw] * 3, axis=-1)
     expected = normalize_raw(rgb, axis=(0, 1))
@@ -56,7 +56,6 @@ def test_video_frame_uses_shared_normalization():
 
     assert image.shape == (3, 8, 8)
     assert torch.equal(image, expected[0])
-    assert video_height == video_width == 8
 
 
 def test_image_transform_coordinates_and_mask_crop():

@@ -3,6 +3,7 @@ import queue
 import ctypes
 import hashlib
 import platform
+import contextlib
 from copy import copy
 from concurrent import futures
 from typing import Callable, List, Optional, Tuple, Union
@@ -152,20 +153,18 @@ def promptable_segmentation_2d(
 
     if image is not None:
         if image.ndim == 3 and image.shape[0] == 3 and image.shape[-1] != 3:
-            # Make channel-first RGB images channel-last. Grayscale and channel-last inputs are
-            # handled by 'to_image' below.
+            # Channel-last RGB; 'to_image' handles grayscale and channel-last inputs.
             image = image.transpose(1, 2, 0)
 
-        # Set the predictor state.
         from micro_sam.v2.normalization import to_image
-        predictor.set_image(to_image(image))
+        from micro_sam.v2.util import encode_image
+        encode_image(predictor, to_image(image))
 
     have_points = points is not None and len(points) > 0
     have_boxes = boxes is not None and len(boxes) > 0
     if have_points:
         assert len(points) == len(labels)
 
-    # If no prompts are provided, return 'None'.
     if not have_points and not have_boxes:
         return
 
@@ -173,32 +172,28 @@ def promptable_segmentation_2d(
     if batched:
         return _batched_promptable_segmentation_2d(predictor, points, labels, boxes, masks)
 
-    # SAM2 concatenates boxes and points along the prompt axis, so several boxes cannot share one
-    # point batch. Reject the combination, as in SAM v1, instead of failing inside the predictor.
+    # SAM2 concatenates boxes and points along the prompt axis, so boxes cannot share a point batch.
     if have_points and have_boxes and len(boxes) > 1:
         print("Point prompts can only be combined with a single box/shape prompt. Skipping segmentation.")
         return None
 
-    # A napari polygon or ellipse yields a filled mask prompt (from 'shape_layer_to_prompts'); when
-    # any is present, route to the mask-aware path that feeds them to SAM2 as low-res logit prompts.
+    # A polygon or ellipse yields a filled mask, which SAM2 takes as a low-res logit prompt.
     if masks is not None and any(m is not None for m in masks):
         return _promptable_segmentation_2d_with_masks(predictor, points, labels, boxes, masks)
 
     kwargs = {}
     if have_points:
-        kwargs["point_coords"] = points[:, ::-1].copy()  # Ensure contiguous array convention so that PyTorch likes it.
+        kwargs["point_coords"] = points[:, ::-1].copy()  # Contiguous, which torch wants.
         kwargs["point_labels"] = labels
     if have_boxes:
         shape = predictor._orig_hw[0]
         kwargs["box"] = np.array([_process_box(b, shape) for b in boxes])
 
-    # Run interactive segmentation.
     masks, scores, logits = predictor.predict(
         multimask_output=False,  # NOTE: Hard-coded to 'False' atm.
         **kwargs
     )
 
-    # Get the count of points / boxes.
     n_points = len(points) if have_points else 0
     n_boxes = len(boxes) if have_boxes else 0
 
@@ -239,8 +234,7 @@ def _promptable_segmentation_2d_with_masks(predictor, points, labels, boxes, mas
         out_masks, _, _ = predictor.predict(**kwargs)
         return out_masks.squeeze()
 
-    # Points combined with a single shape (v1 convention: only one box allowed alongside points,
-    # which the caller has already checked).
+    # Points with a single shape; the caller has already rejected more than one box.
     if have_points and have_boxes:
         seg = _predict_one(box=boxes[0], mask=masks[0], extra_points=points, extra_labels=labels)
         return (seg > 0).astype("uint8")
@@ -301,8 +295,7 @@ def _batched_promptable_segmentation_2d(predictor, points, labels, boxes, masks=
     if boxes is not None and len(boxes) > 0:
         have_box_masks = masks is not None and any(m is not None for m in masks)
         if have_box_masks:
-            # A batched predict takes a single shared 'mask_input', so segment per object to give each
-            # box its own soft mask cue (a box without a mask, e.g. a rectangle, uses the box alone).
+            # A batched predict shares one 'mask_input', so each box needs its own pass.
             for bidx, box in enumerate(boxes):
                 kwargs = {"box": np.array([_process_box(box, shape)]), "multimask_output": False}
                 if masks[bidx] is not None:
@@ -362,9 +355,8 @@ def tiled_promptable_segmentation_2d(
     if not have_points and not have_boxes:
         return None
 
-    # Group the prompts by the tile each falls in, so the tool segments an object across every tile
-    # that holds its prompts. Points are (y, x). Boxes are (y0, x0, y1, x1). A polygon or ellipse
-    # box carries a filled mask prompt. The tool crops it to each tile's outer block so it stays aligned.
+    # Grouped by tile, so an object is segmented in every tile that holds one of its prompts.
+    # Points are (y, x), boxes (y0, x0, y1, x1), and a mask is cropped to the tile's outer block.
     tile_points, tile_labels, tile_boxes, tile_masks = {}, {}, {}, {}
     if have_points:
         for point, label in zip(np.asarray(points), np.asarray(labels)):
@@ -386,8 +378,7 @@ def tiled_promptable_segmentation_2d(
         tpoints = np.asarray(tile_points.get(tile_id, [])).reshape(-1, 2)
         tlabels = np.asarray(tile_labels.get(tile_id, []), dtype=int)
         tboxes = tile_boxes.get(tile_id, [])
-        # Only segment tiles that have a positive cue (a positive point or a box); a tile with only
-        # negative points has nothing to segment there.
+        # A tile with only negative points has nothing to segment.
         if not ((tlabels == 1).any() or len(tboxes) > 0):
             continue
 
@@ -436,8 +427,7 @@ def tiled_promptable_segmentation_2d(
 
         local, glob = _inner_block_slices(tiling, halo, tile_id)
         region = tile_seg[local]
-        # Union the per-tile result into the output, preserving object ids (an object spanning tiles
-        # keeps the same id and is merged across the tile boundary).
+        # Unioned by id, so an object spanning tiles is merged across the boundary.
         sub = out[glob]
         positive = region > 0
         sub[positive] = region[positive]
@@ -451,7 +441,7 @@ class PromptableSegmentation3D:
     """
     def __init__(
         self, predictor, volume, volume_embeddings, device=None,
-        offload_video_to_cpu=None, offload_state_to_cpu=None,
+        offload_state_to_cpu=None, max_cached_frames=None,
     ):
         from micro_sam.v2.util import _get_device
         self.predictor = predictor
@@ -459,33 +449,30 @@ class PromptableSegmentation3D:
         self.volume_embeddings = volume_embeddings
         # 'device=None' uses the predictor's auto-detected device.
         self.device = device
-        # Offloading frames/state to CPU bounds GPU memory for large volumes on CUDA. On MPS it is off
-        # by default: unified memory saves nothing, and SAM2's CPU->MPS 'non_blocking' transfer of the
-        # consolidated masks races, giving intermittent garbage/NaN masks (patchy interactive results).
+        # Bounds device memory on cuda. Off on mps: unified memory saves nothing, and SAM2's
+        # non-blocking transfer back races there, which gives intermittent garbage masks.
         is_mps = device_type(_get_device(device)) == "mps"
-        self.offload_video_to_cpu = (not is_mps) if offload_video_to_cpu is None else offload_video_to_cpu
         self.offload_state_to_cpu = (not is_mps) if offload_state_to_cpu is None else offload_state_to_cpu
+        # A pass walks every slice, so a feature cache shorter than the volume is never hit.
+        self.max_cached_frames = max_cached_frames
 
         if self.volume.ndim != 3:
             raise AssertionError(f"The dimensionality of the volume must be 3, got '{self.volume.ndim}'")
 
         self.init_predictor()
 
-        # Track prompts already pushed to the persistent SAM2 state, keyed by (object_id, frame_id),
-        # so a re-run adds only newly placed prompts on top of the existing state (true incremental
-        # refinement) instead of re-adding duplicates. Cleared on 'reset_predictor'.
+        # What the SAM2 state already holds, so a re-run pushes only the newly placed prompts.
         self._pushed_points = {}  # (object_id, frame_id) -> set of (y, x, label)
         self._pushed_boxes = {}  # (object_id, frame_id) -> set of box corner tuples
         self._pushed_masks = {}  # (object_id, frame_id) -> set of mask content digests
         # Signature of the prompt set of the previous round, see 'sync_prompt_state'.
         self._prompt_signatures = set()
-        self._image_style_trafo = None  # lazily built resize-longest transform for per-slice mask refinement
+        self._image_style_trafo = None  # Built lazily for the per-slice mask refinement.
 
     def init_predictor(self):
-        # Initialize the inference state.
         self.inference_state = self.predictor.init_state(
             volume=self.volume, volume_embeddings=self.volume_embeddings, device=self.device,
-            offload_video_to_cpu=self.offload_video_to_cpu, offload_state_to_cpu=self.offload_state_to_cpu,
+            offload_state_to_cpu=self.offload_state_to_cpu, max_cached_frames=self.max_cached_frames,
         )
 
     def _clear_pushed_prompts(self):
@@ -494,6 +481,46 @@ class PromptableSegmentation3D:
         self._pushed_boxes = {}
         self._pushed_masks = {}
         self._prompt_signatures = set()
+
+    def _anchor_per_object(self):
+        """The earliest slice each object is conditioned on, keyed by its object id."""
+        anchors = {}
+        for key in (*self._pushed_points, *self._pushed_boxes, *self._pushed_masks):
+            object_id, frame_id = key
+            anchors[object_id] = min(anchors.get(object_id, frame_id), frame_id)
+        return anchors
+
+    def _replay_prompts(self, snapshot, object_ids):
+        """Push the recorded prompts of these objects onto a fresh state, in the order they were added.
+
+        The snapshot is taken before the first replay, because resetting the state also clears the
+        bookkeeping this reads, and a later group's prompts would be gone by then.
+
+        A box has to precede the points of its object and frame, which 'add_box_prompts' takes care of
+        by re-adding the points it clears.
+        """
+        points, boxes, masks = snapshot
+        self.reset_predictor()
+        for (object_id, frame_id), pushed in points.items():
+            if object_id not in object_ids:
+                continue
+            for y, x, label in pushed:
+                self.add_point_prompts(
+                    frame_ids=frame_id, points=np.array([[y, x]]),
+                    point_labels=np.array([label]), object_id=object_id,
+                )
+        for (object_id, frame_id), pushed in boxes.items():
+            if object_id in object_ids:
+                self.add_box_prompts(frame_ids=frame_id, boxes=[np.array(box) for box in pushed], object_id=object_id)
+        for (object_id, frame_id), pushed in masks.items():
+            if object_id not in object_ids:
+                continue
+            seen = self._pushed_masks.setdefault((object_id, frame_id), {})
+            for signature, mask in pushed.items():
+                seen[signature] = mask
+                self.predictor.add_new_mask(
+                    inference_state=self.inference_state, frame_idx=frame_id, obj_id=object_id, mask=mask,
+                )
 
     def sync_prompt_state(self, signatures):
         """Discard the persistent state when prompts were removed or changed since the last round.
@@ -511,21 +538,31 @@ class PromptableSegmentation3D:
         self._prompt_signatures = signatures
 
     def reset_predictor(self):
-        # Reset the state after finishing the segmentation round.
         self.predictor.reset_state(self.inference_state)
         self._clear_pushed_prompts()
-        # Drop the per-frame embedding cache (up to MAX_CACHED_FRAMES slices of high-res features) so
-        # committing / clearing frees its RAM. SAM2's 'reset_state' clears the tracking outputs but not
-        # this cache. The embeddings are disk-backed, so the next prompt re-reads the needed frame
-        # lazily via '_get_image_feature' - the cache stays empty until then.
+        # 'reset_state' clears the tracking outputs but not this cache, which holds high-res
+        # features per frame. The embeddings are disk-backed, so the next prompt re-reads its frame.
         self.inference_state["cached_features"] = {}
         _free_device_memory()
 
+    def reset_tracking(self):
+        """Clear the tracked objects, keeping the features of the volume they were tracked on.
+
+        What a further propagation pass over the same volume needs, and all it needs: those features
+        are a function of the volume's embeddings, not of the objects. `reset_predictor` drops them
+        as well and hands the memory back to the allocator, which together cost more than the passes
+        themselves once there are many. The cache stays bounded by MAX_CACHED_FRAMES either way.
+        """
+        self.predictor.reset_state(self.inference_state)
+        self._clear_pushed_prompts()
+
     def get_progress_total(self, z_range=None):
-        """Return the number of slice propagation steps for the requested z range."""
-        if z_range is None:
-            return int(self.volume.shape[0])
-        return int(z_range[1] - z_range[0] + 1)
+        """Return the number of slice propagation steps for the requested z range.
+
+        Objects conditioned on different slices take one propagation pass each, see 'propagate_prompts'.
+        """
+        slices = int(self.volume.shape[0]) if z_range is None else int(z_range[1] - z_range[0] + 1)
+        return slices * max(1, len(set(self._anchor_per_object().values())))
 
     def _broadcast(self, value, n):
         """Broadcast a scalar frame/object id to a length-'n' list (or validate a length-1 or -'n'
@@ -571,20 +608,23 @@ class PromptableSegmentation3D:
         frame_ids = self._broadcast(frame_ids, n)
         object_ids = self._broadcast(1 if object_id is None else object_id, n)
 
-        for frame_id, (y, x), label, obj_id in zip(frame_ids, points, point_labels, object_ids):
-            signature = (int(round(float(y))), int(round(float(x))), int(label))
-            seen = self._pushed_points.setdefault((obj_id, frame_id), set())
-            if signature in seen:
-                continue
-            seen.add(signature)
-            self.predictor.add_new_points_or_box(
-                inference_state=self.inference_state,
-                frame_idx=frame_id,
-                obj_id=obj_id,
-                clear_old_points=False,
-                points=np.array([[x, y]]),  # SAM2 expects (x, y).
-                labels=np.array([label]),
-            )
+        # The per-prompt masks are not read here, and consolidating them costs more than the prompt.
+        skip_output = getattr(self.predictor, "skip_prompt_output", None)
+        with (skip_output() if skip_output is not None else contextlib.nullcontext()):
+            for frame_id, (y, x), label, obj_id in zip(frame_ids, points, point_labels, object_ids):
+                signature = (int(round(float(y))), int(round(float(x))), int(label))
+                seen = self._pushed_points.setdefault((obj_id, frame_id), set())
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                self.predictor.add_new_points_or_box(
+                    inference_state=self.inference_state,
+                    frame_idx=frame_id,
+                    obj_id=obj_id,
+                    clear_old_points=False,
+                    points=np.array([[x, y]]),  # SAM2 expects (x, y).
+                    labels=np.array([label]),
+                )
 
     def add_box_prompts(
         self,
@@ -670,24 +710,25 @@ class PromptableSegmentation3D:
             key = (obj_id, frame_id)
             # A stable digest, so the signature does not change between processes.
             signature = hashlib.sha1(np.ascontiguousarray(mask).tobytes()).hexdigest()
-            seen = self._pushed_masks.setdefault(key, set())
+            seen = self._pushed_masks.setdefault(key, {})
             if signature in seen:
                 continue
-            seen.add(signature)
 
-            # Refine the drawn shape into the object on the seed frame, then seed propagation with the
-            # refined mask. The box is the shape's bounding box (nonzero extent of the filled mask).
+            # Refined on the seed frame first, so the propagation starts from the object rather
+            # than from the drawn shape. The box is the filled mask's extent.
             ys, xs = np.nonzero(mask)
             if len(ys) == 0:
                 continue
             box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype="float32")  # (x0, y0, x1, y1)
             refined = self._image_style_predict(frame_id, box=box, mask=mask)
 
+            prepared = self._prepare_mask(refined)
+            seen[signature] = prepared
             self.predictor.add_new_mask(
                 inference_state=self.inference_state,
                 frame_idx=frame_id,
                 obj_id=obj_id,
-                mask=self._prepare_mask(refined),
+                mask=prepared,
             )
 
     def _propagate_in_direction(
@@ -725,59 +766,75 @@ class PromptableSegmentation3D:
             if z_range is not None and not (z_range[0] <= out_frame_idx <= z_range[1]):
                 break
 
-            per_object = {
-                out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
-            }
+            # One transfer for the whole frame, rather than a host round trip per object.
+            binary = (out_mask_logits > 0.0).cpu().numpy()
+            per_object = {out_obj_id: binary[i] for i, out_obj_id in enumerate(out_obj_ids)}
             video_segments[out_frame_idx] = per_object
-            # Count each slice at most once across both directions (the conditioning frame is yielded
-            # by both), so the progress bar reaches its total exactly on a full pass without overshoot.
+            # Counted once across both directions, which both yield the conditioning frame.
             if update_progress is not None and (seen_frames is None or out_frame_idx not in seen_frames):
                 update_progress(1)
             if seen_frames is not None:
                 seen_frames.add(out_frame_idx)
 
-            # Early stopping: once every tracked object is absent for 'early_stop_patience'
-            # consecutive frames, the object left the volume and there is nothing more to track.
-            # A single empty frame is not enough (SAM2 can momentarily drop and recover a mask), so
-            # we require a run of empty frames before breaking.
+            # A run of empty frames, not one: SAM2 can drop a mask momentarily and recover it.
             if early_stop_patience is not None:
                 frame_is_empty = not any(mask.any() for mask in per_object.values())
                 consecutive_empty = consecutive_empty + 1 if frame_is_empty else 0
                 if consecutive_empty >= early_stop_patience:
                     break
 
-            # Hard z-range bound: we have just stored the edge slice, so stop before the predictor
-            # steps outside the range (and pays for a frame we would discard).
+            # The edge slice is stored, so stop before the predictor pays for a discarded frame.
             if z_range is not None and out_frame_idx == (z_range[0] if reverse else z_range[1]):
                 break
 
         return video_segments
 
     def propagate_prompts(self, update_progress=None, early_stop_patience=None, z_range=None):
-        # First, we propagate the masklets forward in time using the input prompts in selected frames.
-        # 'update_progress' is an optional callback that is called with the number of newly processed
-        # frames, so callers (e.g. the napari annotator) can report propagation progress to the user.
-        # 'early_stop_patience' bounds the propagation by stopping a direction once the object is
-        # absent for that many consecutive frames (see '_propagate_in_direction'). 'z_range' is an
-        # inclusive '(z_min, z_max)' hard bound on the slices that propagation can cover.
-        # Shared across both directions so the conditioning frame (yielded by both) is counted once.
+        """Propagate the pushed prompts through the volume, one pass per conditioned slice.
+
+        SAM2 propagates every object of a state from the earliest slice any of them is conditioned on,
+        and skips the backward pass entirely when that slice is 0. Objects anchored later would be
+        tracked - and have those results written into their memory - before they are conditioned, and
+        would never be propagated backwards at all. So objects that share an anchor are propagated
+        together and the rest get a state of their own.
+        """
+        groups = {}
+        for object_id, frame in self._anchor_per_object().items():
+            groups.setdefault(frame, []).append(object_id)
+        if len(groups) <= 1:
+            return self._propagate_both_directions(update_progress, early_stop_patience, z_range)
+
+        snapshot = (dict(self._pushed_points), dict(self._pushed_boxes), dict(self._pushed_masks))
+        prompt_signatures = set(self._prompt_signatures)
+        video_segments = {}
+        for object_ids in groups.values():
+            self._replay_prompts(snapshot, set(object_ids))
+            for frame, per_object in self._propagate_both_directions(
+                update_progress, early_stop_patience, z_range
+            ).items():
+                video_segments.setdefault(frame, {}).update(per_object)
+
+        self._replay_prompts(snapshot, set().union(*groups.values()))
+        self._prompt_signatures = prompt_signatures
+        return video_segments
+
+    def _propagate_both_directions(self, update_progress=None, early_stop_patience=None, z_range=None):
+        # Shared across both directions, so the conditioning frame is counted once.
         seen_frames = set()
         forward_video_segments = self._propagate_in_direction(
             reverse=False, update_progress=update_progress, early_stop_patience=early_stop_patience,
             z_range=z_range, seen_frames=seen_frames,
         )
 
-        # Next, we do the propagation reverse in time.
         reverse_video_segments = {}
-        if len(forward_video_segments) < self.volume.shape[0]:  # Perform reverse propagation only if necessary
+        if len(forward_video_segments) < self.volume.shape[0]:  # Only if the forward pass fell short.
             reverse_video_segments = self._propagate_in_direction(
                 reverse=True, update_progress=update_progress, early_stop_patience=early_stop_patience,
                 z_range=z_range, seen_frames=seen_frames,
             )
-            # NOTE: The order is reversed to stitch the reverse propagation with forward.
+            # Reversed, so it stitches onto the forward propagation.
             reverse_video_segments = dict(reversed(list(reverse_video_segments.items())))
 
-        # Now stitch the segmented slices together.
         video_segments = {**reverse_video_segments, **forward_video_segments}
         return video_segments
 
@@ -809,7 +866,7 @@ class PromptableSegmentation3D:
         device = self.inference_state["device"]
         orig_hw = tuple(int(s) for s in self.volume.shape[-2:])
         image_size = predictor.image_size
-        scale = float(image_size) / max(orig_hw)  # resize-longest maps original coords into the model frame
+        scale = float(image_size) / max(orig_hw)  # Resize-longest, into the model frame.
 
         image_embed, high_res_feats = self._image_features_for_frame(frame_idx)
 
@@ -876,7 +933,6 @@ class PromptableSegmentation3D:
         Returns:
             Segmentation mask for the slice (2D array), or None if no valid prompts provided.
         """
-        # Validate prompts
         have_points = points is not None and len(points) > 0
         have_boxes = boxes is not None and len(boxes) > 0
         have_masks = masks is not None and any(m is not None for m in masks)
@@ -886,18 +942,14 @@ class PromptableSegmentation3D:
 
         try:
             if have_masks:
-                # A lasso, polygon or ellipse yields a filled mask. Refine it into the object the way the
-                # 2d image predictor does (box + soft mask-logit cue through the mask decoder) rather
-                # than 'add_new_mask', which hard-conditions on the drawn shape and returns it verbatim.
+                # Refined the way the 2d predictor does, rather than through 'add_new_mask', which
+                # hard-conditions on the drawn shape and returns it verbatim.
                 seg = self._refine_slice_from_mask(
                     frame_idx, boxes=boxes, masks=masks,
                     points=points if have_points else None, labels=labels if have_points else None,
                 )
             else:
-                # Prepare prompts
                 box = boxes[0] if have_boxes else None
-
-                # Add prompts to the specific frame
                 _, out_obj_ids, out_mask_logits = self.predictor.add_new_points_or_box(
                     inference_state=self.inference_state,
                     frame_idx=frame_idx,
@@ -907,32 +959,26 @@ class PromptableSegmentation3D:
                     box=box,
                 )
 
-                # Extract the mask from logits
-                # out_mask_logits shape: (num_objects, 1, H, W)
-                mask_logits = out_mask_logits[0]  # Get first object
+                mask_logits = out_mask_logits[0]  # (num_objects, 1, H, W), so this is the first object.
                 seg = (mask_logits.squeeze() > 0.0).cpu().numpy()
 
                 # Crop back to the original slice shape (the video predictor pads non-square frames).
                 seg = _crop_to_original_shape(seg, self.volume.shape[-2:]).astype("uint32")
 
         finally:
-            # Reset the state to clear this object's prompts, along with the bookkeeping that
-            # describes it, so the next segmentation starts fresh.
+            # Clear this object's prompts and their bookkeeping, so the next round starts fresh.
             self.predictor.reset_state(self.inference_state)
             self._clear_pushed_prompts()
 
         return seg
 
     def predict(self, update_progress=None, early_stop_patience=None, z_range=None):
-        # First, we propagate prompts.
         video_segments = self.propagate_prompts(
             update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
         )
 
-        # Next, let's merge the segmented objects per frame back together as instances per slice.
-        # We allocate the full-volume output and index it by the slice id so that frames skipped by
-        # early stopping (which are absent from 'video_segments') stay as background instead of
-        # shifting the remaining slices out of alignment with the volume.
+        # Indexed by slice id, so the frames early stopping skipped stay background rather than
+        # shifting the rest out of alignment.
         shape = self.volume.shape[-2:]
         segmentation = np.zeros((self.volume.shape[0],) + tuple(shape), dtype="uint64")
         for slice_idx, instances in video_segments.items():
@@ -1005,8 +1051,7 @@ class TiledPromptableSegmentation3D:
         self._prompt_signatures = signatures
 
     def reset_predictor(self):
-        # Drop the per-tile segmenters (each with its own inference state + embedding cache) so
-        # committing or clearing frees their RAM. The tool rebuilds them lazily for the next prompt.
+        # Each holds an inference state and an embedding cache; they are rebuilt lazily.
         for segmenter in self._segmenters.values():
             segmenter.reset_predictor()
         self._segmenters = {}
@@ -1016,8 +1061,7 @@ class TiledPromptableSegmentation3D:
 
     def get_progress_total(self, z_range=None):
         """Return tile-slice propagation steps for the currently active tiles."""
-        z_depth = self.shape[0] if z_range is None else z_range[1] - z_range[0] + 1
-        return int(z_depth * len(self._segmenters))
+        return sum(segmenter.get_progress_total(z_range) for segmenter in self._segmenters.values())
 
     def _tile_index(self, y, x):
         """Return the id of the tile whose inner (halo-free) block contains the point (y, x)."""
@@ -1053,8 +1097,7 @@ class TiledPromptableSegmentation3D:
 
             feats = self.volume_embeddings["features"]
             tile_dataset = feats[str(tile_id)]
-            # Keep the per-tile datasets lazy so the video predictor streams this tile-column one
-            # frame at a time from disk, instead of materialising the whole column (~124 MB/slice).
+            # Lazy, so the tile-column is streamed a frame at a time rather than materialised.
             tile_embeddings = {
                 "features": tile_dataset,
                 "pos_enc": _load_list_datasets(self.volume_embeddings["pos_enc"], str(tile_id), lazy_loading=True),
