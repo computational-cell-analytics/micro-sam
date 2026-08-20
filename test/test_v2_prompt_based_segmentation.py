@@ -509,3 +509,86 @@ def test_video_predictor_correction_flags_and_propagation():
     assert seg.shape == volume.shape
     assert seg[2].sum() > 0  # the prompted frame
     assert int((seg.reshape(seg.shape[0], -1).sum(axis=1) > 0).sum()) >= 2  # propagated to neighbors
+
+
+class TrackingPropagationPredictor:
+    """A stand-in predictor whose propagation yields a scripted sequence of per-frame masks.
+
+    'occupancy' gives one entry per frame: True for a frame whose object mask is non-empty. The
+    predictor records how many frames were actually pulled, which is what early stopping is meant to
+    reduce - the frames it never yields are the network evaluations that were skipped.
+    """
+
+    def __init__(self, occupancy):
+        self.occupancy = occupancy
+        self.frames_yielded = 0
+
+    def propagate_in_video(self, inference_state, reverse=False):
+        for frame_idx, occupied in enumerate(self.occupancy):
+            self.frames_yielded += 1
+            logits = torch.full((1, 1, 4, 4), 1.0 if occupied else -1.0)
+            yield frame_idx, [1], logits
+
+
+def _propagate_with_patience(occupancy, patience):
+    segmenter = PromptableSegmentation3D.__new__(PromptableSegmentation3D)
+    segmenter.predictor = TrackingPropagationPredictor(occupancy)
+    segmenter.inference_state = {}
+    segments = segmenter._propagate_in_direction(reverse=False, early_stop_patience=patience)
+    return segments, segmenter.predictor.frames_yielded
+
+
+def test_early_stopping_skips_frames_past_the_end_of_every_object():
+    # Object present on frames 0-3, gone from 4 onwards.
+    occupancy = [True] * 4 + [False] * 6
+
+    full, full_frames = _propagate_with_patience(occupancy, None)
+    stopped, stopped_frames = _propagate_with_patience(occupancy, 2)
+
+    # Without a patience the predictor is run on every frame of the volume.
+    assert full_frames == 10
+    assert sorted(full) == list(range(10))
+
+    # With patience 2 it stops on the second consecutive empty frame, frame 5.
+    assert stopped_frames == 6
+    assert sorted(stopped) == [0, 1, 2, 3, 4, 5]
+
+
+def test_early_stopping_is_output_preserving():
+    # The reason early stopping is on by default: the frames it skips hold nothing but empty masks,
+    # so every non-empty mask of the full propagation survives unchanged.
+    occupancy = [True] * 4 + [False] * 6
+
+    full, _ = _propagate_with_patience(occupancy, None)
+    stopped, _ = _propagate_with_patience(occupancy, 2)
+
+    def non_empty(segments):
+        return {
+            frame: {obj: mask.tolist() for obj, mask in per_object.items()}
+            for frame, per_object in segments.items()
+            if any(mask.any() for mask in per_object.values())
+        }
+
+    assert non_empty(stopped) == non_empty(full)
+    assert set(full) - set(stopped) == {6, 7, 8, 9}
+
+
+def test_early_stopping_tolerates_a_single_dropped_mask():
+    # SAM2 can drop a mask for one frame and recover it, so a patience of 2 must not stop on a
+    # single empty frame and truncate the rest of the object.
+    occupancy = [True, True, False, True, True, False, False, True]
+
+    segments, frames = _propagate_with_patience(occupancy, 2)
+
+    # Frames 5 and 6 are the first consecutive pair, so frame 7 is never reached.
+    assert frames == 7
+    assert sorted(segments) == [0, 1, 2, 3, 4, 5, 6]
+    # The object that reappeared after the isolated gap on frame 2 was kept.
+    assert segments[3][1].any() and segments[4][1].any()
+
+
+def test_volume_early_stop_patience_defaults_to_two():
+    # Adopted in APG_3D_OPTIMIZATION.md experiment 5, and the value the annotator already used.
+    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+
+    assert DEFAULT_PROMPT_GENERATION["early_stop_patience"] == 2
