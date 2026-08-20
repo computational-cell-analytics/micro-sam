@@ -550,5 +550,73 @@ class TestJointDdpGradientSync(unittest.TestCase):
                     self.assertTrue(torch.allclose(grads["decoder"], torch.full((2, 2), 1.5)))
 
 
+def _make_sam2_trainer(device, **kwargs):
+    """Build a Sam2Trainer with stand-ins for the data and the model."""
+    from micro_sam.v2.training.sam2_trainer import Sam2Trainer
+
+    model = nn.Linear(4, 4)
+    return Sam2Trainer(
+        name="precision-test",
+        convert_inputs=lambda x, y: None,
+        loss=nn.MSELoss(),
+        model=model,
+        train_loader=[],
+        val_loader=[],
+        optimizer=torch.optim.SGD(model.parameters(), lr=0.1),
+        device=device,
+        logger=None,
+        **kwargs,
+    )
+
+
+def test_the_trainer_trains_in_fp32_on_the_cpu():
+    """The parent defaults to bfloat16 autocast on the CPU, where bfloat16 is emulated and slow."""
+    trainer = _make_sam2_trainer("cpu")
+
+    assert trainer.mixed_precision is False
+    assert trainer.scaler is None
+
+
+def test_the_trainer_trains_in_bfloat16_without_a_scaler_on_ampere(monkeypatch):
+    """bfloat16 has the range of fp32, so the parent builds the GradScaler in the disabled state."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: (8, 0))
+
+    trainer = _make_sam2_trainer("cuda")
+
+    assert trainer.mixed_precision is True
+    assert trainer.mixed_precision_dtype == "bfloat16"
+    assert trainer.scaler is not None
+    assert trainer.scaler.is_enabled() is False
+
+    # torch.autocast reads the real device on construction, which a host without a GPU cannot do.
+    calls = []
+    monkeypatch.setattr(torch, "autocast", lambda device_type, dtype: calls.append((device_type, dtype)))
+    trainer._amp_context()
+
+    assert calls == [("cuda", torch.bfloat16)]
+
+
+@pytest.mark.parametrize(
+    "capability, expected", [((9, 0), torch.bfloat16), ((8, 0), torch.bfloat16), ((7, 5), None), ((6, 1), None)]
+)
+def test_the_training_precision_skips_the_float16_tier(monkeypatch, capability, expected):
+    """Inference runs float16 on Volta and Turing. Training stays in fp32 there, because SAM2 uses bfloat16."""
+    from micro_sam.v2.util import training_autocast_dtype
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: capability)
+
+    assert training_autocast_dtype(torch.device("cuda")) is expected
+
+
+@pytest.mark.parametrize("device_type", ("cpu", "mps"))
+def test_the_training_precision_is_fp32_outside_cuda(device_type):
+    """bfloat16 is emulated on these devices, so autocast makes training slower."""
+    from micro_sam.v2.util import training_autocast_dtype
+
+    assert training_autocast_dtype(torch.device(device_type)) is None
+
+
 if __name__ == "__main__":
     unittest.main()
