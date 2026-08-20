@@ -25,6 +25,7 @@ from micro_sam.precompute_state import (
     _save_autoseg_state,
     _signature_matches,
     cache_autoseg_state,
+    save_ais_state,
 )
 from micro_sam.util import _open_embeddings, _create_dataset_with_data
 from micro_sam.v2.instance_segmentation import (
@@ -172,6 +173,17 @@ def test_ais_serialization_and_staleness_guard(tmp_path):
     assert not _ais_state_matches(loaded, "hvit_t_other")      # different model -> recompute
     assert _ais_state_matches(loaded, None)                    # unknown request -> reuse
     assert _ais_state_matches({"prediction": prediction}, "hvit_t_cells")  # legacy (no signature) -> reuse
+
+
+def test_save_existing_ais_state(tmp_path):
+    prediction = np.arange(4 * 8 * 8, dtype="float32").reshape(4, 8, 8)
+    save_path = str(tmp_path / "embeddings.zarr")
+
+    save_ais_state({"prediction": prediction}, save_path, state_index=3, model_type="hvit_t_cells")
+    loaded = _load_ais_state_v2(save_path, _autoseg_state_key(3))
+
+    assert np.array_equal(loaded["prediction"], prediction)
+    assert loaded["model_type"] == "hvit_t_cells"
 
 
 def test_signature_matches():

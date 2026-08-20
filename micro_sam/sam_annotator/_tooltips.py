@@ -59,13 +59,24 @@ tooltips = {
         "pred_iou_thresh": "Enter the threshold for filtering objects based on the predicted IOU.",
         "stability_score_thresh": "Enter the threshold for filtering objects based on the stability score.",
         "points_per_side": "Number of points sampled along one side of the image for AMG grid prompting.",
-        # Settings for the SAM2 dense/sparse modes.
+        # Settings for the SAM2 automatic segmentation modes.
         "mode": (
             "Select the automatic segmentation mode: 'amg' (grid-based, no decoder needed), "
-            "'sparse' (flow-based) or 'dense' (multicut-based)."
+            "'sparse' (flow-based), 'dense' (multicut-based), or 'apg' (prompt-based)."
         ),
         "foreground_threshold": "Enter the threshold for binarizing the foreground probability map.",
         "density_threshold": "Enter the convergence-density threshold used for seed extraction.",
+        "candidate_threshold": "Enter the density threshold that APG uses to propose object prompts.",
+        "candidate_threshold_high": "Enter the second density threshold for APG on a volume.",
+        "min_candidate_size": "Enter the minimum size of an APG candidate in pixels.",
+        "score_threshold": "Enter the minimum predicted IoU score for an APG mask.",
+        "max_overlap": "Enter the maximum fraction of an APG candidate that another mask can claim.",
+        "multimasking": "Let APG predict multiple masks for each point and keep the mask with the best score.",
+        "refine_with_box_prompts": "Refine each APG mask with a box prompt. This setting applies to images.",
+        "box_extension": "Enter the number of pixels that APG adds to each refinement box.",
+        "prompt_batch_size": "Enter the number of APG prompts in each model batch.",
+        "n_objects_per_pass": "Enter the number of APG objects in each volume propagation pass.",
+        "early_stop_patience": "Enter the number of empty slices that stop APG propagation. Use 0 for no limit.",
         "beta": "Enter the multicut boundary bias. Higher values favour merging objects.",
         "n_iter": "Enter the number of flow-integration steps.",
         "dt": "Enter the flow-integration step size.",

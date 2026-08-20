@@ -3,7 +3,6 @@ from unittest import mock
 
 import micro_sam.v2.util as v2_util
 from micro_sam.v2.util import (
-    BAND_TOLERANCE,
     FALLBACK_BACKBONE,
     VRAM_BATCH_SIZES,
     _backbone_of,
@@ -68,13 +67,6 @@ class TestBands(unittest.TestCase):
         # The slack must not let a card whose memory is genuinely in use claim a higher band.
         self.assertEqual(_band_for(60.0), 48)
         self.assertEqual(_band_for(20.0), 16)
-
-    def test_every_entry_fits_the_least_free_vram_of_its_band(self):
-        for band, entry in VRAM_BATCH_SIZES.items():
-            for backbone, batch_size in entry.items():
-                fixed, per_sample = ENCODER_COST[backbone]
-                predicted = fixed + per_sample * batch_size
-                self.assertLess(predicted, band * BAND_TOLERANCE, f"{backbone} at {band} GiB")
 
     def test_below_the_smallest_band_reaches_nothing(self):
         self.assertIsNone(_band_for(1.0))

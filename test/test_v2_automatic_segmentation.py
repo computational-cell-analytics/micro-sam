@@ -9,7 +9,7 @@ import pytest
 
 from micro_sam.v2.instance_segmentation import (
     _block_shape_and_halo, _set_image_predictor_from_backbone, _decode_3d_feature_batch,
-    _get_decoder_autocast, UniSAM2InstanceSegmentation, TiledUniSAM2InstanceSegmentation,
+    UniSAM2InstanceSegmentation, TiledUniSAM2InstanceSegmentation,
     TiledAutomaticMaskGenerationSegmenter, amg_3d_segmentation,
     get_instance_segmentation_generator, get_decoder,
 )
@@ -305,27 +305,34 @@ def test_decoder_predictions_are_cached_as_float32():
     assert out.dtype == np.float32
 
 
-@pytest.mark.parametrize("device_type", ("cuda", "mps"))
-def test_decoder_autocast_uses_fp16_on_accelerators(device_type, monkeypatch):
+def test_decoder_autocast_follows_the_device_precision(monkeypatch):
+    """The decoder uses the one policy, so on Ampere it is bfloat16 rather than a fixed fp16."""
+    from micro_sam.v2.util import autocast
+
     calls = []
 
     def fake_autocast(device_type, dtype):
         calls.append((device_type, dtype))
         return nullcontext()
 
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: (8, 0))
     monkeypatch.setattr(torch, "autocast", fake_autocast)
-    with _get_decoder_autocast(torch.device(device_type)):
+    with autocast(torch.device("cuda")):
         pass
 
-    assert calls == [(device_type, torch.float16)]
+    assert calls == [("cuda", torch.bfloat16)]
 
 
-def test_decoder_autocast_leaves_cpu_unchanged(monkeypatch):
+@pytest.mark.parametrize("device_type", ("cpu", "mps"))
+def test_decoder_autocast_is_disabled_outside_cuda(device_type, monkeypatch):
+    from micro_sam.v2.util import autocast
+
     def fail_autocast(*args, **kwargs):
-        pytest.fail("CPU decoder inference must not enable autocast.")
+        pytest.fail(f"Decoder inference on {device_type} must not enable autocast.")
 
     monkeypatch.setattr(torch, "autocast", fail_autocast)
-    with _get_decoder_autocast(torch.device("cpu")):
+    with autocast(torch.device(device_type)):
         pass
 
 
@@ -342,7 +349,7 @@ def test_full_inference_uses_decoder_autocast(monkeypatch):
         return kwargs["output"]
 
     monkeypatch.setattr(
-        "micro_sam.v2.instance_segmentation._get_decoder_autocast",
+        "micro_sam.v2.instance_segmentation.autocast",
         fake_autocast,
     )
     monkeypatch.setattr(

@@ -483,8 +483,13 @@ def _view_result(image_path, key, segmentation):
     help="The number of spatial dimensions. Specify this if your data has a channel dimension."
 )
 @click.option(
+    "--engine", default="ais", type=click.Choice(["amg", "ais", "apg"]),
+    help="The segmentation engine: 'ais' post-processes the decoder prediction, 'amg' uses grid prompts "
+         "and no decoder, 'apg' prompts the interactive branch with the decoder's candidates (2D only)."
+)
+@click.option(
     "--mode", default="sparse", type=click.Choice(["sparse", "dense"]),
-    help="The segmentation mode: 'sparse' (flow, LM data) or 'dense' (multicut, EM data)."
+    help="The AIS post-processing mode: 'sparse' (flow, LM data) or 'dense' (multicut, EM data)."
 )
 @click.option(
     "-d", "--device", default=None,
@@ -503,14 +508,15 @@ def _view_result(image_path, key, segmentation):
 @click.pass_context
 def inference_segmentation(
     ctx, input_path, output_path, embedding_path, pattern, key, model_type, checkpoint_path,
-    tile_shape, halo, ndim, mode, device, batch_size, devices, view, verbose,
+    tile_shape, halo, ndim, engine, mode, device, batch_size, devices, view, verbose,
 ):
     """Run automatic instance segmentation.
 
-    Supports both 2D and 3D data.
+    Supports both 2D and 3D data. The 'apg' engine is 2D only.
 
-    Additional postprocessing parameters (e.g. '--foreground_threshold' for sparse or '--beta' for
-    dense) can be passed through to the segmentation and are forwarded to the segmenter.
+    Additional postprocessing parameters (e.g. '--foreground_threshold' for sparse, '--beta' for dense
+    or '--candidate_threshold' for apg) can be passed through to the segmentation and are forwarded
+    to the segmenter.
     """
     import os
 
@@ -529,7 +535,7 @@ def inference_segmentation(
 
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=model_type, checkpoint=checkpoint_path, device=device,
-        segmentation_mode="ais", is_tiled=tile_shape is not None,
+        segmentation_mode=engine, is_tiled=tile_shape is not None,
     )
 
     input_paths = _get_inputs_from_paths(list(input_path), pattern)

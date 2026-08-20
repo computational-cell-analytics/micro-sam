@@ -1,16 +1,22 @@
 import os
+import ast
+import csv
 import warnings
 from glob import glob
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
+import xxhash
 import numpy as np
+import imageio.v3 as imageio
 from skimage.measure import label as connected_components
 
 import torch
 
 from elf.io import open_file
+
 from torch_em.data import datasets
 from torch_em.util.image import load_image
+from torch_em.util.segmentation import size_filter
 
 from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 from micro_sam.v2.normalization import normalize_raw
@@ -33,15 +39,36 @@ MODEL_TYPES = list(CHECKPOINT_PATHS)
 # The 2d patch shape the models were trained on, see 'generalist_loader'.
 TRAINING_PATCH_SHAPE = (512, 512)
 
-# Test images per LIVECell cell type. Eight cell types, so this fills MAX_EVALUATION_SAMPLES.
-LIVECELL_PER_CELL_TYPE = 25
+# LIVECell test images whose annotation is incomplete: 2 labelled objects in a confluent crop, at
+# 348x and 24x the annotated foreground. Both lie outside the stratified subset.
+LIVECELL_EXCLUDED_TEST_IMAGES = frozenset({
+    "BV2_Phase_A4_2_02d04h00m_3.tif",
+    "BV2_Phase_A4_2_00d00h00m_1.tif",
+})
 
-# The jointly finetuned (interactive + automatic) SAM2 models for cell segmentation.
-JOINT_CHECKPOINT_ROOT = os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints")
+
+def drop_excluded_livecell(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
+    """Remove the incompletely annotated LIVECell test images from a path pair list."""
+    keep = [
+        (raw, label) for raw, label in zip(raw_paths, label_paths)
+        if os.path.basename(raw) not in LIVECELL_EXCLUDED_TEST_IMAGES
+    ]
+    if not keep:
+        return [], []
+    kept_raw, kept_label = zip(*keep)
+    return list(kept_raw), list(kept_label)
+
+
+# Overridable, so a run can point at another training version. A checkpoint that still trains needs
+# a frozen copy, because the trainer overwrites 'best.pt' while jobs queue.
+JOINT_CHECKPOINT_ROOT = os.environ.get(
+    "MICRO_SAM2_JOINT_CHECKPOINT_ROOT", os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints")
+)
 # The joint checkpoints are split into loadable weight files here, see 'export_joint_checkpoint'.
-JOINT_EXPORT_ROOT = os.path.join(_MODELS_DIR, "exported", "joint", "v2")
+JOINT_EXPORT_ROOT = os.environ.get(
+    "MICRO_SAM2_JOINT_EXPORT_ROOT", os.path.join(_MODELS_DIR, "exported", "joint", "v2")
+)
 
-# 2D LM datasets
 DATASETS_2D = [
     "livecell",
     "arvidsson", "bitdepth_nucseg", "cellbindb", "cellpose_data",
@@ -50,16 +77,45 @@ DATASETS_2D = [
     "segpc", "tissuenet", "usiigaci", "vicar", "yeaz",
 ]
 
-# 3D LM datasets
+# Ground-truth size floor that drops the crop-severed slivers relabelling promotes to objects. It
+# defines the ground truth, so it is measured, never tuned.
+GT_MIN_SIZE_2D = {
+    "livecell": 50,
+    "cellpose_data": 20, "deepbacs": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
+    "u20s": 10, "vicar": 25, "yeaz": 10,
+}
+
 DATASETS_3D_LM = [
     "blastospim", "cartocell", "celegans_atlas", "cellseg_3d", "embedseg",
     "gonuclear", "mouse_embryo", "nis3d", "plantseg", "pnas_arabidopsis",
 ]
 
-# 3D EM datasets
 DATASETS_3D_EM = ["platynereis_nuclei", "cremi", "snemi", "humanneurons"]
 
 DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
+
+# The split to tune on, or None where the loader has no splits and VAL_Z_RANGE holds out a z-slab.
+# A dataset whose 'val' is the evaluated split is absent: tuning there would select on scored samples.
+VAL_SPLITS = {
+    "livecell": "val",
+    "tissuenet": "val",
+    "dynamicnuclearnet": "val",
+    "deepbacs": "val",
+    "dic_hepg2": "val",
+    "celegans_atlas": "val",
+    "embedseg": "train",
+    "gonuclear": None,
+    "cremi": None,
+    "snemi": None,
+}
+
+# The tuning slab for volumes with no splits, disjoint from the slab the evaluation scores. Indices
+# count from what load_volume keeps, so snemi starts at slice 70, and gonuclear skips its sparse start.
+VAL_Z_RANGE = {
+    "cremi": (0, 32),
+    "snemi": (0, 8),
+    "gonuclear": (32, 96),
+}
 
 
 def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
@@ -78,17 +134,13 @@ def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
 
 
 def _get_2d_data_paths(
-    dataset_name: str, data_root: str, download: bool = False
+    dataset_name: str, data_root: str, download: bool = False, split: str = "test"
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
 
     if dataset_name == "livecell":
-        # Stratified over the cell types. The test set is sorted by cell type, so heading it would
-        # evaluate two of the eight types.
-        img, gt = _get_livecell_paths(
-            input_folder=os.path.join(p, "livecell"), split="test",
-            n_val_per_cell_type=LIVECELL_PER_CELL_TYPE,
-        )
+        img, gt = _get_livecell_paths(input_folder=os.path.join(p, "livecell"), split=split)
+        img, gt = drop_excluded_livecell(img, gt)
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "arvidsson":
@@ -133,7 +185,7 @@ def _get_2d_data_paths(
 
     if dataset_name == "deepbacs":
         img_folder, label_folder = datasets.deepbacs.get_deepbacs_paths(
-            path=os.path.join(p, "deepbacs"), bac_type="mixed", split="test", download=download,
+            path=os.path.join(p, "deepbacs"), bac_type="mixed", split=split, download=download,
         )
         img = sorted(glob(os.path.join(img_folder, "*.tif")))
         gt = sorted(glob(os.path.join(label_folder, "*.tif")))
@@ -147,7 +199,7 @@ def _get_2d_data_paths(
 
     if dataset_name == "dic_hepg2":
         img, gt = datasets.dic_hepg2.get_dic_hepg2_paths(
-            path=os.path.join(p, "dic_hepg2"), split="test", download=download,
+            path=os.path.join(p, "dic_hepg2"), split=split, download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
@@ -159,7 +211,7 @@ def _get_2d_data_paths(
 
     if dataset_name == "dynamicnuclearnet":
         paths = datasets.dynamicnuclearnet.get_dynamicnuclearnet_paths(
-            path=os.path.join(p, "dynamicnuclearnet"), split="test", download=download,
+            path=os.path.join(p, "dynamicnuclearnet"), split=split, download=download,
         )
         return sorted(paths), sorted(paths), "raw", "labels"
 
@@ -198,7 +250,7 @@ def _get_2d_data_paths(
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "segpc":
-        # No test split. Use validation.
+        # The dataset has no test split, so the evaluation uses the validation split.
         paths = datasets.segpc.get_segpc_paths(
             path=os.path.join(p, "segpc"), split="validation", download=download,
         )
@@ -206,13 +258,13 @@ def _get_2d_data_paths(
 
     if dataset_name == "tissuenet":
         paths = datasets.tissuenet.get_tissuenet_paths(
-            path=os.path.join(p, "tissuenet"), split="test", download=download,
+            path=os.path.join(p, "tissuenet"), split=split, download=download,
         )
-        # rgb composite + cell labels matches training convention
+        # The rgb composite and the cell labels are what the training used.
         return sorted(paths), sorted(paths), "raw/rgb", "labels/cell"
 
     if dataset_name == "usiigaci":
-        # No test split. Use val.
+        # The dataset has no test split, so the evaluation uses the validation split.
         img, gt = datasets.usiigaci.get_usiigaci_paths(
             path=os.path.join(p, "usiigaci"), split="val", download=download,
         )
@@ -238,7 +290,7 @@ def _get_2d_data_paths(
 
 
 def _get_3d_lm_data_paths(
-    dataset_name: str, data_root: str, download: bool = False
+    dataset_name: str, data_root: str, download: bool = False, split: str = "test"
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
 
@@ -269,7 +321,7 @@ def _get_3d_lm_data_paths(
 
     if dataset_name == "celegans_atlas":
         img, gt = datasets.celegans_atlas.get_celegans_atlas_paths(
-            path=os.path.join(p, "celegans_atlas"), split="test", download=download,
+            path=os.path.join(p, "celegans_atlas"), split=split, download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
@@ -282,7 +334,7 @@ def _get_3d_lm_data_paths(
     if dataset_name == "embedseg":
         img, gt = datasets.embedseg_data.get_embedseg_paths(
             path=os.path.join(p, "embedseg"),
-            name="Mouse-Skull-Nuclei-CBG", split="test", download=download,
+            name="Mouse-Skull-Nuclei-CBG", split=split, download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
@@ -293,7 +345,7 @@ def _get_3d_lm_data_paths(
         return sorted(paths), sorted(paths), "raw/nuclei", "labels/nuclei"
 
     if dataset_name == "mouse_embryo":
-        # No test split. Use val.
+        # The dataset has no test split, so the evaluation uses the validation split.
         paths = datasets.mouse_embryo.get_mouse_embryo_paths(
             path=os.path.join(p, "mouse_embryo"), name="nuclei", split="val", download=download,
         )
@@ -342,13 +394,15 @@ def _get_3d_em_data_paths(
         return paths, paths, "volumes/raw", "volumes/labels/nucleus_instance_labels"
 
     if dataset_name == "cremi":
+        # The joint training used samples A and B, so only C is held out.
         paths = datasets.cremi.get_cremi_paths(
-            path=os.path.join(p, "cremi"), samples=("A", "B", "C"), download=download,
+            path=os.path.join(p, "cremi"), samples=("C",), download=download,
         )
         return sorted(paths), sorted(paths), "volumes/raw", "volumes/labels/neuron_ids"
 
     if dataset_name == "snemi":
-        # The test file has no labels. Training used train-slices 70+, so slices [0:70] are holdout.
+        # The test file has no labels, so the holdout is the part of the train file that the joint
+        # training did not use, see load_volume.
         path = datasets.snemi.get_snemi_paths(
             path=os.path.join(p, "snemi"), sample="train", download=download,
         )
@@ -363,20 +417,34 @@ def _get_3d_em_data_paths(
 
 
 def get_data_paths(
-    dataset_name: str, data_root: str, download: bool = False
+    dataset_name: str, data_root: str, download: bool = False, split: str = "test"
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
-    """Return (raw_paths, label_paths, raw_key, label_key) for a dataset's test split.
+    """Return (raw_paths, label_paths, raw_key, label_key) for a dataset's evaluation split.
 
     raw_key / label_key are None for plain image files and non-None for H5 / zarr.
+
+    With split='val' this returns data held out from what the evaluation scores, which is what a
+    parameter search has to run on, see VAL_SPLITS. Only the datasets listed there support it.
     """
     all_datasets = DATASETS_2D + DATASETS_3D
     assert dataset_name in all_datasets, (
         f"Unsupported dataset: '{dataset_name}'. Choose from {all_datasets}."
     )
+
+    if split == "val":
+        if dataset_name not in VAL_SPLITS:
+            raise ValueError(
+                f"There is no data held out from the evaluation for '{dataset_name}', so it cannot be "
+                f"tuned on a validation split. Datasets that can: {sorted(VAL_SPLITS)}."
+            )
+        # None means the loader has no split of its own; the holdout is the z-slab in VAL_Z_RANGE,
+        # which load_volume applies to the very same volumes.
+        split = VAL_SPLITS[dataset_name] or "test"
+
     if dataset_name in DATASETS_2D:
-        return _get_2d_data_paths(dataset_name, data_root, download=download)
+        return _get_2d_data_paths(dataset_name, data_root, download=download, split=split)
     if dataset_name in DATASETS_3D_LM:
-        return _get_3d_lm_data_paths(dataset_name, data_root, download=download)
+        return _get_3d_lm_data_paths(dataset_name, data_root, download=download, split=split)
     return _get_3d_em_data_paths(dataset_name, data_root, download=download)
 
 
@@ -399,11 +467,15 @@ def load_volume(
     crop_shape: Tuple[int, ...] = (8, 512, 512),
     ensure_8bit: bool = True,
     ensure_instances: bool = True,
+    z_range: Optional[Tuple[int, int]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
 
-    Returns (raw, labels, valid_roi) where valid_roi is a boolean mask (True = annotated)
-    for partially annotated datasets (platynereis_nuclei), or None for all others.
+    valid_roi is a boolean mask that is True where the data is annotated. It is None for every
+    dataset except platynereis_nuclei, which is annotated only in part.
+
+    'z_range' restricts the volume to a z-slab before the center crop, which is how a dataset without
+    splits holds tuning data out of the evaluated slab. See VAL_Z_RANGE.
     """
     if raw_key is None:
         raw = load_image(raw_path)
@@ -416,8 +488,12 @@ def load_volume(
         labels = open_file(label_path, mode="r")[label_key][:]
 
     if dataset_name == "snemi":
-        # Restrict to holdout slices [0:70]; training used slices 70+.
-        raw, labels = raw[:70], labels[:70]
+        # Training used slices [0:70], so only slices 70+ are held out.
+        raw, labels = raw[70:], labels[70:]
+
+    if z_range is not None:
+        z_start, z_stop = z_range
+        raw, labels = raw[z_start:z_stop], labels[z_start:z_stop]
 
     valid_roi = None
     if dataset_name == "platynereis_nuclei":
@@ -433,8 +509,7 @@ def load_volume(
     if valid_roi is not None:
         valid_roi = valid_roi[roi]
 
-    # Restrict to the annotated z-range, so nothing is predicted or scored where there is no
-    # ground-truth. Interior empty slices are kept, otherwise the volume would not be contiguous.
+    # Restrict to the annotated z-range. Interior empty slices stay, or the volume is not contiguous.
     annotated = np.any(labels != 0, axis=tuple(range(1, labels.ndim)))
     if annotated.any():
         z_start = int(np.argmax(annotated))
@@ -449,8 +524,6 @@ def load_volume(
     assert raw.shape == labels.shape, f"Shape mismatch: raw {raw.shape} vs labels {labels.shape}"
     return raw.astype("float32"), labels.astype("uint32"), valid_roi
 
-
-# Model helpers shared between the evaluation scripts
 
 _UNISAM2_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/automatic/v1"
 UNISAM2_CHECKPOINT = os.path.join(_UNISAM2_ROOT, "checkpoints", "unisam2-both", "best.pt")
@@ -475,8 +548,29 @@ def _strip_ddp_prefix(state_dict):
     return {(k[len("module."):] if k.startswith("module.") else k): v for k, v in state_dict.items()}
 
 
+def checkpoint_checksum(path: str) -> str:
+    """Return the xxh128 checksum of a checkpoint without loading it into memory."""
+    checksum = xxhash.xxh128()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            checksum.update(block)
+    return checksum.hexdigest()
+
+
+def combine_checkpoint_checksums(*checksums: str) -> str:
+    """Combine the content checksums of all weights that determine one evaluation run."""
+    if len(checksums) == 1:
+        return checksums[0]
+    combined = xxhash.xxh128()
+    for checksum in checksums:
+        combined.update(checksum.encode("ascii"))
+        combined.update(b"\0")
+    return combined.hexdigest()
+
+
 def export_joint_checkpoint(
-    model_type: str, checkpoint: str = "best", export_root: str = JOINT_EXPORT_ROOT
+    model_type: str, checkpoint: str = "best", export_root: str = JOINT_EXPORT_ROOT,
+    source_checksum: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Split a joint checkpoint into an interactive and an automatic weight file.
 
@@ -484,23 +578,28 @@ def export_joint_checkpoint(
     ('unetr_state') and pickled trainer state in a single file. That file cannot be loaded by
     `sam2.build_sam`, which reads `torch.load(...)['model']` with `weights_only=True`. Both
     exported files are plain tensor dicts, mirroring `scripts/model_export/export_sam2_cells_model.py`.
-    Existing exports are reused.
+
+    The checksum in the name records which checkpoint an export came from, so an export is reused
+    only for that content. Every training version has a 'best' checkpoint, so a plain
+    'joint_sam2_hvit_t_best' would hand back the previous version's export instead.
 
     Args:
         model_type: The SAM2 backbone the model was finetuned from, e.g. 'hvit_b'.
         checkpoint: Which trainer checkpoint to export, 'best' or 'latest'.
         export_root: The directory the exported weight files are written to.
+        source_checksum: A previously computed checksum, to avoid reading the checkpoint twice.
 
     Returns:
         The paths to the interactive (SAM2) and the automatic (UniSAM2 decoder) weight files.
     """
-    name = f"joint_sam2_{model_type}_{checkpoint}"
+    checkpoint_path = get_joint_checkpoint(model_type, checkpoint)
+    source_checksum = source_checksum or checkpoint_checksum(checkpoint_path)
+    name = f"joint_sam2_{model_type}_{checkpoint}_{source_checksum}"
     interactive_path = os.path.join(export_root, f"{name}.pt")
     decoder_path = os.path.join(export_root, f"{name}_decoder.pt")
     if os.path.exists(interactive_path) and os.path.exists(decoder_path):
         return interactive_path, decoder_path
 
-    checkpoint_path = get_joint_checkpoint(model_type, checkpoint)
     state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     missing = [key for key in ("model_state", "unetr_state") if key not in state]
     if missing:
@@ -513,12 +612,52 @@ def export_joint_checkpoint(
     return interactive_path, decoder_path
 
 
+# Keep a volume's tracking state on the device: the same masks propagate 1.2-1.3x faster, for about
+# 17 MB of device memory per slice. That is a batch job's to spend, which is why it is not the default.
+VOLUME_SPEED_OPTIONS = {"offload_to_cpu": False}
+
+
 DATASET_SPACING: dict = {
     # z/xy voxel ratios from published acquisition parameters
     "embedseg": (4, 1, 1),  # Mouse-Skull-Nuclei-CBG: z=1µm, xy=0.25µm
     "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
 }
+
+
+# The parameters `AutomaticPromptGenerator.generate` accepts, so a run can be described by one dict.
+GENERATE_PARAM_KEYS = (
+    "candidate_threshold", "foreground_threshold", "n_iter", "dt", "sigma", "min_candidate_size",
+    "score_threshold", "max_overlap", "min_size", "refine_with_box_prompts", "box_extension",
+    "multimasking", "n_objects_per_pass", "early_stop_patience", "n_threads",
+)
+
+
+def resolve_params(overrides=None, ndim=2):
+    """The generation parameters for one run, with 'overrides' applied on top of the library defaults.
+
+    The single definition of what a run's parameters are, so that a benchmark, a walk-through and a
+    sweep all describe the same run. The result is ready to pass to `generate` as keyword arguments.
+
+    Args:
+        overrides: The parameters to change, by the name `generate` gives them. A volume also accepts
+            'candidate_threshold_3d', which is the name the defaults give its own threshold.
+        ndim: The number of spatial dimensions, 2 or 3.
+
+    Returns:
+        The parameters, keyed as `generate` takes them.
+    """
+    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+
+    overrides = overrides or {}
+    params = {key: DEFAULT_PROMPT_GENERATION[key] for key in GENERATE_PARAM_KEYS}
+    params.update(overrides)
+    if ndim == 3:
+        # A candidate's density scales with the object's size, so a volume has its own threshold.
+        default_3d = DEFAULT_PROMPT_GENERATION["candidate_threshold_3d"]
+        params["candidate_threshold"] = overrides.get("candidate_threshold_3d", default_3d)
+    params.pop("candidate_threshold_3d", None)
+    return params
 
 
 def _alias_micro_sam2_modules():
@@ -568,16 +707,50 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
     return get_unisam2_model(checkpoint_path, device=device, encoder=encoder)
 
 
+def build_apg_segmenter(
+    model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None,
+):
+    """Build the automatic prompt generator from both halves of a joint checkpoint.
+
+    The decoder proposes the candidates and the interactive branch scores them, so a run needs both.
+    A volume is propagated by the SAM2 video predictor, which is a different model input type.
+
+    Args:
+        model_type: The SAM2 backbone of the joint model, e.g. 'hvit_t'.
+        ndim: The number of spatial dimensions, 2 or 3.
+        device: The torch device.
+        joint_checkpoint: The joint trainer checkpoint, without the '.pt' suffix.
+        decoder_path: Decoder weights to use instead of the ones exported from the joint checkpoint.
+
+    Returns:
+        The prompt generator, built through the library factory that the CLI and the API use.
+    """
+    from micro_sam.v2.util import get_sam2_model
+    from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
+
+    interactive_path, exported_decoder = export_joint_checkpoint(
+        model_type, joint_checkpoint, source_checksum=joint_checksum
+    )
+    model = get_sam2_model(
+        model_type=model_type, device=device, checkpoint_path=interactive_path,
+        **({"input_type": "videos"} if ndim == 3 else {}),
+    )
+    decoder = load_unisam2_model(
+        decoder_path or exported_decoder, device, encoder=model.image_encoder
+    )
+    return get_instance_segmentation_generator(
+        model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
+    )
+
+
 def predict_unisam2(model, raw, ndim, device, normalization=None):
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
-    # The UniSAM2 inference path expects single-channel input, so a trailing channel axis is averaged
-    # away. Matches 'read_image_2d' in grid_search_automatic_cells, which tunes the postprocessing.
+    # UniSAM2 takes single-channel input, so a trailing channel axis is averaged away.
     if raw.ndim > ndim:
         raw = raw.mean(axis=-1)
 
     is_3d = (ndim == 3)
-    # Tiling a 2d image that fits the training patch would change both the scale the encoder sees
-    # and the window the normalization is computed over.
+    # Tiling an image that fits the training patch changes the encoder's scale and the normalization.
     is_tiled = is_3d or any(size > TRAINING_PATCH_SHAPE[-1] for size in raw.shape[:2])
     segmenter = get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
     if is_tiled:
@@ -609,6 +782,100 @@ def postprocess_unisam2(out, dataset_name, backend="cpp", params=None):
     return seg.astype("uint32")
 
 
+def run_dataset_evaluation(gt_paths, prediction_paths, dataset_name: str, save_path: str):
+    """Score a dataset and write the results to 'save_path'.
+
+    Neuron segmentation in EM is ranked by the CREMI score, not by mSA, so those datasets report the
+    VI and adapted-Rand components instead.
+
+    Args:
+        gt_paths: The ground-truth label arrays, or the paths to them.
+        prediction_paths: The predicted segmentations, or the paths to them.
+        dataset_name: The dataset the segmentations belong to.
+        save_path: The filepath to write the result CSV to.
+
+    Returns:
+        The results as a DataFrame.
+    """
+    from micro_sam.v1.evaluation.evaluation import run_evaluation
+
+    if dataset_name not in DATASETS_3D_EM:
+        return run_evaluation(gt_paths=gt_paths, prediction_paths=prediction_paths, save_path=save_path)
+
+    import pandas as pd
+    from elf.evaluation import cremi_score
+
+    rows = []
+    for gt, seg in zip(gt_paths, prediction_paths):
+        vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, gt)
+        rows.append({
+            "cremi": float(cremi),
+            "vi_split": float(vi_split),
+            "vi_merge": float(vi_merge),
+            "adapted_rand": float(adapted_rand),
+        })
+
+    results = pd.DataFrame(rows).mean().to_frame().T
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    results.to_csv(save_path, index=False)
+    return results
+
+
+def read_tuned_params(
+    grid_search_root: str, dataset_name: str, model_type: str, checkpoint_checksum: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return the best parameter combination of a grid search as a dict.
+
+    New sweeps are keyed by checkpoint checksum. If no such sweep exists, an old checksum-less sweep
+    is still accepted with a warning. The first row is the best combination and values are parsed as
+    Python literals, so a tuple-valued 'candidate_threshold' survives the CSV round trip.
+
+    Args:
+        grid_search_root: The root the grid search wrote its per-model directories to.
+        dataset_name: The dataset whose tuned parameters are read.
+        model_type: The SAM2 backbone, which names the subdirectory.
+        checkpoint_checksum: The effective weights, for an exact cache lookup. If omitted, read the
+            legacy checksum-less location.
+
+    Returns:
+        The best combination, ready to be passed to the postprocessing or to 'generate'.
+    """
+    legacy_path = os.path.join(grid_search_root, model_type, f"{dataset_name}.csv")
+    csv_path = (
+        legacy_path if checkpoint_checksum is None else
+        os.path.join(grid_search_root, model_type, checkpoint_checksum, f"{dataset_name}.csv")
+    )
+    if not os.path.exists(csv_path) and checkpoint_checksum is not None and os.path.exists(legacy_path):
+        warnings.warn(
+            f"Using legacy parameter sweep '{legacy_path}'. It has no checkpoint checksum, so its "
+            "weights cannot be verified.",
+            stacklevel=2,
+        )
+        csv_path = legacy_path
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(f"There is no grid search result at '{csv_path}'.")
+
+    with open(csv_path) as f:
+        rows = list(csv.DictReader(f))
+    if not rows:
+        raise RuntimeError(f"The grid search result at '{csv_path}' is empty.")
+
+    params = {}
+    for key, value in rows[0].items():
+        if key.endswith(("_mean", "_std")) or key == "n_images":
+            continue
+        try:
+            params[key] = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            params[key] = value
+
+    # These are counts, and a column that ever held a NaN comes back as a float.
+    for key in ("min_size", "n_iter", "min_candidate_size", "n_objects_per_pass"):
+        if key in params:
+            params[key] = int(params[key])
+    return params
+
+
 def _check_key(path: str, key: Optional[str], kind: str) -> None:
     if key is None:
         return
@@ -623,11 +890,9 @@ def _check_key(path: str, key: Optional[str], kind: str) -> None:
 def check_data_download(dataset_name: str, data_root: str, download: bool = True) -> None:
     """Fail fast if a dataset cannot be resolved from the local data root.
 
-    This intentionally calls the dataset-specific torch-em `get_*_paths` helpers
-    via `get_data_paths(..., download=download)`, so missing downloads, invalid
-    splits, and unavailable cached files are caught before model loading. By
-    default this check is allowed to download missing datasets once, while the
-    actual evaluation code still reads cached local data afterwards.
+    The check goes through `get_data_paths(..., download=download)`, so it catches a missing download,
+    an invalid split and an unavailable cached file before the model loads. It may download a missing
+    dataset once. The evaluation itself reads the cached local data afterwards.
     """
     try:
         raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root, download=download)
@@ -672,3 +937,258 @@ def check_data_download(dataset_name: str, data_root: str, download: bool = True
     _check_key(label_paths[0], label_key, "label")
 
     print(f"Data check passed for '{dataset_name}': {len(raw_paths)} sample(s).")
+
+
+CROP_SHAPE_2D = (512, 512)
+CROP_SHAPE_3D = (8, 512, 512)
+
+
+def ensure_8bit_range(raw):
+    """Scale raw data into the [0, 255] range the evaluation feeds the models with."""
+    if raw.size == 0:
+        return raw.astype("float32", copy=False)
+    return normalize_raw(raw) * 255.0
+
+
+def read_2d(path, key):
+    """Read a 2d array from an image file, or from an H5 / zarr file using 'key'."""
+    if key is not None:
+        arr = open_file(path, mode="r")[key][:]
+    else:
+        arr = np.asarray(imageio.imread(path))
+    # Transpose channel-first (C, H, W) to channel-last (H, W, C).
+    if arr.ndim == 3 and arr.shape[0] <= 4 and arr.shape[1] > arr.shape[0] and arr.shape[2] > arr.shape[0]:
+        arr = arr.transpose(1, 2, 0)
+    # Some 2d datasets mix in multi-frame stacks, e.g. yeaz. Evaluate their first frame.
+    if arr.ndim == 3 and arr.shape[-1] not in (3, 4):
+        arr = arr[0]
+    return arr
+
+
+def sorted_path_pairs(raw_paths, label_paths):
+    """Sort raw and label paths as pairs, so the pairing survives names that sort differently."""
+    return sorted(zip(raw_paths, label_paths), key=lambda pair: (str(pair[0]), str(pair[1])))
+
+
+def interactive_result_name(
+    dataset_name, method, model_type, prompt, iteration,
+    ndim=2, use_masks=True, mask_threshold=0.0, min_size=0,
+):
+    """Build the name of the result CSV for one iteration of an interactive run.
+
+    The name encodes every setting that changes the numbers, so one run cannot reuse the results of
+    another.
+    """
+    dim_suffix = "" if ndim == 2 else "_3d"
+    tag = interactive_run_tag(ndim, use_masks, mask_threshold, min_size)
+    return f"{dataset_name}_{method}_{model_type}{dim_suffix}_{prompt}{tag}_iter{iteration:02d}.csv"
+
+
+def interactive_run_tag(ndim=2, use_masks=True, mask_threshold=0.0, min_size=0):
+    """Build the settings suffix for an interactive run's result names and prediction directory.
+
+    Both use one tag, so a run can never read back the cached predictions of another run.
+    """
+    # Only the 2d path chooses between mask logits and binarized masks.
+    tag = "" if ndim == 3 else ("_with_masks" if use_masks else "_without_masks")
+    if ndim == 2 and mask_threshold != 0.0:
+        tag += f"_t{mask_threshold:g}"
+    if min_size:
+        tag += f"_min{min_size}"
+    return tag
+
+
+def apply_min_size(labels, min_size, dataset_name):
+    """Drop ground-truth objects below 'min_size' pixels, and warn if that removes too many.
+
+    No single threshold suits every dataset. Gonuclear nuclei have a median of about 3200 pixels per
+    object, while cremi neurite cross-sections in a thin crop have a median of about 6.
+    """
+    if not min_size:
+        return labels
+    before = len(np.unique(labels)) - 1
+    filtered = size_filter(seg=labels, min_size=min_size)
+    after = len(np.unique(filtered)) - 1
+    if before and (before - after) / before > 0.25:
+        warnings.warn(
+            f"min_size={min_size} removes {before - after} of {before} ground-truth objects in "
+            f"'{dataset_name}'. That is more than a quarter, so the threshold is likely too large "
+            f"for this dataset and is discarding real annotations."
+        )
+    return filtered
+
+
+def drop_severed_objects(labels, min_size):
+    """Drop the objects that a crop face cut down to a sliver, in a ground truth or a prediction.
+
+    Both conditions are needed. A size threshold alone also deletes small interior objects, and
+    border contact alone deletes large cells that only reach the edge. The caller filters the ground
+    truth and the prediction the same way, so a dropped remnant never becomes a false positive.
+    """
+    if not min_size:
+        return labels
+    if labels.ndim == 2:
+        edges = (labels[0], labels[-1], labels[:, 0], labels[:, -1])
+    else:
+        # In-plane faces only, since a thin z-crop cuts almost every object on the first and last slice.
+        edges = (labels[:, 0], labels[:, -1], labels[:, :, 0], labels[:, :, -1])
+    border_ids = np.unique(np.concatenate([np.unique(edge) for edge in edges]))
+    border_ids = border_ids[border_ids != 0]
+    if border_ids.size == 0:
+        return labels
+
+    ids, sizes = np.unique(labels[labels != 0], return_counts=True)
+    severed = np.intersect1d(border_ids, ids[sizes < min_size], assume_unique=True)
+    if severed.size == 0:
+        return labels
+    return np.where(np.isin(labels, severed), 0, labels).astype(labels.dtype)
+
+
+def severed_objects(gt, max_span=2):
+    """The ground-truth objects that occupy no more than 'max_span' slices of a volume.
+
+    A volumetric object is anchored on the slice its density converges on, and that density scales
+    with the object's size. An object that the crop reduced to one or two slices never reaches
+    'candidate_threshold', so it is never proposed. Separating these says how much of the gap to the
+    ground truth is the crop rather than the method.
+
+    Args:
+        gt: The ground-truth labels, shape (Z, Y, X).
+        max_span: The largest number of slices a severed object may span.
+
+    Returns:
+        The labels of the severed objects with everything else zeroed, and their ids.
+    """
+    ids = np.unique(gt)
+    ids = ids[ids != 0]
+    if len(ids) == 0:
+        return np.zeros_like(gt), np.array([], dtype=gt.dtype)
+    spans = np.array([int((gt == index).any(axis=(1, 2)).sum()) for index in ids])
+    thin = ids[spans <= max_span]
+    return np.where(np.isin(gt, thin), gt, 0).astype(gt.dtype), thin
+
+
+def unmatched_objects(gt, segmentation, iou_threshold=0.5):
+    """The ground-truth objects that no predicted instance matches at the given IoU.
+
+    Matched the way `mean_segmentation_accuracy` matches at its lowest threshold, so these are the
+    objects the result genuinely lost rather than segmented imprecisely.
+
+    Args:
+        gt: The ground-truth labels.
+        segmentation: The predicted instance segmentation.
+        iou_threshold: The IoU a prediction must reach to count as a match.
+
+    Returns:
+        The labels of the unmatched objects, with everything else zeroed.
+    """
+    ids = np.unique(gt)
+    ids = ids[ids != 0]
+    missed = []
+    for index in ids:
+        mask = gt == index
+        overlapping = segmentation[mask]
+        overlapping = overlapping[overlapping != 0]
+        if overlapping.size == 0:
+            missed.append(index)
+            continue
+        candidates, counts = np.unique(overlapping, return_counts=True)
+        best = int(np.argmax(counts))
+        intersection = int(counts[best])
+        union = int(mask.sum()) + int((segmentation == candidates[best]).sum()) - intersection
+        if intersection / union < iou_threshold:
+            missed.append(index)
+    return np.where(np.isin(gt, missed), gt, 0).astype(gt.dtype)
+
+
+def genuine_misses(gt, segmentation, iou_threshold=0.5, max_span=2):
+    """How many ground-truth objects the result lost that the crop did not sever.
+
+    An aggregate metric hides which objects went missing. A run that recovers objects while costing
+    precision elsewhere is not the same as one that does neither, so this counts the losses the
+    method is answerable for.
+
+    Args:
+        gt: The ground-truth labels, shape (Z, Y, X).
+        segmentation: The predicted instance segmentation.
+        iou_threshold: The IoU a prediction must reach to count as a match.
+        max_span: The largest number of slices a severed object may span.
+
+    Returns:
+        The number of unmatched objects, and how many of those the crop did not sever.
+    """
+    unmatched_ids = np.unique(unmatched_objects(gt, segmentation, iou_threshold))
+    unmatched_ids = unmatched_ids[unmatched_ids != 0]
+    _, thin = severed_objects(gt, max_span)
+    return len(unmatched_ids), int((~np.isin(unmatched_ids, thin)).sum())
+
+
+def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name):
+    """Load one 2d sample the way the evaluation scores it.
+
+    The parameter search and the evaluation both call this function, so both use the same data.
+    """
+    # Normalize before cropping, so that the percentiles cover the whole image.
+    image = ensure_8bit_range(read_2d(raw_path, raw_key))
+    roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
+    gt = connected_components(read_2d(label_path, label_key)[roi]).astype("uint32")
+    return image[roi], drop_severed_objects(gt, GT_MIN_SIZE_2D.get(dataset_name, 0))
+
+
+def load_evaluation_sample_3d(
+    raw_path, label_path, raw_key, label_key, dataset_name,
+    crop_shape=CROP_SHAPE_3D, z_range=None, min_size=0,
+):
+    """Load one volumetric sample the way the evaluation scores it."""
+    raw, labels, valid_roi = load_volume(
+        raw_path, label_path, raw_key, label_key, dataset_name, crop_shape, z_range=z_range
+    )
+    return raw, apply_min_size(labels, min_size, dataset_name), valid_roi
+
+
+def load_data(dataset_name, data_root, ndim, min_size=0, split="test", crop_shape=None, z_range=None):
+    """Yield (image_or_volume, labels, valid_roi) triples for the given dataset.
+
+    valid_roi is a boolean mask that is True where the data is annotated. It is None for every
+    dataset except platynereis_nuclei, which is annotated only in part.
+
+    The filtering happens here, in the single source of the labels used for both prompting and
+    scoring. If only the prompting copy were filtered, the dropped objects would stay in the scored
+    ground truth and count as unmatched.
+
+    Args:
+        dataset_name: The dataset to load.
+        data_root: The root the data lives in.
+        ndim: The number of spatial dimensions, 2 or 3.
+        min_size: Drop ground-truth objects below this many pixels (3d only).
+        split: The split to load, 'test' or the held-out 'val', see VAL_SPLITS.
+        crop_shape: The 3d center crop. Defaults to CROP_SHAPE_3D.
+        z_range: Restrict a volume to a z-slab before cropping, see VAL_Z_RANGE.
+
+    Yields:
+        One (image_or_volume, labels, valid_roi) triple per sample.
+    """
+    raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root, split=split)
+    for raw_path, label_path in sorted_path_pairs(raw_paths, label_paths):
+        if ndim == 3:
+            yield load_evaluation_sample_3d(
+                raw_path, label_path, raw_key, label_key, dataset_name,
+                crop_shape=crop_shape or CROP_SHAPE_3D, z_range=z_range, min_size=min_size,
+            )
+        else:
+            image, gt = load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name)
+            yield image, gt, None
+
+
+def n_samples(dataset_name, data_root, split="test"):
+    """The number of samples of a split, for a progress bar over `load_data`."""
+    return len(get_data_paths(dataset_name, data_root, split=split)[0])
+
+
+def has_val_split(dataset_name: str) -> bool:
+    """Whether a dataset holds data out from the samples the evaluation scores.
+
+    Only these datasets can be tuned honestly: everywhere else a sweep would select its parameters
+    on the very samples the reported score is measured on. See VAL_SPLITS and VAL_Z_RANGE.
+    """
+    return dataset_name in VAL_SPLITS

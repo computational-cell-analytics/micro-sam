@@ -21,7 +21,8 @@ from micro_sam.v2.normalization import to_image
 from micro_sam.prompt_generators import IterativePromptGenerator
 from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
 from micro_sam.v2.util import (
-    _get_device, configure_image_predictor, get_sam2_image_predictor, get_sam2_model, precompute_image_embeddings,
+    _get_device, configure_image_predictor, encode_image, get_sam2_image_predictor, get_sam2_model,
+    precompute_image_embeddings,
 )
 from micro_sam.v1.evaluation.inference import (
     _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
@@ -143,7 +144,7 @@ def _run_interactive_segmentation_2d_per_image(
         multimasking = True
 
     # Expects RGB-style images.
-    predictor.set_image(image.astype("uint8"))  # NOTE: Done as this is what SAM2 expects as inputs.
+    encode_image(predictor, image.astype("uint8"))  # uint8 is what SAM2 expects as input.
 
     gt_ids = np.unique(gt)[1:]
 
@@ -625,7 +626,7 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
             for slice_idx in video_segments.keys():
                 per_slice_seg = np.zeros((height, width))
                 for _instance_idx, _instance_mask in video_segments[slice_idx].items():
-                    # Non-square frames are padded to a square, see '_load_img_as_tensor'.
+                    # Non-square frames are padded to a square, see '_load_frame_as_tensor'.
                     per_slice_seg[_instance_mask.squeeze()[:height, :width]] = _instance_idx
                 segmentation.append(per_slice_seg)
 
