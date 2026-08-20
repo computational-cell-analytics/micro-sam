@@ -1,12 +1,14 @@
 import os
 import time
 import random
-from typing import Callable, Optional
+from collections import defaultdict
+from typing import Callable, List, Optional
 
 import numpy as np
 
 import torch
 import torch.distributed as dist
+from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from torch.utils.tensorboard import SummaryWriter
 
 from torch_em.trainer.logger_base import TorchEmLogger
@@ -15,6 +17,29 @@ from .sam2_trainer import (
     Sam2Trainer, _colorize_instance_map, _overlay_binary_masks, _pinned_validation_rng,
     VALIDATION_SEED,
 )
+
+# Gradients are all-reduced in flat buckets of at most this many bytes. Bigger buckets mean
+# fewer collectives but a larger temporary buffer; 128 MiB matches DDP's own default order.
+GRAD_SYNC_BUCKET_BYTES = 128 * 1024 * 1024
+
+
+def _grad_buckets(grads: List[torch.Tensor], bucket_bytes: int = GRAD_SYNC_BUCKET_BYTES):
+    """Group gradients by dtype into buckets of at most *bucket_bytes*, for flat all-reduce."""
+    by_dtype = defaultdict(list)
+    for grad in grads:
+        by_dtype[grad.dtype].append(grad)
+
+    for dtype_grads in by_dtype.values():
+        bucket, n_bytes = [], 0
+        for grad in dtype_grads:
+            grad_bytes = grad.numel() * grad.element_size()
+            if bucket and n_bytes + grad_bytes > bucket_bytes:
+                yield bucket
+                bucket, n_bytes = [], 0
+            bucket.append(grad)
+            n_bytes += grad_bytes
+        if bucket:
+            yield bucket
 
 
 class JointSam2Trainer(Sam2Trainer):
@@ -107,13 +132,18 @@ class JointSam2Trainer(Sam2Trainer):
         """All-reduce every gradient produced by the automatic backward pass.
 
         The automatic branch bypasses the DDP wrapper, so nothing here has been reduced
-        already - including the encoder it shares with the interactive model.
+        already - including the encoder it shares with the interactive model. The gradients
+        are flattened into buckets before the collective, so the shared encoder costs a
+        handful of all-reduces per iteration instead of one per parameter tensor.
         """
         if not (dist.is_available() and dist.is_initialized()):
             return
-        for p in self.unetr.parameters():
-            if p.grad is not None:
-                dist.all_reduce(p.grad, op=dist.ReduceOp.AVG)
+        grads = [p.grad for p in self.unetr.parameters() if p.grad is not None]
+        for bucket in _grad_buckets(grads):
+            flat = _flatten_dense_tensors(bucket)
+            dist.all_reduce(flat, op=dist.ReduceOp.AVG)
+            for grad, reduced in zip(bucket, _unflatten_dense_tensors(flat, bucket)):
+                grad.copy_(reduced)
 
     def _clip_automatic_grads(self):
         """Clip the automatic branch to the same norm as the interactive branch."""
@@ -171,9 +201,12 @@ class JointSam2Trainer(Sam2Trainer):
 
             if self.logger is not None:
                 lr = self.optimizer.param_groups[0]["lr"]
+                # Materialize both losses in one host sync instead of one per .item() call.
+                inter_value, auto_value = torch.stack(
+                    [inter_loss.detach().float(), auto_loss.detach().float()]
+                ).tolist()
                 self.logger.log_train(
-                    self._iteration, inter_loss.item() + auto_loss.item(), lr,
-                    inter_loss.item(), auto_loss.item(),
+                    self._iteration, inter_value + auto_value, lr, inter_value, auto_value,
                     x=x if log_imgs else None,
                     y=y if log_imgs else None,
                     batch=batch if log_imgs else None,
@@ -194,10 +227,9 @@ class JointSam2Trainer(Sam2Trainer):
         self.model.eval()
         self.unetr.eval()
 
-        inter_loss_val = 0.0
-        inter_metric_val = 0.0
-        auto_loss_val = 0.0
-        auto_metric_val = 0.0
+        # Accumulated on the device as [inter_loss, inter_metric, auto_loss, auto_metric], so the
+        # whole pass costs one host sync instead of four per iteration.
+        totals = torch.zeros(4, device=self.device)
         n_iter = 0
         input_check_done = False
         log_x = log_y = log_batch = log_outputs = log_y_dist = log_pred = None
@@ -212,33 +244,27 @@ class JointSam2Trainer(Sam2Trainer):
                     input_check_done = self._check_input_normalization(x, input_check_done)
                     with forward_context():
                         inter_loss, batch, outputs = self._interactive_step(x, y)
-                        inter_loss_val += inter_loss.item()
-                        inter_metric_val += self.metric(outputs, batch.masks).item()
+                        inter_metric = self.metric(outputs, batch.masks)
                         auto_loss, y_dist, pred = self._automatic_step(x, y)
-                        auto_loss_val += auto_loss.item()
-                        auto_metric_val += self.automatic_metric(pred, y_dist).item()
+                        auto_metric = self.automatic_metric(pred, y_dist)
+                        totals += torch.stack([
+                            inter_loss.detach().float(), inter_metric.detach().float(),
+                            auto_loss.detach().float(), auto_metric.detach().float(),
+                        ])
                     n_iter += 1
                     if log_rng.random() < 1.0 / (i + 1):
                         log_x, log_y, log_batch, log_outputs = x, y, batch, outputs
                         log_y_dist, log_pred = y_dist, pred
 
-        n_iter = max(n_iter, 1)
-        inter_loss_val /= n_iter
-        inter_metric_val /= n_iter
-        auto_loss_val /= n_iter
-        auto_metric_val /= n_iter
-        combined_metric = inter_metric_val + self.automatic_metric_weight * auto_metric_val
+        totals /= max(n_iter, 1)
+        combined = totals[1] + self.automatic_metric_weight * totals[3]
+        stats = torch.cat([totals, combined.unsqueeze(0)])
 
         # Synchronize across DDP ranks so every rank makes the same early-stopping decision.
         if dist.is_available() and dist.is_initialized():
-            stats = torch.tensor(
-                [inter_loss_val, inter_metric_val, auto_loss_val, auto_metric_val, combined_metric],
-                device=self.device,
-            )
             dist.all_reduce(stats, op=dist.ReduceOp.AVG)
-            inter_loss_val, inter_metric_val, auto_loss_val, auto_metric_val, combined_metric = (
-                stats[0].item(), stats[1].item(), stats[2].item(), stats[3].item(), stats[4].item(),
-            )
+
+        inter_loss_val, inter_metric_val, auto_loss_val, auto_metric_val, combined_metric = stats.tolist()
 
         if self.logger is not None:
             self.logger.log_validation(
