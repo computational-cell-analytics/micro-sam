@@ -38,26 +38,19 @@ class PredictorAdaptor(nn.Module):
         super().__init__()
         self.sam_model = sam_model_registry[model_type]()
         self.sam = SamPredictor(self.sam_model)
-        # The decoder for automatic instance segmentation.
-        # It is created when a checkpoint that contains a decoder state is loaded.
         self.decoder = None
 
     def load_state_dict(self, state, **kwargs):
-        # Check if this is a checkpoint in the micro_sam format, which contains the state of the
-        # SAM model under 'model_state' and may contain the state of the instance segmentation
-        # decoder under 'decoder_state'.
+        # Finetuning checkpoints store SAM and decoder weights separately.
         if "model_state" in state:
             load_result = self.sam.model.load_state_dict(state["model_state"], **kwargs)
             decoder_state = state.get("decoder_state")
             if decoder_state is not None:
-                # The decoder implementation is in micro_sam, which is a dependency of
-                # models that are exported with the decoder.
                 from micro_sam.instance_segmentation import get_decoder
                 device = next(self.sam.model.parameters()).device
                 self.decoder = get_decoder(self.sam.model.image_encoder, decoder_state, device=device)
             return load_result
 
-        # Otherwise this is a plain SAM state dict (a model exported without a decoder).
         return self.sam.model.load_state_dict(state, **kwargs)
 
     def _automatic_instance_segmentation(self, image: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -81,26 +74,19 @@ class PredictorAdaptor(nn.Module):
             "input_size": tuple(self.sam.input_size),
             "original_size": tuple(self.sam.original_size),
         }
-        # The image is not used by initialize, since we pass the precomputed embeddings.
+        # The image is unused because the embeddings are precomputed.
         segmenter.initialize(image=image[0].permute(1, 2, 0).cpu().numpy(), image_embeddings=image_embeddings)
-        segmentation = segmenter.generate()
-
-        # Depending on the micro_sam version, generate returns the instance segmentation
-        # as a label image or as a list of binary masks. We normalize to binary masks here.
-        if isinstance(segmentation, np.ndarray):
-            seg_ids = np.unique(segmentation)
-            seg_ids = seg_ids[seg_ids != 0]
-            instance_masks = [segmentation == seg_id for seg_id in seg_ids]
-        else:
-            segmentation = sorted(segmentation, key=lambda mask: mask.get("seg_id", 0))
-            instance_masks = [mask["segmentation"] for mask in segmentation]
+        segmentation = segmenter.generate(output_mode="instance_segmentation")
+        seg_ids = np.unique(segmentation)
+        seg_ids = seg_ids[seg_ids != 0]
+        instance_masks = [segmentation == seg_id for seg_id in seg_ids]
 
         height, width = self.sam.original_size
         if len(instance_masks) == 0:
             masks = torch.zeros((1, 0, 1, height, width), dtype=torch.uint8)
         else:
             masks = torch.from_numpy(np.stack(instance_masks)[None, :, None].astype("uint8"))
-        # The scores are set to 1, since the decoder does not predict mask quality scores.
+        # AIS does not predict mask quality.
         scores = torch.ones((1, masks.shape[1], 1), dtype=torch.float32)
         return masks, scores
 
@@ -161,8 +147,9 @@ class PredictorAdaptor(nn.Module):
         self.sam.input_size = (self.sam.input_h, self.sam.input_w)
         self.sam.original_size = (self.sam.orig_h, self.sam.orig_w)
 
-        # If no prompts were given we run automatic instance segmentation with the decoder.
-        if box_prompts is None and point_prompts is None and mask_prompts is None:
+        # Preserve prompt-free SamPredictor inference without a decoder.
+        prompts = (box_prompts, point_prompts, mask_prompts)
+        if self.decoder is not None and all(prompt is None for prompt in prompts):
             masks, scores = self._automatic_instance_segmentation(image)
             embeddings = self.sam.get_image_embedding()
             return masks, scores, embeddings

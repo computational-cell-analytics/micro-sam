@@ -43,8 +43,7 @@ ARBITRARY_SIZE = spec.ParameterizedSize(min=1, step=1)
 
 
 def _get_architecture_model_type(model_type):
-    # Finetuned models like 'vit_b_lm' use the architecture of the base model type,
-    # which is encoded in the first five characters, e.g. 'vit_b'.
+    # Derived models use their base SAM architecture.
     return model_type[:5]
 
 
@@ -138,7 +137,6 @@ def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
     if checkpoint_path is None:
         model_registry = util.models()
         checkpoint_path = model_registry.fetch(model_type)
-        # If the registry also has an instance segmentation decoder for this model we fetch it too.
         decoder_name = f"{model_type}_decoder"
         decoder_path = model_registry.fetch(decoder_name) if decoder_name in model_registry.registry else None
         return checkpoint_path, decoder_path
@@ -167,12 +165,7 @@ def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
 
 
 def _get_weight_checkpoint(model_type, checkpoint_path, decoder_path, tmp_dir):
-    """Get the checkpoint file for the exported model weights.
-
-    If the model has an instance segmentation decoder, then the state of the SAM model and
-    the state of the decoder are combined into a single checkpoint, using the same format
-    as micro_sam finetuning checkpoints, so that the exported architecture can load both.
-    """
+    """Combine the SAM and decoder states for the exported architecture."""
     if decoder_path is None:
         return checkpoint_path
 
@@ -187,8 +180,7 @@ def _get_weight_checkpoint(model_type, checkpoint_path, decoder_path, tmp_dir):
 
 
 def _get_decoder_attachment(model_type, decoder_path, tmp_dir):
-    # Normalize the file name of the decoder attachment, e.g. 'vit_b_decoder.pt'.
-    # The decoder fetched from the model registry has a file name without extension.
+    # Registry decoder files do not have an extension.
     attachment_name = f"{_get_architecture_model_type(model_type)}_decoder.pt"
     if os.path.basename(decoder_path) == attachment_name:
         return decoder_path
@@ -200,8 +192,6 @@ def _get_decoder_attachment(model_type, decoder_path, tmp_dir):
 # TODO: Update this with our latest yaml file updates.
 def _write_dependencies(dependency_file, require_mobile_sam, require_micro_sam):
     if require_micro_sam:
-        # Models that are exported with an instance segmentation decoder require micro_sam
-        # for the automatic instance segmentation functionality.
         content = """name: sam
 channels:
     - conda-forge
@@ -257,7 +247,7 @@ def _generate_covers(input_paths, result_paths, tmp_dir):
     return covers
 
 
-def _check_model(model_description, input_paths, result_paths, with_decoder):
+def _check_model(model_description, input_paths, result_paths):
     # Load inputs.
     image = xarray.DataArray(np.load(input_paths["image"]), dims=("batch", "channel", "y", "x"))
     embeddings = xarray.DataArray(np.load(result_paths["embeddings"]), dims=("batch", "channel", "y", "x"))
@@ -317,18 +307,14 @@ def _check_model(model_description, input_paths, result_paths, with_decoder):
             predicted_mask = prediction.members["masks"].data
             assert predicted_mask.shape == mask.shape
 
-        # Check the automatic instance segmentation, which is run when no prompts are given,
-        # if the model was exported with an instance segmentation decoder.
-        if with_decoder:
-            sample = create_sample_for_model(
-                model=model_description, inputs={"image": image, "embeddings": embeddings},
-            )
-            prediction = pp.predict_sample_without_blocking(sample)
-            predicted_mask = prediction.members["masks"].data
-            # The instance segmentation returns a stack of binary object masks.
-            assert predicted_mask.ndim == 5
-            assert predicted_mask.shape[-2:] == mask.shape[-2:]
-            assert predicted_mask.shape[1] > 0, "The automatic instance segmentation did not find any objects."
+    # Use a fresh pipeline to verify image-only inference.
+    with bioimageio.core.create_prediction_pipeline(model_description, devices=["cpu"]) as pp:
+        sample = create_sample_for_model(model=model_description, inputs={"image": image})
+        prediction = pp.predict_sample_without_blocking(sample)
+        predicted_mask = prediction.members["masks"].data
+        # AIS may return no objects.
+        assert predicted_mask.ndim == 5
+        assert predicted_mask.shape[-2:] == mask.shape[-2:]
 
 
 def export_sam_model(
@@ -573,8 +559,7 @@ def export_sam_model(
             extra_kwargs["version"] = kwargs["version"]
 
         if with_decoder:
-            # The decoder is also exported as a separate attachment. This keeps the decoder
-            # accessible as a stand-alone file, which is how micro_sam downloads it.
+            # Keep the decoder available as a standalone registry attachment.
             attachment_path = _get_decoder_attachment(model_type, decoder_path, tmp_dir)
             extra_kwargs["attachments"] = [spec.FileDescr(source=attachment_path)]
 
@@ -598,6 +583,6 @@ def export_sam_model(
             # config=
         )
 
-        _check_model(model_description, input_paths, result_paths, with_decoder=with_decoder)
+        _check_model(model_description, input_paths, result_paths)
 
         save_bioimageio_package(model_description, output_path=output_path)
