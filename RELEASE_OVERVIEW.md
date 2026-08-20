@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.8.10**
+
+Support automatic instance segmentation in the bioimage.io model export and add a code of conduct and contributing guide.
+
 **New in version 1.8.9**
 
 Pin `napari<0.9` and minor updates to joint training.
