@@ -41,6 +41,22 @@ class TestModelExport(unittest.TestCase):
 
         # TODO more tests: run prediction with models for different prompt settings
 
+    def test_model_export_with_decoder(self):
+        from micro_sam.bioimageio import export_sam_model
+        image, labels = synthetic_data(shape=(1024, 1022))
+
+        # Export a generalist model, which has an instance segmentation decoder,
+        # so that the exported model supports automatic instance segmentation.
+        model_type = f"{self.model_type}_lm"
+        export_path = os.path.join(self.tmp_folder, "test_export_ais.zip")
+        export_sam_model(
+            image, labels,
+            model_type=model_type, name="test-export-ais",
+            output_path=export_path,
+        )
+
+        self.assertTrue(os.path.exists(export_path))
+
 
 if __name__ == "__main__":
     unittest.main()
