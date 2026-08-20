@@ -182,23 +182,38 @@ def test_autocast_is_used_on_cuda_only(monkeypatch):
 
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(major=8))
-    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: (8, 0))
 
     assert predictor._autocasts({"device": "cuda:0"})
     assert not predictor._autocasts({"device": "cpu"})
-    assert not predictor._autocasts({"device": "mps"})  # no MPS hardware here
+    assert not predictor._autocasts({"device": "mps"})
 
 
-def test_a_pre_ampere_gpu_keeps_fp32(monkeypatch):
-    """Emulated bfloat16 is slower than the fp32 those GPUs run today, so they keep fp32 - on the GPU."""
+@pytest.mark.parametrize(
+    "capability, expected",
+    [((9, 0), torch.bfloat16), ((8, 0), torch.bfloat16), ((7, 5), torch.float16),
+     ((7, 0), torch.float16), ((6, 1), None), ((6, 0), None)],
+)
+def test_the_precision_follows_the_compute_capability(monkeypatch, capability, expected):
+    """bfloat16 from Ampere, float16 from Volta, fp32 below that, where there are no tensor cores."""
+    from micro_sam.v2.util import autocast_dtype
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: capability)
+
+    assert autocast_dtype("cuda:0") is expected
+
+
+def test_a_pre_ampere_gpu_uses_fp16(monkeypatch):
+    """Emulated bfloat16 is slower than fp32 there and needs more memory, so fp16 is used."""
     from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "get_device_properties", lambda device: SimpleNamespace(major=7))
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: (7, 0))
 
-    assert not predictor._autocasts({"device": "cuda:0"})
+    assert predictor._autocasts({"device": "cuda:0"})
+    assert predictor._autocast({"device": "cuda:0"}).fast_dtype is torch.float16
 
 
 def test_a_cuda_request_without_cuda_keeps_fp32(monkeypatch):
@@ -210,16 +225,14 @@ def test_a_cuda_request_without_cuda_keeps_fp32(monkeypatch):
     assert not predictor._autocasts({"device": "cuda:0"})
 
 
-@pytest.mark.parametrize("macos_14, expected", [(True, True), (False, False)])
-def test_mps_follows_the_macos_version_torch_gates_on(monkeypatch, macos_14, expected):
-    """Below macOS 14 torch disables the autocast itself, so claiming one would skip the dtype restore."""
+def test_mps_keeps_fp32(monkeypatch):
+    """MPS has no tensor cores, so half precision only costs the casts."""
     from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
-    monkeypatch.setattr(torch.backends.mps, "is_macos_or_newer", lambda major, minor: macos_14)
 
-    assert predictor._autocasts({"device": "mps"}) is expected
+    assert predictor._autocasts({"device": "mps"}) is False
 
 
 def test_memory_encoder_restores_the_model_dtype_without_autocast(monkeypatch):

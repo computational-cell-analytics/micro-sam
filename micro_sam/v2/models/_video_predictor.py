@@ -204,38 +204,19 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             torch.mps.synchronize()
 
     def _autocasts(self, inference_state) -> bool:
-        """Whether this state runs the model in SAM2's trained bfloat16 precision.
+        """Whether the state runs in half precision.
 
-        This selects the precision, never the device: hardware excluded here still runs where it ran
-        before, just in fp32. It has to agree with what torch actually does, because '_run_*' below
-        skips the mask-memory restore whenever this is True - claiming an autocast that torch then
-        declines would put bfloat16 memory back in front of fp32 projections.
-
-        CUDA needs *native* bfloat16, which is Ampere and newer (compute capability 8.0): older GPUs
-        emulate it more slowly than the fp32 they run today, and torch raises where even the emulation
-        is missing. MPS runs bfloat16 from macOS 14, but without tensor cores it gains no throughput
-        from it: measured on an M-series Mac over an 8 slice volume it propagates in 2.48s against
-        1.84s in fp32, at a foreground IoU of 0.98. The CPU gains nothing from it either.
+        Must agree with '_autocast': the '_run_*' methods skip the mask-memory restore when True.
         """
-        device = torch.device(inference_state["device"])
-        if device.type == "cuda":
-            return torch.cuda.is_available() and torch.cuda.get_device_properties(device).major >= 8
-        return False
+        from micro_sam.v2.util import autocast_dtype
+
+        return autocast_dtype(inference_state["device"]) is not None
 
     def _autocast(self, inference_state):
-        """Run the model in the precision it was trained in.
+        """Run the propagation in the device precision, which is SAM2's own bfloat16 from Ampere on."""
+        from micro_sam.v2.util import autocast
 
-        SAM2 is trained and officially run under bfloat16 autocast, which is also what makes its
-        bfloat16 mask memory self-consistent. Measured on an A100 MIG partition with 'hvit_t_cells' over
-        a 30 slice volume, it propagates 2.9x faster for one object and 3.7x for four, at a foreground
-        dice of 0.97 / 0.98 against fp32. Only the video predictor is autocast: the image embeddings are
-        precomputed and cached separately, so their stored values - and the cache signature - are
-        unaffected by this choice.
-        """
-        if not self._autocasts(inference_state):
-            return contextlib.nullcontext()
-        device_type = torch.device(inference_state["device"]).type
-        return torch.autocast(device_type=device_type, dtype=torch.bfloat16)
+        return autocast(inference_state["device"])
 
     def _restore_memory_dtype(self, maskmem_features):
         """Undo SAM2's bfloat16 downcast of the mask memory, for the paths that run without autocast.

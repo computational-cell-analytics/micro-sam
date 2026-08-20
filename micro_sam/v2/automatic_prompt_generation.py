@@ -20,7 +20,6 @@ every object its best-matching propagated mask scores 0.006 above the merge.
 """
 
 import shutil
-import contextlib
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
@@ -37,7 +36,9 @@ from ..v1.inference import _merge_segmentations
 from ..util import make_temp_embedding_path, _ensure_rgb
 from .postprocessing import DEFAULT_POSTPROCESSING, _compute_flow_density
 from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
-from .util import precompute_image_embeddings, set_precomputed, get_sam2_image_predictor
+from .util import (
+    autocast, encode_image, precompute_image_embeddings, set_precomputed, get_sam2_image_predictor,
+)
 from .instance_segmentation import (
     TiledUniSAM2InstanceSegmentation, UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices,
     _set_image_predictor_from_backbone, _set_image_predictor_from_3d_embeddings,
@@ -72,25 +73,6 @@ DEFAULT_PROMPT_GENERATION = {
     # Throughput only, the density is the same either way.
     "n_threads": 8,
 }
-
-
-def sam2_autocast(device):
-    """Run the SAM2 branch in half precision, as the UniSAM2 decoder already does.
-
-    Worth 1.15x end to end on livecell, for -0.0004 mSA, which is inside the noise of the merge.
-    Only on cuda: MPS has no tensor cores, so half precision buys no throughput there and only costs
-    the conversions. Measured on an M-series Mac, fp16 makes the prompting 1.35x slower and `generate`
-    1.26x slower than fp32, which is also the more accurate of the two.
-
-    Args:
-        device: The device the branch runs on. Half precision is used on cuda only.
-
-    Returns:
-        The autocast context, or a null context where half precision does not apply.
-    """
-    if torch.device(device).type == "cuda":
-        return torch.autocast(device_type="cuda", dtype=torch.float16)
-    return contextlib.nullcontext()
 
 
 def interior_points(labels: np.ndarray) -> np.ndarray:
@@ -516,8 +498,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     def _encode(self, image: np.ndarray) -> dict:
         """Run the image encoder once and return the embeddings that both branches use."""
         self._predictor.reset_predictor()
-        with sam2_autocast(self._predictor.device):
-            self._predictor.set_image(_ensure_rgb(normalize_raw(image, output_dtype="uint8")))
+        encode_image(self._predictor, _ensure_rgb(normalize_raw(image, output_dtype="uint8")))
         return {
             "features": self._predictor.get_image_embedding().cpu().numpy(),
             "high_res_feats": self._predictor._features["high_res_feats"],
@@ -905,7 +886,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
     def _refine_boxes(self, segmentation: np.ndarray, batch_size: int, box_extension: int) -> np.ndarray:
         """Re-prompt every instance with its bounding box, see `refine_with_boxes`."""
-        with sam2_autocast(self._predictor.device):
+        with autocast(self._predictor.device):
             return refine_with_boxes(
                 self._predictor, segmentation, batch_size=batch_size, box_extension=box_extension,
             )
@@ -926,7 +907,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             mask_input, coords, labels, _ = self._predictor._prep_prompts(
                 batch_points, batch_labels, None, None, True,
             )
-            with sam2_autocast(self._predictor.device):
+            with autocast(self._predictor.device):
                 logits, scores, _ = self._predictor._predict(
                     coords, labels, None, mask_input, multimasking, return_logits=True,
                 )
