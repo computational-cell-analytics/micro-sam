@@ -16,7 +16,7 @@ import numpy as np
 
 import torch
 
-from .util import Devices, recommend_batch_size
+from .util import Devices, autocast, recommend_batch_size, to_float32
 from micro_sam.util import _create_dataset_without_data
 from .normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
 
@@ -601,7 +601,9 @@ def _forward_image_batch(
     model: torch.nn.Module, items: List[Dict], device: torch.device, feature_sizes: Sequence,
 ) -> List[Dict]:
     batch = torch.stack([item["tensor"] for item in items]).to(device, non_blocking=True)
-    backbone_out = model.forward_image(batch)
+    # The embedding cache is fp32 and numpy has no bfloat16.
+    with autocast(device):
+        backbone_out = to_float32(model.forward_image(batch))
     _, vision_feats, _, _ = model._prepare_backbone_features(backbone_out)
     if model.directly_add_no_mem_embed:
         vision_feats[-1] = vision_feats[-1] + model.no_mem_embed
@@ -746,7 +748,8 @@ def _prepare_video_frame(raw: np.ndarray, image_size: int) -> torch.Tensor:
 
 def _forward_video_batch(model: torch.nn.Module, items: List[Dict], device: torch.device) -> List[Dict]:
     batch = torch.stack([item["tensor"] for item in items]).to(device, non_blocking=True)
-    backbone_out = model.forward_image(batch)
+    with autocast(device):
+        backbone_out = to_float32(model.forward_image(batch))
 
     vision_features = backbone_out["vision_features"].detach().cpu().numpy()
     # Positional encodings depend only on the input shape, so every batch element is identical.

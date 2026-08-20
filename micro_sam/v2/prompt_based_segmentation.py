@@ -157,7 +157,8 @@ def promptable_segmentation_2d(
             image = image.transpose(1, 2, 0)
 
         from micro_sam.v2.normalization import to_image
-        predictor.set_image(to_image(image))
+        from micro_sam.v2.util import encode_image
+        encode_image(predictor, to_image(image))
 
     have_points = points is not None and len(points) > 0
     have_boxes = boxes is not None and len(boxes) > 0

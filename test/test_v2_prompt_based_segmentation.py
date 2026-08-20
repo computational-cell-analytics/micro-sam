@@ -27,6 +27,9 @@ def test_promptable_segmentation_2d_normalizes_raw(monkeypatch):
     from micro_sam.v2.normalization import to_image
 
     class RecordingImagePredictor:
+        device = "cpu"  # 'encode_image' reads it to pick the encoder precision.
+        _features = None
+
         def set_image(self, image):
             self.image = image
             self._orig_hw = [image.shape[:2]]

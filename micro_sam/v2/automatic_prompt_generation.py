@@ -20,7 +20,6 @@ every object its best-matching propagated mask scores 0.006 above the merge.
 """
 
 import shutil
-import contextlib
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
@@ -37,10 +36,12 @@ from ..v1.inference import _merge_segmentations
 from ..util import make_temp_embedding_path, _ensure_rgb
 from .postprocessing import DEFAULT_POSTPROCESSING, _compute_flow_density
 from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
-from .util import precompute_image_embeddings, set_precomputed, get_sam2_image_predictor
+from .util import (
+    autocast, encode_image, precompute_image_embeddings, set_precomputed, get_sam2_image_predictor,
+)
 from .instance_segmentation import (
     TiledUniSAM2InstanceSegmentation, UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices,
-    _set_image_predictor_from_3d_embeddings,
+    _set_image_predictor_from_backbone, _set_image_predictor_from_3d_embeddings,
 )
 
 # Only enters the merge order, never a cutoff, so it is a constant.
@@ -72,23 +73,6 @@ DEFAULT_PROMPT_GENERATION = {
     # Throughput only, the density is the same either way.
     "n_threads": 8,
 }
-
-
-def sam2_autocast(device):
-    """Run the SAM2 branch in half precision, as the UniSAM2 decoder already does.
-
-    Worth 1.15x end to end on livecell, for -0.0004 mSA, which is inside the noise of the merge.
-
-    Args:
-        device: The device the branch runs on. Half precision is used on cuda and mps only.
-
-    Returns:
-        The autocast context, or a null context where half precision does not apply.
-    """
-    device_type = torch.device(device).type
-    if device_type in ("cuda", "mps"):
-        return torch.autocast(device_type=device_type, dtype=torch.float16)
-    return contextlib.nullcontext()
 
 
 def interior_points(labels: np.ndarray) -> np.ndarray:
@@ -502,6 +486,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._offload_to_cpu = None
         self._max_cached_frames = None
         self._temporary_embedding_path = None
+        self._i = None
         self._owns_image_embeddings = False
         # The embedding cache is keyed on these, which a SAM2 image predictor does not carry itself.
         sam2_model = getattr(predictor, "model", None)
@@ -513,10 +498,25 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     def _encode(self, image: np.ndarray) -> dict:
         """Run the image encoder once and return the embeddings that both branches use."""
         self._predictor.reset_predictor()
-        with sam2_autocast(self._predictor.device):
-            self._predictor.set_image(_ensure_rgb(normalize_raw(image, output_dtype="uint8")))
+        encode_image(self._predictor, _ensure_rgb(normalize_raw(image, output_dtype="uint8")))
         return {
             "features": self._predictor.get_image_embedding().cpu().numpy(),
+            "high_res_feats": self._predictor._features["high_res_feats"],
+            "input_size": self._predictor.model.image_size,
+            "original_size": self._predictor._orig_hw,
+        }
+
+    def _prepare_image_embeddings(self, image_embeddings: dict, i: Optional[int]) -> dict:
+        """Prepare image embeddings for the interactive branch."""
+        if i is None:
+            set_precomputed(self._predictor, image_embeddings)
+            return image_embeddings
+
+        if "fpn" not in image_embeddings:
+            raise ValueError("A slice index requires video-style embeddings with FPN features.")
+        _set_image_predictor_from_3d_embeddings(self._predictor, image_embeddings, i)
+        return {
+            "features": self._predictor.get_image_embedding().detach().cpu().numpy(),
             "high_res_feats": self._predictor._features["high_res_feats"],
             "input_size": self._predictor.model.image_size,
             "original_size": self._predictor._orig_hw,
@@ -527,6 +527,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         image: np.ndarray,
         ndim: int = 2,
         image_embeddings: Optional[dict] = None,
+        i: Optional[int] = None,
         save_path: Optional[str] = None,
         verbose: bool = False,
         offload_to_cpu: Optional[bool] = None,
@@ -543,6 +544,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             image: The input image, shape (Y, X) or (Y, X, C), or the input volume, shape (Z, Y, X).
             ndim: The number of spatial dimensions, 2 or 3. A volume requires a video predictor.
             image_embeddings: Optional precomputed image embeddings. If given, the encoder does not run.
+            i: The slice index for video-style embeddings. By default the embeddings contain one image.
             save_path: Optional path to cache the embeddings of a volume in a zarr container. Without
                 one an ephemeral store is used, which `clear_state` removes.
             verbose: Whether to print progress while the embeddings of a volume are computed.
@@ -568,6 +570,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             self.clear_state()
 
         if ndim == 3:
+            self._i = None
             self._initialize_volume(
                 image, image_embeddings, save_path, verbose, offload_to_cpu, cache_all_slices,
                 lazy_embeddings, **kwargs
@@ -578,9 +581,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if image_embeddings is None:
             image_embeddings = self._encode(image)
         else:
-            set_precomputed(self._predictor, image_embeddings)
+            image_embeddings = self._prepare_image_embeddings(image_embeddings, i)
         super().initialize(image, ndim=ndim, image_embeddings=image_embeddings, **kwargs)
         self._image_embeddings = image_embeddings
+        self._i = None
         self._owns_image_embeddings = owns_image_embeddings
 
     def _build_propagator(self, volume, image_embeddings) -> PromptableSegmentation3D:
@@ -645,6 +649,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         """
         image_embeddings = state.get("image_embeddings")
         volume = state.get("volume")
+        i = state.get("i")
 
         if volume is not None:
             if image_embeddings is None:
@@ -652,14 +657,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             super().set_state(state)
             self._volume = volume
             self._propagator = self._build_propagator(volume, image_embeddings)
+            self._i = None
         else:
             if image_embeddings is None:
                 if "image" not in state:
                     raise ValueError("The state must hold either 'image_embeddings' or 'image'.")
                 image_embeddings = self._encode(state["image"])
             else:
-                set_precomputed(self._predictor, image_embeddings)
+                image_embeddings = self._prepare_image_embeddings(image_embeddings, i)
             super().set_state(state)
+            self._i = None
         self._image_embeddings = image_embeddings
         self._owns_image_embeddings = False
 
@@ -668,6 +675,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         owned_embeddings = self._image_embeddings if getattr(self, "_owns_image_embeddings", False) else None
         super().clear_state()
         self._image_embeddings = None
+        self._i = None
         self._owns_image_embeddings = False
         self._predictor.reset_predictor()
         self._volume = None
@@ -878,7 +886,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
     def _refine_boxes(self, segmentation: np.ndarray, batch_size: int, box_extension: int) -> np.ndarray:
         """Re-prompt every instance with its bounding box, see `refine_with_boxes`."""
-        with sam2_autocast(self._predictor.device):
+        with autocast(self._predictor.device):
             return refine_with_boxes(
                 self._predictor, segmentation, batch_size=batch_size, box_extension=box_extension,
             )
@@ -899,7 +907,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             mask_input, coords, labels, _ = self._predictor._prep_prompts(
                 batch_points, batch_labels, None, None, True,
             )
-            with sam2_autocast(self._predictor.device):
+            with autocast(self._predictor.device):
                 logits, scores, _ = self._predictor._predict(
                     coords, labels, None, mask_input, multimasking, return_logits=True,
                 )
@@ -1048,6 +1056,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         image: np.ndarray,
         ndim: int = 2,
         image_embeddings: Optional[dict] = None,
+        i: Optional[int] = None,
         tile_shape: Optional[tuple] = None,
         halo: Optional[tuple] = None,
         save_path: Optional[str] = None,
@@ -1064,6 +1073,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             ndim: The number of spatial dimensions. Must be 2.
             image_embeddings: Optional precomputed tiled image embeddings. The tiling is taken from
                 them when they are given.
+            i: The slice index for tiled video-style embeddings. By default the embeddings contain one image.
             tile_shape: The tile shape, (y, x). Required when no embeddings are given.
             halo: The overlap between the tiles, (y, x). Required when no embeddings are given.
             save_path: Optional path to cache the computed embeddings in a zarr container. Without one
@@ -1091,17 +1101,37 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             )
 
         TiledUniSAM2InstanceSegmentation.initialize(
-            self, image, ndim=2, image_embeddings=image_embeddings, **kwargs
+            self, image, ndim=2, image_embeddings=image_embeddings, i=i, **kwargs
         )
         self._image_embeddings = image_embeddings
+        self._i = i
         self._owns_image_embeddings = owns_image_embeddings
+        self._set_tiling(image_embeddings)
 
+    def _set_tiling(self, image_embeddings: dict) -> None:
         # From the embeddings, not the arguments, so the prompting cannot disagree with the encoding.
         features = image_embeddings["features"]
         self._tiling = Blocking(
-            [0, 0], [int(s) for s in features.attrs["shape"]], [int(s) for s in features.attrs["tile_shape"]]
+            [0, 0], [int(s) for s in features.attrs["shape"][-2:]],
+            [int(s) for s in features.attrs["tile_shape"]],
         )
         self._halo = [int(s) for s in features.attrs["halo"]]
+
+    def _set_tile_embeddings(self, tile_id: int) -> None:
+        """Set the embeddings for one tile on the image predictor."""
+        if self._i is None:
+            set_precomputed(self._predictor, self._image_embeddings, tile_id=tile_id)
+            return
+
+        name = str(tile_id)
+        features = self._image_embeddings["features"][name]
+        fpn_group = self._image_embeddings["fpn"][name]
+        pos_enc_group = self._image_embeddings["pos_enc"][name]
+        fpn = [fpn_group[str(level)] for level in range(len(fpn_group))]
+        pos_enc = [pos_enc_group[str(level)] for level in range(len(pos_enc_group))]
+        _set_image_predictor_from_backbone(
+            self._predictor, fpn, pos_enc, features, features.attrs["original_size"], self._i,
+        )
 
     def _tile_bounding_box(self, tile_id: int) -> tuple:
         """The outer (halo-extended) block of a tile, as a slice tuple."""
@@ -1129,7 +1159,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             # The prompts are in the full image's frame, the tile's embeddings in the tile's.
             origin = np.array([bounding_box[1].start, bounding_box[0].start], dtype="float32")
 
-            set_precomputed(self._predictor, self._image_embeddings, tile_id=tile_id)
+            self._set_tile_embeddings(tile_id)
             records = self._apply_prompts(
                 {"points": points[indices] - origin, "point_labels": point_labels[indices]},
                 multimasking=multimasking, batch_size=batch_size,
@@ -1186,7 +1216,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             crop = segmentation[bounding_box]
             crop = np.where(np.isin(crop, label_ids), crop, 0).astype("uint32")
 
-            set_precomputed(self._predictor, self._image_embeddings, tile_id=tile_id)
+            self._set_tile_embeddings(tile_id)
             tile_refined = refine_with_boxes(
                 self._predictor, crop, batch_size=batch_size, box_extension=box_extension,
             )
@@ -1202,10 +1232,16 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         )
 
     def set_state(self, state: dict) -> None:
-        """@private"""
-        raise NotImplementedError(
-            "The tiled prompt generator cannot restore its state, because it holds tiled embeddings."
-        )
+        """Restore a stitched decoder prediction and the tiled embeddings used for prompting."""
+        image_embeddings = state.get("image_embeddings")
+        if image_embeddings is None:
+            raise ValueError("A tiled prompt-generator state must hold its 'image_embeddings'.")
+
+        TiledUniSAM2InstanceSegmentation.set_state(self, state)
+        self._image_embeddings = image_embeddings
+        self._i = state.get("i")
+        self._owns_image_embeddings = False
+        self._set_tiling(image_embeddings)
 
     def clear_state(self) -> None:
         """Clear the decoder predictions and the tiled embeddings, removing an ephemeral store."""

@@ -36,7 +36,7 @@ from micro_sam.util import AutoSegBase, make_temp_embedding_path, mask_data_to_s
 from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
 from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
 from micro_sam.v2.util import (
-    precompute_image_embeddings, set_precomputed, _load_list_datasets,
+    autocast, precompute_image_embeddings, set_precomputed, to_float32, _load_list_datasets,
     _DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, Devices,
 )
 
@@ -888,19 +888,10 @@ class _StubEncoder(torch.nn.Module):
         return [feature]
 
 
-def _get_decoder_autocast(device):
-    """Use FP16 decoder autocast on supported accelerator backends."""
-    device_type = torch.device(device).type
-    if device_type in ("cuda", "mps"):
-        return torch.autocast(device_type=device_type, dtype=torch.float16)
-    return contextlib.nullcontext()
-
-
 def _decode_3d_feature_batch(model, features, original_size, device):
     """Decode precomputed feature volumes with shape (B, Z, C, H, W).
 
-    CUDA and MPS decoder inference use FP16 autocast. This matches UniSAM2 training on CUDA and keeps
-    the largest default annotator tile within a 10 GB MIG partition. Cached predictions remain float32.
+    Runs in the device precision (see `micro_sam.v2.util.autocast_dtype`). Predictions stay float32.
     """
     if features.ndim != 5:
         raise ValueError(f"Expected batched features with shape (B, Z, C, H, W), got {features.shape}.")
@@ -910,7 +901,7 @@ def _decode_3d_feature_batch(model, features, original_size, device):
     model.encoder = _StubEncoder(features, img_size)
     try:
         dummy = torch.zeros((features.shape[0], 3, features.shape[1], *original_size), device=device)
-        with _get_decoder_autocast(device):
+        with autocast(device):
             output = model(dummy)
     finally:
         model.encoder = real_encoder
@@ -1017,8 +1008,9 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
             return np.concatenate([_normalize(crop)] * 3, axis=0)
 
         def _predict(this_model, inputs):
-            with _get_decoder_autocast(inputs.device):
-                return this_model(inputs)
+            # The pipeline writes numpy blocks, which have no bfloat16.
+            with autocast(inputs.device):
+                return to_float32(this_model(inputs))
 
         def _predict_probe(this_model, inputs):
             return _predict(this_model, inputs.clamp(0.0, 1.0))

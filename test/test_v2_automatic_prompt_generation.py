@@ -3,6 +3,8 @@ import types
 import numpy as np
 import pytest
 
+import torch
+
 from bioimage_cpp.utils import Blocking
 
 from micro_sam.v2.instance_segmentation import (
@@ -180,11 +182,99 @@ def _make_tiled_generator(shape, tile_shape, halo, monkeypatch):
     segmenter = object.__new__(TiledAutomaticPromptGenerator)
     segmenter._tiling = Blocking([0, 0], list(shape), list(tile_shape))
     segmenter._halo = list(halo)
+    segmenter._i = None
     segmenter._predictor = object()
     segmenter._image_embeddings = object()
     segmenter._prediction = np.zeros((4, *shape), dtype="float32")
     monkeypatch.setattr("micro_sam.v2.automatic_prompt_generation.set_precomputed", lambda *a, **k: None)
     return segmenter
+
+
+def test_generator_prepares_a_video_embedding_slice(monkeypatch):
+    calls = []
+    feature = torch.zeros((1, 4, 8, 8), dtype=torch.float32, requires_grad=True)
+    predictor = types.SimpleNamespace(
+        model=types.SimpleNamespace(image_size=1024),
+        _features=None,
+        _orig_hw=None,
+    )
+
+    def set_slice(image_predictor, image_embeddings, i):
+        calls.append((image_embeddings, i))
+        image_predictor._features = {
+            "image_embed": feature,
+            "high_res_feats": [np.zeros((1, 2, 16, 16), dtype="float32")],
+        }
+        image_predictor._orig_hw = [(64, 64)]
+
+    predictor.get_image_embedding = lambda: predictor._features["image_embed"]
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation._set_image_predictor_from_3d_embeddings", set_slice,
+    )
+
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._predictor = predictor
+    video_embeddings = {"features": object(), "fpn": object()}
+    image_embeddings = segmenter._prepare_image_embeddings(video_embeddings, i=3)
+
+    assert calls == [(video_embeddings, 3)]
+    assert isinstance(image_embeddings["features"], np.ndarray)
+    assert image_embeddings["features"].shape == (1, 4, 8, 8)
+    assert predictor._features["image_embed"] is feature
+    assert predictor._features["image_embed"].requires_grad
+    assert image_embeddings["original_size"] == [(64, 64)]
+
+
+def test_tiled_generator_sets_a_video_embedding_slice(monkeypatch):
+    calls = []
+
+    class Feature:
+        attrs = {"original_size": (32, 32)}
+
+    image_embeddings = {
+        "features": {"0": Feature()},
+        "fpn": {"0": {"0": "fpn-0", "1": "fpn-1"}},
+        "pos_enc": {"0": {"0": "pos-0", "1": "pos-1"}},
+    }
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation._set_image_predictor_from_backbone",
+        lambda *args: calls.append(args),
+    )
+
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._predictor = object()
+    segmenter._image_embeddings = image_embeddings
+    segmenter._i = 2
+    segmenter._set_tile_embeddings(tile_id=0)
+
+    assert calls == [(
+        segmenter._predictor, ["fpn-0", "fpn-1"], ["pos-0", "pos-1"],
+        image_embeddings["features"]["0"], (32, 32), 2,
+    )]
+
+
+def test_tiled_generator_restores_decoder_state():
+    class Features:
+        attrs = {"shape": (64, 64), "tile_shape": (32, 32), "halo": (8, 8)}
+
+    prediction = np.ones((4, 64, 64), dtype="float32")
+    image_embeddings = {"features": Features(), "input_size": None}
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._prediction = None
+    segmenter._is_initialized = False
+    segmenter._image_embeddings = None
+    segmenter._i = None
+    segmenter._owns_image_embeddings = False
+    segmenter._tiling = None
+    segmenter._halo = None
+
+    segmenter.set_state({"prediction": prediction, "image_embeddings": image_embeddings, "i": 3})
+
+    assert segmenter._prediction is prediction
+    assert segmenter._image_embeddings is image_embeddings
+    assert segmenter._i == 3
+    assert segmenter._tiling.number_of_blocks == 4
+    assert segmenter._halo == [8, 8]
 
 
 def test_tiles_for_points_assigns_every_prompt_to_exactly_one_tile(monkeypatch):
@@ -248,11 +338,11 @@ def test_tiled_apply_and_select_maps_prompts_and_masks_between_frames(monkeypatc
     assert tile_ids == sorted(set(tile_ids))  # every tile with prompts is visited once, in order
 
 
-def test_tiled_generator_cannot_serialize_its_state(monkeypatch):
+def test_tiled_generator_cannot_serialize_or_restore_without_embeddings(monkeypatch):
     segmenter = _make_tiled_generator((64, 64), (32, 32), (8, 8), monkeypatch)
     with pytest.raises(NotImplementedError):
         segmenter.get_state()
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(ValueError, match="image_embeddings"):
         segmenter.set_state({})
 
 

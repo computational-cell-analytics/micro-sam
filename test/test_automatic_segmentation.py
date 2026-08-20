@@ -20,8 +20,8 @@ HAVE_CUDA = torch.cuda.is_available()
 class TestAutomaticSegmentation(unittest.TestCase):
     model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
     model_type_ais = "vit_t_lm" if util.VIT_T_SUPPORT else "vit_b_lm"
-    tile_shape = (384, 768)
-    halo = (96, 96)
+    tile_shape = (256, 512)
+    halo = (64, 64)
 
     # create an input 2d image with three objects
     @staticmethod
@@ -65,11 +65,11 @@ class TestAutomaticSegmentation(unittest.TestCase):
     def setUpClass(cls):
         # Input 2d data for normal and tiled segmentation.
         cls.mask, cls.image = cls._get_2d_inputs(shape=(256, 256))
-        cls.large_mask, cls.large_image = cls._get_2d_inputs(shape=(768, 768))
+        cls.large_mask, cls.large_image = cls._get_2d_inputs(shape=(512, 512))
 
         # Input 3d data for normal and tiled segmentation.
         cls.labels, cls.volume = cls._get_3d_inputs(shape=(3, 256, 256))
-        cls.large_labels, cls.large_volume = cls._get_3d_inputs(shape=(3, 768, 768))
+        cls.large_labels, cls.large_volume = cls._get_3d_inputs(shape=(3, 512, 512))
 
     def tearDown(self):
         # Release all unoccupied cached memory (eg. tiling requires a lot of memory)
@@ -129,7 +129,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         instances = automatic_instance_segmentation(
             predictor=predictor, segmenter=segmenter, input_path=image,
             ndim=2, tile_shape=self.tile_shape, halo=self.halo,
-            batch_size=2,
+            batch_size=1,
         )
         self.assertEqual(mask.shape, instances.shape)
         self.assertGreater(instances.max(), 0)

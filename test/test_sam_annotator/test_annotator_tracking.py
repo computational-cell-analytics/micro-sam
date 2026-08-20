@@ -142,3 +142,14 @@ def test_tracking_rejects_sam1_models():
 def test_auto_tracking_uses_sam2_widget():
     assert issubclass(AutoTrackWidget, AutoSegmentWidget)
     assert not issubclass(AutoTrackWidget, AutoSegmentV1Widget)
+
+
+def test_auto_tracking_offers_apg(qtbot):
+    widget = AutoTrackWidget(viewer=None, with_decoder=True, volumetric=True)
+    qtbot.addWidget(widget)
+
+    choices = [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
+    assert choices == ["sparse", "dense", "apg"]
+    widget.mode_dropdown.setCurrentText("apg")
+    assert widget.mode == "apg"
+    assert hasattr(widget, "candidate_threshold_param")

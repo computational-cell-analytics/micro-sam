@@ -3,11 +3,13 @@ import sys
 import pooch
 import shutil
 import warnings
+import contextlib
 from pathlib import Path
-from typing import Union, Literal, Optional, Sequence, Tuple
+from typing import Any, Union, Literal, Optional, Sequence, Tuple
 
 import sam2
 from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 import numpy as np
 
@@ -23,6 +25,97 @@ from micro_sam.util import (
 
 Device = Optional[Union[str, torch.device]]
 Devices = Optional[Union[str, torch.device, Sequence[Union[str, torch.device]]]]
+
+# Precision preference on cuda: bf16, then fp16, then fp32. Gated on the compute capability and not
+# on 'torch.cuda.is_bf16_supported', whose default counts emulation and reports bf16 on Volta, where
+# it is slower than fp32 and needs more memory.
+BF16_MIN_CAPABILITY = (8, 0)
+FP16_MIN_CAPABILITY = (7, 0)
+
+
+def _precision_device(device: Device = None) -> torch.device:
+    """The device a precision decision is made for, unvalidated so a missing backend answers fp32."""
+    return torch.device(get_device()) if device is None else torch.device(device)
+
+
+def autocast_dtype(device: Device = None) -> Optional[torch.dtype]:
+    """The dtype SAM2 and UniSAM2 inference runs in on a device.
+
+    Args:
+        device: The device the forward pass runs on. Defaults to the best available one.
+
+    Returns:
+        The half precision dtype the device runs natively, or None where inference stays in fp32.
+    """
+    device = _precision_device(device)
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    capability = torch.cuda.get_device_capability(device)
+    if capability >= BF16_MIN_CAPABILITY:
+        return torch.bfloat16
+    if capability >= FP16_MIN_CAPABILITY:
+        return torch.float16
+    return None
+
+
+def autocast(device: Device = None):
+    """The autocast context inference runs in on a device.
+
+    Args:
+        device: The device the forward pass runs on. Defaults to the best available one.
+
+    Returns:
+        The autocast context, or a null context for fp32.
+    """
+    device = _precision_device(device)
+    dtype = autocast_dtype(device)
+    if dtype is None:
+        return contextlib.nullcontext()
+    return torch.autocast(device_type=device.type, dtype=dtype)
+
+
+def precision_name(device: Device = None) -> str:
+    """The precision name of a device, for the embedding cache signature.
+
+    Args:
+        device: The device the forward pass runs on.
+
+    Returns:
+        One of 'bf16', 'fp16' or 'fp32'.
+    """
+    return {torch.bfloat16: "bf16", torch.float16: "fp16", None: "fp32"}[autocast_dtype(device)]
+
+
+def to_float32(value: Any) -> Any:
+    """Cast the floating point tensors of a nested structure to fp32.
+
+    Autocast returns half precision, but the embedding cache is fp32 and numpy has no bfloat16.
+
+    Args:
+        value: A tensor, or a dict, list or tuple containing tensors.
+
+    Returns:
+        The same structure with its floating point tensors in fp32.
+    """
+    if isinstance(value, torch.Tensor):
+        return value.float() if value.is_floating_point() else value
+    if isinstance(value, dict):
+        return {key: to_float32(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(to_float32(item) for item in value)
+    return value
+
+
+def encode_image(predictor, image: np.ndarray) -> None:
+    """Run the image encoder in the device precision, keeping the cached features in fp32.
+
+    Args:
+        predictor: The SAM2 image predictor.
+        image: The image to encode.
+    """
+    with autocast(predictor.device):
+        predictor.set_image(image)
+    predictor._features = to_float32(predictor._features)
 
 
 class ImageEmbeddings(dict):
@@ -383,6 +476,14 @@ def get_sam2_model(
     return model
 
 
+class _PrecisionImagePredictor(SAM2ImagePredictor):
+    """A SAM2 image predictor whose prompt encoder and mask decoder run in the device precision."""
+
+    def _predict(self, *args, **kwargs):
+        with autocast(self.device):
+            return to_float32(super()._predict(*args, **kwargs))
+
+
 def configure_image_predictor(predictor):
     """Configure a SAM2 image predictor to always use resize-longest."""
     from micro_sam.v2.transforms.resize import ResizeLongestSideTransforms
@@ -398,9 +499,18 @@ def configure_image_predictor(predictor):
 
 
 def get_sam2_image_predictor(model, **kwargs):
-    """Build a SAM2 image predictor with resize-longest preprocessing."""
-    from sam2.sam2_image_predictor import SAM2ImagePredictor
-    return configure_image_predictor(SAM2ImagePredictor(model, **kwargs))
+    """Build a SAM2 image predictor with resize-longest preprocessing and the device precision."""
+    return configure_image_predictor(_PrecisionImagePredictor(model, **kwargs))
+
+
+def _predictor_device(predictor) -> torch.device:
+    """The device a predictor runs on, whether it exposes it as an attribute or as a method."""
+    device = getattr(predictor, "device", None)
+    if callable(device):
+        device = device()
+    if device is None:
+        device = next(predictor.parameters()).device
+    return torch.device(device)
 
 
 def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, preprocessing):
@@ -424,12 +534,13 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, p
     from micro_sam.util import _get_embedding_signature
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
     signature["normalization"] = preprocessing
+    signature["precision"] = precision_name(_predictor_device(predictor))
 
     stale = False
     for key, val in signature.items():
         # Missing current preprocessing metadata means stale. We still tolerate other legacy signature fields.
         if key not in f.attrs:
-            if key == "normalization":
+            if key in ("normalization", "precision"):
                 stale = True
             continue
         if f.attrs[key] == val:
@@ -454,11 +565,13 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, p
 
 
 def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size, original_size, preprocessing):
-    """Write the common embedding metadata plus the SAM2 preprocessing policy."""
+    """Write the common embedding metadata plus the SAM2 preprocessing policy and precision."""
     from micro_sam.util import _write_embedding_signature as _write_common_signature
 
     _write_common_signature(f, input_, predictor, tile_shape, halo, input_size, original_size)
     f.attrs["normalization"] = preprocessing
+    # The encoder precision changes the stored values, so another one is stale.
+    f.attrs["precision"] = precision_name(_predictor_device(predictor))
 
 
 def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
@@ -484,7 +597,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     # Otherwise we have to compute the embeddings.
     predictor.reset_predictor()
 
-    predictor.set_image(to_image(input_))
+    encode_image(predictor, to_image(input_))
     features = predictor.get_image_embedding().cpu().numpy()
     high_res_features = predictor._features.get("high_res_feats")
     original_size = predictor._orig_hw

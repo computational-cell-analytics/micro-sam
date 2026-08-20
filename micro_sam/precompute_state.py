@@ -251,9 +251,9 @@ def _load_amg_state_v2(save_path, key):
     return state
 
 
-def _save_ais_state_v2(segmenter, save_path, key, model_type, embedding_signature=None):
-    """Store decoder predictions as an array inside the embedding Zarr."""
-    prediction = segmenter.get_state()["prediction"]
+def write_ais_state_v2(state, save_path, key, model_type, embedding_signature=None):
+    """Store a decoder state as an array inside the embedding Zarr."""
+    prediction = state["prediction"]
     embeddings = util._open_embeddings(save_path, mode="a")
     group = _get_autoseg_state_group(embeddings, "ais", create=True)
     if key in group:
@@ -276,6 +276,18 @@ def _save_ais_state_v2(segmenter, save_path, key, model_type, embedding_signatur
     if embedding_signature is not None:
         state_group.attrs["embedding_signature"] = embedding_signature
     _record_autoseg_state(embeddings, "ais", group)
+
+
+def _save_ais_state_v2(segmenter, save_path, key, model_type, embedding_signature=None):
+    """Store a segmenter's decoder prediction inside the embedding Zarr."""
+    write_ais_state_v2(segmenter.get_state(), save_path, key, model_type, embedding_signature)
+
+
+def save_ais_state(state, save_path, state_index=None, model_type=None):
+    """Persist an existing decoder state without running the decoder again."""
+    key = _autoseg_state_key(state_index)
+    signature = _embedding_signature(save_path)
+    write_ais_state_v2(state, save_path, key, model_type, embedding_signature=signature)
 
 
 def _load_ais_state_v2(save_path, key):
