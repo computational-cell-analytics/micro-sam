@@ -225,14 +225,15 @@ def test_a_cuda_request_without_cuda_keeps_fp32(monkeypatch):
     assert not predictor._autocasts({"device": "cuda:0"})
 
 
-def test_mps_keeps_fp32(monkeypatch):
-    """MPS has no tensor cores, so half precision only costs the casts."""
+@pytest.mark.parametrize("macos_14", [True, False])
+def test_mps_keeps_fp32(monkeypatch, macos_14):
+    """MPS keeps fp32 regardless of whether the OS supports bfloat16 autocast."""
     from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
 
-    assert predictor._autocasts({"device": "mps"}) is False
+    assert not predictor._autocasts({"device": "mps"})
 
 
 def test_memory_encoder_restores_the_model_dtype_without_autocast(monkeypatch):

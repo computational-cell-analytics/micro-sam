@@ -643,8 +643,81 @@ class TestAutoSegStatePersistence:
         AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
         assert calls == [None, "/tmp/embeddings.zarr"]
 
+    def test_enabling_decoder_persistence_writes_the_in_memory_state(self, monkeypatch):
+        from types import MethodType, SimpleNamespace
 
-def test_apg_widget_reuses_the_decoder_state(monkeypatch):
+        import micro_sam.precompute_state as precompute_state
+        import micro_sam.v2.instance_segmentation as instance_segmentation
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        calls = {"cache": [], "save": []}
+        prediction = np.ones((4, 8, 8), dtype="float32")
+
+        class Decoder:
+            def parameters(self):
+                yield SimpleNamespace(device="cpu")
+
+        class Segmenter:
+            def __init__(self):
+                self.state = {"prediction": prediction}
+
+            def get_state(self):
+                return self.state
+
+            def set_state(self, state):
+                self.state = state
+
+            def generate(self, **kwargs):
+                return np.zeros((8, 8), dtype="uint32")
+
+            def clear_state(self):
+                pass
+
+        def fake_cache(*args, **kwargs):
+            calls["cache"].append(args[4])
+            return Segmenter()
+
+        def fake_save(state, save_path, **kwargs):
+            calls["save"].append((state, save_path, kwargs))
+
+        monkeypatch.setattr(precompute_state, "cache_autoseg_state", fake_cache)
+        monkeypatch.setattr(precompute_state, "save_ais_state", fake_save)
+        monkeypatch.setattr(instance_segmentation, "get_unisam2_segmentation_generator", lambda *a, **k: Segmenter())
+
+        embedding_widget = SimpleNamespace(cache_state=False)
+        state = SimpleNamespace(
+            predictor=SimpleNamespace(model_type="hvit_t_cells"), decoder=Decoder(),
+            image_embeddings={"input_size": (8, 8)}, inference_devices=None,
+            embedding_path="/tmp/embeddings.zarr", data_signature="data",
+            widgets={"embeddings": embedding_widget},
+        )
+        widget = SimpleNamespace(
+            volumetric=False, mode="sparse", _segmenter=None, _segmenter_key=None,
+            _decoder_state=None, _decoder_state_key=None, _decoder_state_save_path=None,
+            _proposals=None, _proposals_key=None, _postproc_kwargs=lambda: {},
+        )
+        for name in (
+            "_state_save_path", "_release_segmenter", "_decoder_key", "_cached_decoder_state",
+            "_store_decoder_state", "_persist_decoder_state",
+        ):
+            setattr(widget, name, MethodType(getattr(AutoSegmentWidget, name), widget))
+
+        raw = np.zeros((8, 8), dtype="uint8")
+        AutoSegmentWidget._run_unisam2(widget, state, raw, ndim=2, z=None)
+        embedding_widget.cache_state = True
+        AutoSegmentWidget._run_unisam2(widget, state, raw, ndim=2, z=None)
+
+        assert calls["cache"] == [None]
+        assert len(calls["save"]) == 1
+        saved_state, save_path, kwargs = calls["save"][0]
+        assert saved_state["prediction"] is prediction
+        assert save_path == "/tmp/embeddings.zarr"
+        assert kwargs == {"state_index": None, "model_type": "hvit_t_cells"}
+        assert widget._decoder_state_save_path == "/tmp/embeddings.zarr"
+
+
+@pytest.mark.parametrize("is_tiled,z", [(False, None), (True, None), (True, 3)])
+def test_apg_widget_reuses_the_decoder_state(monkeypatch, is_tiled, z):
     from types import MethodType, SimpleNamespace
 
     import micro_sam.precompute_state as precompute_state
@@ -683,6 +756,8 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch):
     def fake_cache(*args, **kwargs):
         calls["cache"] += 1
         assert args[0] == "ais"
+        assert kwargs["is_tiled"] is is_tiled
+        assert kwargs["i"] == z
         return DecoderSegmenter()
 
     def fake_factory(**kwargs):
@@ -693,11 +768,15 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch):
     monkeypatch.setattr(precompute_state, "cache_autoseg_state", fake_cache)
     monkeypatch.setattr(instance_segmentation, "get_instance_segmentation_generator", fake_factory)
 
-    image_embeddings = {
-        "features": np.zeros((1, 4, 8, 8), dtype="float32"),
-        "input_size": 1024,
-        "original_size": (8, 8),
-    }
+    if is_tiled:
+        features = SimpleNamespace(attrs={"tile_shape": (4, 4), "halo": (1, 1)})
+        image_embeddings = {"features": features, "input_size": None}
+    else:
+        image_embeddings = {
+            "features": np.zeros((1, 4, 8, 8), dtype="float32"),
+            "input_size": 1024,
+            "original_size": (8, 8),
+        }
     state = SimpleNamespace(
         predictor=SimpleNamespace(model=object(), model_type="hvit_t_cells"),
         decoder=Decoder(), image_embeddings=image_embeddings, inference_devices=None,
@@ -706,22 +785,36 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch):
     widget = SimpleNamespace(
         _segmenter=None, _segmenter_key=None, _decoder_state=None, _decoder_state_key=None,
         _proposals=None, _proposals_key=None,
-        _state_save_path=lambda state: None,
+        _state_save_path=lambda state: "/tmp/embeddings.zarr",
         _apg_propose_kwargs=lambda: {"candidate_threshold": 1.5},
         _apg_select_kwargs=lambda: {"score_threshold": 0.6},
     )
-    for name in ("_release_segmenter", "_decoder_key", "_cached_decoder_state", "_store_decoder_state"):
+    for name in (
+        "_release_segmenter", "_decoder_key", "_cached_decoder_state", "_store_decoder_state",
+        "_persist_decoder_state",
+    ):
         setattr(widget, name, MethodType(getattr(AutoSegmentWidget, name), widget))
 
-    result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=None)
-    second_result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=None)
+    result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=z)
+    second_result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=z)
 
     assert calls == {"cache": 1, "factory": 1}
     assert prompt_generator.state["image_embeddings"] is image_embeddings
-    # The prompting stage runs once; the second run only replays the merge.
+    assert prompt_generator.state.get("i") == z
     assert prompt_generator.propose_calls == 1
     assert prompt_generator.select_kwargs == {"score_threshold": 0.6}
     assert np.array_equal(result, second_result)
+
+    # Rebuilding APG after a mode switch reuses the decoder state but regenerates the prompts.
+    widget._segmenter = None
+    widget._segmenter_key = None
+    widget._proposals = None
+    widget._proposals_key = None
+    third_result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=z)
+
+    assert calls == {"cache": 1, "factory": 2}
+    assert prompt_generator.propose_calls == 2
+    assert np.array_equal(result, third_result)
 
 
 @pytest.mark.gui
@@ -869,6 +962,7 @@ class TestAutoSegDefaultMode:
         autosegment = SimpleNamespace(
             _segmenter=None, _segmenter_key=object(),
             _decoder_state={"prediction": 1}, _decoder_state_key=object(),
+            _decoder_state_save_path="/tmp/embeddings.zarr",
         )
         autosegment._release_segmenter = MethodType(AutoSegmentWidget._release_segmenter, autosegment)
         autosegment._drop_decoder_state = MethodType(AutoSegmentWidget._drop_decoder_state, autosegment)
@@ -879,3 +973,4 @@ class TestAutoSegDefaultMode:
         # The prediction belongs to the embeddings that were just replaced.
         assert autosegment._decoder_state is None
         assert autosegment._decoder_state_key is None
+        assert autosegment._decoder_state_save_path is None
