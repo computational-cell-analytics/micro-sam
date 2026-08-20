@@ -101,6 +101,10 @@ CANDIDATE_GRID_3D = (4, 3, 3)
 
 # Conservative first-run estimates from the current A100. Observed times replace them as samples run.
 INITIAL_SAMPLE_SECONDS = {2: 5.0, 3: 35.0}
+VOLUME_DIAGNOSTICS = (
+    "proposed_candidates", "scored_candidates", "unique_anchor_slices", "propagation_passes",
+    "propagated_frame_steps", "early_stopped_frame_steps",
+)
 
 IMPLEMENTATION_FILES = (
     Path(__file__),
@@ -653,7 +657,7 @@ def _summarize(samples: pd.DataFrame) -> pd.DataFrame:
             values = group[metric].dropna()
             row[f"{metric}_mean"] = float(values.mean()) if len(values) else np.nan
             row[f"{metric}_std"] = float(values.std(ddof=0)) if len(values) else np.nan
-        for diagnostic in ("unmatched", "genuine_misses"):
+        for diagnostic in ("unmatched", "genuine_misses", *VOLUME_DIAGNOSTICS):
             if diagnostic in group:
                 values = group[diagnostic].dropna()
                 row[diagnostic] = int(values.sum()) if len(values) else np.nan
@@ -673,7 +677,7 @@ def _summarize(samples: pd.DataFrame) -> pd.DataFrame:
         values = summary[f"{metric}_mean"].dropna()
         overall[f"{metric}_mean"] = float(values.mean()) if len(values) else np.nan
         overall[f"{metric}_std"] = float(values.std(ddof=0)) if len(values) else np.nan
-    for diagnostic in ("unmatched", "genuine_misses"):
+    for diagnostic in ("unmatched", "genuine_misses", *VOLUME_DIAGNOSTICS):
         if diagnostic in summary:
             values = summary[diagnostic].dropna()
             overall[diagnostic] = int(values.sum()) if len(values) else np.nan
@@ -695,6 +699,7 @@ def _runtime_projection(
 def _sample_row(
     sample: Dict[str, Any], segmentation: np.ndarray, labels: np.ndarray,
     initialization_seconds: float, generation_seconds: float, peak_cuda_memory_bytes: Optional[int],
+    generation_stats: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     metric_mode = "dense" if sample["dataset"] in DATASETS_3D_EM else "sparse"
     border_min_size = GT_MIN_SIZE_2D.get(sample["dataset"], 0) if sample["ndim"] == 2 else 0
@@ -715,6 +720,8 @@ def _sample_row(
     }
     if sample["ndim"] == 3:
         row["unmatched"], row["genuine_misses"] = genuine_misses(labels, segmentation)
+        generation_stats = generation_stats or {}
+        row.update({key: int(generation_stats.get(key, 0)) for key in VOLUME_DIAGNOSTICS})
     return row
 
 
@@ -742,6 +749,7 @@ def _run_sample(
         initialization_seconds=initialized - start,
         generation_seconds=generated - initialized,
         peak_cuda_memory_bytes=peak_cuda_memory_bytes,
+        generation_stats=getattr(segmenter, "_last_generation_stats", None),
     )
 
 

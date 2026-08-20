@@ -490,6 +490,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._temporary_embedding_path = None
         self._i = None
         self._owns_image_embeddings = False
+        self._last_generation_stats = {}
         # The embedding cache is keyed on these, which a SAM2 image predictor does not carry itself.
         sam2_model = getattr(predictor, "model", None)
         if getattr(predictor, "model_type", None) is None:
@@ -755,6 +756,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if not self._is_initialized:
             raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
 
+        self._last_generation_stats = {}
         shape = self._prediction[0].shape
         # The prediction carries the dimensionality it was run at: (4, Y, X) or (4, Z, Y, X).
         is_volume = self._prediction.ndim == 4
@@ -769,11 +771,21 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 spacing=spacing, min_candidate_size=min_candidate_size, n_threads=n_threads,
             )
             if prompts is None:
+                self._last_generation_stats = {
+                    "proposed_candidates": 0,
+                    "scored_candidates": 0,
+                    "unique_anchor_slices": 0,
+                    "propagation_passes": 0,
+                    "propagated_frame_steps": 0,
+                    "early_stopped_frame_steps": 0,
+                }
                 return np.zeros(shape, dtype="uint32")
+            self._last_generation_stats["proposed_candidates"] = len(prompts["points"])
             candidates = self._score_candidates(
                 prompts, multimasking=multimasking, batch_size=batch_size,
                 score_threshold=score_threshold, max_overlap=max_overlap,
             )
+            self._last_generation_stats["scored_candidates"] = len(candidates)
             records = self._propagate_candidates(
                 candidates, n_objects_per_pass=n_objects_per_pass,
                 early_stop_patience=early_stop_patience, verbose=verbose,
@@ -1006,8 +1018,13 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             for _, group in sorted(by_anchor.items())
             for start in range(0, len(group), n_objects_per_pass)
         ]
+        self._last_generation_stats.update({
+            "unique_anchor_slices": len(by_anchor),
+            "propagation_passes": len(passes),
+        })
 
         records = []
+        propagated_frame_steps = 0
         for batch in tqdm(passes, desc="Propagate prompts", disable=not verbose):
             # Only the objects: re-reading the volume's features each pass costs more than the propagation.
             self._propagator.reset_tracking()
@@ -1020,8 +1037,14 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                     object_id=object_id,
                 )
             video_segments = self._propagator.propagate_prompts(early_stop_patience=early_stop_patience)
+            propagated_frame_steps += len(video_segments)
             records.extend(_volume_records(video_segments, batch, self._volume.shape))
 
+        possible_frame_steps = len(passes) * int(self._volume.shape[0])
+        self._last_generation_stats.update({
+            "propagated_frame_steps": propagated_frame_steps,
+            "early_stopped_frame_steps": possible_frame_steps - propagated_frame_steps,
+        })
         self._propagator.reset_predictor()
         return records
 

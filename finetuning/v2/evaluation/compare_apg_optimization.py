@@ -1,8 +1,8 @@
-"""Compare serialized 2D APG benchmark runs against the optimization acceptance gates.
+"""Compare serialized APG benchmark runs against the optimization acceptance gates.
 
 Repeat ``--baseline-run`` or ``--candidate-run`` for timing trials. Candidate trials with the same
-implementation and resolved 2D parameters are grouped, and their per-dataset medians are compared.
-All inputs must be complete runs of the same 2D manifest, model and checkpoint.
+implementation and resolved parameters are grouped, and their per-dataset medians are compared.
+All inputs must be complete runs of the requested dimension, manifest, model and checkpoint.
 """
 
 from __future__ import annotations
@@ -17,23 +17,29 @@ import numpy as np
 import pandas as pd
 
 
-EXPECTED_DATASETS = frozenset({"livecell", "tissuenet", "dynamicnuclearnet", "deepbacs", "dic_hepg2"})
+EXPECTED_DATASETS = {
+    2: frozenset({"livecell", "tissuenet", "dynamicnuclearnet", "deepbacs", "dic_hepg2"}),
+    3: frozenset({"celegans_atlas", "embedseg", "gonuclear", "cremi", "snemi"}),
+}
 BALANCED_ROW = "__dataset_balanced__"
 
 
-def _read_run(path: Path) -> Tuple[Dict[str, Any], pd.DataFrame]:
+def _read_run(path: Path, ndim: int) -> Tuple[Dict[str, Any], pd.DataFrame]:
     path = path.resolve(strict=True)
     with open(path / "metadata.json") as f:
         metadata = json.load(f)
     if metadata.get("status") != "complete":
         raise RuntimeError(f"Run is not complete: '{path}'.")
-    if metadata.get("dimensions") != [2]:
-        raise ValueError(f"Expected a 2D-only run, got dimensions={metadata.get('dimensions')} in '{path}'.")
+    if metadata.get("dimensions") != [ndim]:
+        raise ValueError(
+            f"Expected a {ndim}D-only run, got dimensions={metadata.get('dimensions')} in '{path}'."
+        )
     summary = pd.read_csv(path / "summary.csv")
     summary = summary.loc[summary["dataset"] != BALANCED_ROW].copy()
     datasets = set(summary["dataset"])
-    if datasets != EXPECTED_DATASETS:
-        raise ValueError(f"Expected datasets {sorted(EXPECTED_DATASETS)}, got {sorted(datasets)} in '{path}'.")
+    expected = EXPECTED_DATASETS[ndim]
+    if datasets != expected:
+        raise ValueError(f"Expected datasets {sorted(expected)}, got {sorted(datasets)} in '{path}'.")
     if summary["dataset"].duplicated().any():
         raise ValueError(f"Dataset rows are not unique in '{path}'.")
     metadata["run_dir"] = str(path)
@@ -52,18 +58,22 @@ def _validate_compatible(runs: Sequence[Tuple[Dict[str, Any], pd.DataFrame]]) ->
             )
 
 
-def _group_key(metadata: Dict[str, Any]) -> str:
+def _group_key(metadata: Dict[str, Any], ndim: int) -> str:
     identity = {
         "implementation_checksum": metadata["implementation_checksum"],
-        "params_2d": metadata["params_2d"],
+        f"params_{ndim}d": metadata[f"params_{ndim}d"],
     }
     return json.dumps(identity, sort_keys=True, separators=(",", ":"))
 
 
-def _aggregate(runs: Sequence[Tuple[Dict[str, Any], pd.DataFrame]]) -> Tuple[Dict[str, Any], pd.DataFrame]:
-    key = _group_key(runs[0][0])
-    if any(_group_key(metadata) != key for metadata, _ in runs):
-        raise ValueError("Timing trials in one group must have identical implementations and 2D parameters.")
+def _aggregate(
+    runs: Sequence[Tuple[Dict[str, Any], pd.DataFrame]], ndim: int,
+) -> Tuple[Dict[str, Any], pd.DataFrame]:
+    key = _group_key(runs[0][0], ndim)
+    if any(_group_key(metadata, ndim) != key for metadata, _ in runs):
+        raise ValueError(
+            f"Timing trials in one group must have identical implementations and {ndim}D parameters."
+        )
     metrics = []
     for _, summary in runs:
         columns = ["msa_mean", "total_seconds"]
@@ -82,12 +92,12 @@ def _aggregate(runs: Sequence[Tuple[Dict[str, Any], pd.DataFrame]]) -> Tuple[Dic
 def _compare(
     baseline: Tuple[Dict[str, Any], pd.DataFrame],
     candidate: Tuple[Dict[str, Any], pd.DataFrame],
-    target: str,
+    target: str, ndim: int,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
     baseline_metadata, baseline_table = baseline
     candidate_metadata, candidate_table = candidate
     rows = []
-    for dataset in sorted(EXPECTED_DATASETS):
+    for dataset in sorted(EXPECTED_DATASETS[ndim]):
         base_msa = float(baseline_table.loc[dataset, "msa_mean"])
         candidate_msa = float(candidate_table.loc[dataset, "msa_mean"])
         base_runtime = float(baseline_table.loc[dataset, "total_seconds"])
@@ -149,19 +159,21 @@ def _compare(
 
 
 def compare_runs(
-    baseline_paths: Sequence[Path], candidate_paths: Sequence[Path], target: str,
+    baseline_paths: Sequence[Path], candidate_paths: Sequence[Path], target: str, ndim: int = 2,
 ) -> Tuple[List[Dict[str, Any]], pd.DataFrame]:
-    baseline_runs = [_read_run(path) for path in baseline_paths]
-    candidate_runs = [_read_run(path) for path in candidate_paths]
+    if ndim not in EXPECTED_DATASETS:
+        raise ValueError(f"Expected ndim to be 2 or 3, got {ndim}.")
+    baseline_runs = [_read_run(path, ndim) for path in baseline_paths]
+    candidate_runs = [_read_run(path, ndim) for path in candidate_paths]
     _validate_compatible(baseline_runs + candidate_runs)
-    baseline = _aggregate(baseline_runs)
+    baseline = _aggregate(baseline_runs, ndim)
     groups = defaultdict(list)
     for run in candidate_runs:
-        groups[_group_key(run[0])].append(run)
+        groups[_group_key(run[0], ndim)].append(run)
 
     decisions, rows = [], []
     for group in groups.values():
-        decision, detail = _compare(baseline, _aggregate(group), target)
+        decision, detail = _compare(baseline, _aggregate(group, ndim), target, ndim)
         decisions.append(decision)
         rows.extend(detail)
     if target == "quality":
@@ -178,10 +190,14 @@ def main() -> None:
     parser.add_argument("--baseline-run", action="append", required=True, type=Path)
     parser.add_argument("--candidate-run", action="append", required=True, type=Path)
     parser.add_argument("--target", required=True, choices=("quality", "efficiency"))
+    parser.add_argument(
+        "--ndim", type=int, choices=(2, 3), default=2,
+        help="Dimension to compare. Defaults to 2 for compatibility with existing commands.",
+    )
     parser.add_argument("--output", type=Path, help="Optional JSON path; detailed rows use the same stem as CSV.")
     args = parser.parse_args()
 
-    decisions, details = compare_runs(args.baseline_run, args.candidate_run, args.target)
+    decisions, details = compare_runs(args.baseline_run, args.candidate_run, args.target, ndim=args.ndim)
     payload = json.dumps(decisions, indent=2, sort_keys=True)
     if args.output is None:
         print(payload)
