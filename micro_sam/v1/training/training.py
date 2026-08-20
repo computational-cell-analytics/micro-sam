@@ -27,11 +27,11 @@ import torch_em
 from torch_em.util import load_data
 from torch_em.data.datasets.util import split_kwargs
 
-from ...util import get_device
 from . import sam_trainer as trainers
 from ..instance_segmentation import get_unetr
 from ..models.peft_sam import ClassicalSurgery
 from . import joint_sam_trainer as joint_trainers
+from ...util import get_device, training_autocast_dtype
 from ..util import get_model_names, export_custom_sam_model, get_sam_model
 from .util import get_trainable_sam_model, ConvertToSamInputs, require_8bit, get_raw_transform
 
@@ -319,6 +319,9 @@ def train_sam(
             model_params, lr, optimizer_class, scheduler_class, scheduler_kwargs
         )
 
+        # The hardware decides the precision. Training runs in bfloat16 only.
+        mixed_precision = training_autocast_dtype(device) is not None
+
         # The trainer which performs training and validation.
         if with_segmentation_decoder:
             instance_seg_loss = torch_em.loss.DiceBasedDistanceLoss(mask_distances_in_bg=True)
@@ -333,7 +336,8 @@ def train_sam(
                 lr_scheduler=scheduler,
                 logger=joint_trainers.JointSamLogger,
                 log_image_interval=100,
-                mixed_precision=True,
+                mixed_precision=mixed_precision,
+                mixed_precision_dtype="bfloat16",
                 convert_inputs=convert_inputs,
                 n_objects_per_batch=n_objects_per_batch,
                 n_sub_iteration=n_sub_iteration,
@@ -355,7 +359,8 @@ def train_sam(
                 lr_scheduler=scheduler,
                 logger=trainers.SamLogger,
                 log_image_interval=100,
-                mixed_precision=True,
+                mixed_precision=mixed_precision,
+                mixed_precision_dtype="bfloat16",
                 convert_inputs=convert_inputs,
                 n_objects_per_batch=n_objects_per_batch,
                 n_sub_iteration=n_sub_iteration,
@@ -522,7 +527,9 @@ def train_instance_segmentation(
             train_loader=train_loader,
             val_loader=val_loader,
             device=device,
-            mixed_precision=True,
+            # The hardware decides the precision. Training runs in bfloat16 only.
+            mixed_precision=training_autocast_dtype(device) is not None,
+            mixed_precision_dtype="bfloat16",
             log_image_interval=50,
             compile_model=False,
             save_root=save_root,

@@ -14,7 +14,7 @@ import torch.distributed as dist
 import torch_em
 from torch_em.trainer.logger_base import TorchEmLogger
 
-from micro_sam.v2.util import training_autocast_dtype
+from micro_sam.util import training_autocast_dtype
 from micro_sam.v2.loss.custom_sam2_loss import CORE_LOSS_KEY, CustomSAM2Metric
 
 # Fixed seed for the main-process randomness during validation (prompt/correction-click
@@ -153,7 +153,7 @@ class Sam2Trainer(CheckpointAdapter, torch_em.trainer.DefaultTrainer):
             train_loader, val_loader, optimizer, device, lr_scheduler,
             logger, save_root, etc.). mixed_precision and mixed_precision_dtype
             default to what the device runs natively, see
-            `micro_sam.v2.util.training_autocast_dtype`.
+            `micro_sam.util.training_autocast_dtype`.
     """
 
     def __init__(

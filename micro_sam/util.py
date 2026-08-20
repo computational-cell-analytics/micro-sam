@@ -232,6 +232,29 @@ def get_device(device: Optional[Union[str, torch.device]] = None) -> Union[str, 
     return device
 
 
+# The compute capability that runs bfloat16 natively. Gated on this and not on
+# 'torch.cuda.is_bf16_supported', whose default counts emulation and reports bf16 on Volta.
+BF16_MIN_CAPABILITY = (8, 0)
+
+
+def training_autocast_dtype(device: Optional[Union[str, torch.device]] = None) -> Optional[torch.dtype]:
+    """The dtype that training runs in on a device.
+
+    Training runs in bfloat16 or fp32, never float16: float16 needs loss scaling and still overflows
+    in the decoder convolutions on GPUs that accumulate it in half precision.
+
+    Args:
+        device: The device the forward pass runs on. Defaults to the best available one.
+
+    Returns:
+        bfloat16 where the device runs it natively, or None where training stays in fp32.
+    """
+    device = torch.device(get_device() if device is None else device)
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    return torch.bfloat16 if torch.cuda.get_device_capability(device) >= BF16_MIN_CAPABILITY else None
+
+
 def get_embedding_function(model_type: str) -> callable:
     """Get the precompute-embeddings function for the model family of `model_type`.
 
