@@ -2,12 +2,28 @@
 
 ## Outcome
 
-No tested optimization met its acceptance gate, so the 3D APG algorithm and its defaults remain
-unchanged. The most promising quality setting, a lower three-level candidate-threshold ladder,
-improved dataset-balanced mSA by 1.31%, short of the required 5%, and increased total runtime by
-20.72%. The best efficiency trade-off, early stopping with patience 2, preserved every dataset within
-the -0.5% quality guard and reduced total runtime by 6.56%, but four of five datasets were only
-0.20-1.81% faster. It therefore failed the requirement of at least 5% speedup on every dataset.
+**Propagation early stopping is now on by default with patience 2** (`early_stop_patience` in
+`micro_sam/v2/automatic_prompt_generation.py`). It was adopted in experiment 5 as a deliberate,
+documented exception to the efficiency gate, which it fails: only two of five datasets are more than
+5% faster. The justification is that on 32-slice crops the setting is *output-preserving* — the
+segmentation is bit-identical on all five datasets at patience 2, 3 and 4, down to the predicted
+object count and seven decimals of mSA. The gate's every-dataset requirement exists to stop a
+workload-specific win from being imposed on workloads it would cost something; here a non-benefiting
+workload pays nothing measurable, while GoNuclear skips 33.6% of its frame steps and runs 30.1%
+faster. The change also aligns the library with the annotator, whose volume widget has defaulted to
+patience 2 since it was written.
+
+No other tested optimization met its gate, and no other default changed. The most promising quality
+setting, a lower three-level candidate-threshold ladder, improved dataset-balanced mSA by 1.31%,
+short of the required 5%, and increased total runtime by 20.72%.
+
+Experiment 3 first measured early stopping on the 12-slice crops and rejected it, concluding that it
+"saves work only on selected datasets". Experiment 5 re-measured it on 32-slice crops and shows that
+conclusion was half right: the *verdict* stands, but the *diagnosis* was wrong. C. elegans did not
+dominate because it was the only dataset whose objects end; it dominated because it was the only crop
+deep enough to have slices left to skip. It also had a quality cost there (up to -3.03% mSA) that
+turns out to be an artifact of its crop being trimmed to 24 of a declared 32 slices, so the stop was
+firing at an unannotated boundary rather than at the end of an object.
 
 The temporal-filter and anchor-coalescing implementations were experimental. Both were reverted after
 their benchmark sweeps failed. Their serialized results are retained below the experiment output root.
@@ -16,24 +32,40 @@ that is no longer present.
 
 ## Benchmark and decision rules
 
-All experiments used only the 3D portion of manifest schema 5, checksum
-`0f8fb67b3650a71f9f44b53037e89546`. The source data below
-`/mnt/vast-nhr/projects/cidas/cca/data` was treated as read-only. One deterministic representative crop
-was evaluated for each dataset:
+Experiments 1-4 used only the 3D portion of manifest schema 5, checksum
+`0f8fb67b3650a71f9f44b53037e89546`. Experiment 5 used the opt-in deep crop set, checksum
+`f611a7125383e850798d0b5bf696f6f7`, selected with `--crops-3d deep`; both manifests are schema 5, and
+both they and their runs are retained. The source data below `/mnt/vast-nhr/projects/cidas/cca/data`
+was treated as read-only. One deterministic representative crop was evaluated for each dataset:
 
-| dataset | crop shape (Z, Y, X) |
-|---|---:|
-| C. elegans atlas | 32 x 140 x 512 |
-| EmbedSeg | 12 x 512 x 512 |
-| GoNuclear | 12 x 512 x 512 |
-| CREMI | 12 x 512 x 512 |
-| SNEMI | 12 x 512 x 512 |
+| dataset | crop shape, experiments 1-4 | crop shape, experiment 5 | propagated slices, 1-4 / 5 |
+|---|---:|---:|---:|
+| C. elegans atlas | 32 x 140 x 512 | 32 x 140 x 512 | 24 / 32 |
+| EmbedSeg | 12 x 512 x 512 | 32 x 512 x 512 | 12 / 32 |
+| GoNuclear | 12 x 512 x 512 | 32 x 512 x 512 | 12 / 32 |
+| CREMI | 12 x 512 x 512 | 32 x 512 x 512 | 12 / 32 |
+| SNEMI | 12 x 512 x 512 | 30 x 512 x 512 | 12 / 30 |
+
+The deep set targets 32 slices with two unavoidable deviations. CREMI's tuning slab is exactly 32
+slices, so its crop is the whole slab and there is only one z position. SNEMI stops at 30 because its
+entire held-out range is 30 slices: training used slices 0-70 of a 100-slice volume, and reaching 32
+would require training data.
+
+The two crop sets differ only in depth and in one selection rule: a deep candidate is accepted only if
+its first and last slice are annotated. The loader trims unannotated end slices, so without that rule
+a declared depth is not the depth that reaches propagation — which is exactly what happened to the
+C. elegans crop of experiments 1-4, whose declared 32 slices became the 24 in the table above. The
+candidate grid is shared, so a deep result is attributable to depth.
 
 The model was `hvit_t` with checkpoint `best`, checksum
 `85fb099c4bb038fa0ab9bddd6151689e`. Runs were serialized on an
-`NVIDIA A100-SXM4-80GB MIG 1g.20gb` device. The canonical baseline, candidate ladder, and early-stop
-sweep used implementation checksum `ada109a965c5c71aa8ec0ac44ecfd411` at revision
-`833d97ae91f8a5f4cc56a10ac79ff527ade8a3ca`.
+`NVIDIA A100-SXM4-80GB MIG 1g.20gb` device throughout, experiment 5 included. The canonical baseline,
+candidate ladder, and early-stop sweep of experiments 1-4 used implementation checksum
+`ada109a965c5c71aa8ec0ac44ecfd411` at revision `833d97ae91f8a5f4cc56a10ac79ff527ade8a3ca`.
+Experiment 5 used `aef08d8026e3ddba8350370bc994019a` at revision
+`c31494020103ec6dccb17bef3aca90f9699da735`; its baseline trial 1 records the parent revision
+`2f67909ce9d3f410e75af9f471406b9f14d37c3b` because it ran minutes before that commit, which changed no
+file that the implementation checksum covers.
 
 The primary quality metric is the equal-weight mean of the five per-dataset mSA values. Relative, not
 absolute, changes determine every gate:
@@ -44,23 +76,31 @@ absolute, changes determine every gate:
 - An efficiency optimization must be at least 5% faster on every dataset. Every dataset must keep mSA
   within -0.5% of baseline.
 - Up to five configurations may be ranked within one hypothesis, but a setting is adopted only if it
-  passes the corresponding gate.
+  passes the corresponding gate, or if failing it is argued explicitly. Experiment 5 is the one such
+  argument made so far, and it rests on the candidate being output-preserving rather than on a
+  judgement about how much quality a speedup is worth.
 
 Canonical baseline runtimes are medians of three complete trials. Candidate quality is deterministic
 for a fixed implementation and configuration. The temporary temporal-filter and anchor-coalescing
 branches each used a same-implementation control, so their timing was not compared across code
 checksums. An apparent accepted candidate would have received two additional timing trials; no initial
-candidate passed, so those confirmation runs were unnecessary. Every complete hypothesis sweep stayed
-within 30 minutes.
+candidate passed a gate outright, so those confirmation runs were unnecessary. Every complete
+hypothesis sweep of experiments 1-4 stayed within 30 minutes. Experiment 5 could not: the deep set costs
+5.7x the frame steps of the 12-slice set in total, and 6-10x on the four datasets whose depth actually
+changed, so a single deep run takes 52-55 minutes and its six runs took about 5.3 hours of GPU time at a
+150-minute per-run budget.
 
 The comparison program rejects incomplete runs and runs with mismatching dimensions, manifest, model,
 checkpoint, implementation, or resolved parameters. Peak CUDA memory is reset and recorded per crop.
 
 ## Baseline
 
-The current 3D defaults use candidate thresholds `(1.5, 10.0)`, score each candidate on its density-peak
-slice, propagate up to 16 objects sharing one anchor slice in a pass, propagate through the complete
-volume, and merge the resulting cropped masks by score.
+The 3D defaults *as of experiments 1-4* use candidate thresholds `(1.5, 10.0)`, score each candidate on
+its density-peak slice, propagate up to 16 objects sharing one anchor slice in a pass, propagate through
+the complete volume, and merge the resulting cropped masks by score. Only the last of these still holds
+unconditionally: experiment 5 changed `early_stop_patience` from `None` to 2, so a pass now ends once
+every one of its objects has been empty for two consecutive slices. The baseline below therefore
+describes the defaults these four experiments were measured against, not the current ones.
 
 | dataset | mSA | median seconds | proposed | scored | anchor slices | passes | frame steps |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -72,7 +112,8 @@ volume, and merge the resulting cropped masks by score.
 | **Dataset-balanced / total** | **0.382458** | **454.532** | **2,923** | **925** | **65** | **93** | **1,332** |
 
 Peak CUDA allocation was 11.15 GB (10.39 GiB). Candidate scoring removes most raw density components,
-but propagation still dominates runtime: each pass visits every slice unless early stopping is enabled.
+but propagation still dominates runtime: with `early_stop_patience=None`, as here, each pass visits every
+slice of the volume whether or not its objects have ended.
 
 ## Experiment 1: candidate-threshold ladders
 
@@ -169,6 +210,12 @@ stop is not necessarily safer: different partial tracks interact during the fina
 **Decision:** retain `early_stop_patience=None` as the general default. Early stopping remains available
 as an explicit workload-specific option.
 
+**Superseded by experiment 5.** Four of the five crops here are 12 slices deep and a pass costs one
+frame step per slice, so this sweep could not distinguish "the objects of a pass do not end" from "the
+crop has no slices left to skip". Re-measuring on 32-slice crops separates the two and reverses the
+decision. Read the per-dataset table above as a measurement of crop depth, not of the mechanism: the
+C. elegans quality regressions in particular do not reproduce at full annotated depth.
+
 ## Experiment 4: anchor-slice coalescing
 
 ### Hypothesis and implementation
@@ -216,6 +263,107 @@ trade-off but fails both the -0.5% per-dataset quality guard and the consistent 
 
 **Decision:** reject both strides and remove the experimental implementation.
 
+## Experiment 5: early stopping on 32-slice crops
+
+### Hypothesis
+
+Experiment 3 rejected early stopping because only C. elegans was meaningfully faster, and concluded that
+the mechanism helps only selected datasets. But C. elegans was also the only crop deeper than 12 slices,
+and a pass costs one frame step per slice, so the sweep confounded two explanations: that the objects of
+a pass do not end, and that the crop has no slices left to skip. At patience 2, 111 of the 116 skipped
+frame steps came from C. elegans and three of five datasets skipped none at all.
+
+This experiment re-measures the same patience values on the opt-in deep crop set, where every dataset has
+30-32 annotated slices, to find out which explanation was doing the work.
+
+### Baseline
+
+Medians of three complete trials on the deep crops. Every crop reaches propagation at its full declared
+depth, so `propagated frame steps` equals `passes x depth` exactly on all five datasets.
+
+| dataset | mSA | median seconds | proposed | scored | anchor slices | passes | frame steps |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| C. elegans atlas | 0.034672 | 198.472 | 209 | 149 | 31 | 31 | 992 |
+| EmbedSeg | 0.450988 | 611.438 | 1,372 | 488 | 32 | 45 | 1,440 |
+| GoNuclear | 0.510760 | 315.041 | 351 | 245 | 32 | 33 | 1,056 |
+| CREMI | 0.148779 | 969.914 | 3,157 | 756 | 31 | 63 | 2,016 |
+| SNEMI | 0.425515 | 1,076.169 | 2,243 | 898 | 30 | 70 | 2,100 |
+| **Dataset-balanced / total** | **0.314143** | **3,170.859** | **7,332** | **2,536** | **156** | **242** | **7,604** |
+
+Peak CUDA allocation was 11.15 GB, unchanged from the 12-slice runs: the peak is set by the encoder and
+scoring phase, not by depth. The deep crops carry 5.7x the frame steps of the 12-slice set (7,604 against
+1,332), because nearly every slice is an anchor and so the pass count grows with depth as well.
+
+These absolute numbers are not comparable to the experiment 1-4 baseline. The crops are different, and
+mSA generally falls because a deeper crop contains more objects; C. elegans falls furthest, from 0.147862
+to 0.034672, because its deep crop is also drawn from a different source volume. Only candidate-against-
+deep-baseline comparisons are meaningful here, which is what the gates use.
+
+### Results
+
+| patience | macro mSA change | total speedup | worst dataset speedup | worst mSA change | quality guard | gate |
+|---:|---:|---:|---:|---:|---|---|
+| 2 | 0.000% | +2.18% | -2.41% | 0.000% | pass | fail |
+| 3 | 0.000% | +2.00% | -3.10% | 0.000% | pass | fail |
+| 4 | 0.000% | +0.78% | -3.95% | 0.000% | pass | fail |
+
+Per-dataset results for patience 2, with the baseline's trial-to-trial spread for scale:
+
+| dataset | mSA change | speedup | baseline spread | skipped frame steps |
+|---|---:|---:|---:|---:|
+| C. elegans atlas | 0% | +7.04% | 3.5% | 121 / 992 (12.2%) |
+| EmbedSeg | 0% | +0.30% | 3.8% | 55 / 1,440 (3.8%) |
+| GoNuclear | 0% | **+30.15%** | 4.1% | 355 / 1,056 (33.6%) |
+| CREMI | 0% | -2.41% | 4.0% | 64 / 2,016 (3.2%) |
+| SNEMI | 0% | -1.69% | 3.8% | 11 / 2,100 (0.5%) |
+
+Three results matter more than the gate verdict.
+
+**The segmentation is bit-identical.** Not "within the -0.5% guard": identical. Every dataset returns the
+same predicted object count and the same mSA to seven decimals, at patience 2, 3 and 4 alike. This is
+what the mechanism should do — it stops only after every object of a pass has been empty for N
+consecutive slices, and empty masks contribute nothing to the score-ordered merge — but experiment 3 did
+not show it, because its C. elegans crop was trimmed to 24 of a declared 32 slices and the stop was
+firing at an unannotated boundary rather than past the end of an object. That also retires experiment 3's
+finding that a later stop is not necessarily safer: patience 2 now dominates 3 and 4 outright, skipping
+strictly more work for the same output, so there is no safety argument for a longer patience on this data.
+
+**Depth was not what held the other datasets back.** With 30-32 slices, EmbedSeg still skips 3.8% of its
+frame steps, CREMI 3.2% and SNEMI 0.5%. They were never depth-starved; they are structurally unable to
+stop. A pass carries up to 16 objects and these crops need 45-70 passes, so at least one object per batch
+survives to the end of the volume, and for dense EM neurites that is true by construction rather than by
+chance. Experiment 3's diagnosis was therefore wrong even though its verdict was right.
+
+**The aggregate speedup fell, from +6.56% to +2.18%.** The deep total is dominated by CREMI and SNEMI,
+2,046 of 3,171 seconds, and they save nothing; GoNuclear's 30% win applies to a 315-second base. The
+12-slice headline was flattered by C. elegans being a large share of a small total.
+
+One measurement caveat: the baseline's per-dataset spread across three trials is 3.5-4.1%, so the 5% gate
+threshold sits close to the noise floor of a single candidate trial. The CREMI and SNEMI "slowdowns" are
+noise around zero, and C. elegans's +7.04% is only twice the spread. GoNuclear's +30.15% is the only
+per-dataset speedup that is unambiguous, and it is corroborated by its frame-step count rather than by
+timing alone.
+
+**Decision:** adopt `early_stop_patience=2` as the library default, as a documented exception to the
+efficiency gate. The gate is failed on three of five datasets and is not waived lightly; the argument is
+that its every-dataset requirement protects workloads that would pay for someone else's speedup, and here
+the payment is provably zero rather than merely small. What a non-benefiting workload loses is bounded by
+the timing noise, and what it computes is unchanged bit for bit.
+
+Unlike the reverted experiments, this one changes code that stays, so it carries regression tests in
+`test/test_v2_prompt_based_segmentation.py`: that propagation stops on the second consecutive frame in
+which every object is empty, that the non-empty masks are identical to a full propagation's, that an
+isolated dropped mask does not trigger a stop, and that the default is 2.
+
+The residual risk is not visible in this benchmark. A stop needs *every* object of the pass to be empty
+for two consecutive slices, which is already conservative, but SAM2 can drop a mask and recover it, so a
+pass whose objects all vanish for two slices and then resume would be truncated. No pass on these five
+crops does that, at any patience value: if one had, the segmentation would not have been bit-identical.
+That is evidence about these crops, not a guarantee — the failure mode needs every object of a batch to
+lapse together, which is likeliest in a sparse volume where a pass carries few objects. Workloads where
+objects are expected to vanish and return should raise the patience, which is why it stays exposed as a
+parameter rather than becoming a fixed constant.
+
 ## Conclusions and follow-up
 
 The experiments identify three structural constraints on further 3D optimization:
@@ -226,13 +374,18 @@ The experiments identify three structural constraints on further 3D optimization
 2. Post-propagation connected-component cleanup is too late and too expensive for the small number of masks
    it changes. Temporal consistency is more promising as a propagation signal or merge score than as a
    per-object, per-slice cleanup pass.
-3. Early stopping and anchor coalescing save work only on selected datasets. A general efficiency win needs
-   a stopping or batching rule driven by each track's evidence, while preserving enough common behavior to
-   improve every workload.
+3. Anchor coalescing saves work only on selected datasets. Early stopping does too, but experiment 5 shows
+   the reason is not crop depth: a pass keeps running while any one of its up-to-16 objects is alive, so
+   dense EM volumes cannot stop at any depth. It was adopted anyway because it is output-preserving, which
+   makes an uneven benefit acceptable in a way an uneven quality trade-off would not be. The remaining win
+   is per-track: stop each track when its own evidence runs out instead of waiting for the whole batch, and
+   GoNuclear's 33.6% becomes the floor rather than the outlier.
 
 A useful next experiment would measure per-track mask confidence and extent during propagation, then stop
 only individual tracks that have remained empty or unstable. The current pass-level early stop cannot save
-work when one long-lived object keeps the entire batch active. For quality, candidate diagnostics should be
+work when one long-lived object keeps the entire batch active, and experiment 5 quantifies the headroom:
+EmbedSeg, CREMI and SNEMI need 45-70 passes each yet skip 0.5-3.8% of their frame steps, so almost all of
+that work is spent propagating objects that have already ended. For quality, candidate diagnostics should be
 matched to ground-truth misses before adding prompts, so extra propagation is spent only on objects the
 default ladder did not already recover.
 
@@ -259,12 +412,38 @@ baseline config checksums are `27bebe0dc27b7778e40a8965bce7b60a`,
 The temporary temporal-filter implementation checksum is `dd29fc112bded2b9404ac7978e923504`;
 the temporary anchor-coalescing checksum is `352853c41b0f219ad217c3be4da3f177`.
 
+Experiment 5 reuses the trial ids of experiments 1-4, so its configuration checksums are the same six
+values listed above: the config identity covers the resolved parameters, dimensions and trial id, but not
+the manifest. Its run directories therefore differ from their 12-slice counterparts only in the manifest
+and implementation components, which is a check in itself that the parameters are identical. Baseline
+trials use `baseline-3d-1`, `baseline-3d-2` and `baseline-3d-3`; the three candidates share
+`early-stop-screen-1`.
+
+| experiment 5 run | run directory |
+|---|---|
+| deep baseline, trials 1-3 | `f611a712…-{27bebe0d…, 59f98b48…, 9ce531cd…}-aef08d80…` |
+| deep patience 2 / 3 / 4 | `f611a712…-{ab942765…, 5ba67d34…, dbfc5596…}-aef08d80…` |
+
 A canonical trial is run with:
 
 ```bash
 python finetuning/v2/evaluation/benchmark_apg_optimization.py \
     --ndim 3 --trial-id baseline-1 --time-budget-minutes 30
 ```
+
+The deep crop set is opt-in, keeps its own manifest, and needs a larger budget. Building it first is
+worthwhile because `--prepare-only` prints the depth each crop will actually propagate through, which is
+the check that the declared depth survived the loader's trim:
+
+```bash
+python finetuning/v2/evaluation/benchmark_apg_optimization.py --crops-3d deep --prepare-only
+
+python finetuning/v2/evaluation/benchmark_apg_optimization.py \
+    --ndim 3 --crops-3d deep --trial-id baseline-3d-1 --time-budget-minutes 150
+```
+
+A stored manifest is checked against the active crop variant, so a deep run cannot silently read the
+12-slice subset, or the reverse.
 
 A JSON configuration supplies a name and only the changed 3D parameters, for example:
 
