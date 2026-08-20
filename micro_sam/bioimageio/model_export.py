@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional, Union
@@ -41,6 +42,11 @@ DEFAULTS = {
 ARBITRARY_SIZE = spec.ParameterizedSize(min=1, step=1)
 
 
+def _get_architecture_model_type(model_type):
+    # Derived models use their base SAM architecture.
+    return model_type[:5]
+
+
 def _create_test_inputs_and_outputs(image, labels, model_type, checkpoint_path, tmp_dir):
 
     # For now we just generate a single box prompt here, but we could also generate more input prompts.
@@ -64,8 +70,8 @@ def _create_test_inputs_and_outputs(image, labels, model_type, checkpoint_path, 
         [_compute_logits_from_mask(labels == 1), _compute_logits_from_mask(labels == 2)]
     )[None]
 
-    predictor = PredictorAdaptor(model_type=model_type)
-    predictor.load_state_dict(torch.load(checkpoint_path))
+    predictor = PredictorAdaptor(model_type=_get_architecture_model_type(model_type))
+    predictor.load_state_dict(torch.load(checkpoint_path, map_location="cpu", weights_only=True))
 
     input_ = util._to_image(image).transpose(2, 0, 1)[None]
     image_path = os.path.join(tmp_dir, "input.npy")
@@ -131,7 +137,9 @@ def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
     if checkpoint_path is None:
         model_registry = util.models()
         checkpoint_path = model_registry.fetch(model_type)
-        return checkpoint_path, None
+        decoder_name = f"{model_type}_decoder"
+        decoder_path = model_registry.fetch(decoder_name) if decoder_name in model_registry.registry else None
+        return checkpoint_path, decoder_path
 
     # Otherwise we have to load the checkpoint to see if it is the state dict of an encoder,
     # or the checkpoint for a custom SAM model.
@@ -156,9 +164,41 @@ def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
         return checkpoint_path, None
 
 
+def _get_weight_checkpoint(model_type, checkpoint_path, decoder_path, tmp_dir):
+    """Combine the SAM and decoder states for the exported architecture."""
+    if decoder_path is None:
+        return checkpoint_path
+
+    weight_dir = os.path.join(tmp_dir, "combined_weights")
+    os.makedirs(weight_dir, exist_ok=True)
+    weight_path = os.path.join(weight_dir, f"{model_type}.pt")
+
+    model_state = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    decoder_state = torch.load(decoder_path, map_location="cpu", weights_only=True)
+    torch.save({"model_state": model_state, "decoder_state": decoder_state}, weight_path)
+    return weight_path
+
+
+def _get_decoder_attachment(model_type, decoder_path, tmp_dir):
+    # Registry decoder files do not have an extension.
+    attachment_name = f"{_get_architecture_model_type(model_type)}_decoder.pt"
+    if os.path.basename(decoder_path) == attachment_name:
+        return decoder_path
+    attachment_path = os.path.join(tmp_dir, attachment_name)
+    shutil.copyfile(decoder_path, attachment_path)
+    return attachment_path
+
+
 # TODO: Update this with our latest yaml file updates.
-def _write_dependencies(dependency_file, require_mobile_sam):
-    content = """name: sam
+def _write_dependencies(dependency_file, require_mobile_sam, require_micro_sam):
+    if require_micro_sam:
+        content = """name: sam
+channels:
+    - conda-forge
+dependencies:
+    - micro_sam"""
+    else:
+        content = """name: sam
 channels:
     - pytorch
     - conda-forge
@@ -267,6 +307,15 @@ def _check_model(model_description, input_paths, result_paths):
             predicted_mask = prediction.members["masks"].data
             assert predicted_mask.shape == mask.shape
 
+    # Use a fresh pipeline to verify image-only inference.
+    with bioimageio.core.create_prediction_pipeline(model_description, devices=["cpu"]) as pp:
+        sample = create_sample_for_model(model=model_description, inputs={"image": image})
+        prediction = pp.predict_sample_without_blocking(sample)
+        predicted_mask = prediction.members["masks"].data
+        # AIS may return no objects.
+        assert predicted_mask.ndim == 5
+        assert predicted_mask.shape[-2:] == mask.shape[-2:]
+
 
 def export_sam_model(
     image: np.ndarray,
@@ -282,6 +331,11 @@ def export_sam_model(
     The exported model can be uploaded to [bioimage.io](https://bioimage.io/#/) and
     be used in tools that support the BioImage.IO model format.
 
+    If the model has an instance segmentation decoder, i.e. if the checkpoint or the
+    model registry contain a decoder state, then the decoder is exported as part of the
+    model weights. In this case the exported model supports automatic instance segmentation,
+    which is run when the model is called without any prompt inputs.
+
     Args:
         image: The image for generating test data.
         label_image: The segmentation corresponding to `image`.
@@ -293,8 +347,10 @@ def export_sam_model(
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
         checkpoint_path, decoder_path = _get_checkpoint(model_type, checkpoint_path, tmp_dir)
+        with_decoder = decoder_path is not None
+        weight_path = _get_weight_checkpoint(model_type, checkpoint_path, decoder_path, tmp_dir)
         input_paths, result_paths = _create_test_inputs_and_outputs(
-            image, label_image, model_type, checkpoint_path, tmp_dir,
+            image, label_image, model_type, weight_path, tmp_dir,
         )
         input_descriptions = [
             # First input: the image data.
@@ -466,15 +522,17 @@ def export_sam_model(
         architecture = spec.ArchitectureFromFileDescr(
             source=Path(architecture_path),
             callable="PredictorAdaptor",
-            kwargs={"model_type": model_type}
+            kwargs={"model_type": _get_architecture_model_type(model_type)}
         )
 
         dependency_file = os.path.join(tmp_dir, "environment.yaml")
-        _write_dependencies(dependency_file, require_mobile_sam=model_type.startswith("vit_t"))
+        _write_dependencies(
+            dependency_file, require_mobile_sam=model_type.startswith("vit_t"), require_micro_sam=with_decoder,
+        )
 
         weight_descriptions = spec.WeightsDescr(
             pytorch_state_dict=spec.PytorchStateDictWeightsDescr(
-                source=Path(checkpoint_path),
+                source=Path(weight_path),
                 architecture=architecture,
                 pytorch_version=spec.Version(torch.__version__),
                 dependencies=spec.FileDescr(source=dependency_file),
@@ -500,8 +558,10 @@ def export_sam_model(
         if "version" in kwargs:
             extra_kwargs["version"] = kwargs["version"]
 
-        if decoder_path is not None:
-            extra_kwargs["attachments"] = [spec.FileDescr(source=decoder_path)]
+        if with_decoder:
+            # Keep the decoder available as a standalone registry attachment.
+            attachment_path = _get_decoder_attachment(model_type, decoder_path, tmp_dir)
+            extra_kwargs["attachments"] = [spec.FileDescr(source=attachment_path)]
 
         model_description = spec.ModelDescr(
             name=name,

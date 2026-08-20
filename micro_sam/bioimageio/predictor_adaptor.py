@@ -1,6 +1,8 @@
 import warnings
 from typing import Optional, Tuple
 
+import numpy as np
+
 import torch
 from torch import nn
 
@@ -21,6 +23,12 @@ class PredictorAdaptor(nn.Module):
     This model supports the same functionality as SamPredictor and can provide mask segmentations
     from box, point or mask input prompts.
 
+    If it was loaded from a checkpoint that also contains the state of an instance segmentation
+    decoder, then calling it without any prompts will run automatic instance segmentation (AIS):
+    the UNETR decoder predicts foreground and distance maps from the image embeddings and the
+    instances are computed from them via a seeded watershed.
+    Running AIS requires the `micro_sam` package.
+
     Args:
         model_type: The type of the model for the image encoder.
             Can be one of 'vit_b', 'vit_l', 'vit_h' or 'vit_t'.
@@ -30,9 +38,57 @@ class PredictorAdaptor(nn.Module):
         super().__init__()
         self.sam_model = sam_model_registry[model_type]()
         self.sam = SamPredictor(self.sam_model)
+        self.decoder = None
 
     def load_state_dict(self, state, **kwargs):
+        # Finetuning checkpoints store SAM and decoder weights separately.
+        if "model_state" in state:
+            load_result = self.sam.model.load_state_dict(state["model_state"], **kwargs)
+            decoder_state = state.get("decoder_state")
+            if decoder_state is not None:
+                from micro_sam.instance_segmentation import get_decoder
+                device = next(self.sam.model.parameters()).device
+                self.decoder = get_decoder(self.sam.model.image_encoder, decoder_state, device=device)
+            return load_result
+
         return self.sam.model.load_state_dict(state, **kwargs)
+
+    def _automatic_instance_segmentation(self, image: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Run automatic instance segmentation with the decoder for the image embeddings
+        that were set in the forward method.
+
+        Returns the instances as a stack of binary masks, so that the output signature
+        matches the output of the prompt-based segmentation.
+        """
+        if self.decoder is None:
+            raise ValueError(
+                "This model was exported without an instance segmentation decoder, "
+                "so it does not support automatic instance segmentation. "
+                "At least one prompt input (box, point or mask) is required."
+            )
+        from micro_sam.instance_segmentation import InstanceSegmentationWithDecoder
+
+        segmenter = InstanceSegmentationWithDecoder(self.sam, self.decoder)
+        image_embeddings = {
+            "features": self.sam.features,
+            "input_size": tuple(self.sam.input_size),
+            "original_size": tuple(self.sam.original_size),
+        }
+        # The image is unused because the embeddings are precomputed.
+        segmenter.initialize(image=image[0].permute(1, 2, 0).cpu().numpy(), image_embeddings=image_embeddings)
+        segmentation = segmenter.generate(output_mode="instance_segmentation")
+        seg_ids = np.unique(segmentation)
+        seg_ids = seg_ids[seg_ids != 0]
+        instance_masks = [segmentation == seg_id for seg_id in seg_ids]
+
+        height, width = self.sam.original_size
+        if len(instance_masks) == 0:
+            masks = torch.zeros((1, 0, 1, height, width), dtype=torch.uint8)
+        else:
+            masks = torch.from_numpy(np.stack(instance_masks)[None, :, None].astype("uint8"))
+        # AIS does not predict mask quality.
+        scores = torch.ones((1, masks.shape[1], 1), dtype=torch.float32)
+        return masks, scores
 
     @torch.no_grad()
     def forward(
@@ -90,6 +146,13 @@ class PredictorAdaptor(nn.Module):
         # Ensure input size and original size are set.
         self.sam.input_size = (self.sam.input_h, self.sam.input_w)
         self.sam.original_size = (self.sam.orig_h, self.sam.orig_w)
+
+        # Preserve prompt-free SamPredictor inference without a decoder.
+        prompts = (box_prompts, point_prompts, mask_prompts)
+        if self.decoder is not None and all(prompt is None for prompt in prompts):
+            masks, scores = self._automatic_instance_segmentation(image)
+            embeddings = self.sam.get_image_embedding()
+            return masks, scores, embeddings
 
         if box_prompts is None:
             boxes = None
