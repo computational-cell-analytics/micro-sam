@@ -2,7 +2,8 @@
 [![PyPI](https://img.shields.io/pypi/v/micro_sam.svg)](https://pypi.org/project/micro_sam/)
 [![Conda](https://anaconda.org/conda-forge/micro_sam/badges/version.svg)](https://anaconda.org/conda-forge/micro_sam)
 [![codecov](https://codecov.io/gh/computational-cell-analytics/micro-sam/graph/badge.svg?token=7ETPP5CABP)](https://codecov.io/gh/computational-cell-analytics/micro-sam)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.7919746.svg)](https://doi.org/10.5281/zenodo.7919746)
+[![Image.sc forum][imagesc-img]][imagesc-url]
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.7919746-blue.svg)](https://doi.org/10.5281/zenodo.7919746)
 
 # Segment Anything for Microscopy
 
@@ -30,9 +31,12 @@ Please check [the documentation](https://computational-cell-analytics.github.io/
 
 ## Contributing
 
-We welcome new contributions!
+We always welcome new contributions!
 
-If you are interested in contributing to `micro-sam`, please see the [contributing guide](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#contribution-guide). The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
+If you just want to suggest a documentation edit, [you can do this directly here, on GitHub][edit-files-on-github].
+For more complex changes, see [CONTRIBUTING.md][contributing] or the [contributing guide](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#contribution-guide) in our documentation for details. The first step is to [discuss your idea in a new issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) with the current developers.
+
+Everyone participating in this project is expected to follow our [Code of Conduct][code-of-conduct].
 
 
 ## Citation
@@ -42,6 +46,7 @@ If you are using this repository in your research please cite
 - and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643).
 - If you use `vit-tiny` models please also cite [Mobile SAM](https://arxiv.org/abs/2306.14289).
 - If you use automatic tracking, please also cite [Trackastra](https://arxiv.org/abs/2405.15700).
+- If you use automatic prompt generation (APG), please also cite [our APG paper](https://openreview.net/forum?id=xFO3DFZN45).
 
 
 ## Related Projects
@@ -62,3 +67,9 @@ We have also built follow-up work that is based on `micro_sam`:
 ## Release Overview
 
 You can find an overview of changes introduced in previous releases [here](https://github.com/computational-cell-analytics/micro-sam/blob/main/RELEASE_OVERVIEW.md).
+
+[imagesc-img]: https://img.shields.io/badge/dynamic/json.svg?label=forum&url=https%3A%2F%2Fforum.image.sc%2Ftags%2Fmicro-sam.json&query=%24.topic_list.tags.0.topic_count&colorB=brightgreen&suffix=%20topics&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAABPklEQVR42m3SyyqFURTA8Y2BER0TDyExZ+aSPIKUlPIITFzKeQWXwhBlQrmFgUzMMFLKZeguBu5y+//17dP3nc5vuPdee6299gohUYYaDGOyyACq4JmQVoFujOMR77hNfOAGM+hBOQqB9TjHD36xhAa04RCuuXeKOvwHVWIKL9jCK2bRiV284QgL8MwEjAneeo9VNOEaBhzALGtoRy02cIcWhE34jj5YxgW+E5Z4iTPkMYpPLCNY3hdOYEfNbKYdmNngZ1jyEzw7h7AIb3fRTQ95OAZ6yQpGYHMMtOTgouktYwxuXsHgWLLl+4x++Kx1FJrjLTagA77bTPvYgw1rRqY56e+w7GNYsqX6JfPwi7aR+Y5SA+BXtKIRfkfJAYgj14tpOF6+I46c4/cAM3UhM3JxyKsxiOIhH0IO6SH/A1Kb1WBeUjbkAAAAAElFTkSuQmCC
+[imagesc-url]: https://forum.image.sc/tag/micro-sam
+[contributing]: https://github.com/computational-cell-analytics/micro-sam/blob/main/CONTRIBUTING.md
+[code-of-conduct]: https://github.com/computational-cell-analytics/micro-sam/blob/main/CODE_OF_CONDUCT.md
+[edit-files-on-github]: https://docs.github.com/en/repositories/working-with-files/managing-files/editing-files
