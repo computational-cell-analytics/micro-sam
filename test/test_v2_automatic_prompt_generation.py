@@ -205,16 +205,25 @@ def test_merge_by_score_rejects_a_candidate_that_is_mostly_claimed():
     assert set(np.unique(segmentation)) == {0, 1}
 
 
-def _make_tiled_generator(shape, tile_shape, halo, monkeypatch):
+def _make_tiled_generator(shape, tile_shape, halo, monkeypatch, predictor=None):
     """A tiled generator with the tiling set up, but no model, predictor or embeddings."""
     segmenter = object.__new__(TiledAutomaticPromptGenerator)
     segmenter._tiling = Blocking([0, 0], list(shape), list(tile_shape))
     segmenter._halo = list(halo)
     segmenter._i = None
-    segmenter._predictor = object()
+    segmenter._predictor = object() if predictor is None else predictor
     segmenter._image_embeddings = object()
     segmenter._prediction = np.zeros((4, *shape), dtype="float32")
-    monkeypatch.setattr("micro_sam.v2.automatic_prompt_generation.set_precomputed", lambda *a, **k: None)
+    segmenter._last_generation_stats = {}
+    segmenter.visited_tiles = []
+
+    def set_precomputed(predictor_, image_embeddings, i=None, tile_id=None):
+        """Record the visit and resize the fake predictor to the tile, as the real one does."""
+        segmenter.visited_tiles.append(tile_id)
+        if hasattr(predictor_, "shape"):
+            predictor_.shape = tuple(box.stop - box.start for box in segmenter._tile_bounding_box(tile_id))
+
+    monkeypatch.setattr("micro_sam.v2.automatic_prompt_generation.set_precomputed", set_precomputed)
     return segmenter
 
 
@@ -363,7 +372,7 @@ def test_tiled_apply_and_select_maps_prompts_and_masks_between_frames(monkeypatc
     segmentation, context = segmenter._merge(
         proposals, shape, score_threshold=0.0, max_overlap=0.3, min_size=1,
     )
-    assert context is None
+    assert context is None  # Only a refinement asks for one.
 
     assert segmentation.shape == shape
     assert segmentation.dtype == np.dtype("uint32")
@@ -373,6 +382,8 @@ def test_tiled_apply_and_select_maps_prompts_and_masks_between_frames(monkeypatc
     assert segmentation[50, 50] != 0
     assert segmentation[10, 10] != segmentation[50, 50]
     assert tile_ids == sorted(set(tile_ids))  # every tile with prompts is visited once, in order
+    # The tile a proposal came from is carried, so a refinement knows where to re-prompt it.
+    assert [proposal["tile_id"] for proposal in proposals] == tile_ids
 
 
 def test_tiled_generator_cannot_serialize_or_restore_without_embeddings(monkeypatch):
@@ -827,32 +838,6 @@ def test_select_with_point_refinement_reprompts_each_instance(monkeypatch):
     assert segmenter._last_generation_stats["merge_reasons"] == {"kept": 2}
 
 
-def test_tiled_generator_supports_only_the_box_refinement(monkeypatch):
-    segmenter = _make_tiled_generator((64, 64), (32, 32), (8, 8), monkeypatch)
-    segmentation = np.zeros((64, 64), dtype="uint32")
-    segmentation[4:12, 4:12] = 1
-
-    refined_with = {}
-    segmenter._refine_boxes = lambda seg, batch_size, box_extension: refined_with.update(
-        {"batch_size": batch_size, "box_extension": box_extension}
-    ) or seg
-
-    result = segmenter._refine(
-        segmentation, None, ("boxes",),
-        {"policy": "replace", "multimasking": False, "box_extension": 3}, batch_size=16,
-    )
-    assert np.array_equal(result, segmentation)
-    assert refined_with == {"batch_size": 16, "box_extension": 3}
-
-    for components, kwargs in [
-        (("points",), {"policy": "replace", "multimasking": False, "n_positives": 3,
-                       "n_negatives": 4, "max_negative_distance": None}),
-        (("boxes",), {"policy": "keep-if-better", "multimasking": False, "box_extension": 0}),
-    ]:
-        with pytest.raises(NotImplementedError, match="non-tiled"):
-            segmenter._refine(segmentation, None, components, kwargs, batch_size=16)
-
-
 def test_consistency_gate_keeps_the_first_round_when_the_masks_disagree():
     segmentation = _two_instance_segmentation()
     records = [
@@ -1091,3 +1076,392 @@ def test_parse_refinement_covers_the_new_components_and_couplings():
         _parse_refinement("points", {"min_grouped_for_points": 2})
     with pytest.raises(ValueError, match="recover_max_claimed"):
         _parse_refinement("points+boxes", {"recover_max_claimed": 0.4})
+
+
+def _tile_record(box, point, predicted_iou=0.9, stability_score=1.0):
+    """A record whose mask fills 'box', a (y_slice, x_slice) in the frame it was predicted in."""
+    shape = tuple(side.stop - side.start for side in box)
+    return {
+        "segmentation": np.ones(shape, dtype=bool), "bounding_box": box,
+        "predicted_iou": predicted_iou, "stability_score": stability_score, "point": point,
+    }
+
+
+def _tile_proposal(segmenter, tile_id, records):
+    """One tile's proposal, as `_apply` returns it."""
+    return {
+        "tile_id": tile_id, "bounding_box": segmenter._tile_bounding_box(tile_id), "records": records,
+    }
+
+
+class _BlockPredictor:
+    """Answers every prompt with a block around its anchor, at the shape of the region that is set.
+
+    The anchor is the prompt's box centre, or its first positive point when there is no box, so a
+    prompt translated into the wrong frame comes back as a visibly displaced mask.
+    """
+
+    device = "cpu"
+    mask_threshold = 0.0
+
+    def __init__(self, shape):
+        self.shape = shape
+        self.calls = []
+
+    def _prep_prompts(self, points, labels, boxes, mask_logits, normalize):
+        self.calls.append({"points": points, "labels": labels, "boxes": boxes, "mask_logits": mask_logits})
+        coords = None if points is None else torch.as_tensor(points)
+        point_labels = None if labels is None else torch.as_tensor(labels)
+        box = None if boxes is None else torch.as_tensor(boxes)
+        masks = None if mask_logits is None else torch.as_tensor(mask_logits)
+        return masks, coords, point_labels, box
+
+    def _anchors(self, coords, labels, boxes):
+        if boxes is not None:
+            return [((x0 + x1) / 2.0, (y0 + y1) / 2.0) for x0, y0, x1, y1 in boxes.tolist()]
+        anchors = []
+        for row, row_labels in zip(coords.tolist(), labels.tolist()):
+            positive = [point for point, label in zip(row, row_labels) if label == 1]
+            anchors.append(tuple(positive[0]))
+        return anchors
+
+    def _predict(self, coords, labels, boxes, mask_input, multimask_output, return_logits):
+        anchors = self._anchors(coords, labels, boxes)
+        n_masks = 3 if multimask_output else 1
+        logits = torch.full((len(anchors), n_masks, *self.shape), -10.0)
+        for row, (x, y) in enumerate(anchors):
+            # Two rows taller than an 8x8 first-round mask, so a replacement is visible but consistent.
+            y0, y1 = max(0, int(y) - 5), min(self.shape[0], int(y) + 5)
+            x0, x1 = max(0, int(x) - 4), min(self.shape[1], int(x) + 4)
+            logits[row, :, y0:y1, x0:x1] = 10.0
+        # Descending, so the argmax over the mask dimension is deterministic.
+        scores = torch.tensor([0.9, 0.7, 0.5][:n_masks]).repeat(len(anchors), 1)
+        return logits, scores, None
+
+
+def _make_plain_generator(shape, predictor):
+    """A non-tiled generator wired for `select`, with no model behind it."""
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._predictor = predictor
+    segmenter._prediction = np.zeros((4, *shape), dtype="float32")
+    segmenter._last_generation_stats = {}
+    return segmenter
+
+
+def _equivalence_records():
+    """Two 8x8 instances prompted at their centres, plus two sub-threshold prompts inside them."""
+    return [
+        _tile_record((slice(4, 12), slice(4, 12)), (8.0, 8.0), predicted_iou=0.9),
+        _tile_record((slice(4, 12), slice(20, 28)), (24.0, 8.0), predicted_iou=0.8),
+        _tile_record((slice(5, 9), slice(5, 9)), (6.0, 6.0), predicted_iou=0.3),
+        _tile_record((slice(5, 9), slice(21, 25)), (22.0, 6.0), predicted_iou=0.3),
+    ]
+
+
+@pytest.mark.parametrize("refinement", ["boxes", "points", "points+boxes", "points+boxes+masks"])
+@pytest.mark.parametrize("policy", ["replace", "keep-if-better"])
+@pytest.mark.parametrize("multimasking", [False, True])
+def test_single_tile_refinement_equals_the_non_tiled_result(monkeypatch, refinement, policy, multimasking):
+    """One tile covering the image collapses every tiled step, so both paths must agree exactly."""
+    shape = (32, 32)
+    kwargs = {"policy": policy, "multimasking": multimasking}
+
+    plain = _make_plain_generator(shape, _BlockPredictor(shape))
+    plain_result = plain.select(
+        _equivalence_records(), score_threshold=0.5, max_overlap=0.3, min_size=1,
+        refinement=refinement, refinement_kwargs=kwargs, batch_size=8,
+    )
+
+    tiled = _make_tiled_generator(shape, shape, (0, 0), monkeypatch, predictor=_BlockPredictor(shape))
+    tiled_result = tiled.select(
+        [_tile_proposal(tiled, 0, _equivalence_records())], score_threshold=0.5, max_overlap=0.3,
+        min_size=1, refinement=refinement, refinement_kwargs=kwargs, batch_size=8,
+    )
+
+    assert plain_result.max() > 0
+    assert np.array_equal(plain_result, tiled_result)
+    shared = set(plain._last_generation_stats) & set(tiled._last_generation_stats)
+    assert {key: plain._last_generation_stats[key] for key in shared} \
+        == {key: tiled._last_generation_stats[key] for key in shared}
+    assert tiled._last_generation_stats["dropped_negatives"] == 0
+    assert tiled._last_generation_stats["stitch_dropped_instances"] == 0
+
+
+def _two_tile_proposals(segmenter):
+    """One instance in tile 0 and one in tile 3, each prompted at its own centre."""
+    return [
+        _tile_proposal(segmenter, 0, [_tile_record((slice(4, 12), slice(4, 12)), (8.0, 8.0))]),
+        # Tile 3's outer block starts at (24, 24), so its instance sits at (44:52, 44:52) globally.
+        _tile_proposal(segmenter, 3, [_tile_record((slice(20, 28), slice(20, 28)), (48.0, 48.0))]),
+    ]
+
+
+def test_tiled_merge_builds_a_global_refinement_context(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    segmenter = _make_tiled_generator(shape, tile_shape, halo, monkeypatch)
+
+    proposals = _two_tile_proposals(segmenter)
+    # A sub-threshold prompt inside the first instance: part of the point pool, not of the merge.
+    proposals[0]["records"].append(
+        _tile_record((slice(6, 10), slice(6, 10)), (7.0, 7.0), predicted_iou=0.3)
+    )
+    segmentation, context = segmenter._merge(
+        proposals, shape, score_threshold=0.5, max_overlap=0.3, min_size=1, return_context=True,
+    )
+
+    present = set(np.unique(segmentation)) - {0}
+    assert set(context["matches"]) == present and len(present) == 2
+    # The ids are unique across tiles and every one of them points back at the record that made it.
+    for instance_id, record_index in context["matches"].items():
+        record = context["records"][record_index]
+        x, y = record["point"]
+        assert segmentation[int(y), int(x)] == instance_id
+    assert len(context["records"]) == len(context["reasons"]) == len(context["record_tiles"]) == 2
+    assert sorted(context["record_tiles"].values()) == [0, 3]
+    # 'proposals' keeps the sub-threshold prompt, which the point pool needs.
+    assert len(context["proposals"]) == 3
+    assert context["score_threshold"] == 0.5 and context["min_size"] == 1
+
+
+def test_tiled_merge_prunes_an_instance_the_stitch_overwrote(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    segmenter = _make_tiled_generator(shape, tile_shape, halo, monkeypatch)
+
+    # Both tiles predict the same object in their shared halo: tile 0 is stitched first and keeps it.
+    proposals = [
+        _tile_proposal(segmenter, 0, [_tile_record((slice(4, 12), slice(28, 36)), (31.0, 8.0))]),
+        _tile_proposal(segmenter, 1, [_tile_record((slice(4, 12), slice(4, 12)), (33.0, 8.0))]),
+    ]
+    segmentation, context = segmenter._merge(
+        proposals, shape, score_threshold=0.5, max_overlap=0.3, min_size=1, return_context=True,
+    )
+
+    assert set(np.unique(segmentation)) - {0} == {1}
+    assert set(context["matches"]) == {1}
+    assert segmenter._last_generation_stats["stitch_dropped_instances"] == 1
+    # The overwritten record is still in the context, it just no longer owns an instance.
+    assert len(context["records"]) == 2
+
+
+def test_tiled_merge_counts_records_not_tiles(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    segmenter = _make_tiled_generator(shape, tile_shape, halo, monkeypatch)
+
+    proposals = _two_tile_proposals(segmenter)
+    proposals[0]["records"].append(
+        _tile_record((slice(6, 10), slice(6, 10)), (7.0, 7.0), predicted_iou=0.3)
+    )
+    segmenter._merge(
+        proposals, shape, score_threshold=0.5, max_overlap=0.3, min_size=1, return_context=True,
+    )
+    assert segmenter._last_generation_stats["proposed_candidates"] == 3
+    assert segmenter._last_generation_stats["scored_candidates"] == 2
+    assert segmenter._last_generation_stats["merge_reasons"] == {"kept": 2}
+
+    # Without a refinement the merge records nothing, as the non-tiled one does not either.
+    segmenter._last_generation_stats = {}
+    segmenter._merge(proposals, shape, score_threshold=0.5, max_overlap=0.3, min_size=1)
+    assert segmenter._last_generation_stats == {}
+
+
+def _refine_two_tiles(segmenter, refinement, refinement_kwargs, proposals=None):
+    """Merge two tiles and refine them, returning the refined segmentation."""
+    return segmenter.select(
+        _two_tile_proposals(segmenter) if proposals is None else proposals,
+        score_threshold=0.5, max_overlap=0.3, min_size=1,
+        refinement=refinement, refinement_kwargs=refinement_kwargs, batch_size=8,
+    )
+
+
+def test_tiled_refinement_visits_each_owning_tile_once_in_order(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    predictor = _BlockPredictor(shape)
+    segmenter = _make_tiled_generator(shape, tile_shape, halo, monkeypatch, predictor=predictor)
+
+    _refine_two_tiles(segmenter, "boxes", {"policy": "replace"})
+    # Only the two tiles that own an instance are set up, once each and in order.
+    assert segmenter.visited_tiles == [0, 3]
+
+
+def test_tiled_refinement_prompts_are_block_local_and_boxes_clipped(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    predictor = _BlockPredictor(shape)
+    segmenter = _make_tiled_generator(shape, tile_shape, halo, monkeypatch, predictor=predictor)
+
+    _refine_two_tiles(segmenter, "points+boxes", {"policy": "replace", "min_consistency": None})
+    # Tile 3's instance is at (44:52, 44:52) globally and its block starts at (24, 24).
+    boxes = predictor.calls[1]["boxes"]
+    assert np.array_equal(boxes, np.array([[20, 20, 28, 28]], dtype="float32"))
+    assert np.array_equal(predictor.calls[1]["points"][0, 0], np.array([24.0, 24.0], dtype="float32"))
+
+    # A box extension is clipped to the block, not to the image.
+    predictor.calls.clear()
+    segmenter._last_generation_stats = {}
+    _refine_two_tiles(segmenter, "boxes", {"policy": "replace", "min_consistency": None, "box_extension": 30})
+    block_shape = tuple(box.stop - box.start for box in segmenter._tile_bounding_box(3))
+    assert np.array_equal(
+        predictor.calls[1]["boxes"], np.array([[0, 0, block_shape[1], block_shape[0]]], dtype="float32")
+    )
+
+
+def test_tiled_refinement_drops_negatives_outside_the_owning_block(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    predictor = _BlockPredictor(shape)
+    segmenter = _make_tiled_generator(shape, tile_shape, halo, monkeypatch, predictor=predictor)
+
+    _refine_two_tiles(segmenter, "points", {"policy": "replace", "min_consistency": None, "n_negatives": 1})
+    # Each instance's only neighbour is in the other corner of the image, well outside its block.
+    for call in predictor.calls:
+        assert set(np.unique(call["labels"])) == {1}
+    assert segmenter._last_generation_stats["dropped_negatives"] == 2
+
+
+def test_tiled_refinement_keeps_an_instance_whose_second_round_is_empty(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    segmenter = _make_tiled_generator(
+        shape, tile_shape, halo, monkeypatch, predictor=types.SimpleNamespace(device="cpu", mask_threshold=0.0)
+    )
+
+    def predict(crop, batch, components, point_prompts, refinement_kwargs):
+        return [(np.zeros(crop.shape, dtype=bool), 0.99) for _ in batch], 0
+
+    segmenter._predict_refinement_batch = predict
+    refined = _refine_two_tiles(segmenter, "boxes", {"policy": "replace"})
+    # Both instances keep their first-round mask instead of vanishing, as they do untiled.
+    assert set(np.unique(refined)) - {0} == {1, 2}
+    assert refined[4:12, 4:12].all() and refined[44:52, 44:52].all()
+    assert segmenter._last_generation_stats["replaced_instances"] == 0
+
+
+def test_tiled_refinement_applies_the_consistency_gate(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    segmenter = _make_tiled_generator(
+        shape, tile_shape, halo, monkeypatch, predictor=types.SimpleNamespace(device="cpu", mask_threshold=0.0)
+    )
+
+    def predict(crop, batch, components, point_prompts, refinement_kwargs):
+        # A mask in the opposite corner of the block, which cannot be a polished first round.
+        mask = np.zeros(crop.shape, dtype=bool)
+        mask[-10:, -10:] = True
+        return [(mask, 0.99) for _ in batch], 0
+
+    segmenter._predict_refinement_batch = predict
+    refined = _refine_two_tiles(segmenter, "boxes", {"policy": "replace"})
+    assert np.array_equal(refined[4:12, 4:12], np.ones((8, 8), dtype="uint32"))
+    assert segmenter._last_generation_stats["gated_consistency"] == 2
+    assert segmenter._last_generation_stats["replaced_instances"] == 0
+
+
+def test_tiled_refinement_gates_growth_into_a_neighbouring_tiles_instance(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    segmenter = _make_tiled_generator(
+        shape, tile_shape, halo, monkeypatch, predictor=types.SimpleNamespace(device="cpu", mask_threshold=0.0)
+    )
+
+    # The second instance is owned by tile 1 but lies inside tile 0's block, so tile 0's crop sees it.
+    proposals = [
+        _tile_proposal(segmenter, 0, [_tile_record((slice(4, 12), slice(4, 12)), (8.0, 8.0))]),
+        _tile_proposal(segmenter, 1, [_tile_record((slice(4, 12), slice(9, 15)), (36.0, 8.0), 0.8)]),
+    ]
+
+    def predict(crop, batch, components, point_prompts, refinement_kwargs):
+        mask = np.zeros(crop.shape, dtype=bool)
+        mask[4:12, 4:39] = True  # Grows from the first instance across the second one.
+        return [(mask, 0.99) for _ in batch], 0
+
+    segmenter._predict_refinement_batch = predict
+    # The consistency gate would veto such a grown mask first, so only the foreign gate is left on.
+    refined = _refine_two_tiles(
+        segmenter, "boxes", {"policy": "replace", "min_consistency": None}, proposals=proposals,
+    )
+    assert segmenter._last_generation_stats["gated_foreign"] == 1
+    assert np.array_equal(refined[4:12, 4:12], np.ones((8, 8), dtype="uint32"))
+
+
+def test_tiled_refinement_repaints_in_global_score_order(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    segmenter = _make_tiled_generator(
+        shape, tile_shape, halo, monkeypatch, predictor=types.SimpleNamespace(device="cpu", mask_threshold=0.0)
+    )
+
+    proposals = [
+        _tile_proposal(segmenter, 0, [_tile_record((slice(4, 12), slice(20, 30)), (25.0, 8.0))]),
+        # Tile 1's block starts at column 24, so this instance is at columns 34:44 globally.
+        _tile_proposal(segmenter, 1, [_tile_record((slice(4, 12), slice(10, 20)), (39.0, 8.0), 0.8)]),
+    ]
+
+    masks = iter([(slice(4, 12), slice(20, 36), 0.5), (slice(4, 12), slice(6, 20), 0.9)])
+
+    def predict(crop, batch, components, point_prompts, refinement_kwargs):
+        rows, columns, score = next(masks)
+        mask = np.zeros(crop.shape, dtype=bool)
+        mask[rows, columns] = True
+        return [(mask, score)], 0
+
+    segmenter._predict_refinement_batch = predict
+    refined = _refine_two_tiles(
+        segmenter, "boxes",
+        {"policy": "replace", "min_consistency": None, "max_foreign_overlap": None}, proposals=proposals,
+    )
+    # Columns 30-35 are contested; the second instance scores higher, although its tile comes later.
+    assert (refined[4:12, 30:36] == 2).all()
+
+
+def test_tiled_generator_rejects_only_the_recovery_component(monkeypatch):
+    segmenter = _make_tiled_generator((64, 64), (32, 32), (8, 8), monkeypatch)
+
+    for mode in ("points", "boxes", "points+boxes", "points+boxes+masks"):
+        segmenter._validate_refinement(_parse_refinement(mode, None)[0])
+    for mode in ("recover", "points+boxes+recover"):
+        with pytest.raises(NotImplementedError, match="recover"):
+            segmenter._validate_refinement(_parse_refinement(mode, None)[0])
+
+    # And 'select' rejects it before it merges anything, let alone touches the model.
+    with pytest.raises(NotImplementedError, match="recover"):
+        segmenter.select([], refinement="points+boxes+recover")
+
+
+def test_refinement_regions_default_to_the_whole_image():
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    assert segmenter._region_of({}, 0) is None
+    assert segmenter._region_box(None) == (slice(None), slice(None))
+    assert segmenter._set_region(None) is None
+    assert segmenter._validate_refinement(("points", "boxes", "masks", "recover")) is None
+
+
+def test_tiled_apply_feeds_the_refinement_end_to_end(monkeypatch):
+    """`_apply` to `select` with a refinement, the chain the tiled generator actually runs."""
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    predictor = _BlockPredictor(shape)
+    segmenter = _make_tiled_generator(shape, tile_shape, halo, monkeypatch, predictor=predictor)
+
+    real_tile_bounding_box = segmenter._tile_bounding_box
+
+    def apply_prompts(prompts, multimasking, batch_size):
+        """One 8x8 record per prompt, centred on the (tile-local) prompt point."""
+        records = []
+        for x, y in prompts["points"][:, 0, :]:
+            box = (slice(int(y) - 4, int(y) + 4), slice(int(x) - 4, int(x) + 4))
+            records.append(_tile_record(box, (float(x), float(y))))
+        return records
+
+    segmenter._apply_prompts = apply_prompts
+    points = np.array([[[10, 10]], [[50, 50]]], dtype="float32")
+    proposals = segmenter._apply(
+        {"points": points, "point_labels": np.ones((2, 1), dtype="int32")}, multimasking=False, batch_size=8,
+    )
+    segmentation = segmenter.select(
+        proposals, score_threshold=0.5, max_overlap=0.3, min_size=1,
+        refinement="points+boxes", refinement_kwargs={"policy": "replace"}, batch_size=8,
+    )
+
+    assert set(np.unique(segmentation)) - {0} == {1, 2}
+    # Both instances are refined in their own tile, so both grow by the predictor's two extra rows.
+    assert segmenter._last_generation_stats["replaced_instances"] == 2
+    for instance_id, (y, x) in zip((1, 2), ((10, 10), (50, 50))):
+        assert segmentation[y, x] == instance_id
+        rows = np.nonzero(segmentation == instance_id)[0]
+        assert rows.max() - rows.min() + 1 == 10
+    # The refinement runs in the tile that produced the instance, not in a neighbouring one.
+    assert segmenter.visited_tiles == [0, 3, 0, 3]
+    assert real_tile_bounding_box(3)[0].start == 24
