@@ -298,7 +298,8 @@ remains the default and the mechanism ships as an explicit opt-in mode
 (`generate(refinement="points+boxes", refinement_kwargs={"n_positives": 3, "n_negatives": 6})` for
 the quality-optimal setting, `n_negatives=4` for the most balanced per-dataset profile).
 
-**Superseded by [campaign 2](APG_2D_REFINEMENT_2.md)**, which confirmed these findings on a
+**Superseded by [campaign 2](#refinement-campaign-2-holdout-validation-and-the-four-follow-up-directions)**,
+which confirmed these findings on a
 held-out validation subset and improved the recommended configuration to +4.19%/+4.89% macro mSA
 (tuned/held-out): one positive, six negatives, geometric acceptance gates — now the refinement
 defaults, so plain `generate(refinement="points+boxes")` is the recommended usage.
@@ -545,4 +546,348 @@ python finetuning/v2/evaluation/screen_apg_refinement.py --device cuda
 python finetuning/v2/evaluation/compare_apg_optimization.py --ndim 2 --target quality \
     --baseline-run <control-1> --baseline-run <control-2> --baseline-run <control-3> \
     --candidate-run <candidate> --output <decisions>.json
+```
+
+---
+
+## Refinement campaign 2: holdout validation and the four follow-up directions
+
+The continuation of the refinement work above, previously kept in its own document and merged here:
+a held-out validation subset, a generalization check of campaign 1, and the systematic sweep of its
+four follow-up directions.
+
+### Outcome
+
+The refinement's recommended configuration improved by a factor of ~1.6 over campaign 1 and is
+confirmed on a held-out validation subset: **`points+boxes` with one positive (the surviving
+prompt), six nearby negatives, and geometric acceptance gates** reaches **+4.19% macro mSA on the
+tuned subset and +4.89% on the held-out one** (campaign 1: +2.91%, unconfirmed), for +35-50%
+runtime. Its values are now the refinement defaults, so `generate(refinement="points+boxes")` is
+the recommended opt-in; the pipeline default stays `refinement=None`, since the +5% quality gate is
+missed by a hair and the 10% runtime cap by a wide margin.
+
+Of the four directions swept: the **geometry gates** (1) and **negative quality** (4) are confirmed
+and adopted; **recovery** (3) is measured neutral; **adaptivity by grouped supply** (2) is refuted —
+and the sweep's biggest single gain came from an ablation none of the four directions predicted:
+dropping the grouped extra positives entirely (`n_positives=1`), which re-frames what this
+refinement actually is. The campaign-1 findings themselves generalized to the holdout (gains equal
+or larger), with one exception: the DIC HepG2 gain was set-specific.
+
+### Motivation
+
+[Campaign 1](#second-round-refinement-from-grouped-prompts) established the
+refinement mechanism and measured `points+boxes`
+p3-n6 at +2.91% macro mSA (+38.5% runtime), with four follow-up directions left on the table:
+
+1. **Geometry-based acceptance** — the keep-if-better score gate never fires for box-anchored
+   re-prompts (predicted IoU is systematically higher than the point-prompt score it competes
+   against), so the LiveCELL/TissueNet regressions pass unchecked. Consistency and containment gates
+   arbitrate on geometry instead.
+2. **Per-instance adaptivity** — the grouped-duplicate supply varies by two orders of magnitude
+   between datasets (DIC 12.8 per instance, DynamicNuclearNet 0.27) and correlates with where the
+   grouped points pay; a per-instance threshold applies them only where they can.
+3. **Recall recovery** — campaign 1 only polished surviving masks, but recall is the limiting factor
+   (APGv2 diagnostics) and the merge rejects whole objects whose mask a neighbour partially claims.
+   Re-prompting those dropped records as *new* instances attacks the recall axis directly.
+4. **Negative selection quality** — nearest-first prompt selection in confluent data plausibly picks
+   negatives that touch the instance's own extent; the source (neighbour interior point vs raw
+   prompt), a minimum distance to the instance's own mask, and the never-swept
+   `max_negative_distance` are the candidate fixes.
+
+Campaign 1 also mined its 240-image validation subset with four screening rounds, so this campaign
+first builds a held-out subset and checks that the campaign-1 findings generalize before tuning
+anything new.
+
+### The holdout subset
+
+`subset_manifest_v5_holdout.json`, checksum `bf8f3c28befe1fb06d62309dc302d1c4`, built against the
+primary manifest `0f8fb67b3650a71f9f44b53037e89546` (recorded as `holdout_of`). 233 2d samples,
+selected by the same complexity-quantile policy on the pool that remains after excluding every
+primary image:
+
+| dataset | holdout samples | image-disjoint from primary? | pool after exclusion |
+|---|---:|---|---:|
+| LiveCELL | 80 (10 per cell type) | yes | 489 (>=41 per type) |
+| TissueNet | 40 | yes | 3078 |
+| DynamicNuclearNet | 40 | yes | 1377 |
+| DeepBacs | 30 | **no — reused verbatim** (all 30 validation images are primary) | 0 |
+| DIC HepG2 | 43 | yes | 43 (of 93 usable; the primary set holds 50) |
+
+The DeepBacs column is therefore not held out and is flagged in every comparison. The test splits
+could have closed the DeepBacs/DIC gaps but are the paper-evaluation splits: selecting on them is
+the leak the `VAL_SPLITS` policy exists to prevent, so they were not used. Unequal per-dataset
+counts do not skew the quality figure, which is an equal-weight mean of per-dataset means.
+
+Tuning stays on the primary subset (comparable to all campaign-1 tables); the holdout is only read
+for the validity check below and for confirming the final shortlist.
+
+### Epochs
+
+The benchmark checksums its implementation files, so the campaign runs in two epochs:
+
+- **Epoch 1** — manifest machinery only (`--subset` axis in the benchmark and screening scripts).
+  Implementation checksum `586d2bcb0c15f95d9a93a7a3c3406e79`. The set-A control (trial
+  `epoch1-control-A`) reproduces macro mSA 0.269577 with every per-dataset value identical: the
+  machinery is behavior-free.
+- **Epoch 2** — the four mechanisms in `micro_sam/v2/automatic_prompt_generation.py`.
+  Implementation checksum: TBD. Fresh controls on both subsets must reproduce epoch-1 quality.
+
+### Validity check (epoch 1): the campaign-1 findings generalize
+
+Criteria fixed before running: campaign-1 findings generalize iff (i) the macro ordering on the
+holdout is `points+boxes {n4, n6}` > `boxes` > baseline; (ii) the `points+boxes` macro gains retain
+at least half their set-A size; (iii) the negative-count response rises through n4-n6 and does not
+collapse before n8.
+
+**All three pass.** Holdout baseline: macro mSA 0.264318 (three identical control trials,
+`controlB-{1..3}`). The five campaign-1 configurations, canonical runs on the holdout:
+
+| configuration | holdout macro | holdout change | set-A change |
+|---|---:|---:|---:|
+| points+boxes p3-n6 replace | 0.273193 | **+3.36%** | +2.91% |
+| points+boxes p3-n4 replace | 0.271569 | +2.74% | +2.24% |
+| points+boxes p3-n4 keep-if-better | 0.270996 | +2.53% | +2.10% |
+| boxes replace | 0.269128 | +1.82% | +1.68% |
+| points p2-n0 replace | 0.267424 | +1.18% | +1.27% |
+
+Every macro gain is at least as large on the holdout as on the tuned set, and the negative-count
+response (screening, `points+boxes` p3, replace) rises monotonically: n0 +0.57%, n2 +1.80%,
+n4 +2.74%, n6 +3.36%, n8 +3.60% — no collapse through n8.
+
+Per-dataset, the picture sharpens rather than reverses (baseline per dataset: LiveCELL 0.339412,
+TissueNet 0.282117, DynamicNuclearNet 0.433541, DeepBacs 0.247616*, DIC 0.018904):
+
+| configuration | LiveCELL | TissueNet | DynNuclearNet | DeepBacs* | DIC HepG2 |
+|---|---:|---:|---:|---:|---:|
+| points+boxes p3-n6 replace | -2.44% | -0.66% | +11.45% | +2.37% | -5.26% |
+| points+boxes p3-n4 replace | -1.74% | -0.76% | +7.66% | +4.79% | -3.91% |
+| boxes replace | +0.93% | -0.05% | +4.23% | +1.01% | +0.83% |
+| points p2-n0 replace | -0.16% | +0.68% | +6.20% | -4.61% | -6.83% |
+
+\* DeepBacs is the reused (not held-out) dataset; its values are identical to set A by construction.
+
+The DynamicNuclearNet gain is robust and larger on the holdout; the LiveCELL/TissueNet regressions
+replicate at smaller size. The one campaign-1 result that does **not** generalize is the DIC gain
+(+6.2%/+10.4% on set A, -3.9%/-5.3% here): DIC's absolute baseline is tiny (0.019-0.027) with 43-50
+samples, so its relative changes carry the largest noise of the five datasets. This strengthens the
+case for the geometry gates (direction 1), whose job is exactly to veto harmful re-prompts
+per instance.
+
+### The four mechanisms (epoch 2)
+
+All in `micro_sam/v2/automatic_prompt_generation.py`, as extensions of the refinement kwargs:
+
+- **Geometry gates** (shared kwargs): `min_consistency` accepts a second-round mask only if its IoU
+  with the first-round mask reaches the threshold — the re-prompt may polish, not reshape;
+  `max_foreign_overlap` keeps the first round when the new mask grows into other first-round
+  instances beyond the threshold. Both veto independently of the policy, because the model's score
+  cannot arbitrate across prompt types. Stats: `gated_consistency`, `gated_foreign`.
+- **Negative quality** (points kwargs): `negative_source="interior"` uses the deepest interior
+  point of each other instance instead of its raw prompt; `min_negative_distance` excludes
+  negatives closer than that to the instance's own first-round mask (exact EDT on the padded
+  bounding box).
+- **Recovery** (new component `"recover"`, valid standalone): records the merge dropped as
+  'duplicate' or 'truncated below min size', with at most `recover_max_claimed` of their pixels
+  claimed, are re-prompted with their own point as the positive and the claimants' surviving
+  prompts as negatives; a survivor (score above `score_threshold`, unclaimed pixels above
+  `min_size`) is painted on its unclaimed pixels as a **new** instance. Built on
+  `merge_by_score(return_claimed=True)`. Stats: `recovery_candidates`, `recovered_instances`.
+- **Adaptivity** (points kwarg): `min_grouped_for_points` re-prompts sparsely grouped instances
+  (fewer suppressed prompts than the threshold) with their box alone — their point row is fully
+  padded with the ignore label inside the same batch. Requires the `boxes` component. Stats:
+  `points_suppressed_instances`.
+
+### Sweeps (primary subset)
+
+Epoch-2 controls: three trials per subset, all reproducing epoch-1 quality exactly (primary
+0.269577, holdout 0.264318) — the four mechanisms are no-ops when off. Base modes for the sweeps:
+`points+boxes` p3-n4 and p3-n6, replace (the campaign-1 winners; primary-set references +2.24% and
++2.91%).
+
+#### S1: acceptance gates
+
+| configuration (on pb-n6) | macro mSA | macro change |
+|---|---:|---:|
+| `min_consistency=0.7` | 0.277984 | **+3.12%** |
+| `max_foreign_overlap=0.15` | 0.277703 | +3.01% |
+| `max_foreign_overlap=0.05` | 0.277688 | +3.01% |
+| `min_consistency=0.5` | 0.277552 | +2.96% |
+| ungated | 0.277424 | +2.91% |
+| `min_consistency=0.85` | 0.275893 | +2.34% |
+
+The same ordering holds on pb-n4 (mc0.7 best at 0.275990). The consistency gate at 0.7 is the
+optimum: 0.85 over-gates (it vetoes genuine boundary fixes), 0.5 barely fires. Per-dataset, mc0.7
+softens the LiveCELL regression (-3.04% to -2.65%) and lifts DIC (+2.76% to +5.00%) without losing
+DynamicNuclearNet. The gates do not fully repair LiveCELL on their own.
+
+#### S2: negative quality
+
+| configuration (on pb-n6) | macro mSA | macro change |
+|---|---:|---:|
+| `negative_source=interior` | 0.277984 | **+3.12%** |
+| interior + `min_negative_distance=3` | 0.277960 | +3.11% |
+| prompts + `min_negative_distance=3` | 0.277798 | +3.05% |
+| prompts + `min_negative_distance=6` | 0.277715 | +3.02% |
+| `max_negative_distance=64` | 0.277650 | +3.00% |
+| interior + `min_negative_distance=6` | 0.277640 | +2.99% |
+| prompts (base) | 0.277424 | +2.91% |
+
+Interior negatives win and cost nothing (the EDT-based distance filter adds ~18% select time for no
+further quality). Per-dataset, interior softens LiveCELL to -2.57% and turns TissueNet positive
+(+0.18%). Every negative-quality variant beats the raw-prompt base, confirming the "negatives touch
+the instance's own extent" hypothesis — but like the gates, none fully repairs LiveCELL alone.
+
+#### S3: composition
+
+| configuration (on pb-n6, replace) | macro mSA | macro change | LiveCELL |
+|---|---:|---:|---:|
+| mc0.7 + fo0.15 | 0.278290 | **+3.23%** | -2.65% |
+| interior + fo0.15 | 0.278156 | +3.18% | -2.55% |
+| interior + mc0.7 + fo0.15 | 0.277966 | +3.11% | **-2.24%** |
+| interior + mc0.7 | 0.277773 | +3.04% | -2.26% |
+
+The gates compose (mc0.7 + fo0.15 beats either alone), and adding interior negatives on top trades
+a little macro for the friendliest LiveCELL/TissueNet profile (interior + mc0.7 + fo0.15:
+LiveCELL -2.24%, TissueNet -0.09%, DIC +6.09%). Both the macro winner and the balanced variant are
+carried into S4/S5 and the shortlist. Even composed, no setting turns LiveCELL positive: what the
+grouped points gain elsewhere they structurally cost on confluent phase-contrast data.
+
+#### S4: recovery — neutral
+
+On the S3 macro winner (`mc0.7 + fo0.15`): `recover_max_claimed=0.4` gives 0.278306 (+0.006 points
+over the base), 0.6 and 0.8 give 0.278145/0.278150 (slightly below). Standalone recovery
+(`refinement="recover"`) lands at 0.269526, marginally **below** baseline. The dropped-duplicate
+records that pass the claim cap either fail the score threshold, produce too-few unclaimed pixels,
+or add objects that cost as much precision as they add recall. The recall axis, like its 3d
+counterpart, does not respond to re-prompting — consistent with the APGv2 finding that the
+merge-rejection failure is rarer than the never-proposed one. The `recover` component stays in the
+library as a measured-neutral option.
+
+#### S5: adaptivity by grouped supply — refuted, instructively
+
+On the same base: `min_grouped_for_points` 1/2/3 give 0.270593/0.267750/0.266471 — far below the
++3.23% base, barely above (or below) the plain baseline. The mechanism works as designed (a control
+with everything suppressed reproduces the `boxes` mode), so the result is a finding, not a bug: an
+instance with no grouped extras still carries its anchor positive **and its negatives**, and
+suppressing its point row removes the negatives — which S2 and the `points+boxes` response surface
+identified as the active ingredient. Gating the point prompt on grouped-duplicate supply therefore
+throws away exactly what pays. The signal gates the wrong ingredient; per-instance adaptivity would
+have to key on something that predicts *negative* usefulness (local crowding), which is left as an
+explicitly unexplored follow-up.
+
+#### S6: the positives ablation — one positive is enough, and better
+
+The holdout confirmation screening carried one ablation the primary sweeps had not measured:
+`n_positives=1` (the surviving prompt only — no grouped extras) under the composed gates. It won on
+the holdout by a wide margin (+4.89% vs +3.66% for the p3 winner), so it was measured back on the
+primary subset, where the ordering replicates:
+
+| configuration (all with mc0.7 + fo0.15, replace) | macro mSA | macro change | LiveCELL | DynNuclearNet |
+|---|---:|---:|---:|---:|
+| p1-n8 | 0.282051 | **+4.63%** | -3.97% | +16.28% |
+| p1-n6 | 0.280874 | +4.19% | -2.61% | +12.41% |
+| p1-n6 interior | 0.280835 | +4.17% | -1.91% | +11.69% |
+| p2-n6 | 0.279948 | +3.85% | -2.69% | +10.71% |
+| p1-n4 | 0.278223 | +3.21% | -1.63% | +8.04% |
+| p3-n6 (the S3 winner) | 0.278290 | +3.23% | -2.65% | +9.40% |
+
+The grouped extra positives — the original core of the second-round idea — do not merely fail to
+help: removing them adds a full point of macro quality. The refined prompt that works is
+**the surviving point + the instance's box + nearby negatives + the geometry gates**; the
+suppressed prompts' only productive role is indirect, as the negative pool of the neighbours.
+(This also explains S5: adaptivity that suppresses the point row removes the negatives, the actual
+active ingredient.)
+
+### Confirmation and canonical runs
+
+The top configurations ran through the canonical benchmark on both subsets, compared against the
+respective epoch-2 control trials with `compare_apg_optimization.py --target quality`. Canonical
+quality matches the screening exactly everywhere. One honesty note: the `n_positives=1` direction
+was first surfaced by the holdout ablation and then *selected* on the primary subset (S6), so the
+holdout numbers below are a fair confirmation of the selection, with that one-config peek on
+record.
+
+| configuration (gates = mc0.7 + fo0.15) | primary macro | primary change | holdout macro | holdout change | runtime (A / B) | accepted |
+|---|---:|---:|---:|---:|---|---|
+| **p1-n6 + gates** | 0.280874 | +4.19% | **0.277244** | **+4.89%** | +48% / +35% | no |
+| p1-n8 + gates | 0.282051 | **+4.63%** | 0.277171 | +4.86% | +48% / +35% | no |
+| p1-n6 interior + gates | 0.280835 | +4.18% | 0.276709 | +4.69% | +50% / +37% | no |
+| p2-n6 + gates | 0.279948 | +3.85% | 0.275333 | +4.17% | +49% / +35% | no |
+| p3-n6 + gates | 0.278290 | +3.23% | 0.274001 | +3.66% | +49% / +35% | no |
+
+All five fail the +5% quality bar — by 0.1-0.8 points now, not by 3 as in campaign 1 — and all
+break the 10% runtime cap by a wide margin, so nothing becomes a pipeline default. No configuration
+regresses any dataset by more than 5% on either subset (worst: p1-n8's LiveCELL -3.97% on the
+primary subset). Peak CUDA memory is unchanged at 1.98 GiB.
+
+**Recommendation** (per the rule fixed before the sweep — best holdout macro among configurations
+regressing no dataset by more than 5% on either subset): **`points+boxes` with `n_positives=1`,
+`n_negatives=6`, `min_consistency=0.7`, `max_foreign_overlap=0.15`, `policy="replace"`** — +4.19%
+macro on the tuned subset, +4.89% on the held-out one. These values are now the `DEFAULT_REFINEMENT`
+entries, so the recommended usage is simply:
+
+```python
+segmenter.generate(refinement="points+boxes")
+```
+
+The pipeline default stays `refinement=None`. Users preferring the gentlest per-dataset profile over
+peak macro can pass `refinement_kwargs={"negative_source": "interior"}` (LiveCELL -1.91%,
+TissueNet +1.09%); `n_negatives=8` buys DynamicNuclearNet (+16.3%) at LiveCELL's expense (-3.97%).
+
+### Conclusions
+
+1. **The refined second-round prompt is: the surviving point + the instance's box + ~6 nearby
+   negatives + geometric acceptance gates.** Worth +4.2%/+4.9% macro mSA (tuned/held-out) over the
+   baseline and +1.3/+1.5 points over the ungated campaign-1 winner, at +35-50% runtime.
+2. **Grouped extra positives are refuted** (direction 2's premise and campaign 1's core idea): p1 >
+   p2 > p3 on both subsets. The suppressed prompts matter only as the neighbours' negative pool.
+3. **Geometry gates work where scores cannot** (direction 1 confirmed): `min_consistency=0.7`
+   composes with `max_foreign_overlap=0.15` for +0.3 points and softer regressions; 0.85
+   over-gates. They contain, but do not eliminate, the LiveCELL cost of the negatives.
+4. **Negative quality matters at the margins** (direction 4 partially confirmed): interior-point
+   negatives are the best source and trade ~0.1 macro points for visibly gentler LiveCELL/TissueNet
+   behaviour; the EDT distance filter costs runtime for nothing.
+5. **Recovery is neutral** (direction 3 refuted): +0.006 points on top of the best config, slightly
+   negative standalone. The recall axis does not respond to re-prompting dropped records, matching
+   the 3d result and the APGv2 diagnosis that most misses were never proposed at all.
+6. **Adaptivity by grouped supply is refuted, instructively** (direction 2): suppressing the point
+   row removes the negatives, the actual active ingredient. Any future per-instance adaptivity must
+   key on a signal that predicts negative usefulness (e.g. local crowding), not positive supply.
+7. **The holdout discipline paid off twice**: it certified that campaign 1 was not a screening
+   artifact (gains generalize, even grow), exposed the one set-specific result (DIC's campaign-1
+   gain), and its confirmation screening surfaced the p1 ablation that became the winner.
+
+### Reproducibility and artifacts
+
+Output root as before; holdout runs key on manifest checksum `bf8f3c28befe1fb06d62309dc302d1c4`,
+screening runs live under `refinement_screening/`. Epoch checksums: epoch 1 (manifest machinery)
+`586d2bcb0c15f95d9a93a7a3c3406e79`; epoch 2 (the four mechanisms, all sweeps and canonical runs)
+`c3a723ae4c7222abd642188169cc9c77`; epoch 3 (the recommended values as `DEFAULT_REFINEMENT`, the
+work tree's final state) `8bcd5e7457fcda456b872d1f329369c4`, certified by the `refinement=None`
+control `04482b7ffd263202d55a6184b648aacf` reproducing 0.269577 with every per-dataset value exact.
+
+Canonical candidate config checksums (identical for the primary and holdout runs; the run
+directories differ through the manifest checksum): p1-n6 `2ffb27a17fd224e5105c9108343a19b3`,
+p1-n6-interior `e9d183ad27536a43d005e4269a41035c`, p1-n8 `aaebcb67bdff007c69b634bab00446a0`,
+p2-n6 `b72d7a7de3f38e13bbb5933189a97986`, p3-n6 `920e114aa174b0ee5cf8e39ed0fd43fd`. Control config
+checksums: primary `055529a777ecef73dcb8238ecc8f3b0a` / `61aafed6af057da99374b9af9d76502f` /
+`b26ae23e408a63ee2582e69e8379883f`; holdout `4bc4f2d669c31128e9a42e0912eabd69` /
+`24d7494a9a2bc0a9efde98ce3b1b57aa` / `b66228ad53910e21d3f6b4e52dd39e51`.
+
+### Conclusions
+
+TBD.
+
+### Reproducibility and artifacts
+
+Output root as before; holdout runs key on the holdout manifest checksum, screening runs live under
+`refinement_screening/`. Config checksums: TBD.
+
+```bash
+# Holdout manifest (requires the primary manifest to exist):
+python finetuning/v2/evaluation/benchmark_apg_optimization.py --subset holdout --prepare-only
+
+# Benchmark / screening on the holdout:
+python finetuning/v2/evaluation/benchmark_apg_optimization.py --ndim 2 --subset holdout --trial-id controlB-1
+python finetuning/v2/evaluation/screen_apg_refinement.py --device cuda --subset holdout --configs <configs>.json
 ```
