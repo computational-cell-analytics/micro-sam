@@ -123,16 +123,15 @@ def get_sam2_train_model(
     if peft_kwargs and isinstance(peft_kwargs, dict):
         from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
         from micro_sam.models.peft import serialize_peft_kwargs
-        model = PEFT_Sam2(model, **peft_kwargs).sam
+        model = PEFT_Sam2(model, **peft_kwargs).sam.to(device)
         # Record the PEFT config on the model so the trainer can persist it in the checkpoint,
         # allowing the model to be reloaded without re-specifying peft_kwargs.
         model.peft_config = serialize_peft_kwargs(peft_kwargs)
 
     if freeze is not None:
         components = [freeze] if isinstance(freeze, str) else freeze
-        # With low-rank PEFT the image encoder is already frozen and adapters are injected inside it,
-        # so additionally freezing the image encoder would freeze those adapters too.
-        if peft_kwargs and peft_kwargs.get("rank") is not None and "image_encoder" in components:
+        # PEFT parameters are injected inside the image encoder, so freezing it would also freeze them.
+        if peft_kwargs and "image_encoder" in components:
             raise ValueError("You cannot use PEFT & freeze the image encoder at the same time.")
         for name, param in model.named_parameters():
             if any(name.startswith(c) for c in components):

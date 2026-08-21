@@ -482,6 +482,7 @@ def _load_peft_finetuned_sam2(model_cfg, model_type, input_type, finetuned_check
             "match the ones used at training time (e.g. a different rank or PEFT method)."
         ) from e
     model.to(device)
+    model.eval()
     return model
 
 
@@ -563,11 +564,11 @@ def export_custom_qlora_sam2_model(
 ) -> None:
     """Export a QLoRA-finetuned SAM2 model to a full-precision LoRA-style checkpoint.
 
-    Mirrors `micro_sam.v1.util.export_custom_qlora_model`. QLoRA freezes the (4-bit quantized) image
-    encoder and only trains the LoRA adapters, so the export keeps the trained full-precision LoRA
-    layers from the finetuned checkpoint and takes every other parameter from the pristine base model
-    (renaming the LoRA-wrapped keys). The exported checkpoint can then be loaded with the LoRA backbone
-    by passing the corresponding `peft_kwargs` to `get_sam2_model` (or auto-detected if stored).
+    QLoRA freezes the 4-bit image encoder while the LoRA adapters and non-encoder SAM2 components are
+    trained. The export keeps these finetuned tensors and reconstructs only the frozen encoder tensors
+    from the pristine full-precision model, renaming LoRA-wrapped keys as needed. The exported checkpoint
+    can then be loaded with the LoRA backbone by passing the corresponding `peft_kwargs` to
+    `get_sam2_model` (or auto-detected if stored).
 
     Args:
         checkpoint_path: Path to the base SAM2 backbone the model was finetuned from (None -> default download).
@@ -588,12 +589,14 @@ def export_custom_qlora_sam2_model(
         ft_model_state = ft_state
     ft_model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in ft_model_state.items()}
 
-    # Step 3: Keep the trained (full-precision) LoRA layers from the finetuned model, recording which
+    # Step 3: Keep the trained non-encoder parameters and full-precision LoRA layers, recording which
     # blocks have LoRA on the attention and/or feed forward layers.
-    updated_model_state = {}
+    updated_model_state = {k: v for k, v in ft_model_state.items() if not k.startswith("image_encoder.")}
     modified_attn_layers = set()
     modified_mlp_layers = set()
     for k, v in ft_model_state.items():
+        if not k.startswith("image_encoder."):
+            continue
         layer_id = int(k.split("blocks.")[1].split(".")[0]) if "blocks." in k else None
         if k.find("qkv.w_a_linear") != -1 or k.find("qkv.w_b_linear") != -1:
             modified_attn_layers.add(layer_id)
@@ -602,9 +605,11 @@ def export_custom_qlora_sam2_model(
             modified_mlp_layers.add(layer_id)
             updated_model_state[k] = v
 
-    # Step 4: Take the remaining parameters from the base model, renaming the LoRA-wrapped keys so the
-    # frozen base qkv lives under 'qkv.qkv_proj' and the frozen base MLP under 'mlp.mlp_layer'.
+    # Step 4: Reconstruct the frozen image encoder from the base model, renaming the LoRA-wrapped keys so
+    # the frozen base qkv lives under 'qkv.qkv_proj' and the frozen base MLP under 'mlp.mlp_layer'.
     for k, v in sam.state_dict().items():
+        if not k.startswith("image_encoder."):
+            continue
         layer_id = int(k.split("blocks.")[1].split(".")[0]) if "blocks." in k else None
         if k.find("attn.qkv.") != -1:
             if layer_id in modified_attn_layers:

@@ -365,7 +365,6 @@ class AdaptFormer(nn.Module):
         nn.init.zeros_(self.up_proj.bias)
 
     def forward(self, x):
-        residual = x
         mlp_output = self.mlp_proj(x)
 
         down = self.down_proj(x)
@@ -376,7 +375,7 @@ class AdaptFormer(nn.Module):
 
         up = self.up_proj(down)
         up = up * self.alpha
-        output = up + residual + mlp_output
+        output = up + mlp_output
 
         return output
 

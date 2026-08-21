@@ -550,6 +550,49 @@ class TestJointDdpGradientSync(unittest.TestCase):
                     self.assertTrue(torch.allclose(grads["decoder"], torch.full((2, 2), 1.5)))
 
 
+def test_get_sam2_train_model_moves_peft_modules_to_device(monkeypatch):
+    from sam2 import build_sam as sam2_build
+
+    from micro_sam.v2.models import peft_sam2
+    from micro_sam.v2.training import util as training_util
+
+    base_model = nn.Linear(2, 2)
+    adapted_model = nn.Linear(2, 2)
+    adapted_model.to = unittest.mock.Mock(return_value=adapted_model)
+    monkeypatch.setattr(sam2_build, "build_sam2", lambda **kwargs: base_model)
+    monkeypatch.setattr(
+        peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=adapted_model)
+    )
+
+    model = training_util.get_sam2_train_model(
+        model_type="hvit_t", device="cpu", checkpoint_path="checkpoint.pt", peft_kwargs={"rank": 2}
+    )
+
+    assert model is adapted_model
+    adapted_model.to.assert_called_once_with("cpu")
+
+
+def test_get_sam2_train_model_rejects_encoder_freezing_for_rankless_peft(monkeypatch):
+    from sam2 import build_sam as sam2_build
+
+    from micro_sam.v2.models import peft_sam2
+    from micro_sam.v2.models.peft_sam2 import SSFSurgery
+    from micro_sam.v2.training import util as training_util
+
+    base_model = nn.Linear(2, 2)
+    adapted_model = nn.Linear(2, 2)
+    monkeypatch.setattr(sam2_build, "build_sam2", lambda **kwargs: base_model)
+    monkeypatch.setattr(
+        peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=adapted_model)
+    )
+
+    with pytest.raises(ValueError, match="cannot use PEFT & freeze the image encoder"):
+        training_util.get_sam2_train_model(
+            model_type="hvit_t", device="cpu", checkpoint_path="checkpoint.pt", freeze=["image_encoder"],
+            peft_kwargs={"peft_module": SSFSurgery},
+        )
+
+
 def _make_sam2_trainer(device, **kwargs):
     """Build a Sam2Trainer with stand-ins for the data and the model."""
     from micro_sam.v2.training.sam2_trainer import Sam2Trainer

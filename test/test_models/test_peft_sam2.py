@@ -222,5 +222,124 @@ class TestPEFTSam2(unittest.TestCase):
             self.assertTrue(all(torch.equal(src_sd[k], load_sd[k]) for k in lora_keys))
 
 
+def test_adaptformer_starts_from_the_original_mlp_output():
+    from micro_sam.models.peft import AdaptFormer
+
+    class HieraMLP(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = torch.nn.ModuleList([torch.nn.Linear(4, 8), torch.nn.Linear(8, 4)])
+
+        def forward(self, x):
+            return self.layers[1](torch.relu(self.layers[0](x)))
+
+    block = torch.nn.Module()
+    block.mlp = HieraMLP()
+    x = torch.randn(2, 4)
+    expected = block.mlp(x)
+
+    AdaptFormer(rank=2, block=block, projection_size=2, alpha=1.0)
+
+    assert torch.allclose(block.mlp(x), expected)
+
+
+def test_peft_load_restores_eval_mode(tmp_path, monkeypatch):
+    from micro_sam.v2 import util as v2_util
+    from micro_sam.v2.models.peft_sam2 import PEFT_Sam2, FacTSurgery
+
+    class Attention(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.qkv = torch.nn.Linear(4, 12)
+
+    class Block(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attn = Attention()
+
+    class Trunk(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.blocks = torch.nn.ModuleList([Block()])
+
+    class ImageEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.trunk = Trunk()
+
+    class Sam(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.image_encoder = ImageEncoder()
+
+        def forward(self, x):
+            return self.image_encoder.trunk.blocks[0].attn.qkv(x)
+
+    peft_kwargs = {"rank": 2, "peft_module": FacTSurgery}
+    source = PEFT_Sam2(Sam().eval(), **peft_kwargs).sam
+    checkpoint = tmp_path / "fact.pt"
+    torch.save({"model": source.state_dict()}, checkpoint)
+
+    monkeypatch.setattr(v2_util, "_get_checkpoint", lambda **kwargs: "base.pt")
+    monkeypatch.setattr(v2_util, "_build_sam2_backbone", lambda *args, **kwargs: Sam().eval())
+
+    loaded = v2_util._load_peft_finetuned_sam2(
+        "config", "hvit_t", "images", checkpoint, "cpu", peft_kwargs,
+    )
+    fact = loaded.image_encoder.trunk.blocks[0].attn.qkv
+    assert not loaded.training
+    assert not fact.dp_q.training
+    assert not fact.dp_v.training
+
+    x = torch.randn(256, 4)
+    with torch.no_grad():
+        assert torch.equal(loaded(x), loaded(x))
+
+
+def test_qlora_export_preserves_finetuned_non_encoder_weights(tmp_path, monkeypatch):
+    from micro_sam.v2 import util as v2_util
+
+    base_state = {
+        "image_encoder.trunk.blocks.0.attn.qkv.weight": torch.tensor([1.0]),
+        "sam_prompt_encoder.weight": torch.tensor([2.0]),
+        "sam_mask_decoder.weight": torch.tensor([3.0]),
+        "memory_attention.weight": torch.tensor([4.0]),
+    }
+    finetuned_state = {
+        "image_encoder.trunk.blocks.0.attn.qkv.qkv_proj.weight": torch.tensor([10.0]),
+        "image_encoder.trunk.blocks.0.attn.qkv.qkv_proj.quant_state.bitsandbytes__nf4": torch.tensor([11.0]),
+        "image_encoder.trunk.blocks.0.attn.qkv.w_a_linear.weight": torch.tensor([12.0]),
+        "image_encoder.trunk.blocks.0.attn.qkv.w_b_linear.weight": torch.tensor([13.0]),
+        "sam_prompt_encoder.weight": torch.tensor([20.0]),
+        "sam_mask_decoder.weight": torch.tensor([30.0]),
+        "memory_attention.weight": torch.tensor([40.0]),
+    }
+
+    class BaseModel:
+        def state_dict(self):
+            return base_state
+
+    monkeypatch.setattr(v2_util, "get_sam2_model", lambda **kwargs: BaseModel())
+    finetuned_path = tmp_path / "qlora.pt"
+    exported_path = tmp_path / "lora.pt"
+    torch.save({"model_state": finetuned_state, "peft_kwargs": {"quantize": True}}, finetuned_path)
+
+    v2_util.export_custom_qlora_sam2_model(None, finetuned_path, "hvit_t", exported_path)
+
+    exported = torch.load(exported_path, weights_only=False)
+    exported_state = exported["model_state"]
+    assert torch.equal(
+        exported_state["image_encoder.trunk.blocks.0.attn.qkv.qkv_proj.weight"], torch.tensor([1.0])
+    )
+    assert torch.equal(
+        exported_state["image_encoder.trunk.blocks.0.attn.qkv.w_a_linear.weight"], torch.tensor([12.0])
+    )
+    assert torch.equal(exported_state["sam_prompt_encoder.weight"], torch.tensor([20.0]))
+    assert torch.equal(exported_state["sam_mask_decoder.weight"], torch.tensor([30.0]))
+    assert torch.equal(exported_state["memory_attention.weight"], torch.tensor([40.0]))
+    assert all("quant_state" not in key for key in exported_state)
+    assert exported["peft_kwargs"] == {"quantize": True}
+
+
 if __name__ == "__main__":
     unittest.main()

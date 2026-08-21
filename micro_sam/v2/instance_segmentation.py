@@ -667,7 +667,38 @@ def amg_3d_segmentation(
     return segmentation
 
 
-def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, output_channels=4, peft_kwargs=None):
+def _convert_automatic_qlora_state(model, model_state):
+    """Merge trained QLoRA tensors into a full-precision UniSAM2 state."""
+    full_precision_state = model.state_dict()
+    trainable_encoder_keys = {
+        name for name, param in model.named_parameters()
+        if name.startswith("encoder.inner.") and param.requires_grad
+    }
+    finetuned_keys = trainable_encoder_keys | {
+        key for key in full_precision_state if not key.startswith("encoder.inner.")
+    }
+
+    missing_keys = sorted(key for key in finetuned_keys if key not in model_state)
+    mismatched_keys = sorted(
+        key for key in finetuned_keys
+        if key in model_state and model_state[key].shape != full_precision_state[key].shape
+    )
+    if missing_keys or mismatched_keys:
+        problems = []
+        if missing_keys:
+            problems.append(f"missing trained keys: {missing_keys}")
+        if mismatched_keys:
+            problems.append(f"incompatible trained keys: {mismatched_keys}")
+        raise RuntimeError(f"Could not convert the automatic QLoRA checkpoint: {'; '.join(problems)}")
+
+    converted_state = dict(full_precision_state)
+    converted_state.update({key: model_state[key] for key in finetuned_keys})
+    return converted_state
+
+
+def get_unisam2_model(
+    checkpoint_path, device=None, encoder=_DEFAULT_MODEL, output_channels=4, peft_kwargs=None, encoder_model_type=None
+):
     """Load a UniSAM2 model for automatic segmentation from a checkpoint.
 
     Args:
@@ -680,6 +711,8 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, outp
         peft_kwargs: Keyword arguments for `micro_sam.v2.models.peft_sam2.PEFT_Sam2`. Needed when the
             encoder was jointly finetuned with a PEFT method (e.g. LoRA), so the same surgery is applied
             before loading. If not given, a PEFT config saved in the checkpoint is auto-detected.
+        encoder_model_type: The base SAM2 model type for a prebuilt PEFT encoder, e.g. 'hvit_l'. This
+            is required because the encoder module does not identify its Hiera architecture.
 
     Returns:
         The UniSAM2 model in eval mode.
@@ -699,15 +732,18 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, outp
         from micro_sam.v2.models.peft_sam2 import PEFT_MODULES
         peft_kwargs = deserialize_peft_kwargs(state["peft_kwargs"], PEFT_MODULES)
 
+    is_qlora = False
     if peft_kwargs and isinstance(peft_kwargs, dict):
         # The encoder was finetuned with PEFT, so the checkpoint carries the injected PEFT parameters.
         # Build the base SAM2 encoder, apply the same PEFT surgery, and reuse it inside UniSAM2 so the
         # decoder checkpoint keys match ('encoder.inner.*'). The trained weights load via load_state_dict.
-        # We do not quantize at inference; a QLoRA-trained model is loaded in full precision.
         from micro_sam.v2.util import get_sam2_model
         from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
+        is_qlora = bool(peft_kwargs.get("quantize", False))
         peft_kwargs = {k: v for k, v in peft_kwargs.items() if k != "quantize"}
-        base_model_type = encoder if isinstance(encoder, str) else _DEFAULT_MODEL
+        base_model_type = encoder if isinstance(encoder, str) else encoder_model_type
+        if base_model_type is None:
+            raise ValueError("'encoder_model_type' is required with a prebuilt PEFT encoder.")
         sam2_model = get_sam2_model(model_type=base_model_type, input_type="images", device=device or "cpu")
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         encoder = sam2_model.image_encoder
@@ -721,6 +757,8 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, outp
             encoder = sam2_model.image_encoder
 
     model = UniSAM2(encoder=encoder, output_channels=output_channels)
+    if peft_kwargs and is_qlora:
+        model_state = _convert_automatic_qlora_state(model, model_state)
     model.load_state_dict(model_state)
 
     if device is not None:
@@ -761,7 +799,9 @@ def get_decoder(model_type, checkpoint=None, device=None, encoder=None):
             f"Automatic segmentation with SAM2 requires a finetuned model with a registered decoder "
             f"or a decoder checkpoint. '{model_type}' provides neither."
         )
-    return get_unisam2_model(decoder_source, device=device, encoder=encoder)
+    return get_unisam2_model(
+        decoder_source, device=device, encoder=encoder, encoder_model_type=model_type[:6]
+    )
 
 
 def _resize_spatial(x: torch.Tensor, size: tuple) -> torch.Tensor:
