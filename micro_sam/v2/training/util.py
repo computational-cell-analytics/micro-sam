@@ -38,8 +38,7 @@ def get_sam2_train_model(
         device: Target device. Auto-selects if None.
         checkpoint_path: Path to a custom checkpoint. Downloads default weights if None.
         freeze: Component name prefixes to freeze (e.g. ["image_encoder"]).
-        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
-            given, the image encoder is frozen and the chosen PEFT method is applied on top of it.
+        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
         prob_to_use_pt_input: Probability of using point/box prompts (vs mask propagation).
         prob_to_use_box_input: Conditional probability of using a box instead of a click.
         num_frames_to_correct: Max number of frames per volume that receive iterative
@@ -118,21 +117,17 @@ def get_sam2_train_model(
         apply_postprocessing=False,
     )
 
-    # Apply parameter efficient finetuning on top of SAM2 by freezing the image encoder and wrapping
-    # its Hiera blocks. This mirrors the SAM v1 path in `micro_sam.v1.training.util`.
-    if peft_kwargs and isinstance(peft_kwargs, dict):
+    if peft_kwargs:
         from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
         from micro_sam.models.peft import serialize_peft_kwargs
+
         model = PEFT_Sam2(model, **peft_kwargs).sam.to(device)
-        # Record the PEFT config on the model so the trainer can persist it in the checkpoint,
-        # allowing the model to be reloaded without re-specifying peft_kwargs.
         model.peft_config = serialize_peft_kwargs(peft_kwargs)
 
     if freeze is not None:
         components = [freeze] if isinstance(freeze, str) else freeze
-        # PEFT parameters are injected inside the image encoder, so freezing it would also freeze them.
         if peft_kwargs and "image_encoder" in components:
-            raise ValueError("You cannot use PEFT & freeze the image encoder at the same time.")
+            raise ValueError("You cannot use PEFT and freeze the image encoder at the same time.")
         for name, param in model.named_parameters():
             if any(name.startswith(c) for c in components):
                 param.requires_grad = False

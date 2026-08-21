@@ -37,15 +37,13 @@ class TestPEFTSam2(unittest.TestCase):
                     trainable_with_grad += 1
             else:
                 self.assertIsNone(param.grad)
-        # The encoder forward must produce gradients for at least some trainable parameters.
         self.assertGreater(trainable_with_grad, 0)
 
     def test_lora_sam2(self):
         from micro_sam.v2.models.peft_sam2 import PEFT_Sam2, LoRASurgery
 
         model = self._get_model()
-        # At initialization LoRA must be a no-op, i.e. the encoder output on a given input matches
-        # the base model. Reuse the same input for both passes so only the LoRA weights differ.
+        # LoRA must not change the encoder output before training.
         x = torch.rand(1, 3, 1024, 1024)
         with torch.no_grad():
             reference = self._run_encoder(model, x).clone()
@@ -152,8 +150,8 @@ class TestPEFTSam2(unittest.TestCase):
 
     @unittest.skip("Training tests are not run in CI.")
     def test_get_sam2_train_model_lora(self):
-        from micro_sam.v2.training.util import get_sam2_train_model
         from micro_sam.v2.models.peft_sam2 import LoRASurgery
+        from micro_sam.v2.training.util import get_sam2_train_model
 
         model = get_sam2_train_model(
             model_type=self.model_type, device="cpu", peft_kwargs={"rank": 2, "peft_module": LoRASurgery},
@@ -161,13 +159,12 @@ class TestPEFTSam2(unittest.TestCase):
         names = self._trainable_encoder_params(model)
         self.assertTrue(len(names) > 0)
         self.assertTrue(all("w_a_linear" in n or "w_b_linear" in n for n in names))
-        # The PEFT config must be recorded on the model so the trainer can persist it.
         self.assertEqual(model.peft_config, {"rank": 2, "peft_module": "LoRASurgery"})
 
     @unittest.skip("Training tests are not run in CI.")
     def test_peft_freeze_conflict_guard(self):
-        from micro_sam.v2.training.util import get_sam2_train_model
         from micro_sam.v2.models.peft_sam2 import LoRASurgery
+        from micro_sam.v2.training.util import get_sam2_train_model
 
         with self.assertRaises(ValueError):
             get_sam2_train_model(
@@ -176,15 +173,15 @@ class TestPEFTSam2(unittest.TestCase):
             )
 
     def _make_lora_checkpoint(self, tmpdir, include_config):
-        """Build a base model, apply LoRA, randomize the LoRA weights, and save a checkpoint."""
-        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2, LoRASurgery
+        """Build a LoRA model with random weights and save its checkpoint."""
         from micro_sam.models.peft import serialize_peft_kwargs
+        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2, LoRASurgery
 
         peft_kwargs = {"rank": 2, "peft_module": LoRASurgery}
         source = PEFT_Sam2(self._get_model(), **peft_kwargs).sam
         with torch.no_grad():
             for name, p in source.image_encoder.named_parameters():
-                if "w_b_linear" in name:  # zero-initialized; make them non-trivial.
+                if "w_b_linear" in name:
                     p.normal_(0.0, 0.02)
 
         ckpt = os.path.join(tmpdir, "peft.pt")
@@ -211,7 +208,6 @@ class TestPEFTSam2(unittest.TestCase):
             self.assertTrue(torch.allclose(out_src, out_load, atol=1e-6))
 
     def test_lora_load_auto_detect(self):
-        # With a saved PEFT config, loading needs no explicit peft_kwargs.
         with tempfile.TemporaryDirectory() as tmpdir:
             source, ckpt, _ = self._make_lora_checkpoint(tmpdir, include_config=True)
             loaded = get_sam2_model(model_type=self.model_type, device="cpu", checkpoint_path=ckpt)
@@ -283,9 +279,7 @@ def test_peft_load_restores_eval_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(v2_util, "_get_checkpoint", lambda **kwargs: "base.pt")
     monkeypatch.setattr(v2_util, "_build_sam2_backbone", lambda *args, **kwargs: Sam().eval())
 
-    loaded = v2_util._load_peft_finetuned_sam2(
-        "config", "hvit_t", "images", checkpoint, "cpu", peft_kwargs,
-    )
+    loaded = v2_util._load_peft_finetuned_sam2("config", "hvit_t", "images", checkpoint, "cpu", peft_kwargs)
     fact = loaded.image_encoder.trunk.blocks[0].attn.qkv
     assert not loaded.training
     assert not fact.dp_q.training

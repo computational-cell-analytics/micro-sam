@@ -708,11 +708,8 @@ def get_unisam2_model(
             scratch, e.g. 'hvit_t', or a prebuilt SAM2 image-encoder module to reuse (which avoids
             rebuilding / downloading the base backbone). Its weights are (re)defined by the checkpoint.
         output_channels: The number of output channels (foreground + directed distances).
-        peft_kwargs: Keyword arguments for `micro_sam.v2.models.peft_sam2.PEFT_Sam2`. Needed when the
-            encoder was jointly finetuned with a PEFT method (e.g. LoRA), so the same surgery is applied
-            before loading. If not given, a PEFT config saved in the checkpoint is auto-detected.
-        encoder_model_type: The base SAM2 model type for a prebuilt PEFT encoder, e.g. 'hvit_l'. This
-            is required because the encoder module does not identify its Hiera architecture.
+        peft_kwargs: The arguments for `PEFT_Sam2`. The function uses the saved arguments by default.
+        encoder_model_type: The SAM2 model type for a prebuilt PEFT encoder. You must set this argument for modules.
 
     Returns:
         The UniSAM2 model in eval mode.
@@ -726,30 +723,26 @@ def get_unisam2_model(
     else:
         model_state = state
 
-    # Auto-detect a PEFT config saved alongside the weights (raw joint checkpoints store it).
     if peft_kwargs is None and isinstance(state, dict) and state.get("peft_kwargs") is not None:
-        from micro_sam.models.peft import deserialize_peft_kwargs
         from micro_sam.v2.models.peft_sam2 import PEFT_MODULES
+        from micro_sam.models.peft import deserialize_peft_kwargs
+
         peft_kwargs = deserialize_peft_kwargs(state["peft_kwargs"], PEFT_MODULES)
 
     is_qlora = False
-    if peft_kwargs and isinstance(peft_kwargs, dict):
-        # The encoder was finetuned with PEFT, so the checkpoint carries the injected PEFT parameters.
-        # Build the base SAM2 encoder, apply the same PEFT surgery, and reuse it inside UniSAM2 so the
-        # decoder checkpoint keys match ('encoder.inner.*'). The trained weights load via load_state_dict.
+    if peft_kwargs:
         from micro_sam.v2.util import get_sam2_model
         from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
+
         is_qlora = bool(peft_kwargs.get("quantize", False))
         peft_kwargs = {k: v for k, v in peft_kwargs.items() if k != "quantize"}
         base_model_type = encoder if isinstance(encoder, str) else encoder_model_type
         if base_model_type is None:
-            raise ValueError("'encoder_model_type' is required with a prebuilt PEFT encoder.")
+            raise ValueError("Set 'encoder_model_type' when you pass a prebuilt PEFT encoder.")
         sam2_model = get_sam2_model(model_type=base_model_type, input_type="images", device=device or "cpu")
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         encoder = sam2_model.image_encoder
     else:
-        # The joint trainer wraps the encoder in 'SAM2EncoderAdapter', so its weights live one level
-        # deeper. Rebuild that structure by passing a module rather than a name.
         needs_adapter = isinstance(encoder, str) and any(k.startswith("encoder.inner.") for k in model_state)
         if needs_adapter:
             from micro_sam.v2.util import get_sam2_model
@@ -799,9 +792,7 @@ def get_decoder(model_type, checkpoint=None, device=None, encoder=None):
             f"Automatic segmentation with SAM2 requires a finetuned model with a registered decoder "
             f"or a decoder checkpoint. '{model_type}' provides neither."
         )
-    return get_unisam2_model(
-        decoder_source, device=device, encoder=encoder, encoder_model_type=model_type[:6]
-    )
+    return get_unisam2_model(decoder_source, device=device, encoder=encoder, encoder_model_type=model_type[:6])
 
 
 def _resize_spatial(x: torch.Tensor, size: tuple) -> torch.Tensor:

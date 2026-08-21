@@ -643,8 +643,8 @@ def test_get_decoder_requires_a_source():
 
 def test_get_decoder_preserves_the_peft_encoder_architecture(tmp_path, monkeypatch):
     from micro_sam.v2 import util as v2_util
-    from micro_sam.v2.models import util as models_util
     from micro_sam.v2.models import peft_sam2
+    from micro_sam.v2.models import util as models_util
 
     class FakeUniSAM2:
         def __init__(self, encoder, output_channels):
@@ -668,9 +668,7 @@ def test_get_decoder_preserves_the_peft_encoder_architecture(tmp_path, monkeypat
     monkeypatch.setattr(peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=model))
 
     checkpoint = tmp_path / "decoder.pt"
-    torch.save(
-        {"model_state": {}, "peft_kwargs": {"rank": 2, "peft_module": "LoRASurgery"}}, checkpoint
-    )
+    torch.save({"model_state": {}, "peft_kwargs": {"rank": 2, "peft_module": "LoRASurgery"}}, checkpoint)
 
     decoder = get_decoder("hvit_l", checkpoint=checkpoint, encoder=object())
 
@@ -680,8 +678,8 @@ def test_get_decoder_preserves_the_peft_encoder_architecture(tmp_path, monkeypat
 
 def test_get_unisam2_model_converts_automatic_qlora_state(tmp_path, monkeypatch):
     from micro_sam.v2 import util as v2_util
-    from micro_sam.v2.models import util as models_util
     from micro_sam.v2.models import peft_sam2
+    from micro_sam.v2.models import util as models_util
     from micro_sam.v2.instance_segmentation import get_unisam2_model
 
     class FakeUniSAM2(torch.nn.Module):
@@ -689,15 +687,11 @@ def test_get_unisam2_model_converts_automatic_qlora_state(tmp_path, monkeypatch)
             super().__init__()
             self.encoder = torch.nn.Module()
             self.encoder.inner = torch.nn.Module()
-            self.encoder.inner.frozen_weight = torch.nn.Parameter(
-                torch.tensor([1.0, 2.0]), requires_grad=False
-            )
+            self.encoder.inner.frozen_weight = torch.nn.Parameter(torch.tensor([1.0, 2.0]), requires_grad=False)
             self.encoder.inner.adapter_weight = torch.nn.Parameter(torch.tensor([0.0]))
             self.decoder_weight = torch.nn.Parameter(torch.tensor([0.0]))
 
-    monkeypatch.setattr(
-        v2_util, "get_sam2_model", lambda **kwargs: types.SimpleNamespace(image_encoder=object())
-    )
+    monkeypatch.setattr(v2_util, "get_sam2_model", lambda **kwargs: types.SimpleNamespace(image_encoder=object()))
     monkeypatch.setattr(models_util, "UniSAM2", FakeUniSAM2)
     monkeypatch.setattr(peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=model))
 

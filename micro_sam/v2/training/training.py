@@ -161,9 +161,7 @@ def train_sam2(
         early_stopping: Stop after this many epochs without improvement (None = off).
         max_num_objects: Max objects sampled per image/volume per step.
         checkpoint_path: Custom checkpoint path. Downloads default weights if None.
-        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper, e.g.
-            `{"rank": 4, "peft_module": LoRASurgery}`. If given, the image encoder is frozen and the
-            chosen PEFT method is applied on top of it.
+        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
         device: Training device. Auto-selects if None.
         lr: Learning rate. SAM2 OG fine-tuning uses 1e-5 (tiny) or 5e-6 (b+).
         vision_lr: Separate LR for the image encoder. If None, uses lr for all parameters.
@@ -487,8 +485,7 @@ def train_sam2_multi_gpu(
         early_stopping: Stop after this many epochs without improvement.
         max_num_objects: Max objects sampled per image/volume per step.
         checkpoint_path: SAM2 checkpoint path. Downloads default if None.
-        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
-            given, the image encoder is frozen and the chosen PEFT method is applied on top of it.
+        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
         lr: Learning rate. SAM2 OG fine-tuning uses 1e-5 (tiny) or 5e-6 (b+).
         vision_lr: Separate LR for the image encoder. If None, uses lr for all parameters.
             SAM2 OG fine-tuning uses 6e-6 (tiny) or 3e-6 (b+), i.e. ~0.6x the base lr.
@@ -567,17 +564,12 @@ def train_sam2_multi_gpu(
 
 
 def _build_unisam2_model(model_type, device, peft_kwargs=None, output_channels=4):
-    """Build a UniSAM2 model, optionally applying PEFT to its SAM2 image encoder.
-
-    Without `peft_kwargs` the encoder is built from the backbone name. With `peft_kwargs` the base
-    SAM2 encoder is built, the PEFT surgery is applied (freezing the encoder and injecting adapters),
-    and the adapted encoder is reused inside UniSAM2; the config is recorded on the model so the
-    trainer can persist it (see `micro_sam.v2.instance_segmentation.get_unisam2_model`).
+    """Build a UniSAM2 model and optionally apply PEFT to its encoder.
 
     Args:
-        model_type: SAM2 encoder variant, e.g. "hvit_t".
+        model_type: The SAM2 encoder variant, for example, "hvit_t".
         device: The device to build the model on.
-        peft_kwargs: Keyword arguments for `micro_sam.v2.models.peft_sam2.PEFT_Sam2`, or None.
+        peft_kwargs: The arguments for `PEFT_Sam2`, or None.
         output_channels: The number of UniSAM2 output channels.
 
     Returns:
@@ -585,10 +577,11 @@ def _build_unisam2_model(model_type, device, peft_kwargs=None, output_channels=4
     """
     from micro_sam.v2.models.util import UniSAM2
 
-    if peft_kwargs and isinstance(peft_kwargs, dict):
+    if peft_kwargs:
         from micro_sam.v2.util import get_sam2_model
         from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
         from micro_sam.models.peft import serialize_peft_kwargs
+
         sam2_model = get_sam2_model(model_type=model_type, input_type="images", device=device)
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         model = UniSAM2(encoder=sam2_model.image_encoder, output_channels=output_channels).to(device)
@@ -635,9 +628,7 @@ def train_automatic(
         save_root: Root directory for checkpoints and logs.
         save_every_kth_epoch: Save a separate checkpoint every k-th epoch.
         overwrite_training: Overwrite an existing checkpoint at the same path.
-        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
-            given, the SAM2 image encoder is frozen and the chosen PEFT method is applied on top of it
-            while the UniSAM2 decoder is trained.
+        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder during decoder training.
         load_from_checkpoint: Trainer checkpoint to resume from, restoring the model, optimizer,
             scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
             the pretrained SAM2 weights to start from.
@@ -835,8 +826,7 @@ def train_automatic_multi_gpu(
             scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
             the pretrained SAM2 weights to start from.
         find_unused_parameters: Passed to DistributedDataParallel.
-        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
-            given, the SAM2 image encoder is frozen and the chosen PEFT method is applied on top of it.
+        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
     """
     if z_slices is None:
         z_slices = [8]
@@ -937,8 +927,7 @@ def train_joint_sam2(
         max_num_objects: Max objects per interactive step.
         checkpoint_path: SAM2 checkpoint path. Downloads default if None.
         freeze: Component name prefixes to freeze (e.g. ["image_encoder"]).
-        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
-            given, the image encoder is frozen and the chosen PEFT method is applied on top of it.
+        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
         device: Training device. Auto-selects if None.
         lr: Learning rate.
         save_root: Root directory for checkpoints and logs.
@@ -1260,8 +1249,7 @@ def train_joint_sam2_multi_gpu(
         max_num_objects: Max objects per interactive step.
         checkpoint_path: SAM2 checkpoint path. Downloads default if None.
         freeze: Component name prefixes to freeze (e.g. ["image_encoder"]).
-        peft_kwargs: Keyword arguments for the `micro_sam.v2.models.peft_sam2.PEFT_Sam2` wrapper. If
-            given, the image encoder is frozen and the chosen PEFT method is applied on top of it.
+        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
         lr: Learning rate.
         save_root: Root directory for checkpoints and logs.
         scheduler_kwargs: ReduceLROnPlateau kwargs. Defaults to patience=10.

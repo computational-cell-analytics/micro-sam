@@ -560,9 +560,7 @@ def test_get_sam2_train_model_moves_peft_modules_to_device(monkeypatch):
     adapted_model = nn.Linear(2, 2)
     adapted_model.to = unittest.mock.Mock(return_value=adapted_model)
     monkeypatch.setattr(sam2_build, "build_sam2", lambda **kwargs: base_model)
-    monkeypatch.setattr(
-        peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=adapted_model)
-    )
+    monkeypatch.setattr(peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=adapted_model))
 
     model = training_util.get_sam2_train_model(
         model_type="hvit_t", device="cpu", checkpoint_path="checkpoint.pt", peft_kwargs={"rank": 2}
@@ -582,11 +580,9 @@ def test_get_sam2_train_model_rejects_encoder_freezing_for_rankless_peft(monkeyp
     base_model = nn.Linear(2, 2)
     adapted_model = nn.Linear(2, 2)
     monkeypatch.setattr(sam2_build, "build_sam2", lambda **kwargs: base_model)
-    monkeypatch.setattr(
-        peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=adapted_model)
-    )
+    monkeypatch.setattr(peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=adapted_model))
 
-    with pytest.raises(ValueError, match="cannot use PEFT & freeze the image encoder"):
+    with pytest.raises(ValueError, match="cannot use PEFT and freeze the image encoder"):
         training_util.get_sam2_train_model(
             model_type="hvit_t", device="cpu", checkpoint_path="checkpoint.pt", freeze=["image_encoder"],
             peft_kwargs={"peft_module": SSFSurgery},

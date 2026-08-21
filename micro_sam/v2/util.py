@@ -430,56 +430,49 @@ def _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type):
     """Build the SAM2 image model or the SAM2 video predictor from a config and a checkpoint."""
     if input_type == "images":
         return build_sam2(
-            config_file=model_cfg, ckpt_path=checkpoint_path, device=device, mode="eval", apply_postprocessing=False,
+            config_file=model_cfg, ckpt_path=checkpoint_path, device=device, mode="eval", apply_postprocessing=False
         )
     return _build_sam2_video_predictor(config_file=model_cfg, ckpt_path=checkpoint_path, device=device)
 
 
 def _load_peft_finetuned_sam2(model_cfg, model_type, input_type, finetuned_checkpoint, device, peft_kwargs, state=None):
-    """Build a SAM2 model with parameter efficient finetuning applied and load finetuned weights.
+    """Build a SAM2 model and load weights from PEFT.
 
-    A PEFT-finetuned checkpoint contains the injected PEFT parameters (e.g. LoRA layers), so the
-    base backbone architecture cannot load it directly. This mirrors the SAM v1 loading path in
-    `micro_sam.v1.util.get_sam_model`: the base backbone is built, the same PEFT surgery used during
-    training is re-applied, and only then are the finetuned weights loaded on top.
+    The function applies the PEFT method before it loads the added parameters.
 
     Args:
         model_cfg: The SAM2 model config path.
-        model_type: The SAM2 model name (the base backbone is derived from the first 6 characters).
-        input_type: Whether the inputs are images or videos.
-        finetuned_checkpoint: Path to the PEFT-finetuned checkpoint.
+        model_type: The SAM2 model name. The first six characters select the base backbone.
+        input_type: The input type, which is images or videos.
+        finetuned_checkpoint: The path to the PEFT checkpoint.
         device: The pytorch device.
-        peft_kwargs: Keyword arguments for `micro_sam.v2.models.peft_sam2.PEFT_Sam2`.
-        state: An already-loaded checkpoint (to avoid reloading it). Loaded from `finetuned_checkpoint` if None.
+        peft_kwargs: The arguments for `PEFT_Sam2`.
+        state: The checkpoint data. The function loads `finetuned_checkpoint` if this value is None.
 
     Returns:
         The PEFT SAM2 model with the finetuned weights loaded.
     """
     from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
 
-    # Build from the base backbone; the finetuned weights (with the PEFT parameters) are loaded after
-    # the surgery so that the checkpoint keys match the wrapped architecture.
     base_checkpoint = _get_checkpoint(model_type=model_type[:6])
     model = _build_sam2_backbone(model_cfg, base_checkpoint, device, input_type)
     model = PEFT_Sam2(model, **peft_kwargs).sam
 
     if state is None:
         state = torch.load(finetuned_checkpoint, map_location="cpu", weights_only=False)
-    if isinstance(state, dict) and "model" in state:  # Exported micro-sam / native SAM2 layout.
+    if isinstance(state, dict) and "model" in state:
         model_state = state["model"]
-    elif isinstance(state, dict) and "model_state" in state:  # Raw torch-em trainer checkpoint.
+    elif isinstance(state, dict) and "model_state" in state:
         model_state = state["model_state"]
     else:
         model_state = state
-    # Strip a DistributedDataParallel 'module.' prefix if the checkpoint was saved under DDP.
     model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in model_state.items()}
 
     try:
         model.load_state_dict(model_state)
     except RuntimeError as e:
         raise RuntimeError(
-            "Failed to load the finetuned PEFT weights. This usually means the given 'peft_kwargs' do not "
-            "match the ones used at training time (e.g. a different rank or PEFT method)."
+            f"The PEFT weights do not match peft_kwargs={peft_kwargs}. Pass the settings that the training used."
         ) from e
     model.to(device)
     model.eval()
@@ -500,10 +493,7 @@ def get_sam2_model(
         device: The pytorch device.
         checkpoint_path: Filepath to the pretrained model weights.
         input_type: Whether the inputs are images or videos.
-        peft_kwargs: Keyword arguments for `micro_sam.v2.models.peft_sam2.PEFT_Sam2`. If given, the model
-            is loaded as a PEFT-finetuned model, i.e. the base backbone is built, the PEFT surgery is
-            re-applied, and the finetuned weights are loaded on top. If not given, a PEFT config saved in
-            a user-provided `checkpoint_path` (see `get_sam2_train_model`) is auto-detected and applied.
+        peft_kwargs: The arguments for `PEFT_Sam2`. The function uses the arguments in the checkpoint by default.
 
     Returns:
         The SAM2 model.
@@ -518,8 +508,6 @@ def get_sam2_model(
     if input_type not in ("images", "videos"):
         raise ValueError(f"'{input_type}' is not a valid input type.")
 
-    # Only a user-provided checkpoint can carry a saved PEFT config; the base / registered downloads
-    # never do, so we avoid loading them twice for the common (non-PEFT) path.
     user_provided_checkpoint = checkpoint_path is not None
 
     if checkpoint_path is None:
@@ -528,23 +516,21 @@ def get_sam2_model(
         else:
             checkpoint_path = _get_checkpoint(model_type=model_type)
 
-    # If the caller did not pass peft_kwargs, auto-detect a PEFT config saved in the checkpoint.
     saved_state = None
     if not peft_kwargs and user_provided_checkpoint:
-        from micro_sam.models.peft import deserialize_peft_kwargs
         from micro_sam.v2.models.peft_sam2 import PEFT_MODULES
+        from micro_sam.models.peft import deserialize_peft_kwargs
+
         saved_state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         if isinstance(saved_state, dict) and saved_state.get("peft_kwargs") is not None:
             peft_kwargs = deserialize_peft_kwargs(saved_state["peft_kwargs"], PEFT_MODULES)
         else:
-            saved_state = None  # Not a PEFT checkpoint; let the build function load it normally.
+            saved_state = None
 
-    if peft_kwargs and isinstance(peft_kwargs, dict):
-        # We do not quantize at inference; a QLoRA-trained model is loaded in full precision (as in
-        # `micro_sam.v1.util.get_sam_model`). Copy first so the caller's dict is not mutated.
+    if peft_kwargs:
         peft_kwargs = {k: v for k, v in peft_kwargs.items() if k != "quantize"}
         model = _load_peft_finetuned_sam2(
-            model_cfg, model_type, input_type, checkpoint_path, device, peft_kwargs, state=saved_state,
+            model_cfg, model_type, input_type, checkpoint_path, device, peft_kwargs, state=saved_state
         )
     else:
         model = _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type)
@@ -562,24 +548,18 @@ def export_custom_qlora_sam2_model(
     model_type: str,
     save_path: Union[str, os.PathLike],
 ) -> None:
-    """Export a QLoRA-finetuned SAM2 model to a full-precision LoRA-style checkpoint.
+    """Export a SAM2 model from QLoRA to a full-precision LoRA checkpoint.
 
-    QLoRA freezes the 4-bit image encoder while the LoRA adapters and non-encoder SAM2 components are
-    trained. The export keeps these finetuned tensors and reconstructs only the frozen encoder tensors
-    from the pristine full-precision model, renaming LoRA-wrapped keys as needed. The exported checkpoint
-    can then be loaded with the LoRA backbone by passing the corresponding `peft_kwargs` to
-    `get_sam2_model` (or auto-detected if stored).
+    The export keeps the trained parameters. It gets the frozen encoder parameters from the base model.
 
     Args:
-        checkpoint_path: Path to the base SAM2 backbone the model was finetuned from (None -> default download).
-        finetuned_path: Path to the QLoRA-finetuned checkpoint.
-        model_type: The SAM2 model type, e.g. 'hvit_t'.
-        save_path: Where to save the exported checkpoint.
+        checkpoint_path: The path to the base checkpoint. Use None to download the default checkpoint.
+        finetuned_path: The path to the QLoRA checkpoint.
+        model_type: The SAM2 model type, for example, 'hvit_t'.
+        save_path: The path for the exported checkpoint.
     """
-    # Step 1: The base (full-precision) SAM2 model that finetuning started from.
     sam = get_sam2_model(model_type=model_type, checkpoint_path=checkpoint_path, device="cpu")
 
-    # Step 2: Load the QLoRA-finetuned checkpoint.
     ft_state = torch.load(finetuned_path, map_location="cpu", weights_only=False)
     if isinstance(ft_state, dict) and "model_state" in ft_state:
         ft_model_state = ft_state["model_state"]
@@ -589,8 +569,6 @@ def export_custom_qlora_sam2_model(
         ft_model_state = ft_state
     ft_model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in ft_model_state.items()}
 
-    # Step 3: Keep the trained non-encoder parameters and full-precision LoRA layers, recording which
-    # blocks have LoRA on the attention and/or feed forward layers.
     updated_model_state = {k: v for k, v in ft_model_state.items() if not k.startswith("image_encoder.")}
     modified_attn_layers = set()
     modified_mlp_layers = set()
@@ -598,28 +576,25 @@ def export_custom_qlora_sam2_model(
         if not k.startswith("image_encoder."):
             continue
         layer_id = int(k.split("blocks.")[1].split(".")[0]) if "blocks." in k else None
-        if k.find("qkv.w_a_linear") != -1 or k.find("qkv.w_b_linear") != -1:
+        if "qkv.w_a_linear" in k or "qkv.w_b_linear" in k:
             modified_attn_layers.add(layer_id)
             updated_model_state[k] = v
-        if k.find("mlp.w_a_linear") != -1 or k.find("mlp.w_b_linear") != -1:
+        if "mlp.w_a_linear" in k or "mlp.w_b_linear" in k:
             modified_mlp_layers.add(layer_id)
             updated_model_state[k] = v
 
-    # Step 4: Reconstruct the frozen image encoder from the base model, renaming the LoRA-wrapped keys so
-    # the frozen base qkv lives under 'qkv.qkv_proj' and the frozen base MLP under 'mlp.mlp_layer'.
     for k, v in sam.state_dict().items():
         if not k.startswith("image_encoder."):
             continue
         layer_id = int(k.split("blocks.")[1].split(".")[0]) if "blocks." in k else None
-        if k.find("attn.qkv.") != -1:
+        if "attn.qkv." in k:
             if layer_id in modified_attn_layers:
                 k = k.replace("qkv", "qkv.qkv_proj")
-        elif k.find("mlp") != -1 and k.find("image_encoder") != -1:
+        elif "mlp" in k and "image_encoder" in k:
             if layer_id in modified_mlp_layers:
                 k = k.replace("mlp.", "mlp.mlp_layer.")
         updated_model_state[k] = v
 
-    # Step 5: Replace the model state (retaining other checkpoint entries, e.g. a stored peft config).
     if isinstance(ft_state, dict) and "model_state" in ft_state:
         ft_state["model_state"] = updated_model_state
         out_state = ft_state
@@ -629,7 +604,6 @@ def export_custom_qlora_sam2_model(
     else:
         out_state = {"model": updated_model_state, "model_type": model_type}
 
-    # Step 6: Store the exported checkpoint.
     torch.save(out_state, save_path)
 
 

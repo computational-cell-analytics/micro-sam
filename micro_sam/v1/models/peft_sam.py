@@ -4,11 +4,9 @@ from segment_anything.modeling import Sam
 
 import torch.nn as nn
 
-from micro_sam.models.peft import (
-    AttentionLoRA, MLPLoRA, FacTSurgery, AdaptFormer, ScaleShiftLayer, SelectiveSurgery, quantize_linear_layers,
-)
 from micro_sam.models.peft import (  # noqa
-    AttentionSurgery, BiasSurgery, LayerNormSurgery, ClassicalSurgery,
+    MLPLoRA, AdaptFormer, FacTSurgery, AttentionLoRA, BiasSurgery, ScaleShiftLayer, ClassicalSurgery,
+    AttentionSurgery, SelectiveSurgery, LayerNormSurgery, quantize_linear_layers,
 )
 
 
@@ -40,7 +38,7 @@ class LoRASurgery(nn.Module):
         block.attn.qkv = AttentionLoRA(rank=rank, block=block.attn.qkv, update_matrices=update_matrices)
 
         if "mlp" in update_matrices:
-            # SAM's MLPBlock exposes its two linear layers as 'lin1'/'lin2' with activation 'act'.
+            # SAM stores its MLP layers in `lin1` and `lin2`.
             block.mlp = MLPLoRA(rank=rank, mlp_layer=block.mlp, get_layers=lambda m: (m.lin1, m.lin2, m.act))
 
     def forward(self, x):

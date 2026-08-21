@@ -1,15 +1,6 @@
-"""Shared building blocks for parameter efficient finetuning (PEFT) of SAM and SAM2.
-
-These modules are backbone-agnostic and reused by both `micro_sam.v1.models.peft_sam` (SAM ViT) and
-`micro_sam.v2.models.peft_sam2` (SAM2 Hiera). Version-specific wiring (which model attributes host the
-qkv/mlp/blocks, and methods that only apply to one backbone such as SAM's SSF/FacT/AdaptFormer) lives in
-the respective `peft_sam*.py` modules.
-"""
+"""Shared modules for parameter efficient finetuning (PEFT) of SAM and SAM2."""
 import math
 from typing import Callable, List, Optional, Union
-
-import torch
-import torch.nn as nn
 
 try:
     import bitsandbytes as bnb
@@ -17,18 +8,18 @@ try:
 except ImportError:
     HAVE_BITSANDBYTES = False
 
+import torch
+import torch.nn as nn
+
 
 def quantize_linear_layers(image_encoder: nn.Module):
-    """Replace every `nn.Linear` in `image_encoder` with a 4-bit bitsandbytes `Linear4bit` (for QLoRA).
-
-    This quantizes the frozen backbone so that LoRA adapters can be trained on top at low precision.
-    CUDA-only (requires `bitsandbytes`). Used identically by SAM (`PEFT_Sam`) and SAM2 (`PEFT_Sam2`).
+    """Replace each linear layer with a 4-bit bitsandbytes layer.
 
     Args:
         image_encoder: The image encoder module whose linear layers are quantized in place.
     """
     if not HAVE_BITSANDBYTES:
-        raise ModuleNotFoundError("Please install 'bitsandbytes'.")
+        raise ModuleNotFoundError("'bitsandbytes' is not available. Install it with 'pip install bitsandbytes'.")
 
     for name, module in image_encoder.named_modules():
         if isinstance(module, torch.nn.Linear):
@@ -38,39 +29,34 @@ def quantize_linear_layers(image_encoder: nn.Module):
             for sub_module in parent_path:
                 parent_module = getattr(parent_module, sub_module)
 
-            # Create the new Linear4bit layer.
             linear_q = bnb.nn.Linear4bit(
                 module.in_features,
                 module.out_features,
                 bias=False if module.bias is None else True,
             )
-            # Assign weights and bias to the new layer.
             linear_q.weight = bnb.nn.Params4bit(data=module.weight, requires_grad=False)
             if module.bias is not None:
                 linear_q.bias = torch.nn.Parameter(module.bias)
 
-            # Replace the original linear layer with the quantized one.
             setattr(parent_module, layer_name, linear_q)
 
 
 class AttentionLoRA(nn.Module):
     """Low-rank adaptation on a fused qkv projection.
 
-    Works for both the symmetric SAM ViT qkv (`Linear(dim, dim * 3)`) and the SAM2 Hiera qkv
-    (`Linear(dim, dim_out * 3)`, where `dim_out` differs from `dim` at stage-transition blocks): the
-    input dimension is `qkv.in_features` and each of q/k/v has size `qkv.out_features // 3`.
+    This module supports the symmetric SAM projection and the asymmetric SAM2 Hiera projection.
 
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
         block: The chosen qkv projection layer for implementing LoRA.
-        update_matrices: Which specific matrices to update in the attention layer. Choice of "q", "k", "v".
+        update_matrices: The matrices to update in the attention layer. Choose "q", "k", or "v".
     """
     def __init__(self, rank: int, block: nn.Module, update_matrices: List[str] = ["q", "v"]):
         super().__init__()
         self.qkv_proj = block
         self.in_dim = block.in_features
         self.out_dim = block.out_features // 3
-        self.alpha = 1  # From our experiments, 'alpha' as 1 gives the best performance.
+        self.alpha = 1  # The experiments gave the best results with alpha set to 1.
         self.rank = rank
 
         # By default, we follow LoRA's recommended setup, i.e. update the "q" and "v" matrices.
@@ -110,10 +96,11 @@ class AttentionLoRA(nn.Module):
         new_k = self.alpha * self.w_b_linear_k(self.w_a_linear_k(x)) if hasattr(self, "w_a_linear_k") else 0
         qkv = torch.cat(
             [
-                qkv[..., :d] + new_q,  # replacing new q values.
-                qkv[..., d:2 * d] + new_k,  # replacing new k values.
-                qkv[..., 2 * d:] + new_v  # replacing new v values.
-            ], dim=-1
+                qkv[..., :d] + new_q,
+                qkv[..., d:2 * d] + new_k,
+                qkv[..., 2 * d:] + new_v,
+            ],
+            dim=-1,
         )
 
         return qkv
@@ -122,10 +109,7 @@ class AttentionLoRA(nn.Module):
 class MLPLoRA(nn.Module):
     """Low-rank adaptation on a two-layer feed forward block.
 
-    The two linear layers and the activation are read from `mlp_layer` via the `get_layers` accessor,
-    which decouples this module from the backbone-specific MLP layout (SAM's `lin1`/`lin2` vs SAM2's
-    `layers[0]`/`layers[1]`). The original `mlp_layer` is kept as a submodule so that the frozen MLP
-    weights and their state-dict keys are unchanged.
+    The `get_layers` function supports the different MLP layouts in SAM and SAM2.
 
     Args:
         rank: The rank of the decomposition matrices for updating weights in each feed forward layer.
@@ -175,12 +159,13 @@ class ScaleShiftLayer(nn.Module):
         elif x.shape[1] == self.scale.shape[0]:
             return x * self.scale.view(1, -1, 1, 1) + self.shift.view(1, -1, 1, 1)
         else:
-            raise ValueError('Input tensors do not match the shape of the scale factors.')
+            raise ValueError(
+                f"The input shape {tuple(x.shape)} does not match the scale shape {tuple(self.scale.shape)}."
+            )
 
 
 class SelectiveSurgery(nn.Module):
-    """Base class for selectively allowing gradient updates for certain parameters.
-    """
+    """Allow gradient updates for selected parameters."""
     def __init__(self, block: nn.Module):
         super().__init__()
         self.block = block
@@ -191,7 +176,7 @@ class SelectiveSurgery(nn.Module):
         suffix: Optional[List[str]] = None,
         infix: Optional[List[str]] = None,
     ):
-        """This function decides the parameter attributes to match for allowing gradient updates.
+        """Allow gradient updates for parameter names that match the filters.
 
         Args:
             prefix: Matches the part of parameter name in front.
@@ -215,38 +200,31 @@ class SelectiveSurgery(nn.Module):
 
 
 class AttentionSurgery(SelectiveSurgery):
-    """Child class for allowing gradient updates for parameters in attention layers."""
+    """Allow gradient updates for parameters in attention layers."""
 
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
-        # Allow gradient updates for the attention layers in the image encoder.
         self.allow_gradient_update_for_parameters(prefix=["attn"])
 
 
 class BiasSurgery(SelectiveSurgery):
-    """Child class for allowing gradient updates for bias parameters."""
+    """Allow gradient updates for bias parameters."""
 
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
-        # Allow gradient updates for the bias parameters in the image encoder.
         self.allow_gradient_update_for_parameters(suffix=["bias"])
 
 
 class LayerNormSurgery(SelectiveSurgery):
-    """Child class for allowing gradient updates in normalization layers."""
+    """Allow gradient updates for parameters in normalization layers."""
 
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
-        # Allow gradient updates for the LayerNorm parameters in the image encoder.
         self.allow_gradient_update_for_parameters(infix=["norm1", "norm2"])
 
 
 class ClassicalSurgery(SelectiveSurgery):
-    """Child class for unfreezing entire blocks, used for late (last-block) finetuning.
-
-    Combined with `attention_layers_to_update`, this finetunes only the chosen blocks while keeping
-    the rest of the image encoder frozen.
-    """
+    """Allow gradient updates for all parameters in selected blocks."""
 
     def __init__(self, block: nn.Module):
         super().__init__(block=block)
@@ -260,13 +238,10 @@ class ClassicalSurgery(SelectiveSurgery):
 
 
 class FacTSurgery(nn.Module):
-    """Operates on the attention layers for performing factorized attention.
+    """Apply factorized attention to attention layers.
 
-    (Inspired from: https://github.com/cchen-cc/MA-SAM/blob/main/MA-SAM/sam_fact_tt_image_encoder.py)
-
-    Handles both the symmetric SAM ViT qkv and the asymmetric SAM2 Hiera qkv (dim != dim_out at
-    stage-transition blocks): the input dimension is `qkv.in_features` and each of q/k/v has size
-    `qkv.out_features // 3`.
+    Based on https://github.com/cchen-cc/MA-SAM/blob/main/MA-SAM/sam_fact_tt_image_encoder.py.
+    This module supports the symmetric SAM projection and the asymmetric SAM2 Hiera projection.
 
     Args:
         rank: The rank of the decomposition matrices for updating weights in each attention layer.
@@ -306,13 +281,14 @@ class FacTSurgery(nn.Module):
         new_q = self.FacTv(new_q)
         new_v = self.FacTv(new_v)
 
-        # NOTE: Scaling Factor is set to 1 as it can be tuned via the learning rate.
+        # The learning rate controls the scale, so the scaling factor is 1.
         qkv = torch.cat(
             [
-                qkv[..., :d] + new_q,  # replacing new q values
-                qkv[..., d:2 * d],  # leaving the middle (k) part identical
-                qkv[..., 2 * d:] + new_v  # replacing new v values
-            ], dim=-1
+                qkv[..., :d] + new_q,
+                qkv[..., d:2 * d],
+                qkv[..., 2 * d:] + new_v,
+            ],
+            dim=-1,
         )
 
         return qkv
@@ -324,7 +300,7 @@ class AdaptFormer(nn.Module):
     Args:
         rank: The rank is not used in this class but kept here for consistency.
         block: The chosen encoder block for implementing AdaptFormer.
-        alpha: A parameter that scales the adapter path. Can be either learnable or some fixed value.
+        alpha: The value that scales the adapter path. Pass a number or `"learnable_scalar"`.
         dropout: The dropout rate for the dropout layer between the down and up projection layer.
         projection_size: The size of the projection layer.
     """
@@ -332,14 +308,14 @@ class AdaptFormer(nn.Module):
         self,
         rank: int,
         block: nn.Module,
-        alpha: Optional[Union[str, float]] = "learnable_scalar",  # Stable choice from our preliminary exp.
-        dropout: Optional[float] = None,  # Does not have an obvious advantage.
-        projection_size: int = 64,  # Stable choice from our preliminary exp.
+        alpha: Optional[Union[str, float]] = "learnable_scalar",  # Preliminary experiments support this value.
+        dropout: Optional[float] = None,  # Preliminary experiments show no clear benefit.
+        projection_size: int = 64,  # Preliminary experiments support this value.
     ):
         super().__init__()
 
         self.mlp_proj = block.mlp
-        # SAM ViT's MLPBlock exposes 'lin1'; SAM2's MLP stores its linear layers in a ModuleList.
+        # SAM and SAM2 use different attributes for the first MLP layer.
         self.n_embd = block.mlp.lin1.in_features if hasattr(block.mlp, "lin1") else block.mlp.layers[0].in_features
 
         if alpha == 'learnable_scalar':
@@ -381,10 +357,7 @@ class AdaptFormer(nn.Module):
 
 
 def serialize_peft_kwargs(peft_kwargs: Optional[dict]) -> Optional[dict]:
-    """Convert `peft_kwargs` into a JSON-friendly dict for storing in a checkpoint.
-
-    The `peft_module` entry (a class) is replaced by its class name; all other entries are expected
-    to be plain values (rank, layer ids, matrix names).
+    """Convert `peft_kwargs` to a dictionary that a checkpoint can store.
 
     Args:
         peft_kwargs: The PEFT keyword arguments, or None.
@@ -402,11 +375,11 @@ def serialize_peft_kwargs(peft_kwargs: Optional[dict]) -> Optional[dict]:
 
 
 def deserialize_peft_kwargs(config: Optional[dict], module_registry: dict) -> Optional[dict]:
-    """Rebuild `peft_kwargs` from a serialized config, resolving `peft_module` via a name registry.
+    """Build `peft_kwargs` from a saved configuration.
 
     Args:
         config: The serialized config (as produced by `serialize_peft_kwargs`), or None.
-        module_registry: A mapping from PEFT module class name to the class.
+        module_registry: The mapping from each PEFT module name to its class.
 
     Returns:
         The deserialized `peft_kwargs`, or None if `config` is empty.
