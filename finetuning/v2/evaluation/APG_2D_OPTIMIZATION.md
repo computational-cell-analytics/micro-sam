@@ -214,6 +214,12 @@ additional prompt is issued only where it addresses a measured failure. For effi
 remove or reuse model work (for example, avoid a prompt forward for candidates that can be rejected from
 decoder evidence), not only pack the same work into a larger batch.
 
+That experiment has since been run: see
+[the second part of this document](#second-round-refinement-from-grouped-prompts) for the
+second-round refinement from grouped prompts, which supersedes the box-refinement result above
+(+2.91% macro mSA as `points+boxes`, still short of the gate) and replaces the
+`refine_with_box_prompts` argument with the generalized `refinement` mode.
+
 ## Reproducibility and artifacts
 
 The output root is:
@@ -267,3 +273,276 @@ python finetuning/v2/evaluation/compare_apg_optimization.py \
 ```
 
 The comparator writes the decision summary as JSON and every per-dataset delta as CSV beside it.
+
+---
+
+## Second-round refinement from grouped prompts
+
+The follow-up experiment the conclusions above asked for, previously kept in its own document and
+merged here. It adds a generalized second refinement round to the 2D APG and sweeps it on the same
+benchmark.
+
+### Outcome
+
+Second-round refinement from grouped prompts works in 2d, but only when the re-prompt is anchored by
+the instance's box: `points+boxes` at 3 positives / 6 negatives is the best 2d refinement measured
+so far, +2.91% macro mSA over the baseline and +1.2 points over box-only refinement — for +38.5%
+runtime. The user-facing hypothesis in its pure form — re-prompting with grouped positive points and
+nearby negative points, without a box — is **refuted**: negatives without a box are harmful
+(-1.8% to -6.3% under `replace`), and the best pure-points configuration (+1.27%) stays behind plain
+box refinement.
+
+No configuration approaches the +5% quality gate and every one breaks the 10% runtime cap, so, as
+with the earlier box-refinement experiment, nothing becomes a library default: `refinement=None`
+remains the default and the mechanism ships as an explicit opt-in mode
+(`generate(refinement="points+boxes", refinement_kwargs={"n_positives": 3, "n_negatives": 6})` for
+the quality-optimal setting, `n_negatives=4` for the most balanced per-dataset profile).
+
+**Superseded by [campaign 2](APG_2D_REFINEMENT_2.md)**, which confirmed these findings on a
+held-out validation subset and improved the recommended configuration to +4.19%/+4.89% macro mSA
+(tuned/held-out): one positive, six negatives, geometric acceptance gates — now the refinement
+defaults, so plain `generate(refinement="points+boxes")` is the recommended usage.
+
+### Motivation and mechanism
+
+The parameter and efficiency sweeps above established that relocating the single point
+prompt cannot deliver a meaningful quality gain and that box refinement of every instance improves
+quality (+1.74% macro mSA) but not enough to pay for its second SAM2 pass. Their follow-up
+recommendation was to *add information — an extra positive or negative point — rather than relocate
+the existing one*, and to attribute any gain to a measured failure mode.
+
+This experiment adds a generalized second refinement round to the 2D APG
+(`micro_sam/v2/automatic_prompt_generation.py`). After the first round's merge, every instance is
+re-prompted once, with a `+`-joined combination of three prompt components:
+
+- `points`: the first round's prompts grouped onto the instance — the prompt that made it plus all
+  suppressed prompts whose point lies inside it — as positives (farthest-point subsampled to
+  `n_positives`), and the nearest prompts belonging to other instances as negatives (nearest-first
+  up to `n_negatives`, optionally capped by `max_negative_distance`). See
+  `derive_refinement_prompts`.
+- `boxes`: the instance's bounding box, grown by `box_extension`.
+- `masks`: the instance's mask as a 256x256 logit prompt in SAM2's squashed square frame
+  (`mask_to_logits`). Only valid in combination, since SAM2 is not trained for dense-only prompting.
+
+The acceptance `policy` decides what the second round may do: `replace` repaints every instance
+from its new mask (ascending combined score, so the most confident wins contested pixels, and an
+empty re-prompt keeps the first-round mask), `keep-if-better` keeps the first-round mask unless the
+second round's `predicted_iou * stability_score` beats the first round's. Everything is exposed as
+`generate(refinement=..., refinement_kwargs={...})`; the former `refine_with_box_prompts` /
+`box_extension` arguments were folded into `refinement="boxes"`. In 3D the closely related idea was
+measured before and found neutral (see the module docstring: grouped re-prompting +0.001, adjacent
+negatives +0.001); the 2D case is what this experiment answers.
+
+### Benchmark and decision rules
+
+Same benchmark and gates as the sweeps above: the 240-image 2D
+portion of manifest schema 5, checksum `0f8fb67b3650a71f9f44b53037e89546`, model `hvit_t` checkpoint
+`best` (`85fb099c4bb038fa0ab9bddd6151689e`), serialized runs on an `NVIDIA A100-SXM4-80GB MIG
+1g.20gb`. The goal of this experiment is declared as **exploration**: the refinement stays an
+explicit opt-in mode either way, the gates are reported for the record, and the shortlist is ranked
+by dataset-balanced macro mSA.
+
+The refinement changed `micro_sam/v2/automatic_prompt_generation.py`, so the implementation checksum
+is new: `9f6254b7cce5f6b1471b4801c8809f54`. Three control trials with `refinement=None` re-establish
+the baseline on this implementation. All three exactly reproduce the canonical baseline — macro mSA
+0.269577 and every per-dataset mSA to six decimals — which verifies that the refactor is a no-op
+when the refinement is off. Their wall times are 3.32-3.45 minutes on the 240 2d images.
+
+### Screening
+
+Every refinement configuration shares the first round, so the grids were screened with
+`screen_apg_refinement.py`, which runs `propose` once per image and only the merge plus the
+second-round re-prompt per configuration. Screening ranks quality only; canonical numbers come from
+the full benchmark runs of the shortlist. Four screening rounds were run; every round carries the
+`refinement-none` control, which reproduces the baseline exactly (a verification that the shared
+proposals do not leak between configurations).
+
+#### Round 1: the main grid (27 configurations)
+
+`points` with `n_positives x n_negatives x policy` in `{2,3,5} x {0,2,4} x {replace,
+keep-if-better}`, plus `boxes`, `points+boxes`, `points+masks` and `boxes+masks` at the point
+defaults (`n_positives=3, n_negatives=4`) with both policies.
+
+| configuration | macro mSA | macro change |
+|---|---:|---:|
+| points+boxes replace | 0.275605 | +2.24% |
+| points+boxes keep-if-better | 0.275232 | +2.10% |
+| boxes replace | 0.274108 | +1.68% |
+| boxes keep-if-better | 0.274092 | +1.68% |
+| points p2-n0 replace | 0.272990 | +1.27% |
+| points p2-n0 keep-if-better | 0.272458 | +1.07% |
+| points p3-n0 keep-if-better | 0.271999 | +0.90% |
+| boxes+masks keep-if-better | 0.270781 | +0.45% |
+| ... remaining keep-if-better points configs | 0.2699-0.2707 | +0.1% to +0.4% |
+| baseline (refinement-none) | 0.269577 | 0 |
+| points+masks (both policies) | 0.2680-0.2692 | -0.6% to -0.1% |
+| points with negatives, replace | 0.2525-0.2648 | **-6.3% to -1.8%** |
+
+Three immediate findings:
+
+1. **For the pure point mode, negatives hurt.** Every `n_negatives>0` configuration is worse than
+   its 0-negative counterpart, catastrophically so under `replace` (down to -6.3%). The
+   `keep-if-better` policy contains the damage (the model's own score identifies the bad re-prompts)
+   but never turns negatives into a win. More positives also hurt: p2 > p3 > p5.
+2. **Mask conditioning is neutral to harmful.** `points+masks` is the only mode below baseline in
+   both policies; `boxes+masks` is strictly worse than `boxes`.
+3. **`points+boxes` beats `boxes`** — and it did so at the *untuned* defaults `p3-n4`, i.e. with the
+   very negatives that ruin the pure point mode.
+
+`boxes replace` at +1.68% is consistent with the +1.74% that
+experiment 2 above measured for refining every instance, which
+cross-validates the new engine against the reverted implementation.
+
+#### Rounds 2-4: the `points+boxes` response surface
+
+With a box anchoring the re-prompt, the roles invert — negatives help and extra positives without
+negatives do almost nothing:
+
+| configuration (all replace) | macro mSA | macro change |
+|---|---:|---:|
+| p3-n8 | 0.277965 | +3.11% |
+| p3-n6 | 0.277424 | +2.91% |
+| p5-n6 | 0.276459 | +2.55% |
+| p2-n4 | 0.276357 | +2.52% |
+| p3-n4 | 0.275605 | +2.24% |
+| p5-n4 | 0.274419 | +1.80% |
+| p2-n2 | 0.273516 | +1.46% |
+| p3-n2 | 0.272662 | +1.15% |
+| p1-n0 (box + surviving point) | 0.271461 | +0.70% |
+| p2-n0 | 0.270860 | +0.48% |
+| p3-n0 | 0.270264 | +0.26% |
+| p5-n0 | 0.269632 | +0.02% |
+| p3-n12 | 0.271987 | +0.89% |
+| p3-n16 | 0.256764 | -4.75% |
+
+The negative-count response peaks at 6-8 and collapses beyond 12. The macro peak is misleading,
+though: per-dataset, `p3-n8` is a lopsided trade (DynamicNuclearNet +13.1%, but LiveCELL -4.5%,
+DIC -4.2%, DeepBacs -1.0%), while `p3-n4` and `p3-n6` gain on three datasets and only regress
+LiveCELL (-2.3% / -3.0%) and TissueNet (-1.4% / -0.3%). The shortlist therefore carries `n4` and
+`n6`, not the macro-optimal `n8`.
+
+### Canonical runs
+
+The five shortlisted configurations ran through the canonical benchmark and
+`compare_apg_optimization.py --target quality` against the three control trials. Canonical quality
+matches the screening exactly on every configuration, which validates the screening shortcut
+end to end.
+
+| configuration | macro mSA | macro change | runtime change | worst dataset runtime | accepted |
+|---|---:|---:|---:|---:|---|
+| points+boxes p3-n6 replace | 0.277424 | +2.91% | +38.50% | +72.93% | no |
+| points+boxes p3-n4 replace | 0.275605 | +2.24% | +24.70% | +44.24% | no |
+| points+boxes p3-n4 keep-if-better | 0.275232 | +2.10% | +42.86% | +67.97% | no |
+| boxes replace | 0.274108 | +1.68% | +40.92% | +69.39% | no |
+| points p2-n0 replace | 0.272990 | +1.27% | +42.20% | +71.28% | no |
+
+Every configuration fails the +5% quality bar and the 10% per-dataset runtime cap; none regresses
+any dataset by more than 5%, so that guard is not the limiting gate. The runtime deltas carry the
+usual single-trial noise (the same amount of second-round work measures anywhere between +24.7% and
++42.9%); a second SAM2 pass over every instance costs roughly a third of the run either way, in line
+with the earlier box-refinement measurement. Peak CUDA memory is unchanged at 1.98 GiB.
+
+Per-dataset relative mSA changes:
+
+| configuration | LiveCELL | TissueNet | DynamicNuclearNet | DeepBacs | DIC HepG2 |
+|---|---:|---:|---:|---:|---:|
+| points+boxes p3-n6 replace | -3.04% | -0.33% | +9.62% | +2.37% | +2.76% |
+| points+boxes p3-n4 replace | -2.34% | -1.36% | +6.20% | +4.79% | +6.22% |
+| points+boxes p3-n4 keep-if-better | -2.03% | -1.32% | +5.57% | +4.28% | +10.36% |
+| boxes replace | +0.53% | +1.12% | +3.44% | +1.01% | -1.73% |
+| points p2-n0 replace | -0.33% | +2.20% | +4.98% | -4.61% | +3.13% |
+
+The grouped prompts are what moves the needle in both directions: relative to box-only refinement
+they buy DynamicNuclearNet, DeepBacs and DIC while costing LiveCELL and TissueNet. Box-only is the
+lone variant that improves LiveCELL. As with the earlier point-placement experiment, no single
+setting helps every modality.
+
+### Attribution
+
+The stratification the previous sweep asked for, from the recorded per-sample statistics of
+`points+boxes p3-n4 replace` (the merge reasons are configuration-independent):
+
+| dataset | kept instances | suppressed duplicates | duplicates per instance | mSA change |
+|---|---:|---:|---:|---:|
+| DIC HepG2 | 142 | 1,814 | 12.8 | +6.22% |
+| TissueNet | 2,794 | 1,681 | 0.60 | -1.36% |
+| LiveCELL | 9,369 | 6,017 | 0.64 | -2.34% |
+| DynamicNuclearNet | 2,673 | 716 | 0.27 | +6.20% |
+| DeepBacs | 630 | 305 | 0.48 | +4.79% |
+
+The suppressed-duplicate supply explains DIC (each instance has a dozen grouped prompts to draw on)
+but not DynamicNuclearNet, whose gain arrives with the fewest duplicates per instance — there the
+negatives, not the extra positives, carry the improvement (consistent with the `points+boxes`
+response surface, where `p1-n0` already beats every `n0` setting with more positives). LiveCELL and
+TissueNet sit in the middle of the supply range and regress: densely packed, similarly sized cells
+are exactly where a neighbouring prompt used as a negative most plausibly touches the instance's own
+extent. Under `keep-if-better` the model's own score arbitrates and 100% of instances still adopt
+the second-round mask when a box is present, so the score does not recognise the LiveCELL
+regressions — the predicted IoU of a box-anchored re-prompt is systematically higher than the
+point-prompt score it competes against.
+
+### Conclusions
+
+1. **Grouped prompts pay only when box-anchored.** The best configuration combines all three
+   information sources the first round leaves behind: the box (extent), the grouped positives
+   (identity), and neighbouring prompts as negatives (boundary). Removing the box flips the
+   negatives from +2.4 points (`p3-n4` vs `p3-n0`, boxed) to -5.6 points (unboxed).
+2. **Negative prompts without a box are the failure mode, not the fix.** A single SAM2 forward
+   conditioned on positive points plus foreign negatives fragments the mask; the merge's score
+   ordering then propagates the damage. `keep-if-better` contains it but cannot recover a win.
+3. **The negative-count response peaks at 6-8 and collapses by 16.** The macro-optimal `n8` is a
+   lopsided DynamicNuclearNet trade; `n4`-`n6` is the balanced range.
+4. **Mask conditioning adds nothing** in either combination, consistent with the -0.005 measured for
+   2d-mask conditioning of 3d anchors.
+5. **Nothing is default-worthy.** +2.9% macro at +38% runtime repeats the box-refinement verdict at
+   a higher quality point: worthwhile as an explicit high-quality mode, not as the default. The
+   library default stays `refinement=None`.
+6. **For 3d,** these results sharpen the earlier neutral measurements: the ingredients that were
+   tried there separately (grouped re-prompting +0.001, adjacent negatives +0.001, box conditioning
+   +0.001) are exactly the ones that only work *in combination* in 2d. A 3d revisit should test the
+   combined `points+boxes` conditioning of the anchor slice rather than any single ingredient — but
+   the expected ceiling is low, since 3d selection was shown to sit 0.006 below its oracle.
+
+### Reproducibility and artifacts
+
+Output root as before:
+
+```text
+/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization/hvit_t/
+  85fb099c4bb038fa0ab9bddd6151689e/
+```
+
+Screening results live under `refinement_screening/` below the same root; the four screening run
+directories have config-list checksums `06743d30ffcd067eb3ec516949f90d6a` (main grid),
+`ccede5e7a9026aaaf45ed5d66ad3a814` (`points+boxes` surface), `33202d8b93dbcf3bc655c0f81dd36bfe`
+(negative counts) and `59f166492207785a80cc9b74559a0634` (saturation probe).
+
+Implementation checksum: `9f6254b7cce5f6b1471b4801c8809f54` at revision
+`8bb90584e0f6df22e6995d411146a0434cd160dd` plus the refinement work tree. Control config checksums:
+`3b6baba28669c2897b453f9246222bc5`, `cda279d704fe9845ab424066945cdd11`,
+`8a0d4adc9b39de3f0bddc39ea4300afb` for trials 1-3. Candidate config checksums:
+
+| configuration | checksum |
+|---|---|
+| points+boxes p3-n6 replace | `d178de990f26c71c320bd75921e2927b` |
+| points+boxes p3-n4 replace | `0db6009d7317c02a3def7b200d80b14e` |
+| points+boxes p3-n4 keep-if-better | `5be45599f85f44af53b71cd732f4b6c6` |
+| boxes replace | `c64754f399678f4a263646be6540a3f1` |
+| points p2-n0 replace | `7e41fb3db1a3547d56e8f0e6695f0880` |
+
+A run directory `0f8fb67b...-3b6baba2...-3862c4a2...` with status `failed` is an aborted control
+launched against a pre-final implementation state; it carries no results and can be removed.
+
+```bash
+# Controls and canonical candidate runs:
+python finetuning/v2/evaluation/benchmark_apg_optimization.py --ndim 2 --trial-id control-1
+python finetuning/v2/evaluation/benchmark_apg_optimization.py --ndim 2 --config <candidate>.json
+
+# Screening:
+python finetuning/v2/evaluation/screen_apg_refinement.py --device cuda
+
+# Comparison:
+python finetuning/v2/evaluation/compare_apg_optimization.py --ndim 2 --target quality \
+    --baseline-run <control-1> --baseline-run <control-2> --baseline-run <control-3> \
+    --candidate-run <candidate> --output <decisions>.json
+```

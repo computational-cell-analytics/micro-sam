@@ -91,6 +91,22 @@ SAMPLE_COUNTS_2D = {
     "deepbacs": 30,
     "dic_hepg2": 50,
 }
+# The held-out subset, image-disjoint from the primary one wherever the validation pool allows it.
+# The primary set has been mined by repeated screening, so candidate configurations tuned on it are
+# confirmed here. DeepBacs is exhausted (all 30 validation images are primary), so it is reused
+# verbatim and its column is not held out. DIC has 93 usable validation images, of which the primary
+# set takes 50, leaving 43; the test splits would close both gaps but are the evaluated splits, so
+# selecting on them is exactly the leak `VAL_SPLITS` exists to prevent. Unequal counts do not skew
+# the primary quality figure, which is an equal-weight mean of the per-dataset means.
+SAMPLE_COUNTS_2D_HOLDOUT = {
+    "livecell": 80,
+    "tissuenet": 40,
+    "dynamicnuclearnet": 40,
+    "deepbacs": 30,
+    "dic_hepg2": 43,
+}
+HOLDOUT_REUSED_DATASETS = ("deepbacs",)
+MANIFEST_SUBSETS = ("primary", "holdout")
 TARGETS_3D = (0.5,)
 # Match the 512 x 512 training field of view and use enough depth to contain representative 3d
 # structure. C. elegans keeps the deeper crop needed to contain its 11-13-slice nuclei; its source
@@ -202,14 +218,17 @@ def _validate_roots(data_root: Path, output_root: Path, manifest_path: Path) -> 
     return data_root, output_root, manifest_path
 
 
-def _default_manifest_path(output_root: Path, variant: str) -> Path:
-    """Where a crop variant keeps its manifest.
+def _default_manifest_path(output_root: Path, variant: str, subset: str = "primary") -> Path:
+    """Where a crop variant and subset keep their manifest.
 
     Each variant gets its own file so both crop sets stay reproducible from one revision, and the
     schema version is not bumped: `_validate_manifest` requires an exact match, so a bump would make
-    the existing standard manifest unloadable and orphan every result measured against it.
+    the existing standard manifest unloadable and orphan every result measured against it. The
+    holdout subset follows the same rule with its own suffix.
     """
     suffix = "" if variant == "standard" else f"_{variant}3d"
+    if subset != "primary":
+        suffix += f"_{subset}"
     return output_root / f"subset_manifest_v{MANIFEST_SCHEMA_VERSION}{suffix}.json"
 
 
@@ -366,10 +385,42 @@ def _scan_2d_dataset(dataset: str, data_root: Path) -> List[Dict[str, Any]]:
     return candidates
 
 
-def _select_2d_samples(data_root: Path) -> List[Dict[str, Any]]:
+def _select_2d_samples(
+    data_root: Path,
+    counts: Dict[str, int] = SAMPLE_COUNTS_2D,
+    exclude_raw_paths: Optional[Dict[str, set]] = None,
+    reuse_samples: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> List[Dict[str, Any]]:
+    """Select the 2d samples, per dataset at even complexity quantiles.
+
+    Args:
+        data_root: The read-only dataset root.
+        counts: Number of samples per dataset.
+        exclude_raw_paths: Raw paths (relative to the data root) that must not be selected, per
+            dataset. This is how the holdout subset stays image-disjoint from the primary one.
+        reuse_samples: Samples to copy verbatim instead of selecting, per dataset. This is how an
+            exhausted dataset (all validation images already primary) still appears in the holdout.
+
+    Returns:
+        The selected samples, with their 'sample_id' set.
+    """
+    exclude_raw_paths = exclude_raw_paths or {}
+    reuse_samples = reuse_samples or {}
     samples = []
     for dataset in DATASETS_2D:
-        candidates = _scan_2d_dataset(dataset, data_root)
+        if dataset in reuse_samples:
+            reused = [dict(sample) for sample in reuse_samples[dataset]]
+            if len(reused) != counts[dataset]:
+                raise RuntimeError(
+                    f"Expected {counts[dataset]} reused samples for '{dataset}', got {len(reused)}."
+                )
+            samples.extend(reused)
+            continue
+        excluded = exclude_raw_paths.get(dataset, set())
+        candidates = [
+            candidate for candidate in _scan_2d_dataset(dataset, data_root)
+            if candidate["raw_path"] not in excluded
+        ]
         if dataset == "livecell":
             by_type = defaultdict(list)
             for candidate in candidates:
@@ -379,11 +430,12 @@ def _select_2d_samples(data_root: Path) -> List[Dict[str, Any]]:
             if missing:
                 raise RuntimeError(f"LIVECell validation data is missing cell types: {missing}.")
             selected = []
-            n_per_type, remainder = divmod(SAMPLE_COUNTS_2D[dataset], len(LIVECELL_TYPES))
+            n_per_type, remainder = divmod(counts[dataset], len(LIVECELL_TYPES))
             if remainder:
                 raise RuntimeError("The LIVECell sample count must be divisible by its cell-type count.")
             for cell_type in LIVECELL_TYPES:
                 group = by_type[cell_type]
+                # Complexity is pool-relative, so it is computed on the (possibly filtered) group.
                 _add_complexity(group)
                 choices = _select_nearest(group, _quantile_targets(n_per_type))
                 for choice in choices:
@@ -391,7 +443,7 @@ def _select_2d_samples(data_root: Path) -> List[Dict[str, Any]]:
                     selected.append(choice)
         else:
             _add_complexity(candidates)
-            selected = _select_nearest(candidates, _quantile_targets(SAMPLE_COUNTS_2D[dataset]))
+            selected = _select_nearest(candidates, _quantile_targets(counts[dataset]))
         for sample in selected:
             sample["sample_id"] = _sample_identity(sample)
             samples.append(sample)
@@ -554,7 +606,14 @@ def _selection_policy_3d(variant: str) -> Dict[str, Any]:
     }
 
 
-def _validate_manifest(manifest: Dict[str, Any], data_root: Path, variant: str) -> None:
+def _sample_counts_2d(subset: str) -> Dict[str, int]:
+    """The expected per-dataset 2d sample counts of a manifest subset."""
+    if subset not in MANIFEST_SUBSETS:
+        raise ValueError(f"Unknown manifest subset '{subset}'; expected one of {list(MANIFEST_SUBSETS)}.")
+    return SAMPLE_COUNTS_2D_HOLDOUT if subset == "holdout" else SAMPLE_COUNTS_2D
+
+
+def _validate_manifest(manifest: Dict[str, Any], data_root: Path, variant: str, subset: str = "primary") -> None:
     if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
         raise RuntimeError(
             f"Unsupported manifest schema {manifest.get('schema_version')}; expected {MANIFEST_SCHEMA_VERSION}."
@@ -574,6 +633,13 @@ def _validate_manifest(manifest: Dict[str, Any], data_root: Path, variant: str) 
             f"The subset manifest was not built for the '{variant}' 3d crop variant: "
             f"{stored_policy} != {expected_policy}."
         )
+    # A pre-holdout manifest carries no 'subset' key, so its absence means the primary subset. This
+    # keeps every existing primary manifest, and hence every result keyed on its checksum, valid.
+    stored_subset = policy.get("subset", "primary")
+    if stored_subset != subset:
+        raise RuntimeError(f"The manifest holds the '{stored_subset}' subset, but '{subset}' was requested.")
+    if subset == "holdout" and not policy.get("holdout_of"):
+        raise RuntimeError("A holdout manifest must record the primary manifest it was built against.")
     samples = manifest.get("samples", [])
     counts = defaultdict(int)
     identifiers = set()
@@ -586,37 +652,96 @@ def _validate_manifest(manifest: Dict[str, Any], data_root: Path, variant: str) 
         _source_path(sample["label_path"], data_root)
         if sample["object_count"] <= 0:
             raise RuntimeError(f"Manifest sample '{sample['sample_id']}' has empty ground truth.")
-    expected = {(dataset, 2): SAMPLE_COUNTS_2D[dataset] for dataset in DATASETS_2D}
+    sample_counts = _sample_counts_2d(subset)
+    expected = {(dataset, 2): sample_counts[dataset] for dataset in DATASETS_2D}
     expected.update({(dataset, 3): 1 for dataset in DATASETS_3D})
     if dict(counts) != expected:
         raise RuntimeError(f"Unexpected manifest sample counts: got {dict(counts)}, expected {expected}.")
 
 
-def prepare_manifest(data_root: Path, manifest_path: Path, variant: str = "standard") -> Dict[str, Any]:
+def _holdout_2d_samples(data_root: Path, primary: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Select the holdout 2d samples: image-disjoint from the primary subset, except where exhausted.
+
+    Returns:
+        The samples, and the policy entries that record what the holdout was built against.
+    """
+    primary_raw_paths = defaultdict(set)
+    primary_by_dataset = defaultdict(list)
+    for sample in primary["samples"]:
+        if sample["ndim"] != 2:
+            continue
+        primary_raw_paths[sample["dataset"]].add(sample["raw_path"])
+        primary_by_dataset[sample["dataset"]].append(sample)
+
+    reuse = {dataset: primary_by_dataset[dataset] for dataset in HOLDOUT_REUSED_DATASETS}
+    samples = _select_2d_samples(
+        data_root, counts=SAMPLE_COUNTS_2D_HOLDOUT, exclude_raw_paths=primary_raw_paths, reuse_samples=reuse,
+    )
+
+    # The whole point of the holdout is disjointness, so it is asserted rather than assumed.
+    for sample in samples:
+        if sample["dataset"] in HOLDOUT_REUSED_DATASETS:
+            continue
+        if sample["raw_path"] in primary_raw_paths[sample["dataset"]]:
+            raise RuntimeError(f"Holdout sample '{sample['sample_id']}' reuses a primary image.")
+
+    policy = {
+        "subset": "holdout",
+        "holdout_of": primary["manifest_checksum"],
+        # Not held out: every validation image of these datasets is already in the primary subset.
+        "reused_datasets": list(HOLDOUT_REUSED_DATASETS),
+    }
+    return samples, policy
+
+
+def prepare_manifest(
+    data_root: Path, manifest_path: Path, variant: str = "standard", subset: str = "primary",
+    primary_manifest_path: Optional[Path] = None,
+) -> Dict[str, Any]:
     if variant not in CROP_VARIANTS_3D:
         raise ValueError(f"Unknown 3d crop variant '{variant}'; expected one of {list(CROP_VARIANTS_3D)}.")
+    sample_counts = _sample_counts_2d(subset)
     if manifest_path.exists():
         with open(manifest_path) as f:
             manifest = json.load(f)
-        _validate_manifest(manifest, data_root, variant)
+        _validate_manifest(manifest, data_root, variant, subset)
         return manifest
 
-    samples = _select_2d_samples(data_root) + _select_3d_samples(data_root, variant)
+    subset_policy = {}
+    if subset == "holdout":
+        # The holdout is defined by exclusion, so the primary manifest it excludes must exist first.
+        primary_path = primary_manifest_path or _default_manifest_path(manifest_path.parent, variant)
+        if not primary_path.exists():
+            raise RuntimeError(
+                f"The holdout subset is built against the primary manifest, which does not exist yet: "
+                f"'{primary_path}'. Prepare the primary manifest first."
+            )
+        with open(primary_path) as f:
+            primary = json.load(f)
+        _validate_manifest(primary, data_root, variant, "primary")
+        samples_2d, subset_policy = _holdout_2d_samples(data_root, primary)
+        # The volumes are carried over verbatim: the holdout is a 2d instrument, but the schema and
+        # its validator expect one volume per 3d dataset, and a copied volume keeps `--ndim 3` honest.
+        samples = samples_2d + [dict(sample) for sample in primary["samples"] if sample["ndim"] == 3]
+    else:
+        samples = _select_2d_samples(data_root) + _select_3d_samples(data_root, variant)
+
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "data_root": str(data_root),
         "selection_policy": {
             "2d_crop_shape": list(CROP_SHAPE_2D),
-            "2d_sample_counts": SAMPLE_COUNTS_2D,
+            "2d_sample_counts": sample_counts,
             "2d_complexity_targets": "even quantile midpoints within each dataset and LIVECell cell type",
             "3d_complexity_targets": list(TARGETS_3D),
             "complexity": "mean percentile rank of object count and foreground fraction",
+            **subset_policy,
             **_selection_policy_3d(variant),
         },
         "samples": samples,
     }
     manifest["manifest_checksum"] = _content_checksum(_manifest_identity(manifest))
-    _validate_manifest(manifest, data_root, variant)
+    _validate_manifest(manifest, data_root, variant, subset)
     _atomic_write_json(manifest_path, manifest)
     return manifest
 
@@ -895,6 +1020,7 @@ def run_benchmark(
     joint_checkpoint: str, config_name: str, params_2d: Dict[str, Any], params_3d: Dict[str, Any],
     device: str, time_budget_minutes: float, dimensions: Sequence[int] = (2, 3),
     trial_id: str = "trial-1", started: Optional[float] = None, crops_3d: str = "standard",
+    subset: str = "primary",
 ) -> Tuple[Path, pd.DataFrame, Dict[str, Any]]:
     started = time.perf_counter() if started is None else started
     checkpoint_path = get_joint_checkpoint(model_type, joint_checkpoint)
@@ -943,9 +1069,10 @@ def run_benchmark(
         "params_3d": params_3d,
         "dimensions": list(dimensions),
         "trial_id": trial_id,
-        # Recorded for attribution only. The crop variant already reaches the run directory through
-        # the manifest checksum, so it must not enter a checksum of its own.
+        # Recorded for attribution only. The crop variant and subset already reach the run directory
+        # through the manifest checksum, so they must not enter a checksum of their own.
         "crops_3d": crops_3d,
+        "subset": subset,
         "device": device,
         "gpu": torch.cuda.get_device_name(torch.device(device)) if device.startswith("cuda") else None,
         "platform": platform.platform(),
@@ -1012,9 +1139,14 @@ def main() -> None:
         help="The 3d crop set. 'deep' opts in to 32-slice crops, the depth a depth-dependent "
              "optimization needs to be measurable, and keeps its own manifest beside the standard one.",
     )
+    parser.add_argument(
+        "--subset", choices=MANIFEST_SUBSETS, default="primary",
+        help="The validation subset. 'holdout' is image-disjoint from the primary subset (except "
+             "the exhausted DeepBacs) and confirms configurations that were tuned on it.",
+    )
     args = parser.parse_args()
 
-    manifest_path = args.manifest or _default_manifest_path(args.output_root, args.crops_3d)
+    manifest_path = args.manifest or _default_manifest_path(args.output_root, args.crops_3d, args.subset)
     data_root, output_root, manifest_path = _validate_roots(args.data_root, args.output_root, manifest_path)
     if args.time_budget_minutes <= 0:
         parser.error("--time-budget-minutes must be positive.")
@@ -1024,11 +1156,12 @@ def main() -> None:
         print("Warning: the 30-minute runtime target was calibrated on an A100, not on CPU.", file=sys.stderr)
 
     output_root.mkdir(parents=True, exist_ok=True)
-    manifest = prepare_manifest(data_root, manifest_path, args.crops_3d)
+    manifest = prepare_manifest(data_root, manifest_path, args.crops_3d, subset=args.subset)
     print(
         f"Manifest: {manifest_path}\n"
         f"Checksum: {manifest['manifest_checksum']}\n"
         f"3d crops: {args.crops_3d}\n"
+        f"Subset: {args.subset}\n"
         f"Samples: {sum(sample['ndim'] == 2 for sample in manifest['samples'])} 2d + "
         f"{sum(sample['ndim'] == 3 for sample in manifest['samples'])} 3d"
     )
@@ -1050,6 +1183,7 @@ def main() -> None:
         manifest, data_root, output_root, args.model_type, args.joint_checkpoint,
         config_name, params_2d, params_3d, args.device, args.time_budget_minutes,
         dimensions=dimensions, trial_id=args.trial_id, started=started, crops_3d=args.crops_3d,
+        subset=args.subset,
     )
     print(summary.to_string(index=False))
     print(f"Run directory: {run_dir}")
