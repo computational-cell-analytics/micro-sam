@@ -716,7 +716,8 @@ def get_unisam2_model(
     """
     from micro_sam.v2.models.util import UniSAM2
 
-    state = torch.load(checkpoint_path, weights_only=False, map_location=device or "cpu")
+    device = "cpu" if device is None else device
+    state = torch.load(checkpoint_path, weights_only=False, map_location=device)
     # A joint checkpoint holds both; 'unetr_state' is the decoder, 'model_state' the interactive model.
     if isinstance(state, dict):
         model_state = state.get("unetr_state", state.get("model_state", state))
@@ -739,20 +740,18 @@ def get_unisam2_model(
         base_model_type = encoder if isinstance(encoder, str) else encoder_model_type
         if base_model_type is None:
             raise ValueError("Set 'encoder_model_type' when you pass a prebuilt PEFT encoder.")
-        sam2_model = get_sam2_model(model_type=base_model_type, input_type="images", device=device or "cpu")
+        sam2_model = get_sam2_model(model_type=base_model_type, input_type="images", device=device)
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         encoder = sam2_model.image_encoder
 
     # The decoder width is not recorded in the checkpoint, so read it off 'out_conv'.
     initial_features = model_state["out_conv.weight"].shape[1]
 
-    model = UniSAM2(encoder=encoder, output_channels=output_channels, initial_features=initial_features)
+    model = UniSAM2(encoder=encoder, output_channels=output_channels, initial_features=initial_features, device=device)
     if peft_kwargs and is_qlora:
         model_state = _convert_automatic_qlora_state(model, model_state)
     model.load_state_dict(model_state)
 
-    if device is not None:
-        model.to(device)
     model.eval()
     return model
 

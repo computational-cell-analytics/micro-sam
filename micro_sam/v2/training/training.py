@@ -587,13 +587,14 @@ def _build_unisam2_model(model_type, device, peft_kwargs=None, output_channels=4
         sam2_model = get_sam2_model(model_type=model_type, input_type="images", device=device)
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         model = UniSAM2(
-            encoder=sam2_model.image_encoder, output_channels=output_channels, initial_features=initial_features
-        ).to(device)
+            encoder=sam2_model.image_encoder, output_channels=output_channels,
+            initial_features=initial_features, device=device,
+        )
         model.peft_config = serialize_peft_kwargs(peft_kwargs)
     else:
         model = UniSAM2(
-            encoder=model_type, output_channels=output_channels, initial_features=initial_features
-        ).to(device)
+            encoder=model_type, output_channels=output_channels, initial_features=initial_features, device=device
+        )
     return model
 
 
@@ -812,8 +813,8 @@ def train_automatic_multi_gpu(
     overwrite_training: bool = True,
     load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     find_unused_parameters: bool = True,
-    initial_features: int = 64,
     peft_kwargs: Optional[Dict] = None,
+    initial_features: int = 64,
 ) -> None:
     """Train UniSAM2 for automatic segmentation across multiple GPUs with DDP.
 
@@ -841,9 +842,9 @@ def train_automatic_multi_gpu(
             scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
             the pretrained SAM2 weights to start from.
         find_unused_parameters: Passed to DistributedDataParallel.
+        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
-        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
     """
     if z_slices is None:
         z_slices = [8]
@@ -1013,8 +1014,8 @@ def train_joint_sam2(
         bidirectional=bidirectional,
     )
     unetr = UniSAM2(
-        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features
-    ).to(device)
+        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features, device=device
+    )
 
     interactive_loss = CustomSAM2Loss(
         use_focal_loss=use_focal_loss, focal_weight=focal_weight,
@@ -1157,8 +1158,8 @@ def _train_joint_rank(
         bidirectional=bidirectional,
     )
     unetr = UniSAM2(
-        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features
-    ).to(device)
+        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features, device=device
+    )
 
     # Only DDP-wrap sam2_model. We sync the unetr decoder grads manually.
     ddp_model = DDP(sam2_model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)

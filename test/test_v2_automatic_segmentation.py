@@ -641,13 +641,44 @@ def test_get_decoder_requires_a_source():
         get_decoder("hvit_t")
 
 
+def test_unisam2_string_encoder_defaults_to_cpu(monkeypatch):
+    from micro_sam.v2.models import util as models_util
+
+    requested_devices = []
+
+    def get_sam2_model(**kwargs):
+        requested_devices.append(kwargs["device"])
+        return types.SimpleNamespace(image_encoder=torch.nn.Linear(1, 1))
+
+    monkeypatch.setattr(models_util, "get_sam2_model", get_sam2_model)
+
+    model = models_util.UniSAM2(encoder="hvit_t", initial_features=4)
+
+    assert requested_devices == [torch.device("cpu")]
+    assert {parameter.device.type for parameter in model.parameters()} == {"cpu"}
+
+
+def test_unisam2_uses_one_device(monkeypatch):
+    from micro_sam.v2.models import util as models_util
+
+    def get_sam2_model(**kwargs):
+        return types.SimpleNamespace(image_encoder=torch.nn.Linear(1, 1, device=kwargs["device"]))
+
+    monkeypatch.setattr(models_util, "get_device", lambda device: device)
+    monkeypatch.setattr(models_util, "get_sam2_model", get_sam2_model)
+
+    model = models_util.UniSAM2(encoder="hvit_t", initial_features=4, device="meta")
+
+    assert {parameter.device.type for parameter in model.parameters()} == {"meta"}
+
+
 def test_get_decoder_preserves_the_peft_encoder_architecture(tmp_path, monkeypatch):
     from micro_sam.v2 import util as v2_util
     from micro_sam.v2.models import peft_sam2
     from micro_sam.v2.models import util as models_util
 
     class FakeUniSAM2:
-        def __init__(self, encoder, output_channels, initial_features=64):
+        def __init__(self, encoder, output_channels, initial_features=64, device=None):
             self.encoder = encoder
 
         def load_state_dict(self, state):
@@ -686,7 +717,7 @@ def test_get_unisam2_model_converts_automatic_qlora_state(tmp_path, monkeypatch)
     from micro_sam.v2.instance_segmentation import get_unisam2_model
 
     class FakeUniSAM2(torch.nn.Module):
-        def __init__(self, encoder, output_channels, initial_features=64):
+        def __init__(self, encoder, output_channels, initial_features=64, device=None):
             super().__init__()
             self.encoder = torch.nn.Module()
             self.encoder.inner = torch.nn.Module()
@@ -720,6 +751,14 @@ def test_get_unisam2_model_converts_automatic_qlora_state(tmp_path, monkeypatch)
     assert torch.equal(model.encoder.inner.frozen_weight, torch.tensor([1.0, 2.0]))
     assert torch.equal(model.encoder.inner.adapter_weight, torch.tensor([3.0]))
     assert torch.equal(model.decoder_weight, torch.tensor([4.0]))
+
+
+def test_train_automatic_multi_gpu_preserves_peft_positional_slot():
+    from micro_sam.v2.training.training import train_automatic_multi_gpu
+
+    parameters = list(inspect.signature(train_automatic_multi_gpu).parameters)
+
+    assert parameters[-2:] == ["peft_kwargs", "initial_features"]
 
 
 class _AttrArray(np.ndarray):
