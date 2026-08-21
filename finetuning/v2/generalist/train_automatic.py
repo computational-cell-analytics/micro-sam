@@ -19,12 +19,22 @@ def main():
         dataset_choice="both",
         n_workers=16,
     )
+
+    # Set 'peft_kwargs' to finetune with a parameter efficient method instead of full finetuning: the
+    # SAM2 image encoder is frozen and the method is applied on top of it, while the UniSAM2 decoder is
+    # trained. Examples:
+    #   from micro_sam.v2.models.peft_sam2 import LoRASurgery, ClassicalSurgery
+    #   peft_kwargs = {"rank": 4, "peft_module": LoRASurgery}  # LoRA on all Hiera blocks
+    #   peft_kwargs = {"peft_module": ClassicalSurgery, "attention_layers_to_update": [11]}  # late finetuning
+    peft_kwargs = None
+
     trainer_kwargs = dict(
         name=name,
         model_type=model_type,
         n_iterations=int(2e5),
         lr=1e-5,
         save_root=save_root,
+        peft_kwargs=peft_kwargs,  # None = full finetuning; set above to use LoRA / late finetuning
     )
 
     if n_gpus > 1:  # i.e. for multiple GPUs

@@ -1,5 +1,5 @@
 import os
-from typing import Callable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import torch
 
@@ -12,6 +12,7 @@ def get_sam2_train_model(
     device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,
+    peft_kwargs: Optional[Dict] = None,
     prob_to_use_pt_input: float = 0.5,
     prob_to_use_box_input: float = 0.5,
     num_frames_to_correct: int = 1,
@@ -37,6 +38,7 @@ def get_sam2_train_model(
         device: Target device. Auto-selects if None.
         checkpoint_path: Path to a custom checkpoint. Downloads default weights if None.
         freeze: Component name prefixes to freeze (e.g. ["image_encoder"]).
+        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
         prob_to_use_pt_input: Probability of using point/box prompts (vs mask propagation).
         prob_to_use_box_input: Conditional probability of using a box instead of a click.
         num_frames_to_correct: Max number of frames per volume that receive iterative
@@ -115,8 +117,17 @@ def get_sam2_train_model(
         apply_postprocessing=False,
     )
 
+    if peft_kwargs:
+        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
+        from micro_sam.models.peft import serialize_peft_kwargs
+
+        model = PEFT_Sam2(model, **peft_kwargs).sam.to(device)
+        model.peft_config = serialize_peft_kwargs(peft_kwargs)
+
     if freeze is not None:
         components = [freeze] if isinstance(freeze, str) else freeze
+        if peft_kwargs and "image_encoder" in components:
+            raise ValueError("You cannot use PEFT and freeze the image encoder at the same time.")
         for name, param in model.named_parameters():
             if any(name.startswith(c) for c in components):
                 param.requires_grad = False
