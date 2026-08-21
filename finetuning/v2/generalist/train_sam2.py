@@ -21,6 +21,14 @@ def main():
         dataset_choice="both",
         n_workers=16,
     )
+
+    # Set 'peft_kwargs' to finetune with a parameter efficient method instead of full finetuning
+    # (passed through to get_sam2_train_model, which freezes the image encoder and applies the method).
+    # Examples:
+    #   from micro_sam.v2.models.peft_sam2 import LoRASurgery, ClassicalSurgery
+    #   peft_kwargs = {"rank": 4, "peft_module": LoRASurgery}  # LoRA on all Hiera blocks
+    #   peft_kwargs = {"peft_module": ClassicalSurgery, "attention_layers_to_update": [11]}  # late finetuning
+    peft_kwargs = None
     trainer_kwargs = dict(
         name=name,
         model_type=model_type,
@@ -44,6 +52,7 @@ def main():
         focal_weight=1.0,  # keep focal on equal footing with dice (SAM2 uses 20)
         use_object_score_loss=True,  # supervise object presence (needed for 3D propagation)
         average_over_frames=False,  # sum over frames so 3D keeps its per-slice weight (like v2)
+        peft_kwargs=peft_kwargs,  # None = full finetuning; set above to use LoRA / late finetuning
     )
 
     if is_multi_gpu:

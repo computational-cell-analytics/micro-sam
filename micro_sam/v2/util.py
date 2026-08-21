@@ -426,11 +426,65 @@ def _get_checkpoint(model_type=_DEFAULT_MODEL):
     return checkpoint_path
 
 
+def _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type):
+    """Build the SAM2 image model or the SAM2 video predictor from a config and a checkpoint."""
+    if input_type == "images":
+        return build_sam2(
+            config_file=model_cfg, ckpt_path=checkpoint_path, device=device, mode="eval", apply_postprocessing=False
+        )
+    return _build_sam2_video_predictor(config_file=model_cfg, ckpt_path=checkpoint_path, device=device)
+
+
+def _load_peft_finetuned_sam2(model_cfg, model_type, input_type, finetuned_checkpoint, device, peft_kwargs, state=None):
+    """Build a SAM2 model and load weights from PEFT.
+
+    The function applies the PEFT method before it loads the added parameters.
+
+    Args:
+        model_cfg: The SAM2 model config path.
+        model_type: The SAM2 model name. The first six characters select the base backbone.
+        input_type: The input type, which is images or videos.
+        finetuned_checkpoint: The path to the PEFT checkpoint.
+        device: The pytorch device.
+        peft_kwargs: The arguments for `PEFT_Sam2`.
+        state: The checkpoint data. The function loads `finetuned_checkpoint` if this value is None.
+
+    Returns:
+        The PEFT SAM2 model with the finetuned weights loaded.
+    """
+    from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
+
+    base_checkpoint = _get_checkpoint(model_type=model_type[:6])
+    model = _build_sam2_backbone(model_cfg, base_checkpoint, device, input_type)
+    model = PEFT_Sam2(model, **peft_kwargs).sam
+
+    if state is None:
+        state = torch.load(finetuned_checkpoint, map_location="cpu", weights_only=False)
+    if isinstance(state, dict) and "model" in state:
+        model_state = state["model"]
+    elif isinstance(state, dict) and "model_state" in state:
+        model_state = state["model_state"]
+    else:
+        model_state = state
+    model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in model_state.items()}
+
+    try:
+        model.load_state_dict(model_state)
+    except RuntimeError as e:
+        raise RuntimeError(
+            f"The PEFT weights do not match peft_kwargs={peft_kwargs}. Pass the settings that the training used."
+        ) from e
+    model.to(device)
+    model.eval()
+    return model
+
+
 def get_sam2_model(
     model_type: str = _DEFAULT_MODEL,
     device: Optional[Union[torch.device, str]] = None,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     input_type: Literal["images", "videos"] = "images",
+    peft_kwargs: Optional[dict] = None,
 ):
     """Get the Segment Anything 2 (SAM2) model for interactive segmentation of images and videos.
 
@@ -439,6 +493,7 @@ def get_sam2_model(
         device: The pytorch device.
         checkpoint_path: Filepath to the pretrained model weights.
         input_type: Whether the inputs are images or videos.
+        peft_kwargs: The arguments for `PEFT_Sam2`. The function uses the arguments in the checkpoint by default.
 
     Returns:
         The SAM2 model.
@@ -453,24 +508,103 @@ def get_sam2_model(
     if input_type not in ("images", "videos"):
         raise ValueError(f"'{input_type}' is not a valid input type.")
 
+    user_provided_checkpoint = checkpoint_path is not None
+
     if checkpoint_path is None:
         if is_finetuned:
             checkpoint_path, _, _ = _download_finetuned_sam2_model(model_type)
         else:
             checkpoint_path = _get_checkpoint(model_type=model_type)
 
-    if input_type == "images":
-        model = build_sam2(
-            config_file=model_cfg, ckpt_path=checkpoint_path, device=device, mode="eval", apply_postprocessing=False,
+    saved_state = None
+    if not peft_kwargs and user_provided_checkpoint:
+        from micro_sam.v2.models.peft_sam2 import PEFT_MODULES
+        from micro_sam.models.peft import deserialize_peft_kwargs
+
+        saved_state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        if isinstance(saved_state, dict) and saved_state.get("peft_kwargs") is not None:
+            peft_kwargs = deserialize_peft_kwargs(saved_state["peft_kwargs"], PEFT_MODULES)
+        else:
+            saved_state = None
+
+    if peft_kwargs:
+        peft_kwargs = {k: v for k, v in peft_kwargs.items() if k != "quantize"}
+        model = _load_peft_finetuned_sam2(
+            model_cfg, model_type, input_type, checkpoint_path, device, peft_kwargs, state=saved_state
         )
     else:
-        model = _build_sam2_video_predictor(config_file=model_cfg, ckpt_path=checkpoint_path, device=device)
+        model = _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type)
 
     # Both predictor wrappers and direct model use need this metadata for embedding signatures.
     model.model_type = model_type
     model.model_name = model_type  # TODO: What is this exactly?
 
     return model
+
+
+def export_custom_qlora_sam2_model(
+    checkpoint_path: Optional[Union[str, os.PathLike]],
+    finetuned_path: Union[str, os.PathLike],
+    model_type: str,
+    save_path: Union[str, os.PathLike],
+) -> None:
+    """Export a SAM2 model from QLoRA to a full-precision LoRA checkpoint.
+
+    The export keeps the trained parameters. It gets the frozen encoder parameters from the base model.
+
+    Args:
+        checkpoint_path: The path to the base checkpoint. Use None to download the default checkpoint.
+        finetuned_path: The path to the QLoRA checkpoint.
+        model_type: The SAM2 model type, for example, 'hvit_t'.
+        save_path: The path for the exported checkpoint.
+    """
+    sam = get_sam2_model(model_type=model_type, checkpoint_path=checkpoint_path, device="cpu")
+
+    ft_state = torch.load(finetuned_path, map_location="cpu", weights_only=False)
+    if isinstance(ft_state, dict) and "model_state" in ft_state:
+        ft_model_state = ft_state["model_state"]
+    elif isinstance(ft_state, dict) and "model" in ft_state:
+        ft_model_state = ft_state["model"]
+    else:
+        ft_model_state = ft_state
+    ft_model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in ft_model_state.items()}
+
+    updated_model_state = {k: v for k, v in ft_model_state.items() if not k.startswith("image_encoder.")}
+    modified_attn_layers = set()
+    modified_mlp_layers = set()
+    for k, v in ft_model_state.items():
+        if not k.startswith("image_encoder."):
+            continue
+        layer_id = int(k.split("blocks.")[1].split(".")[0]) if "blocks." in k else None
+        if "qkv.w_a_linear" in k or "qkv.w_b_linear" in k:
+            modified_attn_layers.add(layer_id)
+            updated_model_state[k] = v
+        if "mlp.w_a_linear" in k or "mlp.w_b_linear" in k:
+            modified_mlp_layers.add(layer_id)
+            updated_model_state[k] = v
+
+    for k, v in sam.state_dict().items():
+        if not k.startswith("image_encoder."):
+            continue
+        layer_id = int(k.split("blocks.")[1].split(".")[0]) if "blocks." in k else None
+        if "attn.qkv." in k:
+            if layer_id in modified_attn_layers:
+                k = k.replace("qkv", "qkv.qkv_proj")
+        elif "mlp" in k and "image_encoder" in k:
+            if layer_id in modified_mlp_layers:
+                k = k.replace("mlp.", "mlp.mlp_layer.")
+        updated_model_state[k] = v
+
+    if isinstance(ft_state, dict) and "model_state" in ft_state:
+        ft_state["model_state"] = updated_model_state
+        out_state = ft_state
+    elif isinstance(ft_state, dict) and "model" in ft_state:
+        ft_state["model"] = updated_model_state
+        out_state = ft_state
+    else:
+        out_state = {"model": updated_model_state, "model_type": model_type}
+
+    torch.save(out_state, save_path)
 
 
 class _PrecisionImagePredictor(SAM2ImagePredictor):

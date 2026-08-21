@@ -31,6 +31,13 @@ def main():
     n_gpus = torch.cuda.device_count()
     name = f"joint_sam2_{model_type}_{'multi' if n_gpus > 1 else 'single'}_gpu"
 
+    # Set 'peft_kwargs' to jointly finetune with a parameter efficient method instead of full
+    # finetuning (the SAM2 image encoder is frozen and the method is applied on top of it). Examples:
+    #   from micro_sam.v2.models.peft_sam2 import LoRASurgery, ClassicalSurgery
+    #   peft_kwargs = {"rank": 4, "peft_module": LoRASurgery}  # LoRA on all Hiera blocks
+    #   peft_kwargs = {"peft_module": ClassicalSurgery, "attention_layers_to_update": [11]}  # late finetuning
+    peft_kwargs = None
+
     # Interactive config mirrors train_sam2.py (v4): CustomSAM2Loss with summed-frame
     # weighting, point/box prompts only, bidirectional 3D propagation, no grad clipping.
     common = dict(
@@ -63,6 +70,7 @@ def main():
         focal_weight=1.0,  # keep focal on equal footing with dice (SAM2 uses 20)
         use_object_score_loss=True,  # supervise object presence (needed for 3D propagation)
         average_over_frames=False,  # sum over frames so 3D keeps its per-slice weight
+        peft_kwargs=peft_kwargs,  # None = full finetuning; set above to use LoRA / late finetuning
     )
 
     if n_gpus > 1:
