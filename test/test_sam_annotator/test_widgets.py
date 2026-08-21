@@ -17,8 +17,26 @@ import torch
 import zarr
 
 from micro_sam.sam_annotator._state import AnnotatorState
-from micro_sam.sam_annotator._widgets import EmbeddingWidget
+from micro_sam.sam_annotator._widgets import _WidgetBase, EmbeddingWidget
 from micro_sam.util import _compute_data_signature
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="GUI test does not work on Windows.")
+def test_string_and_path_param_empty_value_semantics(qtbot):
+    widget = _WidgetBase()
+    qtbot.addWidget(widget)
+
+    widget.name = "sam_model"
+    name_param, layout = widget._add_string_param("name", widget.name)
+    widget.layout().addLayout(layout)
+    name_param.setText("")
+    assert widget.name == ""
+
+    widget.checkpoint_path = "/path/to/checkpoint.pt"
+    path_param, layout = widget._add_path_param("checkpoint_path", widget.checkpoint_path, "file")
+    widget.layout().addLayout(layout)
+    path_param.setText("")
+    assert widget.checkpoint_path is None
 
 
 # make_napari_viewer is a pytest fixture that returns a napari viewer object
@@ -68,3 +86,61 @@ def test_embedding_widget(make_napari_viewer, tmp_path):
 
     # Close the viewer at the end of the test.
     viewer.close()
+
+
+@pytest.mark.gui
+def test_batch_size_visibility_follows_device_and_model(qtbot):
+    """The batch size control is only shown where it has an effect (GPU, and not a VFM encoder)."""
+    from micro_sam.sam_annotator._widgets import ClassificationEmbeddingWidget
+
+    widget = ClassificationEmbeddingWidget()
+    qtbot.addWidget(widget)
+
+    widget.device = "cpu"
+    widget.model_type = "hvit_t_cells"
+    widget._refresh_batch_size()
+    assert widget._batch_size_widget.isHidden()
+
+    widget.device = "cuda"
+    widget._refresh_batch_size()
+    assert not widget._batch_size_widget.isHidden()
+
+    # The VFM encoders offered by the classifiers compute their embeddings unbatched.
+    widget.model_type = "vit_b_dinov2"
+    widget._refresh_batch_size()
+    assert widget._batch_size_widget.isHidden()
+
+    widget.model_type = "vit_b_lm"
+    widget._refresh_batch_size()
+    assert not widget._batch_size_widget.isHidden()
+
+
+@pytest.mark.gui
+def test_hidden_batch_size_is_not_applied(qtbot, monkeypatch):
+    """A GPU batch size must not stay in effect after switching to a device that cannot use it."""
+    from micro_sam.sam_annotator._widgets import ClassificationEmbeddingWidget
+
+    widget = ClassificationEmbeddingWidget()
+    qtbot.addWidget(widget)
+
+    widget.model_type = "hvit_t_cells"
+    widget.device = "cuda"
+    widget.batch_size_param.setValue(32)
+    assert widget.batch_size == 32
+    assert widget._effective_batch_size() == 32
+
+    widget.device = "cpu"
+    widget._refresh_batch_size()
+    assert widget._batch_size_widget.isHidden()
+    assert widget._effective_batch_size() == 1
+    # The remembered GPU preference survives, so switching back restores it.
+    assert widget.batch_size == 32
+    widget.device = "cuda"
+    assert widget._effective_batch_size() == 32
+
+    # 'auto' follows whatever it resolves to.
+    widget.device = "auto"
+    monkeypatch.setattr("micro_sam.util._get_default_device", lambda: "cpu")
+    assert widget._effective_batch_size() == 1
+    monkeypatch.setattr("micro_sam.util._get_default_device", lambda: "cuda")
+    assert widget._effective_batch_size() == 32

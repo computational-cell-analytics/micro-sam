@@ -134,18 +134,16 @@ from skimage.measure import label as connected_components
 
 import torch
 
-from sam2.sam2_image_predictor import SAM2ImagePredictor
-
-from torch_em.transform.raw import normalize
 from torch_em.util.segmentation import size_filter
 
 from elf.evaluation import mean_segmentation_accuracy, cremi_score
 
 from micro_sam.util import segmentation_to_one_hot
+from micro_sam.v2.normalization import normalize_raw
 from micro_sam.prompt_generators import IterativePromptGenerator
 from micro_sam.v1.evaluation.inference import _get_batched_prompts, _get_batched_iterative_prompts
 
-from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings
+from micro_sam.v2.util import get_sam2_image_predictor, get_sam2_model, precompute_image_embeddings
 from micro_sam.v2.evaluation.inference import _embedding_tensors_to_numpy
 
 
@@ -176,7 +174,7 @@ def load_test_volumes_skull(min_size=10):
         if not fname.endswith(".tif"):
             continue
         raw = imageio.imread(os.path.join(img_dir, fname))
-        raw = normalize(raw).astype(np.float32)
+        raw = normalize_raw(raw)
         mask_fname = fname.replace("X", "Y")
         labels = imageio.imread(os.path.join(mask_dir, mask_fname))
         labels = connected_components(labels).astype("uint32")
@@ -199,7 +197,7 @@ def load_test_volumes_lucchi(min_size=10):
     with h5py.File(test_path, "r") as f:
         raw = f["raw"][:]
         labels = f["labels"][:]
-    raw = normalize(raw.astype(np.float32))
+    raw = normalize_raw(raw)
     labels = connected_components(labels).astype("uint32")
     labels = size_filter(labels, min_size=min_size)
     fname = "lucchi_test.h5"
@@ -225,7 +223,7 @@ def load_test_volumes_cremi(min_size=500):
     with h5py.File(test_path, "r") as f:
         raw = f["volumes/raw"][CREMI_TEST_ROI]
         labels = f["volumes/labels/neuron_ids"][CREMI_TEST_ROI]
-    raw = normalize(raw.astype(np.float32))
+    raw = normalize_raw(raw)
     _, labels = np.unique(labels, return_inverse=True)
     labels = labels.reshape(raw.shape).astype("uint32")
     labels = size_filter(labels, min_size=min_size)
@@ -251,26 +249,12 @@ def load_test_images_livecell(n_images=20, min_size=50):
     samples = []
     for i in indices:
         fname = os.path.basename(img_paths[i])
-        raw = normalize(imageio.imread(img_paths[i]).astype(np.float32))
+        raw = normalize_raw(imageio.imread(img_paths[i]))
         labels = connected_components(imageio.imread(seg_paths[i])).astype("uint32")
         labels = size_filter(labels, min_size=min_size)
         samples.append((fname, raw, labels))
         print(f"Loaded {fname}: raw {raw.shape}, {len(np.unique(labels)) - 1} objects")
     return samples
-
-
-def pad_to_square(vol):
-    """Pad (Z, H, W) volume on the right/bottom to make frames square.
-
-    Matches torch_em's ensure_patch_shape convention: content starts at (0, 0),
-    zeros are appended on the right (if W < H) or bottom (if H < W).
-    """
-    _, H, W = vol.shape
-    if H == W:
-        return vol
-    if H > W:
-        return np.pad(vol, ((0, 0), (0, 0), (0, H - W)))
-    return np.pad(vol, ((0, 0), (0, W - H), (0, 0)))
 
 
 def propagate_chunked(predictor, inference_state, z_start, num_frames, chunk_size, forward_only=False):
@@ -354,22 +338,19 @@ def segment_volume(
     Returns:
         List of segmentation arrays (one per iteration), each of shape (Z, H, W).
     """
-    raw_proc = pad_to_square(raw)
-    labels_proc = pad_to_square(labels)
-
     volume_embeddings = _embedding_tensors_to_numpy(
-        precompute_image_embeddings(predictor=predictor, input_=raw_proc, ndim=3)
+        precompute_image_embeddings(predictor=predictor, input_=raw, ndim=3)
     )
-    inference_state = predictor.init_state(volume=raw_proc, volume_embeddings=volume_embeddings)
+    inference_state = predictor.init_state(volume=raw, volume_embeddings=volume_embeddings)
 
     prompt_generator = IterativePromptGenerator()
-    gt_ids = sorted(np.unique(labels_proc)[1:].tolist())
+    gt_ids = sorted(np.unique(labels)[1:].tolist())
     rng = np.random.default_rng(0)
 
-    seg_per_iter_proc = [np.zeros_like(labels_proc) for _ in range(n_iterations)]
+    seg_per_iter = [np.zeros_like(labels) for _ in range(n_iterations)]
 
     for obj_id in tqdm(gt_ids, desc="Objects", leave=False):
-        gt_3d = labels_proc == obj_id
+        gt_3d = labels == obj_id
         obj_zs = np.where(gt_3d.any(axis=(1, 2)))[0]
 
         if first_frame:
@@ -380,7 +361,7 @@ def segment_volume(
             # midpoint can land in a gap with no object, giving an empty prompt slice.
             z_prompt = int(obj_zs[len(obj_zs) // 2])
 
-        gt_slice = (labels_proc[z_prompt] == obj_id).astype("uint32")
+        gt_slice = (labels[z_prompt] == obj_id).astype("uint32")
         points, point_labels, boxes = _get_batched_prompts(
             gt=gt_slice, gt_ids=[1],
             use_points=not use_box, use_boxes=use_box,
@@ -388,7 +369,7 @@ def segment_volume(
         )
         if use_box and box_jitter:
             boxes = boxes.copy()
-            boxes[0] = _jitter_box(boxes[0], labels_proc.shape[1], labels_proc.shape[2], rng)
+            boxes[0] = _jitter_box(boxes[0], labels.shape[1], labels.shape[2], rng)
 
         corr_points = corr_labels = None
         corr_frame = None
@@ -402,7 +383,7 @@ def segment_volume(
                     box=boxes[0] if use_box else None,
                 )
                 for z_extra in _extra_init_frames(obj_zs, z_prompt, num_init_cond_frames):
-                    gt_extra = (labels_proc[z_extra] == obj_id).astype("uint32")
+                    gt_extra = (labels[z_extra] == obj_id).astype("uint32")
                     extra_pts, extra_lbls, _ = _get_batched_prompts(
                         gt=gt_extra, gt_ids=[1],
                         use_points=True, use_boxes=False,
@@ -424,7 +405,7 @@ def segment_volume(
 
             if chunk_size is not None:
                 video_segments = propagate_chunked(
-                    predictor, inference_state, z_prompt, labels_proc.shape[0], chunk_size,
+                    predictor, inference_state, z_prompt, labels.shape[0], chunk_size,
                     forward_only=forward_only,
                 )
             else:
@@ -434,19 +415,19 @@ def segment_volume(
                 ):
                     video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
 
-                if not forward_only and len(video_segments) < labels_proc.shape[0]:
+                if not forward_only and len(video_segments) < labels.shape[0]:
                     for out_frame, _, out_logits in predictor.propagate_in_video(
                         inference_state, start_frame_idx=z_prompt, reverse=True
                     ):
                         if out_frame not in video_segments:
                             video_segments[out_frame] = (out_logits[0] > 0).cpu().numpy().squeeze()
 
-            seg_3d = np.zeros(labels_proc.shape, dtype=bool)
-            H_proc, W_proc = labels_proc.shape[1], labels_proc.shape[2]
+            seg_3d = np.zeros(labels.shape, dtype=bool)
+            height, width = labels.shape[1:]
             for z, mask in video_segments.items():
-                seg_3d[z] = mask[:H_proc, :W_proc]
+                seg_3d[z] = mask[:height, :width]
 
-            seg_per_iter_proc[iteration][seg_3d] = obj_id
+            seg_per_iter[iteration][seg_3d] = obj_id
 
             if iteration < n_iterations - 1:
                 errors = np.array([np.sum(gt_3d[z] != seg_3d[z]) for z in obj_zs])
@@ -464,15 +445,12 @@ def segment_volume(
 
         predictor.reset_state(inference_state)
 
-    # Strip square padding before evaluating against the original label dimensions.
-    _, H_orig, W_orig = labels.shape
-    seg_per_iter = [s[:, :H_orig, :W_orig] for s in seg_per_iter_proc]
     return seg_per_iter
 
 
 @torch.no_grad()
 def segment_image_2d(
-    raw, labels, predictor, n_iterations, use_box=False, batch_size=32, box_jitter=False, pad_square=True,
+    raw, labels, predictor, n_iterations, use_box=False, batch_size=32, box_jitter=False,
 ):
     """Run iterative 2D interactive segmentation using SAM2ImagePredictor.
 
@@ -488,20 +466,9 @@ def segment_image_2d(
         use_box: Use bounding-box prompts instead of points.
         batch_size: Number of objects per inference batch.
         box_jitter: Jitter the box prompts like SAM2 training (only used with use_box).
-        pad_square: Zero-pad the image to a square before inference so SAM2's internal
-            resize to 1024 is aspect-preserving (resize-longest + pad, matching training)
-            instead of stretching. Predictions are cropped back to the original shape.
-            Default True; pass --no_pad_square to use the stretch resize instead.
-
     Returns:
         List of segmentation arrays (one per iteration), each of shape (H, W).
     """
-    H_orig, W_orig = labels.shape
-    if pad_square and H_orig != W_orig:
-        s = max(H_orig, W_orig)
-        raw = np.pad(raw, ((0, s - H_orig), (0, s - W_orig)))
-        labels = np.pad(labels, ((0, s - H_orig), (0, s - W_orig)))
-
     img_uint8 = (raw * 255).astype("uint8")
     if img_uint8.ndim == 2:
         img_uint8 = np.stack([img_uint8] * 3, axis=-1)
@@ -592,8 +559,6 @@ def segment_image_2d(
             else:
                 point_labels = next_labels
 
-    if pad_square:
-        seg_per_iter = [s[:H_orig, :W_orig] for s in seg_per_iter]
     return seg_per_iter
 
 
@@ -658,9 +623,9 @@ def get_image_predictor(model_type, backbone, checkpoint_path):
         if "model_state" in ckpt:
             video_pred = get_sam2_model(model_type=model_type, backbone=backbone, input_type="videos")
             video_pred.load_state_dict(ckpt["model_state"])
-            return SAM2ImagePredictor(video_pred)
+            return get_sam2_image_predictor(video_pred)
     model = get_sam2_model(model_type=model_type, backbone=backbone, checkpoint_path=checkpoint_path)
-    return SAM2ImagePredictor(model)
+    return get_sam2_image_predictor(model)
 
 
 def run_eval_3d(dataset, samples, predictor, args):
@@ -708,7 +673,7 @@ def run_eval_2d(dataset, samples, predictor, args):
         print(f"\nImage: {fname}")
         seg_per_iter = segment_image_2d(
             raw, labels, predictor, n_iterations=args.n_iterations,
-            use_box=args.prompt == "box", box_jitter=args.box_jitter, pad_square=args.pad_square,
+            use_box=args.prompt == "box", box_jitter=args.box_jitter,
         )
         rows = evaluate_volume(labels, seg_per_iter, extra_metrics=args.extra_metrics)
         for row in rows:
@@ -752,7 +717,6 @@ def main():
     parser.add_argument("--first_frame", action="store_true", help="Prompt from first z-frame of each object.")
     parser.add_argument("--forward_only", action="store_true", help="Propagate forward only from the prompt frame.")
     parser.add_argument("--box_jitter", action="store_true", help="Jitter box prompts like SAM2 training.")
-    parser.add_argument("--no_pad_square", dest="pad_square", action="store_false", help="2D: use stretch resize.")
     parser.add_argument(
         "--num_init_cond_frames", type=int, default=1,
         help="Frames to condition on before first propagation (1 = prompt only; 2 matches training).",

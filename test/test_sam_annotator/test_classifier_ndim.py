@@ -33,7 +33,7 @@ def test_classifier_shortcuts_and_button_labels(make_napari_viewer_proxy, classi
 @pytest.mark.parametrize("classifier_cls", [PixelClassifier, ObjectClassifier])
 def test_classifier_recreates_label_layers_for_3d(make_napari_viewer_proxy, classifier_cls):
     # Regression for the pixel/object classifier 3d crash: the tool opens with 2d placeholder label
-    # layers; loading a 3d image must recreate them at ndim=3 rather than reassigning 3d data + a
+    # layers. Loading a 3d image must recreate them at ndim=3 rather than reassigning 3d data + a
     # 3-element scale onto stale 2d layers (which crashes napari in Affine.set_slice).
     state = AnnotatorState()
 

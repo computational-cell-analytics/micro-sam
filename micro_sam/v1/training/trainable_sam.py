@@ -1,11 +1,11 @@
 from typing import Any, Dict, List, Tuple
 
+from segment_anything.modeling import Sam
+from segment_anything.utils.transforms import ResizeLongestSide
+
 import torch
 from torch import nn
 from torch.nn import functional as F
-
-from segment_anything.modeling import Sam
-from segment_anything.utils.transforms import ResizeLongestSide
 
 
 # simple wrapper around SAM in order to keep things trainable

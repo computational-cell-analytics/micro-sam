@@ -27,7 +27,7 @@ def series_annotation(use_finetuned_model):
         pattern="*.tif",
         embedding_path=embedding_path,
         model_type=model_type,
-        precompute_amg_state=False,
+        precompute_autoseg_state=False,
     )
 
 

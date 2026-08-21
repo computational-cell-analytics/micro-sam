@@ -26,7 +26,10 @@ def livecell_annotator(use_finetuned_model):
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell.zarr")
         model_type = "vit_b"
 
-    annotator(image, embedding_path=embedding_path, model_type=model_type, precompute_amg_state=True)
+    annotator(
+        image, embedding_path=embedding_path, model_type=model_type,
+        precompute_autoseg_state=True,
+    )
 
 
 def hela_2d_annotator(use_finetuned_model):

@@ -1,15 +1,19 @@
 import random
+from functools import partial
+from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
+
 import torch
 import torchvision.transforms.functional as TF
 from torchvision.transforms import ColorJitter
 
-from torch_em.transform.raw import normalize, normalize_percentile
+from torch_em.transform.raw import RandomPercentileNormalization, RawTransform
 
 from .labels import _em_cell_label_trafo  # noqa
-from .labels import _axondeepseg_pre_label_transform  # noqa
 from .labels import _plantseg_label_trafo  # noqa
+from micro_sam.v2.normalization import normalize_raw
+from .labels import _axondeepseg_pre_label_transform  # noqa
 
 
 # NOTE: This is a legacy function: we will keep this for now for unpickling checkpoints saved before the refactor.
@@ -29,25 +33,35 @@ def to_rgb(image):
     return image
 
 
-def _to_8bit(raw):
-    "Ensures three channels for inputs and rescales them to [0, 1]."
+def _prepare_to_8bit(raw):
+    """Prepare raw inputs for ``_to_8bit`` without changing their dynamic range."""
     if raw.ndim == 3 and raw.shape[0] == 1:  # If the inputs have 1 channel, we triplicate it.
         raw = np.concatenate([raw] * 3, axis=0)
 
-    raw = to_rgb(raw)  # Ensure all images are in 3-channels: triplicate one channel to three channels.
-    raw = normalize(raw)  # [0, 1] - SAM2 model applies ImageNet normalization internally
+    return to_rgb(raw)  # Ensure channel-first RGB without rescaling the original intensities.
+
+
+def _to_8bit(raw):
+    "Ensures three channels for inputs and percentile-normalizes them to [0, 1]."
+    raw = _prepare_to_8bit(raw)
+    raw = normalize_raw(raw, axis=(1, 2))
     return raw
 
 
+def _prepare_identity(x):
+    """Prepare raw inputs for ``_identity`` without changing their dynamic range."""
+    return to_rgb(x)
+
+
 def _identity(x):
-    "Ensures three channels for inputs and normalizes to [0, 1]."
-    x = to_rgb(x)
-    x = normalize(x)  # [0, 1] - SAM2 model applies ImageNet normalization internally
+    "Ensures three channels for inputs and percentile-normalizes them to [0, 1]."
+    x = _prepare_identity(x)
+    x = normalize_raw(x, axis=(1, 2))
     return x
 
 
-def _cellpose_raw_trafo(x):
-    """Transforms input images to desired format.
+def _prepare_cellpose_raw(x):
+    """Prepare CellPose inputs without changing their dynamic range.
 
     NOTE: The input channel logic is arranged a bit strangely in `cyto` dataset.
     This function takes care of it here.
@@ -64,21 +78,31 @@ def _cellpose_raw_trafo(x):
         # The image is 2 channels and we sort the channels such that - 0: cell, 1: nucleus
         x = np.stack([g, r, np.zeros_like(b)], axis=0)
 
-    x = to_rgb(x)  # Ensures three channels for inputs and avoids rescaling inputs.
-    x = normalize(x)  # [0, 1] - SAM2 model applies ImageNet normalization internally
+    return to_rgb(x)  # Ensures three channels for inputs and avoids rescaling inputs.
+
+
+def _cellpose_raw_trafo(x):
+    """Prepare and percentile-normalize CellPose inputs."""
+    x = _prepare_cellpose_raw(x)
+    x = normalize_raw(x, axis=(1, 2))
     return x
 
 
 def _resize_to_512(x, is_label=False):
-    """Resize (Z, H, W) to (Z, 512, 512) via ResizeLongestSideInputs, then pad to square."""
-    from torch_em.transform.generic import ResizeLongestSideInputs
-    return ResizeLongestSideInputs(target_shape=(512, 512), is_label=is_label)(x)
+    """Resize trailing spatial dimensions to longest side 512 and pad bottom/right."""
+    from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy
+    return resize_longest_side_and_pad_spatial_numpy(x, target_length=512, is_label=is_label)[0]
 
 
 def _resize_raw_to_512(x):
     """Resize small raw volume patch to 512×512 and normalize."""
-    x = _resize_to_512(x, is_label=False)
-    return _identity(x)
+    x = _prepare_resize_raw_to_512(x)
+    return normalize_raw(x, axis=(1, 2))
+
+
+def _prepare_resize_raw_to_512(x):
+    """Resize a raw patch without normalizing it."""
+    return _prepare_identity(_resize_to_512(x, is_label=False))
 
 
 class VideoAugment:
@@ -88,6 +112,9 @@ class VideoAugment:
     the first ColorJitter are applied with the same random parameters across all Z-frames
     (consistent_transform=True in the original YAML). The second ColorJitter is applied
     independently per frame (consistent_transform=False).
+
+    Spatial transforms are applied to the instance labels as well, with nearest-neighbour
+    interpolation, so image and label stay registered. Color transforms touch the raw only.
 
     Args:
         p_hflip: Probability of horizontal flip.
@@ -135,8 +162,12 @@ class VideoAugment:
                 frame = TF.adjust_saturation(frame, s_f)
         return frame
 
-    def _augment_frames(self, frames):
-        """Apply consistent-then-per-frame augmentation to a list of (C, H, W) tensors."""
+    def _augment_frames(self, frames, label_frames):
+        """Apply consistent-then-per-frame augmentation to lists of (C, H, W) raw and label frames.
+
+        Returns the augmented (raw frames, label frames). The spatial parameters are drawn once
+        and reused for every frame and for the labels.
+        """
         do_flip = random.random() < self.p_hflip
         angle = random.uniform(-self.degrees, self.degrees)
         shear_x = random.uniform(-self.shear, self.shear)
@@ -145,14 +176,20 @@ class VideoAugment:
         )
         do_gray = random.random() < self.p_grayscale
 
-        out = []
-        for frame in frames:
+        out, label_out = [], []
+        for frame, label in zip(frames, label_frames):
             if do_flip:
                 frame = TF.hflip(frame)
+                label = TF.hflip(label)
             frame = TF.affine(
                 frame, angle=angle, translate=[0, 0], scale=1.0, shear=[shear_x, 0.0],
                 interpolation=TF.InterpolationMode.BILINEAR,
             )
+            # affine needs a float tensor; NEAREST keeps the instance IDs exact.
+            label = TF.affine(
+                label.float(), angle=angle, translate=[0, 0], scale=1.0, shear=[shear_x, 0.0],
+                interpolation=TF.InterpolationMode.NEAREST,
+            ).to(label.dtype)
             frame = self._cj_apply(frame, fn_idx_v, b_f_v, c_f_v, s_f_v)
             if do_gray:
                 frame = TF.rgb_to_grayscale(frame, num_output_channels=frame.shape[0])
@@ -161,38 +198,44 @@ class VideoAugment:
             )
             frame = self._cj_apply(frame, fn_idx_f, b_f_f, c_f_f, s_f_f)
             out.append(frame.clamp(0.0, 1.0))
-        return out
+            label_out.append(label)
+        return out, label_out
 
-    def __call__(self, x: torch.Tensor) -> torch.Tensor:
+    def __call__(self, x: torch.Tensor, y: torch.Tensor):
         """
         Args:
             x: (B, C, H, W) or (B, C, Z, H, W) float tensor in [0, 1].
+            y: (B, 1, H, W) or (B, 1, Z, H, W) integer instance labels.
         Returns:
-            Augmented tensor of the same shape in [0, 1].
+            Augmented (x, y) with the same shapes and dtypes. Spatial transforms are shared
+            between the two, so the labels stay registered to the image.
         """
         is_3d = x.ndim == 5
         B = x.shape[0]
-        out = []
+        out, label_out = [], []
         for b in range(B):
             if is_3d:
                 Z = x.shape[2]
                 frames = [x[b, :, z] for z in range(Z)]
-                aug = self._augment_frames(frames)
+                labels = [y[b, :, z] for z in range(Z)]
+                aug, aug_label = self._augment_frames(frames, labels)
                 out.append(torch.stack(aug, dim=1))  # (C, Z, H, W)
+                label_out.append(torch.stack(aug_label, dim=1))  # (1, Z, H, W)
             else:
-                aug = self._augment_frames([x[b]])
+                aug, aug_label = self._augment_frames([x[b]], [y[b]])
                 out.append(aug[0])  # (C, H, W)
-        return torch.stack(out)
+                label_out.append(aug_label[0])  # (1, H, W)
+        return torch.stack(out), torch.stack(label_out)
 
 
 class VideoAugmentTransform:
     """torch-em dataset transform with MOSE-style augmentation for 3D microscopy.
 
-    Unlike VideoAugment (which runs in the training loop on raw only), this class
+    Unlike VideoAugment (which runs in the training loop, on whole batches), this class
     is designed for the dataloader transform argument and therefore:
     - Runs in DataLoader workers, in parallel with the GPU forward pass.
-    - Applies spatial transforms to both raw and labels consistently.
-    - Applies color transforms only to raw.
+    - Operates on a single sample rather than a batch.
+    Both apply spatial transforms to raw and labels consistently, and color only to raw.
 
     Designed for (C, Z, H, W) raw arrays and (1, Z, H, W) label arrays
     from torch-em 3D segmentation datasets.
@@ -240,8 +283,8 @@ class VideoAugmentTransform:
         Returns:
             Tuple of (augmented raw, augmented labels).
         """
-        # ascontiguousarray with explicit dtype converts byte order (TIFF/HDF5 sources
-        # may use big-endian, which torch.from_numpy cannot handle without conversion).
+        # ascontiguousarray with explicit dtype converts byte order (TIFF and HDF5 sources
+        # can use big-endian, which torch.from_numpy cannot handle without conversion).
         raw_t = torch.from_numpy(np.ascontiguousarray(raw, dtype=np.float32))
         labels_t = torch.from_numpy(np.ascontiguousarray(labels, dtype=np.int64))
 
@@ -353,6 +396,58 @@ def _normalize_percentile(x, axis=None):
     NOTE: For example, this is a specific input transformation for
     'rgb' format of TissueNet image data for the expected axes.
     """
-    x = normalize_percentile(x, axis=None)  # Use 1st and 99th percentile values for min-max normalization.
-    x = np.clip(x, 0, 1)  # [0, 1] - SAM2 model applies ImageNet normalization internally
-    return x
+    return normalize_raw(x, axis=axis)
+
+
+def get_random_percentile_normalization(
+    raw_transform: Callable,
+    lower_percentile_bounds: Tuple[float, float] = (0.0, 5.0),
+    distribution: str = "uniform",
+    distribution_kwargs: Optional[Dict[str, float]] = None,
+) -> RawTransform:
+    """Convert a generalist raw transform to random percentile normalization.
+
+    The data-specific shape/channel preparation is retained as ``RawTransform.augmentation1``, so the
+    normalizer receives data in its original intensity range. An existing ``augmentation2`` is preserved.
+    """
+    augmentation2 = None
+    if isinstance(raw_transform, RawTransform):
+        augmentation1, augmentation2 = raw_transform.augmentation1, raw_transform.augmentation2
+        if isinstance(raw_transform.normalizer, RandomPercentileNormalization):
+            axis = raw_transform.normalizer.axis
+        elif raw_transform.normalizer is _identity:
+            # Defect-augmented EM datasets (CREMI): the defect pipeline lives in augmentation1 with an
+            # identity normalizer. Preserve it and apply per-channel percentile normalization.
+            axis = (1, 2)
+        else:
+            raise ValueError(f"Unsupported normalizer in generalist raw transform: {raw_transform.normalizer!r}")
+    elif isinstance(raw_transform, RandomPercentileNormalization):
+        augmentation1, axis = None, raw_transform.axis
+    elif raw_transform is _identity:
+        augmentation1, axis = _prepare_identity, (1, 2)
+    elif raw_transform is _to_8bit:
+        augmentation1, axis = _prepare_to_8bit, (1, 2)
+    elif raw_transform is _cellpose_raw_trafo:
+        augmentation1, axis = _prepare_cellpose_raw, (1, 2)
+    elif raw_transform is _resize_raw_to_512:
+        augmentation1, axis = _prepare_resize_raw_to_512, (1, 2)
+    elif raw_transform is _normalize_percentile:
+        augmentation1, axis = None, None
+    elif isinstance(raw_transform, partial) and raw_transform.func is _normalize_percentile:
+        if raw_transform.args:
+            raise ValueError("Positional arguments are not supported for _normalize_percentile transforms.")
+        unexpected_kwargs = set(raw_transform.keywords) - {"axis"}
+        if unexpected_kwargs:
+            raise ValueError(f"Unsupported _normalize_percentile arguments: {sorted(unexpected_kwargs)}")
+        augmentation1, axis = None, raw_transform.keywords.get("axis")
+    else:
+        raise ValueError(f"Unsupported generalist raw transform: {raw_transform!r}")
+
+    normalizer = RandomPercentileNormalization(
+        lower_percentile_bounds=lower_percentile_bounds,
+        distribution=distribution,
+        distribution_kwargs=distribution_kwargs,
+        rounding_decimals=1,
+        axis=axis,
+    )
+    return RawTransform(normalizer=normalizer, augmentation1=augmentation1, augmentation2=augmentation2)

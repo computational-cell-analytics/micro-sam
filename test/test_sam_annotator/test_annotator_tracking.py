@@ -69,7 +69,7 @@ def test_division_frame_detection():
 
 
 def test_mother_division_frame():
-    # A daughter's mask must start the frame after its mother divides; this resolves the bound.
+    # A daughter's mask must start the frame after its mother divides. This resolves the bound.
     from micro_sam.sam_annotator._widgets import _mother_division_frame
 
     data = np.array([[10, 10, 10]])
@@ -142,3 +142,14 @@ def test_tracking_rejects_sam1_models():
 def test_auto_tracking_uses_sam2_widget():
     assert issubclass(AutoTrackWidget, AutoSegmentWidget)
     assert not issubclass(AutoTrackWidget, AutoSegmentV1Widget)
+
+
+def test_auto_tracking_offers_apg(qtbot):
+    widget = AutoTrackWidget(viewer=None, with_decoder=True, volumetric=True)
+    qtbot.addWidget(widget)
+
+    choices = [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
+    assert choices == ["sparse", "dense", "apg"]
+    widget.mode_dropdown.setCurrentText("apg")
+    assert widget.mode == "apg"
+    assert hasattr(widget, "candidate_threshold_param")

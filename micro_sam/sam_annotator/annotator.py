@@ -1,18 +1,20 @@
 from typing import Optional, Tuple, Union
 
-import napari
 import numpy as np
+
 import torch
+
+import napari
 from napari.utils.notifications import show_info
 
 from .. import util
-from ..v2.util import DEFAULT_MODEL
-from . import _widgets as widgets
 from . import util as vutil
-from ._annotator import _AnnotatorBase
+from . import _widgets as widgets
 from ._state import AnnotatorState
+from ..v2.util import DEFAULT_MODEL
+from ._titles import get_dock_title
+from ._annotator import _AnnotatorBase
 from .util import (
-    _initialize_parser,
     _load_amg_state,
     _load_is_state,
     _sync_embedding_widget,
@@ -67,8 +69,8 @@ def detect_ndim_from_viewer(viewer: "napari.viewer.Viewer") -> int:
     """
     image_layers = [layer for layer in viewer.layers if isinstance(layer, napari.layers.Image)]
     if image_layers:
-        # Use the normalizer so singletons/channels are accounted for. Unsupported inputs
-        # fall back to 2D here so the widget can open; '_on_image_selection_changed' then
+        # Use the normalizer so it handles singletons and channels. Unsupported inputs
+        # default to 2D here so the widget can open. Then '_on_image_selection_changed'
         # reports the issue to the user instead of crashing construction.
         try:
             return vutil.prepare_annotation_image(image_layers[0].data)[1]
@@ -133,13 +135,23 @@ class Annotator(_AnnotatorBase):
         def _segment_point_prompts(event):
             interactive.segment(self._viewer)
 
+        # The layer the key reached is the active one, so it goes first: only it relabels a selected
+        # scribble. The viewer-level fallback below has no active prompt layer, so it relabels none.
+        @prompt_layer.bind_key("t", overwrite=True)
+        def _toggle_shape_prompt_label(event=None):
+            vutil.toggle_label(self._shape_prompt_layer, self._point_prompt_layer)
+
+        @point_prompt_layer.bind_key("t", overwrite=True)
+        def _toggle_point_prompt_label(event=None):
+            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
+
         @self._viewer.bind_key("c", overwrite=True)
         def _commit(viewer):
             self._widgets["commit"](viewer)
 
         @self._viewer.bind_key("t", overwrite=True)
         def _toggle_label(event=None):
-            vutil.toggle_label(self._point_prompt_layer)
+            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
 
         @self._viewer.bind_key("Shift-C", overwrite=True)
         def _clear_annotations(viewer):
@@ -196,7 +208,7 @@ class Annotator(_AnnotatorBase):
 
     def _on_image_selection_changed(self, *args):
         """Normalize the selected image and rebuild the annotator if its dimensionality changed."""
-        # Skip while we are replacing the image layer ourselves during normalization.
+        # Skip while we replace the image layer ourselves during normalization.
         if self._suppress_selection_rebuild:
             return
         image_layer = self._embedding_widget.image_selection.get_value()
@@ -216,7 +228,7 @@ class Annotator(_AnnotatorBase):
 
         # Detect an actual change of the selected image, tracked by layer identity (the state's
         # 'image_name' is not reliably set on every code path, so we don't depend on it). The first
-        # call (during setup) just records the image and does not reset; a later switch to a
+        # call (during setup) just records the image and does not reset. A later switch to a
         # different image layer triggers the reset below.
         previous_layer = getattr(self, "_last_image_layer", None)
         image_changed = previous_layer is not None and image_layer is not previous_layer
@@ -225,9 +237,9 @@ class Annotator(_AnnotatorBase):
         # When the selected image changes, reset everything so the tool behaves as if it was just
         # opened on the new image: the precomputed embeddings, the model and everything derived from
         # them belong to the previous image and must not be reused (they can even differ in
-        # dimensionality, e.g. 3D volume -> 2D image). 'reset_state' clears the state; resetting the
-        # (shared, kept) embedding widget inputs restores the default model / tiling / save path; and
-        # the forced rebuild recreates the dimension-specific widgets and napari layers, so all
+        # dimensionality, e.g. 3D volume -> 2D image). 'reset_state' clears the state. Resetting the
+        # (shared, kept) embedding widget inputs restores the default model, tiling and save path. The
+        # forced rebuild recreates the dimension-specific widgets and napari layers, so all
         # checkboxes are back to defaults, the autosegment cache is gone and the prompt / segmentation
         # layers are cleared. The user recomputes embeddings for the new image via 'Compute Embeddings'.
         if image_changed:
@@ -289,9 +301,9 @@ class Annotator(_AnnotatorBase):
         if self._ndim == 3:
             state = AnnotatorState()
             if state.decoder is not None:
-                state.amg_state = _load_is_state(state.embedding_path)
+                state.autoseg_state = _load_is_state(state.embedding_path)
             else:
-                state.amg_state = _load_amg_state(state.embedding_path)
+                state.autoseg_state = _load_amg_state(state.embedding_path)
 
 
 def annotator(
@@ -305,7 +317,7 @@ def annotator(
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
     viewer: Optional["napari.viewer.Viewer"] = None,
-    precompute_amg_state: bool = False,
+    precompute_autoseg_state: bool = False,
     checkpoint_path: Optional[str] = None,
     decoder_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
@@ -330,7 +342,8 @@ def annotator(
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+        precompute_autoseg_state: Whether to precompute the automatic segmentation state (AMG masks, or
+            decoder predictions if the model has a decoder). Requires an embedding path.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
@@ -349,7 +362,7 @@ def annotator(
     """
     # Normalize the image: squeeze singletons and map the channel axis to RGB. The optional 'ndim'
     # override disambiguates multi-channel inputs (e.g. reads a channels-first (C, H, W) array as a
-    # 2d image), consistent with the GUI's 'image dimensions' control; with ndim=None it is
+    # 2d image), consistent with the GUI's 'image dimensions' control. With ndim=None it is
     # auto-detected. 'prepare_annotation_image' raises if the override cannot be applied to the shape.
     image, ndim, rgb = vutil.prepare_annotation_image(image, ndim=ndim)
 
@@ -364,7 +377,7 @@ def annotator(
         save_path=embedding_path,
         halo=halo,
         tile_shape=tile_shape,
-        precompute_amg_state=precompute_amg_state,
+        precompute_autoseg_state=precompute_autoseg_state,
         ndim=ndim,
         checkpoint_path=checkpoint_path,
         decoder_path=decoder_path,
@@ -386,7 +399,7 @@ def annotator(
     annotator_instance._update_image(segmentation_result=segmentation_result)
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator_instance, name="Segment Anything for Microscopy (Segmentation)")
+    viewer.window.add_dock_widget(annotator_instance, name=get_dock_title("segmentation"))
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=(
@@ -405,40 +418,3 @@ def annotator(
         return viewer
 
     napari.run()
-
-
-def main():
-    """@private"""
-    parser = _initialize_parser(
-        description="Start the μSAM GUI for image segmentation (2D or 3D)."
-    )
-    parser.add_argument(
-        "--ndim", type=int,
-        help="The number of spatial dimensions (2 or 3). If not given, auto-detected from the image "
-        "shape. Set 2 to read a multi-channel array (e.g. channels-first (C, H, W) or (H, W, C)) as a "
-        "single 2D image, or 3 to force a (Z, H, W) volume."
-    )
-    args = parser.parse_args()
-    image = util.load_image_data(args.input, key=args.key)
-
-    if args.segmentation_result is None:
-        segmentation_result = None
-    else:
-        segmentation_result = util.load_image_data(
-            args.segmentation_result, key=args.segmentation_key
-        )
-
-    annotator(
-        image,
-        ndim=args.ndim,
-        embedding_path=args.embedding_path,
-        segmentation_result=segmentation_result,
-        model_type=args.model_type,
-        tile_shape=args.tile_shape,
-        halo=args.halo,
-        precompute_amg_state=args.precompute_amg_state,
-        checkpoint_path=args.checkpoint,
-        decoder_path=args.decoder_path,
-        device=args.device,
-        prefer_decoder=args.prefer_decoder,
-    )

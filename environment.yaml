@@ -2,11 +2,12 @@ name: sam
 channels:
     - conda-forge
 dependencies:
-    - bioimage-cpp >=0.3
-    - bioimageio.core
+    - bioimage-cpp >=0.7
+    - bioimageio.core >=0.11
+    - click
     - imagecodecs
     - magicgui
-    - napari >=0.7.1
+    - napari >=0.7.1,<0.9
     - natsort
     - pip
     - pooch
@@ -23,10 +24,13 @@ dependencies:
     # - "pytorch=*=cpu*"
     - pytorch >=2.5
     - segment-anything
+    - tensordict
     - torchvision
-    - torch_em >=0.9
+    - torch_em >=0.10.1
     - tqdm
     - timm
+    - transformers >=4.56
+    - huggingface_hub
     - trackastra >=0.5.3
     - xarray
     - z5py >=3

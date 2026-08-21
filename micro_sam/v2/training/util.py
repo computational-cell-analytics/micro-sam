@@ -2,10 +2,8 @@ import os
 from typing import Callable, Dict, List, Optional, Union
 
 import torch
-import torch.nn.functional as F
 
 from micro_sam.util import get_device
-
 from micro_sam.v2.util import CFG_PATHS, _get_checkpoint
 
 
@@ -23,6 +21,10 @@ def get_sam2_train_model(
     add_all_frames_to_correct_as_cond: bool = True,
     num_correction_pt_per_frame: int = 7,
     num_init_cond_frames_for_train: int = 1,
+    prob_to_use_pt_input_for_eval: Optional[float] = None,
+    prob_to_use_box_input_for_eval: Optional[float] = None,
+    num_frames_to_correct_for_eval: Optional[int] = None,
+    num_init_cond_frames_for_eval: Optional[int] = None,
     bidirectional: bool = False,
 ) -> torch.nn.Module:
     """Build a SAM2Train model for interactive segmentation training.
@@ -41,7 +43,7 @@ def get_sam2_train_model(
         prob_to_use_pt_input: Probability of using point/box prompts (vs mask propagation).
         prob_to_use_box_input: Conditional probability of using a box instead of a click.
         num_frames_to_correct: Max number of frames per volume that receive iterative
-            correction clicks.  Set to the number of z-slices to correct all frames.
+            correction clicks. Set to the number of z-slices to correct all frames.
         rand_frames_to_correct: If True, randomly sample 1..num_frames_to_correct frames
             to correct per step (more robust than always correcting the maximum).
         prob_to_sample_from_gt: Probability of sampling a correction click from the GT
@@ -53,6 +55,15 @@ def get_sam2_train_model(
         num_init_cond_frames_for_train: Number of initial conditioning frames (frames that
             receive the first prompt before any correction round). SAM2 default is 1;
             the MOSE finetune config uses 2.
+        prob_to_use_pt_input_for_eval: Probability of using point/box prompts during validation.
+            Defaults to prob_to_use_pt_input, so validation measures the task that was trained.
+            SAM2's own default is 0.0, which validates GT-mask propagation instead.
+        prob_to_use_box_input_for_eval: Conditional probability of a box during validation.
+            Defaults to prob_to_use_box_input.
+        num_frames_to_correct_for_eval: Frames receiving correction clicks during validation.
+            Defaults to num_frames_to_correct.
+        num_init_cond_frames_for_eval: Initial conditioning frames during validation.
+            Defaults to num_init_cond_frames_for_train.
         bidirectional: If True, replace the forward pass with bidirectional propagation:
             a random z-slice is chosen as the start frame each step, memory is propagated
             both forward (to higher z) and backward (to lower z, with track_in_reverse=True),
@@ -69,6 +80,17 @@ def get_sam2_train_model(
 
     model_cfg = CFG_PATHS[model_type[:6]]
 
+    # SAM2's eval defaults propagate a GT mask instead of prompting, so mirror the training
+    # configuration and validation scores the task actually being trained.
+    if prob_to_use_pt_input_for_eval is None:
+        prob_to_use_pt_input_for_eval = prob_to_use_pt_input
+    if prob_to_use_box_input_for_eval is None:
+        prob_to_use_box_input_for_eval = prob_to_use_box_input
+    if num_frames_to_correct_for_eval is None:
+        num_frames_to_correct_for_eval = num_frames_to_correct
+    if num_init_cond_frames_for_eval is None:
+        num_init_cond_frames_for_eval = num_init_cond_frames_for_train
+
     model = build_sam2(
         config_file=model_cfg,
         ckpt_path=str(checkpoint_path),
@@ -84,6 +106,14 @@ def get_sam2_train_model(
             f"++model.add_all_frames_to_correct_as_cond={add_all_frames_to_correct_as_cond}",
             f"++model.num_correction_pt_per_frame={num_correction_pt_per_frame}",
             f"++model.num_init_cond_frames_for_train={num_init_cond_frames_for_train}",
+            f"++model.prob_to_use_pt_input_for_eval={prob_to_use_pt_input_for_eval}",
+            f"++model.prob_to_use_box_input_for_eval={prob_to_use_box_input_for_eval}",
+            "++model.num_frames_to_correct_for_eval="
+            f"{max(num_frames_to_correct_for_eval, num_init_cond_frames_for_eval)}",
+            f"++model.num_init_cond_frames_for_eval={num_init_cond_frames_for_eval}",
+            # Deterministic eval sampling, so the metric is comparable across epochs.
+            "++model.rand_frames_to_correct_for_eval=False",
+            "++model.rand_init_cond_frames_for_eval=False",
         ],
         apply_postprocessing=False,
     )
@@ -251,6 +281,11 @@ class ConvertToSam2VideoBatch:
     Args:
         max_num_objects: Maximum number of objects to sample per image/volume.
             Excess objects are randomly subsampled.
+        largest_first: Fill half the object slots with the largest instances and the rest
+            at random, instead of sampling all of them at random.
+        augmentor: Optional augmentation, called as ``augmentor(x, y)`` and returning the
+            augmented pair. Must apply spatial transforms to both, or the masks stop matching
+            the image. See :class:`~micro_sam.v2.transforms.raw.VideoAugment`.
     """
 
     _PIXEL_MEAN = [0.485, 0.456, 0.406]
@@ -262,33 +297,28 @@ class ConvertToSam2VideoBatch:
         self.largest_first = largest_first
         self.augmentor = augmentor
         self.init_kwargs = {"max_num_objects": max_num_objects, "largest_first": largest_first}
+        # Built once instead of per frame.
+        self.pixel_mean = torch.tensor(self._PIXEL_MEAN).view(1, 3, 1, 1)
+        self.pixel_std = torch.tensor(self._PIXEL_STD).view(1, 3, 1, 1)
 
     def _to_sam2_size(self, x: torch.Tensor, mode: str) -> torch.Tensor:
         """Resize longest side to SAM2_SIZE then zero-pad to square.
 
-        Matches SAM2's standard preprocessing (RandomResizeAPI + square padding in
-        the MOSE finetune config), preserving aspect ratio rather than stretching.
-        Padding is applied to the right and bottom edges.
+        Padding is applied in image space to the right and bottom edges.
         """
-        H, W = x.shape[-2:]
-        scale = self._SAM2_SIZE / max(H, W)
-        new_h, new_w = int(round(H * scale)), int(round(W * scale))
-        kw = {"align_corners": False} if mode == "bilinear" else {}
-        x = F.interpolate(x, size=(new_h, new_w), mode=mode, **kw)
-        pad_h, pad_w = self._SAM2_SIZE - new_h, self._SAM2_SIZE - new_w
-        if pad_h > 0 or pad_w > 0:
-            x = F.pad(x, (0, pad_w, 0, pad_h))
-        return x
+        from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_tensor
+        return resize_longest_side_and_pad_tensor(x, self._SAM2_SIZE, mode=mode)[0]
 
     def _to_sam2_image(self, x: torch.Tensor) -> torch.Tensor:
         """(B,C,H,W) float [0,1] -> (B,3,1024,1024) ImageNet-normalized."""
         x = x.float()
         if x.shape[1] == 1:
             x = x.expand(-1, 3, -1, -1)
-        mean = torch.tensor(self._PIXEL_MEAN, dtype=x.dtype, device=x.device).view(1, 3, 1, 1)
-        std = torch.tensor(self._PIXEL_STD, dtype=x.dtype, device=x.device).view(1, 3, 1, 1)
-        x = (x - mean) / std
-        return self._to_sam2_size(x, mode="bilinear")
+        # Pad before normalization to keep padding black in image space.
+        x = self._to_sam2_size(x, mode="bilinear")
+        mean = self.pixel_mean.to(device=x.device, dtype=x.dtype)
+        std = self.pixel_std.to(device=x.device, dtype=x.dtype)
+        return (x - mean) / std
 
     def _resize_masks(self, masks: torch.Tensor) -> torch.Tensor:
         """(O,H,W) bool -> (O,1024,1024) bool, aspect-ratio preserving + padded."""
@@ -327,7 +357,7 @@ class ConvertToSam2VideoBatch:
         from training.utils.data_utils import BatchedVideoDatapoint, BatchedVideoMetaData
 
         if self.augmentor is not None:
-            x = self.augmentor(x)
+            x, y = self.augmentor(x, y)
 
         is_3d = (x.ndim == 5)
         B = x.shape[0]
@@ -337,7 +367,8 @@ class ConvertToSam2VideoBatch:
             _, _, H, W = x.shape
             T = 1
 
-        # img_batch: (T, B, 3, 1024, 1024)
+        # Resized per frame: x[:, :, t] is a view, whereas flattening to one frame batch needs
+        # a permute+copy for no gain, since the resize cost is the same either way.
         if is_3d:
             img_batch = torch.stack([self._to_sam2_image(x[:, :, t]) for t in range(T)])
         else:
@@ -345,46 +376,48 @@ class ConvertToSam2VideoBatch:
 
         y = y.squeeze(1)  # (B,H,W) or (B,Z,H,W)
 
-        # For 3D: sample from the union of IDs across all z-slices so that objects
-        # present in any frame are included (frame 0 alone may be empty at patch boundaries).
+        # For 3D: sample from the union of IDs across all z-slices so that it includes objects
+        # present in any frame (frame 0 alone can be empty at patch boundaries).
         obj_ids_per_b = [
             self._sample_obj_ids(y[b].flatten() if is_3d else y[b]) for b in range(B)
         ]
+        # The sampled IDs do not depend on the time step, so emptiness is the same for all of them.
+        n_objects = sum(len(ids) for ids in obj_ids_per_b)
+        if n_objects == 0:
+            raise RuntimeError(
+                "ConvertToSam2VideoBatch: no objects found in batch. "
+                "Use MinInstanceSampler to ensure each sample has objects."
+            )
 
-        # Build per-time-step tensors (same structure as collate_fn in data_utils.py).
-        step_masks, step_obj2frame, step_identifier, step_orig_size = [], [], [], []
+        # One broadcast comparison per frame instead of stacking objects one at a time. The
+        # 1024x1024 resize dominates regardless of how the masks are batched into it.
+        step_masks = []
         for t in range(T):
-            masks_t, obj2frame_t, id_t, size_t = [], [], [], []
-            for b in range(B):
-                ids = obj_ids_per_b[b]
-                if len(ids) == 0:
-                    continue
-                lbl = y[b, t] if is_3d else y[b]       # (H,W)
-                raw = torch.stack([lbl == oid for oid in ids])  # (O_i,H,W)
-                obj_masks = self._resize_masks(raw)             # (O_i,1024,1024)
-                for o_i, oid in enumerate(ids):
-                    masks_t.append(obj_masks[o_i])
-                    obj2frame_t.append(torch.tensor([t, b], dtype=torch.int))
-                    id_t.append(torch.tensor([b, int(oid.item()), t], dtype=torch.long))
-                    size_t.append(torch.tensor([H, W], dtype=torch.long))
+            raw = [
+                (y[b, t] if is_3d else y[b]).unsqueeze(0) == obj_ids_per_b[b].view(-1, 1, 1)
+                for b in range(B) if len(obj_ids_per_b[b]) > 0
+            ]
+            step_masks.append(self._resize_masks(torch.cat(raw)))  # (O,1024,1024)
 
-            if not masks_t:
-                raise RuntimeError(
-                    "ConvertToSam2VideoBatch: no objects found in batch at time step "
-                    f"{t}. Use MinInstanceSampler to ensure each sample has objects."
-                )
-            step_masks.append(torch.stack(masks_t))
-            step_obj2frame.append(torch.stack(obj2frame_t))
-            step_identifier.append(torch.stack(id_t))
-            step_orig_size.append(torch.stack(size_t))
+        # Per-time-step metadata (same structure as collate_fn in data_utils.py). The object
+        # slots are identical for every frame, so the flat lists are built once.
+        batch_index = [b for b in range(B) for _ in range(len(obj_ids_per_b[b]))]
+        object_ids = [int(oid) for b in range(B) for oid in obj_ids_per_b[b].tolist()]
+        step_obj2frame, step_identifier = [], []
+        for t in range(T):
+            step_obj2frame.append(torch.tensor([[t, b] for b in batch_index], dtype=torch.int))
+            step_identifier.append(
+                torch.tensor([[b, oid, t] for b, oid in zip(batch_index, object_ids)], dtype=torch.long)
+            )
+        orig_size = torch.tensor([H, W], dtype=torch.long).expand(T, n_objects, 2).contiguous()
 
         return BatchedVideoDatapoint(
             img_batch=img_batch,
-            obj_to_frame_idx=torch.stack(step_obj2frame),   # (T,O,2)
-            masks=torch.stack(step_masks),                  # (T,O,1024,1024)
+            obj_to_frame_idx=torch.stack(step_obj2frame),  # (T,O,2)
+            masks=torch.stack(step_masks),  # (T,O,1024,1024)
             metadata=BatchedVideoMetaData(
                 unique_objects_identifier=torch.stack(step_identifier),
-                frame_orig_size=torch.stack(step_orig_size),
+                frame_orig_size=orig_size,
             ),
             dict_key="torch_em",
             batch_size=[T],
@@ -395,7 +428,7 @@ class MixedLoader:
     """Round-robin DataLoader wrapper for joint 2D + 3D training.
 
     Each iteration yields one batch from the first loader, then one from the
-    second, cycling until the shorter one is exhausted.  This ensures that every
+    second, cycling until the shorter one is exhausted. This ensures that every
     training step sees both 2D and 3D data.
 
     Args:

@@ -1,25 +1,25 @@
 import os
 import time
 from glob import glob
-from tqdm import tqdm
-from natsort import natsorted
 from typing import Union, Optional, List, Literal
 
 import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
-from bioimage_cpp.segmentation import label as connected_components
-from bioimage_cpp.utils import Blocking
+from tqdm import tqdm
+from natsort import natsorted
 
 import torch
 
 from torch_em.data import datasets
 
-from micro_sam import util
-from ..util import get_sam_model, get_model_names
+from bioimage_cpp.utils import Blocking
+from bioimage_cpp.segmentation import label as connected_components
 
+from micro_sam import util
 from . import run_evaluation
 from ..training.training import _filter_warnings
+from ..util import get_sam_model, get_model_names
 from .inference import run_inference_with_iterative_prompting
 from .evaluation import run_evaluation_for_iterative_prompting
 from .multi_dimensional_segmentation import segment_slices_from_ground_truth
@@ -827,7 +827,7 @@ def run_benchmark_evaluations(
     print("Time taken for running benchmarks: ", f"{int(hours)}h {int(minutes)}m {int(seconds)}s")
 
 
-def main():
+def main(argv=None):
     """@private"""
     import argparse
 
@@ -878,7 +878,7 @@ def main():
         "By default, we run all evaluations with 'all'. If 'automatic' is chosen, it runs automatic segmentation only "
         "/ 'interactive' runs interactive segmentation (starting from box and single point) with iterative prompting."
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     run_benchmark_evaluations(
         input_folder=args.input_folder,

@@ -1,98 +1,52 @@
-"""Benchmark evaluation of interactive segmentation baselines.
+"""Benchmark evaluation of the interactive segmentation baselines, i.e. everything but micro-sam2.
 
 Supported methods:
-  nninteractive: nnInteractive interactive segmentation (3D only)
-  sam: Pretrained SAM v1 interactive segmentation (2D and 3D)
-  sam2: Pretrained SAM2 interactive segmentation (2D and 3D)
-  micro-sam: micro-sam v1 finetuned interactive (vit_b_lm LM / vit_b_em_organelles EM)
-  micro_sam2: Finetuned SAM2 interactive segmentation (2D and 3D)
-  sam3: SAM3 interactive segmentation (2D and 3D)
+  nninteractive: nnInteractive interactive segmentation (3d only)
+  sam: Pretrained SAM v1 interactive segmentation (2d only)
+  sam3: SAM3 interactive segmentation (2d and 3d)
+  micro-sam: micro-sam v1 finetuned interactive, slice-wise (vit_b_lm for LM, vit_b_em_organelles for EM)
+  microsam_vol: micro-sam v1 finetuned interactive, volumetric projection (3d LM only)
+
+The SAM2 engine itself, pretrained or jointly finetuned, is evaluated by
+evaluate_interactive_segmentation.py, which those two share.
 
 Usage examples:
     python evaluate_interactive_baselines.py -d embedseg -e <exp> --method nninteractive -p box
-    python evaluate_interactive_baselines.py -d embedseg -e <exp> --method nninteractive -p point -iter 4
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method sam
-    python evaluate_interactive_baselines.py -d livecell -e <exp> --method sam2
-    python evaluate_interactive_baselines.py -d livecell -e <exp> --method micro-sam
-    python evaluate_interactive_baselines.py -d livecell -e <exp> --method micro_sam2
-    python evaluate_micro_sam_volumetric.py -d embedseg -e <exp> -m vit_b_lm -p box
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method sam3
-    python evaluate_interactive_baselines.py -d embedseg -e <exp> --method sam3 --ndim 3
+    python evaluate_interactive_baselines.py -d livecell -e <exp> --method micro-sam
+    python evaluate_interactive_baselines.py -d embedseg -e <exp> --method microsam_vol -m vit_b_lm -p box
 """
 
 import os
 import sys
-import tempfile
+import shutil
+import argparse
 
-import imageio.v3 as imageio
 import numpy as np
-from skimage.measure import label as connected_components
-from torch_em.transform.raw import normalize
+import pandas as pd
+import imageio.v3 as imageio
 from tqdm import tqdm
+from skimage.measure import label as connected_components
 
 import torch
 
-from micro_sam.v1.evaluation.evaluation import run_evaluation
-
-from common import DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM, CHECKPOINT_PATHS, get_data_paths
-from baselines_common import MAX_EVALUATION_SAMPLES, _load_data
-from common import check_data_download
-
-_METHODS = ["nninteractive", "sam3", "sam", "sam2", "micro-sam", "micro_sam2"]
-
-NNINTERACTIVE_CHECKPOINT = "/mnt/vast-nhr/home/archit/u12090/nnInteractive/pretrained_weights/nnInteractive_v1.0"
-_SAM3_ROOT = "/mnt/vast-nhr/home/archit/u12090/SAM3_Experiments"
-
-MICROSAM2_INTERACTIVE_CHECKPOINT = (
-    "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/interactive/v1/checkpoints/checkpoint.pt"
+from common import (
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM,
+    check_data_download, interactive_result_name, interactive_run_tag, load_data, n_samples,
+    run_dataset_evaluation,
 )
 
-_SAM2_BACKBONE = "sam2.1"
-_SAM2_MODEL_TYPE = "hvit_t"
-_SAM_V1_MODEL_TYPE = "vit_b"
-_MICROSAM_V1_LM_MODEL = "vit_b_lm"
-_MICROSAM_V1_EM_MODEL = "vit_b_em_organelles"
+METHODS = ["nninteractive", "sam3", "sam", "micro-sam", "microsam_vol"]
 
-_EM_DATASETS = set(DATASETS_3D_EM)
+NNINTERACTIVE_CHECKPOINT = "/mnt/vast-nhr/home/archit/u12090/nnInteractive/pretrained_weights/nnInteractive_v1.0"
+SAM3_ROOT = "/mnt/vast-nhr/home/archit/u12090/SAM3_Experiments"
 
+SAM_V1_MODEL_TYPE = "vit_b"
+MICROSAM_V1_LM_MODEL = "vit_b_lm"
+MICROSAM_V1_EM_MODEL = "vit_b_em_organelles"
 
-def _normalize_raw_to_unit(raw):
-    """Normalize raw input to float32 [0, 1] for SAM2-style preprocessing."""
-    raw = raw.astype("float32", copy=False)
-    if raw.size == 0:
-        return raw
-    if raw.min() < 0 or raw.max() > 1:
-        raw = normalize(raw)
-    return np.clip(raw, 0, 1)
-
-
-def _to_sam2_uint8(raw):
-    """Convert raw input to uint8 while preserving [0, 1] normalization semantics."""
-    return np.round(_normalize_raw_to_unit(raw) * 255).astype("uint8")
-
-
-def _get_corrective_point(gt_mask, pred_mask):
-    """Center of the largest FN (positive) or FP (negative) region.
-
-    Returns (coords, is_positive) or (None, None) if prediction is perfect.
-    coords is a list [d0, d1, ...] matching the mask dimensionality.
-    """
-    fn_labeled = connected_components(gt_mask & ~pred_mask)
-    fp_labeled = connected_components(~gt_mask & pred_mask)
-    fn_counts = np.bincount(fn_labeled.ravel())[1:] if fn_labeled.max() > 0 else np.array([])
-    fp_counts = np.bincount(fp_labeled.ravel())[1:] if fp_labeled.max() > 0 else np.array([])
-    fn_max = int(fn_counts.max()) if len(fn_counts) > 0 else 0
-    fp_max = int(fp_counts.max()) if len(fp_counts) > 0 else 0
-    if fn_max == 0 and fp_max == 0:
-        return None, None
-    if fn_max >= fp_max:
-        region = fn_labeled == (fn_counts.argmax() + 1)
-        is_positive = True
-    else:
-        region = fp_labeled == (fp_counts.argmax() + 1)
-        is_positive = False
-    coords = [int(np.round(c.mean())) for c in np.where(region)]
-    return coords, is_positive
+EM_DATASETS = set(DATASETS_3D_EM)
 
 
 def _get_largest_region_center(mask):
@@ -190,11 +144,11 @@ def run_nninteractive_evaluation(
         return
 
     session = _load_nninteractive(checkpoint_path, device)
-    n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
+    n = n_samples(dataset_name, data_root)
     all_gt = []
     all_seg_per_iter = [[] for _ in range(n_iterations)]
 
-    for raw, labels, valid_roi in tqdm(_load_data(dataset_name, data_root, ndim=3), total=n, desc="nninteractive"):
+    for raw, labels, valid_roi in tqdm(load_data(dataset_name, data_root, ndim=3), total=n, desc="nninteractive"):
         segs = _segment_nninteractive_iterative(raw, labels, session, start_with_box, n_iterations)
         all_gt.append(labels)
         for it, seg in enumerate(segs):
@@ -206,20 +160,24 @@ def run_nninteractive_evaluation(
     for it, save_path in enumerate(save_paths):
         if os.path.exists(save_path):
             continue
-        results = run_evaluation(gt_paths=all_gt, prediction_paths=all_seg_per_iter[it], save_path=save_path)
+        results = run_dataset_evaluation(all_gt, all_seg_per_iter[it], dataset_name, save_path)
         print(f"Iteration {it:02d}: {results}")
 
 
 def _load_sam_v1(model_type, checkpoint, device):
-    from micro_sam.util import get_sam_model
+    from micro_sam.v1.util import get_sam_model
     return get_sam_model(model_type=model_type, checkpoint_path=checkpoint, device=device)
 
 
-def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
+def _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
+    """Write the cropped images and labels the SAM v1 2d inference reads, and return their paths."""
     image_paths, gt_paths = [], []
-    n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
-    it = tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")
+    n = n_samples(dataset_name, data_root)
+    it = tqdm(load_data(dataset_name, data_root, 2, min_size), total=n, desc="save-crops")
     for sample_id, (raw, labels, _) in enumerate(it):
+        if labels.max() == 0:  # Inference skips these, so they must not be scored either.
+            continue
+
         image_path = os.path.join(input_dir, f"{sample_id:05d}.tif")
         gt_path = os.path.join(gt_dir, f"{sample_id:05d}.tif")
         raw = np.clip(np.round(raw), 0, 255).astype("uint8")
@@ -230,41 +188,31 @@ def _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
     return image_paths, gt_paths
 
 
-def _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir):
-    image_paths, gt_paths = [], []
-    n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
-    it = tqdm(_load_data(dataset_name, data_root, 2), total=n, desc="save-crops")
-    for sample_id, (raw, labels, _) in enumerate(it):
-        image_path = os.path.join(input_dir, f"{sample_id:05d}.tif")
-        gt_path = os.path.join(gt_dir, f"{sample_id:05d}.tif")
-        imageio.imwrite(image_path, _to_sam2_uint8(raw), compression="zlib")
-        imageio.imwrite(gt_path, labels.astype("uint32"), compression="zlib")
-        image_paths.append(image_path)
-        gt_paths.append(gt_path)
-    return image_paths, gt_paths
-
-
 def run_sam_v1_evaluation(
     dataset_name, data_root, experiment_folder, device,
     model_type="vit_b_lm", checkpoint=None, start_with_box=True, n_iterations=8, ndim=None, name_tag="micro-sam",
-    use_masks=False,
+    use_masks=False, min_size=0,
 ):
     if ndim is None:
         ndim = 3 if dataset_name in DATASETS_3D else 2
 
     if ndim == 3:
         raise ValueError(
-            "micro-sam v1 3D interactive evaluation should use the volumetric implementation. "
+            "micro-sam v1 3D interactive evaluation must use the volumetric implementation. "
             "Run finetuning/v2/evaluation/evaluate_micro_sam_volumetric.py instead."
         )
 
-    if name_tag == "micro-sam" and dataset_name in _EM_DATASETS:
+    if name_tag == "micro-sam" and dataset_name in EM_DATASETS:
         raise ValueError(f"micro-sam interactive does not support EM datasets (LM model only); got '{dataset_name}'.")
 
     prompt_str = "box" if start_with_box else "point"
+    run_tag = interactive_run_tag(ndim=2, use_masks=use_masks, min_size=min_size)
     results_dir = os.path.join(experiment_folder, "results")
     save_paths = [
-        os.path.join(results_dir, f"{dataset_name}_{name_tag}_{model_type}_{prompt_str}_iter{it:02d}.csv")
+        os.path.join(results_dir, interactive_result_name(
+            dataset_name, name_tag, model_type, prompt_str, it,
+            ndim=2, use_masks=use_masks, min_size=min_size,
+        ))
         for it in range(n_iterations)
     ]
     if all(os.path.exists(p) for p in save_paths):
@@ -274,34 +222,40 @@ def run_sam_v1_evaluation(
     predictor = _load_sam_v1(model_type, checkpoint, device)
     from micro_sam.v1.evaluation.inference import run_inference_with_iterative_prompting
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_dir = os.path.join(tmpdir, "images")
-        gt_dir = os.path.join(tmpdir, "labels")
-        prediction_dir = os.path.join(tmpdir, "predictions")
-        embedding_dir = os.path.join(tmpdir, "embeddings")
-        os.makedirs(input_dir, exist_ok=True)
-        os.makedirs(gt_dir, exist_ok=True)
-        image_paths, gt_paths = _write_sam_v1_2d_inputs(dataset_name, data_root, input_dir, gt_dir)
+    # Inputs, embeddings and predictions outlive the process so a preempted or timed-out job resumes
+    # per image. '/tmp' is a small RAM-backed tmpfs on the compute nodes, so it is avoided here.
+    work_dir = os.path.join(
+        experiment_folder, "predictions", f"{name_tag}_{model_type}", dataset_name, f"{prompt_str}{run_tag}"
+    )
+    input_dir = os.path.join(work_dir, "inputs", "images")
+    gt_dir = os.path.join(work_dir, "inputs", "labels")
+    embedding_dir = os.path.join(work_dir, "embeddings")
+    prediction_dir = os.path.join(work_dir, "predictions")
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(gt_dir, exist_ok=True)
+    image_paths, gt_paths = _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size)
 
-        run_inference_with_iterative_prompting(
-            predictor=predictor,
-            image_paths=image_paths,
-            gt_paths=gt_paths,
-            embedding_dir=embedding_dir,
-            prediction_dir=prediction_dir,
-            start_with_box_prompt=start_with_box,
-            n_iterations=n_iterations,
-            use_masks=use_masks,
-        )
+    run_inference_with_iterative_prompting(
+        predictor=predictor,
+        image_paths=image_paths,
+        gt_paths=gt_paths,
+        embedding_dir=embedding_dir,
+        prediction_dir=prediction_dir,
+        start_with_box_prompt=start_with_box,
+        n_iterations=n_iterations,
+        use_masks=use_masks,
+    )
 
-        os.makedirs(results_dir, exist_ok=True)
-        for it, save_path in enumerate(save_paths):
-            if os.path.exists(save_path):
-                continue
-            pred_dir = os.path.join(prediction_dir, f"iteration{it:02d}")
-            pred_paths = [os.path.join(pred_dir, os.path.basename(path)) for path in image_paths]
-            results = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=save_path)
-            print(f"Iteration {it:02d}: {results}")
+    os.makedirs(results_dir, exist_ok=True)
+    for it, save_path in enumerate(save_paths):
+        if os.path.exists(save_path):
+            continue
+        pred_dir = os.path.join(prediction_dir, f"iteration{it:02d}")
+        pred_paths = [os.path.join(pred_dir, os.path.basename(path)) for path in image_paths]
+        results = run_dataset_evaluation(gt_paths, pred_paths, dataset_name, save_path)
+        print(f"Iteration {it:02d}: {results}")
+
+    shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def run_sam3_evaluation(
@@ -311,7 +265,7 @@ def run_sam3_evaluation(
     if ndim is None:
         ndim = 3 if dataset_name in DATASETS_3D else 2
 
-    sys.path.insert(0, _SAM3_ROOT)
+    sys.path.insert(0, SAM3_ROOT)
     from micro_sam3.evaluation.inference import (
         build_sam3_image_predictor, build_sam3_video_predictor,
         run_interactive_segmentation_2d_sam3, run_interactive_segmentation_3d_sam3,
@@ -335,11 +289,11 @@ def run_sam3_evaluation(
         predictor = build_sam3_video_predictor()
         model, processor = None, None
 
-    n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
+    n = n_samples(dataset_name, data_root)
     all_gt = []
     all_seg_per_iter = [[] for _ in range(n_iterations)]
 
-    for raw, labels, valid_roi in tqdm(_load_data(dataset_name, data_root, ndim), total=n, desc=f"sam3-{ndim}d"):
+    for raw, labels, valid_roi in tqdm(load_data(dataset_name, data_root, ndim), total=n, desc=f"sam3-{ndim}d"):
         if ndim == 2:
             segs = run_interactive_segmentation_2d_sam3(
                 image=raw, gt=labels, model=model, processor=processor,
@@ -360,139 +314,103 @@ def run_sam3_evaluation(
     for it, save_path in enumerate(save_paths):
         if os.path.exists(save_path):
             continue
-        results = run_evaluation(gt_paths=all_gt, prediction_paths=all_seg_per_iter[it], save_path=save_path)
+        results = run_dataset_evaluation(all_gt, all_seg_per_iter[it], dataset_name, save_path)
         print(f"Iteration {it:02d}: {results}")
 
 
-def run_sam2_evaluation(
-    dataset_name, data_root, experiment_folder, device,
-    model_type=_SAM2_MODEL_TYPE, backbone=_SAM2_BACKBONE, checkpoint_path=None,
-    start_with_box=True, n_iterations=8, ndim=None, name_tag="sam2", use_masks=False,
+def run_microsam_volumetric_evaluation(
+    dataset_name, data_root, experiment_folder, model_type=None, checkpoint=None,
+    prompt_choice="box", full_grid_search=False, store_segmentation=True, min_size=0,
 ):
-    if ndim is None:
-        ndim = 3 if dataset_name in DATASETS_3D else 2
-    if checkpoint_path is None:
-        checkpoint_path = CHECKPOINT_PATHS[backbone][model_type]
+    """Evaluate micro-sam v1 with its volumetric projection instead of slice-wise prompting.
 
-    prompt_str = "box" if start_with_box else "point"
-    dim_suffix = "" if ndim == 2 else "_3d"
-    results_dir = os.path.join(experiment_folder, "results")
-    save_paths = [
-        os.path.join(results_dir, f"{dataset_name}_{name_tag}_{model_type}{dim_suffix}_{prompt_str}_iter{it:02d}.csv")
-        for it in range(n_iterations)
-    ]
-    if all(os.path.exists(p) for p in save_paths):
-        print(f"Results already stored at '{results_dir}'.")
+    The prompt of an object is placed on one slice and projected through the volume, which is the
+    mode the micro-sam v1 annotator offers for 3d data.
+    """
+    from micro_sam.v1.evaluation.multi_dimensional_segmentation import (
+        run_multi_dimensional_segmentation_grid_search
+    )
+
+    if dataset_name not in DATASETS_3D:
+        raise ValueError(f"The volumetric micro-sam v1 evaluation is 3d only; got '{dataset_name}'.")
+    if dataset_name in EM_DATASETS:
+        raise ValueError(f"Volumetric micro-sam v1 only supports LM datasets; got '{dataset_name}'.")
+
+    if model_type is None:
+        model_type = MICROSAM_V1_LM_MODEL
+
+    interactive_seg_mode = "points" if prompt_choice == "point" else "box"
+    # The projection settings the annotator defaults to. A full sweep is opt-in, since it re-runs
+    # the projection for every combination.
+    grid_search_values = None if full_grid_search else {
+        "iou_threshold": [0.8], "projection": ["mask"], "box_extension": [0.025],
+    }
+
+    n = n_samples(dataset_name, data_root)
+    rows = []
+    it = tqdm(load_data(dataset_name, data_root, 3, min_size), total=n, desc="microsam_vol")
+    for sample_id, (raw, labels, _) in enumerate(it):
+        sample_name = f"sample_{sample_id:05d}"
+        result_dir = os.path.join(
+            experiment_folder, "results", f"{dataset_name}_microsam_vol_{model_type}_{prompt_choice}", sample_name,
+        )
+        embedding_path = os.path.join(
+            experiment_folder, "embeddings", f"{dataset_name}_microsam_vol_{model_type}", sample_name,
+        )
+
+        best_params_path = run_multi_dimensional_segmentation_grid_search(
+            volume=raw,
+            ground_truth=labels,
+            model_type=model_type,
+            checkpoint_path=checkpoint,
+            embedding_path=embedding_path,
+            result_dir=result_dir,
+            interactive_seg_mode=interactive_seg_mode,
+            grid_search_values=grid_search_values,
+            min_size=min_size,
+            store_segmentation=store_segmentation,
+            verbose=False,
+        )
+
+        best_params = pd.read_csv(best_params_path)
+        best_params.insert(0, "sample_id", sample_id)
+        rows.append(best_params)
+
+    if not rows:
         return
 
-    from micro_sam.v2.evaluation.inference import run_interactive_segmentation_2d, run_interactive_segmentation_3d
-
-    if ndim == 2:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            input_dir = os.path.join(tmpdir, "images")
-            gt_dir = os.path.join(tmpdir, "labels")
-            prediction_dir = os.path.join(tmpdir, "predictions")
-            os.makedirs(input_dir, exist_ok=True)
-            os.makedirs(gt_dir, exist_ok=True)
-            image_paths, gt_paths = _write_sam2_2d_inputs(dataset_name, data_root, input_dir, gt_dir)
-
-            prediction_dir = run_interactive_segmentation_2d(
-                image_paths=image_paths,
-                gt_paths=gt_paths,
-                image_key=None,
-                gt_key=None,
-                prediction_dir=prediction_dir,
-                model_type=model_type,
-                backbone=backbone,
-                checkpoint_path=checkpoint_path,
-                start_with_box_prompt=start_with_box,
-                device=device,
-                n_iterations=n_iterations,
-                use_masks=use_masks,
-                ensure_8bit=False,
-            )
-
-            os.makedirs(results_dir, exist_ok=True)
-            for it, save_path in enumerate(save_paths):
-                if os.path.exists(save_path):
-                    continue
-                pred_dir = os.path.join(prediction_dir, f"iteration{it:02d}")
-                pred_paths = [os.path.join(pred_dir, os.path.basename(path)) for path in image_paths]
-                results = run_evaluation(gt_paths=gt_paths, prediction_paths=pred_paths, save_path=save_path)
-                print(f"Iteration {it:02d}: {results}")
-    else:
-        n = min(len(get_data_paths(dataset_name, data_root)[0]), MAX_EVALUATION_SAMPLES)
-        prediction_root = os.path.join(experiment_folder, "predictions", name_tag)
-        all_gt = []
-        all_valid_rois = []
-        pred_paths_per_iter = [[] for _ in range(n_iterations)]
-
-        for sample_id, (raw, labels, valid_roi) in enumerate(
-            tqdm(_load_data(dataset_name, data_root, ndim=3), total=n, desc=f"{name_tag}-3d")
-        ):
-            sample_prediction_dir = run_interactive_segmentation_3d(
-                raw=np.stack([_to_sam2_uint8(frame) for frame in raw]),
-                labels=labels,
-                model_type=model_type,
-                backbone=backbone,
-                checkpoint_path=checkpoint_path,
-                start_with_box_prompt=start_with_box,
-                prediction_dir=os.path.join(prediction_root, f"sample_{sample_id:05d}"),
-                prediction_fname=f"{sample_id:05d}.tif",
-                device=device,
-                n_iterations=n_iterations,
-            )
-            all_gt.append(labels)
-            all_valid_rois.append(valid_roi)
-            for it in range(n_iterations):
-                pred_paths_per_iter[it].append(
-                    os.path.join(sample_prediction_dir, f"iteration{it}", f"{sample_id:05d}.tif")
-                )
-
-        os.makedirs(results_dir, exist_ok=True)
-        for it, save_path in enumerate(save_paths):
-            if os.path.exists(save_path):
-                continue
-            preds = []
-            for pred_path, valid_roi in zip(pred_paths_per_iter[it], all_valid_rois):
-                pred = imageio.imread(pred_path)
-                if valid_roi is not None:
-                    pred[~valid_roi] = 0
-                preds.append(pred)
-            results = run_evaluation(gt_paths=all_gt, prediction_paths=preds, save_path=save_path)
-            print(f"Iteration {it:02d}: {results}")
+    summary_path = os.path.join(
+        experiment_folder, "results", f"{dataset_name}_microsam_vol_{model_type}_{prompt_choice}.csv",
+    )
+    os.makedirs(os.path.dirname(summary_path), exist_ok=True)
+    pd.concat(rows, ignore_index=True).to_csv(summary_path, index=False)
+    print(f"Stored the summary at '{summary_path}'.")
 
 
 def main():
-    import argparse
-    all_datasets = sorted(set(DATASETS_2D + DATASETS_3D))
-    parser = argparse.ArgumentParser(description="Evaluate interactive segmentation baselines.")
-    parser.add_argument("-d", "--dataset_name", required=True, choices=all_datasets)
-    parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-d", "--dataset_name", required=True, choices=sorted(set(DATASETS_2D + DATASETS_3D)))
+    parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT, help="The root the data lives in.")
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
-    parser.add_argument("--method", type=str, default="nninteractive", choices=_METHODS)
-    parser.add_argument(
-        "-p", "--prompt_choice", type=str, default="box", choices=["box", "point"],
-        help="First prompt type (default: box)."
-    )
-    parser.add_argument(
-        "-iter", "--n_iterations", type=int, default=8, help="Number of iterative prompting rounds (default: 8)."
-    )
-    parser.add_argument(
-        "-c", "--checkpoint", type=str, default=None, help="Override default checkpoint path."
-    )
+    parser.add_argument("--method", type=str, required=True, choices=METHODS)
+    parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=("box", "point"))
+    parser.add_argument("-iter", "--n_iterations", type=int, default=8, help="Iterative prompting rounds.")
+    parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Override the default checkpoint path.")
     parser.add_argument(
         "-m", "--model_type", type=str, default=None,
-        help="Model type override (e.g. vit_b for sam, hvit_t for sam2/micro_sam2)."
+        help="Model type override, e.g. vit_b for sam, hvit_t for sam2."
     )
+    parser.add_argument("--ndim", type=int, default=None, choices=(2, 3), help="Defaults to the dataset's own.")
     parser.add_argument(
-        "--ndim", type=int, default=None, choices=[2, 3],
-        help="Dimensionality override (default: inferred from dataset)."
+        "--min_size", type=int, default=0,
+        help="Drop ground-truth objects below this many pixels, from both prompting and scoring. "
+             "Cropping leaves unrecoverable slivers at the crop faces."
     )
     parser.add_argument(
         "--use_masks", action="store_true",
-        help="Use previous logits/masks as mask prompts during SAM2 iterative prompting."
+        help="Feed the previous logits masks back as mask prompts. SAM v1 is not trained with them."
     )
+    parser.add_argument("--full_grid_search", action="store_true", help="Sweep the projection of microsam_vol.")
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
@@ -515,46 +433,32 @@ def main():
         )
 
     elif args.method == "sam":
-        mt = args.model_type or _SAM_V1_MODEL_TYPE
         run_sam_v1_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            device=device, model_type=mt, checkpoint=args.checkpoint,
+            device=device, model_type=args.model_type or SAM_V1_MODEL_TYPE, checkpoint=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, name_tag="sam",
-            use_masks=args.use_masks,
+            use_masks=args.use_masks, min_size=args.min_size,
         )
 
     elif args.method == "micro-sam":
-        is_em = args.dataset_name in _EM_DATASETS
-        mt = args.model_type or (_MICROSAM_V1_EM_MODEL if is_em else _MICROSAM_V1_LM_MODEL)
+        is_em = args.dataset_name in EM_DATASETS
+        model_type = args.model_type or (MICROSAM_V1_EM_MODEL if is_em else MICROSAM_V1_LM_MODEL)
         run_sam_v1_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            device=device, model_type=mt, checkpoint=args.checkpoint,
+            device=device, model_type=model_type, checkpoint=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, name_tag="micro-sam",
-            use_masks=args.use_masks,
+            use_masks=args.use_masks, min_size=args.min_size,
         )
 
-    elif args.method == "sam2":
-        mt = args.model_type or _SAM2_MODEL_TYPE
-        run_sam2_evaluation(
+    elif args.method == "microsam_vol":
+        run_microsam_volumetric_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            device=device, model_type=mt, backbone=_SAM2_BACKBONE,
-            checkpoint_path=args.checkpoint,
-            start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim,
-            name_tag="sam2", use_masks=args.use_masks,
-        )
-
-    elif args.method == "micro_sam2":
-        mt = args.model_type or _SAM2_MODEL_TYPE
-        run_sam2_evaluation(
-            args.dataset_name, args.input_path, args.experiment_folder,
-            device=device, model_type=mt, backbone=_SAM2_BACKBONE,
-            checkpoint_path=args.checkpoint or MICROSAM2_INTERACTIVE_CHECKPOINT,
-            start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim,
-            name_tag="micro_sam2", use_masks=args.use_masks,
+            model_type=args.model_type, checkpoint=args.checkpoint, prompt_choice=args.prompt_choice,
+            full_grid_search=args.full_grid_search, min_size=args.min_size,
         )
 
     else:
-        raise ValueError
+        raise ValueError(f"Unknown method: '{args.method}'.")
 
 
 if __name__ == "__main__":

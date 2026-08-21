@@ -1,21 +1,24 @@
 from typing import List, Optional, Tuple, Union
 
-import napari
 import numpy as np
 import imageio.v3 as imageio
+
 import torch
 
+import napari
+
 from .. import util
+from ._batch import run_batch
+from . import _widgets as widgets
+from ._state import AnnotatorState
 from ..v2.util import DEFAULT_MODEL
+from ._titles import get_dock_title
+from ._annotator import _ClassifierBase
+from .util import _sync_embedding_widget
+from ._batch_classification import ClassificationBatchTask
 from ..pixel_classification import (
     accumulate_pixel_labels, compute_pixel_features, project_prediction_to_image, train_pixel_classifier,
 )
-from ._annotator import _ClassifierBase
-from ._batch import run_batch
-from ._batch_classification import ClassificationBatchTask
-from ._state import AnnotatorState
-from . import _widgets as widgets
-from .util import _sync_embedding_widget
 
 # The SAM and SAM2 image encoders project every model size down to a fixed 256-channel image
 # embedding (prompt_embed_dim), so the per-pixel feature dimension is always 256.
@@ -104,7 +107,7 @@ def pixel_classifier(
 
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,
-        halo=halo, tile_shape=tile_shape, precompute_amg_state=False,
+        halo=halo, tile_shape=tile_shape, precompute_autoseg_state=False,
         ndim=ndim, checkpoint_path=checkpoint_path, device=device,
         skip_load=False, use_cli=True,
     )
@@ -120,7 +123,7 @@ def pixel_classifier(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Pixel Classification)")
+    viewer.window.add_dock_widget(annotator, name=get_dock_title("pixel_classification"))
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
@@ -140,7 +143,7 @@ def pixel_classifier(
 class PixelClassificationBatchTask(ClassificationBatchTask):
     """Batch task for the pixel classifier."""
 
-    dock_name = "Segment Anything for Microscopy (Batch Pixel Classification)"
+    dock_name = get_dock_title("batch_pixel_classification")
     classifier_class = PixelClassifier
     features_attr = "pixel_features"
     aux_attr = "pixel_grid_shape"
@@ -160,6 +163,7 @@ def batch_pixel_classifier(
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
     skip_done: bool = False,
+    batch_size: Optional[int] = 1,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the pixel classifier for a list of images.
 
@@ -182,6 +186,9 @@ def batch_pixel_classifier(
         ndim: The dimensionality of the data. If not given will be derived from the data.
         viewer: The viewer to which the functionality should be added.
         return_viewer: Whether to return the napari viewer instead of starting the event loop.
+        batch_size: The number of tiles / slices per model call when computing the embeddings.
+            Only has an effect on a GPU. Pass None to select it per device from the free VRAM
+            (SAM2 only). By default a single tile / slice is used.
         skip_done: Whether to skip images whose prediction already exists in `output_folder`.
 
     Returns:
@@ -195,6 +202,7 @@ def batch_pixel_classifier(
     task = PixelClassificationBatchTask(
         ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,
         tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
+        batch_size=batch_size,
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,

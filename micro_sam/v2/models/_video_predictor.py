@@ -1,140 +1,149 @@
-import os
-from tqdm import tqdm
+import contextlib
 from collections import OrderedDict
+from collections.abc import Mapping
 from typing import Optional, Dict, Union
 
 import numpy as np
-from PIL import Image
-from skimage.transform import resize
-
-import torch
+from tqdm import tqdm
 
 from sam2.build_sam import _load_checkpoint
 from sam2.sam2_video_predictor import SAM2VideoPredictor
-from sam2.utils.misc import AsyncVideoFrameLoader
+
+import torch
 
 
-# Number of recent frames whose precomputed features are cached on the device during inference. >1
-# so repeatedly segmenting the same / nearby slice reuses the upload; small so memory stays bounded.
+# Number of recent frames whose precomputed features stay cached on the device during inference. >1
+# so segmenting the same or nearby slice again reuses the upload. Small so memory stays bounded.
 MAX_CACHED_FRAMES = 8
 
+# The ImageNet statistics SAM2 normalizes its frames with (sam2.utils.misc only has them as defaults).
+IMG_MEAN = (0.485, 0.456, 0.406)
+IMG_STD = (0.229, 0.224, 0.225)
 
-def _load_img_as_tensor(img_path, image_size):
+
+def _load_frame_as_tensor(raw, image_size):
     """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
 
-    For file-path inputs: PIL loads the image, resizes via plain square stretch (JPEG convention).
-    For numpy inputs: percentile-normalizes any dtype to [0, 1] (2nd / 98th percentile per channel);
-    resizes using aspect-ratio preserving scale to image_size on the longest side, then zero-pads to a
-    square - matching ConvertToSam2VideoBatch._to_sam2_size used during training.
+    The frame is percentile-normalized per channel, so that any input dtype is mapped to the range
+    SAM2's ImageNet normalization expects, and it keeps its aspect ratio: the longest side is resized
+    to `image_size` and the remaining bottom/right region is zero-padded. The caller applies the
+    ImageNet normalization.
+    """
+    from micro_sam.v2.normalization import normalize_raw
+    from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_tensor
+
+    img_np = np.stack([raw] * 3, axis=-1) if raw.ndim == 2 else raw
+    img_np = normalize_raw(img_np, axis=(0, 1))
+    img = torch.from_numpy(img_np.astype(np.float32)).permute(2, 0, 1)
+    img, _ = resize_longest_side_and_pad_tensor(img[None], image_size)
+    return img[0]
+
+
+def _prepare_frame(raw, image_size):
+    """Resize and ImageNet-normalize one frame, exactly as the video predictor loads its frames.
+
+    Args:
+        raw: The frame as a numpy array.
+        image_size: The size the longest side is resized to.
 
     Returns:
-        img: (3, image_size, image_size) float32 tensor, ImageNet-normalised by the caller.
-        video_height: max(H, W) of the original frame - used as the effective square dimension
-            for SAM2's coordinate normalization so prompts map into the resized content region.
-        video_width: same as video_height.
+        The frame as a (3, image_size, image_size) float32 tensor on the CPU.
     """
-    if isinstance(img_path, str):
-        img_pil = Image.open(img_path)
-        img_np = np.array(img_pil.convert("RGB").resize((image_size, image_size)))
-        video_width, video_height = img_pil.size
-        img_np = img_np / 255.0
-    else:
-        img_np = img_path
-        img_np = np.stack([img_np] * 3, axis=-1) if img_np.ndim == 2 else img_np
-
-        # Percentile-normalize each channel to [0, 1], so any input dtype (e.g. uint16 microscopy data)
-        # is mapped to the range SAM2's ImageNet normalization expects. Clip since percentile
-        # normalization maps the 2nd / 98th percentiles to 0 / 1 and overshoots outside that range.
-        from torch_em.transform.raw import normalize_percentile
-        img_np = normalize_percentile(img_np.astype(np.float32), lower=2.0, upper=98.0, axis=(0, 1))
-        img_np = np.clip(img_np, 0.0, 1.0)
-
-        # Aspect-ratio preserving scale + zero-pad, matching _to_sam2_size in training.
-        # video_height/video_width are set to max(H, W) so SAM2's coordinate normalization
-        # (which divides by these and scales to image_size) correctly maps original-frame
-        # coordinates into the resized content region rather than the zero-padded area.
-        H, W = img_np.shape[:2]
-        video_height = video_width = max(H, W)
-        scale = image_size / max(H, W)
-        new_h, new_w = int(round(H * scale)), int(round(W * scale))
-        img_np = resize(img_np, output_shape=(new_h, new_w, 3), order=1, anti_aliasing=True, preserve_range=True)
-        pad_h, pad_w = image_size - new_h, image_size - new_w
-        if pad_h > 0 or pad_w > 0:
-            img_np = np.pad(img_np, ((0, pad_h), (0, pad_w), (0, 0)))
-
-    img = torch.from_numpy(img_np.astype(np.float32)).permute(2, 0, 1)
-    return img, video_height, video_width
+    image = _load_frame_as_tensor(raw, image_size)
+    mean = torch.tensor(IMG_MEAN, dtype=torch.float32)[:, None, None]
+    std = torch.tensor(IMG_STD, dtype=torch.float32)[:, None, None]
+    return (image - mean) / std
 
 
-def _load_video_frames_from_images(
-    video_path,
-    volume,
-    image_size,
-    offload_video_to_cpu,
-    img_mean=(0.485, 0.456, 0.406),
-    img_std=(0.229, 0.224, 0.225),
-    async_loading_frames=False,
-    compute_device=torch.device("cuda"),
-    verbosity=True,
-):
-    """Based on 'load_video_frames_from_jpg_images'.
+def _volume_geometry(volume):
+    """The frame count and the effective square size of a (Z, Y, X) volume.
 
-    Load the video frames from a directory of image files (eg. "<frame_index>.jpg" format).
-
-    The frames are resized to image_size x image_size and are loaded to GPU if
-    `offload_video_to_cpu` is `False` and to CPU if `offload_video_to_cpu` is `True`.
-
-    You can load a frame asynchronously by setting `async_loading_frames` to `True`.
+    That is all the inference state needs from its frames: the per-frame features come from the
+    precomputed embeddings, never from the volume itself. Only the shape is read, so a lazy input
+    (dask / zarr / h5py) is never materialized. The square size gives prompts one isotropic scale
+    factor, matching how a frame would be resized and padded.
     """
-    img_mean = torch.tensor(img_mean, dtype=torch.float32)[:, None, None]
-    img_std = torch.tensor(img_std, dtype=torch.float32)[:, None, None]
+    shape = tuple(volume.shape)
+    if len(shape) != 3:
+        raise ValueError(f"Expected a 3D volume of shape (Z, Y, X), got an array of shape {shape}.")
+    num_frames, height, width = (int(s) for s in shape)
+    return num_frames, max(height, width)
 
-    if video_path is None:
-        assert isinstance(volume, np.ndarray) and volume.ndim == 3, "Something is off with the 'volume'."
-        # Iterate over each slice.
-        images = []
-        for i, curr_slice in enumerate(volume):
-            curr_image, video_height, video_width = _load_img_as_tensor(curr_slice, image_size)
-            images.append(curr_image)
-        images = torch.stack(images)  # Stack the inputs in expected format.
-    else:
-        if isinstance(video_path, str) and os.path.isdir(video_path):
-            frames_folder = video_path
-        else:
-            raise AssertionError("The video predictor expects the user to provide the folder where frames are stored.")
 
-        frame_names = [p for p in os.listdir(frames_folder)]  # NOTE: This part has changed to support multiple ffs.
-        frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
-        num_frames = len(frame_names)
-        if num_frames == 0:
-            raise RuntimeError(f"No images found in '{frames_folder}'.")
+BATCHED_FRAME_OUTPUT_KEYS = ("maskmem_features", "pred_masks", "obj_ptr", "object_score_logits")
 
-        img_paths = [os.path.join(frames_folder, frame_name) for frame_name in frame_names]
 
-        if async_loading_frames:
-            lazy_images = AsyncVideoFrameLoader(
-                img_paths,
-                image_size,
-                offload_video_to_cpu,
-                img_mean,
-                img_std,
-                compute_device,
-            )
-            return lazy_images, lazy_images.video_height, lazy_images.video_width
+def _batch_frame_outputs(entries):
+    """Concatenate one frame's per-object memory entries along the batch axis."""
+    batched = {}
+    for key in BATCHED_FRAME_OUTPUT_KEYS:
+        values = [entry[key] for entry in entries]
+        batched[key] = None if values[0] is None else torch.cat(values, dim=0)
+    position = entries[0]["maskmem_pos_enc"]
+    # The same for every object, so the batch axis of the group is all it needs, see
+    # 'SAM2VideoPredictor._get_maskmem_pos_enc'.
+    batched["maskmem_pos_enc"] = (
+        None if position is None else [x[0:1].expand(len(entries), -1, -1, -1) for x in position]
+    )
+    return batched
 
-        images = torch.zeros(num_frames, 3, image_size, image_size, dtype=torch.float32)
-        for n, img_path in enumerate(tqdm(img_paths, desc="frame loading", disable=not verbosity)):
-            images[n], video_height, video_width = _load_img_as_tensor(img_path, image_size)
 
-    if not offload_video_to_cpu:
-        images = images.to(compute_device)
-        img_mean = img_mean.to(compute_device)
-        img_std = img_std.to(compute_device)
+def _slice_frame_output(batched, index):
+    """One object's entry out of a batched frame output, as views rather than copies."""
+    entry = {}
+    for key in BATCHED_FRAME_OUTPUT_KEYS:
+        value = batched[key]
+        entry[key] = None if value is None else value[index:index + 1]
+    position = batched["maskmem_pos_enc"]
+    entry["maskmem_pos_enc"] = None if position is None else [x[0:1] for x in position]
+    return entry
 
-    # Normalize by mean and std
-    images -= img_mean
-    images /= img_std
-    return images, video_height, video_width
+
+class _BatchedMemory(Mapping):
+    """The memories of several objects, concatenated on the batch axis as they are read.
+
+    Only the frames the memory selection reaches are concatenated, so the cost follows the memory
+    window rather than the length of the volume.
+    """
+
+    def __init__(self, per_object):
+        self._per_object = per_object
+        self._batched = {}
+
+    def __getitem__(self, frame_idx):
+        if frame_idx not in self._batched:
+            self._batched[frame_idx] = _batch_frame_outputs([entry[frame_idx] for entry in self._per_object])
+        return self._batched[frame_idx]
+
+    def __iter__(self):
+        return iter(self._per_object[0])
+
+    def __len__(self):
+        return len(self._per_object[0])
+
+
+def _allocated(device):
+    """Bytes currently held by tensors on the device, or 0 where that cannot be read."""
+    if torch.device(device).type != "cuda":
+        return 0
+    return torch.cuda.memory_allocated(torch.device(device))
+
+
+def _cache_capacity(device, entry_bytes, num_frames, share=0.25):
+    """How many slices of features to keep, given a share of what is free on the device.
+
+    A propagation pass walks every slice, so a cache shorter than the volume is never hit: what
+    matters is whether the whole volume fits, not how close to it one gets. Never fewer than
+    MAX_CACHED_FRAMES, so this can only improve on the fixed cap.
+    """
+    if not entry_bytes or torch.device(device).type != "cuda":
+        return MAX_CACHED_FRAMES
+    try:
+        free, _ = torch.cuda.mem_get_info(torch.device(device))
+    except (RuntimeError, AssertionError):
+        return MAX_CACHED_FRAMES
+    affordable = int(free * share) // entry_bytes
+    return int(min(num_frames, max(MAX_CACHED_FRAMES, affordable)))
 
 
 class CustomVideoPredictor(SAM2VideoPredictor):
@@ -145,17 +154,128 @@ class CustomVideoPredictor(SAM2VideoPredictor):
     propagate_in_video, reset_state, etc.) is inherited unchanged from SAM2VideoPredictor.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Enable responsive interactive correction: a click on an already-tracked frame turns that
+        # frame into a conditioning frame (so the correction sticks and propagates), and stale
+        # non-conditioning memory around it is cleared. Without these, iterative 3D prompts leave the
+        # result unchanged. 'clear_non_cond_mem_around_input' needs the per-object helper we add below.
+        self.add_all_frames_to_correct_as_cond = True
+        self.clear_non_cond_mem_around_input = True
+
+    # Set for the duration of 'skip_prompt_output' only, on the class so that an instance built
+    # without '__init__' still reads it.
+    _skip_prompt_output = False
+
+    @contextlib.contextmanager
+    def skip_prompt_output(self):
+        """Skip the preview masks that adding a prompt returns, for callers that discard them.
+
+        Adding a prompt ends by consolidating every object's mask on that frame into one
+        video-resolution tensor, only to return it. Consolidating reads the state and writes nothing,
+        so leaving it out changes no result at all - it just does not build a tensor nobody asked for.
+        The cost is quadratic in the objects of a pass, since every one of them consolidates across
+        all the others, which is what makes it worth skipping when prompts are pushed in bulk.
+        """
+        self._skip_prompt_output = True
+        try:
+            yield
+        finally:
+            self._skip_prompt_output = False
+
+    def _wait_for_offloaded_state(self, inference_state):
+        """Wait for the offloaded tensors to reach the CPU before anything reads them back.
+
+        With 'offload_state_to_cpu' SAM2 stores 'pred_masks' and 'maskmem_features' on the CPU with a
+        'non_blocking' copy into pageable memory, which records no event to wait on. Without a wait a
+        host reader can observe the buffer the allocator recycled from the previous call.
+
+        This is a host barrier, so it is called only where a host read follows: the consolidation
+        across objects, the dtype restore below and the batched-memory concatenation during propagation.
+        The wait covers the current stream rather than the whole device, so a second model replica in
+        the batched pipeline keeps running.
+        """
+        if not inference_state.get("offload_state_to_cpu"):
+            return
+        device = torch.device(inference_state["device"])
+        if device.type == "cuda":
+            torch.cuda.current_stream(device).synchronize()
+        elif device.type == "mps":
+            torch.mps.synchronize()
+
+    def _autocasts(self, inference_state) -> bool:
+        """Whether the state runs in half precision.
+
+        Must agree with '_autocast': the '_run_*' methods skip the mask-memory restore when True.
+        """
+        from micro_sam.v2.util import autocast_dtype
+
+        return autocast_dtype(inference_state["device"]) is not None
+
+    def _autocast(self, inference_state):
+        """Run the propagation in the device precision, which is SAM2's own bfloat16 from Ampere on."""
+        from micro_sam.v2.util import autocast
+
+        return autocast(inference_state["device"])
+
+    def _restore_memory_dtype(self, maskmem_features):
+        """Undo SAM2's bfloat16 downcast of the mask memory, for the paths that run without autocast.
+
+        SAM2 stores 'maskmem_features' as bfloat16 to shrink the state, which its own inference makes
+        safe by running under a bfloat16 autocast. Without one the cast only survives because
+        'sam2_base._prepare_memory_conditioned_features' concatenates the fp32 object pointers onto the
+        memory and 'torch.cat' promotes the result back to fp32. An object whose only conditioning frame
+        lies ahead of the frame being propagated contributes no object pointers, so its memory stays
+        bfloat16 and hits the fp32 memory-attention projections. That is reachable from the GUI: batched
+        volume segmentation on the CPU with objects prompted on different slices.
+
+        Only call this once the offloaded copy has landed - it reads the tensor on the host.
+        """
+        if maskmem_features is None:
+            return None
+        return maskmem_features.to(next(self.parameters()).dtype)
+
+    def _run_memory_encoder(self, inference_state, *args, **kwargs):
+        with self._autocast(inference_state):
+            maskmem_features, maskmem_pos_enc = super()._run_memory_encoder(inference_state, *args, **kwargs)
+        if not self._autocasts(inference_state):
+            self._wait_for_offloaded_state(inference_state)
+            maskmem_features = self._restore_memory_dtype(maskmem_features)
+        return maskmem_features, maskmem_pos_enc
+
+    def _run_single_frame_inference(self, inference_state, *args, **kwargs):
+        with self._autocast(inference_state):
+            out = super()._run_single_frame_inference(inference_state, *args, **kwargs)
+        if not self._autocasts(inference_state):
+            self._wait_for_offloaded_state(inference_state)
+            out[0]["maskmem_features"] = self._restore_memory_dtype(out[0]["maskmem_features"])
+        return out
+
+    def _consolidate_temp_output_across_obj(self, inference_state, *args, **kwargs):
+        """Wait once here: this copies every object's offloaded 'pred_masks' into one host buffer.
+
+        It runs when a prompt is added, not inside the propagation loop, so it costs one wait per
+        interaction.
+        """
+        if self._skip_prompt_output:
+            return {"pred_masks_video_res": None, "pred_masks": None}
+        self._wait_for_offloaded_state(inference_state)
+        return super()._consolidate_temp_output_across_obj(inference_state, *args, **kwargs)
+
+    def _get_orig_video_res_output(self, inference_state, any_res_masks):
+        """Pass the skipped consolidation through, so no mask is resized for a discarded output."""
+        if any_res_masks is None:
+            return None, None
+        return super()._get_orig_video_res_output(inference_state, any_res_masks)
+
     @torch.inference_mode()
     def init_state(
         self,
         volume: np.ndarray,
         volume_embeddings: Dict,
         device: Optional[Union[str, torch.device]] = None,
-        offload_video_to_cpu: bool = False,
         offload_state_to_cpu: bool = False,
-        async_loading_frames: bool = False,
-        verbosity: bool = True,
-        ignore_caching_features: bool = False,
+        max_cached_frames: Optional[int] = None,
     ):
         """Initialize an inference state.
 
@@ -163,11 +283,11 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             volume: The volume as numpy array in memory.
             volume_embeddings: The precomputed embeddings.
             device: The torch device.
-            offload_video_to_cpu: Move the video from GPU to CPU.
             offload_state_to_cpu: Move the inference state components from GPU to CPU.
-            async_loading_frames: Asynchronises the frame loading process.
-            verbosity: The verbosity argument.
-            ignore_caching_features: Avoids ensuring feature caching over all frames.
+            max_cached_frames: How many slices of features stay on the device. A propagation pass
+                walks every slice, so a cache shorter than the volume is never hit and every slice is
+                read again on every pass. None sizes it to the volume where a quarter of the free
+                device memory holds it, and to MAX_CACHED_FRAMES where it does not.
         """
 
         from micro_sam.v2.util import _get_device
@@ -175,26 +295,12 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         # Get the expected device.
         device = _get_device(device)
 
-        # Convert the volume or video in expected format.
-        images, video_height, video_width = _load_video_frames_from_images(
-            video_path=None,  # NOTE: This feature works. We just don't care about it in our tasks.
-            volume=volume,
-            image_size=self.image_size,
-            offload_video_to_cpu=offload_video_to_cpu,
-            async_loading_frames=async_loading_frames,
-            compute_device=device,
-            verbosity=verbosity,
-        )
+        # The frames themselves are never needed, only their count and their square size.
+        num_frames, video_size = _volume_geometry(volume)
 
         # 'inference_state' is the running dictionary which keeps all key details in memory.
         inference_state = {
-            # Initialize the image and frame details.
-            "images": images,
-            "num_frames": len(images),
-
-            # Whether to offload the video frames to CPU memory.
-            # Turning on this option saves the GPU memory with only a very small overhead.
-            "offload_video_to_cpu": offload_video_to_cpu,
+            "num_frames": num_frames,
 
             # Whether to offload the inference state to CPU memory.
             # Turning on this option saves the GPU memory at the cost of a lower tracking fps
@@ -203,9 +309,10 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             "offload_state_to_cpu": offload_state_to_cpu,
 
             # The original video height and width, used for resizing final output scores
-            "video_height": video_height,
-            "video_width": video_width,
+            "video_height": video_size,
+            "video_width": video_size,
             "device": device,
+            "max_cached_frames": max_cached_frames,
             "storage_device": torch.device("cpu") if offload_state_to_cpu else device,
 
             # Inputs on each frame
@@ -233,15 +340,10 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             "frames_tracked_per_obj": {},
         }
 
-        # Avoids preparing cached features - essential for the embedding precomputation stage.
-        if ignore_caching_features:
-            inference_state["cached_features"] = {}  # Create an empty 'cached_features' dictionary to warm up.
-            return inference_state
-
         # Store the precomputed embeddings and load each frame's features lazily during tracking
-        # (see '_get_image_feature'). Materialising every slice's high-resolution features up-front
-        # costs ~200 MB/slice and OOMs for large volumes; the lazy single-frame cache keeps memory
-        # bounded. When the embeddings are backed by a zarr on disk (lazy_loading=True), only one
+        # (see '_get_image_feature'). Loading every slice's high-resolution features up-front costs
+        # about 200 MB per slice and runs out of memory for large volumes. The lazy single-frame cache
+        # keeps memory bounded. When the embeddings are backed by a zarr on disk (lazy_loading=True), only one
         # slice is held in memory at a time.
         inference_state["precomputed_embeddings"] = volume_embeddings
         inference_state["cached_features"] = {}
@@ -252,36 +354,45 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         """Compute or look up the image features for a frame.
 
         Overrides 'SAM2VideoPredictor._get_image_feature' to source per-frame features from the
-        precomputed embeddings (if stored on the inference state) instead of running the image
-        encoder. A single-frame cache bounds memory for large volumes. Falls back to the parent
-        behaviour (run the encoder) when no precomputed embeddings are available.
-        """
-        image, backbone_out = inference_state["cached_features"].get(frame_idx, (None, None))
-        if backbone_out is None:
-            embeddings = inference_state.get("precomputed_embeddings")
-            if embeddings is None:
-                return super()._get_image_feature(inference_state, frame_idx, batch_size)
+        precomputed embeddings the state always carries, instead of running the image encoder. The
+        cache bounds how many slices of them stay on the device, see 'max_cached_frames'.
 
+        The frame itself is returned as None rather than read, resized and uploaded: every caller in
+        SAM2 and here discards it ('_, _, vision_feats, ...'), and it is a third of what a cached
+        slice would otherwise cost.
+        """
+        backbone_out = inference_state["cached_features"].get(frame_idx)
+        if backbone_out is None:
+            embeddings = inference_state["precomputed_embeddings"]
+
+            from micro_sam.v2.util import _to_device_tensor, _shared_pos_enc, _backbone_fpn
             device = inference_state["device"]
-            image = inference_state["images"][frame_idx].to(device).float().unsqueeze(0)
-            vision_pos_enc = [
-                torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in embeddings["pos_enc"]
-            ]
-            backbone_fpn = [
-                torch.as_tensor(np.asarray(t[frame_idx]), device=device).float() for t in embeddings["fpn"]
-            ]
+            allocated_before = _allocated(device)
+            # In-memory embeddings keep 'pos_enc'/'fpn' as device tensors, which 'np.asarray' cannot
+            # convert (fails on mps/cuda); '_to_device_tensor' handles both tensors and numpy/zarr.
+            vision_pos_enc = [_to_device_tensor(_shared_pos_enc(t), device) for t in embeddings["pos_enc"]]
+            vision_features = _to_device_tensor(embeddings["features"][frame_idx], device)
+            backbone_fpn = _backbone_fpn(
+                [_to_device_tensor(t[frame_idx], device) for t in embeddings["fpn"]], vision_features
+            )
             backbone_out = {"backbone_fpn": backbone_fpn, "vision_pos_enc": vision_pos_enc}
+            allocated_by_entry = _allocated(device) - allocated_before
             # Cache the few most recent frames (not just one) so repeatedly segmenting the same or a
             # nearby slice does not re-read the (possibly zarr-backed, tiled) embeddings and re-upload
             # them to the device every interaction - the cause of the noticeable per-slice delay with
             # tiling. The small cap still bounds memory for large volumes / propagation.
             cache = inference_state["cached_features"]
-            cache[frame_idx] = (image, backbone_out)
-            while len(cache) > MAX_CACHED_FRAMES:
+            cache[frame_idx] = backbone_out
+            if inference_state.get("max_cached_frames") is None:
+                # Sized from what a slice really costs on the device, measured rather than estimated:
+                # the entry holds upcast copies of the stored embeddings, not the stored bytes.
+                inference_state["max_cached_frames"] = _cache_capacity(
+                    device, allocated_by_entry, inference_state["num_frames"]
+                )
+            while len(cache) > inference_state["max_cached_frames"]:
                 del cache[next(iter(cache))]  # evict the oldest inserted frame (FIFO)
 
         # Expand the features to the number of objects being tracked (mirrors upstream SAM2).
-        expanded_image = image.expand(batch_size, -1, -1, -1)
         expanded_backbone_out = {
             "backbone_fpn": backbone_out["backbone_fpn"].copy(),
             "vision_pos_enc": backbone_out["vision_pos_enc"].copy(),
@@ -292,19 +403,136 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             expanded_backbone_out["vision_pos_enc"][i] = pos.expand(batch_size, -1, -1, -1)
 
         features = self._prepare_backbone_features(expanded_backbone_out)
-        features = (expanded_image,) + features
-        return features
+        return (None,) + features
+
+    def _memory_groups(self, inference_state, obj_indices):
+        """Group the objects that can share a forward pass, i.e. that read the same memory frames.
+
+        The memory selection depends on which frames an object has, never on what is in them, so
+        objects with the same frames select the same memory and can go through the model together.
+        Objects prompted on different slices fall into groups of their own, which is SAM2's behaviour.
+        """
+        groups = {}
+        for obj_idx in obj_indices:
+            output_dict = inference_state["output_dict_per_obj"][obj_idx]
+            signature = (
+                frozenset(output_dict["cond_frame_outputs"]), frozenset(output_dict["non_cond_frame_outputs"])
+            )
+            groups.setdefault(signature, []).append(obj_idx)
+        return list(groups.values())
+
+    def _track_frame_batch(self, inference_state, obj_indices, frame_idx, reverse):
+        """Track one frame for a group of objects in a single forward, storing each object's output."""
+        per_object = [inference_state["output_dict_per_obj"][obj_idx] for obj_idx in obj_indices]
+        output_dict = {
+            "cond_frame_outputs": _BatchedMemory([entry["cond_frame_outputs"] for entry in per_object]),
+            "non_cond_frame_outputs": _BatchedMemory([entry["non_cond_frame_outputs"] for entry in per_object]),
+        }
+        current_out, pred_masks = self._run_single_frame_inference(
+            inference_state=inference_state,
+            output_dict=output_dict,
+            frame_idx=frame_idx,
+            batch_size=len(obj_indices),
+            is_init_cond_frame=False,
+            point_inputs=None,
+            mask_inputs=None,
+            reverse=reverse,
+            run_mem_encoder=True,
+        )
+        for index, output in enumerate(per_object):
+            output["non_cond_frame_outputs"][frame_idx] = _slice_frame_output(current_out, index)
+        return pred_masks
+
+    @torch.inference_mode()
+    def propagate_in_video(
+        self, inference_state, start_frame_idx=None, max_frame_num_to_track=None, reverse=False,
+    ):
+        """Propagate the prompts through the volume, tracking a frame's objects in one forward pass.
+
+        SAM2 runs one object at a time here ('batch_size=1, # run on the slice of a single object'),
+        because a conditioning frame can hold a different number of clicks per object. A frame that
+        conditions nothing takes no prompts at all, and those are all but one frame per object, so
+        there they can go through the model together.
+
+        This is what volumetric prompt generation costs its time on, and it is bound by kernel
+        launches rather than by arithmetic: sixteen objects on one slice issue sixteen forward passes
+        of a few microseconds' worth of work each. Batching them leaves every mask exactly as it was
+        - the objects carry no non-overlap constraint, so none of them depends on its batch - while
+        the launches per frame drop by the size of the group.
+        """
+        self.propagate_in_video_preflight(inference_state)
+
+        obj_ids = inference_state["obj_ids"]
+        num_frames = inference_state["num_frames"]
+        batch_size = self._get_obj_num(inference_state)
+
+        if start_frame_idx is None:
+            start_frame_idx = min(
+                frame_idx
+                for output_dict in inference_state["output_dict_per_obj"].values()
+                for frame_idx in output_dict["cond_frame_outputs"]
+            )
+        if max_frame_num_to_track is None:
+            max_frame_num_to_track = num_frames
+        if reverse:
+            end_frame_idx = max(start_frame_idx - max_frame_num_to_track, 0)
+            # Nothing to track backwards from the first frame.
+            processing_order = range(start_frame_idx, end_frame_idx - 1, -1) if start_frame_idx > 0 else []
+        else:
+            end_frame_idx = min(start_frame_idx + max_frame_num_to_track, num_frames - 1)
+            processing_order = range(start_frame_idx, end_frame_idx + 1)
+
+        for frame_idx in tqdm(processing_order, desc="propagate in video"):
+            pred_masks_per_obj = [None] * batch_size
+            to_track = []
+            for obj_idx in range(batch_size):
+                output_dict = inference_state["output_dict_per_obj"][obj_idx]
+                # A frame this object was prompted on already holds its output, see SAM2.
+                if frame_idx in output_dict["cond_frame_outputs"]:
+                    current_out = output_dict["cond_frame_outputs"][frame_idx]
+                    pred_masks_per_obj[obj_idx] = current_out["pred_masks"].to(
+                        inference_state["device"], non_blocking=True
+                    )
+                    if self.clear_non_cond_mem_around_input:
+                        self._clear_obj_non_cond_mem_around_input(inference_state, frame_idx, obj_idx)
+                    inference_state["frames_tracked_per_obj"][obj_idx][frame_idx] = {"reverse": reverse}
+                else:
+                    to_track.append(obj_idx)
+
+            if to_track:
+                # '_BatchedMemory' concatenates offloaded entries on the host.
+                self._wait_for_offloaded_state(inference_state)
+            for group in self._memory_groups(inference_state, to_track):
+                pred_masks = self._track_frame_batch(inference_state, group, frame_idx, reverse)
+                for index, obj_idx in enumerate(group):
+                    pred_masks_per_obj[obj_idx] = pred_masks[index:index + 1]
+                    inference_state["frames_tracked_per_obj"][obj_idx][frame_idx] = {"reverse": reverse}
+
+            if len(pred_masks_per_obj) > 1:
+                all_pred_masks = torch.cat(pred_masks_per_obj, dim=0)
+            else:
+                all_pred_masks = pred_masks_per_obj[0]
+            _, video_res_masks = self._get_orig_video_res_output(inference_state, all_pred_masks)
+            yield frame_idx, obj_ids, video_res_masks
+
+    def _clear_obj_non_cond_mem_around_input(self, inference_state, frame_idx, obj_idx):
+        """Clear one object's non-conditioning memory around an interacted frame.
+
+        The installed SAM2 fork calls this per-object variant from 'propagate_in_video' and
+        'propagate_in_video_preflight' (guarded by 'clear_non_cond_mem_around_input') but only ships
+        the global '_clear_non_cond_mem_around_input', so enabling the flag raises AttributeError. We
+        restore the per-object method here rather than editing the fork. Dropping the stale surrounding
+        non-conditioning memory lets correction clicks actually take effect during iterative prompting.
+        """
+        r = self.memory_temporal_stride_for_eval
+        frame_idx_begin = frame_idx - r * self.num_maskmem
+        frame_idx_end = frame_idx + r * self.num_maskmem
+        non_cond_frame_outputs = inference_state["output_dict_per_obj"][obj_idx]["non_cond_frame_outputs"]
+        for t in range(frame_idx_begin, frame_idx_end + 1):
+            non_cond_frame_outputs.pop(t, None)
 
 
-def _build_sam2_video_predictor(
-    config_file,
-    ckpt_path=None,
-    device="cuda",
-    mode="eval",
-    hydra_overrides_extra=[],
-    apply_postprocessing=True,
-    **kwargs,
-):
+def _build_sam2_video_predictor(config_file, ckpt_path=None, device="cuda"):
     from hydra import compose
     from hydra.utils import instantiate
     from omegaconf import OmegaConf
@@ -312,21 +540,6 @@ def _build_sam2_video_predictor(
     hydra_overrides = [
         "++model._target_=micro_sam.v2.models._video_predictor.CustomVideoPredictor",
     ]
-    if apply_postprocessing:
-        hydra_overrides_extra = hydra_overrides_extra.copy()
-        hydra_overrides_extra += [
-            # dynamically fall back to multi-mask if the single mask is not stable
-            "++model.sam_mask_decoder_extra_args.dynamic_multimask_via_stability=true",
-            "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_delta=0.05",
-            "++model.sam_mask_decoder_extra_args.dynamic_multimask_stability_thresh=0.98",
-            # the sigmoid mask logits on interacted frames with clicks in the memory encoder so that the encoded masks
-            # are exactly as what users see from clicking
-            "++model.binarize_mask_from_pts_for_mem_enc=true",
-            # fill small holes in the low-res masks up to `fill_hole_area`
-            # (before resizing them to the original video resolution)
-            "++model.fill_hole_area=8",
-        ]
-    hydra_overrides.extend(hydra_overrides_extra)
 
     # Read config and init model
     cfg = compose(config_name=config_file, overrides=hydra_overrides)
@@ -334,6 +547,5 @@ def _build_sam2_video_predictor(
     model = instantiate(cfg.model, _recursive_=True)
     _load_checkpoint(model, ckpt_path)
     model = model.to(device)
-    if mode == "eval":
-        model.eval()
+    model.eval()
     return model

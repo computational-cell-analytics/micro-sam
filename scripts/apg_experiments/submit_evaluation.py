@@ -148,12 +148,8 @@ def main(args):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--baselines", action="store_true", help="Whether to run baseline scripts."
-    )
-    parser.add_argument(
-        "-d", "--dataset_name", type=str, default=None, help="The choice of dataset name.",
-    )
+    parser.add_argument("--baselines", action="store_true", help="Whether to run baseline scripts.")
+    parser.add_argument("-d", "--dataset_name", type=str, default=None, help="The choice of dataset name.")
     parser.add_argument(
         "-m", "--model_type", type=str, required=True, help="The choice of model type for baseline / SAM methods."
     )

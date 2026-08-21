@@ -19,7 +19,7 @@ class UniBatchSampler(Sampler[List[int]]):
         batch_size: Default number of samples per batch (used when no
             per-group override is provided).
         batch_size_per_group: Optional dict mapping group keys to their
-            batch size.  Groups not present fall back to *batch_size*.
+            batch size. Groups not present fall back to *batch_size*.
         shuffle: Whether to shuffle indices within each group and the
             batch order across groups each epoch.
         drop_last: Whether to drop the last incomplete batch per group.
@@ -87,7 +87,7 @@ class DistributedUniBatchSampler(Sampler[List[int]]):
     """Distributed version of UniBatchSampler for DDP training.
 
     Shards batches **within each group** across ranks, so every rank receives
-    the same proportion of 2D and 3D batches each epoch.  This avoids the load
+    the same proportion of 2D and 3D batches each epoch. This avoids the load
     imbalance that arises when a globally-shuffled list is interleaved across
     ranks, because 2D and 3D batches have very different compute costs.
 

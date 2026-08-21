@@ -1,21 +1,21 @@
 import os
-from tqdm import tqdm
+from math import floor
 from itertools import product
 from typing import Union, Tuple, Optional, List, Dict, Literal
 
 import numpy as np
 import pandas as pd
-from math import floor
 import imageio.v3 as imageio
+from tqdm import tqdm
 
 import torch
 
 from elf.evaluation import mean_segmentation_accuracy, dice_score
 
 from ... import util
-from ..util import get_sam_model, precompute_image_embeddings
 from ..inference import batched_inference
 from ...prompt_generators import PointAndBoxPromptGenerator
+from ..util import get_sam_model, precompute_image_embeddings
 from ..multi_dimensional_segmentation import segment_mask_in_volume
 from ..evaluation.instance_segmentation import _get_range_of_search_values, evaluate_instance_segmentation_grid_search
 

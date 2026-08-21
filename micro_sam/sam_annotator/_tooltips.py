@@ -2,46 +2,53 @@
 
 tooltips = {
     "embedding": {
-        "custom_weights": "Select custom model weights. For example for a model you have finetuned",
-        "device": "Select the computational device to use for processing.",
+        "batch_size": (
+            "Number of image slices or tiles encoded together per GPU. Larger values can improve throughput. "
+            "They can also be slower or run out of GPU memory. The shown value estimates what fits on this "
+            "GPU; it is refined per GPU when the embeddings are computed, unless you enter a value yourself."
+        ),
+        "cache_state": "Cache the automatic segmentation state to disk for faster (re)runs.",
+        "custom_weights": "Select custom model weights, for example from a model that you finetuned.",
+        "device": "Select the computational device to use for processing. 'auto' picks the best available device and uses all visible GPUs; selecting a device runs on that one only.",  # noqa
         "embeddings_save_path": "Select path to save or load the computed image embeddings.",
-        "halo": "Enter overlap values for computing tiled embeddings. Enter only x-value for quadratic size.\n Only active when tiling is used.",  # noqa
+        "halo": "Enter overlap values to compute tiled embeddings. Enter only the x-value for a square size.\n Active only when you use tiling.",  # noqa
         "image": "Select the napari image layer.",
         "model_family": "Select the segment anything 2 model family.",
-        "model_family_advanced": "Select the advanced (non-SAM2) model family, e.g. a SAM1 family. Switched on via 'Advanced Models' in the embedding settings.",  # noqa
+        "model_family_advanced": "Select the advanced (non-SAM2) model family, for example a SAM1 family. Turn it on via 'Advanced Models' in the embedding settings.",  # noqa
         "model_size": "Select the image encoder size of the segment anything 2 model.",
         "advanced_model": "Switch the model list above to advanced models beyond the default SAM2 models (currently SAM1). Only available for the classification tools.",  # noqa
         "automatic_segmentation_mode": "Select the automatic segmentation mode.",
         "run_button": "Compute embeddings or load embeddings if embedding_save_path is specified.",
-        "tiling": "Enter tile size for computing tiled embeddings. Enter only x-value for quadratic size or both for non-quadratic.",  # noqa
-        "settings": "Settings for computing the image embeddings: model family and size, tiling, the embedding save path and the compute device.",  # noqa
+        "tiling": "Enter the tile size to compute tiled embeddings. Enter only the x-value for a square size, or both values for a non-square size.",  # noqa
+        "settings": "Settings for computing the image embeddings: model family and size, tiling, batch size, the embedding save path and the compute device.",  # noqa
     },
     "segmentnd": {
-        "box_extension": "Enter factor by which box size is increased when projecting to adjacent slices. Larger factors help if object sizes change between slices.",  # noqa
+        "box_extension": "Enter the factor by which the box size grows when it projects to adjacent slices. Larger factors help if object sizes change between slices.",  # noqa
         "iou_threshold": "Enter the minimal overlap between objects in adjacent slices to continue segmentation.",
-        "early_stop_patience": "SAM2 volume mode: stop propagating once the object has been absent for this many consecutive slices. Lower values stop sooner (faster); 0 disables early stopping and propagates through the whole volume.",  # noqa
+        "early_stop_patience": "SAM2 volume mode: stop propagation once the object is absent for this many slices in a row. Lower values stop sooner (faster). A value of 0 disables early stopping and propagates through the whole volume.",  # noqa
         "use_full_z_range": "SAM2 volume mode: propagate through all slices along z. Uncheck to restrict propagation to a chosen slice range with the slider below (faster, and a hard guardrail against leaking into neighbouring structures).",  # noqa
         "z_range": "SAM2 volume mode: the inclusive range of slices (along z) that propagation is allowed to cover. Only used when 'Propagate through full volume' is unchecked.",  # noqa
-        "motion_smoothing": "Enter the motion smoothing factor. It is used to follow objects which have a directed movement, higher values help for objects that are moving fast.",  # noqa
+        "motion_smoothing": "Enter the motion smoothing factor. It helps to follow objects that have a directed movement. Higher values help for fast objects.",  # noqa
         "projection_dropdown": "Choose the projection mode. It determines which prompts are derived from the masks projected to adjacent frames to rerun SAM.",  # noqa
-        "batched": "Enable to segment multiple objects with separate point prompts. Each positive point will be tracked as a separate object. Only available for SAM2 models.",  # noqa
+        "batched": "Enable to segment multiple objects with separate point prompts. The tool tracks each positive point as a separate object. Only available for SAM2 models.",  # noqa
         "settings": "Settings controlling how a 2d segmentation is propagated through the volume (projection mode, IoU threshold, early stopping and the z-range).",  # noqa
     },
     "unified_segment": {
-        "apply_to_volume": "Choose if segmentation is run for the current slice/frame only or for the full volume/all frames.",  # noqa
+        "apply_to_volume": "Choose whether to segment only the current slice or frame, or the full volume or all frames.",  # noqa
         "batched": "Enable to segment multiple objects at once: each positive point and each box defines a separate object. Only available for SAM2 models.",  # noqa
+        "batched_scribble_disabled": "Batched segmentation is unavailable while scribble prompts are present. Remove all path, polyline and line prompts to re-enable it.",  # noqa
         "segment_button": "Run Segment Anything 2 on the current point/box prompts to segment the object. Shortcut: S.",  # noqa
         "clear_button": "Clear the current prompts and the current-object segmentation (whole volume or current slice per 'Apply to Volume' for 3d data). Shortcut: Shift + C.",  # noqa
         "settings": "Settings for interactive segmentation across slices (projection mode and propagation parameters).",  # noqa
     },
     "autosegment": {
         # General settings.
-        "apply_to_volume": "Choose if automatic segmentation is run for the full volume or only the current slice.",
-        "gap_closing": "Enter value for closing gaps across slices for volumetric segmentation. Higher values will reduce artifacts due to missing slices in objects but may lead to wrongly merging objects.",  # noqa
-        "min_extent": "Enter the minimal number of slices for objects in volumetric segmentation. To filter out small segmentation artifacts.",  # noqa
+        "apply_to_volume": "Choose whether to run automatic segmentation on the full volume or only the current slice.",
+        "gap_closing": "Enter the value to close gaps across slices for volumetric segmentation. Higher values reduce artifacts from missing slices in objects, but can wrongly merge objects.",  # noqa
+        "min_extent": "Enter the minimal number of slices for objects in volumetric segmentation. This filters out small segmentation artifacts.",  # noqa
         "min_object_size": "Enter the minimal object size in pixels. This refers to the size per slice for volumetric segmentation.",  # noqa
         "run_button": "Run automatic segmentation.",
-        "with_background": "Choose if your image has a large background area.",
+        "with_background": "Choose whether your image has a large background area.",
         "tile_z": "Number of slices per z-block for 3d automatic segmentation. The volume is decoded in z-blocks to bound memory. Set this to the number of slices (or more) to process the whole volume in one block (no z-tiling).",  # noqa
         "halo_z": "Number of overlapping slices between z-blocks for 3d automatic segmentation, used as context and discarded when stitching.",  # noqa
         # Settings for AIS.
@@ -52,13 +59,24 @@ tooltips = {
         "pred_iou_thresh": "Enter the threshold for filtering objects based on the predicted IOU.",
         "stability_score_thresh": "Enter the threshold for filtering objects based on the stability score.",
         "points_per_side": "Number of points sampled along one side of the image for AMG grid prompting.",
-        # Settings for the SAM2 dense/sparse modes.
+        # Settings for the SAM2 automatic segmentation modes.
         "mode": (
             "Select the automatic segmentation mode: 'amg' (grid-based, no decoder needed), "
-            "'sparse' (flow-based) or 'dense' (multicut-based)."
+            "'sparse' (flow-based), 'dense' (multicut-based), or 'apg' (prompt-based)."
         ),
         "foreground_threshold": "Enter the threshold for binarizing the foreground probability map.",
         "density_threshold": "Enter the convergence-density threshold used for seed extraction.",
+        "candidate_threshold": "Enter the density threshold that APG uses to propose object prompts.",
+        "candidate_threshold_high": "Enter the second density threshold for APG on a volume.",
+        "min_candidate_size": "Enter the minimum size of an APG candidate in pixels.",
+        "score_threshold": "Enter the minimum predicted IoU score for an APG mask.",
+        "max_overlap": "Enter the maximum fraction of an APG candidate that another mask can claim.",
+        "multimasking": "Let APG predict multiple masks for each point and keep the mask with the best score.",
+        "refine_with_box_prompts": "Refine each APG mask with a box prompt. This setting applies to images.",
+        "box_extension": "Enter the number of pixels that APG adds to each refinement box.",
+        "prompt_batch_size": "Enter the number of APG prompts in each model batch.",
+        "n_objects_per_pass": "Enter the number of APG objects in each volume propagation pass.",
+        "early_stop_patience": "Enter the number of empty slices that stop APG propagation. Use 0 for no limit.",
         "beta": "Enter the multicut boundary bias. Higher values favour merging objects.",
         "n_iter": "Enter the number of flow-integration steps.",
         "dt": "Enter the flow-integration step size.",
@@ -69,14 +87,14 @@ tooltips = {
     },
     "autotrack": {
         "run_button": "Run automatic tracking.",
-        "run_tracking": "Choose if to run tracking for the whole timeseries or if to segment only the current timeframe.",  # noqa
+        "run_tracking": "Choose whether to run tracking for the whole timeseries, or to segment only the current timeframe.",  # noqa
     },
     "prompt_menu": {
-        "labels": "Choose positive prompts to inlcude regions or negative ones to exclude regions. Toggle between the settings by pressing [t].",  # noqa
+        "labels": "Choose positive point/scribble prompts to include regions or negative ones to exclude regions. Toggle between the settings by pressing [t]. In 3d, a scribble belongs to the z-slice where it was drawn and can seed or correct volume propagation.",  # noqa
     },
     "annotator_tracking": {
         "track_id": "Select the id of the track you are currently annotating.",
-        "track_state": "Select the state of the current annotation. Choose 'division' if the object is dviding in the current frame.",  # noqa
+        "track_state": "Select the state of the current annotation. Choose 'division' if the object divides in the current frame.",  # noqa
         "export_button": "Export the committed tracking result in the chosen format (CTC, GEFF or TrackMate XML).",  # noqa
     },
     "batch_annotator": {
@@ -92,18 +110,18 @@ tooltips = {
         "checkpoint": "Select a checkpoint (saved model) to resume training from.",
         "device": "Select the computational device to use for processing.",
         "initial_model": "Select the model name used as starting point for training.",
-        "label_key": 'Define the key that holds to the segmentation labels. Use a pattern, e.g. "*.tif" select multiple files or an internal path for hdf5, zarr or similar formats.',  # noqa
-        "label_path": "Specify the path to the segmentaiton labels for training. Can either point to a directory or single file.",  # noqa
+        "label_key": 'Define the key that holds the segmentation labels. Use a pattern, e.g. "*.tif", to select multiple files, or an internal path for hdf5, zarr or similar formats.',  # noqa
+        "label_path": "Specify the path to the segmentation labels for training. Can either point to a directory or single file.",  # noqa
         "label_path_val": "Specify the path to the segmentation labels for validation. Can either point to a directory or single file.",  # noqa
         "name": "Enter the name of the model that will be trained.",
         "patch": "Select the size of image patches used for training.",
-        "raw_key": 'Define the key that holds to the image data. Use a pattern, e.g. "*.tif" select multiple files or an internal path for hdf5, zarr or similar formats.',  # noqa
+        "raw_key": 'Define the key that holds the image data. Use a pattern, e.g. "*.tif", to select multiple files, or an internal path for hdf5, zarr or similar formats.',  # noqa
         "raw_path": "Specify the path to the image data for training. Can either point to a directory or single file.",
         "raw_path_val": "Specify the path to the image data for validation. Can either point to a directory or single file.",  # noqa
         "segmentation_decoder": "Choose whether to train with additional segmentation decoder or not.",
         "output_path": "Specify the path where you want to save the trained model after the training process.",
         "n_epochs": "Define the number of training epochs for your model.",
-        "configuration": "Specifiy the hardware configuration to use for training.",
+        "configuration": "Specify the hardware configuration to use for training.",
     },
     "commit": {
         "layer": "The layer to commit. Either 'current_object' to commit results from prompt-based segmentation or 'auto_segmentation' to commit results from automatic segmentation.",  # noqa
@@ -113,7 +131,7 @@ tooltips = {
     },
     "classification": {
         "settings": "Optional classifier settings: PCA feature reduction, AnyUp upsampling, the random seed, and loading or exporting a trained classifier.",  # noqa
-        "forward_classifier_state": "Carry the classifier across images in the batch: annotated features from previous images are stacked with the current one, a fresh random forest is trained on the combined set, and it is applied to the next image automatically (even without new annotations). Uncheck to classify each image independently.",  # noqa
+        "forward_classifier_state": "Carry the classifier across images in the batch. The tool stacks the annotated features from earlier images with the current image. It trains a fresh random forest on the combined set. Then it applies the forest to the next image automatically, even without new annotations. Uncheck to classify each image on its own.",  # noqa
         "segmentation": "Select the segmentation (labels) layer whose objects will be classified.",
         "train_button": "Train the random forest on all current annotations and predict on the image. Shortcut: Shift + T.",  # noqa
         "clear_button": "Clear the annotation scribbles and the prediction (whole volume, or the current slice for 3d data when 'Apply to Volume' is unchecked). Shortcut: C.",  # noqa

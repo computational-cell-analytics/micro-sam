@@ -1,5 +1,29 @@
 # Release Overview
 
+**New in version 1.8.10**
+
+Support automatic instance segmentation in the bioimage.io model export and add a code of conduct and contributing guide.
+
+**New in version 1.8.9**
+
+Pin `napari<0.9` and minor updates to joint training.
+
+**New in version 1.8.8**
+
+Fix the bioimage.io model export for bioimageio.spec >=0.5.11.
+
+**New in version 1.8.7**
+
+Fixing minor issues with 1.8.6 related to clearing custom weights / checkpoint paths in the annotator and training widgets.
+
+**New in version 1.8.6**
+
+Support napari 0.8 (which requires Python >=3.11) and switch the PyPI Qt backend to PyQt6.
+
+**New in version 1.8.5**
+
+Add tracking model and solver options, clarify CLI arguments, and fix compatibility with recent bioimage-cpp versions.
+
 **New in version 1.8.3 - 1.8.4**
 
 Switch the Qt backend to PyQt6 and require napari >=0.7.

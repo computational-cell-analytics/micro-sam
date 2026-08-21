@@ -21,14 +21,17 @@ def em_3d_annotator(use_finetuned_model):
     if use_finetuned_model:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi-vit_b_em_organelles.zarr")
         model_type = "vit_b_em_organelles"
-        precompute_amg_state = True
+        precompute_autoseg_state = True
     else:
         embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi.zarr")
         model_type = "vit_h"
-        precompute_amg_state = False
+        precompute_autoseg_state = False
 
     # start the annotator, cache the embeddings
-    annotator(raw, embedding_path=embedding_path, model_type=model_type, precompute_amg_state=precompute_amg_state)
+    annotator(
+        raw, embedding_path=embedding_path, model_type=model_type,
+        precompute_autoseg_state=precompute_autoseg_state,
+    )
 
 
 def main():

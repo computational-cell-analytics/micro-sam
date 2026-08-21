@@ -4,17 +4,18 @@ and `micro_sam.v1.evaluation.inference`.
 
 import os
 from glob import glob
-from tqdm import tqdm
 from pathlib import Path
-from natsort import natsorted
 from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
+from tqdm import tqdm
+from natsort import natsorted
+
+from elf.evaluation import mean_segmentation_accuracy, matching
 
 from bioimage_cpp.segmentation import label
-from elf.evaluation import mean_segmentation_accuracy, matching
 
 from ...util import load_image_data
 
@@ -167,7 +168,7 @@ def run_evaluation_for_iterative_prompting(
     return res_df
 
 
-def main():
+def main(argv=None):
     """@private"""
     import argparse
 
@@ -199,9 +200,7 @@ def main():
         help="The choice of overlap threshold(s) for calculating the segmentation accuracy. By default, "
         "np.arange(0.5, 1., 0.05) is used to provide the mean segmentation accurcy score over all values.",
     )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Whether to allow verbosity of evaluation."
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Whether to allow verbosity of evaluation.")
 
     # TODO: We can extend this in future for other metrics, eg. dice score, etc.
     # NOTE: This argument is not exposed to the user atm.
@@ -211,7 +210,7 @@ def main():
     #     "for instance segmentation."
     # )
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Check whether the inputs are as expected.
     def _get_inputs_from_paths(paths, key):

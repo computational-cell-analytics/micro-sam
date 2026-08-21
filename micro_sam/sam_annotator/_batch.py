@@ -8,14 +8,17 @@ task-agnostic; everything task-specific lives in the concrete adapter.
 
 import os
 
-import napari
 import imageio.v3 as imageio
+
+import napari
 from magicgui.widgets import Container, PushButton
+
 from qtpy import QtWidgets
 from qtpy.QtCore import Qt, QTimer
 
 from . import _widgets as widgets
 from ._state import AnnotatorState
+from ._titles import get_dock_title
 
 
 def _hide_embedding_widget(annotator):
@@ -30,7 +33,7 @@ def _hide_embedding_widget(annotator):
     ew = getattr(annotator, "_embedding_widget", None)
     if ew is None:
         return
-    # Each annotator wraps its widgets in a QGroupBox; hide that wrapper so the whole section (frame
+    # Each annotator wraps its widgets in a QGroupBox. Hide that wrapper so the whole section (frame
     # included) disappears rather than leaving an empty box.
     frame = ew
     while frame is not None and not isinstance(frame, QtWidgets.QGroupBox):
@@ -45,7 +48,7 @@ def _embed_navigation(viewer, annotator, nav_container):
     """
     inner = getattr(annotator, "_annotator_widget", None)
     if inner is None or inner.layout() is None:
-        viewer.window.add_dock_widget(nav_container, name="Batch Navigation")
+        viewer.window.add_dock_widget(nav_container, name=get_dock_title("batch_navigation"))
         return
     group = QtWidgets.QGroupBox("Batch Navigation")
     group_layout = QtWidgets.QVBoxLayout()
@@ -170,7 +173,7 @@ def run_batch(
     Returns:
         The napari viewer, only if `return_viewer=True`.
     """
-    end_msg = "You have annotated the last image. Do you wish to close napari?"
+    end_msg = "You annotated the last image. Do you want to close napari?"
     os.makedirs(output_folder, exist_ok=True)
     task.output_folder = output_folder
     task.have_inputs_as_arrays = have_inputs_as_arrays

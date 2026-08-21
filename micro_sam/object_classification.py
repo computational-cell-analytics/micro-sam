@@ -5,25 +5,24 @@ from typing import List, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 
-from bioimage_cpp.utils import Blocking, take_dict
-
-from skimage.measure import regionprops_table
 from skimage.transform import resize
+from skimage.measure import regionprops_table
 
 try:
     from napari.utils import progress as tqdm
 except ImportError:
     from tqdm import tqdm
 
-from .import util
+from bioimage_cpp.utils import Blocking, take_dict
+
+from . import util
 from .v1.util import precompute_image_embeddings
 
 
-def _anyup_object_resize(embeds_chw, image_region, target_hw, upsampler, is_sam2=False):
+def _anyup_object_resize(embeds_chw, image_region, target_hw, upsampler):
     # Upsample a (C, h, w) embedding to (target_h, target_w, C) with AnyUp, using the image region
-    # as guidance. SAM1 padded the image to a square, so we square-pad the image here to match how
-    # the segmentation is padded; SAM2 stretched the image to a square, so we pass it as-is (AnyUp
-    # pools it to the embedding grid, matching the stretched features).
+    # as guidance. The encoders pad the image to a square, so we square-pad the image here to match
+    # how the segmentation is padded.
     import torch
     import torch.nn.functional as F
     from .pixel_classification import _to_anyup_image
@@ -37,9 +36,8 @@ def _anyup_object_resize(embeds_chw, image_region, target_hw, upsampler, is_sam2
 
     device = next(upsampler.parameters()).device
     image_tensor = _to_anyup_image(image_region, device)  # (1, 3, H, W)
-    if not is_sam2:
-        h, w = image_tensor.shape[-2:]
-        image_tensor = F.pad(image_tensor, (0, max(h - w, 0), 0, max(w - h, 0)))
+    h, w = image_tensor.shape[-2:]
+    image_tensor = F.pad(image_tensor, (0, max(h - w, 0), 0, max(w - h, 0)))
     feature_tensor = torch.from_numpy(np.ascontiguousarray(embeds_chw)).to(device).float().unsqueeze(0)
     from .pixel_classification import ANYUP_Q_CHUNK_SIZE
     with torch.no_grad():
@@ -50,22 +48,15 @@ def _anyup_object_resize(embeds_chw, image_region, target_hw, upsampler, is_sam2
 
 
 def _compute_object_features_impl(
-    embeddings, segmentation, resize_embedding_shape, image_region=None, upsampler=None, is_sam2=False,
-    pbar_update=None,
+    embeddings, segmentation, resize_embedding_shape, image_region=None, upsampler=None, pbar_update=None,
 ):
     # Keep the raw (C, h, w) embedding for AnyUp, which needs the channel axis first.
     embeddings_chw = embeddings
 
-    # Bring the segmentation to a square shape matching the (square) embedding. SAM1 pads the image
-    # to a square (so we zero-pad the segmentation to match); SAM2 stretches the image to a square
-    # (so we resize the segmentation to a square to match the stretched embedding).
+    # Bring the segmentation to a square shape matching the (square) embedding. The encoders pad the
+    # image to a square, so we zero-pad the segmentation to match.
     shape = segmentation.shape
-    if is_sam2:
-        side = max(shape)
-        segmentation_rescaled = resize(
-            segmentation, (side, side), order=0, anti_aliasing=False, preserve_range=True
-        ).astype(segmentation.dtype)
-    elif shape[0] == shape[1]:
+    if shape[0] == shape[1]:
         segmentation_rescaled = segmentation
     elif shape[0] > shape[1]:
         segmentation_rescaled = np.pad(segmentation, ((0, 0), (0, shape[0] - shape[1])))
@@ -83,7 +74,7 @@ def _compute_object_features_impl(
     resize_hw = tuple(min(rsh, sh) for rsh, sh in zip(resize_embedding_shape, shape))
     if upsampler is not None:
         # AnyUp upsamples the embedding using the image region instead of plain interpolation.
-        embeddings = _anyup_object_resize(embeddings_chw, image_region, resize_hw, upsampler, is_sam2)
+        embeddings = _anyup_object_resize(embeddings_chw, image_region, resize_hw, upsampler)
     else:
         embeddings = embeddings_chw.transpose(1, 2, 0)  # put the channel axis last
         embeddings = resize(
@@ -191,9 +182,6 @@ def compute_object_features(
 
     is_tiled = image_embeddings["input_size"] is None
     is_3d = segmentation.ndim == 3
-    # SAM2 embeddings carry the high-resolution decoder features; SAM1 embeddings never do. SAM2
-    # stretches the image to a square (no padding), which changes how the embedding aligns spatially.
-    is_sam2 = "high_res_feats" in image_embeddings
 
     # If we have simple embeddings, i.e. 2d without tiling, then we can directly compute the features.
     if not is_tiled and not is_3d:
@@ -205,7 +193,7 @@ def compute_object_features(
         )
         result = _compute_object_features_impl(
             embeddings, segmentation, resize_embedding_shape, image_region=image, upsampler=upsampler,
-            is_sam2=is_sam2, pbar_update=anyup_pbar.update if upsampler is not None else None,
+            pbar_update=anyup_pbar.update if upsampler is not None else None,
         )
         anyup_pbar.close()
         return result
@@ -237,7 +225,7 @@ def compute_object_features(
     ):
         # Compute this seg ids and features.
         this_seg_ids, this_features = _compute_object_features_impl(
-            embeds, seg, resize_embedding_shape, image_region=image_region, upsampler=upsampler, is_sam2=is_sam2
+            embeds, seg, resize_embedding_shape, image_region=image_region, upsampler=upsampler
         )
         this_seg_ids = this_seg_ids.tolist()
 
@@ -294,7 +282,7 @@ def project_prediction_to_segmentation(
     """
     assert len(object_prediction) == len(seg_ids)
 
-    # bioimage_cpp.take_dict only accepts these integer label dtypes. Napari label layers may use
+    # bioimage_cpp.take_dict only accepts these integer label dtypes. Napari label layers can use
     # smaller dtypes such as uint8, so cast only for the relabeling call.
     if segmentation.dtype not in (np.uint32, np.uint64, np.int32, np.int64):
         if segmentation.dtype == bool or np.issubdtype(segmentation.dtype, np.unsignedinteger):
@@ -328,6 +316,7 @@ def run_prediction_with_object_classifier(
     project_prediction: bool = True,
     ndim: Optional[int] = None,
     upsampler=None,
+    model_type: Optional[str] = None,
 ) -> List[np.ndarray]:
     """Run prediction with a pretrained object classifier on a series of images.
 
@@ -348,14 +337,20 @@ def run_prediction_with_object_classifier(
         The predictions.
     """
     assert len(images) == len(segmentations)
-    # Stored as {'rf': ..., 'metadata': ...}; older files are a bare classifier.
+    # Stored as {'rf': ..., 'model_spec': ...}; older files are a bare classifier.
     obj = load(rf_path)
     rf = obj["rf"] if isinstance(obj, dict) and "rf" in obj else obj
+    compute_embeddings = util.get_embedding_function(model_type) if model_type is not None \
+        else precompute_image_embeddings
     predictions = []
     for image, segmentation in tqdm(
         zip(images, segmentations), total=len(images), desc="Run prediction with object classifier"
     ):
-        embeddings = precompute_image_embeddings(predictor, image, verbose=False, ndim=ndim)
+        if isinstance(image, (str, os.PathLike)):
+            image = util.load_image_data(image, key=image_key)
+        if isinstance(segmentation, (str, os.PathLike)):
+            segmentation = util.load_image_data(segmentation, key=segmentation_key)
+        embeddings = compute_embeddings(predictor, image, verbose=False, ndim=ndim)
         seg_ids, features = compute_object_features(
             embeddings, segmentation, verbose=False, image=image if upsampler is not None else None,
             upsampler=upsampler,

@@ -9,6 +9,34 @@ from micro_sam.sam_annotator.annotator import annotator, detect_ndim, detect_ndi
 from micro_sam._test_util import check_layer_initialization
 
 
+def test_progress_bar_initial_description(monkeypatch):
+    """A progress description supplied at creation is visible before the backend reports a total."""
+    from micro_sam.sam_annotator import _widgets
+
+    captured = {}
+
+    class FakeProgress:
+        def update(self, value):
+            pass
+
+        def set_description(self, description):
+            pass
+
+        def close(self):
+            pass
+
+        def reset(self):
+            pass
+
+    def fake_progress(**kwargs):
+        captured["kwargs"] = kwargs
+        return FakeProgress()
+
+    monkeypatch.setattr(_widgets, "progress", fake_progress)
+    _widgets._create_pbar_for_threadworker("Preparing image embeddings")
+    assert captured["kwargs"] == {"desc": "Preparing image embeddings"}
+
+
 class TestDetectNdim:
     """Test the detect_ndim helper function."""
 
@@ -119,6 +147,59 @@ class TestAnnotatorClass:
         viewer = make_napari_viewer_proxy()
         widget = Annotator(viewer)
         assert widget._ndim == 2
+        assert "scribble_prompts" not in viewer.layers
+        assert viewer.layers["prompts"].ndim == 2
+        assert viewer.layers["prompts"].current_properties["label"][0] == "positive"
+        viewer.layers["prompts"].mode = "add_polyline"
+        toggle_binding = next(
+            callback for key, callback in viewer.layers["prompts"].keymap.items() if str(key) == "T"
+        )
+        toggle_binding(viewer.layers["prompts"])
+        assert widget._prompt_widget[0].value == "negative"
+        assert viewer.layers["point_prompts"].current_properties["label"][0] == "negative"
+        assert viewer.layers["prompts"].current_properties["label"][0] == "negative"
+        assert viewer.layers["prompts"].current_edge_color == "red"
+        toggle_binding(viewer.layers["prompts"])
+        assert widget._prompt_widget[0].value == "positive"
+        widget._prompt_widget[0].value = "negative"
+        assert viewer.layers["point_prompts"].current_properties["label"][0] == "negative"
+        assert viewer.layers["prompts"].current_properties["label"][0] == "negative"
+        assert viewer.layers["prompts"].current_edge_color == "red"
+        viewer.layers["prompts"].add_rectangles(np.array([[0, 0], [8, 8]]))
+        viewer.layers["prompts"].add_paths(np.array([[1, 1], [7, 7]]))
+        np.testing.assert_array_equal(viewer.layers["prompts"].properties["label"], ["positive", "negative"])
+        # Selecting a scribble means working in the shape layer, so the menu relabels it.
+        viewer.layers.selection.active = viewer.layers["prompts"]
+        viewer.layers["prompts"].selected_data = {1}
+        widget._prompt_widget[0].value = "positive"
+        np.testing.assert_array_equal(viewer.layers["prompts"].properties["label"], ["positive", "positive"])
+
+        # From the point layer the same menu change leaves the scribble alone.
+        viewer.layers["prompts"].selected_data = {1}
+        viewer.layers.selection.active = viewer.layers["point_prompts"]
+        widget._prompt_widget[0].value = "negative"
+        np.testing.assert_array_equal(viewer.layers["prompts"].properties["label"], ["positive", "positive"])
+        assert viewer.layers["point_prompts"].current_properties["label"][0] == "negative"
+        viewer.close()
+
+    def test_tracking_point_layer_toggle_leaves_a_drawn_scribble_alone(self, make_napari_viewer_proxy):
+        """The tracking annotator shares the rule: the toggle only relabels the layer in use."""
+        from micro_sam.sam_annotator.annotator_tracking import AnnotatorTracking
+
+        viewer = make_napari_viewer_proxy()
+        viewer.add_image(np.stack(4 * [binary_blobs(64)]), name="timeseries")
+        AnnotatorTracking(viewer)
+        shapes, points = viewer.layers["prompts"], viewer.layers["point_prompts"]
+
+        shapes.mode = "add_path"
+        shapes.add_paths(np.array([[0.0, 1.0, 1.0], [0.0, 7.0, 7.0]]))
+        assert shapes.properties["label"][0] == "positive"
+
+        toggle = next(cb for key, cb in points.keymap.items() if str(key) == "T")
+        toggle(points)
+
+        assert points.current_properties["label"][0] == "negative"
+        np.testing.assert_array_equal(shapes.properties["label"], ["positive"])
         viewer.close()
 
     def test_widget_detects_ndim_from_loaded_image(self, make_napari_viewer_proxy):
@@ -131,7 +212,7 @@ class TestAnnotatorClass:
 
     def test_widget_rebuilds_when_3d_image_loaded_after_open(self, make_napari_viewer_proxy):
         # Open the widget without an image (defaults to 2D), then load a 3D image.
-        # Selecting it as input should rebuild the annotator for 3D.
+        # Selecting it as input rebuilds the annotator for 3D.
         viewer = make_napari_viewer_proxy()
         widget = Annotator(viewer)
         assert widget._ndim == 2
@@ -141,6 +222,7 @@ class TestAnnotatorClass:
         assert widget._ndim == 3
         # The prompt layers must be recreated with the new dimensionality.
         assert viewer.layers["point_prompts"].ndim == 3
+        assert viewer.layers["prompts"].ndim == 3
         viewer.close()
 
     def test_annotator_3d(self, make_napari_viewer_proxy):
@@ -194,6 +276,40 @@ class TestAnnotatorClass:
 
         viewer.close()
 
+    def test_reset_inputs_keeps_optional_paths_unset(self, qapp):
+        """Clearing inputs restores safe defaults without creating a blank custom checkpoint path."""
+        from micro_sam.sam_annotator._widgets import EmbeddingWidget
+
+        ew = EmbeddingWidget(ndim_choice=True)
+
+        # Optional paths start unset, and whitespace entered in a path field is unset as well.
+        assert ew.custom_weights is None
+        assert ew.custom_weights_param.text() == ""
+        ew.custom_weights_param.setText(" ")
+        assert ew.custom_weights is None
+
+        # Batching starts at the value the VRAM table recommends for the default model and device,
+        # which is one without a GPU. Read from the table rather than from the widget's own helper,
+        # which would agree with it trivially.
+        from micro_sam.util import _get_default_device
+        from micro_sam.v2.util import recommend_batch_size
+
+        device = _get_default_device() if ew.device == "auto" else ew.device
+        recommended = recommend_batch_size(ew.model_type, device)
+        assert ew.batch_size == recommended
+        assert ew.batch_size_param.value() == recommended
+
+        # Reproduce the input reset used when a different image layer is selected.
+        ew.custom_weights_param.setText("/tmp/custom-weights.pt")
+        ew.batch_size_param.setValue(recommended + 1)
+        assert ew.custom_weights == "/tmp/custom-weights.pt"
+        assert ew.batch_size == recommended + 1
+        ew._reset_inputs_to_defaults()
+        assert ew.custom_weights is None
+        assert ew.custom_weights_param.text() == ""
+        assert ew.batch_size == recommended
+        assert ew.batch_size_param.value() == recommended
+
     @pytest.mark.parametrize("ndim", [2, 3])
     def test_batched_checkbox_hidden_when_tiled(self, make_napari_viewer_proxy, ndim):
         # Regression for 3c: batched (multi-object) prompting is unsupported with tiling, so the
@@ -230,6 +346,50 @@ class TestAnnotatorClass:
 
         viewer.close()
 
+    @pytest.mark.parametrize("ndim", [2, 3])
+    def test_batched_checkbox_disabled_with_scribbles(self, make_napari_viewer_proxy, ndim):
+        """Batched mode is unavailable exactly while the prompt layer contains a scribble."""
+        from micro_sam.sam_annotator._state import AnnotatorState
+
+        image = binary_blobs(256) if ndim == 2 else np.stack(4 * [binary_blobs(256)])
+        shape = (256, 256) if ndim == 2 else (4, 256, 256)
+        scribble = (
+            np.array([[1, 1], [7, 7]])
+            if ndim == 2 else np.array([[1, 1, 1], [1, 7, 7]])
+        )
+
+        viewer = make_napari_viewer_proxy()
+        viewer.add_image(image, name="image")
+        widget = Annotator(viewer)
+        interactive = widget._widgets["interactive"]
+        prompt_layer = viewer.layers["prompts"]
+
+        # Start in the normal, non-tiled state and enable batched mode.
+        AnnotatorState().image_embeddings = {
+            "input_size": (256, 256), "original_size": shape, "features": None,
+        }
+        interactive._update_batched_visibility()
+        assert interactive.batched_checkbox.isEnabled()
+        normal_tooltip = interactive.batched_checkbox.toolTip()
+        interactive.batched_checkbox.setChecked(True)
+
+        # Adding a scribble immediately resets and disables batched mode.
+        prompt_layer.add_paths(scribble)
+        assert not interactive.batched_checkbox.isChecked()
+        assert not interactive.batched_checkbox.isEnabled()
+        assert not interactive.batched
+        assert "unavailable while scribble prompts are present" in interactive.batched_checkbox.toolTip()
+        if ndim == 3:
+            assert not interactive._segment_widget.batched
+
+        # Removing the last scribble restores normal batched availability.
+        prompt_layer.selected_data = {0}
+        prompt_layer.remove_selected()
+        assert interactive.batched_checkbox.isEnabled()
+        assert interactive.batched_checkbox.toolTip() == normal_tooltip
+
+        viewer.close()
+
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
@@ -252,7 +412,7 @@ class TestNdimOverride:
         viewer.close()
 
     def test_channels_first_forced_2d(self, make_napari_viewer_proxy):
-        # A channels-first (C, H, W) array is auto-detected as a volume; forcing '2d' reads it as a
+        # A channels-first (C, H, W) array is auto-detected as a volume. Forcing '2d' reads it as a
         # 2d multi-channel image (mapped to RGB) and rebuilds the annotator for 2d.
         viewer = make_napari_viewer_proxy()
         viewer.add_image(np.zeros((4, 64, 64), dtype="uint8"), name="image")
@@ -264,6 +424,7 @@ class TestNdimOverride:
         assert viewer.layers["image"].rgb is True
         assert tuple(viewer.layers["image"].data.shape) == (64, 64, 3)
         assert viewer.layers["point_prompts"].ndim == 2
+        assert viewer.layers["prompts"].ndim == 2
         viewer.close()
 
     def test_channels_last_two_channel_auto(self, make_napari_viewer_proxy):
@@ -354,6 +515,308 @@ class TestZTilingControls:
         viewer.close()
 
 
+class TestAutoSegVolumeDispatch:
+    """'Apply to volume' decides the run dimensionality of automatic segmentation on a 3d volume:
+    off -> only the current slice (2d); on -> the whole volume (3d), segmented slice by slice.
+    This is what makes the state caching happen per-slice, on demand."""
+
+    def _dispatch(self, monkeypatch, *, apply_to_volume, current_slice=2):
+        from types import SimpleNamespace
+        from micro_sam.sam_annotator import _widgets
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        volume = np.zeros((5, 16, 16), dtype="float32")
+        auto_layer = SimpleNamespace(data=np.zeros((5, 16, 16), dtype="uint32"), refresh=lambda: None)
+        viewer = SimpleNamespace(
+            layers={"image": SimpleNamespace(data=volume), "auto_segmentation": auto_layer},
+            dims=SimpleNamespace(point=(current_slice, 0, 0)),
+        )
+
+        calls = {}
+
+        def fake_run_amg(state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
+            calls.update(run_raw_shape=tuple(run_raw.shape), ndim=ndim, z=z)
+            return np.zeros(run_raw.shape if ndim == 3 else run_raw.shape[-2:], dtype="uint32")
+
+        # Duck-typed stand-in so we exercise the '__call__' dispatch without instantiating a QWidget.
+        widget = SimpleNamespace(
+            _viewer=viewer, mode="amg", volumetric=True, apply_to_volume=apply_to_volume,
+            _run_amg=fake_run_amg,
+        )
+
+        def fake_pbar():
+            signal = lambda: SimpleNamespace(emit=lambda *a, **k: None)  # noqa
+            signals = SimpleNamespace(
+                pbar_total=signal(), pbar_description=signal(), pbar_update=signal(), pbar_stop=signal(),
+            )
+            return SimpleNamespace(), signals
+
+        monkeypatch.setattr(_widgets, "AnnotatorState", lambda: SimpleNamespace(get_image_name=lambda v: "image"))
+        monkeypatch.setattr(_widgets, "_validate_layers", lambda *a, **k: False)
+        monkeypatch.setattr(_widgets, "_validate_embeddings", lambda *a, **k: False)
+        monkeypatch.setattr(_widgets, "_select_layer", lambda *a, **k: None)
+        monkeypatch.setattr(_widgets, "_create_pbar_for_threadworker", fake_pbar)
+        monkeypatch.setattr(
+            _widgets, "QtWidgets",
+            SimpleNamespace(QApplication=SimpleNamespace(processEvents=lambda *a, **k: None)),
+        )
+
+        AutoSegmentWidget.__call__(widget)
+        return calls
+
+    def test_apply_to_volume_off_runs_current_slice_only(self, monkeypatch):
+        calls = self._dispatch(monkeypatch, apply_to_volume=False, current_slice=2)
+        assert calls["ndim"] == 2  # a single 2d slice, not the whole volume
+        assert calls["z"] == 2  # the currently viewed slice
+        assert calls["run_raw_shape"] == (16, 16)
+
+    def test_apply_to_volume_on_runs_whole_volume(self, monkeypatch):
+        calls = self._dispatch(monkeypatch, apply_to_volume=True)
+        assert calls["ndim"] == 3  # the whole volume, segmented slice by slice
+        assert calls["z"] is None
+        assert calls["run_raw_shape"] == (5, 16, 16)
+
+
+class TestAutoSegStatePersistence:
+    """By default (caching off) auto-seg persists no state, so the embedding zarr gets no
+    'autoseg_state' group; it is written only when the user opts in. '_state_save_path'
+    is the gate: None means in-memory only, a path means persist into the embedding zarr."""
+
+    def _state_save_path(self, cache_state, embedding_path="/tmp/e.zarr", with_widget=True):
+        from types import SimpleNamespace
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        widgets = {"embeddings": SimpleNamespace(cache_state=cache_state)} if with_widget else {}
+        state = SimpleNamespace(widgets=widgets, embedding_path=embedding_path)
+        return AutoSegmentWidget._state_save_path(SimpleNamespace(), state)
+
+    def test_no_persist_by_default(self):
+        assert self._state_save_path(cache_state=False) is None  # default: in-memory only, no zarr group
+
+    def test_persist_when_opted_in(self):
+        assert self._state_save_path(cache_state=True) == "/tmp/e.zarr"
+
+    def test_no_persist_without_embedding_widget(self):
+        assert self._state_save_path(cache_state=True, with_widget=False) is None
+
+    def test_enabling_persistence_invalidates_the_in_memory_cache(self, monkeypatch):
+        """Turning disk caching on after an in-memory run must route through the cache helper again."""
+        from types import MethodType, SimpleNamespace
+
+        import micro_sam.precompute_state as precompute_state
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        calls = []
+
+        class _Segmenter:
+            def generate(self, **kwargs):
+                return np.zeros((8, 8), dtype="uint32")
+
+            def clear_state(self):
+                pass
+
+        def fake_cache_autoseg_state(*args, **kwargs):
+            calls.append(args[4])  # save_path
+            return _Segmenter()
+
+        monkeypatch.setattr(precompute_state, "cache_autoseg_state", fake_cache_autoseg_state)
+
+        embedding_widget = SimpleNamespace(cache_state=False)
+        state = SimpleNamespace(
+            predictor=SimpleNamespace(model=object(), model_type="hvit_t"),
+            image_embeddings={"input_size": (8, 8)},
+            embedding_path="/tmp/embeddings.zarr",
+            data_signature="data",
+            widgets={"embeddings": embedding_widget},
+        )
+        widget = SimpleNamespace(
+            volumetric=False, min_object_size=0, points_per_side=32,
+            pred_iou_thresh=0.8, stability_score_thresh=0.9,
+            _segmenter=None, _segmenter_key=None,
+        )
+        widget._state_save_path = MethodType(AutoSegmentWidget._state_save_path, widget)
+        widget._release_segmenter = MethodType(AutoSegmentWidget._release_segmenter, widget)
+
+        raw = np.zeros((8, 8), dtype="uint8")
+        AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
+        embedding_widget.cache_state = True
+        AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
+        assert calls == [None, "/tmp/embeddings.zarr"]
+
+    def test_enabling_decoder_persistence_writes_the_in_memory_state(self, monkeypatch):
+        from types import MethodType, SimpleNamespace
+
+        import micro_sam.precompute_state as precompute_state
+        import micro_sam.v2.instance_segmentation as instance_segmentation
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        calls = {"cache": [], "save": []}
+        prediction = np.ones((4, 8, 8), dtype="float32")
+
+        class Decoder:
+            def parameters(self):
+                yield SimpleNamespace(device="cpu")
+
+        class Segmenter:
+            def __init__(self):
+                self.state = {"prediction": prediction}
+
+            def get_state(self):
+                return self.state
+
+            def set_state(self, state):
+                self.state = state
+
+            def generate(self, **kwargs):
+                return np.zeros((8, 8), dtype="uint32")
+
+            def clear_state(self):
+                pass
+
+        def fake_cache(*args, **kwargs):
+            calls["cache"].append(args[4])
+            return Segmenter()
+
+        def fake_save(state, save_path, **kwargs):
+            calls["save"].append((state, save_path, kwargs))
+
+        monkeypatch.setattr(precompute_state, "cache_autoseg_state", fake_cache)
+        monkeypatch.setattr(precompute_state, "save_ais_state", fake_save)
+        monkeypatch.setattr(instance_segmentation, "get_unisam2_segmentation_generator", lambda *a, **k: Segmenter())
+
+        embedding_widget = SimpleNamespace(cache_state=False)
+        state = SimpleNamespace(
+            predictor=SimpleNamespace(model_type="hvit_t_cells"), decoder=Decoder(),
+            image_embeddings={"input_size": (8, 8)}, inference_devices=None,
+            embedding_path="/tmp/embeddings.zarr", data_signature="data",
+            widgets={"embeddings": embedding_widget},
+        )
+        widget = SimpleNamespace(
+            volumetric=False, mode="sparse", _segmenter=None, _segmenter_key=None,
+            _decoder_state=None, _decoder_state_key=None, _decoder_state_save_path=None,
+            _proposals=None, _proposals_key=None, _postproc_kwargs=lambda: {},
+        )
+        for name in (
+            "_state_save_path", "_release_segmenter", "_decoder_key", "_cached_decoder_state",
+            "_store_decoder_state", "_persist_decoder_state",
+        ):
+            setattr(widget, name, MethodType(getattr(AutoSegmentWidget, name), widget))
+
+        raw = np.zeros((8, 8), dtype="uint8")
+        AutoSegmentWidget._run_unisam2(widget, state, raw, ndim=2, z=None)
+        embedding_widget.cache_state = True
+        AutoSegmentWidget._run_unisam2(widget, state, raw, ndim=2, z=None)
+
+        assert calls["cache"] == [None]
+        assert len(calls["save"]) == 1
+        saved_state, save_path, kwargs = calls["save"][0]
+        assert saved_state["prediction"] is prediction
+        assert save_path == "/tmp/embeddings.zarr"
+        assert kwargs == {"state_index": None, "model_type": "hvit_t_cells"}
+        assert widget._decoder_state_save_path == "/tmp/embeddings.zarr"
+
+
+@pytest.mark.parametrize("is_tiled,z", [(False, None), (True, None), (True, 3)])
+def test_apg_widget_reuses_the_decoder_state(monkeypatch, is_tiled, z):
+    from types import MethodType, SimpleNamespace
+
+    import micro_sam.precompute_state as precompute_state
+    import micro_sam.v2.instance_segmentation as instance_segmentation
+    from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+    calls = {"cache": 0, "factory": 0}
+
+    class Decoder:
+        def parameters(self):
+            yield SimpleNamespace(device="cpu")
+
+    class DecoderSegmenter:
+        def get_state(self):
+            return {"prediction": np.ones((4, 8, 8), dtype="float32")}
+
+    class PromptGenerator:
+        def __init__(self):
+            self.propose_calls = 0
+
+        def set_state(self, state):
+            self.state = state
+
+        def propose(self, **kwargs):
+            self.propose_calls += 1
+            self.propose_kwargs = kwargs
+            return ["proposal"]
+
+        def select(self, proposals, **kwargs):
+            self.proposals = proposals
+            self.select_kwargs = kwargs
+            return np.ones((8, 8), dtype="uint32")
+
+    prompt_generator = PromptGenerator()
+
+    def fake_cache(*args, **kwargs):
+        calls["cache"] += 1
+        assert args[0] == "ais"
+        assert kwargs["is_tiled"] is is_tiled
+        assert kwargs["i"] == z
+        return DecoderSegmenter()
+
+    def fake_factory(**kwargs):
+        calls["factory"] += 1
+        assert kwargs["segmentation_mode"] == "apg"
+        return prompt_generator
+
+    monkeypatch.setattr(precompute_state, "cache_autoseg_state", fake_cache)
+    monkeypatch.setattr(instance_segmentation, "get_instance_segmentation_generator", fake_factory)
+
+    if is_tiled:
+        features = SimpleNamespace(attrs={"tile_shape": (4, 4), "halo": (1, 1)})
+        image_embeddings = {"features": features, "input_size": None}
+    else:
+        image_embeddings = {
+            "features": np.zeros((1, 4, 8, 8), dtype="float32"),
+            "input_size": 1024,
+            "original_size": (8, 8),
+        }
+    state = SimpleNamespace(
+        predictor=SimpleNamespace(model=object(), model_type="hvit_t_cells"),
+        decoder=Decoder(), image_embeddings=image_embeddings, inference_devices=None,
+        data_signature="image", widgets={}, embedding_path=None,
+    )
+    widget = SimpleNamespace(
+        _segmenter=None, _segmenter_key=None, _decoder_state=None, _decoder_state_key=None,
+        _proposals=None, _proposals_key=None,
+        _state_save_path=lambda state: "/tmp/embeddings.zarr",
+        _apg_propose_kwargs=lambda: {"candidate_threshold": 1.5},
+        _apg_select_kwargs=lambda: {"score_threshold": 0.6},
+    )
+    for name in (
+        "_release_segmenter", "_decoder_key", "_cached_decoder_state", "_store_decoder_state",
+        "_persist_decoder_state",
+    ):
+        setattr(widget, name, MethodType(getattr(AutoSegmentWidget, name), widget))
+
+    result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=z)
+    second_result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=z)
+
+    assert calls == {"cache": 1, "factory": 1}
+    assert prompt_generator.state["image_embeddings"] is image_embeddings
+    assert prompt_generator.state.get("i") == z
+    assert prompt_generator.propose_calls == 1
+    assert prompt_generator.select_kwargs == {"score_threshold": 0.6}
+    assert np.array_equal(result, second_result)
+
+    # Rebuilding APG after a mode switch reuses the decoder state but regenerates the prompts.
+    widget._segmenter = None
+    widget._segmenter_key = None
+    widget._proposals = None
+    widget._proposals_key = None
+    third_result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=z)
+
+    assert calls == {"cache": 1, "factory": 2}
+    assert prompt_generator.propose_calls == 2
+    assert np.array_equal(result, third_result)
+
+
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 class TestAutoSegDefaultMode:
@@ -373,4 +836,141 @@ class TestAutoSegDefaultMode:
         assert autoseg.with_decoder is True
         assert autoseg.mode == "sparse"
         assert autoseg.mode_dropdown.currentText() == "sparse"
+        choices = [autoseg.mode_dropdown.itemText(i) for i in range(autoseg.mode_dropdown.count())]
+        assert choices == ["sparse", "dense", "apg"]
         viewer.close()
+
+    def test_apg_controls_use_backend_defaults(self, make_napari_viewer_proxy):
+        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=2)
+        autoseg = widget._widgets["autosegment"]
+        autoseg.mode_dropdown.setCurrentText("apg")
+
+        defaults = DEFAULT_PROMPT_GENERATION
+        assert autoseg.mode == "apg"
+        assert autoseg.candidate_threshold_param.value() == defaults["candidate_threshold"]
+        assert autoseg.foreground_threshold_param.value() == defaults["foreground_threshold"]
+        assert autoseg.min_candidate_size_param.value() == defaults["min_candidate_size"]
+        assert autoseg.score_threshold_param.value() == defaults["score_threshold"]
+        assert autoseg.max_overlap_param.value() == defaults["max_overlap"]
+        assert autoseg.min_object_size_param.value() == defaults["min_size"]
+        assert autoseg.multimasking_checkbox.isChecked() == defaults["multimasking"]
+        assert autoseg.refine_with_box_prompts_checkbox.isChecked() == defaults["refine_with_box_prompts"]
+        viewer.close()
+
+    def test_volumetric_apg_controls_build_generate_kwargs(self, make_napari_viewer_proxy):
+        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=3)
+        autoseg = widget._widgets["autosegment"]
+        autoseg.mode_dropdown.setCurrentText("apg")
+
+        kwargs = autoseg._apg_kwargs(ndim=3)
+        assert kwargs["candidate_threshold"] == DEFAULT_PROMPT_GENERATION["candidate_threshold_3d"]
+        assert kwargs["n_objects_per_pass"] == DEFAULT_PROMPT_GENERATION["n_objects_per_pass"]
+        assert kwargs["early_stop_patience"] is None
+
+        autoseg.early_stop_patience_param.setValue(3)
+        assert autoseg._apg_kwargs(ndim=3)["early_stop_patience"] == 3
+        viewer.close()
+
+    def test_apg_kwargs_split_matches_propose_and_select(self, make_napari_viewer_proxy):
+        """The 2d run calls 'propose' and 'select' separately, so each must get exactly its own
+        arguments and the two together must still cover everything 'generate' was given."""
+        import inspect
+
+        from micro_sam.v2.automatic_prompt_generation import AutomaticPromptGenerator
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=2)
+        autoseg = widget._widgets["autosegment"]
+        autoseg.mode_dropdown.setCurrentText("apg")
+
+        propose_kwargs = autoseg._apg_propose_kwargs()
+        select_kwargs = autoseg._apg_select_kwargs()
+
+        propose_params = set(inspect.signature(AutomaticPromptGenerator.propose).parameters) - {"self"}
+        select_params = set(inspect.signature(AutomaticPromptGenerator.select).parameters) - {"self", "proposals"}
+        assert set(propose_kwargs) == propose_params
+        assert set(select_kwargs) == select_params
+
+        # Together they are what the single-call form would have passed.
+        assert set(propose_kwargs) | set(select_kwargs) == set(autoseg._apg_kwargs(ndim=2))
+        viewer.close()
+
+    def test_autoseg_settings_use_v2_defaults(self):
+        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        class _FakeLayout:
+            def addLayout(self, layout):
+                pass
+
+        class _FakeSettings:
+            def __init__(self):
+                self._layout = _FakeLayout()
+
+            def layout(self):
+                return self._layout
+
+        class _FakeAutoSegmentWidget:
+            def _add_float_param(self, *args, **kwargs):
+                return None, None
+
+            def _add_int_param(self, *args, **kwargs):
+                return None, None
+
+            def _add_density_threshold(self, settings):
+                pass
+
+            def _add_flow_integration_params(self, settings, n_iter, dt=0.5, sigma=1.0):
+                self.n_iter = n_iter
+                self.dt = dt
+                self.sigma = sigma
+
+        autoseg = _FakeAutoSegmentWidget()
+        AutoSegmentWidget._sparse_settings(autoseg, _FakeSettings())
+        defaults = DEFAULT_POSTPROCESSING["sparse"]
+        assert autoseg.foreground_threshold == defaults["foreground_threshold"]
+        assert autoseg.density_threshold == defaults["density_threshold"]
+        assert autoseg.min_object_size == defaults["min_size"]
+        assert autoseg.sigma == defaults["sigma"]
+        assert autoseg.n_iter == defaults["n_iter"]
+        assert autoseg.dt == defaults["dt"]
+
+        autoseg = _FakeAutoSegmentWidget()
+        AutoSegmentWidget._dense_settings(autoseg, _FakeSettings())
+        defaults = DEFAULT_POSTPROCESSING["dense"]
+        assert autoseg.beta == defaults["beta"]
+        assert autoseg.density_threshold == defaults["density_threshold"]
+        assert autoseg.sigma == defaults["sigma"]
+        assert autoseg.n_iter == defaults["n_iter"]
+        assert autoseg.dt == defaults["dt"]
+
+    def test_embedding_recompute_clears_cached_prediction(self):
+        from types import SimpleNamespace
+
+        from micro_sam.sam_annotator._widgets import EmbeddingWidget
+
+        from types import MethodType
+
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        autosegment = SimpleNamespace(
+            _segmenter=None, _segmenter_key=object(),
+            _decoder_state={"prediction": 1}, _decoder_state_key=object(),
+            _decoder_state_save_path="/tmp/embeddings.zarr",
+        )
+        autosegment._release_segmenter = MethodType(AutoSegmentWidget._release_segmenter, autosegment)
+        autosegment._drop_decoder_state = MethodType(AutoSegmentWidget._drop_decoder_state, autosegment)
+        state = SimpleNamespace(widgets={"autosegment": autosegment})
+        EmbeddingWidget._clear_autosegment_cache(state)
+        assert autosegment._segmenter is None
+        assert autosegment._segmenter_key is None
+        # The prediction belongs to the embeddings that were just replaced.
+        assert autosegment._decoder_state is None
+        assert autosegment._decoder_state_key is None
+        assert autosegment._decoder_state_save_path is None

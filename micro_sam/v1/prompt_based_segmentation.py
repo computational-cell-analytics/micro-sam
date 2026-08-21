@@ -5,17 +5,18 @@ import warnings
 from typing import Optional, Tuple
 
 import numpy as np
+
 from skimage.feature import peak_local_max
 from skimage.segmentation import find_boundaries
+
+from segment_anything.predictor import SamPredictor
+from segment_anything.utils.transforms import ResizeLongestSide
 
 import torch
 
 from bioimage_cpp.utils import Blocking
-from bioimage_cpp.distance import distance_transform
 from bioimage_cpp.filters import gaussian_smoothing
-
-from segment_anything.predictor import SamPredictor
-from segment_anything.utils.transforms import ResizeLongestSide
+from bioimage_cpp.distance import distance_transform
 
 from .. import util
 from .util import set_precomputed

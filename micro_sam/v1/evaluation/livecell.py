@@ -11,13 +11,13 @@ from typing import List, Optional, Union
 
 from segment_anything import SamPredictor
 
+from ..util import get_sam_model
+from ..evaluation import precompute_all_embeddings
+from . import instance_segmentation, inference, evaluation
 from ..instance_segmentation import (
     get_predictor_and_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
 )
-from ..util import get_sam_model
-from ..evaluation import precompute_all_embeddings
-from . import instance_segmentation, inference, evaluation
 
 
 CELL_TYPES = ["A172", "BT474", "BV2", "Huh7", "MCF7", "SHSY5Y", "SkBr3", "SKOV3"]
@@ -342,10 +342,7 @@ def run_livecell_inference() -> None:
     parser = argparse.ArgumentParser()
 
     # the checkpoint, input and experiment folder
-    parser.add_argument(
-        "-c", "--ckpt", type=str, default=None,
-        help="Provide model checkpoints (vanilla / finetuned)."
-    )
+    parser.add_argument("-c", "--ckpt", type=str, default=None, help="Provide model checkpoints (vanilla / finetuned).")
     parser.add_argument(
         "-i", "--input", type=str, required=True,
         help="Provide the data directory for LIVECell Dataset."
@@ -425,9 +422,7 @@ def run_livecell_inference() -> None:
 def run_livecell_evaluation() -> None:
     """Run LIVECell evaluation with command line tool."""
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-i", "--input", required=True, help="Provide the data directory for LIVECell Dataset"
-    )
+    parser.add_argument("-i", "--input", required=True, help="Provide the data directory for LIVECell Dataset")
     parser.add_argument(
         "-e", "--experiment_folder", required=True,
         help="Provide the path where the inference data is stored."

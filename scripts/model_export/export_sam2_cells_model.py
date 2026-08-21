@@ -7,7 +7,7 @@ automatic UniSAM2 decoder weights (under 'unetr_state') and a lot of non-tensor 
 
 - `sam2.build_sam._load_checkpoint` reads `torch.load(...)["model"]` with `weights_only=True`,
   so it needs the SAM2 weights under a 'model' key and rejects the pickled trainer objects.
-- `micro_sam.v2.automatic_segmentation.get_unisam2_model` needs the UniSAM2 state dict.
+- `micro_sam.v2.instance_segmentation.get_unisam2_model` needs the UniSAM2 state dict.
 
 This script splits the joint checkpoint into the two-file, micro-sam-v1-style layout:
 

@@ -12,13 +12,12 @@
 # - downstream applications (eg. updating the "num_multimask_outputs" for multi-class semantic segmentation)
 #
 
+from functools import partial
 from typing import OrderedDict
 
-import torch
-
-from functools import partial
-
 from segment_anything.modeling import Sam, ImageEncoderViT, PromptEncoder, MaskDecoder, TwoWayTransformer
+
+import torch
 
 
 def _validate_model_type(state: OrderedDict) -> str:

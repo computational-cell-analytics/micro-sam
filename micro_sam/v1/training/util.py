@@ -4,23 +4,22 @@ from functools import partial
 from typing import Dict, List, Optional, Union, Tuple, Callable
 
 import numpy as np
+from segment_anything.utils.transforms import ResizeLongestSide
 
 import torch
 
-from segment_anything.utils.transforms import ResizeLongestSide
+from torch_em.transform.label import PerObjectDistanceTransform
+from torch_em.transform.raw import normalize_percentile, normalize
+from torch_em.data.datasets.light_microscopy.neurips_cell_seg import to_rgb
 
+from ..util import get_sam_model
+from .. import models as custom_models
+from .trainable_sam import TrainableSAM
 from ...prompt_generators import PointAndBoxPromptGenerator
 from ...util import (
     get_centers_and_bounding_boxes, get_device,
     segmentation_to_one_hot, _DEFAULT_MODEL,
 )
-from ..util import get_sam_model
-from .. import models as custom_models
-from .trainable_sam import TrainableSAM
-
-from torch_em.transform.label import PerObjectDistanceTransform
-from torch_em.transform.raw import normalize_percentile, normalize
-from torch_em.data.datasets.light_microscopy.neurips_cell_seg import to_rgb
 
 
 def identity(x):

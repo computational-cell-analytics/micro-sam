@@ -1,1 +1,1 @@
-"""Shared model utilities used across SAM v1 and SAM v2 (version-agnostic)."""
+"""Model implementations shared across SAM model families."""

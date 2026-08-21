@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional, Union
@@ -8,19 +9,19 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import binary_dilation, binary_erosion
 
-import torch
-
 import bioimageio.core
 import bioimageio.spec.model.v0_5 as spec
 from bioimageio.spec import save_bioimageio_package
 from bioimageio.core.digest_spec import create_sample_for_model
 
+import torch
+
 from ... import util
 from ..util import models
-from ...prompt_generators import PointAndBoxPromptGenerator
-from ..evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_box
-from ..prompt_based_segmentation import _compute_logits_from_mask
 from .predictor_adaptor import PredictorAdaptor
+from ...prompt_generators import PointAndBoxPromptGenerator
+from ..prompt_based_segmentation import _compute_logits_from_mask
+from ..evaluation.model_comparison import _enhance_image, _overlay_outline, _overlay_box
 
 
 DEFAULTS = {
@@ -41,6 +42,11 @@ DEFAULTS = {
 # Reference: https://github.com/bioimage-io/spec-bioimage-io/commit/39d343681d427ec93cf69eef7597d9eb9678deb1#diff-0bbdaa8196fa31f945afabcf04a4295ff098f1f24400ef9e59b0f684d411905eL269  # noqa
 # We had this parameter in bioimageio.spec. This has been removed. We just make a copy of the same parameter.
 ARBITRARY_SIZE = spec.ParameterizedSize(min=1, step=1)
+
+
+def _get_architecture_model_type(model_type):
+    # Derived models use their base SAM architecture.
+    return model_type[:5]
 
 
 def _create_test_inputs_and_outputs(image, labels, model_type, checkpoint_path, tmp_dir):
@@ -66,8 +72,8 @@ def _create_test_inputs_and_outputs(image, labels, model_type, checkpoint_path, 
         [_compute_logits_from_mask(labels == 1), _compute_logits_from_mask(labels == 2)]
     )[None]
 
-    predictor = PredictorAdaptor(model_type=model_type)
-    predictor.load_state_dict(torch.load(checkpoint_path))
+    predictor = PredictorAdaptor(model_type=_get_architecture_model_type(model_type))
+    predictor.load_state_dict(torch.load(checkpoint_path, map_location="cpu", weights_only=True))
 
     input_ = util._to_image(image).transpose(2, 0, 1)[None]
     image_path = os.path.join(tmp_dir, "input.npy")
@@ -133,7 +139,9 @@ def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
     if checkpoint_path is None:
         model_registry = models()
         checkpoint_path = model_registry.fetch(model_type)
-        return checkpoint_path, None
+        decoder_name = f"{model_type}_decoder"
+        decoder_path = model_registry.fetch(decoder_name) if decoder_name in model_registry.registry else None
+        return checkpoint_path, decoder_path
 
     # Otherwise we have to load the checkpoint to see if it is the state dict of an encoder,
     # or the checkpoint for a custom SAM model.
@@ -158,9 +166,41 @@ def _get_checkpoint(model_type, checkpoint_path, tmp_dir):
         return checkpoint_path, None
 
 
+def _get_weight_checkpoint(model_type, checkpoint_path, decoder_path, tmp_dir):
+    """Combine the SAM and decoder states for the exported architecture."""
+    if decoder_path is None:
+        return checkpoint_path
+
+    weight_dir = os.path.join(tmp_dir, "combined_weights")
+    os.makedirs(weight_dir, exist_ok=True)
+    weight_path = os.path.join(weight_dir, f"{model_type}.pt")
+
+    model_state = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    decoder_state = torch.load(decoder_path, map_location="cpu", weights_only=True)
+    torch.save({"model_state": model_state, "decoder_state": decoder_state}, weight_path)
+    return weight_path
+
+
+def _get_decoder_attachment(model_type, decoder_path, tmp_dir):
+    # Registry decoder files do not have an extension.
+    attachment_name = f"{_get_architecture_model_type(model_type)}_decoder.pt"
+    if os.path.basename(decoder_path) == attachment_name:
+        return decoder_path
+    attachment_path = os.path.join(tmp_dir, attachment_name)
+    shutil.copyfile(decoder_path, attachment_path)
+    return attachment_path
+
+
 # TODO: Update this with our latest yaml file updates.
-def _write_dependencies(dependency_file, require_mobile_sam):
-    content = """name: sam
+def _write_dependencies(dependency_file, require_mobile_sam, require_micro_sam):
+    if require_micro_sam:
+        content = """name: sam
+channels:
+    - conda-forge
+dependencies:
+    - micro_sam"""
+    else:
+        content = """name: sam
 channels:
     - pytorch
     - conda-forge
@@ -223,7 +263,8 @@ def _check_model(model_description, input_paths, result_paths):
     # Load outputs.
     mask = np.load(result_paths["mask"])
 
-    with bioimageio.core.create_prediction_pipeline(model_description) as pp:
+    # Match the device used to generate the reference outputs.
+    with bioimageio.core.create_prediction_pipeline(model_description, devices=["cpu"]) as pp:
 
         # Check with all prompts. We only check the result for this setting,
         # because this was used to generate the test data.
@@ -245,7 +286,7 @@ def _check_model(model_description, input_paths, result_paths):
         # The masks are binary and thresholded at logit 0 right after a bilinear upsample, so the
         # export round-trip (direct PyTorch vs the reloaded bioimage.io pipeline) can flip pixels in
         # a thin band along the mask boundary due to platform-level float / interpolation differences
-        # (notably on macOS/arm64). Such boundary flips are expected; only a disagreement deeper than
+        # (notably on macOS/arm64). Such boundary flips are expected. Only a disagreement deeper than
         # this band indicates a genuinely wrong export. So we ignore disagreements within 'band' px of
         # the reference mask boundary and require the rest to match exactly.
         mask_bool, predicted_bool = mask.astype(bool), predicted_mask.astype(bool)
@@ -288,6 +329,15 @@ def _check_model(model_description, input_paths, result_paths):
             predicted_mask = prediction.members["masks"].data
             assert predicted_mask.shape == mask.shape
 
+    # Use a fresh pipeline to verify image-only inference.
+    with bioimageio.core.create_prediction_pipeline(model_description, devices=["cpu"]) as pp:
+        sample = create_sample_for_model(model=model_description, inputs={"image": image})
+        prediction = pp.predict_sample_without_blocking(sample)
+        predicted_mask = prediction.members["masks"].data
+        # AIS may return no objects.
+        assert predicted_mask.ndim == 5
+        assert predicted_mask.shape[-2:] == mask.shape[-2:]
+
 
 def export_sam_model(
     image: np.ndarray,
@@ -303,6 +353,11 @@ def export_sam_model(
     The exported model can be uploaded to [bioimage.io](https://bioimage.io/#/) and
     be used in tools that support the BioImage.IO model format.
 
+    If the model has an instance segmentation decoder, i.e. if the checkpoint or the
+    model registry contain a decoder state, then the decoder is exported as part of the
+    model weights. In this case the exported model supports automatic instance segmentation,
+    which is run when the model is called without any prompt inputs.
+
     Args:
         image: The image for generating test data.
         label_image: The segmentation corresponding to `image`.
@@ -314,8 +369,10 @@ def export_sam_model(
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
         checkpoint_path, decoder_path = _get_checkpoint(model_type, checkpoint_path, tmp_dir)
+        with_decoder = decoder_path is not None
+        weight_path = _get_weight_checkpoint(model_type, checkpoint_path, decoder_path, tmp_dir)
         input_paths, result_paths = _create_test_inputs_and_outputs(
-            image, label_image, model_type, checkpoint_path, tmp_dir,
+            image, label_image, model_type, weight_path, tmp_dir,
         )
         input_descriptions = [
             # First input: the image data.
@@ -487,15 +544,17 @@ def export_sam_model(
         architecture = spec.ArchitectureFromFileDescr(
             source=Path(architecture_path),
             callable="PredictorAdaptor",
-            kwargs={"model_type": model_type}
+            kwargs={"model_type": _get_architecture_model_type(model_type)}
         )
 
         dependency_file = os.path.join(tmp_dir, "environment.yaml")
-        _write_dependencies(dependency_file, require_mobile_sam=model_type.startswith("vit_t"))
+        _write_dependencies(
+            dependency_file, require_mobile_sam=model_type.startswith("vit_t"), require_micro_sam=with_decoder,
+        )
 
         weight_descriptions = spec.WeightsDescr(
             pytorch_state_dict=spec.PytorchStateDictWeightsDescr(
-                source=Path(checkpoint_path),
+                source=Path(weight_path),
                 architecture=architecture,
                 pytorch_version=spec.Version(torch.__version__),
                 dependencies=spec.FileDescr(source=dependency_file),
@@ -521,8 +580,10 @@ def export_sam_model(
         if "version" in kwargs:
             extra_kwargs["version"] = kwargs["version"]
 
-        if decoder_path is not None:
-            extra_kwargs["attachments"] = [spec.FileDescr(source=decoder_path)]
+        if with_decoder:
+            # Keep the decoder available as a standalone registry attachment.
+            attachment_path = _get_decoder_attachment(model_type, decoder_path, tmp_dir)
+            extra_kwargs["attachments"] = [spec.FileDescr(source=attachment_path)]
 
         model_description = spec.ModelDescr(
             name=name,
@@ -533,10 +594,10 @@ def export_sam_model(
             authors=kwargs.get("authors", DEFAULTS["authors"]),
             cite=kwargs.get("cite", DEFAULTS["cite"]),
             license=spec.LicenseId("CC-BY-4.0"),
-            documentation=Path(doc_path),
+            documentation=spec.FileDescr(source=Path(doc_path)),
             git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
             tags=kwargs.get("tags", DEFAULTS["tags"]),
-            covers=covers,
+            covers=[spec.FileDescr(source=Path(cover)) for cover in covers],
             **extra_kwargs,
             # TODO write specific settings in the config
             # dict with yaml values, key must be a str

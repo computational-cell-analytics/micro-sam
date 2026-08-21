@@ -1,8 +1,8 @@
 from typing import List, Union, Optional
 
-import torch.nn as nn
-
 from segment_anything.modeling import Sam
+
+import torch.nn as nn
 
 from micro_sam.models.peft import (
     AttentionLoRA, MLPLoRA, FacTSurgery, AdaptFormer, ScaleShiftLayer, SelectiveSurgery, quantize_linear_layers,

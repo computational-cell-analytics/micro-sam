@@ -2,35 +2,13 @@
 """
 
 import os
-import multiprocessing as mp
 import warnings
+import multiprocessing as mp
+import xml.etree.ElementTree as ET
+from pathlib import Path
 from concurrent import futures
 from collections import defaultdict
-from pathlib import Path
 from typing import Dict, List, Optional, Union, Tuple
-import xml.etree.ElementTree as ET
-
-import imageio.v3 as imageio
-import networkx as nx
-import numpy as np
-import torch
-from scipy.ndimage import binary_closing
-from skimage.measure import regionprops
-
-from bioimage_cpp.segmentation import label, relabel_sequential
-from bioimage_cpp.graph import UndirectedGraph
-from bioimage_cpp.utils import segmentation_overlap
-
-import elf.segmentation as seg_utils
-import elf.tracking.tracking_utils as track_utils
-from elf.tracking.motile_tracking import recolor_segmentation
-
-from segment_anything.predictor import SamPredictor
-
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
 
 try:
     from trackastra.model import Trackastra
@@ -40,11 +18,32 @@ except ImportError:
     graph_to_ctc = None
     graph_to_napari_tracks = None
 
+import numpy as np
+import networkx as nx
+import imageio.v3 as imageio
+from skimage.measure import regionprops
+from scipy.ndimage import binary_closing
+from segment_anything.predictor import SamPredictor
+
+import torch
+
+try:
+    from napari.utils import progress as tqdm
+except ImportError:
+    from tqdm import tqdm
+
+import elf.segmentation as seg_utils
+import elf.tracking.tracking_utils as track_utils
+from elf.tracking.motile_tracking import recolor_segmentation
+
+from bioimage_cpp.graph import UndirectedGraph
+from bioimage_cpp.utils import segmentation_overlap
+from bioimage_cpp.segmentation import label, relabel_sequential
 
 from .. import util
+from ..util import AutoSegBase
 from .util import precompute_image_embeddings
 from .prompt_based_segmentation import segment_from_mask
-from .instance_segmentation import AMGBase
 
 
 PROJECTION_MODES = ("box", "mask", "points", "points_and_mask", "single_point")
@@ -362,7 +361,7 @@ def merge_instance_segmentation_3d(
     if len(edges) == 0:  # Nothing to merge.
         return slice_segmentation
 
-    uv_ids = np.array([[edge["source"], edge["target"]] for edge in edges])
+    uv_ids = np.array([[edge["source"], edge["target"]] for edge in edges], dtype=np.uint64)
     overlaps = np.array([edge["score"] for edge in edges])
 
     n_nodes = int(slice_segmentation.max() + 1)
@@ -424,7 +423,7 @@ def _segment_slices(
 def automatic_3d_segmentation(
     volume: np.ndarray,
     predictor: SamPredictor,
-    segmentor: AMGBase,
+    segmentor: AutoSegBase,
     embedding_path: Optional[Union[str, os.PathLike]] = None,
     with_background: bool = True,
     gap_closing: Optional[int] = None,
@@ -591,9 +590,9 @@ def _filter_lineages(lineages, tracking_result):
     return filtered_lineages
 
 
-def _tracking_impl(timeseries, segmentation, mode, min_time_extent, output_folder=None):
+def _tracking_impl(timeseries, segmentation, mode, min_time_extent, tracking_model="general_2d", output_folder=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = Trackastra.from_pretrained("general_2d", device=device)
+    model = Trackastra.from_pretrained(tracking_model, device=device)
     result = model.track(timeseries, segmentation, mode=mode)
     try:
         lineage_graph, _ = result
@@ -629,6 +628,8 @@ def track_across_frames(
     segmentation: np.ndarray,
     gap_closing: Optional[int] = None,
     min_time_extent: Optional[int] = None,
+    mode: str = "greedy",
+    tracking_model: str = "general_2d",
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
@@ -646,6 +647,9 @@ def track_across_frames(
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
         min_time_extent: Require a minimal extent in time for the tracked objects.
+        mode: The trackastra linking solver. One of 'greedy_nodiv', 'greedy' or 'ilp'.
+            'ilp' uses the motile solver. By default, set to 'greedy'.
+        tracking_model: The pretrained trackastra model to use. By default, set to 'general_2d'.
         verbose: Verbosity flag. By default, set to 'True'.
         pbar_init: Function to initialize the progress bar.
         pbar_update: Function to update the progress bar.
@@ -670,8 +674,9 @@ def track_across_frames(
     segmentation, lineage = _tracking_impl(
         timeseries=np.asarray(timeseries),
         segmentation=segmentation,
-        mode="greedy",
+        mode=mode,
         min_time_extent=min_time_extent,
+        tracking_model=tracking_model,
         output_folder=output_folder,
     )
     return segmentation, lineage
@@ -680,10 +685,12 @@ def track_across_frames(
 def automatic_tracking_implementation(
     timeseries: np.ndarray,
     predictor: SamPredictor,
-    segmentor: AMGBase,
+    segmentor: AutoSegBase,
     embedding_path: Optional[Union[str, os.PathLike]] = None,
     gap_closing: Optional[int] = None,
     min_time_extent: Optional[int] = None,
+    mode: str = "greedy",
+    tracking_model: str = "general_2d",
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
@@ -705,6 +712,9 @@ def automatic_tracking_implementation(
         gap_closing: If given, gaps in the segmentation are closed with a binary closing
             operation. The value is used to determine the number of iterations for the closing.
         min_time_extent: Require a minimal extent in time for the tracked objects.
+        mode: The trackastra linking solver. One of 'greedy_nodiv', 'greedy' or 'ilp'.
+            'ilp' uses the motile solver. By default, set to 'greedy'.
+        tracking_model: The pretrained trackastra model to use. By default, set to 'general_2d'.
         tile_shape: Shape of the tiles for tiled prediction. By default prediction is run without tiling.
         halo: Overlap of the tiles for tiled prediction. By default prediction is run without tiling.
         verbose: Verbosity flag. By default, set to 'True'.
@@ -735,6 +745,8 @@ def automatic_tracking_implementation(
         segmentation=segmentation,
         gap_closing=gap_closing,
         min_time_extent=min_time_extent,
+        mode=mode,
+        tracking_model=tracking_model,
         verbose=verbose,
         output_folder=output_folder,
     )
@@ -772,7 +784,7 @@ def get_napari_track_data(
     with futures.ThreadPoolExecutor(n_threads) as tp:
         track_data = list(tp.map(compute_props, range(segmentation.shape[0])))
     track_data = [data for data in track_data if data.size > 0]
-    # The segmentation may be empty, e.g. if all tracks were filtered out via 'min_time_extent'.
+    # The segmentation can be empty, e.g. if 'min_time_extent' filtered out all tracks.
     track_data = np.concatenate(track_data) if track_data else np.zeros((0, 4), dtype="float64")
 
     # The graph representation of napari uses the children as keys and the parents as values,

@@ -7,39 +7,39 @@ import os
 import shutil
 import tempfile
 import warnings
-from abc import ABC
-from contextlib import contextmanager
 from copy import deepcopy
 from collections import OrderedDict
+from contextlib import contextmanager
 from typing import Any, Dict, Literal, List, Optional, Tuple, Union
 
-import numpy as np
 import zarr
+import numpy as np
+
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
-
-from bioimage_cpp import filters as filter_impl
-
-import torch
-from torchvision.ops.boxes import batched_nms, box_area
-
-from torch_em.model import UNETR
-from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
-
-import elf.parallel as parallel_impl
-from elf.parallel.filters import apply_filter
-from elf.wrapper.base import MultiTransformationWrapper
-from elf.wrapper.generic import ThresholdWrapper
-
-from bioimage_cpp.utils import Blocking
 
 import segment_anything.utils.amg as amg_utils
 from segment_anything.predictor import SamPredictor
 
+import torch
+from torchvision.ops.boxes import batched_nms, box_area
+
+import elf.parallel as parallel_impl
+from elf.parallel.filters import apply_filter
+from elf.wrapper.generic import ThresholdWrapper
+from elf.wrapper.base import MultiTransformationWrapper
+
+from torch_em.model import UNETR
+from torch_em.util.segmentation import watershed_from_center_and_boundary_distances
+
+from bioimage_cpp.utils import Blocking
+from bioimage_cpp import filters as filter_impl
+
 from .. import util
-from .util import get_sam_model, precompute_image_embeddings, set_precomputed
-from .inference import batched_inference, batched_tiled_inference
+from ..util import AutoSegBase
 from .._vendored import batched_mask_to_box, mask_to_rle_pytorch
+from .inference import batched_inference, batched_tiled_inference
+from .util import get_sam_model, precompute_image_embeddings, set_precomputed
 
 # We may change this to 'apg' in version 1.8.
 DEFAULT_SEGMENTATION_MODE_WITH_DECODER = "ais"
@@ -63,21 +63,14 @@ class _FakeInput:
 #
 
 
-class AMGBase(ABC):
-    """Base class for the automatic mask generators.
-    """
+class AMGBase(AutoSegBase):
+    """Base class for the grid-based (AMG) automatic mask generators."""
     def __init__(self):
         # the state that has to be computed by the 'initialize' method of the child classes
         self._is_initialized = False
         self._crop_list = None
         self._crop_boxes = None
         self._original_size = None
-
-    @property
-    def is_initialized(self):
-        """Whether the mask generator has already been initialized.
-        """
-        return self._is_initialized
 
     @property
     def crop_list(self):
@@ -346,7 +339,7 @@ class AutomaticMaskGenerator(AMGBase):
         # we set the points per batch to 16 for mps for performance reasons
         # and otherwise keep them at the default of 64
         if points_per_batch is None:
-            points_per_batch = 16 if str(predictor.device) == "mps" else 64
+            points_per_batch = 16 if util.device_type(predictor.device) == "mps" else 64
         self._points_per_batch = points_per_batch
 
         self._crop_n_layers = crop_n_layers
@@ -951,10 +944,11 @@ def _apply_smoothing(foreground, foreground_smoothing, tile_shape, n_threads):
     return foreground
 
 
-class InstanceSegmentationWithDecoder:
+class InstanceSegmentationWithDecoder(AutoSegBase):
     """Generates an instance segmentation without prompts, using a decoder.
 
-    Implements the same interface as `AutomaticMaskGenerator`.
+    A concrete `AutoSegBase` (like `AutomaticMaskGenerator`), but predicts the segmentation with a
+    decoder instead of grid prompts.
 
     Use this class as follows:
     ```python
@@ -977,12 +971,6 @@ class InstanceSegmentationWithDecoder:
         self._boundary_distances = None
 
         self._is_initialized = False
-
-    @property
-    def is_initialized(self):
-        """Whether the mask generator has already been initialized.
-        """
-        return self._is_initialized
 
     @torch.no_grad()
     def initialize(
@@ -1637,7 +1625,7 @@ def get_instance_segmentation_generator(
     decoder: Optional[torch.nn.Module] = None,
     segmentation_mode: Optional[Literal["amg", "ais", "apg"]] = None,
     **kwargs,
-) -> Union[AMGBase, InstanceSegmentationWithDecoder]:
+) -> AutoSegBase:
     f"""Get the automatic mask generator.
 
     Args:

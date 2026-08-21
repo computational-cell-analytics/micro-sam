@@ -3,23 +3,23 @@ from glob import glob
 from typing import List, Optional, Union, Tuple
 
 import numpy as np
-
 import imageio.v3 as imageio
 
 import torch
 
 import napari
+
 from qtpy import QtWidgets
 from qtpy.QtCore import QTimer
 
-from ..v1.util import get_model_names
-from ..v2.util import DEFAULT_MODEL
 from . import _widgets as widgets
-from ._batch import BatchAnnotatorTask, run_batch
-from ._tooltips import get_tooltip
 from ._state import AnnotatorState
-from .annotator import Annotator, detect_ndim
+from ._tooltips import get_tooltip
+from ..v2.util import DEFAULT_MODEL
+from ._titles import get_dock_title
 from .util import _sync_embedding_widget
+from .annotator import Annotator, detect_ndim
+from ._batch import BatchAnnotatorTask, run_batch
 
 # The tasks supported by the unified batch annotator.
 TASKS = ["Segmentation", "Tracking", "Object Classification", "Pixel Classification"]
@@ -46,18 +46,20 @@ class SegmentationBatchTask(BatchAnnotatorTask):
 
     def __init__(
         self, *, ndim, model_type, embedding_path, tile_shape, halo,
-        precompute_amg_state, checkpoint_path, device, prefer_decoder, initial_segmentations=None,
+        precompute_autoseg_state, checkpoint_path, device, prefer_decoder,
+        initial_segmentations=None, batch_size=1,
     ):
         self.ndim = ndim
         self.model_type = model_type
         self.embedding_path = embedding_path
         self.tile_shape = tile_shape
         self.halo = halo
-        self.precompute_amg_state = precompute_amg_state
+        self.precompute_autoseg_state = precompute_autoseg_state
         self.checkpoint_path = checkpoint_path
         self.device = device
         self.prefer_decoder = prefer_decoder
         self.initial_segmentations = initial_segmentations
+        self.batch_size = batch_size
         self.predictor = None
         self.decoder = None
 
@@ -67,9 +69,9 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         return os.path.splitext(os.path.basename(entry))[0] + ".tif"
 
     def precompute(self, images):
-        # Embeddings are computed lazily per item in start/advance (via 'initialize_predictor', which
-        # routes SAM1/SAM2 and loads the model once, reused across items). Here we only build the
-        # per-item embedding paths; 'None' for every item when no embedding folder is given.
+        # The tool computes embeddings lazily per item in start and advance (via 'initialize_predictor',
+        # which routes SAM1 or SAM2 and loads the model once, then reuses it across items). Here we only
+        # build the per-item embedding paths. Each item is 'None' when no embedding folder is given.
         if self.embedding_path is None:
             return [None] * len(images)
         os.makedirs(self.embedding_path, exist_ok=True)
@@ -99,7 +101,9 @@ class SegmentationBatchTask(BatchAnnotatorTask):
             kwargs = dict(prefer_decoder=self.prefer_decoder)
         state.initialize_predictor(
             image, model_type=self.model_type, save_path=embedding_path, halo=self.halo, tile_shape=self.tile_shape,
-            ndim=self.ndim, precompute_amg_state=self.precompute_amg_state, checkpoint_path=self.checkpoint_path,
+            ndim=self.ndim,
+            precompute_autoseg_state=self.precompute_autoseg_state,
+            checkpoint_path=self.checkpoint_path, batch_size=self.batch_size,
             device=self.device, skip_load=False, use_cli=True, **kwargs,
         )
         # Capture the loaded model so subsequent items reuse it instead of reloading.
@@ -117,7 +121,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         annotator._update_image(segmentation_result=self._resolve_initial_result(entry, index))
 
         state = AnnotatorState()
-        viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Batch Segmentation)")
+        viewer.window.add_dock_widget(annotator, name=get_dock_title("batch_segmentation"))
         _sync_embedding_widget(
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
@@ -132,8 +136,8 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
         segmentation_result = self._resolve_initial_result(entry, index)
         viewer.layers["image"].data = image
-        if state.amg is not None:
-            state.amg.clear_state()
+        if state.automatic_segmenter is not None:
+            state.automatic_segmenter.clear_state()
         self._init_predictor(viewer, image, embedding_path)
         annotator._update_image(segmentation_result=segmentation_result)
 
@@ -157,11 +161,12 @@ def batch_annotator(
     halo: Optional[Tuple[int, int]] = None,
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
-    precompute_amg_state: bool = False,
+    precompute_autoseg_state: bool = False,
     checkpoint_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
     prefer_decoder: bool = True,
     skip_segmented: bool = True,
+    batch_size: Optional[int] = 1,
 ) -> Optional["napari.viewer.Viewer"]:
     """Run the segmentation annotation tool for a batch of images (2d or 3d).
 
@@ -182,13 +187,17 @@ def batch_annotator(
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
             By default, does not return the napari viewer.
-        precompute_amg_state: Whether to precompute the state for automatic mask generation.
+        precompute_autoseg_state: Whether to precompute the automatic segmentation state (AMG masks, or
+            decoder predictions if the model has a decoder). Requires an embedding path.
             This will take more time when precomputing embeddings, but will then make
             automatic mask generation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.
             By default, set to 'True'.
+        batch_size: The number of tiles / slices per model call when computing the embeddings.
+            Only has an effect on a GPU. Pass None to select it per device from the free VRAM
+            (SAM2 only). By default a single tile / slice is used.
         skip_segmented: Whether existing output files mark images as completed. If True, resume at
             the first image without an output and skip any later completed images. If False, start
             at the first image and load existing segmentations into the 'committed_objects' layer.
@@ -198,7 +207,7 @@ def batch_annotator(
     """
     if initial_segmentations is not None and len(initial_segmentations) != len(images):
         raise ValueError(
-            "You have passed initial segmentations, but the number of images and segmentations is not the same: "
+            "You passed initial segmentations, but the number of images and segmentations is not the same: "
             f"{len(images)} != {len(initial_segmentations)}."
         )
 
@@ -211,9 +220,10 @@ def batch_annotator(
 
     task = SegmentationBatchTask(
         ndim=ndim, model_type=model_type, embedding_path=embedding_path,
-        tile_shape=tile_shape, halo=halo, precompute_amg_state=precompute_amg_state,
+        tile_shape=tile_shape, halo=halo,
+        precompute_autoseg_state=precompute_autoseg_state,
         checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
-        initial_segmentations=initial_segmentations,
+        initial_segmentations=initial_segmentations, batch_size=batch_size,
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
@@ -314,6 +324,17 @@ class BatchAnnotator(widgets._WidgetBase):
         scroll.setWidget(self._content)
         self.layout().addWidget(scroll)
 
+        self._rebuilt_on_show = False
+
+    def showEvent(self, event):
+        # The first embedding widget is built before napari styles the console, so its path fields keep
+        # the wider default font and the console opens wider than it is after any task change. Build it
+        # once more here, under the same conditions as a task change, so the width stays the same.
+        super().showEvent(event)
+        if not self._rebuilt_on_show:
+            self._rebuilt_on_show = True
+            self._rebuild_embedding_widget()
+
     def _create_options(self):
         self.folder = None
         self._folder_textbox, layout = self._add_path_param(
@@ -332,20 +353,40 @@ class BatchAnnotator(widgets._WidgetBase):
         self._content.layout().addLayout(layout)
         self._pattern_label = layout.itemAt(0).widget()
 
+        # Segmentation folder (object classification only), toggled by the task selector.
+        self.segmentation_folder = None
+        self.segmentation_pattern = "*"
+        self._seg_folder_container = QtWidgets.QWidget()
+        seg_layout = QtWidgets.QVBoxLayout()
+        seg_layout.setContentsMargins(0, 0, 0, 0)
+        _, path_layout = self._add_path_param(
+            "segmentation_folder", self.segmentation_folder, "directory",
+            title="Segmentation Folder", placeholder="Folder with segmentations (optional) ...",
+            tooltip=get_tooltip("batch_annotator", "segmentation_folder"),
+        )
+        seg_layout.addLayout(path_layout)
+        self._seg_folder_label = path_layout.itemAt(0).widget()
+        self._seg_folder_container.setLayout(seg_layout)
+        self._seg_folder_container.setVisible(False)
+        self._content.layout().addWidget(self._seg_folder_container)
+
         self.output_folder = None
         _, layout = self._add_path_param(
             "output_folder", self.output_folder, "directory",
             title="Output Folder", placeholder="Folder to save the results ...",
             tooltip=get_tooltip("batch_annotator", "output_folder")
         )
+        self._content.layout().addLayout(layout)
+        self._output_label = layout.itemAt(0).widget()
+
+        # 'Continue Annotation' (segmentation only) gets its own row. Inside the output folder row its
+        # width would widen the whole console whenever the segmentation task is selected.
         self.continue_annotation = True
         self.continue_annotation_checkbox = self._add_boolean_param(
             "continue_annotation", self.continue_annotation, title="Continue Annotation",
             tooltip=get_tooltip("batch_annotator", "continue_annotation"),
         )
-        layout.addWidget(self.continue_annotation_checkbox)
-        self._content.layout().addLayout(layout)
-        self._output_label = layout.itemAt(0).widget()
+        self._content.layout().addWidget(self.continue_annotation_checkbox)
 
         # Model dropdown on top, then the Task dropdown below it (stacked). The model dropdown is owned
         # by the embedded embedding widget and relocated into '_model_row' in '_rebuild_embedding_widget'.
@@ -365,22 +406,6 @@ class BatchAnnotator(widgets._WidgetBase):
         self._content.layout().addLayout(task_layout)
         self._task_label = task_layout.itemAt(0).widget()
 
-        # Segmentation folder (object classification only), toggled by the task selector.
-        self.segmentation_folder = None
-        self.segmentation_pattern = "*"
-        self._seg_folder_container = QtWidgets.QWidget()
-        seg_layout = QtWidgets.QVBoxLayout()
-        seg_layout.setContentsMargins(0, 0, 0, 0)
-        _, path_layout = self._add_path_param(
-            "segmentation_folder", self.segmentation_folder, "directory",
-            title="Segmentation Folder", placeholder="Folder with segmentations (optional) ...",
-            tooltip=get_tooltip("batch_annotator", "segmentation_folder"),
-        )
-        seg_layout.addLayout(path_layout)
-        self._seg_folder_container.setLayout(seg_layout)
-        self._seg_folder_container.setVisible(False)
-        self._content.layout().addWidget(self._seg_folder_container)
-
         # Embedded model / embedding settings, reusing the annotator's embedding widget so the model
         # family/size, image-dimensions and tiling controls (and, for the classifier tasks, the
         # 'Advanced Models' selector) are not duplicated. Swapped to match the selected task.
@@ -399,7 +424,7 @@ class BatchAnnotator(widgets._WidgetBase):
 
     def _build_embedding_widget(self):
         # The classifier tasks use the classification embedding widget (which adds the 'Advanced
-        # Models' selector); tracking uses the SAM2-only timeseries widget; segmentation the default.
+        # Models' selector). Tracking uses the SAM2-only timeseries widget. Segmentation uses the default.
         if self.task in ("Object Classification", "Pixel Classification"):
             ew = widgets.ClassificationEmbeddingWidget(ndim_choice=True)
         elif self.task == "Tracking":
@@ -407,8 +432,8 @@ class BatchAnnotator(widgets._WidgetBase):
         else:
             ew = widgets.EmbeddingWidget(ndim_choice=True)
         # The launcher works on a folder and the harness computes embeddings itself, so the
-        # 'Compute Embeddings' button is not needed (the image / model row is hidden in the rebuild,
-        # after the model dropdown has been relocated next to the Task dropdown).
+        # 'Compute Embeddings' button is not needed. The rebuild hides the image and model row,
+        # after it moves the model dropdown next to the Task dropdown.
         ew.run_button.hide()
         return ew
 
@@ -440,11 +465,12 @@ class BatchAnnotator(widgets._WidgetBase):
         self._model_row.addWidget(self._relocated_model_dropdown)
         _hide_layout_widgets(self._embedding_widget.layout().itemAt(0))
 
-        # Uniform label widths so the input / output / pattern fields and the model / task dropdowns
-        # all start at the same x and span the same width.
-        self._align_widths(
-            [self._folder_label, self._pattern_label, self._output_label, self._task_label, self._model_label]
-        )
+        # Uniform label widths so the input / segmentation / output / pattern fields and the model /
+        # task dropdowns all start at the same x and span the same width.
+        self._align_widths([
+            self._folder_label, self._pattern_label, self._seg_folder_label, self._output_label,
+            self._task_label, self._model_label,
+        ])
 
         self._update_default_tiling()
 
@@ -460,7 +486,7 @@ class BatchAnnotator(widgets._WidgetBase):
         ew = self._embedding_widget
         if ew is None or not self.folder:
             return
-        files = sorted(glob(os.path.join(self.folder, self.pattern)))
+        files = sorted(glob(os.path.join(self.folder, self.pattern or "*")))
         if not files:
             return
         try:
@@ -472,7 +498,7 @@ class BatchAnnotator(widgets._WidgetBase):
         ew._apply_default_tiling_for_shape(spatial)
 
     def _validate_inputs(self):
-        missing_data = self.folder is None or len(glob(os.path.join(self.folder, self.pattern))) == 0
+        missing_data = self.folder is None or len(glob(os.path.join(self.folder, self.pattern or "*"))) == 0
         missing_output = self.output_folder is None
         if missing_data or missing_output:
             msg = ""
@@ -484,7 +510,7 @@ class BatchAnnotator(widgets._WidgetBase):
 
         # For object classification with provided segmentations, the counts must match.
         if self.task == "Object Classification" and self.segmentation_folder:
-            n_img = len(glob(os.path.join(self.folder, self.pattern)))
+            n_img = len(glob(os.path.join(self.folder, self.pattern or "*")))
             n_seg = len(glob(os.path.join(self.segmentation_folder, self.segmentation_pattern)))
             if n_img != n_seg:
                 return widgets._generate_message(
@@ -520,18 +546,18 @@ class BatchAnnotator(widgets._WidgetBase):
 
         common = dict(
             model_type=ew.model_type, tile_shape=tile_shape, halo=halo,
-            checkpoint_path=ew.custom_weights, device=ew.device,
+            checkpoint_path=ew.custom_weights, device=ew.device, batch_size=ew._effective_batch_size(),
             viewer=self._viewer, return_viewer=True,
         )
 
         if self.task == "Segmentation":
             launched_viewer = image_folder_annotator(
                 input_folder=self.folder, output_folder=self.output_folder, ndim=ndim,
-                pattern=self.pattern, embedding_path=ew.embeddings_save_path,
+                pattern=self.pattern or "*", embedding_path=ew.embeddings_save_path,
                 skip_segmented=bool(self.continue_annotation), **common,
             )
         else:
-            image_files = sorted(glob(os.path.join(self.folder, self.pattern)))
+            image_files = sorted(glob(os.path.join(self.folder, self.pattern or "*")))
             if self.task == "Tracking":
                 from .annotator_tracking import batch_tracking_annotator
                 launched_viewer = batch_tracking_annotator(
@@ -583,78 +609,3 @@ class BatchAnnotator(widgets._WidgetBase):
             except Exception:
                 pass
         QTimer.singleShot(0, _remove)
-
-
-def main():
-    """@private"""
-    import argparse
-
-    available_models = list(get_model_names())
-    available_models = ", ".join(available_models)
-
-    parser = argparse.ArgumentParser(description="Annotate a batch of images from a folder.")
-    parser.add_argument(
-        "-i", "--input_folder", required=True,
-        help="The folder containing the image data. The data can be stored in any common format (tif, jpg, png, ...)."
-    )
-    parser.add_argument(
-        "-o", "--output_folder", required=True,
-        help="The folder where the segmentation results will be stored."
-    )
-    parser.add_argument(
-        "--ndim", help="The number of spatial dimensions (2 or 3). If None, auto-detected from image shape."
-    )
-    parser.add_argument(
-        "-p", "--pattern", default="*",
-        help="The pattern to select the images to annotator from the input folder. E.g. *.tif to annotate all tifs."
-        "By default all files in the folder will be loaded and annotated."
-    )
-    parser.add_argument(
-        "--initial_segmentation_folder",
-        help="A folder with initial segmentation results. By default no initial segmentations are loaded."
-    )
-    parser.add_argument(
-        "--initial_segmentation_pattern",
-        help="The glob pattern for loading files from `initial_segmentation_folder`."
-    )
-    parser.add_argument(
-        "-e", "--embedding_path",
-        help="The filepath for saving/loading the pre-computed image embeddings. "
-        "NOTE: It is recommended to pass this argument and store the embeddings, "
-        "otherwise they will be recomputed every time (which can take a long time)."
-    )
-    parser.add_argument(
-        "-m", "--model_type", default=DEFAULT_MODEL,
-        help=f"The segment anything model that will be used, one of {available_models}."
-    )
-    parser.add_argument(
-        "-c", "--checkpoint", default=None,
-        help="Checkpoint from which the SAM model will be loaded."
-    )
-    parser.add_argument(
-        "-d", "--device", default=None,
-        help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
-        "By default the most performant available device will be selected."
-    )
-
-    parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
-    )
-    parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
-    )
-    parser.add_argument("--precompute_amg_state", action="store_true")
-    parser.add_argument("--prefer_decoder", action="store_false")
-    parser.add_argument("--skip_segmented", action="store_false")
-
-    args = parser.parse_args()
-
-    image_folder_annotator(
-        args.input_folder, args.output_folder, pattern=args.pattern, ndim=args.ndim,
-        initial_segmentation_folder=args.initial_segmentation_folder,
-        initial_segmentation_pattern=args.initial_segmentation_pattern,
-        embedding_path=args.embedding_path, model_type=args.model_type,
-        tile_shape=args.tile_shape, halo=args.halo, precompute_amg_state=args.precompute_amg_state,
-        checkpoint_path=args.checkpoint, device=args.device,
-        prefer_decoder=args.prefer_decoder, skip_segmented=args.skip_segmented
-    )

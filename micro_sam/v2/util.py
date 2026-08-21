@@ -1,21 +1,163 @@
 import os
 import sys
 import pooch
+import shutil
 import warnings
+import contextlib
 from pathlib import Path
-from typing import Union, Literal, Optional, Tuple
+from typing import Any, Union, Literal, Optional, Sequence, Tuple
+
+import sam2
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 import numpy as np
 
 import torch
 
-from micro_sam.util import (
-    get_device, get_cache_directory, microsam_cachedir, _open_embeddings, _create_dataset_without_data,
-)
 from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
+from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
+from micro_sam.util import (
+    get_device, get_cache_directory, microsam_cachedir, _open_embeddings,
+    _configure_mps_memory, device_type, make_temp_embedding_path, BF16_MIN_CAPABILITY,
+)
 
-import sam2
-from sam2.build_sam import build_sam2
+
+Device = Optional[Union[str, torch.device]]
+Devices = Optional[Union[str, torch.device, Sequence[Union[str, torch.device]]]]
+
+# Precision preference on cuda: bf16, then fp16, then fp32. See `micro_sam.util.BF16_MIN_CAPABILITY`.
+FP16_MIN_CAPABILITY = (7, 0)
+
+
+def _precision_device(device: Device = None) -> torch.device:
+    """The device a precision decision is made for, unvalidated so a missing backend answers fp32."""
+    return torch.device(get_device()) if device is None else torch.device(device)
+
+
+def autocast_dtype(device: Device = None) -> Optional[torch.dtype]:
+    """The dtype SAM2 and UniSAM2 inference runs in on a device.
+
+    Args:
+        device: The device the forward pass runs on. Defaults to the best available one.
+
+    Returns:
+        The half precision dtype the device runs natively, or None where inference stays in fp32.
+    """
+    device = _precision_device(device)
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    capability = torch.cuda.get_device_capability(device)
+    if capability >= BF16_MIN_CAPABILITY:
+        return torch.bfloat16
+    if capability >= FP16_MIN_CAPABILITY:
+        return torch.float16
+    return None
+
+
+def autocast(device: Device = None):
+    """The autocast context inference runs in on a device.
+
+    Args:
+        device: The device the forward pass runs on. Defaults to the best available one.
+
+    Returns:
+        The autocast context, or a null context for fp32.
+    """
+    device = _precision_device(device)
+    dtype = autocast_dtype(device)
+    if dtype is None:
+        return contextlib.nullcontext()
+    return torch.autocast(device_type=device.type, dtype=dtype)
+
+
+def precision_name(device: Device = None) -> str:
+    """The precision name of a device, for the embedding cache signature.
+
+    Args:
+        device: The device the forward pass runs on.
+
+    Returns:
+        One of 'bf16', 'fp16' or 'fp32'.
+    """
+    return {torch.bfloat16: "bf16", torch.float16: "fp16", None: "fp32"}[autocast_dtype(device)]
+
+
+def to_float32(value: Any) -> Any:
+    """Cast the floating point tensors of a nested structure to fp32.
+
+    Autocast returns half precision, but the embedding cache is fp32 and numpy has no bfloat16.
+
+    Args:
+        value: A tensor, or a dict, list or tuple containing tensors.
+
+    Returns:
+        The same structure with its floating point tensors in fp32.
+    """
+    if isinstance(value, torch.Tensor):
+        return value.float() if value.is_floating_point() else value
+    if isinstance(value, dict):
+        return {key: to_float32(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(to_float32(item) for item in value)
+    return value
+
+
+def encode_image(predictor, image: np.ndarray) -> None:
+    """Run the image encoder in the device precision, keeping the cached features in fp32.
+
+    Args:
+        predictor: The SAM2 image predictor.
+        image: The image to encode.
+    """
+    with autocast(predictor.device):
+        predictor.set_image(image)
+    predictor._features = to_float32(predictor._features)
+
+
+class ImageEmbeddings(dict):
+    """Embedding result with explicit lifetime management for its backing store."""
+
+    def __init__(self, embeddings, store=None, temporary_path=None):
+        super().__init__(embeddings)
+        self._store = store
+        self._temporary_path = temporary_path
+        self._closed = False
+
+    @property
+    def closed(self):
+        """Whether this embedding resource is closed."""
+        return self._closed
+
+    @property
+    def temporary_path(self):
+        """The owned ephemeral path, or None for memory-backed or persistent embeddings."""
+        return self._temporary_path
+
+    def close(self):
+        """Close the backing store and remove an owned ephemeral path."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            store = getattr(self._store, "file", self._store)
+            close = getattr(store, "close", None)
+            if close is not None:
+                close()
+        finally:
+            self._store = None
+            if self._temporary_path is not None:
+                shutil.rmtree(self._temporary_path, ignore_errors=True)
+                self._temporary_path = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def __del__(self):
+        self.close()
 
 
 # NOTE: The model config is expected to be fetched from the module's relative path location.
@@ -49,8 +191,8 @@ HASHES = {
 }
 
 
-# Default in-plane tiling for large images. Tiling is enabled when an in-plane axis exceeds
-# DEFAULT_TILING_THRESHOLD; the SAM input patch per axis is then DEFAULT_TILE_SHAPE + 2 * DEFAULT_HALO,
+# Default in-plane tiling for large images. The tool enables tiling when an in-plane axis exceeds
+# DEFAULT_TILING_THRESHOLD. The SAM input patch per axis is then DEFAULT_TILE_SHAPE + 2 * DEFAULT_HALO,
 # which is kept equal to the threshold (512 + 2 * 128 = 768).
 DEFAULT_TILING_THRESHOLD = 768
 DEFAULT_TILE_SHAPE = (512, 512)
@@ -58,14 +200,86 @@ DEFAULT_HALO = (128, 128)
 
 # Default z block / halo for volumetric (3d) tiling. Each decoder pass spans the inner block plus the
 # halo on each side, i.e. DEFAULT_TILE_Z + 2 * DEFAULT_HALO_Z = 8 slices, matching the UniSAM2 8-slice
-# training crop (so the z-convolutions see the z-context they were trained on; do not enlarge this
+# training crop (so the z-convolutions see the z-context they were trained on. Do not enlarge this
 # beyond the training crop). Set the z tile >= the slice count to disable z-tiling.
 DEFAULT_TILE_Z = 4
 DEFAULT_HALO_Z = 2
 
+# Encoder batch size per free-VRAM band in GiB, then per backbone, measured end to end. A device
+# uses the largest band it reaches, see BAND_TOLERANCE.
+VRAM_BATCH_SIZES = {
+    4: {"hvit_t": 2, "hvit_s": 2, "hvit_b": 2, "hvit_l": 1},
+    6: {"hvit_t": 2, "hvit_s": 2, "hvit_b": 2, "hvit_l": 2},
+    8: {"hvit_t": 4, "hvit_s": 4, "hvit_b": 4, "hvit_l": 4},
+    10: {"hvit_t": 4, "hvit_s": 4, "hvit_b": 4, "hvit_l": 4},
+    12: {"hvit_t": 4, "hvit_s": 4, "hvit_b": 4, "hvit_l": 4},
+    16: {"hvit_t": 8, "hvit_s": 8, "hvit_b": 8, "hvit_l": 8},
+    24: {"hvit_t": 8, "hvit_s": 8, "hvit_b": 8, "hvit_l": 8},
+    32: {"hvit_t": 16, "hvit_s": 16, "hvit_b": 16, "hvit_l": 16},
+    40: {"hvit_t": 16, "hvit_s": 16, "hvit_b": 16, "hvit_l": 16},
+    48: {"hvit_t": 16, "hvit_s": 16, "hvit_b": 16, "hvit_l": 16},
+    80: {"hvit_t": 32, "hvit_s": 32, "hvit_b": 32, "hvit_l": 32},
+}
+
+# The backbone assumed for an unknown model name, the most memory-hungry one in the table.
+FALLBACK_BACKBONE = "hvit_l"
+
+# Bands are keyed by nominal card size, but a card never reports all of it as free (CUDA context,
+# ECC reserve): an 80 GB A100 has 79.25 GiB. Without this slack every such card falls a band short.
+BAND_TOLERANCE = 0.95
+
+
+def _band_for(free_gib):
+    """The largest tabulated VRAM band the device reaches, or None if it reaches none."""
+    reached = [band for band in VRAM_BATCH_SIZES if free_gib >= band * BAND_TOLERANCE]
+    return max(reached) if reached else None
+
+
+def _backbone_of(model_type):
+    """Map a model name onto its backbone, e.g. 'hvit_t_cells' -> 'hvit_t'."""
+    backbone = str(model_type)[:6]
+    return backbone if backbone in SUPPORTED_MODELS else FALLBACK_BACKBONE
+
+
+def _free_vram_gib(device):
+    """The free VRAM of a CUDA device in GiB, or None for a non-CUDA device."""
+    device = torch.device(device)
+    if device.type != "cuda" or not torch.cuda.is_available():
+        return None
+    return torch.cuda.mem_get_info(device)[0] / 1024 ** 3
+
+
+def recommend_batch_size(model_type, device, n_jobs=None):
+    """Look up the encoder batch size for a model on a device.
+
+    Args:
+        model_type: The model name, e.g. 'hvit_t' or 'hvit_t_cells'. Unknown names are treated as the
+            most memory-hungry backbone.
+        device: The device the encoder runs on. Non-CUDA devices always get a batch size of one, as
+            does a device with less free VRAM than the smallest tabulated band.
+        n_jobs: The total number of tiles / slices, to avoid a batch larger than the work.
+
+    Returns:
+        The batch size to use, at least one.
+    """
+    free_gib = _free_vram_gib(device)
+    if free_gib is None:
+        return 1
+
+    band = _band_for(free_gib)
+    if band is None:
+        # The smallest entry is calibrated for the smallest band, not below it, so a device that
+        # reaches no band stays at one instead of relying on the OOM backoff to recover.
+        return 1
+
+    batch_size = VRAM_BATCH_SIZES[band][_backbone_of(model_type)]
+    if n_jobs is not None:
+        batch_size = min(batch_size, max(1, int(n_jobs)))
+    return int(batch_size)
+
 
 def needs_default_tiling(shape):
-    """Whether default in-plane tiling should be enabled for a given image shape.
+    """Whether to enable default in-plane tiling for a given image shape.
 
     Args:
         shape: The image shape without any channel axis. Either 2d (y, x) or 3d (z, y, x);
@@ -95,17 +309,17 @@ FINETUNED_MODELS = [
 ]
 
 # The default model for the annotation tools (GUI + CLI + Python API). This is the single source of
-# truth for the default; the GUI derives its synthetic 'vit_<size><suffix>' selector string from it.
+# truth for the default. The GUI derives its synthetic 'vit_<size><suffix>' selector string from it.
 DEFAULT_MODEL = "hvit_t_cells"
 
 FINETUNED_URLS = {
-    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/PJRPRXC3BNOLJ6X/download",
-    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/URqdbdzJiUtUiq1/download",
+    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/iqNv2cjhPMGOo9J/download",
+    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/VlXsFg16Qh2SsiA/download",
 }
 
 FINETUNED_HASHES = {
-    "hvit_t_cells": "xxh128:385a8521cbadad2536b2e7950c394f80",
-    "hvit_t_cells_decoder": "xxh128:842add10a67e4c7827d97f033e62a6f5",
+    "hvit_t_cells": "xxh128:0d1873746eda30f2c1b1fd3edd9a82d0",
+    "hvit_t_cells_decoder": "xxh128:301163dbb748519da1e03057789f1ccf",
 }
 
 
@@ -184,8 +398,10 @@ def _download_finetuned_sam2_model(model_type, progress_bar_factory=None):
 def _get_device(device=None):
     if device is None or device == "auto":
         device = get_device()
+    else:
+        _configure_mps_memory(device)
 
-    if device == "cuda":
+    if device_type(device) == "cuda":
         # NOTE: Adapt global variables to work with flash attentions.
         sam2.modeling.sam.transformer.OLD_GPU = True
         sam2.modeling.sam.transformer.USE_FLASH_ATTN = True
@@ -210,7 +426,16 @@ def _get_checkpoint(model_type=_DEFAULT_MODEL):
     return checkpoint_path
 
 
-def _load_peft_finetuned_sam2(build_fn, model_cfg, model_type, finetuned_checkpoint, device, peft_kwargs, state=None):
+def _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type):
+    """Build the SAM2 image model or the SAM2 video predictor from a config and a checkpoint."""
+    if input_type == "images":
+        return build_sam2(
+            config_file=model_cfg, ckpt_path=checkpoint_path, device=device, mode="eval", apply_postprocessing=False,
+        )
+    return _build_sam2_video_predictor(config_file=model_cfg, ckpt_path=checkpoint_path, device=device)
+
+
+def _load_peft_finetuned_sam2(model_cfg, model_type, input_type, finetuned_checkpoint, device, peft_kwargs, state=None):
     """Build a SAM2 model with parameter efficient finetuning applied and load finetuned weights.
 
     A PEFT-finetuned checkpoint contains the injected PEFT parameters (e.g. LoRA layers), so the
@@ -219,9 +444,9 @@ def _load_peft_finetuned_sam2(build_fn, model_cfg, model_type, finetuned_checkpo
     training is re-applied, and only then are the finetuned weights loaded on top.
 
     Args:
-        build_fn: The SAM2 build function (image predictor or video predictor).
         model_cfg: The SAM2 model config path.
         model_type: The SAM2 model name (the base backbone is derived from the first 6 characters).
+        input_type: Whether the inputs are images or videos.
         finetuned_checkpoint: Path to the PEFT-finetuned checkpoint.
         device: The pytorch device.
         peft_kwargs: Keyword arguments for `micro_sam.v2.models.peft_sam2.PEFT_Sam2`.
@@ -235,9 +460,7 @@ def _load_peft_finetuned_sam2(build_fn, model_cfg, model_type, finetuned_checkpo
     # Build from the base backbone; the finetuned weights (with the PEFT parameters) are loaded after
     # the surgery so that the checkpoint keys match the wrapped architecture.
     base_checkpoint = _get_checkpoint(model_type=model_type[:6])
-    model = build_fn(
-        config_file=model_cfg, ckpt_path=base_checkpoint, device=device, mode="eval", apply_postprocessing=False,
-    )
+    model = _build_sam2_backbone(model_cfg, base_checkpoint, device, input_type)
     model = PEFT_Sam2(model, **peft_kwargs).sam
 
     if state is None:
@@ -284,18 +507,14 @@ def get_sam2_model(
     Returns:
         The SAM2 model.
     """
-    # The base SAM2 backbone is the first 6 characters of the name, e.g. 'hvit_t_cells' -> 'hvit_t';
-    # finetuned micro-sam weights come from the registry rather than the base SAM2 download.
+    # The base SAM2 backbone is the first 6 characters of the name, e.g. 'hvit_t_cells' -> 'hvit_t'.
+    # Finetuned micro-sam weights come from the registry rather than the base SAM2 download.
     is_finetuned = model_type in FINETUNED_MODELS
     model_cfg = CFG_PATHS[model_type[:6]]
 
     device = _get_device(device)
 
-    if input_type == "images":
-        _build_segment_anything_2 = build_sam2
-    elif input_type == "videos":
-        _build_segment_anything_2 = _build_sam2_video_predictor
-    else:
+    if input_type not in ("images", "videos"):
         raise ValueError(f"'{input_type}' is not a valid input type.")
 
     # Only a user-provided checkpoint can carry a saved PEFT config; the base / registered downloads
@@ -324,20 +543,14 @@ def get_sam2_model(
         # `micro_sam.v1.util.get_sam_model`). Copy first so the caller's dict is not mutated.
         peft_kwargs = {k: v for k, v in peft_kwargs.items() if k != "quantize"}
         model = _load_peft_finetuned_sam2(
-            _build_segment_anything_2, model_cfg, model_type, checkpoint_path, device, peft_kwargs, state=saved_state,
+            model_cfg, model_type, input_type, checkpoint_path, device, peft_kwargs, state=saved_state,
         )
     else:
-        model = _build_segment_anything_2(
-            config_file=model_cfg,
-            ckpt_path=checkpoint_path,
-            device=device,
-            mode="eval",
-            apply_postprocessing=False,
-        )
+        model = _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type)
 
-    if input_type == "videos":
-        model.model_type = model_type
-        model.model_name = model_type  # TODO: What is this exactly?
+    # Both predictor wrappers and direct model use need this metadata for embedding signatures.
+    model.model_type = model_type
+    model.model_name = model_type  # TODO: What is this exactly?
 
     return model
 
@@ -415,27 +628,74 @@ def export_custom_qlora_sam2_model(
     torch.save(out_state, save_path)
 
 
-def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
+class _PrecisionImagePredictor(SAM2ImagePredictor):
+    """A SAM2 image predictor whose prompt encoder and mask decoder run in the device precision."""
+
+    def _predict(self, *args, **kwargs):
+        with autocast(self.device):
+            return to_float32(super()._predict(*args, **kwargs))
+
+
+def configure_image_predictor(predictor):
+    """Configure a SAM2 image predictor to always use resize-longest."""
+    from micro_sam.v2.transforms.resize import ResizeLongestSideTransforms
+
+    old = predictor._transforms
+    predictor._transforms = ResizeLongestSideTransforms(
+        resolution=predictor.model.image_size,
+        mask_threshold=predictor.mask_threshold,
+        max_hole_area=getattr(old, "max_hole_area", 0.0),
+        max_sprinkle_area=getattr(old, "max_sprinkle_area", 0.0),
+    )
+    return predictor
+
+
+def get_sam2_image_predictor(model, **kwargs):
+    """Build a SAM2 image predictor with resize-longest preprocessing and the device precision."""
+    return configure_image_predictor(_PrecisionImagePredictor(model, **kwargs))
+
+
+def _predictor_device(predictor) -> torch.device:
+    """The device a predictor runs on, whether it exposes it as an attribute or as a method."""
+    device = getattr(predictor, "device", None)
+    if callable(device):
+        device = device()
+    if device is None:
+        device = next(predictor.parameters()).device
+    return torch.device(device)
+
+
+def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, preprocessing):
     """Validate saved embeddings against the requested configuration.
 
-    Returns True if the saved embeddings are stale and should be recomputed (the model or tiling
-    configuration changed), False if they can be loaded. Raises if they belong to different image
-    data (data signature mismatch).
+    Returns True if the saved embeddings are stale and should be recomputed (the model, tiling or
+    preprocessing changed), False if they can be loaded. Raises if they belong to different image
+    data (data signature mismatch). `preprocessing` is the policy expected for the current path
+    (2d image or 3d / video, see `micro_sam.v2.normalization`).
     """
-    # We may have an empty zarr file that was already created to save the embeddings in.
-    # In this case the embeddings will be computed and we don't need to perform any checks.
+    # We can have an empty zarr file that was already created to save the embeddings in. A
+    # feature-bearing file without the completion metadata is a partial cache: reject it unless it
+    # explicitly records the current preprocessing policy. Untagged caches can use the former video
+    # resize implementation and cannot be safely resumed.
     if "input_size" not in f.attrs:
-        return False
+        normalization = f.attrs.get("normalization")
+        return "features" in f and normalization != preprocessing
 
-    # Creates all the metadta that is stored along with the embeddings.
+    # Creates all the metadata that is stored along with the embeddings.
     # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam.v2`?
     from micro_sam.util import _get_embedding_signature
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
+    signature["normalization"] = preprocessing
+    signature["precision"] = precision_name(_predictor_device(predictor))
 
     stale = False
     for key, val in signature.items():
-        # A key absent from an older file should not invalidate it (it predates that key).
-        if key not in f.attrs or f.attrs[key] == val:
+        # Missing current preprocessing metadata means stale. We still tolerate other legacy signature fields.
+        if key not in f.attrs:
+            if key in ("normalization", "precision"):
+                stale = True
+            continue
+        if f.attrs[key] == val:
             continue
         # Different image data: surface as an error rather than silently overwriting it.
         if key == "data_signature":
@@ -451,9 +711,19 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
                 "But please recompute them if model predictions don't look as expected."
             )
             continue
-        # Model or tiling changed: the saved embeddings are stale and must be recomputed.
+        # Model, tiling or normalization changed: the saved embeddings are stale and must be recomputed.
         stale = True
     return stale
+
+
+def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size, original_size, preprocessing):
+    """Write the common embedding metadata plus the SAM2 preprocessing policy and precision."""
+    from micro_sam.util import _write_embedding_signature as _write_common_signature
+
+    _write_common_signature(f, input_, predictor, tile_shape, halo, input_size, original_size)
+    f.attrs["normalization"] = preprocessing
+    # The encoder precision changes the stored values, so another one is stale.
+    f.attrs["precision"] = precision_name(_predictor_device(predictor))
 
 
 def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
@@ -479,10 +749,7 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
     # Otherwise we have to compute the embeddings.
     predictor.reset_predictor()
 
-    from micro_sam.util import _to_image
-    # Min-max normalization, unified across the SAM2 image paths (interactive, AMG and the UniSAM2
-    # decoder when run on precomputed embeddings); the UniSAM2 decoder was trained with min-max.
-    predictor.set_image(_to_image(input_, normalization="minmax"))
+    encode_image(predictor, to_image(input_))
     features = predictor.get_image_embedding().cpu().numpy()
     high_res_features = predictor._features.get("high_res_feats")
     original_size = predictor._orig_hw
@@ -493,14 +760,15 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
 
     # Save the embeddings if we have a save_path.
     if save_path is not None:
-        from micro_sam.util import _create_dataset_with_data, _write_embedding_signature
+        from micro_sam.util import _create_dataset_with_data
         _create_dataset_with_data(f, "features", data=features)
         # Store the high-resolution features (a list of tensors) needed by the SAM2 decoder.
         high_res_group = f.require_group("high_res_feats")
         for i, feat in enumerate(high_res_features):
             _create_dataset_with_data(high_res_group, str(i), data=feat.cpu().numpy())
         _write_embedding_signature(
-            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size, original_size=original_size,
+            f, input_, predictor, tile_shape=None, halo=None, input_size=input_size,
+            original_size=original_size, preprocessing=IMAGE_PREPROCESSING,
         )
 
     image_embeddings = {
@@ -510,147 +778,6 @@ def _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update):
         "original_size": original_size,
     }
     return image_embeddings
-
-
-def _compute_tiled_2d(input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update):
-    from micro_sam.util import _to_image, _create_dataset_with_data, _write_embedding_signature
-    from bioimage_cpp.utils import Blocking
-
-    features = f.require_group("features")
-    high_res_group = f.require_group("high_res_feats")
-
-    # If the tiled embeddings are already cached we just return the open groups.
-    if save_path is not None and "shape" in features.attrs:
-        return {"features": features, "high_res_feats": high_res_group, "input_size": None, "original_size": None}
-
-    tiling = Blocking([0, 0], list(input_.shape[:2]), list(tile_shape))
-    n_tiles = tiling.number_of_blocks
-
-    features.attrs["shape"] = list(input_.shape[:2])
-    features.attrs["tile_shape"] = list(tile_shape)
-    features.attrs["halo"] = list(halo)
-
-    pbar_init(n_tiles, "Compute Image Embeddings 2D tiled")
-    predictor.reset_predictor()
-    for tile_id in range(n_tiles):
-        block = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
-        bb = tuple(slice(begin, end) for begin, end in zip(block.begin, block.end))
-        predictor.set_image(_to_image(input_[bb], normalization="minmax"))
-
-        tile_features = predictor.get_image_embedding().cpu().numpy()
-        high_res_features = [feat.cpu().numpy() for feat in predictor._features["high_res_feats"]]
-        ds = _create_dataset_with_data(features, str(tile_id), data=tile_features)
-        ds.attrs["input_size"] = predictor.model.image_size
-        # Store the original size in the predictor's nested '[[h, w]]' layout (one entry per image),
-        # so 'set_precomputed' restores '_orig_hw[-1] == (h, w)' for non-square tiles too.
-        ds.attrs["original_size"] = [list(predictor._orig_hw[0])]
-
-        tile_high_res = high_res_group.require_group(str(tile_id))
-        for level, feat in enumerate(high_res_features):
-            _create_dataset_with_data(tile_high_res, str(level), data=feat)
-
-        predictor.reset_predictor()
-        pbar_update(1)
-
-    if save_path is not None:
-        _write_embedding_signature(
-            f, input_, predictor, tile_shape=tile_shape, halo=halo, input_size=None, original_size=None,
-        )
-
-    return {"features": features, "high_res_feats": high_res_group, "input_size": None, "original_size": None}
-
-
-def _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update):
-    from micro_sam.util import _to_image, _create_dataset_with_data, _write_embedding_signature
-    from bioimage_cpp.utils import Blocking
-
-    features = f.require_group("features")
-    pos_enc_group = f.require_group("pos_enc")
-    fpn_group = f.require_group("fpn")
-
-    # If the tiled embeddings are already cached we just return the open groups.
-    if save_path is not None and "shape" in features.attrs:
-        return {
-            "features": features, "pos_enc": pos_enc_group, "fpn": fpn_group,
-            "input_size": None, "original_size": None,
-        }
-
-    # The volume is tiled in-plane (xy); each tile is its own (Z, tile_y, tile_x) sub-volume.
-    tiling = Blocking([0, 0], list(input_.shape[1:]), list(tile_shape))
-    n_tiles = tiling.number_of_blocks
-    n_slices = input_.shape[0]
-
-    features.attrs["shape"] = list(input_.shape)
-    features.attrs["tile_shape"] = list(tile_shape)
-    features.attrs["halo"] = list(halo)
-
-    # Progress is reported per actual patch (tile-column x z slice), not per tile, since each tile
-    # encodes all z slices and that inner loop is the bulk of the work.
-    pbar_init(n_tiles * n_slices, "Compute Image Embeddings 3D tiled")
-    for tile_id in range(n_tiles):
-        block = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
-        bb = tuple(slice(begin, end) for begin, end in zip(block.begin, block.end))
-        sub_volume = np.asarray(input_[:, bb[0], bb[1]])
-
-        # Compute the per-slice video-style features for this tile-column (as in '_compute_3d').
-        inference_state = predictor.init_state(
-            volume=sub_volume, volume_embeddings=None, ignore_caching_features=True,
-        )
-        batched_images = [_to_image(sub_volume[z]) for z in range(n_slices)]
-        vision_feats, pos_encs, fpns, original_sizes, input_sizes = _compute_embeddings_batched_3d(
-            inference_state, predictor, list(range(n_slices)), batched_images, pbar_update=pbar_update,
-        )
-
-        # Stack the per-slice outputs along z, matching the (n_slices, ...) layout '_compute_3d' saves.
-        stacked = [feat.unsqueeze(0) if feat.ndim == 3 else feat for feat in vision_feats]
-        tile_features = torch.stack(stacked, dim=0).detach().cpu().numpy()
-        depth = len(pos_encs[0])
-        tile_pos = [torch.stack([p[level] for p in pos_encs]).detach().cpu().numpy() for level in range(depth)]
-        tile_fpn = [torch.stack([p[level] for p in fpns]).detach().cpu().numpy() for level in range(depth)]
-
-        ds = _create_dataset_with_data(features, str(tile_id), data=tile_features)
-        ds.attrs["input_size"] = input_sizes[-1]
-        ds.attrs["original_size"] = list(original_sizes[-1])
-        tile_pos_group = pos_enc_group.require_group(str(tile_id))
-        for level, level_feat in enumerate(tile_pos):
-            _create_dataset_with_data(tile_pos_group, str(level), data=level_feat)
-        tile_fpn_group = fpn_group.require_group(str(tile_id))
-        for level, level_feat in enumerate(tile_fpn):
-            _create_dataset_with_data(tile_fpn_group, str(level), data=level_feat)
-
-    if save_path is not None:
-        _write_embedding_signature(
-            f, input_, predictor, tile_shape=tile_shape, halo=halo, input_size=None, original_size=None,
-        )
-
-    return {
-        "features": features, "pos_enc": pos_enc_group, "fpn": fpn_group,
-        "input_size": None, "original_size": None,
-    }
-
-
-def _create_list_dataset_without_data(group, prefix_name, tensors, dtype, z_slices):
-    subgroup = group.require_group(prefix_name)
-
-    ds_list = []
-    for i, curr_tensor in enumerate(tensors):
-        curr_shape = tuple(curr_tensor.shape)
-        shape = (z_slices,) + curr_shape
-        chunks = (1,) + curr_shape
-        name = str(i)
-
-        if name in subgroup:
-            ds = subgroup[name]
-            if ds.shape != shape:
-                raise RuntimeError(f"Invalid shape for {prefix_name}/{name}: expected {shape}, got {ds.shape}")
-            if getattr(ds, "chunks", None) is not None and ds.chunks != chunks:
-                raise RuntimeError(f"Invalid chunks for {prefix_name}/{name}: expected {chunks}, got {ds.chunks}")
-        else:
-            ds = _create_dataset_without_data(subgroup, name, shape=shape, dtype=dtype, chunks=chunks)
-
-        ds_list.append(ds)
-
-    return ds_list
 
 
 def _load_list_datasets(group, prefix_name, lazy_loading):
@@ -667,159 +794,6 @@ def _load_list_datasets(group, prefix_name, lazy_loading):
     return out
 
 
-@torch.no_grad
-def _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batched_images, pbar_update=None):
-    batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes, input_sizes = [], [], [], [], []
-
-    for image, z_id in zip(batched_images, batched_z):
-        # Run the image encoder to extract relevant features
-        predictor._get_image_feature(inference_state, frame_idx=z_id, batch_size=1)
-
-        # Let's extract the current 'cached_features' outputs
-        _, curr_backbone_out = inference_state["cached_features"][z_id]
-
-        # Store the vision transformer outputs and other stuff.
-        batched_vision_features.append(curr_backbone_out["vision_features"])
-        batched_pos_enc.append(curr_backbone_out["vision_pos_enc"])
-        batched_backbone_fpn.append(curr_backbone_out["backbone_fpn"])
-        original_sizes.append(image.shape[:2])
-        input_sizes.append(predictor.image_size)
-
-        if pbar_update is not None:  # Advance per slice so a tile-column reports per-patch progress.
-            pbar_update(1)
-
-    return batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes, input_sizes
-
-
-def _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update, batch_size):
-    # Check if the embeddings are already fully cached.
-    if save_path is not None and "original_size" in f.attrs:
-        # In this case we load the embeddings.
-        features = f["features"] if lazy_loading else f["features"][:]
-        pos_enc = _load_list_datasets(f, "pos_enc", lazy_loading)
-        fpn = _load_list_datasets(f, "fpn", lazy_loading)
-        original_size = f.attrs["original_size"]
-        input_size = f.attrs["input_size"]
-        image_embeddings = {
-            "features": features,
-            "pos_enc": pos_enc,
-            "fpn": fpn,
-            "input_size": input_size,
-            "original_size": original_size,
-        }
-        return image_embeddings
-
-    # Otherwise we have to compute the embeddings.
-
-    # First check if we have a save path or not and set things up accordingly.
-    if save_path is None:
-        features, pos_encs, fpns = [], [], []
-        save_features = False
-        partial_features = False
-    else:
-        save_features = True
-        embed_shape = (1, 256, 64, 64)
-        shape = (input_.shape[0],) + embed_shape
-        chunks = (1,) + embed_shape
-        if "features" in f:
-            partial_features = True
-            features = f["features"]
-            if features.shape != shape or features.chunks != chunks:
-                raise RuntimeError("Invalid partial features")
-        else:
-            partial_features = False
-            from micro_sam.util import _create_dataset_without_data
-            features = _create_dataset_without_data(f, "features", shape=shape, chunks=chunks, dtype="float32")
-
-    # We create the 'inference_state' object which keeps all important components in memory.
-    inference_state = predictor.init_state(
-        volume=input_,
-        volume_embeddings=None,  # NOTE: It's a mandatory argument, but with the argument below, passing 'None' doesn't matter.  # noqa
-        ignore_caching_features=True
-    )
-
-    # Initialize the pbar and batches.
-    n_slices = input_.shape[0]
-    pbar_init(n_slices, "Compute Image Embeddings 3D")
-    n_batches = int(np.ceil(n_slices / batch_size))
-    pos_enc_dsets, fpn_dsets = None, None
-
-    for batch_id in range(n_batches):
-        z_start = batch_id * batch_size
-        z_stop = min(z_start + batch_size, n_slices)
-
-        batched_images, batched_z = [], []
-        for z in range(z_start, z_stop):
-            # Skip feature computation in case of partial features in non-zero slice.
-            if partial_features and np.count_nonzero(features[z]) != 0:
-                continue
-
-            from micro_sam.util import _to_image
-            tile_input = _to_image(input_[z])
-            batched_images.append(tile_input)
-            batched_z.append(z)
-
-        (
-            batched_vision_features, batched_pos_enc, batched_backbone_fpn, original_sizes, input_sizes
-        ) = _compute_embeddings_batched_3d(inference_state, predictor, batched_z, batched_images)
-
-        for z, curr_vision_feats, curr_pos_enc, curr_back_fpn in zip(
-            batched_z, batched_vision_features, batched_pos_enc, batched_backbone_fpn
-        ):
-            if curr_vision_feats.ndim == 3:
-                curr_vision_feats = curr_vision_feats.unsqueeze(0)
-
-            if save_features:
-                features[z] = curr_vision_feats.detach().cpu().numpy()
-                if pos_enc_dsets is None:
-                    pos_enc_dsets = _create_list_dataset_without_data(
-                        f, "pos_enc", curr_pos_enc, dtype="float32", z_slices=n_slices
-                    )
-                for i, t in enumerate(curr_pos_enc):
-                    pos_enc_dsets[i][z] = t.detach().cpu().numpy()
-
-                if fpn_dsets is None:
-                    fpn_dsets = _create_list_dataset_without_data(
-                        f, "fpn", curr_back_fpn, dtype="float32", z_slices=n_slices
-                    )
-                for i, t in enumerate(curr_back_fpn):
-                    fpn_dsets[i][z] = t.detach().cpu().numpy()
-
-            else:
-                features.append(curr_vision_feats)
-                pos_encs.append(curr_pos_enc)
-                fpns.append(curr_back_fpn)
-
-            pbar_update(1)
-
-    if save_features:
-        from micro_sam.util import _write_embedding_signature
-        _write_embedding_signature(
-            f, input_, predictor, tile_shape=None, halo=None,
-            input_size=input_sizes[-1], original_size=original_sizes[-1],
-        )
-    else:
-        # Concatenate across the z axis for 'vision_features'.
-        features = torch.cat(features).cpu().numpy()
-
-        # Concatenate across the z axis for other features too.
-        depth = 3  # Corresponds to the depth of both FPN and Positional Embeddings.
-        pos_encs = [torch.stack([p[i] for p in pos_encs]) for i in range(depth)]
-        fpns = [torch.stack([p[i] for p in fpns]) for i in range(depth)]
-
-    pos_enc = _load_list_datasets(f, "pos_enc", lazy_loading) if save_features else pos_encs
-    fpn = _load_list_datasets(f, "fpn", lazy_loading) if save_features else fpns
-
-    image_embeddings = {
-        "features": features,
-        "pos_enc": pos_enc,
-        "fpn": fpn,
-        "input_size": input_sizes[-1],
-        "original_size": original_sizes[-1],
-    }
-    return image_embeddings
-
-
 def precompute_image_embeddings(
     predictor,
     input_: np.ndarray,
@@ -829,7 +803,10 @@ def precompute_image_embeddings(
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     verbose: bool = True,
-    batch_size: int = 1,
+    batch_size: Optional[int] = None,
+    devices: Devices = None,
+    num_prefetch_workers: int = 4,
+    num_write_workers: int = 2,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
 ):
@@ -838,12 +815,41 @@ def precompute_image_embeddings(
     If 'save_path' is given the embeddings will be loaded/saved in a zarr container.
 
     Args:
-        ...
+        predictor: The SAM2 image or video predictor.
+        input_: The input image or volume.
+        save_path: Optional zarr path for persistent embedding storage.
+        lazy_loading: Stream embeddings from zarr instead of materializing them in memory. Without
+            `save_path`, the returned `ImageEmbeddings` owns an ephemeral on-disk store; use it as a
+            context manager or call `close()` when finished.
+        ndim: The number of spatial dimensions. By default this is inferred from the input.
+        tile_shape: Optional in-plane tile shape.
+        halo: Optional in-plane tile halo.
+        verbose: Whether to show progress.
+        batch_size: The batch size used when running inference for multiple slices and / or tiles.
+            By default it is looked up independently on each CUDA device from its free VRAM (see
+            `recommend_batch_size`). Pass an integer to run every device at that batch size.
+        devices: Device or devices used for embedding inference. If None and the predictor is on
+            CUDA, all visible CUDA devices are used.
+        num_prefetch_workers: Number of threads used to read and preprocess input jobs.
+        num_write_workers: Number of threads used to write the embeddings. Only has an effect for
+            volumes and tiled images, which are written incrementally.
+        pbar_init: Optional callback to initialize external progress.
+        pbar_update: Optional callback to update external progress.
 
     Returns:
-        The image embeddings.
+        An `ImageEmbeddings` resource. Call `close()` when finished or use it as a context manager.
     """
     ndim = input_.ndim if ndim is None else ndim
+    preprocessing = IMAGE_PREPROCESSING if ndim == 2 else VIDEO_PREPROCESSING
+    if ndim == 2:
+        configure_image_predictor(predictor)
+
+    is_streamed = ndim == 3 or tile_shape is not None
+    temporary_path = None
+    if lazy_loading and is_streamed and save_path is None:
+        # Without a save path the zarr is held in memory, which defeats lazy loading. Back it by an
+        # ephemeral on-disk store so the tiles / slices are streamed from disk instead.
+        temporary_path = save_path = make_temp_embedding_path()
 
     # Handle the embedding save_path.
     # We don't have a save path, open in memory zarr file to hold tiled embeddings.
@@ -854,8 +860,9 @@ def precompute_image_embeddings(
     # check that the saved embeddings in there match the parameters of the function call.
     elif os.path.exists(save_path):
         f = _open_embeddings(save_path, mode="a")
-        if _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo):
-            # Stale embeddings (model or tiling changed): truncate and recompute, overwriting them.
+        if _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, preprocessing):
+            # Close the old handle before truncating the store.
+            getattr(f, "file", f).close()
             f = _open_embeddings(save_path, mode="w")
 
     # We have a save path and it does not exist yet. Create the zarr file to which the
@@ -863,26 +870,75 @@ def precompute_image_embeddings(
     else:
         f = _open_embeddings(save_path, mode="a")
 
+    # Persist the policy before writing any feature data, so an interrupted partial cache can only
+    # be resumed under the same preprocessing policy.
+    if save_path is not None:
+        f.attrs["normalization"] = preprocessing
+
     from micro_sam.util import handle_pbar
+    from micro_sam.v2.batched_inference import _compute_3d, _compute_tiled_2d, _compute_tiled_3d
+
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
 
+    resource = ImageEmbeddings({}, store=f, temporary_path=temporary_path)
     if ndim == 2 and tile_shape is None:
         embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
     elif ndim == 2 and tile_shape is not None:
         if halo is None:
             raise ValueError("To compute tiled embeddings the parameter halo has to be passed.")
-        embeddings = _compute_tiled_2d(input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update)
+        embeddings = _compute_tiled_2d(
+            input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update,
+            batch_size=batch_size, devices=devices, num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
+        )
     elif ndim == 3 and tile_shape is None:
-        embeddings = _compute_3d(input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update, batch_size)
+        embeddings = _compute_3d(
+            input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update,
+            batch_size=batch_size, devices=devices, num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
+        )
     elif ndim == 3 and tile_shape is not None:
         if halo is None:
             raise ValueError("To compute tiled embeddings the parameter halo has to be passed.")
-        embeddings = _compute_tiled_3d(input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update)
+        embeddings = _compute_tiled_3d(
+            input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update,
+            batch_size=batch_size, devices=devices, num_prefetch_workers=num_prefetch_workers,
+            num_write_workers=num_write_workers,
+        )
     else:
         raise ValueError(f"Invalid dimensionality {input_.ndim}, expect 2 or 3 dim data.")
 
     pbar_close()
-    return embeddings
+    uses_store = tile_shape is not None or (ndim == 3 and lazy_loading)
+    if not uses_store:
+        resource.close()
+    resource.update(embeddings)
+    return resource
+
+
+def _shared_pos_enc(level):
+    """Read the positional encoding shared by every slice. Unlike 'features' and 'fpn', it is stored once.
+
+    Args:
+        level: One stored positional-encoding level, shaped (1, 1, C, H, W).
+
+    Returns:
+        The encoding for any slice, shaped (1, C, H, W).
+    """
+    return level[0]
+
+
+def _backbone_fpn(fpn_levels, features):
+    """Rebuild the encoder's FPN levels, whose last one is stored as 'features' rather than twice.
+
+    Args:
+        fpn_levels: The stored FPN levels for one slice, all but the last.
+        features: That slice's 'features', which is the missing last level.
+
+    Returns:
+        The full list of FPN levels, in the order the encoder produced them.
+    """
+    return list(fpn_levels) + [features]
 
 
 def _to_device_tensor(data, device):
@@ -903,38 +959,25 @@ def _to_device_tensor(data, device):
     return torch.as_tensor(np.asarray(data), device=device).float()
 
 
-def set_precomputed(
-    predictor,
-    image_embeddings,
-    i: Optional[int] = None,
-    tile_id: Optional[int] = None,
-    input_: Optional[np.ndarray] = None,
-):
-    """Set the precomputed image embeddings for a predictor.
+def set_precomputed(predictor, image_embeddings, i: Optional[int] = None, tile_id: Optional[int] = None):
+    """Set precomputed image embeddings on a SAM2 image predictor.
+
+    Only 2d embeddings are set this way. A volume's embeddings are not: the video predictor reads
+    them per frame while it tracks, see `CustomVideoPredictor.init_state`.
 
     Args:
-        ...
+        predictor: The SAM2 image predictor to set the embeddings on.
+        image_embeddings: The precomputed embeddings, as returned by `precompute_image_embeddings`.
+        i: The slice index, which 2d embeddings do not have. Passing one raises, so that a volumetric
+            call routed here by mistake fails instead of segmenting the wrong thing.
+        tile_id: The tile to set, for tiled embeddings. That tile's features are read from the store
+            and set as if they were those of a whole image.
 
     Returns:
-        ...
+        The predictor, with the embeddings set on it.
     """
     if tile_id is not None:
         tile_features = image_embeddings["features"][str(tile_id)]
-        if "pos_enc" in image_embeddings:
-            # 3D tiled embeddings: the per-tile positional encodings and FPN outputs (stored under
-            # 'pos_enc/{tile_id}/{level}' and 'fpn/{tile_id}/{level}') are needed to set up the video
-            # inference state for this tile-column. 'input_' must be the tile sub-volume.
-            pos_enc = _load_list_datasets(image_embeddings["pos_enc"], str(tile_id), lazy_loading=False)
-            fpn = _load_list_datasets(image_embeddings["fpn"], str(tile_id), lazy_loading=False)
-            tile_image_embeddings = {
-                "features": np.asarray(tile_features),
-                "pos_enc": pos_enc,
-                "fpn": fpn,
-                "input_size": tile_features.attrs["input_size"],
-                "original_size": tile_features.attrs["original_size"],
-            }
-            return set_precomputed(predictor, tile_image_embeddings, i=i, input_=input_)
-
         # The SAM2 image predictor also needs the high-resolution features (used by the decoder),
         # which are stored per tile under 'high_res_feats/{tile_id}/{level}'.
         high_res_feats = _load_list_datasets(image_embeddings["high_res_feats"], str(tile_id), lazy_loading=False)
@@ -952,46 +995,18 @@ def set_precomputed(
         device = predictor.device  # Otherwise, for image predictor.
 
     features = image_embeddings["features"]
-    assert features.ndim in (4, 5), f"{features.ndim}"
-    if features.ndim == 5:
-        if i is None:
-            raise ValueError("The data is 3D so an index i is needed.")
-
-        if input_ is None:
-            raise AssertionError("For 3D inputs, you must provide the original multi-dimensional array.")
-
-        # Prepare the inference state
-        inference_state = predictor.init_state(
-            volume=input_, volume_embeddings=image_embeddings, ignore_caching_features=True,
+    if features.ndim != 4:
+        raise ValueError(
+            f"Expected 2d embeddings, whose features have 4 dimensions, got {features.ndim}. The "
+            "embeddings of a volume are read by the video predictor's 'init_state' instead."
         )
+    if i is not None:
+        raise ValueError("The data is 2D so an index is not needed.")
 
-        # Get other visual features, eg. positional embeddings and FPN outputs to prepare 'backbone_out'.
-        pos_list = image_embeddings["pos_enc"]
-        fpn_list = image_embeddings["fpn"]
-
-        # There's an easy assumption made here. The first dimension of 'features' corresponds to n-slices.
-        running_features = {}
-        for slice_id in range(features.shape[0]):
-            image = inference_state["images"][slice_id].to(device).float().unsqueeze(0)
-            vision_features = _to_device_tensor(features[slice_id], device)
-            vision_pos_enc = [_to_device_tensor(t[slice_id], device) for t in pos_list]
-            backbone_fpn = [_to_device_tensor(t[slice_id], device) for t in fpn_list]
-            backbone_out = {
-                "vision_features": vision_features, "vision_pos_enc": vision_pos_enc, "backbone_fpn": backbone_fpn,
-            }
-            running_features[slice_id] = (image, backbone_out)
-
-        inference_state["cached_features"] = running_features
-        return predictor, inference_state
-
-    elif features.ndim == 4:
-        if i is not None:
-            raise ValueError("The data is 2D so an index is not needed.")
-
-        # Convert to tensors on the predictor device, as 'predictor.set_image' would for the decoder.
-        image_embed = _to_device_tensor(features, device)
-        high_res_feats = [_to_device_tensor(feat, device) for feat in image_embeddings["high_res_feats"]]
-        predictor._features = {"image_embed": image_embed, "high_res_feats": high_res_feats}
-        predictor._is_image_set = True
-        predictor._orig_hw = image_embeddings["original_size"]
-        return predictor
+    # Convert to tensors on the predictor device, as 'predictor.set_image' would for the decoder.
+    image_embed = _to_device_tensor(features, device)
+    high_res_feats = [_to_device_tensor(feat, device) for feat in image_embeddings["high_res_feats"]]
+    predictor._features = {"image_embed": image_embed, "high_res_feats": high_res_feats}
+    predictor._is_image_set = True
+    predictor._orig_hw = image_embeddings["original_size"]
+    return predictor

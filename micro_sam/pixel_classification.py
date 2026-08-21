@@ -4,26 +4,26 @@ from multiprocessing import cpu_count
 from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
-import torch
-
-from bioimage_cpp.utils import Blocking
+from skimage.transform import resize
 
 from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
 
-from skimage.transform import resize
+import torch
 
 try:
     from napari.utils import progress as tqdm
 except ImportError:
     from tqdm import tqdm
 
+from bioimage_cpp.utils import Blocking
+
 from . import util
 from .v1.util import precompute_image_embeddings
 
 # Default in-plane grid size (longest side) for the per-pixel feature grid.
-# Non-tiled images use 'grid_size'; tiled images use the larger 'max_grid_size', since tiling
+# Non-tiled images use 'grid_size'. Tiled images use the larger 'max_grid_size', since tiling
 # yields more genuine embedding detail (n_tiles x the per-tile resolution).
 DEFAULT_GRID_SIZE = 256
 DEFAULT_MAX_GRID_SIZE = 512
@@ -135,8 +135,8 @@ def _resize_to_grid(embeddings: np.ndarray, target_hw: Tuple[int, int]) -> np.nd
     """Resize a (C, H, W) embedding to a (target_h, target_w, C) feature image."""
     n_channels = embeddings.shape[0]
     # An empty target band (a sub-pixel-thin edge strip) has nothing to fill, and a degenerate
-    # zero-size source cannot be interpolated; in both cases return a zero-filled band so the caller's
-    # slice assignment is a no-op instead of resizing to/from a zero-size shape (which raises a NaN).
+    # zero-size source cannot be interpolated. In both cases return a zero-filled band so the caller's
+    # slice assignment does nothing instead of resizing to or from a zero-size shape (which raises a NaN).
     if min(target_hw) == 0 or min(embeddings.shape[-2:]) == 0:
         return np.zeros((target_hw[0], target_hw[1], n_channels), dtype="float32")
     feature_image = embeddings.transpose(1, 2, 0)
@@ -144,15 +144,14 @@ def _resize_to_grid(embeddings: np.ndarray, target_hw: Tuple[int, int]) -> np.nd
     return resize(feature_image, resize_shape, preserve_range=True).astype("float32")
 
 
-def _block_to_grid(embeddings, block_hw, target_hw, image_region=None, upsampler=None, is_sam2=False, pbar_update=None):
+def _block_to_grid(embeddings, block_hw, target_hw, image_region=None, upsampler=None, pbar_update=None):
     """Crop a block embedding to its aspect ratio and map it to the target grid shape.
 
-    SAM1 pads the image to a square before encoding, so the square embedding has content in a
-    sub-rectangle that we crop out. SAM2 stretches the image to a square, so the full embedding
-    already corresponds to the whole image and must not be cropped. With `upsampler`, AnyUp
-    upsamples the embedding using `image_region` as guidance; otherwise it is plainly interpolated.
+    The encoders pad the image to a square, so the square embedding has content in a sub-rectangle
+    that we crop out. With `upsampler`, AnyUp upsamples the embedding using `image_region` as
+    guidance; otherwise it is plainly interpolated.
     """
-    block = embeddings if is_sam2 else _aspect_crop(embeddings, block_hw)
+    block = _aspect_crop(embeddings, block_hw)
     if upsampler is not None:
         result = _anyup_to_grid(block, image_region, target_hw, upsampler)
         if pbar_update is not None:
@@ -162,11 +161,11 @@ def _block_to_grid(embeddings, block_hw, target_hw, image_region=None, upsampler
 
 
 def _compute_tiled_feature_image(
-    features, image_hw, max_grid_size, z=None, image=None, upsampler=None, is_sam2=False, pbar_update=None
+    features, image_hw, max_grid_size, z=None, image=None, upsampler=None, pbar_update=None
 ):
     """Assemble a downsampled (GH, GW, C) feature image for a single 2d (tiled) plane.
 
-    For 3d data 'z' selects the slice of each tile's embedding; for 2d data 'z' is None.
+    For 3d data 'z' selects the slice of each tile's embedding. For 2d data 'z' is None.
     With `upsampler`, each tile's inner block is upsampled with AnyUp using the matching image crop.
     """
     tile_shape, halo, shape = features.attrs["tile_shape"], features.attrs["halo"], features.attrs["shape"]
@@ -184,14 +183,13 @@ def _compute_tiled_feature_image(
         outer, inner_local = block.outer_block, block.inner_block_local
         outer_hw = (outer.end[0] - outer.begin[0], outer.end[1] - outer.begin[1])
 
-        # SAM1 pads the tile to a square (crop to the outer block aspect); SAM2 stretches it (no crop).
-        if not is_sam2:
-            embeds = _aspect_crop(embeds, outer_hw)
+        # The tile is padded to a square, so crop to the outer block aspect.
+        embeds = _aspect_crop(embeds, outer_hw)
         tile_scale = (embeds.shape[-2] / outer_hw[0], embeds.shape[-1] / outer_hw[1])
         iy0, iy1 = int(round(inner_local.begin[0] * tile_scale[0])), int(round(inner_local.end[0] * tile_scale[0]))
         ix0, ix1 = int(round(inner_local.begin[1] * tile_scale[1])), int(round(inner_local.end[1] * tile_scale[1]))
-        # A thin edge tile can round its inner region to zero feature rows/cols; keep at least one real
-        # row/column so the strip gets coarse (but valid) features instead of an empty, un-resizable block.
+        # A thin edge tile can round its inner region to zero feature rows or columns. Keep at least one
+        # real row or column so the strip gets coarse (but valid) features instead of an empty, un-resizable block.
         iy0, ix0 = min(iy0, embeds.shape[-2] - 1), min(ix0, embeds.shape[-1] - 1)
         iy1, ix1 = max(iy1, iy0 + 1), max(ix1, ix0 + 1)
         inner_embeds = embeds[:, iy0:iy1, ix0:ix1]
@@ -248,9 +246,6 @@ def compute_pixel_features(
 
     is_tiled = image_embeddings["input_size"] is None
     is_3d = len(image_shape) == 3
-    # SAM2 embeddings carry the high-resolution decoder features; SAM1 embeddings never do. SAM2
-    # stretches the image to a square (no padding), so its embedding must not be aspect-cropped.
-    is_sam2 = "high_res_feats" in image_embeddings
     features = image_embeddings["features"]
 
     # AnyUp is the slow part, so when it is used we show a dedicated progress bar (which also drives
@@ -274,15 +269,14 @@ def compute_pixel_features(
         for z in tqdm(range(depth), total=depth, disable=slice_disable, desc="Compute pixel features"):
             if is_tiled:
                 plane, grid = _compute_tiled_feature_image(
-                    features, image_hw, max_grid_size, z=z, image=image, upsampler=upsampler,
-                    is_sam2=is_sam2, pbar_update=pbar_update,
+                    features, image_hw, max_grid_size, z=z, image=image, upsampler=upsampler, pbar_update=pbar_update
                 )
             else:
                 embeds = np.asarray(features[z]).squeeze()
                 grid, _ = _grid_shape(image_hw, grid_size)
                 plane = _block_to_grid(
                     embeds, image_hw, grid, image_region=None if image is None else image[z],
-                    upsampler=upsampler, is_sam2=is_sam2, pbar_update=pbar_update,
+                    upsampler=upsampler, pbar_update=pbar_update,
                 )
             planes.append(plane)
         feature_image = np.stack(planes)
@@ -291,15 +285,13 @@ def compute_pixel_features(
         image_hw = (image_shape[0], image_shape[1])
         if is_tiled:
             feature_image, grid = _compute_tiled_feature_image(
-                features, image_hw, max_grid_size, image=image, upsampler=upsampler,
-                is_sam2=is_sam2, pbar_update=pbar_update,
+                features, image_hw, max_grid_size, image=image, upsampler=upsampler, pbar_update=pbar_update
             )
         else:
             embeds = np.asarray(features).squeeze()
             grid, _ = _grid_shape(image_hw, grid_size)
             feature_image = _block_to_grid(
-                embeds, image_hw, grid, image_region=image, upsampler=upsampler,
-                is_sam2=is_sam2, pbar_update=pbar_update,
+                embeds, image_hw, grid, image_region=image, upsampler=upsampler, pbar_update=pbar_update,
             )
         grid_shape = grid
 
@@ -413,8 +405,8 @@ def train_pixel_classifier(
         n_jobs=cpu_count() if n_jobs is None else n_jobs, random_state=random_state, **rf_kwargs,
     )
 
-    # Optionally reduce the features to the top-n PCA components. n_components is clamped to the
-    # number of features and samples; if it covers all features we skip PCA and use the plain RF.
+    # Optionally reduce the features to the top-n PCA components. We clamp n_components to the
+    # number of features and samples. If it covers all features, we skip PCA and use the plain RF.
     n_features = X.shape[1]
     k = min(int(n_components), n_features, len(X)) if n_components else 0
     if 0 < k < n_features:
@@ -527,6 +519,7 @@ def run_prediction_with_pixel_classifier(
     image_key: Optional[str] = None,
     ndim: Optional[int] = None,
     upsampler=None,
+    model_type: Optional[str] = None,
 ) -> List[np.ndarray]:
     """Run prediction with a pretrained pixel classifier on a series of images.
 
@@ -539,20 +532,24 @@ def run_prediction_with_pixel_classifier(
         upsampler: An optional AnyUp model (see `get_anyup_upsampler`) to upsample the embeddings
             with the image as guidance instead of plain interpolation. Use the same setting that
             the classifier was trained with.
+        model_type: The model family of `predictor`, used to pick the matching embedding function
+            (SAM1 / SAM2 / VFM). If not given, the SAM1 embedding function is used.
 
     Returns:
         The pixel level predictions.
     """
-    # Stored as {'rf': ..., 'metadata': ...} by the GUI; older / backend files are a bare classifier.
+    # Stored as {'rf': ..., 'model_spec': ...} by the GUI. Older or backend files are a bare classifier.
     obj = load(rf_path)
     rf = obj["rf"] if isinstance(obj, dict) and "rf" in obj else obj
+    compute_embeddings = util.get_embedding_function(model_type) if model_type is not None \
+        else precompute_image_embeddings
     predictions = []
     for image in tqdm(images, total=len(images), desc="Run prediction with pixel classifier"):
         if isinstance(image, (str, os.PathLike)):
             image = util.load_image_data(image, key=image_key)
         this_ndim = ndim if ndim is not None else (image.ndim - 1 if image.shape[-1] == 3 else image.ndim)
         image_shape = image.shape[:this_ndim]
-        embeddings = precompute_image_embeddings(predictor, image, verbose=False, ndim=this_ndim)
+        embeddings = compute_embeddings(predictor, image, verbose=False, ndim=this_ndim)
         features, grid_shape = compute_pixel_features(
             embeddings, image_shape, image=image if upsampler is not None else None,
             upsampler=upsampler, verbose=False,

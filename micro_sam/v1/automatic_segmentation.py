@@ -1,26 +1,27 @@
 import os
 import warnings
 from glob import glob
-from tqdm import tqdm
 from pathlib import Path
 from functools import partial
 from typing import Dict, List, Optional, Union, Tuple, Literal
 
 import numpy as np
 import imageio.v3 as imageio
+from tqdm import tqdm
 
 from torch_em.data.datasets.util import split_kwargs
 
 from .. import util
+from ..util import AutoSegBase
 from .util import get_sam_model, precompute_image_embeddings, get_model_names
+from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
 from .instance_segmentation import (
-    get_instance_segmentation_generator, get_decoder, AMGBase,
+    get_instance_segmentation_generator, get_decoder,
     AutomaticMaskGenerator, TiledAutomaticMaskGenerator,
     AutomaticPromptGenerator, TiledAutomaticPromptGenerator,
     InstanceSegmentationWithDecoder, TiledInstanceSegmentationWithDecoder,
     DEFAULT_SEGMENTATION_MODE_WITH_DECODER,
 )
-from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
 
 
 def get_predictor_and_segmenter(
@@ -32,7 +33,7 @@ def get_predictor_and_segmenter(
     predictor=None,
     state=None,
     **kwargs,
-) -> Tuple[util.SamPredictor, Union[AMGBase, InstanceSegmentationWithDecoder]]:
+) -> Tuple[util.SamPredictor, AutoSegBase]:
     f"""Get the Segment Anything model and class for automatic instance segmentation.
 
     Args:
@@ -88,7 +89,7 @@ def _add_suffix_to_output_path(output_path: Union[str, os.PathLike], suffix: str
 
 def automatic_tracking(
     predictor: util.SamPredictor,
-    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
+    segmenter: AutoSegBase,
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
     embedding_path: Optional[Union[os.PathLike, str]] = None,
@@ -99,6 +100,8 @@ def automatic_tracking(
     return_embeddings: bool = False,
     annotate: bool = False,
     batch_size: int = 1,
+    mode: str = "greedy",
+    tracking_model: str = "general_2d",
     **generate_kwargs
 ) -> Tuple[np.ndarray, List[Dict]]:
     """Run automatic tracking for the input timeseries.
@@ -121,6 +124,9 @@ def automatic_tracking(
             By default, does not activate the annotator.
         batch_size: The batch size to compute image embeddings over tiles / z-planes.
             By default, does it sequentially, i.e. one after the other.
+        mode: The trackastra linking solver. One of 'greedy_nodiv', 'greedy' or 'ilp'.
+            'ilp' uses the motile solver. By default, set to 'greedy'.
+        tracking_model: The pretrained trackastra model to use. By default, set to 'general_2d'.
         generate_kwargs: optional keyword arguments for the generate function of the AMG, APG, or AIS class.
 
     Returns:
@@ -147,6 +153,8 @@ def automatic_tracking(
         halo=halo,
         verbose=verbose,
         batch_size=batch_size,
+        mode=mode,
+        tracking_model=tracking_model,
         return_embeddings=True,
         output_folder=output_path,
         **generate_kwargs,
@@ -164,7 +172,7 @@ def automatic_tracking(
 
 def automatic_instance_segmentation(
     predictor: util.SamPredictor,
-    segmenter: Union[AMGBase, InstanceSegmentationWithDecoder],
+    segmenter: AutoSegBase,
     input_path: Union[Union[os.PathLike, str], np.ndarray],
     output_path: Optional[Union[os.PathLike, str]] = None,
     embedding_path: Optional[Union[os.PathLike, str]] = None,
@@ -331,15 +339,14 @@ def _get_inputs_from_paths(paths, pattern):
     for path in paths:
         if os.path.isfile(path):  # It is just one filepath.
             fpaths.append(path)
-        else:  # Otherwise, if the path is a directory, fetch all inputs provided with a pattern.
-            assert pattern is not None, \
-                f"You must provide a pattern to search for files in the directory: '{os.path.abspath(path)}'."
-            fpaths.extend(glob(os.path.join(path, pattern)))
+        else:  # A directory: match files with the pattern, defaulting to all files if none is given.
+            hits = glob(os.path.join(path, pattern if pattern is not None else "*"))
+            fpaths.extend(p for p in hits if os.path.isfile(p))
 
     return fpaths
 
 
-def main():
+def main(argv=None):
     """@private"""
     import argparse
 
@@ -393,10 +400,12 @@ def main():
         "-c", "--checkpoint", default=None, type=str, help="Checkpoint from which the SAM model will be loaded."
     )
     parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction.", default=None
+        "--tile_shape", nargs="+", type=int,
+        help="The tile shape for using tiled prediction. Example: --tile_shape 384 384.", default=None
     )
     parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction.", default=None
+        "--halo", nargs="+", type=int,
+        help="The halo for using tiled prediction. Example: --tile_shape 64 64.", default=None
     )
     parser.add_argument(
         "-n", "--ndim", default=None, type=int,
@@ -424,11 +433,9 @@ def main():
         "--tracking", action="store_true", help="Run automatic tracking instead of instance segmentation. "
         "NOTE: It is only supported for timeseries inputs."
     )
-    parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs."
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Whether to allow verbosity of outputs.")
 
-    args, parameter_args = parser.parse_known_args()
+    args, parameter_args = parser.parse_known_args(argv)
 
     def _convert_argval(value):
         # The values for the parsed arguments need to be in the expected input structure as provided.

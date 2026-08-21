@@ -1,30 +1,32 @@
 from multiprocessing import cpu_count
 from typing import List, Optional, Tuple, Union
 
-import imageio.v3 as imageio
-import napari
 import numpy as np
-import torch
-
-from magicgui.widgets import ComboBox
-from qtpy import QtWidgets
-
+import imageio.v3 as imageio
 from skimage.measure import regionprops_table
+
 from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+
+import torch
+
+import napari
+from qtpy import QtWidgets
+from magicgui.widgets import ComboBox
 
 from .. import util
-from ..v2.util import DEFAULT_MODEL
-from ..object_classification import compute_object_features, project_prediction_to_segmentation
-from ._annotator import _ClassifierBase
 from ._batch import run_batch
-from ._batch_classification import ClassificationBatchTask
+from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-from . import _widgets as widgets
+from ..v2.util import DEFAULT_MODEL
+from ._titles import get_dock_title
+from ._annotator import _ClassifierBase
 from .util import _sync_embedding_widget
+from ._batch_classification import ClassificationBatchTask
+from ..object_classification import compute_object_features, project_prediction_to_segmentation
 
 # Object features are the object area plus the per-channel mean of the 256-channel SAM/SAM2 image
 # embedding, i.e. 257 features. PCA can reduce to at most this many components.
@@ -63,8 +65,8 @@ def _train_rf(
 
     rf = RandomForestClassifier(random_state=random_state, **rf_kwargs)
 
-    # Optionally reduce the features to the top-n PCA components. n_components is clamped to the
-    # number of features and samples; if it covers all features we skip PCA and use the plain RF.
+    # Optionally reduce the features to the top-n PCA components. We clamp n_components to the
+    # number of features and samples. If it covers all features, we skip PCA and use the plain RF.
     # Object features mix area (large magnitude) with embedding means (small), so we standardize
     # them before PCA to keep area from dominating the components.
     n_features = X.shape[1]
@@ -245,7 +247,7 @@ def object_classifier(
 
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,
-        halo=halo, tile_shape=tile_shape, precompute_amg_state=False,
+        halo=halo, tile_shape=tile_shape, precompute_autoseg_state=False,
         ndim=ndim, checkpoint_path=checkpoint_path, device=device,
         skip_load=False, use_cli=True,
     )
@@ -262,7 +264,7 @@ def object_classifier(
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator, name="Segment Anything for Microscopy (Object Classification)")
+    viewer.window.add_dock_widget(annotator, name=get_dock_title("object_classification"))
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
@@ -282,7 +284,7 @@ def object_classifier(
 class ObjectClassificationBatchTask(ClassificationBatchTask):
     """Batch task for the object classifier: per-item segmentation layer + projected prediction."""
 
-    dock_name = "Segment Anything for Microscopy (Batch Object Classification)"
+    dock_name = get_dock_title("batch_object_classification")
     classifier_class = ObjectClassifier
     features_attr = "object_features"
     aux_attr = "seg_ids"
@@ -321,6 +323,7 @@ def batch_object_classifier(
     viewer: Optional["napari.viewer.Viewer"] = None,
     return_viewer: bool = False,
     skip_done: bool = False,
+    batch_size: Optional[int] = 1,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the object classifier for a list of images and segmentations.
 
@@ -344,6 +347,9 @@ def batch_object_classifier(
         ndim: The dimensionality of the data. If not given will be derived from the data.
         viewer: The viewer to which the functionality should be added.
         return_viewer: Whether to return the napari viewer instead of starting the event loop.
+        batch_size: The number of tiles / slices per model call when computing the embeddings.
+            Only has an effect on a GPU. Pass None to select it per device from the free VRAM
+            (SAM2 only). By default a single tile / slice is used.
         skip_done: Whether to skip images whose prediction already exists in `output_folder`.
 
     Returns:
@@ -362,6 +368,7 @@ def batch_object_classifier(
     task = ObjectClassificationBatchTask(
         segmentations=segmentations, ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,
         tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
+        batch_size=batch_size,
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,

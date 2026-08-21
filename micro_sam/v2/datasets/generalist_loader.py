@@ -1,6 +1,7 @@
-import json
 import os
+import json
 import random
+from glob import glob
 from functools import partial
 
 import numpy as np
@@ -8,22 +9,22 @@ from sklearn.model_selection import train_test_split
 
 import torch
 
+from elf.io import open_file
+
 import torch_em
 from torch_em.data import datasets, MinInstanceSampler, ConcatDataset
-
-from elf.io import open_file
 
 from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, _build_group_map
 from ..transforms.raw import (
     _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile, _resize_raw_to_512, _resize_to_512,
+    get_random_percentile_normalization,
 )
 from ..transforms.labels import (
     _em_cell_label_trafo, _joint_em_cell_label_trafo,
     _plantseg_label_trafo, _axondeepseg_pre_label_transform, _instance_labels,
     _JointLabelTransform,
 )
-
 
 # Cap on validation samples drawn per dataset, to keep the per-epoch validation pass cheap.
 # Each access is a random crop (see UniDataWrapper.max_samples), so this is N random samples.
@@ -33,6 +34,11 @@ N_SAMPLES_VAL = 50
 # (prompt sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch) in
 # Sam2Trainer._validate_impl, so the validation metric is comparable across epochs.
 VALIDATION_SEED = 42
+
+# Train with uniformly sampled symmetric percentiles. Validate deterministically with the 2nd and 98th percentiles
+# to match the inference-time normalization in normalize_raw.
+TRAIN_LOWER_PERCENTILE_BOUNDS = (0.0, 5.0)
+VALIDATION_LOWER_PERCENTILE_BOUNDS = (2.0, 2.0)
 
 
 def seed_worker(worker_id):
@@ -49,15 +55,51 @@ def seed_worker(worker_id):
 
 
 def _ensure_native_byte_order(y):
-    # tifffile.memmap returns big-endian >f4 for some TIFFs; byteswap to native so that
-    # Kornia augmentation and skimage/vigra C extensions receive correctly ordered bytes.
+    # tifffile.memmap returns big-endian >f4 for some TIFFs. Byteswap to native so that
+    # Kornia augmentation and skimage or vigra C extensions receive correctly ordered bytes.
     return y.byteswap().view(y.dtype.newbyteorder()) if not y.dtype.isnative else y
+
+
+def _set_percentile_normalization(dataset, lower_percentile_bounds):
+    """Replace fixed normalization in all torch-em leaves of a dataset tree."""
+    if isinstance(dataset, (list, tuple)):
+        for ds in dataset:
+            _set_percentile_normalization(ds, lower_percentile_bounds)
+        return
+
+    if isinstance(dataset, UniDataWrapper):
+        _set_percentile_normalization(dataset.ds, lower_percentile_bounds)
+        return
+
+    children = getattr(dataset, "datasets", None)
+    if children is not None:
+        for ds in children:
+            _set_percentile_normalization(ds, lower_percentile_bounds)
+        return
+
+    if not hasattr(dataset, "raw_transform"):
+        raise TypeError(f"Cannot configure raw normalization for dataset of type {type(dataset).__name__}.")
+
+    dataset.raw_transform = get_random_percentile_normalization(
+        dataset.raw_transform, lower_percentile_bounds=lower_percentile_bounds
+    )
+
+
+def _configure_training_normalization(train_datasets, val_datasets):
+    """Enable random percentile augmentation for training and deterministic 2nd/98th validation."""
+    _set_percentile_normalization(
+        train_datasets, lower_percentile_bounds=TRAIN_LOWER_PERCENTILE_BOUNDS,
+    )
+    _set_percentile_normalization(
+        val_datasets, lower_percentile_bounds=VALIDATION_LOWER_PERCENTILE_BOUNDS,
+    )
 
 
 def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32, deterministic=False):
     # For deterministic validation, re-seed workers every epoch via worker_init_fn.
     # This requires non-persistent workers, since persistent workers run worker_init_fn only once.
-    persistent = not deterministic
+    # Persistent workers also require num_workers > 0.
+    persistent = (num_workers > 0) and not deterministic
     worker_init = seed_worker if deterministic else None
     if isinstance(dataset, ConcatDataset) and (batch_size > 1 or batch_size_per_group):
         batch_sampler = UniBatchSampler(
@@ -163,7 +205,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                 "Mouse-Organoid-Cells-CBG", "Mouse-Skull-Nuclei-CBG",
                 "Platynereis-ISH-Nuclei-CBG", "Platynereis-Nuclei-CBG",
             ]
-        else:   # Only two datasets have the test split.
+        else:  # Only two datasets have the test split.
             names = ["Mouse-Skull-Nuclei-CBG", "Platynereis-ISH-Nuclei-CBG"]
 
         all_embedseg_datasets = [
@@ -273,7 +315,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "raw_channel": "rgb",
         "label_channel": "cell",
         "patch_shape": patch_shape,
-        "raw_transform": partial(_normalize_percentile, axis=(0, 1)),
+        "raw_transform": partial(_normalize_percentile, axis=(1, 2)),  # TissueNet 'rgb' is (3, H, W)
         **{k: v for k, v in kwargs.items() if k != "raw_transform"}
     }
 
@@ -372,7 +414,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
 
     # 13. CTC (cell segmentation from Cell Tracking Challenge)
-    # NOTE: CTC only supports the train split; no validation data added for CTC.
+    # NOTE: CTC only supports the train split. No validation data is added for CTC.
     ctc_kwargs = {
         "path": os.path.join(input_path, "ctc"),
         "patch_shape": (1, *patch_shape),
@@ -397,8 +439,8 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     """Get all electron microscopy (EM) datasets for generalist training.
 
     Args:
-        _em_label_trafo: EM cell label transform function to use.  Defaults to
-            :func:`_em_cell_label_trafo`.  Pass :func:`_joint_em_cell_label_trafo`
+        _em_label_trafo: EM cell label transform function to use. Defaults to
+            :func:`_em_cell_label_trafo`. Pass :func:`_joint_em_cell_label_trafo`
             when building joint interactive+automatic datasets.
 
     Returns:
@@ -643,6 +685,39 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             )
         )
 
+    # 6. Igor cells (cell segmentation in vEM)
+    # NOTE: This data is used for training only. No validation data is added for it.
+    # The volumes are (16, 1024, 1024) uint8 blocks with dense uint32 instance labels.
+    igor_cells_root = os.path.join(input_path, "igor_cells")
+    all_igor_cells_paths = sorted(glob(os.path.join(igor_cells_root, "data_block_*.tif")))
+    igor_cells_raw_paths = [p for p in all_igor_cells_paths if not p.endswith("_seg.tif")]
+    igor_cells_label_paths = [p.replace(".tif", "_seg.tif") for p in igor_cells_raw_paths]
+    assert igor_cells_raw_paths, f"Did not find any volumes in '{igor_cells_root}'."
+    assert all(os.path.exists(p) for p in igor_cells_label_paths)
+
+    for z in z_slices:
+        igor_cells_kwargs = {
+            "patch_shape": (z, *patch_shape),
+            "n_samples": max(1, 500 // n_z),
+            # sampling=None: the volumes are isotropic.
+            "label_transform2": (
+                partial(_em_label_trafo, label_trafo=label_trafo(instances=True))
+                if label_trafo is not None else kwargs.get("label_transform2")
+            ),
+            "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]}
+        }
+
+        train_ds.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=igor_cells_raw_paths, raw_key=None,
+                    label_paths=igor_cells_label_paths, label_key=None,
+                    is_seg_dataset=True, **igor_cells_kwargs,
+                ), source_ndim=3, group_key=(3, z),
+            )
+        )
+
     return train_ds, val_ds
 
 
@@ -705,6 +780,8 @@ def get_dataloaders(
         train_ds.extend(em_train)
         val_ds.extend(em_val)
 
+    _configure_training_normalization(train_ds, val_ds)
+
     # Finally, we prepare a 'ConcatDataset' for all the available datasets.
     train_ds = ConcatDataset(*train_ds)
     val_ds = ConcatDataset(*val_ds)
@@ -721,7 +798,7 @@ def get_dataloaders(
     )
     val_loader = _prepare_data_loader(
         val_ds, batch_size=batch_size, shuffle=False,
-        batch_size_per_group=batch_size_per_group, num_workers=n_workers,
+        batch_size_per_group=batch_size_per_group, num_workers=n_workers, deterministic=True,
     )
 
     return train_loader, val_loader
@@ -739,7 +816,7 @@ def get_interactive_dataloaders(
 
     Identical dataset composition to :func:`get_dataloaders` but returns raw
     integer instance labels (``label_dtype=torch.int64``) instead of distance
-    transforms.  Used with :class:`micro_sam.v2.training.ConvertToSam2VideoBatch`.
+    transforms. Used with :class:`micro_sam.v2.training.ConvertToSam2VideoBatch`.
 
     Args:
         input_path: Root path to the generalist training data.
@@ -815,6 +892,7 @@ def _build_automatic_datasets(input_path, z_slices, dataset_choice):
         train_ds.extend(em_train)
         val_ds.extend(em_val)
 
+    _configure_training_normalization(train_ds, val_ds)
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
 
 
@@ -848,6 +926,8 @@ def _build_interactive_datasets(input_path, z_slices, dataset_choice):
         em_train, em_val = _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    _configure_training_normalization(train_ds, val_ds)
 
     # Cap each validation dataset to N_SAMPLES_VAL random samples so the per-epoch
     # validation pass stays cheap (train datasets are left at full size).
@@ -896,6 +976,8 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice):
         )
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    _configure_training_normalization(train_ds, val_ds)
 
     # Cap each validation dataset to N_SAMPLES_VAL random samples so the per-epoch
     # validation pass stays cheap (matches the interactive builder; train datasets are full size).

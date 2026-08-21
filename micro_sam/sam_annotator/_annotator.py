@@ -1,22 +1,24 @@
 import os
 from datetime import datetime
 from typing import List, Optional
+from joblib import dump, hash as joblib_hash, load
+
+import numpy as np
 
 import napari
-import numpy as np
-from joblib import dump, hash as joblib_hash, load
-from magicgui.widgets import CheckBox, ComboBox, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox, Widget
-from napari.utils.notifications import show_info
-from qtpy import QtWidgets
+from napari.utils.notifications import show_info, show_warning
 
-from . import _widgets as widgets
+from qtpy import QtWidgets
+from magicgui.widgets import CheckBox, ComboBox, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox, Widget
+
 from . import util as vutil
+from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from ..__version__ import __version__ as micro_sam_version
 
 # Placeholder shapes used to seed the annotator layers before a real image is loaded.
-# Only the dimensionality matters; the values are reset to the image shape on load.
+# Only the dimensionality matters. The tool resets the values to the image shape on load.
 PLACEHOLDER_SHAPE = {2: (256, 256), 3: (16, 256, 256)}
 
 
@@ -89,15 +91,40 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             )
             self._point_prompt_layer.border_color_mode = "cycle"
 
-        if "prompts" not in self._viewer.layers:
+        if "prompts" in self._viewer.layers:
+            self._shape_prompt_layer = self._viewer.layers["prompts"]
+        else:
             # Add the shape layer for box and other shape prompts.
-            self._viewer.add_shapes(
+            self._shape_prompt_layer = self._viewer.add_shapes(
                 face_color="transparent",
-                edge_color="green",
+                edge_color="label",
+                edge_color_cycle=vutil.LABEL_COLOR_CYCLE,
                 edge_width=4,
                 name="prompts",
                 ndim=self._ndim,
+                property_choices={"label": self._point_labels},
             )
+            self._shape_prompt_layer.edge_color_mode = "cycle"
+
+        # Migrate a pre-existing prompt layer and keep boxes / dense mask prompts green. Open
+        # paths retain their positive / negative property and use the same colors as point prompts.
+        if "label" not in self._shape_prompt_layer.properties:
+            properties = dict(self._shape_prompt_layer.properties)
+            properties["label"] = np.full(len(self._shape_prompt_layer.data), "positive", dtype=object)
+            self._shape_prompt_layer.properties = properties
+            current_properties = self._shape_prompt_layer.current_properties
+            current_properties["label"] = np.array(["positive"])
+            self._shape_prompt_layer.current_properties = current_properties
+            self._shape_prompt_layer.edge_color_cycle = vutil.LABEL_COLOR_CYCLE
+            self._shape_prompt_layer.edge_color = "label"
+            self._shape_prompt_layer.edge_color_mode = "cycle"
+        if not self._shape_prompt_layer.metadata.get("micro_sam_prompt_labels_configured", False):
+            self._shape_prompt_layer.events.data.connect(vutil.normalize_prompt_shape_labels)
+            self._shape_prompt_layer.events.mode.connect(vutil.sync_prompt_shape_current_color)
+            self._shape_prompt_layer.events.current_properties.connect(vutil.sync_prompt_shape_current_color)
+            self._shape_prompt_layer.metadata["micro_sam_prompt_labels_configured"] = True
+        vutil.normalize_prompt_shape_labels(self._shape_prompt_layer)
+        vutil.sync_prompt_shape_current_color(self._shape_prompt_layer)
 
     # Child classes have to implement this function and create a dictionary with the widgets.
     def _get_widgets(self):
@@ -124,8 +151,11 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Create the prompt widget. (The same for all plugins.)
         # Child plugins decide whether to expose it as a separate group (e.g. tracking) or to
         # embed it into another widget (e.g. the interactive segmentation widget).
+        shape_prompt_layer = self._viewer.layers["prompts"]
+        linked_layers = [shape_prompt_layer] if "label" in shape_prompt_layer.current_properties else None
         self._prompt_widget = widgets.create_prompt_menu(
-            self._point_prompt_layer, self._point_labels
+            self._point_prompt_layer, self._point_labels, linked_layers=linked_layers,
+            viewer=self._viewer,
         )
 
         # Create the dictionary for the widgets and get the widgets of the child plugin.
@@ -151,13 +181,23 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         def _segment_point_prompts(event):
             self._widgets["segment"](self._viewer)
 
+        # The layer the key reached is the active one, so it goes first: only it relabels a selected
+        # scribble. The viewer-level fallback below has no active prompt layer, so it relabels none.
+        @prompt_layer.bind_key("t", overwrite=True)
+        def _toggle_shape_prompt_label(event=None):
+            vutil.toggle_label(self._shape_prompt_layer, self._point_prompt_layer)
+
+        @point_prompt_layer.bind_key("t", overwrite=True)
+        def _toggle_point_prompt_label(event=None):
+            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
+
         @self._viewer.bind_key("c", overwrite=True)
         def _commit(viewer):
             self._widgets["commit"](viewer)
 
         @self._viewer.bind_key("t", overwrite=True)
         def _toggle_label(event=None):
-            vutil.toggle_label(self._point_prompt_layer)
+            vutil.toggle_label(self._point_prompt_layer, self._shape_prompt_layer)
 
         @self._viewer.bind_key("Shift-C", overwrite=True)
         def _clear_annotations(viewer):
@@ -214,6 +254,10 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
                 widget_layout.addWidget(widget)
             widget_frame.setLayout(widget_layout)
             annotator_widget.layout().addWidget(widget_frame)
+
+        # Each container keeps the height of its contents. Without this the leftover space of the
+        # dock is spread over the containers, which pulls their rows apart.
+        annotator_widget.layout().addStretch()
 
         self._annotator_widget = annotator_widget
         # Allow widget to resize within scroll area.
@@ -281,7 +325,12 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._require_layers()
 
         # The prompt widget is bound to the point prompt layer, so it is recreated alongside it.
-        self._prompt_widget = widgets.create_prompt_menu(self._point_prompt_layer, self._point_labels)
+        shape_prompt_layer = self._viewer.layers["prompts"]
+        linked_layers = [shape_prompt_layer] if "label" in shape_prompt_layer.current_properties else None
+        self._prompt_widget = widgets.create_prompt_menu(
+            self._point_prompt_layer, self._point_labels, linked_layers=linked_layers,
+            viewer=self._viewer,
+        )
 
         # Rebuild the dimension-specific widgets, keeping the shared embedding widget.
         self._widgets = {"embeddings": self._embedding_widget}
@@ -677,7 +726,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         use_anyup.changed.connect(self._invalidate_features)
 
         # Random seed. 'fixed' trains the random forest with a fixed seed so the prediction is
-        # reproducible; 'random' leaves it unseeded so results vary slightly between runs. The exact
+        # reproducible. 'random' leaves it unseeded so results vary slightly between runs. The exact
         # seed value does not matter, so this is a simple two-way choice rather than a numeric field.
         random_seed = ComboBox(value="fixed", choices=["fixed", "random"])
         random_seed_tooltip = get_tooltip("classification", "random_seed")
@@ -715,8 +764,9 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         self._get_random_state = get_random_state
         self._set_options = set_options
 
-        # Classifier load/export. Load takes a stored model file; export chooses a destination folder
-        # (defaulting to the current working directory) where the model is saved with an auto-generated name.
+        # Classifier load and export. Load takes a stored model file. Export chooses a destination
+        # folder (the current working directory by default) and saves the model there with an
+        # auto-generated name.
         load_path = FileEdit(label="load classifier path:", mode="r", filter="*.joblib")
         load_path.line_edit.native.setPlaceholderText("/path/to/stored_model.joblib")
         load_path.native.setToolTip(get_tooltip("classification", "load_path"))
@@ -809,6 +859,10 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             widget_frame.setLayout(widget_layout)
             self._annotator_widget.layout().addWidget(widget_frame)
 
+        # Each container keeps the height of its contents. Without this the leftover space of the
+        # dock is spread over the containers, which pulls their rows apart.
+        self._annotator_widget.layout().addStretch()
+
         # Connect the label layer and the refresh function.
         self._refresh_label_widget()
 
@@ -895,9 +949,10 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             layer.refresh()
 
     def _load_rf(self, model_path):
-        model_path = str(model_path)
-        if not model_path or not os.path.exists(model_path):
-            return widgets._generate_message("error", "You have to provide a valid path to load the classifier.")
+        # An empty path field resolves to the current directory, so we check for an actual file here.
+        model_path = str(model_path).strip()
+        if not model_path or not os.path.isfile(model_path):
+            return show_warning("There are no classifier weights to load from. Please select a '.joblib' file.")
 
         # Stored as {'rf': ..., 'model_spec': ...}; older files are a bare classifier (no spec).
         obj = load(model_path)
@@ -951,8 +1006,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         n_components = self._get_n_components()
         use_anyup = bool(self._get_use_anyup())
         random_seed = "random" if self._get_random_state() is None else "fixed"
-        # 'ew.model_type' is only set once embeddings are computed via the GUI; fall back to the
-        # predictor's model_type (always set) so a CLI-launched session still records the model.
+        # The GUI sets 'ew.model_type' only after it computes embeddings. Use the predictor's
+        # model_type (always set) instead, so a CLI-launched session still records the model.
         model_type = getattr(ew, "model_type", None) or getattr(state.predictor, "model_type", None)
         return {
             "micro_sam_version": micro_sam_version,
@@ -984,8 +1039,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # the size options are rebuilt when it changes.
         family, size = spec.get("model_family"), spec.get("model_size")
         if ew is not None and family is not None:
-            # The classification widget routes the family to the primary or advanced selector; other
-            # widgets fall back to setting the family dropdown directly.
+            # The classification widget routes the family to the primary or advanced selector. Other
+            # widgets set the family dropdown directly.
             setter = getattr(ew, "set_model_family_size", None)
             if setter is not None:
                 setter(family, size)
@@ -994,8 +1049,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
                 if size is not None:
                     ew.model_size_dropdown.setCurrentText(size)
 
-        # Tiling, tile/halo params and custom weights via the shared sync helper (these field names match).
-        # 'ew.model_type' may be unset until embeddings are computed, so fall back via getattr.
+        # Tiling, tile and halo params and custom weights via the shared sync helper (these field names match).
+        # 'ew.model_type' can be unset until the GUI computes embeddings, so read it via getattr.
         if ew is not None:
             vutil._sync_embedding_widget(
                 ew, model_type=spec.get("model_type") or getattr(ew, "model_type", None),
@@ -1020,6 +1075,6 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         current_model = getattr(state.predictor, "model_type", None) if state.predictor is not None else None
         if stored_model is not None and current_model is not None and stored_model != current_model:
             show_info(
-                f"Loaded classifier was trained with '{stored_model}', but the current embeddings use "
+                f"The loaded classifier was trained with '{stored_model}', but the current embeddings use "
                 f"'{current_model}'. Recompute the embeddings with the restored settings before predicting."
             )

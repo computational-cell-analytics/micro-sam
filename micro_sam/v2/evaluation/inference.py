@@ -1,31 +1,32 @@
 import os
 import shutil
 import warnings
-from tqdm import tqdm
 from pathlib import Path
 from typing import Union, Optional, List
 
 import numpy as np
 import imageio.v3 as imageio
-from bioimage_cpp.segmentation import label as connected_components
+from tqdm import tqdm
+from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
 import torch
 
-from torch_em.transform.raw import normalize
-from torch_em.util.segmentation import size_filter
-
 from elf.io import open_file
 
-from sam2.sam2_image_predictor import SAM2ImagePredictor
-from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+from torch_em.util.segmentation import size_filter
 
-from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
+from bioimage_cpp.segmentation import label as connected_components
+
+from micro_sam.v2.normalization import to_image
 from micro_sam.prompt_generators import IterativePromptGenerator
+from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
+from micro_sam.v2.util import (
+    _get_device, configure_image_predictor, encode_image, get_sam2_image_predictor, get_sam2_model,
+    precompute_image_embeddings,
+)
 from micro_sam.v1.evaluation.inference import (
     _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
 )
-
-from micro_sam.v2.util import _get_device, get_sam2_model, precompute_image_embeddings
 
 
 def _embedding_tensors_to_numpy(embeddings):
@@ -68,7 +69,7 @@ def run_amg(
     for image_path in tqdm(image_paths, desc="Run inference for automatic mask generation"):
         image_name = Path(os.path.basename(image_path)).with_suffix(".tif")
 
-        # We skip the images that already have been segmented.
+        # We skip the images that are already segmented.
         prediction_path = os.path.join(prediction_dir, image_name)
         if os.path.exists(prediction_path):
             continue
@@ -78,10 +79,9 @@ def run_amg(
         else:
             image = open_file(image_path)[image_key][:]
 
-        if ensure_8bit and image.max() > 255:
-            image = normalize(image) * 255
-
-        if image.ndim == 2:  # Convert single channel images to RGB images.
+        if ensure_8bit:
+            image = to_image(image)
+        elif image.ndim == 2:  # Convert single channel images to RGB images.
             image = np.stack([image] * 3, axis=-1)
 
         model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
@@ -91,6 +91,7 @@ def run_amg(
             pred_iou_thresh=0.6,  # default: 0.8
             stability_score_thresh=0.6,  # default: 0.95
         )
+        configure_image_predictor(mask_generator.predictor)
 
         outputs = mask_generator.generate(image.astype("uint8"))  # NOTE: Done as this is what SAM2 expects as inputs.
 
@@ -123,6 +124,7 @@ def _run_interactive_segmentation_2d_per_image(
     n_iterations: int = 8,
     use_masks: bool = False,
     batch_size: int = 32,
+    mask_threshold: float = 0.0,
 ) -> None:
     """Functionality for interactive segmentation per 2d image.
     """
@@ -142,7 +144,7 @@ def _run_interactive_segmentation_2d_per_image(
         multimasking = True
 
     # Expects RGB-style images.
-    predictor.set_image(image.astype("uint8"))  # NOTE: Done as this is what SAM2 expects as inputs.
+    encode_image(predictor, image.astype("uint8"))  # uint8 is what SAM2 expects as input.
 
     gt_ids = np.unique(gt)[1:]
 
@@ -156,7 +158,8 @@ def _run_interactive_segmentation_2d_per_image(
         dilation=dilation,
     )
 
-    sampled_binary_y = segmentation_to_one_hot(segmentation=gt.astype("int64"), segmentation_ids=gt_ids)
+    # The prompt generator scans the full masks per object, which is ~7x faster on the GPU.
+    sampled_binary_y = segmentation_to_one_hot(segmentation=gt.astype("int64"), segmentation_ids=gt_ids).to(device)
 
     for iteration in range(n_iterations):
         if iteration == 0:  # logits masks cannot be used for the first iteration.
@@ -188,6 +191,7 @@ def _run_interactive_segmentation_2d_per_image(
                 box=batch_boxes,
                 mask_input=batch_logits_masks,
                 multimask_output=multimasking,
+                return_logits=True,
             )
 
             if batch_scores.ndim == 2:
@@ -206,7 +210,9 @@ def _run_interactive_segmentation_2d_per_image(
             masks.append(batch_masks)
             logits.append(batch_logits)
 
-        masks = np.concatenate(masks)
+        # 'masks' holds logits so far, since a threshold above the SAM2 default of 0 counteracts
+        # the over-segmentation that the mask feedback otherwise compounds across iterations.
+        masks = np.concatenate(masks) > mask_threshold
         logits_masks = np.concatenate(logits)
 
         # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
@@ -214,7 +220,7 @@ def _run_interactive_segmentation_2d_per_image(
 
         next_coords, next_labels = _get_batched_iterative_prompts(
             sampled_binary_gt=sampled_binary_y,
-            masks=torch.from_numpy(masks).to(torch.float32),
+            masks=torch.from_numpy(masks).to(device=device, dtype=torch.float32),
             batch_size=batch_size,
             prompt_generator=prompt_generator
         )
@@ -246,10 +252,15 @@ def run_interactive_segmentation_2d(
     n_iterations: int = 8,
     dilation: int = 5,
     batch_size: int = 32,
-    use_masks: bool = False,
+    use_masks: bool = True,
     ensure_8bit: bool = True,
+    mask_threshold: float = 0.0,
 ):
     """Functionality for interactive segmentation in 2d images using iterative prompting.
+
+    `use_masks` defaults to True because SAM2 is trained with the previous mask logits alongside every
+    correction click, see 'SAM2Train._iter_correct_pt_sampling'. Without them the predictions degrade
+    with each iteration.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -267,7 +278,7 @@ def run_interactive_segmentation_2d(
         os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
 
     model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
-    predictor = SAM2ImagePredictor(model)
+    predictor = get_sam2_image_predictor(model)
 
     for image_path, gt_path in tqdm(
         zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with iterative prompting",
@@ -287,10 +298,9 @@ def run_interactive_segmentation_2d(
         else:
             image = open_file(image_path)[image_key][:]
 
-        if ensure_8bit and image.max() > 255:
-            image = normalize(image) * 255
-
-        if image.ndim == 2:
+        if ensure_8bit:
+            image = to_image(image)
+        elif image.ndim == 2:
             image = np.stack([image] * 3, axis=-1)
 
         if gt_key is None:
@@ -315,6 +325,7 @@ def run_interactive_segmentation_2d(
             n_iterations=n_iterations,
             use_masks=use_masks,
             batch_size=batch_size,
+            mask_threshold=mask_threshold,
         )
 
     return prediction_dir
@@ -433,7 +444,8 @@ def run_interactive_segmentation_3d(
     inference_state = predictor.init_state(volume=raw, volume_embeddings=volume_embeddings)
 
     gt_ids = list(np.unique(labels))[1:]  # Ignoring the background label
-    segmentation = []
+    # An empty volume has nothing to prompt, so all iterations stay empty.
+    segmentation = [np.zeros(labels.shape, dtype="uint64") for _ in range(n_iterations)]
     for gt_id in tqdm(gt_ids, desc="Segmenting per object in the volume"):
         _per_iter_segmentation = _run_interactive_segmentation_3d_per_object(
             gt_ids=gt_id,
@@ -449,11 +461,8 @@ def run_interactive_segmentation_3d(
             n_iterations=n_iterations,
         )
 
-        for _iter in range(n_iterations):
-            if gt_id == gt_ids[0]:  # Add segmentations to the list for first object.
-                segmentation.append(_per_iter_segmentation[_iter])
-            else:  # Merge incoming segmentations per object to existing seg. array.
-                segmentation[_iter] += _per_iter_segmentation[_iter]
+        for _iter in range(n_iterations):  # Merge the incoming segmentation per object.
+            segmentation[_iter] += _per_iter_segmentation[_iter]
 
     for i, prediction_path in enumerate(prediction_paths):
         os.makedirs(Path(prediction_path).parent, exist_ok=True)
@@ -502,7 +511,7 @@ def _run_interactive_segmentation_3d_per_object(
         n_iterations=n_iterations,
     )
 
-    assert len(gt_ids) == len(preds_per_object), "The number of label ids should match the number of objects segmented."
+    assert len(gt_ids) == len(preds_per_object), "The number of label ids must match the number of objects segmented."
 
     seg_per_iterations = []
     for gt_id, _preds_per_iters in zip(gt_ids, preds_per_object):  # Access interactive segmentation per object.
@@ -571,7 +580,7 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
         pred_per_iteration = []
         _corr_points = None  # (x,y) correction points for the next iteration
         _corr_labels = None
-        _corr_frame = None   # z-slice where corrections will be applied
+        _corr_frame = None  # z-slice where corrections will be applied
 
         for iteration in list_of_iterations:
             if iteration == 0:
@@ -612,11 +621,13 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
 
             video_segments = {**reverse_video_segments, **forward_video_segments}
 
+            height, width = labels.shape[-2:]
             segmentation = []
             for slice_idx in video_segments.keys():
-                per_slice_seg = np.zeros(labels.shape[-2:])
+                per_slice_seg = np.zeros((height, width))
                 for _instance_idx, _instance_mask in video_segments[slice_idx].items():
-                    per_slice_seg[_instance_mask.squeeze()] = _instance_idx
+                    # Non-square frames are padded to a square, see '_load_frame_as_tensor'.
+                    per_slice_seg[_instance_mask.squeeze()[:height, :width]] = _instance_idx
                 segmentation.append(per_slice_seg)
 
             segmentation = (np.stack(segmentation) > 0).astype("uint64")
@@ -643,8 +654,8 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
                 )
                 next_coords = next_coords.detach().cpu().numpy()  # [1, 2, 2]: (obj, pos+neg, xy)
                 next_labels = next_labels.detach().cpu().numpy()  # [1, 2]
-                _corr_points = next_coords[0]   # [[x_pos, y_pos], [x_neg, y_neg]]
-                _corr_labels = next_labels[0]   # [1, 0]
+                _corr_points = next_coords[0]  # [[x_pos, y_pos], [x_neg, y_neg]]
+                _corr_labels = next_labels[0]  # [1, 0]
                 _corr_frame = z_worst
 
         pred_per_object.append(pred_per_iteration)

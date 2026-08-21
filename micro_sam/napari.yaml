@@ -75,6 +75,10 @@ contributions:
       key: micro_sam-segmentation
 
   widgets:
+    # napari names the dock widget '<display_name> (<the plugin display_name above>)', which is also the
+    # dock title the CLI / API entry points pass to 'add_dock_widget', so a tool is called the same way no
+    # matter how it was started. These names repeat the tool names in 'sam_annotator/_titles.py', which
+    # this static manifest cannot import, so both have to be changed together.
     - command: micro_sam.annotator
       display_name: Segmentation Annotator
     - command: micro_sam.annotator_tracking

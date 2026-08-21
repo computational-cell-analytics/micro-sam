@@ -73,9 +73,33 @@ def dino_pixel_classifier():
     example_data = fetch_livecell_example_data(DATA_CACHE)
     image = imageio.imread(example_data)
 
-    # DINOv2 encoder weights download automatically via torch.hub. DINOv3 ('dino_v3_*') weights are
-    # license-gated; supply the emailed URL or local path via the MICROSAM_DINOV3_WEIGHTS env var.
-    pixel_classifier(image, model_type="dino_v2_vitb")
+    # DINOv2 encoder weights download automatically via torch.hub. DINOv3 ('vit_*_dinov3') weights are
+    # license-gated; supply your HuggingFace access via 'huggingface-cli login' or the 'HF_TOKEN' variable.
+    pixel_classifier(image, model_type="vit_b_dinov2")
+
+
+def sam3_pixel_classifier():
+    from micro_sam.sam_annotator.pixel_classifier import pixel_classifier
+
+    example_data = fetch_livecell_example_data(DATA_CACHE)
+    image = imageio.imread(example_data)
+
+    # The SAM3 image encoder is gated on HuggingFace (facebook/sam3): accept the license there and
+    # authenticate via 'huggingface-cli login' or the 'HF_TOKEN' variable; the checkpoint then downloads.
+    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-vit_sam3.zarr")
+    pixel_classifier(image, embedding_path=embedding_path, model_type="vit_sam3")
+
+
+def sam3_lucchi_pixel_classifier():
+    from micro_sam.sam_annotator.pixel_classifier import pixel_classifier
+
+    example_data = fetch_3d_example_data(DATA_CACHE)
+    with open_file(example_data) as f:
+        raw = f["*.png"][:]
+
+    # A single EM slice; SAM3 on CPU is heavy, so a 2D slice keeps interactive testing tractable.
+    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi-slice-vit_sam3.zarr")
+    pixel_classifier(raw[raw.shape[0] // 2], embedding_path=embedding_path, model_type="vit_sam3")
 
 
 def main():

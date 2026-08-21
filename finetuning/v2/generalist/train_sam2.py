@@ -7,7 +7,7 @@ def main():
 
     # NOTE:
     # -> v2 - best working model with OG loss (focal weight 20, cosine LR, vision_lr, grad clip 0.1).
-    # -> v3 - simplified CustomSAM2Loss, 1x weighting, average over frames; trails v2 on 3D.
+    # -> v3 - simplified CustomSAM2Loss, 1x weighting, average over frames. Trails v2 on 3D.
     # -> v4 - v3 but sum over frames is restored (average_over_frames=False) to test the 3D deficit.
     save_root = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/interactive/v4"
 

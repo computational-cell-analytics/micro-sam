@@ -13,13 +13,32 @@ from concurrent import futures
 from typing import Optional, Tuple
 
 import numpy as np
+from tqdm import tqdm, trange
 from skimage.filters import gaussian
 from scipy.ndimage import map_coordinates
-from tqdm import tqdm, trange
 
 from bioimage_cpp.segmentation import label, watershed
 
 FLOW_BACKENDS = ("python", "cpp")
+
+DEFAULT_POSTPROCESSING = {
+    "sparse": {
+        "foreground_threshold": 0.7,
+        "density_threshold": 10.0,
+        "min_size": 50,
+        "n_iter": 50,
+        "dt": 0.25,
+        "sigma": 0.5,
+        "foreground_weight": 0.75,
+    },
+    "dense": {
+        "beta": 0.5,
+        "density_threshold": 3.0,
+        "n_iter": 50,
+        "dt": 0.5,
+        "sigma": 1.0,
+    },
+}
 
 
 def _compute_flow_density(
@@ -62,9 +81,7 @@ def _compute_flow_density(
 
     if backend == "cpp":
         from bioimage_cpp.flow import compute_flow_density
-        # cpp backend uses RK2 (midpoint) integration vs Euler in the python backend.
-        # This gives slightly different (and marginally better) density maps at the same
-        # n_iter/dt, so scores are not bit-identical across backends.
+        # RK2 integration rather than the python backend's Euler, so the densities are not identical.
         return compute_flow_density(
             -directed_distances, fg_mask,
             n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing, number_of_threads=n_threads,
@@ -106,16 +123,41 @@ def _compute_flow_density(
     return density
 
 
+def watershed_heightmap(
+    foreground: np.ndarray, directed_distances: np.ndarray, foreground_weight: float
+) -> np.ndarray:
+    """Build the heightmap that separates touching objects in the seeded watershed.
+
+    The inverted distance magnitude puts object boundaries at its local minima, which is a weak edge
+    signal. The foreground probability carries the actual object edge, so mixing the two in sharpens
+    the boundaries. Both terms are scaled to [0, 1] to make the weight meaningful.
+
+    Args:
+        foreground: Foreground probability map, shape (*spatial).
+        directed_distances: Distance channels stacked along axis 0, shape (ndim, *spatial).
+        foreground_weight: Weight of the foreground term. 0 uses the distances only.
+
+    Returns:
+        The watershed heightmap, float32 array of the same spatial shape as foreground.
+    """
+    distances = np.linalg.norm(directed_distances, axis=0)
+    distances = distances.max() - distances
+    distances /= (distances.max() + 1e-9)
+    hmap = foreground_weight * (1.0 - np.clip(foreground, 0, 1)) + (1.0 - foreground_weight) * distances
+    return np.ascontiguousarray(hmap, dtype="float32")
+
+
 def flow_instance_segmentation(
     foreground: np.ndarray,
     directed_distances: np.ndarray,
-    foreground_threshold: float = 0.6,
-    n_iter: int = 100,
-    dt: float = 0.5,
-    sigma: float = 1.0,
+    foreground_threshold: float = DEFAULT_POSTPROCESSING["sparse"]["foreground_threshold"],
+    n_iter: int = DEFAULT_POSTPROCESSING["sparse"]["n_iter"],
+    dt: float = DEFAULT_POSTPROCESSING["sparse"]["dt"],
+    sigma: float = DEFAULT_POSTPROCESSING["sparse"]["sigma"],
     spacing: Optional[Tuple] = None,
-    density_threshold: float = 10.0,
-    min_size: int = 10,
+    density_threshold: float = DEFAULT_POSTPROCESSING["sparse"]["density_threshold"],
+    min_size: int = DEFAULT_POSTPROCESSING["sparse"]["min_size"],
+    foreground_weight: float = DEFAULT_POSTPROCESSING["sparse"]["foreground_weight"],
     verbose: bool = False,
     backend: str = "cpp",
     n_threads: int = 1,
@@ -141,6 +183,8 @@ def flow_instance_segmentation(
         spacing: Anisotropic voxel spacing for 3D inputs, e.g. (4, 1, 1).
         density_threshold: Convergence-density threshold for seed extraction.
         min_size: Minimum object size (pixels/voxels) to keep.
+        foreground_weight: Weight of the foreground term in the watershed heightmap, see
+            `watershed_heightmap`.
         verbose: Show tqdm progress bar during flow integration (python backend only).
         backend: Flow computation backend, ``"python"`` or ``"cpp"``.
         n_threads: Number of threads for the cpp backend flow computation.
@@ -164,8 +208,7 @@ def flow_instance_segmentation(
     )
 
     seeds = label(density > density_threshold)
-    hmap = np.linalg.norm(directed_distances, axis=0)
-    hmap = hmap.max() - hmap
+    hmap = watershed_heightmap(foreground, directed_distances, foreground_weight)
     seg = watershed(hmap, markers=seeds, mask=fg_mask)
 
     if min_size > 0:
@@ -180,11 +223,11 @@ def flow_instance_segmentation(
 def run_multicut(
     boundary_map: np.ndarray,
     distances: np.ndarray,
-    beta: float = 0.7,
-    density_threshold: float = 5.0,
-    n_iter: int = 50,
-    dt: float = 0.5,
-    sigma: float = 1.0,
+    beta: float = DEFAULT_POSTPROCESSING["dense"]["beta"],
+    density_threshold: float = DEFAULT_POSTPROCESSING["dense"]["density_threshold"],
+    n_iter: int = DEFAULT_POSTPROCESSING["dense"]["n_iter"],
+    dt: float = DEFAULT_POSTPROCESSING["dense"]["dt"],
+    sigma: float = DEFAULT_POSTPROCESSING["dense"]["sigma"],
     n_threads: int = 8,
     backend: str = "cpp",
 ) -> np.ndarray:
@@ -228,7 +271,7 @@ def run_multicut(
             backend=backend, n_threads=1,
         )
         seeds = label(density > density_threshold)
-        # watershed requires a float heightmap; boundary maps are usually float already.
+        # watershed requires a float heightmap. Boundary maps are usually float already.
         bd = bd if np.issubdtype(bd.dtype, np.floating) else bd.astype("float32")
         wsz = watershed(bd, markers=seeds)
         overseg[z] = wsz
@@ -246,12 +289,15 @@ def run_multicut(
     overseg += np.cumsum(offsets)[:, None, None]
 
     rag = compute_rag(overseg)
+    if rag.numberOfEdges == 0:  # A single region leaves nothing to merge.
+        return overseg.astype("uint64")
+
     feats = compute_boundary_mean_and_length(rag, overseg, boundary_map)
-    if n_slices == 1:
-        # A single slice (2d) has no inter-slice (z) edges, so weight all in-plane edges by size.
+    z_edges = None if n_slices == 1 else compute_z_edge_mask(rag, overseg)
+    # 'xyz' weights in-plane and z edges as separate populations, so it needs both to be present.
+    if z_edges is None or z_edges.all() or not z_edges.any():
         costs = compute_edge_costs(feats[:, 0], edge_sizes=feats[:, 1], weighting_scheme="all", beta=beta)
     else:
-        z_edges = compute_z_edge_mask(rag, overseg)
         costs = compute_edge_costs(
             feats[:, 0], edge_sizes=feats[:, 1],
             weighting_scheme="xyz", z_edge_mask=z_edges, beta=beta,
