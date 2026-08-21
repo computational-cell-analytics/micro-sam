@@ -88,42 +88,11 @@ def _setup_module_aliases():
     setattr(tr_mod, "raw", transforms_raw)
 
 
-def _build_unisam2(checkpoint_path, state_key, device):
-    from micro_sam.v2.models.util import UniSAM2
+def load_unisam2_model(checkpoint_path, device):
+    """Load UniSAM2 from either a standalone or a joint training checkpoint."""
+    from micro_sam.v2.instance_segmentation import get_unisam2_model
     _setup_module_aliases()
-    model = UniSAM2(encoder="hvit_t", output_channels=4)
-    state = torch.load(checkpoint_path, weights_only=False, map_location=device)
-    model.load_state_dict(state[state_key])
-    model.to(device)
-    model.eval()
-    return model
-
-
-def load_automatic_model(checkpoint_path, device):
-    """Load UniSAM2 from a single-GPU automatic segmentation checkpoint."""
-    return _build_unisam2(checkpoint_path, "model_state", device)
-
-
-def load_joint_model(checkpoint_path, device):
-    """Load the UniSAM2 automatic head from a joint training checkpoint.
-
-    The joint checkpoint stores encoder weights under 'encoder.inner.*'
-    (SAM2EncoderAdapter wraps the shared encoder as .inner). Standalone
-    UniSAM2(encoder="hvit_t") expects 'encoder.*' directly, so we remap.
-    """
-    from micro_sam.v2.models.util import UniSAM2
-    _setup_module_aliases()
-    model = UniSAM2(encoder="hvit_t", output_channels=4)
-    state = torch.load(checkpoint_path, weights_only=False, map_location=device)
-    raw = state["unetr_state"]
-    remapped = {
-        k.replace("encoder.inner.", "encoder.", 1) if k.startswith("encoder.inner.") else k: v
-        for k, v in raw.items()
-    }
-    model.load_state_dict(remapped)
-    model.to(device)
-    model.eval()
-    return model
+    return get_unisam2_model(checkpoint_path, device=device, encoder="hvit_t")
 
 
 def predict_volume(model, raw, device):
@@ -323,10 +292,7 @@ def run_prediction(dataset_name, model_name, checkpoint_path, output_dir, device
     os.makedirs(save_dir, exist_ok=True)
 
     print(f"Loading model '{model_name}' from {checkpoint_path}")
-    if model_name == "automatic":
-        model = load_automatic_model(checkpoint_path, device)
-    else:
-        model = load_joint_model(checkpoint_path, device)
+    model = load_unisam2_model(checkpoint_path, device)
 
     volumes = list(_iter_volumes(dataset_name, DATA_ROOT, max_samples=max_samples))
     for sample_id, raw, labels in tqdm(volumes, desc=f"{dataset_name}/{model_name}"):

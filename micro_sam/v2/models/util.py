@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from torch_em.model.unetr import UNETR3D
 
-from micro_sam.v2.util import _get_checkpoint
+from micro_sam.v2.util import get_sam2_model
 
 
 class CustomActivation(nn.Module):
@@ -38,17 +38,14 @@ class UniSAM2(UNETR3D):
     def __init__(
         self, encoder: Union[str, nn.Module] = "hvit_t", output_channels: int = 4, img_size: int = 1024, **kwargs
     ):
+        # One encoder type for both callers, so the weights land under the same keys either way.
         if isinstance(encoder, str):
-            encoder_checkpoint = _get_checkpoint(model_type=encoder)
-        else:
-            encoder_checkpoint = None
-            encoder = SAM2EncoderAdapter(encoder, img_size=img_size)
+            encoder = get_sam2_model(model_type=encoder, input_type="images").image_encoder
 
         super().__init__(
             img_size=img_size,
             backbone="sam2",
-            encoder=encoder,
-            encoder_checkpoint=encoder_checkpoint,
+            encoder=SAM2EncoderAdapter(encoder, img_size=img_size),
             final_activation=CustomActivation(),
             out_channels=output_channels,
             use_sam_stats=True,

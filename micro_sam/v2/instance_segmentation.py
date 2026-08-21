@@ -717,9 +717,9 @@ def get_unisam2_model(
     from micro_sam.v2.models.util import UniSAM2
 
     state = torch.load(checkpoint_path, weights_only=False, map_location=device or "cpu")
-    # The standalone trainer writes 'model_state', the joint one 'unetr_state' or 'decoder_state'.
+    # A joint checkpoint holds both; 'unetr_state' is the decoder, 'model_state' the interactive model.
     if isinstance(state, dict):
-        model_state = state.get("model_state", state.get("unetr_state", state.get("decoder_state", state)))
+        model_state = state.get("unetr_state", state.get("model_state", state))
     else:
         model_state = state
 
@@ -742,14 +742,11 @@ def get_unisam2_model(
         sam2_model = get_sam2_model(model_type=base_model_type, input_type="images", device=device or "cpu")
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         encoder = sam2_model.image_encoder
-    else:
-        needs_adapter = isinstance(encoder, str) and any(k.startswith("encoder.inner.") for k in model_state)
-        if needs_adapter:
-            from micro_sam.v2.util import get_sam2_model
-            sam2_model = get_sam2_model(model_type=encoder, input_type="images", device=device or "cpu")
-            encoder = sam2_model.image_encoder
 
-    model = UniSAM2(encoder=encoder, output_channels=output_channels)
+    # The decoder width is not recorded in the checkpoint, so read it off 'out_conv'.
+    initial_features = model_state["out_conv.weight"].shape[1]
+
+    model = UniSAM2(encoder=encoder, output_channels=output_channels, initial_features=initial_features)
     if peft_kwargs and is_qlora:
         model_state = _convert_automatic_qlora_state(model, model_state)
     model.load_state_dict(model_state)
