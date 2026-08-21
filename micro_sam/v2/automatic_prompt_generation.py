@@ -35,7 +35,6 @@ from bioimage_cpp.utils import Blocking
 from bioimage_cpp.segmentation import label
 
 from .normalization import to_image
-from ..v1.inference import _merge_segmentations
 from ..util import make_temp_embedding_path
 from .postprocessing import DEFAULT_POSTPROCESSING, _compute_flow_density
 from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
@@ -397,6 +396,45 @@ def derive_refinement_prompts(
     return prompts
 
 
+def _shift_box(bounding_box: tuple, offset: tuple) -> tuple:
+    """Translate a bounding box by a per-axis offset, returning it unchanged for a zero offset."""
+    if not any(offset):
+        return bounding_box
+    return tuple(slice(box.start + shift, box.stop + shift) for box, shift in zip(bounding_box, offset))
+
+
+def _localize_prompts(prompt: Dict[str, Any], origin: tuple, extent: tuple) -> tuple:
+    """Translate one instance's re-prompt into a region's frame, dropping the negatives outside it.
+
+    The instance's own mask lies inside the region it is re-prompted in, so its positives are only
+    clamped onto the border pixel they round to. A negative comes from a neighbouring instance and
+    can lie outside the region — beyond a tile's halo — and has to go, because the predictor
+    normalises the prompt against the region's own shape.
+
+    Args:
+        prompt: The instance's prompt, as `derive_refinement_prompts` returns it.
+        origin: The region's (y, x) origin in the full image.
+        extent: The region's (y, x) shape.
+
+    Returns:
+        The translated prompt, and the number of negatives dropped.
+    """
+    origin_xy = np.array([origin[1], origin[0]], dtype="float32")
+    high_xy = np.array([extent[1] - 1, extent[0] - 1], dtype="float32")
+    points = np.asarray(prompt["points"], dtype="float32") - origin_xy
+    labels = np.asarray(prompt["point_labels"])
+
+    # A point that rounds onto one of the region's pixels is inside it. Positives are never dropped.
+    inside = np.all((points >= -0.5) & (points <= high_xy + 0.5), axis=1)
+    keep = inside | (labels == 1)
+    localized = {
+        "points": np.clip(points[keep], 0.0, high_xy),
+        "point_labels": labels[keep],
+        "n_grouped": prompt["n_grouped"],
+    }
+    return localized, int(np.count_nonzero(~keep))
+
+
 def sam2_autocast(device):
     """Run the SAM2 branch in half precision, as the UniSAM2 decoder already does.
 
@@ -673,55 +711,6 @@ def merge_by_score(
     if return_claimed:
         result += (claimed_by,)
     return result[0] if len(result) == 1 else result
-
-
-def refine_with_boxes(
-    predictor, segmentation: np.ndarray, batch_size: int = 64, box_extension: int = 0,
-) -> np.ndarray:
-    """Re-prompt every instance with its bounding box and repaint the result.
-
-    A box is much less ambiguous than a point. Derive the boxes from the predicted masks, not from the
-    candidate regions: a candidate region is a fragment, so its box says the object is fragment-sized.
-
-    Args:
-        predictor: The SAM2 image predictor. The image must already be set on it.
-        segmentation: The instance segmentation to refine.
-        batch_size: Number of boxes per forward pass.
-        box_extension: Number of pixels every box is grown by. Confluent data prefers 0, because a grown
-            box reaches into the neighbouring object.
-
-    Returns:
-        The refined instance segmentation, uint32 array with the shape of the input.
-    """
-    shape = segmentation.shape
-    boxes, ids = [], []
-    for index, slices in enumerate(find_objects(segmentation)):
-        if slices is None:
-            continue
-        y_slice, x_slice = slices
-        boxes.append([
-            max(0, x_slice.start - box_extension), max(0, y_slice.start - box_extension),
-            min(shape[1], x_slice.stop + box_extension), min(shape[0], y_slice.stop + box_extension),
-        ])
-        ids.append(index + 1)
-    if not boxes:
-        return segmentation
-
-    boxes, ids = np.array(boxes, dtype="float32"), np.array(ids, dtype="uint32")
-
-    masks, scores = [], []
-    for start in range(0, len(boxes), batch_size):
-        batch = boxes[start:start + batch_size]
-        mask, score, _ = predictor.predict(box=batch, multimask_output=False)
-        masks.append(np.asarray(mask).reshape(len(batch), *shape).astype(bool))
-        scores.append(np.asarray(score).reshape(-1))
-    masks, scores = np.concatenate(masks), np.concatenate(scores)
-
-    # Ascending score, so that the most confident instance is painted last and wins contested pixels.
-    refined = np.zeros(shape, dtype="uint32")
-    for index in np.argsort(scores):
-        refined[masks[index]] = ids[index]
-    return refined
 
 
 def _records_shape(records: List[Dict[str, Any]]) -> tuple:
@@ -1218,6 +1207,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         components = resolved = None
         if refinement is not None:
             components, resolved = _parse_refinement(refinement, refinement_kwargs)
+            self._validate_refinement(components)
 
         shape = self._prediction[0].shape
         if not proposals:
@@ -1230,6 +1220,24 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if components is not None and segmentation.max() > 0:
             segmentation = self._refine(segmentation, context, components, resolved, batch_size)
         return segmentation
+
+    def _validate_refinement(self, components: tuple) -> None:
+        """Reject the refinement components the generator cannot run. This one runs all of them."""
+
+    def _region_of(self, context: dict, record_index: int):
+        """The region a record's instance is re-prompted in, keyed however the generator likes.
+
+        A refinement runs region by region, because a tiled generator has to point its predictor at
+        one tile at a time. Here the whole image is one region, so every record shares the key None.
+        """
+        return None
+
+    def _region_box(self, key) -> tuple:
+        """The region's bounding box, as a slice tuple into the segmentation."""
+        return (slice(None), slice(None))
+
+    def _set_region(self, key) -> None:
+        """Point the predictor at the region. Its image is already set for a single one."""
 
     def _apply(self, prompts: dict, multimasking: bool, batch_size: int) -> list:
         """Turn the prompts into mask proposals."""
@@ -1295,6 +1303,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         inconsistent with the first round ('min_consistency') or grows into a neighbour
         ('max_foreign_overlap') is discarded, because the model's own score cannot arbitrate across
         prompt types. An instance whose re-prompt comes back empty keeps its first-round mask.
+
+        The instances are grouped by the region they are re-prompted in and every region is set up
+        once, since a tiled generator pays for each switch. Within a region everything runs on its
+        crop of the segmentation, which is the frame the predictor works in; only the repaint at
+        the end is global, so the score order arbitrates across regions as well as within them.
         """
         shape = segmentation.shape
         instances = [
@@ -1318,48 +1331,79 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 min_negative_distance=refinement_kwargs["min_negative_distance"],
             )
 
+        # Every instance needs the record that made it, for its first-round score.
+        groups = {}
+        for instance_id, bounding_box in instances:
+            if instance_id not in context["matches"]:
+                raise RuntimeError(
+                    f"Instance {instance_id} is in the segmentation but not in the merge context. The "
+                    "refinement cannot score it against its first round."
+                )
+            key = self._region_of(context, context["matches"][instance_id])
+            groups.setdefault(key, []).append((instance_id, bounding_box))
+
         min_consistency = refinement_kwargs["min_consistency"]
         max_foreign_overlap = refinement_kwargs["max_foreign_overlap"]
         keep_if_better = refinement_kwargs["policy"] == "keep-if-better"
-        chosen, replaced, suppressed = [], 0, 0
+        chosen, replaced, suppressed, dropped = [], 0, 0, 0
         gated = {"gated_consistency": 0, "gated_foreign": 0}
-        for start in range(0, len(instances), batch_size):
-            batch = instances[start:start + batch_size]
-            predictions, batch_suppressed = self._predict_refinement_batch(
-                segmentation, batch, components, point_prompts, refinement_kwargs,
-            )
-            suppressed += batch_suppressed
-            for (instance_id, bounding_box), (mask, score) in zip(batch, predictions):
-                record = context["records"][context["matches"][instance_id]]
-                first_round_score = record["predicted_iou"] * record["stability_score"]
-                take_second = mask.any() and (not keep_if_better or score > first_round_score)
-                if take_second and min_consistency is not None:
-                    first_round_mask = segmentation == instance_id
-                    union = int(np.count_nonzero(mask | first_round_mask))
-                    iou = int(np.count_nonzero(mask & first_round_mask)) / union if union else 0.0
-                    if iou < min_consistency:
-                        take_second = False
-                        gated["gated_consistency"] += 1
-                if take_second and max_foreign_overlap is not None:
-                    on_mask = segmentation[mask]
-                    foreign = int(np.count_nonzero((on_mask != 0) & (on_mask != instance_id)))
-                    if foreign / int(mask.sum()) > max_foreign_overlap:
-                        take_second = False
-                        gated["gated_foreign"] += 1
-                if take_second:
-                    replaced += 1
-                    rows, columns = np.nonzero(mask)
-                    box = (slice(int(rows.min()), int(rows.max()) + 1),
-                           slice(int(columns.min()), int(columns.max()) + 1))
-                    chosen.append((score, instance_id, box, mask[box]))
-                else:
-                    chosen.append((
-                        first_round_score, instance_id, bounding_box, segmentation[bounding_box] == instance_id,
-                    ))
+        for key in sorted(groups):
+            self._set_region(key)
+            region_box = self._region_box(key)
+            crop = segmentation[region_box]
+            origin = tuple(box.start or 0 for box in region_box)
+
+            region_prompts = point_prompts
+            if point_prompts is not None and (any(origin) or crop.shape != shape):
+                region_prompts = {}
+                for instance_id, _ in groups[key]:
+                    region_prompts[instance_id], region_dropped = _localize_prompts(
+                        point_prompts[instance_id], origin, crop.shape
+                    )
+                    dropped += region_dropped
+            region_instances = [
+                (instance_id, _shift_box(bounding_box, tuple(-shift for shift in origin)))
+                for instance_id, bounding_box in groups[key]
+            ]
+
+            for start in range(0, len(region_instances), batch_size):
+                batch = region_instances[start:start + batch_size]
+                predictions, batch_suppressed = self._predict_refinement_batch(
+                    crop, batch, components, region_prompts, refinement_kwargs,
+                )
+                suppressed += batch_suppressed
+                for (instance_id, bounding_box), (mask, score) in zip(batch, predictions):
+                    record = context["records"][context["matches"][instance_id]]
+                    first_round_score = record["predicted_iou"] * record["stability_score"]
+                    take_second = mask.any() and (not keep_if_better or score > first_round_score)
+                    if take_second and min_consistency is not None:
+                        first_round_mask = crop == instance_id
+                        union = int(np.count_nonzero(mask | first_round_mask))
+                        iou = int(np.count_nonzero(mask & first_round_mask)) / union if union else 0.0
+                        if iou < min_consistency:
+                            take_second = False
+                            gated["gated_consistency"] += 1
+                    if take_second and max_foreign_overlap is not None:
+                        on_mask = crop[mask]
+                        foreign = int(np.count_nonzero((on_mask != 0) & (on_mask != instance_id)))
+                        if foreign / int(mask.sum()) > max_foreign_overlap:
+                            take_second = False
+                            gated["gated_foreign"] += 1
+                    if take_second:
+                        replaced += 1
+                        rows, columns = np.nonzero(mask)
+                        box = (slice(int(rows.min()), int(rows.max()) + 1),
+                               slice(int(columns.min()), int(columns.max()) + 1))
+                        chosen.append((score, instance_id, _shift_box(box, origin), mask[box]))
+                    else:
+                        chosen.append((
+                            first_round_score, instance_id, _shift_box(bounding_box, origin),
+                            crop[bounding_box] == instance_id,
+                        ))
 
         self._last_generation_stats.update({
             "refined_instances": len(instances), "replaced_instances": replaced,
-            "points_suppressed_instances": suppressed, **gated,
+            "points_suppressed_instances": suppressed, "dropped_negatives": dropped, **gated,
         })
         # Ascending score, so that the most confident instance is painted last and wins contested pixels.
         refined = np.zeros(shape, dtype="uint32")
@@ -1669,6 +1713,13 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
     proposed once. Each is assigned to the tile whose inner block holds its point and prompted within
     that tile's halo, so no object is segmented twice and no mask is cut off at a nearby border.
 
+    A refinement runs the same way: every instance is re-prompted in the tile that produced it, with
+    its prompts translated into that tile's frame, while the acceptance gates and the final repaint
+    stay global. The negatives an instance takes from its neighbours are chosen across the whole
+    image, so a neighbour beyond the halo is dropped from the re-prompt and counted in the
+    'dropped_negatives' statistic — a large count means the halo is too small for 'n_negatives'. The
+    'recover' component is the one mode that does not run here, see `_validate_refinement`.
+
     Args:
         model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
         predictor: The SAM2 image predictor for the interactive branch of the same model.
@@ -1782,7 +1833,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
                 # Back into the full image's frame, so the records agree with the non-tiled ones.
                 record["point"] = (record["point"][0] + float(origin[0]), record["point"][1] + float(origin[1]))
             if records:
-                proposals.append({"bounding_box": bounding_box, "records": records})
+                proposals.append({"tile_id": tile_id, "bounding_box": bounding_box, "records": records})
         return proposals
 
     def _merge(
@@ -1791,75 +1842,113 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
     ) -> tuple:
         """Stitch the per-tile merges into one segmentation, resolving the halo overlaps.
 
-        The context is always None: the halo resolution remaps the per-tile instance ids, so the
-        merge matches cannot be carried across it, and the tiled box refinement does not need them.
+        Each tile is merged on its own and its instance ids are offset to stay unique across the
+        image, so the stitch only decides which tile owns a contested pixel — it never renames an
+        id. The refinement context therefore carries across it: the per-tile matches are shifted by
+        the same offset as the ids, and the instances a neighbouring tile overwrote entirely are
+        pruned, since an id that is no longer in the segmentation has nothing left to refine.
+
+        The context carries no claim maps, because only the 'recover' component reads them and a
+        per-tile merge only ever sees the claimants of its own tile. That component is rejected
+        before the merge, see `_validate_refinement`.
         """
         segmentation = np.zeros(shape, dtype="uint32")
         offset = 0
 
+        all_records, records, reasons, matches, record_tiles = [], [], [], {}, {}
         for proposal in proposals:
             bounding_box = proposal["bounding_box"]
             tile_shape = tuple(box.stop - box.start for box in bounding_box)
-            records = [record for record in proposal["records"] if record["predicted_iou"] >= score_threshold]
-            if not records:
+            # Flattened before the tile can be skipped below, so the record indices cannot shear.
+            all_records.extend(proposal["records"])
+            record_offset = len(records)
+            tile_records = [
+                record for record in proposal["records"] if record["predicted_iou"] >= score_threshold
+            ]
+            records.extend(tile_records)
+            if return_context:
+                record_tiles.update({
+                    record_offset + index: proposal["tile_id"] for index in range(len(tile_records))
+                })
+            if not tile_records:
                 continue
 
-            tile_segmentation = merge_by_score(records, tile_shape, max_overlap=max_overlap, min_size=min_size)
+            if return_context:
+                tile_segmentation, tile_matches, tile_reasons = merge_by_score(
+                    tile_records, tile_shape, max_overlap=max_overlap, min_size=min_size,
+                    return_matches=True, return_reasons=True,
+                )
+                reasons.extend(tile_reasons)
+            else:
+                tile_segmentation = merge_by_score(
+                    tile_records, tile_shape, max_overlap=max_overlap, min_size=min_size
+                )
             max_id = int(tile_segmentation.max())
             if max_id == 0:
                 continue
+            if return_context:
+                matches.update({
+                    instance_id + offset: record_index + record_offset
+                    for instance_id, record_index in tile_matches.items()
+                })
             # Keep the instance ids unique across tiles before the halo overlaps are resolved.
             tile_segmentation[tile_segmentation != 0] += offset
             offset += max_id
-            segmentation[bounding_box] = _merge_segmentations(tile_segmentation, segmentation[bounding_box])
-        return segmentation, None
+            # An earlier tile keeps every pixel it claimed, which is the halo resolution.
+            previous = segmentation[bounding_box]
+            segmentation[bounding_box] = np.where(previous != 0, previous, tile_segmentation)
 
-    def _refine(
-        self, segmentation: np.ndarray, context: dict, components: tuple, refinement_kwargs: dict,
-        batch_size: int,
-    ) -> np.ndarray:
-        """Dispatch to the tiled box refinement, which is the only mode with a tiled implementation."""
-        supported = set(components) == {"boxes"} and refinement_kwargs["policy"] == "replace"
-        if not supported or refinement_kwargs["multimasking"]:
+        if not return_context:
+            return segmentation, None
+
+        present = {int(instance_id) for instance_id in np.unique(segmentation)} - {0}
+        stitch_dropped = len(matches) - len(present)
+        matches = {
+            instance_id: record_index for instance_id, record_index in matches.items()
+            if instance_id in present
+        }
+        if set(matches) != present:
+            raise RuntimeError(
+                f"The stitched segmentation has {len(present - set(matches))} instances that no tile "
+                "merge accounts for, so the refinement context would be incomplete."
+            )
+        self._last_generation_stats.update({
+            "proposed_candidates": len(all_records),
+            "scored_candidates": len(records),
+            "merge_reasons": {reason: reasons.count(reason) for reason in sorted(set(reasons))},
+            "stitch_dropped_instances": stitch_dropped,
+        })
+        return segmentation, {
+            "proposals": all_records, "records": records, "matches": matches, "reasons": reasons,
+            "record_tiles": record_tiles, "score_threshold": score_threshold, "min_size": min_size,
+        }
+
+    def _validate_refinement(self, components: tuple) -> None:
+        """Reject the one component whose bookkeeping a tiled merge cannot provide."""
+        if "recover" in components:
             raise NotImplementedError(
-                "The tiled generator only supports refinement='boxes' with policy='replace' and "
-                "multimasking=False. The other modes need per-tile prompt bookkeeping, which is not "
-                "implemented; use the non-tiled generator for them."
+                "The tiled generator does not support the 'recover' refinement component: it needs "
+                "the claim maps of the merge, and a tiled merge only sees the claimants within one "
+                "tile. Recovery measured neutral, so drop it from the mode or run untiled."
             )
-        return self._refine_boxes(segmentation, batch_size, refinement_kwargs["box_extension"])
 
-    def _refine_boxes(self, segmentation: np.ndarray, batch_size: int, box_extension: int) -> np.ndarray:
-        """Re-prompt every instance with its bounding box, in the tile that holds its interior point.
+    def _region_of(self, context: dict, record_index: int):
+        """The tile that produced a record, which is the tile its instance is re-prompted in.
 
-        Refined once, by the tile whose inner block holds its point, so two tiles cannot both claim it.
+        That tile's embeddings made the first-round mask, so the mask, its bounding box and every
+        prompt grouped onto it lie inside the tile's halo-extended block, and the stitch can only
+        take pixels away. Assigning by the instance's interior point instead would carry no such
+        guarantee, and would truncate an instance that the point's tile does not fully cover.
         """
-        ids = np.unique(segmentation)
-        ids = ids[ids != 0]
-        if ids.size == 0:
-            return segmentation
+        return context["record_tiles"][record_index]
 
-        centers = interior_points(segmentation)
-        if len(centers) != len(ids):
-            raise RuntimeError(f"Got {len(centers)} interior points for {len(ids)} instances.")
-        assignment = {}
-        for label_id, (y, x) in zip(ids, centers):
-            tile_id = self._tiling.coordinates_to_block_id([int(y), int(x)])
-            assignment.setdefault(tile_id, []).append(label_id)
+    def _region_box(self, key) -> tuple:
+        """@private"""
+        return self._tile_bounding_box(key)
 
-        refined = np.zeros_like(segmentation)
-        for tile_id, label_ids in sorted(assignment.items()):
-            bounding_box = self._tile_bounding_box(tile_id)
-            crop = segmentation[bounding_box]
-            crop = np.where(np.isin(crop, label_ids), crop, 0).astype("uint32")
-
-            set_precomputed(self._predictor, self._image_embeddings, tile_id=tile_id)
-            tile_refined = refine_with_boxes(
-                self._predictor, crop, batch_size=batch_size, box_extension=box_extension,
-            )
-            # Refined masks keep their ids; an earlier tile wins a contested pixel, as in the merge.
-            target = refined[bounding_box]
-            refined[bounding_box] = np.where(target == 0, tile_refined, target)
-        return refined
+    def _set_region(self, key) -> None:
+        """@private"""
+        set_precomputed(self._predictor, self._image_embeddings, tile_id=key)
 
     def get_state(self) -> dict:
         """@private"""
