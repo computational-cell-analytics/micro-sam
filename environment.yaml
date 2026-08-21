@@ -26,7 +26,7 @@ dependencies:
     - segment-anything
     - tensordict
     - torchvision
-    - torch_em >=0.10.1
+    - torch_em >=0.10.3
     - tqdm
     - timm
     - transformers >=4.56
