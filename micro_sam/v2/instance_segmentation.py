@@ -690,7 +690,10 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, outp
     else:
         model_state = state
 
-    model = UniSAM2(encoder=encoder, output_channels=output_channels)
+    # The decoder width is not recorded in the checkpoint, so read it off 'out_conv'.
+    initial_features = model_state["out_conv.weight"].shape[1]
+
+    model = UniSAM2(encoder=encoder, output_channels=output_channels, initial_features=initial_features)
     model.load_state_dict(model_state)
 
     if device is not None:

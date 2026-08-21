@@ -569,6 +569,7 @@ def train_automatic(
     save_every_kth_epoch: Optional[int] = None,
     overwrite_training: bool = True,
     load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
+    initial_features: int = 64,
 ) -> None:
     """Train UniSAM2 for automatic instance segmentation with directed distance targets.
 
@@ -594,12 +595,14 @@ def train_automatic(
         load_from_checkpoint: Trainer checkpoint to resume from, restoring the model, optimizer,
             scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
             the pretrained SAM2 weights to start from.
+        initial_features: Width of the convolutional decoder. The features per level are
+            'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
     """
     import torch_em
     from micro_sam.v2.models.util import UniSAM2
 
     device = get_device(device)
-    model = UniSAM2(encoder=model_type, output_channels=4).to(device)
+    model = UniSAM2(encoder=model_type, output_channels=4, initial_features=initial_features).to(device)
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
     loss = DirectedDistanceLoss(mask_distances_in_bg=True)
@@ -654,6 +657,7 @@ def _train_automatic_rank(
     dataset_choice: str,
     n_workers: int,
     find_unused_parameters: bool,
+    initial_features: int,
 ):
     """Single-rank torchrun worker for train_automatic_multi_gpu."""
     import torch_em
@@ -703,7 +707,7 @@ def _train_automatic_rank(
     )
     val_loader.shuffle = False
 
-    model = UniSAM2(encoder=model_type, output_channels=4).to(device)
+    model = UniSAM2(encoder=model_type, output_channels=4, initial_features=initial_features).to(device)
     ddp_model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
@@ -761,6 +765,7 @@ def train_automatic_multi_gpu(
     overwrite_training: bool = True,
     load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     find_unused_parameters: bool = True,
+    initial_features: int = 64,
 ) -> None:
     """Train UniSAM2 for automatic segmentation across multiple GPUs with DDP.
 
@@ -788,6 +793,8 @@ def train_automatic_multi_gpu(
             scheduler, epoch and iteration. This is distinct from checkpoint_path, which supplies
             the pretrained SAM2 weights to start from.
         find_unused_parameters: Passed to DistributedDataParallel.
+        initial_features: Width of the convolutional decoder. The features per level are
+            'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
     """
     if z_slices is None:
         z_slices = [8]
@@ -822,6 +829,7 @@ def train_automatic_multi_gpu(
         dataset_choice=dataset_choice,
         n_workers=n_workers,
         find_unused_parameters=find_unused_parameters,
+        initial_features=initial_features,
     )
 
 
@@ -863,6 +871,7 @@ def train_joint_sam2(
     use_object_score_loss: bool = False,
     average_over_frames: bool = False,
     automatic_metric_weight: float = 0.25,
+    initial_features: int = 64,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly with a shared image encoder (single GPU).
 
@@ -914,6 +923,8 @@ def train_joint_sam2(
             metric used for checkpointing, LR scheduling and early stopping. Defaults to 1/4,
             which puts DirectedDistanceLoss's 4 summed terms on the scale of the interactive
             Dice metric. Set to 0 to select purely on the interactive task.
+        initial_features: Width of the convolutional decoder. The features per level are
+            'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
     """
     from micro_sam.v2.datasets.generalist_loader import _build_joint_datasets, _prepare_data_loader
     from micro_sam.v2.models.util import UniSAM2
@@ -949,7 +960,9 @@ def train_joint_sam2(
         num_init_cond_frames_for_train=num_init_cond_frames,
         bidirectional=bidirectional,
     )
-    unetr = UniSAM2(encoder=sam2_model.image_encoder, output_channels=4).to(device)
+    unetr = UniSAM2(
+        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features
+    ).to(device)
 
     interactive_loss = CustomSAM2Loss(
         use_focal_loss=use_focal_loss, focal_weight=focal_weight,
@@ -1034,6 +1047,7 @@ def _train_joint_rank(
     use_object_score_loss: bool = False,
     average_over_frames: bool = False,
     automatic_metric_weight: float = 0.25,
+    initial_features: int = 64,
 ):
     """Single-rank torchrun worker for train_joint_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
@@ -1089,7 +1103,9 @@ def _train_joint_rank(
         num_init_cond_frames_for_train=num_init_cond_frames,
         bidirectional=bidirectional,
     )
-    unetr = UniSAM2(encoder=sam2_model.image_encoder, output_channels=4).to(device)
+    unetr = UniSAM2(
+        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features
+    ).to(device)
 
     # Only DDP-wrap sam2_model. We sync the unetr decoder grads manually.
     ddp_model = DDP(sam2_model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
@@ -1179,6 +1195,7 @@ def train_joint_sam2_multi_gpu(
     use_object_score_loss: bool = False,
     average_over_frames: bool = False,
     automatic_metric_weight: float = 0.25,
+    initial_features: int = 64,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly across multiple GPUs with DDP.
 
@@ -1233,6 +1250,8 @@ def train_joint_sam2_multi_gpu(
             metric used for checkpointing, LR scheduling and early stopping. Defaults to 1/4,
             which puts DirectedDistanceLoss's 4 summed terms on the scale of the interactive
             Dice metric. Set to 0 to select purely on the interactive task.
+        initial_features: Width of the convolutional decoder. The features per level are
+            'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
     """
     if z_slices is None:
         z_slices = [8]
@@ -1287,4 +1306,5 @@ def train_joint_sam2_multi_gpu(
         use_object_score_loss=use_object_score_loss,
         average_over_frames=average_over_frames,
         automatic_metric_weight=automatic_metric_weight,
+        initial_features=initial_features,
     )
