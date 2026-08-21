@@ -1,10 +1,11 @@
-from typing import Union
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
 
 from torch_em.model.unetr import UNETR3D
 
+from micro_sam.util import get_device
 from micro_sam.v2.util import get_sam2_model
 
 
@@ -36,11 +37,18 @@ class UniSAM2(UNETR3D):
     """UNETR-based model for universal (2d + 3d) segmentation.
     """
     def __init__(
-        self, encoder: Union[str, nn.Module] = "hvit_t", output_channels: int = 4, img_size: int = 1024, **kwargs
+        self,
+        encoder: Union[str, nn.Module] = "hvit_t",
+        output_channels: int = 4,
+        img_size: int = 1024,
+        device: Optional[Union[str, torch.device]] = None,
+        **kwargs,
     ):
+        device = torch.device("cpu") if device is None else torch.device(get_device(device))
+
         # One encoder type for both callers, so the weights land under the same keys either way.
         if isinstance(encoder, str):
-            encoder = get_sam2_model(model_type=encoder, input_type="images").image_encoder
+            encoder = get_sam2_model(model_type=encoder, input_type="images", device=device).image_encoder
 
         super().__init__(
             img_size=img_size,
@@ -53,3 +61,4 @@ class UniSAM2(UNETR3D):
             use_strip_pooling=True,
             **kwargs
         )
+        self.to(device)
