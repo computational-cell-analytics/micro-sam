@@ -16,8 +16,9 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from common import VARIANTS, VARIANT_LABELS, compute_distance_variants, to_consecutive_labels, \
-    load_dsb, load_livecell
+from common import (
+    VARIANTS, VARIANT_LABELS, compute_distance_variants, to_consecutive_labels, load_dsb, load_livecell
+)
 
 EPS = 1e-7
 
@@ -129,8 +130,10 @@ def summarize(results, layout, tile, region_size, min_magnitude):
         }), include_groups=False
     )
     cut_fraction = table[table["inside"] != "whole"]["n_pixels"].sum() / max(table["n_pixels"].sum(), 1)
-    print(f"Tile {tile}, region {region_size}: {100 * cut_fraction:.1f}% of the compared "
-          f"foreground belongs to objects that the tile cuts.")
+    print(
+        f"Tile {tile}, region {region_size}: {100 * cut_fraction:.1f}% of the compared foreground "
+        f"belongs to objects that the tile cuts."
+    )
     order = [name for _, _, name in INSIDE_BINS]
     weighted = weighted.reindex(
         pd.MultiIndex.from_product([list(VARIANTS), order], names=["variant", "inside"])

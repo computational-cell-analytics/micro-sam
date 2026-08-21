@@ -44,7 +44,7 @@ collapses them onto a **point** (one seed). Why magnitude matters: a unit-norm f
 Method: build the fields from **ground truth** labels, run the AIS v2 post-processing on them,
 score against the same ground truth. This bounds what a perfectly trained model could reach with
 each representation. `n_iter`, `density_threshold` and `sigma` were swept per variant and the best
-setting chosen per (dataset, variant) — never per image. Sweeping all three is essential: the
+setting chosen per (dataset, variant) - never per image. Sweeping all three is essential: the
 pipeline defaults are tuned to the euclidean field's magnitude profile, and density smoothing is
 the baseline's main fix for its over-segmentation.
 
@@ -75,10 +75,10 @@ watershed on flat plateaus, which has nothing to do with the distance representa
 - **Hybrid wins every sparse dataset.** The margin tracks how far an object's medial axis is from
   being a point: round nuclei have little headroom (DSB +0.015, GoNuclear +0.057), elongated
   LIVECell cells have a lot (+0.30).
-- **`geodesic_boundary` is a dead end** — within noise of euclidean everywhere, at ~2x the cost.
+- **`geodesic_boundary` is a dead end** - within noise of euclidean everywhere, at ~2x the cost.
   Its magnitude is already inside the hybrid (`|hybrid| == boundary distance` before the
   per-channel normalization).
-- **`geodesic_center` alone fails** — no ridge, so touching objects merge (LIVECell: 63 predicted
+- **`geodesic_center` alone fails** - no ridge, so touching objects merge (LIVECell: 63 predicted
   objects for 107 ground truth).
 - **EM is unresolved.** SNEMI favours geodesic, CREMI is a wash. But every variant scores mSA
   0.10-0.26 there, i.e. the dense path is dominated by the boundary map and the multicut, not by
@@ -112,7 +112,7 @@ against the full-image field. Median angular deviation, LIVECell tile 256:
 | geodesic hybrid | 63.5 deg | 19.7 | **1.18** | 0.06 | 0.06 |
 
 **The target is stable once >=75% of the object is inside the crop** (1.18 deg, 0% of pixels beyond
-30 deg). So this is not a learnability problem — the target is also a deterministic function of the
+30 deg). So this is not a learnability problem - the target is also a deterministic function of the
 patch. It is a **tiled inference** constraint: the tile plus halo must contain ~75% of any object
 whose pixels are kept, i.e. a halo of roughly half the largest object diameter. Worth checking
 against what `batched_tiled_inference` currently uses before deploying the hybrid on tiled data.
@@ -172,7 +172,7 @@ per-image variance. The oracle gap is 0.30 mSA; anything above ~0.05 is meaningf
 below zero kills the idea.
 
 `lr=1e-4` and `n_iterations=25000` are reasonable defaults, not tuned values (`train_automatic`'s
-own default lr is 1e-5). Use the same for both arms — the comparison is the point.
+own default lr is 1e-5). Use the same for both arms - the comparison is the point.
 
 **Not yet done: a single optimizer step.** Shapes, dataloader throughput and plumbing are validated
 on CPU; training was never run (no GPU here, and CPU training is blocked by the mixed-precision

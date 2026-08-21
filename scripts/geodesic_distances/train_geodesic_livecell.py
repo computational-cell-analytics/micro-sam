@@ -8,9 +8,9 @@ target and 0.91 with the hybrid one. This script tests whether that ceiling surv
 Run both arms and then evaluate them:
 
     python train_geodesic_livecell.py train --target euclidean --save_root /path/to/runs
-    python train_geodesic_livecell.py train --target hybrid    --save_root /path/to/runs
+    python train_geodesic_livecell.py train --target hybrid --save_root /path/to/runs
     python train_geodesic_livecell.py evaluate --target euclidean --save_root /path/to/runs
-    python train_geodesic_livecell.py evaluate --target hybrid    --save_root /path/to/runs
+    python train_geodesic_livecell.py evaluate --target hybrid --save_root /path/to/runs
 
 ``--dry_run`` builds the loaders and pulls a single batch, which checks the target shapes without
 touching a GPU.
@@ -33,14 +33,14 @@ import torch_em
 from torch_em.data import MinInstanceSampler, ConcatDataset
 from torch_em.data.datasets import get_livecell_dataset
 
-from micro_sam.v2.datasets.wrapper import UniDataWrapper
 from micro_sam.v2.transforms.raw import _identity
+from micro_sam.v2.datasets.wrapper import UniDataWrapper
+from micro_sam.v2.training.training import train_automatic
 from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
+from micro_sam.v2.automatic_segmentation import get_predictor_and_segmenter
 from micro_sam.v2.transforms.labels import (
     DirectedPerObjectBoundaryDistanceTransform, GeodesicHybridDistanceTransform
 )
-from micro_sam.v2.training.training import train_automatic
-from micro_sam.v2.automatic_segmentation import get_predictor_and_segmenter
 
 from common import DENSITY_GRID, ITER_GRID, SIGMA_GRID, load_livecell
 
@@ -107,8 +107,10 @@ def run_dry_run(args):
     for _ in train_loader:
         n_batches += 1
     elapsed = time.perf_counter() - start
-    print(f"{elapsed / max(n_batches, 1):.3f} s per batch of {args.batch_size} "
-          f"over {n_batches} batches with {args.n_workers} workers")
+    print(
+        f"{elapsed / max(n_batches, 1):.3f} s per batch of {args.batch_size} "
+        f"over {n_batches} batches with {args.n_workers} workers"
+    )
 
 
 def run_training(args):

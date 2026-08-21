@@ -75,8 +75,10 @@ def run_sample(sample, grid, n_threads, keep_variants, verbose, foreground_sigma
             row = {"sample": sample["name"], "variant": variant, **setting}
             row.update(evaluate(segmentation, labels))
             rows.append(row)
-            print(f"{sample['name']} [{VARIANT_LABELS[variant]} {setting}]: "
-                  f"mSA {row['mSA']:.4f}, CREMI {row['CREMI']:.4f}")
+            print(
+                f"{sample['name']} [{VARIANT_LABELS[variant]} {setting}]: "
+                f"mSA {row['mSA']:.4f}, CREMI {row['CREMI']:.4f}"
+            )
 
     return rows, (variants if keep_variants else None)
 
@@ -234,9 +236,11 @@ def main():
 
     if args.view:
         all_segmentations = [
-            {variant: segment(sample, variants[variant], best_settings[variant], args.n_threads,
-                              args.foreground_sigma)
-             for variant in VARIANTS}
+            {
+                variant: segment(
+                    sample, variants[variant], best_settings[variant], args.n_threads, args.foreground_sigma
+                ) for variant in VARIANTS
+            }
             for sample, variants in zip(samples, cached)
         ]
         show(samples, all_segmentations, f"{args.dataset}: AIS v2 from ground truth distances")

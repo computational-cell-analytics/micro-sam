@@ -32,12 +32,16 @@ def report_differences(labels, fields, directed_boundary, current, sampling):
 
     excess = fields["center_distance_excess"][foreground]
     ratio = fields["center_distance_ratio"][foreground]
-    print(f"Center distance: {100 * np.mean(excess > voxel):.1f}% of the foreground is more than one voxel "
-          f"further along the object than in a straight line (median excess {np.median(excess):.2f}, "
-          f"p95 {np.percentile(excess, 95):.2f}, max {excess.max():.2f}).")
-    print(f"Detour factor: median {np.median(ratio):.2f}x, p95 {np.percentile(ratio, 95):.2f}x, "
-          f"max {ratio.max():.2f}x; {100 * np.mean(ratio > 1.5):.1f}% of the foreground detours by more "
-          f"than 1.5x and {100 * np.mean(ratio > 2.0):.2f}% by more than 2x.")
+    print(
+        f"Center distance: {100 * np.mean(excess > voxel):.1f}% of the foreground is more than one voxel "
+        f"further along the object than in a straight line (median excess {np.median(excess):.2f}, "
+        f"p95 {np.percentile(excess, 95):.2f}, max {excess.max():.2f})."
+    )
+    print(
+        f"Detour factor: median {np.median(ratio):.2f}x, p95 {np.percentile(ratio, 95):.2f}x, "
+        f"max {ratio.max():.2f}x; {100 * np.mean(ratio > 1.5):.1f}% of the foreground detours by more "
+        f"than 1.5x and {100 * np.mean(ratio > 2.0):.2f}% by more than 2x."
+    )
 
     # Compare the direction of the current transform with its geodesic counterpart.
     reference = current[1:][-ndim:][:, foreground]
@@ -45,8 +49,10 @@ def report_differences(labels, fields, directed_boundary, current, sampling):
     reference = reference / (np.linalg.norm(reference, axis=0, keepdims=True) + EPS)
     geodesic = geodesic / (np.linalg.norm(geodesic, axis=0, keepdims=True) + EPS)
     angles = np.degrees(np.arccos(np.clip((reference * geodesic).sum(axis=0), -1.0, 1.0)))
-    print(f"Directed boundary distances: median angle {np.median(angles):.1f} degrees, "
-          f"{100 * np.mean(angles > 30):.1f}% of the foreground deviates by more than 30 degrees.")
+    print(
+        f"Directed boundary distances: median angle {np.median(angles):.1f} degrees, "
+        f"{100 * np.mean(angles > 30):.1f}% of the foreground deviates by more than 30 degrees."
+    )
 
 
 def add_distance_layers(viewer, fields, directed, current, ndim, scale):
