@@ -684,19 +684,11 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, outp
     from micro_sam.v2.models.util import UniSAM2
 
     state = torch.load(checkpoint_path, weights_only=False, map_location=device or "cpu")
-    # The standalone trainer writes 'model_state', the joint one 'unetr_state' or 'decoder_state'.
+    # A joint checkpoint holds both; 'unetr_state' is the decoder, 'model_state' the interactive model.
     if isinstance(state, dict):
-        model_state = state.get("model_state", state.get("unetr_state", state.get("decoder_state", state)))
+        model_state = state.get("unetr_state", state.get("model_state", state))
     else:
         model_state = state
-
-    # The joint trainer wraps the encoder in 'SAM2EncoderAdapter', so its weights live one level
-    # deeper. Rebuild that structure by passing a module rather than a name.
-    needs_adapter = isinstance(encoder, str) and any(k.startswith("encoder.inner.") for k in model_state)
-    if needs_adapter:
-        from micro_sam.v2.util import get_sam2_model
-        sam2_model = get_sam2_model(model_type=encoder, input_type="images", device=device or "cpu")
-        encoder = sam2_model.image_encoder
 
     model = UniSAM2(encoder=encoder, output_channels=output_channels)
     model.load_state_dict(model_state)
