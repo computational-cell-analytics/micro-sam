@@ -595,3 +595,73 @@ def test_volume_early_stop_patience_defaults_to_two():
     from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
 
     assert DEFAULT_PROMPT_GENERATION["early_stop_patience"] == 2
+
+
+def test_add_prompt_set_pushes_a_box_and_its_points_in_one_call():
+    segmenter = make_recording_segmenter()
+    segmenter.add_prompt_set(
+        frame_id=3, points=np.array([[10, 12], [20, 22]]), point_labels=np.array([1, 0]),
+        box=np.array([4, 5, 12, 13]), object_id=2,
+    )
+
+    # One call, where the incremental methods would have made three: every push re-runs the mask
+    # decoder on the conditioning frame, which is what this exists to avoid.
+    calls = segmenter.predictor.calls
+    assert len(calls) == 1
+    assert calls[0]["frame_idx"] == 3 and calls[0]["obj_id"] == 2
+    # SAM2 requires 'clear_old_points' whenever a box is given.
+    assert calls[0]["clear_old_points"] is True
+    # Points go to SAM2 in (x, y), the box in (x0, y0, x1, y1).
+    assert calls[0]["points"] == [[12.0, 10.0], [22.0, 20.0]]
+    assert calls[0]["labels"] == [1, 0]
+    assert calls[0]["box"] == [[5, 4, 13, 12]]
+
+
+def test_add_prompt_set_records_the_anchor_it_conditioned():
+    segmenter = make_recording_segmenter()
+    segmenter.add_prompt_set(
+        frame_id=5, points=np.array([[10, 12]]), point_labels=np.array([1]),
+        box=np.array([4, 5, 12, 13]), object_id=7,
+    )
+    segmenter.add_prompt_set(frame_id=2, points=np.array([[1, 1]]), point_labels=np.array([1]), object_id=7)
+
+    # The bookkeeping the incremental methods keep, so the anchor and a replay still see these.
+    assert segmenter._anchor_per_object() == {7: 2}
+    assert (7, 5) in segmenter._pushed_boxes
+    assert (10, 12, 1) in segmenter._pushed_points[(7, 5)]
+
+
+def test_add_prompt_set_conditions_on_a_box_alone():
+    segmenter = make_recording_segmenter()
+    segmenter.add_prompt_set(frame_id=1, box=np.array([0, 0, 8, 8]), object_id=1)
+    assert len(segmenter.predictor.calls) == 1
+    assert segmenter.predictor.calls[0]["points"] is None
+    assert segmenter.predictor.calls[0]["box"] == [[0, 0, 8, 8]]
+    # Nothing to push is not an error, and pushes nothing.
+    segmenter.add_prompt_set(frame_id=1, object_id=1)
+    assert len(segmenter.predictor.calls) == 1
+
+
+@pytest.mark.parametrize("n_points", [1, 2, 7])
+def test_add_prompt_set_never_pushes_a_negative_stride(n_points):
+    """A single point is the case that bites.
+
+    The caller hands (y, x) and this reverses to the (x, y) SAM2 wants, so the array it builds is a
+    reversed view. For one point that view is flagged C-contiguous - numpy ignores the stride of a
+    size-1 axis - while still carrying a negative stride, and torch refuses those. Nothing about the
+    reversal is specific to one point, so all three counts are pinned.
+    """
+    segmenter = make_recording_segmenter()
+    points_yx = np.arange(2 * n_points, dtype="float32").reshape(n_points, 2)[:, ::-1]
+    segmenter.add_prompt_set(
+        frame_id=0, points=points_yx, point_labels=np.ones(n_points, dtype="int32"),
+        box=np.array([1, 2, 9, 9]), object_id=1,
+    )
+
+    call = segmenter.predictor.calls[0]
+    for name in ("points", "labels"):
+        pushed = np.asarray(call[name])
+        assert all(stride > 0 for stride in pushed.strides), f"{name} has a negative stride"
+        # The check torch itself makes, which is what the strides are about.
+        torch.tensor(pushed)
+    assert np.asarray(call["points"]).shape == (n_points, 2)

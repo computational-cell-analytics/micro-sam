@@ -2,6 +2,16 @@
 
 ## Outcome
 
+**A second refinement round is now available for volumes, as an opt-in.**
+`generate(refinement="points+boxes")` re-prompts each candidate on its anchor slice before the
+propagation and is worth **+2.28% macro mSA at +1.4% runtime on the 32-slice crops** (+2.26% at about
++9% on the 12-slice ones), with no dataset regressing at depth. It fails the +5% quality gate, so
+`refinement=None` remains the pipeline default, but it passes the per-dataset runtime cap at depth,
+which no 2d refinement variant does. Experiment 6 has the measurements; its two tuned defaults differ
+from the 2d ones (`n_negatives` 4 rather than 6, `min_consistency` 0.85 rather than 0.7), and it also
+found that *how many SAM2 calls carry the same prompt* changes quality by 1.75 macro points, which no
+2d experiment could have surfaced.
+
 **Propagation early stopping is now on by default with patience 2** (`early_stop_patience` in
 `micro_sam/v2/automatic_prompt_generation.py`). It was adopted in experiment 5 as a deliberate,
 documented exception to the efficiency gate, which it fails: only two of five datasets are more than
@@ -364,6 +374,292 @@ lapse together, which is likeliest in a sparse volume where a pass carries few o
 objects are expected to vanish and return should raise the patience, which is why it stays exposed as a
 parameter rather than becoming a fixed constant.
 
+## Experiment 6: refining the anchor slice
+
+### Hypothesis
+
+Campaign 1 of the 2d refinement work closed with a prediction about volumes
+([`APG_2D_OPTIMIZATION.md`](APG_2D_OPTIMIZATION.md), conclusion 6): the three ingredients that were
+each measured neutral in 3d - re-prompting an instance with the prompts grouped onto it (+0.001),
+negative prompts from the adjacent instances (+0.001), and conditioning the anchor slice with a box
+(+0.001) - are exactly the ones that only pay *in combination* in 2d, where the combined
+`points+boxes` re-prompt is worth +4.2% macro mSA. A 3d revisit should therefore test the combination
+rather than any single ingredient.
+
+Where it can be tested is forced. A volumetric mask comes from the propagation, and the module
+docstring records that a prompt on an already propagated slice turns it into a conditioning frame and
+replaces the mask there with a single-point one (-0.034 mSA). A finished track cannot be re-prompted,
+so the 2d shape of the mechanism - merge, then re-prompt every instance - has no volumetric
+counterpart. What does have one is the **anchor slice**: every candidate is already prompted and
+scored there, in 2d, before anything is propagated, and that one prompt is what the whole track grows
+from.
+
+### Mechanism
+
+`generate(refinement=..., refinement_kwargs=...)` now accepts a volume. The mode strings and their
+components are the 2d ones; the second round runs inside `_score_candidates`, slice by slice, while
+the predictor is still pointed at that slice, and what it produces is the conditioning the
+propagation starts from rather than a finished mask. `derive_refinement_prompts`,
+`_predict_refinement_batch`, `_predict_prompt_batch` and both acceptance gates are the 2d code,
+applied in-plane. The kwarg surface is the 2d one minus `min_grouped_for_points`, which 2d refuted,
+plus one addition with no 2d analogue: **`conditioning`**, which decides how an accepted round reaches
+the propagation.
+
+The `recover` component keeps its 2d shape but gains a stronger volumetric argument: the merge that
+drops a candidate runs on one slice, and two objects overlapping in-plane there can be separate
+everywhere else in z, so a revived candidate is propagated and the 3d merge arbitrates.
+
+### Benchmark
+
+Standard 12-slice crops, manifest `0f8fb67b3650a71f9f44b53037e89546`, `hvit_t` checkpoint `best`
+(`85fb099c4bb038fa0ab9bddd6151689e`), on an `NVIDIA A100-SXM4-80GB MIG 1g.20gb` - the same device
+string every earlier experiment recorded, so runtimes here are comparable to theirs. The screening ran
+across six
+implementation epochs; the `refinement=None` control returns macro mSA **0.382313017** in all
+seventeen of its runs, every per-dataset value identical, so quality is comparable across epochs even
+where the comparator's checksum matching is not. Baseline: 0.382313017, and a per-window median total
+between 425 and 458 s.
+
+**Timing on this machine needs stating before any cost figure is read.** The baseline moved 427 ->
+455 -> 437 -> 458 s across four windows in six hours with byte-identical unrefined code, and the
+*within-window* spread ranged from 0.18% to 4.72%. A 1g.20gb slice is supposed to be partitioned, so
+that drift is worth knowing about on its own: partitioning the GPU does not partition whatever this
+is - host, storage or memory bandwidth. Splitting it shows the noise in generation, not
+in the embedding phase, so it is contention on the node. Every round is therefore bracketed by a
+control before and after it, and a round whose bracket shows drift has its cost column discarded:
+that happened to R2 (+7.67% drift), R3 (+6.84%) and R4. The conditioning round and the composition
+round held to -0.67% and -0.01% and their cost figures stand. `boxes` with `conditioning="mask"`
+illustrates the hazard: the same code and the same segmentation measured +10.20%, +4.87% and +0.06%
+against three different windows' controls.
+
+### The mode grid
+
+Everything at the 2d optimum (p1-n6, mc0.7, fo0.15, replace), `conditioning="prompts"` unless noted.
+
+| mode | macro % | worst dataset |
+|---|---:|---:|
+| **points+boxes** | **+1.867** | -1.20 |
+| points+boxes+masks | +1.833 | -0.15 |
+| boxes, `conditioning="mask"` | +0.216 | -4.46 |
+| points | +0.111 | -2.41 |
+| boxes+masks | +0.080 | -1.58 |
+| points+boxes, `conditioning="mask"` | -0.446 | -9.75 |
+| boxes | -0.614 | -1.50 |
+
+Every mode kept the baseline's 925 scored candidates and 93 propagation passes, so no second round
+fed back into the first.
+
+**The combination transfers; the ingredient ordering does not.** `points+boxes` beats both of its
+ingredients alone - `points` +0.11%, `boxes` -0.61% - which is 2d's claim that grouped prompts pay
+only when box-anchored, and its converse. But 2d had `boxes` alone at +1.68%, and here a box-only
+conditioning frame is *worse* than the original single point. In a volume the box contributes nothing
+by itself and earns its place only as the anchor the points hang off. Mask cues add nothing to
+`points+boxes`, as in 2d.
+
+### The conditioning axis, which has no 2d counterpart
+
+Four strategies push **the same prompt** - identical box and points, from an identical accepted second
+round: 912 replaced, 12 consistency-gated, 1 foreign-gated, 5.82 negatives per candidate, 1216 frame
+steps, in every row. They differ only in how many SAM2 calls carry it.
+
+| strategy | pushes per object | macro % | total time % | worst dataset time |
+|---|---:|---:|---:|---:|
+| `prompts` | 1 box + 6 points | **+1.867** | +8.64 | **+10.08** |
+| `prompts-grouped` | 1 box + 1 points | +1.334 | **+1.97** | +2.29 |
+| `prompts-joint` | 1 | +0.113 | +0.68 | +0.88 |
+| `mask` | 1 (`add_new_mask`) | -0.446 | ~-2 | - |
+
+A push is not bookkeeping. Each `add_new_points_or_box` re-runs the mask decoder on the conditioning
+frame and feeds the previous prediction back in as a mask input, so pushing a prompt in more steps
+refines the anchor iteratively. One call gives the decoder a single shot at box and points together;
+eight give it a box and then six corrections. **Almost all of the benefit is in the first extra
+step**: one push to two is worth +1.22 macro points, two to eight only +0.53 more for four times the
+added runtime. What pays is letting the decoder see the box before it sees the negatives, not
+correcting point by point.
+
+This was found against intent. `prompts` was the original implementation; its runtime was read as
+waste and "optimized" into `prompts-joint`, which cost 1.75 macro points. The telemetry identified
+the cause: with the second round's counters and the frame steps identical, nothing but the push
+mechanism could account for the drop. The same correction applies to the cost - `prompts` was first
+reported at +25.25% against a baseline from another window, and is +8.64% against its own.
+
+### The prompt counts
+
+| config | macro % | negatives used per candidate |
+|---|---:|---:|
+| **n_negatives=4** | **+2.158** | 3.95 |
+| n_negatives=6 (2d optimum) | +1.867 | 5.82 |
+| n_positives=2 | +0.945 | 3.95 |
+| n_negatives=2 | +0.749 | 2.00 |
+| n_negatives=8 | +0.655 | 7.62 |
+| n_negatives=12 | +0.337 | 11.11 |
+| n_negatives=0 | -0.302 | 0 |
+| n_positives=3 | -3.056 | 3.95 |
+
+**Negatives are the whole mechanism and they peak at four.** With none the mode falls below baseline
+and lands where `boxes` alone did, which it should: one positive and no negatives is a box plus the
+original point. 2d peaked at six to eight and collapsed past twelve; 3d peaks earlier. That fits how a
+volume must choose them - every negative comes from a candidate anchored on the same slice, so each is
+a real in-plane neighbour rather than a prompt from across the image, and four already bound the
+object. Supply is not the cap: 11.1 negatives per candidate were available and used at n12.
+
+**Extra positives hurt, more sharply than in 2d.** p1 > p2 > p3, and p3 takes EmbedSeg down 12.7%.
+This is 2d's S6 ablation reproducing: the grouped extra positives were the original core of the
+second-round idea and are the wrong ingredient in both dimensions.
+
+### The acceptance gates
+
+On base `n_negatives=4`.
+
+| config | macro % | consistency-gated | foreign-gated |
+|---|---:|---:|---:|
+| **`min_consistency=0.85`** | **+2.264** | 39 | 0 |
+| `min_consistency=0.85`, foreign off | +2.264 | 39 | 0 |
+| `max_foreign_overlap=None` | +2.195 | 9 | 0 |
+| base, mc0.7 + fo0.15 | +2.158 | 9 | 1 |
+| `max_foreign_overlap=0.05` | +2.158 | 9 | 7 |
+| ungated | +1.962 | 0 | 0 |
+| `min_consistency=0.5` | +1.925 | 2 | 2 |
+| `min_consistency=0.95` | +1.541 | 374 | 0 |
+
+**The consistency gate carries the gates' whole contribution and 3d wants it tighter than 2d**, with a
+clean interior optimum at 0.85. 2d measured the opposite at the top, where 0.85 over-gated (+2.34%
+against +3.12% for 0.7). The reversal has a mechanism: in 2d a wrongly accepted re-prompt costs one
+instance's mask, in 3d it becomes the conditioning frame of a whole track. At 0.95 the gate vetoes 374
+of 925 and starts refusing genuine improvements.
+
+**`max_foreign_overlap` is redundant rather than inert.** Composed with mc0.85 it fires zero times and
+removing it changes nothing to six decimals: the consistency gate has already vetoed those same
+candidates. Keeping the 0.15 default costs nothing.
+
+**Caveat.** Four of the five datasets return identical mSA across every row of this table - only CREMI
+moves, from +1.81% to +7.88%, on a single crop with the lowest absolute baseline of the five (0.0957).
+The gate ranking rests on one crop, which is what `APGv2.md:77-78` warns against.
+
+### Negative quality and prompt geometry: four directions refuted
+
+| config | macro % | worst dataset |
+|---|---:|---:|
+| **base** (`box_extension=0`, prompt negatives, replace, no distance cap) | **+2.158** | -1.09 |
+| `policy="keep-if-better"` | +1.883 | -1.09 |
+| `max_negative_distance=64` | +0.338 | -1.09 |
+| `negative_source="interior"` | +0.185 | -1.91 |
+| `box_extension=2` | -1.962 | -23.32 |
+| `box_extension=4` | -5.122 | -17.08 |
+
+Nothing improves on the defaults, which is worth as much as a win: it closes four axes. A grown box is
+far more harmful than in 2d, driven by the C. elegans atlas (-23.3% at extension 2), the most crowded
+crop - a box grown into a neighbour becomes a track's conditioning frame, so the error propagates
+instead of staying in one mask. Interior negatives *lose*, reversing 2d's best source, plausibly
+because a 3d prompt is the density peak of a whole component while the interior point of an obliquely
+cut cross-section can sit near the border of a thin sliver. Capping negatives by distance costs 1.8
+points, so the negatives that pay are not only the immediate neighbours.
+
+### Recovery: neutral, and quantified
+
+| `recover_max_claimed` | candidates | recovered | macro % |
+|---:|---:|---:|---:|
+| 0.4 | 16 | 7 | +2.158 |
+| 0.6 | 24 | 9 | +2.158 |
+| 0.8 | 33 | 9 | +2.158 |
+| without `recover` | - | - | +2.158 |
+| standalone `recover` | 24 | 9 | +0.000 |
+
+The volumetric argument is stronger than 2d's and still does not pay, for a reason the argument did
+not anticipate: there is almost nothing to act on. Of 925 scored candidates the merge offers 16 to 33
+whose pixels are lightly enough claimed to qualify, at most 9 survive their re-prompt, and adding 9
+objects across five crops moves the dataset-balanced mSA by less than 1e-6 - with or without the rest
+of the refinement. The records the per-slice merge drops are nearly all heavily claimed, i.e. real
+duplicates rather than lost objects, which matches 2d's S4 and this document's own diagnosis that the
+dominant 3d recall failure is the object that was never proposed. `recover` stays as a
+measured-neutral option, as in 2d.
+
+### What the standard set recommends
+
+Two configurations, both `points+boxes` with `n_negatives=4` and `min_consistency=0.85`:
+
+- **quality**: `conditioning="prompts"` - +2.264% macro for about +9% total runtime and +10.08% on its
+  worst dataset, which misses the gates' 10% per-dataset cap by 0.08 points.
+- **balance**: `conditioning="prompts-grouped"` - +1.876% macro for +2.60% runtime, comfortably inside
+  every runtime constraint, and the only refinement variant in either dimension that is.
+
+Neither approaches the +5% quality gate, so the pipeline default stays `refinement=None`.
+
+### Confirmation on the deep crops
+
+Opt-in 32-slice set, manifest `f611a7125383e850798d0b5bf696f6f7`, selected with `--crops-3d deep`.
+`--prepare-only` confirms all five crops reach their declared depth with no trim (32, 32, 32, 32, 30)
+at the ROIs and object counts experiment 5 recorded.
+
+Three controls give macro **0.314143** with every per-dataset value within 3.6e-7 of experiment 5's
+recorded deep baseline, so the refinement work is behaviour-free at depth as well. Median total
+3024 s; the bracketing control closed at 3000 s, -0.78%, so this round's cost figures stand.
+
+| configuration | macro % | total time % | worst dataset mSA | worst dataset time |
+|---|---:|---:|---:|---:|
+| **n4 + mc0.85, `prompts-grouped`** | **+2.310** | +1.97 | +0.09 | +3.74 |
+| **n4 + mc0.85, `prompts`** | +2.277 | **+1.42** | +0.16 | **+2.08** |
+| library defaults, n6 + mc0.7, `prompts` | +1.779 | +9.41 | +0.02 | +10.90 |
+
+Per-dataset mSA change:
+
+| configuration | celegans | embedseg | gonuclear | cremi | snemi |
+|---|---:|---:|---:|---:|---:|
+| n4 + mc0.85, `prompts-grouped` | +7.23 | +1.15 | +3.55 | +0.09 | +2.43 |
+| n4 + mc0.85, `prompts` | +8.36 | +1.15 | +3.48 | +0.16 | +2.28 |
+| library defaults | +8.46 | +0.80 | +3.52 | +2.24 | +0.02 |
+
+Four results, all of them favourable, and one of them the answer to the question this set exists for.
+
+**The tuning is not an artifact of shallow crops.** Both tuned variants beat the defaults at 32 slices,
++2.28% and +2.31% against +1.78%, reproducing the 12-slice ordering (+2.26% against +1.87%). That was
+the real risk: `n_negatives=4` and `min_consistency=0.85` were selected on crops where four of the five
+datasets returned identical mSA across entire rounds, R3's whole signal was one CREMI crop and R4's
+one C. elegans crop. They hold at depth.
+
+**Nothing regresses at depth.** The worst per-dataset change is +0.02% to +0.16% across all three
+candidates, against -1.09% to -1.34% on the 12-slice crops: every deep crop of every candidate
+improves. C. elegans gains the most, 7.2-8.5%, and it is also the crop whose absolute baseline is
+smallest (0.0347), so its relative change carries the least weight of the five.
+
+The tuning trades between datasets rather than lifting all of them: against the defaults it buys CREMI
+down (+2.24% to +0.09%) and SNEMI up (+0.02% to +2.43%), and the macro gain is that trade coming out
+ahead. The two tuned variants differ from each other mainly on C. elegans, +7.23% against +8.36%.
+
+**The cost largely disappears at depth.** `prompts` cost about +9% total and +10.08% on its worst
+dataset at 12 slices; at 32 it is +1.42% and +2.08%. The refinement's overhead is fixed per candidate
+- one extra 2d forward, a few extra anchor-frame pushes - while propagation scales with depth, and the
+deep crops carry 5.7x the frame steps. Both tuned variants therefore clear the 10% per-dataset runtime
+cap comfortably, which neither did on the shallow set. Deep volumes being the case that matters, this
+is the more relevant regime.
+
+**The two conditioning strategies converge.** At 12 slices `prompts` led `prompts-grouped` by 0.39
+macro points; at 32 they are within 0.03 points and their runtimes differ by less than the controls'
+own 3.0% spread. The iterative refinement of the anchor is worth less when the track is longer, which
+is consistent with its mechanism: the anchor is one frame of 32 rather than one of 12.
+
+### Decision
+
+The quality gate needs +5% macro mSA and the best configuration reaches +2.31%, so **no default
+changes and `refinement=None` remains the pipeline default**, as in 2d. The gate is failed on quality
+alone: the runtime cap, which the 12-slice measurements broke, is passed at depth by both tuned
+variants.
+
+The measured optimum becomes the `DEFAULT_REFINEMENT_3D` values, so the recommended usage is
+
+```python
+segmenter.generate(refinement="points+boxes")
+```
+
+which resolves to `n_positives=1`, `n_negatives=4`, `min_consistency=0.85`,
+`max_foreign_overlap=0.15`, `policy="replace"`, `conditioning="prompts"`: +2.28% macro at +1.4%
+runtime on the deep crops, +2.26% at about +9% on the shallow ones. Workloads on shallow stacks, where
+`prompts` is the expensive variant, should pass `refinement_kwargs={"conditioning": "prompts-grouped"}`
+for +1.88% at +2.6%; at depth the two are equivalent and the cheaper one is marginally ahead.
+
+Two of the 2d recommendation's values do **not** carry over and the defaults differ accordingly:
+`n_negatives` is 4 rather than 6, and `min_consistency` 0.85 rather than 0.7.
+
 ## Conclusions and follow-up
 
 The experiments identify three structural constraints on further 3D optimization:
@@ -380,6 +676,33 @@ The experiments identify three structural constraints on further 3D optimization
    makes an uneven benefit acceptable in a way an uneven quality trade-off would not be. The remaining win
    is per-track: stop each track when its own evidence runs out instead of waiting for the whole batch, and
    GoNuclear's 33.6% becomes the floor rather than the outlier.
+
+Experiment 6 adds three more, all specific to refining a volume rather than an image:
+
+4. **The structure of the 2d refinement transfers; none of its tuned values do.** The combination pays
+   where no single ingredient does, one positive beats two beats three, mask cues add nothing, and
+   recovery is neutral - all as in 2d. But `boxes` alone is negative here where it was +1.68% in 2d,
+   negatives peak at four rather than six to eight, the consistency gate wants 0.85 rather than 0.7,
+   `max_foreign_overlap` is redundant rather than additive, interior negatives lose rather than win,
+   and a grown box costs four macro points rather than a fraction of one. Each reversal has a
+   volumetric mechanism behind it, and the common thread is that a 3d anchor prompt is the conditioning
+   frame of a whole track, so both the value of getting it right and the cost of getting it wrong are
+   larger than for one 2d mask.
+5. **The number of decoder steps that carry a prompt is a parameter, not an implementation detail.**
+   Pushing the identical box and points in one SAM2 call, two, or eight gives +0.11%, +1.33% and
+   +1.87%, because each push re-runs the mask decoder on the conditioning frame and feeds the previous
+   prediction back in. Nearly all of it is in the first extra step: letting the decoder see the box
+   before the negatives. Anything that touches how prompts reach the video predictor should measure
+   this axis rather than assume batching is free.
+6. **A refinement's cost amortizes against depth while its benefit does not decay.** The same
+   configuration costs about +9% on 12-slice crops and +1.4% on 32-slice ones, because the overhead is
+   fixed per candidate while propagation scales with depth. Optimizations of the per-candidate stages
+   should therefore be gated on deep crops; the shallow set overstates their cost by roughly 6x.
+
+The follow-ups experiment 6 leaves open: the recall axis is still untouched, since recovery reaches only
+the 16-33 candidates of 925 that the anchor-slice merge drops lightly and the dominant failure remains
+the object never proposed; and the shallow benchmark cannot resolve the gates, where four of five
+datasets returned identical mSA across whole rounds and one CREMI crop carried the entire signal.
 
 A useful next experiment would measure per-track mask confidence and extent during propagation, then stop
 only individual tracks that have remained empty or unstable. The current pass-level early stop cannot save
@@ -468,3 +791,84 @@ python finetuning/v2/evaluation/compare_apg_optimization.py \
 ```
 
 The comparator writes its decision summary as JSON and every per-dataset delta as CSV beside it.
+
+### Experiment 6: reproducibility and artifacts
+
+Output root as for the earlier experiments. Model `hvit_t` / `best`
+(`85fb099c4bb038fa0ab9bddd6151689e`) throughout, on an `NVIDIA A100-SXM4-80GB MIG 1g.20gb`. Manifests
+`0f8fb67b3650a71f9f44b53037e89546` (standard) and `f611a7125383e850798d0b5bf696f6f7` (deep).
+
+The implementation changed six times, so the campaign spans six checksums. Quality is nonetheless
+comparable across all of them: the `refinement=None` control returns macro mSA 0.382313017 on the
+standard crops in every one of its seventeen runs, with every per-dataset value identical, and
+0.314143 on the deep crops. Runtime is not comparable across epochs, which is what the bracketing
+controls below are for.
+
+| epoch | implementation | what changed | what it carries |
+|---|---|---|---|
+| 2 | `d8fafe4f32175b067e54805b7601cd37` | the implementation | R1's mode grid |
+| 3 | `8f7ba4cda458c37479c72c0fdd05c21f` | prompts batched into one push | superseded; three modes crashed |
+| 4 | `30546874680ed0ebdf479bcc41f099ca` | negative-stride fix | R1 re-measured |
+| 5 | `ef3aac3c94a76583e37035f33f9dfd75` | `conditioning` as an explicit axis | the conditioning round, R2, R3, R4 |
+| 6 | `efe1ae4b6f23407f256bc1b418dd5be1` | `recover` conditioning fix | R5, composition, the deep confirmation |
+
+Epochs 3 and 4 exist only to undo mistakes: epoch 3 batched the anchor-frame pushes into one call,
+which crashed on any frame carrying a single candidate and, once fixed, cost 1.75 macro points by
+removing the iterative refinement it was meant to make cheaper. Both are recorded because their runs
+are on disk and because the epoch-5 conditioning axis is the measurement that explains them.
+
+Configuration checksums, by round (trial id in brackets):
+
+| round | configurations |
+|---|---|
+| controls, standard | `d2d0cb8b`, `095496cc`, `c667d849` [`control-3d-1..3`], in every epoch |
+| brackets, standard | `ee632c07` [r2], `77cbca7c` [r3], `9c2f2fa8` [r4], `fe11fd69` [r5], `fb305b4e` [e6], `5af3a058` [cond] |
+| R1 mode grid [`r1-screen-1`] | boxes `678a375f`; boxes+masks `ca6ffd5e`; boxes/mask `2db8dbd7`; points `fe9e9f9b`; points+boxes `458952ad`; points+boxes/mask `6d4160f8`; points+boxes+masks `6e22acd7` |
+| conditioning [`cond-screen-1`] | prompts `131ad19b`; prompts-grouped `80d48a8b`; prompts-joint `55fc4298` |
+| R2 [`r2-screen-1`] | n0 `845c1895`; n2 `4e65b8eb`; n4 `76b46b4b`; n8 `5b70c6f8`; n12 `0e094bd1`; p2 `3009f492`; p3 `2b313dc3` |
+| R3 [`r3-screen-1`] | mc0.5 `fdbb589a`; mc0.85 `73a64deb`; mc-off `b9d5eab9`; fo0.05 `189a1258`; fo-off `d201ebfe`; ungated `85d4f770` |
+| R4 [`r4-screen-1`] | interior `b1596834`; box-ext2 `4b068d93`; box-ext4 `0a569e09`; max-neg-dist64 `e34960f9`; keep-if-better `05f79163` |
+| R5 [`r5-screen-1`] | 0.4 `d0aad4c4`; 0.6 `917d9bc2`; 0.8 `561e043c`; standalone `9138fc68` |
+| composition [`comp-screen-1`] | mc0.85+fo-off `6b039643`; mc0.95 `2839a7a0`; grouped+mc0.85 `c667bceb` |
+| deep controls | `d2d0cb8b`, `095496cc`, `c667d849` [`control-3d-1..3`]; bracket `a4738f11` [`deep-bracket`] |
+| deep candidates [`deep-screen-1`] | tuned `0d1909b7`; grouped `2fadfc69`; defaults `f79dcef2` |
+
+A round is run as one configuration per invocation, for example:
+
+```bash
+python finetuning/v2/evaluation/benchmark_apg_optimization.py \
+    --ndim 3 --config points-boxes-n4-mc085.json --trial-id r2-screen-1 --time-budget-minutes 60
+
+python finetuning/v2/evaluation/benchmark_apg_optimization.py \
+    --ndim 3 --crops-3d deep --config deep-tuned.json --trial-id deep-screen-1 \
+    --time-budget-minutes 150
+```
+
+with a configuration naming only the changed 3d parameters:
+
+```json
+{
+  "name": "deep-tuned",
+  "params_3d": {
+    "refinement": "points+boxes",
+    "refinement_kwargs": {"n_negatives": 4, "min_consistency": 0.85}
+  }
+}
+```
+
+Because those two values are now the `DEFAULT_REFINEMENT_3D` entries, that configuration is what a
+bare `{"refinement": "points+boxes"}` resolves to; `deep-defaults` above predates the change and
+records the previous values explicitly.
+
+Every round was bracketed by a control before and after it. Where the bracket showed drift the round's
+cost column is discarded: R2 (+7.67%), R3 (+6.84%) and R4 are quality-only for that reason. The
+conditioning round (-0.01%), the composition round (-0.67%) and the deep confirmation (-0.78%) held,
+and their cost figures are the ones quoted.
+
+Regression tests are in `test/test_v2_automatic_prompt_generation.py` and
+`test/test_v2_prompt_based_segmentation.py`. Two of them exist because of specific failures rather
+than by design: a parametrized stride test over one, two and seven points, after a single-candidate
+frame produced a reversed array that torch refuses; and a cross product over six modes and four
+conditioning strategies that pushes every candidate through the real propagator, after a producer of
+conditioning dicts was found to omit a key the consumer required. Both bugs were shaped the same way -
+each half unit-tested, the pair never exercised together.

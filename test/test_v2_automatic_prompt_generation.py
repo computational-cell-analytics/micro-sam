@@ -12,6 +12,7 @@ from micro_sam.v2.instance_segmentation import (
 from micro_sam.v2.automatic_prompt_generation import (
     AutomaticPromptGenerator, TiledAutomaticPromptGenerator, derive_point_prompts, merge_by_score,
     interior_points, derive_refinement_prompts, mask_to_logits, _parse_refinement,
+    REFINEMENT_STATS_3D,
 )
 from micro_sam.v2.normalization import to_image
 
@@ -1465,3 +1466,586 @@ def test_tiled_apply_feeds_the_refinement_end_to_end(monkeypatch):
     # The refinement runs in the tile that produced the instance, not in a neighbouring one.
     assert segmenter.visited_tiles == [0, 3, 0, 3]
     assert real_tile_bounding_box(3)[0].start == 24
+
+
+# --- volumetric refinement -------------------------------------------------------------------------
+
+
+class _VolumePredictor:
+    """Answers each prompt batch with the masks a test supplies, and records what it was asked."""
+
+    device = "cpu"
+    mask_threshold = 0.0
+
+    def __init__(self, responses):
+        # One (masks, scores) pair per '_predict' call, in call order.
+        self.responses = list(responses)
+        self.calls = []
+
+    def _prep_prompts(self, points, labels, boxes, mask_logits, normalize):
+        self.calls.append({"points": points, "labels": labels, "boxes": boxes, "mask_logits": mask_logits})
+        return (
+            None if mask_logits is None else torch.as_tensor(mask_logits),
+            None if points is None else torch.as_tensor(points),
+            None if labels is None else torch.as_tensor(labels),
+            None if boxes is None else torch.as_tensor(boxes),
+        )
+
+    def _predict(self, coords, labels, boxes, mask_input, multimask_output, return_logits):
+        masks, scores = self.responses.pop(0)
+        # +-10 logits, so the stability score is exactly 1 and the combined score is the given one.
+        logits = torch.where(torch.as_tensor(np.asarray(masks))[:, None], 10.0, -10.0)
+        return logits, torch.as_tensor(scores, dtype=torch.float32)[:, None], None
+
+    @property
+    def refinement_calls(self):
+        """The calls that carry a box or a mask cue, which the anchor scoring never does."""
+        return [call for call in self.calls if call["boxes"] is not None or call["mask_logits"] is not None]
+
+
+class _RecordingPropagator:
+    """Records the conditioning pushed for each object, and answers a pass with fixed masks."""
+
+    def __init__(self, video_segments=None):
+        self.pushed = []
+        self.video_segments = video_segments or {}
+
+    def reset_tracking(self):
+        self.pushed.append(("reset",))
+
+    def reset_predictor(self):
+        pass
+
+    def add_point_prompts(self, frame_ids, points, point_labels, object_id=None, **kwargs):
+        self.pushed.append((
+            "points", int(frame_ids), int(object_id),
+            np.asarray(points).tolist(), np.asarray(point_labels).tolist(),
+        ))
+
+    def add_box_prompts(self, frame_ids, boxes=None, object_id=None):
+        self.pushed.append(("box", int(frame_ids), int(object_id), np.asarray(boxes[0]).tolist()))
+
+    def add_prompt_set(self, frame_id, points=None, point_labels=None, box=None, object_id=1,
+                       clear_old_points=True):
+        self.pushed.append((
+            "set", int(frame_id), int(object_id),
+            None if points is None else np.asarray(points).tolist(),
+            None if point_labels is None else np.asarray(point_labels).tolist(),
+            None if box is None else np.asarray(box).tolist(),
+        ))
+
+    def add_mask_prompts(self, frame_ids, masks=None, object_id=None, refine=True):
+        self.pushed.append(("mask", int(frame_ids), int(object_id), int(np.asarray(masks[0]).sum()), refine))
+
+    def propagate_prompts(self, early_stop_patience=None):
+        return self.video_segments
+
+
+def _volume_generator(monkeypatch, shape, predictor, propagator=None):
+    """An initialized volumetric generator whose slice features are handed out by the monkeypatch."""
+    frames_seen = []
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation._set_image_predictor_from_3d_embeddings",
+        lambda predictor, embeddings, frame: frames_seen.append(frame),
+    )
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._prediction = np.zeros((4, *shape), dtype="float32")
+    segmenter._predictor = predictor
+    segmenter._propagator = propagator
+    segmenter._volume = np.zeros(shape, dtype="uint8")
+    segmenter._image_embeddings = {}
+    segmenter._is_initialized = True
+    segmenter._last_generation_stats = {key: 0 for key in REFINEMENT_STATS_3D}
+    return segmenter, frames_seen
+
+
+def _mask(shape, rows, columns):
+    mask = np.zeros(shape, dtype=bool)
+    mask[rows, columns] = True
+    return mask
+
+
+def _two_anchor_prompts():
+    """Two candidates on frame 0 and one on frame 2, as `derive_volume_prompts` returns them."""
+    return {
+        "points": np.array([[[6, 6]], [[24, 6]], [[24, 24]]], dtype="float32"),
+        "point_labels": np.ones((3, 1), dtype="int32"),
+        "frames": np.array([0, 0, 2], dtype="int64"),
+    }
+
+
+def _score_volume(segmenter, refinement=None, refinement_kwargs=None, prompts=None, **kwargs):
+    components = resolved = None
+    if refinement is not None:
+        components, resolved = _parse_refinement(refinement, refinement_kwargs, is_volume=True)
+    return segmenter._score_candidates(
+        prompts or _two_anchor_prompts(), multimasking=False, batch_size=64,
+        score_threshold=kwargs.get("score_threshold", 0.6), max_overlap=kwargs.get("max_overlap", 0.15),
+        components=components, refinement_kwargs=resolved,
+    )
+
+
+def test_parse_refinement_resolves_the_volume_surface():
+    # The volume surface is the 2d one minus 'min_grouped_for_points', plus 'conditioning'.
+    _, image = _parse_refinement("points+boxes", None)
+    _, volume = _parse_refinement("points+boxes", None, is_volume=True)
+    assert set(image) - set(volume) == {"min_grouped_for_points"}
+    assert set(volume) - set(image) == {"conditioning"}
+    assert volume["conditioning"] == "prompts"
+    # Two values were measured separately in 3d and differ from 2d; the rest are shared.
+    assert (volume["n_negatives"], volume["min_consistency"]) == (4, 0.85)
+    assert (image["n_negatives"], image["min_consistency"]) == (6, 0.7)
+    assert {key: volume[key] for key in ("n_positives", "policy", "box_extension", "negative_source")} == {
+        key: image[key] for key in ("n_positives", "policy", "box_extension", "negative_source")
+    }
+
+    with pytest.raises(ValueError, match="min_grouped_for_points"):
+        _parse_refinement("points+boxes", {"min_grouped_for_points": 2}, is_volume=True)
+    with pytest.raises(ValueError, match="Invalid conditioning"):
+        _parse_refinement("points+boxes", {"conditioning": "logits"}, is_volume=True)
+    with pytest.raises(ValueError, match="needs a re-prompt component"):
+        _parse_refinement("recover", {"conditioning": "mask"}, is_volume=True)
+    with pytest.raises(ValueError, match="can only condition a re-prompt"):
+        _parse_refinement("masks", None, is_volume=True)
+    # Recovery alone is a valid volume mode, and reads the conditioning default without complaint.
+    assert _parse_refinement("recover", None, is_volume=True)[0] == ("recover",)
+
+
+def test_volume_scoring_without_refinement_carries_only_the_propagation_prompt(monkeypatch):
+    # The guard on the unrefined path: a candidate is what it always was, so its propagation is too.
+    shape = (32, 32)
+    predictor = _VolumePredictor([
+        ([_mask(shape, slice(4, 12), slice(4, 12)), _mask(shape, slice(4, 12), slice(20, 28))], [0.9, 0.8]),
+        ([_mask(shape, slice(20, 28), slice(20, 28))], [0.7]),
+    ])
+    segmenter, frames_seen = _volume_generator(monkeypatch, (3, *shape), predictor)
+    candidates = _score_volume(segmenter)
+
+    assert frames_seen == [0, 2]
+    assert [candidate["frame"] for candidate in candidates] == [0, 0, 2]
+    assert all(set(candidate) == {"frame", "point", "score", "stability"} for candidate in candidates)
+    # No second round means no extra forward: exactly one scoring call per anchor slice.
+    assert predictor.refinement_calls == []
+    assert len(predictor.calls) == 2
+
+
+def test_volume_refinement_reprompts_every_candidate_on_its_anchor_slice(monkeypatch):
+    shape = (32, 32)
+    first = [_mask(shape, slice(4, 12), slice(4, 12)), _mask(shape, slice(4, 12), slice(20, 28))]
+    # A polished boundary: one row and column wider, so the consistency gate passes.
+    refined = [_mask(shape, slice(4, 13), slice(4, 13)), _mask(shape, slice(4, 13), slice(20, 29))]
+    predictor = _VolumePredictor([
+        (first, [0.9, 0.8]),
+        (refined, [0.95, 0.85]),
+        ([_mask(shape, slice(20, 28), slice(20, 28))], [0.7]),
+        ([_mask(shape, slice(20, 29), slice(20, 29))], [0.75]),
+    ])
+    segmenter, frames_seen = _volume_generator(monkeypatch, (3, *shape), predictor)
+    # The gate is pinned: this test is about the re-prompt, and the refined masks below sit at IoU
+    # 0.79 of the first round, which the measured 3d default of 0.85 would veto.
+    candidates = _score_volume(
+        segmenter, refinement="points+boxes", refinement_kwargs={"min_consistency": 0.7},
+    )
+
+    # One pass over each anchor slice: the features are read once, then scored and refined on.
+    assert frames_seen == [0, 2]
+    assert [len(call["points"]) for call in predictor.refinement_calls] == [2, 1]
+    assert segmenter._last_generation_stats["refined_candidates"] == 3
+    assert segmenter._last_generation_stats["replaced_candidates"] == 3
+    assert segmenter._last_generation_stats["gated_consistency"] == 0
+    assert segmenter._last_generation_stats["gated_foreign"] == 0
+
+    # The second round's score is what orders the 3d merge, and it goes in as one combined value.
+    assert candidates[0]["score"] == pytest.approx(0.95, abs=1e-6)
+    assert candidates[0]["stability"] == 1.0
+    # The conditioning is the re-prompt the second round was itself conditioned on - the instance's
+    # box, and its own point as the positive with the neighbour's as a negative - so the video
+    # predictor's decoder rebuilds the mask from the prompt the gates accepted.
+    conditioning = candidates[0]["conditioning"]
+    assert conditioning["box"] == (4, 4, 12, 12)
+    assert conditioning["point_labels"].tolist() == [1, 0]
+    assert conditioning["points"].tolist() == [[6.0, 6.0], [24.0, 6.0]]
+
+
+def test_volume_consistency_gate_keeps_the_first_round_prompt(monkeypatch):
+    shape = (32, 32)
+    predictor = _VolumePredictor([
+        ([_mask(shape, slice(4, 12), slice(4, 12))], [0.9]),
+        # Somewhere else entirely: a reshape, not a polish.
+        ([_mask(shape, slice(18, 26), slice(18, 26))], [0.99]),
+    ])
+    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), predictor)
+    prompts = {
+        "points": np.array([[[6, 6]]], dtype="float32"),
+        "point_labels": np.ones((1, 1), dtype="int32"),
+        "frames": np.array([0], dtype="int64"),
+    }
+    candidates = _score_volume(segmenter, refinement="points+boxes", prompts=prompts)
+
+    assert segmenter._last_generation_stats["gated_consistency"] == 1
+    assert segmenter._last_generation_stats["replaced_candidates"] == 0
+    # Rejected, so it propagates from its first-round point at its first-round score.
+    assert "conditioning" not in candidates[0]
+    assert candidates[0]["score"] == pytest.approx(0.9, abs=1e-6)
+
+
+def test_volume_foreign_overlap_gate_rejects_growth_into_a_neighbour(monkeypatch):
+    shape = (32, 32)
+    first = [_mask(shape, slice(4, 12), slice(4, 12)), _mask(shape, slice(4, 12), slice(20, 28))]
+    # The first instance swallows the second one's territory.
+    refined = [_mask(shape, slice(4, 12), slice(4, 28)), _mask(shape, slice(4, 12), slice(20, 28))]
+    predictor = _VolumePredictor([(first, [0.9, 0.8]), (refined, [0.95, 0.85])])
+    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), predictor)
+    prompts = {
+        "points": np.array([[[6, 6]], [[24, 6]]], dtype="float32"),
+        "point_labels": np.ones((2, 1), dtype="int32"),
+        "frames": np.array([0, 0], dtype="int64"),
+    }
+    candidates = _score_volume(
+        segmenter, refinement="points+boxes", refinement_kwargs={"min_consistency": None}, prompts=prompts,
+    )
+
+    assert segmenter._last_generation_stats["gated_foreign"] == 1
+    assert "conditioning" not in candidates[0]
+    assert "conditioning" in candidates[1]
+
+
+def test_keep_if_better_policy_keeps_the_first_round_on_a_volume(monkeypatch):
+    shape = (32, 32)
+    predictor = _VolumePredictor([
+        ([_mask(shape, slice(4, 12), slice(4, 12))], [0.9]),
+        ([_mask(shape, slice(4, 13), slice(4, 13))], [0.5]),
+    ])
+    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), predictor)
+    prompts = {
+        "points": np.array([[[6, 6]]], dtype="float32"),
+        "point_labels": np.ones((1, 1), dtype="int32"),
+        "frames": np.array([0], dtype="int64"),
+    }
+    candidates = _score_volume(
+        segmenter, refinement="points+boxes", refinement_kwargs={"policy": "keep-if-better"}, prompts=prompts,
+    )
+
+    assert segmenter._last_generation_stats["replaced_candidates"] == 0
+    assert "conditioning" not in candidates[0]
+
+
+def _overlapping_anchor_prompts():
+    """Two prompts on one slice whose masks overlap enough for the merge to drop the weaker one."""
+    return {
+        "points": np.array([[[8, 8]], [[24, 8]]], dtype="float32"),
+        "point_labels": np.ones((2, 1), dtype="int32"),
+        "frames": np.array([0, 0], dtype="int64"),
+    }
+
+
+def _recovery_predictor(shape, recovered_score=0.8):
+    kept = _mask(shape, slice(4, 20), slice(4, 20))
+    # 64 of its 256 pixels are the first instance's, i.e. a quarter claimed: dropped as a duplicate
+    # at max_overlap 0.15, but far from swallowed.
+    duplicate = _mask(shape, slice(4, 20), slice(16, 32))
+    return _VolumePredictor([
+        ([kept, duplicate], [0.9, 0.8]),
+        ([duplicate], [recovered_score]),
+    ])
+
+
+def test_volume_recovery_propagates_an_anchor_slice_duplicate(monkeypatch):
+    shape = (32, 32)
+    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), _recovery_predictor(shape))
+    candidates = _score_volume(segmenter, refinement="recover", prompts=_overlapping_anchor_prompts())
+
+    assert segmenter._last_generation_stats["recovery_candidates"] == 1
+    assert segmenter._last_generation_stats["recovered_candidates"] == 1
+    # The kept candidate is unchanged; the revived one is propagated from its own prompt, with the
+    # claimant as a negative, and the 3d merge gets to decide whether it was a duplicate after all.
+    assert len(candidates) == 2
+    assert "conditioning" not in candidates[0]
+    revived = candidates[1]
+    assert revived["point"] == (24.0, 8.0)
+    assert revived["conditioning"]["point_labels"].tolist() == [1, 0]
+    assert revived["conditioning"]["points"].tolist() == [[24.0, 8.0], [8.0, 8.0]]
+    assert "box" not in revived["conditioning"]
+
+
+def test_volume_recovery_respects_the_claimed_cap_and_the_score(monkeypatch):
+    shape = (32, 32)
+    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), _recovery_predictor(shape))
+    candidates = _score_volume(
+        segmenter, refinement="recover", refinement_kwargs={"recover_max_claimed": 0.2},
+        prompts=_overlapping_anchor_prompts(),
+    )
+    # A quarter of it is claimed, above the cap, so it is its claimant rather than a lost object.
+    assert segmenter._last_generation_stats["recovery_candidates"] == 0
+    assert len(candidates) == 1
+
+    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), _recovery_predictor(shape, recovered_score=0.4))
+    candidates = _score_volume(segmenter, refinement="recover", prompts=_overlapping_anchor_prompts())
+    assert segmenter._last_generation_stats["recovery_candidates"] == 1
+    assert segmenter._last_generation_stats["recovered_candidates"] == 0
+    assert len(candidates) == 1
+
+
+def test_unrefined_candidate_is_propagated_from_its_single_point():
+    propagator = _RecordingPropagator()
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._propagator = propagator
+    segmenter._condition_pass({"frame": 3, "point": (7.0, 2.0)}, object_id=1)
+    # The propagator takes YX, and nothing else is pushed.
+    assert propagator.pushed == [("points", 3, 1, [[2.0, 7.0]], [1])]
+
+
+@pytest.mark.parametrize("mode, expected", [
+    # A push is a decoder step on the anchor frame, so the strategy decides how many it gets: one
+    # per point after the box, one for all the points after the box, or one for everything.
+    ("prompts", ["box", "points"]),
+    ("prompts-grouped", ["box", "set"]),
+    ("prompts-joint", ["set"]),
+])
+def test_prompt_conditioning_pushes_what_its_strategy_asks_for(mode, expected):
+    propagator = _RecordingPropagator()
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._propagator = propagator
+    candidate = {
+        "frame": 1, "point": (6.0, 6.0),
+        "conditioning": {
+            "mode": mode,
+            "box": (4, 5, 12, 13),
+            "points": np.array([[6, 6], [24, 6]], dtype="float32"),
+            "point_labels": np.array([1, 0], dtype="int32"),
+        },
+    }
+    segmenter._condition_pass(candidate, object_id=2)
+
+    assert [entry[0] for entry in propagator.pushed] == expected
+    # The propagator takes YX for the box and the points, whichever strategy sent them.
+    box_push = next(e for e in propagator.pushed if e[0] in ("box", "set"))
+    if box_push[0] == "box":
+        assert box_push[3] == [5.0, 4.0, 13.0, 12.0]
+    else:
+        assert box_push[5] == [5.0, 4.0, 13.0, 12.0]
+    point_push = next(e for e in propagator.pushed if e[0] in ("points", "set") and e[3] is not None)
+    assert point_push[3] == [[6.0, 6.0], [6.0, 24.0]]
+
+
+def test_mask_conditioning_hands_over_an_already_refined_mask():
+    propagator = _RecordingPropagator()
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._propagator = propagator
+    mask = _mask((32, 32), slice(4, 12), slice(4, 12))
+    segmenter._condition_pass({"frame": 0, "point": (6.0, 6.0), "conditioning": {"mask": mask}}, object_id=1)
+
+    # Refined against this slice already, so the propagator must not refine it a second time.
+    assert propagator.pushed == [("mask", 0, 1, 64, False)]
+
+
+def test_mask_conditioning_is_selected_by_the_kwarg(monkeypatch):
+    shape = (32, 32)
+    predictor = _VolumePredictor([
+        ([_mask(shape, slice(4, 12), slice(4, 12))], [0.9]),
+        ([_mask(shape, slice(4, 13), slice(4, 13))], [0.95]),
+    ])
+    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), predictor)
+    prompts = {
+        "points": np.array([[[6, 6]]], dtype="float32"),
+        "point_labels": np.ones((1, 1), dtype="int32"),
+        "frames": np.array([0], dtype="int64"),
+    }
+    candidates = _score_volume(
+        segmenter, refinement="points+boxes",
+        refinement_kwargs={"conditioning": "mask", "min_consistency": 0.7}, prompts=prompts,
+    )
+    conditioning = candidates[0]["conditioning"]
+    assert set(conditioning) == {"mask"}
+    assert int(conditioning["mask"].sum()) == 81
+
+
+def test_volume_generate_runs_the_refinement_end_to_end(monkeypatch):
+    shape = (32, 32)
+    first = [_mask(shape, slice(4, 12), slice(4, 12)), _mask(shape, slice(4, 12), slice(20, 28))]
+    refined = [_mask(shape, slice(4, 13), slice(4, 13)), _mask(shape, slice(4, 13), slice(20, 29))]
+    predictor = _VolumePredictor([(first, [0.9, 0.8]), (refined, [0.95, 0.85])])
+    # One propagated slice per object, enough for the merge to paint something.
+    video_segments = {0: {1: first[0][None], 2: first[1][None]}}
+    propagator = _RecordingPropagator(video_segments)
+    segmenter, _ = _volume_generator(monkeypatch, (2, *shape), predictor, propagator)
+    segmenter._last_generation_stats = {}
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.derive_volume_prompts",
+        lambda *args, **kwargs: {
+            "points": np.array([[[6, 6]], [[24, 6]]], dtype="float32"),
+            "point_labels": np.ones((2, 1), dtype="int32"),
+            "frames": np.array([0, 0], dtype="int64"),
+        },
+    )
+
+    segmentation = segmenter.generate(
+        refinement="points+boxes", refinement_kwargs={"min_consistency": 0.7}, min_size=1,
+    )
+
+    assert segmentation.shape == (2, *shape)
+    assert sorted(np.unique(segmentation)) == [0, 1, 2]
+    # Every refinement counter is reported, so a run never leaves the column absent.
+    assert set(REFINEMENT_STATS_3D) <= set(segmenter._last_generation_stats)
+    assert segmenter._last_generation_stats["replaced_candidates"] == 2
+    # Both objects reached the propagator box-first then points, in one pass, which is what the
+    # default 'prompts' strategy asks for.
+    assert [entry[0] for entry in propagator.pushed] == ["reset", "box", "points", "box", "points"]
+
+
+def test_volume_refinement_is_off_by_default():
+    # The pipeline default stays None in both dimensions; the mode is an explicit opt-in.
+    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+    assert DEFAULT_PROMPT_GENERATION["refinement"] is None
+    assert DEFAULT_PROMPT_GENERATION["refinement_kwargs"] is None
+
+
+def test_volume_refinement_survives_an_anchor_slice_that_keeps_nothing(monkeypatch):
+    # Every record below 'min_size', so the slice's merge keeps nothing and there is no instance to
+    # re-prompt. The refinement has to fall through rather than index an empty segmentation.
+    shape = (32, 32)
+    predictor = _VolumePredictor([([_mask(shape, slice(4, 6), slice(4, 6))], [0.9])])
+    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), predictor)
+    prompts = {
+        "points": np.array([[[5, 5]]], dtype="float32"),
+        "point_labels": np.ones((1, 1), dtype="int32"),
+        "frames": np.array([0], dtype="int64"),
+    }
+    candidates = _score_volume(
+        segmenter, refinement="points+boxes+recover",
+        refinement_kwargs={"negative_source": "interior"}, prompts=prompts,
+    )
+    assert candidates == []
+    assert segmenter._last_generation_stats["refined_candidates"] == 0
+    # A record too small never reaches the claim check, so it is not a recovery candidate either.
+    assert segmenter._last_generation_stats["recovery_candidates"] == 0
+
+
+def test_refined_conditioning_reaches_the_real_propagator(monkeypatch):
+    """The refinement and the propagator, wired together rather than each against a stub.
+
+    Both sides were unit tested in isolation and a shape neither of them exercised - one candidate on
+    a frame, so one positive and no negatives - still broke: the (y, x) to (x, y) reversal left a
+    negative stride on the size-1 axis, which torch refuses. So this runs the real
+    'PromptableSegmentation3D.add_prompt_set' against a predictor that makes torch's own check.
+    """
+    from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
+
+    class TensorPredictor:
+        """Converts what it is handed, which is the check that matters here."""
+
+        def __init__(self):
+            self.calls = []
+
+        def add_new_points_or_box(self, inference_state, frame_idx, obj_id, clear_old_points=False,
+                                  points=None, labels=None, box=None):
+            if points is not None:
+                torch.tensor(points, dtype=torch.float32)
+            if labels is not None:
+                torch.tensor(labels, dtype=torch.int32)
+            if box is not None:
+                torch.tensor(box, dtype=torch.float32)
+            self.calls.append(obj_id)
+
+    shape = (32, 32)
+    # Two frames: the first has two candidates, the second only one - the case that broke.
+    predictor = _VolumePredictor([
+        ([_mask(shape, slice(4, 12), slice(4, 12)), _mask(shape, slice(4, 12), slice(20, 28))], [0.9, 0.8]),
+        ([_mask(shape, slice(4, 13), slice(4, 13)), _mask(shape, slice(4, 13), slice(20, 29))], [0.95, 0.85]),
+        ([_mask(shape, slice(20, 28), slice(20, 28))], [0.7]),
+        ([_mask(shape, slice(20, 29), slice(20, 29))], [0.75]),
+    ])
+    segmenter, _ = _volume_generator(monkeypatch, (3, *shape), predictor)
+    candidates = _score_volume(
+        segmenter, refinement="points+boxes", refinement_kwargs={"min_consistency": 0.7},
+    )
+
+    # One candidate alone on its frame gets a single positive and no negatives.
+    single = [c for c in candidates if c["frame"] == 2]
+    assert len(single) == 1
+    assert single[0]["conditioning"]["points"].shape == (1, 2)
+
+    propagator = PromptableSegmentation3D.__new__(PromptableSegmentation3D)
+    propagator.predictor = TensorPredictor()
+    propagator.volume = np.zeros((3, *shape), dtype="uint8")
+    propagator.inference_state = {}
+    propagator._pushed_points, propagator._pushed_boxes, propagator._pushed_masks = {}, {}, {}
+    propagator._prompt_signatures = set()
+    segmenter._propagator = propagator
+
+    for object_id, candidate in enumerate(candidates, start=1):
+        segmenter._condition_pass(candidate, object_id)
+    # Every object reached the predictor, and every array it was handed converted - which is the
+    # check: the default strategy pushes the box and then each point, so the single-candidate object
+    # sends the one-point array that used to carry a negative stride.
+    assert sorted(set(propagator.predictor.calls)) == [1, 2, 3]
+
+
+@pytest.mark.parametrize("refinement", [
+    "points", "boxes", "points+boxes", "points+boxes+masks", "recover", "points+boxes+recover",
+])
+@pytest.mark.parametrize("conditioning", ["prompts", "prompts-grouped", "prompts-joint", "mask"])
+def test_every_conditioning_a_mode_produces_is_pushable(monkeypatch, refinement, conditioning):
+    """The producer/consumer contract, over the whole cross product.
+
+    Two bugs came from testing the two halves separately: a reversed one-point array that torch
+    refused, and a recovered candidate whose conditioning dict had no 'mode' key. Both were shaped
+    like a mode nobody had pushed end to end. This pushes every candidate of every mode, through the
+    real propagator, and lets torch do its own check.
+    """
+    from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
+
+    components = tuple(refinement.split("+"))
+    if conditioning == "mask" and not [c for c in components if c != "recover"]:
+        pytest.skip("'mask' needs a re-prompt component, which _parse_refinement enforces")
+
+    class TensorPredictor:
+        # 'add_mask_prompts' resizes into the predictor's frame before it pushes.
+        image_size = 512
+
+        def __init__(self):
+            self.pushed = 0
+
+        def add_new_points_or_box(self, inference_state, frame_idx, obj_id, clear_old_points=False,
+                                  points=None, labels=None, box=None):
+            for array, dtype in ((points, torch.float32), (labels, torch.int32), (box, torch.float32)):
+                if array is not None:
+                    torch.tensor(array, dtype=dtype)
+            self.pushed += 1
+
+        def add_new_mask(self, inference_state, frame_idx, obj_id, mask):
+            self.pushed += 1
+
+    shape = (32, 32)
+    kept = _mask(shape, slice(4, 20), slice(4, 20))
+    duplicate = _mask(shape, slice(4, 20), slice(16, 32))
+    single = _mask(shape, slice(20, 28), slice(20, 28))
+    # Two candidates on frame 0 (one of them a merge-suppressed duplicate, for 'recover'), one alone
+    # on frame 2 - the single-point case. Enough responses for any mode's scoring and re-prompting.
+    predictor = _VolumePredictor([
+        ([kept, duplicate], [0.9, 0.8]), ([kept, duplicate], [0.95, 0.85]), ([duplicate], [0.8]),
+        ([single], [0.7]), ([single], [0.75]), ([single], [0.7]),
+    ])
+    segmenter, _ = _volume_generator(monkeypatch, (3, *shape), predictor)
+    prompts = {
+        "points": np.array([[[8, 8]], [[24, 8]], [[24, 24]]], dtype="float32"),
+        "point_labels": np.ones((3, 1), dtype="int32"),
+        "frames": np.array([0, 0, 2], dtype="int64"),
+    }
+    candidates = _score_volume(
+        segmenter, refinement=refinement, refinement_kwargs={"conditioning": conditioning},
+        prompts=prompts,
+    )
+
+    propagator = PromptableSegmentation3D.__new__(PromptableSegmentation3D)
+    propagator.predictor = TensorPredictor()
+    propagator.volume = np.zeros((3, *shape), dtype="uint8")
+    propagator.inference_state = {}
+    propagator._pushed_points, propagator._pushed_boxes, propagator._pushed_masks = {}, {}, {}
+    propagator._prompt_signatures = set()
+    segmenter._propagator = propagator
+
+    assert candidates, "the fixture should produce at least one candidate for every mode"
+    for object_id, candidate in enumerate(candidates, start=1):
+        segmenter._condition_pass(candidate, object_id)
+    assert propagator.predictor.pushed >= len(candidates)
