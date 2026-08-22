@@ -236,6 +236,7 @@ class RecordingPredictor:
     """A stand-in SAM2 predictor that records every 'add_new_points_or_box' call."""
 
     def __init__(self):
+        self.image_size = 32
         self.calls = []
         self.mask_calls = []
         self.active_objects = set()
@@ -267,6 +268,7 @@ def make_recording_segmenter():
     segmenter._pushed_points = {}
     segmenter._pushed_boxes = {}
     segmenter._pushed_masks = {}
+    segmenter._prompt_history = []
     segmenter._prompt_signatures = set()
     return segmenter
 
@@ -426,17 +428,20 @@ def test_grouped_propagation_restores_all_prompts_before_a_deletion(monkeypatch)
 def test_replaying_masks_restores_their_bookkeeping():
     segmenter = make_recording_segmenter()
     mask = np.ones((32, 32), dtype=bool)
-    snapshot = ({}, {}, {(2, 5): {"mask-signature": mask}})
+    segmenter.add_mask_prompts(frame_ids=5, masks=[mask], object_id=2, refine=False)
+    snapshot = tuple(operation.copied() for operation in segmenter._prompt_history)
+    signature = next(iter(segmenter._pushed_masks[(2, 5)]))
+    segmenter.predictor.mask_calls.clear()
 
     segmenter._replay_prompts(snapshot, {2})
 
     assert set(segmenter._pushed_masks) == {(2, 5)}
-    assert segmenter._pushed_masks[(2, 5)]["mask-signature"] is mask
+    assert np.array_equal(segmenter._pushed_masks[(2, 5)][signature], mask)
     assert segmenter.predictor.active_objects == {2}
     assert len(segmenter.predictor.mask_calls) == 1
     assert segmenter.predictor.mask_calls[0]["frame_idx"] == 5
     assert segmenter.predictor.mask_calls[0]["obj_id"] == 2
-    assert segmenter.predictor.mask_calls[0]["mask"] is mask
+    assert np.array_equal(segmenter.predictor.mask_calls[0]["mask"], mask)
 
 
 def test_segment_slice_clears_the_pushed_prompt_bookkeeping():
@@ -629,6 +634,127 @@ def test_add_prompt_set_records_the_anchor_it_conditioned():
     assert segmenter._anchor_per_object() == {7: 2}
     assert (7, 5) in segmenter._pushed_boxes
     assert (10, 12, 1) in segmenter._pushed_points[(7, 5)]
+
+
+def test_add_prompt_set_replacement_updates_active_bookkeeping():
+    segmenter = make_recording_segmenter()
+    first_point = np.array([[4, 6]])
+    segmenter.add_prompt_set(
+        frame_id=3, points=first_point, point_labels=np.array([1]),
+        box=np.array([1, 2, 10, 11]), object_id=2,
+    )
+    segmenter.add_prompt_set(
+        frame_id=3, points=np.array([[14, 16]]), point_labels=np.array([1]),
+        box=np.array([8, 9, 20, 21]), object_id=2, clear_old_points=True,
+    )
+
+    key = (2, 3)
+    assert segmenter._pushed_points[key] == {(14, 16, 1)}
+    assert segmenter._pushed_boxes[key] == {(8, 9, 20, 21)}
+
+    # The first point was cleared in SAM2, so it must not be deduped when it is explicitly re-added.
+    segmenter.add_point_prompts(frame_ids=3, points=first_point, point_labels=np.array([1]), object_id=2)
+    assert len(segmenter.predictor.calls) == 3
+    assert segmenter.predictor.calls[-1]["points"] == [[6.0, 4.0]]
+    assert segmenter._pushed_points[key] == {(4, 6, 1), (14, 16, 1)}
+    assert len(segmenter._prompt_history) == 3
+
+
+def test_add_prompt_set_rejects_box_append_without_mutation():
+    segmenter = make_recording_segmenter()
+
+    with pytest.raises(ValueError, match="clear_old_points=True"):
+        segmenter.add_prompt_set(
+            frame_id=3, points=np.array([[4, 6]]), point_labels=np.array([1]),
+            box=np.array([1, 2, 10, 11]), object_id=2, clear_old_points=False,
+        )
+
+    assert segmenter.predictor.calls == []
+    assert segmenter._pushed_points == {}
+    assert segmenter._pushed_boxes == {}
+    assert segmenter._prompt_history == []
+
+
+def test_replay_preserves_joint_prompt_batch_and_order():
+    segmenter = make_recording_segmenter()
+    points = np.array([[4, 6], [8, 10], [12, 14]])
+    labels = np.array([1, 0, 0])
+    segmenter.add_prompt_set(
+        frame_id=3, points=points, point_labels=labels,
+        box=np.array([1, 2, 20, 21]), object_id=2,
+    )
+    snapshot = tuple(operation.copied() for operation in segmenter._prompt_history)
+    original_call = dict(segmenter.predictor.calls[-1])
+    segmenter.predictor.calls.clear()
+
+    segmenter._replay_prompts(snapshot, {2})
+
+    assert segmenter.predictor.calls == [original_call]
+    assert len(segmenter._prompt_history) == 1
+
+
+def test_multi_anchor_replay_uses_each_logical_call_once(monkeypatch):
+    segmenter = make_recording_segmenter()
+    segmenter.add_prompt_set(
+        frame_id=1, points=np.array([[4, 6], [8, 10]]), point_labels=np.array([1, 0]),
+        box=np.array([1, 2, 20, 21]), object_id=1,
+    )
+    segmenter.add_prompt_set(
+        frame_id=5, points=np.array([[12, 14], [16, 18]]), point_labels=np.array([1, 0]),
+        box=np.array([3, 4, 22, 23]), object_id=2,
+    )
+    monkeypatch.setattr(segmenter, "_propagate_both_directions", lambda *args, **kwargs: {})
+
+    segmenter.propagate_prompts()
+
+    # Two initial calls, one call across the grouped replays for each object, then two calls to
+    # restore the combined state. Every replay keeps both points batched with its box.
+    assert len(segmenter.predictor.calls) == 6
+    assert [len(call["points"]) for call in segmenter.predictor.calls] == [2] * 6
+    assert [call["obj_id"] for call in segmenter.predictor.calls] == [1, 2, 1, 2, 1, 2]
+    assert segmenter.predictor.active_objects == {1, 2}
+
+
+def test_mixed_replay_preserves_mask_exclusivity_and_final_active_state():
+    segmenter = make_recording_segmenter()
+    key = (2, 3)
+    segmenter.add_prompt_set(
+        frame_id=3, points=np.array([[4, 6]]), point_labels=np.array([1]),
+        box=np.array([1, 2, 10, 11]), object_id=2,
+    )
+    mask = np.ones((32, 32), dtype=bool)
+    segmenter.add_mask_prompts(frame_ids=3, masks=[mask], object_id=2, refine=False)
+    assert key not in segmenter._pushed_points and key not in segmenter._pushed_boxes
+    assert key in segmenter._pushed_masks
+
+    segmenter.add_point_prompts(
+        frame_ids=3, points=np.array([[14, 16]]), point_labels=np.array([0]), object_id=2,
+    )
+    assert key not in segmenter._pushed_masks
+    assert segmenter._pushed_points[key] == {(14, 16, 0)}
+
+    snapshot = tuple(operation.copied() for operation in segmenter._prompt_history)
+    segmenter.predictor.calls.clear()
+    segmenter.predictor.mask_calls.clear()
+    segmenter._replay_prompts(snapshot, {2})
+
+    assert len(segmenter.predictor.calls) == 2
+    assert len(segmenter.predictor.mask_calls) == 1
+    assert key not in segmenter._pushed_masks
+    assert segmenter._pushed_points[key] == {(14, 16, 0)}
+    assert len(segmenter._prompt_history) == 3
+
+
+def test_reset_clears_prompt_operation_history():
+    segmenter = make_recording_segmenter()
+    segmenter.add_prompt_set(
+        frame_id=3, points=np.array([[4, 6]]), point_labels=np.array([1]), object_id=2,
+    )
+    assert segmenter._prompt_history
+
+    segmenter.reset_tracking()
+
+    assert segmenter._prompt_history == []
 
 
 def test_add_prompt_set_conditions_on_a_box_alone():

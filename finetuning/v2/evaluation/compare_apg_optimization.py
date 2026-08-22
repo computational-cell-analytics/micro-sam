@@ -24,6 +24,11 @@ EXPECTED_DATASETS = {
 BALANCED_ROW = "__dataset_balanced__"
 
 
+def _optional_int(value: Any) -> int | None:
+    """Convert a measured integer while preserving missing CPU/MPS measurements as null."""
+    return None if pd.isna(value) else int(value)
+
+
 def _read_run(path: Path, ndim: int) -> Tuple[Dict[str, Any], pd.DataFrame]:
     path = path.resolve(strict=True)
     with open(path / "metadata.json") as f:
@@ -113,7 +118,7 @@ def _compare(
             "runtime_change": candidate_runtime / base_runtime - 1.0,
             "speedup": 1.0 - candidate_runtime / base_runtime,
             "candidate_peak_cuda_memory_bytes": (
-                int(candidate_table.loc[dataset, "peak_cuda_memory_bytes"])
+                _optional_int(candidate_table.loc[dataset, "peak_cuda_memory_bytes"])
                 if "peak_cuda_memory_bytes" in candidate_table else None
             ),
         })

@@ -1970,6 +1970,7 @@ def test_refined_conditioning_reaches_the_real_propagator(monkeypatch):
     propagator.volume = np.zeros((3, *shape), dtype="uint8")
     propagator.inference_state = {}
     propagator._pushed_points, propagator._pushed_boxes, propagator._pushed_masks = {}, {}, {}
+    propagator._prompt_history = []
     propagator._prompt_signatures = set()
     segmenter._propagator = propagator
 
@@ -2042,6 +2043,7 @@ def test_every_conditioning_a_mode_produces_is_pushable(monkeypatch, refinement,
     propagator.volume = np.zeros((3, *shape), dtype="uint8")
     propagator.inference_state = {}
     propagator._pushed_points, propagator._pushed_boxes, propagator._pushed_masks = {}, {}, {}
+    propagator._prompt_history = []
     propagator._prompt_signatures = set()
     segmenter._propagator = propagator
 

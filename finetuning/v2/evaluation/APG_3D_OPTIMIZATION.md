@@ -872,3 +872,40 @@ frame produced a reversed array that torch refuses; and a cross product over six
 conditioning strategies that pushes every candidate through the real propagator, after a producer of
 conditioning dicts was found to omit a key the consumer required. Both bugs were shaped the same way -
 each half unit-tested, the pair never exercised together.
+
+### Prompt-state replay regression benchmark
+
+`benchmark_prompt_state_replay.py` isolates a separate multi-anchor correctness and efficiency
+problem. It reads the standard-manifest C. elegans crop `celegans_atlas:8db1fb8b4013`, selects the
+four largest non-z-border objects with distinct center slices, and compares the production shared
+state against one independent predictor state per anchor. The oracle sends the intended predictor
+operations directly, bypassing `PromptableSegmentation3D` bookkeeping and replay.
+
+The `joint` protocol sends one tight box, one interior positive and up to four nearest foreign-object
+negatives in a single call. The `replacement` protocol first sends a grown box with an alternate
+positive, replaces it with the joint set, then appends the cleared alternate point. The decoder-only
+measurement runs one warm-up plus five repetitions; each protocol also gets one complete propagation.
+
+```bash
+python finetuning/v2/evaluation/benchmark_prompt_state_replay.py --label baseline
+python finetuning/v2/evaluation/benchmark_prompt_state_replay.py --label fixed --expect-exact
+```
+
+Both runs used `hvit_t` / `best` (`85fb099c4bb038fa0ab9bddd6151689e`), manifest
+`0f8fb67b3650a71f9f44b53037e89546`, and an NVIDIA A100-SXM4-80GB. The baseline and fixed
+implementation checksums are `15d81f30dc775292a2200c70f80aa4f8` and
+`49dbb7540d5010a3736912e47e6ed2d3`. Results are stored in the default APG output root's
+`prompt_state_replay/` directory as `prompt_state_replay_{baseline,fixed}_a8f60972.json`.
+
+| protocol | replay calls, before -> after | median decoder/replay time | full production time | oracle exact | selected-object mSA, before -> after/oracle |
+|---|---:|---:|---:|---:|---:|
+| joint | 92 -> 12 | 3.518 s -> 1.685 s (2.09x) | 15.508 s -> 10.180 s (1.52x) | no -> yes | 0.568 -> 0.568/0.568 |
+| replacement | 168 -> 36 | 3.690 s -> 1.864 s (1.98x) | 11.125 s -> 10.256 s (1.08x) | no -> yes | 0.354 -> 0.522/0.522 |
+
+Before the fix, replay reconstructed unordered active prompt sets: it split batched points into
+individual decoder calls, replayed boxes afterward, and retained prompts that a replacement had
+cleared. The corrected implementation records successful predictor operations and replays their
+order, batching and `clear_old_points` flags verbatim. Active deduplication maps separately mirror
+SAM2's mutually exclusive point/box and mask inputs. The fixed masks are bit-identical to the oracle
+for every selected object in both protocols, and the predictor-call counts equal the logical minimum
+for the initial push, grouped replay and final state restoration.

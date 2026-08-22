@@ -4,6 +4,7 @@ import ctypes
 import hashlib
 import platform
 import contextlib
+from dataclasses import dataclass
 from copy import copy
 from concurrent import futures
 from typing import Callable, List, Optional, Tuple, Union
@@ -16,6 +17,38 @@ from micro_sam.v2.util import Devices
 from micro_sam.util import device_type
 from micro_sam.v1.prompt_based_segmentation import _process_box, _compute_logits_from_mask
 from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy, ResizeLongestSideTransforms
+
+
+@dataclass(frozen=True)
+class _PromptOperation:
+    """One successful mutation of a SAM2 video-predictor prompt state.
+
+    The active prompt maps below are sufficient for deduplication, but not for reconstruction:
+    SAM2 uses the preceding decoder logits when a point set is replaced, and batching points changes
+    the decoder result. Replaying these operations verbatim preserves both pieces of state.
+    """
+
+    kind: str
+    frame_id: int
+    object_id: int
+    clear_old_points: bool = True
+    points: Optional[np.ndarray] = None  # (y, x), before conversion to SAM2's (x, y).
+    point_labels: Optional[np.ndarray] = None
+    box: Optional[np.ndarray] = None  # (y0, x0, y1, x1), before SAM2 box processing.
+    mask_signature: Optional[str] = None
+    mask: Optional[np.ndarray] = None  # Prepared in SAM2's padded square frame.
+
+    def copied(self):
+        """Return a snapshot whose arrays cannot be changed through caller-owned inputs."""
+        return _PromptOperation(
+            kind=self.kind, frame_id=self.frame_id, object_id=self.object_id,
+            clear_old_points=self.clear_old_points,
+            points=None if self.points is None else self.points.copy(),
+            point_labels=None if self.point_labels is None else self.point_labels.copy(),
+            box=None if self.box is None else self.box.copy(),
+            mask_signature=self.mask_signature,
+            mask=None if self.mask is None else self.mask.copy(),
+        )
 
 
 def _trim_cpu_heap():
@@ -464,7 +497,10 @@ class PromptableSegmentation3D:
         # What the SAM2 state already holds, so a re-run pushes only the newly placed prompts.
         self._pushed_points = {}  # (object_id, frame_id) -> set of (y, x, label)
         self._pushed_boxes = {}  # (object_id, frame_id) -> set of box corner tuples
-        self._pushed_masks = {}  # (object_id, frame_id) -> set of mask content digests
+        self._pushed_masks = {}  # (object_id, frame_id) -> mask digest -> prepared mask
+        # Successful predictor calls in their original order and batching. The active maps above
+        # deliberately omit prompts that SAM2 replaced; the history retains their decoder effects.
+        self._prompt_history = []
         # Signature of the prompt set of the previous round, see 'sync_prompt_state'.
         self._prompt_signatures = set()
         self._image_style_trafo = None  # Built lazily for the per-slice mask refinement.
@@ -480,6 +516,7 @@ class PromptableSegmentation3D:
         self._pushed_points = {}
         self._pushed_boxes = {}
         self._pushed_masks = {}
+        self._prompt_history = []
         self._prompt_signatures = set()
 
     def _anchor_per_object(self):
@@ -491,36 +528,79 @@ class PromptableSegmentation3D:
         return anchors
 
     def _replay_prompts(self, snapshot, object_ids):
-        """Push the recorded prompts of these objects onto a fresh state, in the order they were added.
+        """Replay these objects' successful predictor operations onto a fresh state.
 
         The snapshot is taken before the first replay, because resetting the state also clears the
-        bookkeeping this reads, and a later group's prompts would be gone by then.
-
-        A box has to precede the points of its object and frame, which 'add_box_prompts' takes care of
-        by re-adding the points it clears.
+        history this reads, and a later group's prompts would be gone by then. Preserving operation
+        order, point batching and replacement flags is necessary because SAM2 feeds the previous
+        decoder logits into the next point/box operation.
         """
-        points, boxes, masks = snapshot
         self.reset_predictor()
-        for (object_id, frame_id), pushed in points.items():
-            if object_id not in object_ids:
-                continue
-            for y, x, label in pushed:
-                self.add_point_prompts(
-                    frame_ids=frame_id, points=np.array([[y, x]]),
-                    point_labels=np.array([label]), object_id=object_id,
-                )
-        for (object_id, frame_id), pushed in boxes.items():
-            if object_id in object_ids:
-                self.add_box_prompts(frame_ids=frame_id, boxes=[np.array(box) for box in pushed], object_id=object_id)
-        for (object_id, frame_id), pushed in masks.items():
-            if object_id not in object_ids:
-                continue
-            seen = self._pushed_masks.setdefault((object_id, frame_id), {})
-            for signature, mask in pushed.items():
-                seen[signature] = mask
-                self.predictor.add_new_mask(
-                    inference_state=self.inference_state, frame_idx=frame_id, obj_id=object_id, mask=mask,
-                )
+        skip_output = getattr(self.predictor, "skip_prompt_output", None)
+        with (skip_output() if skip_output is not None else contextlib.nullcontext()):
+            for operation in snapshot:
+                if operation.object_id in object_ids:
+                    self._apply_prompt_operation(operation)
+
+    def _apply_prompt_operation(self, operation):
+        """Apply and record one predictor operation, updating active state only after it succeeds."""
+        operation = operation.copied()
+        key = (operation.object_id, operation.frame_id)
+
+        if operation.kind == "points_or_box":
+            if operation.box is not None and not operation.clear_old_points:
+                raise ValueError("SAM2 requires 'clear_old_points=True' whenever a box is given.")
+            kwargs = {}
+            if operation.points is not None and len(operation.points):
+                if operation.point_labels is None or len(operation.points) != len(operation.point_labels):
+                    raise AssertionError("The number of points and labels do not match.")
+                # SAM2 expects (x, y). This unconditional copy also removes negative strides for a
+                # single point, whose reversed view numpy can otherwise still call contiguous.
+                kwargs["points"] = np.array(operation.points[:, ::-1], dtype="float32")
+                kwargs["labels"] = np.array(operation.point_labels, dtype="int32")
+            if operation.box is not None:
+                kwargs["box"] = np.array([_process_box(operation.box, self.volume.shape[-2:])])
+            if not kwargs:
+                return
+
+            self.predictor.add_new_points_or_box(
+                inference_state=self.inference_state,
+                frame_idx=operation.frame_id,
+                obj_id=operation.object_id,
+                clear_old_points=operation.clear_old_points,
+                **kwargs,
+            )
+
+            # Mirror SAM2's mutually exclusive active input maps. A replacement discards the active
+            # point/box set, but its earlier decoder effect remains in '_prompt_history'.
+            if operation.clear_old_points:
+                self._pushed_points.pop(key, None)
+                self._pushed_boxes.pop(key, None)
+            self._pushed_masks.pop(key, None)
+            if operation.points is not None and len(operation.points):
+                seen = self._pushed_points.setdefault(key, set())
+                for (y, x), label in zip(operation.points, operation.point_labels):
+                    seen.add((int(round(float(y))), int(round(float(x))), int(label)))
+            if operation.box is not None:
+                signature = tuple(np.round(operation.box).astype(int).tolist())
+                self._pushed_boxes.setdefault(key, set()).add(signature)
+
+        elif operation.kind == "mask":
+            if operation.mask is None or operation.mask_signature is None:
+                raise ValueError("A mask operation requires a prepared mask and its signature.")
+            self.predictor.add_new_mask(
+                inference_state=self.inference_state,
+                frame_idx=operation.frame_id,
+                obj_id=operation.object_id,
+                mask=operation.mask,
+            )
+            self._pushed_points.pop(key, None)
+            self._pushed_boxes.pop(key, None)
+            self._pushed_masks[key] = {operation.mask_signature: operation.mask.copy()}
+        else:
+            raise ValueError(f"Unknown prompt operation kind '{operation.kind}'.")
+
+        self._prompt_history.append(operation)
 
     def sync_prompt_state(self, signatures):
         """Discard the persistent state when prompts were removed or changed since the last round.
@@ -613,17 +693,15 @@ class PromptableSegmentation3D:
         with (skip_output() if skip_output is not None else contextlib.nullcontext()):
             for frame_id, (y, x), label, obj_id in zip(frame_ids, points, point_labels, object_ids):
                 signature = (int(round(float(y))), int(round(float(x))), int(label))
-                seen = self._pushed_points.setdefault((obj_id, frame_id), set())
-                if signature in seen:
+                if signature in self._pushed_points.get((obj_id, frame_id), set()):
                     continue
-                seen.add(signature)
-                self.predictor.add_new_points_or_box(
-                    inference_state=self.inference_state,
-                    frame_idx=frame_id,
-                    obj_id=obj_id,
-                    clear_old_points=False,
-                    points=np.array([[x, y]]),  # SAM2 expects (x, y).
-                    labels=np.array([label]),
+                self._apply_prompt_operation(
+                    _PromptOperation(
+                        kind="points_or_box", frame_id=frame_id, object_id=obj_id,
+                        clear_old_points=False,
+                        points=np.array([[y, x]], dtype="float32"),
+                        point_labels=np.array([label], dtype="int32"),
+                    )
                 )
 
     def add_prompt_set(
@@ -657,39 +735,35 @@ class PromptableSegmentation3D:
                 frame. SAM2 requires it whenever a box is given. False appends, which is how a
                 points-only push is added after a box.
         """
-        if points is None and box is None:
+        has_points = points is not None and len(points) > 0
+        if not has_points and box is None:
             return
         frame_id, object_id = int(frame_id), int(object_id)
-        key = (object_id, frame_id)
-        kwargs = {}
+        if box is not None and not clear_old_points:
+            # Validate before touching bookkeeping or invoking SAM2, whose implementation rejects
+            # this combination as well.
+            raise ValueError("SAM2 requires 'clear_old_points=True' whenever a box is given.")
 
-        if points is not None and len(points):
+        normalized_points, normalized_labels = None, None
+        if has_points:
             points = np.asarray(points, dtype="float32").reshape(-1, 2)
+            if point_labels is None:
+                raise ValueError("'point_labels' is required when points are given.")
             point_labels = np.asarray(point_labels, dtype="int32").reshape(-1)
             if len(points) != len(point_labels):
                 raise AssertionError("The number of points and labels do not match.")
-            # SAM2 expects (x, y), and torch refuses an array with a negative stride. The copy is
-            # unconditional because 'ascontiguousarray' does not always make one: numpy ignores the
-            # stride of a size-1 axis when it sets the contiguous flag, so reversing a single point
-            # yields an array flagged contiguous that still carries a negative stride.
-            kwargs["points"] = np.array(points[:, ::-1], dtype="float32")
-            kwargs["labels"] = np.array(point_labels, dtype="int32")
-            seen = self._pushed_points.setdefault(key, set())
-            for (y, x), label in zip(points, point_labels):
-                seen.add((int(round(float(y))), int(round(float(x))), int(label)))
-        if box is not None:
-            kwargs["box"] = np.array([_process_box(box, self.volume.shape[-2:])])
-            self._pushed_boxes.setdefault(key, set()).add(tuple(np.round(box).astype(int).tolist()))
+            normalized_points, normalized_labels = points, point_labels
+        normalized_box = None if box is None else np.asarray(box, dtype="float32").reshape(4)
 
         # The preview mask is discarded, as in the incremental methods.
         skip_output = getattr(self.predictor, "skip_prompt_output", None)
         with (skip_output() if skip_output is not None else contextlib.nullcontext()):
-            self.predictor.add_new_points_or_box(
-                inference_state=self.inference_state,
-                frame_idx=frame_id,
-                obj_id=object_id,
-                clear_old_points=clear_old_points,
-                **kwargs,
+            self._apply_prompt_operation(
+                _PromptOperation(
+                    kind="points_or_box", frame_id=frame_id, object_id=object_id,
+                    clear_old_points=bool(clear_old_points),
+                    points=normalized_points, point_labels=normalized_labels, box=normalized_box,
+                )
             )
 
     def add_box_prompts(
@@ -720,25 +794,23 @@ class PromptableSegmentation3D:
             for frame_id, box, obj_id in zip(frame_ids, boxes, object_ids):
                 key = (obj_id, frame_id)
                 signature = tuple(np.round(box).astype(int).tolist())
-                seen = self._pushed_boxes.setdefault(key, set())
-                if signature in seen:
+                if signature in self._pushed_boxes.get(key, set()):
                     continue
-                seen.add(signature)
-                self.predictor.add_new_points_or_box(
-                    inference_state=self.inference_state,
-                    frame_idx=frame_id,
-                    obj_id=obj_id,
-                    clear_old_points=True,
-                    box=np.array([_process_box(box, self.volume.shape[-2:])]),
+                existing_points = sorted(self._pushed_points.get(key, set()))
+                self._apply_prompt_operation(
+                    _PromptOperation(
+                        kind="points_or_box", frame_id=frame_id, object_id=obj_id,
+                        clear_old_points=True, box=np.asarray(box, dtype="float32").reshape(4),
+                    )
                 )
-                for y, x, label in self._pushed_points.get(key, set()):
-                    self.predictor.add_new_points_or_box(
-                        inference_state=self.inference_state,
-                        frame_idx=frame_id,
-                        obj_id=obj_id,
-                        clear_old_points=False,
-                        points=np.array([[x, y]]),
-                        labels=np.array([label]),
+                for y, x, label in existing_points:
+                    self._apply_prompt_operation(
+                        _PromptOperation(
+                            kind="points_or_box", frame_id=frame_id, object_id=obj_id,
+                            clear_old_points=False,
+                            points=np.array([[y, x]], dtype="float32"),
+                            point_labels=np.array([label], dtype="int32"),
+                        )
                     )
 
     def _prepare_mask(self, mask):
@@ -793,8 +865,7 @@ class PromptableSegmentation3D:
                 key = (obj_id, frame_id)
                 # A stable digest, so the signature does not change between processes.
                 signature = hashlib.sha1(np.ascontiguousarray(mask).tobytes()).hexdigest()
-                seen = self._pushed_masks.setdefault(key, {})
-                if signature in seen:
+                if signature in self._pushed_masks.get(key, {}):
                     continue
 
                 # Refined on the seed frame first, so the propagation starts from the object rather
@@ -807,12 +878,11 @@ class PromptableSegmentation3D:
                     mask = self._image_style_predict(frame_id, box=box, mask=mask)
 
                 prepared = self._prepare_mask(mask)
-                seen[signature] = prepared
-                self.predictor.add_new_mask(
-                    inference_state=self.inference_state,
-                    frame_idx=frame_id,
-                    obj_id=obj_id,
-                    mask=prepared,
+                self._apply_prompt_operation(
+                    _PromptOperation(
+                        kind="mask", frame_id=frame_id, object_id=obj_id,
+                        mask_signature=signature, mask=prepared,
+                    )
                 )
 
     def _propagate_in_direction(
@@ -888,7 +958,9 @@ class PromptableSegmentation3D:
         if len(groups) <= 1:
             return self._propagate_both_directions(update_progress, early_stop_patience, z_range)
 
-        snapshot = (dict(self._pushed_points), dict(self._pushed_boxes), dict(self._pushed_masks))
+        # The active maps intentionally omit replaced prompts. Reconstruct from successful calls so
+        # point batches, replacement boundaries and the previous-logit chain stay unchanged.
+        snapshot = tuple(operation.copied() for operation in self._prompt_history)
         prompt_signatures = set(self._prompt_signatures)
         video_segments = {}
         for object_ids in groups.values():
