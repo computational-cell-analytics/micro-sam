@@ -17,6 +17,14 @@ point (+0.001 and -0.005), and sampling further positive prompts from an instanc
 (-0.034, because a prompt on a propagated slice turns it into a conditioning frame and replaces the
 mask there with a single-point one). Selection is not what limits the result: an oracle that hands
 every object its best-matching propagated mask scores 0.006 above the merge.
+
+The first three of those are exactly the ingredients 2d found only pay in combination, and combining
+them on the anchor slice - which the -0.034 above is also the reason they cannot be combined anywhere
+else - is worth +2.3% mSA on 32-slice crops for +1.4% runtime, so the optional 'refinement' does that.
+It is off by default in both dimensions, being short of the +5% the optimization gates ask for. One
+thing measured there is worth knowing before touching this file: pushing the same prompt to the video
+predictor in one call rather than several costs 1.75% mSA, because each push re-runs the mask decoder
+on the conditioning frame. See finetuning/v2/evaluation/APG_3D_OPTIMIZATION.md, experiment 6.
 """
 
 import shutil
@@ -81,7 +89,7 @@ DEFAULT_PROMPT_GENERATION = {
     "n_threads": 8,
 }
 
-# The components a 2d refinement mode can be assembled from, and the keyword arguments each accepts.
+# The components a refinement mode can be assembled from, and the keyword arguments each accepts.
 # A mode is a '+'-joined combination, e.g. 'points', 'boxes' or 'points+boxes': every component
 # except 'recover' contributes its prompt to one joint re-prompt per instance, so 'points+boxes'
 # conditions on both. 'recover' instead re-prompts the records the merge dropped, adding instances.
@@ -139,18 +147,76 @@ DEFAULT_REFINEMENT = {
     "box_extension": 0,
 }
 
+# A volume refines its anchor slices, before the propagation. A prompt on an already propagated slice
+# would turn it into a conditioning frame and replace the mask there with a single-point one (-0.034
+# mSA, see the module docstring), so a finished track cannot be touched; what the second round
+# produces is the conditioning the propagation starts from rather than a finished mask. The
+# components mean the same as in 2d, and the kwargs are the 2d ones minus 'min_grouped_for_points':
+# that was refuted in 2d, and suppressing an instance's point row also removes its negatives, which
+# is the ingredient that pays. 'conditioning' is the one addition, see `DEFAULT_REFINEMENT_3D`.
+# How an accepted re-prompt is pushed onto the anchor frame, see 'DEFAULT_REFINEMENT_3D'.
+CONDITIONING_MODES = ("prompts", "prompts-grouped", "prompts-joint", "mask")
+REFINEMENT_KWARGS_3D = {
+    "shared": REFINEMENT_KWARGS["shared"] + ("conditioning",),
+    "points": tuple(key for key in REFINEMENT_KWARGS["points"] if key != "min_grouped_for_points"),
+    "boxes": REFINEMENT_KWARGS["boxes"],
+    "masks": REFINEMENT_KWARGS["masks"],
+    "recover": REFINEMENT_KWARGS["recover"],
+}
+DEFAULT_REFINEMENT_3D = {
+    key: value for key, value in DEFAULT_REFINEMENT.items() if key != "min_grouped_for_points"
+}
+# The counters a volume's refinement reports, all of them accumulated over the anchor slices. Zeroed
+# together when a refinement runs, so a mode that cannot produce one still reports it as 0 rather
+# than leaving the column absent for that run only.
+REFINEMENT_STATS_3D = (
+    "refined_candidates", "replaced_candidates", "gated_consistency", "gated_foreign",
+    "recovery_candidates", "recovered_candidates", "refinement_negatives",
+)
+DEFAULT_REFINEMENT_3D.update({
+    # Measured on the 3d benchmark, and different from 2d on both axes. Negatives peak at four rather
+    # than six to eight: every one of a volume's negatives comes from a candidate anchored on the same
+    # slice, so each is a real in-plane neighbour and four already bound the object. Zero falls below
+    # the baseline and twelve back to +0.3%.
+    "n_negatives": 4,
+    # Tighter than 2d's 0.7, where 0.85 over-gated. In 2d a wrongly accepted re-prompt costs one
+    # instance's mask; here it becomes the conditioning frame of a whole track, so refusing more of
+    # them pays. 0.95 over-gates in 3d too, vetoing 374 of 925 second rounds. With this gate tight,
+    # 'max_foreign_overlap' never fires, so it is kept at the 2d value only because it costs nothing.
+    "min_consistency": 0.85,
+    # How an accepted second round reaches the propagation, which is not the formality it looks
+    # like: every push of a prompt re-runs SAM2's mask decoder on the anchor frame and feeds the
+    # previous prediction back in, so pushing the same prompt in more steps refines the anchor
+    # iteratively rather than repeating work.
+    #   'prompts'         the box, then one push per point. The most steps, and the best measured
+    #                     quality by a wide margin: +1.87% macro against +0.11% for a single push.
+    #   'prompts-grouped' the box, then one push carrying every point. Two steps.
+    #   'prompts-joint'   one push carrying the box and every point. One step, so the propagation
+    #                     starts from a single forward and the iterative refinement is gone.
+    #   'mask'            the refined mask itself, via 'add_new_mask'. The anchor frame is then
+    #                     exactly what the gates accepted, but the decoder never sees the prompt.
+    #                     Conditioning an anchor with an *unrefined* 2d mask measured -0.005 mSA.
+    "conditioning": "prompts",
+})
 
-def _parse_refinement(refinement: str, refinement_kwargs: Optional[Dict[str, Any]]) -> tuple:
+
+def _parse_refinement(
+    refinement: str, refinement_kwargs: Optional[Dict[str, Any]], is_volume: bool = False,
+) -> tuple:
     """Parse a refinement mode into its components and resolve its keyword arguments.
 
     Args:
         refinement: The mode, a '+'-joined combination of `REFINEMENT_COMPONENTS`.
         refinement_kwargs: The mode's keyword arguments. Only keys that one of the mode's
             components (or every mode) accepts are allowed.
+        is_volume: Whether the mode is resolved for a volume, which accepts and defaults its
+            keyword arguments differently, see `REFINEMENT_KWARGS_3D` and `DEFAULT_REFINEMENT_3D`.
 
     Returns:
         The components as a tuple, and the resolved keyword arguments with the defaults filled in.
     """
+    accepted = REFINEMENT_KWARGS_3D if is_volume else REFINEMENT_KWARGS
+    defaults = DEFAULT_REFINEMENT_3D if is_volume else DEFAULT_REFINEMENT
     components = tuple(refinement.split("+"))
     unknown = [component for component in components if component not in REFINEMENT_COMPONENTS]
     if unknown or len(set(components)) != len(components):
@@ -164,9 +230,9 @@ def _parse_refinement(refinement: str, refinement_kwargs: Optional[Dict[str, Any
             "for dense-only prompting. Combine it, e.g. 'points+masks' or 'boxes+masks'."
         )
 
-    allowed = set(REFINEMENT_KWARGS["shared"])
+    allowed = set(accepted["shared"])
     for component in components:
-        allowed.update(REFINEMENT_KWARGS[component])
+        allowed.update(accepted[component])
     refinement_kwargs = refinement_kwargs or {}
     unknown = sorted(set(refinement_kwargs) - allowed)
     if unknown:
@@ -175,7 +241,7 @@ def _parse_refinement(refinement: str, refinement_kwargs: Optional[Dict[str, Any
             f"Allowed: {', '.join(sorted(allowed))}."
         )
 
-    resolved = {key: DEFAULT_REFINEMENT[key] for key in allowed}
+    resolved = {key: defaults[key] for key in allowed}
     resolved.update(refinement_kwargs)
     if resolved["policy"] not in ("replace", "keep-if-better"):
         raise ValueError(f"Invalid refinement policy {resolved['policy']!r}: expected 'replace' or 'keep-if-better'.")
@@ -187,6 +253,16 @@ def _parse_refinement(refinement: str, refinement_kwargs: Optional[Dict[str, Any
         raise ValueError(
             "min_grouped_for_points suppresses the point prompt of sparsely grouped instances, so "
             "their re-prompt needs a box: combine it with the 'boxes' component."
+        )
+    if resolved.get("conditioning", "prompts") not in CONDITIONING_MODES:
+        raise ValueError(
+            f"Invalid conditioning {resolved['conditioning']!r}: expected one of "
+            f"{', '.join(CONDITIONING_MODES)}."
+        )
+    if resolved.get("conditioning") == "mask" and not [c for c in components if c != "recover"]:
+        raise ValueError(
+            "conditioning='mask' hands the propagation the mask of a second-round re-prompt, so the "
+            "mode needs a re-prompt component: combine it with 'points', 'boxes' or both."
         )
     return components, resolved
 
@@ -433,6 +509,24 @@ def _localize_prompts(prompt: Dict[str, Any], origin: tuple, extent: tuple) -> t
         "n_grouped": prompt["n_grouped"],
     }
     return localized, int(np.count_nonzero(~keep))
+
+
+def _prompt_box(bounding_box: tuple, shape: tuple, box_extension: int) -> tuple:
+    """An instance's bounding box as the XYXY box prompt SAM2 takes, grown and clipped to 'shape'.
+
+    Args:
+        bounding_box: The instance's bounding box, as a (y_slice, x_slice) tuple.
+        shape: The (Y, X) shape the grown box is clipped to.
+        box_extension: Number of pixels the box is grown by on every side.
+
+    Returns:
+        The box as (x0, y0, x1, y1).
+    """
+    y_slice, x_slice = bounding_box
+    return (
+        max(0, x_slice.start - box_extension), max(0, y_slice.start - box_extension),
+        min(shape[1], x_slice.stop + box_extension), min(shape[0], y_slice.stop + box_extension),
+    )
 
 
 def sam2_autocast(device):
@@ -1058,10 +1152,13 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             refinement: Optional second round, a '+'-joined combination of 'points' (the first
                 round's prompts grouped onto each merged instance, see `derive_refinement_prompts`),
                 'boxes' (its bounding box), 'masks' (its mask as a logit prompt) and 'recover'
-                (re-prompt the records the merge dropped and add the survivors as new instances).
-                Images only; None (the default) runs no second round.
+                (re-prompt the records the merge dropped and add the survivors). None (the default)
+                runs no second round. For a volume the round runs on each candidate's anchor slice,
+                before the propagation, and produces the conditioning that propagation starts from
+                rather than a finished mask, see `_refine_anchors`.
             refinement_kwargs: Keyword arguments of that second round, validated against the mode's
-                components; see `DEFAULT_REFINEMENT` for the accepted keys and their defaults.
+                components; see `DEFAULT_REFINEMENT`, or `DEFAULT_REFINEMENT_3D` for a volume, for
+                the accepted keys and their defaults.
             multimasking: Whether to predict several masks per point and keep the best scoring one. A
                 single point is ambiguous between one object and a cluster, so this is on by default.
             n_objects_per_pass: Number of objects propagated together through a volume. The video
@@ -1090,8 +1187,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 "candidate_threshold_3d" if is_volume else "candidate_threshold"
             ]
         if is_volume:
+            components = resolved = None
             if refinement is not None:
-                raise ValueError("Refinement is not supported for volumes, whose masks come from the propagation.")
+                components, resolved = _parse_refinement(refinement, refinement_kwargs, is_volume=True)
             prompts = derive_volume_prompts(
                 self._prediction[0], self._prediction[1:], candidate_threshold=candidate_threshold,
                 foreground_threshold=foreground_threshold, n_iter=n_iter, dt=dt, sigma=sigma,
@@ -1106,12 +1204,23 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                     "propagated_frame_steps": 0,
                     "early_stopped_frame_steps": 0,
                 }
+                if components is not None:
+                    self._last_generation_stats.update({key: 0 for key in REFINEMENT_STATS_3D})
                 return np.zeros(shape, dtype="uint32")
             self._last_generation_stats["proposed_candidates"] = len(prompts["points"])
-            candidates = self._score_candidates(
-                prompts, multimasking=multimasking, batch_size=batch_size,
-                score_threshold=score_threshold, max_overlap=max_overlap,
+            if components is not None:
+                self._last_generation_stats.update({key: 0 for key in REFINEMENT_STATS_3D})
+            # The refinement's forwards are not wrapped by '_apply_prompts', which has its own.
+            autocast = (
+                sam2_autocast(self._predictor.device) if components is not None
+                else contextlib.nullcontext()
             )
+            with autocast:
+                candidates = self._score_candidates(
+                    prompts, multimasking=multimasking, batch_size=batch_size,
+                    score_threshold=score_threshold, max_overlap=max_overlap,
+                    components=components, refinement_kwargs=resolved,
+                )
             self._last_generation_stats["scored_candidates"] = len(candidates)
             records = self._propagate_candidates(
                 candidates, n_objects_per_pass=n_objects_per_pass,
@@ -1442,11 +1551,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 labels[row, :len(prompt["points"])] = prompt["point_labels"]
         if "boxes" in components:
             boxes = np.array([
-                [
-                    max(0, x_slice.start - box_extension), max(0, y_slice.start - box_extension),
-                    min(shape[1], x_slice.stop + box_extension), min(shape[0], y_slice.stop + box_extension),
-                ]
-                for _, (y_slice, x_slice) in batch
+                _prompt_box(bounding_box, shape, box_extension) for _, bounding_box in batch
             ], dtype="float32")
         if "masks" in components:
             mask_logits = np.stack([mask_to_logits(segmentation == instance_id) for instance_id, _ in batch])
@@ -1614,7 +1719,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
     def _score_candidates(
         self, prompts: dict, multimasking: bool, batch_size: int, score_threshold: float,
-        max_overlap: float,
+        max_overlap: float, components: Optional[tuple] = None,
+        refinement_kwargs: Optional[dict] = None,
     ) -> List[dict]:
         """Prompt every candidate in 2d on its anchor slice, and keep the strong, non-duplicate ones.
 
@@ -1622,10 +1728,23 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         poorly, or that a better-scoring one already covers on that slice, is never propagated. It
         also gives every surviving candidate the predicted IoU that orders the volumetric merge.
 
+        A refinement runs here too, slice by slice, while the predictor is still pointed at that
+        slice: re-reading a slice's features costs more than the re-prompt itself does.
+
+        Args:
+            prompts: The volumetric prompts, as `derive_volume_prompts` returns them.
+            multimasking: Whether to predict several masks per point and keep the best scoring one.
+            batch_size: Number of prompts per forward pass.
+            score_threshold: Discard candidates whose predicted IoU is below this.
+            max_overlap: Reject a candidate when more than this fraction of it is already claimed.
+            components: The refinement components, or None to run no second round.
+            refinement_kwargs: The resolved refinement keyword arguments.
+
         Returns:
             The surviving candidates, each with the prompt it will be propagated with.
         """
         points, point_labels, frames = prompts["points"], prompts["point_labels"], prompts["frames"]
+        slice_shape = self._prediction[0].shape[-2:]
         candidates = []
         for frame in np.unique(frames):
             indices = np.where(frames == frame)[0]
@@ -1639,20 +1758,252 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             if not records:
                 continue
 
-            _, kept = merge_by_score(
-                records, _records_shape(records), max_overlap=max_overlap,
-                min_size=DEFAULT_PROMPT_GENERATION["min_size"], return_matches=True,
+            if components is None:
+                _, kept = merge_by_score(
+                    records, _records_shape(records), max_overlap=max_overlap,
+                    min_size=DEFAULT_PROMPT_GENERATION["min_size"], return_matches=True,
+                )
+                candidates.extend(
+                    self._anchor_candidate(int(frame), records[record_index])
+                    for record_index in kept.values()
+                )
+                continue
+
+            # On the slice's own canvas rather than the records' bounding one, because a refinement
+            # looks instance ids up by position: for the foreign-overlap gate and for the negatives.
+            segmentation, matches, reasons, claimed = merge_by_score(
+                records, slice_shape, max_overlap=max_overlap,
+                min_size=DEFAULT_PROMPT_GENERATION["min_size"],
+                return_matches=True, return_reasons=True, return_claimed=True,
             )
-            for record_index in kept.values():
-                record = records[record_index]
-                x, y = points[indices[record["prompt_index"]], 0]
-                candidates.append({
-                    "frame": int(frame),
-                    "point": (float(x), float(y)),
-                    "score": record["predicted_iou"],
-                    "stability": record["stability_score"],
-                })
+            context = {
+                "frame": int(frame), "segmentation": segmentation, "records": records,
+                "matches": matches, "reasons": reasons, "claimed": claimed,
+                "points": points[indices][:, 0, :], "score_threshold": score_threshold,
+                "min_size": DEFAULT_PROMPT_GENERATION["min_size"],
+            }
+            candidates.extend(self._refine_anchors(context, components, refinement_kwargs, batch_size))
+            if "recover" in components:
+                candidates.extend(self._recover_suppressed(context, refinement_kwargs, batch_size))
         return candidates
+
+    def _anchor_candidate(self, frame: int, record: dict) -> dict:
+        """One propagation candidate: the prompt that made the anchor mask, and the merge's score."""
+        return {
+            "frame": int(frame),
+            "point": record["point"],
+            "score": record["predicted_iou"],
+            "stability": record["stability_score"],
+        }
+
+    def _refine_anchors(
+        self, context: dict, components: tuple, refinement_kwargs: dict, batch_size: int,
+    ) -> List[dict]:
+        """Re-prompt every scored candidate of one anchor slice, and return what to propagate.
+
+        The volumetric counterpart of `_reprompt_instances`, and the only place a volume can refine
+        at all: a prompt on an already propagated slice would turn it into a conditioning frame and
+        replace the mask there with a single-point one. So the second round runs on the anchor slice,
+        before the propagation, and what it produces is not a mask - the propagation still makes that
+        - but the conditioning the propagation starts from and the score that orders the 3d merge.
+
+        The prompts, the batched forward and both gates are the 2d ones, applied in-plane on the
+        anchor slice: `derive_refinement_prompts` groups that slice's suppressed prompts onto their
+        candidate and takes the neighbouring ones as negatives, 'min_consistency' keeps a re-prompt
+        from reshaping the anchor rather than polishing it, and 'max_foreign_overlap' keeps it out of
+        a neighbour. A candidate whose re-prompt comes back empty or gated keeps its first round.
+
+        Returns:
+            The slice's candidates in first-round score order. An accepted re-prompt carries its
+            conditioning under 'conditioning'; a rejected one has no such key and is propagated from
+            its first-round point, exactly as without a refinement.
+        """
+        segmentation, records = context["segmentation"], context["records"]
+        frame, frame_points = context["frame"], context["points"]
+        candidates = {
+            instance_id: self._anchor_candidate(frame, records[record_index])
+            for instance_id, record_index in context["matches"].items()
+        }
+
+        reprompt = tuple(component for component in components if component != "recover")
+        if not reprompt:
+            return list(candidates.values())
+
+        point_prompts = None
+        if "points" in reprompt:
+            point_prompts = derive_refinement_prompts(
+                segmentation, frame_points,
+                {instance_id: candidate["point"] for instance_id, candidate in candidates.items()},
+                n_positives=refinement_kwargs["n_positives"],
+                n_negatives=refinement_kwargs["n_negatives"],
+                max_negative_distance=refinement_kwargs["max_negative_distance"],
+                negative_source=refinement_kwargs["negative_source"],
+                min_negative_distance=refinement_kwargs["min_negative_distance"],
+            )
+
+        boxes = {
+            index + 1: bounding_box
+            for index, bounding_box in enumerate(find_objects(segmentation))
+            if bounding_box is not None
+        }
+        instances = [(instance_id, boxes[instance_id]) for instance_id in candidates]
+        min_consistency = refinement_kwargs["min_consistency"]
+        max_foreign_overlap = refinement_kwargs["max_foreign_overlap"]
+        keep_if_better = refinement_kwargs["policy"] == "keep-if-better"
+        stats = self._last_generation_stats
+        stats["refined_candidates"] += len(instances)
+        if point_prompts is not None:
+            # A volume can only take negatives from the candidates anchored on this same slice, so it
+            # reaches 'n_negatives' far less often than an image does - which is what would explain a
+            # flat response to that parameter. Reported, rather than assumed either way.
+            stats["refinement_negatives"] += sum(
+                int(np.count_nonzero(point_prompts[instance_id]["point_labels"] == 0))
+                for instance_id, _ in instances
+            )
+
+        for start in range(0, len(instances), batch_size):
+            batch = instances[start:start + batch_size]
+            predictions, _ = self._predict_refinement_batch(
+                segmentation, batch, reprompt, point_prompts, refinement_kwargs,
+            )
+            for (instance_id, bounding_box), (mask, score) in zip(batch, predictions):
+                candidate = candidates[instance_id]
+                first_round_score = candidate["score"] * candidate["stability"]
+                take_second = mask.any() and (not keep_if_better or score > first_round_score)
+                if take_second and min_consistency is not None:
+                    first_round_mask = segmentation == instance_id
+                    union = int(np.count_nonzero(mask | first_round_mask))
+                    iou = int(np.count_nonzero(mask & first_round_mask)) / union if union else 0.0
+                    if iou < min_consistency:
+                        take_second = False
+                        stats["gated_consistency"] += 1
+                if take_second and max_foreign_overlap is not None:
+                    on_mask = segmentation[mask]
+                    foreign = int(np.count_nonzero((on_mask != 0) & (on_mask != instance_id)))
+                    if foreign / int(mask.sum()) > max_foreign_overlap:
+                        take_second = False
+                        stats["gated_foreign"] += 1
+                if not take_second:
+                    continue
+                stats["replaced_candidates"] += 1
+                # The merge only reads the product of the two, and the second round reports it as one
+                # combined score, so it goes in whole rather than being split back up arbitrarily.
+                candidate["score"], candidate["stability"] = float(score), 1.0
+                candidate["conditioning"] = self._anchor_conditioning(
+                    mask, bounding_box, segmentation.shape, reprompt,
+                    point_prompts, instance_id, refinement_kwargs,
+                )
+        return list(candidates.values())
+
+    def _anchor_conditioning(
+        self, mask: np.ndarray, bounding_box: tuple, shape: tuple, components: tuple,
+        point_prompts: Optional[dict], instance_id: int, refinement_kwargs: dict,
+    ) -> dict:
+        """What the propagation conditions the anchor frame on, once a second round is accepted.
+
+        'conditioning="mask"' hands the video predictor the refined mask, so the anchor frame is
+        exactly the mask the gates accepted, but its decoder never sees the prompt that produced it.
+        'prompts' pushes that prompt instead - the same box and points the second round used - and
+        lets the decoder rebuild the mask, which is what the interactive branch does everywhere else.
+        """
+        if refinement_kwargs["conditioning"] == "mask":
+            return {"mask": mask}
+        conditioning = {"mode": refinement_kwargs["conditioning"]}
+        if "boxes" in components:
+            conditioning["box"] = _prompt_box(bounding_box, shape, refinement_kwargs["box_extension"])
+        if "points" in components:
+            conditioning["points"] = point_prompts[instance_id]["points"]
+            conditioning["point_labels"] = point_prompts[instance_id]["point_labels"]
+        return conditioning
+
+    def _recover_suppressed(
+        self, context: dict, refinement_kwargs: dict, batch_size: int,
+    ) -> List[dict]:
+        """Re-prompt the candidates the anchor slice's merge suppressed, and propagate the survivors.
+
+        The 2d recovery revives records the merge dropped because a neighbour already claimed them.
+        In a volume that argument is stronger: the merge that dropped these ran on a single slice,
+        and two objects that overlap in-plane there can be separate everywhere else in z. A revived
+        candidate is propagated like any other and the 3d merge arbitrates, so one that really does
+        duplicate its claimant is dropped again - on the evidence of the whole volume this time,
+        rather than of one slice. What it costs is the propagation of the candidates that are wrong,
+        which is why the counters below report how many there were.
+
+        Returns:
+            The extra candidates, most credible first, each conditioned on its own prompt.
+        """
+        max_claimed = refinement_kwargs["recover_max_claimed"]
+        n_negatives = refinement_kwargs.get("n_negatives", DEFAULT_REFINEMENT_3D["n_negatives"])
+        # A revived candidate has no accepted second-round mask to hand over - it *is* the second
+        # round - so 'mask' has nothing to mean here and it is conditioned on its own prompt.
+        conditioning = refinement_kwargs["conditioning"]
+        if conditioning == "mask":
+            conditioning = "prompts"
+        records, segmentation = context["records"], context["segmentation"]
+        surviving = {
+            instance_id: records[record_index]["point"]
+            for instance_id, record_index in context["matches"].items()
+        }
+
+        entries = []
+        for record_index, (record, reason, claimed) in enumerate(
+            zip(records, context["reasons"], context["claimed"])
+        ):
+            if reason not in ("duplicate", "truncated below min size"):
+                continue
+            if sum(claimed.values()) > max_claimed:
+                continue
+            point = np.asarray(record["point"], dtype="float32")
+            claimants = [
+                surviving[claimant] for claimant in claimed if claimant in surviving
+            ]
+            claimants = sorted(
+                claimants, key=lambda negative: float(np.linalg.norm(np.asarray(negative) - point))
+            )[:n_negatives]
+            entries.append((record["predicted_iou"] * record["stability_score"], record_index, point, claimants))
+        # Descending record score, so the most credible lost object is propagated first.
+        entries.sort(key=lambda entry: (-entry[0], entry[1]))
+        stats = self._last_generation_stats
+        stats["recovery_candidates"] += len(entries)
+        if not entries:
+            return []
+
+        recovered = []
+        for start in range(0, len(entries), batch_size):
+            batch = entries[start:start + batch_size]
+            width = 1 + max(len(negatives) for _, _, _, negatives in batch)
+            points = np.zeros((len(batch), width, 2), dtype="float32")
+            labels = np.full((len(batch), width), -1, dtype="int32")
+            for row, (_, _, point, negatives) in enumerate(batch):
+                points[row, 0] = point
+                labels[row, 0] = 1
+                for column, negative in enumerate(negatives, start=1):
+                    points[row, column] = negative
+                    labels[row, column] = 0
+            predictions = self._predict_prompt_batch(
+                points, labels, None, None, refinement_kwargs["multimasking"],
+            )
+            for row, ((_, _, point, _), (mask, score)) in enumerate(zip(batch, predictions)):
+                if score < context["score_threshold"]:
+                    continue
+                # Not fully swallowed on this slice either: a record whose free pixels are gone is
+                # its claimant, not a lost object, whatever the 3d merge would make of it.
+                if int((mask & (segmentation == 0)).sum()) < context["min_size"]:
+                    continue
+                keep = labels[row] >= 0
+                recovered.append({
+                    "frame": context["frame"],
+                    "point": (float(point[0]), float(point[1])),
+                    "score": float(score),
+                    "stability": 1.0,
+                    "conditioning": {
+                        "mode": conditioning,
+                        "points": points[row][keep],
+                        "point_labels": labels[row][keep],
+                    },
+                })
+        stats["recovered_candidates"] += len(recovered)
+        return recovered
 
     def _propagate_candidates(
         self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
@@ -1683,13 +2034,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             # Only the objects: re-reading the volume's features each pass costs more than the propagation.
             self._propagator.reset_tracking()
             for object_id, candidate in enumerate(batch, start=1):
-                x, y = candidate["point"]
-                self._propagator.add_point_prompts(
-                    frame_ids=candidate["frame"],
-                    points=np.array([[y, x]], dtype="float32"),  # The propagator takes YX.
-                    point_labels=np.array([1], dtype="int32"),
-                    object_id=object_id,
-                )
+                self._condition_pass(candidate, object_id)
             video_segments = self._propagator.propagate_prompts(early_stop_patience=early_stop_patience)
             propagated_frame_steps += len(video_segments)
             records.extend(_volume_records(video_segments, batch, self._volume.shape))
@@ -1701,6 +2046,71 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         })
         self._propagator.reset_predictor()
         return records
+
+    def _condition_pass(self, candidate: dict, object_id: int) -> None:
+        """Push one candidate's conditioning onto the propagator, as the object with this id.
+
+        Without a refinement a candidate is conditioned on the single point the decoder proposed it
+        at. A refined one carries either the mask its second round produced, which conditions the
+        anchor frame directly, or that round's box and points - in as many pushes as its
+        'conditioning' asks for, because a push is a decoder step on the anchor frame rather than
+        bookkeeping, and more of them refine the anchor further. See `DEFAULT_REFINEMENT_3D`.
+        """
+        frame = candidate["frame"]
+        conditioning = candidate.get("conditioning")
+        if conditioning is None:
+            x, y = candidate["point"]
+            self._propagator.add_point_prompts(
+                frame_ids=frame,
+                points=np.array([[y, x]], dtype="float32"),  # The propagator takes YX.
+                point_labels=np.array([1], dtype="int32"),
+                object_id=object_id,
+            )
+            return
+
+        mask = conditioning.get("mask")
+        if mask is not None:
+            # Already refined against this slice, so the propagator must not refine it a second time.
+            self._propagator.add_mask_prompts(
+                frame_ids=frame, masks=[mask], object_id=object_id, refine=False,
+            )
+            return
+
+        # Every producer of a conditioning dict sets this; a missing one is a bug in the producer,
+        # so it raises rather than silently picking a strategy.
+        mode = conditioning["mode"]
+        box = conditioning.get("box")
+        points = conditioning.get("points")
+        # The propagator takes YX for both.
+        points_yx = None if points is None else np.asarray(points, dtype="float32")[:, ::-1]
+        labels = conditioning.get("point_labels")
+        box_yx = None if box is None else np.array([box[1], box[0], box[3], box[2]], dtype="float32")
+
+        if mode == "prompts-joint":
+            self._propagator.add_prompt_set(
+                frame_id=frame, points=points_yx, point_labels=labels, box=box_yx,
+                object_id=object_id,
+            )
+            return
+
+        # A box has to come first, and it clears whatever the object carried on the frame.
+        if box_yx is not None:
+            self._propagator.add_box_prompts(
+                frame_ids=frame, boxes=[box_yx], object_id=object_id,
+            )
+        if points_yx is None or not len(points_yx):
+            return
+        if mode == "prompts-grouped":
+            self._propagator.add_prompt_set(
+                frame_id=frame, points=points_yx, point_labels=labels, object_id=object_id,
+                # Appends to the box rather than replacing it.
+                clear_old_points=box_yx is None,
+            )
+            return
+        self._propagator.add_point_prompts(
+            frame_ids=frame, points=points_yx,
+            point_labels=np.asarray(labels, dtype="int32"), object_id=object_id,
+        )
 
 
 class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2InstanceSegmentation):

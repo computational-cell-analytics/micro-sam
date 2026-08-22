@@ -625,6 +625,72 @@ class PromptableSegmentation3D:
                     labels=np.array([label]),
                 )
 
+    def add_prompt_set(
+        self,
+        frame_id: int,
+        points: Optional[np.ndarray] = None,
+        point_labels: Optional[np.ndarray] = None,
+        box: Optional[np.ndarray] = None,
+        object_id: int = 1,
+        clear_old_points: bool = True,
+    ):
+        """Condition one object on a whole prompt set at once, in a single SAM2 call.
+
+        'add_point_prompts' pushes one point at a time, and 'add_box_prompts' pushes a box and then
+        replays the points it had to clear. That is what an annotator placing corrections needs: each
+        push returns the running segmentation, and re-running only sends what is new. A caller that
+        has the whole set up front pays for it, because every push re-runs the mask decoder on the
+        conditioning frame - eight of them for a box and seven points. SAM2 takes the set in one
+        call instead, with the box as the first two coordinates, which is also the order it wants.
+
+        The prompts are recorded in the same bookkeeping the incremental methods use, so the anchor
+        of each object and a replay onto a fresh state still see them.
+
+        Args:
+            frame_id: The slice to condition.
+            points: The points, (N, 2) in (y, x) order. None conditions on the box alone.
+            point_labels: One label per point: 1 positive, 0 negative.
+            box: An optional box, in (y0, x0, y1, x1) order.
+            object_id: The object being conditioned.
+            clear_old_points: Whether the push replaces what this object already carries on the
+                frame. SAM2 requires it whenever a box is given. False appends, which is how a
+                points-only push is added after a box.
+        """
+        if points is None and box is None:
+            return
+        frame_id, object_id = int(frame_id), int(object_id)
+        key = (object_id, frame_id)
+        kwargs = {}
+
+        if points is not None and len(points):
+            points = np.asarray(points, dtype="float32").reshape(-1, 2)
+            point_labels = np.asarray(point_labels, dtype="int32").reshape(-1)
+            if len(points) != len(point_labels):
+                raise AssertionError("The number of points and labels do not match.")
+            # SAM2 expects (x, y), and torch refuses an array with a negative stride. The copy is
+            # unconditional because 'ascontiguousarray' does not always make one: numpy ignores the
+            # stride of a size-1 axis when it sets the contiguous flag, so reversing a single point
+            # yields an array flagged contiguous that still carries a negative stride.
+            kwargs["points"] = np.array(points[:, ::-1], dtype="float32")
+            kwargs["labels"] = np.array(point_labels, dtype="int32")
+            seen = self._pushed_points.setdefault(key, set())
+            for (y, x), label in zip(points, point_labels):
+                seen.add((int(round(float(y))), int(round(float(x))), int(label)))
+        if box is not None:
+            kwargs["box"] = np.array([_process_box(box, self.volume.shape[-2:])])
+            self._pushed_boxes.setdefault(key, set()).add(tuple(np.round(box).astype(int).tolist()))
+
+        # The preview mask is discarded, as in the incremental methods.
+        skip_output = getattr(self.predictor, "skip_prompt_output", None)
+        with (skip_output() if skip_output is not None else contextlib.nullcontext()):
+            self.predictor.add_new_points_or_box(
+                inference_state=self.inference_state,
+                frame_idx=frame_id,
+                obj_id=object_id,
+                clear_old_points=clear_old_points,
+                **kwargs,
+            )
+
     def add_box_prompts(
         self,
         frame_ids: Union[int, List[int]],
@@ -646,29 +712,33 @@ class PromptableSegmentation3D:
         frame_ids = self._broadcast(frame_ids, n)
         object_ids = self._broadcast(1 if object_id is None else object_id, n)
 
-        for frame_id, box, obj_id in zip(frame_ids, boxes, object_ids):
-            key = (obj_id, frame_id)
-            signature = tuple(np.round(box).astype(int).tolist())
-            seen = self._pushed_boxes.setdefault(key, set())
-            if signature in seen:
-                continue
-            seen.add(signature)
-            self.predictor.add_new_points_or_box(
-                inference_state=self.inference_state,
-                frame_idx=frame_id,
-                obj_id=obj_id,
-                clear_old_points=True,
-                box=np.array([_process_box(box, self.volume.shape[-2:])]),
-            )
-            for y, x, label in self._pushed_points.get(key, set()):
+        # As in 'add_point_prompts': the preview mask each push returns is discarded here, and
+        # consolidating it costs a pass over every object of the state.
+        skip_output = getattr(self.predictor, "skip_prompt_output", None)
+        with (skip_output() if skip_output is not None else contextlib.nullcontext()):
+            for frame_id, box, obj_id in zip(frame_ids, boxes, object_ids):
+                key = (obj_id, frame_id)
+                signature = tuple(np.round(box).astype(int).tolist())
+                seen = self._pushed_boxes.setdefault(key, set())
+                if signature in seen:
+                    continue
+                seen.add(signature)
                 self.predictor.add_new_points_or_box(
                     inference_state=self.inference_state,
                     frame_idx=frame_id,
                     obj_id=obj_id,
-                    clear_old_points=False,
-                    points=np.array([[x, y]]),
-                    labels=np.array([label]),
+                    clear_old_points=True,
+                    box=np.array([_process_box(box, self.volume.shape[-2:])]),
                 )
+                for y, x, label in self._pushed_points.get(key, set()):
+                    self.predictor.add_new_points_or_box(
+                        inference_state=self.inference_state,
+                        frame_idx=frame_id,
+                        obj_id=obj_id,
+                        clear_old_points=False,
+                        points=np.array([[x, y]]),
+                        labels=np.array([label]),
+                    )
 
     def _prepare_mask(self, mask):
         """Bring a full-resolution 2d boolean mask into the padded-square frame the video predictor
@@ -686,6 +756,7 @@ class PromptableSegmentation3D:
         frame_ids: Union[int, List[int]],
         masks: Optional[List[np.ndarray]] = None,
         object_id: Optional[Union[int, List[int]]] = None,
+        refine: bool = True,
     ):
         """Add mask prompts (full-resolution 2d boolean masks) to the persistent SAM2 state.
 
@@ -696,6 +767,14 @@ class PromptableSegmentation3D:
         a frame on either a mask or points/box (not both), so a mask prompt does not combine with
         points on the same object/frame. A mask already pushed (same object, frame, content) is
         skipped so re-runs only add newly drawn masks.
+
+        Args:
+            frame_ids: The slice each mask conditions, one per mask or one for all of them.
+            masks: The masks, at the volume's full resolution.
+            object_id: The object each mask belongs to, one per mask or one for all of them.
+            refine: Whether to refine each mask into the object on its frame first. True for a shape
+                somebody drew; False for a mask that is already a prediction for this frame, which a
+                second refinement would only pull away from what it was accepted as.
         """
         if masks is None or len(masks) == 0:
             return
@@ -705,30 +784,35 @@ class PromptableSegmentation3D:
         frame_ids = self._broadcast(frame_ids, n)
         object_ids = self._broadcast(1 if object_id is None else object_id, n)
 
-        for frame_id, mask, obj_id in zip(frame_ids, masks, object_ids):
-            key = (obj_id, frame_id)
-            # A stable digest, so the signature does not change between processes.
-            signature = hashlib.sha1(np.ascontiguousarray(mask).tobytes()).hexdigest()
-            seen = self._pushed_masks.setdefault(key, {})
-            if signature in seen:
-                continue
+        # As in 'add_point_prompts': the preview mask each push returns is discarded here, and
+        # consolidating it costs a pass over every object of the state.
+        skip_output = getattr(self.predictor, "skip_prompt_output", None)
+        with (skip_output() if skip_output is not None else contextlib.nullcontext()):
+            for frame_id, mask, obj_id in zip(frame_ids, masks, object_ids):
+                key = (obj_id, frame_id)
+                # A stable digest, so the signature does not change between processes.
+                signature = hashlib.sha1(np.ascontiguousarray(mask).tobytes()).hexdigest()
+                seen = self._pushed_masks.setdefault(key, {})
+                if signature in seen:
+                    continue
 
-            # Refined on the seed frame first, so the propagation starts from the object rather
-            # than from the drawn shape. The box is the filled mask's extent.
-            ys, xs = np.nonzero(mask)
-            if len(ys) == 0:
-                continue
-            box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype="float32")  # (x0, y0, x1, y1)
-            refined = self._image_style_predict(frame_id, box=box, mask=mask)
+                # Refined on the seed frame first, so the propagation starts from the object rather
+                # than from the drawn shape. The box is the filled mask's extent.
+                ys, xs = np.nonzero(mask)
+                if len(ys) == 0:
+                    continue
+                if refine:
+                    box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype="float32")  # (x0,y0,x1,y1)
+                    mask = self._image_style_predict(frame_id, box=box, mask=mask)
 
-            prepared = self._prepare_mask(refined)
-            seen[signature] = prepared
-            self.predictor.add_new_mask(
-                inference_state=self.inference_state,
-                frame_idx=frame_id,
-                obj_id=obj_id,
-                mask=prepared,
-            )
+                prepared = self._prepare_mask(mask)
+                seen[signature] = prepared
+                self.predictor.add_new_mask(
+                    inference_state=self.inference_state,
+                    frame_idx=frame_id,
+                    obj_id=obj_id,
+                    mask=prepared,
+                )
 
     def _propagate_in_direction(
         self, reverse, update_progress=None, early_stop_patience=None, z_range=None, seen_frames=None
@@ -1278,7 +1362,7 @@ class TiledPromptableSegmentation3D:
                 frame_ids=frame_ids, boxes=np.array(local_boxes), object_id=tile_ids[tile_id],
             )
 
-    def add_mask_prompts(self, frame_ids, masks=None, object_id=None):
+    def add_mask_prompts(self, frame_ids, masks=None, object_id=None, refine=True):
         """Add mask prompts. Each mask is routed to the tiles its filled region overlaps, cropped to
         each tile's outer block, and added there (so a mask spanning tiles is added on both sides)."""
         if masks is None or len(masks) == 0:
@@ -1298,7 +1382,7 @@ class TiledPromptableSegmentation3D:
             for tid in _box_to_tiles(self.tiling, self.halo, box_yx):
                 self._get_segmenter(tid).add_mask_prompts(
                     frame_ids=frame_ids, masks=[_crop_mask_to_tile(self.tiling, self.halo, tid, mask)],
-                    object_id=obj_id,
+                    object_id=obj_id, refine=refine,
                 )
 
     def predict(self, update_progress=None, early_stop_patience=None, z_range=None):

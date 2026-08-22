@@ -134,6 +134,10 @@ INITIAL_SAMPLE_SECONDS = {2: 5.0, 3: 35.0}
 VOLUME_DIAGNOSTICS = (
     "proposed_candidates", "scored_candidates", "unique_anchor_slices", "propagation_passes",
     "propagated_frame_steps", "early_stopped_frame_steps",
+    # Only a refinement run reports these ('REFINEMENT_STATS_3D' in the APG module); they read 0 for
+    # every other run, which is what a missing key means here.
+    "refined_candidates", "replaced_candidates", "gated_consistency", "gated_foreign",
+    "recovery_candidates", "recovered_candidates", "refinement_negatives",
 )
 
 IMPLEMENTATION_FILES = (
