@@ -31,6 +31,18 @@ DEFAULT_POSTPROCESSING = {
         "sigma": 0.5,
         "foreground_weight": 0.75,
     },
+    # For the geodesic hybrid target, whose flow converges to a point rather than onto a medial
+    # axis. Tuned on ground truth fields for the best worst-case mSA over DSB, LIVECell and
+    # GoNuclear; the "sparse" values are tuned for the euclidean target and under-perform here.
+    "sparse_hybrid": {
+        "foreground_threshold": 0.7,
+        "density_threshold": 2.0,
+        "min_size": 50,
+        "n_iter": 200,
+        "dt": 0.25,
+        "sigma": 2.0,
+        "foreground_weight": 0.75,
+    },
     "dense": {
         "beta": 0.5,
         "density_threshold": 3.0,

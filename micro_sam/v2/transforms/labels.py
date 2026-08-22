@@ -5,7 +5,7 @@ import numpy as np
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 
-from bioimage_cpp.distance import vector_difference_transform
+from bioimage_cpp.distance import distance_transform, geodesic_distance_field, vector_difference_transform
 from bioimage_cpp.segmentation import label as connected_components, relabel_sequential
 
 
@@ -187,6 +187,80 @@ class DirectedPerObjectBoundaryDistanceTransform:
             assert distances.shape[1] == 1
             distances = distances.squeeze(1)
 
+        return distances
+
+
+def _geodesic_object_center(mask, sampling):
+    """Point of maximal distance to the boundary, which always lies inside the object.
+
+    The mask is padded so that the crop face counts as a boundary, which keeps the center off a
+    face where an object was cut. The padding does not enter any output field.
+
+    Singleton axes are left unpadded. A 2d input is promoted to a single z slice, and padding that
+    axis would put background one voxel away from every single voxel, flattening the distance field
+    and making the argmax arbitrary.
+    """
+    kwargs = {} if sampling is None else {"sampling": sampling}
+    pad_width = tuple((1, 1) if extent > 1 else (0, 0) for extent in mask.shape)
+    inner = tuple(slice(1, -1) if extent > 1 else slice(None) for extent in mask.shape)
+    boundary_distance = distance_transform(np.pad(mask, pad_width), **kwargs)[inner]
+    return np.unravel_index(int(np.argmax(np.where(mask, boundary_distance, -1.0))), mask.shape)
+
+
+def _finite_fill(field, mask):
+    """Replace the +inf that a geodesic solve returns for voxels it cannot reach.
+
+    Only disconnected objects have unreachable voxels, which ``apply_label`` already prevents.
+    """
+    reachable = mask & np.isfinite(field)
+    fill = field[reachable].max() if reachable.any() else 0.0
+    return np.where(reachable, field, fill).astype("float32")
+
+
+class GeodesicHybridDistanceTransform(DirectedPerObjectBoundaryDistanceTransform):
+    """Directed distances whose direction comes from the geodesic field around the object center.
+
+    Same output layout as :class:`DirectedPerObjectBoundaryDistanceTransform`, so it is a drop-in
+    replacement as ``label_transform2``. Only the vector at each pixel differs: it is the gradient
+    of the geodesic distance field from the object's center, scaled by the geodesic distance to the
+    boundary.
+
+    The two parts do different jobs downstream and neither works alone. The direction makes the
+    flow in :func:`micro_sam.v2.postprocessing.flow_instance_segmentation` converge to a single sink
+    per object whatever its shape, where a boundary referenced direction converges onto a medial
+    axis and so over-segments elongated objects. The magnitude is what
+    :func:`micro_sam.v2.postprocessing.watershed_heightmap` inverts into the ridge between touching
+    objects, which a unit norm field cannot provide.
+
+    Post-process predictions with ``DEFAULT_POSTPROCESSING["sparse_hybrid"]``; the ``"sparse"``
+    values are tuned for the euclidean target's magnitude profile.
+    """
+
+    def compute_normalized_directed_distances(self, labels, label_id, boundaries, bb, distances):
+        """@private
+        """
+        cropped_mask = labels[bb] == label_id
+        ndim = labels.ndim
+        kwargs = {} if self.sampling is None else {"sampling": self.sampling}
+
+        # The object's own boundary, not the shared one the euclidean transform uses: a geodesic
+        # solve needs its sources inside the mask it propagates through.
+        sources = np.argwhere(find_boundaries(cropped_mask, mode="inner") & cropped_mask)
+        if len(sources) == 0:  # A one voxel wide object is all boundary.
+            return distances
+
+        boundary_field = _finite_fill(geodesic_distance_field(cropped_mask, sources, **kwargs), cropped_mask)
+        center = _geodesic_object_center(cropped_mask, self.sampling)
+        gradient = geodesic_distance_field(
+            cropped_mask, np.array(center), return_gradient=True, **kwargs
+        )[1]
+        gradient[~np.isfinite(gradient)] = 0.0
+
+        this_distances = gradient * boundary_field[..., None]
+        spatial_axes = tuple(range(ndim))
+        this_distances /= (np.abs(this_distances).max(axis=spatial_axes, keepdims=True) + self.eps)
+
+        distances[bb][cropped_mask] = this_distances[cropped_mask]
         return distances
 
 
