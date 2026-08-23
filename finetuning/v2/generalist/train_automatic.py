@@ -16,7 +16,7 @@ def main():
         batch_size=2,
         batch_size_2d=8,
         z_slices=[8],
-        dataset_choice="both",
+        dataset_choice="all",
         n_workers=16,
     )
 

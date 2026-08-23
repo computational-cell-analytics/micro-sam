@@ -844,7 +844,7 @@ def precompute_embeddings(
 @click.option("-m", "--model_type", default="hvit_t", help="SAM2 variant: hvit_t, hvit_s, hvit_b, hvit_l.")
 @click.option("-s", "--save_root", default=None, help="Directory for checkpoints and logs. Default: current dir.")
 @click.option("--name", default=None, help="Checkpoint/log folder name. Auto-generated if unset.")
-@click.option("--dataset_choice", default="both", help="Data modality to train on: 'lm', 'em' or 'both'.")
+@click.option("--dataset_choice", default="all", help="Data modality to train on: 'lm', 'em', 'hp' or 'all'.")
 @click.option("--n_epochs", type=int, default=100, help="Number of training epochs.")
 @click.option("--n_iterations", type=int, default=None, help="Fixed iteration budget (overrides --n_epochs).")
 @click.option("--batch_size", type=int, default=1, help="Batch size per GPU for 3d groups.")

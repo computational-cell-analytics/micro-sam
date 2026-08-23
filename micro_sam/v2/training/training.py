@@ -427,7 +427,7 @@ def train_sam2_multi_gpu(
     batch_size: int = 2,
     batch_size_2d: Optional[int] = None,
     z_slices: Optional[List[int]] = None,
-    dataset_choice: str = "both",
+    dataset_choice: str = "all",
     n_workers: int = 16,
     n_epochs: int = 100,
     n_iterations: Optional[int] = None,
@@ -478,7 +478,7 @@ def train_sam2_multi_gpu(
         batch_size: Batch size per GPU for 3D groups.
         batch_size_2d: Batch size per GPU for 2D groups (falls back to batch_size).
         z_slices: Z-slice counts for 3D data groups (default [8]).
-        dataset_choice: ``"lm"``, ``"em"``, or ``"both"``.
+        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, or ``"all"``.
         n_workers: DataLoader workers per GPU.
         n_epochs: Training epochs.
         n_iterations: Override n_epochs with a fixed iteration budget.
@@ -802,7 +802,7 @@ def train_automatic_multi_gpu(
     batch_size: int = 2,
     batch_size_2d: Optional[int] = None,
     z_slices: Optional[List[int]] = None,
-    dataset_choice: str = "both",
+    dataset_choice: str = "all",
     n_workers: int = 16,
     n_epochs: int = 100,
     n_iterations: Optional[int] = None,
@@ -829,7 +829,7 @@ def train_automatic_multi_gpu(
         batch_size: Batch size per GPU for 3D groups.
         batch_size_2d: Batch size per GPU for 2D groups (falls back to batch_size).
         z_slices: Z-slice counts for 3D data groups (default [8]).
-        dataset_choice: ``"lm"``, ``"em"``, or ``"both"``.
+        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, or ``"all"``.
         n_workers: DataLoader workers per GPU.
         n_epochs: Number of training epochs (default 100). Ignored if n_iterations is set.
         n_iterations: If set, train for this many iterations instead of epochs.
@@ -891,7 +891,7 @@ def train_joint_sam2(
     batch_size: int = 2,
     batch_size_2d: Optional[int] = None,
     z_slices: Optional[List[int]] = None,
-    dataset_choice: str = "both",
+    dataset_choice: str = "all",
     n_workers: int = 16,
     n_epochs: int = 100,
     n_iterations: Optional[int] = None,
@@ -939,7 +939,7 @@ def train_joint_sam2(
         batch_size: Batch size for 3D groups (both branches).
         batch_size_2d: Batch size for 2D groups (both branches). Defaults to ``batch_size``.
         z_slices: Z-slice counts for 3D groups (default [8]).
-        dataset_choice: ``"lm"``, ``"em"``, or ``"both"``.
+        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, or ``"all"``.
         n_workers: DataLoader workers.
         n_epochs: Number of training epochs. Ignored if n_iterations is set.
         n_iterations: If set, train for this many iterations instead of epochs.
@@ -1218,7 +1218,7 @@ def train_joint_sam2_multi_gpu(
     batch_size: int = 2,
     batch_size_2d: Optional[int] = None,
     z_slices: Optional[List[int]] = None,
-    dataset_choice: str = "both",
+    dataset_choice: str = "all",
     n_workers: int = 16,
     n_epochs: int = 100,
     n_iterations: Optional[int] = None,
@@ -1269,7 +1269,7 @@ def train_joint_sam2_multi_gpu(
         batch_size: Batch size per GPU for 3D groups (both branches).
         batch_size_2d: Batch size per GPU for 2D groups. Defaults to ``batch_size``.
         z_slices: Z-slice counts for 3D groups (default [8]).
-        dataset_choice: ``"lm"``, ``"em"``, or ``"both"``.
+        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, or ``"all"``.
         n_workers: DataLoader workers per GPU.
         n_epochs: Number of training epochs. Ignored if n_iterations is set.
         n_iterations: If set, train for this many iterations instead of epochs.

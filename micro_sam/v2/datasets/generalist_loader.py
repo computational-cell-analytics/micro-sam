@@ -71,6 +71,10 @@ def _set_percentile_normalization(dataset, lower_percentile_bounds):
         _set_percentile_normalization(dataset.ds, lower_percentile_bounds)
         return
 
+    if isinstance(dataset, torch.utils.data.Subset):
+        _set_percentile_normalization(dataset.dataset, lower_percentile_bounds)
+        return
+
     children = getattr(dataset, "datasets", None)
     if children is not None:
         for ds in children:
@@ -721,13 +725,133 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     return train_ds, val_ds
 
 
+def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
+    """Get all histopathology (HP) datasets for generalist training.
+
+    Dataset composition mirrors patho-sam's generalist training set:
+    https://github.com/computational-cell-analytics/patho-sam
+
+    Returns:
+        Tuple of (train_ds, val_ds) lists of UniDataWrapper instances.
+    """
+    train_ds, val_ds = [], []
+
+    # 1. CPM15 (nucleus segmentation in H&E histopathology images)
+    cpm15_kwargs = {
+        "path": os.path.join(input_path, "cpm15"), "patch_shape": patch_shape, "data_choice": "cpm15", **kwargs
+    }
+    train_ds.append(
+        UniDataWrapper(datasets.get_cpm_dataset(split="train", n_samples=50, **cpm15_kwargs), source_ndim=2)
+    )
+    val_ds.append(UniDataWrapper(datasets.get_cpm_dataset(split="val", n_samples=50, **cpm15_kwargs), source_ndim=2))
+
+    # 2. CPM17 (nucleus segmentation in H&E histopathology images)
+    # NOTE: No native val split. Split the train image/label paths so train and val get
+    # independent dataset instances (a shared random_split Subset would alias raw_transform).
+    cpm17_raw_paths, cpm17_label_paths = datasets.cpm.get_cpm_paths(
+        path=os.path.join(input_path, "cpm17"), data_choice="cpm17", split="train",
+    )
+    cpm17_train_raw, cpm17_val_raw, cpm17_train_labels, cpm17_val_labels = train_test_split(
+        cpm17_raw_paths, cpm17_label_paths, test_size=0.2, random_state=42,
+    )
+    cpm17_kwargs = {"patch_shape": patch_shape, "with_channels": True, "ndim": 2, **kwargs}
+    train_ds.append(
+        UniDataWrapper(
+            torch_em.default_segmentation_dataset(
+                raw_paths=cpm17_train_raw, raw_key=None, label_paths=cpm17_train_labels, label_key=None,
+                is_seg_dataset=False, n_samples=50, **cpm17_kwargs,
+            ), source_ndim=2,
+        )
+    )
+    val_ds.append(
+        UniDataWrapper(
+            torch_em.default_segmentation_dataset(
+                raw_paths=cpm17_val_raw, raw_key=None, label_paths=cpm17_val_labels, label_key=None,
+                is_seg_dataset=False, n_samples=50, **cpm17_kwargs,
+            ), source_ndim=2,
+        )
+    )
+
+    # 3. Lizard (nucleus segmentation in H&E histopathology images)
+    lizard_kwargs = {
+        "path": os.path.join(input_path, "lizard"), "patch_shape": patch_shape, "download": True, **kwargs
+    }
+    train_ds.append(UniDataWrapper(datasets.get_lizard_dataset(split="train", **lizard_kwargs), source_ndim=2))
+    val_ds.append(UniDataWrapper(datasets.get_lizard_dataset(split="val", **lizard_kwargs), source_ndim=2))
+
+    # 4. MoNuSeg (nucleus segmentation in H&E histopathology images)
+    # NOTE: No native val split. Split the train image/label paths so train and val get
+    # independent dataset instances (a shared random_split Subset would alias raw_transform).
+    monuseg_raw_paths, monuseg_label_paths = datasets.monuseg.get_monuseg_paths(
+        path=os.path.join(input_path, "monuseg"), split="train", download=True,
+    )
+    monuseg_train_raw, monuseg_val_raw, monuseg_train_labels, monuseg_val_labels = train_test_split(
+        monuseg_raw_paths, monuseg_label_paths, test_size=0.2, random_state=42,
+    )
+    monuseg_kwargs = {"patch_shape": patch_shape, "is_seg_dataset": False, **kwargs}
+    train_ds.append(
+        UniDataWrapper(
+            torch_em.default_segmentation_dataset(
+                raw_paths=monuseg_train_raw, raw_key=None, label_paths=monuseg_train_labels, label_key=None,
+                n_samples=50, **monuseg_kwargs,
+            ), source_ndim=2,
+        )
+    )
+    val_ds.append(
+        UniDataWrapper(
+            torch_em.default_segmentation_dataset(
+                raw_paths=monuseg_val_raw, raw_key=None, label_paths=monuseg_val_labels, label_key=None,
+                n_samples=50, **monuseg_kwargs,
+            ), source_ndim=2,
+        )
+    )
+
+    # 5. PanNuke (nucleus segmentation in H&E histopathology images)
+    # NOTE: fold_1 + fold_2 for training, split 80/20 for internal val, matching patho-sam's
+    # generalist training set. fold_3 is left untouched: it is the held-out benchmark test split
+    # used across patho-sam's own evaluation scripts.
+    # The full dataset is built twice (independent instances) so train and val get their own
+    # raw_transform, rather than a shared random_split Subset that would alias the two.
+    pannuke_kwargs = {
+        "path": os.path.join(input_path, "pannuke"), "patch_shape": (1, *patch_shape),
+        "download": True, "ndim": 2, "folds": ["fold_1", "fold_2"], **kwargs,
+    }
+    pannuke_train_full = datasets.get_pannuke_dataset(**pannuke_kwargs)
+    pannuke_val_full = datasets.get_pannuke_dataset(**pannuke_kwargs)
+    pannuke_train_idx, pannuke_val_idx = train_test_split(
+        range(len(pannuke_train_full)), test_size=0.2, random_state=42,
+    )
+    train_ds.append(
+        UniDataWrapper(torch.utils.data.Subset(pannuke_train_full, pannuke_train_idx), source_ndim=2)
+    )
+    val_ds.append(UniDataWrapper(torch.utils.data.Subset(pannuke_val_full, pannuke_val_idx), source_ndim=2))
+
+    # 6. PUMA (nucleus segmentation in H&E histopathology images)
+    puma_kwargs = {"path": os.path.join(input_path, "puma"), "patch_shape": patch_shape, "download": True, **kwargs}
+    train_ds.append(UniDataWrapper(datasets.get_puma_dataset(split="train", **puma_kwargs), source_ndim=2))
+    val_ds.append(UniDataWrapper(datasets.get_puma_dataset(split="val", **puma_kwargs), source_ndim=2))
+
+    # 7. TNBC (nucleus segmentation in H&E histopathology images)
+    # NOTE: ndim must be given explicitly. get_tnbc_dataset doesn't pass it, and the raw h5 data is
+    # channels-last (H, W, 3): the default ndim auto-detection misreads the 3 as a depth axis.
+    tnbc_kwargs = {
+        "path": os.path.join(input_path, "tnbc"), "patch_shape": patch_shape, "download": True, "ndim": 2, **kwargs
+    }
+    train_ds.append(
+        UniDataWrapper(datasets.get_tnbc_dataset(split="train", n_samples=50, **tnbc_kwargs), source_ndim=2)
+    )
+    val_ds.append(UniDataWrapper(datasets.get_tnbc_dataset(split="val", n_samples=50, **tnbc_kwargs), source_ndim=2))
+
+    return train_ds, val_ds
+
+
 def get_dataloaders(
     input_path,
     label_trafo=None,
     batch_size=1,
     batch_size_2d=None,
     z_slices=None,
-    dataset_choice="both",
+    dataset_choice="all",
     n_workers=32,
 ):
     """Get generalist dataloaders for training UniSAM2.
@@ -744,10 +868,11 @@ def get_dataloaders(
         dataset_choice: Which dataset domain to include. One of:
             - ``"lm"``: Light microscopy datasets only (2D + 3D LM).
             - ``"em"``: Electron microscopy datasets only.
-            - ``"both"``: All datasets (default).
+            - ``"hp"``: Histopathology datasets only.
+            - ``"all"``: All datasets (default).
     """
-    if dataset_choice not in ("lm", "em", "both"):
-        raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', or 'both'.")
+    if dataset_choice not in ("lm", "em", "hp", "all"):
+        raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', 'hp', or 'all'.")
 
     if label_trafo is None:
         from micro_sam.v2.transforms.labels import GeodesicHybridDistanceTransform
@@ -770,15 +895,20 @@ def get_dataloaders(
 
     train_ds, val_ds = [], []
 
-    if dataset_choice in ("lm", "both"):
+    if dataset_choice in ("lm", "all"):
         lm_train, lm_val = _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
         train_ds.extend(lm_train)
         val_ds.extend(lm_val)
 
-    if dataset_choice in ("em", "both"):
+    if dataset_choice in ("em", "all"):
         em_train, em_val = _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    if dataset_choice in ("hp", "all"):
+        hp_train, hp_val = _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(hp_train)
+        val_ds.extend(hp_val)
 
     _configure_training_normalization(train_ds, val_ds)
 
@@ -809,7 +939,7 @@ def get_interactive_dataloaders(
     batch_size=1,
     batch_size_2d=None,
     z_slices=None,
-    dataset_choice="both",
+    dataset_choice="all",
     n_workers=32,
 ):
     """Get generalist dataloaders for SAM2 interactive segmentation training.
@@ -826,14 +956,14 @@ def get_interactive_dataloaders(
         z_slices: List of z-slice counts for 3D data (e.g. [8]).
             Defaults to [8].
         dataset_choice: Which dataset domain to include - ``"lm"``, ``"em"``,
-            or ``"both"`` (default).
+            ``"hp"``, or ``"all"`` (default).
         n_workers: Number of DataLoader worker processes.
 
     Returns:
         Tuple of (train_loader, val_loader).
     """
-    if dataset_choice not in ("lm", "em", "both"):
-        raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', or 'both'.")
+    if dataset_choice not in ("lm", "em", "hp", "all"):
+        raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', 'hp', or 'all'.")
 
     if z_slices is None:
         z_slices = [8]
@@ -882,15 +1012,20 @@ def _build_automatic_datasets(input_path, z_slices, dataset_choice):
 
     train_ds, val_ds = [], []
 
-    if dataset_choice in ("lm", "both"):
+    if dataset_choice in ("lm", "all"):
         lm_train, lm_val = _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
         train_ds.extend(lm_train)
         val_ds.extend(lm_val)
 
-    if dataset_choice in ("em", "both"):
+    if dataset_choice in ("em", "all"):
         em_train, em_val = _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    if dataset_choice in ("hp", "all"):
+        hp_train, hp_val = _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(hp_train)
+        val_ds.extend(hp_val)
 
     _configure_training_normalization(train_ds, val_ds)
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
@@ -917,15 +1052,20 @@ def _build_interactive_datasets(input_path, z_slices, dataset_choice):
 
     train_ds, val_ds = [], []
 
-    if dataset_choice in ("lm", "both"):
+    if dataset_choice in ("lm", "all"):
         lm_train, lm_val = _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
         train_ds.extend(lm_train)
         val_ds.extend(lm_val)
 
-    if dataset_choice in ("em", "both"):
+    if dataset_choice in ("em", "all"):
         em_train, em_val = _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    if dataset_choice in ("hp", "all"):
+        hp_train, hp_val = _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
+        train_ds.extend(hp_train)
+        val_ds.extend(hp_val)
 
     _configure_training_normalization(train_ds, val_ds)
 
@@ -964,18 +1104,23 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice):
 
     train_ds, val_ds = [], []
 
-    if dataset_choice in ("lm", "both"):
+    if dataset_choice in ("lm", "all"):
         lm_train, lm_val = _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
         train_ds.extend(lm_train)
         val_ds.extend(lm_val)
 
-    if dataset_choice in ("em", "both"):
+    if dataset_choice in ("em", "all"):
         em_train, em_val = _get_em_datasets(
             input_path, patch_shape, z_slices, kwargs, label_trafo,
             _em_label_trafo=_joint_em_cell_label_trafo,
         )
         train_ds.extend(em_train)
         val_ds.extend(em_val)
+
+    if dataset_choice in ("hp", "all"):
+        hp_train, hp_val = _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(hp_train)
+        val_ds.extend(hp_val)
 
     _configure_training_normalization(train_ds, val_ds)
 
