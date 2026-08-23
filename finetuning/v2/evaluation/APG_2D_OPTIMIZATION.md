@@ -1106,3 +1106,136 @@ and `1609fe12d0525ca9e02c216851752022`; current-implementation first-pass suffix
 `1d5530f64dd603916ae05de66227b458`, `aac26a5ca704f959f32adad81f759f9f` and
 `672ed6a96a8989c2e7a1e6040f6ebbfd`. The incremental decision is
 `compare_vs_current_first_pass.json` with its adjacent detailed CSV.
+
+## Three-token compact selector and post-merge signed gate
+
+### Scope and protocol
+
+This final campaign follows up the two most direct remaining opportunities while keeping the model
+path deployable. It deliberately keeps SAM2's existing three multimask alternatives: neither a
+fourth token nor a new first-pass box/neighbor prompt is introduced. Campaign 1 replaces the dense
+full-resolution selector features with mask-token and low-resolution evidence computed on the
+decoder device. Campaign 2 freezes that winner and learns which merged instances benefit from the
+existing `points+boxes` second pass.
+
+All primary model comparisons use five image-level out-of-fold predictions. Thresholds and model
+size are selected only on the 240-image primary split. The 233-image holdout is used once for frozen
+confirmation, followed by three serialized A100 MIG timing trials. A corrected square-stretch
+mapping is used for low-resolution foreground and prompt coordinates, matching SAM2's image
+transform rather than independently scaling the two image axes.
+
+### Campaign 1: compact on-device selector
+
+The implementation invokes the SAM2 mask decoder directly and explicitly retains its three
+multimask tokens (`1:4`). It extracts one of four versioned input schemas without transferring masks
+to NumPy for feature computation:
+
+- `lowres_v1`: the established 19 mask/seed/foreground statistics at decoder resolution;
+- `token_v1`: predicted IoU, alternative index, and the 256-dimensional mask token;
+- `token_lowres_v1`: the 19 low-resolution statistics plus the 256-dimensional token;
+- `dense_v1`: the previous full-resolution 19-feature control.
+
+The compact schemas enforce exactly three alternatives. Eager selection post-processes and
+transfers only the chosen mask; deferred selection keeps all three until the general merge. The
+same MLP score controls initial eligibility and merge ordering in both cases.
+
+Primary final-merge screening selected the H64 `token_lowres_v1` model and a learned-score threshold
+of 0.375:
+
+| OOF scorer | best threshold | primary mSA | selection time |
+|---|---:|---:|---:|
+| low-resolution H64 | 0.325 | 0.294125 | 0.735 s |
+| token-only H32 | 0.250 | 0.299611 | 0.881 s |
+| token-only H64 | 0.300 | 0.301014 | 0.772 s |
+| token-only H128 | 0.300 | 0.304437 | 0.787 s |
+| token + low-resolution H32 | 0.275 | 0.303642 | 0.835 s |
+| **token + low-resolution H64** | **0.375** | **0.306835** | **0.628 s** |
+| token + low-resolution H128 | 0.225 | 0.306647 | 0.892 s |
+
+After fixing H64 and 0.375, deferred merging scores slightly higher but costs materially more:
+
+| merge policy | primary mSA | holdout mSA | holdout runtime |
+|---|---:|---:|---:|
+| **eager** | 0.306835 | 0.315633 | **186.15 s median (3)** |
+| deferred | **0.308195** | **0.316343** | 217.32 s (1) |
+
+Deferred therefore adds only 0.000710 holdout mSA while taking 16.8% longer than eager. Eager is the
+frozen deployment winner.
+
+The compact path also formally replaces the previous dense H64 selector. On holdout it improves
+macro mSA from 0.295659 to 0.315633 (+6.76%) while reducing the sum of per-dataset median runtimes by
+12.04%. Peak CUDA memory falls from about 2.31 GB to 2.10 GB. Four datasets improve; DIC changes
+from 0.043984 to 0.039948, a small -0.004036 absolute change whose large relative percentage is a
+near-zero-baseline artifact. The replacement comparator consequently retains the 2% relative guard
+but permits at most 0.005 absolute loss for such low-score cases. Every replacement check passes.
+
+### Campaign 2: post-merge signed-utility refinement
+
+The first pass is frozen to `token_lowres_v1` H64, eager selection and learned-score filtering at
+0.375. The new gate is evaluated after merge and prompt assembly, so its 25 features describe the
+actual surviving instance: source and visible geometry, merge/filter margins, foreground support,
+claimed fraction, neighboring-instance distance, and the assembled positive/negative prompt set.
+It is trained on signed refinement utility (`refined IoU - first-pass IoU`) rather than clipping
+harmful refinements to zero. Signed output is not clamped at inference.
+
+The ablations show that both changes matter. The older pre-merge positive-benefit gate peaks at
+0.308843 at 50%; moving the positive target post-merge reaches 0.309682, and retaining signed harms
+reaches 0.310674. The deployment fraction is 15%, because it is the highest-quality point below the
+predeclared runtime budget and it dominates 20% in both primary quality and screening cost:
+
+| gate | fraction | primary mSA | selection/refinement time |
+|---|---:|---:|---:|
+| no refinement | 0% | 0.306835 | 0.655 s |
+| blanket `points+boxes` | 100% | 0.308035 | 70.067 s |
+| pre-merge positive utility | 50% | 0.308843 | 39.866 s |
+| post-merge positive utility | 50% | 0.309682 | 33.590 s |
+| post-merge signed utility | 10% | 0.309606 | 11.268 s |
+| **post-merge signed utility** | **15%** | **0.310112** | **14.516 s** |
+| post-merge signed utility | 25% | 0.310342 | 21.066 s |
+| post-merge signed utility | 50% | 0.310674 | 38.137 s |
+
+The primary-selected 15% threshold is `0.0075367484`; its full-primary refit threshold frozen for
+holdout and deployment is `0.0042799711`. It refines 2,760 of 19,890 eligible holdout instances
+(13.9% after distribution shift). Its quality gain retains 163% of the pre-merge gate's primary
+gain and 212% of that gate's holdout gain, exceeding the 80% retention requirement on both splits.
+
+The frozen per-dataset holdout and canonical runtime comparison is:
+
+| dataset | selector only mSA | + signed 15% gate mSA | quality change | selector seconds | gated seconds | runtime change |
+|---|---:|---:|---:|---:|---:|---:|
+| DeepBacs | 0.335103 | 0.341084 | +1.785% | 13.233 | 12.353 | -6.646% |
+| DIC HepG2 | 0.039948 | 0.040979 | +2.582% | 30.472 | 27.296 | -10.421% |
+| DynamicNuclearNet | 0.545306 | 0.553082 | +1.426% | 21.765 | 21.757 | -0.038% |
+| LiveCELL | 0.356211 | 0.355869 | -0.096% | 92.185 | 98.762 | +7.134% |
+| TissueNet | 0.301595 | 0.301734 | +0.046% | 28.467 | 28.167 | -1.053% |
+| **dataset-balanced / total** | **0.315633** | **0.318550** | **+0.924%** | **186.12** | **188.33** | **+1.189%** |
+
+The refinement acceptance route requires a positive macro change, no dataset below -1%, at most
+10% aggregate and 15% per-dataset runtime growth, and at most 10% additional peak CUDA memory. All
+checks pass; peak memory is unchanged at about 2.10 GB. This makes the 15% signed gate an accepted
+incremental deployment option on top of the compact eager selector.
+
+### Historical tree comparison and artifacts
+
+There is no remaining measured quality gap to the removed tree experiments. The historical
+ExtraTrees deferred selector reached 0.284267/0.286724 primary/holdout, and its 40% refinement route
+reached 0.288126/0.290765. The compact eager selector already reaches 0.306835/0.315633, and the
+signed 15% route reaches 0.310112/0.318550. These are contextual rather than controlled comparisons
+because the newer campaign also changes filtering, features and gate stage; they nevertheless remove
+any empirical reason to retain the much slower tree dependency.
+
+The main artifacts below the optimization output root are:
+
+- selector dataset: `multimask_selection/token_lowres_v1/primary_features.npz`;
+- selector: `multimask_selection/groupwise_v1/token_lowres_v1/models/` followed by
+  `token_lowres_v1-groupwise-h64-d0p1-regression.pt`;
+- signed-gate dataset/artifact: `multimask_selection/groupwise_v1/refinement_gate/` followed by
+  `compact_h64_eager/postmerge_signed/primary_features.npz` and its `models/` directory;
+- compact replacement decision: `campaign_compact_selector_replacement.json` and adjacent CSV;
+- refinement decision: `campaign_postmerge_signed_refinement.json` and adjacent CSV;
+- canonical gated run suffixes: `d3dcd1b32bf729d035b2ef1e30522d47`,
+  `2760e6a9d54c1ce9337896fee2cc13ae`, and `87d46d134d369d6324785bf0c770cb18`.
+
+The deployment configuration is
+`apg_token_lowres_h64_eager_postmerge_signed_15.json`. Both fitted artifacts remain explicit inputs;
+library defaults are unchanged.

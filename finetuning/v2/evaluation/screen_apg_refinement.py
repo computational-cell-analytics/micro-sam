@@ -81,6 +81,14 @@ STAT_COLUMNS = (
 )
 
 
+def _compute_premerge_gate_scores(needs_uncertainty, use_gate_oof, gate_model):
+    """Whether proposals need the 23-feature pre-merge gate path."""
+    return bool(
+        needs_uncertainty and not use_gate_oof
+        and getattr(gate_model, "gate_stage", "premerge") == "premerge"
+    )
+
+
 def default_screening_configs() -> List[Dict[str, Any]]:
     """The refinement screening grid: the point-prompt sweep plus the box/mask baselines.
 
@@ -332,8 +340,13 @@ def run_screening(
         selector_rows, selector_values, selector_lookup = _load_oof_lookup(
             selector_oof_dataset, {"selector": selector_oof_predictions}, manifest_checksum,
         )
+        selector_data = np.load(selector_oof_dataset, allow_pickle=False)
+        selector_schema = (
+            str(selector_data["input_schema"]) if "input_schema" in selector_data.files else "dense_v1"
+        )
     else:
         selector_rows = selector_values = selector_lookup = None
+        selector_schema = None
     gate_lookup = (
         _load_gate_oof_lookup(gate_oof_dataset, gate_oof_predictions, manifest_checksum)
         if use_gate_oof else None
@@ -343,21 +356,25 @@ def run_screening(
         propose_params.update({
             "multimask_scorer": "predicted_iou", "multimask_selection": "deferred",
         })
+        if selector_schema is not None:
+            propose_params.update({
+                "return_multimask_features": True, "multimask_feature_schema": selector_schema,
+            })
     segmenter = build_apg_segmenter(
         model_type, 2, device, joint_checkpoint=joint_checkpoint, joint_checksum=checkpoint_id,
         export_root=str(output_root / "model_exports"),
     )
-    if ((multimask_scorer_artifact is not None and not use_selector_oof)
-            or (refinement_gate_artifact is not None and not use_gate_oof)):
+    scorer_model = (
+        load_feature_scorer(multimask_scorer_artifact, device=device)
+        if multimask_scorer_artifact is not None and not use_selector_oof else None
+    )
+    gate_model = (
+        load_feature_scorer(refinement_gate_artifact, device=device)
+        if refinement_gate_artifact is not None and not use_gate_oof else None
+    )
+    if scorer_model is not None or gate_model is not None:
         segmenter.set_multimask_models(
-            scorer=(
-                load_feature_scorer(multimask_scorer_artifact, device=device)
-                if multimask_scorer_artifact is not None and not use_selector_oof else None
-            ),
-            refinement_gate=(
-                load_feature_scorer(refinement_gate_artifact, device=device)
-                if refinement_gate_artifact is not None and not use_gate_oof else None
-            ),
+            scorer=scorer_model, refinement_gate=gate_model,
         )
 
     for index, sample in enumerate(pending, start=1):
@@ -365,7 +382,10 @@ def run_screening(
         segmenter.clear_state()
         segmenter.initialize(raw, ndim=2)
         proposals = segmenter.propose(
-            **propose_params, compute_multimask_uncertainty=needs_uncertainty and not use_gate_oof,
+            **propose_params,
+            compute_multimask_uncertainty=_compute_premerge_gate_scores(
+                needs_uncertainty, use_gate_oof, gate_model,
+            ),
         )
         if use_selector_oof or use_gate_oof:
             if proposals:

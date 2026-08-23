@@ -12,12 +12,14 @@ from micro_sam.v2.instance_segmentation import (
 from micro_sam.v2.automatic_prompt_generation import (
     AutomaticPromptGenerator, TiledAutomaticPromptGenerator, derive_point_prompts, merge_by_score,
     interior_points, derive_refinement_prompts, mask_to_logits, _parse_refinement,
-    REFINEMENT_STATS_3D,
+    postmerge_refinement_gate_features, _lowres_feature_context, REFINEMENT_STATS_3D,
 )
 from micro_sam.v2.normalization import to_image
 from micro_sam.v2.multimask_selection import (
-    GroupwiseMLP, MULTIMASK_FEATURE_NAMES, REFINEMENT_GATE_FEATURE_NAMES,
-    extract_multimask_features_torch, load_feature_scorer, refinement_gate_features_torch,
+    GroupwiseMLP, MASK_TOKEN_FEATURE_NAMES, MASK_TOKEN_LOWRES_FEATURE_NAMES,
+    MULTIMASK_FEATURE_NAMES, REFINEMENT_GATE_FEATURE_NAMES, combine_selector_features_torch,
+    POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES, extract_multimask_features_torch,
+    load_feature_scorer, refinement_gate_features_torch,
 )
 
 
@@ -26,6 +28,53 @@ def test_apg_declares_no_postprocessing_mode():
     assert AutomaticPromptGenerator._has_postprocessing_mode is False
     assert TiledAutomaticPromptGenerator._has_postprocessing_mode is False
     assert getattr(UniSAM2InstanceSegmentation, "_has_postprocessing_mode", True) is True
+
+
+@pytest.mark.parametrize(
+    "schema,expected",
+    [("lowres_v1", 19), ("token_v1", 258), ("token_lowres_v1", 275)],
+)
+def test_compact_selector_feature_schemas_are_three_mask_only(schema, expected):
+    lowres = torch.arange(2 * 3 * 19, dtype=torch.float32).reshape(2, 3, 19)
+    scores = torch.tensor([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]])
+    tokens = torch.arange(2 * 3 * 256, dtype=torch.float32).reshape(2, 3, 256)
+    features = combine_selector_features_torch(schema, lowres, scores, tokens)
+    assert features.shape == (2, 3, expected)
+    if schema == "token_v1":
+        assert tuple(MASK_TOKEN_FEATURE_NAMES) and torch.equal(features[:, :, 0], scores)
+        assert torch.equal(features[0, :, 1], torch.arange(3, dtype=torch.float32))
+    if schema == "token_lowres_v1":
+        assert len(MASK_TOKEN_LOWRES_FEATURE_NAMES) == expected
+        assert torch.equal(features[:, :, :19], lowres)
+
+    with pytest.raises(ValueError, match="three multimask alternatives"):
+        combine_selector_features_torch(schema, lowres[:, :2], scores[:, :2], tokens[:, :2])
+
+
+def test_lowres_feature_context_uses_sam2_square_resize_coordinates():
+    class Transforms:
+        resolution = 16
+
+        def transform_coords(self, coords, normalize, orig_hw):
+            assert normalize and orig_hw == (4, 8)
+            return coords / torch.tensor([8.0, 4.0]) * self.resolution
+
+    predictor = types.SimpleNamespace(
+        model=types.SimpleNamespace(image_size=16), _orig_hw=[(4, 8)], _transforms=Transforms(),
+    )
+    foreground = np.arange(32, dtype="float32").reshape(4, 8)
+    resized, points = _lowres_feature_context(
+        predictor, foreground, np.array([[4.0, 2.0]], dtype="float32"), (4, 4), torch.device("cpu"),
+    )
+    expected = torch.nn.functional.interpolate(
+        torch.as_tensor(foreground)[None, None], size=(16, 16), mode="bilinear",
+        align_corners=False, antialias=True,
+    )
+    expected = torch.nn.functional.interpolate(
+        expected, size=(4, 4), mode="bilinear", align_corners=False, antialias=True,
+    )[0, 0]
+    assert torch.allclose(resized, expected)
+    assert torch.allclose(points, torch.tensor([[2.0, 2.0]]))
 
 
 def test_factory_rejects_incomplete_apg_arguments():
@@ -292,6 +341,27 @@ def test_pointwise_mlp_artifact_roundtrip(tmp_path):
     scorer = load_feature_scorer(path)
 
     assert scorer.predict(np.zeros((2, len(names)), dtype="float32")).shape == (2,)
+
+
+def test_signed_postmerge_gate_artifact_preserves_negative_predictions(tmp_path):
+    names = POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES
+    module = torch.nn.Sequential(torch.nn.Linear(len(names), 1))
+    torch.nn.init.zeros_(module[0].weight)
+    torch.nn.init.constant_(module[0].bias, -0.25)
+    path = tmp_path / "signed-gate.pt"
+    torch.save({
+        "kind": "mlp", "feature_version": 1, "feature_names": list(names),
+        "hidden_sizes": [], "dropout": 0.0,
+        "mean": np.zeros(len(names), dtype="float32"),
+        "scale": np.ones(len(names), dtype="float32"),
+        "state_dict": module.state_dict(),
+        "metadata": {"gate_stage": "postmerge", "output_activation": "identity"},
+    }, path)
+    scorer = load_feature_scorer(path)
+
+    prediction = scorer.predict(np.zeros((2, len(names)), dtype="float32"))
+    assert scorer.gate_stage == "postmerge"
+    assert np.allclose(prediction, -0.25)
 
 
 def test_groupwise_mlp_artifact_roundtrip_and_permutation_equivariance(tmp_path):
@@ -782,6 +852,45 @@ def test_refinement_prompts_take_the_nearest_other_prompts_as_negatives():
         segmentation, points, surviving, n_positives=1, n_negatives=1, max_negative_distance=5.0,
     )
     assert (prompts[1]["point_labels"] == 0).sum() == 0
+
+
+def test_postmerge_gate_features_capture_visible_masks_and_assembled_negatives():
+    segmentation = _two_instance_segmentation()
+    records = [
+        {
+            "segmentation": np.ones((8, 8), dtype=bool),
+            "bounding_box": (slice(4, 12), slice(4, 12)),
+            "predicted_iou": 0.9, "stability_score": 0.8, "selection_score": 0.85,
+            "merge_score": 0.85, "multimask_index": 2, "point": (6.0, 6.0),
+        },
+        {
+            "segmentation": np.ones((8, 8), dtype=bool),
+            "bounding_box": (slice(4, 12), slice(20, 28)),
+            "predicted_iou": 0.8, "stability_score": 0.9, "selection_score": 0.75,
+            "merge_score": 0.75, "multimask_index": 1, "point": (24.0, 6.0),
+        },
+    ]
+    context = {
+        "proposals": records, "records": records, "matches": {1: 0, 2: 1},
+        "claimed": [{}, {1: 0.125}], "score_filter": "selection_score", "score_threshold": 0.7,
+    }
+    prompts = derive_refinement_prompts(
+        segmentation, np.array([[6, 6], [10, 6], [24, 6]], dtype="float32"),
+        {1: (6.0, 6.0), 2: (24.0, 6.0)}, n_positives=1, n_negatives=1,
+    )
+    foreground = np.ones(segmentation.shape, dtype="float32")
+    features, instance_ids = postmerge_refinement_gate_features(
+        segmentation, context, prompts, foreground, foreground_threshold=0.5,
+    )
+
+    assert instance_ids.tolist() == [1, 2]
+    assert features.shape == (2, len(POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES))
+    assert np.isfinite(features).all()
+    columns = {name: index for index, name in enumerate(POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES)}
+    assert np.allclose(features[:, columns["visible_fraction"]], 1.0)
+    assert np.allclose(features[:, columns["negative_prompt_count"]], 1.0)
+    assert features[1, columns["claimed_fraction"]] == pytest.approx(0.125)
+    assert features[0, columns["selection_minus_predicted_iou"]] == pytest.approx(-0.05)
 
 
 def test_mask_to_logits_matches_the_squashed_sam2_frame():
@@ -1456,6 +1565,52 @@ def test_uncertainty_gate_refines_only_selected_instances():
     assert segmenter._last_generation_stats["refinement_eligible_instances"] == 2
     assert segmenter._last_generation_stats["uncertainty_selected_instances"] == 1
     assert segmenter._last_generation_stats["refined_instances"] == 1
+
+
+def test_postmerge_uncertainty_gate_scores_after_prompt_assembly():
+    shape = (32, 32)
+    segmentation = _two_instance_segmentation()
+    records = [
+        _tile_record((slice(4, 12), slice(4, 12)), (8.0, 8.0), predicted_iou=0.9),
+        _tile_record((slice(4, 12), slice(20, 28)), (24.0, 8.0), predicted_iou=0.8),
+    ]
+    context = {
+        "proposals": records, "records": records, "matches": {1: 0, 2: 1},
+        "reasons": ["kept", "kept"], "claimed": [{}, {}],
+        "score_threshold": 0.6, "score_filter": "predicted_iou", "min_size": 1,
+    }
+    segmenter = _make_plain_generator(shape, types.SimpleNamespace(device="cpu"))
+
+    class Gate:
+        gate_stage = "postmerge"
+
+        def predict_tensor(self, features):
+            assert features.shape == (2, len(POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES))
+            # Signed utility: only the second instance is predicted to benefit.
+            return torch.tensor([-0.1, 0.2])
+
+    segmenter._refinement_gate_model = Gate()
+    calls = []
+
+    def predict(segmentation_, batch, components, point_prompts, refinement_kwargs):
+        calls.extend(instance_id for instance_id, _ in batch)
+        return [(segmentation_ == instance_id, 0.95) for instance_id, _ in batch], 0
+
+    segmenter._predict_refinement_batch = predict
+    _, kwargs = _parse_refinement(
+        "points+boxes", {
+            "gate": "uncertainty", "gate_threshold": 0.0,
+            "min_consistency": None, "max_foreign_overlap": None,
+        },
+    )
+    refined = segmenter._reprompt_instances(
+        segmentation, context, ("points", "boxes"), kwargs, batch_size=8,
+    )
+
+    assert calls == [2]
+    assert np.array_equal(refined, segmentation)
+    assert records[0]["uncertainty_score"] == pytest.approx(-0.1)
+    assert records[1]["uncertainty_score"] == pytest.approx(0.2)
 
 
 def _equivalence_records():

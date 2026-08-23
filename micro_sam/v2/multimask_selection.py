@@ -16,6 +16,7 @@ import torch
 
 
 MULTIMASK_FEATURE_VERSION = 1
+MASK_TOKEN_DIMENSION = 256
 MULTIMASK_FEATURE_NAMES = (
     "predicted_iou",
     "stability",
@@ -43,6 +44,87 @@ REFINEMENT_GATE_FEATURE_NAMES = MULTIMASK_FEATURE_NAMES + (
     "selection_score_spread",
     "raw_and_selected_disagree",
 )
+POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES = (
+    "predicted_iou",
+    "stability",
+    "predicted_iou_x_stability",
+    "selection_score",
+    "selection_minus_predicted_iou",
+    "merge_score",
+    "score_filter_margin",
+    "alternative_index",
+    "log_source_area",
+    "log_visible_area",
+    "visible_fraction",
+    "log_visible_box_area",
+    "visible_box_occupancy",
+    "log_box_aspect_ratio",
+    "border_contact_fraction",
+    "foreground_mean",
+    "foreground_precision",
+    "claimed_fraction",
+    "log_instance_count",
+    "log_nearest_instance_seed_distance",
+    "grouped_prompt_count",
+    "positive_prompt_count",
+    "negative_prompt_count",
+    "log_nearest_negative_distance",
+    "log_mean_negative_distance",
+)
+
+MASK_TOKEN_FEATURE_NAMES = (
+    "predicted_iou", "alternative_index",
+) + tuple(f"mask_token_{index}" for index in range(MASK_TOKEN_DIMENSION))
+MASK_TOKEN_LOWRES_FEATURE_NAMES = MULTIMASK_FEATURE_NAMES + tuple(
+    f"mask_token_{index}" for index in range(MASK_TOKEN_DIMENSION)
+)
+SELECTOR_FEATURE_SCHEMAS = {
+    "dense_v1": MULTIMASK_FEATURE_NAMES,
+    "lowres_v1": MULTIMASK_FEATURE_NAMES,
+    "token_v1": MASK_TOKEN_FEATURE_NAMES,
+    "token_lowres_v1": MASK_TOKEN_LOWRES_FEATURE_NAMES,
+}
+
+
+def selector_input_schema(scorer) -> str:
+    """Return the versioned runtime input schema requested by a selector artifact."""
+    schema = getattr(scorer, "input_schema", "dense_v1")
+    if schema not in SELECTOR_FEATURE_SCHEMAS:
+        raise ValueError(f"Unsupported multimask selector input schema {schema!r}.")
+    return schema
+
+
+def combine_selector_features_torch(
+    schema: str, lowres_features: Optional[torch.Tensor], scores: torch.Tensor,
+    mask_tokens: Optional[torch.Tensor],
+) -> torch.Tensor:
+    """Assemble one of the compact three-alternative selector schemas on the decoder device."""
+    if schema not in SELECTOR_FEATURE_SCHEMAS:
+        raise ValueError(f"Unsupported multimask selector input schema {schema!r}.")
+    scores = torch.as_tensor(scores, dtype=torch.float32)
+    if scores.ndim != 2:
+        raise ValueError(f"Expected grouped predicted-IoU scores, got {tuple(scores.shape)}.")
+    n_prompts, n_alternatives = scores.shape
+    if n_alternatives != 3:
+        raise ValueError(f"Compact mask-token scoring expects three multimask alternatives, got {n_alternatives}.")
+    if schema in ("dense_v1", "lowres_v1"):
+        if lowres_features is None:
+            raise ValueError(f"Selector schema {schema!r} requires mask features.")
+        return lowres_features.to(torch.float32)
+    if mask_tokens is None:
+        raise ValueError(f"Selector schema {schema!r} requires SAM2 mask tokens.")
+    mask_tokens = torch.as_tensor(mask_tokens, dtype=torch.float32, device=scores.device)
+    expected = (n_prompts, n_alternatives, MASK_TOKEN_DIMENSION)
+    if tuple(mask_tokens.shape) != expected:
+        raise ValueError(f"Expected mask tokens with shape {expected}, got {tuple(mask_tokens.shape)}.")
+    if schema == "token_v1":
+        alternative = torch.arange(
+            n_alternatives, dtype=torch.float32, device=scores.device,
+        )[None, :, None].expand(n_prompts, -1, -1)
+        return torch.cat((scores[:, :, None], alternative, mask_tokens), dim=2)
+    if lowres_features is None:
+        raise ValueError("The token_lowres_v1 schema requires low-resolution mask features.")
+    return torch.cat((lowres_features.to(torch.float32), mask_tokens), dim=2)
 
 
 def extract_multimask_features_torch(
@@ -225,6 +307,11 @@ class TorchFeatureScorer:
         self.scale = torch.as_tensor(scale, dtype=torch.float32, device=device)
         self.scale = torch.where(self.scale == 0, torch.ones_like(self.scale), self.scale)
         self.metadata = dict(metadata or {})
+        self.input_schema = str(self.metadata.get("input_schema", "dense_v1"))
+        self.output_activation = str(self.metadata.get("output_activation", "clamp"))
+        self.gate_stage = str(self.metadata.get("gate_stage", "premerge"))
+        if self.output_activation not in ("clamp", "identity"):
+            raise ValueError(f"Unsupported scorer output activation {self.output_activation!r}.")
 
     def predict_tensor(self, features: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
         parameter = next(self.module.parameters(), None)
@@ -232,7 +319,9 @@ class TorchFeatureScorer:
         values = torch.as_tensor(features, dtype=torch.float32, device=device)
         with torch.no_grad():
             prediction = self.module((values - self.mean) / self.scale).reshape(-1)
-        return prediction.clamp(0.0, 1.0).to(torch.float32)
+        if self.output_activation == "clamp":
+            prediction = prediction.clamp(0.0, 1.0)
+        return prediction.to(torch.float32)
 
     def predict(self, features: np.ndarray) -> np.ndarray:
         return self.predict_tensor(features).cpu().numpy().astype("float32")
@@ -283,6 +372,7 @@ class GroupwiseTorchFeatureScorer:
         self.scale = torch.as_tensor(scale, dtype=torch.float32, device=device)
         self.scale = torch.where(self.scale == 0, torch.ones_like(self.scale), self.scale)
         self.metadata = dict(metadata or {})
+        self.input_schema = str(self.metadata.get("input_schema", "dense_v1"))
         self.n_alternatives = int(n_alternatives)
         if self.n_alternatives < 1:
             raise ValueError("A groupwise scorer requires at least one alternative.")
@@ -309,6 +399,8 @@ def load_feature_scorer(path: Union[str, Path], device: Union[str, torch.device]
     if path.suffix in (".pt", ".pth"):
         state = torch.load(path, map_location=device, weights_only=False)
         _validate_feature_state(state)
+        metadata = dict(state.get("metadata") or {})
+        metadata.setdefault("input_schema", state.get("input_schema", "dense_v1"))
         if state.get("kind") not in ("mlp", "groupwise_mlp"):
             raise ValueError(f"Unsupported torch feature scorer kind {state.get('kind')!r}.")
         if state["kind"] == "groupwise_mlp":
@@ -317,7 +409,7 @@ def load_feature_scorer(path: Union[str, Path], device: Union[str, torch.device]
             ).to(device)
             module.load_state_dict(state["state_dict"])
             return GroupwiseTorchFeatureScorer(
-                module, state["mean"], state["scale"], state.get("metadata"), state["feature_names"],
+                module, state["mean"], state["scale"], metadata, state["feature_names"],
                 int(state.get("n_alternatives", 3)),
             )
         layers = []
@@ -331,7 +423,7 @@ def load_feature_scorer(path: Union[str, Path], device: Union[str, torch.device]
         module = torch.nn.Sequential(*layers).to(device)
         module.load_state_dict(state["state_dict"])
         return TorchFeatureScorer(
-            module, state["mean"], state["scale"], state.get("metadata"), state["feature_names"]
+            module, state["mean"], state["scale"], metadata, state["feature_names"]
         )
     raise ValueError(f"Unsupported feature scorer extension {path.suffix!r}; expected '.pt' or '.pth'.")
 
@@ -343,5 +435,12 @@ def _validate_feature_state(state: Dict[str, Any]) -> None:
             f"runtime version {MULTIMASK_FEATURE_VERSION}."
         )
     names = tuple(state.get("feature_names", ()))
-    if names not in (MULTIMASK_FEATURE_NAMES, REFINEMENT_GATE_FEATURE_NAMES):
-        raise ValueError("Feature scorer names do not match the runtime feature schema.")
+    metadata = dict(state.get("metadata") or {})
+    schema = str(state.get("input_schema", metadata.get("input_schema", "dense_v1")))
+    if names in (REFINEMENT_GATE_FEATURE_NAMES, POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES):
+        return
+    expected = SELECTOR_FEATURE_SCHEMAS.get(schema)
+    if expected is None or names != expected:
+        raise ValueError(
+            f"Feature scorer names do not match runtime schema {schema!r}."
+        )

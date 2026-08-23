@@ -21,10 +21,13 @@ from benchmark_apg_optimization import (
     DEFAULT_DATA_ROOT, DEFAULT_OUTPUT_ROOT, _default_manifest_path, _load_2d_sample,
     _validate_roots, prepare_manifest,
 )
-from micro_sam.v2.automatic_prompt_generation import _parse_refinement
+from micro_sam.v2.automatic_prompt_generation import (
+    _parse_refinement, derive_refinement_prompts, postmerge_refinement_gate_features,
+)
 from micro_sam.v2.multimask_selection import (
-    MULTIMASK_FEATURE_VERSION, REFINEMENT_GATE_FEATURE_NAMES,
-    load_feature_scorer, refinement_gate_features_torch,
+    MULTIMASK_FEATURE_NAMES, MULTIMASK_FEATURE_VERSION, POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES,
+    REFINEMENT_GATE_FEATURE_NAMES, load_feature_scorer, refinement_gate_features_torch,
+    selector_input_schema,
 )
 from screen_apg_multimask import (
     _configured_records, _load_oof_lookup, _oof_predictions_for_sample, _predict_records,
@@ -63,6 +66,9 @@ def _gate_row(raw_proposals, selection_scores, source_record):
         np.stack([raw_proposals[index]["multimask_features"] for index in group_indices]),
         dtype=torch.float32,
     )
+    # Compact selector datasets may carry a token suffix, but the established pre-merge gate uses
+    # the same 19 low-resolution mask statistics as the dense implementation.
+    features = features[:, :len(MULTIMASK_FEATURE_NAMES)]
     scores = torch.as_tensor(selection_scores[group_indices], dtype=torch.float32)
     alternatives = [raw_proposals[index]["multimask_index"] for index in group_indices]
     selected = alternatives.index(source_record["multimask_index"])
@@ -75,7 +81,12 @@ def extract_gate_dataset(
     manifest, data_root, output, device, selector_artifact=None, selection="eager", merge="raw",
     score_filter="predicted_iou", score_threshold=0.6,
     selector_oof_dataset=None, selector_oof_predictions=None,
+    gate_stage="premerge", target_mode="positive",
 ):
+    if gate_stage not in ("premerge", "postmerge"):
+        raise ValueError(f"Invalid gate stage {gate_stage!r}.")
+    if target_mode not in ("positive", "signed"):
+        raise ValueError(f"Invalid target mode {target_mode!r}.")
     samples = [sample for sample in manifest["samples"] if sample["ndim"] == 2]
     folds = _stable_folds(samples)
     scorer = load_feature_scorer(selector_artifact, device=device) if selector_artifact else None
@@ -87,8 +98,11 @@ def extract_gate_dataset(
         selector_rows, selector_predictions, selector_lookup = _load_oof_lookup(
             selector_oof_dataset, {"selector": selector_oof_predictions}, manifest["manifest_checksum"],
         )
+        selector_data = np.load(selector_oof_dataset, allow_pickle=False)
+        proposal_schema = str(selector_data["input_schema"]) if "input_schema" in selector_data.files else "dense_v1"
     else:
         selector_rows = selector_predictions = selector_lookup = None
+        proposal_schema = selector_input_schema(scorer) if scorer is not None else "dense_v1"
     checkpoint = common.get_joint_checkpoint("hvit_t", "best")
     segmenter = common.build_apg_segmenter(
         "hvit_t", 2, device, joint_checkpoint="best",
@@ -104,6 +118,7 @@ def extract_gate_dataset(
             segmenter.initialize(raw, ndim=2)
             raw_proposals = segmenter.propose(
                 multimasking=True, multimask_scorer="predicted_iou", multimask_selection="deferred",
+                return_multimask_features=True, multimask_feature_schema=proposal_schema,
             )
             if not raw_proposals:
                 continue
@@ -131,13 +146,47 @@ def extract_gate_dataset(
             )
             if context is None or first.max() == 0:
                 continue
+            if gate_stage == "postmerge":
+                all_points_list, seen_groups = [], set()
+                for record_index, record in enumerate(context["proposals"]):
+                    group = record.get("multimask_group", ("record", record_index))
+                    if group in seen_groups:
+                        continue
+                    seen_groups.add(group)
+                    all_points_list.append(record["point"])
+                point_prompts = derive_refinement_prompts(
+                    first, np.asarray(all_points_list, dtype="float32"),
+                    {
+                        instance_id: context["records"][record_index]["point"]
+                        for instance_id, record_index in context["matches"].items()
+                    },
+                    n_positives=refinement_kwargs["n_positives"],
+                    n_negatives=refinement_kwargs["n_negatives"],
+                    max_negative_distance=refinement_kwargs["max_negative_distance"],
+                    negative_source=refinement_kwargs["negative_source"],
+                    min_negative_distance=refinement_kwargs["min_negative_distance"],
+                )
+                gate_features, gate_instance_ids = postmerge_refinement_gate_features(
+                    first, context, point_prompts, segmenter._prediction[0], float(
+                        context["records"][next(iter(context["matches"].values()))].get(
+                            "foreground_threshold", 0.5,
+                        )
+                    ),
+                )
+                postmerge_rows = {
+                    int(instance_id): features
+                    for instance_id, features in zip(gate_instance_ids, gate_features)
+                }
             instance_rows = []
             for instance_id, record_index in context["matches"].items():
                 source = context["records"][record_index]
                 target = _target_for_instance(first, labels, instance_id, source["point"])
                 instance_rows.append({
                     "instance_id": instance_id,
-                    "features": _gate_row(raw_proposals, selection_scores, source),
+                    "features": (
+                        postmerge_rows[instance_id] if gate_stage == "postmerge"
+                        else _gate_row(raw_proposals, selection_scores, source)
+                    ),
                     "first_iou": _iou(first == instance_id, target),
                     "target": target,
                     "prompt_index": source["prompt_index"],
@@ -149,7 +198,9 @@ def extract_gate_dataset(
             for item in instance_rows:
                 delta = _iou(refined == item["instance_id"], item["target"]) - item["first_iou"]
                 rows.append({
-                    "features": item["features"], "target": max(delta, 0.0), "raw_delta": delta,
+                    "features": item["features"],
+                    "target": delta if target_mode == "signed" else max(delta, 0.0),
+                    "raw_delta": delta,
                     "sample_id": sample["sample_id"], "dataset": sample["dataset"],
                     "fold": folds[sample["sample_id"]],
                     "group": f"{sample['sample_id']}:{item['instance_id']}",
@@ -177,12 +228,17 @@ def extract_gate_dataset(
             weights[image_rows] = 1.0 / (len(np.unique(datasets)) * len(dataset_samples) * len(image_rows))
     weights /= weights.mean()
     output.parent.mkdir(parents=True, exist_ok=True)
+    feature_names = (
+        POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES if gate_stage == "postmerge"
+        else REFINEMENT_GATE_FEATURE_NAMES
+    )
     np.savez_compressed(
         output, features=features, targets=targets, raw_delta=raw_delta, sample_ids=sample_ids,
         datasets=datasets, groups=groups, folds=fold_array, weights=weights.astype("float32"),
         prompt_indices=prompt_indices, multimask_indices=multimask_indices,
         feature_version=np.asarray(MULTIMASK_FEATURE_VERSION),
-        feature_names=np.asarray(REFINEMENT_GATE_FEATURE_NAMES),
+        feature_names=np.asarray(feature_names), gate_stage=np.asarray(gate_stage),
+        target_mode=np.asarray(target_mode),
         manifest_checksum=np.asarray(manifest["manifest_checksum"]),
         selector_prediction_source=np.asarray(
             "out-of-fold" if selector_predictions is not None else (
@@ -201,8 +257,16 @@ def _load_gate_dataset(path: Path) -> dict:
     data = np.load(path, allow_pickle=False)
     if int(data["feature_version"]) != MULTIMASK_FEATURE_VERSION:
         raise ValueError("The gate feature dataset has a different runtime schema version.")
-    if tuple(data["feature_names"].tolist()) != REFINEMENT_GATE_FEATURE_NAMES:
+    gate_stage = str(data["gate_stage"]) if "gate_stage" in data.files else "premerge"
+    target_mode = str(data["target_mode"]) if "target_mode" in data.files else "positive"
+    expected_names = (
+        POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES if gate_stage == "postmerge"
+        else REFINEMENT_GATE_FEATURE_NAMES
+    )
+    if tuple(data["feature_names"].tolist()) != expected_names:
         raise ValueError("The gate feature dataset does not match the runtime schema.")
+    if target_mode not in ("positive", "signed"):
+        raise ValueError(f"Unsupported gate target mode {target_mode!r}.")
     return {
         "features": data["features"].astype("float32", copy=False),
         "targets": data["targets"].astype("float32", copy=False),
@@ -210,6 +274,7 @@ def _load_gate_dataset(path: Path) -> dict:
         "weights": data["weights"].astype("float32", copy=False),
         "folds": data["folds"].astype("int8", copy=False),
         "manifest_checksum": str(data["manifest_checksum"]),
+        "feature_names": expected_names, "gate_stage": gate_stage, "target_mode": target_mode,
         "first_pass_policy": (
             json.loads(str(data["first_pass_policy"])) if "first_pass_policy" in data.files else None
         ),
@@ -298,8 +363,16 @@ def _fit_gate_full(data, device, epochs):
     return model.eval(), mean, scale
 
 
-def train_gate(dataset: Path, output_dir: Path, device: str) -> Path:
+def train_gate(dataset: Path, output_dir: Path, device: str, target_mode: str | None = None) -> Path:
     data = _load_gate_dataset(dataset)
+    if target_mode is not None:
+        if target_mode not in ("positive", "signed"):
+            raise ValueError(f"Invalid target mode {target_mode!r}.")
+        data["target_mode"] = target_mode
+        data["targets"] = (
+            data["raw_delta"].copy() if target_mode == "signed"
+            else np.maximum(data["raw_delta"], 0.0)
+        ).astype("float32", copy=False)
     predictions = np.zeros_like(data["targets"])
     fold_epochs = []
     for outer in range(5):
@@ -311,7 +384,10 @@ def train_gate(dataset: Path, output_dir: Path, device: str) -> Path:
             (data["features"][test] - mean) / scale, dtype=torch.float32, device=device,
         )
         with torch.no_grad():
-            predictions[test] = model(values).reshape(-1).clamp(0, 1).cpu().numpy()
+            fold_predictions = model(values).reshape(-1)
+            if data["target_mode"] == "positive":
+                fold_predictions = fold_predictions.clamp(0, 1)
+            predictions[test] = fold_predictions.cpu().numpy()
         fold_epochs.append(best_epoch)
         print(f"gate fold {outer + 1}/5 epoch={best_epoch}", flush=True)
 
@@ -324,7 +400,7 @@ def train_gate(dataset: Path, output_dir: Path, device: str) -> Path:
     }
     thresholds = {
         str(fraction): float(np.quantile(predictions, 1.0 - fraction))
-        for fraction in (0.1, 0.2, 0.3, 0.4, 0.5)
+        for fraction in (0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5)
     }
     metrics["fraction_thresholds"] = thresholds
     refit_epochs = max(1, int(round(float(np.mean(fold_epochs)))))
@@ -333,18 +409,23 @@ def train_gate(dataset: Path, output_dir: Path, device: str) -> Path:
         (data["features"] - mean) / scale, dtype=torch.float32, device=device,
     )
     with torch.no_grad():
-        refit_predictions = model(refit_values).reshape(-1).clamp(0, 1).cpu().numpy()
+        refit_predictions = model(refit_values).reshape(-1)
+        if data["target_mode"] == "positive":
+            refit_predictions = refit_predictions.clamp(0, 1)
+        refit_predictions = refit_predictions.cpu().numpy()
     metrics["refit_fraction_thresholds"] = {
         str(fraction): float(np.quantile(refit_predictions, 1.0 - fraction))
-        for fraction in (0.1, 0.2, 0.3, 0.4, 0.5)
+        for fraction in (0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5)
     }
 
-    name = "gate-mlp-h128x64-d0p1-regression"
+    prefix = "postmerge-" if data["gate_stage"] == "postmerge" else ""
+    suffix = "-signed" if data["target_mode"] == "signed" else ""
+    name = f"{prefix}gate-mlp-h128x64-d0p1-regression{suffix}"
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact = output_dir / f"{name}.pt"
     torch.save({
         "kind": "mlp", "feature_version": MULTIMASK_FEATURE_VERSION,
-        "feature_names": list(REFINEMENT_GATE_FEATURE_NAMES),
+        "feature_names": list(data["feature_names"]),
         "hidden_sizes": list(ARCHITECTURE["hidden_sizes"]), "dropout": ARCHITECTURE["dropout"],
         "mean": mean, "scale": scale,
         "state_dict": {key: value.cpu() for key, value in model.state_dict().items()},
@@ -352,6 +433,8 @@ def train_gate(dataset: Path, output_dir: Path, device: str) -> Path:
             "architecture": ARCHITECTURE, "loss": "direct-regression", "epochs": refit_epochs,
             "manifest_checksum": data["manifest_checksum"],
             "first_pass_policy": data["first_pass_policy"], "oof_metrics": metrics,
+            "gate_stage": data["gate_stage"], "target_mode": data["target_mode"],
+            "output_activation": "identity" if data["target_mode"] == "signed" else "clamp",
         },
     }, artifact)
     np.save(output_dir / f"{name}_oof.npy", predictions.astype("float32"))
@@ -380,6 +463,14 @@ def main():
         default="predicted_iou",
     )
     parser.add_argument("--score-threshold", type=float, default=0.6)
+    parser.add_argument(
+        "--gate-stage", choices=("premerge", "postmerge"), default="premerge",
+        help="Feature stage. Post-merge sees the accepted mask and its assembled refinement prompts.",
+    )
+    parser.add_argument(
+        "--target", choices=("positive", "signed"), default="positive",
+        help="Fit clipped positive gain or the signed IoU change from refinement.",
+    )
     parser.add_argument("--dataset", type=Path, default=None)
     parser.add_argument("--artifact-dir", type=Path, default=None)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -388,6 +479,8 @@ def main():
     data_root, output_root, manifest_path = _validate_roots(args.data_root, args.output_root, manifest_path)
     manifest = prepare_manifest(data_root, manifest_path, "standard", subset="primary")
     root = output_root / "multimask_selection" / "groupwise_v1" / "refinement_gate"
+    if args.gate_stage != "premerge" or args.target != "positive":
+        root = root / f"{args.gate_stage}_{args.target}"
     dataset = args.dataset or root / "primary_features.npz"
     artifact_dir = args.artifact_dir or root / "models"
     if args.stage in ("extract", "all"):
@@ -397,9 +490,10 @@ def main():
             score_threshold=args.score_threshold,
             selector_oof_dataset=args.selector_oof_dataset,
             selector_oof_predictions=args.selector_oof_predictions,
+            gate_stage=args.gate_stage, target_mode=args.target,
         )
     if args.stage in ("train", "all"):
-        artifact = train_gate(dataset.resolve(strict=True), artifact_dir, args.device)
+        artifact = train_gate(dataset.resolve(strict=True), artifact_dir, args.device, target_mode=args.target)
         print(f"Artifact: {artifact}")
 
 

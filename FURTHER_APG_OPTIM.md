@@ -12,7 +12,10 @@ the motivation and audit trail.
 
 The first compact-model campaign found a 52 KB groupwise MLP selector. Retaining the historical
 predicted-IoU filter left it at 0.283210/0.278328 primary/holdout and over the per-dataset runtime
-cap, motivating the later learned-filter campaign.
+cap, motivating the later learned-filter campaign. A final compact-feature campaign has now
+superseded that path: the three SAM2 mask tokens plus low-resolution mask evidence, H64 eager
+selection and a 0.375 learned-score filter reach 0.306835/0.315633. The three-trial holdout median is
+186.15 s, 12.04% faster than the dense H64 control while improving its mSA by 6.76%.
 
 The decoder-head/filter follow-up resolves this: the same triplet H64 scorer with eager selection
 and a primary-selected 0.25 learned-score filter reaches 0.296508/0.295659. Its three-trial holdout
@@ -21,11 +24,13 @@ median is 189.9 s versus 177.8 s for same-implementation controls. The formal co
 dataset. A separately trained singleton MLP reaches 0.289056/0.283470 in 174.7 s in a diagnostic
 run; the single-token default is itself better and faster than the historical three-mask/IoU path,
 but remains below the +5% quality gate. The accepted eager MLP policy remains opt-in because its
-artifact is external; changing library defaults was not part of the campaign. The gated MLP and
-selective-refinement follow-up retrained the gate on this exact eager/learned-filter policy. Its
-primary-selected 50% route reaches 0.299904/0.301455 primary/holdout, but adds 25.32% runtime over
-the same-implementation first pass. It is therefore an explicit quality/latency option, not the
-deployment recommendation; the selector-only route remains the accepted default candidate.
+artifact is external; changing library defaults was not part of the campaign. The first gated MLP
+follow-up retrained the gate on this exact eager/learned-filter policy. Its primary-selected 50%
+route reached 0.299904/0.301455 primary/holdout but added 25.32% runtime. The final campaign instead
+scores signed refinement utility after merge and prompt assembly. Its primary-selected 15% route
+reaches 0.310112/0.318550 on top of the compact selector and adds only 1.19% aggregate runtime in
+canonical trials. It passes the incremental refinement acceptance gates and is the deployment
+recommendation when both fitted artifacts are available.
 
 The review covered:
 
@@ -488,6 +493,10 @@ track-level evidence—rather than repeating a broader fixed heuristic.
 
 ## Recommended experiment sequence
 
+Phases A and B are now complete. Their accepted outcomes are the three-token `token_lowres_v1` H64
+eager selector and its optional post-merge signed-utility 15% refinement gate, documented in
+`finetuning/v2/evaluation/APG_2D_OPTIMIZATION.md`. Phases C and D remain future 3D work.
+
 ### Phase A: validate first-round multimask ranking
 
 1. Export all three masks and the proposed features without changing final APG output.
@@ -544,8 +553,316 @@ headroom is more conditional:
 - In 3D, distinguish recall-limited modalities from candidate-saturated ones, and use evidence over a
   track's lifetime rather than relying exclusively on its density anchor and one slice score.
 
-The strongest immediate experiment is full validation of multimask ranking. It offers a plausible
-quality gain without another model forward and also supplies the uncertainty signal needed to make
-the existing refinement cost selective. The strongest 3D experiment is instrumentation followed by
+The 2D sequence is complete: compact three-token ranking produced a significant quality and runtime
+improvement, and post-merge signed-utility gating retained more refinement gain with only 1.19%
+aggregate overhead. The strongest remaining experiment is now 3D instrumentation followed by
 persistence-aware candidate ranking; propagation changes should come only after measuring how active
 batch size and per-track retirement translate into actual wall time.
+
+## Ranked 3D agenda after the completed 2D campaigns
+
+### What the 2D results change
+
+The completed 2D work sharpens the 3D agenda in four ways.
+
+1. **A learned score should control eligibility as well as ordering.** In 2D, replacing predicted-IoU
+   ordering alone was useful but modest; the large gain appeared when the learned score also controlled
+   the initial filter. This is even more important in 3D because a false positive that survives the
+   anchor-slice filter pays for a full propagation.
+2. **Compact decoder evidence is enough.** Three mask tokens plus low-resolution mask statistics beat
+   the dense feature path while being faster and smaller. A 3D model should reuse this architecture and
+   on-device extraction, not reintroduce CPU/NumPy mask features, trees, a linear head, or a fourth mask
+   token.
+3. **Score at the stage where the relevant evidence exists.** The 2D post-merge gate beat a pre-merge
+   one because it saw the accepted mask and assembled prompts. In 3D this implies two different scores:
+   one before propagation, when the decision is whether a candidate is worth the cost, and one after
+   propagation, when the complete trajectory is available for final merge ordering.
+4. **Train on signed downstream utility.** Clipping harmful refinements to zero hides exactly the cases
+   a gate needs to reject. A 3D refinement or alternate-anchor gate should predict the signed change in
+   the completed track or final segmentation, not only anchor-slice IoU.
+
+One detail prevents a mechanical copy of the 2D selector. The ordinary unrefined 3D path uses the
+selected anchor mask for score filtering and anchor-slice duplicate suppression, but then conditions
+the video predictor from the original point again. Choosing a different one of the three anchor masks
+does not directly choose a different propagated mask. The useful target is consequently **track
+utility**—whether this prompt should be propagated and how its resulting volume should rank—rather
+than only which anchor cross-section has the best 2D IoU. Passing the chosen unrefined mask into the
+propagator is not recommended: that path was already measured slightly negative.
+
+The quantitative backdrop is unusually clear. On the deep benchmark, 2,536 candidates become 242
+propagation passes and 7,604 pass-frame steps; the baseline takes about 3,171 seconds and peaks at
+11.15 GB. Propagation is about 91% of the measured GoNuclear runtime. The lower threshold ladder
+recovered only +1.31% macro mSA for +20.72% runtime, whereas the existing anchor refinement reaches
++2.28% for only +1.4% at depth. Any new quality route should therefore improve decisions around the
+existing candidates before it broadens their supply.
+
+### Ranking
+
+| priority | option | primary purpose | expected cost/risk | recommendation |
+|---:|---|---|---|---|
+| 1 | learned candidate-to-track funnel | quality and propagation selectivity | medium; needs a larger leakage-safe 3D training set | pursue first |
+| 2 | post-anchor signed gate for the existing refinement | additional quality with bounded second-round work | medium; paired propagation labels are expensive once | run on the frozen priority-1 winner |
+| 3 | full-volume feature residency and eager host embeddings | output-exact runtime reduction | low algorithmic risk; bounded GPU/host memory cost | run as the first short performance screen |
+| 4 | trajectory-aware per-track retirement | reduce dominant propagation work | high implementation risk; speedup is not proportional to retired objects | instrument first, implement only if the wall-time oracle is large |
+| 5 | uncertainty-gated alternate-anchor initialization | recover propagation-decay and bad-anchor failures | high cost and batching risk | run only after error attribution on priorities 1-2 |
+| 6 | sparse streaming records and compiled tracking kernels | transfer, host-memory and launch efficiency | engineering-heavy, quality-neutral in intent | follow only after the higher-level path is fixed |
+
+### Prerequisite: a trainable 3D benchmark and reusable track cache
+
+The existing five standard and five deep crops are adequate for deterministic regression and canonical
+timing, but not for selecting an MLP. The earlier diagnostics explicitly found that the standard error
+on EmbedSeg and GoNuclear exceeds the spread of the parameter grid, and several 3D refinement rounds
+were ranked by one changing crop. Before fitting any score, construct a larger optimization manifest
+from non-overlapping validation crops and a frozen, source-disjoint holdout wherever the source data
+permits it.
+
+Splits must be grouped by source volume, not by candidate or crop. Overlapping crops and crops from the
+same small source must never cross an OOF fold. Report both shallow and 30-32-slice results, but make the
+deep set the deployment decision because propagation and fixed per-candidate overhead have a different
+ratio there. A leave-one-dataset-out diagnostic should accompany the ordinary five-fold OOF screen; it
+is not required to win every held-out modality, but it will show whether the model learned general
+track evidence or dataset identity.
+
+The extraction format should preserve one stable identity for every density component, prompt group,
+anchor alternative and propagated track. It should include:
+
+- the threshold-component lineage and all proposal features described below;
+- the three anchor masks' compact features, mask tokens and OOF scores;
+- the anchor-slice fate (`low score`, duplicate, truncated, kept, or empty);
+- one cached unrefined volume record per unique point prompt;
+- per-frame trajectory accumulators and the final candidate-to-ground-truth match;
+- for the refinement campaign, paired unrefined and refined tracks for the same candidate.
+
+This cache is what makes a real sweep feasible. The ordinary point-conditioned track is independent of
+which anchor alternative supplied the filtering score, so each unique prompt can be propagated once.
+OOF scorers, eager/deferred anchor merges, learned thresholds and final merge scores can then be replayed
+from cached records without rerunning SAM2 for every configuration. A broadened proposal campaign can
+likewise cache each new prompt once, then measure exactly which added tracks survive each policy.
+
+### Priority 1: learned candidate-to-track funnel
+
+This is the best remaining overall option because it can improve quality at both merge stages and can
+remove expensive false candidates before propagation. It has two small Torch models with deliberately
+different information and responsibilities.
+
+#### 1A. Pre-propagation candidate scorer
+
+Retain the existing three SAM2 multimask outputs on the anchor slice and extract the same
+`token_lowres_v1` evidence that won in 2D. Concatenate group context with 3D proposal features that are
+currently discarded by `derive_volume_prompts`:
+
+- birth and merge thresholds, persistence, and which ladder levels contain the component;
+- peak, integrated and percentile density;
+- component volume, bounding-box occupancy, z extent and anchor position within that extent;
+- foreground mean/precision and flow agreement in the component and anchor cross-section;
+- distance and prominence relative to competing peaks;
+- predicted-IoU/stability ranks, mask-token context, alternative agreement and score margin;
+- number and distance of same-slice candidates and the expected pass occupancy at that anchor.
+
+Start with direct regression to the matched unrefined track's 3D IoU, because direct IoU regression
+won the 2D architecture sweep. Also evaluate a signed marginal-utility target derived by adding or
+removing the cached track from the final merge. Keep the model family compact: groupwise H32, H64 and
+H128 MLPs, image/source-grouped OOF predictions, and exactly three alternatives.
+
+The learned score should be ablated in three roles:
+
+1. select the anchor alternative used for same-slice duplicate suppression;
+2. apply the initial candidate threshold before propagation;
+3. provide the provisional final merge order before trajectory evidence is added.
+
+Compare predicted IoU, token-only, low-resolution-only, and token-plus-low-resolution inputs. Compare
+eager and deferred anchor merging only after architecture and threshold are fixed. Report candidate
+count, unique anchors, `ceil(candidates_at_anchor / 16)` pass count, predicted object count and cached
+final mSA. Removing a candidate from a partially filled pass may save quality but not time; a claimed
+speedup is credible only when it removes passes or is confirmed end to end.
+
+#### 1B. Post-propagation trajectory scorer
+
+The final merge currently orders a track by its anchor predicted IoU times anchor stability. That score
+cannot see a mask that leaks, oscillates, decays, disappears and resumes, or conflicts with the decoder
+foreground away from the anchor. Accumulate compact per-track evidence during the already-required
+propagation:
+
+- object-score-logit mean, minimum, quantiles and slopes away from the anchor;
+- mask area, area ratio to the anchor, abrupt area changes and empty-gap statistics;
+- foreground support/precision and convergence-density support along the track;
+- adjacent-slice overlap, centroid motion, border contact and directional asymmetry;
+- observed z extent versus the proposal component's z extent;
+- anchor score, pre-propagation MLP score, refinement state and conditioning strategy.
+
+Compute reductions on the device and transfer only a few scalars per track. Fit a small pointwise MLP
+to direct final-track IoU and signed final-merge utility, then use its score for final filtering and
+merge ordering. Screen four frozen variants: current anchor score, pre-propagation scorer only,
+trajectory scorer only, and the two-stage combination. This is the 3D counterpart of delaying a
+decision until the useful evidence exists, and it adds no decoder or propagation call.
+
+#### 1C. Persistence-based recall expansion, only after 1A-1B
+
+Once the learned funnel is validated on the unchanged `(1.5, 10.0)` ladder, add proposal supply from a
+lower threshold or explicit component-persistence hierarchy. Do not adopt another fixed ladder. The
+new candidates must pass the frozen pre-propagation scorer, and the screen must enforce explicit budgets
+on propagated candidates and passes.
+
+The decisive comparison is not broadened ladder versus baseline; that was already rejected. It is:
+
+1. current ladder plus learned funnel;
+2. persistence-expanded candidates plus the same frozen funnel;
+3. the rejected lower ladder without learned filtering as the cost reference.
+
+Report genuine-miss recovery separately from false candidate propagation. The expansion is useful only
+if it recovers seeded objects in recall-limited C. elegans/CREMI without reproducing the candidate
+explosion already observed in EmbedSeg/SNEMI.
+
+### Priority 2: signed utility gate for anchor refinement
+
+The existing 3D `points+boxes` refinement is the strongest validated quality mechanism: one positive,
+four negatives, `min_consistency=0.85`, and `conditioning="prompts"` give +2.28% macro mSA for +1.4%
+runtime at depth. It currently refines every anchor survivor and relies on a geometric consistency gate
+afterward. The 2D result suggests replacing that blanket decision with a learned signed gate.
+
+The 3D gate must run **after anchor-slice merge and prompt assembly but before the second decoder call**.
+A post-volume-merge gate is too late because re-prompting a completed track changes its conditioning
+state. Inputs should combine the frozen priority-1 score with the actual visible anchor mask, claimed
+fraction, same-slice neighbors, selected negative prompts, density persistence/z extent, alternative
+margin and anchor location.
+
+Build paired supervision by propagating each training candidate twice: once from the ordinary point and
+once from the accepted tuned refinement. The target is
+`refined track IoU - unrefined track IoU`, retaining negative values. Where cached tracks interact in
+the final merge, also record signed change in the final segmentation. Compare:
+
+- the current blanket refinement plus geometric consistency gate;
+- a positive-benefit MLP, to isolate the effect of signed training;
+- a signed-utility MLP at fixed selected fractions (5, 10, 15, 25, 40, 60 and 100%);
+- signed MLP plus the current consistency veto, and signed MLP without it.
+
+Freeze the fraction and threshold on primary OOF predictions, then refit once for holdout. Because the
+blanket refinement is already cheap at depth, the primary objective is higher net quality, not merely
+fewer decoder calls. A useful gate should retain at least 80% of the blanket gain on both primary and
+holdout, introduce no dataset loss beyond 1%, and stay within +10% aggregate/+15% per-dataset runtime
+relative to the frozen selector-only route. Prefer a gate that exceeds blanket quality by rejecting
+harmful refinements.
+
+### Priority 3: full-volume feature residency
+
+This is the clearest behavior-preserving performance screen and can run independently of learned
+scoring. The video predictor caches slice features on the device, but the automatic capacity reserves
+only a quarter of free memory. Its own implementation notes that a cache shorter than the volume gives
+no full-pass reuse: after walking the volume, slices are fetched again on the next of up to 242 passes.
+With lazy zarr-backed embeddings this can include storage reads and host-to-device transfers, a plausible
+contributor to the measured node-level generation-time drift.
+
+Screen four initialization policies with identical generation parameters:
+
+1. current adaptive device cache plus lazy embeddings;
+2. current device cache plus eager host-resident embeddings (`lazy_embeddings=False`);
+3. all slice features resident on the device (`cache_all_slices=True`);
+4. eager host embeddings plus full device residency.
+
+At the documented roughly 90 MB per slice, 30-32 deep slices require about 2.7-2.9 GB in addition to the
+11.15 GB measured peak, so full residency appears plausible on the 20 GB MIG used for the campaign but
+must be measured rather than assumed. Include at least one longer-volume stress case that cannot fit, so
+an eventual automatic policy has a tested fallback.
+
+If full residency wins, replace the partial adaptive choice with a binary deployment policy: cache the
+whole volume only when measured entry size plus the maximum propagation-state reserve fits with a safety
+margin; otherwise keep the small interactive cache. A near-full cache that cannot hold the complete
+walk should not consume memory without reuse. This route must be bit-identical, including object ids,
+and should be accepted only with at least 5% aggregate speedup, no dataset more than 2% slower, and no
+out-of-memory failure under the declared fallback.
+
+### Priority 4: trajectory-aware per-track retirement
+
+Pass-level patience 2 is output-preserving on the deep crops but cannot stop when one long-lived object
+keeps a batch active. Per-track retirement is still the largest conceptual propagation reduction, but the
+current predictor batches compatible objects and is launch-bound. Retiring fifteen of sixteen objects
+may leave one forward launch per frame, so object-frame counts are not a speedup estimate.
+
+Instrument before implementing:
+
+- active and empty objects per frame and direction;
+- `object_score_logits`, mask area and foreground support per object;
+- memory-signature group sizes passed to `_track_frame_batch`;
+- CUDA time for group sizes 1, 2, 4, 8 and 16 with warm caches;
+- an oracle last-useful-frame bound from ground truth and a prediction-only conservative bound;
+- projected launches, batch elements and actual wall time saved by each bound.
+
+Proceed only if the prediction-only oracle projects at least a 10% aggregate end-to-end win after the
+measured batch-size curve. The first prototype should deactivate a track direction only after a run of
+empty masks, negative object-score logits and absent foreground/density support beyond the component's
+expected z extent. Retired objects emit empty masks while survivors stay batched; their old memories must
+not alter surviving tracks. Sweep conservative patience/margin values and compare on top of the existing
+pass-level patience 2.
+
+An efficiency promotion needs at least 5% end-to-end speedup on every dataset with no dataset losing
+more than 0.5% mSA. If a stricter policy is bit-identical, the output-preserving exception used for
+pass-level early stopping may be considered, but only after three timing trials and a sparse-volume test
+where masks can disappear and return.
+
+### Priority 5: uncertainty-gated alternate-anchor initialization
+
+Use this only if the trajectory diagnostics still attribute substantial genuine misses to decay from a
+poor anchor. Retain each density component's top separated high-density slices and evaluate the safer
+variant first: score two candidate slices, choose one anchor, and propagate once. This spends an extra
+2D decoder call but keeps one conditioning frame per track.
+
+Only if choose-one-of-two shows clear oracle headroom should a small selected fraction receive two
+conditioning frames. Multi-anchor objects have different memory-frame signatures and split out of the
+large propagation batch, so even a few can be much more expensive than their decoder calls suggest. The
+prompt-state replay fix makes this path correct, not cheap.
+
+Train a signed gate on the change in completed-track utility from the alternate anchor versus the default.
+Use component z extent, the default/alternate anchor scores and margins, foreground/density support,
+distance between slices, and the priority-1 uncertainty features. Freeze a small fraction on primary and
+report decoder calls, unique anchors, propagation passes, memory-signature group sizes and total runtime.
+Do not test unconditional two-anchor conditioning, four mask tokens, or the previously rejected strategy
+of adding approximate flow boxes and neighboring negatives to the first decoder call.
+
+### Priority 6: secondary engineering work
+
+Two implementation optimizations remain credible after the algorithmic path is fixed:
+
+- **Sparse streaming records.** Consume propagation frames into per-object bounding-box accumulators
+  instead of retaining `video_segments`, use GPU row/column reductions, and transfer only occupied crops
+  where that beats one batched full-frame transfer. This directly applies the 2D lesson that mask transfer
+  and record materialization matter once dense alternatives are removed. It must reproduce volume records
+  and final segmentations bit for bit.
+- **Compiled tracking kernels.** Compile `_track_frame_batch` or bucket stable group sizes before trying
+  CUDA graphs. Measure warm-up, graph count, dynamic memory-signature recompilation, peak memory and full
+  end-to-end time. The 7,604 deep pass-frame steps can amortize compilation, but shape variability can
+  erase the gain. Do not combine compilation with retirement until each is independently measured.
+
+Multi-GPU propagation of independent passes is also possible, but it is deployment scaling rather than a
+single-device APG optimization: it duplicates the video model and feature residency and should be reported
+as throughput per volume and per GPU, not as an algorithmic speedup.
+
+### Campaign order and decision gates
+
+The recommended order is:
+
+1. add the larger grouped manifest, component lineage, track cache and trajectory telemetry;
+2. run the short feature-residency performance screen while cached track extraction is running;
+3. fit the pre-propagation scorer on the unchanged candidate ladder;
+4. add trajectory rescoring and freeze the complete candidate-to-track funnel;
+5. test persistence-based recall expansion through that frozen funnel;
+6. train the signed anchor-refinement gate on top of the winner;
+7. implement retirement only if its telemetry oracle clears the wall-time threshold;
+8. test alternate anchors only if the remaining errors are demonstrably anchor/decay failures.
+
+Use three distinct acceptance routes rather than forcing every hypothesis through one number:
+
+- **quality:** the established +5% macro mSA gate, at most two datasets below -5%, and no dataset above
+  +10% runtime unless the >=10% all-datasets quality exception applies;
+- **incremental learned gate:** positive macro gain over the frozen parent, no dataset below -1%, at
+  least 80% retention of the referenced blanket gain on primary and holdout, <=10% aggregate and <=15%
+  per-dataset runtime growth;
+- **output-exact performance:** identical segmentation and object ids, >=5% aggregate speedup, no dataset
+  more than 2% slower, and a declared memory fallback that does not OOM. A non-exact performance change
+  keeps the stricter existing >=5% per-dataset speedup and <=0.5% quality-loss gate.
+
+Every canonical result needs three timing trials bracketed closely by controls because the earlier 3D
+campaign measured 3-7% node-level drift. Report initialization and generation separately, plus cache
+hits/bytes, candidate and pass counts, object-frame batch elements, actual tracking launches, refined
+fraction, trajectory-feature time, transfer time and peak CUDA memory. These measurements make it
+possible to reject a mechanism for the right reason rather than mistaking fewer candidates or objects
+for fewer expensive launches.

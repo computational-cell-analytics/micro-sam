@@ -114,6 +114,7 @@ def _compare(
             "baseline_msa": base_msa,
             "candidate_msa": candidate_msa,
             "msa_change": candidate_msa / base_msa - 1.0,
+            "msa_delta": candidate_msa - base_msa,
             "baseline_seconds": base_runtime,
             "candidate_seconds": candidate_runtime,
             "runtime_change": candidate_runtime / base_runtime - 1.0,
@@ -128,8 +129,17 @@ def _compare(
     macro_candidate = float(candidate_table["msa_mean"].mean())
     macro_change = macro_candidate / macro_baseline - 1.0
     msa_changes = np.array([row["msa_change"] for row in rows])
+    msa_deltas = np.array([row["msa_delta"] for row in rows])
     runtime_changes = np.array([row["runtime_change"] for row in rows])
     speedups = np.array([row["speedup"] for row in rows])
+    total_runtime_change = float(
+        candidate_table["total_seconds"].sum() / baseline_table["total_seconds"].sum() - 1.0
+    )
+    peak_ok = True
+    if "peak_cuda_memory_bytes" in baseline_table and "peak_cuda_memory_bytes" in candidate_table:
+        baseline_peak = baseline_table["peak_cuda_memory_bytes"].replace(0, np.nan)
+        peak_change = candidate_table["peak_cuda_memory_bytes"] / baseline_peak - 1.0
+        peak_ok = bool(np.nanmax(peak_change.to_numpy()) <= 0.10)
     quality_exception = bool(macro_change >= 0.10 and np.all(msa_changes > 0.0))
     if target == "quality":
         checks = {
@@ -137,10 +147,33 @@ def _compare(
             "at_most_two_datasets_below_minus_5_percent": bool(np.sum(msa_changes < -0.05) <= 2),
             "runtime_cap_or_quality_exception": bool(np.all(runtime_changes <= 0.10) or quality_exception),
         }
-    else:
+    elif target == "efficiency":
         checks = {
             "every_dataset_quality_loss_at_most_0_5_percent": bool(np.all(msa_changes >= -0.005)),
             "every_dataset_speedup_at_least_5_percent": bool(np.all(speedups >= 0.05)),
+        }
+    elif target == "refinement":
+        checks = {
+            "macro_msa_improves": bool(macro_change > 0.0),
+            "every_dataset_quality_loss_at_most_1_percent": bool(np.all(msa_changes >= -0.01)),
+            "aggregate_runtime_regression_at_most_10_percent": bool(total_runtime_change <= 0.10),
+            "every_dataset_runtime_regression_at_most_15_percent": bool(
+                np.all(runtime_changes <= 0.15)
+            ),
+            "peak_cuda_memory_increase_at_most_10_percent": peak_ok,
+        }
+    else:
+        total_speedup = -total_runtime_change
+        checks = {
+            "macro_quality_loss_at_most_0_5_percent": bool(macro_change >= -0.005),
+            # Relative changes become misleading when a baseline score is close to zero. Preserve
+            # the 2% relative guard for ordinary scores, but allow at most 0.005 absolute mSA loss.
+            "every_dataset_quality_loss_within_relative_or_absolute_limit": bool(
+                np.all((msa_changes >= -0.02) | (msa_deltas >= -0.005))
+            ),
+            "aggregate_speedup_at_least_5_percent": bool(total_speedup >= 0.05),
+            "every_dataset_runtime_regression_at_most_2_percent": bool(np.all(runtime_changes <= 0.02)),
+            "peak_cuda_memory_increase_at_most_10_percent": peak_ok,
         }
     decision = {
         "candidate": candidate_metadata["config_name"],
@@ -155,9 +188,7 @@ def _compare(
         "datasets_below_minus_5_percent": int(np.sum(msa_changes < -0.05)),
         "worst_dataset_runtime_change": float(runtime_changes.max()),
         "worst_dataset_speedup": float(speedups.min()),
-        "total_runtime_change": (
-            float(candidate_table["total_seconds"].sum() / baseline_table["total_seconds"].sum() - 1.0)
-        ),
+        "total_runtime_change": total_runtime_change,
         "baseline": baseline_metadata,
         "candidate_metadata": candidate_metadata,
     }
@@ -182,7 +213,7 @@ def compare_runs(
         decision, detail = _compare(baseline, _aggregate(group, ndim), target, ndim)
         decisions.append(decision)
         rows.extend(detail)
-    if target == "quality":
+    if target in ("quality", "refinement"):
         decisions.sort(key=lambda item: (-item["macro_candidate_msa"], item["worst_dataset_runtime_change"]))
     else:
         decisions.sort(key=lambda item: (
@@ -195,7 +226,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-run", action="append", required=True, type=Path)
     parser.add_argument("--candidate-run", action="append", required=True, type=Path)
-    parser.add_argument("--target", required=True, choices=("quality", "efficiency"))
+    parser.add_argument(
+        "--target", required=True, choices=("quality", "efficiency", "replacement", "refinement")
+    )
     parser.add_argument(
         "--ndim", type=int, choices=(2, 3), default=2,
         help="Dimension to compare. Defaults to 2 for compatibility with existing commands.",

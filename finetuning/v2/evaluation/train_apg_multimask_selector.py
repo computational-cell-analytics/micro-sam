@@ -26,6 +26,7 @@ from benchmark_apg_optimization import (
 )
 from micro_sam.v2.multimask_selection import (
     GroupwiseMLP, MULTIMASK_FEATURE_NAMES, MULTIMASK_FEATURE_VERSION,
+    SELECTOR_FEATURE_SCHEMAS,
 )
 
 
@@ -59,7 +60,10 @@ def _record_target(record: dict, labels: np.ndarray) -> float:
 
 def extract_dataset(
     manifest: dict, data_root: Path, output: Path, device: str, multimasking: bool = True,
+    input_schema: str = "dense_v1",
 ) -> Path:
+    if not multimasking and input_schema != "dense_v1":
+        raise ValueError("Compact selector schemas require the three-mask output.")
     samples = [sample for sample in manifest["samples"] if sample["ndim"] == 2]
     folds = _stable_folds(samples)
     checkpoint = common.get_joint_checkpoint("hvit_t", "best")
@@ -78,7 +82,7 @@ def extract_dataset(
             proposals = segmenter.propose(
                 multimasking=multimasking, multimask_scorer="predicted_iou",
                 multimask_selection="deferred" if multimasking else "eager",
-                return_multimask_features=True,
+                return_multimask_features=True, multimask_feature_schema=input_schema,
             )
             for record in proposals:
                 if "multimask_features" not in record:
@@ -118,7 +122,8 @@ def extract_dataset(
         output, features=features, targets=targets, sample_ids=sample_ids, datasets=datasets,
         groups=groups, folds=folds_array, alternatives=alternatives, weights=weights.astype("float32"),
         feature_version=np.asarray(MULTIMASK_FEATURE_VERSION),
-        feature_names=np.asarray(MULTIMASK_FEATURE_NAMES),
+        feature_names=np.asarray(SELECTOR_FEATURE_SCHEMAS[input_schema]),
+        input_schema=np.asarray(input_schema),
         manifest_checksum=np.asarray(manifest["manifest_checksum"]),
         n_alternatives=np.asarray(n_alternatives),
     )
@@ -126,12 +131,27 @@ def extract_dataset(
     return output
 
 
-def _load_grouped_dataset(path: Path) -> dict:
+def _load_grouped_dataset(path: Path, requested_schema: str | None = None) -> dict:
     data = np.load(path, allow_pickle=False)
     if int(data["feature_version"]) != MULTIMASK_FEATURE_VERSION:
         raise ValueError("The feature dataset has a different runtime schema version.")
-    if tuple(data["feature_names"].tolist()) != MULTIMASK_FEATURE_NAMES:
+    input_schema = str(data["input_schema"]) if "input_schema" in data.files else "dense_v1"
+    if input_schema not in SELECTOR_FEATURE_SCHEMAS:
+        raise ValueError(f"Unknown selector input schema {input_schema!r}.")
+    if tuple(data["feature_names"].tolist()) != SELECTOR_FEATURE_SCHEMAS[input_schema]:
         raise ValueError("The feature dataset does not match the runtime schema.")
+    features = data["features"].astype("float32", copy=False)
+    if requested_schema is not None and requested_schema != input_schema:
+        if input_schema != "token_lowres_v1" or requested_schema not in ("lowres_v1", "token_v1"):
+            raise ValueError(f"Cannot derive schema {requested_schema!r} from {input_schema!r}.")
+        if requested_schema == "lowres_v1":
+            features = features[:, :len(MULTIMASK_FEATURE_NAMES)]
+        else:
+            token_start = len(MULTIMASK_FEATURE_NAMES)
+            features = np.concatenate(
+                (features[:, 0:1], features[:, 8:9], features[:, token_start:]), axis=1,
+            )
+        input_schema = requested_schema
     n_alternatives = int(data["n_alternatives"]) if "n_alternatives" in data else 3
     if n_alternatives not in (1, 3):
         raise ValueError(f"Expected one or three alternatives per prompt, got {n_alternatives}.")
@@ -152,7 +172,7 @@ def _load_grouped_dataset(path: Path) -> dict:
     if not np.all(folds == folds[:, :1]) or not np.all(sample_ids == sample_ids[:, :1]):
         raise ValueError("All alternatives of a prompt must belong to the same image and fold.")
     return {
-        "features": data["features"][rows].astype("float32", copy=False),
+        "features": features[rows].astype("float32", copy=False),
         "targets": data["targets"][rows].astype("float32", copy=False),
         "weights": data["weights"][rows].mean(axis=1).astype("float32"),
         "folds": folds[:, 0].astype("int8"),
@@ -162,6 +182,8 @@ def _load_grouped_dataset(path: Path) -> dict:
         "flat_weights": data["weights"].astype("float32", copy=False),
         "manifest_checksum": str(data["manifest_checksum"]),
         "n_alternatives": n_alternatives,
+        "input_schema": input_schema,
+        "feature_names": SELECTOR_FEATURE_SCHEMAS[input_schema],
     }
 
 
@@ -205,13 +227,13 @@ def _loss(prediction, target, weight):
     return (per_group * weight).sum() / weight.sum()
 
 
-def _fit(features, targets, weights, train, validation, device, max_epochs=120):
+def _fit(features, targets, weights, train, validation, device, architecture, max_epochs=120):
     mean, scale = _normalization(features[train], weights[train])
     x = torch.as_tensor((features - mean) / scale, dtype=torch.float32, device=device)
     y = torch.as_tensor(targets, dtype=torch.float32, device=device)
     w = torch.as_tensor(weights, dtype=torch.float32, device=device)
     torch.manual_seed(17)
-    model = GroupwiseMLP(features.shape[-1], **ARCHITECTURE).to(device)
+    model = GroupwiseMLP(features.shape[-1], **architecture).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     generator = torch.Generator(device="cpu").manual_seed(17)
     train_indices = torch.as_tensor(np.flatnonzero(train), dtype=torch.int64)
@@ -242,13 +264,13 @@ def _fit(features, targets, weights, train, validation, device, max_epochs=120):
     return model.eval(), mean, scale, best_epoch
 
 
-def _fit_full(features, targets, weights, device, epochs):
+def _fit_full(features, targets, weights, device, epochs, architecture):
     mean, scale = _normalization(features, weights)
     x = torch.as_tensor((features - mean) / scale, dtype=torch.float32, device=device)
     y = torch.as_tensor(targets, dtype=torch.float32, device=device)
     w = torch.as_tensor(weights, dtype=torch.float32, device=device)
     torch.manual_seed(17)
-    model = GroupwiseMLP(features.shape[-1], **ARCHITECTURE).to(device)
+    model = GroupwiseMLP(features.shape[-1], **architecture).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
     generator = torch.Generator(device="cpu").manual_seed(17)
     indices = torch.arange(len(features), dtype=torch.int64)
@@ -263,8 +285,12 @@ def _fit_full(features, targets, weights, device, epochs):
     return model.eval(), mean, scale
 
 
-def train_selector(dataset: Path, output_dir: Path, device: str) -> Path:
-    data = _load_grouped_dataset(dataset)
+def train_selector(
+    dataset: Path, output_dir: Path, device: str, hidden_size: int = 64,
+    input_schema: str | None = None,
+) -> Path:
+    data = _load_grouped_dataset(dataset, requested_schema=input_schema)
+    architecture = {"hidden_size": int(hidden_size), "dropout": 0.1}
     features, targets = data["features"], data["targets"]
     weights, folds = data["weights"], data["folds"]
     grouped_oof = np.zeros_like(targets)
@@ -274,7 +300,7 @@ def train_selector(dataset: Path, output_dir: Path, device: str) -> Path:
         train = (folds != outer) & (folds != validation_fold)
         validation, test = folds == validation_fold, folds == outer
         model, mean, scale, best_epoch = _fit(
-            features, targets, weights, train, validation, device,
+            features, targets, weights, train, validation, device, architecture,
         )
         values = torch.as_tensor((features[test] - mean) / scale, dtype=torch.float32, device=device)
         with torch.no_grad():
@@ -289,26 +315,28 @@ def train_selector(dataset: Path, output_dir: Path, device: str) -> Path:
     )
     metrics["fold_epochs"] = fold_epochs
     refit_epochs = max(1, int(round(float(np.mean(fold_epochs)))))
-    model, mean, scale = _fit_full(features, targets, weights, device, refit_epochs)
+    model, mean, scale = _fit_full(features, targets, weights, device, refit_epochs, architecture)
 
     prefix = "singlemask-" if data["n_alternatives"] == 1 else ""
-    name = f"{prefix}groupwise-h64-d0p1-regression"
+    schema_prefix = "" if data["input_schema"] == "dense_v1" else f"{data['input_schema']}-"
+    name = f"{prefix}{schema_prefix}groupwise-h{hidden_size}-d0p1-regression"
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact = output_dir / f"{name}.pt"
     torch.save({
         "kind": "groupwise_mlp", "feature_version": MULTIMASK_FEATURE_VERSION,
-        "feature_names": list(MULTIMASK_FEATURE_NAMES),
+        "input_schema": data["input_schema"], "feature_names": list(data["feature_names"]),
         "n_alternatives": data["n_alternatives"],
-        "hidden_size": ARCHITECTURE["hidden_size"], "dropout": ARCHITECTURE["dropout"],
+        "hidden_size": architecture["hidden_size"], "dropout": architecture["dropout"],
         "mean": mean, "scale": scale,
         "state_dict": {key: value.cpu() for key, value in model.state_dict().items()},
         "metadata": {
-            "architecture": ARCHITECTURE, "loss": "direct-regression", "epochs": refit_epochs,
+            "architecture": architecture, "loss": "direct-regression", "epochs": refit_epochs,
+            "input_schema": data["input_schema"],
             "manifest_checksum": data["manifest_checksum"], "oof_metrics": metrics,
         },
     }, artifact)
     np.save(output_dir / f"{name}_oof.npy", flat_oof.astype("float32"))
-    with open(output_dir / f"{prefix}groupwise_training_results.json", "w") as f:
+    with open(output_dir / f"{name}_training_results.json", "w") as f:
         json.dump({
             "artifact": str(artifact), "metrics": metrics, "refit_epochs": refit_epochs,
             "oof_quantiles": {
@@ -333,21 +361,49 @@ def main() -> None:
         "--single-mask", action="store_true",
         help="Extract and train for the dedicated single-mask decoder token.",
     )
+    parser.add_argument(
+        "--input-schema", choices=tuple(SELECTOR_FEATURE_SCHEMAS), default="dense_v1",
+        help="Selector inputs to extract and train. Compact schemas support three masks only.",
+    )
+    parser.add_argument(
+        "--hidden-size", action="append", type=int, default=[],
+        help="Groupwise MLP width. Repeat to train several widths.",
+    )
+    parser.add_argument(
+        "--train-schema", action="append", choices=tuple(SELECTOR_FEATURE_SCHEMAS), default=[],
+        help="Schema to train from the extracted dataset. Hybrid extraction can derive token or lowres inputs.",
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
     manifest_path = args.manifest or _default_manifest_path(args.output_root, "standard", "primary")
     data_root, output_root, manifest_path = _validate_roots(args.data_root, args.output_root, manifest_path)
     manifest = prepare_manifest(data_root, manifest_path, "standard", subset="primary")
     selection_root = output_root / "multimask_selection"
+    if args.single_mask and args.input_schema != "dense_v1":
+        raise ValueError("--single-mask only supports --input-schema dense_v1.")
+    schema_root = args.input_schema if args.input_schema != "dense_v1" else None
     dataset_root = selection_root / "singlemask_v1" if args.single_mask else selection_root
     model_root = selection_root / ("singlemask_v1" if args.single_mask else "groupwise_v1")
+    if schema_root is not None:
+        dataset_root = dataset_root / schema_root
+        model_root = model_root / schema_root
     dataset = args.dataset or dataset_root / "primary_features.npz"
     artifact_dir = args.artifact_dir or model_root / "models"
     if args.stage in ("extract", "all"):
-        extract_dataset(manifest, data_root, dataset, args.device, multimasking=not args.single_mask)
+        extract_dataset(
+            manifest, data_root, dataset, args.device, multimasking=not args.single_mask,
+            input_schema=args.input_schema,
+        )
     if args.stage in ("train", "all"):
-        artifact = train_selector(dataset.resolve(strict=True), artifact_dir, args.device)
-        print(f"Artifact: {artifact}")
+        train_schemas = args.train_schema or [args.input_schema]
+        for train_schema in train_schemas:
+            hidden_sizes = args.hidden_size or ([64] if train_schema == "lowres_v1" else [32, 64, 128])
+            for hidden_size in hidden_sizes:
+                artifact = train_selector(
+                    dataset.resolve(strict=True), artifact_dir, args.device, hidden_size=hidden_size,
+                    input_schema=train_schema,
+                )
+                print(f"Artifact: {artifact}")
 
 
 if __name__ == "__main__":
