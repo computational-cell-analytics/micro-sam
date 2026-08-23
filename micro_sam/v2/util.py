@@ -304,8 +304,11 @@ def needs_default_tiling(shape):
 # 'hvit_t'), so no explicit backbone mapping is needed. The user-facing GUI name is defined in the
 # annotator widgets.
 FINETUNED_MODELS = [
-    # Microscopy generalist: joint SAM2 + UniSAM2 model with the 'hvit_t' backbone.
+    # Microscopy generalist: joint SAM2 + UniSAM2 models, one per SAM2 backbone.
     "hvit_t_cells",
+    "hvit_s_cells",
+    "hvit_b_cells",
+    "hvit_l_cells",
 ]
 
 # The default model for the annotation tools (GUI + CLI + Python API). This is the single source of
@@ -315,11 +318,23 @@ DEFAULT_MODEL = "hvit_t_cells"
 FINETUNED_URLS = {
     "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/iqNv2cjhPMGOo9J/download",
     "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/VlXsFg16Qh2SsiA/download",
+    "hvit_s_cells": "https://owncloud.gwdg.de/index.php/s/pB9FrVSjK9UztCe/download",
+    "hvit_s_cells_decoder": "https://owncloud.gwdg.de/index.php/s/NpiBiWnzqRXYkdc/download",
+    "hvit_b_cells": "https://owncloud.gwdg.de/index.php/s/WPUYBdknWgdUnf3/download",
+    "hvit_b_cells_decoder": "https://owncloud.gwdg.de/index.php/s/QrOJJaolizanXIu/download",
+    "hvit_l_cells": "https://owncloud.gwdg.de/index.php/s/kxFOH9YwlWEoyjf/download",
+    "hvit_l_cells_decoder": "https://owncloud.gwdg.de/index.php/s/xvu7k43mYOoKFNH/download",
 }
 
 FINETUNED_HASHES = {
     "hvit_t_cells": "xxh128:0d1873746eda30f2c1b1fd3edd9a82d0",
     "hvit_t_cells_decoder": "xxh128:301163dbb748519da1e03057789f1ccf",
+    "hvit_s_cells": "xxh128:a197591b47093c8ef53b0187e3811911",
+    "hvit_s_cells_decoder": "xxh128:afe742f97f2b72de4c60f46691788c79",
+    "hvit_b_cells": "xxh128:10142e4120285a8e9c2ee9eb5d4ef9d4",
+    "hvit_b_cells_decoder": "xxh128:7987038c4bfd2e8552a59e19b551c169",
+    "hvit_l_cells": "xxh128:d0f7a067f07357524978d2215f379523",
+    "hvit_l_cells_decoder": "xxh128:f16b41ccaf285297227ddc8acc240cb6",
 }
 
 

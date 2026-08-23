@@ -206,8 +206,6 @@ def build_command(
                 command.append("--skip_tuning")
             if args.tuning_root is not None:
                 command.extend(["--tuning_root", args.tuning_root])
-            if args.n_tuning_samples is not None:
-                command.extend(["--n_tuning_samples", str(args.n_tuning_samples)])
 
     if args.segmentation_type == "interactive":
         command.extend(["-p", args.prompt_choice, "-iter", str(args.n_iterations)])
@@ -310,8 +308,7 @@ def main():
                         help="Name of the joint trainer checkpoint the micro-sam2 weights are taken from, "
                              "without the '.pt' suffix, e.g. 'best' or the name of a frozen copy.")
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate micro-sam2 with the library defaults.")
-    parser.add_argument("--tuning_root", type=str, default=None, help="Where the sweeps are stored and read from.")
-    parser.add_argument("--n_tuning_samples", type=int, default=None, help="Cap each sweep to this many samples.")
+    parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=("box", "point"))
     parser.add_argument("-iter", "--n_iterations", type=int, default=8, help="Iterative prompting rounds.")
     parser.add_argument("--min_size", type=int, default=0,
