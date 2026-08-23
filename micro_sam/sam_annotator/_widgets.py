@@ -443,10 +443,10 @@ class _WidgetBase(QtWidgets.QWidget):
 
         # Per-family backend config: the model-type suffix appended after 'hvit_{size}' and the
         # available model sizes. The base SAM2 family supports all sizes. Finetuned families (e.g.
-        # 'Microscopy', the joint SAM2 + UniSAM2 'hvit_t_cells' model) can exist only for some sizes.
+        # 'Microscopy', the joint SAM2 + UniSAM2 'hvit_*_cells' models) can exist only for some sizes.
         self.model_family_config = {
             "Natural Images": {"suffix": "", "sizes": ["t", "s", "b", "l"]},
-            "Microscopy": {"suffix": "_cells", "sizes": ["t"]},
+            "Microscopy": {"suffix": "_cells", "sizes": ["t", "s", "b", "l"]},
         }
 
         # NOTE: The available SAM2 model sizes are 'tiny', 'small', 'base' and 'large'.
