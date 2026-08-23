@@ -36,6 +36,8 @@ CHECKPOINT_PATHS = {
 
 MODEL_TYPES = list(CHECKPOINT_PATHS)
 
+MODES = ("ais", "apg")
+
 # The 2d patch shape the models were trained on, see 'generalist_loader'.
 TRAINING_PATCH_SHAPE = (512, 512)
 
@@ -741,6 +743,49 @@ def build_apg_segmenter(
     return get_instance_segmentation_generator(
         model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
     )
+
+
+def resolve_checkpoint_identity(mode, model_type, joint_checkpoint="best", checkpoint_path=None):
+    """Return the content identity of the effective weights and, if needed, the joint checkpoint."""
+    joint_checksum = None
+    if checkpoint_path is None or mode == "apg":
+        joint_path = get_joint_checkpoint(model_type, joint_checkpoint)
+        joint_checksum = checkpoint_checksum(joint_path)
+
+    if checkpoint_path is None:
+        return joint_checksum, joint_checksum
+
+    decoder_checksum = checkpoint_checksum(checkpoint_path)
+    if mode == "apg":
+        return combine_checkpoint_checksums(joint_checksum, decoder_checksum), joint_checksum
+    return decoder_checksum, None
+
+
+def build_model(mode, model_type, device, ndim, joint_checkpoint="best", checkpoint_path=None, joint_checksum=None):
+    """Load the model a mode runs on, from the two halves of the joint checkpoint.
+
+    Args:
+        mode: The segmentation mode, one of MODES.
+        model_type: The SAM2 backbone of the joint model, e.g. 'hvit_t'.
+        device: The torch device.
+        ndim: The number of spatial dimensions, 2 or 3.
+        joint_checkpoint: The joint trainer checkpoint, without the '.pt' suffix.
+        checkpoint_path: Decoder weights to use instead of the ones exported from the joint checkpoint.
+        joint_checksum: The checksum of the joint checkpoint, from `resolve_checkpoint_identity`.
+
+    Returns:
+        The UniSAM2 decoder for 'ais', or the prompt generator for 'apg'.
+    """
+    if mode == "apg":
+        return build_apg_segmenter(
+            model_type, ndim, device, joint_checkpoint, decoder_path=checkpoint_path,
+            joint_checksum=joint_checksum,
+        )
+
+    decoder_path = checkpoint_path or export_joint_checkpoint(
+        model_type, joint_checkpoint, source_checksum=joint_checksum
+    )[1]
+    return load_unisam2_model(decoder_path, device, encoder=model_type)
 
 
 def predict_unisam2(model, raw, ndim, device, normalization=None):
