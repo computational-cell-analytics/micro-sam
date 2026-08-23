@@ -563,7 +563,7 @@ def train_sam2_multi_gpu(
     )
 
 
-def _build_unisam2_model(model_type, device, peft_kwargs=None, output_channels=4, initial_features=64):
+def _build_unisam2_model(model_type, device, peft_kwargs=None, output_channels=4, initial_features=32):
     """Build a UniSAM2 model and optionally apply PEFT to its encoder.
 
     Args:
@@ -613,7 +613,7 @@ def train_automatic(
     overwrite_training: bool = True,
     peft_kwargs: Optional[Dict] = None,
     load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
-    initial_features: int = 64,
+    initial_features: int = 32,
 ) -> None:
     """Train UniSAM2 for automatic instance segmentation with directed distance targets.
 
@@ -621,7 +621,7 @@ def train_automatic(
     :class:`~micro_sam.v2.loss.directed_distance_based.DirectedDistanceLoss` on
     combined 2D + 3D data. Pass a loader built by
     :func:`~micro_sam.v2.datasets.generalist_loader.get_dataloaders` with
-    ``label_trafo=DirectedPerObjectBoundaryDistanceTransform``.
+    ``label_trafo=GeodesicHybridDistanceTransform`` (the default).
 
     Args:
         name: Checkpoint / log folder name.
@@ -814,7 +814,7 @@ def train_automatic_multi_gpu(
     load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     find_unused_parameters: bool = True,
     peft_kwargs: Optional[Dict] = None,
-    initial_features: int = 64,
+    initial_features: int = 32,
 ) -> None:
     """Train UniSAM2 for automatic segmentation across multiple GPUs with DDP.
 
@@ -923,7 +923,7 @@ def train_joint_sam2(
     use_object_score_loss: bool = False,
     average_over_frames: bool = False,
     automatic_metric_weight: float = 0.25,
-    initial_features: int = 64,
+    initial_features: int = 32,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly with a shared image encoder (single GPU).
 
@@ -1101,7 +1101,7 @@ def _train_joint_rank(
     use_object_score_loss: bool = False,
     average_over_frames: bool = False,
     automatic_metric_weight: float = 0.25,
-    initial_features: int = 64,
+    initial_features: int = 32,
 ):
     """Single-rank torchrun worker for train_joint_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
@@ -1250,7 +1250,7 @@ def train_joint_sam2_multi_gpu(
     use_object_score_loss: bool = False,
     average_over_frames: bool = False,
     automatic_metric_weight: float = 0.25,
-    initial_features: int = 64,
+    initial_features: int = 32,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly across multiple GPUs with DDP.
 

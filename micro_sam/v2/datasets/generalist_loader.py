@@ -750,8 +750,8 @@ def get_dataloaders(
         raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', or 'both'.")
 
     if label_trafo is None:
-        from micro_sam.v2.transforms.labels import DirectedPerObjectBoundaryDistanceTransform
-        label_trafo = DirectedPerObjectBoundaryDistanceTransform
+        from micro_sam.v2.transforms.labels import GeodesicHybridDistanceTransform
+        label_trafo = GeodesicHybridDistanceTransform
 
     if z_slices is None:
         z_slices = [8]
@@ -868,10 +868,10 @@ def _build_automatic_datasets(input_path, z_slices, dataset_choice):
     Returns:
         Tuple of (train_ds, val_ds) as :class:`ConcatDataset` instances.
     """
-    from micro_sam.v2.transforms.labels import DirectedPerObjectBoundaryDistanceTransform
+    from micro_sam.v2.transforms.labels import GeodesicHybridDistanceTransform
 
     patch_shape = (512, 512)
-    label_trafo = DirectedPerObjectBoundaryDistanceTransform
+    label_trafo = GeodesicHybridDistanceTransform
 
     kwargs = {
         "raw_transform": _identity,
