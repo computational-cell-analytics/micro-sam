@@ -67,6 +67,7 @@ def _group_key(metadata: Dict[str, Any], ndim: int) -> str:
     identity = {
         "implementation_checksum": metadata["implementation_checksum"],
         f"params_{ndim}d": metadata[f"params_{ndim}d"],
+        "model_artifacts": metadata.get("model_artifacts", {}),
     }
     return json.dumps(identity, sort_keys=True, separators=(",", ":"))
 

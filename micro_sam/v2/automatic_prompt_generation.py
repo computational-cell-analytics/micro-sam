@@ -28,6 +28,7 @@ on the conditioning frame. See finetuning/v2/evaluation/APG_3D_OPTIMIZATION.md, 
 """
 
 import shutil
+import time
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
@@ -42,6 +43,9 @@ from bioimage_cpp.utils import Blocking
 from bioimage_cpp.segmentation import label
 
 from .normalization import to_image
+from .multimask_selection import (
+    extract_multimask_features_torch, refinement_gate_features_torch,
+)
 from ..util import make_temp_embedding_path
 from .postprocessing import DEFAULT_POSTPROCESSING, _compute_flow_density
 from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
@@ -61,9 +65,18 @@ DEFAULT_PROMPT_GENERATION = {
     "candidate_threshold": 1.5,
     "min_candidate_size": 4,
     "score_threshold": 0.6,
+    # Which record score the 2D pre-merge eligibility threshold applies to. Learned scoring is an
+    # explicit opt-in; the historical predicted-IoU filter remains the default.
+    "score_filter": "predicted_iou",
     # The one axis that transfers: optimal on eleven of twelve datasets.
     "max_overlap": 0.15,
     "multimasking": True,
+    # Images only. The default is the exact historical predicted-IoU argmax. A microscopy scorer is
+    # installed explicitly with `set_multimask_models` before selecting it here.
+    "multimask_scorer": "predicted_iou",
+    # Images only. Deferred selection retains the alternatives until the score-ordered merge and
+    # accepts at most one alternative from each prompt.
+    "multimask_selection": "eager",
     # Off by default: no refinement mode has passed the optimization gates yet, see 'REFINEMENT_COMPONENTS'.
     "refinement": None,
     "refinement_kwargs": None,
@@ -96,7 +109,9 @@ DEFAULT_PROMPT_GENERATION = {
 # conditions on both. 'recover' instead re-prompts the records the merge dropped, adding instances.
 REFINEMENT_COMPONENTS = ("points", "boxes", "masks", "recover")
 REFINEMENT_KWARGS = {
-    "shared": ("policy", "multimasking", "min_consistency", "max_foreign_overlap"),
+    "shared": (
+        "policy", "multimasking", "min_consistency", "max_foreign_overlap", "gate", "gate_threshold",
+    ),
     "points": (
         "n_positives", "n_negatives", "max_negative_distance", "negative_source",
         "min_negative_distance", "min_grouped_for_points",
@@ -122,6 +137,10 @@ DEFAULT_REFINEMENT = {
     # Keep the first-round mask when more than this fraction of the second-round mask lies on
     # *other* first-round instances, which is a re-prompt growing into a neighbour. None allows any.
     "max_foreign_overlap": 0.15,
+    # `all` preserves the established opt-in refinement. `uncertainty` evaluates the installed
+    # refinement gate and only re-prompts records whose predicted utility reaches the threshold.
+    "gate": "all",
+    "gate_threshold": 0.0,
     # The surviving prompt only: grouped extra positives measurably hurt (p1 > p2 > p3 on both
     # subsets). The suppressed prompts' productive role is as the neighbours' negative pool.
     "n_positives": 1,
@@ -246,6 +265,12 @@ def _parse_refinement(
     resolved.update(refinement_kwargs)
     if resolved["policy"] not in ("replace", "keep-if-better"):
         raise ValueError(f"Invalid refinement policy {resolved['policy']!r}: expected 'replace' or 'keep-if-better'.")
+    if resolved.get("gate", "all") not in ("all", "uncertainty"):
+        raise ValueError(
+            f"Invalid refinement gate {resolved['gate']!r}: expected 'all' or 'uncertainty'."
+        )
+    if not np.isfinite(resolved.get("gate_threshold", 0.0)):
+        raise ValueError("The refinement gate threshold must be finite.")
     if resolved.get("negative_source", "prompts") not in ("prompts", "interior"):
         raise ValueError(
             f"Invalid negative_source {resolved['negative_source']!r}: expected 'prompts' or 'interior'."
@@ -746,14 +771,24 @@ def merge_by_score(
         additionally one {instance_id: fraction_of_record_area} map per record, in record order.
     """
     out = np.zeros(shape, dtype="uint32")
-    scores = np.array([record["predicted_iou"] * record["stability_score"] for record in records])
+    scores = np.array([
+        record.get("merge_score", record["predicted_iou"] * record["stability_score"])
+        for record in records
+    ])
+    if not np.isfinite(scores).all():
+        raise ValueError("Every merge score must be finite.")
     full_box = tuple(slice(None) for _ in shape)
     matches = {}
     reasons = ["" for _ in records]
     claimed_by = [{} for _ in records]
+    accepted_groups = set()
     next_id = 1
-    for index in np.argsort(-scores):
+    for index in sorted(range(len(records)), key=lambda candidate: (-scores[candidate], candidate)):
         record = records[index]
+        group = record.get("multimask_group")
+        if group is not None and group in accepted_groups:
+            reasons[index] = "alternative not selected"
+            continue
         mask = record["segmentation"]
         mask = mask.numpy() if hasattr(mask, "numpy") else np.asarray(mask)
         area = int(mask.sum())
@@ -779,6 +814,8 @@ def merge_by_score(
         target[fresh] = next_id
         reasons[index] = "kept"
         matches[next_id] = int(index)
+        if group is not None:
+            accepted_groups.add(group)
         next_id += 1
 
     result = (out,)
@@ -909,12 +946,45 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._i = None
         self._owns_image_embeddings = False
         self._last_generation_stats = {}
+        self._microscopy_multimask_scorer = None
+        self._refinement_gate_model = None
         # The embedding cache is keyed on these, which a SAM2 image predictor does not carry itself.
         sam2_model = getattr(predictor, "model", None)
         if getattr(predictor, "model_type", None) is None:
             predictor.model_type = getattr(sam2_model, "model_type", None) or "hvit"
         if getattr(predictor, "model_name", None) is None:
             predictor.model_name = getattr(sam2_model, "model_name", None) or predictor.model_type
+
+    def set_multimask_models(self, scorer=None, refinement_gate=None) -> None:
+        """Install fitted feature models used by the optional 2D APG optimization modes.
+
+        Both objects implement ``predict(features)`` and are intentionally injected rather than
+        loaded from an implicit global path. This keeps checkpoints and evaluation artifacts
+        attributable. The normal predicted-IoU path does not require either model.
+        """
+        self._microscopy_multimask_scorer = scorer
+        self._refinement_gate_model = refinement_gate
+
+    def _validate_multimask_options(
+        self, multimasking: bool, multimask_scorer: str, multimask_selection: str, is_volume: bool,
+    ) -> None:
+        if multimask_scorer not in ("predicted_iou", "microscopy"):
+            raise ValueError(
+                f"Invalid multimask scorer {multimask_scorer!r}: expected 'predicted_iou' or 'microscopy'."
+            )
+        if multimask_selection not in ("eager", "deferred"):
+            raise ValueError(
+                f"Invalid multimask selection {multimask_selection!r}: expected 'eager' or 'deferred'."
+            )
+        changed = multimask_scorer != "predicted_iou" or multimask_selection != "eager"
+        if multimask_selection == "deferred" and not multimasking:
+            raise ValueError("Deferred multimask selection requires multimasking=True.")
+        if is_volume and changed:
+            raise ValueError("Microscopy multimask scoring and deferred selection currently support 2d only.")
+        if multimask_scorer == "microscopy" and self._microscopy_multimask_scorer is None:
+            raise RuntimeError(
+                "multimask_scorer='microscopy' requires a fitted scorer; call set_multimask_models first."
+            )
 
     def _encode(self, image: np.ndarray) -> dict:
         """Run the image encoder once and return the embeddings that both branches use."""
@@ -1124,11 +1194,14 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         spacing: Optional[tuple] = None,
         min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
         score_threshold: float = DEFAULT_PROMPT_GENERATION["score_threshold"],
+        score_filter: str = DEFAULT_PROMPT_GENERATION["score_filter"],
         max_overlap: float = DEFAULT_PROMPT_GENERATION["max_overlap"],
         min_size: int = DEFAULT_PROMPT_GENERATION["min_size"],
         refinement: Optional[str] = DEFAULT_PROMPT_GENERATION["refinement"],
         refinement_kwargs: Optional[Dict[str, Any]] = DEFAULT_PROMPT_GENERATION["refinement_kwargs"],
         multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
+        multimask_scorer: str = DEFAULT_PROMPT_GENERATION["multimask_scorer"],
+        multimask_selection: str = DEFAULT_PROMPT_GENERATION["multimask_selection"],
         n_objects_per_pass: int = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"],
         early_stop_patience: Optional[int] = DEFAULT_PROMPT_GENERATION["early_stop_patience"],
         batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
@@ -1151,7 +1224,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 which costs precision for the sparse post-processing but buys candidate recall here.
             spacing: Anisotropic voxel spacing of a volume, e.g. (4, 1, 1).
             min_candidate_size: Discard density components smaller than this.
-            score_threshold: Discard candidates whose predicted IoU is below this.
+            score_threshold: Discard candidates whose selected filter score is below this.
+            score_filter: Filter image proposals by 'predicted_iou' (the default), the installed
+                model's 'selection_score', or 'none'. Volumes support predicted IoU only.
             max_overlap: Reject a candidate when more than this fraction of it is already claimed. For a
                 volume this applies on the slice a candidate is prompted on and again on the 3d merge.
             min_size: Minimum object size in the result.
@@ -1167,6 +1242,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 the accepted keys and their defaults.
             multimasking: Whether to predict several masks per point and keep the best scoring one. A
                 single point is ambiguous between one object and a cluster, so this is on by default.
+            multimask_scorer: How to score the alternatives of an image prompt: SAM2's generic
+                'predicted_iou' or an installed microscopy feature scorer.
+            multimask_selection: Whether to choose one alternative 'eager'ly or defer the choice to
+                the grouped score-ordered merge. Images only.
             n_objects_per_pass: Number of objects propagated together through a volume. The video
                 predictor runs them as one batch, so this trades device memory against the pass count.
             early_stop_patience: Stop a propagation pass after this many consecutive slices in which
@@ -1188,11 +1267,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         shape = self._prediction[0].shape
         # The prediction carries the dimensionality it was run at: (4, Y, X) or (4, Z, Y, X).
         is_volume = self._prediction.ndim == 4
+        self._validate_multimask_options(
+            multimasking, multimask_scorer, multimask_selection, is_volume=is_volume,
+        )
         if candidate_threshold is None:
             candidate_threshold = DEFAULT_PROMPT_GENERATION[
                 "candidate_threshold_3d" if is_volume else "candidate_threshold"
             ]
         if is_volume:
+            if score_filter != "predicted_iou":
+                raise ValueError("Volumes currently support score_filter='predicted_iou' only.")
             components = resolved = None
             if refinement is not None:
                 components, resolved = _parse_refinement(refinement, refinement_kwargs, is_volume=True)
@@ -1240,10 +1324,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         proposals = self.propose(
             candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
             n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size,
-            multimasking=multimasking, batch_size=batch_size, n_threads=n_threads,
+            multimasking=multimasking, multimask_scorer=multimask_scorer,
+            multimask_selection=multimask_selection, batch_size=batch_size, n_threads=n_threads,
+            compute_multimask_uncertainty=(
+                refinement is not None
+                and (refinement_kwargs or {}).get("gate", DEFAULT_REFINEMENT["gate"]) == "uncertainty"
+            ),
         )
         return self.select(
-            proposals, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
+            proposals, score_threshold=score_threshold, score_filter=score_filter,
+            max_overlap=max_overlap, min_size=min_size,
             refinement=refinement, refinement_kwargs=refinement_kwargs, batch_size=batch_size,
         )
 
@@ -1257,8 +1347,12 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         sigma: float = DEFAULT_PROMPT_GENERATION["sigma"],
         min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
         multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
+        multimask_scorer: str = DEFAULT_PROMPT_GENERATION["multimask_scorer"],
+        multimask_selection: str = DEFAULT_PROMPT_GENERATION["multimask_selection"],
         batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
         n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
+        compute_multimask_uncertainty: bool = False,
+        return_multimask_features: bool = False,
     ) -> list:
         """Derive the prompts and turn them into scored mask proposals, without selecting any of them.
 
@@ -1275,8 +1369,12 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             sigma: Gaussian sigma for smoothing the candidate density.
             min_candidate_size: Discard density components smaller than this.
             multimasking: Whether to predict several masks per point and keep the best scoring one.
+            multimask_scorer: 'predicted_iou' or an installed 'microscopy' feature scorer.
+            multimask_selection: Choose one alternative 'eager'ly or retain a grouped 'deferred' set.
             batch_size: Number of prompts per forward pass.
             n_threads: Number of threads for the flow integration the candidates come from.
+            compute_multimask_uncertainty: Attach refinement-gate scores to the selected records.
+            return_multimask_features: Attach the selector feature vector for training or diagnostics.
 
         Returns:
             The proposals, to be passed to `select`. Their layout is an implementation detail of the
@@ -1286,6 +1384,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
         if self._prediction.ndim == 4:
             raise ValueError("Proposals can only be reused for an image, because a volume gates its propagation.")
+        self._validate_multimask_options(
+            multimasking, multimask_scorer, multimask_selection, is_volume=False,
+        )
+        if compute_multimask_uncertainty and not multimasking:
+            raise ValueError("Uncertainty-gated refinement requires multimasking=True.")
+        if compute_multimask_uncertainty and self._refinement_gate_model is None:
+            raise RuntimeError(
+                "Computing multimask uncertainty requires a fitted refinement gate; "
+                "call set_multimask_models first."
+            )
 
         prompts = derive_point_prompts(
             self._prediction[0], self._prediction[1:], candidate_threshold=candidate_threshold,
@@ -1294,12 +1402,19 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         )
         if prompts is None:
             return []
-        return self._apply(prompts, multimasking=multimasking, batch_size=batch_size)
+        return self._apply(
+            prompts, multimasking=multimasking, batch_size=batch_size,
+            multimask_scorer=multimask_scorer, multimask_selection=multimask_selection,
+            compute_multimask_uncertainty=compute_multimask_uncertainty,
+            return_multimask_features=return_multimask_features,
+            foreground_threshold=foreground_threshold,
+        )
 
     def select(
         self,
         proposals: list,
         score_threshold: float = DEFAULT_PROMPT_GENERATION["score_threshold"],
+        score_filter: str = DEFAULT_PROMPT_GENERATION["score_filter"],
         max_overlap: float = DEFAULT_PROMPT_GENERATION["max_overlap"],
         min_size: int = DEFAULT_PROMPT_GENERATION["min_size"],
         refinement: Optional[str] = DEFAULT_PROMPT_GENERATION["refinement"],
@@ -1310,7 +1425,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
         Args:
             proposals: The proposals, as returned by `propose` on the same generator.
-            score_threshold: Discard proposals whose predicted IoU is below this.
+            score_threshold: Discard proposals whose selected filter score is below this.
+            score_filter: The proposal field used by the threshold: 'predicted_iou',
+                'selection_score', or 'none'.
             max_overlap: Reject a proposal when more than this fraction of it is already claimed.
             min_size: Minimum object size in the result.
             refinement: Optional second round, a '+'-joined combination of 'points', 'boxes',
@@ -1323,6 +1440,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             The instance segmentation, uint32 array with the spatial shape of the prediction.
         """
         components = resolved = None
+        if score_filter not in ("predicted_iou", "selection_score", "none"):
+            raise ValueError(
+                f"Invalid score filter {score_filter!r}: expected 'predicted_iou', "
+                "'selection_score' or 'none'."
+            )
         if refinement is not None:
             components, resolved = _parse_refinement(refinement, refinement_kwargs)
             self._validate_refinement(components)
@@ -1333,7 +1455,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
         segmentation, context = self._merge(
             proposals, shape, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
-            return_context=components is not None,
+            return_context=components is not None, score_filter=score_filter,
         )
         if components is not None and segmentation.max() > 0:
             segmentation = self._refine(segmentation, context, components, resolved, batch_size)
@@ -1357,13 +1479,31 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     def _set_region(self, key) -> None:
         """Point the predictor at the region. Its image is already set for a single one."""
 
-    def _apply(self, prompts: dict, multimasking: bool, batch_size: int) -> list:
+    def _apply(
+        self, prompts: dict, multimasking: bool, batch_size: int, multimask_scorer: str = "predicted_iou",
+        multimask_selection: str = "eager", compute_multimask_uncertainty: bool = False,
+        return_multimask_features: bool = False,
+        foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
+    ) -> list:
         """Turn the prompts into mask proposals."""
-        return self._apply_prompts(prompts, multimasking=multimasking, batch_size=batch_size)
+        kwargs = {"multimasking": multimasking, "batch_size": batch_size}
+        if (
+            multimask_scorer != "predicted_iou"
+            or multimask_selection != "eager"
+            or compute_multimask_uncertainty
+            or return_multimask_features
+        ):
+            kwargs.update({
+                "multimask_scorer": multimask_scorer, "multimask_selection": multimask_selection,
+                "compute_multimask_uncertainty": compute_multimask_uncertainty,
+                "return_multimask_features": return_multimask_features,
+                "foreground": self._prediction[0], "foreground_threshold": foreground_threshold,
+            })
+        return self._apply_prompts(prompts, **kwargs)
 
     def _merge(
         self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
-        return_context: bool = False,
+        return_context: bool = False, score_filter: str = "predicted_iou",
     ) -> tuple:
         """Merge the mask proposals into an instance segmentation.
 
@@ -1372,7 +1512,15 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             from every instance id to the record that made it. Without `return_context` the context
             is None, so the matches are not computed for nothing.
         """
-        records = [record for record in proposals if record["predicted_iou"] >= score_threshold]
+        if score_filter == "none":
+            records = list(proposals)
+        else:
+            missing = [index for index, record in enumerate(proposals) if score_filter not in record]
+            if missing:
+                raise ValueError(
+                    f"Cannot filter by {score_filter!r}: {len(missing)} proposal records lack that score."
+                )
+            records = [record for record in proposals if record[score_filter] >= score_threshold]
         if not records:
             return np.zeros(shape, dtype="uint32"), None
         if not return_context:
@@ -1390,6 +1538,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             "proposals": proposals, "records": records, "matches": matches,
             "reasons": reasons, "claimed": claimed,
             "score_threshold": score_threshold, "min_size": min_size,
+            "score_filter": score_filter,
         }
 
     def _refine(
@@ -1428,15 +1577,47 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         the end is global, so the score order arbitrates across regions as well as within them.
         """
         shape = segmentation.shape
-        instances = [
+        all_instances = [
             (index + 1, bounding_box)
             for index, bounding_box in enumerate(find_objects(segmentation))
             if bounding_box is not None
         ]
+        instances = all_instances
+        unselected = []
+        if refinement_kwargs.get("gate", "all") == "uncertainty":
+            threshold = float(refinement_kwargs["gate_threshold"])
+            instances = []
+            for instance in all_instances:
+                instance_id, _ = instance
+                record = context["records"][context["matches"][instance_id]]
+                if "uncertainty_score" not in record:
+                    raise RuntimeError(
+                        "Uncertainty-gated refinement requires proposals carrying uncertainty scores. "
+                        "Generate them with a fitted refinement gate model."
+                    )
+                (instances if record["uncertainty_score"] >= threshold else unselected).append(instance)
+        self._last_generation_stats.update({
+            "refinement_eligible_instances": len(all_instances),
+            "uncertainty_selected_instances": len(instances),
+        })
+        if not instances:
+            self._last_generation_stats.update({
+                "refined_instances": 0, "replaced_instances": 0,
+                "points_suppressed_instances": 0, "dropped_negatives": 0,
+                "gated_consistency": 0, "gated_foreign": 0,
+            })
+            return segmentation
 
         point_prompts = None
         if "points" in components:
-            all_points = np.array([record["point"] for record in context["proposals"]], dtype="float32")
+            all_points_list, seen_groups = [], set()
+            for record_index, record in enumerate(context["proposals"]):
+                group = record.get("multimask_group", ("record", record_index))
+                if group in seen_groups:
+                    continue
+                seen_groups.add(group)
+                all_points_list.append(record["point"])
+            all_points = np.array(all_points_list, dtype="float32")
             surviving_points = {
                 instance_id: context["records"][record_index]["point"]
                 for instance_id, record_index in context["matches"].items()
@@ -1464,6 +1645,12 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         max_foreign_overlap = refinement_kwargs["max_foreign_overlap"]
         keep_if_better = refinement_kwargs["policy"] == "keep-if-better"
         chosen, replaced, suppressed, dropped = [], 0, 0, 0
+        for instance_id, bounding_box in unselected:
+            record = context["records"][context["matches"][instance_id]]
+            chosen.append((
+                record.get("merge_score", record["predicted_iou"] * record["stability_score"]),
+                instance_id, bounding_box, segmentation[bounding_box] == instance_id,
+            ))
         gated = {"gated_consistency": 0, "gated_foreign": 0}
         for key in sorted(groups):
             self._set_region(key)
@@ -1493,6 +1680,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 for (instance_id, bounding_box), (mask, score) in zip(batch, predictions):
                     record = context["records"][context["matches"][instance_id]]
                     first_round_score = record["predicted_iou"] * record["stability_score"]
+                    first_round_merge_score = record.get("merge_score", first_round_score)
                     take_second = mask.any() and (not keep_if_better or score > first_round_score)
                     if take_second and min_consistency is not None:
                         first_round_mask = crop == instance_id
@@ -1515,7 +1703,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                         chosen.append((score, instance_id, _shift_box(box, origin), mask[box]))
                     else:
                         chosen.append((
-                            first_round_score, instance_id, _shift_box(bounding_box, origin),
+                            first_round_merge_score, instance_id, _shift_box(bounding_box, origin),
                             crop[bounding_box] == instance_id,
                         ))
 
@@ -1674,12 +1862,37 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._last_generation_stats["recovered_instances"] = accepted
         return recovered
 
-    def _apply_prompts(self, prompts, multimasking: bool, batch_size: int) -> List[Dict[str, Any]]:
-        """Prompt the interactive branch in batches, returning records for the merge."""
+    def _apply_prompts(
+        self, prompts, multimasking: bool, batch_size: int, multimask_scorer: str = "predicted_iou",
+        multimask_selection: str = "eager", compute_multimask_uncertainty: bool = False,
+        return_multimask_features: bool = False,
+        foreground: Optional[np.ndarray] = None,
+        foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
+    ) -> List[Dict[str, Any]]:
+        """Prompt in batches and return eager records or grouped multimask alternatives."""
         points, point_labels = prompts["points"], prompts["point_labels"]
         mask_threshold = getattr(self._predictor, "mask_threshold", 0.0)
+        advanced = bool(
+            multimask_scorer != "predicted_iou"
+            or multimask_selection == "deferred"
+            or compute_multimask_uncertainty
+            or return_multimask_features
+        )
+        if advanced and foreground is None:
+            raise ValueError("Multimask feature scoring requires the APG foreground prediction.")
+        feature_foreground = feature_context_points = None
+        if advanced:
+            feature_foreground = torch.as_tensor(
+                foreground, dtype=torch.float32, device=self._predictor.device,
+            )
+            feature_context_points = torch.as_tensor(
+                points[:, 0], dtype=torch.float32, device=self._predictor.device,
+            )
 
         records = []
+        feature_seconds = scorer_seconds = transfer_seconds = record_seconds = 0.0
+        alternatives_returned = 0
+        changed_from_iou = torch.zeros((), dtype=torch.int64, device=self._predictor.device)
         for start in range(0, len(points), batch_size):
             stop = start + batch_size
             batch_points, batch_labels = points[start:stop], point_labels[start:stop]
@@ -1694,36 +1907,190 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 )
             logits = logits.reshape(n_prompts, -1, *logits.shape[-2:])
             scores = scores.reshape(n_prompts, -1)
-            index = torch.arange(n_prompts, device=scores.device)
-            best = scores.argmax(dim=1)
-            logits, scores = logits[index, best], scores[index, best]
+            if not advanced:
+                # Preserve the historical fast path exactly: select on the device, then transfer
+                # only the kept mask and calculate its stability.
+                index = torch.arange(n_prompts, device=scores.device)
+                best = scores.argmax(dim=1)
+                selected_logits, selected_scores = logits[index, best], scores[index, best]
+                stability = calculate_stability_score(
+                    selected_logits, mask_threshold, STABILITY_SCORE_OFFSET
+                )
+                binary = selected_logits > mask_threshold
+                selection_scores = None
+                selected = np.zeros(n_prompts, dtype="int64")
+                alternative_indices = np.asarray(best.cpu(), dtype="int64")
+                gate_scores = None
+            else:
+                n_alternatives = logits.shape[1]
+                stability = calculate_stability_score(
+                    logits.reshape(n_prompts * n_alternatives, *logits.shape[-2:]),
+                    mask_threshold, STABILITY_SCORE_OFFSET,
+                ).reshape(n_prompts, n_alternatives)
+                binary = logits > mask_threshold
+                cuda_timing = scores.device.type == "cuda"
+                if cuda_timing:
+                    feature_started, feature_finished = torch.cuda.Event(True), torch.cuda.Event(True)
+                    feature_started.record()
+                else:
+                    feature_started = time.perf_counter()
+                features_tensor = extract_multimask_features_torch(
+                    binary, scores, stability, batch_points[:, 0], feature_foreground, foreground_threshold,
+                    context_points=feature_context_points,
+                    prompt_indices=torch.arange(start, start + n_prompts, device=scores.device),
+                )
+                if cuda_timing:
+                    feature_finished.record()
+                    scorer_started, scorer_finished = torch.cuda.Event(True), torch.cuda.Event(True)
+                    scorer_started.record()
+                else:
+                    feature_seconds += time.perf_counter() - feature_started
+                    scorer_started = time.perf_counter()
+                if multimask_scorer == "predicted_iou":
+                    selection_scores_tensor = scores.to(torch.float32)
+                elif hasattr(self._microscopy_multimask_scorer, "predict_grouped_tensor"):
+                    selection_scores_tensor = self._microscopy_multimask_scorer.predict_grouped_tensor(
+                        features_tensor,
+                    )
+                elif hasattr(self._microscopy_multimask_scorer, "predict_tensor"):
+                    selection_scores_tensor = self._microscopy_multimask_scorer.predict_tensor(
+                        features_tensor.reshape(-1, features_tensor.shape[-1]),
+                    ).reshape(n_prompts, n_alternatives)
+                else:
+                    selection_scores_tensor = torch.as_tensor(
+                        np.asarray(self._microscopy_multimask_scorer.predict(
+                            features_tensor.cpu().numpy().reshape(-1, features_tensor.shape[-1]),
+                        ), dtype="float32").reshape(n_prompts, n_alternatives),
+                        dtype=torch.float32,
+                        device=scores.device,
+                    )
+                selected_tensor = selection_scores_tensor.argmax(dim=1)
+                raw_best = scores.argmax(dim=1)
+                changed_from_iou += torch.count_nonzero(selected_tensor != raw_best)
+                if compute_multimask_uncertainty:
+                    gate_columns = []
+                    for alternative_index in range(n_alternatives):
+                        chosen = torch.full(
+                            (n_prompts,), alternative_index, dtype=torch.int64, device=scores.device,
+                        )
+                        gate_features = refinement_gate_features_torch(
+                            features_tensor, selection_scores_tensor, chosen,
+                        )
+                        if hasattr(self._refinement_gate_model, "predict_tensor"):
+                            gate_prediction = self._refinement_gate_model.predict_tensor(gate_features)
+                        else:
+                            gate_prediction = torch.as_tensor(
+                                self._refinement_gate_model.predict(gate_features.cpu().numpy()),
+                                dtype=torch.float32, device=scores.device,
+                            )
+                        gate_columns.append(gate_prediction)
+                    gate_scores_tensor = torch.stack(gate_columns, dim=1)
+                else:
+                    gate_scores_tensor = None
+                if cuda_timing:
+                    scorer_finished.record()
+                else:
+                    scorer_seconds += time.perf_counter() - scorer_started
 
-            stability = calculate_stability_score(logits, mask_threshold, STABILITY_SCORE_OFFSET)
-            binary = logits > mask_threshold
+                if multimask_selection == "eager":
+                    row_index = torch.arange(n_prompts, device=scores.device)
+                    kept_masks = binary[row_index, selected_tensor][:, None]
+                    kept_scores = scores[row_index, selected_tensor][:, None]
+                    kept_stability = stability[row_index, selected_tensor][:, None]
+                else:
+                    kept_masks, kept_scores, kept_stability = binary, scores, stability
+
+                # The baseline already reduces mask extents on the GPU. Keeping the same strategy
+                # here avoids scanning the much larger eager/deferred mask arrays again on CPU.
+                rows_any_tensor = kept_masks.any(dim=3)
+                columns_any_tensor = kept_masks.any(dim=2)
+
+                transfer_started = time.perf_counter()
+                masks_np = kept_masks.cpu().numpy()
+                rows_any = rows_any_tensor.cpu().numpy()
+                columns_any = columns_any_tensor.cpu().numpy()
+                scores_np = kept_scores.float().cpu().numpy()
+                stability_np = kept_stability.float().cpu().numpy()
+                features = features_tensor.cpu().numpy()
+                selection_scores = selection_scores_tensor.cpu().numpy()
+                selected = selected_tensor.cpu().numpy()
+                gate_scores = gate_scores_tensor.cpu().numpy() if gate_scores_tensor is not None else None
+                transfer_seconds += time.perf_counter() - transfer_started
+                if not np.isfinite(features).all():
+                    raise RuntimeError("The Torch multimask feature extractor produced a non-finite value.")
+                if not np.isfinite(selection_scores).all():
+                    raise RuntimeError("The multimask scorer produced a non-finite value.")
+                if gate_scores is not None and not np.isfinite(gate_scores).all():
+                    raise RuntimeError("The refinement gate produced a non-finite value.")
+                if cuda_timing:
+                    feature_seconds += feature_started.elapsed_time(feature_finished) / 1000.0
+                    scorer_seconds += scorer_started.elapsed_time(scorer_finished) / 1000.0
+                alternative_indices = (
+                    selected if multimask_selection == "eager"
+                    else np.arange(n_alternatives, dtype="int64")
+                )
+                binary = None
+
             # Two reductions on the device: an np.nonzero per mask costs more than the rest of the loop.
-            rows_any = binary.any(dim=2).cpu().numpy()
-            columns_any = binary.any(dim=1).cpu().numpy()
-            masks = binary.cpu().numpy()
-            scores = scores.float().cpu().numpy()
-            stability = stability.float().cpu().numpy()
-            for offset, (mask, row_any, column_any, score, stable) in enumerate(
-                zip(masks, rows_any, columns_any, scores, stability)
-            ):
-                if not row_any.any():
-                    continue
-                y0, y1 = int(row_any.argmax()), len(row_any) - int(row_any[::-1].argmax())
-                x0, x1 = int(column_any.argmax()), len(column_any) - int(column_any[::-1].argmax())
-                records.append({
-                    # The crop rather than the full mask: the merge is linear in the mask's size.
-                    "segmentation": mask[y0:y1, x0:x1].copy(),
-                    "bounding_box": (slice(y0, y1), slice(x0, x1)),
-                    "predicted_iou": float(score),
-                    "stability_score": float(stable),
-                    # Empty masks are dropped, so the record order does not track the prompts.
-                    "prompt_index": start + offset,
-                    # The prompt itself, which is what a refinement round groups by.
-                    "point": (float(batch_points[offset, 0, 0]), float(batch_points[offset, 0, 1])),
-                })
+            if not advanced:
+                rows_any = binary.any(dim=2).cpu().numpy()[:, None]
+                columns_any = binary.any(dim=1).cpu().numpy()[:, None]
+                masks_np = binary.cpu().numpy()[:, None]
+                scores_np = selected_scores.float().cpu().numpy()[:, None]
+                stability_np = stability.float().cpu().numpy()[:, None]
+            records_started = time.perf_counter()
+            for offset in range(n_prompts):
+                choices = range(masks_np.shape[1])
+                for local_alternative in choices:
+                    mask = masks_np[offset, local_alternative]
+                    row_any, column_any = rows_any[offset, local_alternative], columns_any[offset, local_alternative]
+                    if not row_any.any():
+                        continue
+                    y0, y1 = int(row_any.argmax()), len(row_any) - int(row_any[::-1].argmax())
+                    x0, x1 = int(column_any.argmax()), len(column_any) - int(column_any[::-1].argmax())
+                    alternative_index = int(
+                        alternative_indices[offset] if np.ndim(alternative_indices) else alternative_indices
+                    ) if masks_np.shape[1] == 1 else int(alternative_indices[local_alternative])
+                    if advanced:
+                        raw_score = float(scores_np[offset, local_alternative])
+                        stable = float(stability_np[offset, local_alternative])
+                        selection_score = float(selection_scores[offset, alternative_index])
+                    else:
+                        raw_score = float(scores_np[offset, 0])
+                        stable = float(stability_np[offset, 0])
+                        selection_score = raw_score
+                    record = {
+                        "segmentation": mask[y0:y1, x0:x1].copy(),
+                        "bounding_box": (slice(y0, y1), slice(x0, x1)),
+                        "predicted_iou": raw_score,
+                        "stability_score": stable,
+                        "prompt_index": start + offset,
+                        "point": (float(batch_points[offset, 0, 0]), float(batch_points[offset, 0, 1])),
+                        "multimask_index": alternative_index,
+                        "selection_score": selection_score,
+                        "merge_score": (
+                            selection_score if multimask_scorer == "microscopy" else raw_score * stable
+                        ),
+                    }
+                    if return_multimask_features or multimask_selection == "deferred":
+                        record["multimask_features"] = features[offset, alternative_index].copy()
+                    if multimask_selection == "deferred" and masks_np.shape[1] > 1:
+                        record["multimask_group"] = start + offset
+                    if gate_scores is not None:
+                        record["uncertainty_score"] = float(gate_scores[offset, alternative_index])
+                    records.append(record)
+                    alternatives_returned += 1
+            if advanced:
+                record_seconds += time.perf_counter() - records_started
+        if advanced:
+            self._last_generation_stats.update({
+                "multimask_alternatives": alternatives_returned,
+                "multimask_changed_from_iou": int(changed_from_iou.cpu()),
+                "multimask_feature_seconds": feature_seconds,
+                "multimask_scorer_seconds": scorer_seconds,
+                "multimask_transfer_seconds": transfer_seconds,
+                "multimask_record_seconds": record_seconds,
+            })
         return records
 
     def _score_candidates(
@@ -2255,7 +2622,12 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             assignment.setdefault(tile_id, []).append(index)
         return assignment
 
-    def _apply(self, prompts: dict, multimasking: bool, batch_size: int) -> list:
+    def _apply(
+        self, prompts: dict, multimasking: bool, batch_size: int, multimask_scorer: str = "predicted_iou",
+        multimask_selection: str = "eager", compute_multimask_uncertainty: bool = False,
+        return_multimask_features: bool = False,
+        foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
+    ) -> list:
         """Prompt each tile with the candidates that belong to it, keeping the tiles apart."""
         points, point_labels = prompts["points"], prompts["point_labels"]
 
@@ -2266,20 +2638,34 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             origin = np.array([bounding_box[1].start, bounding_box[0].start], dtype="float32")
 
             self._set_tile_embeddings(tile_id)
-            records = self._apply_prompts(
-                {"points": points[indices] - origin, "point_labels": point_labels[indices]},
-                multimasking=multimasking, batch_size=batch_size,
-            )
+            local_prompts = {"points": points[indices] - origin, "point_labels": point_labels[indices]}
+            kwargs = {"multimasking": multimasking, "batch_size": batch_size}
+            if (
+                multimask_scorer != "predicted_iou"
+                or multimask_selection != "eager"
+                or compute_multimask_uncertainty
+                or return_multimask_features
+            ):
+                kwargs.update({
+                    "multimask_scorer": multimask_scorer, "multimask_selection": multimask_selection,
+                    "compute_multimask_uncertainty": compute_multimask_uncertainty,
+                    "return_multimask_features": return_multimask_features,
+                    "foreground": self._prediction[0][bounding_box],
+                    "foreground_threshold": foreground_threshold,
+                })
+            records = self._apply_prompts(local_prompts, **kwargs)
             for record in records:
                 # Back into the full image's frame, so the records agree with the non-tiled ones.
                 record["point"] = (record["point"][0] + float(origin[0]), record["point"][1] + float(origin[1]))
+                if "multimask_group" in record:
+                    record["multimask_group"] = (tile_id, record["multimask_group"])
             if records:
                 proposals.append({"tile_id": tile_id, "bounding_box": bounding_box, "records": records})
         return proposals
 
     def _merge(
         self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
-        return_context: bool = False,
+        return_context: bool = False, score_filter: str = "predicted_iou",
     ) -> tuple:
         """Stitch the per-tile merges into one segmentation, resolving the halo overlaps.
 
@@ -2303,9 +2689,17 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             # Flattened before the tile can be skipped below, so the record indices cannot shear.
             all_records.extend(proposal["records"])
             record_offset = len(records)
-            tile_records = [
-                record for record in proposal["records"] if record["predicted_iou"] >= score_threshold
-            ]
+            if score_filter == "none":
+                tile_records = list(proposal["records"])
+            else:
+                missing = [record for record in proposal["records"] if score_filter not in record]
+                if missing:
+                    raise ValueError(
+                        f"Cannot filter by {score_filter!r}: {len(missing)} tile records lack that score."
+                    )
+                tile_records = [
+                    record for record in proposal["records"] if record[score_filter] >= score_threshold
+                ]
             records.extend(tile_records)
             if return_context:
                 record_tiles.update({
@@ -2362,6 +2756,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         return segmentation, {
             "proposals": all_records, "records": records, "matches": matches, "reasons": reasons,
             "record_tiles": record_tiles, "score_threshold": score_threshold, "min_size": min_size,
+            "score_filter": score_filter,
         }
 
     def _validate_refinement(self, components: tuple) -> None:

@@ -2,8 +2,10 @@
 
 ## Outcome
 
-No tested optimization met its acceptance gate, so the 2D APG algorithm and its defaults remain
-unchanged. The closest quality candidate, confidence-gated box refinement of every instance, improved
+The original point-placement, blanket-refinement and batching campaign below found no accepted
+optimization. The later learned-multimask campaign and its compact deployment follow-up are recorded
+at the end of this document; they add explicit opt-in model paths while still leaving all defaults
+unchanged. In the original campaign, the closest quality candidate, confidence-gated box refinement, improved
 the dataset-balanced mSA by 1.74%, short of the required 5%, while increasing total runtime by 21.86%.
 The best worst-dataset efficiency candidate, a prompt batch size of 192, improved total runtime by
 0.53% and its slowest-improving dataset by only 0.23%, short of the required 5% on every dataset.
@@ -630,7 +632,8 @@ The benchmark checksums its implementation files, so the campaign runs in two ep
   `epoch1-control-A`) reproduces macro mSA 0.269577 with every per-dataset value identical: the
   machinery is behavior-free.
 - **Epoch 2** — the four mechanisms in `micro_sam/v2/automatic_prompt_generation.py`.
-  Implementation checksum: TBD. Fresh controls on both subsets must reproduce epoch-1 quality.
+  Implementation checksum `c3a723ae4c7222abd642188169cc9c77`; fresh controls on both subsets
+  reproduced epoch-1 quality.
 
 ### Validity check (epoch 1): the campaign-1 findings generalize
 
@@ -874,20 +877,161 @@ checksums: primary `055529a777ecef73dcb8238ecc8f3b0a` / `61aafed6af057da99374b9a
 `b26ae23e408a63ee2582e69e8379883f`; holdout `4bc4f2d669c31128e9a42e0912eabd69` /
 `24d7494a9a2bc0a9efde98ce3b1b57aa` / `b66228ad53910e21d3f6b4e52dd39e51`.
 
-### Conclusions
+## Compact MLP deployment follow-up
 
-TBD.
+### Selected models
 
-### Reproducibility and artifacts
+The selected first-round model is a 52 KB groupwise MLP with a shared 64-unit encoder, mean/max
+group context, 10% dropout and a per-alternative scoring head. Direct regression on alternative IoU
+was the best training objective. With the historical predicted-IoU eligibility filter, deferred
+merging reaches 0.283210 primary mSA and 0.278328 holdout mSA, +5.06% and +5.30% over the
+established controls. Its three-trial holdout median is 203.5 s, +7.8% over the same-implementation
+188.8 s baseline, but two datasets exceeded the original per-dataset runtime cap.
 
-Output root as before; holdout runs key on the holdout manifest checksum, screening runs live under
-`refinement_screening/`. Config checksums: TBD.
+The optional refinement gate is a separate 50 KB `(128, 64)` MLP trained directly on the positive
+benefit of the second pass. At the primary-selected 50% threshold it raises quality to
+0.287493/0.283929 on primary/holdout, but its 251.4 s median is +33.1% over baseline. The additional
+latency is dominated by the selected second decoder calls rather than gate inference.
+
+### Torch-only feature path
+
+The version-1 19-feature schema is computed only with Torch. Decoder masks, predicted IoU,
+stability, foreground support, seed geometry, pairwise agreement, ranks, areas and boxes stay on the
+decoder device through feature extraction and MLP inference. CUDA synchronization is postponed
+until the already-required proposal materialization. Empty masks, tied alternatives, clipped edge
+seeds and singleton groups are covered by the Torch tests.
+
+The artifact loader supports only pointwise and permutation-equivariant groupwise MLP artifacts in
+`.pt` or `.pth` form. The groupwise model's shared alternative encoder is pooled with group mean
+and maximum, concatenated back to every alternative and scored by one shared head. Both selector and
+gate expose tensor inference; the historical predicted-IoU path still avoids model loading and
+feature extraction entirely.
+
+### Fixed eager/deferred comparison
+
+The same H64 artifact was evaluated under both merge semantics after architecture selection:
+
+| merge | primary mSA | holdout mSA | holdout median | runtime vs baseline |
+|---|---:|---:|---:|---:|
+| eager learned rescore | 0.282357 | 0.277130 | **200.9 s** | +6.4% |
+| deferred group merge | **0.283210** | **0.278328** | 203.5 s | +7.8% |
+
+Deferred gains 0.30% primary and 0.43% holdout relative quality. Its explicit prompt-group lock is a
+small extension of the ordinary score-ordered merge, not a separate assignment stage. The later
+learned-filter campaign below establishes eager selection as the stronger deployment choice.
+
+### Reproduction
+
+The supported training entry points are now:
 
 ```bash
-# Holdout manifest (requires the primary manifest to exist):
-python finetuning/v2/evaluation/benchmark_apg_optimization.py --subset holdout --prepare-only
-
-# Benchmark / screening on the holdout:
-python finetuning/v2/evaluation/benchmark_apg_optimization.py --ndim 2 --subset holdout --trial-id controlB-1
-python finetuning/v2/evaluation/screen_apg_refinement.py --device cuda --subset holdout --configs <configs>.json
+python finetuning/v2/evaluation/train_apg_multimask_selector.py --device cuda
+python finetuning/v2/evaluation/train_apg_multimask_selector.py --single-mask --device cuda
+python finetuning/v2/evaluation/train_apg_refinement_gate.py --device cuda \
+    --selection deferred --merge learned \
+    --selector-oof-dataset multimask_selection/primary_features.npz \
+    --selector-oof-predictions \
+        multimask_selection/groupwise_v1/models/groupwise-h64-d0p1-regression_oof.npy
 ```
+
+The selector script extracts GPU features and trains the fixed direct H64 model for either one or
+three alternatives. The gate script extracts pre-refinement features and trains the fixed direct
+H128x64 model. `screen_apg_mask_head_filters.py` performs the current selection/filter sweep,
+`screen_apg_refinement.py` replays OOF gate predictions, and
+`benchmark_apg_optimization.py` records artifact hashes and canonical timings.
+
+
+## Decoder-head and learned-filter campaign
+
+### Outcome
+
+The follow-up campaign finds no evidence that SAM2's three-mask output is better than its dedicated
+single-mask token under the historical APG policy. With the default predicted-IoU threshold and
+ordering, `multimasking=False` improves mSA from 0.269577 to 0.280752 on primary (+4.15%) and from
+0.264318 to 0.276301 on holdout (+4.53%); all five datasets improve on both splits. This is a real
+but sub-threshold gain under the established +5% aggregate quality gate.
+
+The conclusion changes once the learned score also controls initial proposal eligibility. A
+separately trained singleton H64 scorer with a 0.25 learned-score filter reaches 0.289056/0.283470.
+The existing triplet H64 scorer reaches 0.296508/0.295659 with eager selection and a 0.25 filter,
+and 0.295966/0.296831 with deferred selection and a 0.30 filter. Thus the extra alternatives are
+useful when both selection and filtering are microscopy-aware, even though the default three-mask
+policy is worse than token 0.
+
+| configuration | initial filter | primary mSA | holdout mSA | canonical runtime |
+|---|---|---:|---:|---:|
+| three masks, predicted IoU (control) | IoU >= 0.60 | 0.269577 | 0.264318 | 177.8 s median (3) |
+| single mask, predicted IoU | IoU >= 0.60 | 0.280752 | 0.276301 | 171.7 s (1) |
+| single mask, H64 ordering | IoU >= 0.60 | 0.281581 | 0.276264 | not timed |
+| single mask, H64 ordering/filtering | MLP >= 0.25 | 0.289056 | 0.283470 | 174.7 s (1) |
+| three masks, H64 eager ordering | IoU >= 0.60 | 0.282357 | 0.277130 | historical 200.9 s median (3) |
+| three masks, H64 eager ordering/filtering | MLP >= 0.25 | **0.296508** | 0.295659 | 189.9 s median (3) |
+| three masks, H64 deferred ordering | IoU >= 0.60 | 0.283210 | 0.278328 | historical 203.5 s median (3) |
+| three masks, H64 deferred ordering/filtering | MLP >= 0.30 | 0.295966 | **0.296831** | 194.2 s (1) |
+
+The historical eager/deferred runtimes are retained only to connect to the preceding campaign; they
+use implementation checksum `52e46e3315064212fd71d5dde674561a`. All new canonical timings use
+checksum `7447ecca968e89297a454b6e105d7d6d`, the same holdout manifest and the same A100 MIG. Entries
+marked `(1)` are diagnostic one-shot timings rather than formal repeated comparisons.
+
+### Leakage-safe selection protocol
+
+The single-mask training dataset contains 48,331 token-0 alternatives, one per prompt group. Its
+52 KB H64/dropout-0.1 groupwise MLP was trained from scratch rather than applying the triplet model
+to singleton groups. Five image-level, dataset-stratified outer folds produced OOF predictions for
+the primary sweep; the final model was refit on all primary rows for holdout. Its weighted OOF MSE
+is 0.054056, weighted MAE 0.175710 and target correlation 0.664536.
+
+The primary screen independently swept learned-score thresholds from 0.20 through 0.80 in 0.05
+increments for single, eager-triplet and deferred-triplet routes. It also evaluated no initial
+filter and the historical predicted-IoU filter. The fixed route thresholds were 0.25, 0.25 and 0.30,
+respectively. Eager triplet at 0.25 was the global primary winner and is consequently the only
+formal holdout candidate. Deferred's slightly higher holdout value is confirmatory evidence, not a
+post-hoc selection.
+
+Replacing only merge ordering is not enough: relative to the same learned scorers with the old IoU
+filter, the learned filter adds +2.65%/+2.61% primary/holdout for singleton, +5.01%/+6.69% for eager
+triplet and +4.50%/+6.65% for deferred triplet. The `score_filter` option now makes this distinction
+explicit: `predicted_iou` retains historical eligibility, `selection_score` applies the threshold to
+the installed model's score, and `none` disables the initial threshold. The selected MLP score
+continues to define merge ordering in all learned configurations.
+
+### Eager/deferred comparison
+
+After fixing the scorer and threshold on primary, eager remains preferable for deployment. Deferred
+is 0.18% worse on primary and 0.40% better on holdout, while its one-shot runtime is 2.3% above the
+eager median because three times as many records enter the merge pool. The exact GPU feature and
+MLP work is nearly identical; deferred mainly increases mask transfer and record materialization.
+Its full-run diagnostics report 9.19 s feature extraction, 0.40 s MLP scoring, 4.36 s transfer and
+1.86 s record construction. Eager reports medians near 9.20 s, 0.41 s, 1.63 s and 0.49 s.
+
+The formal comparator accepts eager H64 plus the 0.25 MLP filter. Against three same-implementation
+controls, holdout mSA improves 11.86%, no dataset regresses, median aggregate runtime rises 6.83%,
+and the worst per-dataset runtime increase is 8.68%. All quality checks pass and the >10% quality
+gain activates the previously established quality/runtime exception. This is an accepted opt-in
+candidate; library defaults remain unchanged because the fitted artifact is external and promotion
+was not part of this campaign.
+
+### Reproduction artifacts
+
+Artifacts are below the established optimization output root:
+
+- singleton features/model: `multimask_selection/singlemask_v1/primary_features.npz` and
+  `models/singlemask-groupwise-h64-d0p1-regression.pt`;
+- triplet model: `multimask_selection/groupwise_v1/models/groupwise-h64-d0p1-regression.pt`;
+- primary screen suffix: `mask_head_filter_screening/.../7765c0915944736459b5a3ed50ec7e9f/`;
+- holdout confirmation suffix:
+  `mask_head_filter_screening/.../223ed9424a42086df9a60fcec647b9cb/`;
+- formal decision: `canonical_eager_decision.json` and `canonical_eager_decision.csv` in that
+  holdout confirmation directory;
+- canonical baseline suffixes: `e71562d94af3587252f1f89ebca4250f`,
+  `1bb3ce5d68b10d4f60215ecaa8a93db0`, and `80026a5815867f3025116a41449ca75b`;
+- canonical eager suffixes: `f379e4296344653ed7dd84094461379b`,
+  `f527cd24aca4814d4e7ad9b620f08a48`, and `3092bb125bbe3ad33d371db57e4be269`;
+- diagnostic singleton-default, singleton-MLP and deferred suffixes:
+  `1ca4ce4dba9c74913fff3065c80154c2`, `f0e9fa0d5e1893251f6c654929d0fe37`, and
+  `d41a0701a1ee5d04f200b69836d7b3e7`.
+
+The campaign entry points are `train_apg_multimask_selector.py` (with optional `--single-mask`) and
+`screen_apg_mask_head_filters.py`. The screen reuses one single- and one three-mask decoder pass per
+image across every filter threshold, so threshold comparisons do not repeatedly invoke the decoder.

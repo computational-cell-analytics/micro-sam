@@ -15,6 +15,10 @@ from micro_sam.v2.automatic_prompt_generation import (
     REFINEMENT_STATS_3D,
 )
 from micro_sam.v2.normalization import to_image
+from micro_sam.v2.multimask_selection import (
+    GroupwiseMLP, MULTIMASK_FEATURE_NAMES, REFINEMENT_GATE_FEATURE_NAMES,
+    extract_multimask_features_torch, load_feature_scorer, refinement_gate_features_torch,
+)
 
 
 def test_apg_declares_no_postprocessing_mode():
@@ -204,6 +208,180 @@ def test_merge_by_score_rejects_a_candidate_that_is_mostly_claimed():
     ]
     segmentation = merge_by_score(records, shape, max_overlap=0.3, min_size=1)
     assert set(np.unique(segmentation)) == {0, 1}
+
+
+def test_multimask_features_include_prompt_and_triplet_evidence():
+    masks = np.zeros((2, 3, 8, 8), dtype=bool)
+    masks[0, 0, 1:4, 1:4] = True
+    masks[0, 1, 1:6, 1:6] = True
+    masks[0, 2, 0:8, 0:8] = True
+    masks[1, :, 5:8, 5:8] = True
+    scores = np.array([[0.9, 0.8, 0.7], [0.7, 0.8, 0.9]], dtype="float32")
+    stability = np.full((2, 3), 0.8, dtype="float32")
+    points = np.array([[2, 2], [6, 6]], dtype="float32")
+    foreground = np.zeros((8, 8), dtype="float32")
+    foreground[1:7, 1:7] = 1.0
+
+    features = extract_multimask_features_torch(
+        torch.as_tensor(masks), torch.as_tensor(scores), torch.as_tensor(stability),
+        points, foreground, 0.7,
+    )
+
+    assert features.shape == (2, 3, len(MULTIMASK_FEATURE_NAMES))
+    assert torch.isfinite(features).all()
+    # All alternatives contain their own seed. Only the largest first-prompt alternative contains
+    # the other prompt, and its foreground precision is lower because it covers the whole image.
+    assert (features[:, :, 12] == 1).all()
+    assert torch.equal(features[0, :, 11], torch.tensor([0.0, 0.0, 1.0]))
+    assert features[0, 2, 14] < features[0, 1, 14]
+
+    gate = refinement_gate_features_torch(features, torch.as_tensor(scores), torch.tensor([1, 2]))
+    assert gate.shape == (2, len(REFINEMENT_GATE_FEATURE_NAMES))
+    assert gate[0, -3] == pytest.approx(-0.1)
+    assert gate[0, -1] == 1.0
+
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="CUDA is required for GPU feature parity.",
+))])
+def test_torch_multimask_features_are_device_stable(device):
+    rng = np.random.default_rng(17)
+    masks = rng.random((4, 3, 13, 15)) > 0.65
+    # Exercise an empty alternative, tied scores/ranks, repeated seeds and clipped boundary points.
+    masks[0, 2] = False
+    scores = np.array([
+        [0.8, 0.8, 0.4], [0.6, 0.7, 0.9], [0.9, 0.5, 0.7], [0.3, 0.4, 0.5],
+    ], dtype="float32")
+    stability = rng.random((4, 3), dtype="float32")
+    points = np.array([[-2, 2], [7, 6], [7, 6], [20, 12]], dtype="float32")
+    context = np.concatenate((points, np.array([[3, 4], [12, 8]], dtype="float32")))
+    foreground = rng.random((13, 15), dtype="float32")
+    indices = np.arange(4)
+
+    expected = extract_multimask_features_torch(
+        torch.as_tensor(masks), torch.as_tensor(scores), torch.as_tensor(stability),
+        points, foreground, 0.7, context, indices,
+    )
+    actual = extract_multimask_features_torch(
+        torch.as_tensor(masks, device=device), torch.as_tensor(scores, device=device),
+        torch.as_tensor(stability, device=device), points, foreground, 0.7, context, indices,
+    ).cpu()
+    assert torch.allclose(actual, expected, rtol=1e-5, atol=1e-5)
+
+    selected = torch.tensor([0, 2, 1, 2])
+    expected_gate = refinement_gate_features_torch(expected, torch.as_tensor(scores), selected)
+    actual_gate = refinement_gate_features_torch(
+        actual.to(device), torch.as_tensor(scores, device=device), selected.to(device),
+    ).cpu()
+    assert torch.allclose(actual_gate, expected_gate, rtol=1e-5, atol=1e-5)
+
+
+def test_pointwise_mlp_artifact_roundtrip(tmp_path):
+    names = REFINEMENT_GATE_FEATURE_NAMES
+    module = torch.nn.Sequential(
+        torch.nn.Linear(len(names), 16), torch.nn.ReLU(), torch.nn.Linear(16, 1),
+    )
+    state = {
+        "kind": "mlp", "feature_version": 1, "feature_names": list(names),
+        "hidden_sizes": [16], "dropout": 0.0,
+        "mean": np.zeros(len(names), dtype="float32"),
+        "scale": np.ones(len(names), dtype="float32"),
+        "state_dict": module.state_dict(), "metadata": {},
+    }
+    path = tmp_path / "gate.pt"
+    torch.save(state, path)
+    scorer = load_feature_scorer(path)
+
+    assert scorer.predict(np.zeros((2, len(names)), dtype="float32")).shape == (2,)
+
+
+def test_groupwise_mlp_artifact_roundtrip_and_permutation_equivariance(tmp_path):
+    torch.manual_seed(17)
+    module = GroupwiseMLP(len(MULTIMASK_FEATURE_NAMES), hidden_size=32, dropout=0.0)
+    state = {
+        "kind": "groupwise_mlp", "feature_version": 1,
+        "feature_names": list(MULTIMASK_FEATURE_NAMES), "n_alternatives": 3,
+        "hidden_size": 32, "dropout": 0.0,
+        "mean": np.zeros(len(MULTIMASK_FEATURE_NAMES), dtype="float32"),
+        "scale": np.ones(len(MULTIMASK_FEATURE_NAMES), dtype="float32"),
+        "state_dict": module.state_dict(), "metadata": {},
+    }
+    path = tmp_path / "groupwise.pt"
+    torch.save(state, path)
+    scorer = load_feature_scorer(path)
+    features = np.random.default_rng(4).normal(size=(5, 3, len(MULTIMASK_FEATURE_NAMES))).astype("float32")
+    prediction = scorer.predict_grouped(features)
+    permutation = np.array([2, 0, 1])
+    permuted = scorer.predict_grouped(features[:, permutation])
+
+    assert prediction.shape == (5, 3)
+    assert np.allclose(permuted, prediction[:, permutation])
+
+
+def test_groupwise_mlp_artifact_supports_singleton_groups(tmp_path):
+    module = GroupwiseMLP(len(MULTIMASK_FEATURE_NAMES), hidden_size=16, dropout=0.0)
+    state = {
+        "kind": "groupwise_mlp", "feature_version": 1,
+        "feature_names": list(MULTIMASK_FEATURE_NAMES), "n_alternatives": 1,
+        "hidden_size": 16, "dropout": 0.0,
+        "mean": np.zeros(len(MULTIMASK_FEATURE_NAMES), dtype="float32"),
+        "scale": np.ones(len(MULTIMASK_FEATURE_NAMES), dtype="float32"),
+        "state_dict": module.state_dict(), "metadata": {},
+    }
+    path = tmp_path / "single-groupwise.pt"
+    torch.save(state, path)
+    scorer = load_feature_scorer(path)
+    features = np.random.default_rng(5).normal(
+        size=(4, 1, len(MULTIMASK_FEATURE_NAMES)),
+    ).astype("float32")
+
+    assert scorer.predict_grouped(features).shape == (4, 1)
+
+
+def test_grouped_merge_accepts_at_most_one_alternative_per_prompt():
+    shape = (16, 16)
+    first = np.zeros(shape, dtype=bool)
+    first[2:8, 2:8] = True
+    second = np.zeros(shape, dtype=bool)
+    second[2:10, 2:10] = True
+    independent = np.zeros(shape, dtype=bool)
+    independent[10:15, 10:15] = True
+    records = [
+        {"segmentation": first, "predicted_iou": 0.9, "stability_score": 1.0,
+         "merge_score": 0.9, "multimask_group": 0},
+        {"segmentation": second, "predicted_iou": 0.8, "stability_score": 1.0,
+         "merge_score": 0.8, "multimask_group": 0},
+        {"segmentation": independent, "predicted_iou": 0.7, "stability_score": 1.0,
+         "merge_score": 0.7, "multimask_group": 1},
+    ]
+
+    segmentation, reasons = merge_by_score(records, shape, max_overlap=0.3, min_size=1, return_reasons=True)
+
+    assert set(np.unique(segmentation)) == {0, 1, 2}
+    assert reasons == ["kept", "alternative not selected", "kept"]
+
+
+def test_grouped_merge_tries_a_lower_alternative_after_rejection():
+    shape = (16, 16)
+    claimed = np.zeros(shape, dtype=bool)
+    claimed[1:10, 1:10] = True
+    rejected = claimed.copy()
+    fallback = np.zeros(shape, dtype=bool)
+    fallback[10:15, 10:15] = True
+    records = [
+        {"segmentation": claimed, "predicted_iou": 0.95, "stability_score": 1.0, "merge_score": 0.95},
+        {"segmentation": rejected, "predicted_iou": 0.9, "stability_score": 1.0,
+         "merge_score": 0.9, "multimask_group": 3},
+        {"segmentation": fallback, "predicted_iou": 0.8, "stability_score": 1.0,
+         "merge_score": 0.8, "multimask_group": 3},
+    ]
+
+    segmentation, matches, reasons = merge_by_score(
+        records, shape, max_overlap=0.3, min_size=1, return_matches=True, return_reasons=True,
+    )
+
+    assert reasons == ["kept", "duplicate", "kept"]
+    assert matches == {1: 0, 2: 2}
+    assert segmentation[12, 12] == 2
 
 
 def _make_tiled_generator(shape, tile_shape, halo, monkeypatch, predictor=None):
@@ -793,6 +971,33 @@ def test_select_without_refinement_matches_the_plain_merge():
     assert segmenter._last_generation_stats == {}
 
 
+def test_select_can_filter_by_learned_score_or_skip_the_initial_filter():
+    shape = (24, 24)
+    learned = np.zeros(shape, dtype=bool)
+    learned[2:8, 2:8] = True
+    raw = np.zeros(shape, dtype=bool)
+    raw[14:20, 14:20] = True
+    proposals = [
+        {"segmentation": learned, "predicted_iou": 0.5, "selection_score": 0.9,
+         "stability_score": 1.0, "merge_score": 0.9},
+        {"segmentation": raw, "predicted_iou": 0.9, "selection_score": 0.4,
+         "stability_score": 1.0, "merge_score": 0.4},
+    ]
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._prediction = np.zeros((4, *shape), dtype="float32")
+    segmenter._last_generation_stats = {}
+
+    predicted = segmenter.select(proposals, score_threshold=0.6, score_filter="predicted_iou", min_size=1)
+    selected = segmenter.select(proposals, score_threshold=0.6, score_filter="selection_score", min_size=1)
+    unfiltered = segmenter.select(proposals, score_filter="none", min_size=1)
+
+    assert predicted[16, 16] != 0 and predicted[4, 4] == 0
+    assert selected[4, 4] != 0 and selected[16, 16] == 0
+    assert unfiltered[4, 4] != 0 and unfiltered[16, 16] != 0
+    with pytest.raises(ValueError, match="Invalid score filter"):
+        segmenter.select(proposals, score_filter="utility", min_size=1)
+
+
 def test_select_validates_the_refinement_before_touching_the_model():
     segmenter = object.__new__(AutomaticPromptGenerator)
     segmenter._prediction = np.zeros((4, 16, 16), dtype="float32")
@@ -1147,6 +1352,110 @@ def _make_plain_generator(shape, predictor):
     segmenter._prediction = np.zeros((4, *shape), dtype="float32")
     segmenter._last_generation_stats = {}
     return segmenter
+
+
+def test_apply_prompts_can_eagerly_score_or_defer_multimasks():
+    class AlternativeIndexScorer:
+        def predict_grouped_tensor(self, features):
+            return features[:, :, 8]
+
+        def predict(self, features):
+            return np.asarray(features)[:, 8]
+
+    shape = (32, 32)
+    segmenter = _make_plain_generator(shape, _BlockPredictor(shape))
+    segmenter._microscopy_multimask_scorer = AlternativeIndexScorer()
+    segmenter._refinement_gate_model = None
+    prompts = {
+        "points": np.array([[[8.0, 8.0]], [[24.0, 24.0]]], dtype="float32"),
+        "point_labels": np.ones((2, 1), dtype="int32"),
+    }
+    foreground = np.ones(shape, dtype="float32")
+
+    eager = segmenter._apply_prompts(
+        prompts, multimasking=True, batch_size=8, multimask_scorer="microscopy",
+        multimask_selection="eager", foreground=foreground,
+    )
+    deferred = segmenter._apply_prompts(
+        prompts, multimasking=True, batch_size=8, multimask_scorer="microscopy",
+        multimask_selection="deferred", foreground=foreground,
+    )
+
+    assert len(eager) == 2 and {record["multimask_index"] for record in eager} == {2}
+    assert len(deferred) == 6
+    assert {record["multimask_group"] for record in deferred} == {0, 1}
+    assert all(record["merge_score"] == record["multimask_index"] for record in deferred)
+
+
+def test_apply_prompts_can_score_the_dedicated_single_mask():
+    class SingletonScorer:
+        def predict_grouped_tensor(self, features):
+            assert features.shape[1] == 1
+            return torch.full(features.shape[:2], 0.75, device=features.device)
+
+    shape = (32, 32)
+    segmenter = _make_plain_generator(shape, _BlockPredictor(shape))
+    segmenter._microscopy_multimask_scorer = SingletonScorer()
+    segmenter._refinement_gate_model = None
+    prompts = {
+        "points": np.array([[[8.0, 8.0]], [[24.0, 24.0]]], dtype="float32"),
+        "point_labels": np.ones((2, 1), dtype="int32"),
+    }
+    records = segmenter._apply_prompts(
+        prompts, multimasking=False, batch_size=8, multimask_scorer="microscopy",
+        foreground=np.ones(shape, dtype="float32"), return_multimask_features=True,
+    )
+
+    assert len(records) == 2
+    assert all(record["selection_score"] == pytest.approx(0.75) for record in records)
+    assert all(record["merge_score"] == pytest.approx(0.75) for record in records)
+    assert all(record["multimask_index"] == 0 for record in records)
+    assert all(record["multimask_features"].shape == (19,) for record in records)
+
+
+def test_single_mask_allows_learned_scoring_but_not_deferred_selection():
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._microscopy_multimask_scorer = object()
+
+    segmenter._validate_multimask_options(False, "microscopy", "eager", is_volume=False)
+    with pytest.raises(ValueError, match="Deferred multimask selection"):
+        segmenter._validate_multimask_options(False, "microscopy", "deferred", is_volume=False)
+
+
+def test_uncertainty_gate_refines_only_selected_instances():
+    shape = (32, 32)
+    segmentation = np.zeros(shape, dtype="uint32")
+    segmentation[4:12, 4:12] = 1
+    segmentation[20:28, 20:28] = 2
+    records = [
+        _tile_record((slice(4, 12), slice(4, 12)), (8.0, 8.0), predicted_iou=0.9),
+        _tile_record((slice(20, 28), slice(20, 28)), (24.0, 24.0), predicted_iou=0.8),
+    ]
+    records[0]["uncertainty_score"] = 0.2
+    records[1]["uncertainty_score"] = 0.8
+    context = {
+        "proposals": records, "records": records, "matches": {1: 0, 2: 1},
+        "reasons": ["kept", "kept"], "claimed": [{}, {}], "score_threshold": 0.5, "min_size": 1,
+    }
+    segmenter = _make_plain_generator(shape, types.SimpleNamespace(device="cpu"))
+    calls = []
+
+    def predict(segmentation_, batch, components, point_prompts, refinement_kwargs):
+        calls.extend(instance_id for instance_id, _ in batch)
+        return [(segmentation_ == instance_id, 0.95) for instance_id, _ in batch], 0
+
+    segmenter._predict_refinement_batch = predict
+    _, kwargs = _parse_refinement(
+        "boxes", {"gate": "uncertainty", "gate_threshold": 0.5, "min_consistency": None,
+                  "max_foreign_overlap": None},
+    )
+    refined = segmenter._reprompt_instances(segmentation, context, ("boxes",), kwargs, batch_size=8)
+
+    assert calls == [2]
+    assert np.array_equal(refined, segmentation)
+    assert segmenter._last_generation_stats["refinement_eligible_instances"] == 2
+    assert segmenter._last_generation_stats["uncertainty_selected_instances"] == 1
+    assert segmenter._last_generation_stats["refined_instances"] == 1
 
 
 def _equivalence_records():
