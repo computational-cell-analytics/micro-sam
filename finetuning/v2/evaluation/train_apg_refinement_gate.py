@@ -73,6 +73,7 @@ def _gate_row(raw_proposals, selection_scores, source_record):
 
 def extract_gate_dataset(
     manifest, data_root, output, device, selector_artifact=None, selection="eager", merge="raw",
+    score_filter="predicted_iou", score_threshold=0.6,
     selector_oof_dataset=None, selector_oof_predictions=None,
 ):
     samples = [sample for sample in manifest["samples"] if sample["ndim"] == 2]
@@ -125,8 +126,8 @@ def extract_gate_dataset(
                 selection_scores if scorer is not None or selector_predictions is not None else None,
             )
             first, context = segmenter._merge(
-                configured, labels.shape, score_threshold=0.6, max_overlap=0.15, min_size=50,
-                return_context=True,
+                configured, labels.shape, score_threshold=score_threshold,
+                score_filter=score_filter, max_overlap=0.15, min_size=50, return_context=True,
             )
             if context is None or first.max() == 0:
                 continue
@@ -188,6 +189,10 @@ def extract_gate_dataset(
                 "refit-model" if scorer is not None else "predicted-iou"
             )
         ),
+        first_pass_policy=np.asarray(json.dumps({
+            "selection": selection, "merge": merge, "score_filter": score_filter,
+            "score_threshold": score_threshold, "max_overlap": 0.15, "min_size": 50,
+        }, sort_keys=True)),
     )
     return output
 
@@ -205,6 +210,9 @@ def _load_gate_dataset(path: Path) -> dict:
         "weights": data["weights"].astype("float32", copy=False),
         "folds": data["folds"].astype("int8", copy=False),
         "manifest_checksum": str(data["manifest_checksum"]),
+        "first_pass_policy": (
+            json.loads(str(data["first_pass_policy"])) if "first_pass_policy" in data.files else None
+        ),
     }
 
 
@@ -321,6 +329,15 @@ def train_gate(dataset: Path, output_dir: Path, device: str) -> Path:
     metrics["fraction_thresholds"] = thresholds
     refit_epochs = max(1, int(round(float(np.mean(fold_epochs)))))
     model, mean, scale = _fit_gate_full(data, device, refit_epochs)
+    refit_values = torch.as_tensor(
+        (data["features"] - mean) / scale, dtype=torch.float32, device=device,
+    )
+    with torch.no_grad():
+        refit_predictions = model(refit_values).reshape(-1).clamp(0, 1).cpu().numpy()
+    metrics["refit_fraction_thresholds"] = {
+        str(fraction): float(np.quantile(refit_predictions, 1.0 - fraction))
+        for fraction in (0.1, 0.2, 0.3, 0.4, 0.5)
+    }
 
     name = "gate-mlp-h128x64-d0p1-regression"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -333,7 +350,8 @@ def train_gate(dataset: Path, output_dir: Path, device: str) -> Path:
         "state_dict": {key: value.cpu() for key, value in model.state_dict().items()},
         "metadata": {
             "architecture": ARCHITECTURE, "loss": "direct-regression", "epochs": refit_epochs,
-            "manifest_checksum": data["manifest_checksum"], "oof_metrics": metrics,
+            "manifest_checksum": data["manifest_checksum"],
+            "first_pass_policy": data["first_pass_policy"], "oof_metrics": metrics,
         },
     }, artifact)
     np.save(output_dir / f"{name}_oof.npy", predictions.astype("float32"))
@@ -357,6 +375,11 @@ def main():
     parser.add_argument("--selector-oof-predictions", type=Path, default=None)
     parser.add_argument("--selection", choices=("eager", "deferred"), default="eager")
     parser.add_argument("--merge", choices=("raw", "learned"), default="raw")
+    parser.add_argument(
+        "--score-filter", choices=("predicted_iou", "selection_score", "none"),
+        default="predicted_iou",
+    )
+    parser.add_argument("--score-threshold", type=float, default=0.6)
     parser.add_argument("--dataset", type=Path, default=None)
     parser.add_argument("--artifact-dir", type=Path, default=None)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -370,7 +393,8 @@ def main():
     if args.stage in ("extract", "all"):
         extract_gate_dataset(
             manifest, data_root, dataset, args.device, args.selector_artifact,
-            selection=args.selection, merge=args.merge,
+            selection=args.selection, merge=args.merge, score_filter=args.score_filter,
+            score_threshold=args.score_threshold,
             selector_oof_dataset=args.selector_oof_dataset,
             selector_oof_predictions=args.selector_oof_predictions,
         )

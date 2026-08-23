@@ -22,7 +22,10 @@ dataset. A separately trained singleton MLP reaches 0.289056/0.283470 in 174.7 s
 run; the single-token default is itself better and faster than the historical three-mask/IoU path,
 but remains below the +5% quality gate. The accepted eager MLP policy remains opt-in because its
 artifact is external; changing library defaults was not part of the campaign. The gated MLP and
-selective-refinement path remain explicit quality/latency options.
+selective-refinement follow-up retrained the gate on this exact eager/learned-filter policy. Its
+primary-selected 50% route reaches 0.299904/0.301455 primary/holdout, but adds 25.32% runtime over
+the same-implementation first pass. It is therefore an explicit quality/latency option, not the
+deployment recommendation; the selector-only route remains the accepted default candidate.
 
 The review covered:
 

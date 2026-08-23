@@ -1035,3 +1035,74 @@ Artifacts are below the established optimization output root:
 The campaign entry points are `train_apg_multimask_selector.py` (with optional `--single-mask`) and
 `screen_apg_mask_head_filters.py`. The screen reuses one single- and one three-mask decoder pass per
 image across every filter threshold, so threshold comparisons do not repeatedly invoke the decoder.
+
+## Combined eager selector and uncertainty-gate campaign
+
+### Policy-matched training and selection
+
+The previous gate was trained after deferred selection and the historical predicted-IoU filter, so
+attaching it to the accepted eager selector would have changed its input distribution. This campaign
+instead re-extracted 20,370 primary instances after the exact accepted first pass: triplet H64 eager
+selection, learned-score merge ordering, and `selection_score >= 0.25`. Both selector and gate inputs
+use image-level OOF predictions on primary. The fixed direct `(128, 64)` gate was then refit on all
+primary rows for holdout and deployment.
+
+The extractor now records its first-pass policy in the feature dataset and accepts explicit
+`score_filter` and `score_threshold` arguments. OOF screening replays the same filter when it checks
+that every merged instance has a gate prediction. The trainer records both OOF fraction thresholds
+for primary selection and full-refit thresholds for frozen holdout confirmation.
+
+The OOF sweep selected 50% strictly on primary:
+
+| refined fraction | primary mSA |
+|---:|---:|
+| 0% (first pass only) | 0.296508 |
+| 10% | 0.297267 |
+| 20% | 0.298105 |
+| 30% | 0.298565 |
+| 40% | 0.299291 |
+| **50%** | **0.299904** |
+| 100% (refine all) | 0.299195 |
+
+The OOF threshold is `0.0150854`; the corresponding full-primary refit threshold frozen for holdout
+is `0.0151422`. It selects exactly 10,185/20,370 primary instances and 10,705/20,934 holdout
+instances (51.1% on holdout after distribution shift).
+
+### Quality and runtime outcome
+
+The frozen 50% gate confirms on holdout: mSA increases from 0.295659 to 0.301455, or 1.96% relative.
+It also beats blanket refinement's 0.299058 while issuing about half as many second decoder calls.
+Every dataset improves over the accepted first pass, but most gains are small outside DeepBacs:
+
+| dataset | first pass mSA | + 50% gate mSA | quality change | runtime change |
+|---|---:|---:|---:|---:|
+| DeepBacs | 0.271977 | 0.285267 | +4.89% | +12.97% |
+| DIC-HeLa | 0.043984 | 0.044304 | +0.73% | +4.45% |
+| DynamicNuclearNet | 0.523938 | 0.536082 | +2.32% | +34.62% |
+| LiveCELL | 0.347593 | 0.349098 | +0.43% | +31.64% |
+| TissueNet | 0.290801 | 0.292524 | +0.59% | +22.90% |
+| **dataset-balanced / total** | **0.295659** | **0.301455** | **+1.96%** | **+25.32%** |
+
+Canonical runtime uses three serialized holdout trials for each side under implementation checksum
+`621931b4644d2b7c5fece26343227f52`. The sum of per-dataset medians is 212.15 s for the first pass
+and 265.86 s for the combination; the worst per-dataset increase is 34.62%. The incremental
+candidate therefore fails the established quality route: its gain is below 5% and its runtime is
+above the 10% cap. Compared with the original default it reaches +14.05% mSA and improves every
+dataset, so the formal comparator accepts it only via the existing >=10% all-datasets quality
+exception, despite +49.55% cross-epoch runtime.
+
+The conclusion is consequently qualified: the gate targets refinement better than refine-all and is
+the highest-quality tested 2D route, but it is not a viable promotion over the accepted eager first
+pass under the deployment gates. Keep it as an explicit quality/latency option; retain selector-only
+eager H64 plus the 0.25 learned filter as the deployment recommendation.
+
+### Artifacts
+
+The policy-matched dataset, gate artifact, sweep configurations, canonical configurations and
+comparison reports are under
+`multimask_selection/groupwise_v1/refinement_gate/eager_mlp_filter_025/`. Canonical combined run
+suffixes are `6a48d15097d4d38e816183aa526d0e08`, `01f566fcef32f901c9ed1e5b136cce7f`
+and `1609fe12d0525ca9e02c216851752022`; current-implementation first-pass suffixes are
+`1d5530f64dd603916ae05de66227b458`, `aac26a5ca704f959f32adad81f759f9f` and
+`672ed6a96a8989c2e7a1e6040f6ebbfd`. The incremental decision is
+`compare_vs_current_first_pass.json` with its adjacent detailed CSV.

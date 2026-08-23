@@ -230,11 +230,14 @@ def _inject_gate_oof_scores(segmenter, proposals, sample_id, shape, configs, loo
         params = config["params_2d"]
         if (params.get("refinement_kwargs") or {}).get("gate") != "uncertainty":
             continue
-        merge_settings.add((params["score_threshold"], params["max_overlap"], params["min_size"]))
-    for score_threshold, max_overlap, min_size in merge_settings:
+        merge_settings.add((
+            params["score_threshold"], params["score_filter"],
+            params["max_overlap"], params["min_size"],
+        ))
+    for score_threshold, score_filter, max_overlap, min_size in merge_settings:
         _, context = segmenter._merge(
-            proposals, shape, score_threshold=score_threshold, max_overlap=max_overlap,
-            min_size=min_size, return_context=True,
+            proposals, shape, score_threshold=score_threshold, score_filter=score_filter,
+            max_overlap=max_overlap, min_size=min_size, return_context=True,
         )
         if context is None:
             continue
