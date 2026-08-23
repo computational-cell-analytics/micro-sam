@@ -18,7 +18,7 @@ def main():
     parser.add_argument("--n_iterations", type=int, default=None)
     parser.add_argument("--model_type", default="hvit_t", choices=["hvit_t", "hvit_s", "hvit_b", "hvit_l"])
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--dataset_choice", default="both", choices=["lm", "em", "both"])
+    parser.add_argument("--dataset_choice", default="all", choices=["lm", "em", "hp", "all"])
     args = parser.parse_args()
 
     model_type = args.model_type
