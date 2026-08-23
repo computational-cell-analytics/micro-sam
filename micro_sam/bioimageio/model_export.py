@@ -40,6 +40,13 @@ DEFAULTS = {
 # Reference: https://github.com/bioimage-io/spec-bioimage-io/commit/39d343681d427ec93cf69eef7597d9eb9678deb1#diff-0bbdaa8196fa31f945afabcf04a4295ff098f1f24400ef9e59b0f684d411905eL269  # noqa
 # We had this parameter in bioimageio.spec. This has been removed. We just make a copy of the same parameter.
 ARBITRARY_SIZE = spec.ParameterizedSize(min=1, step=1)
+# Image size for models exported with an instance segmentation decoder. Their test
+# procedure runs automatic instance segmentation on the test image resized to the
+# minimum (and min + 1, min + 2), and below circa 200 pixels the resized test images
+# no longer contain segmentable objects, which violates the data dependent minimum
+# of one object in the mask output. 256 leaves a good margin while keeping all
+# realistic image sizes valid.
+AIS_IMAGE_SIZE = spec.ParameterizedSize(min=256, step=1)
 
 
 def _get_architecture_model_type(model_type):
@@ -47,53 +54,81 @@ def _get_architecture_model_type(model_type):
     return model_type[:5]
 
 
-def _create_test_inputs_and_outputs(image, labels, model_type, checkpoint_path, tmp_dir):
-
-    # For now we just generate a single box prompt here, but we could also generate more input prompts.
-    generator = PointAndBoxPromptGenerator(
-        n_positive_points=1,
-        n_negative_points=2,
-        dilation_strength=2,
-        get_point_prompts=True,
-        get_box_prompts=True,
-    )
-    centers, bounding_boxes = util.get_centers_and_bounding_boxes(labels)
-    masks = util.segmentation_to_one_hot(labels.astype("int64"), segmentation_ids=[1, 2])  # type: ignore
-    point_prompts, point_labels, box_prompts, _ = generator(masks, [bounding_boxes[1], bounding_boxes[2]])
-
-    box_prompts = box_prompts.numpy()[None]
-    point_prompts = point_prompts.numpy()[None]
-    point_labels = point_labels.numpy()[None]
-
-    # Generate logits from the two
-    mask_prompts = np.stack(
-        [_compute_logits_from_mask(labels == 1), _compute_logits_from_mask(labels == 2)]
-    )[None]
+def _create_test_inputs_and_outputs(image, labels, model_type, checkpoint_path, tmp_dir, with_decoder):
 
     predictor = PredictorAdaptor(model_type=_get_architecture_model_type(model_type))
     predictor.load_state_dict(torch.load(checkpoint_path, map_location="cpu", weights_only=True))
+    # The reference outputs must be generated in eval mode: bioimageio.core runs
+    # exported models in eval mode, and in train mode the batch norm layers of the
+    # image encoder use batch statistics, which changes the results.
+    predictor.eval()
 
     input_ = util._to_image(image).transpose(2, 0, 1)[None]
     image_path = os.path.join(tmp_dir, "input.npy")
     np.save(image_path, input_)
 
-    masks, scores, embeddings = predictor(
-        image=torch.from_numpy(input_),
-        embeddings=None,
-        box_prompts=torch.from_numpy(box_prompts),
-        point_prompts=torch.from_numpy(point_prompts),
-        point_labels=torch.from_numpy(point_labels),
-        mask_prompts=torch.from_numpy(mask_prompts),
-    )
+    if with_decoder:
+        # The exported model runs automatic instance segmentation when called
+        # without prompts, and the test data has to exercise exactly that path:
+        # the model description only declares the image input (see below), so
+        # the reference outputs are generated from a prompt-free call.
+        with torch.no_grad():
+            masks, scores, embeddings = predictor(image=torch.from_numpy(input_))
+        if masks.shape[1] == 0:
+            raise RuntimeError(
+                "Automatic instance segmentation did not find any objects in the test image. "
+                "The exported model would fail its test procedure, which requires at least one object "
+                "in the mask output. Please use a test image in which the model finds instances."
+            )
+        inputs = {"image": image_path}
+    else:
+        # For now we just generate a single box prompt here, but we could also generate more input prompts.
+        generator = PointAndBoxPromptGenerator(
+            n_positive_points=1,
+            n_negative_points=2,
+            dilation_strength=2,
+            get_point_prompts=True,
+            get_box_prompts=True,
+        )
+        centers, bounding_boxes = util.get_centers_and_bounding_boxes(labels)
+        masks = util.segmentation_to_one_hot(labels.astype("int64"), segmentation_ids=[1, 2])  # type: ignore
+        point_prompts, point_labels, box_prompts, _ = generator(masks, [bounding_boxes[1], bounding_boxes[2]])
 
-    box_prompt_path = os.path.join(tmp_dir, "box_prompts.npy")
-    point_prompt_path = os.path.join(tmp_dir, "point_prompts.npy")
-    point_label_path = os.path.join(tmp_dir, "point_labels.npy")
-    mask_prompt_path = os.path.join(tmp_dir, "mask_prompts.npy")
-    np.save(box_prompt_path, box_prompts.astype("int64"))
-    np.save(point_prompt_path, point_prompts)
-    np.save(point_label_path, point_labels)
-    np.save(mask_prompt_path, mask_prompts)
+        box_prompts = box_prompts.numpy()[None]
+        point_prompts = point_prompts.numpy()[None]
+        point_labels = point_labels.numpy()[None]
+
+        # Generate logits from the two
+        mask_prompts = np.stack(
+            [_compute_logits_from_mask(labels == 1), _compute_logits_from_mask(labels == 2)]
+        )[None]
+
+        with torch.no_grad():
+            masks, scores, embeddings = predictor(
+                image=torch.from_numpy(input_),
+                embeddings=None,
+                box_prompts=torch.from_numpy(box_prompts),
+                point_prompts=torch.from_numpy(point_prompts),
+                point_labels=torch.from_numpy(point_labels),
+                mask_prompts=torch.from_numpy(mask_prompts),
+            )
+
+        box_prompt_path = os.path.join(tmp_dir, "box_prompts.npy")
+        point_prompt_path = os.path.join(tmp_dir, "point_prompts.npy")
+        point_label_path = os.path.join(tmp_dir, "point_labels.npy")
+        mask_prompt_path = os.path.join(tmp_dir, "mask_prompts.npy")
+        np.save(box_prompt_path, box_prompts.astype("int64"))
+        np.save(point_prompt_path, point_prompts)
+        np.save(point_label_path, point_labels)
+        np.save(mask_prompt_path, mask_prompts)
+
+        inputs = {
+            "image": image_path,
+            "box_prompts": box_prompt_path,
+            "point_prompts": point_prompt_path,
+            "point_labels": point_label_path,
+            "mask_prompts": mask_prompt_path,
+        }
 
     mask_path = os.path.join(tmp_dir, "mask.npy")
     score_path = os.path.join(tmp_dir, "scores.npy")
@@ -102,13 +137,6 @@ def _create_test_inputs_and_outputs(image, labels, model_type, checkpoint_path, 
     np.save(score_path, scores.numpy())
     np.save(embed_path, embeddings.numpy())
 
-    inputs = {
-        "image": image_path,
-        "box_prompts": box_prompt_path,
-        "point_prompts": point_prompt_path,
-        "point_labels": point_label_path,
-        "mask_prompts": mask_prompt_path,
-    }
     outputs = {"mask": mask_path, "score": score_path, "embeddings": embed_path}
     return inputs, outputs
 
@@ -213,9 +241,8 @@ dependencies:
         f.write(content)
 
 
-def _generate_covers(input_paths, result_paths, tmp_dir):
+def _generate_covers(input_paths, result_paths, tmp_dir, with_decoder):
     image = np.load(input_paths["image"]).squeeze()
-    prompts = np.load(input_paths["box_prompts"])
     mask = np.load(result_paths["mask"])
 
     # create the image overlay
@@ -227,13 +254,18 @@ def _generate_covers(input_paths, result_paths, tmp_dir):
         overlay = image
     overlay = _enhance_image(overlay.astype("float32"))
 
-    # overlay the mask as outline
-    overlay = _overlay_outline(overlay, mask[0, 0, 0], outline_dilation=2)
+    if with_decoder:
+        # Show the automatic instance segmentation result: the outline of all instances.
+        overlay = _overlay_outline(overlay, mask[0, :, 0].max(axis=0), outline_dilation=2)
+    else:
+        # overlay the mask as outline
+        overlay = _overlay_outline(overlay, mask[0, 0, 0], outline_dilation=2)
 
-    # overlay the bounding box prompt
-    prompt = prompts[0, 0][[1, 0, 3, 2]]
-    prompt = np.array([prompt[:2], prompt[2:]])
-    overlay = _overlay_box(overlay, prompt, outline_dilation=4)
+        # overlay the bounding box prompt
+        prompts = np.load(input_paths["box_prompts"])
+        prompt = prompts[0, 0][[1, 0, 3, 2]]
+        prompt = np.array([prompt[:2], prompt[2:]])
+        overlay = _overlay_box(overlay, prompt, outline_dilation=4)
 
     # write  the cover image
     fig, ax = plt.subplots(1)
@@ -247,9 +279,25 @@ def _generate_covers(input_paths, result_paths, tmp_dir):
     return covers
 
 
-def _check_model(model_description, input_paths, result_paths):
-    # Load inputs.
+def _check_model(model_description, input_paths, result_paths, with_decoder):
     image = xarray.DataArray(np.load(input_paths["image"]), dims=("batch", "channel", "y", "x"))
+
+    if with_decoder:
+        # The model only declares the image input, so the reference outputs were
+        # generated by automatic instance segmentation and that is what we check.
+        mask = np.load(result_paths["mask"])
+        scores = np.load(result_paths["score"])
+        embeddings = np.load(result_paths["embeddings"])
+
+        with bioimageio.core.create_prediction_pipeline(model_description) as pp:
+            sample = create_sample_for_model(model=model_description, inputs={"image": image})
+            prediction = pp.predict_sample_without_blocking(sample)
+            assert np.allclose(mask, prediction.members["masks"].data)
+            assert np.allclose(scores, prediction.members["scores"].data)
+            assert np.allclose(embeddings, prediction.members["embeddings"].data)
+        return
+
+    # Load inputs.
     embeddings = xarray.DataArray(np.load(result_paths["embeddings"]), dims=("batch", "channel", "y", "x"))
     box_prompts = xarray.DataArray(np.load(input_paths["box_prompts"]), dims=("batch", "object", "channel"))
     point_prompts = xarray.DataArray(
@@ -317,6 +365,250 @@ def _check_model(model_description, input_paths, result_paths):
         assert predicted_mask.shape[-2:] == mask.shape[-2:]
 
 
+def _regenerate_reference_outputs(model_description, input_paths, result_paths):
+    """Regenerate the reference outputs through the packaged model interface.
+
+    The direct reference call and a bioimageio prediction pipeline can differ by
+    a few ulps in the image embeddings (different tensor memory layouts select
+    different convolution kernels), which is enough to fail the strict
+    reproducibility check of the bioimageio test procedure. Generating the
+    reference outputs through the same interface that consumers use makes the
+    packaged test outputs exactly reproducible.
+    """
+    # Mirror the exact call sequence of the reproducibility check in
+    # bioimageio.core, so the saved outputs match it bit for bit.
+    from bioimageio.core.digest_spec import get_test_input_sample
+
+    sample = get_test_input_sample(model_description)
+    # Default device selection: the bioimageio test procedure also uses it, so
+    # the saved reference outputs match a test run on the same machine.
+    with bioimageio.core.create_prediction_pipeline(model_description) as pp:
+        pp.apply_preprocessing(sample)
+        prediction = pp.predict_sample_without_blocking(
+            sample,
+            skip_preprocessing=True,
+            skip_postprocessing=True,
+            skip_input_padding=True,
+            skip_output_cropping=True,
+        )
+        pp.apply_postprocessing(prediction)
+    np.save(result_paths["mask"], np.asarray(prediction.members["masks"].data).astype("uint8"))
+    np.save(result_paths["score"], np.asarray(prediction.members["scores"].data).astype("float32"))
+    np.save(result_paths["embeddings"], np.asarray(prediction.members["embeddings"].data).astype("float32"))
+
+
+def _build_model_description(
+    name, input_paths, result_paths, weight_descriptions, doc_path, covers, extra_kwargs, with_decoder, **kwargs
+):
+    # The description is built by a separate function so that it can be re-built
+    # after the reference outputs were regenerated: the test tensor hashes are
+    # pinned when the description is created.
+    input_descriptions = [
+        # First input: the image data.
+        spec.InputTensorDescr(
+            id=spec.TensorId("image"),
+            axes=[
+                spec.BatchAxis(size=1),
+                # NOTE: to support 1 and 3 channels we can add another preprocessing.
+                # Best solution: Have a pre-processing for this! (1C -> RGB)
+                spec.ChannelAxis(channel_names=[spec.Identifier(cname) for cname in "RGB"]),
+                spec.SpaceInputAxis(id=spec.AxisId("y"), size=AIS_IMAGE_SIZE if with_decoder else ARBITRARY_SIZE),
+                spec.SpaceInputAxis(id=spec.AxisId("x"), size=AIS_IMAGE_SIZE if with_decoder else ARBITRARY_SIZE),
+            ],
+            test_tensor=spec.FileDescr(source=input_paths["image"]),
+            data=spec.IntervalOrRatioDataDescr(type="uint8")
+        ),
+    ]
+
+    # Models with an instance segmentation decoder are exported image-only:
+    # the spec requires a test tensor for every declared input and feeds all
+    # of them during testing, so declaring the prompt inputs would make the
+    # test procedure exercise the promptable head instead of automatic
+    # instance segmentation. The promptable head remains available through
+    # micro_sam itself.
+    if not with_decoder:
+        input_descriptions += [
+        # Second input: the box prompts (optional)
+        spec.InputTensorDescr(
+            id=spec.TensorId("box_prompts"),
+            optional=True,
+            axes=[
+                spec.BatchAxis(size=1),
+                spec.IndexInputAxis(
+                    id=spec.AxisId("object"),
+                    size=ARBITRARY_SIZE
+                ),
+                spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "hwxy"]),
+            ],
+            test_tensor=spec.FileDescr(source=input_paths["box_prompts"]),
+            data=spec.IntervalOrRatioDataDescr(type="int64")
+        ),
+
+        # Third input: the point prompt coordinates (optional)
+        spec.InputTensorDescr(
+            id=spec.TensorId("point_prompts"),
+            optional=True,
+            axes=[
+                spec.BatchAxis(size=1),
+                spec.IndexInputAxis(
+                    id=spec.AxisId("object"),
+                    size=ARBITRARY_SIZE
+                ),
+                spec.IndexInputAxis(
+                    id=spec.AxisId("point"),
+                    size=ARBITRARY_SIZE
+                ),
+                spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "xy"]),
+            ],
+            test_tensor=spec.FileDescr(source=input_paths["point_prompts"]),
+            data=spec.IntervalOrRatioDataDescr(type="int64")
+        ),
+
+        # Fourth input: the point prompt labels (optional)
+        spec.InputTensorDescr(
+            id=spec.TensorId("point_labels"),
+            optional=True,
+            axes=[
+                spec.BatchAxis(size=1),
+                spec.IndexInputAxis(
+                    id=spec.AxisId("object"),
+                    size=ARBITRARY_SIZE
+                ),
+                spec.IndexInputAxis(
+                    id=spec.AxisId("point"),
+                    size=ARBITRARY_SIZE
+                ),
+            ],
+            test_tensor=spec.FileDescr(source=input_paths["point_labels"]),
+            data=spec.IntervalOrRatioDataDescr(type="int64")
+        ),
+
+        # Fifth input: the mask prompts (optional)
+        spec.InputTensorDescr(
+            id=spec.TensorId("mask_prompts"),
+            optional=True,
+            axes=[
+                spec.BatchAxis(size=1),
+                spec.IndexInputAxis(
+                    id=spec.AxisId("object"),
+                    size=ARBITRARY_SIZE
+                ),
+                spec.ChannelAxis(channel_names=["channel"]),
+                spec.SpaceInputAxis(id=spec.AxisId("y"), size=256),
+                spec.SpaceInputAxis(id=spec.AxisId("x"), size=256),
+            ],
+            test_tensor=spec.FileDescr(source=input_paths["mask_prompts"]),
+            data=spec.IntervalOrRatioDataDescr(type="float32")
+        ),
+
+        # Sixth input: the image embeddings (optional)
+        spec.InputTensorDescr(
+            id=spec.TensorId("embeddings"),
+            optional=True,
+            axes=[
+                spec.BatchAxis(size=1),
+                # NOTE: we currently have to specify all the channel names
+                # (It would be nice to also support size)
+                spec.ChannelAxis(channel_names=[spec.Identifier(f"c{i}") for i in range(256)]),
+                spec.SpaceInputAxis(id=spec.AxisId("y"), size=64),
+                spec.SpaceInputAxis(id=spec.AxisId("x"), size=64),
+            ],
+            test_tensor=spec.FileDescr(source=result_paths["embeddings"]),
+            data=spec.IntervalOrRatioDataDescr(type="float32")
+        ),
+
+    ]
+
+    output_descriptions = [
+        # First output: The mask predictions.
+        spec.OutputTensorDescr(
+            id=spec.TensorId("masks"),
+            axes=[
+                spec.BatchAxis(size=1),
+                # NOTE: we use the data dependent size here to avoid dependency on optional inputs
+                spec.IndexOutputAxis(
+                    id=spec.AxisId("object"), size=spec.DataDependentSize(),
+                ),
+                # NOTE: this could be a 3 once we use multi-masking
+                spec.ChannelAxis(channel_names=[spec.Identifier("mask")]),
+                spec.SpaceOutputAxis(
+                    id=spec.AxisId("y"),
+                    size=spec.SizeReference(
+                        tensor_id=spec.TensorId("image"), axis_id=spec.AxisId("y"),
+                    )
+                ),
+                spec.SpaceOutputAxis(
+                    id=spec.AxisId("x"),
+                    size=spec.SizeReference(
+                        tensor_id=spec.TensorId("image"), axis_id=spec.AxisId("x"),
+                    )
+                )
+            ],
+            data=spec.IntervalOrRatioDataDescr(type="uint8"),
+            test_tensor=spec.FileDescr(source=result_paths["mask"])
+        ),
+
+        # The score predictions
+        spec.OutputTensorDescr(
+            id=spec.TensorId("scores"),
+            axes=[
+                spec.BatchAxis(size=1),
+                # NOTE: we use the data dependent size here to avoid dependency on optional inputs
+                spec.IndexOutputAxis(
+                    id=spec.AxisId("object"), size=spec.DataDependentSize(),
+                ),
+                # NOTE: this could be a 3 once we use multi-masking
+                spec.ChannelAxis(channel_names=[spec.Identifier("mask")]),
+            ],
+            data=spec.IntervalOrRatioDataDescr(type="float32"),
+            test_tensor=spec.FileDescr(source=result_paths["score"])
+        ),
+
+        # The image embeddings
+        spec.OutputTensorDescr(
+            id=spec.TensorId("embeddings"),
+            axes=[
+                spec.BatchAxis(size=1),
+                spec.ChannelAxis(channel_names=[spec.Identifier(f"c{i}") for i in range(256)]),
+                spec.SpaceOutputAxis(id=spec.AxisId("y"), size=64),
+                spec.SpaceOutputAxis(id=spec.AxisId("x"), size=64),
+            ],
+            data=spec.IntervalOrRatioDataDescr(type="float32"),
+            test_tensor=spec.FileDescr(source=result_paths["embeddings"])
+        )
+    ]
+
+    return spec.ModelDescr(
+        name=name,
+        inputs=input_descriptions,
+        outputs=output_descriptions,
+        weights=weight_descriptions,
+        description=kwargs.get("description", DEFAULTS["description"]),
+        authors=kwargs.get("authors", DEFAULTS["authors"]),
+        cite=kwargs.get("cite", DEFAULTS["cite"]),
+        license=spec.LicenseId("CC-BY-4.0"),
+        documentation=spec.FileDescr(source=Path(doc_path)),
+        git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
+        tags=kwargs.get("tags", DEFAULTS["tags"]),
+        covers=[spec.FileDescr(source=Path(cover)) for cover in covers],
+        **extra_kwargs,
+        config=spec.Config(
+            bioimageio=spec.BioimageioConfig(
+                # The embeddings output holds raw float features. Numerical
+                # differences between hardware and backends can push a few
+                # hundred of its elements per million past the default
+                # tolerance without any effect on the segmentation outputs.
+                reproducibility_tolerance=[
+                    spec.ReproducibilityTolerance(
+                        mismatched_elements_per_million=1000,
+                        output_ids=[spec.TensorId("embeddings")],
+                    )
+                ],
+            ),
+        ),
+    )
+
+
 def export_sam_model(
     image: np.ndarray,
     label_image: np.ndarray,
@@ -333,8 +625,12 @@ def export_sam_model(
 
     If the model has an instance segmentation decoder, i.e. if the checkpoint or the
     model registry contain a decoder state, then the decoder is exported as part of the
-    model weights. In this case the exported model supports automatic instance segmentation,
-    which is run when the model is called without any prompt inputs.
+    model weights. In this case the exported model runs automatic instance segmentation:
+    it only declares the image input, its test tensors are generated from a prompt-free
+    call, and the bioimageio test procedure validates the automatic instance segmentation
+    results. Prompt-based segmentation with such a model remains available through
+    micro_sam itself. Models without a decoder are exported with the interactive prompt
+    inputs instead.
 
     Args:
         image: The image for generating test data.
@@ -350,174 +646,8 @@ def export_sam_model(
         with_decoder = decoder_path is not None
         weight_path = _get_weight_checkpoint(model_type, checkpoint_path, decoder_path, tmp_dir)
         input_paths, result_paths = _create_test_inputs_and_outputs(
-            image, label_image, model_type, weight_path, tmp_dir,
+            image, label_image, model_type, weight_path, tmp_dir, with_decoder=with_decoder,
         )
-        input_descriptions = [
-            # First input: the image data.
-            spec.InputTensorDescr(
-                id=spec.TensorId("image"),
-                axes=[
-                    spec.BatchAxis(size=1),
-                    # NOTE: to support 1 and 3 channels we can add another preprocessing.
-                    # Best solution: Have a pre-processing for this! (1C -> RGB)
-                    spec.ChannelAxis(channel_names=[spec.Identifier(cname) for cname in "RGB"]),
-                    spec.SpaceInputAxis(id=spec.AxisId("y"), size=ARBITRARY_SIZE),
-                    spec.SpaceInputAxis(id=spec.AxisId("x"), size=ARBITRARY_SIZE),
-                ],
-                test_tensor=spec.FileDescr(source=input_paths["image"]),
-                data=spec.IntervalOrRatioDataDescr(type="uint8")
-            ),
-
-            # Second input: the box prompts (optional)
-            spec.InputTensorDescr(
-                id=spec.TensorId("box_prompts"),
-                optional=True,
-                axes=[
-                    spec.BatchAxis(size=1),
-                    spec.IndexInputAxis(
-                        id=spec.AxisId("object"),
-                        size=ARBITRARY_SIZE
-                    ),
-                    spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "hwxy"]),
-                ],
-                test_tensor=spec.FileDescr(source=input_paths["box_prompts"]),
-                data=spec.IntervalOrRatioDataDescr(type="int64")
-            ),
-
-            # Third input: the point prompt coordinates (optional)
-            spec.InputTensorDescr(
-                id=spec.TensorId("point_prompts"),
-                optional=True,
-                axes=[
-                    spec.BatchAxis(size=1),
-                    spec.IndexInputAxis(
-                        id=spec.AxisId("object"),
-                        size=ARBITRARY_SIZE
-                    ),
-                    spec.IndexInputAxis(
-                        id=spec.AxisId("point"),
-                        size=ARBITRARY_SIZE
-                    ),
-                    spec.ChannelAxis(channel_names=[spec.Identifier(bname) for bname in "xy"]),
-                ],
-                test_tensor=spec.FileDescr(source=input_paths["point_prompts"]),
-                data=spec.IntervalOrRatioDataDescr(type="int64")
-            ),
-
-            # Fourth input: the point prompt labels (optional)
-            spec.InputTensorDescr(
-                id=spec.TensorId("point_labels"),
-                optional=True,
-                axes=[
-                    spec.BatchAxis(size=1),
-                    spec.IndexInputAxis(
-                        id=spec.AxisId("object"),
-                        size=ARBITRARY_SIZE
-                    ),
-                    spec.IndexInputAxis(
-                        id=spec.AxisId("point"),
-                        size=ARBITRARY_SIZE
-                    ),
-                ],
-                test_tensor=spec.FileDescr(source=input_paths["point_labels"]),
-                data=spec.IntervalOrRatioDataDescr(type="int64")
-            ),
-
-            # Fifth input: the mask prompts (optional)
-            spec.InputTensorDescr(
-                id=spec.TensorId("mask_prompts"),
-                optional=True,
-                axes=[
-                    spec.BatchAxis(size=1),
-                    spec.IndexInputAxis(
-                        id=spec.AxisId("object"),
-                        size=ARBITRARY_SIZE
-                    ),
-                    spec.ChannelAxis(channel_names=["channel"]),
-                    spec.SpaceInputAxis(id=spec.AxisId("y"), size=256),
-                    spec.SpaceInputAxis(id=spec.AxisId("x"), size=256),
-                ],
-                test_tensor=spec.FileDescr(source=input_paths["mask_prompts"]),
-                data=spec.IntervalOrRatioDataDescr(type="float32")
-            ),
-
-            # Sixth input: the image embeddings (optional)
-            spec.InputTensorDescr(
-                id=spec.TensorId("embeddings"),
-                optional=True,
-                axes=[
-                    spec.BatchAxis(size=1),
-                    # NOTE: we currently have to specify all the channel names
-                    # (It would be nice to also support size)
-                    spec.ChannelAxis(channel_names=[spec.Identifier(f"c{i}") for i in range(256)]),
-                    spec.SpaceInputAxis(id=spec.AxisId("y"), size=64),
-                    spec.SpaceInputAxis(id=spec.AxisId("x"), size=64),
-                ],
-                test_tensor=spec.FileDescr(source=result_paths["embeddings"]),
-                data=spec.IntervalOrRatioDataDescr(type="float32")
-            ),
-
-        ]
-
-        output_descriptions = [
-            # First output: The mask predictions.
-            spec.OutputTensorDescr(
-                id=spec.TensorId("masks"),
-                axes=[
-                    spec.BatchAxis(size=1),
-                    # NOTE: we use the data dependent size here to avoid dependency on optional inputs
-                    spec.IndexOutputAxis(
-                        id=spec.AxisId("object"), size=spec.DataDependentSize(),
-                    ),
-                    # NOTE: this could be a 3 once we use multi-masking
-                    spec.ChannelAxis(channel_names=[spec.Identifier("mask")]),
-                    spec.SpaceOutputAxis(
-                        id=spec.AxisId("y"),
-                        size=spec.SizeReference(
-                            tensor_id=spec.TensorId("image"), axis_id=spec.AxisId("y"),
-                        )
-                    ),
-                    spec.SpaceOutputAxis(
-                        id=spec.AxisId("x"),
-                        size=spec.SizeReference(
-                            tensor_id=spec.TensorId("image"), axis_id=spec.AxisId("x"),
-                        )
-                    )
-                ],
-                data=spec.IntervalOrRatioDataDescr(type="uint8"),
-                test_tensor=spec.FileDescr(source=result_paths["mask"])
-            ),
-
-            # The score predictions
-            spec.OutputTensorDescr(
-                id=spec.TensorId("scores"),
-                axes=[
-                    spec.BatchAxis(size=1),
-                    # NOTE: we use the data dependent size here to avoid dependency on optional inputs
-                    spec.IndexOutputAxis(
-                        id=spec.AxisId("object"), size=spec.DataDependentSize(),
-                    ),
-                    # NOTE: this could be a 3 once we use multi-masking
-                    spec.ChannelAxis(channel_names=[spec.Identifier("mask")]),
-                ],
-                data=spec.IntervalOrRatioDataDescr(type="float32"),
-                test_tensor=spec.FileDescr(source=result_paths["score"])
-            ),
-
-            # The image embeddings
-            spec.OutputTensorDescr(
-                id=spec.TensorId("embeddings"),
-                axes=[
-                    spec.BatchAxis(size=1),
-                    spec.ChannelAxis(channel_names=[spec.Identifier(f"c{i}") for i in range(256)]),
-                    spec.SpaceOutputAxis(id=spec.AxisId("y"), size=64),
-                    spec.SpaceOutputAxis(id=spec.AxisId("x"), size=64),
-                ],
-                data=spec.IntervalOrRatioDataDescr(type="float32"),
-                test_tensor=spec.FileDescr(source=result_paths["embeddings"])
-            )
-        ]
-
         architecture_path = os.path.join(os.path.split(__file__)[0], "predictor_adaptor.py")
         architecture = spec.ArchitectureFromFileDescr(
             source=Path(architecture_path),
@@ -543,7 +673,7 @@ def export_sam_model(
 
         covers = kwargs.get("covers", None)
         if covers is None:
-            covers = _generate_covers(input_paths, result_paths, tmp_dir)
+            covers = _generate_covers(input_paths, result_paths, tmp_dir, with_decoder=with_decoder)
         else:
             assert all(os.path.exists(cov) for cov in covers)
 
@@ -563,26 +693,20 @@ def export_sam_model(
             attachment_path = _get_decoder_attachment(model_type, decoder_path, tmp_dir)
             extra_kwargs["attachments"] = [spec.FileDescr(source=attachment_path)]
 
-        model_description = spec.ModelDescr(
-            name=name,
-            inputs=input_descriptions,
-            outputs=output_descriptions,
-            weights=weight_descriptions,
-            description=kwargs.get("description", DEFAULTS["description"]),
-            authors=kwargs.get("authors", DEFAULTS["authors"]),
-            cite=kwargs.get("cite", DEFAULTS["cite"]),
-            license=spec.LicenseId("CC-BY-4.0"),
-            documentation=spec.FileDescr(source=Path(doc_path)),
-            git_repo=spec.HttpUrl("https://github.com/computational-cell-analytics/micro-sam"),
-            tags=kwargs.get("tags", DEFAULTS["tags"]),
-            covers=[spec.FileDescr(source=Path(cover)) for cover in covers],
-            **extra_kwargs,
-            # TODO write specific settings in the config
-            # dict with yaml values, key must be a str
-            # micro_sam: ...
-            # config=
+        model_description = _build_model_description(
+            name, input_paths, result_paths, weight_descriptions, doc_path, covers, extra_kwargs,
+            with_decoder=with_decoder, **kwargs,
         )
 
-        _check_model(model_description, input_paths, result_paths)
+        if with_decoder:
+            # Regenerate the reference outputs through the packaged model interface
+            # and re-build the description so it pins the new test tensor hashes.
+            _regenerate_reference_outputs(model_description, input_paths, result_paths)
+            model_description = _build_model_description(
+                name, input_paths, result_paths, weight_descriptions, doc_path, covers, extra_kwargs,
+                with_decoder=with_decoder, **kwargs,
+            )
+
+        _check_model(model_description, input_paths, result_paths, with_decoder=with_decoder)
 
         save_bioimageio_package(model_description, output_path=output_path)

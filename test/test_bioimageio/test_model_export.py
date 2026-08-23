@@ -59,6 +59,16 @@ class TestModelExport(unittest.TestCase):
 
         self.assertTrue(os.path.exists(export_path))
 
+        # The exported model must be image-only, with the raised size minimum,
+        # so that the bioimageio test procedure exercises automatic instance segmentation.
+        model_description = bioimageio.spec.load_model_description(export_path)
+        self.assertEqual([str(ipt.id) for ipt in model_description.inputs], ["image"])
+        space_axes = [axis for axis in model_description.inputs[0].axes if str(axis.id) in ("y", "x")]
+        self.assertEqual(len(space_axes), 2)
+        for axis in space_axes:
+            self.assertEqual(axis.size.min, 256)
+            self.assertEqual(axis.size.step, 1)
+
 
 class TestModelExportRegressions(unittest.TestCase):
     def test_prompt_free_prediction_without_decoder(self):
@@ -187,6 +197,7 @@ class TestModelExportRegressions(unittest.TestCase):
                     model_description=object(),
                     input_paths=input_paths,
                     result_paths={"embeddings": input_paths["embeddings"], "mask": mask_path},
+                    with_decoder=False,
                 )
 
             self.assertEqual(pipeline.predict_sample_without_blocking.call_count, 8)
