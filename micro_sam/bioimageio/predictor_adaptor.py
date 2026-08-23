@@ -39,6 +39,10 @@ class PredictorAdaptor(nn.Module):
         self.sam_model = sam_model_registry[model_type]()
         self.sam = SamPredictor(self.sam_model)
         self.decoder = None
+        # The image the current self.sam embeddings were computed for (or that
+        # externally passed embeddings were declared for). Used to invalidate
+        # the embedding cache when forward() is called with a different image.
+        self._input_image = None
 
     def load_state_dict(self, state, **kwargs):
         # Finetuning checkpoints store SAM and decoder weights separately.
@@ -123,8 +127,17 @@ class PredictorAdaptor(nn.Module):
         # only supports floating-point dtypes on MPS (Apple Silicon).
         image_float = image.float() if not image.is_floating_point() else image
 
-        # We have image embeddings set and image embeddings were not passed.
-        if self.sam.is_image_set and embeddings is None:
+        # We have image embeddings set for this exact image and no new image
+        # embeddings were passed. Comparing against the cached image is required
+        # for correctness: reusing embeddings of a previous, different image
+        # would silently return segmentations in the old image's geometry.
+        if (
+            self.sam.is_image_set
+            and embeddings is None
+            and self._input_image is not None
+            and image.shape == self._input_image.shape
+            and torch.equal(image, self._input_image)
+        ):
             pass  # do nothing
 
         # The embeddings are passed, so we set them.
@@ -133,13 +146,16 @@ class PredictorAdaptor(nn.Module):
             self.sam.orig_h, self.sam.orig_w = image.shape[2:]
             self.sam.input_h, self.sam.input_w = self.sam.transform.apply_image_torch(image_float).shape[2:]
             self.sam.is_image_set = True
+            self._input_image = image.detach().clone()
 
-        # We don't have image embeddings set and they were not passed.
-        elif not self.sam.is_image_set:
+        # No embeddings were passed and we don't have embeddings for this image,
+        # so we compute them.
+        else:
             input_ = self.sam.transform.apply_image_torch(image_float)
             self.sam.set_torch_image(input_, original_image_size=image.shape[2:])
             self.sam.orig_h, self.sam.orig_w = self.sam.original_size
             self.sam.input_h, self.sam.input_w = self.sam.input_size
+            self._input_image = image.detach().clone()
 
         assert self.sam.is_image_set, "The predictor has not yet been initialized."
 

@@ -82,6 +82,9 @@ class TestModelExportRegressions(unittest.TestCase):
         torch.nn.Module.__init__(adaptor)
         adaptor.sam = sam
         adaptor.decoder = None
+        # The embedding cache is keyed on the input image: embeddings are only
+        # reused when the incoming image matches the recorded one.
+        adaptor._input_image = image
         adaptor._automatic_instance_segmentation = MagicMock(
             side_effect=AssertionError("AIS must not be called without a decoder")
         )
