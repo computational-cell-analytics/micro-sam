@@ -1080,6 +1080,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         verbose: bool = False,
         offload_to_cpu: Optional[bool] = None,
         cache_all_slices: bool = False,
+        devices: Devices = None,
         **kwargs,
     ) -> None:
         """Compute the tiled embeddings, run the decoder on them and keep them for the prompting.
@@ -1103,6 +1104,8 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
                 rather than on the device, see `AutomaticPromptGenerator.initialize`.
             cache_all_slices: Volumes only. Whether every tile's slices stay cached on the device
                 while it is propagated, see `AutomaticPromptGenerator.initialize`.
+            devices: The devices for decoder inference and volume propagation. If this value is None,
+                the generator uses `inference_device`.
             kwargs: Additional arguments for `TiledUniSAM2InstanceSegmentation.initialize`.
         """
         if ndim not in (2, 3):
@@ -1132,25 +1135,32 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
                     "generator has to be constructed with one instead of an image predictor."
                 )
             TiledUniSAM2InstanceSegmentation.initialize(
-                self, image, ndim=3, image_embeddings=image_embeddings, **kwargs
+                self, image, ndim=3, image_embeddings=image_embeddings, devices=devices, **kwargs
             )
             self._volume = image
             self._i = None
             self._offload_to_cpu = offload_to_cpu
             self._max_cached_frames = int(image.shape[0]) if cache_all_slices else None
-            self._propagator = TiledPromptableSegmentation3D(
-                self._video_predictor, image, image_embeddings,
-                offload_state_to_cpu=self._offload_to_cpu, max_cached_frames=self._max_cached_frames,
-            )
+            self._propagator = self._build_tiled_propagator(image, image_embeddings, devices)
         else:
             TiledUniSAM2InstanceSegmentation.initialize(
-                self, image, ndim=2, image_embeddings=image_embeddings, i=i, **kwargs
+                self, image, ndim=2, image_embeddings=image_embeddings, i=i, devices=devices, **kwargs
             )
             self._i = i
 
         self._image_embeddings = image_embeddings
         self._owns_image_embeddings = owns_image_embeddings
         self._set_tiling(image_embeddings)
+
+    def _build_tiled_propagator(
+        self, volume: np.ndarray, image_embeddings: dict, devices: Devices = None,
+    ) -> TiledPromptableSegmentation3D:
+        """Build the propagator for a tiled volume on the decoder devices."""
+        return TiledPromptableSegmentation3D(
+            self._video_predictor, volume, image_embeddings,
+            devices=self._inference_devices(devices),
+            offload_state_to_cpu=self._offload_to_cpu, max_cached_frames=self._max_cached_frames,
+        )
 
     def _set_tiling(self, image_embeddings: dict) -> None:
         # From the embeddings, not the arguments, so the prompting cannot disagree with the encoding.
@@ -1252,9 +1262,9 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         every pair of tiles whose halo-extended blocks touch contributes one graph edge per pair of
         labels that share pixels in that shared region, weighted by the overlap fraction. One multicut
         over the whole tile graph then decides which cross-tile ids are the same object, instead of
-        `_merge`'s fixed cutoff deciding tile by tile in processing order. Every tile then paints only
-        its inner (non-overlapping) block, so the multicut's node labels are what resolves a border,
-        not a second, pixel-level overlap rule.
+        `_merge`'s fixed cutoff deciding tile by tile in processing order. Each tile first writes its
+        inner block. Its halo then fills background pixels in adjacent inner blocks. This keeps masks
+        that cross tile borders. The halo does not replace foreground pixels from the adjacent tile.
         """
         import elf.segmentation as seg_utils
         from bioimage_cpp.graph import UndirectedGraph
@@ -1326,13 +1336,21 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             node_labels = np.arange(n_nodes, dtype="uint32")
 
         segmentation = np.zeros(shape, dtype="uint32")
+        relabeled_tiles = []
         for tile_id, tile_offset, tile_segmentation, bounding_box in tiles:
             global_ids = tile_segmentation.astype("uint64")
             global_ids[global_ids != 0] += tile_offset
             relabeled = node_labels[global_ids].astype("uint32")
+            relabeled_tiles.append((relabeled, bounding_box))
             inner = self._tile_inner_box(tile_id, n_slices)
             local_inner = tuple(slice(s.start - b.start, s.stop - b.start) for s, b in zip(inner, bounding_box))
             segmentation[inner] = relabeled[local_inner]
+
+        # Fill background pixels from the halos so that masks can cross tile borders.
+        for relabeled, bounding_box in relabeled_tiles:
+            target = segmentation[bounding_box]
+            fill = (target == 0) & (relabeled != 0)
+            target[fill] = relabeled[fill]
         return segmentation
 
     @torch.no_grad()
@@ -1568,8 +1586,19 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             raise ValueError("A tiled prompt-generator state must hold its 'image_embeddings'.")
 
         TiledUniSAM2InstanceSegmentation.set_state(self, state)
+        volume = state.get("volume")
+        if volume is not None:
+            if self._video_predictor is None:
+                raise ValueError(
+                    "The video predictor is None. Construct the tiled generator with a SAM2 video predictor."
+                )
+            self._volume = volume
+            self._propagator = self._build_tiled_propagator(volume, image_embeddings)
+            self._i = None
+        else:
+            self._volume = None
+            self._i = state.get("i")
         self._image_embeddings = image_embeddings
-        self._i = state.get("i")
         self._owns_image_embeddings = False
         self._set_tiling(image_embeddings)
 

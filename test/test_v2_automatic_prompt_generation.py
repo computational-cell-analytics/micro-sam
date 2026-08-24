@@ -277,6 +277,86 @@ def test_tiled_generator_restores_decoder_state():
     assert segmenter._halo == [8, 8]
 
 
+def test_tiled_generator_restores_a_volumetric_state(monkeypatch):
+    class Features:
+        attrs = {"shape": (64, 64), "tile_shape": (32, 32), "halo": (8, 8)}
+
+    created = []
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.TiledPromptableSegmentation3D",
+        lambda *args, **kwargs: created.append((args, kwargs)) or "propagator",
+    )
+    prediction = np.ones((4, 3, 64, 64), dtype="float32")
+    image_embeddings = {"features": Features(), "input_size": None}
+    volume = np.zeros((3, 64, 64), dtype="uint8")
+    video_predictor = object()
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._prediction = None
+    segmenter._is_initialized = False
+    segmenter._video_predictor = video_predictor
+    segmenter._image_embeddings = None
+    segmenter._volume = None
+    segmenter._propagator = None
+    segmenter._offload_to_cpu = True
+    segmenter._max_cached_frames = 3
+    segmenter._inference_device = "cuda:1"
+    segmenter._i = 7
+    segmenter._owns_image_embeddings = False
+    segmenter._tiling = None
+    segmenter._halo = None
+
+    segmenter.set_state({
+        "prediction": prediction,
+        "image_embeddings": image_embeddings,
+        "volume": volume,
+    })
+
+    assert segmenter._prediction is prediction
+    assert segmenter._image_embeddings is image_embeddings
+    assert segmenter._volume is volume
+    assert segmenter._propagator == "propagator"
+    assert segmenter._i is None
+    assert created == [(
+        (video_predictor, volume, image_embeddings),
+        {"devices": "cuda:1", "offload_state_to_cpu": True, "max_cached_frames": 3},
+    )]
+
+
+@pytest.mark.parametrize("devices,expected", [(None, "cuda:1"), (["cuda:2"], ["cuda:2"])])
+def test_tiled_generator_forwards_devices_to_volume_propagation(monkeypatch, devices, expected):
+    class Features:
+        attrs = {"shape": (3, 32, 32), "tile_shape": (16, 16), "halo": (4, 4)}
+
+    decoder_calls = []
+    propagator_calls = []
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.TiledUniSAM2InstanceSegmentation.initialize",
+        lambda *args, **kwargs: decoder_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.TiledPromptableSegmentation3D",
+        lambda *args, **kwargs: propagator_calls.append(kwargs) or "propagator",
+    )
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._video_predictor = object()
+    segmenter._inference_device = "cuda:1"
+    segmenter._image_embeddings = None
+    segmenter._volume = None
+    segmenter._propagator = None
+    segmenter._temporary_embedding_path = None
+    segmenter._offload_to_cpu = None
+    segmenter._max_cached_frames = None
+    segmenter._tiling = None
+    segmenter._halo = None
+    image_embeddings = {"features": Features()}
+    volume = np.zeros((3, 32, 32), dtype="uint8")
+
+    segmenter.initialize(volume, ndim=3, image_embeddings=image_embeddings, devices=devices)
+
+    assert decoder_calls[0]["devices"] is devices
+    assert propagator_calls[0]["devices"] == expected
+
+
 def test_tiles_for_points_assigns_every_prompt_to_exactly_one_tile(monkeypatch):
     shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
     segmenter = _make_tiled_generator(shape, tile_shape, halo, monkeypatch)
@@ -293,6 +373,29 @@ def test_tiles_for_points_assigns_every_prompt_to_exactly_one_tile(monkeypatch):
     assert assignment[1] == [1, 4]
     assert assignment[2] == [2]
     assert assignment[3] == [3]
+
+
+def test_multicut_preserves_a_mask_that_crosses_from_its_anchor_tile_halo(monkeypatch):
+    segmenter = _make_tiled_generator((4, 8), (4, 4), (0, 2), monkeypatch)
+    mask = np.zeros((1, 4, 6), dtype=bool)
+    mask[:, 1:3, 2:6] = True
+    proposals = [{
+        "tile_id": 0,
+        "bounding_box": (slice(0, 1), slice(0, 4), slice(0, 6)),
+        "records": [{
+            "segmentation": mask,
+            "predicted_iou": 0.9,
+            "stability_score": 0.9,
+        }],
+    }]
+
+    segmentation = segmenter._merge_via_multicut(
+        proposals, (1, 4, 8), score_threshold=0.5, max_overlap=0.5, min_size=1,
+    )
+
+    # The prompt belongs to tile 0 (x < 4), but its propagated mask reaches two pixels into tile 1.
+    assert np.all(segmentation[:, 1:3, 2:6] == 1)
+    assert np.all(segmentation[:, :, 6:] == 0)
 
 
 def test_tiled_apply_and_select_maps_prompts_and_masks_between_frames(monkeypatch):
