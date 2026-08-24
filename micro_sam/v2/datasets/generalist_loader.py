@@ -725,24 +725,33 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     return train_ds, val_ds
 
 
-def _pannuke_random_pad_trafo(raw, labels, patch_shape):
-    """Randomly pad a PanNuke 256x256 tile up to ``patch_shape``, at a random offset (steps of 64).
+def _pannuke_random_resize_and_pad_trafo(raw, labels, patch_shape):
+    """Randomly upscale a PanNuke 256x256 tile (steps of 64) and zero-pad the rest to patch_shape.
 
-    The output shape is always ``patch_shape``, matching the other histopathology datasets in the
-    same batch group; only the offset of the 256x256 content within it varies, instead of always
-    anchoring it to one corner as torch_em's default padding does.
+    Runs as the joint 'transform', after normalization, so percentile stats stay on real pixels.
     """
-    pad_total = patch_shape[-1] - raw.shape[-1]
+    from skimage.transform import resize
+
+    native = raw.shape[-1]
+    target = patch_shape[-1]
+    size = random.choice(range(native, target + 1, 64))
+
+    if size != native:
+        raw = resize(
+            raw, raw.shape[:-2] + (size, size), order=1, anti_aliasing=True, preserve_range=True,
+        ).astype(raw.dtype)
+        labels = resize(
+            labels, labels.shape[:-2] + (size, size), order=0, anti_aliasing=False, preserve_range=True,
+        ).astype(labels.dtype)
+
+    pad_total = target - size
     if pad_total <= 0:
         return raw, labels
 
-    top = random.choice(range(0, pad_total + 1, 64))
-    left = random.choice(range(0, pad_total + 1, 64))
-    pad_height = (top, pad_total - top)
-    pad_width = (left, pad_total - left)
+    pad_width = (0, pad_total)
 
     def _pad(x):
-        return np.pad(x, [(0, 0)] * (x.ndim - 2) + [pad_height, pad_width])
+        return np.pad(x, [(0, 0)] * (x.ndim - 2) + [pad_width, pad_width])
 
     return _pad(raw), _pad(labels)
 
@@ -834,14 +843,12 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     # used across patho-sam's own evaluation scripts.
     # The full dataset is built twice (independent instances) so train and val get their own
     # raw_transform, rather than a shared random_split Subset that would alias the two.
-    # PanNuke tiles are natively 256x256, so patch_shape is requested at their native size (this
-    # keeps torch_em's patch padding a no-op) and _pannuke_random_pad_trafo pads it back up to
-    # patch_shape itself, at a random offset, so it still matches the batch shape of the other
-    # 2D histopathology datasets while no longer always anchoring the content to one corner.
+    # patch_shape is requested at PanNuke's native 256x256, so torch_em's own padding is a no-op;
+    # _pannuke_random_resize_and_pad_trafo does the resize+pad up to 512x512 instead.
     pannuke_kwargs = {
         "path": os.path.join(input_path, "pannuke"), "patch_shape": (1, 256, 256),
         "download": True, "ndim": 2, "folds": ["fold_1", "fold_2"],
-        **{**kwargs, "transform": partial(_pannuke_random_pad_trafo, patch_shape=patch_shape)},
+        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
     }
     pannuke_train_full = datasets.get_pannuke_dataset(**pannuke_kwargs)
     pannuke_val_full = datasets.get_pannuke_dataset(**pannuke_kwargs)
