@@ -9,12 +9,13 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import imageio.v3 as imageio
 
+import bioimageio.core
 import bioimageio.spec
 
 import torch
 
 import micro_sam.util as util
-from micro_sam.sample_data import synthetic_data
+from micro_sam.sample_data import fetch_hela_2d_example_data, synthetic_data
 
 spec_minor = int(bioimageio.spec.__version__.split(".")[1])
 
@@ -53,7 +54,9 @@ class TestModelExport(unittest.TestCase):
 
     def test_model_export_with_decoder(self):
         from micro_sam.bioimageio import export_sam_model
-        image, labels = synthetic_data(shape=(1024, 1022))
+        data_dir = os.path.join(util.get_cache_directory(), "sample_data")
+        image = imageio.imread(fetch_hela_2d_example_data(data_dir))
+        labels = np.zeros(image.shape[:2], dtype="uint32")
 
         # Export a generalist model, which has an instance segmentation decoder,
         # so that the exported model supports automatic instance segmentation.
@@ -62,6 +65,8 @@ class TestModelExport(unittest.TestCase):
         export_sam_model(image, labels, model_type=model_type, name="test-export-ais", output_path=export_path)
 
         self.assertTrue(os.path.exists(export_path))
+        test_summary = bioimageio.core.test_model(export_path, devices=["cpu"])
+        self.assertEqual(test_summary.status, "passed", test_summary.format())
 
         # Match the size minima to the test image, so that BioImageIO does not crop instances from its probes.
         model_description = bioimageio.spec.load_model_description(export_path)
