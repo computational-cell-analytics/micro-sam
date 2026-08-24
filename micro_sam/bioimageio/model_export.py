@@ -276,7 +276,7 @@ def _check_model(model_description, input_paths, result_paths, with_decoder):
         scores = np.load(result_paths["score"])
         embeddings = np.load(result_paths["embeddings"])
 
-        with bioimageio.core.create_prediction_pipeline(model_description) as pp:
+        with bioimageio.core.create_prediction_pipeline(model_description, devices=["cpu"]) as pp:
             sample = create_sample_for_model(model=model_description, inputs={"image": image})
             prediction = pp.predict_sample_without_blocking(sample)
             assert np.allclose(mask, prediction.members["masks"].data)
@@ -360,8 +360,8 @@ def _regenerate_reference_outputs(model_description, input_paths, result_paths):
     from bioimageio.core.digest_spec import get_test_input_sample
 
     sample = get_test_input_sample(model_description)
-    # Match the default device selection of the BioImageIO test.
-    with bioimageio.core.create_prediction_pipeline(model_description) as pp:
+    # Keep reference generation deterministic across CI runners.
+    with bioimageio.core.create_prediction_pipeline(model_description, devices=["cpu"]) as pp:
         pp.apply_preprocessing(sample)
         prediction = pp.predict_sample_without_blocking(
             sample,

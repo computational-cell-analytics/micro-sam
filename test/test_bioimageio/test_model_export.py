@@ -79,6 +79,57 @@ class TestModelExport(unittest.TestCase):
 
 
 class TestModelExportRegressions(unittest.TestCase):
+    def test_decoder_export_pipelines_use_cpu(self):
+        from micro_sam.bioimageio import model_export
+
+        image = np.zeros((1, 3, 8, 8), dtype="uint8")
+        mask = np.ones((1, 1, 1, 8, 8), dtype="uint8")
+        scores = np.ones((1, 1, 1), dtype="float32")
+        embeddings = np.ones((1, 256, 64, 64), dtype="float32")
+        prediction = SimpleNamespace(
+            members={
+                "masks": SimpleNamespace(data=mask),
+                "scores": SimpleNamespace(data=scores),
+                "embeddings": SimpleNamespace(data=embeddings),
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = os.path.join(tmp_dir, "image.npy")
+            mask_path = os.path.join(tmp_dir, "mask.npy")
+            score_path = os.path.join(tmp_dir, "scores.npy")
+            embeddings_path = os.path.join(tmp_dir, "embeddings.npy")
+            np.save(input_path, image)
+            np.save(mask_path, mask)
+            np.save(score_path, scores)
+            np.save(embeddings_path, embeddings)
+
+            input_paths = {"image": input_path}
+            result_paths = {"mask": mask_path, "score": score_path, "embeddings": embeddings_path}
+            model_description = object()
+            pipeline = MagicMock()
+            pipeline.predict_sample_without_blocking.return_value = prediction
+
+            with (
+                patch("bioimageio.core.digest_spec.get_test_input_sample", return_value=object()),
+                patch.object(model_export.bioimageio.core, "create_prediction_pipeline") as create_pipeline,
+            ):
+                create_pipeline.return_value.__enter__.return_value = pipeline
+                model_export._regenerate_reference_outputs(
+                    model_description, input_paths=input_paths, result_paths=result_paths
+                )
+                create_pipeline.assert_called_once_with(model_description, devices=["cpu"])
+
+            with (
+                patch.object(model_export, "create_sample_for_model", return_value=object()),
+                patch.object(model_export.bioimageio.core, "create_prediction_pipeline") as create_pipeline,
+            ):
+                create_pipeline.return_value.__enter__.return_value = pipeline
+                model_export._check_model(
+                    model_description, input_paths=input_paths, result_paths=result_paths, with_decoder=True
+                )
+                create_pipeline.assert_called_once_with(model_description, devices=["cpu"])
+
     def test_prompt_free_prediction_without_decoder(self):
         from micro_sam.bioimageio.predictor_adaptor import PredictorAdaptor
 
