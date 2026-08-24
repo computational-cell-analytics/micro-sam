@@ -725,6 +725,28 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     return train_ds, val_ds
 
 
+def _pannuke_random_pad_trafo(raw, labels, patch_shape):
+    """Randomly pad a PanNuke 256x256 tile up to ``patch_shape``, at a random offset (steps of 64).
+
+    The output shape is always ``patch_shape``, matching the other histopathology datasets in the
+    same batch group; only the offset of the 256x256 content within it varies, instead of always
+    anchoring it to one corner as torch_em's default padding does.
+    """
+    pad_total = patch_shape[-1] - raw.shape[-1]
+    if pad_total <= 0:
+        return raw, labels
+
+    top = random.choice(range(0, pad_total + 1, 64))
+    left = random.choice(range(0, pad_total + 1, 64))
+    pad_height = (top, pad_total - top)
+    pad_width = (left, pad_total - left)
+
+    def _pad(x):
+        return np.pad(x, [(0, 0)] * (x.ndim - 2) + [pad_height, pad_width])
+
+    return _pad(raw), _pad(labels)
+
+
 def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     """Get all histopathology (HP) datasets for generalist training.
 
@@ -812,9 +834,14 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     # used across patho-sam's own evaluation scripts.
     # The full dataset is built twice (independent instances) so train and val get their own
     # raw_transform, rather than a shared random_split Subset that would alias the two.
+    # PanNuke tiles are natively 256x256, so patch_shape is requested at their native size (this
+    # keeps torch_em's patch padding a no-op) and _pannuke_random_pad_trafo pads it back up to
+    # patch_shape itself, at a random offset, so it still matches the batch shape of the other
+    # 2D histopathology datasets while no longer always anchoring the content to one corner.
     pannuke_kwargs = {
-        "path": os.path.join(input_path, "pannuke"), "patch_shape": (1, *patch_shape),
-        "download": True, "ndim": 2, "folds": ["fold_1", "fold_2"], **kwargs,
+        "path": os.path.join(input_path, "pannuke"), "patch_shape": (1, 256, 256),
+        "download": True, "ndim": 2, "folds": ["fold_1", "fold_2"],
+        **{**kwargs, "transform": partial(_pannuke_random_pad_trafo, patch_shape=patch_shape)},
     }
     pannuke_train_full = datasets.get_pannuke_dataset(**pannuke_kwargs)
     pannuke_val_full = datasets.get_pannuke_dataset(**pannuke_kwargs)
