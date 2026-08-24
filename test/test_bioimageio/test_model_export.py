@@ -68,7 +68,7 @@ class TestModelExport(unittest.TestCase):
         test_summary = bioimageio.core.test_model(export_path, devices=["cpu"])
         self.assertEqual(test_summary.status, "passed", test_summary.format())
 
-        # Match the size minima to the test image, so that BioImageIO does not crop instances from its probes.
+        # Prevent BioImageIO probes from cropping instances.
         model_description = bioimageio.spec.load_model_description(export_path)
         self.assertEqual([str(ipt.id) for ipt in model_description.inputs], ["image"])
         space_axes = [axis for axis in model_description.inputs[0].axes if str(axis.id) in ("y", "x")]
