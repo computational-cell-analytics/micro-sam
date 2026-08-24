@@ -710,7 +710,7 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
 
 
 def build_apg_segmenter(
-    model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None,
+    model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None, is_tiled=False,
 ):
     """Build the automatic prompt generator from both halves of a joint checkpoint.
 
@@ -723,6 +723,8 @@ def build_apg_segmenter(
         device: The torch device.
         joint_checkpoint: The joint trainer checkpoint, without the '.pt' suffix.
         decoder_path: Decoder weights to use instead of the ones exported from the joint checkpoint.
+        is_tiled: Whether to build the tiled generator, which encodes and propagates tile by tile
+            instead of downscaling the whole image (or volume) to the model's input size.
 
     Returns:
         The prompt generator, built through the library factory that the CLI and the API use.
@@ -741,7 +743,7 @@ def build_apg_segmenter(
         decoder_path or exported_decoder, device, encoder=model.image_encoder
     )
     return get_instance_segmentation_generator(
-        model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
+        model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim, is_tiled=is_tiled,
     )
 
 

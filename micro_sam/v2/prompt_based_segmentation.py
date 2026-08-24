@@ -1063,6 +1063,15 @@ class TiledPromptableSegmentation3D:
         """Return tile-slice propagation steps for the currently active tiles."""
         return sum(segmenter.get_progress_total(z_range) for segmenter in self._segmenters.values())
 
+    def reset_tracking(self):
+        """Reset every active tile's tracked objects, keeping its cached encoding.
+
+        Lets a caller run several propagation passes over the same tiles (e.g. one pass per batch
+        of objects) without paying the per-tile encoder cost again.
+        """
+        for segmenter in self._segmenters.values():
+            segmenter.reset_tracking()
+
     def _tile_index(self, y, x):
         """Return the id of the tile whose inner (halo-free) block contains the point (y, x)."""
         for tile_id in range(self.tiling.number_of_blocks):
@@ -1324,3 +1333,31 @@ class TiledPromptableSegmentation3D:
             positive = inner != 0
             region[positive] = inner[positive]
         return segmentation
+
+    def propagate_prompts_by_tile(self, update_progress=None, early_stop_patience=None, z_range=None):
+        """Propagate every active tile's prompts, keeping each tile's result and block apart.
+
+        Unlike `predict`, which stitches by object identity (one logical object prompted in several
+        tiles keeps one id), this never merges across tiles. It is for a caller whose object ids are
+        tile-local, e.g. automatic prompt generation, where every candidate belongs to exactly one
+        tile and its id would otherwise collide with an unrelated candidate in another tile.
+
+        Returns:
+            {tile_id: (video_segments, bounding_box)}. `video_segments` is the tile's own
+            {frame: {object_id: mask}} in the tile's local (cropped) coordinates, as returned by
+            `PromptableSegmentation3D.propagate_prompts`. `bounding_box` is the tile's outer
+            (halo-included) block, a (y, x) slice tuple into the volume's in-plane axes.
+        """
+        def propagate_tile(tile_id, tile_update=None):
+            return self._segmenters[tile_id].propagate_prompts(
+                update_progress=tile_update, early_stop_patience=early_stop_patience, z_range=z_range,
+            )
+
+        results = {}
+        for tile_id, video_segments in self._run_tile_jobs(
+            sorted(self._segmenters), propagate_tile, update_progress=update_progress,
+        ):
+            outer = self.tiling.get_block_with_halo(tile_id, list(self.halo)).outer_block
+            bounding_box = tuple(slice(int(b), int(e)) for b, e in zip(outer.begin, outer.end))
+            results[tile_id] = (video_segments, bounding_box)
+        return results

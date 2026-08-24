@@ -1480,10 +1480,9 @@ def get_instance_segmentation_generator(
                 "decoder's candidates into masks."
             )
         if ndim == 3:
-            if is_tiled:
-                raise NotImplementedError("Volumetric prompt generation does not support tiling yet.")
             # A volume is prompted through the video predictor, which propagates its prompts.
-            return AutomaticPromptGenerator(decoder, model, device=device, inference_device=inference_device)
+            cls = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
+            return cls(decoder, model, device=device, inference_device=inference_device)
         cls = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
         return cls(
             decoder, get_sam2_image_predictor(model), device=device, inference_device=inference_device,

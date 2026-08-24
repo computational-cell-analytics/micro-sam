@@ -20,7 +20,7 @@ every object its best-matching propagated mask scores 0.006 above the merge.
 """
 
 import shutil
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from tqdm import tqdm
@@ -35,9 +35,10 @@ from .normalization import normalize_raw
 from ..v1.inference import _merge_segmentations
 from ..util import make_temp_embedding_path, _ensure_rgb
 from .postprocessing import DEFAULT_POSTPROCESSING, _compute_flow_density
-from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
+from .prompt_based_segmentation import PromptableSegmentation3D, TiledPromptableSegmentation3D, _crop_to_original_shape
 from .util import (
     autocast, encode_image, precompute_image_embeddings, set_precomputed, get_sam2_image_predictor,
+    _load_list_datasets,
 )
 from .instance_segmentation import (
     TiledUniSAM2InstanceSegmentation, UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices,
@@ -375,6 +376,17 @@ def _records_shape(records: List[Dict[str, Any]]) -> tuple:
     """The smallest canvas that holds every record, which is all a merge of cropped masks needs."""
     boxes = [record["bounding_box"] for record in records]
     return tuple(max(box[axis].stop for box in boxes) for axis in range(len(boxes[0])))
+
+
+def _intersect_boxes(box_a: tuple, box_b: tuple) -> Optional[tuple]:
+    """The overlap of two same-length slice tuples, or None where an axis does not overlap."""
+    result = []
+    for a, b in zip(box_a, box_b):
+        start, stop = max(a.start, b.start), min(a.stop, b.stop)
+        if start >= stop:
+            return None
+        result.append(slice(start, stop))
+    return tuple(result)
 
 
 def _volume_records(
@@ -1027,11 +1039,16 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
     """Generates an instance segmentation with automatically generated prompts, for tiled inference.
 
     Like `AutomaticPromptGenerator`, but both branches run tile by tile, which keeps the encoder at its
-    native resolution instead of downscaling the whole image to its input size.
+    native resolution instead of downscaling the whole image (or volume) to its input size.
 
     The prompts are derived once from the stitched prediction, so a candidate spanning a tile border is
     proposed once. Each is assigned to the tile whose inner block holds its point and prompted within
     that tile's halo, so no object is segmented twice and no mask is cut off at a nearby border.
+
+    A volume tiles the same way, in-plane only: the decoder already runs tiled and z-blocked (see
+    `TiledUniSAM2InstanceSegmentation`), and every candidate's tile keeps its own video-predictor state
+    (see `TiledPromptableSegmentation3D`), built and torn down one tile at a time so a volume too large
+    for one video-predictor state still fits.
 
     Args:
         model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
@@ -1061,6 +1078,8 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         halo: Optional[tuple] = None,
         save_path: Optional[str] = None,
         verbose: bool = False,
+        offload_to_cpu: Optional[bool] = None,
+        cache_all_slices: bool = False,
         **kwargs,
     ) -> None:
         """Compute the tiled embeddings, run the decoder on them and keep them for the prompting.
@@ -1069,24 +1088,29 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         again in `generate`, so they are held until `clear_state`.
 
         Args:
-            image: The input image, shape (Y, X) or (Y, X, C).
-            ndim: The number of spatial dimensions. Must be 2.
-            image_embeddings: Optional precomputed tiled image embeddings. The tiling is taken from
-                them when they are given.
+            image: The input image, shape (Y, X) or (Y, X, C), or the input volume, shape (Z, Y, X).
+            ndim: The number of spatial dimensions, 2 or 3. A volume requires a video predictor.
+            image_embeddings: Optional precomputed tiled (video-style, for a volume) embeddings. The
+                tiling is taken from them when they are given.
             i: The slice index for tiled video-style embeddings. By default the embeddings contain one image.
-            tile_shape: The tile shape, (y, x). Required when no embeddings are given.
-            halo: The overlap between the tiles, (y, x). Required when no embeddings are given.
+            tile_shape: The in-plane tile shape, (y, x). Required when no embeddings are given. A
+                volume is not tiled along z.
+            halo: The in-plane overlap between the tiles, (y, x). Required when no embeddings are given.
             save_path: Optional path to cache the computed embeddings in a zarr container. Without one
                 an ephemeral store is used, which `clear_state` removes.
             verbose: Whether to print progress while the embeddings are computed.
+            offload_to_cpu: Volumes only. Whether every tile's tracking state is held on the host
+                rather than on the device, see `AutomaticPromptGenerator.initialize`.
+            cache_all_slices: Volumes only. Whether every tile's slices stay cached on the device
+                while it is propagated, see `AutomaticPromptGenerator.initialize`.
             kwargs: Additional arguments for `TiledUniSAM2InstanceSegmentation.initialize`.
         """
-        if ndim != 2:
-            raise ValueError(f"Tiled prompt generation supports 2d images only, got ndim={ndim}.")
+        if ndim not in (2, 3):
+            raise ValueError(f"Tiled prompt generation supports 2d and 3d inputs, got ndim={ndim}.")
         if image_embeddings is None and (tile_shape is None or halo is None):
             raise ValueError("Both 'tile_shape' and 'halo' have to be passed for the tiled generator.")
 
-        if self._temporary_embedding_path is not None:
+        if self._temporary_embedding_path is not None or self._volume is not None:
             self.clear_state()
 
         owns_image_embeddings = image_embeddings is None
@@ -1095,16 +1119,36 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             if path is None:
                 self._temporary_embedding_path = make_temp_embedding_path()
                 path = self._temporary_embedding_path
+            encoder = self._video_predictor if ndim == 3 else self._predictor
             image_embeddings = precompute_image_embeddings(
-                self._predictor, image, save_path=path, ndim=2, tile_shape=tile_shape, halo=halo,
+                encoder, image, save_path=path, ndim=ndim, tile_shape=tile_shape, halo=halo,
                 verbose=verbose, lazy_loading=True,
             )
 
-        TiledUniSAM2InstanceSegmentation.initialize(
-            self, image, ndim=2, image_embeddings=image_embeddings, i=i, **kwargs
-        )
+        if ndim == 3:
+            if self._video_predictor is None:
+                raise ValueError(
+                    "Volumetric prompt generation prompts the SAM2 video predictor, so the tiled "
+                    "generator has to be constructed with one instead of an image predictor."
+                )
+            TiledUniSAM2InstanceSegmentation.initialize(
+                self, image, ndim=3, image_embeddings=image_embeddings, **kwargs
+            )
+            self._volume = image
+            self._i = None
+            self._offload_to_cpu = offload_to_cpu
+            self._max_cached_frames = int(image.shape[0]) if cache_all_slices else None
+            self._propagator = TiledPromptableSegmentation3D(
+                self._video_predictor, image, image_embeddings,
+                offload_state_to_cpu=self._offload_to_cpu, max_cached_frames=self._max_cached_frames,
+            )
+        else:
+            TiledUniSAM2InstanceSegmentation.initialize(
+                self, image, ndim=2, image_embeddings=image_embeddings, i=i, **kwargs
+            )
+            self._i = i
+
         self._image_embeddings = image_embeddings
-        self._i = i
         self._owns_image_embeddings = owns_image_embeddings
         self._set_tiling(image_embeddings)
 
@@ -1191,6 +1235,292 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             offset += max_id
             segmentation[bounding_box] = _merge_segmentations(tile_segmentation, segmentation[bounding_box])
         return segmentation
+
+    def _tile_inner_box(self, tile_id: int, n_slices: int) -> tuple:
+        """The inner (halo-free) block of a tile, as a slice tuple, full z depth included."""
+        block = self._tiling.get_block_with_halo(tile_id, list(self._halo)).inner_block
+        return (slice(0, n_slices),) + tuple(slice(int(b), int(e)) for b, e in zip(block.begin, block.end))
+
+    def _merge_via_multicut(
+        self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
+        beta: float = 0.5,
+    ) -> np.ndarray:
+        """Stitch the per-tile merges with a region-adjacency-graph multicut, not a fixed cutoff.
+
+        The bioimage-py 'stitching.py' pattern (also how `micro_sam.v1.multi_dimensional_segmentation
+        .merge_instance_segmentation_3d` stitches z-slices, just across tiles here instead of frames):
+        every pair of tiles whose halo-extended blocks touch contributes one graph edge per pair of
+        labels that share pixels in that shared region, weighted by the overlap fraction. One multicut
+        over the whole tile graph then decides which cross-tile ids are the same object, instead of
+        `_merge`'s fixed cutoff deciding tile by tile in processing order. Every tile then paints only
+        its inner (non-overlapping) block, so the multicut's node labels are what resolves a border,
+        not a second, pixel-level overlap rule.
+        """
+        import elf.segmentation as seg_utils
+        from bioimage_cpp.graph import UndirectedGraph
+        from bioimage_cpp.utils import segmentation_overlap
+
+        n_slices = shape[0]
+        tiles = []
+        offset = 0
+        for proposal in proposals:
+            records = [record for record in proposal["records"] if record["predicted_iou"] >= score_threshold]
+            if not records:
+                continue
+            bounding_box = proposal["bounding_box"]
+            tile_shape = tuple(box.stop - box.start for box in bounding_box)
+            tile_segmentation = merge_by_score(records, tile_shape, max_overlap=max_overlap, min_size=min_size)
+            max_id = int(tile_segmentation.max())
+            if max_id == 0:
+                continue
+            tiles.append((proposal["tile_id"], offset, tile_segmentation, bounding_box))
+            offset += max_id
+
+        if not tiles:
+            return np.zeros(shape, dtype="uint32")
+
+        # One node per instance, plus node 0 for the background all of them are cut from.
+        n_nodes = offset + 1
+        edges: Dict[Tuple[int, int], float] = {}
+        for i, (_, offset_a, seg_a, box_a) in enumerate(tiles):
+            for _, offset_b, seg_b, box_b in tiles[i + 1:]:
+                shared = _intersect_boxes(box_a, box_b)
+                if shared is None:
+                    continue
+                local_a = tuple(slice(s.start - b.start, s.stop - b.start) for s, b in zip(shared, box_a))
+                local_b = tuple(slice(s.start - b.start, s.stop - b.start) for s, b in zip(shared, box_b))
+                overlap = segmentation_overlap(seg_a[local_a], seg_b[local_b])
+                for label_a, label_b, count in overlap.overlap_table()[["label_a", "label_b", "count"]]:
+                    if label_a == 0 and label_b == 0:
+                        continue
+                    # Normalized by the smaller label, not by the shared crop: a small sliver of a
+                    # large tile touching another tile's object should not read as a weak overlap.
+                    size_a = overlap.count_a(int(label_a)) if label_a else count
+                    size_b = overlap.count_b(int(label_b)) if label_b else count
+                    fraction = float(count) / max(1, min(int(size_a), int(size_b)))
+                    u = offset_a + int(label_a) if label_a else 0
+                    v = offset_b + int(label_b) if label_b else 0
+                    key = (u, v) if u < v else (v, u)
+                    edges[key] = max(edges.get(key, 0.0), fraction)
+
+        if edges:
+            uv_ids = np.array(list(edges.keys()), dtype="uint64")
+            costs = seg_utils.multicut.compute_edge_costs(np.array(list(edges.values()), dtype="float32"))
+            # Background never merges with a real object, so its edges are maximally repulsive.
+            # A raw cost has to be strongly positive to end up repulsive after '1.0 - costs' below.
+            costs[(uv_ids == 0).any(axis=1)] = 8.0
+            graph = UndirectedGraph(n_nodes)
+            graph.insert_edges(uv_ids)
+            node_labels = seg_utils.multicut.multicut_decomposition(graph, 1.0 - costs, beta=beta)
+            # The solver's cluster ids are not guaranteed to keep node 0 mapped to output id 0, so a
+            # real object's cluster could collide with it. Remap explicitly: node 0's cluster -> 0,
+            # every other cluster -> a compact id that cannot equal it.
+            background_cluster = node_labels[0]
+            is_background = node_labels == background_cluster
+            remapped = np.zeros(n_nodes, dtype="uint32")
+            _, inverse = np.unique(node_labels[~is_background], return_inverse=True)
+            remapped[~is_background] = inverse + 1
+            node_labels = remapped
+        else:
+            # No two tiles touch, so every tile's ids are already final.
+            node_labels = np.arange(n_nodes, dtype="uint32")
+
+        segmentation = np.zeros(shape, dtype="uint32")
+        for tile_id, tile_offset, tile_segmentation, bounding_box in tiles:
+            global_ids = tile_segmentation.astype("uint64")
+            global_ids[global_ids != 0] += tile_offset
+            relabeled = node_labels[global_ids].astype("uint32")
+            inner = self._tile_inner_box(tile_id, n_slices)
+            local_inner = tuple(slice(s.start - b.start, s.stop - b.start) for s, b in zip(inner, bounding_box))
+            segmentation[inner] = relabeled[local_inner]
+        return segmentation
+
+    @torch.no_grad()
+    def generate(
+        self,
+        candidate_threshold: Optional[Union[float, Sequence[float]]] = None,
+        foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
+        n_iter: int = DEFAULT_PROMPT_GENERATION["n_iter"],
+        dt: float = DEFAULT_PROMPT_GENERATION["dt"],
+        sigma: float = DEFAULT_PROMPT_GENERATION["sigma"],
+        spacing: Optional[tuple] = None,
+        min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
+        score_threshold: float = DEFAULT_PROMPT_GENERATION["score_threshold"],
+        max_overlap: float = DEFAULT_PROMPT_GENERATION["max_overlap"],
+        min_size: int = DEFAULT_PROMPT_GENERATION["min_size"],
+        refine_with_box_prompts: bool = DEFAULT_PROMPT_GENERATION["refine_with_box_prompts"],
+        box_extension: int = DEFAULT_PROMPT_GENERATION["box_extension"],
+        multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
+        n_objects_per_pass: int = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"],
+        early_stop_patience: Optional[int] = DEFAULT_PROMPT_GENERATION["early_stop_patience"],
+        batch_size: int = 64,
+        n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
+        verbose: bool = False,
+        stitch: str = "multicut",
+    ) -> np.ndarray:
+        """Derive prompts from the stored predictions, apply them and merge the masks.
+
+        Same arguments as `AutomaticPromptGenerator.generate`. A 2d image defers to it unchanged; a
+        volume differs only in the final merge, which has to resolve the halo overlaps between tiles
+        rather than run one flat, untiled `merge_by_score`.
+
+        Args:
+            stitch: Volumes only. How the tiles are merged across their halo overlaps: 'overlap' is
+                `_merge`'s greedy rule (a later tile's id is discarded above a fixed overlap with what
+                is already placed); 'multicut' is `_merge_via_multicut`, a RAG built from every pair of
+                touching tiles' overlaps, solved once for the whole volume rather than tile by tile.
+        """
+        if not self._is_initialized:
+            raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
+        if self._prediction.ndim != 4:
+            return super().generate(
+                candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
+                n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size,
+                score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
+                refine_with_box_prompts=refine_with_box_prompts, box_extension=box_extension,
+                multimasking=multimasking, batch_size=batch_size, n_threads=n_threads, verbose=verbose,
+            )
+        if stitch not in ("overlap", "multicut"):
+            raise ValueError(f"'stitch' must be 'overlap' or 'multicut', got '{stitch}'.")
+
+        shape = self._prediction[0].shape
+        if candidate_threshold is None:
+            candidate_threshold = DEFAULT_PROMPT_GENERATION["candidate_threshold_3d"]
+        prompts = derive_volume_prompts(
+            self._prediction[0], self._prediction[1:], candidate_threshold=candidate_threshold,
+            foreground_threshold=foreground_threshold, n_iter=n_iter, dt=dt, sigma=sigma,
+            spacing=spacing, min_candidate_size=min_candidate_size, n_threads=n_threads,
+        )
+        if prompts is None:
+            return np.zeros(shape, dtype="uint32")
+        candidates = self._score_candidates(
+            prompts, multimasking=multimasking, batch_size=batch_size,
+            score_threshold=score_threshold, max_overlap=max_overlap,
+        )
+        proposals = self._propagate_candidates(
+            candidates, n_objects_per_pass=n_objects_per_pass,
+            early_stop_patience=early_stop_patience, verbose=verbose,
+        )
+        if stitch == "multicut":
+            return self._merge_via_multicut(
+                proposals, shape, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
+            )
+        return self._merge(
+            proposals, shape, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
+        )
+
+    def _set_tile_embeddings_3d(self, tile_id: int, frame: int) -> None:
+        """Set one tile's slice ``frame`` on the image predictor, from the tiled 3d embeddings."""
+        features = self._image_embeddings["features"][str(tile_id)]
+        fpn = _load_list_datasets(self._image_embeddings["fpn"], str(tile_id), lazy_loading=True)
+        pos_enc = _load_list_datasets(self._image_embeddings["pos_enc"], str(tile_id), lazy_loading=True)
+        _set_image_predictor_from_backbone(
+            self._predictor, fpn, pos_enc, features, features.attrs["original_size"], frame,
+        )
+
+    @torch.no_grad()
+    def _score_candidates(
+        self, prompts: dict, multimasking: bool, batch_size: int, score_threshold: float,
+        max_overlap: float,
+    ) -> List[dict]:
+        """Score every candidate in the tile whose inner block holds its anchor point.
+
+        Like `AutomaticPromptGenerator._score_candidates`, but a tile's slice is reconstructed from
+        the tiled 3d embeddings instead of the (untiled) full-resolution ones, and duplicate
+        suppression stays inside one tile's candidates on one frame: a candidate assigned to another
+        tile is never a plausible duplicate, since inner blocks do not overlap.
+        """
+        points, point_labels, frames = prompts["points"], prompts["point_labels"], prompts["frames"]
+        candidates = []
+        for frame in np.unique(frames):
+            by_tile: Dict[int, List[int]] = {}
+            for index in np.where(frames == frame)[0]:
+                x, y = points[index, 0]
+                tile_id = self._tiling.coordinates_to_block_id([int(y), int(x)])
+                by_tile.setdefault(tile_id, []).append(index)
+
+            for tile_id, indices in by_tile.items():
+                self._set_tile_embeddings_3d(tile_id, int(frame))
+                bounding_box = self._tile_bounding_box(tile_id)
+                origin = np.array([bounding_box[1].start, bounding_box[0].start], dtype="float32")
+
+                records = self._apply_prompts(
+                    {"points": points[indices] - origin, "point_labels": point_labels[indices]},
+                    multimasking=multimasking, batch_size=batch_size,
+                )
+                records = [record for record in records if record["predicted_iou"] >= score_threshold]
+                if not records:
+                    continue
+
+                _, kept = merge_by_score(
+                    records, _records_shape(records), max_overlap=max_overlap,
+                    min_size=DEFAULT_PROMPT_GENERATION["min_size"], return_matches=True,
+                )
+                for record_index in kept.values():
+                    record = records[record_index]
+                    x, y = points[indices[record["prompt_index"]], 0]
+                    candidates.append({
+                        "frame": int(frame),
+                        "tile_id": int(tile_id),
+                        "point": (float(x), float(y)),
+                        "score": record["predicted_iou"],
+                        "stability": record["stability_score"],
+                    })
+        return candidates
+
+    def _propagate_candidates(
+        self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
+        verbose: bool,
+    ) -> List[Dict[str, Any]]:
+        """Propagate every tile's candidates with that tile's own video-predictor state.
+
+        One tile's state is built, propagated through every pass its candidates need, and torn down
+        before the next tile's is built, so only one tile's state has to fit in device memory at a
+        time (see `TiledPromptableSegmentation3D`). The result is grouped by tile, like the 2d tiled
+        generator's proposals, because the merge across tiles still has to resolve their halo overlaps.
+        """
+        by_tile: Dict[int, List[dict]] = {}
+        for candidate in candidates:
+            by_tile.setdefault(candidate["tile_id"], []).append(candidate)
+
+        n_slices = self._volume.shape[0]
+        proposals = []
+        for tile_id, tile_candidates in sorted(by_tile.items()):
+            by_anchor: Dict[int, List[dict]] = {}
+            for candidate in tile_candidates:
+                by_anchor.setdefault(candidate["frame"], []).append(candidate)
+            passes = [
+                group[start:start + n_objects_per_pass]
+                for _, group in sorted(by_anchor.items())
+                for start in range(0, len(group), n_objects_per_pass)
+            ]
+
+            tile_records = []
+            bounding_box = None
+            for batch in tqdm(passes, desc=f"Propagate prompts (tile {tile_id})", disable=not verbose):
+                self._propagator.reset_tracking()
+                for object_id, candidate in enumerate(batch, start=1):
+                    x, y = candidate["point"]
+                    self._propagator.add_point_prompts(
+                        frame_ids=candidate["frame"],
+                        points=np.array([[y, x]], dtype="float32"),  # The propagator takes YX.
+                        point_labels=np.array([1], dtype="int32"),
+                        object_id=object_id,
+                    )
+                by_tile_segments = self._propagator.propagate_prompts_by_tile(
+                    early_stop_patience=early_stop_patience,
+                )
+                video_segments, bounding_box_yx = by_tile_segments[tile_id]
+                # A concrete z-slice, not 'slice(None)': '_merge' needs '.start'/'.stop' to size the tile.
+                bounding_box = (slice(0, n_slices),) + bounding_box_yx
+                tile_shape = (n_slices,) + tuple(box.stop - box.start for box in bounding_box_yx)
+                tile_records.extend(_volume_records(video_segments, batch, tile_shape))
+            # Free this tile's video-predictor state before the next tile's is built.
+            self._propagator.reset_predictor()
+
+            if tile_records:
+                proposals.append({"tile_id": tile_id, "bounding_box": bounding_box, "records": tile_records})
+        return proposals
 
     def _refine_boxes(self, segmentation: np.ndarray, batch_size: int, box_extension: int) -> np.ndarray:
         """Re-prompt every instance with its bounding box, in the tile that holds its interior point.
