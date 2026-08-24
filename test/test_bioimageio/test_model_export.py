@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import imageio.v3 as imageio
 
 import bioimageio.spec
 
@@ -36,11 +37,14 @@ class TestModelExport(unittest.TestCase):
         from micro_sam.bioimageio import export_sam_model
         image, labels = synthetic_data(shape=(1024, 1022))
 
+        cover_path = os.path.join(self.tmp_folder, "cover.png")
+        imageio.imwrite(cover_path, image)
         export_path = os.path.join(self.tmp_folder, "test_export.zip")
         export_sam_model(
             image, labels,
             model_type=self.model_type, name="test-export",
             output_path=export_path,
+            covers=[cover_path],
         )
 
         self.assertTrue(os.path.exists(export_path))
@@ -59,14 +63,13 @@ class TestModelExport(unittest.TestCase):
 
         self.assertTrue(os.path.exists(export_path))
 
-        # The exported model must be image-only, with the raised size minimum,
-        # so that the bioimageio test procedure exercises automatic instance segmentation.
+        # Match the size minima to the test image, so that BioImageIO does not crop instances from its probes.
         model_description = bioimageio.spec.load_model_description(export_path)
         self.assertEqual([str(ipt.id) for ipt in model_description.inputs], ["image"])
         space_axes = [axis for axis in model_description.inputs[0].axes if str(axis.id) in ("y", "x")]
         self.assertEqual(len(space_axes), 2)
-        for axis in space_axes:
-            self.assertEqual(axis.size.min, 256)
+        for axis, expected_min in zip(space_axes, image.shape):
+            self.assertEqual(axis.size.min, expected_min)
             self.assertEqual(axis.size.step, 1)
 
 

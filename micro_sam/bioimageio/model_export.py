@@ -40,13 +40,6 @@ DEFAULTS = {
 # Reference: https://github.com/bioimage-io/spec-bioimage-io/commit/39d343681d427ec93cf69eef7597d9eb9678deb1#diff-0bbdaa8196fa31f945afabcf04a4295ff098f1f24400ef9e59b0f684d411905eL269  # noqa
 # We had this parameter in bioimageio.spec. This has been removed. We just make a copy of the same parameter.
 ARBITRARY_SIZE = spec.ParameterizedSize(min=1, step=1)
-# Image size for models exported with an instance segmentation decoder. Their test
-# procedure runs automatic instance segmentation on the test image resized to the
-# minimum (and min + 1, min + 2), and below circa 200 pixels the resized test images
-# no longer contain segmentable objects, which violates the data dependent minimum
-# of one object in the mask output. 256 leaves a good margin while keeping all
-# realistic image sizes valid.
-AIS_IMAGE_SIZE = spec.ParameterizedSize(min=256, step=1)
 
 
 def _get_architecture_model_type(model_type):
@@ -403,6 +396,14 @@ def _build_model_description(
     # The description is built by a separate function so that it can be re-built
     # after the reference outputs were regenerated: the test tensor hashes are
     # pinned when the description is created.
+    if with_decoder:
+        # Start each BioImageIO size probe at the test image size, so that it cannot crop instances.
+        test_image_shape = np.load(input_paths["image"], mmap_mode="r").shape
+        image_y_size = spec.ParameterizedSize(min=test_image_shape[-2], step=1)
+        image_x_size = spec.ParameterizedSize(min=test_image_shape[-1], step=1)
+    else:
+        image_y_size = image_x_size = ARBITRARY_SIZE
+
     input_descriptions = [
         # First input: the image data.
         spec.InputTensorDescr(
@@ -412,8 +413,8 @@ def _build_model_description(
                 # NOTE: to support 1 and 3 channels we can add another preprocessing.
                 # Best solution: Have a pre-processing for this! (1C -> RGB)
                 spec.ChannelAxis(channel_names=[spec.Identifier(cname) for cname in "RGB"]),
-                spec.SpaceInputAxis(id=spec.AxisId("y"), size=AIS_IMAGE_SIZE if with_decoder else ARBITRARY_SIZE),
-                spec.SpaceInputAxis(id=spec.AxisId("x"), size=AIS_IMAGE_SIZE if with_decoder else ARBITRARY_SIZE),
+                spec.SpaceInputAxis(id=spec.AxisId("y"), size=image_y_size),
+                spec.SpaceInputAxis(id=spec.AxisId("x"), size=image_x_size),
             ],
             test_tensor=spec.FileDescr(source=input_paths["image"]),
             data=spec.IntervalOrRatioDataDescr(type="uint8")
@@ -671,7 +672,7 @@ def export_sam_model(
 
         doc_path = _write_documentation(kwargs.get("documentation", None), model_type, tmp_dir)
 
-        covers = kwargs.get("covers", None)
+        covers = kwargs.pop("covers", None)
         if covers is None:
             covers = _generate_covers(input_paths, result_paths, tmp_dir, with_decoder=with_decoder)
         else:
