@@ -52,6 +52,10 @@ class TestModelExport(unittest.TestCase):
 
         # TODO more tests: run prediction with models for different prompt settings
 
+    @unittest.skipUnless(
+        platform.system() == "Linux",
+        "The full decoder model export is only tested on Linux.",
+    )
     def test_model_export_with_decoder(self):
         from micro_sam.bioimageio import export_sam_model
         data_dir = os.path.join(util.get_cache_directory(), "sample_data")
