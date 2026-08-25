@@ -7,13 +7,15 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import imageio.v3 as imageio
 
+import bioimageio.core
 import bioimageio.spec
 
 import torch
 
 import micro_sam.util as util
-from micro_sam.sample_data import synthetic_data
+from micro_sam.sample_data import fetch_hela_2d_example_data, synthetic_data
 
 spec_minor = int(bioimageio.spec.__version__.split(".")[1])
 
@@ -36,20 +38,29 @@ class TestModelExport(unittest.TestCase):
         from micro_sam.bioimageio import export_sam_model
         image, labels = synthetic_data(shape=(1024, 1022))
 
+        cover_path = os.path.join(self.tmp_folder, "cover.png")
+        imageio.imwrite(cover_path, image)
         export_path = os.path.join(self.tmp_folder, "test_export.zip")
         export_sam_model(
             image, labels,
             model_type=self.model_type, name="test-export",
             output_path=export_path,
+            covers=[cover_path],
         )
 
         self.assertTrue(os.path.exists(export_path))
 
         # TODO more tests: run prediction with models for different prompt settings
 
+    @unittest.skipUnless(
+        platform.system() == "Linux",
+        "The full decoder model export is only tested on Linux.",
+    )
     def test_model_export_with_decoder(self):
         from micro_sam.bioimageio import export_sam_model
-        image, labels = synthetic_data(shape=(1024, 1022))
+        data_dir = os.path.join(util.get_cache_directory(), "sample_data")
+        image = imageio.imread(fetch_hela_2d_example_data(data_dir))
+        labels = np.zeros(image.shape[:2], dtype="uint32")
 
         # Export a generalist model, which has an instance segmentation decoder,
         # so that the exported model supports automatic instance segmentation.
@@ -58,9 +69,71 @@ class TestModelExport(unittest.TestCase):
         export_sam_model(image, labels, model_type=model_type, name="test-export-ais", output_path=export_path)
 
         self.assertTrue(os.path.exists(export_path))
+        test_summary = bioimageio.core.test_model(export_path, devices=["cpu"])
+        self.assertEqual(test_summary.status, "passed", test_summary.format())
+
+        # Prevent BioImageIO probes from cropping instances.
+        model_description = bioimageio.spec.load_model_description(export_path)
+        self.assertEqual([str(ipt.id) for ipt in model_description.inputs], ["image"])
+        space_axes = [axis for axis in model_description.inputs[0].axes if str(axis.id) in ("y", "x")]
+        self.assertEqual(len(space_axes), 2)
+        for axis, expected_min in zip(space_axes, image.shape):
+            self.assertEqual(axis.size.min, expected_min)
+            self.assertEqual(axis.size.step, 1)
 
 
 class TestModelExportRegressions(unittest.TestCase):
+    def test_decoder_export_pipelines_use_cpu(self):
+        from micro_sam.bioimageio import model_export
+
+        image = np.zeros((1, 3, 8, 8), dtype="uint8")
+        mask = np.ones((1, 1, 1, 8, 8), dtype="uint8")
+        scores = np.ones((1, 1, 1), dtype="float32")
+        embeddings = np.ones((1, 256, 64, 64), dtype="float32")
+        prediction = SimpleNamespace(
+            members={
+                "masks": SimpleNamespace(data=mask),
+                "scores": SimpleNamespace(data=scores),
+                "embeddings": SimpleNamespace(data=embeddings),
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            input_path = os.path.join(tmp_dir, "image.npy")
+            mask_path = os.path.join(tmp_dir, "mask.npy")
+            score_path = os.path.join(tmp_dir, "scores.npy")
+            embeddings_path = os.path.join(tmp_dir, "embeddings.npy")
+            np.save(input_path, image)
+            np.save(mask_path, mask)
+            np.save(score_path, scores)
+            np.save(embeddings_path, embeddings)
+
+            input_paths = {"image": input_path}
+            result_paths = {"mask": mask_path, "score": score_path, "embeddings": embeddings_path}
+            model_description = object()
+            pipeline = MagicMock()
+            pipeline.predict_sample_without_blocking.return_value = prediction
+
+            with (
+                patch("bioimageio.core.digest_spec.get_test_input_sample", return_value=object()),
+                patch.object(model_export.bioimageio.core, "create_prediction_pipeline") as create_pipeline,
+            ):
+                create_pipeline.return_value.__enter__.return_value = pipeline
+                model_export._regenerate_reference_outputs(
+                    model_description, input_paths=input_paths, result_paths=result_paths
+                )
+                create_pipeline.assert_called_once_with(model_description, devices=["cpu"])
+
+            with (
+                patch.object(model_export, "create_sample_for_model", return_value=object()),
+                patch.object(model_export.bioimageio.core, "create_prediction_pipeline") as create_pipeline,
+            ):
+                create_pipeline.return_value.__enter__.return_value = pipeline
+                model_export._check_model(
+                    model_description, input_paths=input_paths, result_paths=result_paths, with_decoder=True
+                )
+                create_pipeline.assert_called_once_with(model_description, devices=["cpu"])
+
     def test_prompt_free_prediction_without_decoder(self):
         from micro_sam.bioimageio.predictor_adaptor import PredictorAdaptor
 
@@ -187,6 +260,7 @@ class TestModelExportRegressions(unittest.TestCase):
                     model_description=object(),
                     input_paths=input_paths,
                     result_paths={"embeddings": input_paths["embeddings"], "mask": mask_path},
+                    with_decoder=False,
                 )
 
             self.assertEqual(pipeline.predict_sample_without_blocking.call_count, 8)
