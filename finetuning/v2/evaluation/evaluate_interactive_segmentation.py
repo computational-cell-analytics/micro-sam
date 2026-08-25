@@ -112,9 +112,15 @@ def write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
 
 def run_interactive_evaluation_2d(
     dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag, legacy_tag,
-    start_with_box=True, n_iterations=8, use_masks=True, mask_threshold=0.0, min_size=0,
+    start_with_box=True, n_iterations=8, use_masks=True, mask_threshold=0.0, min_size=0, shard=None,
 ):
-    """Run iterative prompting on the 2d test split and write one result CSV per iteration."""
+    """Run iterative prompting on the 2d test split and write one result CSV per iteration.
+
+    With 'shard' set to (shard_index, n_shards), only that stride of the images is predicted, and
+    the function returns before scoring: 'run_interactive_segmentation_2d' skips any image whose
+    prediction files already exist (see its module), so a later unsharded call (shard=None) over the
+    same dataset does the scoring once every shard's images are done, without repeating them.
+    """
     prompt = "box" if start_with_box else "point"
     results_dir = os.path.join(experiment_folder, "results")
     save_paths = [
@@ -148,9 +154,15 @@ def run_interactive_evaluation_2d(
     os.makedirs(gt_dir, exist_ok=True)
     image_paths, gt_paths = write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size)
 
+    predict_image_paths, predict_gt_paths = image_paths, gt_paths
+    if shard is not None:
+        shard_index, n_shards = shard
+        predict_image_paths = image_paths[shard_index::n_shards]
+        predict_gt_paths = gt_paths[shard_index::n_shards]
+
     prediction_dir = run_interactive_segmentation_2d(
-        image_paths=image_paths,
-        gt_paths=gt_paths,
+        image_paths=predict_image_paths,
+        gt_paths=predict_gt_paths,
         image_key=None,
         gt_key=None,
         prediction_dir=prediction_root,
@@ -163,6 +175,10 @@ def run_interactive_evaluation_2d(
         ensure_8bit=False,
         mask_threshold=mask_threshold,
     )
+
+    if shard is not None:
+        print(f"Shard {shard[0]}/{shard[1]} finished predicting {len(predict_image_paths)} image(s).")
+        return
 
     os.makedirs(results_dir, exist_ok=True)
     for iteration, save_path in enumerate(save_paths):
@@ -278,7 +294,16 @@ def main():
         help="Feed the previous logits masks back as mask prompts. 2d only, on by default."
     )
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
+    parser.add_argument(
+        "--shard_index", type=int, default=None,
+        help="This shard's index (0-based), for splitting a 2d dataset's images across parallel jobs. "
+             "Requires --n_shards. A later unsharded call over the same dataset does the scoring.",
+    )
+    parser.add_argument("--n_shards", type=int, default=None, help="Total number of shards. Requires --shard_index.")
     args = parser.parse_args()
+
+    if (args.shard_index is None) != (args.n_shards is None):
+        raise ValueError("--shard_index and --n_shards must be given together.")
 
     check_data_download(args.dataset_name, args.input_path)
 
@@ -291,13 +316,16 @@ def main():
     )
 
     if ndim == 2:
+        shard = None if args.shard_index is None else (args.shard_index, args.n_shards)
         run_interactive_evaluation_2d(
             args.dataset_name, args.input_path, args.experiment_folder, device, args.model_type,
             checkpoint, tag, legacy_tag,
             start_with_box=(args.prompt_choice == "box"), n_iterations=args.n_iterations,
-            use_masks=args.use_masks, mask_threshold=args.mask_threshold, min_size=args.min_size,
+            use_masks=args.use_masks, mask_threshold=args.mask_threshold, min_size=args.min_size, shard=shard,
         )
     else:
+        if args.shard_index is not None:
+            raise ValueError("Sharding is only supported for 2d datasets.")
         run_interactive_evaluation_3d(
             args.dataset_name, args.input_path, args.experiment_folder, device, args.model_type,
             checkpoint, tag, legacy_tag,

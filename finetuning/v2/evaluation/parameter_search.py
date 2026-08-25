@@ -556,6 +556,11 @@ def main():
     )
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Weights instead of the joint export.")
     parser.add_argument("--joint_checkpoint", type=str, default="best", help="Joint checkpoint name, without '.pt'.")
+    parser.add_argument(
+        "--interactive_checkpoint", type=str, default=None,
+        help="Standalone interactive weights for apg mode, bypassing the joint checkpoint entirely. "
+             "Requires -c/--checkpoint for the decoder half too.",
+    )
     parser.add_argument("--tuning_root", type=str, default=None, help="Where the sweeps are written and read from.")
     parser.add_argument("--n_tuning_samples", type=int, default=None, help="Cap each sweep to this many samples.")
     parser.add_argument("--criterion", type=str, default=None, choices=sorted(CRITERION_ASCENDING))
@@ -575,6 +580,7 @@ def main():
     for mode in args.mode:
         checkpoint_id, joint_checksum = resolve_checkpoint_identity(
             mode, args.model_type, args.joint_checkpoint, args.checkpoint,
+            interactive_checkpoint_path=args.interactive_checkpoint,
         )
         tuning_root = args.tuning_root or os.path.join(args.experiment_folder, "tuning")
         tuning_root = os.path.join(tuning_root, mode)
@@ -589,7 +595,7 @@ def main():
                 models[model_key] = build_model(
                     mode, args.model_type, device, ndim,
                     joint_checkpoint=args.joint_checkpoint, checkpoint_path=args.checkpoint,
-                    joint_checksum=joint_checksum,
+                    joint_checksum=joint_checksum, interactive_checkpoint_path=args.interactive_checkpoint,
                 )
             tune_parameters(
                 models[model_key], mode, dataset_name, args.input_path, args.model_type, tuning_root, device,

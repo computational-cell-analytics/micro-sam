@@ -114,7 +114,9 @@ def _load_microsam_v1(method, model_type, checkpoint, device):
 def _segment_cellpose(image_or_volume, model, ndim, dataset_name=None):
     if ndim == 3:
         anisotropy = DATASET_ANISOTROPY.get(dataset_name, None)
-        masks = model.eval(image_or_volume, diameter=None, channels=[0, 0], do_3D=True, anisotropy=anisotropy)[0]
+        masks = model.eval(
+            image_or_volume, diameter=None, channels=[0, 0], do_3D=True, anisotropy=anisotropy, z_axis=0,
+        )[0]
     else:
         masks = model.eval(image_or_volume, diameter=None, channels=[0, 0])[0]
     return masks.astype("uint32")
