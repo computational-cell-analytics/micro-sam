@@ -19,6 +19,7 @@ def main():
     parser.add_argument("--model_type", default="hvit_t", choices=["hvit_t", "hvit_s", "hvit_b", "hvit_l"])
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--dataset_choice", default="all", choices=["lm", "em", "hp", "all"])
+    parser.add_argument("--distance_type", default="geodesic", choices=["geodesic", "directed"])
     args = parser.parse_args()
 
     model_type = args.model_type
@@ -26,10 +27,10 @@ def main():
     batch_size_2d, z_slice, max_num_objects = CHOSEN_PARAMETERS[model_type]
     z_slices = [z_slice]
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
-    save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v0")
+    save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v4")
 
-    n_gpus = torch.cuda.device_count()
-    name = f"joint_sam2_{model_type}_{'multi' if n_gpus > 1 else 'single'}_gpu"
+    is_multi_gpu = "RANK" in os.environ
+    name = f"joint_sam2_{model_type}_{args.distance_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
 
     # Set 'peft_kwargs' to jointly finetune with a parameter efficient method instead of full
     # finetuning (the SAM2 image encoder is frozen and the method is applied on top of it). Examples:
@@ -71,9 +72,11 @@ def main():
         use_object_score_loss=True,  # supervise object presence (needed for 3D propagation)
         average_over_frames=False,  # sum over frames so 3D keeps its per-slice weight
         peft_kwargs=peft_kwargs,  # None = full finetuning; set above to use LoRA / late finetuning
+        initial_features=32,  # decoder bottleneck matches the hvit_t embed_dim
+        distance_type=args.distance_type,  # regression target of the automatic branch
     )
 
-    if n_gpus > 1:
+    if is_multi_gpu:
         from micro_sam.v2.training import train_joint_sam2_multi_gpu
         train_joint_sam2_multi_gpu(**common)
     else:

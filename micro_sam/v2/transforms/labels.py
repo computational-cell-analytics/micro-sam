@@ -277,3 +277,17 @@ class _JointLabelTransform(DirectedPerObjectBoundaryDistanceTransform):
 
     def __init__(self, instances: bool = True, **kwargs):
         super().__init__(instances=instances, **kwargs)
+
+
+class _JointGeodesicLabelTransform(GeodesicHybridDistanceTransform):
+    """Geodesic hybrid distance transform for joint interactive + automatic training.
+
+    The :class:`GeodesicHybridDistanceTransform` counterpart of
+    :class:`_JointLabelTransform`: same 5-channel output
+    ``[instance_ids, foreground_mask, d_x, d_y, d_z]``, but the directed distances come from
+    the geodesic field around each object's center instead of the euclidean vector to the
+    nearest boundary.
+    """
+
+    def __init__(self, instances: bool = True, **kwargs):
+        super().__init__(instances=instances, **kwargs)
