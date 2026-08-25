@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.8.11**
+
+Fix stale embeddings and add AIS tests for the BioImage.IO/BioEngine model export.
+
 **New in version 1.8.10**
 
 Support automatic instance segmentation in the bioimage.io model export and add a code of conduct and contributing guide.
