@@ -711,6 +711,7 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
 
 def build_apg_segmenter(
     model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None, is_tiled=False,
+    interactive_checkpoint_path=None,
 ):
     """Build the automatic prompt generator from both halves of a joint checkpoint.
 
@@ -725,6 +726,9 @@ def build_apg_segmenter(
         decoder_path: Decoder weights to use instead of the ones exported from the joint checkpoint.
         is_tiled: Whether to build the tiled generator, which encodes and propagates tile by tile
             instead of downscaling the whole image (or volume) to the model's input size.
+        interactive_checkpoint_path: Standalone interactive weights (e.g. a downloaded registry
+            checkpoint) to use instead of the interactive half exported from the joint checkpoint.
+            Requires 'decoder_path' too, since there is then no joint checkpoint to export it from.
 
     Returns:
         The prompt generator, built through the library factory that the CLI and the API use.
@@ -732,9 +736,14 @@ def build_apg_segmenter(
     from micro_sam.v2.util import get_sam2_model
     from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
 
-    interactive_path, exported_decoder = export_joint_checkpoint(
-        model_type, joint_checkpoint, source_checksum=joint_checksum
-    )
+    if interactive_checkpoint_path is not None:
+        if decoder_path is None:
+            raise ValueError("'interactive_checkpoint_path' requires 'decoder_path' too.")
+        interactive_path, exported_decoder = interactive_checkpoint_path, None
+    else:
+        interactive_path, exported_decoder = export_joint_checkpoint(
+            model_type, joint_checkpoint, source_checksum=joint_checksum
+        )
     model = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=interactive_path,
         **({"input_type": "videos"} if ndim == 3 else {}),
@@ -747,8 +756,16 @@ def build_apg_segmenter(
     )
 
 
-def resolve_checkpoint_identity(mode, model_type, joint_checkpoint="best", checkpoint_path=None):
+def resolve_checkpoint_identity(
+    mode, model_type, joint_checkpoint="best", checkpoint_path=None, interactive_checkpoint_path=None,
+):
     """Return the content identity of the effective weights and, if needed, the joint checkpoint."""
+    if interactive_checkpoint_path is not None:
+        checksums = [checkpoint_checksum(interactive_checkpoint_path)]
+        if checkpoint_path is not None:
+            checksums.append(checkpoint_checksum(checkpoint_path))
+        return combine_checkpoint_checksums(*checksums), None
+
     joint_checksum = None
     if checkpoint_path is None or mode == "apg":
         joint_path = get_joint_checkpoint(model_type, joint_checkpoint)
@@ -763,7 +780,10 @@ def resolve_checkpoint_identity(mode, model_type, joint_checkpoint="best", check
     return decoder_checksum, None
 
 
-def build_model(mode, model_type, device, ndim, joint_checkpoint="best", checkpoint_path=None, joint_checksum=None):
+def build_model(
+    mode, model_type, device, ndim, joint_checkpoint="best", checkpoint_path=None, joint_checksum=None,
+    interactive_checkpoint_path=None,
+):
     """Load the model a mode runs on, from the two halves of the joint checkpoint.
 
     Args:
@@ -774,6 +794,8 @@ def build_model(mode, model_type, device, ndim, joint_checkpoint="best", checkpo
         joint_checkpoint: The joint trainer checkpoint, without the '.pt' suffix.
         checkpoint_path: Decoder weights to use instead of the ones exported from the joint checkpoint.
         joint_checksum: The checksum of the joint checkpoint, from `resolve_checkpoint_identity`.
+        interactive_checkpoint_path: Standalone interactive weights for 'apg', bypassing the joint
+            checkpoint entirely. See `build_apg_segmenter`.
 
     Returns:
         The UniSAM2 decoder for 'ais', or the prompt generator for 'apg'.
@@ -781,7 +803,7 @@ def build_model(mode, model_type, device, ndim, joint_checkpoint="best", checkpo
     if mode == "apg":
         return build_apg_segmenter(
             model_type, ndim, device, joint_checkpoint, decoder_path=checkpoint_path,
-            joint_checksum=joint_checksum,
+            joint_checksum=joint_checksum, interactive_checkpoint_path=interactive_checkpoint_path,
         )
 
     decoder_path = checkpoint_path or export_joint_checkpoint(

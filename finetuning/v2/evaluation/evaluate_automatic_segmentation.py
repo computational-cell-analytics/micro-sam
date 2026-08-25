@@ -130,6 +130,11 @@ def main():
     parser.add_argument("--mode", type=str, default="ais", choices=MODES, help="The segmentation mode to evaluate.")
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Weights instead of the joint export.")
     parser.add_argument("--joint_checkpoint", type=str, default="best", help="Joint checkpoint name, without '.pt'.")
+    parser.add_argument(
+        "--interactive_checkpoint", type=str, default=None,
+        help="Standalone interactive weights for --mode apg, bypassing the joint checkpoint entirely. "
+             "Requires -c/--checkpoint for the decoder half too.",
+    )
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate with the library defaults.")
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
     parser.add_argument("--backend", type=str, default="cpp", choices=("cpp", "python"), help="Flow backend.")
@@ -145,11 +150,12 @@ def main():
     crop_shape = tuple(args.crop_3d) if args.crop_3d else None
     checkpoint_id, joint_checksum = resolve_checkpoint_identity(
         args.mode, args.model_type, args.joint_checkpoint, args.checkpoint,
+        interactive_checkpoint_path=args.interactive_checkpoint,
     )
     model = build_model(
         args.mode, args.model_type, device, ndim,
         joint_checkpoint=args.joint_checkpoint, checkpoint_path=args.checkpoint,
-        joint_checksum=joint_checksum,
+        joint_checksum=joint_checksum, interactive_checkpoint_path=args.interactive_checkpoint,
     )
 
     params = None
