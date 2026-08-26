@@ -20,7 +20,7 @@ every object its best-matching propagated mask scores 0.006 above the merge.
 """
 
 import shutil
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 from tqdm import tqdm
@@ -464,17 +464,6 @@ def _records_shape(records: List[Dict[str, Any]]) -> tuple:
     """The smallest canvas that holds every record, which is all a merge of cropped masks needs."""
     boxes = [record["bounding_box"] for record in records]
     return tuple(max(box[axis].stop for box in boxes) for axis in range(len(boxes[0])))
-
-
-def _intersect_boxes(box_a: tuple, box_b: tuple) -> Optional[tuple]:
-    """The overlap of two same-length slice tuples, or None where an axis does not overlap."""
-    result = []
-    for a, b in zip(box_a, box_b):
-        start, stop = max(a.start, b.start), min(a.stop, b.stop)
-        if start >= stop:
-            return None
-        result.append(slice(start, stop))
-    return tuple(result)
 
 
 def _volume_records(
@@ -1359,108 +1348,6 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         block = self._tiling.get_block_with_halo(tile_id, list(self._halo)).inner_block
         return (slice(0, n_slices),) + tuple(slice(int(b), int(e)) for b, e in zip(block.begin, block.end))
 
-    def _merge_via_multicut(
-        self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
-        beta: float = 0.5,
-    ) -> np.ndarray:
-        """Stitch the per-tile merges with a region-adjacency-graph multicut, not a fixed cutoff.
-
-        The bioimage-py 'stitching.py' pattern (also how `micro_sam.v1.multi_dimensional_segmentation
-        .merge_instance_segmentation_3d` stitches z-slices, just across tiles here instead of frames):
-        every pair of tiles whose halo-extended blocks touch contributes one graph edge per pair of
-        labels that share pixels in that shared region, weighted by the overlap fraction. One multicut
-        over the whole tile graph then decides which cross-tile ids are the same object, instead of
-        `_merge`'s fixed cutoff deciding tile by tile in processing order. Each tile first writes its
-        inner block. Its halo then fills background pixels in adjacent inner blocks. This keeps masks
-        that cross tile borders. The halo does not replace foreground pixels from the adjacent tile.
-        """
-        import elf.segmentation as seg_utils
-        from bioimage_cpp.graph import UndirectedGraph
-        from bioimage_cpp.utils import segmentation_overlap
-
-        n_slices = shape[0]
-        tiles = []
-        offset = 0
-        for proposal in proposals:
-            records = [record for record in proposal["records"] if record["predicted_iou"] >= score_threshold]
-            if not records:
-                continue
-            bounding_box = proposal["bounding_box"]
-            tile_shape = tuple(box.stop - box.start for box in bounding_box)
-            tile_segmentation = merge_by_score(records, tile_shape, max_overlap=max_overlap, min_size=min_size)
-            max_id = int(tile_segmentation.max())
-            if max_id == 0:
-                continue
-            tiles.append((proposal["tile_id"], offset, tile_segmentation, bounding_box))
-            offset += max_id
-
-        if not tiles:
-            return np.zeros(shape, dtype="uint32")
-
-        # One node per instance, plus node 0 for the background all of them are cut from.
-        n_nodes = offset + 1
-        edges: Dict[Tuple[int, int], float] = {}
-        for i, (_, offset_a, seg_a, box_a) in enumerate(tiles):
-            for _, offset_b, seg_b, box_b in tiles[i + 1:]:
-                shared = _intersect_boxes(box_a, box_b)
-                if shared is None:
-                    continue
-                local_a = tuple(slice(s.start - b.start, s.stop - b.start) for s, b in zip(shared, box_a))
-                local_b = tuple(slice(s.start - b.start, s.stop - b.start) for s, b in zip(shared, box_b))
-                overlap = segmentation_overlap(seg_a[local_a], seg_b[local_b])
-                for label_a, label_b, count in overlap.overlap_table()[["label_a", "label_b", "count"]]:
-                    if label_a == 0 and label_b == 0:
-                        continue
-                    # Normalized by the smaller label, not by the shared crop: a small sliver of a
-                    # large tile touching another tile's object should not read as a weak overlap.
-                    size_a = overlap.count_a(int(label_a)) if label_a else count
-                    size_b = overlap.count_b(int(label_b)) if label_b else count
-                    fraction = float(count) / max(1, min(int(size_a), int(size_b)))
-                    u = offset_a + int(label_a) if label_a else 0
-                    v = offset_b + int(label_b) if label_b else 0
-                    key = (u, v) if u < v else (v, u)
-                    edges[key] = max(edges.get(key, 0.0), fraction)
-
-        if edges:
-            uv_ids = np.array(list(edges.keys()), dtype="uint64")
-            costs = seg_utils.multicut.compute_edge_costs(np.array(list(edges.values()), dtype="float32"))
-            # Background never merges with a real object, so its edges are maximally repulsive.
-            # A raw cost has to be strongly positive to end up repulsive after '1.0 - costs' below.
-            costs[(uv_ids == 0).any(axis=1)] = 8.0
-            graph = UndirectedGraph(n_nodes)
-            graph.insert_edges(uv_ids)
-            node_labels = seg_utils.multicut.multicut_decomposition(graph, 1.0 - costs, beta=beta)
-            # The solver's cluster ids are not guaranteed to keep node 0 mapped to output id 0, so a
-            # real object's cluster could collide with it. Remap explicitly: node 0's cluster -> 0,
-            # every other cluster -> a compact id that cannot equal it.
-            background_cluster = node_labels[0]
-            is_background = node_labels == background_cluster
-            remapped = np.zeros(n_nodes, dtype="uint32")
-            _, inverse = np.unique(node_labels[~is_background], return_inverse=True)
-            remapped[~is_background] = inverse + 1
-            node_labels = remapped
-        else:
-            # No two tiles touch, so every tile's ids are already final.
-            node_labels = np.arange(n_nodes, dtype="uint32")
-
-        segmentation = np.zeros(shape, dtype="uint32")
-        relabeled_tiles = []
-        for tile_id, tile_offset, tile_segmentation, bounding_box in tiles:
-            global_ids = tile_segmentation.astype("uint64")
-            global_ids[global_ids != 0] += tile_offset
-            relabeled = node_labels[global_ids].astype("uint32")
-            relabeled_tiles.append((relabeled, bounding_box))
-            inner = self._tile_inner_box(tile_id, n_slices)
-            local_inner = tuple(slice(s.start - b.start, s.stop - b.start) for s, b in zip(inner, bounding_box))
-            segmentation[inner] = relabeled[local_inner]
-
-        # Fill background pixels from the halos so that masks can cross tile borders.
-        for relabeled, bounding_box in relabeled_tiles:
-            target = segmentation[bounding_box]
-            fill = (target == 0) & (relabeled != 0)
-            target[fill] = relabeled[fill]
-        return segmentation
-
     @torch.no_grad()
     def generate(
         self,
@@ -1482,19 +1369,12 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         batch_size: int = 64,
         n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
         verbose: bool = False,
-        stitch: str = "multicut",
     ) -> np.ndarray:
         """Derive prompts from the stored predictions, apply them and merge the masks.
 
         Same arguments as `AutomaticPromptGenerator.generate`. A 2d image defers to it unchanged; a
         volume differs only in the final merge, which has to resolve the halo overlaps between tiles
         rather than run one flat, untiled `merge_by_score`.
-
-        Args:
-            stitch: Volumes only. How the tiles are merged across their halo overlaps: 'overlap' is
-                `_merge`'s greedy rule (a later tile's id is discarded above a fixed overlap with what
-                is already placed); 'multicut' is `_merge_via_multicut`, a RAG built from every pair of
-                touching tiles' overlaps, solved once for the whole volume rather than tile by tile.
         """
         if not self._is_initialized:
             raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
@@ -1506,8 +1386,6 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
                 refine_with_box_prompts=refine_with_box_prompts, box_extension=box_extension,
                 multimasking=multimasking, batch_size=batch_size, n_threads=n_threads, verbose=verbose,
             )
-        if stitch not in ("overlap", "multicut"):
-            raise ValueError(f"'stitch' must be 'overlap' or 'multicut', got '{stitch}'.")
 
         shape = self._prediction[0].shape
         defaults = default_prompt_generation(self._model_type, is_volume=True)
@@ -1535,10 +1413,6 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             candidates, n_objects_per_pass=n_objects_per_pass,
             early_stop_patience=early_stop_patience, verbose=verbose,
         )
-        if stitch == "multicut":
-            return self._merge_via_multicut(
-                proposals, shape, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
-            )
         return self._merge(
             proposals, shape, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
         )

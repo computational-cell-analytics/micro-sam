@@ -375,29 +375,6 @@ def test_tiles_for_points_assigns_every_prompt_to_exactly_one_tile(monkeypatch):
     assert assignment[3] == [3]
 
 
-def test_multicut_preserves_a_mask_that_crosses_from_its_anchor_tile_halo(monkeypatch):
-    segmenter = _make_tiled_generator((4, 8), (4, 4), (0, 2), monkeypatch)
-    mask = np.zeros((1, 4, 6), dtype=bool)
-    mask[:, 1:3, 2:6] = True
-    proposals = [{
-        "tile_id": 0,
-        "bounding_box": (slice(0, 1), slice(0, 4), slice(0, 6)),
-        "records": [{
-            "segmentation": mask,
-            "predicted_iou": 0.9,
-            "stability_score": 0.9,
-        }],
-    }]
-
-    segmentation = segmenter._merge_via_multicut(
-        proposals, (1, 4, 8), score_threshold=0.5, max_overlap=0.5, min_size=1,
-    )
-
-    # The prompt belongs to tile 0 (x < 4), but its propagated mask reaches two pixels into tile 1.
-    assert np.all(segmentation[:, 1:3, 2:6] == 1)
-    assert np.all(segmentation[:, :, 6:] == 0)
-
-
 def test_tiled_apply_and_select_maps_prompts_and_masks_between_frames(monkeypatch):
     shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
     segmenter = _make_tiled_generator(shape, tile_shape, halo, monkeypatch)

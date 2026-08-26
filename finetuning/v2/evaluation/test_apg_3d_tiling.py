@@ -11,7 +11,7 @@ Uses the model registry ingested from owncloud (`micro_sam.v2.util.FINETUNED_MOD
 
 Usage:
     python test_apg_3d_tiling.py -m hvit_t_cells
-    python test_apg_3d_tiling.py -d embedseg -m hvit_t_cells --stitch overlap
+    python test_apg_3d_tiling.py -d embedseg -m hvit_t_cells
     python test_apg_3d_tiling.py -m hvit_s_cells --tile_shape 256 256 --halo 48 48
 """
 
@@ -40,11 +40,11 @@ def build_segmenter(model_type, device):
     )
 
 
-def segment_volume(model, raw, tile_shape, halo, params, stitch):
+def segment_volume(model, raw, tile_shape, halo, params):
     """Segment one volume with the tiled generator, from a clean state."""
     model.clear_state()
     model.initialize(raw, ndim=3, tile_shape=tile_shape, halo=halo, **VOLUME_SPEED_OPTIONS)
-    return model.generate(stitch=stitch, **params).astype("uint32")
+    return model.generate(**params).astype("uint32")
 
 
 def main():
@@ -54,7 +54,6 @@ def main():
     parser.add_argument("-i", "--input_path", default=DATA_ROOT, help="The root the data lives in.")
     parser.add_argument("--tile_shape", type=int, nargs=2, default=(384, 384), help="In-plane tile shape (y, x).")
     parser.add_argument("--halo", type=int, nargs=2, default=(64, 64), help="In-plane tile halo (y, x).")
-    parser.add_argument("--stitch", default="multicut", choices=("overlap", "multicut"), help="Tile merge rule.")
     parser.add_argument("--sample_index", type=int, default=None, help="Score only this one sample, by index.")
     parser.add_argument(
         "--z_crop", type=int, default=None,
@@ -71,8 +70,6 @@ def main():
     params = resolve_params(ndim=3)
 
     tag = f"{args.dataset_name}_{args.model_type}"
-    if args.stitch != "multicut":
-        tag = f"{tag}_{args.stitch}"
     if args.z_crop is not None:
         tag = f"{tag}_z{args.z_crop}"
     if args.xy_crop is not None:
@@ -93,7 +90,7 @@ def main():
         print(f"Sample {index}: volume shape {raw.shape}, {int(labels.max())} ground-truth objects.")
 
         start = time.time()
-        seg = segment_volume(model, raw, tuple(args.tile_shape), tuple(args.halo), params, args.stitch)
+        seg = segment_volume(model, raw, tuple(args.tile_shape), tuple(args.halo), params)
         elapsed = time.time() - start
         print(f"Sample {index}: segmented in {elapsed:.1f}s, {int(seg.max())} predicted objects.")
 
