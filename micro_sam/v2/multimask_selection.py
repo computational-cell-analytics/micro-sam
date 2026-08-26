@@ -17,6 +17,7 @@ import torch
 
 MULTIMASK_FEATURE_VERSION = 1
 MASK_TOKEN_DIMENSION = 256
+REFINEMENT_GATE_STAGES = ("premerge", "postmerge")
 MULTIMASK_FEATURE_NAMES = (
     "predicted_iou",
     "stability",
@@ -84,6 +85,31 @@ SELECTOR_FEATURE_SCHEMAS = {
     "token_v1": MASK_TOKEN_FEATURE_NAMES,
     "token_lowres_v1": MASK_TOKEN_LOWRES_FEATURE_NAMES,
 }
+
+
+def refinement_gate_stage(scorer) -> str:
+    """Return and validate the stage of an installed refinement gate."""
+    stage = str(getattr(scorer, "gate_stage", "premerge"))
+    feature_names = tuple(getattr(scorer, "feature_names", ()))
+    _validate_refinement_gate_stage(stage, feature_names)
+    return stage
+
+
+def _validate_refinement_gate_stage(stage: str, feature_names: Sequence[str] = ()) -> None:
+    if stage not in REFINEMENT_GATE_STAGES:
+        raise ValueError(
+            f"Unsupported refinement gate stage {stage!r}: expected one of "
+            f"{', '.join(REFINEMENT_GATE_STAGES)}."
+        )
+    names = tuple(feature_names)
+    if names == REFINEMENT_GATE_FEATURE_NAMES and stage != "premerge":
+        raise ValueError("Pre-merge refinement gate features require gate_stage='premerge'.")
+    if names == POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES and stage != "postmerge":
+        raise ValueError("Post-merge refinement gate features require gate_stage='postmerge'.")
+    if names and names not in (REFINEMENT_GATE_FEATURE_NAMES, POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES):
+        raise ValueError(
+            "A refinement gate must use the pre-merge or post-merge refinement-gate feature schema."
+        )
 
 
 def selector_input_schema(scorer) -> str:
@@ -310,6 +336,11 @@ class TorchFeatureScorer:
         self.input_schema = str(self.metadata.get("input_schema", "dense_v1"))
         self.output_activation = str(self.metadata.get("output_activation", "clamp"))
         self.gate_stage = str(self.metadata.get("gate_stage", "premerge"))
+        if (
+            self.feature_names in (REFINEMENT_GATE_FEATURE_NAMES, POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES)
+            or "gate_stage" in self.metadata
+        ):
+            _validate_refinement_gate_stage(self.gate_stage, self.feature_names)
         if self.output_activation not in ("clamp", "identity"):
             raise ValueError(f"Unsupported scorer output activation {self.output_activation!r}.")
 
@@ -438,7 +469,10 @@ def _validate_feature_state(state: Dict[str, Any]) -> None:
     metadata = dict(state.get("metadata") or {})
     schema = str(state.get("input_schema", metadata.get("input_schema", "dense_v1")))
     if names in (REFINEMENT_GATE_FEATURE_NAMES, POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES):
+        _validate_refinement_gate_stage(str(metadata.get("gate_stage", "premerge")), names)
         return
+    if "gate_stage" in metadata:
+        _validate_refinement_gate_stage(str(metadata["gate_stage"]), names)
     expected = SELECTOR_FEATURE_SCHEMAS.get(schema)
     if expected is None or names != expected:
         raise ValueError(

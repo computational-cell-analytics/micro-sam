@@ -57,7 +57,7 @@ from benchmark_apg_optimization import (
     prepare_manifest,
 )
 from evaluate_automatic_segmentation import compute_metrics
-from micro_sam.v2.multimask_selection import load_feature_scorer
+from micro_sam.v2.multimask_selection import load_feature_scorer, refinement_gate_stage
 from screen_apg_multimask import (
     _configured_records, _load_oof_lookup, _oof_predictions_for_sample,
 )
@@ -85,7 +85,7 @@ def _compute_premerge_gate_scores(needs_uncertainty, use_gate_oof, gate_model):
     """Whether proposals need the 23-feature pre-merge gate path."""
     return bool(
         needs_uncertainty and not use_gate_oof
-        and getattr(gate_model, "gate_stage", "premerge") == "premerge"
+        and refinement_gate_stage(gate_model) == "premerge"
     )
 
 

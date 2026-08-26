@@ -364,6 +364,38 @@ def test_signed_postmerge_gate_artifact_preserves_negative_predictions(tmp_path)
     assert np.allclose(prediction, -0.25)
 
 
+@pytest.mark.parametrize(
+    "names,stage,error",
+    [
+        (REFINEMENT_GATE_FEATURE_NAMES, "during-merge", "Unsupported refinement gate stage"),
+        (REFINEMENT_GATE_FEATURE_NAMES, "postmerge", "Pre-merge refinement gate features"),
+        (POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES, "premerge", "Post-merge refinement gate features"),
+        (MULTIMASK_FEATURE_NAMES, "postmerge", "refinement-gate feature schema"),
+    ],
+)
+def test_refinement_gate_artifacts_validate_their_stage_and_schema(tmp_path, names, stage, error):
+    module = torch.nn.Sequential(torch.nn.Linear(len(names), 1))
+    path = tmp_path / "invalid-gate.pt"
+    torch.save({
+        "kind": "mlp", "feature_version": 1, "feature_names": list(names),
+        "hidden_sizes": [], "dropout": 0.0,
+        "mean": np.zeros(len(names), dtype="float32"),
+        "scale": np.ones(len(names), dtype="float32"),
+        "state_dict": module.state_dict(), "metadata": {"gate_stage": stage},
+    }, path)
+
+    with pytest.raises(ValueError, match=error):
+        load_feature_scorer(path)
+
+
+def test_installing_a_custom_refinement_gate_validates_its_stage():
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    invalid_gate = types.SimpleNamespace(gate_stage="during-merge")
+
+    with pytest.raises(ValueError, match="Unsupported refinement gate stage"):
+        segmenter.set_multimask_models(refinement_gate=invalid_gate)
+
+
 def test_groupwise_mlp_artifact_roundtrip_and_permutation_equivariance(tmp_path):
     torch.manual_seed(17)
     module = GroupwiseMLP(len(MULTIMASK_FEATURE_NAMES), hidden_size=32, dropout=0.0)
@@ -856,6 +888,9 @@ def test_refinement_prompts_take_the_nearest_other_prompts_as_negatives():
 
 def test_postmerge_gate_features_capture_visible_masks_and_assembled_negatives():
     segmentation = _two_instance_segmentation()
+    # The second source mask has lost one of its eight columns in the final visible segmentation.
+    # Post-merge gates derive both fractions from that final result, without merge-internal claim maps.
+    segmentation[4:12, 27] = 0
     records = [
         {
             "segmentation": np.ones((8, 8), dtype=bool),
@@ -872,7 +907,7 @@ def test_postmerge_gate_features_capture_visible_masks_and_assembled_negatives()
     ]
     context = {
         "proposals": records, "records": records, "matches": {1: 0, 2: 1},
-        "claimed": [{}, {1: 0.125}], "score_filter": "selection_score", "score_threshold": 0.7,
+        "score_filter": "selection_score", "score_threshold": 0.7,
     }
     prompts = derive_refinement_prompts(
         segmentation, np.array([[6, 6], [10, 6], [24, 6]], dtype="float32"),
@@ -887,7 +922,7 @@ def test_postmerge_gate_features_capture_visible_masks_and_assembled_negatives()
     assert features.shape == (2, len(POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES))
     assert np.isfinite(features).all()
     columns = {name: index for index, name in enumerate(POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES)}
-    assert np.allclose(features[:, columns["visible_fraction"]], 1.0)
+    assert np.allclose(features[:, columns["visible_fraction"]], [1.0, 0.875])
     assert np.allclose(features[:, columns["negative_prompt_count"]], 1.0)
     assert features[1, columns["claimed_fraction"]] == pytest.approx(0.125)
     assert features[0, columns["selection_minus_predicted_iou"]] == pytest.approx(-0.05)
@@ -930,7 +965,7 @@ def test_replace_policy_repaints_from_the_second_round_and_restores_empty_masks(
     grown = np.zeros_like(segmentation, dtype=bool)
     grown[2:14, 2:14] = True
     empty = np.zeros_like(segmentation, dtype=bool)
-    predictions = iter([([(grown, 0.5), (empty, 0.99)], 0)])
+    predictions = iter([[(grown, 0.5), (empty, 0.99)]])
     segmenter._predict_refinement_batch = lambda *args, **kwargs: next(predictions)
 
     refined = segmenter._reprompt_instances(
@@ -959,7 +994,7 @@ def test_keep_if_better_policy_keeps_the_first_round_unless_the_score_improves()
     worse[12:16, 4:12] = True
     better = np.zeros_like(segmentation, dtype=bool)
     better[4:14, 20:28] = True
-    predictions = iter([([(worse, 0.5), (better, 0.95)], 0)])
+    predictions = iter([[(worse, 0.5), (better, 0.95)]])
     segmenter._predict_refinement_batch = lambda *args, **kwargs: next(predictions)
 
     refined = segmenter._reprompt_instances(
@@ -986,7 +1021,7 @@ def test_higher_scoring_instances_win_contested_pixels():
     left[4:12, 4:18] = True
     right = np.zeros_like(segmentation, dtype=bool)
     right[4:12, 14:28] = True  # contests columns 14-17
-    predictions = iter([([(left, 0.5), (right, 0.9)], 0)])
+    predictions = iter([[(left, 0.5), (right, 0.9)]])
     segmenter._predict_refinement_batch = lambda *args, **kwargs: next(predictions)
 
     refined = segmenter._reprompt_instances(
@@ -1041,12 +1076,11 @@ def test_refinement_batches_pad_points_with_the_ignore_label(monkeypatch):
     }
     batch = [(1, (slice(4, 12), slice(4, 12))), (2, (slice(4, 12), slice(20, 28)))]
     kwargs = _parse_refinement("points+boxes+masks", {"box_extension": 2})[1]
-    predictions, suppressed = segmenter._predict_refinement_batch(
+    predictions = segmenter._predict_refinement_batch(
         segmentation, batch, ("points", "boxes", "masks"), point_prompts, kwargs,
     )
 
     assert len(predictions) == 2
-    assert suppressed == 0
     call = predictor.calls[0]
     assert call["points"].shape == (2, 3, 2)
     assert call["labels"].tolist() == [[1, 1, 0], [1, -1, -1]]
@@ -1136,7 +1170,7 @@ def test_select_with_point_refinement_reprompts_each_instance(monkeypatch):
     def predict_refinement_batch(segmentation, batch, components, point_prompts, refinement_kwargs):
         seen["components"] = components
         seen["prompts"] = point_prompts
-        return [(segmentation == instance_id, 0.95) for instance_id, _ in batch], 0
+        return [(segmentation == instance_id, 0.95) for instance_id, _ in batch]
 
     segmenter._predict_refinement_batch = predict_refinement_batch
 
@@ -1166,7 +1200,7 @@ def test_consistency_gate_keeps_the_first_round_when_the_masks_disagree():
     elsewhere[20:28, 4:12] = True
     polished = np.zeros_like(segmentation, dtype=bool)
     polished[4:12, 20:27] = True
-    predictions = iter([([(elsewhere, 0.99), (polished, 0.99)], 0)])
+    predictions = iter([[(elsewhere, 0.99), (polished, 0.99)]])
     segmenter._predict_refinement_batch = lambda *args, **kwargs: next(predictions)
 
     refined = segmenter._reprompt_instances(
@@ -1192,7 +1226,7 @@ def test_foreign_overlap_gate_rejects_growth_into_neighbours():
     swallowing[4:12, 4:28] = True
     inside = np.zeros_like(segmentation, dtype=bool)
     inside[5:11, 21:27] = True
-    predictions = iter([([(swallowing, 0.99), (inside, 0.99)], 0)])
+    predictions = iter([[(swallowing, 0.99), (inside, 0.99)]])
     segmenter._predict_refinement_batch = lambda *args, **kwargs: next(predictions)
 
     refined = segmenter._reprompt_instances(
@@ -1250,7 +1284,7 @@ def test_refinement_prompts_report_the_grouped_supply():
     assert prompts[2]["n_grouped"] == 0
 
 
-def test_merge_by_score_reports_claimed_fractions():
+def test_merge_by_score_reports_reasons_without_changing_the_result():
     shape = (16, 16)
     high = np.zeros(shape, dtype=bool)
     high[2:10, 2:10] = True
@@ -1265,132 +1299,27 @@ def test_merge_by_score_reports_claimed_fractions():
     ]
 
     plain = merge_by_score(records, shape, max_overlap=0.1, min_size=4)
-    segmentation, reasons, claimed = merge_by_score(
-        records, shape, max_overlap=0.1, min_size=4, return_reasons=True, return_claimed=True,
+    segmentation, reasons = merge_by_score(
+        records, shape, max_overlap=0.1, min_size=4, return_reasons=True,
     )
     assert np.array_equal(plain, segmentation)
     assert reasons == ["duplicate", "kept", "too small"]
-    assert claimed[0] == {1: 0.25}  # a quarter of the duplicate is claimed by instance 1
-    assert claimed[1] == {}  # painted first, nothing claimed it
-    assert claimed[2] == {}  # dropped before the claim check
-
-
-def test_recovery_adds_a_new_instance_on_unclaimed_pixels():
-    shape = (32, 32)
-    first = np.zeros(shape, dtype=bool)
-    first[4:12, 4:16] = True
-    # Overlaps the first mask on a third of its pixels, so the merge drops it as a duplicate.
-    lost = np.zeros(shape, dtype=bool)
-    lost[4:12, 12:24] = True
-    proposals = [
-        {"segmentation": first, "predicted_iou": 0.9, "stability_score": 1.0, "point": (8.0, 8.0)},
-        {"segmentation": lost, "predicted_iou": 0.8, "stability_score": 1.0, "point": (20.0, 8.0)},
-    ]
-    segmenter = object.__new__(AutomaticPromptGenerator)
-    segmenter._prediction = np.zeros((4, *shape), dtype="float32")
-    segmenter._predictor = types.SimpleNamespace(device="cpu", mask_threshold=0.0)
-    segmenter._last_generation_stats = {}
-
-    seen = {}
-
-    def predict_prompt_batch(points, labels, boxes, mask_logits, multimasking):
-        seen["points"], seen["labels"] = points, labels
-        return [(lost, 0.9)]
-
-    segmenter._predict_prompt_batch = predict_prompt_batch
-
-    segmentation = segmenter.select(
-        proposals, score_threshold=0.6, max_overlap=0.15, min_size=4, refinement="recover",
-    )
-    # The lost record returns as a new instance, on its unclaimed pixels only.
-    assert set(np.unique(segmentation)) == {0, 1, 2}
-    assert np.array_equal(segmentation == 1, first)
-    assert np.array_equal(segmentation == 2, lost & ~first)
-    # Its positive is its own prompt, the negative the claimant's surviving prompt.
-    assert seen["points"][0, 0].tolist() == [20.0, 8.0]
-    assert seen["labels"][0].tolist() == [1, 0]
-    assert seen["points"][0, 1].tolist() == [8.0, 8.0]
-    assert segmenter._last_generation_stats["recovery_candidates"] == 1
-    assert segmenter._last_generation_stats["recovered_instances"] == 1
-
-
-def test_recovery_respects_the_claimed_cap_and_the_score():
-    shape = (32, 32)
-    first = np.zeros(shape, dtype=bool)
-    first[4:12, 4:16] = True
-    mostly_claimed = np.zeros(shape, dtype=bool)
-    mostly_claimed[4:12, 6:18] = True  # 10 of its 12 columns lie inside the first mask
-    proposals = [
-        {"segmentation": first, "predicted_iou": 0.9, "stability_score": 1.0, "point": (8.0, 8.0)},
-        {"segmentation": mostly_claimed, "predicted_iou": 0.8, "stability_score": 1.0, "point": (12.0, 8.0)},
-    ]
-    segmenter = object.__new__(AutomaticPromptGenerator)
-    segmenter._prediction = np.zeros((4, *shape), dtype="float32")
-    segmenter._predictor = types.SimpleNamespace(device="cpu", mask_threshold=0.0)
-    segmenter._last_generation_stats = {}
-    segmenter._predict_prompt_batch = lambda *args: [(mostly_claimed, 0.9)]
-
-    # Fully claimed beyond the cap: not even a recovery candidate.
-    segmentation = segmenter.select(
-        proposals, score_threshold=0.6, max_overlap=0.15, min_size=4,
-        refinement="recover", refinement_kwargs={"recover_max_claimed": 0.5},
-    )
-    assert set(np.unique(segmentation)) == {0, 1}
-    assert segmenter._last_generation_stats["recovery_candidates"] == 0
-
-    # Within the cap, but the re-prompt scores below the select threshold: attempted, not accepted.
-    segmenter._predict_prompt_batch = lambda *args: [(mostly_claimed, 0.4)]
-    segmentation = segmenter.select(
-        proposals, score_threshold=0.6, max_overlap=0.15, min_size=4,
-        refinement="recover", refinement_kwargs={"recover_max_claimed": 0.9},
-    )
-    assert set(np.unique(segmentation)) == {0, 1}
-    assert segmenter._last_generation_stats["recovery_candidates"] == 1
-    assert segmenter._last_generation_stats["recovered_instances"] == 0
-
-
-def test_adaptive_point_suppression_pads_the_whole_row():
-    segmentation = _two_instance_segmentation()
-    records = [
-        {"predicted_iou": 0.9, "stability_score": 1.0, "point": (6.0, 6.0)},
-        {"predicted_iou": 0.8, "stability_score": 1.0, "point": (24.0, 6.0)},
-    ]
-    segmenter = _make_refinement_generator(segmentation, records, {1: 0, 2: 1})
-    predictor = _RecordingPredictor(segmentation.shape)
-    segmenter._predictor = predictor
-
-    point_prompts = {
-        1: {"points": np.array([[6, 6], [10, 10]], dtype="float32"),
-            "point_labels": np.array([1, 1], dtype="int32"), "n_grouped": 3},
-        2: {"points": np.array([[24, 6]], dtype="float32"),
-            "point_labels": np.array([1], dtype="int32"), "n_grouped": 0},
-    }
-    batch = [(1, (slice(4, 12), slice(4, 12))), (2, (slice(4, 12), slice(20, 28)))]
-    kwargs = _parse_refinement("points+boxes", {"min_grouped_for_points": 2})[1]
-    predictions, suppressed = segmenter._predict_refinement_batch(
-        segmentation, batch, ("points", "boxes"), point_prompts, kwargs,
-    )
-    assert suppressed == 1
-    call = predictor.calls[0]
-    # Instance 2 is below the supply threshold: its whole point row is padding, its box remains.
-    assert call["labels"].tolist() == [[1, 1], [-1, -1]]
-    assert call["boxes"] is not None and len(call["boxes"]) == 2
 
 
 def test_parse_refinement_covers_the_new_components_and_couplings():
-    components, resolved = _parse_refinement("points+boxes+recover", {"recover_max_claimed": 0.4})
-    assert components == ("points", "boxes", "recover")
-    assert resolved["recover_max_claimed"] == 0.4
-    # Recovery is meaningful alone, unlike a dense-only mask prompt.
-    assert _parse_refinement("recover", None)[0] == ("recover",)
+    components, resolved = _parse_refinement("points+boxes+masks", {"box_extension": 4})
+    assert components == ("points", "boxes", "masks")
+    assert resolved["box_extension"] == 4
     with pytest.raises(ValueError, match="dense-only"):
-        _parse_refinement("masks+recover", None)
+        _parse_refinement("masks", None)
     with pytest.raises(ValueError, match="negative_source"):
         _parse_refinement("points", {"negative_source": "centroids"})
-    with pytest.raises(ValueError, match="boxes"):
-        _parse_refinement("points", {"min_grouped_for_points": 2})
+    with pytest.raises(ValueError, match="Invalid refinement mode"):
+        _parse_refinement("recover", None)
     with pytest.raises(ValueError, match="recover_max_claimed"):
         _parse_refinement("points+boxes", {"recover_max_claimed": 0.4})
+    with pytest.raises(ValueError, match="min_grouped_for_points"):
+        _parse_refinement("points", {"min_grouped_for_points": 2})
 
 
 def _tile_record(box, point, predicted_iou=0.9, stability_score=1.0):
@@ -1544,14 +1473,14 @@ def test_uncertainty_gate_refines_only_selected_instances():
     records[1]["uncertainty_score"] = 0.8
     context = {
         "proposals": records, "records": records, "matches": {1: 0, 2: 1},
-        "reasons": ["kept", "kept"], "claimed": [{}, {}], "score_threshold": 0.5, "min_size": 1,
+        "score_threshold": 0.5,
     }
     segmenter = _make_plain_generator(shape, types.SimpleNamespace(device="cpu"))
     calls = []
 
     def predict(segmentation_, batch, components, point_prompts, refinement_kwargs):
         calls.extend(instance_id for instance_id, _ in batch)
-        return [(segmentation_ == instance_id, 0.95) for instance_id, _ in batch], 0
+        return [(segmentation_ == instance_id, 0.95) for instance_id, _ in batch]
 
     segmenter._predict_refinement_batch = predict
     _, kwargs = _parse_refinement(
@@ -1576,8 +1505,7 @@ def test_postmerge_uncertainty_gate_scores_after_prompt_assembly():
     ]
     context = {
         "proposals": records, "records": records, "matches": {1: 0, 2: 1},
-        "reasons": ["kept", "kept"], "claimed": [{}, {}],
-        "score_threshold": 0.6, "score_filter": "predicted_iou", "min_size": 1,
+        "score_threshold": 0.6, "score_filter": "predicted_iou",
     }
     segmenter = _make_plain_generator(shape, types.SimpleNamespace(device="cpu"))
 
@@ -1594,7 +1522,7 @@ def test_postmerge_uncertainty_gate_scores_after_prompt_assembly():
 
     def predict(segmentation_, batch, components, point_prompts, refinement_kwargs):
         calls.extend(instance_id for instance_id, _ in batch)
-        return [(segmentation_ == instance_id, 0.95) for instance_id, _ in batch], 0
+        return [(segmentation_ == instance_id, 0.95) for instance_id, _ in batch]
 
     segmenter._predict_refinement_batch = predict
     _, kwargs = _parse_refinement(
@@ -1681,11 +1609,11 @@ def test_tiled_merge_builds_a_global_refinement_context(monkeypatch):
         record = context["records"][record_index]
         x, y = record["point"]
         assert segmentation[int(y), int(x)] == instance_id
-    assert len(context["records"]) == len(context["reasons"]) == len(context["record_tiles"]) == 2
+    assert len(context["records"]) == len(context["record_tiles"]) == 2
     assert sorted(context["record_tiles"].values()) == [0, 3]
     # 'proposals' keeps the sub-threshold prompt, which the point pool needs.
     assert len(context["proposals"]) == 3
-    assert context["score_threshold"] == 0.5 and context["min_size"] == 1
+    assert context["score_threshold"] == 0.5
 
 
 def test_tiled_merge_prunes_an_instance_the_stitch_overwrote(monkeypatch):
@@ -1748,6 +1676,58 @@ def test_tiled_refinement_visits_each_owning_tile_once_in_order(monkeypatch):
     assert segmenter.visited_tiles == [0, 3]
 
 
+def test_tiled_postmerge_gate_scores_the_stitched_segmentation(monkeypatch):
+    shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
+    segmenter = _make_tiled_generator(
+        shape, tile_shape, halo, monkeypatch,
+        predictor=types.SimpleNamespace(device="cpu", mask_threshold=0.0),
+    )
+
+    class Gate:
+        gate_stage = "postmerge"
+        feature_names = POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES
+
+        def predict_tensor(self, features):
+            self.features = np.asarray(features)
+            return torch.tensor([-0.1, 0.2])
+
+    gate = Gate()
+    segmenter._refinement_gate_model = gate
+    calls = []
+    proposals = [
+        _tile_proposal(
+            segmenter, 0,
+            [_tile_record((slice(4, 12), slice(28, 36)), (31.0, 8.0))],
+        ),
+        # Tile 1 starts at x=24. Its 28:40 global mask loses 28:36 to the instance tile 0
+        # stitched first, leaving one third of its source area visible at 36:40.
+        _tile_proposal(
+            segmenter, 1,
+            [_tile_record((slice(4, 12), slice(4, 16)), (38.0, 8.0), predicted_iou=0.8)],
+        ),
+    ]
+
+    def predict(crop, batch, components, point_prompts, refinement_kwargs):
+        calls.extend(instance_id for instance_id, _ in batch)
+        return [(crop == instance_id, 0.95) for instance_id, _ in batch]
+
+    segmenter._predict_refinement_batch = predict
+    refined = _refine_two_tiles(
+        segmenter, "points+boxes", {
+            "gate": "uncertainty", "gate_threshold": 0.0,
+            "min_consistency": None, "max_foreign_overlap": None,
+        }, proposals=proposals,
+    )
+
+    columns = {name: index for index, name in enumerate(POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES)}
+    assert gate.features.shape == (2, len(POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES))
+    assert np.allclose(gate.features[:, columns["claimed_fraction"]], [0.0, 2.0 / 3.0])
+    assert np.allclose(gate.features[:, columns["visible_fraction"]], [1.0, 1.0 / 3.0])
+    assert calls == [2]
+    assert set(np.unique(refined)) == {0, 1, 2}
+    assert (refined[4:12, 28:36] == 1).all() and (refined[4:12, 36:40] == 2).all()
+
+
 def test_tiled_refinement_prompts_are_block_local_and_boxes_clipped(monkeypatch):
     shape, tile_shape, halo = (64, 64), (32, 32), (8, 8)
     predictor = _BlockPredictor(shape)
@@ -1788,7 +1768,7 @@ def test_tiled_refinement_keeps_an_instance_whose_second_round_is_empty(monkeypa
     )
 
     def predict(crop, batch, components, point_prompts, refinement_kwargs):
-        return [(np.zeros(crop.shape, dtype=bool), 0.99) for _ in batch], 0
+        return [(np.zeros(crop.shape, dtype=bool), 0.99) for _ in batch]
 
     segmenter._predict_refinement_batch = predict
     refined = _refine_two_tiles(segmenter, "boxes", {"policy": "replace"})
@@ -1808,7 +1788,7 @@ def test_tiled_refinement_applies_the_consistency_gate(monkeypatch):
         # A mask in the opposite corner of the block, which cannot be a polished first round.
         mask = np.zeros(crop.shape, dtype=bool)
         mask[-10:, -10:] = True
-        return [(mask, 0.99) for _ in batch], 0
+        return [(mask, 0.99) for _ in batch]
 
     segmenter._predict_refinement_batch = predict
     refined = _refine_two_tiles(segmenter, "boxes", {"policy": "replace"})
@@ -1832,7 +1812,7 @@ def test_tiled_refinement_gates_growth_into_a_neighbouring_tiles_instance(monkey
     def predict(crop, batch, components, point_prompts, refinement_kwargs):
         mask = np.zeros(crop.shape, dtype=bool)
         mask[4:12, 4:39] = True  # Grows from the first instance across the second one.
-        return [(mask, 0.99) for _ in batch], 0
+        return [(mask, 0.99) for _ in batch]
 
     segmenter._predict_refinement_batch = predict
     # The consistency gate would veto such a grown mask first, so only the foreign gate is left on.
@@ -1861,7 +1841,7 @@ def test_tiled_refinement_repaints_in_global_score_order(monkeypatch):
         rows, columns, score = next(masks)
         mask = np.zeros(crop.shape, dtype=bool)
         mask[rows, columns] = True
-        return [(mask, score)], 0
+        return [(mask, score)]
 
     segmenter._predict_refinement_batch = predict
     refined = _refine_two_tiles(
@@ -1872,26 +1852,11 @@ def test_tiled_refinement_repaints_in_global_score_order(monkeypatch):
     assert (refined[4:12, 30:36] == 2).all()
 
 
-def test_tiled_generator_rejects_only_the_recovery_component(monkeypatch):
-    segmenter = _make_tiled_generator((64, 64), (32, 32), (8, 8), monkeypatch)
-
-    for mode in ("points", "boxes", "points+boxes", "points+boxes+masks"):
-        segmenter._validate_refinement(_parse_refinement(mode, None)[0])
-    for mode in ("recover", "points+boxes+recover"):
-        with pytest.raises(NotImplementedError, match="recover"):
-            segmenter._validate_refinement(_parse_refinement(mode, None)[0])
-
-    # And 'select' rejects it before it merges anything, let alone touches the model.
-    with pytest.raises(NotImplementedError, match="recover"):
-        segmenter.select([], refinement="points+boxes+recover")
-
-
 def test_refinement_regions_default_to_the_whole_image():
     segmenter = object.__new__(AutomaticPromptGenerator)
     assert segmenter._region_of({}, 0) is None
     assert segmenter._region_box(None) == (slice(None), slice(None))
     assert segmenter._set_region(None) is None
-    assert segmenter._validate_refinement(("points", "boxes", "masks", "recover")) is None
 
 
 def test_tiled_apply_feeds_the_refinement_end_to_end(monkeypatch):
@@ -2050,10 +2015,10 @@ def _score_volume(segmenter, refinement=None, refinement_kwargs=None, prompts=No
 
 
 def test_parse_refinement_resolves_the_volume_surface():
-    # The volume surface is the 2d one minus 'min_grouped_for_points', plus 'conditioning'.
+    # Learned uncertainty gates are 2d-only; volumes add their propagation conditioning strategy.
     _, image = _parse_refinement("points+boxes", None)
     _, volume = _parse_refinement("points+boxes", None, is_volume=True)
-    assert set(image) - set(volume) == {"min_grouped_for_points"}
+    assert set(image) - set(volume) == {"gate", "gate_threshold"}
     assert set(volume) - set(image) == {"conditioning"}
     assert volume["conditioning"] == "prompts"
     # Two values were measured separately in 3d and differ from 2d; the rest are shared.
@@ -2063,16 +2028,14 @@ def test_parse_refinement_resolves_the_volume_surface():
         key: image[key] for key in ("n_positives", "policy", "box_extension", "negative_source")
     }
 
-    with pytest.raises(ValueError, match="min_grouped_for_points"):
-        _parse_refinement("points+boxes", {"min_grouped_for_points": 2}, is_volume=True)
+    with pytest.raises(ValueError, match="gate"):
+        _parse_refinement("points+boxes", {"gate": "uncertainty"}, is_volume=True)
+    with pytest.raises(ValueError, match="gate_threshold"):
+        _parse_refinement("points+boxes", {"gate_threshold": 0.5}, is_volume=True)
     with pytest.raises(ValueError, match="Invalid conditioning"):
         _parse_refinement("points+boxes", {"conditioning": "logits"}, is_volume=True)
-    with pytest.raises(ValueError, match="needs a re-prompt component"):
-        _parse_refinement("recover", {"conditioning": "mask"}, is_volume=True)
-    with pytest.raises(ValueError, match="can only condition a re-prompt"):
+    with pytest.raises(ValueError, match="dense-only"):
         _parse_refinement("masks", None, is_volume=True)
-    # Recovery alone is a valid volume mode, and reads the conditioning default without complaint.
-    assert _parse_refinement("recover", None, is_volume=True)[0] == ("recover",)
 
 
 def test_volume_scoring_without_refinement_carries_only_the_propagation_prompt(monkeypatch):
@@ -2192,62 +2155,6 @@ def test_keep_if_better_policy_keeps_the_first_round_on_a_volume(monkeypatch):
 
     assert segmenter._last_generation_stats["replaced_candidates"] == 0
     assert "conditioning" not in candidates[0]
-
-
-def _overlapping_anchor_prompts():
-    """Two prompts on one slice whose masks overlap enough for the merge to drop the weaker one."""
-    return {
-        "points": np.array([[[8, 8]], [[24, 8]]], dtype="float32"),
-        "point_labels": np.ones((2, 1), dtype="int32"),
-        "frames": np.array([0, 0], dtype="int64"),
-    }
-
-
-def _recovery_predictor(shape, recovered_score=0.8):
-    kept = _mask(shape, slice(4, 20), slice(4, 20))
-    # 64 of its 256 pixels are the first instance's, i.e. a quarter claimed: dropped as a duplicate
-    # at max_overlap 0.15, but far from swallowed.
-    duplicate = _mask(shape, slice(4, 20), slice(16, 32))
-    return _VolumePredictor([
-        ([kept, duplicate], [0.9, 0.8]),
-        ([duplicate], [recovered_score]),
-    ])
-
-
-def test_volume_recovery_propagates_an_anchor_slice_duplicate(monkeypatch):
-    shape = (32, 32)
-    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), _recovery_predictor(shape))
-    candidates = _score_volume(segmenter, refinement="recover", prompts=_overlapping_anchor_prompts())
-
-    assert segmenter._last_generation_stats["recovery_candidates"] == 1
-    assert segmenter._last_generation_stats["recovered_candidates"] == 1
-    # The kept candidate is unchanged; the revived one is propagated from its own prompt, with the
-    # claimant as a negative, and the 3d merge gets to decide whether it was a duplicate after all.
-    assert len(candidates) == 2
-    assert "conditioning" not in candidates[0]
-    revived = candidates[1]
-    assert revived["point"] == (24.0, 8.0)
-    assert revived["conditioning"]["point_labels"].tolist() == [1, 0]
-    assert revived["conditioning"]["points"].tolist() == [[24.0, 8.0], [8.0, 8.0]]
-    assert "box" not in revived["conditioning"]
-
-
-def test_volume_recovery_respects_the_claimed_cap_and_the_score(monkeypatch):
-    shape = (32, 32)
-    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), _recovery_predictor(shape))
-    candidates = _score_volume(
-        segmenter, refinement="recover", refinement_kwargs={"recover_max_claimed": 0.2},
-        prompts=_overlapping_anchor_prompts(),
-    )
-    # A quarter of it is claimed, above the cap, so it is its claimant rather than a lost object.
-    assert segmenter._last_generation_stats["recovery_candidates"] == 0
-    assert len(candidates) == 1
-
-    segmenter, _ = _volume_generator(monkeypatch, (1, *shape), _recovery_predictor(shape, recovered_score=0.4))
-    candidates = _score_volume(segmenter, refinement="recover", prompts=_overlapping_anchor_prompts())
-    assert segmenter._last_generation_stats["recovery_candidates"] == 1
-    assert segmenter._last_generation_stats["recovered_candidates"] == 0
-    assert len(candidates) == 1
 
 
 def test_unrefined_candidate_is_propagated_from_its_single_point():
@@ -2376,13 +2283,11 @@ def test_volume_refinement_survives_an_anchor_slice_that_keeps_nothing(monkeypat
         "frames": np.array([0], dtype="int64"),
     }
     candidates = _score_volume(
-        segmenter, refinement="points+boxes+recover",
+        segmenter, refinement="points+boxes",
         refinement_kwargs={"negative_source": "interior"}, prompts=prompts,
     )
     assert candidates == []
     assert segmenter._last_generation_stats["refined_candidates"] == 0
-    # A record too small never reaches the claim check, so it is not a recovery candidate either.
-    assert segmenter._last_generation_stats["recovery_candidates"] == 0
 
 
 def test_refined_conditioning_reaches_the_real_propagator(monkeypatch):
@@ -2447,22 +2352,16 @@ def test_refined_conditioning_reaches_the_real_propagator(monkeypatch):
 
 
 @pytest.mark.parametrize("refinement", [
-    "points", "boxes", "points+boxes", "points+boxes+masks", "recover", "points+boxes+recover",
+    "points", "boxes", "points+boxes", "points+boxes+masks",
 ])
 @pytest.mark.parametrize("conditioning", ["prompts", "prompts-grouped", "prompts-joint", "mask"])
 def test_every_conditioning_a_mode_produces_is_pushable(monkeypatch, refinement, conditioning):
     """The producer/consumer contract, over the whole cross product.
 
-    Two bugs came from testing the two halves separately: a reversed one-point array that torch
-    refused, and a recovered candidate whose conditioning dict had no 'mode' key. Both were shaped
-    like a mode nobody had pushed end to end. This pushes every candidate of every mode, through the
-    real propagator, and lets torch do its own check.
+    A reversed one-point array previously slipped through tests of the two halves and torch refused
+    it. This pushes every candidate of every mode through the real propagator and lets torch check it.
     """
     from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
-
-    components = tuple(refinement.split("+"))
-    if conditioning == "mask" and not [c for c in components if c != "recover"]:
-        pytest.skip("'mask' needs a re-prompt component, which _parse_refinement enforces")
 
     class TensorPredictor:
         # 'add_mask_prompts' resizes into the predictor's frame before it pushes.
@@ -2485,8 +2384,8 @@ def test_every_conditioning_a_mode_produces_is_pushable(monkeypatch, refinement,
     kept = _mask(shape, slice(4, 20), slice(4, 20))
     duplicate = _mask(shape, slice(4, 20), slice(16, 32))
     single = _mask(shape, slice(20, 28), slice(20, 28))
-    # Two candidates on frame 0 (one of them a merge-suppressed duplicate, for 'recover'), one alone
-    # on frame 2 - the single-point case. Enough responses for any mode's scoring and re-prompting.
+    # Two candidates on frame 0 and one alone on frame 2: the single-point case. There are enough
+    # responses for every mode's scoring and re-prompting.
     predictor = _VolumePredictor([
         ([kept, duplicate], [0.9, 0.8]), ([kept, duplicate], [0.95, 0.85]), ([duplicate], [0.8]),
         ([single], [0.7]), ([single], [0.75]), ([single], [0.7]),

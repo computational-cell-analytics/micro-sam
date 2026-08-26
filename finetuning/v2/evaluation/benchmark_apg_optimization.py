@@ -139,7 +139,7 @@ VOLUME_DIAGNOSTICS = (
     # Only a refinement run reports these ('REFINEMENT_STATS_3D' in the APG module); they read 0 for
     # every other run, which is what a missing key means here.
     "refined_candidates", "replaced_candidates", "gated_consistency", "gated_foreign",
-    "recovery_candidates", "recovered_candidates", "refinement_negatives",
+    "refinement_negatives",
 )
 IMAGE_DIAGNOSTICS = (
     "multimask_alternatives", "multimask_changed_from_iou",

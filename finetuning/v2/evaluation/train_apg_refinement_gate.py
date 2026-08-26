@@ -26,7 +26,7 @@ from micro_sam.v2.automatic_prompt_generation import (
 )
 from micro_sam.v2.multimask_selection import (
     MULTIMASK_FEATURE_NAMES, MULTIMASK_FEATURE_VERSION, POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES,
-    REFINEMENT_GATE_FEATURE_NAMES, load_feature_scorer, refinement_gate_features_torch,
+    REFINEMENT_GATE_FEATURE_NAMES, REFINEMENT_GATE_STAGES, load_feature_scorer, refinement_gate_features_torch,
     selector_input_schema,
 )
 from screen_apg_multimask import (
@@ -83,7 +83,7 @@ def extract_gate_dataset(
     selector_oof_dataset=None, selector_oof_predictions=None,
     gate_stage="premerge", target_mode="positive",
 ):
-    if gate_stage not in ("premerge", "postmerge"):
+    if gate_stage not in REFINEMENT_GATE_STAGES:
         raise ValueError(f"Invalid gate stage {gate_stage!r}.")
     if target_mode not in ("positive", "signed"):
         raise ValueError(f"Invalid target mode {target_mode!r}.")
@@ -259,6 +259,8 @@ def _load_gate_dataset(path: Path) -> dict:
         raise ValueError("The gate feature dataset has a different runtime schema version.")
     gate_stage = str(data["gate_stage"]) if "gate_stage" in data.files else "premerge"
     target_mode = str(data["target_mode"]) if "target_mode" in data.files else "positive"
+    if gate_stage not in REFINEMENT_GATE_STAGES:
+        raise ValueError(f"Unsupported gate stage {gate_stage!r} in the feature dataset.")
     expected_names = (
         POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES if gate_stage == "postmerge"
         else REFINEMENT_GATE_FEATURE_NAMES

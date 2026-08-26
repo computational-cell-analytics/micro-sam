@@ -46,7 +46,7 @@ from bioimage_cpp.segmentation import label
 from .normalization import to_image
 from .multimask_selection import (
     POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES, combine_selector_features_torch, extract_multimask_features_torch,
-    refinement_gate_features_torch, selector_input_schema,
+    refinement_gate_features_torch, refinement_gate_stage, selector_input_schema,
 )
 from ..util import make_temp_embedding_path
 from .postprocessing import DEFAULT_POSTPROCESSING, _compute_flow_density
@@ -107,20 +107,18 @@ DEFAULT_PROMPT_GENERATION = {
 
 # The components a refinement mode can be assembled from, and the keyword arguments each accepts.
 # A mode is a '+'-joined combination, e.g. 'points', 'boxes' or 'points+boxes': every component
-# except 'recover' contributes its prompt to one joint re-prompt per instance, so 'points+boxes'
-# conditions on both. 'recover' instead re-prompts the records the merge dropped, adding instances.
-REFINEMENT_COMPONENTS = ("points", "boxes", "masks", "recover")
+# contributes its prompt to one joint re-prompt per instance, so 'points+boxes' conditions on both.
+REFINEMENT_COMPONENTS = ("points", "boxes", "masks")
 REFINEMENT_KWARGS = {
     "shared": (
         "policy", "multimasking", "min_consistency", "max_foreign_overlap", "gate", "gate_threshold",
     ),
     "points": (
         "n_positives", "n_negatives", "max_negative_distance", "negative_source",
-        "min_negative_distance", "min_grouped_for_points",
+        "min_negative_distance",
     ),
     "boxes": ("box_extension",),
     "masks": (),
-    "recover": ("recover_max_claimed",),
 }
 DEFAULT_REFINEMENT = {
     # The defaults are the measured optimum of the recommended mode, 'points+boxes': +4.2% macro mSA
@@ -158,12 +156,6 @@ DEFAULT_REFINEMENT = {
     # Exclude negatives closer than this (in pixels) to the instance's own first-round mask: a
     # negative touching the instance's true extent cuts into the object instead of bounding it.
     "min_negative_distance": 0,
-    # Re-prompt with points only where the first round grouped at least this many suppressed
-    # prompts onto the instance; below it the re-prompt is box-only. 0 uses points everywhere.
-    "min_grouped_for_points": 0,
-    # Only records whose pixels were claimed at most this much are recovered: a nearly swallowed
-    # record duplicates its claimant, while a lightly claimed one is a genuinely lost object.
-    "recover_max_claimed": 0.6,
     # Number of pixels every box prompt is grown by. Confluent data prefers 0, because a grown box
     # reaches into the neighbouring object.
     "box_extension": 0,
@@ -173,27 +165,27 @@ DEFAULT_REFINEMENT = {
 # would turn it into a conditioning frame and replace the mask there with a single-point one (-0.034
 # mSA, see the module docstring), so a finished track cannot be touched; what the second round
 # produces is the conditioning the propagation starts from rather than a finished mask. The
-# components mean the same as in 2d, and the kwargs are the 2d ones minus 'min_grouped_for_points':
-# that was refuted in 2d, and suppressing an instance's point row also removes its negatives, which
-# is the ingredient that pays. 'conditioning' is the one addition, see `DEFAULT_REFINEMENT_3D`.
+# components mean the same as in 2d. The learned uncertainty gate is image-only; 'conditioning' is
+# the one volume addition, see `DEFAULT_REFINEMENT_3D`.
 # How an accepted re-prompt is pushed onto the anchor frame, see 'DEFAULT_REFINEMENT_3D'.
 CONDITIONING_MODES = ("prompts", "prompts-grouped", "prompts-joint", "mask")
 REFINEMENT_KWARGS_3D = {
-    "shared": REFINEMENT_KWARGS["shared"] + ("conditioning",),
-    "points": tuple(key for key in REFINEMENT_KWARGS["points"] if key != "min_grouped_for_points"),
+    "shared": tuple(
+        key for key in REFINEMENT_KWARGS["shared"] if key not in ("gate", "gate_threshold")
+    ) + ("conditioning",),
+    "points": REFINEMENT_KWARGS["points"],
     "boxes": REFINEMENT_KWARGS["boxes"],
     "masks": REFINEMENT_KWARGS["masks"],
-    "recover": REFINEMENT_KWARGS["recover"],
 }
 DEFAULT_REFINEMENT_3D = {
-    key: value for key, value in DEFAULT_REFINEMENT.items() if key != "min_grouped_for_points"
+    key: value for key, value in DEFAULT_REFINEMENT.items() if key not in ("gate", "gate_threshold")
 }
 # The counters a volume's refinement reports, all of them accumulated over the anchor slices. Zeroed
 # together when a refinement runs, so a mode that cannot produce one still reports it as 0 rather
 # than leaving the column absent for that run only.
 REFINEMENT_STATS_3D = (
     "refined_candidates", "replaced_candidates", "gated_consistency", "gated_foreign",
-    "recovery_candidates", "recovered_candidates", "refinement_negatives",
+    "refinement_negatives",
 )
 DEFAULT_REFINEMENT_3D.update({
     # Measured on the 3d benchmark, and different from 2d on both axes. Negatives peak at four rather
@@ -246,7 +238,7 @@ def _parse_refinement(
             f"Invalid refinement mode {refinement!r}: expected a '+'-joined combination of "
             f"{', '.join(REFINEMENT_COMPONENTS)} without repetition."
         )
-    if tuple(component for component in components if component != "recover") == ("masks",):
+    if components == ("masks",):
         raise ValueError(
             "A mask prompt can only condition a re-prompt, not drive one alone: SAM2 is not trained "
             "for dense-only prompting. Combine it, e.g. 'points+masks' or 'boxes+masks'."
@@ -277,20 +269,10 @@ def _parse_refinement(
         raise ValueError(
             f"Invalid negative_source {resolved['negative_source']!r}: expected 'prompts' or 'interior'."
         )
-    if resolved.get("min_grouped_for_points", 0) > 0 and "boxes" not in components:
-        raise ValueError(
-            "min_grouped_for_points suppresses the point prompt of sparsely grouped instances, so "
-            "their re-prompt needs a box: combine it with the 'boxes' component."
-        )
     if resolved.get("conditioning", "prompts") not in CONDITIONING_MODES:
         raise ValueError(
             f"Invalid conditioning {resolved['conditioning']!r}: expected one of "
             f"{', '.join(CONDITIONING_MODES)}."
-        )
-    if resolved.get("conditioning") == "mask" and not [c for c in components if c != "recover"]:
-        raise ValueError(
-            "conditioning='mask' hands the propagation the mask of a second-round re-prompt, so the "
-            "mode needs a re-prompt component: combine it with 'points', 'boxes' or both."
         )
     return components, resolved
 
@@ -591,7 +573,9 @@ def postmerge_refinement_gate_features(
             0.0 if score_filter == "none"
             else float(record.get(score_filter, predicted_iou)) - float(context["score_threshold"])
         )
-        claimed_fraction = float(sum(context["claimed"][record_index].values()))
+        claimed_fraction = float(np.clip(
+            1.0 - visible_area / max(source_area, 1.0), 0.0, 1.0,
+        ))
         rows.append((
             predicted_iou,
             stability,
@@ -928,7 +912,7 @@ def derive_volume_prompts(
 
 def merge_by_score(
     records: List[Dict[str, Any]], shape: tuple, max_overlap: float = 0.3, min_size: int = 50,
-    return_matches: bool = False, return_reasons: bool = False, return_claimed: bool = False,
+    return_matches: bool = False, return_reasons: bool = False,
 ) -> Union[np.ndarray, tuple]:
     """Merge prediction records in descending score order, each claiming only unclaimed pixels.
 
@@ -950,16 +934,10 @@ def merge_by_score(
             'too small', a 'duplicate' when a better-scoring mask already claims more than
             'max_overlap' of it, 'truncated below min size' when too few of its pixels are free, or
             'kept'. This is what the merge does, reported rather than recomputed.
-        return_claimed: Whether to also return, per record, which earlier-painted instances claimed
-            its pixels and what fraction each claimed. This is who suppressed a 'duplicate', so a
-            recovery round knows the record it revives and the neighbours to prompt against. A
-            record dropped as 'too small' never reaches the claim check and reports an empty map.
-
     Returns:
         The instance segmentation, uint32 array. If `return_matches`, additionally a mapping from
         every instance id to the index of the record that made it. If `return_reasons`, additionally
-        the reason per record, in the order the records were given. If `return_claimed`,
-        additionally one {instance_id: fraction_of_record_area} map per record, in record order.
+        the reason per record, in the order the records were given.
     """
     out = np.zeros(shape, dtype="uint32")
     scores = np.array([
@@ -971,7 +949,6 @@ def merge_by_score(
     full_box = tuple(slice(None) for _ in shape)
     matches = {}
     reasons = ["" for _ in records]
-    claimed_by = [{} for _ in records]
     accepted_groups = set()
     next_id = 1
     for index in sorted(range(len(records)), key=lambda candidate: (-scores[candidate], candidate)):
@@ -989,12 +966,6 @@ def merge_by_score(
         # A view, so painting the fresh pixels below writes straight into the output.
         target = out[record.get("bounding_box", full_box)]
         claimed = target[mask]
-        if return_claimed:
-            counts = np.bincount(claimed)
-            claimed_by[index] = {
-                int(instance_id): float(counts[instance_id] / area)
-                for instance_id in np.nonzero(counts)[0] if instance_id != 0
-            }
         if int(np.count_nonzero(claimed)) / area > max_overlap:
             reasons[index] = "duplicate"
             continue
@@ -1014,8 +985,6 @@ def merge_by_score(
         result += (matches,)
     if return_reasons:
         result += (reasons,)
-    if return_claimed:
-        result += (claimed_by,)
     return result[0] if len(result) == 1 else result
 
 
@@ -1153,6 +1122,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         loaded from an implicit global path. This keeps checkpoints and evaluation artifacts
         attributable. The normal predicted-IoU path does not require either model.
         """
+        if refinement_gate is not None:
+            refinement_gate_stage(refinement_gate)
         self._microscopy_multimask_scorer = scorer
         self._refinement_gate_model = refinement_gate
 
@@ -1423,8 +1394,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             min_size: Minimum object size in the result.
             refinement: Optional second round, a '+'-joined combination of 'points' (the first
                 round's prompts grouped onto each merged instance, see `derive_refinement_prompts`),
-                'boxes' (its bounding box), 'masks' (its mask as a logit prompt) and 'recover'
-                (re-prompt the records the merge dropped and add the survivors). None (the default)
+                'boxes' (its bounding box) and 'masks' (its mask as a logit prompt). None (the default)
                 runs no second round. For a volume the round runs on each candidate's anchor slice,
                 before the propagation, and produces the conditioning that propagation starts from
                 rather than a finished mask, see `_refine_anchors`.
@@ -1520,7 +1490,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             compute_multimask_uncertainty=(
                 refinement is not None
                 and (refinement_kwargs or {}).get("gate", DEFAULT_REFINEMENT["gate"]) == "uncertainty"
-                and getattr(self._refinement_gate_model, "gate_stage", "premerge") == "premerge"
+                and refinement_gate_stage(self._refinement_gate_model) == "premerge"
             ),
         )
         return self.select(
@@ -1627,7 +1597,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             max_overlap: Reject a proposal when more than this fraction of it is already claimed.
             min_size: Minimum object size in the result.
             refinement: Optional second round, a '+'-joined combination of 'points', 'boxes',
-                'masks' and 'recover'; see `generate`.
+                and 'masks'; see `generate`.
             refinement_kwargs: Keyword arguments of that second round, validated against the mode's
                 components; see `DEFAULT_REFINEMENT` for the accepted keys and their defaults.
             batch_size: Number of prompts per forward pass of the refinement.
@@ -1643,7 +1613,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             )
         if refinement is not None:
             components, resolved = _parse_refinement(refinement, refinement_kwargs)
-            self._validate_refinement(components)
 
         shape = self._prediction[0].shape
         if not proposals:
@@ -1656,9 +1625,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if components is not None and segmentation.max() > 0:
             segmentation = self._refine(segmentation, context, components, resolved, batch_size)
         return segmentation
-
-    def _validate_refinement(self, components: tuple) -> None:
-        """Reject the refinement components the generator cannot run. This one runs all of them."""
 
     def _region_of(self, context: dict, record_index: int):
         """The region a record's instance is re-prompted in, keyed however the generator likes.
@@ -1724,9 +1690,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             return np.zeros(shape, dtype="uint32"), None
         if not return_context:
             return merge_by_score(records, shape, max_overlap=max_overlap, min_size=min_size), None
-        segmentation, matches, reasons, claimed = merge_by_score(
+        segmentation, matches, reasons = merge_by_score(
             records, shape, max_overlap=max_overlap, min_size=min_size,
-            return_matches=True, return_reasons=True, return_claimed=True,
+            return_matches=True, return_reasons=True,
         )
         self._last_generation_stats.update({
             "proposed_candidates": len(proposals),
@@ -1735,25 +1701,18 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         })
         return segmentation, {
             "proposals": proposals, "records": records, "matches": matches,
-            "reasons": reasons, "claimed": claimed,
-            "score_threshold": score_threshold, "min_size": min_size,
-            "score_filter": score_filter,
+            "score_threshold": score_threshold, "score_filter": score_filter,
         }
 
     def _refine(
         self, segmentation: np.ndarray, context: dict, components: tuple, refinement_kwargs: dict,
         batch_size: int,
     ) -> np.ndarray:
-        """Run the requested refinement stages: re-prompt the instances, then recover dropped records."""
+        """Re-prompt the accepted instances with the requested refinement components."""
         with autocast(self._predictor.device):
-            reprompt_components = tuple(component for component in components if component != "recover")
-            if reprompt_components:
-                segmentation = self._reprompt_instances(
-                    segmentation, context, reprompt_components, refinement_kwargs, batch_size,
-                )
-            if "recover" in components:
-                segmentation = self._recover_dropped(segmentation, context, refinement_kwargs, batch_size)
-        return segmentation
+            return self._reprompt_instances(
+                segmentation, context, components, refinement_kwargs, batch_size,
+            )
 
     def _reprompt_instances(
         self, segmentation: np.ndarray, context: dict, components: tuple, refinement_kwargs: dict,
@@ -1785,7 +1744,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         unselected = []
         gate_requested = refinement_kwargs.get("gate", "all") == "uncertainty"
         gate_model = getattr(self, "_refinement_gate_model", None)
-        gate_stage = getattr(gate_model, "gate_stage", "premerge")
+        gate_stage = refinement_gate_stage(gate_model)
         if gate_requested and gate_stage == "premerge":
             threshold = float(refinement_kwargs["gate_threshold"])
             instances = []
@@ -1856,7 +1815,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if not instances:
             self._last_generation_stats.update({
                 "refined_instances": 0, "replaced_instances": 0,
-                "points_suppressed_instances": 0, "dropped_negatives": 0,
+                "dropped_negatives": 0,
                 "gated_consistency": 0, "gated_foreign": 0,
             })
             return segmentation
@@ -1875,7 +1834,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         min_consistency = refinement_kwargs["min_consistency"]
         max_foreign_overlap = refinement_kwargs["max_foreign_overlap"]
         keep_if_better = refinement_kwargs["policy"] == "keep-if-better"
-        chosen, replaced, suppressed, dropped = [], 0, 0, 0
+        chosen, replaced, dropped = [], 0, 0
         for instance_id, bounding_box in unselected:
             record = context["records"][context["matches"][instance_id]]
             chosen.append((
@@ -1904,10 +1863,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
             for start in range(0, len(region_instances), batch_size):
                 batch = region_instances[start:start + batch_size]
-                predictions, batch_suppressed = self._predict_refinement_batch(
+                predictions = self._predict_refinement_batch(
                     crop, batch, components, region_prompts, refinement_kwargs,
                 )
-                suppressed += batch_suppressed
                 for (instance_id, bounding_box), (mask, score) in zip(batch, predictions):
                     record = context["records"][context["matches"][instance_id]]
                     first_round_score = record["predicted_iou"] * record["stability_score"]
@@ -1940,7 +1898,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
         self._last_generation_stats.update({
             "refined_instances": len(instances), "replaced_instances": replaced,
-            "points_suppressed_instances": suppressed, "dropped_negatives": dropped, **gated,
+            "dropped_negatives": dropped, **gated,
         })
         # Ascending score, so that the most confident instance is painted last and wins contested pixels.
         refined = np.zeros(shape, dtype="uint32")
@@ -1951,19 +1909,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     def _predict_refinement_batch(
         self, segmentation: np.ndarray, batch: list, components: tuple,
         point_prompts: Optional[dict], refinement_kwargs: dict,
-    ) -> tuple:
-        """One batched forward pass over the instances of 'batch'.
-
-        Returns:
-            The (mask, combined score) pairs, and the number of instances whose point prompt was
-            suppressed by 'min_grouped_for_points' (their rows carry only padding, so they are
-            re-prompted by the remaining components alone).
-        """
+    ) -> list:
+        """Return one (mask, combined score) pair per instance in ``batch``."""
         shape = segmentation.shape
         box_extension = refinement_kwargs.get("box_extension", 0)
-        min_grouped = refinement_kwargs.get("min_grouped_for_points", 0)
         points = labels = boxes = mask_logits = None
-        suppressed = 0
 
         if "points" in components:
             per_instance = [point_prompts[instance_id] for instance_id, _ in batch]
@@ -1971,10 +1921,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             points = np.zeros((len(batch), width, 2), dtype="float32")
             labels = np.full((len(batch), width), -1, dtype="int32")
             for row, prompt in enumerate(per_instance):
-                if prompt.get("n_grouped", 0) < min_grouped:
-                    # All padding: the sparsely grouped instance is re-prompted by its box alone.
-                    suppressed += 1
-                    continue
                 points[row, :len(prompt["points"])] = prompt["points"]
                 labels[row, :len(prompt["points"])] = prompt["point_labels"]
         if "boxes" in components:
@@ -1984,10 +1930,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if "masks" in components:
             mask_logits = np.stack([mask_to_logits(segmentation == instance_id) for instance_id, _ in batch])
 
-        predictions = self._predict_prompt_batch(
+        return self._predict_prompt_batch(
             points, labels, boxes, mask_logits, refinement_kwargs["multimasking"],
         )
-        return predictions, suppressed
 
     def _predict_prompt_batch(
         self,
@@ -2020,78 +1965,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         masks = (logits > mask_threshold).cpu().numpy()
         combined = (scores.float() * stability.float()).cpu().numpy()
         return [(mask, float(score)) for mask, score in zip(masks, combined)]
-
-    def _recover_dropped(
-        self, segmentation: np.ndarray, context: dict, refinement_kwargs: dict, batch_size: int,
-    ) -> np.ndarray:
-        """Re-prompt the records the merge dropped and paint the survivors as new instances.
-
-        A record rejected as a 'duplicate' can be a genuinely lost object whose mask a neighbour
-        partially claimed. Each candidate is re-prompted with its own point as the positive and the
-        prompts of the instances that claimed it as negatives, and only its still-unclaimed pixels
-        are painted, so no existing instance changes. Recovery attacks recall, where the
-        per-instance re-prompt only polishes boundaries.
-        """
-        max_claimed = refinement_kwargs["recover_max_claimed"]
-        n_negatives = refinement_kwargs.get("n_negatives", DEFAULT_REFINEMENT["n_negatives"])
-        surviving_points = {
-            instance_id: context["records"][record_index]["point"]
-            for instance_id, record_index in context["matches"].items()
-        }
-
-        entries = []
-        for record_index, (record, reason, claimed) in enumerate(
-            zip(context["records"], context["reasons"], context["claimed"])
-        ):
-            if reason not in ("duplicate", "truncated below min size"):
-                continue
-            if sum(claimed.values()) > max_claimed:
-                continue
-            point = np.asarray(record["point"], dtype="float32")
-            claimants = [
-                surviving_points[claimant] for claimant in claimed if claimant in surviving_points
-            ]
-            claimants = sorted(
-                claimants, key=lambda negative: float(np.linalg.norm(np.asarray(negative) - point))
-            )[:n_negatives]
-            entries.append((record["predicted_iou"] * record["stability_score"], record_index, point, claimants))
-        # Descending record score, so the most credible lost object claims its free pixels first.
-        entries.sort(key=lambda entry: (-entry[0], entry[1]))
-        self._last_generation_stats.update({"recovery_candidates": len(entries), "recovered_instances": 0})
-        if not entries:
-            return segmentation
-
-        recovered = segmentation.copy()
-        next_id = int(segmentation.max()) + 1
-        score_threshold = context["score_threshold"]
-        min_size = context["min_size"]
-        accepted = 0
-        for start in range(0, len(entries), batch_size):
-            batch = entries[start:start + batch_size]
-            width = 1 + max(len(negatives) for _, _, _, negatives in batch)
-            points = np.zeros((len(batch), width, 2), dtype="float32")
-            labels = np.full((len(batch), width), -1, dtype="int32")
-            for row, (_, _, point, negatives) in enumerate(batch):
-                points[row, 0] = point
-                labels[row, 0] = 1
-                for column, negative in enumerate(negatives, start=1):
-                    points[row, column] = negative
-                    labels[row, column] = 0
-            predictions = self._predict_prompt_batch(
-                points, labels, None, None, refinement_kwargs["multimasking"],
-            )
-            for (_, _, point, _), (mask, score) in zip(batch, predictions):
-                if score < score_threshold:
-                    continue
-                fresh = mask & (recovered == 0)
-                if int(fresh.sum()) < min_size:
-                    continue
-                recovered[fresh] = next_id
-                next_id += 1
-                accepted += 1
-
-        self._last_generation_stats["recovered_instances"] = accepted
-        return recovered
 
     def _apply_prompts(
         self, prompts, multimasking: bool, batch_size: int, multimask_scorer: str = "predicted_iou",
@@ -2429,20 +2302,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
             # On the slice's own canvas rather than the records' bounding one, because a refinement
             # looks instance ids up by position: for the foreign-overlap gate and for the negatives.
-            segmentation, matches, reasons, claimed = merge_by_score(
+            segmentation, matches = merge_by_score(
                 records, slice_shape, max_overlap=max_overlap,
                 min_size=DEFAULT_PROMPT_GENERATION["min_size"],
-                return_matches=True, return_reasons=True, return_claimed=True,
+                return_matches=True,
             )
             context = {
                 "frame": int(frame), "segmentation": segmentation, "records": records,
-                "matches": matches, "reasons": reasons, "claimed": claimed,
-                "points": points[indices][:, 0, :], "score_threshold": score_threshold,
-                "min_size": DEFAULT_PROMPT_GENERATION["min_size"],
+                "matches": matches, "points": points[indices][:, 0, :],
             }
             candidates.extend(self._refine_anchors(context, components, refinement_kwargs, batch_size))
-            if "recover" in components:
-                candidates.extend(self._recover_suppressed(context, refinement_kwargs, batch_size))
         return candidates
 
     def _anchor_candidate(self, frame: int, record: dict) -> dict:
@@ -2483,12 +2352,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             for instance_id, record_index in context["matches"].items()
         }
 
-        reprompt = tuple(component for component in components if component != "recover")
-        if not reprompt:
-            return list(candidates.values())
-
         point_prompts = None
-        if "points" in reprompt:
+        if "points" in components:
             point_prompts = derive_refinement_prompts(
                 segmentation, frame_points,
                 {instance_id: candidate["point"] for instance_id, candidate in candidates.items()},
@@ -2521,8 +2386,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
         for start in range(0, len(instances), batch_size):
             batch = instances[start:start + batch_size]
-            predictions, _ = self._predict_refinement_batch(
-                segmentation, batch, reprompt, point_prompts, refinement_kwargs,
+            predictions = self._predict_refinement_batch(
+                segmentation, batch, components, point_prompts, refinement_kwargs,
             )
             for (instance_id, bounding_box), (mask, score) in zip(batch, predictions):
                 candidate = candidates[instance_id]
@@ -2548,7 +2413,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 # combined score, so it goes in whole rather than being split back up arbitrarily.
                 candidate["score"], candidate["stability"] = float(score), 1.0
                 candidate["conditioning"] = self._anchor_conditioning(
-                    mask, bounding_box, segmentation.shape, reprompt,
+                    mask, bounding_box, segmentation.shape, components,
                     point_prompts, instance_id, refinement_kwargs,
                 )
         return list(candidates.values())
@@ -2573,95 +2438,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             conditioning["points"] = point_prompts[instance_id]["points"]
             conditioning["point_labels"] = point_prompts[instance_id]["point_labels"]
         return conditioning
-
-    def _recover_suppressed(
-        self, context: dict, refinement_kwargs: dict, batch_size: int,
-    ) -> List[dict]:
-        """Re-prompt the candidates the anchor slice's merge suppressed, and propagate the survivors.
-
-        The 2d recovery revives records the merge dropped because a neighbour already claimed them.
-        In a volume that argument is stronger: the merge that dropped these ran on a single slice,
-        and two objects that overlap in-plane there can be separate everywhere else in z. A revived
-        candidate is propagated like any other and the 3d merge arbitrates, so one that really does
-        duplicate its claimant is dropped again - on the evidence of the whole volume this time,
-        rather than of one slice. What it costs is the propagation of the candidates that are wrong,
-        which is why the counters below report how many there were.
-
-        Returns:
-            The extra candidates, most credible first, each conditioned on its own prompt.
-        """
-        max_claimed = refinement_kwargs["recover_max_claimed"]
-        n_negatives = refinement_kwargs.get("n_negatives", DEFAULT_REFINEMENT_3D["n_negatives"])
-        # A revived candidate has no accepted second-round mask to hand over - it *is* the second
-        # round - so 'mask' has nothing to mean here and it is conditioned on its own prompt.
-        conditioning = refinement_kwargs["conditioning"]
-        if conditioning == "mask":
-            conditioning = "prompts"
-        records, segmentation = context["records"], context["segmentation"]
-        surviving = {
-            instance_id: records[record_index]["point"]
-            for instance_id, record_index in context["matches"].items()
-        }
-
-        entries = []
-        for record_index, (record, reason, claimed) in enumerate(
-            zip(records, context["reasons"], context["claimed"])
-        ):
-            if reason not in ("duplicate", "truncated below min size"):
-                continue
-            if sum(claimed.values()) > max_claimed:
-                continue
-            point = np.asarray(record["point"], dtype="float32")
-            claimants = [
-                surviving[claimant] for claimant in claimed if claimant in surviving
-            ]
-            claimants = sorted(
-                claimants, key=lambda negative: float(np.linalg.norm(np.asarray(negative) - point))
-            )[:n_negatives]
-            entries.append((record["predicted_iou"] * record["stability_score"], record_index, point, claimants))
-        # Descending record score, so the most credible lost object is propagated first.
-        entries.sort(key=lambda entry: (-entry[0], entry[1]))
-        stats = self._last_generation_stats
-        stats["recovery_candidates"] += len(entries)
-        if not entries:
-            return []
-
-        recovered = []
-        for start in range(0, len(entries), batch_size):
-            batch = entries[start:start + batch_size]
-            width = 1 + max(len(negatives) for _, _, _, negatives in batch)
-            points = np.zeros((len(batch), width, 2), dtype="float32")
-            labels = np.full((len(batch), width), -1, dtype="int32")
-            for row, (_, _, point, negatives) in enumerate(batch):
-                points[row, 0] = point
-                labels[row, 0] = 1
-                for column, negative in enumerate(negatives, start=1):
-                    points[row, column] = negative
-                    labels[row, column] = 0
-            predictions = self._predict_prompt_batch(
-                points, labels, None, None, refinement_kwargs["multimasking"],
-            )
-            for row, ((_, _, point, _), (mask, score)) in enumerate(zip(batch, predictions)):
-                if score < context["score_threshold"]:
-                    continue
-                # Not fully swallowed on this slice either: a record whose free pixels are gone is
-                # its claimant, not a lost object, whatever the 3d merge would make of it.
-                if int((mask & (segmentation == 0)).sum()) < context["min_size"]:
-                    continue
-                keep = labels[row] >= 0
-                recovered.append({
-                    "frame": context["frame"],
-                    "point": (float(point[0]), float(point[1])),
-                    "score": float(score),
-                    "stability": 1.0,
-                    "conditioning": {
-                        "mode": conditioning,
-                        "points": points[row][keep],
-                        "point_labels": labels[row][keep],
-                    },
-                })
-        stats["recovered_candidates"] += len(recovered)
-        return recovered
 
     def _propagate_candidates(
         self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
@@ -2785,8 +2561,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
     its prompts translated into that tile's frame, while the acceptance gates and the final repaint
     stay global. The negatives an instance takes from its neighbours are chosen across the whole
     image, so a neighbour beyond the halo is dropped from the re-prompt and counted in the
-    'dropped_negatives' statistic — a large count means the halo is too small for 'n_negatives'. The
-    'recover' component is the one mode that does not run here, see `_validate_refinement`.
+    'dropped_negatives' statistic — a large count means the halo is too small for 'n_negatives'.
 
     Args:
         model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
@@ -2960,9 +2735,8 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         the same offset as the ids, and the instances a neighbouring tile overwrote entirely are
         pruned, since an id that is no longer in the segmentation has nothing left to refine.
 
-        The context carries no claim maps, because only the 'recover' component reads them and a
-        per-tile merge only ever sees the claimants of its own tile. That component is rejected
-        before the merge, see `_validate_refinement`.
+        Post-merge refinement features derive visibility loss from the stitched segmentation, so the
+        context does not need per-tile claim maps.
         """
         segmentation = np.zeros(shape, dtype="uint32")
         offset = 0
@@ -3039,19 +2813,10 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             "stitch_dropped_instances": stitch_dropped,
         })
         return segmentation, {
-            "proposals": all_records, "records": records, "matches": matches, "reasons": reasons,
-            "record_tiles": record_tiles, "score_threshold": score_threshold, "min_size": min_size,
+            "proposals": all_records, "records": records, "matches": matches,
+            "record_tiles": record_tiles, "score_threshold": score_threshold,
             "score_filter": score_filter,
         }
-
-    def _validate_refinement(self, components: tuple) -> None:
-        """Reject the one component whose bookkeeping a tiled merge cannot provide."""
-        if "recover" in components:
-            raise NotImplementedError(
-                "The tiled generator does not support the 'recover' refinement component: it needs "
-                "the claim maps of the merge, and a tiled merge only sees the claimants within one "
-                "tile. Recovery measured neutral, so drop it from the mode or run untiled."
-            )
 
     def _region_of(self, context: dict, record_index: int):
         """The tile that produced a record, which is the tile its instance is re-prompted in.

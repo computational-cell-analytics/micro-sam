@@ -676,9 +676,12 @@ samples, so its relative changes carry the largest noise of the five datasets. T
 case for the geometry gates (direction 1), whose job is exactly to veto harmful re-prompts
 per instance.
 
-### The four mechanisms (epoch 2)
+### The four mechanisms (epoch 2, historical implementation)
 
-All in `micro_sam/v2/automatic_prompt_generation.py`, as extensions of the refinement kwargs:
+The epoch-2 implementation added all four mechanisms below to
+`micro_sam/v2/automatic_prompt_generation.py`. The geometry and negative-quality mechanisms remain;
+the neutral recovery and refuted grouped-supply adaptivity paths were removed after the campaign to
+avoid carrying unsupported options in the current API.
 
 - **Geometry gates** (shared kwargs): `min_consistency` accepts a second-round mask only if its IoU
   with the first-round mask reaches the threshold — the re-prompt may polish, not reshape;
@@ -689,13 +692,13 @@ All in `micro_sam/v2/automatic_prompt_generation.py`, as extensions of the refin
   point of each other instance instead of its raw prompt; `min_negative_distance` excludes
   negatives closer than that to the instance's own first-round mask (exact EDT on the padded
   bounding box).
-- **Recovery** (new component `"recover"`, valid standalone): records the merge dropped as
+- **Recovery** (historical component `"recover"`, then valid standalone): records the merge dropped as
   'duplicate' or 'truncated below min size', with at most `recover_max_claimed` of their pixels
   claimed, are re-prompted with their own point as the positive and the claimants' surviving
   prompts as negatives; a survivor (score above `score_threshold`, unclaimed pixels above
   `min_size`) is painted on its unclaimed pixels as a **new** instance. Built on
   `merge_by_score(return_claimed=True)`. Stats: `recovery_candidates`, `recovered_instances`.
-- **Adaptivity** (points kwarg): `min_grouped_for_points` re-prompts sparsely grouped instances
+- **Adaptivity** (historical points kwarg): `min_grouped_for_points` re-prompts sparsely grouped instances
   (fewer suppressed prompts than the threshold) with their box alone — their point row is fully
   padded with the ignore label inside the same batch. Requires the `boxes` component. Stats:
   `points_suppressed_instances`.
@@ -763,8 +766,8 @@ over the base), 0.6 and 0.8 give 0.278145/0.278150 (slightly below). Standalone 
 records that pass the claim cap either fail the score threshold, produce too-few unclaimed pixels,
 or add objects that cost as much precision as they add recall. The recall axis, like its 3d
 counterpart, does not respond to re-prompting — consistent with the APGv2 finding that the
-merge-rejection failure is rarer than the never-proposed one. The `recover` component stays in the
-library as a measured-neutral option.
+merge-rejection failure is rarer than the never-proposed one. The measured-neutral `recover`
+component was subsequently removed from the library.
 
 #### S5: adaptivity by grouped supply — refuted, instructively
 
@@ -776,7 +779,7 @@ suppressing its point row removes the negatives — which S2 and the `points+box
 identified as the active ingredient. Gating the point prompt on grouped-duplicate supply therefore
 throws away exactly what pays. The signal gates the wrong ingredient; per-instance adaptivity would
 have to key on something that predicts *negative* usefulness (local crowding), which is left as an
-explicitly unexplored follow-up.
+explicitly unexplored follow-up. The refuted `min_grouped_for_points` option was subsequently removed.
 
 #### S6: the positives ablation — one positive is enough, and better
 

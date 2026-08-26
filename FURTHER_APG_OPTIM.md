@@ -866,3 +866,326 @@ hits/bytes, candidate and pass counts, object-frame batch elements, actual track
 fraction, trajectory-feature time, transfer time and peak CUDA memory. These measurements make it
 possible to reject a mechanism for the right reason rather than mistaking fewer candidates or objects
 for fewer expensive launches.
+
+## Stopped 3D learned-funnel campaign: complete report
+
+### Decision and scope
+
+The learned 3D funnel effort was stopped after the primary OOF campaign and a targeted correction
+campaign completed on 24-25 August 2026. No learned artifact met its promotion gate. The holdout was
+therefore never opened, no library default was changed, and the conditional refinement, recall-expansion,
+and retirement stages were not advanced. The temporary campaign implementation was removed from the
+source tree after this report was written. The generated caches, logs, model artifacts, and screening
+tables remain under:
+
+```text
+/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization/3d_campaign
+```
+
+They occupy approximately 1.3 GB across 3,971 files and are the reproducibility record for the numbers
+below. The campaign used the frozen SAM2 Hiera-tiny checkpoint identified by
+`85fb099c4bb038fa0ab9bddd6151689e` and the unchanged `(1.5, 10.0)` 3D proposal ladder.
+
+The campaign was designed to answer four questions raised by the strong 2D learned-scorer result:
+
+1. Was the first 3D loss caused by assigning the wrong target to the three anchor alternatives?
+2. Can a pre-propagation model identify useful point-conditioned tracks and avoid propagation work?
+3. Does post-propagation trajectory evidence improve final filtering or merge ordering?
+4. Would a selected anchor mask become useful if it actually conditioned propagation, and does the 2D
+   scorer transfer to that setting?
+
+The quality route required at least +5% dataset-balanced primary mSA, at most two datasets below -5%,
+and the documented runtime guard. The output-exact residency route required at least 5% aggregate
+speedup with no dataset more than 2% slower. The counterfactual mask-conditioned route required both a
+positive lower 95% confidence bound on random-stratum track IoU and recovery of at least 50% of the
+mask-track oracle headroom.
+
+### Data, split, and cache design
+
+The original five standard and five deep crops were too small for model selection, so deterministic
+manifests were built for 32 primary and 10 sealed holdout deep crops. The primary set contained one
+C. elegans crop, three EmbedSeg crops, 22 GoNuclear crops, three CREMI crops, and three SNEMI crops. The
+holdout contained one, one, six, one, and one respectively. Folds were grouped by source volume; where
+only one source existed, a spatially disjoint crop was reserved for holdout. All reported learned
+results are source-grouped five-fold OOF results on primary. Leave-one-dataset-out weighted errors were
+also recorded during fitting, but were diagnostic rather than a selection criterion.
+
+The reusable extractor recorded stable candidate identities and component lineage, the three compact
+SAM alternatives, mask tokens, low-resolution mask statistics, proposal context, anchor-slice fates,
+point-conditioned tracks, cropped bit-packed masks, direct 3D IoU targets, and prediction-only
+trajectory reductions. It also instrumented feature-cache hits and misses, tracking launches, realized
+batch sizes, active/empty object-frame elements, object-score logits, and deferred CUDA timings. Each
+sample had a checksummed identity covering the manifest, checkpoint, implementation, feature schemas,
+and prompt parameters. Pass fragments were written atomically so a preempted crop could resume without
+mixing incompatible cache identities.
+
+The completed primary cache produced 24,946 proposal candidates. The historical anchor filter and
+same-slice merge retained 9,897 point-conditioned parent tracks over 934 anchor slices and 1,204
+propagation passes. This distinction became important: a proposal candidate, an anchor alternative,
+and a completed track are three different decision units.
+
+### Implementation that was tried
+
+The temporary implementation added the following opt-in facilities without changing defaults:
+
+- a versioned Torch artifact loader with explicit `anchor`, `candidate`, `trajectory`, and `refinement`
+  stages and checksummed feature schemas;
+- 20 component/proposal features, grouped compact mask alternatives, and 27 full-trajectory features;
+- separate installed models for anchor alternative selection, pre-propagation candidate filtering,
+  post-propagation track scoring, and the later refinement gate;
+- volume score-filter and track-order controls in APG plus benchmark CLI arguments for explicit artifacts;
+- cache-residency controls for adaptive/full device features and lazy/eager host embeddings;
+- predictor telemetry for feature reuse, launches, batch elements, object-score logits, active tracks,
+  and CUDA time by realized group size;
+- manifest preparation, restartable extraction, grouped OOF training, cache replay, counterfactual
+  mask-conditioned propagation, Slurm submission, and screening tools;
+- tests for manifests and identity checks, source-grouped OOF behavior, resume semantics, feature
+  construction, scorer-stage validation, replay, and the counterfactual bootstrap gate.
+
+The model family was deliberately compact. Anchor models used three alternatives and direct anchor-plane
+IoU. Candidate models used permutation-invariant grouped alternatives and were trained to either direct
+point-conditioned track IoU or signed pre-propagation merge utility. Trajectory models used one row per
+completed historical track and were trained to direct track IoU or signed final-merge utility. The input
+ablations were token-only, low-resolution-only, and token plus low-resolution; widths were H32, H64, and
+H128. Thresholds were derived from non-test folds at fixed retained fractions rather than selected on
+the evaluated fold.
+
+### Execution history and operational corrections
+
+The first remote extraction array, job `15465049`, and the first two residency arrays, jobs `15465229`
+and `15465230`, failed before doing scientific work. Their scripts enabled `set -u` before sourcing the
+cluster bash setup, whose `/etc/bashrc` reads an unset `BASHRCSOURCED` variable. The launchers were fixed
+to source the environment first and enable nounset afterward. The jobs failed in 23-48 seconds with exit
+code 1; none produced results that entered an aggregate.
+
+Local sample-zero validation intentionally invalidated several early cache identities while the feature
+ablations and telemetry were completed. These attempts were moved to `stale/` rather than silently
+reused. The preserved names identify the transitions: identity-only, pre-ablation schema,
+pre-CUDA-telemetry, and a CUDA-counter correction. The final extraction array `15466938` completed all
+31 remote crops with exit code 0, while sample zero used the interactive 20 GB MIG. Runtime varied from
+about two minutes to 74 minutes because candidate/pass counts differ sharply by crop; accounting and
+fragment completeness confirmed that the short jobs were valid completions, not kills. The array was
+initially throttled to three and was increased to eight after recognizing that these jobs contend with
+all other queued GPU work in the same way as the residency jobs.
+
+The first fitter, job `15466943`, completed in 1:55:06. The corrected target array `15500050` and
+counterfactual array `15500154` likewise completed every shard with exit code 0; the long corrected
+target shards took 43:25, 1:02:56, and 28:01, while most smaller shards took one to nine minutes. The
+corrected primary fitter `15500055` was promoted from `grete:preemptible` to `grete:interactive`, raising
+its scheduling priority by approximately 100,000; because the two partitions share the same physical
+nodes and do not preempt running jobs, its predicted start initially remained unchanged. Slurm refused
+the same promotion for dependent job `15500461` because of the interactive QOS job limit. This caused no
+loss because it was still dependency-blocked. The jobs ultimately completed in 1:09:57 and 0:06:11,
+respectively, both with exit code 0.
+
+### Output-exact feature-residency screen
+
+Four serial, identically configured deep screens compared adaptive/full device caching with lazy/eager
+host embeddings. Job array `15466942` completed all four configurations. The reported quality, proposal
+counts, pass counts, and peak CUDA allocation were identical. Aggregate timings were:
+
+| device cache | host embeddings | initialization (s) | generation (s) | total (s) | delta vs adaptive/lazy |
+|---|---|---:|---:|---:|---:|
+| adaptive | lazy | 89.275 | 2,877.936 | 2,967.212 | control |
+| adaptive | eager | 93.637 | 2,885.259 | 2,978.896 | +0.39% |
+| full | lazy | 89.461 | 2,898.498 | 2,987.959 | +0.70% |
+| full | eager | 94.220 | 2,878.591 | 2,972.812 | +0.19% |
+
+All four reported dataset-balanced mSA `0.314143`, peak CUDA allocation `11,154,618,368` bytes,
+11,670 feature-cache hits, 158 misses, 6,756 tracking launches, and 73,742 tracked batch elements. The
+158 misses are effectively one miss per volume slice: on a 20 GB MIG the existing adaptive policy
+already held the complete 30-32-slice feature set. Full residency therefore created no additional reuse,
+and eager host loading only moved small initialization costs. The largest timing difference was 0.7%,
+in the wrong direction and well inside the known node variation. No configuration cleared the 5%
+performance gate, so no three-trial confirmation or longer-volume fallback test was warranted.
+
+### First learned candidate campaign
+
+The first aggregate treated all 24,946 proposal groups as candidate/track examples and fitted nine
+direct-IoU candidate models: three input schemas by three widths. OOF Pearson correlations ranged from
+near zero to `0.3862`; the strongest pointwise correlation came from token plus low-resolution H32. The
+cache replay tested learned alternative selection, initial filtering, and final merge ordering at a
+threshold grid.
+
+The historical control won:
+
+| policy | dataset-balanced mSA | candidates | anchor slices | passes | predicted objects |
+|---|---:|---:|---:|---:|---:|
+| historical anchor control | **0.337022** | 9,897 | 934 | 1,204 | 1,912 |
+| best learned policy, token+lowres H32 selection/filter at 0.425 | 0.334496 | 9,237 | 954 | 1,178 | 1,905 |
+
+The best learned route lost `0.002526` absolute mSA, approximately 0.75% relative. More aggressive
+learned selection reduced candidates and passes but lost more quality. No configuration passed the
+primary gate, so trajectory fitting, the holdout, and end-to-end learned-artifact confirmation were
+stopped at this point.
+
+Reviewing this screen exposed a real objective error. One point-conditioned 3D track IoU had been
+broadcast to all three anchor alternatives, although replay used the three predicted scores in an
+`argmax`. Such identical labels cannot train an alternative selector. It also obscured that ordinary
+unrefined propagation restarts from the original point: choosing another 2D anchor mask changes local
+filtering and duplicate suppression, but does not choose the propagated track. The first negative result
+was therefore not treated as conclusive; the decisions and supervision were separated in a corrected
+campaign.
+
+### Corrected campaign
+
+The corrected aggregate contained 24,946 proposal candidates and 9,897 historical parent tracks. It
+trained three independent stages:
+
+- `anchor`: three direct anchor-plane IoUs for the three alternatives;
+- `candidate`: one point-conditioned track IoU or signed removal utility for each proposal group;
+- `trajectory`: one completed-track IoU or signed final-merge utility for each historical survivor.
+
+Each screen changed only the tested role. Anchor selection retained the historical candidate threshold
+and final ordering; candidate filtering retained historical anchor selection and final ordering; the
+trajectory screen started from the full historical parent. This prevented one scorer from receiving
+credit for a different decision.
+
+#### Corrected anchor selection
+
+The best anchor-plane model was low-resolution-only H64. Its OOF Pearson correlation was `0.68795`, so
+the corrected labels produced a learnable 2D target. The downstream effect was nevertheless negligible:
+
+| policy | dataset-balanced mSA | candidates | passes | predicted objects |
+|---|---:|---:|---:|---:|
+| historical control | 0.337022 | 9,897 | 1,204 | 1,912 |
+| low-resolution H64 anchor selection | **0.337415** | 9,889 | 1,202 | 1,910 |
+
+This is only `+0.000393` absolute or `+0.12%` relative. C. elegans, CREMI, EmbedSeg, and GoNuclear were
+unchanged; the complete gain came from SNEMI (`0.481382 -> 0.483347`). A model can predict the anchor
+cross-section well without materially changing point-conditioned 3D propagation.
+
+#### Corrected pre-propagation candidate filtering
+
+The one modest positive result was a token-only H128 model trained on direct track IoU and used only as
+an 85%-retention filter. Learned ordering reduced its gain, and every signed-utility winner was below the
+historical control.
+
+| dataset | historical mSA | learned filter mSA | absolute delta |
+|---|---:|---:|---:|
+| C. elegans | 0.031763 | 0.033744 | +0.001980 |
+| CREMI | 0.146845 | 0.143359 | -0.003486 |
+| EmbedSeg | 0.629028 | 0.641389 | +0.012360 |
+| GoNuclear | 0.396090 | 0.385431 | -0.010659 |
+| SNEMI | 0.481382 | 0.489397 | +0.008015 |
+| **dataset-balanced** | **0.337022** | **0.338664** | **+0.001642** |
+
+Aggregate candidate count fell from 9,897 to 8,940 (-9.7%), anchor slices from 934 to 895 (-4.2%),
+passes from 1,204 to 1,103 (-8.4%), and predicted objects from 1,912 to 1,820 (-4.8%). These are credible
+reductions in projected propagation work, but the cache replay time is not an end-to-end GPU timing. The
+quality gain is only +0.49% relative, an order of magnitude below the +5% gate, and it trades meaningful
+CREMI/GoNuclear losses for EmbedSeg/SNEMI gains. It was therefore not promoted or evaluated on holdout.
+
+#### Corrected post-propagation trajectory scoring
+
+No trajectory policy beat the historical order. The best learned alternative was direct-IoU H64 at
+100% retention, meaning it only reordered tracks:
+
+| policy | dataset-balanced mSA | absolute delta |
+|---|---:|---:|
+| historical control | **0.337022** | control |
+| direct H64 trajectory order, 100% retained | 0.332420 | -0.004602 |
+
+Filtering tracks made the result worse. The direct H64 model had OOF Pearson `0.39347`, but pointwise
+track-IoU correlation did not preserve the non-local overlap decisions made by final score-ordered merge.
+Utility models also lost. The tested 27-feature trajectory representation and pointwise MLP objective
+therefore did not justify any deployment or a retirement prototype.
+
+#### Why signed utility did not help
+
+The exact downstream utilities were extremely sparse:
+
+| target | negative | exactly zero | positive | maximum OOF Pearson among tested utility models |
+|---|---:|---:|---:|---:|
+| candidate removal utility, 24,946 rows | 1.86% | **95.99%** | 2.16% | 0.2603 |
+| trajectory removal utility, 9,897 rows | 3.19% | **90.87%** | 5.94% | 0.2539 |
+
+Most tracks either do not survive the final merge or can be removed without changing dataset mSA, so a
+regression loss is dominated by exact zeros while the rare nonzero values span roughly `-1.87` to
+`+1.99` object-equivalents. Direct-IoU models reached correlations up to `0.4061` for candidates and
+`0.3935` for trajectories, and the only positive downstream policy used the direct target. Retaining
+the sign was conceptually correct, but it did not solve the rarity and interaction problem.
+
+### Mask-conditioned counterfactual campaign
+
+The ordinary path does not propagate the selected anchor mask, so a staged counterfactual explicitly
+called mask-prompt conditioning for each of the three alternatives. The canonical manifest contained
+750 groups: for each dataset, 75 random candidates, 40 ground-truth anchor-regret candidates, and 35
+low-margin candidates. All three masks were propagated. The screen compared historical predicted-IoU
+selection, corrected primary anchor models, one dedicated token+low-resolution H32 model trained on
+these tracks, the frozen 2D selector, an anchor-plane-IoU oracle, and a mask-track-IoU oracle.
+
+On the unbiased random stratum, real alternate-mask headroom existed:
+
+| policy | dataset-balanced selected-track IoU | delta vs historical | paired 95% interval | oracle headroom recovered |
+|---|---:|---:|---:|---:|
+| historical predicted IoU | 0.684892 | control | [0, 0] | 0% |
+| anchor-plane-IoU oracle | 0.704042 | +0.019150 | [0.008012, 0.029819] | 46.6% |
+| mask-track-IoU oracle | 0.725962 | +0.041070 | [0.032241, 0.050744] | 100% |
+| best primary learned policy | 0.684083 | -0.000810 | [-0.007734, 0.006074] | -2.0% |
+| dedicated counterfactual H32 model | 0.683653 | -0.001239 | [-0.013889, 0.011358] | -3.0% |
+| frozen 2D token+lowres H64 | 0.652010 | -0.032883 | [-0.044242, -0.022727] | -80.1% |
+
+The anchor-plane oracle shows that a better cross-section can sometimes choose a better conditioned
+track, but even perfect anchor IoU recovers less than half the full track oracle. Neither learned 3D
+model recovered positive random-stratum headroom. The 2D scorer transferred especially poorly and was
+significantly worse than predicted IoU, demonstrating a genuine 2D-to-3D decision/domain mismatch.
+
+Cached segmentation replay gave the dedicated counterfactual model `0.340147` dataset-balanced mSA
+versus `0.337970` for historical selection, a nominal `+0.002176` with interval
+`[0.001951, 0.002442]`. This apparent gain was not a valid promotion signal: approximately 96% of the
+macro delta came from the single C. elegans primary crop (`0.032670 -> 0.043160`), and the manifest had
+deliberately enriched candidates selected with ground-truth anchor regret. A crop bootstrap cannot
+measure C. elegans crop variation when only one primary crop exists. The predeclared random-stratum
+track gate protected against that selection effect and returned
+`advance_mask_conditioned_anchor: false`. For reference, the segmentation replay oracles reached
+`0.340365` for perfect anchor IoU and `0.341952` for perfect conditioned-track IoU, while the frozen 2D
+scorer fell to `0.335730`.
+
+### What the campaign established
+
+The original supervision bug was real, but it was not the main explanation for the difference from 2D.
+After correction, anchor-plane IoU was learnable while downstream 3D quality barely moved. In 2D the
+selected mask is the output that enters filtering and final merge; in ordinary 3D the selected mask is
+used locally and the video predictor starts again from the point. The learned action and the evaluated
+3D track are therefore only weakly coupled.
+
+There is some learnable pre-propagation eligibility signal: a direct-IoU token model removed about 8.4%
+of passes with a small OOF quality gain. It was not sufficiently consistent across modalities and did
+not approach the quality gate. Post-propagation features did not yield a safe merge order, because a
+pointwise score does not capture interactions among overlapping tracks. Exact signed merge utilities
+were too sparse for ordinary regression. Finally, forcing the chosen mask to condition propagation
+revealed oracle headroom but not a leakage-safe predictor of that headroom; direct transfer of the 2D
+model was decisively negative.
+
+Accordingly, the historical predicted-IoU anchor policy, point-conditioned propagation, and historical
+track order remain the supported behavior. No 3D learned artifact should be exported or installed from
+this campaign. If the topic is revisited, the only evidence-backed starting points are a more strongly
+regularized, cross-dataset candidate eligibility classifier or a prediction-only gate that first
+identifies the small subset with alternate-mask regret. Either would require a new primary design rather
+than opening the sealed holdout for the models reported here.
+
+### Stages deliberately not run
+
+The signed refinement-gate extractor and trainer were implemented but not executed because there was no
+frozen learned-funnel winner on which to condition the experiment. Persistence-expanded proposal supply
+was not run because the unchanged-ladder funnel failed. Per-track retirement was instrumented but not
+implemented; fewer active objects do not necessarily remove launches in the batched predictor, and no
+accepted funnel existed for a final end-to-end screen. Alternate-anchor choose-one/two-conditioning was
+not advanced after the counterfactual learned gate failed. Sparse streaming records and compiled
+tracking kernels were also left untouched. This respected the campaign's decision gates and avoided
+spending the sealed holdout on an exploratory configuration.
+
+### Canonical result files
+
+The most important preserved files are:
+
+```text
+3d_campaign/jobs/20260824_082649_residency/logs/residency_15466942_*.out
+3d_campaign/screening/candidate/9f476137689a23fe2debed3f23a9eae8/summary.csv
+3d_campaign/correction_v2/screening/anchor/6b7c31022c03c4b12c57b4c22d736ae7/summary.csv
+3d_campaign/correction_v2/screening/candidate/66f42c2710920d0afbeb874aab978513/summary.csv
+3d_campaign/correction_v2/screening/trajectory/7780de64b44ca986c17a7eb6aea7680d/summary.csv
+3d_campaign/correction_v2/screening/counterfactual/dae562dc67233831110bcc2925779aa2/gate.json
+3d_campaign/correction_v2/screening/counterfactual/dae562dc67233831110bcc2925779aa2/track_diagnostics.csv
+```

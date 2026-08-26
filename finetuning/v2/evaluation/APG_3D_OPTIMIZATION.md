@@ -401,13 +401,14 @@ components are the 2d ones; the second round runs inside `_score_candidates`, sl
 the predictor is still pointed at that slice, and what it produces is the conditioning the
 propagation starts from rather than a finished mask. `derive_refinement_prompts`,
 `_predict_refinement_batch`, `_predict_prompt_batch` and both acceptance gates are the 2d code,
-applied in-plane. The kwarg surface is the 2d one minus `min_grouped_for_points`, which 2d refuted,
-plus one addition with no 2d analogue: **`conditioning`**, which decides how an accepted round reaches
-the propagation.
+applied in-plane. The current volume kwarg surface omits the 2d-only learned uncertainty-gate options
+`gate` and `gate_threshold`, and adds one option with no 2d analogue: **`conditioning`**, which decides
+how an accepted round reaches the propagation.
 
-The `recover` component keeps its 2d shape but gains a stronger volumetric argument: the merge that
-drops a candidate runs on one slice, and two objects overlapping in-plane there can be separate
-everywhere else in z, so a revived candidate is propagated and the 3d merge arbitrates.
+Historically, the campaign also implemented a `recover` component. It kept the 2d shape but had a
+stronger volumetric argument: the merge that drops a candidate runs on one slice, and two objects
+overlapping in-plane there can be separate everywhere else in z, so a revived candidate was
+propagated and the 3d merge arbitrated. The neutral result below led to its later removal.
 
 ### Benchmark
 
@@ -571,8 +572,8 @@ whose pixels are lightly enough claimed to qualify, at most 9 survive their re-p
 objects across five crops moves the dataset-balanced mSA by less than 1e-6 - with or without the rest
 of the refinement. The records the per-slice merge drops are nearly all heavily claimed, i.e. real
 duplicates rather than lost objects, which matches 2d's S4 and this document's own diagnosis that the
-dominant 3d recall failure is the object that was never proposed. `recover` stays as a
-measured-neutral option, as in 2d.
+dominant 3d recall failure is the object that was never proposed. The measured-neutral `recover`
+option was subsequently removed from both the 2d and 3d library paths.
 
 ### What the standard set recommends
 
