@@ -716,6 +716,9 @@ def get_unisam2_model(
     """
     from micro_sam.v2.models.util import UniSAM2
 
+    # Captured before 'encoder' is reassigned to the built PEFT module below.
+    resolved_model_type = encoder if isinstance(encoder, str) else encoder_model_type
+
     device = "cpu" if device is None else device
     state = torch.load(checkpoint_path, weights_only=False, map_location=device)
     # A joint checkpoint holds both; 'unetr_state' is the decoder, 'model_state' the interactive model.
@@ -753,6 +756,7 @@ def get_unisam2_model(
     model.load_state_dict(model_state)
 
     model.eval()
+    model.model_type = resolved_model_type
     return model
 
 
@@ -1021,6 +1025,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         inference_device: Devices = USE_MODEL_DEVICE,
     ) -> None:
         self._model = model
+        self._model_type = getattr(model, "model_type", None)
         self._device = device
         self._inference_device = device if inference_device is USE_MODEL_DEVICE else inference_device
         self._prediction = None
@@ -1245,6 +1250,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         """
         if not self._is_initialized:
             raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
+        kwargs.setdefault("model_type", self._model_type)
         return _segment_from_predictions(self._prediction, mode=mode, **kwargs)
 
     def get_state(self) -> dict:

@@ -34,7 +34,7 @@ from common import (
 )
 
 
-def segment(model, mode, raw, ndim, dataset_name, params, device, backend="cpp", spacing=None):
+def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, backend="cpp", spacing=None):
     """Segment one sample with the tuned parameters of a mode."""
     if mode == "apg":
         model.clear_state()
@@ -43,7 +43,7 @@ def segment(model, mode, raw, ndim, dataset_name, params, device, backend="cpp",
         return model.generate(**{**volume_params, **params}).astype("uint32")
 
     prediction = predict_unisam2(model, raw, ndim=ndim, device=device)
-    return postprocess_unisam2(prediction, dataset_name, backend=backend, params=params)
+    return postprocess_unisam2(prediction, dataset_name, model_type=model_type, backend=backend, params=params)
 
 
 def run_evaluation(
@@ -97,7 +97,8 @@ def run_evaluation(
         if labels.max() == 0:  # Nothing to score without ground-truth.
             continue
         seg = segment(
-            model, mode, raw, ndim, dataset_name, params or {}, device, backend=backend, spacing=spacing,
+            model, mode, raw, ndim, dataset_name, model_type, params or {}, device, backend=backend,
+            spacing=spacing,
         )
         if valid_roi is not None:
             seg[~valid_roi] = 0

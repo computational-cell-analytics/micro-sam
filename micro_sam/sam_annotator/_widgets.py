@@ -4445,8 +4445,8 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _sparse_settings(self, settings):
         # Flow-based instance segmentation parameters (LM data).
-        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
-        defaults = DEFAULT_POSTPROCESSING["sparse"]
+        from micro_sam.v2.postprocessing import default_postprocessing
+        defaults = default_postprocessing(getattr(self, "model_type", None), "sparse")
 
         self.foreground_threshold = defaults["foreground_threshold"]
         self.foreground_threshold_param, layout = self._add_float_param(
@@ -4474,8 +4474,8 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _dense_settings(self, settings):
         # Multicut-based instance segmentation parameters (EM data, 2d and 3d).
-        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
-        defaults = DEFAULT_POSTPROCESSING["dense"]
+        from micro_sam.v2.postprocessing import default_postprocessing
+        defaults = default_postprocessing(getattr(self, "model_type", None), "dense")
 
         self.beta = defaults["beta"]
         self.beta_param, layout = self._add_float_param(

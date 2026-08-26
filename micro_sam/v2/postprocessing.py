@@ -21,36 +21,81 @@ from bioimage_cpp.segmentation import label, watershed
 
 FLOW_BACKENDS = ("python", "cpp")
 
+# Per (model_type, mode) defaults from the registry parameter search: the best-average-rank
+# combination across every dataset that shares that mode's grid, computed separately for each of the
+# 4 registry backbones. "universal" is the same aggregation pooled across all 4 backbones too, and is
+# the fallback `default_postprocessing` uses for a model_type the table does not carry (e.g. a custom
+# finetune). Directed-distance targets only; a joint model trained on the geodesic target should use
+# DEFAULT_POSTPROCESSING_SPARSE_HYBRID instead.
 DEFAULT_POSTPROCESSING = {
-    "sparse": {
-        "foreground_threshold": 0.7,
-        "density_threshold": 10.0,
-        "min_size": 50,
-        "n_iter": 50,
-        "dt": 0.25,
-        "sigma": 0.5,
-        "foreground_weight": 0.75,
+    "hvit_t": {
+        "sparse": {
+            "foreground_threshold": 0.5, "density_threshold": 10.0, "min_size": 100,
+            "sigma": 0.5, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5,
+        },
+        "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
-    # For the geodesic hybrid target, whose flow converges to a point rather than onto a medial
-    # axis. Tuned on ground truth fields for the best worst-case mSA over DSB, LIVECell and
-    # GoNuclear; the "sparse" values are tuned for the euclidean target and under-perform here.
-    "sparse_hybrid": {
-        "foreground_threshold": 0.7,
-        "density_threshold": 2.0,
-        "min_size": 50,
-        "n_iter": 200,
-        "dt": 0.25,
-        "sigma": 2.0,
-        "foreground_weight": 0.75,
+    "hvit_s": {
+        "sparse": {
+            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
+            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.75,
+        },
+        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 25, "dt": 0.5},
     },
-    "dense": {
-        "beta": 0.5,
-        "density_threshold": 3.0,
-        "n_iter": 50,
-        "dt": 0.5,
-        "sigma": 1.0,
+    "hvit_b": {
+        "sparse": {
+            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
+            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.65,
+        },
+        "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+    },
+    "hvit_l": {
+        "sparse": {
+            "foreground_threshold": 0.4, "density_threshold": 10.0, "min_size": 50,
+            "sigma": 0.5, "n_iter": 50, "dt": 0.25, "foreground_weight": 0.65,
+        },
+        "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 1.0, "n_iter": 50, "dt": 0.5},
+    },
+    "universal": {
+        "sparse": {
+            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
+            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.75,
+        },
+        "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
 }
+
+# For the geodesic hybrid target, whose flow converges to a point rather than onto a medial axis.
+# Tuned on ground truth fields for the best worst-case mSA over DSB, LIVECell and GoNuclear; the
+# "sparse" values above are tuned for the euclidean/directed target and under-perform here. Not
+# covered by the registry parameter search (registry models are all directed-distance), so this
+# stays a single flat default rather than per model_type.
+DEFAULT_POSTPROCESSING_SPARSE_HYBRID = {
+    "foreground_threshold": 0.7,
+    "density_threshold": 2.0,
+    "min_size": 50,
+    "n_iter": 200,
+    "dt": 0.25,
+    "sigma": 2.0,
+    "foreground_weight": 0.75,
+}
+
+
+def default_postprocessing(model_type: Optional[str], mode: str) -> dict:
+    """The default postprocessing parameters for one model type and mode.
+
+    Args:
+        model_type: The SAM2 backbone, e.g. 'hvit_t', or a finetuned model built on one, e.g.
+            'hvit_t_cells' (only the backbone prefix is used to look up the table). Falls back to the
+            'universal' (pooled across all 4 registry backbones) default for a model type outside the
+            registry, e.g. a custom finetune, or when unknown (None).
+        mode: 'sparse' (`flow_instance_segmentation`) or 'dense' (`run_multicut`).
+
+    Returns:
+        The default parameter dict for that model type and mode.
+    """
+    backbone = model_type[:6] if model_type else model_type
+    return DEFAULT_POSTPROCESSING.get(backbone, DEFAULT_POSTPROCESSING["universal"])[mode]
 
 
 def _compute_flow_density(
@@ -162,14 +207,15 @@ def watershed_heightmap(
 def flow_instance_segmentation(
     foreground: np.ndarray,
     directed_distances: np.ndarray,
-    foreground_threshold: float = DEFAULT_POSTPROCESSING["sparse"]["foreground_threshold"],
-    n_iter: int = DEFAULT_POSTPROCESSING["sparse"]["n_iter"],
-    dt: float = DEFAULT_POSTPROCESSING["sparse"]["dt"],
-    sigma: float = DEFAULT_POSTPROCESSING["sparse"]["sigma"],
+    model_type: Optional[str] = None,
+    foreground_threshold: Optional[float] = None,
+    n_iter: Optional[int] = None,
+    dt: Optional[float] = None,
+    sigma: Optional[float] = None,
     spacing: Optional[Tuple] = None,
-    density_threshold: float = DEFAULT_POSTPROCESSING["sparse"]["density_threshold"],
-    min_size: int = DEFAULT_POSTPROCESSING["sparse"]["min_size"],
-    foreground_weight: float = DEFAULT_POSTPROCESSING["sparse"]["foreground_weight"],
+    density_threshold: Optional[float] = None,
+    min_size: Optional[int] = None,
+    foreground_weight: Optional[float] = None,
     verbose: bool = False,
     backend: str = "cpp",
     n_threads: int = 1,
@@ -188,6 +234,8 @@ def flow_instance_segmentation(
         foreground: Foreground probability map, shape (Y, X) or (Z, Y, X).
         directed_distances: Distance channels stacked along axis 0,
             shape (ndim, *spatial) or (3, *spatial) for 2D input.
+        model_type: The SAM2 backbone the predictions came from, e.g. 'hvit_t'. Selects the default
+            for any of the tunable parameters below left as None, see `default_postprocessing`.
         foreground_threshold: Foreground binarisation threshold.
         n_iter: Number of flow-integration steps.
         dt: Integration step size.
@@ -204,6 +252,22 @@ def flow_instance_segmentation(
     Returns:
         Instance segmentation, uint32 array, same spatial shape as foreground.
     """
+    defaults = default_postprocessing(model_type, "sparse")
+    if foreground_threshold is None:
+        foreground_threshold = defaults["foreground_threshold"]
+    if n_iter is None:
+        n_iter = defaults["n_iter"]
+    if dt is None:
+        dt = defaults["dt"]
+    if sigma is None:
+        sigma = defaults["sigma"]
+    if density_threshold is None:
+        density_threshold = defaults["density_threshold"]
+    if min_size is None:
+        min_size = defaults["min_size"]
+    if foreground_weight is None:
+        foreground_weight = defaults["foreground_weight"]
+
     ndim = foreground.ndim
     if directed_distances.shape[0] > ndim:
         directed_distances = directed_distances[-ndim:]
@@ -235,11 +299,12 @@ def flow_instance_segmentation(
 def run_multicut(
     boundary_map: np.ndarray,
     distances: np.ndarray,
-    beta: float = DEFAULT_POSTPROCESSING["dense"]["beta"],
-    density_threshold: float = DEFAULT_POSTPROCESSING["dense"]["density_threshold"],
-    n_iter: int = DEFAULT_POSTPROCESSING["dense"]["n_iter"],
-    dt: float = DEFAULT_POSTPROCESSING["dense"]["dt"],
-    sigma: float = DEFAULT_POSTPROCESSING["dense"]["sigma"],
+    model_type: Optional[str] = None,
+    beta: Optional[float] = None,
+    density_threshold: Optional[float] = None,
+    n_iter: Optional[int] = None,
+    dt: Optional[float] = None,
+    sigma: Optional[float] = None,
     n_threads: int = 8,
     backend: str = "cpp",
 ) -> np.ndarray:
@@ -253,6 +318,8 @@ def run_multicut(
         boundary_map: Boundary probability map, shape (Z, Y, X).
             Typically ``1 - foreground`` or ``fg.max() - fg``.
         distances: In-plane distance channels (ydist, xdist), shape (2, Z, Y, X).
+        model_type: The SAM2 backbone the predictions came from, e.g. 'hvit_t'. Selects the default
+            for any of the tunable parameters below left as None, see `default_postprocessing`.
         beta: Multicut boundary bias; higher values favour more merging.
         density_threshold: Convergence-density threshold for seed extraction
             in the slice-wise oversegmentation.
@@ -265,6 +332,18 @@ def run_multicut(
     Returns:
         Instance segmentation, uint64 array, shape (Z, Y, X).
     """
+    defaults = default_postprocessing(model_type, "dense")
+    if beta is None:
+        beta = defaults["beta"]
+    if density_threshold is None:
+        density_threshold = defaults["density_threshold"]
+    if n_iter is None:
+        n_iter = defaults["n_iter"]
+    if dt is None:
+        dt = defaults["dt"]
+    if sigma is None:
+        sigma = defaults["sigma"]
+
     from elf.segmentation.features import (
         compute_rag, compute_boundary_mean_and_length,
         compute_z_edge_mask, project_node_labels_to_pixels,
