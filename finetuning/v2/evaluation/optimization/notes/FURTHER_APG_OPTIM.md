@@ -7,7 +7,7 @@ branch, followed by small sandbox experiments intended to identify useful next d
 directions have now been implemented and evaluated on the established 240-image primary and
 233-image holdout subsets. The implementation, leakage-safe sweeps, canonical acceptance result and
 reproduction commands are recorded in the final section of
-`finetuning/v2/evaluation/APG_2D_OPTIMIZATION.md`; the exploratory measurements below are retained as
+`finetuning/v2/evaluation/optimization/notes/APG_2D_OPTIMIZATION.md`; the exploratory measurements below are retained as
 the motivation and audit trail.
 
 The first compact-model campaign found a 52 KB groupwise MLP selector. Retaining the historical
@@ -34,8 +34,8 @@ recommendation when both fitted artifacts are available.
 
 The review covered:
 
-- `finetuning/v2/evaluation/APG_2D_OPTIMIZATION.md`
-- `finetuning/v2/evaluation/APG_3D_OPTIMIZATION.md`
+- `finetuning/v2/evaluation/optimization/notes/APG_2D_OPTIMIZATION.md`
+- `finetuning/v2/evaluation/optimization/notes/APG_3D_OPTIMIZATION.md`
 - `finetuning/v2/evaluation/APGv2.md`
 - `micro_sam/v2/automatic_prompt_generation.py`
 - `micro_sam/v2/prompt_based_segmentation.py`
@@ -495,7 +495,7 @@ track-level evidence—rather than repeating a broader fixed heuristic.
 
 Phases A and B are now complete. Their accepted outcomes are the three-token `token_lowres_v1` H64
 eager selector and its optional post-merge signed-utility 15% refinement gate, documented in
-`finetuning/v2/evaluation/APG_2D_OPTIMIZATION.md`. Phases C and D remain future 3D work.
+`finetuning/v2/evaluation/optimization/notes/APG_2D_OPTIMIZATION.md`. Phases C and D remain future 3D work.
 
 ### Phase A: validate first-round multimask ranking
 

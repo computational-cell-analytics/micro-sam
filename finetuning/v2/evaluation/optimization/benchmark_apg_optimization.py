@@ -10,16 +10,18 @@ and results are written below the output root.
 
 Examples:
     # Build or inspect the deterministic subset without loading a model.
-    python benchmark_apg_optimization.py --prepare-only
+    python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py --prepare-only
 
     # Run the current APG defaults.
-    python benchmark_apg_optimization.py --ndim 2 --trial-id baseline-1
+    python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py --ndim 2 --trial-id baseline-1
 
     # Run one alternative configuration.
-    python benchmark_apg_optimization.py --config apg_candidate_thresholds.json
+    python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py \
+        --config apg_candidate_thresholds.json
 
     # Opt in to the 32-slice 3d crops, which keep their own manifest beside the standard one.
-    python benchmark_apg_optimization.py --ndim 3 --crops-3d deep --trial-id baseline-3d-1
+    python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py \
+        --ndim 3 --crops-3d deep --trial-id baseline-3d-1
 
 The optional JSON configuration has this shape:
     {
@@ -51,29 +53,21 @@ from elf.io import open_file
 from skimage.measure import label as connected_components
 from tqdm import tqdm
 
-import common
-from common import (
-    CROP_SHAPE_2D,
-    DATASET_SPACING,
-    DATASETS_3D_EM,
-    GENERATE_PARAM_KEYS,
-    GT_MIN_SIZE_2D,
-    VAL_Z_RANGE,
-    VOLUME_SPEED_OPTIONS,
-    build_apg_segmenter,
-    checkpoint_checksum,
-    drop_severed_objects,
-    ensure_8bit_range,
-    get_data_paths,
-    get_joint_checkpoint,
-    genuine_misses,
-    read_2d,
-    resolve_params,
-    sorted_path_pairs,
-)
-from evaluate_automatic_segmentation import compute_metrics
 from micro_sam.v2.normalization import normalize_raw
 from micro_sam.v2.multimask_selection import load_feature_scorer
+
+EVALUATION_ROOT = Path(__file__).resolve().parent.parent
+REPOSITORY_ROOT = EVALUATION_ROOT.parents[2]
+sys.path.insert(0, str(EVALUATION_ROOT))
+
+import common  # noqa
+from common import (  # noqa
+    CROP_SHAPE_2D, DATASET_SPACING, DATASETS_3D_EM, GENERATE_PARAM_KEYS, GT_MIN_SIZE_2D, VAL_Z_RANGE,
+    VOLUME_SPEED_OPTIONS, build_apg_segmenter, checkpoint_checksum, drop_severed_objects,
+    ensure_8bit_range, get_data_paths, get_joint_checkpoint, genuine_misses, read_2d, resolve_params,
+    sorted_path_pairs,
+)
+from parameter_search import compute_metrics  # noqa
 
 
 DATASETS_2D = ("livecell", "tissuenet", "dynamicnuclearnet", "deepbacs", "dic_hepg2")
@@ -154,7 +148,7 @@ IMAGE_TIMINGS = (
 IMPLEMENTATION_FILES = (
     Path(__file__),
     Path(common.__file__),
-    Path(__file__).with_name("evaluate_automatic_segmentation.py"),
+    EVALUATION_ROOT / "parameter_search.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/automatic_prompt_generation.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/multimask_selection.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/instance_segmentation.py",
@@ -850,7 +844,7 @@ def _realized_depth_3d(sample: Dict[str, Any], data_root: Path) -> int:
 def _git_revision() -> Optional[str]:
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).resolve().parents[3], text=True
+            ["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT, text=True
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return None

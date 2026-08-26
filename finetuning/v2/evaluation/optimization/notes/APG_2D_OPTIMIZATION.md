@@ -3,10 +3,11 @@
 ## Outcome
 
 The original point-placement, blanket-refinement and batching campaign below found no accepted
-optimization. The later learned-multimask campaign and its compact deployment follow-up are recorded
-at the end of this document; they add explicit opt-in model paths while still leaving all defaults
-unchanged. In the original campaign, the closest quality candidate, confidence-gated box refinement, improved
-the dataset-balanced mSA by 1.74%, short of the required 5%, while increasing total runtime by 21.86%.
+optimization. The end of this document records the later learned-multimask campaign and its compact deployment follow-up.
+They add explicit opt-in model paths and leave all defaults unchanged.
+In the original campaign, confidence-gated box refinement was the closest quality candidate.
+It improved the dataset-balanced mSA by 1.74%, which was short of the required 5%.
+It increased the total runtime by 21.86%.
 The best worst-dataset efficiency candidate, a prompt batch size of 192, improved total runtime by
 0.53% and its slowest-improving dataset by only 0.23%, short of the required 5% on every dataset.
 
@@ -249,7 +250,7 @@ checksums `ec1371c439138cbdcb7c7118dea2aa96` and `95e5995b05fe70cfd67b4c7179af97
 A canonical trial is run with:
 
 ```bash
-python finetuning/v2/evaluation/benchmark_apg_optimization.py \
+python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py \
     --ndim 2 --trial-id baseline-1
 ```
 
@@ -265,7 +266,7 @@ A JSON configuration supplies a name and only the changed parameters, for exampl
 Serialized runs are evaluated with repeated `--baseline-run` and `--candidate-run` arguments:
 
 ```bash
-python finetuning/v2/evaluation/compare_apg_optimization.py \
+python finetuning/v2/evaluation/optimization/compare_apg_optimization.py \
     --target efficiency \
     --baseline-run /path/to/baseline-1 \
     --baseline-run /path/to/baseline-2 \
@@ -538,14 +539,14 @@ launched against a pre-final implementation state; it carries no results and can
 
 ```bash
 # Controls and canonical candidate runs:
-python finetuning/v2/evaluation/benchmark_apg_optimization.py --ndim 2 --trial-id control-1
-python finetuning/v2/evaluation/benchmark_apg_optimization.py --ndim 2 --config <candidate>.json
+python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py --ndim 2 --trial-id control-1
+python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py --ndim 2 --config <candidate>.json
 
 # Screening:
-python finetuning/v2/evaluation/screen_apg_refinement.py --device cuda
+python finetuning/v2/evaluation/optimization/screen_apg_refinement.py --device cuda
 
 # Comparison:
-python finetuning/v2/evaluation/compare_apg_optimization.py --ndim 2 --target quality \
+python finetuning/v2/evaluation/optimization/compare_apg_optimization.py --ndim 2 --target quality \
     --baseline-run <control-1> --baseline-run <control-2> --baseline-run <control-3> \
     --candidate-run <candidate> --output <decisions>.json
 ```
@@ -928,9 +929,9 @@ learned-filter campaign below establishes eager selection as the stronger deploy
 The supported training entry points are now:
 
 ```bash
-python finetuning/v2/evaluation/train_apg_multimask_selector.py --device cuda
-python finetuning/v2/evaluation/train_apg_multimask_selector.py --single-mask --device cuda
-python finetuning/v2/evaluation/train_apg_refinement_gate.py --device cuda \
+python finetuning/v2/evaluation/optimization/train_apg_multimask_selector.py --device cuda
+python finetuning/v2/evaluation/optimization/train_apg_multimask_selector.py --single-mask --device cuda
+python finetuning/v2/evaluation/optimization/train_apg_refinement_gate.py --device cuda \
     --selection deferred --merge learned \
     --selector-oof-dataset multimask_selection/primary_features.npz \
     --selector-oof-predictions \

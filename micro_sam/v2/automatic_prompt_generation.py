@@ -24,7 +24,7 @@ else - is worth +2.3% mSA on 32-slice crops for +1.4% runtime, so the optional '
 It is off by default in both dimensions, being short of the +5% the optimization gates ask for. One
 thing measured there is worth knowing before touching this file: pushing the same prompt to the video
 predictor in one call rather than several costs 1.75% mSA, because each push re-runs the mask decoder
-on the conditioning frame. See finetuning/v2/evaluation/APG_3D_OPTIMIZATION.md, experiment 6.
+on the conditioning frame. See finetuning/v2/evaluation/optimization/notes/APG_3D_OPTIMIZATION.md, experiment 6.
 """
 
 import shutil
@@ -123,7 +123,8 @@ REFINEMENT_KWARGS = {
 DEFAULT_REFINEMENT = {
     # The defaults are the measured optimum of the recommended mode, 'points+boxes': +4.2% macro mSA
     # on the tuned subset and +4.9% on the held-out one, for about +35-50% runtime. See
-    # finetuning/v2/evaluation/APG_2D_OPTIMIZATION.md; the pipeline default stays 'refinement=None'.
+    # finetuning/v2/evaluation/optimization/notes/APG_2D_OPTIMIZATION.md; the pipeline default stays
+    # 'refinement=None'.
     # 'replace' repaints every instance from its second-round mask; 'keep-if-better' keeps the
     # first-round mask unless the second round scores higher — which for a box-anchored re-prompt
     # it nearly always does, so the geometric gates below are what actually arbitrates.

@@ -10,17 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-import common
-from benchmark_apg_optimization import (
-    DEFAULT_DATA_ROOT, DEFAULT_OUTPUT_ROOT, _default_manifest_path, _load_2d_sample,
-    _validate_roots, prepare_manifest,
-)
 from micro_sam.v2.automatic_prompt_generation import (
     _parse_refinement, derive_refinement_prompts, postmerge_refinement_gate_features,
 )
@@ -29,10 +25,19 @@ from micro_sam.v2.multimask_selection import (
     REFINEMENT_GATE_FEATURE_NAMES, REFINEMENT_GATE_STAGES, load_feature_scorer, refinement_gate_features_torch,
     selector_input_schema,
 )
-from screen_apg_multimask import (
+
+EVALUATION_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(EVALUATION_ROOT))
+
+import common  # noqa
+from optimization.benchmark_apg_optimization import (  # noqa
+    DEFAULT_DATA_ROOT, DEFAULT_OUTPUT_ROOT, _default_manifest_path, _load_2d_sample,
+    _validate_roots, prepare_manifest,
+)
+from optimization.screen_apg_multimask import (  # noqa
     _configured_records, _load_oof_lookup, _oof_predictions_for_sample, _predict_records,
 )
-from train_apg_multimask_selector import _stable_folds
+from optimization.train_apg_multimask_selector import _stable_folds  # noqa
 
 
 ARCHITECTURE = {"hidden_sizes": (128, 64), "dropout": 0.1}

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import sys
 import time
 from pathlib import Path
 
@@ -16,14 +17,18 @@ import numpy as np
 import pandas as pd
 import torch
 
-import common
-from benchmark_apg_optimization import (
+from micro_sam.v2.multimask_selection import load_feature_scorer
+
+EVALUATION_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(EVALUATION_ROOT))
+
+import common  # noqa
+from parameter_search import compute_metrics  # noqa
+from optimization.benchmark_apg_optimization import (  # noqa
     DEFAULT_DATA_ROOT, DEFAULT_OUTPUT_ROOT, GT_MIN_SIZE_2D, _atomic_write_csv, _atomic_write_json,
     _content_checksum, _default_manifest_path, _git_revision, _implementation_checksum,
     _load_2d_sample, _validate_roots, prepare_manifest,
 )
-from evaluate_automatic_segmentation import compute_metrics
-from micro_sam.v2.multimask_selection import load_feature_scorer
 
 
 def _default_configs(models: dict) -> list:

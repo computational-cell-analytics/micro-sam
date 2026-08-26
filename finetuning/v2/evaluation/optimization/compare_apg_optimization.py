@@ -1,4 +1,4 @@
-"""Compare serialized APG benchmark runs against the optimization acceptance gates.
+"""Compare saved APG benchmark runs against the optimization acceptance gates.
 
 Repeat ``--baseline-run`` or ``--candidate-run`` for timing trials. Candidate trials with the same
 implementation and resolved parameters are grouped, and their per-dataset medians are compared.

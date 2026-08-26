@@ -596,7 +596,7 @@ def test_early_stopping_tolerates_a_single_dropped_mask():
 
 
 def test_volume_early_stop_patience_defaults_to_two():
-    # Adopted in APG_3D_OPTIMIZATION.md experiment 5, and the value the annotator already used.
+    # Adopted in evaluation/optimization/notes/APG_3D_OPTIMIZATION.md experiment 5; the annotator already used it.
     from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
 
     assert DEFAULT_PROMPT_GENERATION["early_stop_patience"] == 2

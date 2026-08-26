@@ -535,7 +535,7 @@ candidates. Keeping the 0.15 default costs nothing.
 
 **Caveat.** Four of the five datasets return identical mSA across every row of this table - only CREMI
 moves, from +1.81% to +7.88%, on a single crop with the lowest absolute baseline of the five (0.0957).
-The gate ranking rests on one crop, which is what `APGv2.md:77-78` warns against.
+The gate ranking rests on one crop, which is what `../../APGv2.md:77-78` warns against.
 
 ### Negative quality and prompt geometry: four directions refuted
 
@@ -751,7 +751,7 @@ trials use `baseline-3d-1`, `baseline-3d-2` and `baseline-3d-3`; the three candi
 A canonical trial is run with:
 
 ```bash
-python finetuning/v2/evaluation/benchmark_apg_optimization.py \
+python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py \
     --ndim 3 --trial-id baseline-1 --time-budget-minutes 30
 ```
 
@@ -760,9 +760,9 @@ worthwhile because `--prepare-only` prints the depth each crop will actually pro
 the check that the declared depth survived the loader's trim:
 
 ```bash
-python finetuning/v2/evaluation/benchmark_apg_optimization.py --crops-3d deep --prepare-only
+python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py --crops-3d deep --prepare-only
 
-python finetuning/v2/evaluation/benchmark_apg_optimization.py \
+python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py \
     --ndim 3 --crops-3d deep --trial-id baseline-3d-1 --time-budget-minutes 150
 ```
 
@@ -782,7 +782,7 @@ Serialized runs are evaluated with repeated `--baseline-run` and `--candidate-ru
 explicit dimension:
 
 ```bash
-python finetuning/v2/evaluation/compare_apg_optimization.py \
+python finetuning/v2/evaluation/optimization/compare_apg_optimization.py \
     --ndim 3 --target efficiency \
     --baseline-run /path/to/baseline-1 \
     --baseline-run /path/to/baseline-2 \
@@ -837,10 +837,10 @@ Configuration checksums, by round (trial id in brackets):
 A round is run as one configuration per invocation, for example:
 
 ```bash
-python finetuning/v2/evaluation/benchmark_apg_optimization.py \
+python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py \
     --ndim 3 --config points-boxes-n4-mc085.json --trial-id r2-screen-1 --time-budget-minutes 60
 
-python finetuning/v2/evaluation/benchmark_apg_optimization.py \
+python finetuning/v2/evaluation/optimization/benchmark_apg_optimization.py \
     --ndim 3 --crops-3d deep --config deep-tuned.json --trial-id deep-screen-1 \
     --time-budget-minutes 150
 ```
@@ -888,8 +888,8 @@ positive, replaces it with the joint set, then appends the cleared alternate poi
 measurement runs one warm-up plus five repetitions; each protocol also gets one complete propagation.
 
 ```bash
-python finetuning/v2/evaluation/benchmark_prompt_state_replay.py --label baseline
-python finetuning/v2/evaluation/benchmark_prompt_state_replay.py --label fixed --expect-exact
+python finetuning/v2/evaluation/optimization/benchmark_prompt_state_replay.py --label baseline
+python finetuning/v2/evaluation/optimization/benchmark_prompt_state_replay.py --label fixed --expect-exact
 ```
 
 Both runs used `hvit_t` / `best` (`85fb099c4bb038fa0ab9bddd6151689e`), manifest

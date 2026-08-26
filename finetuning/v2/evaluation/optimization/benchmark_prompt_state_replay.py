@@ -16,8 +16,8 @@ calls directly, without using prompt bookkeeping or replay. Exact agreement is t
 criterion; runtime and ground-truth metrics describe the practical effect.
 
 Example:
-    python benchmark_prompt_state_replay.py --label baseline
-    python benchmark_prompt_state_replay.py --label fixed --expect-exact
+    python finetuning/v2/evaluation/optimization/benchmark_prompt_state_replay.py --label baseline
+    python finetuning/v2/evaluation/optimization/benchmark_prompt_state_replay.py --label fixed --expect-exact
 """
 
 from __future__ import annotations
@@ -26,9 +26,9 @@ import argparse
 import contextlib
 import hashlib
 import json
-import os
 import platform
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
@@ -39,11 +39,16 @@ import xxhash
 from elf.evaluation import mean_segmentation_accuracy
 from scipy.ndimage import distance_transform_edt
 
-import benchmark_apg_optimization as apg_benchmark
-import common
 from micro_sam.v1.prompt_based_segmentation import _process_box
 from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
 from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings
+
+EVALUATION_ROOT = Path(__file__).resolve().parent.parent
+REPOSITORY_ROOT = EVALUATION_ROOT.parents[2]
+sys.path.insert(0, str(EVALUATION_ROOT))
+
+import common  # noqa
+from optimization import benchmark_apg_optimization as apg_benchmark  # noqa
 
 
 DEFAULT_SAMPLE_ID = "celegans_atlas:8db1fb8b4013"
@@ -58,7 +63,7 @@ def _synchronize(device: str) -> None:
 
 def _implementation_checksum() -> str:
     checksum = xxhash.xxh128()
-    paths = (Path(__file__), Path(__file__).parents[3] / "micro_sam/v2/prompt_based_segmentation.py")
+    paths = (Path(__file__), REPOSITORY_ROOT / "micro_sam/v2/prompt_based_segmentation.py")
     for path in paths:
         with open(path, "rb") as f:
             for block in iter(lambda: f.read(1024 * 1024), b""):
@@ -70,7 +75,7 @@ def _implementation_checksum() -> str:
 def _git_revision() -> str | None:
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parents[3], text=True,
+            ["git", "rev-parse", "HEAD"], cwd=REPOSITORY_ROOT, text=True,
         ).strip()
     except (OSError, subprocess.CalledProcessError):
         return None
