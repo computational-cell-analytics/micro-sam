@@ -61,17 +61,23 @@ def create_tracking_menu(points_layer, box_layer, states, track_ids, tracking_wi
     #     if new_state != state_menu.value:
     #         state_menu.value = new_state
 
-    def update_track_id_boxes(event):
-        if "track_id" in box_layer.current_properties:
-            new_id = str(box_layer.current_properties["track_id"][0])
-            if new_id != track_id_menu.value:
-                track_id_menu.value = new_id
-                state.current_track_id = int(new_id)
+    # napari 0.9 no longer syncs 'current_properties' with the selection on shape layers (napari/napari#9221).
+    def update_track_id_boxes(*args):
+        if "track_id" not in box_layer.properties:
+            return
+        selected = list(box_layer.selected_data)
+        track_ids = set(box_layer.properties["track_id"][selected])
+        if len(track_ids) != 1:  # A mixed selection would relabel every selected box.
+            return
+        new_id = str(track_ids.pop())
+        if new_id != track_id_menu.value:
+            track_id_menu.value = new_id
+            state.current_track_id = int(new_id)
 
     points_layer.events.current_properties.connect(update_state)
     points_layer.events.current_properties.connect(update_track_id)
     # box_layer.events.current_properties.connect(update_state_boxes)
-    box_layer.events.current_properties.connect(update_track_id_boxes)
+    box_layer.selected_data.events.items_changed.connect(update_track_id_boxes)
 
     def state_changed(new_state):
         current_properties = points_layer.current_properties

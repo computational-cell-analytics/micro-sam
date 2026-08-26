@@ -2,7 +2,7 @@
 
 **New in version 1.8.12**
 
-Support napari 0.9 and remove the upper version limit for napari.
+Support napari 0.9, pin `napari<0.10`, and fix the tracking annotator when prompt layers already exist and when selecting box prompts.
 
 **New in version 1.8.11**
 
