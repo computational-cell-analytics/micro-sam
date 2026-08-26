@@ -11,6 +11,7 @@ from skimage.data import binary_blobs
 import micro_sam.util as util
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator import batch_annotator, image_folder_annotator
+from micro_sam.sam_annotator._batch import _maximize_dock_vertically
 from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam._test_util import check_layer_initialization
 
@@ -23,6 +24,32 @@ def _create_images(tmpdir, n_images):
         imageio.imwrite(im_path, image_data)
         image_paths.append(im_path)
     return image_paths
+
+
+def test_maximize_dock_uses_public_qt_parent(qtbot):
+    from qtpy.QtCore import Qt
+
+    class MainWindow(QtWidgets.QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.resize_calls = []
+
+        def resizeDocks(self, docks, sizes, orientation):
+            self.resize_calls.append((docks, sizes, orientation))
+
+    main_window = MainWindow()
+    qtbot.addWidget(main_window)
+    dock = QtWidgets.QDockWidget()
+    annotator = QtWidgets.QWidget()
+    dock.setWidget(annotator)
+    main_window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+
+    _maximize_dock_vertically(annotator)
+    QtWidgets.QApplication.processEvents()
+
+    size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
+    assert annotator.sizePolicy().verticalPolicy() == size_policy.Expanding
+    assert main_window.resize_calls == [([dock], [main_window.height()], Qt.Vertical)]
 
 
 @pytest.mark.gui
