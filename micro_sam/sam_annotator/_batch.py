@@ -61,7 +61,7 @@ def _embed_navigation(viewer, annotator, nav_container):
     inner.layout().insertWidget(0, group)
 
 
-def _maximize_dock_vertically(viewer, annotator):
+def _maximize_dock_vertically(annotator):
     """Expand the docked annotator to fill the available vertical space when it opens.
 
     napari sizes a freshly docked widget to its (small) size hint, leaving it shrunk; this makes the
@@ -78,11 +78,17 @@ def _maximize_dock_vertically(viewer, annotator):
     if dock is None:
         return
 
+    # Resolve the main window through public Qt APIs.
+    main_window = dock.parentWidget()
+    while main_window is not None and not isinstance(main_window, QtWidgets.QMainWindow):
+        main_window = main_window.parentWidget()
+    if main_window is None:
+        return
+
     def _resize():
         try:
-            main_window = viewer.window._qt_window
             main_window.resizeDocks([dock], [main_window.height()], Qt.Vertical)
-        except Exception:
+        except RuntimeError:
             pass
 
     # Defer until the window is shown, otherwise the initial dock layout overrides the resize.
@@ -216,7 +222,7 @@ def run_batch(
     _hide_embedding_widget(annotator)
 
     # Open the annotator maximized vertically instead of shrunk to its size hint.
-    _maximize_dock_vertically(viewer, annotator)
+    _maximize_dock_vertically(annotator)
 
     def _go_to(index):
         nonlocal current_index
