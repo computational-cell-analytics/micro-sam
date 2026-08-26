@@ -924,6 +924,7 @@ def train_joint_sam2(
     average_over_frames: bool = False,
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
+    distance_type: str = "geodesic",
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly with a shared image encoder (single GPU).
 
@@ -978,6 +979,9 @@ def train_joint_sam2(
             Dice metric. Set to 0 to select purely on the interactive task.
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
+        distance_type: Directed distance target for the automatic branch. "geodesic" uses the
+            geodesic hybrid field around each object's center, "directed" the euclidean vector
+            to the nearest boundary.
     """
     from micro_sam.v2.datasets.generalist_loader import _build_joint_datasets, _prepare_data_loader
     from micro_sam.v2.models.util import UniSAM2
@@ -989,7 +993,7 @@ def train_joint_sam2(
 
     device = get_device(device)
 
-    train_ds, val_ds = _build_joint_datasets(input_path, z_slices, dataset_choice)
+    train_ds, val_ds = _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type)
     bpg = {2: batch_size_2d} if batch_size_2d != batch_size else None
     train_loader = _prepare_data_loader(
         train_ds, batch_size=batch_size, shuffle=True,
@@ -1102,6 +1106,7 @@ def _train_joint_rank(
     average_over_frames: bool = False,
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
+    distance_type: str = "geodesic",
 ):
     """Single-rank torchrun worker for train_joint_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
@@ -1118,7 +1123,7 @@ def _train_joint_rank(
 
     batch_size_per_group = {2: batch_size_2d} if batch_size_2d != batch_size else None
 
-    train_ds, val_ds = _build_joint_datasets(input_path, z_slices, dataset_choice)
+    train_ds, val_ds = _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type)
 
     train_sampler = DistributedUniBatchSampler(
         group_per_index=_build_group_map(train_ds),
@@ -1251,6 +1256,7 @@ def train_joint_sam2_multi_gpu(
     average_over_frames: bool = False,
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
+    distance_type: str = "geodesic",
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly across multiple GPUs with DDP.
 
@@ -1308,6 +1314,9 @@ def train_joint_sam2_multi_gpu(
             Dice metric. Set to 0 to select purely on the interactive task.
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
+        distance_type: Directed distance target for the automatic branch. "geodesic" uses the
+            geodesic hybrid field around each object's center, "directed" the euclidean vector
+            to the nearest boundary.
     """
     if z_slices is None:
         z_slices = [8]
@@ -1364,4 +1373,5 @@ def train_joint_sam2_multi_gpu(
         average_over_frames=average_over_frames,
         automatic_metric_weight=automatic_metric_weight,
         initial_features=initial_features,
+        distance_type=distance_type,
     )

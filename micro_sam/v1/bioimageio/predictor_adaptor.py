@@ -39,6 +39,9 @@ class PredictorAdaptor(nn.Module):
         self.sam_model = sam_model_registry[model_type]()
         self.sam = SamPredictor(self.sam_model)
         self.decoder = None
+        # Cache the bounded SAM input and original size for invalidation.
+        self._cached_input = None
+        self._cached_original_size = None
 
     def load_state_dict(self, state, **kwargs):
         # Finetuning checkpoints store SAM and decoder weights separately.
@@ -122,24 +125,37 @@ class PredictorAdaptor(nn.Module):
         # Cast to float for MPS compatibility: F.interpolate with antialias=True
         # only supports floating-point dtypes on MPS (Apple Silicon).
         image_float = image.float() if not image.is_floating_point() else image
+        input_ = self.sam.transform.apply_image_torch(image_float)
+        original_image_size = tuple(image.shape[2:])
 
-        # We have image embeddings set and image embeddings were not passed.
-        if self.sam.is_image_set and embeddings is None:
+        # Reuse embeddings only when their input and output geometry match.
+        if (
+            self.sam.is_image_set
+            and embeddings is None
+            and self._cached_input is not None
+            and self._cached_original_size == original_image_size
+            and input_.shape == self._cached_input.shape
+            and torch.equal(input_, self._cached_input)
+        ):
             pass  # do nothing
 
         # The embeddings are passed, so we set them.
         elif embeddings is not None:
             self.sam.features = embeddings
-            self.sam.orig_h, self.sam.orig_w = image.shape[2:]
-            self.sam.input_h, self.sam.input_w = self.sam.transform.apply_image_torch(image_float).shape[2:]
+            self.sam.orig_h, self.sam.orig_w = original_image_size
+            self.sam.input_h, self.sam.input_w = input_.shape[2:]
             self.sam.is_image_set = True
+            self._cached_input = input_.detach().clone()
+            self._cached_original_size = original_image_size
 
-        # We don't have image embeddings set and they were not passed.
-        elif not self.sam.is_image_set:
-            input_ = self.sam.transform.apply_image_torch(image_float)
-            self.sam.set_torch_image(input_, original_image_size=image.shape[2:])
+        # No embeddings were passed and we don't have embeddings for this image,
+        # so we compute them.
+        else:
+            self.sam.set_torch_image(input_, original_image_size=original_image_size)
             self.sam.orig_h, self.sam.orig_w = self.sam.original_size
             self.sam.input_h, self.sam.input_w = self.sam.input_size
+            self._cached_input = input_.detach().clone()
+            self._cached_original_size = original_image_size
 
         assert self.sam.is_image_set, "The predictor has not yet been initialized."
 

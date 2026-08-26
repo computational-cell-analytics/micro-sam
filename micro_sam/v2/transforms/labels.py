@@ -231,9 +231,6 @@ class GeodesicHybridDistanceTransform(DirectedPerObjectBoundaryDistanceTransform
     axis and so over-segments elongated objects. The magnitude is what
     :func:`micro_sam.v2.postprocessing.watershed_heightmap` inverts into the ridge between touching
     objects, which a unit norm field cannot provide.
-
-    Post-process predictions with ``DEFAULT_POSTPROCESSING["sparse_hybrid"]``; the ``"sparse"``
-    values are tuned for the euclidean target's magnitude profile.
     """
 
     def compute_normalized_directed_distances(self, labels, label_id, boundaries, bb, distances):
@@ -273,6 +270,20 @@ class _JointLabelTransform(DirectedPerObjectBoundaryDistanceTransform):
 
     The interactive branch uses channel 0 (cast to int64 as instance IDs)
     and the automatic branch uses channels 1-4.
+    """
+
+    def __init__(self, instances: bool = True, **kwargs):
+        super().__init__(instances=instances, **kwargs)
+
+
+class _JointGeodesicLabelTransform(GeodesicHybridDistanceTransform):
+    """Geodesic hybrid distance transform for joint interactive + automatic training.
+
+    The :class:`GeodesicHybridDistanceTransform` counterpart of
+    :class:`_JointLabelTransform`: same 5-channel output
+    ``[instance_ids, foreground_mask, d_x, d_y, d_z]``, but the directed distances come from
+    the geodesic field around each object's center instead of the euclidean vector to the
+    nearest boundary.
     """
 
     def __init__(self, instances: bool = True, **kwargs):

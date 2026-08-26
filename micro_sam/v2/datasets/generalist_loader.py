@@ -23,7 +23,7 @@ from ..transforms.raw import (
 from ..transforms.labels import (
     _em_cell_label_trafo, _joint_em_cell_label_trafo,
     _plantseg_label_trafo, _axondeepseg_pre_label_transform, _instance_labels,
-    _JointLabelTransform,
+    _JointLabelTransform, _JointGeodesicLabelTransform,
 )
 
 # Cap on validation samples drawn per dataset, to keep the per-epoch validation pass cheap.
@@ -1111,7 +1111,7 @@ def _build_interactive_datasets(input_path, z_slices, dataset_choice):
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
 
 
-def _build_joint_datasets(input_path, z_slices, dataset_choice):
+def _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type="geodesic"):
     """Build train/val datasets for joint interactive + automatic SAM2 training.
 
     Labels have **5 channels**: ``[instance_ids, fg, d_x, d_y, d_z]``.
@@ -1123,11 +1123,23 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice):
     Unlike building two separate datasets, this shares a single data pipeline so both
     branches always see the same image patch.
 
+    Args:
+        input_path: Root path to the generalist training data.
+        z_slices: Z-slice counts for 3D groups.
+        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, or ``"all"``.
+        distance_type: Which directed distance target the automatic branch regresses.
+            ``"geodesic"`` uses :class:`_JointGeodesicLabelTransform`, ``"directed"`` uses
+            :class:`_JointLabelTransform`.
+
     Returns:
         Tuple of (train_ds, val_ds) as :class:`ConcatDataset` instances.
     """
+    if distance_type not in ("geodesic", "directed"):
+        raise ValueError(f"Invalid distance_type: {distance_type!r}. Expected 'geodesic' or 'directed'.")
+
     patch_shape = (512, 512)
-    label_trafo = _JointLabelTransform  # instances=True by default -> 5-channel output
+    # Both default to instances=True -> 5-channel output.
+    label_trafo = _JointGeodesicLabelTransform if distance_type == "geodesic" else _JointLabelTransform
 
     kwargs = {
         "raw_transform": _identity,
