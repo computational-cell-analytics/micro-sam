@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.8.12**
+
+Support napari 0.9 and remove the upper version limit for napari.
+
 **New in version 1.8.11**
 
 Fix stale embeddings and add AIS tests for the BioImage.IO/BioEngine model export.
