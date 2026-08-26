@@ -224,7 +224,7 @@ def deduplicate_flow_travel(params_list):
 
 
 def score_image_sparse_cached(
-    prediction, labels, params_list, backend, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
+    prediction, labels, params_list, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
 ):
     """Score all sparse combos on one image, caching the flow density across shared combos.
 
@@ -249,7 +249,7 @@ def score_image_sparse_cached(
         if key not in density_cache:
             density_cache[key] = _compute_flow_density(
                 directed, fg_mask_cache[ft], n_iter=int(n_iter), dt=dt, sigma=sigma, spacing=spacing,
-                backend=backend, n_threads=n_threads,
+                n_threads=n_threads,
             )
         fw = params["foreground_weight"]
         if fw not in hmap_cache:
@@ -304,7 +304,7 @@ def dense_boundary_and_distances(prediction):
     return boundary_map, distances
 
 
-def dense_oversegmentation(boundary_map, distances, density_threshold, sigma, n_iter, dt, backend, n_threads):
+def dense_oversegmentation(boundary_map, distances, density_threshold, sigma, n_iter, dt, n_threads):
     """The expensive, beta-independent part of run_multicut: oversegmentation, RAG and edge features."""
     from elf.segmentation.features import compute_rag, compute_boundary_mean_and_length, compute_z_edge_mask
     n_slices = boundary_map.shape[0]
@@ -314,9 +314,8 @@ def dense_oversegmentation(boundary_map, distances, density_threshold, sigma, n_
         bd = boundary_map[z]
         dists = distances[:, z]
         fg_mask = np.ones(bd.shape, dtype="bool")
-        density = _compute_flow_density(
-            dists, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma, verbose=False, backend=backend, n_threads=1,
-        )
+        # 1 thread per slice: the ThreadPoolExecutor below already parallelizes across slices.
+        density = _compute_flow_density(dists, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma, n_threads=1)
         seeds = connected_components(density > density_threshold)
         bd = bd if np.issubdtype(bd.dtype, np.floating) else bd.astype("float32")
         wsz = watershed(bd, markers=seeds)
@@ -352,7 +351,7 @@ def dense_solve(rag, feats, z_edges, overseg, n_slices, beta):
     return seg.astype("uint32")
 
 
-def score_image_dense_cached(prediction, labels, params_list, backend, n_threads=POSTPROC_THREADS, border_min_size=0):
+def score_image_dense_cached(prediction, labels, params_list, n_threads=POSTPROC_THREADS, border_min_size=0):
     """Score all dense combos on one image, caching the oversegmentation and RAG across shared combos."""
     boundary_map, distances = dense_boundary_and_distances(prediction)
     overseg_cache = {}
@@ -363,7 +362,7 @@ def score_image_dense_cached(prediction, labels, params_list, backend, n_threads
         if key not in overseg_cache:
             overseg_cache[key] = dense_oversegmentation(
                 boundary_map, distances, params["density_threshold"], params["sigma"], params["n_iter"],
-                dt=dt, backend=backend, n_threads=n_threads,
+                dt=dt, n_threads=n_threads,
             )
         overseg, rag, feats, z_edges, n_slices = overseg_cache[key]
         try:
@@ -424,16 +423,16 @@ def score_sample_apg_cached(segmenter, labels, params_list, metric_mode, border_
 
 
 def score_image(
-    prediction, labels, mode, params_list, backend, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
+    prediction, labels, mode, params_list, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
 ):
     """Return a per-combo list of metric dicts for one decoder prediction, aligned with params_list."""
     if mode == "sparse":
         return score_image_sparse_cached(
-            prediction, labels, params_list, backend, n_threads=n_threads, spacing=spacing,
+            prediction, labels, params_list, n_threads=n_threads, spacing=spacing,
             border_min_size=border_min_size,
         )
     return score_image_dense_cached(
-        prediction, labels, params_list, backend, n_threads=n_threads, border_min_size=border_min_size
+        prediction, labels, params_list, n_threads=n_threads, border_min_size=border_min_size
     )
 
 
@@ -488,7 +487,7 @@ def merge_shards(output_root, dataset_name, mode, model_type, num_shards, checkp
 
 def tune_parameters(
     model, mode, dataset_name, data_root, model_type, output_root, device,
-    backend="cpp", n_threads=POSTPROC_THREADS, n_tuning_samples=None, crop_shape=None, criterion=None,
+    n_threads=POSTPROC_THREADS, n_tuning_samples=None, crop_shape=None, criterion=None,
     checkpoint_id=None, shard_index=0, num_shards=1,
 ):
     """Sweep the grid of a mode on the validation split and return the best parameter combination.
@@ -514,7 +513,6 @@ def tune_parameters(
         model_type: The SAM2 backbone, which names the output subdirectory.
         output_root: The root the sweep results are written to.
         device: The torch device.
-        backend: The backend for the flow computation.
         n_threads: The threads for the postprocessing.
         n_tuning_samples: Cap the sweep to this many validation samples.
         crop_shape: The 3d center crop.
@@ -588,7 +586,7 @@ def tune_parameters(
             else:
                 prediction = predict_unisam2(model, raw, ndim=ndim, device=device)
                 scores = score_image(
-                    prediction, labels, postproc_mode, params_list, backend,
+                    prediction, labels, postproc_mode, params_list,
                     n_threads=n_threads, spacing=config["spacing"], border_min_size=border_min_size,
                 )
         except Exception as e:
@@ -901,7 +899,6 @@ def main():
     parser.add_argument("--tuning_root", type=str, default=None, help="Where the sweeps are written and read from.")
     parser.add_argument("--n_tuning_samples", type=int, default=None, help="Cap each sweep to this many samples.")
     parser.add_argument("--criterion", type=str, default=None, choices=sorted(CRITERION_ASCENDING))
-    parser.add_argument("--backend", type=str, default="cpp", choices=("cpp", "python"), help="Flow backend.")
     parser.add_argument("--n_threads", type=int, default=POSTPROC_THREADS, help="Threads for the postprocessing.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
     parser.add_argument(
@@ -977,7 +974,7 @@ def main():
                 )
             tune_parameters(
                 models[model_key], mode, dataset_name, args.input_path, args.model_type, tuning_root, device,
-                backend=args.backend, n_threads=args.n_threads, n_tuning_samples=args.n_tuning_samples,
+                n_threads=args.n_threads, n_tuning_samples=args.n_tuning_samples,
                 crop_shape=crop_shape, criterion=args.criterion, checkpoint_id=checkpoint_id,
                 shard_index=args.shard_index, num_shards=args.num_shards,
             )

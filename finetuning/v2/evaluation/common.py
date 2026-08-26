@@ -673,7 +673,7 @@ GENERATE_PARAM_KEYS = (
 )
 
 
-def resolve_params(overrides=None, ndim=2):
+def resolve_params(overrides=None, ndim=2, model_type=None):
     """The generation parameters for one run, with 'overrides' applied on top of the library defaults.
 
     The single definition of what a run's parameters are, so that a benchmark, a walk-through and a
@@ -683,18 +683,23 @@ def resolve_params(overrides=None, ndim=2):
         overrides: The parameters to change, by the name `generate` gives them. A volume also accepts
             'candidate_threshold_3d', which is the name the defaults give its own threshold.
         ndim: The number of spatial dimensions, 2 or 3.
+        model_type: The SAM2 backbone the defaults are looked up for, see `default_prompt_generation`.
 
     Returns:
         The parameters, keyed as `generate` takes them.
     """
-    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION, default_prompt_generation
+    from micro_sam.v2.util import DEFAULT_MODEL
 
     overrides = overrides or {}
-    params = {key: DEFAULT_PROMPT_GENERATION[key] for key in GENERATE_PARAM_KEYS}
+    model_type = model_type or DEFAULT_MODEL
+    per_model_defaults = default_prompt_generation(model_type, is_volume=False)
+    defaults = {**DEFAULT_PROMPT_GENERATION, **per_model_defaults}
+    params = {key: defaults[key] for key in GENERATE_PARAM_KEYS}
     params.update(overrides)
     if ndim == 3:
         # A candidate's density scales with the object's size, so a volume has its own threshold.
-        default_3d = DEFAULT_PROMPT_GENERATION["candidate_threshold_3d"]
+        default_3d = default_prompt_generation(model_type, is_volume=True)["candidate_threshold"]
         params["candidate_threshold"] = overrides.get("candidate_threshold_3d", default_3d)
     params.pop("candidate_threshold_3d", None)
     return params
@@ -870,12 +875,12 @@ def predict_unisam2(model, raw, ndim, device, normalization=None):
     return segmenter.get_state()["prediction"]
 
 
-def postprocess_unisam2(out, dataset_name, model_type=None, backend="cpp", params=None):
+def postprocess_unisam2(out, dataset_name, model_type, params=None):
     """Turn a (4, *spatial) prediction into an instance segmentation.
 
     EM datasets use the dense (multicut) mode, all others the sparse (flow) mode. 'params' overrides
     the postprocessing defaults, e.g. with the best combination found by grid_search_automatic_cells.
-    Without 'params', 'model_type' selects the per-model library default instead of the pooled one.
+    Without 'params', 'model_type' selects the per-model library default.
     """
     from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
     params = {} if params is None else params
@@ -884,12 +889,10 @@ def postprocess_unisam2(out, dataset_name, model_type=None, backend="cpp", param
         boundary_map = fg.max() - fg
         boundary_map /= boundary_map.max()
         distances = np.stack([out[2], out[3]])
-        seg = run_multicut(boundary_map, distances, model_type=model_type, backend=backend, **params)
+        seg = run_multicut(boundary_map, distances, model_type=model_type, **params)
     else:
         spacing = DATASET_SPACING.get(dataset_name, None)
-        seg = flow_instance_segmentation(
-            fg, out[1:], model_type=model_type, spacing=spacing, backend=backend, **params
-        )
+        seg = flow_instance_segmentation(fg, out[1:], model_type=model_type, spacing=spacing, **params)
     return seg.astype("uint32")
 
 

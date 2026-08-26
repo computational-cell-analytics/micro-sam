@@ -231,10 +231,6 @@ class GeodesicHybridDistanceTransform(DirectedPerObjectBoundaryDistanceTransform
     axis and so over-segments elongated objects. The magnitude is what
     :func:`micro_sam.v2.postprocessing.watershed_heightmap` inverts into the ridge between touching
     objects, which a unit norm field cannot provide.
-
-    Post-process predictions with ``DEFAULT_POSTPROCESSING_SPARSE_HYBRID``; the per-model_type
-    ``DEFAULT_POSTPROCESSING[model_type]["sparse"]`` values are tuned for the euclidean target's
-    magnitude profile.
     """
 
     def compute_normalized_directed_distances(self, labels, label_id, boundaries, bb, distances):

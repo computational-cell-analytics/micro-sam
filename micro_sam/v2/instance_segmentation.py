@@ -1025,7 +1025,9 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         inference_device: Devices = USE_MODEL_DEVICE,
     ) -> None:
         self._model = model
-        self._model_type = getattr(model, "model_type", None)
+        # 'model_type' can be unset on a manually assembled module; the postprocessing defaults need
+        # a concrete backbone to look up, so fall back to the single-source default rather than None.
+        self._model_type = getattr(model, "model_type", None) or _DEFAULT_MODEL
         self._device = device
         self._inference_device = device if inference_device is USE_MODEL_DEVICE else inference_device
         self._prediction = None

@@ -34,10 +34,11 @@ from bioimage_cpp.segmentation import label
 from .normalization import normalize_raw
 from ..v1.inference import _merge_segmentations
 from ..util import make_temp_embedding_path, _ensure_rgb
-from .postprocessing import DEFAULT_POSTPROCESSING, _compute_flow_density
+from .postprocessing import _compute_flow_density
 from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
 from .util import (
-    autocast, encode_image, precompute_image_embeddings, set_precomputed, get_sam2_image_predictor,
+    DEFAULT_MODEL, autocast, encode_image, precompute_image_embeddings, set_precomputed,
+    get_sam2_image_predictor,
 )
 from .instance_segmentation import (
     TiledUniSAM2InstanceSegmentation, UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices,
@@ -47,9 +48,9 @@ from .instance_segmentation import (
 # Only enters the merge order, never a cutoff, so it is a constant.
 STABILITY_SCORE_OFFSET = 1.0
 
-# Per (model_type, mode) defaults from the registry parameter search, same methodology and 'universal'
-# fallback as `micro_sam.v2.postprocessing.DEFAULT_POSTPROCESSING`. 2D and 3D are swept independently
-# (a volume prompts once per object rather than once per slice), so they get separate tables.
+# Per (model_type, mode) defaults from the registry parameter search, same methodology as
+# `micro_sam.v2.postprocessing.DEFAULT_POSTPROCESSING`. 2D and 3D are swept independently (a volume
+# prompts once per object rather than once per slice), so they get separate tables.
 DEFAULT_PROMPT_GENERATION_2D = {
     "hvit_t": {
         "foreground_threshold": 0.7, "candidate_threshold": 3.0, "n_iter": 50, "sigma": 0.5,
@@ -68,11 +69,6 @@ DEFAULT_PROMPT_GENERATION_2D = {
     },
     "hvit_l": {
         "foreground_threshold": 0.7, "candidate_threshold": 2.25, "n_iter": 50, "sigma": 1.0,
-        "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 50,
-        "refine_with_box_prompts": True,
-    },
-    "universal": {
-        "foreground_threshold": 0.7, "candidate_threshold": 3.0, "n_iter": 50, "sigma": 0.5,
         "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 50,
         "refine_with_box_prompts": True,
     },
@@ -95,21 +91,15 @@ DEFAULT_PROMPT_GENERATION_3D = {
         "candidate_threshold": (1.5, 10.0), "sigma": 0.25, "min_candidate_size": 1,
         "score_threshold": 0.6, "max_overlap": 0.5, "min_size": 100,
     },
-    "universal": {
-        "candidate_threshold": (1.5, 10.0), "sigma": 0.25, "min_candidate_size": 1,
-        "score_threshold": 0.6, "max_overlap": 0.5, "min_size": 100,
-    },
 }
 
 
-def default_prompt_generation(model_type: Optional[str], is_volume: bool) -> dict:
+def default_prompt_generation(model_type: str = DEFAULT_MODEL, is_volume: bool = False) -> dict:
     """The default APG parameters for one model type and dimensionality.
 
     Args:
         model_type: The SAM2 backbone, e.g. 'hvit_t', or a finetuned model built on one (only the
-            backbone prefix is used to look up the table). Falls back to the 'universal' (pooled
-            across all 4 registry backbones) default for a model type outside the registry, or when
-            unknown (None).
+            backbone prefix is used to look up the table). Must be one of the 4 registry backbones.
         is_volume: Whether to use the 3D table (`derive_volume_prompts`) or the 2D one
             (`derive_point_prompts`). A volume prompts once per object rather than once per slice, so
             the two are swept and tuned independently.
@@ -118,8 +108,13 @@ def default_prompt_generation(model_type: Optional[str], is_volume: bool) -> dic
         The default parameter dict for that model type and dimensionality.
     """
     table = DEFAULT_PROMPT_GENERATION_3D if is_volume else DEFAULT_PROMPT_GENERATION_2D
-    backbone = model_type[:6] if model_type else model_type
-    return table.get(backbone, table["universal"])
+    backbone = model_type[:6]
+    if backbone not in table:
+        raise ValueError(
+            f"No default prompt generation parameters for model type '{model_type}'. "
+            f"Choose one built on a backbone in {sorted(table)}."
+        )
+    return table[backbone]
 
 
 DEFAULT_PROMPT_GENERATION = {
@@ -129,9 +124,9 @@ DEFAULT_PROMPT_GENERATION = {
     "n_objects_per_pass": 16,
     # Volumes only. None propagates through the whole volume.
     "early_stop_patience": None,
-    # Shared with the sparse post-processing, but tuned there for one peak per object, not for recall.
-    # Not swept per model_type in the registry search, unlike the params in `default_prompt_generation`.
-    "dt": DEFAULT_POSTPROCESSING["universal"]["sparse"]["dt"],
+    # Shared with the sparse post-processing's 'dt', tuned there for one peak per object rather than
+    # for recall, but 0.5 for every registry backbone either way, so it stays a flat constant here.
+    "dt": 0.5,
     # Throughput only, the density is the same either way.
     "n_threads": 8,
 }
@@ -164,14 +159,13 @@ def interior_points(labels: np.ndarray) -> np.ndarray:
 def derive_point_prompts(
     foreground: np.ndarray,
     directed_distances: np.ndarray,
-    model_type: Optional[str] = None,
+    model_type: str = DEFAULT_MODEL,
     candidate_threshold: Optional[float] = None,
     foreground_threshold: Optional[float] = None,
     n_iter: Optional[int] = None,
     dt: Optional[float] = None,
     sigma: Optional[float] = None,
     min_candidate_size: Optional[int] = None,
-    backend: str = "cpp",
     n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
 ) -> Optional[Dict[str, np.ndarray]]:
     """Derive one positive point prompt per convergence-density component.
@@ -195,8 +189,7 @@ def derive_point_prompts(
         dt: Integration step size. Mostly only the product with 'n_iter' matters.
         sigma: Gaussian sigma for smoothing the convergence-density map.
         min_candidate_size: Discard components smaller than this, which are noise rather than objects.
-        backend: Flow computation backend, ``"python"`` or ``"cpp"``.
-        n_threads: Number of threads for the cpp backend.
+        n_threads: Number of threads for the flow computation.
 
     Returns:
         The prompts as {'points': (N, 1, 2) in XY, 'point_labels': (N, 1)}, or None if none were found.
@@ -220,8 +213,7 @@ def derive_point_prompts(
 
     fg_mask = foreground > foreground_threshold
     density = _compute_flow_density(
-        directed_distances, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma,
-        backend=backend, n_threads=n_threads,
+        directed_distances, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma, n_threads=n_threads,
     )
     candidates = label(density > candidate_threshold)
 
@@ -247,7 +239,7 @@ def derive_point_prompts(
 def derive_volume_prompts(
     foreground: np.ndarray,
     directed_distances: np.ndarray,
-    model_type: Optional[str] = None,
+    model_type: str = DEFAULT_MODEL,
     candidate_threshold: Optional[Union[float, Sequence[float]]] = None,
     foreground_threshold: Optional[float] = None,
     n_iter: Optional[int] = None,
@@ -255,7 +247,6 @@ def derive_volume_prompts(
     sigma: Optional[float] = None,
     spacing: Optional[tuple] = None,
     min_candidate_size: Optional[int] = None,
-    backend: str = "cpp",
     n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
 ) -> Optional[Dict[str, np.ndarray]]:
     """Derive one positive point prompt, on one slice, per volumetric convergence-density component.
@@ -281,8 +272,7 @@ def derive_volume_prompts(
         sigma: Gaussian sigma for smoothing the convergence-density map.
         spacing: Anisotropic voxel spacing, e.g. (4, 1, 1), for physically isotropic smoothing.
         min_candidate_size: Discard components smaller than this, which are noise rather than objects.
-        backend: Flow computation backend, ``"python"`` or ``"cpp"``.
-        n_threads: Number of threads for the cpp backend.
+        n_threads: Number of threads for the flow computation.
 
     Returns:
         The prompts as {'points': (N, 1, 2) in XY, 'point_labels': (N, 1), 'frames': (N,) slice
@@ -297,9 +287,12 @@ def derive_volume_prompts(
     if candidate_threshold is None:
         candidate_threshold = defaults["candidate_threshold"]
     if foreground_threshold is None:
-        foreground_threshold = DEFAULT_PROMPT_GENERATION_2D["universal"]["foreground_threshold"]
+        # 0.7 for every registry backbone in the 2D table (not swept for volumes), so it stays a flat
+        # constant here rather than going through `default_prompt_generation`.
+        foreground_threshold = 0.7
     if n_iter is None:
-        n_iter = DEFAULT_PROMPT_GENERATION_2D["universal"]["n_iter"]
+        # 50 for every registry backbone in the 2D table, same reasoning as 'foreground_threshold'.
+        n_iter = 50
     if dt is None:
         dt = DEFAULT_PROMPT_GENERATION["dt"]
     if sigma is None:
@@ -310,7 +303,7 @@ def derive_volume_prompts(
     fg_mask = foreground > foreground_threshold
     density = _compute_flow_density(
         directed_distances, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma, spacing=spacing,
-        backend=backend, n_threads=n_threads,
+        n_threads=n_threads,
     )
 
     points, frames, seen = [], [], set()
