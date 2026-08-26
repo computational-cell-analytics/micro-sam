@@ -34,10 +34,11 @@ from bioimage_cpp.segmentation import label
 from .normalization import normalize_raw
 from ..v1.inference import _merge_segmentations
 from ..util import make_temp_embedding_path, _ensure_rgb
-from .postprocessing import DEFAULT_POSTPROCESSING, _compute_flow_density
+from .postprocessing import _compute_flow_density
 from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
 from .util import (
-    autocast, encode_image, precompute_image_embeddings, set_precomputed, get_sam2_image_predictor,
+    DEFAULT_MODEL, autocast, encode_image, precompute_image_embeddings, set_precomputed,
+    get_sam2_image_predictor,
 )
 from .instance_segmentation import (
     TiledUniSAM2InstanceSegmentation, UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices,
@@ -47,29 +48,85 @@ from .instance_segmentation import (
 # Only enters the merge order, never a cutoff, so it is a constant.
 STABILITY_SCORE_OFFSET = 1.0
 
+# Per (model_type, mode) defaults from the registry parameter search, same methodology as
+# `micro_sam.v2.postprocessing.DEFAULT_POSTPROCESSING`. 2D and 3D are swept independently (a volume
+# prompts once per object rather than once per slice), so they get separate tables.
+DEFAULT_PROMPT_GENERATION_2D = {
+    "hvit_t": {
+        "foreground_threshold": 0.7, "candidate_threshold": 3.0, "n_iter": 50, "sigma": 0.5,
+        "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 50,
+        "refine_with_box_prompts": True,
+    },
+    "hvit_s": {
+        "foreground_threshold": 0.7, "candidate_threshold": 1.0, "n_iter": 50, "sigma": 2.0,
+        "min_candidate_size": 4, "score_threshold": 0.5, "max_overlap": 0.15, "min_size": 50,
+        "refine_with_box_prompts": True,
+    },
+    "hvit_b": {
+        "foreground_threshold": 0.7, "candidate_threshold": 3.0, "n_iter": 50, "sigma": 0.5,
+        "min_candidate_size": 4, "score_threshold": 0.5, "max_overlap": 0.15, "min_size": 50,
+        "refine_with_box_prompts": True,
+    },
+    "hvit_l": {
+        "foreground_threshold": 0.7, "candidate_threshold": 2.25, "n_iter": 50, "sigma": 1.0,
+        "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 50,
+        "refine_with_box_prompts": True,
+    },
+}
+
+DEFAULT_PROMPT_GENERATION_3D = {
+    "hvit_t": {
+        "candidate_threshold": (1.5, 10.0), "sigma": 1.0, "min_candidate_size": 1,
+        "score_threshold": 0.6, "max_overlap": 0.15, "min_size": 100,
+    },
+    "hvit_s": {
+        "candidate_threshold": (0.5, 5.0), "sigma": 1.0, "min_candidate_size": 1,
+        "score_threshold": 0.6, "max_overlap": 0.5, "min_size": 100,
+    },
+    "hvit_b": {
+        "candidate_threshold": (1.0, 5.0), "sigma": 1.0, "min_candidate_size": 4,
+        "score_threshold": 0.6, "max_overlap": 0.5, "min_size": 100,
+    },
+    "hvit_l": {
+        "candidate_threshold": (1.5, 10.0), "sigma": 0.25, "min_candidate_size": 1,
+        "score_threshold": 0.6, "max_overlap": 0.5, "min_size": 100,
+    },
+}
+
+
+def default_prompt_generation(model_type: str = DEFAULT_MODEL, is_volume: bool = False) -> dict:
+    """The default APG parameters for one model type and dimensionality.
+
+    Args:
+        model_type: The SAM2 backbone, e.g. 'hvit_t', or a finetuned model built on one (only the
+            backbone prefix is used to look up the table). Must be one of the 4 registry backbones.
+        is_volume: Whether to use the 3D table (`derive_volume_prompts`) or the 2D one
+            (`derive_point_prompts`). A volume prompts once per object rather than once per slice, so
+            the two are swept and tuned independently.
+
+    Returns:
+        The default parameter dict for that model type and dimensionality.
+    """
+    table = DEFAULT_PROMPT_GENERATION_3D if is_volume else DEFAULT_PROMPT_GENERATION_2D
+    backbone = model_type[:6]
+    if backbone not in table:
+        raise ValueError(
+            f"No default prompt generation parameters for model type '{model_type}'. "
+            f"Choose one built on a backbone in {sorted(table)}."
+        )
+    return table[backbone]
+
+
 DEFAULT_PROMPT_GENERATION = {
-    # Below the flow post-processing's 'density_threshold': the model rejects the surplus candidates.
-    "candidate_threshold": 1.5,
-    "min_candidate_size": 4,
-    "score_threshold": 0.6,
-    # The one axis that transfers: optimal on eleven of twelve datasets.
-    "max_overlap": 0.15,
     "multimasking": True,
-    # Off by default until the box stage is swept beyond livecell.
-    "refine_with_box_prompts": False,
     "box_extension": 0,
-    # Volumes only. A ladder separates the peaks that a single threshold merges into one component.
-    "candidate_threshold_3d": (1.5, 10.0),
     # Volumes only. Trades device memory against the pass count.
     "n_objects_per_pass": 16,
     # Volumes only. None propagates through the whole volume.
     "early_stop_patience": None,
-    # Shared with the sparse post-processing, but tuned there for one peak per object, not for recall.
-    "foreground_threshold": DEFAULT_POSTPROCESSING["sparse"]["foreground_threshold"],
-    "n_iter": DEFAULT_POSTPROCESSING["sparse"]["n_iter"],
-    "dt": DEFAULT_POSTPROCESSING["sparse"]["dt"],
-    "sigma": DEFAULT_POSTPROCESSING["sparse"]["sigma"],
-    "min_size": DEFAULT_POSTPROCESSING["sparse"]["min_size"],
+    # Shared with the sparse post-processing's 'dt', tuned there for one peak per object rather than
+    # for recall, but 0.5 for every registry backbone either way, so it stays a flat constant here.
+    "dt": 0.5,
     # Throughput only, the density is the same either way.
     "n_threads": 8,
 }
@@ -102,13 +159,13 @@ def interior_points(labels: np.ndarray) -> np.ndarray:
 def derive_point_prompts(
     foreground: np.ndarray,
     directed_distances: np.ndarray,
-    candidate_threshold: float = DEFAULT_PROMPT_GENERATION["candidate_threshold"],
-    foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
-    n_iter: int = DEFAULT_PROMPT_GENERATION["n_iter"],
-    dt: float = DEFAULT_PROMPT_GENERATION["dt"],
-    sigma: float = DEFAULT_PROMPT_GENERATION["sigma"],
-    min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
-    backend: str = "cpp",
+    model_type: str = DEFAULT_MODEL,
+    candidate_threshold: Optional[float] = None,
+    foreground_threshold: Optional[float] = None,
+    n_iter: Optional[int] = None,
+    dt: Optional[float] = None,
+    sigma: Optional[float] = None,
+    min_candidate_size: Optional[int] = None,
     n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
 ) -> Optional[Dict[str, np.ndarray]]:
     """Derive one positive point prompt per convergence-density component.
@@ -121,6 +178,8 @@ def derive_point_prompts(
         foreground: Foreground probability map, shape (Y, X).
         directed_distances: Distance channels stacked along axis 0. A leading z-channel is dropped, so
             `prediction[1:]` can be passed regardless of dimensionality.
+        model_type: The SAM2 backbone the predictions came from, e.g. 'hvit_t'. Selects the default
+            for any of the tunable parameters below left as None, see `default_prompt_generation`.
         candidate_threshold: Density threshold for proposing candidates. Lower proposes more. The density
             of a component scales with the object's area, so this is coupled to object size.
         foreground_threshold: Foreground binarisation threshold, which bounds the pixels that can be
@@ -130,19 +189,31 @@ def derive_point_prompts(
         dt: Integration step size. Mostly only the product with 'n_iter' matters.
         sigma: Gaussian sigma for smoothing the convergence-density map.
         min_candidate_size: Discard components smaller than this, which are noise rather than objects.
-        backend: Flow computation backend, ``"python"`` or ``"cpp"``.
-        n_threads: Number of threads for the cpp backend.
+        n_threads: Number of threads for the flow computation.
 
     Returns:
         The prompts as {'points': (N, 1, 2) in XY, 'point_labels': (N, 1)}, or None if none were found.
     """
+    defaults = default_prompt_generation(model_type, is_volume=False)
+    if candidate_threshold is None:
+        candidate_threshold = defaults["candidate_threshold"]
+    if foreground_threshold is None:
+        foreground_threshold = defaults["foreground_threshold"]
+    if n_iter is None:
+        n_iter = defaults["n_iter"]
+    if dt is None:
+        dt = DEFAULT_PROMPT_GENERATION["dt"]
+    if sigma is None:
+        sigma = defaults["sigma"]
+    if min_candidate_size is None:
+        min_candidate_size = defaults["min_candidate_size"]
+
     if directed_distances.shape[0] > foreground.ndim:
         directed_distances = directed_distances[-foreground.ndim:]
 
     fg_mask = foreground > foreground_threshold
     density = _compute_flow_density(
-        directed_distances, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma,
-        backend=backend, n_threads=n_threads,
+        directed_distances, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma, n_threads=n_threads,
     )
     candidates = label(density > candidate_threshold)
 
@@ -168,14 +239,14 @@ def derive_point_prompts(
 def derive_volume_prompts(
     foreground: np.ndarray,
     directed_distances: np.ndarray,
-    candidate_threshold: float = DEFAULT_PROMPT_GENERATION["candidate_threshold"],
-    foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
-    n_iter: int = DEFAULT_PROMPT_GENERATION["n_iter"],
-    dt: float = DEFAULT_PROMPT_GENERATION["dt"],
-    sigma: float = DEFAULT_PROMPT_GENERATION["sigma"],
+    model_type: str = DEFAULT_MODEL,
+    candidate_threshold: Optional[Union[float, Sequence[float]]] = None,
+    foreground_threshold: Optional[float] = None,
+    n_iter: Optional[int] = None,
+    dt: Optional[float] = None,
+    sigma: Optional[float] = None,
     spacing: Optional[tuple] = None,
-    min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
-    backend: str = "cpp",
+    min_candidate_size: Optional[int] = None,
     n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
 ) -> Optional[Dict[str, np.ndarray]]:
     """Derive one positive point prompt, on one slice, per volumetric convergence-density component.
@@ -188,6 +259,8 @@ def derive_volume_prompts(
     Args:
         foreground: Foreground probability map, shape (Z, Y, X).
         directed_distances: Distance channels stacked along axis 0, shape (3, Z, Y, X).
+        model_type: The SAM2 backbone the predictions came from, e.g. 'hvit_t'. Selects the default
+            for any of the tunable parameters below left as None, see `default_prompt_generation`.
         candidate_threshold: Density threshold for proposing candidates, or several of them. Lower
             proposes more, but also merges the peaks of touching objects into one component, so a
             ladder recovers what a single threshold cannot separate.
@@ -199,8 +272,7 @@ def derive_volume_prompts(
         sigma: Gaussian sigma for smoothing the convergence-density map.
         spacing: Anisotropic voxel spacing, e.g. (4, 1, 1), for physically isotropic smoothing.
         min_candidate_size: Discard components smaller than this, which are noise rather than objects.
-        backend: Flow computation backend, ``"python"`` or ``"cpp"``.
-        n_threads: Number of threads for the cpp backend.
+        n_threads: Number of threads for the flow computation.
 
     Returns:
         The prompts as {'points': (N, 1, 2) in XY, 'point_labels': (N, 1), 'frames': (N,) slice
@@ -211,10 +283,27 @@ def derive_volume_prompts(
     if directed_distances.shape[0] != 3:
         raise ValueError(f"Expected 3 distance channels, got {directed_distances.shape[0]}.")
 
+    defaults = default_prompt_generation(model_type, is_volume=True)
+    if candidate_threshold is None:
+        candidate_threshold = defaults["candidate_threshold"]
+    if foreground_threshold is None:
+        # 0.7 for every registry backbone in the 2D table (not swept for volumes), so it stays a flat
+        # constant here rather than going through `default_prompt_generation`.
+        foreground_threshold = 0.7
+    if n_iter is None:
+        # 50 for every registry backbone in the 2D table, same reasoning as 'foreground_threshold'.
+        n_iter = 50
+    if dt is None:
+        dt = DEFAULT_PROMPT_GENERATION["dt"]
+    if sigma is None:
+        sigma = defaults["sigma"]
+    if min_candidate_size is None:
+        min_candidate_size = defaults["min_candidate_size"]
+
     fg_mask = foreground > foreground_threshold
     density = _compute_flow_density(
         directed_distances, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma, spacing=spacing,
-        backend=backend, n_threads=n_threads,
+        n_threads=n_threads,
     )
 
     points, frames, seen = [], [], set()
@@ -695,16 +784,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     def generate(
         self,
         candidate_threshold: Optional[Union[float, Sequence[float]]] = None,
-        foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
-        n_iter: int = DEFAULT_PROMPT_GENERATION["n_iter"],
-        dt: float = DEFAULT_PROMPT_GENERATION["dt"],
-        sigma: float = DEFAULT_PROMPT_GENERATION["sigma"],
+        foreground_threshold: Optional[float] = None,
+        n_iter: Optional[int] = None,
+        dt: Optional[float] = None,
+        sigma: Optional[float] = None,
         spacing: Optional[tuple] = None,
-        min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
-        score_threshold: float = DEFAULT_PROMPT_GENERATION["score_threshold"],
-        max_overlap: float = DEFAULT_PROMPT_GENERATION["max_overlap"],
-        min_size: int = DEFAULT_PROMPT_GENERATION["min_size"],
-        refine_with_box_prompts: bool = DEFAULT_PROMPT_GENERATION["refine_with_box_prompts"],
+        min_candidate_size: Optional[int] = None,
+        score_threshold: Optional[float] = None,
+        max_overlap: Optional[float] = None,
+        min_size: Optional[int] = None,
+        refine_with_box_prompts: Optional[bool] = None,
         box_extension: int = DEFAULT_PROMPT_GENERATION["box_extension"],
         multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
         n_objects_per_pass: int = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"],
@@ -717,8 +806,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
         Args:
             candidate_threshold: Density threshold for proposing candidates, or several of them for
-                a volume. By default 1.5 for an image and (1.5, 10.0) for a volume, see
-                `derive_volume_prompts`.
+                a volume. By default resolved per model type and dimensionality, see
+                `default_prompt_generation`.
             foreground_threshold: Foreground binarisation threshold. Here it only limits which pixels can
                 be proposed from, since the masks come from the interactive branch, so it trades candidate
                 recall rather than boundary quality.
@@ -755,15 +844,22 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         shape = self._prediction[0].shape
         # The prediction carries the dimensionality it was run at: (4, Y, X) or (4, Z, Y, X).
         is_volume = self._prediction.ndim == 4
+        defaults = default_prompt_generation(self._model_type, is_volume=is_volume)
         if candidate_threshold is None:
-            candidate_threshold = DEFAULT_PROMPT_GENERATION[
-                "candidate_threshold_3d" if is_volume else "candidate_threshold"
-            ]
+            candidate_threshold = defaults["candidate_threshold"]
+        if score_threshold is None:
+            score_threshold = defaults["score_threshold"]
+        if max_overlap is None:
+            max_overlap = defaults["max_overlap"]
+        if min_size is None:
+            min_size = defaults["min_size"]
+
         if is_volume:
             prompts = derive_volume_prompts(
-                self._prediction[0], self._prediction[1:], candidate_threshold=candidate_threshold,
-                foreground_threshold=foreground_threshold, n_iter=n_iter, dt=dt, sigma=sigma,
-                spacing=spacing, min_candidate_size=min_candidate_size, n_threads=n_threads,
+                self._prediction[0], self._prediction[1:], model_type=self._model_type,
+                candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
+                n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing,
+                min_candidate_size=min_candidate_size, n_threads=n_threads,
             )
             if prompts is None:
                 return np.zeros(shape, dtype="uint32")
@@ -777,6 +873,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             )
             return merge_by_score(records, shape, max_overlap=max_overlap, min_size=min_size)
 
+        if refine_with_box_prompts is None:
+            refine_with_box_prompts = defaults["refine_with_box_prompts"]
         proposals = self.propose(
             candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
             n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size,
@@ -790,12 +888,12 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     @torch.no_grad()
     def propose(
         self,
-        candidate_threshold: Optional[float] = DEFAULT_PROMPT_GENERATION["candidate_threshold"],
-        foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
-        n_iter: int = DEFAULT_PROMPT_GENERATION["n_iter"],
-        dt: float = DEFAULT_PROMPT_GENERATION["dt"],
-        sigma: float = DEFAULT_PROMPT_GENERATION["sigma"],
-        min_candidate_size: int = DEFAULT_PROMPT_GENERATION["min_candidate_size"],
+        candidate_threshold: Optional[float] = None,
+        foreground_threshold: Optional[float] = None,
+        n_iter: Optional[int] = None,
+        dt: Optional[float] = None,
+        sigma: Optional[float] = None,
+        min_candidate_size: Optional[int] = None,
         multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
         batch_size: int = 64,
         n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
@@ -828,9 +926,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             raise ValueError("Proposals can only be reused for an image, because a volume gates its propagation.")
 
         prompts = derive_point_prompts(
-            self._prediction[0], self._prediction[1:], candidate_threshold=candidate_threshold,
-            foreground_threshold=foreground_threshold, n_iter=n_iter, dt=dt, sigma=sigma,
-            min_candidate_size=min_candidate_size, n_threads=n_threads,
+            self._prediction[0], self._prediction[1:], model_type=self._model_type,
+            candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
+            n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size, n_threads=n_threads,
         )
         if prompts is None:
             return []
@@ -839,10 +937,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     def select(
         self,
         proposals: list,
-        score_threshold: float = DEFAULT_PROMPT_GENERATION["score_threshold"],
-        max_overlap: float = DEFAULT_PROMPT_GENERATION["max_overlap"],
-        min_size: int = DEFAULT_PROMPT_GENERATION["min_size"],
-        refine_with_box_prompts: bool = DEFAULT_PROMPT_GENERATION["refine_with_box_prompts"],
+        score_threshold: Optional[float] = None,
+        max_overlap: Optional[float] = None,
+        min_size: Optional[int] = None,
+        refine_with_box_prompts: Optional[bool] = None,
         box_extension: int = DEFAULT_PROMPT_GENERATION["box_extension"],
         batch_size: int = 64,
     ) -> np.ndarray:
@@ -860,6 +958,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         Returns:
             The instance segmentation, uint32 array with the spatial shape of the prediction.
         """
+        defaults = default_prompt_generation(self._model_type, is_volume=False)
+        if score_threshold is None:
+            score_threshold = defaults["score_threshold"]
+        if max_overlap is None:
+            max_overlap = defaults["max_overlap"]
+        if min_size is None:
+            min_size = defaults["min_size"]
+        if refine_with_box_prompts is None:
+            refine_with_box_prompts = defaults["refine_with_box_prompts"]
+
         shape = self._prediction[0].shape
         if not proposals:
             return np.zeros(shape, dtype="uint32")
@@ -972,7 +1080,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
             _, kept = merge_by_score(
                 records, _records_shape(records), max_overlap=max_overlap,
-                min_size=DEFAULT_PROMPT_GENERATION["min_size"], return_matches=True,
+                min_size=default_prompt_generation(self._model_type, is_volume=True)["min_size"],
+                return_matches=True,
             )
             for record_index in kept.values():
                 record = records[record_index]

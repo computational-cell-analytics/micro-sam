@@ -4245,8 +4245,6 @@ class AutoSegmentWidget(_WidgetBase):
         # fallback (and only mode) when no decoder is available.
         self.mode = "sparse" if with_decoder else "amg"
         self.settings = None
-        # The flow computation backend is always the (faster) cpp implementation.
-        self.backend = "cpp"
         # z block / halo for 3d decoder inference: the volume is decoded in z chunks to bound memory.
         # These only matter for volumetric decoder modes. Set 'tile_z' >= the slice count for no z-tiling.
         from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
@@ -4445,8 +4443,9 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _sparse_settings(self, settings):
         # Flow-based instance segmentation parameters (LM data).
-        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
-        defaults = DEFAULT_POSTPROCESSING["sparse"]
+        from micro_sam.v2.postprocessing import default_postprocessing
+        from micro_sam.v2.util import DEFAULT_MODEL
+        defaults = default_postprocessing(getattr(self, "model_type", None) or DEFAULT_MODEL, "sparse")
 
         self.foreground_threshold = defaults["foreground_threshold"]
         self.foreground_threshold_param, layout = self._add_float_param(
@@ -4474,8 +4473,9 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _dense_settings(self, settings):
         # Multicut-based instance segmentation parameters (EM data, 2d and 3d).
-        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
-        defaults = DEFAULT_POSTPROCESSING["dense"]
+        from micro_sam.v2.postprocessing import default_postprocessing
+        from micro_sam.v2.util import DEFAULT_MODEL
+        defaults = default_postprocessing(getattr(self, "model_type", None) or DEFAULT_MODEL, "dense")
 
         self.beta = defaults["beta"]
         self.beta_param, layout = self._add_float_param(
@@ -4495,8 +4495,10 @@ class AutoSegmentWidget(_WidgetBase):
         )
 
     def _apg_settings(self, settings):
-        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
-        defaults = DEFAULT_PROMPT_GENERATION
+        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION, default_prompt_generation
+        from micro_sam.v2.util import DEFAULT_MODEL
+        model_type = getattr(self, "model_type", None) or DEFAULT_MODEL
+        defaults = default_prompt_generation(model_type, is_volume=False)
 
         self.candidate_threshold = defaults["candidate_threshold"]
         self.candidate_threshold_param, layout = self._add_float_param(
@@ -4506,7 +4508,8 @@ class AutoSegmentWidget(_WidgetBase):
         settings.layout().addLayout(layout)
 
         if self.volumetric and not self._is_tracking:
-            self.candidate_threshold_high = defaults["candidate_threshold_3d"][1]
+            volume_defaults = default_prompt_generation(model_type, is_volume=True)
+            self.candidate_threshold_high = volume_defaults["candidate_threshold"][1]
             self.candidate_threshold_high_param, layout = self._add_float_param(
                 "candidate_threshold_high", self.candidate_threshold_high, min_val=0.0, max_val=100.0, step=0.1,
                 tooltip=get_tooltip("autosegment", "candidate_threshold_high"),
@@ -4548,7 +4551,7 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addLayout(layout)
 
-        self.multimasking = defaults["multimasking"]
+        self.multimasking = DEFAULT_PROMPT_GENERATION["multimasking"]
         self.multimasking_checkbox = self._add_boolean_param(
             "multimasking", self.multimasking, tooltip=get_tooltip("autosegment", "multimasking"),
         )
@@ -4561,7 +4564,7 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addWidget(self.refine_with_box_prompts_checkbox)
 
-        self.box_extension = defaults["box_extension"]
+        self.box_extension = DEFAULT_PROMPT_GENERATION["box_extension"]
         self.box_extension_param, layout = self._add_int_param(
             "box_extension", self.box_extension, min_val=0, max_val=100,
             tooltip=get_tooltip("autosegment", "box_extension"),
@@ -4576,7 +4579,7 @@ class AutoSegmentWidget(_WidgetBase):
         settings.layout().addLayout(layout)
 
         if self.volumetric and not self._is_tracking:
-            self.n_objects_per_pass = defaults["n_objects_per_pass"]
+            self.n_objects_per_pass = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"]
             self.n_objects_per_pass_param, layout = self._add_int_param(
                 "n_objects_per_pass", self.n_objects_per_pass, min_val=1, max_val=1024,
                 tooltip=get_tooltip("autosegment", "n_objects_per_pass"),
@@ -4591,19 +4594,19 @@ class AutoSegmentWidget(_WidgetBase):
             settings.layout().addLayout(layout)
 
         self._add_flow_integration_params(
-            settings, n_iter=defaults["n_iter"], dt=defaults["dt"], sigma=defaults["sigma"],
+            settings, n_iter=defaults["n_iter"], dt=DEFAULT_PROMPT_GENERATION["dt"], sigma=defaults["sigma"],
         )
 
     def _postproc_kwargs(self):
         if self.mode == "dense":
             return dict(
                 beta=self.beta, density_threshold=self.density_threshold, n_iter=self.n_iter,
-                dt=self.dt, sigma=self.sigma, n_threads=self.n_threads, backend=self.backend,
+                dt=self.dt, sigma=self.sigma, n_threads=self.n_threads,
             )
         return dict(
             foreground_threshold=self.foreground_threshold, density_threshold=self.density_threshold,
             min_size=self.min_object_size, n_iter=self.n_iter, dt=self.dt, sigma=self.sigma,
-            n_threads=self.n_threads, backend=self.backend,
+            n_threads=self.n_threads,
         )
 
     def _apg_kwargs(self, ndim):

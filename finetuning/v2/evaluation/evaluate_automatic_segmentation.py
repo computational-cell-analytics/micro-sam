@@ -34,7 +34,7 @@ from common import (
 )
 
 
-def segment(model, mode, raw, ndim, dataset_name, params, device, backend="cpp", spacing=None):
+def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, spacing=None):
     """Segment one sample with the tuned parameters of a mode."""
     if mode == "apg":
         model.clear_state()
@@ -43,12 +43,12 @@ def segment(model, mode, raw, ndim, dataset_name, params, device, backend="cpp",
         return model.generate(**{**volume_params, **params}).astype("uint32")
 
     prediction = predict_unisam2(model, raw, ndim=ndim, device=device)
-    return postprocess_unisam2(prediction, dataset_name, backend=backend, params=params)
+    return postprocess_unisam2(prediction, dataset_name, model_type=model_type, params=params)
 
 
 def run_evaluation(
     model, mode, dataset_name, data_root, experiment_folder, model_type, params, device,
-    backend="cpp", crop_shape=None, checkpoint_id=None,
+    crop_shape=None, checkpoint_id=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -64,7 +64,6 @@ def run_evaluation(
         model_type: The SAM2 backbone, which names the result file.
         params: The parameters to segment with, or None for the library defaults.
         device: The torch device.
-        backend: The backend for the flow computation.
         crop_shape: The 3d center crop.
         checkpoint_id: The checksum of all model weights used by the mode.
 
@@ -96,9 +95,7 @@ def run_evaluation(
     for raw, labels, valid_roi in tqdm(samples, total=total, desc=f"{mode}-{model_type}"):
         if labels.max() == 0:  # Nothing to score without ground-truth.
             continue
-        seg = segment(
-            model, mode, raw, ndim, dataset_name, params or {}, device, backend=backend, spacing=spacing,
-        )
+        seg = segment(model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing)
         if valid_roi is not None:
             seg[~valid_roi] = 0
         if ndim == 2:
@@ -137,7 +134,6 @@ def main():
     )
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate with the library defaults.")
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
-    parser.add_argument("--backend", type=str, default="cpp", choices=("cpp", "python"), help="Flow backend.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
     args = parser.parse_args()
 
@@ -175,7 +171,7 @@ def main():
 
     run_evaluation(
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,
-        params, device, backend=args.backend, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
+        params, device, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
     )
 
 

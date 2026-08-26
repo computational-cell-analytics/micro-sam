@@ -841,14 +841,14 @@ class TestAutoSegDefaultMode:
         viewer.close()
 
     def test_apg_controls_use_backend_defaults(self, make_napari_viewer_proxy):
-        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION, default_prompt_generation
 
         viewer = make_napari_viewer_proxy()
         widget = Annotator(viewer, ndim=2)
         autoseg = widget._widgets["autosegment"]
         autoseg.mode_dropdown.setCurrentText("apg")
 
-        defaults = DEFAULT_PROMPT_GENERATION
+        defaults = default_prompt_generation(DEFAULT_MODEL, is_volume=False)
         assert autoseg.mode == "apg"
         assert autoseg.candidate_threshold_param.value() == defaults["candidate_threshold"]
         assert autoseg.foreground_threshold_param.value() == defaults["foreground_threshold"]
@@ -856,20 +856,23 @@ class TestAutoSegDefaultMode:
         assert autoseg.score_threshold_param.value() == defaults["score_threshold"]
         assert autoseg.max_overlap_param.value() == defaults["max_overlap"]
         assert autoseg.min_object_size_param.value() == defaults["min_size"]
-        assert autoseg.multimasking_checkbox.isChecked() == defaults["multimasking"]
+        assert autoseg.multimasking_checkbox.isChecked() == DEFAULT_PROMPT_GENERATION["multimasking"]
         assert autoseg.refine_with_box_prompts_checkbox.isChecked() == defaults["refine_with_box_prompts"]
         viewer.close()
 
     def test_volumetric_apg_controls_build_generate_kwargs(self, make_napari_viewer_proxy):
-        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION, default_prompt_generation
 
         viewer = make_napari_viewer_proxy()
         widget = Annotator(viewer, ndim=3)
         autoseg = widget._widgets["autosegment"]
         autoseg.mode_dropdown.setCurrentText("apg")
 
+        defaults_2d = default_prompt_generation(DEFAULT_MODEL, is_volume=False)
+        defaults_3d = default_prompt_generation(DEFAULT_MODEL, is_volume=True)
         kwargs = autoseg._apg_kwargs(ndim=3)
-        assert kwargs["candidate_threshold"] == DEFAULT_PROMPT_GENERATION["candidate_threshold_3d"]
+        expected_candidate_threshold = (defaults_2d["candidate_threshold"], defaults_3d["candidate_threshold"][1])
+        assert kwargs["candidate_threshold"] == expected_candidate_threshold
         assert kwargs["n_objects_per_pass"] == DEFAULT_PROMPT_GENERATION["n_objects_per_pass"]
         assert kwargs["early_stop_patience"] is None
 
@@ -902,7 +905,7 @@ class TestAutoSegDefaultMode:
         viewer.close()
 
     def test_autoseg_settings_use_v2_defaults(self):
-        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
+        from micro_sam.v2.postprocessing import default_postprocessing
         from micro_sam.sam_annotator._widgets import AutoSegmentWidget
 
         class _FakeLayout:
@@ -933,7 +936,7 @@ class TestAutoSegDefaultMode:
 
         autoseg = _FakeAutoSegmentWidget()
         AutoSegmentWidget._sparse_settings(autoseg, _FakeSettings())
-        defaults = DEFAULT_POSTPROCESSING["sparse"]
+        defaults = default_postprocessing(DEFAULT_MODEL, "sparse")
         assert autoseg.foreground_threshold == defaults["foreground_threshold"]
         assert autoseg.density_threshold == defaults["density_threshold"]
         assert autoseg.min_object_size == defaults["min_size"]
@@ -943,7 +946,7 @@ class TestAutoSegDefaultMode:
 
         autoseg = _FakeAutoSegmentWidget()
         AutoSegmentWidget._dense_settings(autoseg, _FakeSettings())
-        defaults = DEFAULT_POSTPROCESSING["dense"]
+        defaults = default_postprocessing(DEFAULT_MODEL, "dense")
         assert autoseg.beta == defaults["beta"]
         assert autoseg.density_threshold == defaults["density_threshold"]
         assert autoseg.sigma == defaults["sigma"]

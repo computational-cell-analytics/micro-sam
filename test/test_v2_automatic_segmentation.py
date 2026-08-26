@@ -13,8 +13,8 @@ from micro_sam.v2.instance_segmentation import (
     TiledAutomaticMaskGenerationSegmenter, amg_3d_segmentation,
     get_instance_segmentation_generator, get_decoder,
 )
-from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, run_multicut
-from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z, ImageEmbeddings
+from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, default_postprocessing, run_multicut
+from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, ImageEmbeddings
 
 
 def _run_decoder_3d(model, image_embeddings, device="cpu"):
@@ -29,8 +29,9 @@ def _run_decoder_2d(model, image_embeddings, device="cpu"):
 
 def test_run_multicut_uses_dense_defaults():
     signature = inspect.signature(run_multicut)
-    for name, value in DEFAULT_POSTPROCESSING["dense"].items():
-        assert signature.parameters[name].default == value
+    assert signature.parameters["model_type"].default == DEFAULT_MODEL
+    for backbone, modes in DEFAULT_POSTPROCESSING.items():
+        assert default_postprocessing(backbone, "dense") == modes["dense"]
 
 
 class _FakeSAM2Model:
