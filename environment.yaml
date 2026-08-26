@@ -6,7 +6,7 @@ dependencies:
     - bioimageio.core >=0.11
     - imagecodecs
     - magicgui
-    - napari >=0.7.1
+    - napari >=0.7.1,<0.10
     - natsort
     - pip
     - pooch
