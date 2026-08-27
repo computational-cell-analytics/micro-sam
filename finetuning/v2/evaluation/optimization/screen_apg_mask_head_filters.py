@@ -26,7 +26,7 @@ from parameter_search import compute_metrics  # noqa
 from optimization.benchmark_apg_optimization import (  # noqa
     DEFAULT_DATA_ROOT, DEFAULT_OUTPUT_ROOT, GT_MIN_SIZE_2D, _atomic_write_csv, _atomic_write_json,
     _content_checksum, _default_manifest_path, _git_revision, _implementation_checksum,
-    _load_2d_sample, _validate_roots, prepare_manifest,
+    _hardware_identity, _load_2d_sample, _validate_roots, prepare_manifest,
 )
 from optimization.screen_apg_multimask import _load_oof_lookup, _oof_predictions_for_sample  # noqa
 
@@ -150,7 +150,8 @@ def run_screening(
         "manifest_checksum": manifest["manifest_checksum"], "implementation_checksum": _implementation_checksum(),
         "screen_implementation_checksum": _checksum(Path(__file__)), "subset": subset,
         "models": {"single": _checksum(single_model_path), "three": _checksum(three_model_path)},
-        "configs": configs, "prediction_source": "out-of-fold" if use_oof else "refit-model",
+        "configs": configs, "device": device, "hardware": _hardware_identity(device),
+        "prediction_source": "out-of-fold" if use_oof else "refit-model",
     }
     if use_oof:
         identity["feature_datasets"] = {
@@ -162,7 +163,7 @@ def run_screening(
     run_dir = output_root / "mask_head_filter_screening" / "hvit_t" / checkpoint_id / _content_checksum(identity)
     run_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(run_dir / "metadata.json", {
-        **identity, "device": device, "git_revision": _git_revision(),
+        **identity, "git_revision": _git_revision(),
         "model_paths": {"single": str(single_model_path), "three": str(three_model_path)},
     })
     samples_path = run_dir / "samples.csv"

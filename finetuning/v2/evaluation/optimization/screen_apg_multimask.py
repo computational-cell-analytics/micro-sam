@@ -27,7 +27,7 @@ from parameter_search import compute_metrics  # noqa
 from optimization.benchmark_apg_optimization import (  # noqa
     DEFAULT_DATA_ROOT, DEFAULT_OUTPUT_ROOT, GT_MIN_SIZE_2D, _atomic_write_csv, _atomic_write_json,
     _content_checksum, _default_manifest_path, _git_revision, _implementation_checksum,
-    _load_2d_sample, _validate_roots, prepare_manifest,
+    _hardware_identity, _load_2d_sample, _validate_roots, prepare_manifest,
 )
 
 
@@ -194,6 +194,8 @@ def run_screening(
         "screen_implementation_checksum": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "artifacts": {name: hashlib.sha256(Path(path).read_bytes()).hexdigest() for name, path in artifacts.items()},
         "configs": configs,
+        "device": device,
+        "hardware": _hardware_identity(device),
         "prediction_source": "out-of-fold" if use_oof else "refit-model",
     }
     if use_oof:
@@ -204,7 +206,7 @@ def run_screening(
     run_dir = output_root / "multimask_screening" / "hvit_t" / checkpoint_id / _content_checksum(identity)
     run_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(run_dir / "metadata.json", {
-        **identity, "screening": True, "subset": subset, "device": device,
+        **identity, "screening": True, "subset": subset,
         "git_revision": _git_revision(), "artifact_paths": {key: str(value) for key, value in artifacts.items()},
         "feature_dataset_path": str(feature_dataset) if feature_dataset is not None else None,
         "oof_artifact_paths": (

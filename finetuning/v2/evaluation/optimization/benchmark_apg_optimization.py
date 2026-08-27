@@ -175,6 +175,43 @@ def _content_checksum(value: Any) -> str:
     return xxhash.xxh128(_json_bytes(value)).hexdigest()
 
 
+def _processor_name() -> str:
+    """Return the processor model when the platform module does not provide it."""
+    name = platform.processor().strip()
+    if name:
+        return name
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.exists():
+        with open(cpuinfo) as f:
+            for line in f:
+                key, separator, value = line.partition(":")
+                if separator and key.strip() in ("model name", "Hardware", "Processor"):
+                    return value.strip()
+    return platform.machine()
+
+
+def _hardware_identity(device: str) -> Dict[str, Any]:
+    """Return the hardware fields that affect benchmark timings."""
+    resolved = torch.device(device)
+    processor = _processor_name()
+    identity = {
+        "machine": platform.machine(),
+        "processor": processor,
+        "accelerator": processor if resolved.type == "mps" else None,
+        "accelerator_memory_bytes": None,
+        "cuda_capability": None,
+    }
+    if resolved.type == "cuda":
+        index = torch.cuda.current_device() if resolved.index is None else resolved.index
+        properties = torch.cuda.get_device_properties(index)
+        identity.update({
+            "accelerator": properties.name,
+            "accelerator_memory_bytes": int(properties.total_memory),
+            "cuda_capability": [int(properties.major), int(properties.minor)],
+        })
+    return identity
+
+
 def _implementation_checksum() -> str:
     """Hash the code that determines loading, prompting, propagation, merging and scoring."""
     checksum = xxhash.xxh128()
@@ -1074,11 +1111,14 @@ def run_benchmark(
         name: hashlib.sha256(Path(path).resolve(strict=True).read_bytes()).hexdigest()
         for name, path in artifact_paths.items() if path is not None
     }
+    hardware = _hardware_identity(device)
     config_identity = {
         "params_2d": params_2d,
         "params_3d": params_3d,
         "dimensions": dimensions,
         "trial_id": trial_id,
+        "device": device,
+        "hardware": hardware,
         "model_artifacts": artifact_checksums,
     }
     config_checksum = _content_checksum(config_identity)
@@ -1118,7 +1158,7 @@ def run_benchmark(
         "crops_3d": crops_3d,
         "subset": subset,
         "device": device,
-        "gpu": torch.cuda.get_device_name(torch.device(device)) if device.startswith("cuda") else None,
+        "hardware": hardware,
         "platform": platform.platform(),
         "python": sys.version,
         "torch": torch.__version__,
