@@ -928,17 +928,18 @@ def test_postmerge_gate_features_capture_visible_masks_and_assembled_negatives()
     assert features[0, columns["selection_minus_predicted_iou"]] == pytest.approx(-0.05)
 
 
-def test_mask_to_logits_matches_the_squashed_sam2_frame():
+def test_mask_to_logits_preserves_aspect_ratio_and_padding():
     mask = np.zeros((64, 128), dtype=bool)
     mask[16:32, 64:96] = True
     logits = mask_to_logits(mask)
     assert logits.shape == (1, 256, 256)
     assert logits.dtype == np.dtype("float32")
-    # The mask occupies the same normalized region in the squashed square frame.
+    # The image frame scales both axes by two and pads the lower half.
     binary = logits[0] > 0
     rows, columns = np.nonzero(binary)
-    assert 60 <= rows.min() <= 68 and 124 <= rows.max() <= 132
+    assert 28 <= rows.min() <= 36 and 60 <= rows.max() <= 68
     assert 124 <= columns.min() <= 132 and 188 <= columns.max() <= 196
+    assert not binary[128:].any()
     # Logits are symmetric and finite, so the prompt encoder sees a proper probability.
     assert np.isfinite(logits).all()
     assert np.isclose(logits.max(), -logits.min())

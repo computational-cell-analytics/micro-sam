@@ -44,6 +44,7 @@ from bioimage_cpp.utils import Blocking
 from bioimage_cpp.segmentation import label
 
 from .normalization import to_image
+from .transforms.resize import resize_longest_side_and_pad_tensor
 from .multimask_selection import (
     POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES, combine_selector_features_torch, extract_multimask_features_torch,
     refinement_gate_features_torch, refinement_gate_stage, selector_input_schema,
@@ -339,10 +340,8 @@ def _parse_refinement(
 def mask_to_logits(mask: np.ndarray, eps: float = 1e-3) -> np.ndarray:
     """Turn a binary mask into the low-resolution logit prompt SAM2 expects.
 
-    SAM2 squashes the input to a square, without the aspect-preserving padding of SAM v1, so the
-    mask is resized to 256x256 directly; the v1 helper's frame would misalign a non-square image.
-    The binary mask is resized and re-binarized rather than resizing logits, so a small object is
-    not washed out by the interpolation.
+    The image predictor preserves the aspect ratio and pads the bottom or right side. The mask uses
+    the same frame, so it stays aligned with the image features and other prompts.
 
     Args:
         mask: The binary mask, shape (Y, X).
@@ -352,7 +351,7 @@ def mask_to_logits(mask: np.ndarray, eps: float = 1e-3) -> np.ndarray:
         The logits, shape (1, 256, 256), float32.
     """
     binary = torch.from_numpy(np.asarray(mask, dtype="float32"))[None, None]
-    resized = torch.nn.functional.interpolate(binary, size=(256, 256), mode="bilinear", align_corners=False)
+    resized, _ = resize_longest_side_and_pad_tensor(binary, target_length=256)
     logit = float(np.log((1.0 - eps) / eps))
     return np.where(resized[0].numpy() > 0.5, logit, -logit).astype("float32")
 
