@@ -30,6 +30,18 @@ STOP = "stop"
 DONE = "done"
 
 
+def _available_cpus() -> int:
+    """The cores this process may actually run on.
+
+    'os.cpu_count' reports the machine, not the allocation, so on a scheduler that pins a job to a
+    subset of the cores it oversubscribes every worker by the ratio between the two.
+    """
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:  # Not POSIX.
+        return os.cpu_count() or 1
+
+
 def model_overrides(model) -> Dict[str, Any]:
     """The instance-level model settings a worker has to reproduce, see MIRRORED_MODEL_ATTRIBUTES."""
     return {name: getattr(model, name) for name in MIRRORED_MODEL_ATTRIBUTES if hasattr(model, name)}
@@ -133,7 +145,7 @@ class PropagationPool:
         build_kwargs: The arguments that rebuild the video predictor, from `model.build_kwargs`.
         devices: The devices to run one worker on each.
         overrides: Instance-level model settings to reapply after rebuilding, see `model_overrides`.
-        n_threads: CPU threads per worker. By default the cores of the machine, split evenly.
+        n_threads: CPU threads per worker. By default the cores this process may use, split evenly.
     """
 
     def __init__(
@@ -145,7 +157,7 @@ class PropagationPool:
         self._devices = _worker_devices(devices)
         self._context = multiprocessing.get_context("spawn")
         if n_threads is None:
-            n_threads = max(1, (os.cpu_count() or len(self._devices)) // len(self._devices))
+            n_threads = max(1, _available_cpus() // len(self._devices))
 
         self._results = self._context.Queue()
         self._jobs = self._context.Queue()
