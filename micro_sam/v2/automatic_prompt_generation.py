@@ -2940,7 +2940,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
 
     def _set_region(self, key) -> None:
         """@private"""
-        set_precomputed(self._predictor, self._image_embeddings, tile_id=key)
+        self._set_tile_embeddings(key)
 
     def get_state(self) -> dict:
         """@private"""

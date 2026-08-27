@@ -544,7 +544,7 @@ def test_generator_prepares_a_video_embedding_slice(monkeypatch):
     assert image_embeddings["original_size"] == [(64, 64)]
 
 
-def test_tiled_generator_sets_a_video_embedding_slice(monkeypatch):
+def test_tiled_refinement_sets_a_video_embedding_slice(monkeypatch):
     calls = []
 
     class Feature:
@@ -564,7 +564,7 @@ def test_tiled_generator_sets_a_video_embedding_slice(monkeypatch):
     segmenter._predictor = object()
     segmenter._image_embeddings = image_embeddings
     segmenter._i = 2
-    segmenter._set_tile_embeddings(tile_id=0)
+    segmenter._set_region(0)
 
     assert calls == [(
         segmenter._predictor, ["fpn-0", "fpn-1"], ["pos-0", "pos-1"],
