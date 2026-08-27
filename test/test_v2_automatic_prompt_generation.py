@@ -51,13 +51,13 @@ def test_compact_selector_feature_schemas_are_three_mask_only(schema, expected):
         combine_selector_features_torch(schema, lowres[:, :2], scores[:, :2], tokens[:, :2])
 
 
-def test_lowres_feature_context_uses_sam2_square_resize_coordinates():
+def test_lowres_feature_context_uses_padded_resize_coordinates():
     class Transforms:
         resolution = 16
 
         def transform_coords(self, coords, normalize, orig_hw):
             assert normalize and orig_hw == (4, 8)
-            return coords / torch.tensor([8.0, 4.0]) * self.resolution
+            return coords * (self.resolution / max(orig_hw))
 
     predictor = types.SimpleNamespace(
         model=types.SimpleNamespace(image_size=16), _orig_hw=[(4, 8)], _transforms=Transforms(),
@@ -67,14 +67,15 @@ def test_lowres_feature_context_uses_sam2_square_resize_coordinates():
         predictor, foreground, np.array([[4.0, 2.0]], dtype="float32"), (4, 4), torch.device("cpu"),
     )
     expected = torch.nn.functional.interpolate(
-        torch.as_tensor(foreground)[None, None], size=(16, 16), mode="bilinear",
+        torch.as_tensor(foreground)[None, None], size=(8, 16), mode="bilinear",
         align_corners=False, antialias=True,
     )
+    expected = torch.nn.functional.pad(expected, (0, 0, 0, 8))
     expected = torch.nn.functional.interpolate(
         expected, size=(4, 4), mode="bilinear", align_corners=False, antialias=True,
     )[0, 0]
     assert torch.allclose(resized, expected)
-    assert torch.allclose(points, torch.tensor([[2.0, 2.0]]))
+    assert torch.allclose(points, torch.tensor([[2.0, 1.0]]))
 
 
 def test_factory_rejects_incomplete_apg_arguments():

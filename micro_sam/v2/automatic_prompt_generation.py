@@ -768,11 +768,7 @@ def _lowres_feature_context(predictor, foreground, context_points, lowres_shape,
     """Map APG foreground and prompt coordinates into SAM2's square low-resolution frame."""
     resolution = int(predictor.model.image_size)
     foreground = torch.as_tensor(foreground, dtype=torch.float32, device=device)[None, None]
-    # SAM2Transforms stretches both axes to the decoder's square input (it does not preserve aspect
-    # ratio), so its auxiliary foreground evidence must use that exact coordinate frame.
-    foreground = F.interpolate(
-        foreground, size=(resolution, resolution), mode="bilinear", align_corners=False, antialias=True,
-    )
+    foreground, _ = resize_longest_side_and_pad_tensor(foreground, target_length=resolution)
     foreground = F.interpolate(
         foreground, size=lowres_shape, mode="bilinear", align_corners=False, antialias=True,
     )[0, 0]
