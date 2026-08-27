@@ -15,6 +15,7 @@ from micro_sam.v2.automatic_prompt_generation import (
     postmerge_refinement_gate_features, _lowres_feature_context, REFINEMENT_STATS_3D,
 )
 from micro_sam.v2.normalization import to_image
+from micro_sam.v2.transforms.resize import ResizeLongestSideTransforms
 from micro_sam.v2.multimask_selection import (
     GroupwiseMLP, MASK_TOKEN_FEATURE_NAMES, MASK_TOKEN_LOWRES_FEATURE_NAMES,
     MULTIMASK_FEATURE_NAMES, REFINEMENT_GATE_FEATURE_NAMES, combine_selector_features_torch,
@@ -90,7 +91,11 @@ def test_factory_rejects_incomplete_apg_arguments():
 @pytest.mark.parametrize("is_tiled,expected", [(False, AutomaticPromptGenerator),
                                                (True, TiledAutomaticPromptGenerator)])
 def test_factory_returns_the_apg_classes(monkeypatch, is_tiled, expected):
-    predictor = types.SimpleNamespace(model=types.SimpleNamespace(model_type="hvit_b"))
+    predictor = types.SimpleNamespace(
+        model=types.SimpleNamespace(image_size=8, model_type="hvit_b"),
+        mask_threshold=0.0,
+        _transforms=types.SimpleNamespace(),
+    )
     monkeypatch.setattr("micro_sam.v2.util.get_sam2_image_predictor", lambda model: predictor)
 
     decoder = object()
@@ -100,9 +105,27 @@ def test_factory_returns_the_apg_classes(monkeypatch, is_tiled, expected):
     assert type(segmenter) is expected
     assert segmenter._model is decoder
     assert segmenter._predictor is predictor
+    assert isinstance(predictor._transforms, ResizeLongestSideTransforms)
     # The embedding cache is keyed on these, which a SAM2 image predictor does not carry by itself.
     assert predictor.model_type == "hvit_b"
     assert predictor.model_name == "hvit_b"
+
+
+def test_apg_configures_a_direct_image_predictor():
+    old_transforms = types.SimpleNamespace(max_hole_area=3.0, max_sprinkle_area=4.0)
+    predictor = types.SimpleNamespace(
+        model=types.SimpleNamespace(image_size=8, model_type="hvit_t"),
+        mask_threshold=0.0,
+        _transforms=old_transforms,
+    )
+
+    segmenter = AutomaticPromptGenerator(torch.nn.Identity(), predictor)
+
+    assert segmenter._predictor is predictor
+    assert isinstance(predictor._transforms, ResizeLongestSideTransforms)
+    assert predictor._transforms.resolution == 8
+    assert predictor._transforms.max_hole_area == 3.0
+    assert predictor._transforms.max_sprinkle_area == 4.0
 
 
 def test_apg_encodes_multichannel_images_with_per_channel_normalization():

@@ -53,8 +53,8 @@ from ..util import make_temp_embedding_path
 from .postprocessing import _compute_flow_density
 from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
 from .util import (
-    DEFAULT_MODEL, autocast, encode_image, precompute_image_embeddings, set_precomputed,
-    get_sam2_image_predictor,
+    DEFAULT_MODEL, autocast, configure_image_predictor, encode_image, get_sam2_image_predictor,
+    precompute_image_embeddings, set_precomputed,
 )
 from .instance_segmentation import (
     TiledUniSAM2InstanceSegmentation, UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices,
@@ -1176,11 +1176,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         inference_device: Devices = USE_MODEL_DEVICE,
     ) -> None:
         super().__init__(model, device=device, inference_device=inference_device)
-        # The image predictor is built on the video predictor's own weights: no second backbone.
         self._video_predictor = predictor if hasattr(predictor, "propagate_in_video") else None
         if self._video_predictor is None:
-            self._predictor = predictor
+            self._predictor = configure_image_predictor(predictor)
         else:
+            # Build the image predictor on the video predictor's weights.
             self._predictor = get_sam2_image_predictor(predictor)
         predictor = self._predictor
 
