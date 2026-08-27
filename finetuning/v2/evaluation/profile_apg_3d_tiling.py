@@ -165,7 +165,7 @@ def instrument_propagation(timings, job_times):
     apg_module.propagate_passes = timed_job
 
 
-def profile_volume(model, raw, tile_shape, halo, params, stitch, timings, breakdown, tile_times, embedding_path):
+def profile_volume(model, raw, tile_shape, halo, params, timings, breakdown, tile_times, embedding_path):
     """Run one volume, timing every stage of the generator."""
     model.clear_state()
     with timings.stage("encoder_embeddings"):
@@ -181,9 +181,9 @@ def profile_volume(model, raw, tile_shape, halo, params, stitch, timings, breakd
     timings.wrap(apg_module, "derive_volume_prompts")
     timings.wrap(model, "_score_candidates")
     timings.wrap(model, "_propagate_candidates")
-    timings.wrap(model, "_merge_via_multicut" if stitch == "multicut" else "_merge")
+    timings.wrap(model, "_merge")
     with timings.stage("generate_total"):
-        segmentation = model.generate(stitch=stitch, **params).astype("uint32")
+        segmentation = model.generate(**params).astype("uint32")
     return segmentation
 
 
@@ -194,7 +194,6 @@ def main():
     parser.add_argument("-i", "--input_path", default=DATA_ROOT, help="The root the data lives in.")
     parser.add_argument("--tile_shape", type=int, nargs=2, default=(384, 384), help="In-plane tile shape (y, x).")
     parser.add_argument("--halo", type=int, nargs=2, default=(64, 64), help="In-plane tile halo (y, x).")
-    parser.add_argument("--stitch", default="multicut", choices=("overlap", "multicut"), help="Tile merge rule.")
     parser.add_argument("--sample_index", type=int, default=0, help="Profile only this one sample, by index.")
     parser.add_argument("--z_crop", type=int, default=None, help="Center-crop the volume to this many z slices.")
     parser.add_argument("--xy_crop", type=int, default=None, help="Center-crop the volume in y and x.")
@@ -244,8 +243,8 @@ def main():
     tile_times, merge_tally = [], {}
     instrument_merge(merge_tally)
     segmentation = profile_volume(
-        model, raw, tuple(args.tile_shape), tuple(args.halo), params, args.stitch, timings, args.breakdown,
-        tile_times, embedding_path,
+        model, raw, tuple(args.tile_shape), tuple(args.halo), params, timings, args.breakdown, tile_times,
+        embedding_path,
     )
     total = time.time() - start
     sampler.stop()

@@ -209,13 +209,15 @@ class PropagationPool:
         """Run one job per tile-and-passes, returning the results in the order the jobs were given."""
         if not self._loaded:
             raise RuntimeError("The pool has no volume. Call 'set_volume' first.")
-        if not jobs:
-            return []
 
         for index, (tile_id, _, passes) in enumerate(jobs):
             self._jobs.put((index, tile_id, passes, early_stop_patience))
         for _ in self._workers:
             self._jobs.put(DONE)
+        self._loaded = False
+
+        if not jobs:
+            return []
 
         results = [None] * len(jobs)
         for _ in jobs:
@@ -248,19 +250,32 @@ class PropagationPool:
             self.close()
 
 
-def build_pool(model, devices: Sequence, n_threads: Optional[int] = None) -> Optional[PropagationPool]:
+def build_pool(
+    model, devices: Sequence, n_threads: Optional[int] = None, n_worker_processes: Optional[int] = None,
+) -> Optional[PropagationPool]:
     """A pool for this model, or None when the propagation has to stay in this process.
 
     Args:
         model: The SAM2 video predictor the workers rebuild.
         devices: The inference devices, one worker each.
         n_threads: CPU threads per worker.
+        n_worker_processes: The requested number of workers. None uses every device when at least two exist.
 
     Returns:
-        The pool, or None when there is one device or the model carries no build recipe.
+        The pool, or None when automatic selection has one device or the model has no build recipe.
     """
+    devices = list(devices)
+    if n_worker_processes is not None:
+        if n_worker_processes < 0 or n_worker_processes > len(devices):
+            raise ValueError(
+                f"The worker process count {n_worker_processes} must be between 0 and {len(devices)}."
+            )
+        if n_worker_processes == 0:
+            return None
+        devices = devices[:n_worker_processes]
+
     build_kwargs = getattr(model, "build_kwargs", None)
-    if build_kwargs is None or len(devices) < 2:
+    if build_kwargs is None or (n_worker_processes is None and len(devices) < 2):
         return None
     if not all(torch.device(device).type == "cuda" for device in devices):
         return None

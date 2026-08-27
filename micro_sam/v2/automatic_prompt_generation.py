@@ -1250,6 +1250,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._last_generation_stats = {}
         self._microscopy_multimask_scorer = None
         self._refinement_gate_model = None
+        self._scoring_predictor_pool = None
         # The embedding cache is keyed on these, which a SAM2 image predictor does not carry itself.
         sam2_model = getattr(predictor, "model", None)
         if getattr(predictor, "model_type", None) is None:
@@ -2773,6 +2774,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         predictor: The SAM2 image predictor for the interactive branch of the same model.
         device: The device the model lives on.
         inference_device: The device intent used as the `devices=None` fallback.
+        n_worker_processes: The number of propagation workers. None uses every device. Zero uses the current process.
     """
 
     def __init__(
@@ -2783,13 +2785,14 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         inference_device: Devices = USE_MODEL_DEVICE,
         n_worker_processes: Optional[int] = None,
     ) -> None:
+        if n_worker_processes is not None and n_worker_processes < 0:
+            raise ValueError(f"The worker process count {n_worker_processes} must be non-negative or None.")
         super().__init__(model, predictor, device=device, inference_device=inference_device)
         self._tiling = None
         self._tile_shape = None
         self._halo = None
         self._embedding_path = None
         self._pool = None
-        self._pool_volume = None
         self._n_worker_processes = n_worker_processes
 
     def initialize(
@@ -3129,7 +3132,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
 
             _, kept = merge_by_score(
                 records, _records_shape(records), max_overlap=max_overlap,
-                min_size=default_prompt_generation(self._model_type, is_volume=True)["min_size"],
+                min_size=default_prompt_generation(self._model_type, is_volume=False)["min_size"],
                 return_matches=True,
             )
             candidates = []
@@ -3161,7 +3164,9 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         if self._n_worker_processes == 0 or self._pool is not None or self._embedding_path is None:
             return
         devices = [device for _, device in self._propagator.predictor_devices]
-        self._pool = build_pool(self._video_predictor, devices)
+        self._pool = build_pool(
+            self._video_predictor, devices, n_worker_processes=self._n_worker_processes,
+        )
         if self._pool is None:
             self._n_worker_processes = 0  # Nothing to spread over, so stop trying.
 
@@ -3175,14 +3180,10 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         if self._pool is None:
             return None
 
-        # The workers hold one volume at a time, so they only reload when this is a different one.
-        token = (id(self._volume), self._embedding_path)
-        if token != self._pool_volume:
-            self._pool.set_volume(
-                self._volume, self._embedding_path, self._tile_shape, self._halo,
-                self._offload_to_cpu, self._max_cached_frames,
-            )
-            self._pool_volume = token
+        self._pool.set_volume(
+            self._volume, self._embedding_path, self._tile_shape, self._halo,
+            self._offload_to_cpu, self._max_cached_frames,
+        )
         return self._pool
 
     def close(self) -> None:
@@ -3192,7 +3193,6 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         if pool is not None:
             pool.close()
             self._pool = None
-            self._pool_volume = None
 
     def __del__(self):
         self.close()
@@ -3218,6 +3218,8 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             ]
 
         n_workers = len(self._propagator.predictor_devices)
+        if getattr(self, "_n_worker_processes", None) not in (None, 0):
+            n_workers = self._n_worker_processes
         n_passes = sum(len(passes) for passes in by_tile_passes.values())
         if n_workers < 2 or n_passes == 0:
             chunk = n_passes or 1  # One job per tile: nothing to balance, so keep every tile's cache.
@@ -3251,6 +3253,8 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             by_tile.setdefault(candidate["tile_id"], []).append(candidate)
 
         jobs = self._propagation_jobs(by_tile, n_objects_per_pass)
+        if not jobs:
+            return []
         n_slices = self._volume.shape[0]
 
         pool = self._worker_pool()
@@ -3325,6 +3329,8 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             self._i = state.get("i")
         self._image_embeddings = image_embeddings
         self._owns_image_embeddings = False
+        self._scoring_predictor_pool = None
+        self._embedding_path = getattr(image_embeddings, "path", None)
         self._set_tiling(image_embeddings)
 
     def clear_state(self) -> None:
@@ -3334,6 +3340,4 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         self._tile_shape = None
         self._halo = None
         self._embedding_path = None
-        # The workers themselves stay: their models cost seconds to build and the next volume
-        # replaces the state they hold, see '_worker_pool'.
-        self._pool_volume = None
+        # The worker models stay alive. The next propagation call replaces their volume state.

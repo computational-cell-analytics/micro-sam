@@ -843,6 +843,49 @@ def test_worker_pool_is_declined_without_what_a_worker_needs():
     assert build_pool(SimpleNamespace(), [torch.device("cuda", 0), torch.device("cuda", 1)]) is None
     assert build_pool(SimpleNamespace(build_kwargs=recipe), [torch.device("cuda", 0)]) is None
     assert build_pool(SimpleNamespace(build_kwargs=recipe), [torch.device("cpu"), torch.device("cpu")]) is None
+    assert build_pool(
+        SimpleNamespace(build_kwargs=recipe), [torch.device("cuda", 0), torch.device("cuda", 1)],
+        n_worker_processes=0,
+    ) is None
+
+
+def test_worker_pool_honors_an_explicit_process_count(monkeypatch):
+    from micro_sam.v2.propagation_pool import build_pool
+
+    class Pool:
+        def __init__(self, build_kwargs, devices, **kwargs):
+            self.devices = list(devices)
+
+    monkeypatch.setattr("micro_sam.v2.propagation_pool.PropagationPool", Pool)
+    model = SimpleNamespace(build_kwargs={"model_type": "hvit_t"})
+    devices = [torch.device("cuda", index) for index in range(3)]
+
+    pool = build_pool(model, devices, n_worker_processes=1)
+
+    assert pool.devices == [torch.device("cuda", 0)]
+    with pytest.raises(ValueError, match="between 0 and 3"):
+        build_pool(model, devices, n_worker_processes=4)
+
+
+def test_worker_pool_completes_an_empty_job_cycle():
+    from micro_sam.v2.propagation_pool import DONE, PropagationPool
+
+    class Queue:
+        def __init__(self):
+            self.items = []
+
+        def put(self, item):
+            self.items.append(item)
+
+    pool = object.__new__(PropagationPool)
+    pool._loaded = True
+    pool._workers = [object(), object()]
+    pool._jobs = Queue()
+
+    assert pool.map_jobs([], early_stop_patience=None) == []
+    assert pool._jobs.items == [DONE, DONE]
+    assert pool._loaded is False
+    pool._workers = []
 
 
 def test_worker_pool_mirrors_the_model_settings_a_recipe_would_lose():

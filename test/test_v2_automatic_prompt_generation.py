@@ -105,6 +105,7 @@ def test_factory_returns_the_apg_classes(monkeypatch, is_tiled, expected):
     assert type(segmenter) is expected
     assert segmenter._model is decoder
     assert segmenter._predictor is predictor
+    assert segmenter._scoring_predictor_pool is None
     assert isinstance(predictor._transforms, ResizeLongestSideTransforms)
     # The embedding cache is keyed on these, which a SAM2 image predictor does not carry by itself.
     assert predictor.model_type == "hvit_b"
@@ -624,13 +625,16 @@ def test_tiled_generator_restores_a_volumetric_state(monkeypatch):
     class Features:
         attrs = {"shape": (64, 64), "tile_shape": (32, 32), "halo": (8, 8)}
 
+    class Embeddings(dict):
+        path = "new.zarr"
+
     created = []
     monkeypatch.setattr(
         "micro_sam.v2.automatic_prompt_generation.TiledPromptableSegmentation3D",
         lambda *args, **kwargs: created.append((args, kwargs)) or "propagator",
     )
     prediction = np.ones((4, 3, 64, 64), dtype="float32")
-    image_embeddings = {"features": Features(), "input_size": None}
+    image_embeddings = Embeddings(features=Features(), input_size=None)
     volume = np.zeros((3, 64, 64), dtype="uint8")
     video_predictor = object()
     segmenter = object.__new__(TiledAutomaticPromptGenerator)
@@ -645,8 +649,10 @@ def test_tiled_generator_restores_a_volumetric_state(monkeypatch):
     segmenter._inference_device = "cuda:1"
     segmenter._i = 7
     segmenter._owns_image_embeddings = False
+    segmenter._scoring_predictor_pool = ["old-predictor"]
     segmenter._tiling = None
     segmenter._halo = None
+    segmenter._embedding_path = "old.zarr"
 
     segmenter.set_state({
         "prediction": prediction,
@@ -659,6 +665,8 @@ def test_tiled_generator_restores_a_volumetric_state(monkeypatch):
     assert segmenter._volume is volume
     assert segmenter._propagator == "propagator"
     assert segmenter._i is None
+    assert segmenter._scoring_predictor_pool is None
+    assert segmenter._embedding_path == "new.zarr"
     assert created == [(
         (video_predictor, volume, image_embeddings),
         {"devices": "cuda:1", "offload_state_to_cpu": True, "max_cached_frames": 3},
@@ -701,6 +709,44 @@ def test_tiled_generator_forwards_devices_to_volume_propagation(monkeypatch, dev
 
     assert decoder_calls[0]["devices"] is devices
     assert propagator_calls[0]["devices"] == expected
+
+
+def test_tiled_volume_scoring_uses_the_slice_size_limit(monkeypatch):
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._tiling = Blocking([0, 0], [16, 16], [16, 16])
+    segmenter._model_type = "hvit_t"
+    segmenter._scoring_predictors = lambda: [object()]
+    segmenter._scoring_devices = lambda: [torch.device("cpu")]
+    segmenter._set_tile_embeddings_3d = lambda *args: None
+    segmenter._tile_bounding_box = lambda tile_id: (slice(0, 16), slice(0, 16))
+
+    mask = np.ones((6, 10), dtype=bool)
+    segmenter._apply_prompts = lambda *args, **kwargs: [{
+        "segmentation": mask,
+        "bounding_box": (slice(0, 6), slice(0, 10)),
+        "predicted_iou": 0.9,
+        "stability_score": 0.8,
+        "prompt_index": 0,
+    }]
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.default_prompt_generation",
+        lambda model_type, is_volume: {"min_size": 100 if is_volume else 50},
+    )
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.map_jobs_over_devices",
+        lambda devices, jobs, function: [function(0, job) for job in jobs],
+    )
+    prompts = {
+        "points": np.array([[[4.0, 4.0]]], dtype="float32"),
+        "point_labels": np.ones((1, 1), dtype="int32"),
+        "frames": np.array([0], dtype="int64"),
+    }
+
+    candidates = segmenter._score_candidates(
+        prompts, multimasking=False, batch_size=1, score_threshold=0.0, max_overlap=0.5,
+    )
+
+    assert len(candidates) == 1
 
 
 def test_tiles_for_points_assigns_every_prompt_to_exactly_one_tile(monkeypatch):
@@ -2593,6 +2639,14 @@ def test_propagation_jobs_keep_a_tile_whole_on_one_device():
     assert [(tile_id, len(passes)) for tile_id, _, passes in jobs] == [(0, 30), (1, 5)]
 
 
+def test_propagation_jobs_use_the_requested_worker_count():
+    segmenter = _propagation_generator(n_devices=4)
+    segmenter._n_worker_processes = 1
+    jobs = segmenter._propagation_jobs(_candidates({0: 30, 1: 5}), n_objects_per_pass=16)
+
+    assert [(tile_id, len(passes)) for tile_id, _, passes in jobs] == [(0, 30), (1, 5)]
+
+
 def test_propagation_jobs_split_a_dominant_tile_over_the_devices():
     # One tile holding most of the candidates would otherwise run alone while the others idle.
     segmenter = _propagation_generator(n_devices=4)
@@ -2630,6 +2684,75 @@ def test_propagation_jobs_cover_every_pass_exactly_once():
     for tile_id, pieces in seen.items():
         frames = [frame for _, piece in sorted(pieces) for frame in piece]
         assert frames == [candidate["frame"] for candidate in by_tile[tile_id]]
+
+
+def test_worker_pool_reloads_the_volume_for_each_map():
+    class Pool:
+        def __init__(self):
+            self.calls = []
+
+        def set_volume(self, *args):
+            self.calls.append(args)
+
+        def close(self):
+            pass
+
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._pool = Pool()
+    segmenter._n_worker_processes = 2
+    segmenter._volume = np.zeros((2, 8, 8), dtype="uint8")
+    segmenter._embedding_path = "embeddings.zarr"
+    segmenter._tile_shape = [8, 8]
+    segmenter._halo = [2, 2]
+    segmenter._offload_to_cpu = True
+    segmenter._max_cached_frames = 2
+
+    assert segmenter._worker_pool() is segmenter._pool
+    assert segmenter._worker_pool() is segmenter._pool
+    assert len(segmenter._pool.calls) == 2
+
+
+def test_tiled_generator_passes_the_requested_worker_count(monkeypatch):
+    calls = []
+
+    class Pool:
+        def close(self):
+            pass
+
+    def build_pool(model, devices, **kwargs):
+        calls.append((model, devices, kwargs))
+        return Pool()
+
+    monkeypatch.setattr("micro_sam.v2.propagation_pool.build_pool", build_pool)
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._n_worker_processes = 1
+    segmenter._pool = None
+    segmenter._embedding_path = "embeddings.zarr"
+    segmenter._video_predictor = object()
+    segmenter._propagator = types.SimpleNamespace(
+        predictor_devices=[(object(), torch.device("cuda", index)) for index in range(3)],
+    )
+
+    segmenter._start_worker_pool()
+
+    assert calls == [(
+        segmenter._video_predictor,
+        [torch.device("cuda", index) for index in range(3)],
+        {"n_worker_processes": 1},
+    )]
+
+
+def test_tiled_generator_rejects_a_negative_worker_count():
+    with pytest.raises(ValueError, match="non-negative"):
+        TiledAutomaticPromptGenerator(None, None, n_worker_processes=-1)
+
+
+def test_empty_propagation_does_not_load_the_worker_pool():
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._propagation_jobs = lambda *args: []
+    segmenter._worker_pool = lambda: pytest.fail("The empty propagation loaded the worker pool.")
+
+    assert segmenter._propagate_candidates([], 16, None, False) == []
 
 
 class RecordingPropagator:
