@@ -52,13 +52,21 @@ def _read_run(path: Path, ndim: int) -> Tuple[Dict[str, Any], pd.DataFrame]:
 
 
 def _validate_compatible(runs: Sequence[Tuple[Dict[str, Any], pd.DataFrame]]) -> None:
-    identity_keys = ("manifest_checksum", "checkpoint_checksum", "checkpoint_name", "model_type")
-    reference = {key: runs[0][0].get(key) for key in identity_keys}
-    for metadata, _ in runs[1:]:
-        identity = {key: metadata.get(key) for key in identity_keys}
+    identity_keys = (
+        "manifest_checksum", "checkpoint_checksum", "checkpoint_name", "model_type", "device", "hardware",
+    )
+    identities = []
+    for metadata, _ in runs:
+        missing = [key for key in identity_keys if key not in metadata]
+        if missing:
+            raise ValueError(f"Benchmark metadata is missing required identity fields: {', '.join(missing)}.")
+        identities.append({key: metadata[key] for key in identity_keys})
+    reference = identities[0]
+    for identity in identities[1:]:
         if identity != reference:
             raise ValueError(
-                "Benchmark identities differ; all comparisons must use the same manifest and checkpoint: "
+                "Benchmark identities differ. All comparisons must use the same manifest, checkpoint, device, "
+                "and hardware: "
                 f"{reference} != {identity}."
             )
 
