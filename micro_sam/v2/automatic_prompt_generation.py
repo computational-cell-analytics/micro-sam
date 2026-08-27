@@ -120,10 +120,8 @@ def default_prompt_generation(model_type: str = DEFAULT_MODEL, is_volume: bool =
     return table[backbone]
 
 
-# How the volumetric propagation is cut into jobs: enough per device that none idles at the end,
-# but never so few passes per job that building its video-predictor state costs more than it saves.
-# Measured: eight jobs per device instead of four costs 3% on gonuclear, because the rebuilds a job
-# pays for on a new device outweigh the tail they shorten.
+# Enough jobs per device that none idles at the end, and enough passes per job to pay for its state.
+# Eight per device instead of four costs 3% on gonuclear: the extra rebuilds outweigh the shorter tail.
 PROPAGATION_JOBS_PER_DEVICE = 4
 MIN_PASSES_PER_PROPAGATION_JOB = 4
 

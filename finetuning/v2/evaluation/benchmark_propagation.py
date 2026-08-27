@@ -72,7 +72,7 @@ def load_volume(dataset_name, input_path, z_crop, xy_crop):
     raise ValueError(f"No annotated sample in '{dataset_name}'.")
 
 
-def build_propagator(model, raw, embedding_path, tile_shape, halo, device):
+def build_propagator(model, raw, embedding_path, tile_shape, halo, device, cache_all_slices=False):
     """One tiled propagator over the volume, reusing a cached embedding store when there is one."""
     embeddings = precompute_image_embeddings(
         model, raw, save_path=embedding_path, ndim=3, tile_shape=tile_shape, halo=halo,
@@ -80,6 +80,7 @@ def build_propagator(model, raw, embedding_path, tile_shape, halo, device):
     )
     return TiledPromptableSegmentation3D(
         model, raw, embeddings, devices=device, offload_state_to_cpu=False,
+        max_cached_frames=int(raw.shape[0]) if cache_all_slices else None,
     )
 
 
@@ -153,6 +154,10 @@ def main():
     parser.add_argument("--device", default="cuda:0", help="The device to propagate on.")
     parser.add_argument("--embedding_dir", default=os.environ.get("TMPDIR", "/tmp"), help="Embedding cache.")
     parser.add_argument("--torch_profile", action="store_true", help="Print the operator breakdown.")
+    parser.add_argument(
+        "--cache_all_slices", action="store_true",
+        help="Keep every slice's features on the device instead of the free-VRAM heuristic.",
+    )
     parser.add_argument("--tag", default="baseline", help="Name this benchmark in the saved json.")
     parser.add_argument("--variant", default="baseline", choices=VARIANTS, help="Price one part of a pass.")
     parser.add_argument(
@@ -176,7 +181,8 @@ def main():
         # The temporal embeddings are indexed by recency, so a smaller window uses a valid prefix.
         model.num_maskmem = args.num_maskmem
     propagator = build_propagator(
-        model, raw, embedding_path, tuple(args.tile_shape), tuple(args.halo), args.device
+        model, raw, embedding_path, tuple(args.tile_shape), tuple(args.halo), args.device,
+        cache_all_slices=args.cache_all_slices,
     )
 
     if args.torch_profile:
