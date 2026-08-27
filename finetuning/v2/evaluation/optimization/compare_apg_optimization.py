@@ -52,13 +52,21 @@ def _read_run(path: Path, ndim: int) -> Tuple[Dict[str, Any], pd.DataFrame]:
 
 
 def _validate_compatible(runs: Sequence[Tuple[Dict[str, Any], pd.DataFrame]]) -> None:
-    identity_keys = ("manifest_checksum", "checkpoint_checksum", "checkpoint_name", "model_type")
-    reference = {key: runs[0][0].get(key) for key in identity_keys}
-    for metadata, _ in runs[1:]:
-        identity = {key: metadata.get(key) for key in identity_keys}
+    identity_keys = (
+        "manifest_checksum", "checkpoint_checksum", "checkpoint_name", "model_type", "device", "hardware",
+    )
+    identities = []
+    for metadata, _ in runs:
+        missing = [key for key in identity_keys if key not in metadata]
+        if missing:
+            raise ValueError(f"Benchmark metadata is missing required identity fields: {', '.join(missing)}.")
+        identities.append({key: metadata[key] for key in identity_keys})
+    reference = identities[0]
+    for identity in identities[1:]:
         if identity != reference:
             raise ValueError(
-                "Benchmark identities differ; all comparisons must use the same manifest and checkpoint: "
+                "Benchmark identities differ. All comparisons must use the same manifest, checkpoint, device, "
+                "and hardware: "
                 f"{reference} != {identity}."
             )
 
@@ -137,9 +145,12 @@ def _compare(
     )
     peak_ok = True
     if "peak_cuda_memory_bytes" in baseline_table and "peak_cuda_memory_bytes" in candidate_table:
-        baseline_peak = baseline_table["peak_cuda_memory_bytes"].replace(0, np.nan)
-        peak_change = candidate_table["peak_cuda_memory_bytes"] / baseline_peak - 1.0
-        peak_ok = bool(np.nanmax(peak_change.to_numpy()) <= 0.10)
+        baseline_peak = baseline_table["peak_cuda_memory_bytes"].replace(0, np.nan).to_numpy()
+        candidate_peak = candidate_table["peak_cuda_memory_bytes"].to_numpy()
+        paired = np.isfinite(baseline_peak) & np.isfinite(candidate_peak)
+        if paired.any():
+            peak_change = candidate_peak[paired] / baseline_peak[paired] - 1.0
+            peak_ok = bool(peak_change.max() <= 0.10)
     quality_exception = bool(macro_change >= 0.10 and np.all(msa_changes > 0.0))
     if target == "quality":
         checks = {

@@ -44,6 +44,7 @@ from bioimage_cpp.utils import Blocking
 from bioimage_cpp.segmentation import label
 
 from .normalization import to_image
+from .transforms.resize import resize_longest_side_and_pad_tensor
 from .multimask_selection import (
     POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES, combine_selector_features_torch, extract_multimask_features_torch,
     refinement_gate_features_torch, refinement_gate_stage, selector_input_schema,
@@ -52,8 +53,8 @@ from ..util import make_temp_embedding_path
 from .postprocessing import _compute_flow_density
 from .prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
 from .util import (
-    DEFAULT_MODEL, autocast, encode_image, precompute_image_embeddings, set_precomputed,
-    get_sam2_image_predictor,
+    DEFAULT_MODEL, autocast, configure_image_predictor, encode_image, get_sam2_image_predictor,
+    precompute_image_embeddings, set_precomputed,
 )
 from .instance_segmentation import (
     TiledUniSAM2InstanceSegmentation, UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices,
@@ -339,10 +340,8 @@ def _parse_refinement(
 def mask_to_logits(mask: np.ndarray, eps: float = 1e-3) -> np.ndarray:
     """Turn a binary mask into the low-resolution logit prompt SAM2 expects.
 
-    SAM2 squashes the input to a square, without the aspect-preserving padding of SAM v1, so the
-    mask is resized to 256x256 directly; the v1 helper's frame would misalign a non-square image.
-    The binary mask is resized and re-binarized rather than resizing logits, so a small object is
-    not washed out by the interpolation.
+    The image predictor preserves the aspect ratio and pads the bottom or right side. The mask uses
+    the same frame, so it stays aligned with the image features and other prompts.
 
     Args:
         mask: The binary mask, shape (Y, X).
@@ -352,7 +351,7 @@ def mask_to_logits(mask: np.ndarray, eps: float = 1e-3) -> np.ndarray:
         The logits, shape (1, 256, 256), float32.
     """
     binary = torch.from_numpy(np.asarray(mask, dtype="float32"))[None, None]
-    resized = torch.nn.functional.interpolate(binary, size=(256, 256), mode="bilinear", align_corners=False)
+    resized, _ = resize_longest_side_and_pad_tensor(binary, target_length=256)
     logit = float(np.log((1.0 - eps) / eps))
     return np.where(resized[0].numpy() > 0.5, logit, -logit).astype("float32")
 
@@ -769,11 +768,7 @@ def _lowres_feature_context(predictor, foreground, context_points, lowres_shape,
     """Map APG foreground and prompt coordinates into SAM2's square low-resolution frame."""
     resolution = int(predictor.model.image_size)
     foreground = torch.as_tensor(foreground, dtype=torch.float32, device=device)[None, None]
-    # SAM2Transforms stretches both axes to the decoder's square input (it does not preserve aspect
-    # ratio), so its auxiliary foreground evidence must use that exact coordinate frame.
-    foreground = F.interpolate(
-        foreground, size=(resolution, resolution), mode="bilinear", align_corners=False, antialias=True,
-    )
+    foreground, _ = resize_longest_side_and_pad_tensor(foreground, target_length=resolution)
     foreground = F.interpolate(
         foreground, size=lowres_shape, mode="bilinear", align_corners=False, antialias=True,
     )[0, 0]
@@ -1181,11 +1176,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         inference_device: Devices = USE_MODEL_DEVICE,
     ) -> None:
         super().__init__(model, device=device, inference_device=inference_device)
-        # The image predictor is built on the video predictor's own weights: no second backbone.
         self._video_predictor = predictor if hasattr(predictor, "propagate_in_video") else None
         if self._video_predictor is None:
-            self._predictor = predictor
+            self._predictor = configure_image_predictor(predictor)
         else:
+            # Build the image predictor on the video predictor's weights.
             self._predictor = get_sam2_image_predictor(predictor)
         predictor = self._predictor
 
@@ -2214,6 +2209,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                         dtype=torch.float32,
                         device=scores.device,
                     )
+                selection_scores_tensor = selection_scores_tensor.to(scores.device)
                 selected_tensor = selection_scores_tensor.argmax(dim=1)
                 raw_best = scores.argmax(dim=1)
                 changed_from_iou += torch.count_nonzero(selected_tensor != raw_best)
@@ -2945,7 +2941,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
 
     def _set_region(self, key) -> None:
         """@private"""
-        set_precomputed(self._predictor, self._image_embeddings, tile_id=key)
+        self._set_tile_embeddings(key)
 
     def get_state(self) -> dict:
         """@private"""

@@ -47,7 +47,7 @@ from parameter_search import compute_metrics  # noqa
 from optimization.benchmark_apg_optimization import (  # noqa
     DEFAULT_DATA_ROOT, DEFAULT_OUTPUT_ROOT, MANIFEST_SUBSETS, _atomic_write_csv, _atomic_write_json,
     _content_checksum, _default_manifest_path, _git_revision, _implementation_checksum,
-    _load_2d_sample, _validate_roots, prepare_manifest,
+    _hardware_identity, _load_2d_sample, _validate_roots, prepare_manifest,
 )
 from optimization.screen_apg_multimask import (  # noqa
     _configured_records, _load_oof_lookup, _oof_predictions_for_sample,
@@ -271,10 +271,12 @@ def run_screening(
         name: hashlib.sha256(Path(path).resolve(strict=True).read_bytes()).hexdigest()
         for name, path in artifact_paths.items() if path is not None
     }
+    hardware = _hardware_identity(device)
     screen_implementation_checksum = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     configs_checksum = _content_checksum({
         "configs": configs, "model_artifacts": artifact_checksums,
         "screen_implementation_checksum": screen_implementation_checksum,
+        "device": device, "hardware": hardware,
     })
     manifest_checksum = manifest["manifest_checksum"]
 
@@ -296,6 +298,7 @@ def run_screening(
         "checkpoint_name": joint_checkpoint,
         "model_type": model_type,
         "device": device,
+        "hardware": hardware,
         "subset": subset,
         "git_revision": _git_revision(),
         "model_artifacts": artifact_checksums,

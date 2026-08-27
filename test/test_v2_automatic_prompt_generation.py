@@ -15,6 +15,7 @@ from micro_sam.v2.automatic_prompt_generation import (
     postmerge_refinement_gate_features, _lowres_feature_context, REFINEMENT_STATS_3D,
 )
 from micro_sam.v2.normalization import to_image
+from micro_sam.v2.transforms.resize import ResizeLongestSideTransforms
 from micro_sam.v2.multimask_selection import (
     GroupwiseMLP, MASK_TOKEN_FEATURE_NAMES, MASK_TOKEN_LOWRES_FEATURE_NAMES,
     MULTIMASK_FEATURE_NAMES, REFINEMENT_GATE_FEATURE_NAMES, combine_selector_features_torch,
@@ -51,13 +52,13 @@ def test_compact_selector_feature_schemas_are_three_mask_only(schema, expected):
         combine_selector_features_torch(schema, lowres[:, :2], scores[:, :2], tokens[:, :2])
 
 
-def test_lowres_feature_context_uses_sam2_square_resize_coordinates():
+def test_lowres_feature_context_uses_padded_resize_coordinates():
     class Transforms:
         resolution = 16
 
         def transform_coords(self, coords, normalize, orig_hw):
             assert normalize and orig_hw == (4, 8)
-            return coords / torch.tensor([8.0, 4.0]) * self.resolution
+            return coords * (self.resolution / max(orig_hw))
 
     predictor = types.SimpleNamespace(
         model=types.SimpleNamespace(image_size=16), _orig_hw=[(4, 8)], _transforms=Transforms(),
@@ -67,14 +68,15 @@ def test_lowres_feature_context_uses_sam2_square_resize_coordinates():
         predictor, foreground, np.array([[4.0, 2.0]], dtype="float32"), (4, 4), torch.device("cpu"),
     )
     expected = torch.nn.functional.interpolate(
-        torch.as_tensor(foreground)[None, None], size=(16, 16), mode="bilinear",
+        torch.as_tensor(foreground)[None, None], size=(8, 16), mode="bilinear",
         align_corners=False, antialias=True,
     )
+    expected = torch.nn.functional.pad(expected, (0, 0, 0, 8))
     expected = torch.nn.functional.interpolate(
         expected, size=(4, 4), mode="bilinear", align_corners=False, antialias=True,
     )[0, 0]
     assert torch.allclose(resized, expected)
-    assert torch.allclose(points, torch.tensor([[2.0, 2.0]]))
+    assert torch.allclose(points, torch.tensor([[2.0, 1.0]]))
 
 
 def test_factory_rejects_incomplete_apg_arguments():
@@ -89,7 +91,11 @@ def test_factory_rejects_incomplete_apg_arguments():
 @pytest.mark.parametrize("is_tiled,expected", [(False, AutomaticPromptGenerator),
                                                (True, TiledAutomaticPromptGenerator)])
 def test_factory_returns_the_apg_classes(monkeypatch, is_tiled, expected):
-    predictor = types.SimpleNamespace(model=types.SimpleNamespace(model_type="hvit_b"))
+    predictor = types.SimpleNamespace(
+        model=types.SimpleNamespace(image_size=8, model_type="hvit_b"),
+        mask_threshold=0.0,
+        _transforms=types.SimpleNamespace(),
+    )
     monkeypatch.setattr("micro_sam.v2.util.get_sam2_image_predictor", lambda model: predictor)
 
     decoder = object()
@@ -99,9 +105,27 @@ def test_factory_returns_the_apg_classes(monkeypatch, is_tiled, expected):
     assert type(segmenter) is expected
     assert segmenter._model is decoder
     assert segmenter._predictor is predictor
+    assert isinstance(predictor._transforms, ResizeLongestSideTransforms)
     # The embedding cache is keyed on these, which a SAM2 image predictor does not carry by itself.
     assert predictor.model_type == "hvit_b"
     assert predictor.model_name == "hvit_b"
+
+
+def test_apg_configures_a_direct_image_predictor():
+    old_transforms = types.SimpleNamespace(max_hole_area=3.0, max_sprinkle_area=4.0)
+    predictor = types.SimpleNamespace(
+        model=types.SimpleNamespace(image_size=8, model_type="hvit_t"),
+        mask_threshold=0.0,
+        _transforms=old_transforms,
+    )
+
+    segmenter = AutomaticPromptGenerator(torch.nn.Identity(), predictor)
+
+    assert segmenter._predictor is predictor
+    assert isinstance(predictor._transforms, ResizeLongestSideTransforms)
+    assert predictor._transforms.resolution == 8
+    assert predictor._transforms.max_hole_area == 3.0
+    assert predictor._transforms.max_sprinkle_area == 4.0
 
 
 def test_apg_encodes_multichannel_images_with_per_channel_normalization():
@@ -543,7 +567,7 @@ def test_generator_prepares_a_video_embedding_slice(monkeypatch):
     assert image_embeddings["original_size"] == [(64, 64)]
 
 
-def test_tiled_generator_sets_a_video_embedding_slice(monkeypatch):
+def test_tiled_refinement_sets_a_video_embedding_slice(monkeypatch):
     calls = []
 
     class Feature:
@@ -563,7 +587,7 @@ def test_tiled_generator_sets_a_video_embedding_slice(monkeypatch):
     segmenter._predictor = object()
     segmenter._image_embeddings = image_embeddings
     segmenter._i = 2
-    segmenter._set_tile_embeddings(tile_id=0)
+    segmenter._set_region(0)
 
     assert calls == [(
         segmenter._predictor, ["fpn-0", "fpn-1"], ["pos-0", "pos-1"],
@@ -928,17 +952,18 @@ def test_postmerge_gate_features_capture_visible_masks_and_assembled_negatives()
     assert features[0, columns["selection_minus_predicted_iou"]] == pytest.approx(-0.05)
 
 
-def test_mask_to_logits_matches_the_squashed_sam2_frame():
+def test_mask_to_logits_preserves_aspect_ratio_and_padding():
     mask = np.zeros((64, 128), dtype=bool)
     mask[16:32, 64:96] = True
     logits = mask_to_logits(mask)
     assert logits.shape == (1, 256, 256)
     assert logits.dtype == np.dtype("float32")
-    # The mask occupies the same normalized region in the squashed square frame.
+    # The image frame scales both axes by two and pads the lower half.
     binary = logits[0] > 0
     rows, columns = np.nonzero(binary)
-    assert 60 <= rows.min() <= 68 and 124 <= rows.max() <= 132
+    assert 28 <= rows.min() <= 36 and 60 <= rows.max() <= 68
     assert 124 <= columns.min() <= 132 and 188 <= columns.max() <= 196
+    assert not binary[128:].any()
     # Logits are symmetric and finite, so the prompt encoder sees a proper probability.
     assert np.isfinite(logits).all()
     assert np.isclose(logits.max(), -logits.min())
@@ -1345,19 +1370,19 @@ class _BlockPredictor:
     prompt translated into the wrong frame comes back as a visibly displaced mask.
     """
 
-    device = "cpu"
     mask_threshold = 0.0
 
-    def __init__(self, shape):
+    def __init__(self, shape, device="cpu"):
         self.shape = shape
+        self.device = torch.device(device)
         self.calls = []
 
     def _prep_prompts(self, points, labels, boxes, mask_logits, normalize):
         self.calls.append({"points": points, "labels": labels, "boxes": boxes, "mask_logits": mask_logits})
-        coords = None if points is None else torch.as_tensor(points)
-        point_labels = None if labels is None else torch.as_tensor(labels)
-        box = None if boxes is None else torch.as_tensor(boxes)
-        masks = None if mask_logits is None else torch.as_tensor(mask_logits)
+        coords = None if points is None else torch.as_tensor(points, device=self.device)
+        point_labels = None if labels is None else torch.as_tensor(labels, device=self.device)
+        box = None if boxes is None else torch.as_tensor(boxes, device=self.device)
+        masks = None if mask_logits is None else torch.as_tensor(mask_logits, device=self.device)
         return masks, coords, point_labels, box
 
     def _anchors(self, coords, labels, boxes):
@@ -1372,14 +1397,14 @@ class _BlockPredictor:
     def _predict(self, coords, labels, boxes, mask_input, multimask_output, return_logits):
         anchors = self._anchors(coords, labels, boxes)
         n_masks = 3 if multimask_output else 1
-        logits = torch.full((len(anchors), n_masks, *self.shape), -10.0)
+        logits = torch.full((len(anchors), n_masks, *self.shape), -10.0, device=self.device)
         for row, (x, y) in enumerate(anchors):
             # Two rows taller than an 8x8 first-round mask, so a replacement is visible but consistent.
             y0, y1 = max(0, int(y) - 5), min(self.shape[0], int(y) + 5)
             x0, x1 = max(0, int(x) - 4), min(self.shape[1], int(x) + 4)
             logits[row, :, y0:y1, x0:x1] = 10.0
         # Descending, so the argmax over the mask dimension is deterministic.
-        scores = torch.tensor([0.9, 0.7, 0.5][:n_masks]).repeat(len(anchors), 1)
+        scores = torch.tensor([0.9, 0.7, 0.5][:n_masks], device=self.device).repeat(len(anchors), 1)
         return logits, scores, None
 
 
@@ -1423,6 +1448,31 @@ def test_apply_prompts_can_eagerly_score_or_defer_multimasks():
     assert len(deferred) == 6
     assert {record["multimask_group"] for record in deferred} == {0, 1}
     assert all(record["merge_score"] == record["multimask_index"] for record in deferred)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for the device transfer test.")
+def test_apply_prompts_moves_cpu_selector_scores_to_decoder_device():
+    class CpuScorer:
+        def predict_grouped_tensor(self, features):
+            assert features.device.type == "cuda"
+            return features[:, :, 8].cpu()
+
+    shape = (32, 32)
+    segmenter = _make_plain_generator(shape, _BlockPredictor(shape, device="cuda"))
+    segmenter._microscopy_multimask_scorer = CpuScorer()
+    segmenter._refinement_gate_model = None
+    prompts = {
+        "points": np.array([[[8.0, 8.0]], [[24.0, 24.0]]], dtype="float32"),
+        "point_labels": np.ones((2, 1), dtype="int32"),
+    }
+
+    records = segmenter._apply_prompts(
+        prompts, multimasking=True, batch_size=8, multimask_scorer="microscopy",
+        foreground=np.ones(shape, dtype="float32"),
+    )
+
+    assert len(records) == 2
+    assert {record["multimask_index"] for record in records} == {2}
 
 
 def test_apply_prompts_can_score_the_dedicated_single_mask():
