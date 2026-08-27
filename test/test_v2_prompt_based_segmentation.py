@@ -1,3 +1,4 @@
+import queue
 import threading
 from types import SimpleNamespace
 
@@ -879,12 +880,69 @@ def test_worker_pool_completes_an_empty_job_cycle():
 
     pool = object.__new__(PropagationPool)
     pool._loaded = True
+    pool._failed = False
     pool._workers = [object(), object()]
     pool._jobs = Queue()
 
     assert pool.map_jobs([], early_stop_patience=None) == []
     assert pool._jobs.items == [DONE, DONE]
     assert pool._loaded is False
+    pool._workers = []
+
+
+def test_worker_pool_fails_when_one_worker_exits():
+    from micro_sam.v2.propagation_pool import PropagationPool
+
+    class Results:
+        def get(self, timeout):
+            raise queue.Empty
+
+    pool = object.__new__(PropagationPool)
+    pool._loaded = True
+    pool._failed = False
+    pool._results = Results()
+    pool._workers = [
+        SimpleNamespace(is_alive=lambda: False),
+        SimpleNamespace(is_alive=lambda: True),
+    ]
+
+    with pytest.raises(RuntimeError, match=r"workers \[0\] exited"):
+        pool._take()
+    assert pool._loaded is False
+    assert pool._failed is True
+    pool._workers = []
+
+
+def test_worker_pool_cannot_reuse_queues_after_a_reported_error():
+    from micro_sam.v2.propagation_pool import PropagationPool
+
+    class Channel:
+        def __init__(self):
+            self.items = []
+
+        def put(self, item):
+            self.items.append(item)
+
+    class Results:
+        def get(self, timeout):
+            return 0, None, "synthetic worker failure"
+
+    pool = object.__new__(PropagationPool)
+    pool._loaded = True
+    pool._failed = False
+    pool._jobs = Channel()
+    pool._results = Results()
+    pool._workers = [object()]
+
+    with pytest.raises(RuntimeError, match="synthetic worker failure"):
+        pool.map_jobs([(7, 0, [[]])], early_stop_patience=None)
+    assert pool._loaded is False
+    assert pool._failed is True
+
+    queued = list(pool._jobs.items)
+    with pytest.raises(RuntimeError, match="pool unusable"):
+        pool.map_jobs([], early_stop_patience=None)
+    assert pool._jobs.items == queued
     pool._workers = []
 
 

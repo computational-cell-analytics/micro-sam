@@ -176,6 +176,18 @@ class PropagationPool:
         for worker in self._workers:
             worker.start()
         self._loaded = False
+        self._failed = False
+
+    def _require_usable(self) -> None:
+        if self._failed:
+            raise RuntimeError(
+                "A worker failure made the propagation pool unusable. Close this pool. "
+                "Create a new pool before propagation."
+            )
+
+    def _invalidate(self) -> None:
+        self._loaded = False
+        self._failed = True
 
     def _take(self):
         """The next message from a worker, or a failure if one died without sending one."""
@@ -183,14 +195,19 @@ class PropagationPool:
             try:
                 return self._results.get(timeout=1.0)
             except queue.Empty:
-                if not any(worker.is_alive() for worker in self._workers):
-                    raise RuntimeError("Every propagation worker exited before returning a result.")
+                dead_workers = [index for index, worker in enumerate(self._workers) if not worker.is_alive()]
+                if dead_workers:
+                    self._invalidate()
+                    raise RuntimeError(
+                        f"Propagation workers {dead_workers} exited before returning a result."
+                    )
 
     def set_volume(
         self, volume: np.ndarray, embedding_path: str, tile_shape: Sequence[int], halo: Sequence[int],
         offload_state_to_cpu: Optional[bool], max_cached_frames: Optional[int],
     ) -> None:
         """Give every worker the volume to propagate, replacing the previous one."""
+        self._require_usable()
         setup = {
             "volume": volume, "embedding_path": str(embedding_path),
             "tile_shape": tuple(int(s) for s in tile_shape), "halo": tuple(int(s) for s in halo),
@@ -202,11 +219,13 @@ class PropagationPool:
         for _ in self._workers:
             worker_id, _, error = self._take()
             if error is not None:
+                self._invalidate()
                 raise RuntimeError(f"Propagation worker {worker_id} failed to load the volume:\n{error}")
         self._loaded = True
 
     def map_jobs(self, jobs: List[Tuple], early_stop_patience: Optional[int]) -> List:
         """Run one job per tile-and-passes, returning the results in the order the jobs were given."""
+        self._require_usable()
         if not self._loaded:
             raise RuntimeError("The pool has no volume. Call 'set_volume' first.")
 
@@ -223,6 +242,7 @@ class PropagationPool:
         for _ in jobs:
             index, payload, error = self._take()
             if error is not None:
+                self._invalidate()
                 raise RuntimeError(f"Propagation worker {index} failed:\n{error}")
             results[index] = payload
         return results
