@@ -1631,7 +1631,12 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 candidates, n_objects_per_pass=n_objects_per_pass,
                 early_stop_patience=early_stop_patience, verbose=verbose,
             )
-            return merge_by_score(records, shape, max_overlap=max_overlap, min_size=min_size)
+            # Tiled records arrive grouped by tile and need their halo overlaps resolved, which
+            # '_merge' does polymorphically; an untiled volume merges them flat.
+            return self._merge(
+                records, shape, score_threshold=score_threshold, max_overlap=max_overlap,
+                min_size=min_size,
+            )[0]
 
         proposals = self.propose(
             candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
