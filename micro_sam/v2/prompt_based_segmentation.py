@@ -602,9 +602,9 @@ class PromptableSegmentation3D:
         """
         self.predictor.reset_state(self.inference_state)
         self._clear_pushed_prompts()
-        # 'reset_state' clears the tracking outputs but not this cache, which holds high-res
-        # features per frame. The embeddings are disk-backed, so the next prompt re-reads its frame.
+        # 'reset_state' clears the tracking outputs, not the cached features or the encoding they share.
         self.inference_state["cached_features"] = {}
+        self.inference_state.pop("shared_pos_enc", None)
 
     def reset_predictor(self):
         self.release()

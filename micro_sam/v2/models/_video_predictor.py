@@ -367,10 +367,15 @@ class CustomVideoPredictor(SAM2VideoPredictor):
 
             from micro_sam.v2.util import _to_device_tensor, _shared_pos_enc, _backbone_fpn
             device = inference_state["device"]
+            # Shared by every slice: a copy per entry made it 88 of 105 MB and sized the cache short.
+            vision_pos_enc = inference_state.get("shared_pos_enc")
+            if vision_pos_enc is None:
+                # In-memory embeddings keep 'pos_enc'/'fpn' as device tensors, which 'np.asarray'
+                # cannot convert (fails on mps/cuda); '_to_device_tensor' handles tensors and zarr.
+                vision_pos_enc = [_to_device_tensor(_shared_pos_enc(t), device) for t in embeddings["pos_enc"]]
+                inference_state["shared_pos_enc"] = vision_pos_enc
+            # Measured after the shared encoding, so a slice is priced at what a slice actually adds.
             allocated_before = _allocated(device)
-            # In-memory embeddings keep 'pos_enc'/'fpn' as device tensors, which 'np.asarray' cannot
-            # convert (fails on mps/cuda); '_to_device_tensor' handles both tensors and numpy/zarr.
-            vision_pos_enc = [_to_device_tensor(_shared_pos_enc(t), device) for t in embeddings["pos_enc"]]
             vision_features = _to_device_tensor(embeddings["features"][frame_idx], device)
             backbone_fpn = _backbone_fpn(
                 [_to_device_tensor(t[frame_idx], device) for t in embeddings["fpn"]], vision_features
