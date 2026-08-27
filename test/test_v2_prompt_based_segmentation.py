@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -7,6 +8,7 @@ from bioimage_cpp.utils import Blocking
 
 from micro_sam.v2.prompt_based_segmentation import (
     PromptableSegmentation3D,
+    ReplicatedPromptableSegmentation3D,
     TiledPromptableSegmentation3D,
     promptable_segmentation_2d,
 )
@@ -512,3 +514,62 @@ def test_video_predictor_correction_flags_and_propagation():
     assert seg.shape == volume.shape
     assert seg[2].sum() > 0  # the prompted frame
     assert int((seg.reshape(seg.shape[0], -1).sum(axis=1) > 0).sum()) >= 2  # propagated to neighbors
+
+
+def _replicated_segmenter(n_devices):
+    """A propagation pool whose per-device states are just their worker index."""
+    pool = ReplicatedPromptableSegmentation3D.__new__(ReplicatedPromptableSegmentation3D)
+    pool._predictor_devices = [(None, torch.device("cpu"))] * n_devices
+    pool._segmenters = {}
+    pool._get_segmenter = lambda worker_id: pool._segmenters.setdefault(worker_id, f"state-{worker_id}")
+    return pool
+
+
+def test_replicated_propagation_gives_every_worker_its_own_state():
+    # A pass conditions its own objects, so two passes must never share one video-predictor state.
+    pool = _replicated_segmenter(3)
+    barrier = threading.Barrier(3, timeout=30)
+    seen = []
+
+    def run(segmenter, job):
+        barrier.wait()  # Only returns if all three workers really run at the same time.
+        seen.append(segmenter)
+        return job
+
+    assert pool.map_passes([0, 1, 2], run) == [0, 1, 2]
+    assert sorted(seen) == ["state-0", "state-1", "state-2"]
+
+
+def test_replicated_propagation_builds_no_state_it_cannot_use():
+    # A run with one pass must not pay for a full model replica per device.
+    pool = _replicated_segmenter(4)
+
+    assert pool.map_passes(["only"], lambda segmenter, job: (segmenter, job)) == [("state-0", "only")]
+    assert list(pool._segmenters) == [0]
+
+
+def test_replicated_propagation_returns_the_jobs_in_order():
+    pool = _replicated_segmenter(2)
+    jobs = list(range(6))
+
+    assert pool.map_passes(jobs, lambda segmenter, job: job * 2) == [job * 2 for job in jobs]
+
+
+def test_worker_pool_is_declined_without_what_a_worker_needs():
+    # A worker builds its own model and opens the embeddings itself, so a model with no recipe or a
+    # run on one device has to stay in this process rather than fail at spawn time.
+    from micro_sam.v2.propagation_pool import build_pool
+
+    recipe = {"model_type": "hvit_t", "checkpoint_path": "/none.pt", "input_type": "videos", "peft_kwargs": None}
+    assert build_pool(SimpleNamespace(), [torch.device("cuda", 0), torch.device("cuda", 1)]) is None
+    assert build_pool(SimpleNamespace(build_kwargs=recipe), [torch.device("cuda", 0)]) is None
+    assert build_pool(SimpleNamespace(build_kwargs=recipe), [torch.device("cpu"), torch.device("cpu")]) is None
+
+
+def test_worker_pool_mirrors_the_model_settings_a_recipe_would_lose():
+    # 'num_maskmem' is set on the instance, not passed to the constructor, so a worker that rebuilt
+    # from 'build_kwargs' alone would silently propagate with SAM2's default memory instead.
+    from micro_sam.v2.propagation_pool import model_overrides
+
+    assert model_overrides(SimpleNamespace(num_maskmem=3)) == {"num_maskmem": 3}
+    assert model_overrides(SimpleNamespace()) == {}

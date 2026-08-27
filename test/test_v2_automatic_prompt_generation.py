@@ -12,7 +12,7 @@ from micro_sam.v2.instance_segmentation import (
 )
 from micro_sam.v2.automatic_prompt_generation import (
     AutomaticPromptGenerator, TiledAutomaticPromptGenerator, derive_point_prompts, merge_by_score,
-    interior_points,
+    interior_points, propagate_passes,
 )
 
 
@@ -245,7 +245,7 @@ def test_tiled_generator_sets_a_video_embedding_slice(monkeypatch):
     segmenter._predictor = object()
     segmenter._image_embeddings = image_embeddings
     segmenter._i = 2
-    segmenter._set_tile_embeddings(tile_id=0)
+    segmenter._set_tile_embeddings(segmenter._predictor, tile_id=0)
 
     assert calls == [(
         segmenter._predictor, ["fpn-0", "fpn-1"], ["pos-0", "pos-1"],
@@ -348,6 +348,9 @@ def test_tiled_generator_forwards_devices_to_volume_propagation(monkeypatch, dev
     segmenter._max_cached_frames = None
     segmenter._tiling = None
     segmenter._halo = None
+    segmenter._embedding_path = None
+    segmenter._pool = None
+    segmenter._n_worker_processes = None
     image_embeddings = {"features": Features()}
     volume = np.zeros((3, 32, 32), dtype="uint8")
 
@@ -388,7 +391,7 @@ def test_tiled_apply_and_select_maps_prompts_and_masks_between_frames(monkeypatc
         tile_ids.append(tile_id)
         return tile_bounding_box.current
 
-    def apply_prompts(prompts, multimasking, batch_size):
+    def apply_prompts(predictor, prompts, multimasking, batch_size):
         """One 6x6 record per prompt, centred on the (tile-local) prompt point."""
         box = tile_bounding_box.current
         tile_shape_ = tuple(s.stop - s.start for s in box)
@@ -478,6 +481,8 @@ def test_reinitializing_generator_releases_owned_volume_embeddings(monkeypatch):
     segmenter._owns_image_embeddings = False
     segmenter._volume = None
     segmenter._propagator = None
+    segmenter._scoring_predictor_pool = None
+    segmenter._inference_device = None  # Fans the encoder out over every visible GPU.
     segmenter._temporary_embedding_path = None
     volume = np.zeros((2, 16, 16), dtype="uint8")
 
@@ -534,6 +539,8 @@ def test_reinitializing_tiled_generator_removes_the_previous_temporary_store(mon
     segmenter._image_embeddings = None
     segmenter._volume = None
     segmenter._propagator = None
+    segmenter._scoring_predictor_pool = None
+    segmenter._inference_device = None  # Fans the encoder out over every visible GPU.
     segmenter._temporary_embedding_path = None
     segmenter._tiling = None
     segmenter._halo = None
@@ -554,3 +561,122 @@ def test_reinitializing_tiled_generator_removes_the_previous_temporary_store(mon
 
     segmenter.clear_state()
     assert removed == ["first.zarr", "second.zarr"]
+
+
+def _propagation_generator(n_devices):
+    """A tiled generator whose propagator only reports how many devices it spreads over."""
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._propagator = types.SimpleNamespace(predictor_devices=[None] * n_devices)
+    return segmenter
+
+
+def _candidates(counts):
+    """One candidate per anchor slice, so a tile's pass count is its entry in 'counts'."""
+    return {
+        tile_id: [{"tile_id": tile_id, "frame": frame, "point": (0.0, 0.0)} for frame in range(count)]
+        for tile_id, count in counts.items()
+    }
+
+
+def test_propagation_jobs_keep_a_tile_whole_on_one_device():
+    # Nothing to balance, so every tile keeps one state and pays for its features once.
+    segmenter = _propagation_generator(n_devices=1)
+    jobs = segmenter._propagation_jobs(_candidates({0: 30, 1: 5}), n_objects_per_pass=16)
+
+    assert [(tile_id, len(passes)) for tile_id, _, passes in jobs] == [(0, 30), (1, 5)]
+
+
+def test_propagation_jobs_split_a_dominant_tile_over_the_devices():
+    # One tile holding most of the candidates would otherwise run alone while the others idle.
+    segmenter = _propagation_generator(n_devices=4)
+    jobs = segmenter._propagation_jobs(_candidates({0: 120, 1: 6, 2: 6}), n_objects_per_pass=16)
+
+    per_tile = {}
+    for tile_id, _, passes in jobs:
+        per_tile.setdefault(tile_id, []).append(len(passes))
+    assert len(per_tile[0]) > 1
+    assert sum(per_tile[0]) == 120
+    assert per_tile[1] == [6] and per_tile[2] == [6]
+    # Longest job first, so the schedule ends on short ones.
+    assert [len(passes) for _, _, passes in jobs] == sorted(
+        (len(passes) for _, _, passes in jobs), reverse=True
+    )
+
+
+def test_propagation_jobs_never_cut_below_the_minimum():
+    # A job too short to pay for building its own video-predictor state is a loss, not a speed-up.
+    segmenter = _propagation_generator(n_devices=4)
+    jobs = segmenter._propagation_jobs(_candidates({tile: 2 for tile in range(8)}), n_objects_per_pass=16)
+
+    assert all(len(passes) <= 2 for _, _, passes in jobs)
+    assert len(jobs) == 8
+
+
+def test_propagation_jobs_cover_every_pass_exactly_once():
+    segmenter = _propagation_generator(n_devices=4)
+    by_tile = _candidates({0: 33, 1: 17, 2: 4})
+    jobs = segmenter._propagation_jobs(by_tile, n_objects_per_pass=16)
+
+    seen = {}
+    for tile_id, index, passes in jobs:
+        seen.setdefault(tile_id, []).append((index, [candidate["frame"] for batch in passes for candidate in batch]))
+    for tile_id, pieces in seen.items():
+        frames = [frame for _, piece in sorted(pieces) for frame in piece]
+        assert frames == [candidate["frame"] for candidate in by_tile[tile_id]]
+
+
+class RecordingPropagator:
+    """A stand-in tiled propagator that records the calls one run of passes makes."""
+
+    def __init__(self, shape=(4, 8, 8), fail_on=None):
+        self.shape = shape
+        self.fail_on = fail_on
+        self.calls = []
+        self.prompts = []
+
+    def reset_tile_tracking(self, tile_id):
+        self.calls.append(("reset", tile_id))
+
+    def add_point_prompts(self, frame_ids, points, point_labels, object_id):
+        self.prompts.append((int(frame_ids), tuple(points[0]), int(object_id)))
+
+    def propagate_tile(self, tile_id, early_stop_patience=None):
+        self.calls.append(("propagate", tile_id))
+        if self.fail_on is not None and len(self.prompts) >= self.fail_on:
+            raise RuntimeError("synthetic propagation failure")
+        masks = {object_id: np.ones(self.shape[1:], dtype=bool) for _, _, object_id in self.prompts}
+        segments = {frame: masks for frame in range(self.shape[0])}
+        return segments, (slice(0, self.shape[1]), slice(0, self.shape[2]))
+
+    def release_tile(self, tile_id):
+        self.calls.append(("release", tile_id))
+
+
+def test_propagate_passes_prompts_every_candidate_then_frees_the_tile():
+    propagator = RecordingPropagator()
+    passes = [
+        [{"frame": 1, "point": (2.0, 3.0), "score": 0.9, "stability": 0.9}],
+        [{"frame": 2, "point": (4.0, 5.0), "score": 0.8, "stability": 0.8}],
+    ]
+
+    bounding_box, records = propagate_passes(propagator, 7, passes, None, n_slices=4)
+
+    # One reset and one propagation per pass, and the state is freed exactly once at the end.
+    assert propagator.calls == [
+        ("reset", 7), ("propagate", 7), ("reset", 7), ("propagate", 7), ("release", 7)
+    ]
+    # The propagator takes YX, the candidates carry XY.
+    assert propagator.prompts == [(1, (3.0, 2.0), 1), (2, (5.0, 4.0), 1)]
+    assert bounding_box == (slice(0, 4), slice(0, 8), slice(0, 8))
+    assert [record["predicted_iou"] for record in records] == [0.9, 0.8]  # One record per pass.
+
+
+def test_propagate_passes_frees_the_tile_when_a_pass_fails():
+    # A worker that died holding a state would keep the device memory of a volume it is done with.
+    propagator = RecordingPropagator(fail_on=1)
+    passes = [[{"frame": 0, "point": (1.0, 1.0), "score": 0.9, "stability": 0.9}]]
+
+    with pytest.raises(RuntimeError, match="synthetic propagation failure"):
+        propagate_passes(propagator, 3, passes, None, n_slices=4)
+
+    assert ("release", 3) in propagator.calls

@@ -601,9 +601,10 @@ class TestInteractiveTileScheduling(unittest.TestCase):
         segmenter.halo = (0, 0)
         segmenter.tiling = Blocking([0, 0], [8, 8], [4, 4])
         segmenter._predictor_devices = [(None, torch.device("cpu")), (None, torch.device("cpu"))]
-        segmenter._tile_workers = {}
+        segmenter._active_worker = threading.local()
+        segmenter._tile_workers = {tile_id: tile_id % 2 for tile_id in range(4)}
         segmenter._segmenters = {
-            tile_id: FakeInteractiveTile(tile_id + 1)
+            (tile_id, tile_id % 2): FakeInteractiveTile(tile_id + 1)
             for tile_id in range(4)
         }
         progress = []
@@ -670,25 +671,68 @@ class TestTileDeviceAffinity(unittest.TestCase):
         segmenter = TiledPromptableSegmentation3D.__new__(TiledPromptableSegmentation3D)
         segmenter._predictor_devices = [(None, torch.device("cpu"))] * n_devices
         segmenter._tile_workers = {}
+        segmenter._segmenters = {}
+        segmenter._active_worker = threading.local()
         return segmenter
 
     def test_sparse_tiles_are_spread_over_devices(self):
         # Regression: 'tile_id % n_devices' mapped the tiles 0, 2, 4, 6 to the same device.
         segmenter = self._segmenter(2)
-        segmenter._run_tile_jobs([0, 2, 4, 6], lambda tile_id: tile_id)
-        self.assertEqual([segmenter._worker_id(tile_id) for tile_id in (0, 2, 4, 6)], [0, 1, 0, 1])
+        barrier = threading.Barrier(2, timeout=30)
+
+        def job(tile_id):
+            barrier.wait()  # Only returns if both workers really run at the same time.
+            return tile_id
+
+        results = segmenter.map_tiles([0, 2, 4, 6], job)
+        self.assertEqual([tile_id for tile_id, _ in results], [0, 2, 4, 6])
+        self.assertEqual(set(segmenter._tile_workers.values()), {0, 1})
 
     def test_tile_affinity_is_kept_across_jobs(self):
         # The tile state lives on one device, so its assignment must not change between jobs.
         segmenter = self._segmenter(3)
-        segmenter._run_tile_jobs([3, 6], lambda tile_id: tile_id)
+        segmenter.map_tiles([3, 6], lambda tile_id: tile_id)
         assignment = dict(segmenter._tile_workers)
-        self.assertEqual(sorted(assignment.values()), [0, 1])
+        self.assertEqual(sorted(assignment), [3, 6])
 
-        segmenter._run_tile_jobs([6, 3, 9], lambda tile_id: tile_id)
+        segmenter.map_tiles([6, 3, 9], lambda tile_id: tile_id)
         for tile_id, worker_id in assignment.items():
             self.assertEqual(segmenter._worker_id(tile_id), worker_id)
-        self.assertEqual(segmenter._worker_id(9), 2)
+        self.assertIn(9, segmenter._tile_workers)
+
+    def test_results_keep_the_job_order_however_the_devices_finish(self):
+        # The merge breaks score ties by record order, so a run must not depend on the schedule.
+        segmenter = self._segmenter(4)
+        delays = {0: 0.05, 1: 0.0, 2: 0.03, 3: 0.0}
+
+        def job(index):
+            time.sleep(delays[index])
+            return index
+
+        results = segmenter.map_tile_jobs(sorted(delays), job)
+        self.assertEqual(results, [0, 1, 2, 3])
+
+    def test_one_tile_can_run_on_several_devices_at_once(self):
+        # The propagation cuts a tile's passes into jobs, so two devices hold the same tile.
+        segmenter = self._segmenter(2)
+        built = []
+        barrier = threading.Barrier(2, timeout=30)
+
+        def get_segmenter(tile_id):
+            key = (tile_id, segmenter._worker_id(tile_id))
+            if key not in segmenter._segmenters:
+                segmenter._segmenters[key] = key
+                built.append(key)
+            return segmenter._segmenters[key]
+
+        segmenter._get_segmenter = get_segmenter
+
+        def job(_):
+            barrier.wait()
+            return get_segmenter(7)
+
+        self.assertEqual(sorted(segmenter.map_tile_jobs([0, 1], job)), [(7, 0), (7, 1)])
+        self.assertEqual(sorted(built), [(7, 0), (7, 1)])
 
 
 if __name__ == "__main__":

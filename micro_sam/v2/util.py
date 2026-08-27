@@ -118,10 +118,11 @@ def encode_image(predictor, image: np.ndarray) -> None:
 class ImageEmbeddings(dict):
     """Embedding result with explicit lifetime management for its backing store."""
 
-    def __init__(self, embeddings, store=None, temporary_path=None):
+    def __init__(self, embeddings, store=None, temporary_path=None, path=None):
         super().__init__(embeddings)
         self._store = store
         self._temporary_path = temporary_path
+        self._path = path
         self._closed = False
 
     @property
@@ -133,6 +134,15 @@ class ImageEmbeddings(dict):
     def temporary_path(self):
         """The owned ephemeral path, or None for memory-backed or persistent embeddings."""
         return self._temporary_path
+
+    @property
+    def path(self):
+        """The store these embeddings are backed by, or None when they live in memory.
+
+        A path is what makes them readable from another process, which is how the volumetric
+        propagation reaches them (see `micro_sam.v2.propagation_pool`).
+        """
+        return self._path
 
     def close(self):
         """Close the backing store and remove an owned ephemeral path."""
@@ -553,6 +563,12 @@ def get_sam2_model(
     # Both predictor wrappers and direct model use need this metadata for embedding signatures.
     model.model_type = model_type
     model.model_name = model_type  # TODO: What is this exactly?
+    # The arguments that rebuild this model, so a worker process can construct it for itself rather
+    # than receive it (see `micro_sam.v2.propagation_pool`). Weights are not part of it: the path is.
+    model.build_kwargs = {
+        "model_type": model_type, "checkpoint_path": str(checkpoint_path),
+        "input_type": input_type, "peft_kwargs": peft_kwargs,
+    }
 
     return model
 
@@ -874,7 +890,7 @@ def precompute_image_embeddings(
 
     _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
 
-    resource = ImageEmbeddings({}, store=f, temporary_path=temporary_path)
+    resource = ImageEmbeddings({}, store=f, temporary_path=temporary_path, path=save_path)
     if ndim == 2 and tile_shape is None:
         embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
     elif ndim == 2 and tile_shape is not None:

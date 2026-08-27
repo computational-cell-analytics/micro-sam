@@ -1455,7 +1455,8 @@ def get_instance_segmentation_generator(
             `UniSAM2InstanceSegmentation`).
         ndim: The number of spatial dimensions. Only 'apg' has a separate volumetric segmenter; the
             other modes handle a volume in their front-end (see `automatic_instance_segmentation`).
-        kwargs: Additional keyword arguments for the AMG segmenter.
+        kwargs: Additional keyword arguments for the segmenter, e.g. 'n_worker_processes' for
+            volumetric APG (see `TiledAutomaticPromptGenerator`).
 
     Returns:
         The segmentation generator instance.
@@ -1490,7 +1491,7 @@ def get_instance_segmentation_generator(
         if ndim == 3:
             # A volume is prompted through the video predictor, which propagates its prompts.
             cls = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
-            return cls(decoder, model, device=device, inference_device=inference_device)
+            return cls(decoder, model, device=device, inference_device=inference_device, **kwargs)
         cls = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
         return cls(
             decoder, get_sam2_image_predictor(model), device=device, inference_device=inference_device,

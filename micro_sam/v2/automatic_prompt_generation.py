@@ -35,7 +35,10 @@ from .normalization import normalize_raw
 from ..v1.inference import _merge_segmentations
 from ..util import make_temp_embedding_path, _ensure_rgb
 from .postprocessing import _compute_flow_density
-from .prompt_based_segmentation import PromptableSegmentation3D, TiledPromptableSegmentation3D, _crop_to_original_shape
+from .prompt_based_segmentation import (
+    ReplicatedPromptableSegmentation3D, TiledPromptableSegmentation3D, map_jobs_over_devices,
+    _crop_to_original_shape,
+)
 from .util import (
     DEFAULT_MODEL, autocast, encode_image, precompute_image_embeddings, set_precomputed,
     get_sam2_image_predictor, _load_list_datasets,
@@ -116,6 +119,13 @@ def default_prompt_generation(model_type: str = DEFAULT_MODEL, is_volume: bool =
         )
     return table[backbone]
 
+
+# How the volumetric propagation is cut into jobs: enough per device that none idles at the end,
+# but never so few passes per job that building its video-predictor state costs more than it saves.
+# Measured: eight jobs per device instead of four costs 3% on gonuclear, because the rebuilds a job
+# pays for on a new device outweigh the tail they shorten.
+PROPAGATION_JOBS_PER_DEVICE = 4
+MIN_PASSES_PER_PROPAGATION_JOB = 4
 
 DEFAULT_PROMPT_GENERATION = {
     "multimasking": True,
@@ -488,11 +498,13 @@ def _volume_records(
     for frame, masks in sorted(video_segments.items()):
         for object_id, mask in masks.items():
             mask = _crop_to_original_shape(np.asarray(mask).squeeze(), shape[-2:])
-            rows, columns = np.nonzero(mask)
-            if len(rows) == 0:
+            # Two reductions rather than an np.nonzero per mask, which materializes every index: this
+            # runs once per object and slice, so it is a real share of a volume's time.
+            rows_any, columns_any = mask.any(axis=1), mask.any(axis=0)
+            if not rows_any.any():
                 continue
-            y0, y1 = int(rows.min()), int(rows.max()) + 1
-            x0, x1 = int(columns.min()), int(columns.max()) + 1
+            y0, y1 = int(rows_any.argmax()), len(rows_any) - int(rows_any[::-1].argmax())
+            x0, x1 = int(columns_any.argmax()), len(columns_any) - int(columns_any[::-1].argmax())
             per_object.setdefault(object_id, []).append(
                 (int(frame), y0, y1, x0, x1, mask[y0:y1, x0:x1].copy())
             )
@@ -516,6 +528,51 @@ def _volume_records(
             "stability_score": candidate["stability"],
         })
     return records
+
+
+def propagate_passes(propagator, tile_id: int, passes: List[List[dict]], early_stop_patience, n_slices: int):
+    """Propagate a run of one tile's passes on the propagator's state for it, then free that state.
+
+    The passes share the state, so they run in order and pay for the tile's features once, and it is
+    torn down at the end, so the peak is the states running at that moment rather than one per tile
+    in the volume.
+
+    A module-level function rather than a method, because a propagation worker process runs it too,
+    on a propagator it built for itself (see `micro_sam.v2.propagation_pool`).
+
+    Args:
+        propagator: The tiled propagator holding this tile's video-predictor state.
+        tile_id: The tile the passes belong to.
+        passes: The passes, each a list of the candidates conditioned on one slice.
+        early_stop_patience: Consecutive empty slices after which a direction stops, or None.
+        n_slices: The depth of the volume.
+
+    Returns:
+        The tile's (bounding_box, records), the second of which the merge paints from.
+    """
+    records = []
+    bounding_box = None
+    try:
+        for batch in passes:
+            propagator.reset_tile_tracking(tile_id)
+            for object_id, candidate in enumerate(batch, start=1):
+                x, y = candidate["point"]
+                propagator.add_point_prompts(
+                    frame_ids=candidate["frame"],
+                    points=np.array([[y, x]], dtype="float32"),  # The propagator takes YX.
+                    point_labels=np.array([1], dtype="int32"),
+                    object_id=object_id,
+                )
+            video_segments, bounding_box_yx = propagator.propagate_tile(
+                tile_id, early_stop_patience=early_stop_patience,
+            )
+            # A concrete z-slice, not 'slice(None)': '_merge' needs '.start'/'.stop' to size the tile.
+            bounding_box = (slice(0, n_slices),) + bounding_box_yx
+            tile_shape = (n_slices,) + tuple(box.stop - box.start for box in bounding_box_yx)
+            records.extend(_volume_records(video_segments, batch, tile_shape))
+    finally:
+        propagator.release_tile(tile_id)
+    return bounding_box, records
 
 
 class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
@@ -577,6 +634,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._temporary_embedding_path = None
         self._i = None
         self._owns_image_embeddings = False
+        self._scoring_predictor_pool = None
         # The embedding cache is keyed on these, which a SAM2 image predictor does not carry itself.
         sam2_model = getattr(predictor, "model", None)
         if getattr(predictor, "model_type", None) is None:
@@ -676,10 +734,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._i = None
         self._owns_image_embeddings = owns_image_embeddings
 
-    def _build_propagator(self, volume, image_embeddings) -> PromptableSegmentation3D:
-        """The video predictor this volume is propagated with, holding its state where asked to."""
-        return PromptableSegmentation3D(
-            self._video_predictor, volume, image_embeddings,
+    def _build_propagator(self, volume, image_embeddings) -> ReplicatedPromptableSegmentation3D:
+        """The video predictor this volume is propagated with, one state per inference device."""
+        return ReplicatedPromptableSegmentation3D(
+            self._video_predictor, volume, image_embeddings, devices=self._inference_devices(None),
             offload_state_to_cpu=self._offload_to_cpu, max_cached_frames=self._max_cached_frames,
         )
 
@@ -704,7 +762,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 path = self._temporary_embedding_path
             image_embeddings = precompute_image_embeddings(
                 self._video_predictor, volume, save_path=path, ndim=3, verbose=verbose,
-                lazy_loading=lazy_embeddings,
+                lazy_loading=lazy_embeddings, devices=self._inference_devices(None),
             )
 
         UniSAM2InstanceSegmentation.initialize(self, volume, ndim=3, image_embeddings=image_embeddings, **kwargs)
@@ -768,6 +826,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._owns_image_embeddings = False
         self._predictor.reset_predictor()
         self._volume = None
+        # Built on the propagator's replicas, so it must not outlive them.
+        self._scoring_predictor_pool = None
         if self._propagator is not None:
             self._propagator.reset_predictor()
             self._propagator = None
@@ -981,7 +1041,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
     def _apply(self, prompts: dict, multimasking: bool, batch_size: int) -> list:
         """Turn the prompts into mask proposals."""
-        return self._apply_prompts(prompts, multimasking=multimasking, batch_size=batch_size)
+        return self._apply_prompts(self._predictor, prompts, multimasking=multimasking, batch_size=batch_size)
 
     def _merge(
         self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
@@ -999,12 +1059,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 self._predictor, segmentation, batch_size=batch_size, box_extension=box_extension,
             )
 
-    def _apply_prompts(self, prompts, multimasking: bool, batch_size: int) -> List[Dict[str, Any]]:
-        """Prompt the interactive branch in batches, returning records for the merge."""
+    def _apply_prompts(self, predictor, prompts, multimasking: bool, batch_size: int) -> List[Dict[str, Any]]:
+        """Prompt the interactive branch in batches, returning records for the merge.
+
+        Takes the predictor rather than reading `self._predictor`, so the volumetric scoring can hand
+        every worker the replica on its own device.
+        """
         from sam2.utils.amg import calculate_stability_score
 
         points, point_labels = prompts["points"], prompts["point_labels"]
-        mask_threshold = getattr(self._predictor, "mask_threshold", 0.0)
+        mask_threshold = getattr(predictor, "mask_threshold", 0.0)
 
         records = []
         for start in range(0, len(points), batch_size):
@@ -1012,11 +1076,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             batch_points, batch_labels = points[start:stop], point_labels[start:stop]
             n_prompts = len(batch_points)
             # Reduced on the device, so only the kept mask is transferred rather than every proposal.
-            mask_input, coords, labels, _ = self._predictor._prep_prompts(
+            mask_input, coords, labels, _ = predictor._prep_prompts(
                 batch_points, batch_labels, None, None, True,
             )
-            with autocast(self._predictor.device):
-                logits, scores, _ = self._predictor._predict(
+            with autocast(predictor.device):
+                logits, scores, _ = predictor._predict(
                     coords, labels, None, mask_input, multimasking, return_logits=True,
                 )
             logits = logits.reshape(n_prompts, -1, *logits.shape[-2:])
@@ -1065,24 +1129,26 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             The surviving candidates, each with the prompt it will be propagated with.
         """
         points, point_labels, frames = prompts["points"], prompts["point_labels"], prompts["frames"]
-        candidates = []
-        for frame in np.unique(frames):
+
+        def score_frame(worker_id, frame):
+            predictor = self._scoring_predictors()[worker_id]
             indices = np.where(frames == frame)[0]
             # Reads the slice's features out of the volume's embeddings, so nothing is re-encoded.
-            _set_image_predictor_from_3d_embeddings(self._predictor, self._image_embeddings, int(frame))
+            _set_image_predictor_from_3d_embeddings(predictor, self._image_embeddings, int(frame))
             records = self._apply_prompts(
-                {"points": points[indices], "point_labels": point_labels[indices]},
+                predictor, {"points": points[indices], "point_labels": point_labels[indices]},
                 multimasking=multimasking, batch_size=batch_size,
             )
             records = [record for record in records if record["predicted_iou"] >= score_threshold]
             if not records:
-                continue
+                return []
 
             _, kept = merge_by_score(
                 records, _records_shape(records), max_overlap=max_overlap,
                 min_size=default_prompt_generation(self._model_type, is_volume=True)["min_size"],
                 return_matches=True,
             )
+            candidates = []
             for record_index in kept.values():
                 record = records[record_index]
                 x, y = points[indices[record["prompt_index"]], 0]
@@ -1092,7 +1158,28 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                     "score": record["predicted_iou"],
                     "stability": record["stability_score"],
                 })
-        return candidates
+            return candidates
+
+        # A slice is scored independently of the others, so the slices spread over the devices.
+        per_frame = map_jobs_over_devices(self._scoring_devices(), np.unique(frames), score_frame)
+        return [candidate for frame_candidates in per_frame for candidate in frame_candidates]
+
+    def _scoring_predictors(self) -> list:
+        """One image predictor per inference device, built on the video predictor's own replicas.
+
+        The volumetric scoring reads one slice's features per job and prompts the interactive branch
+        with them, which is independent per job, so the jobs spread over the devices exactly like the
+        propagation. Built lazily and only once, because a replica is a full model.
+        """
+        if self._scoring_predictor_pool is None:
+            self._scoring_predictor_pool = [
+                get_sam2_image_predictor(predictor) for predictor, _ in self._propagator.predictor_devices
+            ]
+        return self._scoring_predictor_pool
+
+    def _scoring_devices(self) -> list:
+        """The devices the volumetric scoring spreads its jobs over."""
+        return [device for _, device in self._propagator.predictor_devices]
 
     def _propagate_candidates(
         self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
@@ -1113,23 +1200,26 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             for start in range(0, len(group), n_objects_per_pass)
         ]
 
-        records = []
-        for batch in tqdm(passes, desc="Propagate prompts", disable=not verbose):
+        def run_pass(propagator, batch):
             # Only the objects: re-reading the volume's features each pass costs more than the propagation.
-            self._propagator.reset_tracking()
+            propagator.reset_tracking()
             for object_id, candidate in enumerate(batch, start=1):
                 x, y = candidate["point"]
-                self._propagator.add_point_prompts(
+                propagator.add_point_prompts(
                     frame_ids=candidate["frame"],
                     points=np.array([[y, x]], dtype="float32"),  # The propagator takes YX.
                     point_labels=np.array([1], dtype="int32"),
                     object_id=object_id,
                 )
-            video_segments = self._propagator.propagate_prompts(early_stop_patience=early_stop_patience)
-            records.extend(_volume_records(video_segments, batch, self._volume.shape))
+            video_segments = propagator.propagate_prompts(early_stop_patience=early_stop_patience)
+            return _volume_records(video_segments, batch, self._volume.shape)
+
+        # The passes share nothing but the volume, so each goes to whichever device is free.
+        with tqdm(total=len(passes), desc="Propagate prompts", disable=not verbose) as progress:
+            per_pass = self._propagator.map_passes(passes, run_pass, update_progress=progress.update)
 
         self._propagator.reset_predictor()
-        return records
+        return [record for pass_records in per_pass for record in pass_records]
 
 
 class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2InstanceSegmentation):
@@ -1144,14 +1234,19 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
 
     A volume tiles the same way, in-plane only: the decoder already runs tiled and z-blocked (see
     `TiledUniSAM2InstanceSegmentation`), and every candidate's tile keeps its own video-predictor state
-    (see `TiledPromptableSegmentation3D`), built and torn down one tile at a time so a volume too large
-    for one video-predictor state still fits.
+    (see `TiledPromptableSegmentation3D`), built and torn down as the propagation moves through them.
+
+    A volume's propagation runs in one worker process per inference device rather than one thread,
+    because threads do not scale it (see `micro_sam.v2.propagation_pool`). Pass `n_worker_processes=0`
+    to keep it in this process.
 
     Args:
         model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
         predictor: The SAM2 image predictor for the interactive branch of the same model.
         device: The device the model lives on.
         inference_device: The device intent used as the `devices=None` fallback.
+        n_worker_processes: Processes the volumetric propagation runs in. By default one per
+            inference device; 0 keeps it in this process.
     """
 
     def __init__(
@@ -1160,10 +1255,16 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         predictor,
         device: Optional[Union[str, torch.device]] = None,
         inference_device: Devices = USE_MODEL_DEVICE,
+        n_worker_processes: Optional[int] = None,
     ) -> None:
         super().__init__(model, predictor, device=device, inference_device=inference_device)
         self._tiling = None
+        self._tile_shape = None
         self._halo = None
+        self._embedding_path = None
+        self._pool = None
+        self._pool_volume = None
+        self._n_worker_processes = n_worker_processes
 
     def initialize(
         self,
@@ -1222,7 +1323,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             encoder = self._video_predictor if ndim == 3 else self._predictor
             image_embeddings = precompute_image_embeddings(
                 encoder, image, save_path=path, ndim=ndim, tile_shape=tile_shape, halo=halo,
-                verbose=verbose, lazy_loading=True,
+                verbose=verbose, lazy_loading=True, devices=self._inference_devices(None),
             )
 
         if ndim == 3:
@@ -1247,7 +1348,12 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
 
         self._image_embeddings = image_embeddings
         self._owns_image_embeddings = owns_image_embeddings
+        # Where a worker process reads the embeddings from. None for a store that lives in memory,
+        # which nothing outside this process can open, so the propagation then stays here.
+        self._embedding_path = getattr(image_embeddings, "path", None)
         self._set_tiling(image_embeddings)
+        if ndim == 3:
+            self._start_worker_pool()
 
     def _build_tiled_propagator(
         self, volume: np.ndarray, image_embeddings: dict, devices: Devices = None,
@@ -1262,16 +1368,14 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
     def _set_tiling(self, image_embeddings: dict) -> None:
         # From the embeddings, not the arguments, so the prompting cannot disagree with the encoding.
         features = image_embeddings["features"]
-        self._tiling = Blocking(
-            [0, 0], [int(s) for s in features.attrs["shape"][-2:]],
-            [int(s) for s in features.attrs["tile_shape"]],
-        )
+        self._tile_shape = [int(s) for s in features.attrs["tile_shape"]]
+        self._tiling = Blocking([0, 0], [int(s) for s in features.attrs["shape"][-2:]], self._tile_shape)
         self._halo = [int(s) for s in features.attrs["halo"]]
 
-    def _set_tile_embeddings(self, tile_id: int) -> None:
-        """Set the embeddings for one tile on the image predictor."""
+    def _set_tile_embeddings(self, predictor, tile_id: int) -> None:
+        """Set the embeddings for one tile on the given image predictor."""
         if self._i is None:
-            set_precomputed(self._predictor, self._image_embeddings, tile_id=tile_id)
+            set_precomputed(predictor, self._image_embeddings, tile_id=tile_id)
             return
 
         name = str(tile_id)
@@ -1281,7 +1385,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         fpn = [fpn_group[str(level)] for level in range(len(fpn_group))]
         pos_enc = [pos_enc_group[str(level)] for level in range(len(pos_enc_group))]
         _set_image_predictor_from_backbone(
-            self._predictor, fpn, pos_enc, features, features.attrs["original_size"], self._i,
+            predictor, fpn, pos_enc, features, features.attrs["original_size"], self._i,
         )
 
     def _tile_bounding_box(self, tile_id: int) -> tuple:
@@ -1310,9 +1414,9 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             # The prompts are in the full image's frame, the tile's embeddings in the tile's.
             origin = np.array([bounding_box[1].start, bounding_box[0].start], dtype="float32")
 
-            self._set_tile_embeddings(tile_id)
+            self._set_tile_embeddings(self._predictor, tile_id)
             records = self._apply_prompts(
-                {"points": points[indices] - origin, "point_labels": point_labels[indices]},
+                self._predictor, {"points": points[indices] - origin, "point_labels": point_labels[indices]},
                 multimasking=multimasking, batch_size=batch_size,
             )
             if records:
@@ -1417,13 +1521,13 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             proposals, shape, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
         )
 
-    def _set_tile_embeddings_3d(self, tile_id: int, frame: int) -> None:
-        """Set one tile's slice ``frame`` on the image predictor, from the tiled 3d embeddings."""
+    def _set_tile_embeddings_3d(self, predictor, tile_id: int, frame: int) -> None:
+        """Set one tile's slice ``frame`` on the given image predictor, from the tiled 3d embeddings."""
         features = self._image_embeddings["features"][str(tile_id)]
         fpn = _load_list_datasets(self._image_embeddings["fpn"], str(tile_id), lazy_loading=True)
         pos_enc = _load_list_datasets(self._image_embeddings["pos_enc"], str(tile_id), lazy_loading=True)
         _set_image_predictor_from_backbone(
-            self._predictor, fpn, pos_enc, features, features.attrs["original_size"], frame,
+            predictor, fpn, pos_enc, features, features.attrs["original_size"], frame,
         )
 
     @torch.no_grad()
@@ -1439,96 +1543,182 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         tile is never a plausible duplicate, since inner blocks do not overlap.
         """
         points, point_labels, frames = prompts["points"], prompts["point_labels"], prompts["frames"]
-        candidates = []
+
+        jobs = []
         for frame in np.unique(frames):
             by_tile: Dict[int, List[int]] = {}
             for index in np.where(frames == frame)[0]:
                 x, y = points[index, 0]
                 tile_id = self._tiling.coordinates_to_block_id([int(y), int(x)])
                 by_tile.setdefault(tile_id, []).append(index)
+            jobs.extend((int(frame), tile_id, indices) for tile_id, indices in by_tile.items())
 
-            for tile_id, indices in by_tile.items():
-                self._set_tile_embeddings_3d(tile_id, int(frame))
-                bounding_box = self._tile_bounding_box(tile_id)
-                origin = np.array([bounding_box[1].start, bounding_box[0].start], dtype="float32")
+        def score_job(worker_id, job):
+            frame, tile_id, indices = job
+            predictor = self._scoring_predictors()[worker_id]
+            self._set_tile_embeddings_3d(predictor, tile_id, frame)
+            bounding_box = self._tile_bounding_box(tile_id)
+            origin = np.array([bounding_box[1].start, bounding_box[0].start], dtype="float32")
 
-                records = self._apply_prompts(
-                    {"points": points[indices] - origin, "point_labels": point_labels[indices]},
-                    multimasking=multimasking, batch_size=batch_size,
-                )
-                records = [record for record in records if record["predicted_iou"] >= score_threshold]
-                if not records:
-                    continue
+            records = self._apply_prompts(
+                predictor, {"points": points[indices] - origin, "point_labels": point_labels[indices]},
+                multimasking=multimasking, batch_size=batch_size,
+            )
+            records = [record for record in records if record["predicted_iou"] >= score_threshold]
+            if not records:
+                return []
 
-                _, kept = merge_by_score(
-                    records, _records_shape(records), max_overlap=max_overlap,
-                    min_size=default_prompt_generation(self._model_type, is_volume=True)["min_size"],
-                    return_matches=True,
-                )
-                for record_index in kept.values():
-                    record = records[record_index]
-                    x, y = points[indices[record["prompt_index"]], 0]
-                    candidates.append({
-                        "frame": int(frame),
-                        "tile_id": int(tile_id),
-                        "point": (float(x), float(y)),
-                        "score": record["predicted_iou"],
-                        "stability": record["stability_score"],
-                    })
-        return candidates
+            _, kept = merge_by_score(
+                records, _records_shape(records), max_overlap=max_overlap,
+                min_size=default_prompt_generation(self._model_type, is_volume=True)["min_size"],
+                return_matches=True,
+            )
+            candidates = []
+            for record_index in kept.values():
+                record = records[record_index]
+                x, y = points[indices[record["prompt_index"]], 0]
+                candidates.append({
+                    "frame": frame,
+                    "tile_id": int(tile_id),
+                    "point": (float(x), float(y)),
+                    "score": record["predicted_iou"],
+                    "stability": record["stability_score"],
+                })
+            return candidates
 
-    def _propagate_candidates(
-        self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
-        verbose: bool,
-    ) -> List[Dict[str, Any]]:
-        """Propagate every tile's candidates with that tile's own video-predictor state.
+        # One tile's prompts on one slice, which is independent of every other pair, so they spread.
+        per_job = map_jobs_over_devices(self._scoring_devices(), jobs, score_job)
+        return [candidate for job_candidates in per_job for candidate in job_candidates]
 
-        One tile's state is built, propagated through every pass its candidates need, and torn down
-        before the next tile's is built, so only one tile's state has to fit in device memory at a
-        time (see `TiledPromptableSegmentation3D`). The result is grouped by tile, like the 2d tiled
-        generator's proposals, because the merge across tiles still has to resolve their halo overlaps.
+    def _start_worker_pool(self) -> None:
+        """Start the propagation workers, so their models build while this process encodes.
+
+        A worker's model takes about as long to build as the encoder, the decoder and the scoring
+        take together, so starting them here rather than at the first propagation hides the cost
+        entirely. Kept afterwards: an evaluation over many volumes would otherwise pay it per volume.
         """
-        by_tile: Dict[int, List[dict]] = {}
-        for candidate in candidates:
-            by_tile.setdefault(candidate["tile_id"], []).append(candidate)
+        from .propagation_pool import build_pool
 
-        n_slices = self._volume.shape[0]
-        proposals = []
+        if self._n_worker_processes == 0 or self._pool is not None or self._embedding_path is None:
+            return
+        devices = [device for _, device in self._propagator.predictor_devices]
+        self._pool = build_pool(self._video_predictor, devices)
+        if self._pool is None:
+            self._n_worker_processes = 0  # Nothing to spread over, so stop trying.
+
+    def _worker_pool(self):
+        """The worker processes the propagation runs in, or None when it stays in this process.
+
+        Threads do not scale this over devices - the propagation loop holds the interpreter lock for
+        too much of every frame - so it is handed to one process per device instead.
+        """
+        self._start_worker_pool()
+        if self._pool is None:
+            return None
+
+        # The workers hold one volume at a time, so they only reload when this is a different one.
+        token = (id(self._volume), self._embedding_path)
+        if token != self._pool_volume:
+            self._pool.set_volume(
+                self._volume, self._embedding_path, self._tile_shape, self._halo,
+                self._offload_to_cpu, self._max_cached_frames,
+            )
+            self._pool_volume = token
+        return self._pool
+
+    def close(self) -> None:
+        """End the propagation workers, if any were started."""
+        # Read defensively: this also runs from '__del__', which a half-built instance reaches too.
+        pool = getattr(self, "_pool", None)
+        if pool is not None:
+            pool.close()
+            self._pool = None
+            self._pool_volume = None
+
+    def __del__(self):
+        self.close()
+
+    def _propagation_jobs(self, by_tile: Dict[int, List[dict]], n_objects_per_pass: int) -> List[tuple]:
+        """Cut every tile's passes into the jobs the devices pull, longest job first.
+
+        A whole tile per device leaves the schedule with a tail: the tiles differ by an order of
+        magnitude in how many candidates they hold, so the last big one runs alone while the other
+        devices idle. Cutting a tile into runs of passes lets several devices work on it, and
+        starting with the longest run keeps the tail short. Each job still holds enough passes to
+        pay for building its own state.
+        """
+        by_tile_passes = {}
         for tile_id, tile_candidates in sorted(by_tile.items()):
             by_anchor: Dict[int, List[dict]] = {}
             for candidate in tile_candidates:
                 by_anchor.setdefault(candidate["frame"], []).append(candidate)
-            passes = [
+            by_tile_passes[tile_id] = [
                 group[start:start + n_objects_per_pass]
                 for _, group in sorted(by_anchor.items())
                 for start in range(0, len(group), n_objects_per_pass)
             ]
 
-            tile_records = []
-            bounding_box = None
-            for batch in tqdm(passes, desc=f"Propagate prompts (tile {tile_id})", disable=not verbose):
-                self._propagator.reset_tracking()
-                for object_id, candidate in enumerate(batch, start=1):
-                    x, y = candidate["point"]
-                    self._propagator.add_point_prompts(
-                        frame_ids=candidate["frame"],
-                        points=np.array([[y, x]], dtype="float32"),  # The propagator takes YX.
-                        point_labels=np.array([1], dtype="int32"),
-                        object_id=object_id,
-                    )
-                by_tile_segments = self._propagator.propagate_prompts_by_tile(
-                    early_stop_patience=early_stop_patience,
-                )
-                video_segments, bounding_box_yx = by_tile_segments[tile_id]
-                # A concrete z-slice, not 'slice(None)': '_merge' needs '.start'/'.stop' to size the tile.
-                bounding_box = (slice(0, n_slices),) + bounding_box_yx
-                tile_shape = (n_slices,) + tuple(box.stop - box.start for box in bounding_box_yx)
-                tile_records.extend(_volume_records(video_segments, batch, tile_shape))
-            # Free this tile's video-predictor state before the next tile's is built.
-            self._propagator.reset_predictor()
+        n_workers = len(self._propagator.predictor_devices)
+        n_passes = sum(len(passes) for passes in by_tile_passes.values())
+        if n_workers < 2 or n_passes == 0:
+            chunk = n_passes or 1  # One job per tile: nothing to balance, so keep every tile's cache.
+        else:
+            target = n_workers * PROPAGATION_JOBS_PER_DEVICE
+            chunk = max(MIN_PASSES_PER_PROPAGATION_JOB, -(-n_passes // target))
 
-            if tile_records:
-                proposals.append({"tile_id": tile_id, "bounding_box": bounding_box, "records": tile_records})
+        jobs = []
+        for tile_id, passes in by_tile_passes.items():
+            jobs.extend(
+                (tile_id, index, passes[start:start + chunk])
+                for index, start in enumerate(range(0, len(passes), chunk))
+            )
+        return sorted(jobs, key=lambda job: -len(job[2]))
+
+    def _propagate_candidates(
+        self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
+        verbose: bool,
+    ) -> List[Dict[str, Any]]:
+        """Propagate every tile's candidates, spreading the work over the inference devices.
+
+        The propagation is where a volume's time goes, and it is embarrassingly parallel: a pass
+        conditions its own objects on one slice of one tile and tracks them to the ends, sharing
+        nothing with the others but the read-only embeddings. So the passes are cut into jobs and
+        handed to one worker per device, each pulling the next job once it is free. The result is
+        grouped by tile, like the 2d tiled generator's proposals, because the merge still has to
+        resolve the halo overlaps.
+        """
+        by_tile: Dict[int, List[dict]] = {}
+        for candidate in candidates:
+            by_tile.setdefault(candidate["tile_id"], []).append(candidate)
+
+        jobs = self._propagation_jobs(by_tile, n_objects_per_pass)
+        n_slices = self._volume.shape[0]
+
+        pool = self._worker_pool()
+        if pool is not None:
+            results = pool.map_jobs(jobs, early_stop_patience)
+        else:
+            def run_job(job):
+                tile_id, _, passes = job
+                return propagate_passes(self._propagator, tile_id, passes, early_stop_patience, n_slices)
+
+            with tqdm(total=len(jobs), desc="Propagate prompts", disable=not verbose) as progress:
+                results = self._propagator.map_tile_jobs(jobs, run_job, update_progress=progress.update)
+
+        # Regrouped in the order the passes were cut, not the order the devices finished them in:
+        # the merge breaks score ties by record order.
+        by_tile_records: Dict[int, List[tuple]] = {}
+        for (tile_id, index, _), result in zip(jobs, results):
+            by_tile_records.setdefault(tile_id, []).append((index, result))
+
+        proposals = []
+        for tile_id in sorted(by_tile_records):
+            bounding_box, records = None, []
+            for _, (job_box, job_records) in sorted(by_tile_records[tile_id], key=lambda item: item[0]):
+                bounding_box = job_box if job_box is not None else bounding_box
+                records.extend(job_records)
+            if records:
+                proposals.append({"tile_id": tile_id, "bounding_box": bounding_box, "records": records})
         return proposals
 
     def _refine_boxes(self, segmentation: np.ndarray, batch_size: int, box_extension: int) -> np.ndarray:
@@ -1555,7 +1745,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             crop = segmentation[bounding_box]
             crop = np.where(np.isin(crop, label_ids), crop, 0).astype("uint32")
 
-            self._set_tile_embeddings(tile_id)
+            self._set_tile_embeddings(self._predictor, tile_id)
             tile_refined = refine_with_boxes(
                 self._predictor, crop, batch_size=batch_size, box_extension=box_extension,
             )
@@ -1597,4 +1787,9 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         """Clear the decoder predictions and the tiled embeddings, removing an ephemeral store."""
         super().clear_state()
         self._tiling = None
+        self._tile_shape = None
         self._halo = None
+        self._embedding_path = None
+        # The workers themselves stay: their models cost seconds to build and the next volume
+        # replaces the state they hold, see '_worker_pool'.
+        self._pool_volume = None

@@ -3,6 +3,7 @@ import queue
 import ctypes
 import hashlib
 import platform
+import threading
 import contextlib
 from copy import copy
 from concurrent import futures
@@ -32,6 +33,61 @@ def _trim_cpu_heap():
         ctypes.CDLL("libc.so.6").malloc_trim(0)
     except (OSError, AttributeError):
         pass
+
+
+def _device_context(device):
+    """Make a worker thread's default CUDA device the one its tile's state lives on."""
+    device = torch.device(device)
+    return torch.cuda.device(device) if device.type == "cuda" else contextlib.nullcontext()
+
+
+def map_jobs_over_devices(devices, jobs: List, function: Callable, update_progress=None) -> List:
+    """Run independent jobs over one worker per device, each taking the next job once it is free.
+
+    The results come back in the order the jobs were given, never the order the devices finished in,
+    because a caller that merges them may break ties by position.
+
+    Args:
+        devices: The devices to spread the jobs over, one worker each.
+        jobs: The jobs, passed to `function` one at a time.
+        function: Called as `function(worker_id, job)`, with the index of the device it runs on.
+        update_progress: Optional callback, called with 1 after every finished job.
+
+    Returns:
+        One result per job, in the order the jobs were given.
+    """
+    jobs = list(jobs)
+    if not jobs:
+        return []
+
+    results = [None] * len(jobs)
+    n_workers = min(len(devices), len(jobs))
+    if n_workers < 2:
+        for index, job in enumerate(jobs):
+            results[index] = function(0, job)
+            if update_progress is not None:
+                update_progress(1)
+        return results
+
+    pending = queue.Queue()
+    for index, job in enumerate(jobs):
+        pending.put((index, job))
+
+    def run_worker(worker_id):
+        with _device_context(devices[worker_id]):
+            while True:
+                try:
+                    index, job = pending.get_nowait()
+                except queue.Empty:
+                    break
+                results[index] = function(worker_id, job)
+                if update_progress is not None:
+                    update_progress(1)
+
+    with futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
+        for task in [pool.submit(run_worker, worker_id) for worker_id in range(n_workers)]:
+            task.result()
+    return results
 
 
 def _free_device_memory():
@@ -537,12 +593,21 @@ class PromptableSegmentation3D:
             self.reset_predictor()
         self._prompt_signatures = signatures
 
-    def reset_predictor(self):
+    def release(self):
+        """Drop the tracked objects and the cached slice features, keeping the allocator's cache.
+
+        What a caller that builds another state of the same size on this device right afterwards
+        needs: the blocks go back to the caching allocator, which hands them to the next state.
+        Emptying that cache instead would make every rebuild pay for a fresh allocation.
+        """
         self.predictor.reset_state(self.inference_state)
         self._clear_pushed_prompts()
         # 'reset_state' clears the tracking outputs but not this cache, which holds high-res
         # features per frame. The embeddings are disk-backed, so the next prompt re-reads its frame.
         self.inference_state["cached_features"] = {}
+
+    def reset_predictor(self):
+        self.release()
         _free_device_memory()
 
     def reset_tracking(self):
@@ -990,6 +1055,69 @@ class PromptableSegmentation3D:
         return segmentation
 
 
+class ReplicatedPromptableSegmentation3D:
+    """One `PromptableSegmentation3D` per inference device over the same volume, for independent passes.
+
+    Automatic prompt generation propagates a volume in passes that share nothing but the volume and
+    its embeddings: each conditions its own objects on one slice and tracks them to both ends. So a
+    pass goes to whichever device is free, with one video-predictor state per device rather than one
+    in total. `TiledPromptableSegmentation3D` spreads tiles for the same reason; this spreads the
+    passes of a volume that is not tiled, where one state covers the whole volume.
+
+    Device memory is the cost: a state per device instead of a state in total. Pass a single device
+    to give that back.
+
+    Args:
+        predictor: The SAM2 video predictor.
+        volume: The input volume, shape (Z, Y, X).
+        volume_embeddings: The precomputed 3d embeddings.
+        devices: Devices the passes are spread over. By default all visible CUDA devices are used
+            when the predictor is on CUDA. Pass a single device to pin the propagation to it.
+    """
+
+    def __init__(self, predictor, volume, volume_embeddings, devices: Devices = None, **kwargs):
+        from micro_sam.v2.batched_inference import _prepare_models, _resolve_devices
+
+        self._predictor_devices = _prepare_models(predictor, _resolve_devices(predictor, devices))
+        self.volume = volume
+        self.volume_embeddings = volume_embeddings
+        self._kwargs = kwargs
+        # Built lazily, so a run with fewer passes than devices never pays for a state it cannot use.
+        self._segmenters = {}
+
+    def _get_segmenter(self, worker_id):
+        if worker_id not in self._segmenters:
+            predictor, device = self._predictor_devices[worker_id]
+            self._segmenters[worker_id] = PromptableSegmentation3D(
+                predictor, self.volume, self.volume_embeddings, device=device, **self._kwargs
+            )
+        return self._segmenters[worker_id]
+
+    @property
+    def predictor_devices(self):
+        """The (predictor, device) replica per inference device, for a caller that needs its own."""
+        return self._predictor_devices
+
+    def map_passes(self, jobs: List, function: Callable, update_progress=None) -> List:
+        """Run one job per pass, one worker per device, each taking the next job once it is free.
+
+        `function` is called as `function(segmenter, job)` with the worker's own state, so a job may
+        prompt and propagate it freely. The results keep the order the jobs were given in, which the
+        merge needs: it breaks score ties by record order.
+        """
+        devices = [device for _, device in self._predictor_devices]
+        return map_jobs_over_devices(
+            devices, jobs, lambda worker_id, job: function(self._get_segmenter(worker_id), job),
+            update_progress=update_progress,
+        )
+
+    def reset_predictor(self):
+        """Free every worker's video-predictor state."""
+        for segmenter in self._segmenters.values():
+            segmenter.reset_predictor()
+        self._segmenters = {}
+
+
 class TiledPromptableSegmentation3D:
     """Tiled promptable segmentation for volumetric data.
 
@@ -1025,10 +1153,13 @@ class TiledPromptableSegmentation3D:
         self.halo = tuple(int(s) for s in feats.attrs["halo"])
         self.tiling = Blocking([0, 0], list(self.shape[1:]), list(self.tile_shape))
 
-        # Per-tile state, built lazily for the tiles that actually receive prompts.
+        # State per (tile, worker), built lazily for the tiles that actually receive prompts. Keyed by
+        # the worker as well, so 'map_tile_jobs' can put a tile's passes on several devices at once.
         self._segmenters = {}
         # Device assigned to each active tile, see '_worker_id'.
         self._tile_workers = {}
+        # The worker a thread is running as, which overrides the per-tile assignment while it is set.
+        self._active_worker = threading.local()
         # Signature of the prompt set of the previous round, see 'sync_prompt_state'.
         self._prompt_signatures = set()
 
@@ -1063,15 +1194,6 @@ class TiledPromptableSegmentation3D:
         """Return tile-slice propagation steps for the currently active tiles."""
         return sum(segmenter.get_progress_total(z_range) for segmenter in self._segmenters.values())
 
-    def reset_tracking(self):
-        """Reset every active tile's tracked objects, keeping its cached encoding.
-
-        Lets a caller run several propagation passes over the same tiles (e.g. one pass per batch
-        of objects) without paying the per-tile encoder cost again.
-        """
-        for segmenter in self._segmenters.values():
-            segmenter.reset_tracking()
-
     def _tile_index(self, y, x):
         """Return the id of the tile whose inner (halo-free) block contains the point (y, x)."""
         for tile_id in range(self.tiling.number_of_blocks):
@@ -1086,10 +1208,26 @@ class TiledPromptableSegmentation3D:
         The tile state (inference state + embedding cache) lives on one device, so the affinity is
         kept for the tile's lifetime. Assigning by 'tile_id % n_devices' instead would leave devices
         idle, because the active tile ids are sparse (e.g. the tiles 0, 2, 4 share one residue).
+
+        A thread running as a worker uses that worker's device instead, so two workers can hold the
+        same tile without either reaching into the other's state.
         """
+        bound = getattr(self._active_worker, "index", None)
+        if bound is not None:
+            return bound
         if tile_id not in self._tile_workers:
             self._tile_workers[tile_id] = len(self._tile_workers) % len(self._predictor_devices)
         return self._tile_workers[tile_id]
+
+    @contextlib.contextmanager
+    def _as_worker(self, worker_id):
+        """Run this thread as one worker: its device, and its own state for whatever tile it touches."""
+        self._active_worker.index = worker_id
+        try:
+            with _device_context(self._predictor_devices[worker_id][1]):
+                yield
+        finally:
+            self._active_worker.index = None
 
     def _outer_offset(self, tile_id):
         """Return the (y0, x0) origin of the tile's outer (halo-included) block."""
@@ -1097,7 +1235,8 @@ class TiledPromptableSegmentation3D:
         return int(outer.begin[0]), int(outer.begin[1])
 
     def _get_segmenter(self, tile_id):
-        if tile_id not in self._segmenters:
+        key = (tile_id, self._worker_id(tile_id))
+        if key not in self._segmenters:
             from micro_sam.v2.util import _load_list_datasets
 
             outer = self.tiling.get_block_with_halo(tile_id, list(self.halo)).outer_block
@@ -1114,11 +1253,11 @@ class TiledPromptableSegmentation3D:
                 "input_size": tile_dataset.attrs["input_size"],
                 "original_size": tile_dataset.attrs["original_size"],
             }
-            predictor, device = self._predictor_devices[self._worker_id(tile_id)]
-            self._segmenters[tile_id] = PromptableSegmentation3D(
+            predictor, device = self._predictor_devices[key[1]]
+            self._segmenters[key] = PromptableSegmentation3D(
                 predictor, sub_volume, tile_embeddings, device=device, **self._kwargs
             )
-        return self._segmenters[tile_id]
+        return self._segmenters[key]
 
     def _inner_slices(self, tile_id):
         """Return the (local, global) inner-block slices for placing a tile result into the volume."""
@@ -1127,29 +1266,47 @@ class TiledPromptableSegmentation3D:
         glob = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
         return local, glob
 
-    def _run_tile_jobs(
+    def map_tiles(
         self, tile_ids: List[int], function: Callable, update_progress: Optional[Callable[[int], None]] = None,
     ) -> List[Tuple]:
-        """Run tile jobs concurrently across devices and serially within each device."""
-        groups = {}
-        for tile_id in tile_ids:
-            groups.setdefault(self._worker_id(tile_id), []).append(tile_id)
+        """Run one job per tile, one worker per device, each pulling the next tile once it is free.
 
-        def run_group(group, worker_update=None):
+        A tile that already holds a state keeps the device that state lives on. An unassigned tile is
+        bound to whichever worker picks it up, so tiles with very different costs (as in automatic
+        prompt generation, where a tile costs what its candidates cost) balance over the devices
+        instead of being dealt out round-robin before their cost is known.
+        """
+        tile_ids = list(tile_ids)
+        if not tile_ids:
+            return []
+
+        preassigned = {}
+        unassigned = queue.Queue()
+        for tile_id in tile_ids:
+            if tile_id in self._tile_workers:
+                preassigned.setdefault(self._tile_workers[tile_id], []).append(tile_id)
+            else:
+                unassigned.put(tile_id)
+
+        def run_worker(worker_id, worker_update=None):
+            def call(tile_id):
+                return function(tile_id) if worker_update is None else function(tile_id, worker_update)
+
             results = []
-            for tile_id in group:
-                if worker_update is None:
-                    result = function(tile_id)
-                else:
-                    result = function(tile_id, worker_update)
-                results.append((tile_id, result))
+            with self._as_worker(worker_id):
+                for tile_id in preassigned.get(worker_id, []):
+                    results.append((tile_id, call(tile_id)))
+                while True:
+                    try:
+                        tile_id = unassigned.get_nowait()
+                    except queue.Empty:
+                        break
+                    self._tile_workers[tile_id] = worker_id
+                    results.append((tile_id, call(tile_id)))
             return results
 
-        if len(groups) < 2:
-            if not groups:
-                return []
-            group = next(iter(groups.values()))
-            return run_group(group, update_progress)
+        if len(self._predictor_devices) < 2:
+            return sorted(run_worker(0, update_progress), key=lambda result: result[0])
 
         progress_queue = queue.Queue()
 
@@ -1164,9 +1321,10 @@ class TiledPromptableSegmentation3D:
                 update_progress(increment)
 
         results = []
-        with futures.ThreadPoolExecutor(max_workers=len(groups)) as pool:
+        n_workers = len(self._predictor_devices)
+        with futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
             worker_update = progress_queue.put if update_progress is not None else None
-            tasks = [pool.submit(run_group, group, worker_update) for group in groups.values()]
+            tasks = [pool.submit(run_worker, worker_id, worker_update) for worker_id in range(n_workers)]
             pending = set(tasks)
             while pending:
                 done, pending = futures.wait(pending, timeout=0.05, return_when=futures.FIRST_COMPLETED)
@@ -1175,6 +1333,67 @@ class TiledPromptableSegmentation3D:
                     results.extend(task.result())
         forward_progress()
         return sorted(results, key=lambda result: result[0])
+
+    @property
+    def predictor_devices(self):
+        """The (predictor, device) replica per inference device, for a caller that needs its own."""
+        return self._predictor_devices
+
+    @property
+    def active_tiles(self) -> List[int]:
+        """The tiles that currently hold a state, in ascending order."""
+        return sorted({tile_id for tile_id, _ in self._segmenters})
+
+    def map_tile_jobs(self, jobs: List, function: Callable, update_progress=None) -> List:
+        """Run jobs that each name a tile, one worker per device, each on its own state for that tile.
+
+        Unlike `map_tiles`, several jobs of one tile can run at once: a job prompts the state of its
+        tile *on its worker's device*, so a single tile whose work dwarfs the others spreads over the
+        devices instead of pinning them to one. The extra states are what it costs, and a job that
+        moves to a new device re-reads that tile's features, so give a job enough work to pay for it.
+
+        `function` is called as `function(job)`, and `update_progress` from the worker rather than
+        from the caller's thread - unlike `map_tiles`, whose callback the GUI drives.
+        """
+        devices = [device for _, device in self._predictor_devices]
+
+        def run(worker_id, job):
+            with self._as_worker(worker_id):
+                return function(job)
+
+        return map_jobs_over_devices(devices, jobs, run, update_progress=update_progress)
+
+    def reset_tile_tracking(self, tile_id: int) -> None:
+        """Reset one tile's tracked objects, keeping its cached encoding. A no-op before its first use."""
+        segmenter = self._segmenters.get((tile_id, self._worker_id(tile_id)))
+        if segmenter is not None:
+            segmenter.reset_tracking()
+
+    def propagate_tile(self, tile_id: int, update_progress=None, early_stop_patience=None, z_range=None):
+        """Propagate one tile's prompts, returning its own segments and its outer (halo-included) block.
+
+        Never merges across tiles, unlike `predict`, which stitches by object identity: it is for a
+        caller whose object ids are tile-local, e.g. automatic prompt generation, where a candidate
+        belongs to exactly one tile and its id would otherwise collide with another tile's.
+        """
+        video_segments = self._get_segmenter(tile_id).propagate_prompts(
+            update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+        )
+        outer = self.tiling.get_block_with_halo(tile_id, list(self.halo)).outer_block
+        bounding_box = tuple(slice(int(b), int(e)) for b, e in zip(outer.begin, outer.end))
+        return video_segments, bounding_box
+
+    def release_tile(self, tile_id: int) -> None:
+        """Free one tile's video-predictor state, leaving the other tiles' states alive.
+
+        Keeps the CUDA cache rather than emptying it: the next state on this device is the same size,
+        so the allocator reuses the blocks, and a collection from every worker after every job costs
+        more than it frees - it holds the interpreter lock while the other devices wait for work.
+        """
+        segmenter = self._segmenters.pop((tile_id, self._worker_id(tile_id)), None)
+        self._tile_workers.pop(tile_id, None)
+        if segmenter is not None:
+            segmenter.release()
 
     def segment_slice(self, frame_idx, points=None, labels=None, boxes=None, masks=None, object_id=1):
         """Segment a single slice. Points are (x, y), boxes (x0, y0, x1, y1), as passed by the annotator.
@@ -1232,7 +1451,7 @@ class TiledPromptableSegmentation3D:
 
         out = np.zeros(self.shape[1:], dtype="uint32")
         found = False
-        for tile_id, tile_seg in self._run_tile_jobs(sorted(tile_jobs), segment_tile):
+        for tile_id, tile_seg in self.map_tiles(sorted(tile_jobs), segment_tile):
             if tile_seg is None:
                 continue
             local, glob = self._inner_slices(tile_id)
@@ -1320,12 +1539,12 @@ class TiledPromptableSegmentation3D:
         segmentation = np.zeros(self.shape, dtype="uint64")
 
         def predict_tile(tile_id, tile_update=None):
-            return self._segmenters[tile_id].predict(
+            return self._get_segmenter(tile_id).predict(
                 update_progress=tile_update, early_stop_patience=early_stop_patience, z_range=z_range,
             )
 
-        for tile_id, tile_seg in self._run_tile_jobs(
-            sorted(self._segmenters), predict_tile, update_progress=update_progress,
+        for tile_id, tile_seg in self.map_tiles(
+            self.active_tiles, predict_tile, update_progress=update_progress,
         ):
             local, glob = self._inner_slices(tile_id)
             inner = tile_seg[(slice(None),) + local]
@@ -1333,31 +1552,3 @@ class TiledPromptableSegmentation3D:
             positive = inner != 0
             region[positive] = inner[positive]
         return segmentation
-
-    def propagate_prompts_by_tile(self, update_progress=None, early_stop_patience=None, z_range=None):
-        """Propagate every active tile's prompts, keeping each tile's result and block apart.
-
-        Unlike `predict`, which stitches by object identity (one logical object prompted in several
-        tiles keeps one id), this never merges across tiles. It is for a caller whose object ids are
-        tile-local, e.g. automatic prompt generation, where every candidate belongs to exactly one
-        tile and its id would otherwise collide with an unrelated candidate in another tile.
-
-        Returns:
-            {tile_id: (video_segments, bounding_box)}. `video_segments` is the tile's own
-            {frame: {object_id: mask}} in the tile's local (cropped) coordinates, as returned by
-            `PromptableSegmentation3D.propagate_prompts`. `bounding_box` is the tile's outer
-            (halo-included) block, a (y, x) slice tuple into the volume's in-plane axes.
-        """
-        def propagate_tile(tile_id, tile_update=None):
-            return self._segmenters[tile_id].propagate_prompts(
-                update_progress=tile_update, early_stop_patience=early_stop_patience, z_range=z_range,
-            )
-
-        results = {}
-        for tile_id, video_segments in self._run_tile_jobs(
-            sorted(self._segmenters), propagate_tile, update_progress=update_progress,
-        ):
-            outer = self.tiling.get_block_with_halo(tile_id, list(self.halo)).outer_block
-            bounding_box = tuple(slice(int(b), int(e)) for b, e in zip(outer.begin, outer.end))
-            results[tile_id] = (video_segments, bounding_box)
-        return results
