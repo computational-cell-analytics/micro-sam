@@ -668,8 +668,9 @@ DATASET_SPACING: dict = {
 # The parameters `AutomaticPromptGenerator.generate` accepts, so a run can be described by one dict.
 GENERATE_PARAM_KEYS = (
     "candidate_threshold", "foreground_threshold", "n_iter", "dt", "sigma", "min_candidate_size",
-    "score_threshold", "max_overlap", "min_size", "refine_with_box_prompts", "box_extension",
-    "multimasking", "n_objects_per_pass", "early_stop_patience", "n_threads",
+    "score_threshold", "score_filter", "max_overlap", "min_size", "refinement", "refinement_kwargs",
+    "multimasking", "multimask_scorer", "multimask_selection",
+    "n_objects_per_pass", "early_stop_patience", "batch_size", "n_threads",
 )
 
 
@@ -757,7 +758,7 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t", encoder_model_
 
 def build_apg_segmenter(
     model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None,
-    is_tiled=False, interactive_checkpoint_path=None, devices=None,
+    interactive_checkpoint_path=None, export_root=None, devices=None,
 ):
     """Build the automatic prompt generator from both halves of a joint checkpoint.
 
@@ -770,11 +771,10 @@ def build_apg_segmenter(
         device: The torch device.
         joint_checkpoint: The joint trainer checkpoint, without the '.pt' suffix.
         decoder_path: Decoder weights to use instead of the ones exported from the joint checkpoint.
-        is_tiled: Whether to build the tiled generator, which encodes and propagates tile by tile
-            instead of downscaling the whole image (or volume) to the model's input size.
         interactive_checkpoint_path: Standalone interactive weights (e.g. a downloaded registry
             checkpoint) to use instead of the interactive half exported from the joint checkpoint.
             Requires 'decoder_path' too, since there is then no joint checkpoint to export it from.
+        export_root: Optional directory for the split checkpoint files. Defaults to JOINT_EXPORT_ROOT.
         devices: The devices the decoder, the scoring and the propagation spread over. All visible
             GPUs by default; pass a single device to pin the run to it.
 
@@ -789,8 +789,9 @@ def build_apg_segmenter(
             raise ValueError("'interactive_checkpoint_path' requires 'decoder_path' too.")
         interactive_path, exported_decoder = interactive_checkpoint_path, None
     else:
+        export_kwargs = {} if export_root is None else {"export_root": export_root}
         interactive_path, exported_decoder = export_joint_checkpoint(
-            model_type, joint_checkpoint, source_checksum=joint_checksum
+            model_type, joint_checkpoint, source_checksum=joint_checksum, **export_kwargs
         )
     model = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=interactive_path,
@@ -801,7 +802,7 @@ def build_apg_segmenter(
     )
     return get_instance_segmentation_generator(
         model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
-        is_tiled=is_tiled, inference_device=devices,
+        inference_device=devices,
     )
 
 
@@ -1078,7 +1079,10 @@ def ensure_8bit_range(raw):
     """Scale raw data into the [0, 255] range the evaluation feeds the models with."""
     if raw.size == 0:
         return raw.astype("float32", copy=False)
-    return normalize_raw(raw) * 255.0
+    # `read_2d` returns channel-last images. Preserve the contrast of every microscopy channel
+    # instead of letting the channel with the largest values determine the shared percentile range.
+    spatial_axes = (0, 1) if raw.ndim == 3 and raw.shape[-1] in (1, 2, 3, 4) else None
+    return normalize_raw(raw, axis=spatial_axes) * 255.0
 
 
 def read_2d(path, key):
