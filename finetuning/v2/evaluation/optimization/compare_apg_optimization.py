@@ -145,9 +145,12 @@ def _compare(
     )
     peak_ok = True
     if "peak_cuda_memory_bytes" in baseline_table and "peak_cuda_memory_bytes" in candidate_table:
-        baseline_peak = baseline_table["peak_cuda_memory_bytes"].replace(0, np.nan)
-        peak_change = candidate_table["peak_cuda_memory_bytes"] / baseline_peak - 1.0
-        peak_ok = bool(np.nanmax(peak_change.to_numpy()) <= 0.10)
+        baseline_peak = baseline_table["peak_cuda_memory_bytes"].replace(0, np.nan).to_numpy()
+        candidate_peak = candidate_table["peak_cuda_memory_bytes"].to_numpy()
+        paired = np.isfinite(baseline_peak) & np.isfinite(candidate_peak)
+        if paired.any():
+            peak_change = candidate_peak[paired] / baseline_peak[paired] - 1.0
+            peak_ok = bool(peak_change.max() <= 0.10)
     quality_exception = bool(macro_change >= 0.10 and np.all(msa_changes > 0.0))
     if target == "quality":
         checks = {
