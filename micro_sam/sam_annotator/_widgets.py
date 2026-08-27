@@ -4495,7 +4495,9 @@ class AutoSegmentWidget(_WidgetBase):
         )
 
     def _apg_settings(self, settings):
-        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION, default_prompt_generation
+        from micro_sam.v2.automatic_prompt_generation import (
+            DEFAULT_PROMPT_GENERATION, DEFAULT_REFINEMENT, default_prompt_generation,
+        )
         from micro_sam.v2.util import DEFAULT_MODEL
         model_type = getattr(self, "model_type", None) or DEFAULT_MODEL
         defaults = default_prompt_generation(model_type, is_volume=False)
@@ -4557,21 +4559,21 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addWidget(self.multimasking_checkbox)
 
-        self.refine_with_box_prompts = defaults["refine_with_box_prompts"]
+        self.refine_with_box_prompts = DEFAULT_PROMPT_GENERATION["refinement"] == "boxes"
         self.refine_with_box_prompts_checkbox = self._add_boolean_param(
             "refine_with_box_prompts", self.refine_with_box_prompts,
             tooltip=get_tooltip("autosegment", "refine_with_box_prompts"),
         )
         settings.layout().addWidget(self.refine_with_box_prompts_checkbox)
 
-        self.box_extension = DEFAULT_PROMPT_GENERATION["box_extension"]
+        self.box_extension = DEFAULT_REFINEMENT["box_extension"]
         self.box_extension_param, layout = self._add_int_param(
             "box_extension", self.box_extension, min_val=0, max_val=100,
             tooltip=get_tooltip("autosegment", "box_extension"),
         )
         settings.layout().addLayout(layout)
 
-        self.prompt_batch_size = 64
+        self.prompt_batch_size = DEFAULT_PROMPT_GENERATION["batch_size"]
         self.prompt_batch_size_param, layout = self._add_int_param(
             "prompt_batch_size", self.prompt_batch_size, min_val=1, max_val=1024,
             tooltip=get_tooltip("autosegment", "prompt_batch_size"),
@@ -4586,7 +4588,7 @@ class AutoSegmentWidget(_WidgetBase):
             )
             settings.layout().addLayout(layout)
 
-            self.early_stop_patience = 0
+            self.early_stop_patience = DEFAULT_PROMPT_GENERATION["early_stop_patience"]
             self.early_stop_patience_param, layout = self._add_int_param(
                 "early_stop_patience", self.early_stop_patience, min_val=0, max_val=1024,
                 tooltip=get_tooltip("autosegment", "early_stop_patience"),
@@ -4613,12 +4615,14 @@ class AutoSegmentWidget(_WidgetBase):
         candidate_threshold = self.candidate_threshold
         if ndim == 3:
             candidate_threshold = (candidate_threshold, self.candidate_threshold_high)
+        refinement = "boxes" if self.refine_with_box_prompts else None
+        refinement_kwargs = {"box_extension": self.box_extension} if refinement is not None else None
 
         kwargs = dict(
             candidate_threshold=candidate_threshold, foreground_threshold=self.foreground_threshold,
             min_candidate_size=self.min_candidate_size, score_threshold=self.score_threshold,
-            max_overlap=self.max_overlap, min_size=self.min_object_size,
-            refine_with_box_prompts=bool(self.refine_with_box_prompts), box_extension=self.box_extension,
+            score_filter="predicted_iou", max_overlap=self.max_overlap, min_size=self.min_object_size,
+            refinement=refinement, refinement_kwargs=refinement_kwargs,
             multimasking=bool(self.multimasking), batch_size=self.prompt_batch_size,
             n_iter=self.n_iter, dt=self.dt, sigma=self.sigma, n_threads=self.n_threads,
         )
@@ -4637,9 +4641,11 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _apg_select_kwargs(self):
         # The merge stage: post-processing of the proposals, cheap next to the prompting.
+        refinement = "boxes" if self.refine_with_box_prompts else None
+        refinement_kwargs = {"box_extension": self.box_extension} if refinement is not None else None
         return dict(
             score_threshold=self.score_threshold, max_overlap=self.max_overlap, min_size=self.min_object_size,
-            refine_with_box_prompts=bool(self.refine_with_box_prompts), box_extension=self.box_extension,
+            score_filter="predicted_iou", refinement=refinement, refinement_kwargs=refinement_kwargs,
             batch_size=self.prompt_batch_size,
         )
 

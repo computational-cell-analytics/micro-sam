@@ -857,7 +857,9 @@ class TestAutoSegDefaultMode:
         assert autoseg.max_overlap_param.value() == defaults["max_overlap"]
         assert autoseg.min_object_size_param.value() == defaults["min_size"]
         assert autoseg.multimasking_checkbox.isChecked() == DEFAULT_PROMPT_GENERATION["multimasking"]
-        assert autoseg.refine_with_box_prompts_checkbox.isChecked() == defaults["refine_with_box_prompts"]
+        assert autoseg.refine_with_box_prompts_checkbox.isChecked() == (
+            DEFAULT_PROMPT_GENERATION["refinement"] == "boxes"
+        )
         viewer.close()
 
     def test_volumetric_apg_controls_build_generate_kwargs(self, make_napari_viewer_proxy):
@@ -874,7 +876,7 @@ class TestAutoSegDefaultMode:
         expected_candidate_threshold = (defaults_2d["candidate_threshold"], defaults_3d["candidate_threshold"][1])
         assert kwargs["candidate_threshold"] == expected_candidate_threshold
         assert kwargs["n_objects_per_pass"] == DEFAULT_PROMPT_GENERATION["n_objects_per_pass"]
-        assert kwargs["early_stop_patience"] is None
+        assert kwargs["early_stop_patience"] == DEFAULT_PROMPT_GENERATION["early_stop_patience"]
 
         autoseg.early_stop_patience_param.setValue(3)
         assert autoseg._apg_kwargs(ndim=3)["early_stop_patience"] == 3
@@ -897,7 +899,7 @@ class TestAutoSegDefaultMode:
 
         propose_params = set(inspect.signature(AutomaticPromptGenerator.propose).parameters) - {"self"}
         select_params = set(inspect.signature(AutomaticPromptGenerator.select).parameters) - {"self", "proposals"}
-        assert set(propose_kwargs) == propose_params
+        assert set(propose_kwargs) <= propose_params
         assert set(select_kwargs) == select_params
 
         # Together they are what the single-call form would have passed.

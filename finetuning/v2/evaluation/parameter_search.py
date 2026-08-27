@@ -77,7 +77,7 @@ APG_GRID_2D = {
     "score_threshold": [0.5, 0.6, 0.7, 0.8],
     "max_overlap": [0.15, 0.3],
     "min_size": [50],
-    "refine_with_box_prompts": [False, True],
+    "refinement": [None, "boxes"],
 }
 
 # A volume gates its propagation on the score, so none of its axes are free and this grid stays small.
