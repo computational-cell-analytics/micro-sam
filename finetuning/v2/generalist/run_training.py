@@ -16,17 +16,20 @@ EPOCHS = {
 
 SCRIPT = "/mnt/vast-nhr/home/archit/u16934/micro-sam/finetuning/v2/generalist/train_joint.py"
 
+PARTITION = "kisski-h100"
+GPU_TYPE = "H100"
+
 
 def write_batch_script(out_path, model_type, n_epochs, dataset_choice, distance_type, save_root, dry):
     "Writing the multi-node sbatch script for one joint SAM2 training run (2 nodes x 4 H100 = 8 GPUs)."
     # IB-supported NCCL comms across nodes.
     batch_script = rf"""#!/bin/bash
-#SBATCH --job-name=micro-sam2_joint_{model_type}
+#SBATCH --job-name=μSAM2_joint_{model_type}
 #SBATCH -t 4-00:00:00
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
-#SBATCH -p kisski-h100
-#SBATCH --gpus-per-node=H100:4
+#SBATCH -p {PARTITION}
+#SBATCH --gpus-per-node={GPU_TYPE}:4
 #SBATCH --cpus-per-task 32
 #SBATCH --mem 384G
 #SBATCH --qos=96h
@@ -113,7 +116,7 @@ if __name__ == "__main__":
         help="The choice of model type. Submits all four models if not specified.",
     )
     parser.add_argument(
-        "-s", "--save_root", type=str, default="/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v3",
+        "-s", "--save_root", type=str, default="/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v4",
         help="The path where to store the model checkpoints and logs.",
     )
     parser.add_argument(
