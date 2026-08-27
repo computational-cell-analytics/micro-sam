@@ -34,7 +34,7 @@ from common import (
 )
 
 
-def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, spacing=None):
+def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, spacing=None, devices=None):
     """Segment one sample with the tuned parameters of a mode."""
     if mode == "apg":
         model.clear_state()
@@ -42,13 +42,13 @@ def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, sp
         volume_params = {"spacing": spacing} if ndim == 3 else {}
         return model.generate(**{**volume_params, **params}).astype("uint32")
 
-    prediction = predict_unisam2(model, raw, ndim=ndim, device=device)
+    prediction = predict_unisam2(model, raw, ndim=ndim, device=device, devices=devices)
     return postprocess_unisam2(prediction, dataset_name, model_type=model_type, params=params)
 
 
 def run_evaluation(
     model, mode, dataset_name, data_root, experiment_folder, model_type, params, device,
-    crop_shape=None, checkpoint_id=None,
+    crop_shape=None, checkpoint_id=None, devices=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -66,6 +66,7 @@ def run_evaluation(
         device: The torch device.
         crop_shape: The 3d center crop.
         checkpoint_id: The checksum of all model weights used by the mode.
+        devices: The devices inference spreads over. All visible GPUs by default.
 
     Returns:
         The results as a DataFrame.
@@ -95,7 +96,10 @@ def run_evaluation(
     for raw, labels, valid_roi in tqdm(samples, total=total, desc=f"{mode}-{model_type}"):
         if labels.max() == 0:  # Nothing to score without ground-truth.
             continue
-        seg = segment(model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing)
+        seg = segment(
+            model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing,
+            devices=devices,
+        )
         if valid_roi is not None:
             seg[~valid_roi] = 0
         if ndim == 2:
@@ -135,6 +139,7 @@ def main():
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate with the library defaults.")
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
+    parser.add_argument("--devices", nargs="*", default=None, help="Inference devices. All visible GPUs by default.")
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
@@ -152,6 +157,7 @@ def main():
         args.mode, args.model_type, device, ndim,
         joint_checkpoint=args.joint_checkpoint, checkpoint_path=args.checkpoint,
         joint_checksum=joint_checksum, interactive_checkpoint_path=args.interactive_checkpoint,
+        devices=args.devices or None,
     )
 
     params = None
@@ -172,6 +178,7 @@ def main():
     run_evaluation(
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,
         params, device, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
+        devices=args.devices or None,
     )
 
 

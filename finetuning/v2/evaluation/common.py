@@ -756,8 +756,8 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t", encoder_model_
 
 
 def build_apg_segmenter(
-    model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None, is_tiled=False,
-    interactive_checkpoint_path=None,
+    model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None,
+    is_tiled=False, interactive_checkpoint_path=None, devices=None,
 ):
     """Build the automatic prompt generator from both halves of a joint checkpoint.
 
@@ -775,6 +775,8 @@ def build_apg_segmenter(
         interactive_checkpoint_path: Standalone interactive weights (e.g. a downloaded registry
             checkpoint) to use instead of the interactive half exported from the joint checkpoint.
             Requires 'decoder_path' too, since there is then no joint checkpoint to export it from.
+        devices: The devices the decoder, the scoring and the propagation spread over. All visible
+            GPUs by default; pass a single device to pin the run to it.
 
     Returns:
         The prompt generator, built through the library factory that the CLI and the API use.
@@ -798,7 +800,8 @@ def build_apg_segmenter(
         decoder_path or exported_decoder, device, encoder=model.image_encoder, encoder_model_type=model_type,
     )
     return get_instance_segmentation_generator(
-        model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim, is_tiled=is_tiled,
+        model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
+        is_tiled=is_tiled, inference_device=devices,
     )
 
 
@@ -828,7 +831,7 @@ def resolve_checkpoint_identity(
 
 def build_model(
     mode, model_type, device, ndim, joint_checkpoint="best", checkpoint_path=None, joint_checksum=None,
-    interactive_checkpoint_path=None,
+    interactive_checkpoint_path=None, devices=None,
 ):
     """Load the model a mode runs on, from the two halves of the joint checkpoint.
 
@@ -842,6 +845,7 @@ def build_model(
         joint_checksum: The checksum of the joint checkpoint, from `resolve_checkpoint_identity`.
         interactive_checkpoint_path: Standalone interactive weights for 'apg', bypassing the joint
             checkpoint entirely. See `build_apg_segmenter`.
+        devices: The devices inference spreads over. All visible GPUs by default.
 
     Returns:
         The UniSAM2 decoder for 'ais', or the prompt generator for 'apg'.
@@ -850,6 +854,7 @@ def build_model(
         return build_apg_segmenter(
             model_type, ndim, device, joint_checkpoint, decoder_path=checkpoint_path,
             joint_checksum=joint_checksum, interactive_checkpoint_path=interactive_checkpoint_path,
+            devices=devices,
         )
 
     decoder_path = checkpoint_path or export_joint_checkpoint(
@@ -858,7 +863,7 @@ def build_model(
     return load_unisam2_model(decoder_path, device, encoder=model_type)
 
 
-def predict_unisam2(model, raw, ndim, device, normalization=None):
+def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None):
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
     # UniSAM2 takes single-channel input, so a trailing channel axis is averaged away.
     if raw.ndim > ndim:
@@ -867,7 +872,9 @@ def predict_unisam2(model, raw, ndim, device, normalization=None):
     is_3d = (ndim == 3)
     # Tiling an image that fits the training patch changes the encoder's scale and the normalization.
     is_tiled = is_3d or any(size > TRAINING_PATCH_SHAPE[-1] for size in raw.shape[:2])
-    segmenter = get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
+    segmenter = get_unisam2_segmentation_generator(
+        model, is_tiled=is_tiled, device=device, inference_device=devices
+    )
     if is_tiled:
         tile_shape = (4, 384, 384) if is_3d else (384, 384)
         halo = (2, 64, 64) if is_3d else (64, 64)
