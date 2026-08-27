@@ -2209,6 +2209,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                         dtype=torch.float32,
                         device=scores.device,
                     )
+                selection_scores_tensor = selection_scores_tensor.to(scores.device)
                 selected_tensor = selection_scores_tensor.argmax(dim=1)
                 raw_best = scores.argmax(dim=1)
                 changed_from_iou += torch.count_nonzero(selected_tensor != raw_best)

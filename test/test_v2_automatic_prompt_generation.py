@@ -1347,19 +1347,19 @@ class _BlockPredictor:
     prompt translated into the wrong frame comes back as a visibly displaced mask.
     """
 
-    device = "cpu"
     mask_threshold = 0.0
 
-    def __init__(self, shape):
+    def __init__(self, shape, device="cpu"):
         self.shape = shape
+        self.device = torch.device(device)
         self.calls = []
 
     def _prep_prompts(self, points, labels, boxes, mask_logits, normalize):
         self.calls.append({"points": points, "labels": labels, "boxes": boxes, "mask_logits": mask_logits})
-        coords = None if points is None else torch.as_tensor(points)
-        point_labels = None if labels is None else torch.as_tensor(labels)
-        box = None if boxes is None else torch.as_tensor(boxes)
-        masks = None if mask_logits is None else torch.as_tensor(mask_logits)
+        coords = None if points is None else torch.as_tensor(points, device=self.device)
+        point_labels = None if labels is None else torch.as_tensor(labels, device=self.device)
+        box = None if boxes is None else torch.as_tensor(boxes, device=self.device)
+        masks = None if mask_logits is None else torch.as_tensor(mask_logits, device=self.device)
         return masks, coords, point_labels, box
 
     def _anchors(self, coords, labels, boxes):
@@ -1374,14 +1374,14 @@ class _BlockPredictor:
     def _predict(self, coords, labels, boxes, mask_input, multimask_output, return_logits):
         anchors = self._anchors(coords, labels, boxes)
         n_masks = 3 if multimask_output else 1
-        logits = torch.full((len(anchors), n_masks, *self.shape), -10.0)
+        logits = torch.full((len(anchors), n_masks, *self.shape), -10.0, device=self.device)
         for row, (x, y) in enumerate(anchors):
             # Two rows taller than an 8x8 first-round mask, so a replacement is visible but consistent.
             y0, y1 = max(0, int(y) - 5), min(self.shape[0], int(y) + 5)
             x0, x1 = max(0, int(x) - 4), min(self.shape[1], int(x) + 4)
             logits[row, :, y0:y1, x0:x1] = 10.0
         # Descending, so the argmax over the mask dimension is deterministic.
-        scores = torch.tensor([0.9, 0.7, 0.5][:n_masks]).repeat(len(anchors), 1)
+        scores = torch.tensor([0.9, 0.7, 0.5][:n_masks], device=self.device).repeat(len(anchors), 1)
         return logits, scores, None
 
 
@@ -1425,6 +1425,31 @@ def test_apply_prompts_can_eagerly_score_or_defer_multimasks():
     assert len(deferred) == 6
     assert {record["multimask_group"] for record in deferred} == {0, 1}
     assert all(record["merge_score"] == record["multimask_index"] for record in deferred)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for the device transfer test.")
+def test_apply_prompts_moves_cpu_selector_scores_to_decoder_device():
+    class CpuScorer:
+        def predict_grouped_tensor(self, features):
+            assert features.device.type == "cuda"
+            return features[:, :, 8].cpu()
+
+    shape = (32, 32)
+    segmenter = _make_plain_generator(shape, _BlockPredictor(shape, device="cuda"))
+    segmenter._microscopy_multimask_scorer = CpuScorer()
+    segmenter._refinement_gate_model = None
+    prompts = {
+        "points": np.array([[[8.0, 8.0]], [[24.0, 24.0]]], dtype="float32"),
+        "point_labels": np.ones((2, 1), dtype="int32"),
+    }
+
+    records = segmenter._apply_prompts(
+        prompts, multimasking=True, batch_size=8, multimask_scorer="microscopy",
+        foreground=np.ones(shape, dtype="float32"),
+    )
+
+    assert len(records) == 2
+    assert {record["multimask_index"] for record in records} == {2}
 
 
 def test_apply_prompts_can_score_the_dedicated_single_mask():
