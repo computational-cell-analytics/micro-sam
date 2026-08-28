@@ -846,11 +846,11 @@ def test_worker_pool_is_declined_without_what_a_worker_needs():
     assert build_pool(SimpleNamespace(build_kwargs=recipe), [torch.device("cpu"), torch.device("cpu")]) is None
     assert build_pool(
         SimpleNamespace(build_kwargs=recipe), [torch.device("cuda", 0), torch.device("cuda", 1)],
-        n_worker_processes=0,
+        n_workers=0,
     ) is None
 
 
-def test_worker_pool_honors_an_explicit_process_count(monkeypatch):
+def test_worker_pool_oversubscribes_devices_that_cycle(monkeypatch):
     from micro_sam.v2.propagation_pool import build_pool
 
     class Pool:
@@ -859,17 +859,18 @@ def test_worker_pool_honors_an_explicit_process_count(monkeypatch):
 
     monkeypatch.setattr("micro_sam.v2.propagation_pool.PropagationPool", Pool)
     model = SimpleNamespace(build_kwargs={"model_type": "hvit_t"})
-    devices = [torch.device("cuda", index) for index in range(3)]
+    devices = [torch.device("cuda", index) for index in range(2)]
 
-    pool = build_pool(model, devices, n_worker_processes=1)
+    pool = build_pool(model, devices, n_workers=4)
 
-    assert pool.devices == [torch.device("cuda", 0)]
-    with pytest.raises(ValueError, match="between 0 and 3"):
-        build_pool(model, devices, n_worker_processes=4)
+    assert pool.devices == [
+        torch.device("cuda", 0), torch.device("cuda", 1), torch.device("cuda", 0), torch.device("cuda", 1),
+    ]
+    assert build_pool(model, devices, n_workers=1) is None  # One worker leaves nothing to spread over.
 
 
 def test_worker_pool_completes_an_empty_job_cycle():
-    from micro_sam.v2.propagation_pool import DONE, PropagationPool
+    from micro_sam.v2.propagation_pool import PropagationPool
 
     class Queue:
         def __init__(self):
@@ -885,8 +886,47 @@ def test_worker_pool_completes_an_empty_job_cycle():
     pool._jobs = Queue()
 
     assert pool.map_jobs([], early_stop_patience=None) == []
-    assert pool._jobs.items == [DONE, DONE]
-    assert pool._loaded is False
+    assert pool._jobs.items == []
+    assert pool._loaded is True
+    pool._workers = []
+
+
+def test_worker_pool_ends_every_worker_before_loading_the_next_volume():
+    from micro_sam.v2.propagation_pool import DONE, PropagationPool
+
+    events = []
+
+    class Channel:
+        def __init__(self, name):
+            self.name = name
+
+        def put(self, item):
+            events.append((self.name, item))
+
+    responses = iter([
+        (0, DONE, None), (1, DONE, None),
+        (0, None, None), (1, None, None),
+    ])
+    pool = object.__new__(PropagationPool)
+    pool._loaded = True
+    pool._failed = False
+    pool._workers = [object(), object()]
+    pool._jobs = Channel("job")
+    pool._commands = [Channel("command-0"), Channel("command-1")]
+
+    def take():
+        events.append(("result", None))
+        return next(responses)
+
+    pool._take = take
+    pool.set_volume(
+        np.zeros((2, 4, 4), dtype="uint8"), "embeddings.zarr", (4, 4), (1, 1), True, 2,
+    )
+
+    assert [name for name, _ in events] == [
+        "job", "job", "result", "result", "command-0", "command-1", "result", "result",
+    ]
+    assert pool._loaded is True
     pool._workers = []
 
 

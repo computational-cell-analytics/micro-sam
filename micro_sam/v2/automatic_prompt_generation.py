@@ -160,6 +160,15 @@ DEFAULT_PROMPT_GENERATION = {
     # default; the annotator has used this value since the volume widget was written. Raise it where
     # objects are expected to disappear and reappear, since SAM2 can drop a mask and recover it.
     "early_stop_patience": 2,
+    # Tiled volumes only. Rounds the candidates are propagated in, highest scoring first. Four in
+    # five of them lose the merge as duplicates of a better-scoring instance, and a volume pays to
+    # propagate every one before the merge ever sees it. Between rounds the voxels the finished
+    # masks claim are known, so a candidate they already cover can be dropped instead. Measured on
+    # one gonuclear volume, four rounds cut 1100s to 407s and improved mSA 0.443 -> 0.452, and held
+    # on snemi (better) and humanneurons (neutral) - but cost cremi 0.04 CREMI score, so this stays
+    # off by default until the data at hand has been measured. Four rounds is the knee: more prune
+    # more, but each round is a barrier the devices wait on.
+    "propagation_waves": 1,
     # Number of image prompts (or refinement boxes) evaluated per forward pass.
     "batch_size": 64,
     # These are constant across all registry backbones and dimensionalities.
@@ -1511,6 +1520,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         multimask_selection: str = DEFAULT_PROMPT_GENERATION["multimask_selection"],
         n_objects_per_pass: int = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"],
         early_stop_patience: Optional[int] = DEFAULT_PROMPT_GENERATION["early_stop_patience"],
+        propagation_waves: int = DEFAULT_PROMPT_GENERATION["propagation_waves"],
         batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
         n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
         verbose: bool = False,
@@ -1554,6 +1564,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 the grouped score-ordered merge. Images only.
             n_objects_per_pass: Number of objects propagated together through a volume. The video
                 predictor runs them as one batch, so this trades device memory against the pass count.
+            propagation_waves: Tiled volumes only. Rounds the candidates are propagated in, highest
+                scoring first, dropping between rounds those an already-propagated instance covers by
+                more than 'max_overlap'. One round propagates every candidate, see
+                `DEFAULT_PROMPT_GENERATION`.
             early_stop_patience: Stop a propagation pass after this many consecutive slices in which
                 every object of the pass is empty. None propagates through the whole volume. Two by
                 default: propagating past the end of every object of a pass only reproduces empty
@@ -1630,7 +1644,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             self._last_generation_stats["scored_candidates"] = len(candidates)
             records = self._propagate_candidates(
                 candidates, n_objects_per_pass=n_objects_per_pass,
-                early_stop_patience=early_stop_patience, verbose=verbose,
+                early_stop_patience=early_stop_patience, verbose=verbose, max_overlap=max_overlap,
+                propagation_waves=propagation_waves,
             )
             # Tiled records arrive grouped by tile and need their halo overlaps resolved, which
             # '_merge' does polymorphically; an untiled volume merges them flat.
@@ -2523,6 +2538,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             "point": record["point"],
             "score": record["predicted_iou"],
             "stability": record["stability_score"],
+            # The mask on the anchor slice, which the pruning between propagation rounds measures
+            # the claimed overlap of.
+            "mask": record["segmentation"],
+            "mask_box": record["bounding_box"],
         }
 
     def _refine_anchors(
@@ -2643,7 +2662,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
     def _propagate_candidates(
         self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
-        verbose: bool,
+        verbose: bool, max_overlap: float, propagation_waves: int = 1,
     ) -> List[Dict[str, Any]]:
         """Turn every candidate into a volumetric mask by propagating its prompts through the volume.
 
@@ -2651,19 +2670,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         them together from the earliest slice any of them is conditioned on: an object anchored later
         than that would be tracked before it is conditioned, and never propagated backwards at all.
         """
-        by_anchor = {}
-        for candidate in candidates:
-            by_anchor.setdefault(candidate["frame"], []).append(candidate)
-        passes = [
-            group[start:start + n_objects_per_pass]
-            for _, group in sorted(by_anchor.items())
-            for start in range(0, len(group), n_objects_per_pass)
-        ]
-        self._last_generation_stats.update({
-            "unique_anchor_slices": len(by_anchor),
-            "propagation_passes": len(passes),
-        })
-
         def run_pass(propagator, batch):
             # Only the objects: re-reading the volume's features each pass costs more than the propagation.
             propagator.reset_tracking()
@@ -2672,20 +2678,106 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             video_segments = propagator.propagate_prompts(early_stop_patience=early_stop_patience)
             return _volume_records(video_segments, batch, self._volume.shape), len(video_segments)
 
-        # The passes share nothing but the volume, so each goes to whichever device is free.
-        with tqdm(total=len(passes), desc="Propagate prompts", disable=not verbose) as progress:
-            per_pass = self._propagator.map_passes(passes, run_pass, update_progress=progress.update)
+        claims: Dict[Any, np.ndarray] = {}
+        records, anchors = [], set()
+        n_passes = propagated_frame_steps = n_propagated = 0
+        waves = self._candidate_waves(candidates, propagation_waves)
+        for wave_index, wave in enumerate(waves):
+            wave = [candidate for candidate in wave if not self._is_claimed(claims, candidate, max_overlap)]
+            n_propagated += len(wave)
+            by_anchor: Dict[int, List[dict]] = {}
+            for candidate in wave:
+                by_anchor.setdefault(candidate["frame"], []).append(candidate)
+            passes = [
+                group[start:start + n_objects_per_pass]
+                for _, group in sorted(by_anchor.items())
+                for start in range(0, len(group), n_objects_per_pass)
+            ]
+            if not passes:
+                continue
+            anchors.update(by_anchor)
+            n_passes += len(passes)
 
-        records = [record for pass_records, _ in per_pass for record in pass_records]
-        propagated_frame_steps = sum(steps for _, steps in per_pass)
+            # The passes share nothing but the volume, so each goes to whichever device is free.
+            with tqdm(total=len(passes), desc="Propagate prompts", disable=not verbose) as progress:
+                per_pass = self._propagator.map_passes(passes, run_pass, update_progress=progress.update)
 
-        possible_frame_steps = len(passes) * int(self._volume.shape[0])
+            for pass_records, steps in per_pass:
+                records.extend(pass_records)
+                propagated_frame_steps += steps
+                if wave_index + 1 < len(waves):
+                    self._claim_records(claims, None, pass_records)
+
+        possible_frame_steps = n_passes * int(self._volume.shape[0])
         self._last_generation_stats.update({
+            "unique_anchor_slices": len(anchors),
+            "propagation_passes": n_passes,
+            "propagated_candidates": n_propagated,
+            "pruned_candidates": len(candidates) - n_propagated,
             "propagated_frame_steps": propagated_frame_steps,
             "early_stopped_frame_steps": possible_frame_steps - propagated_frame_steps,
         })
         self._propagator.reset_predictor()
         return records
+
+    def _claim_key(self, candidate: dict):
+        """The region a candidate's masks are expressed in. An untiled volume is a single region."""
+        return None
+
+    def _claim_shape(self, key) -> tuple:
+        """The shape of that region's claim volume, which the record bounding boxes index into."""
+        return tuple(int(side) for side in self._volume.shape)
+
+    def _candidate_waves(self, candidates: List[dict], propagation_waves: int) -> List[List[dict]]:
+        """The candidates in descending merge score, cut into the rounds they are propagated in.
+
+        Descending, because that is the order the merge resolves them in: an instance a later
+        candidate would duplicate has already been propagated by the time that candidate is reached.
+        """
+        if not candidates:
+            return []
+        if propagation_waves <= 1:
+            return [list(candidates)]
+        order = sorted(candidates, key=lambda candidate: -(candidate["score"] * candidate["stability"]))
+        size = -(-len(order) // propagation_waves)
+        return [order[start:start + size] for start in range(0, len(order), size)]
+
+    def _region_claim(self, claims: Dict[Any, np.ndarray], key) -> np.ndarray:
+        """The voxels of one region that an already-propagated instance covers, made on first use."""
+        if key not in claims:
+            claims[key] = np.zeros(self._claim_shape(key), dtype=bool)
+        return claims[key]
+
+    def _claim_records(self, claims: Dict[Any, np.ndarray], key, records: List[dict]) -> None:
+        """Record the voxels a round's masks cover, in the frame the records are expressed in."""
+        if not records:
+            return
+        claim = self._region_claim(claims, key)
+        for record in records:
+            claim[record["bounding_box"]] |= record["segmentation"]
+
+    def _is_claimed(self, claims: Dict[Any, np.ndarray], candidate: dict, max_overlap: float) -> bool:
+        """Whether earlier rounds already claim enough of this candidate to make it a duplicate.
+
+        The merge rejects a candidate when a better-scoring mask claims more than 'max_overlap' of
+        it. This applies that same rule to the candidate's anchor-slice mask rather than to the
+        volumetric mask it has not been propagated into yet, so it predicts the rejection instead of
+        being it. Testing the anchor point instead measures less and prunes less: 597 candidates
+        against 1222 on one gonuclear crop, for the same score.
+
+        Where instances tile space rather than sit apart in background this misfires, because an
+        abutting neighbour then claims a real share of the candidate. Measured on cremi it costs
+        0.03 CREMI score, which is why the default is one round, see 'propagation_waves'.
+        """
+        claim = claims.get(self._claim_key(candidate))
+        if claim is None:
+            return False
+        mask = candidate["mask"]
+        area = int(mask.sum())
+        if area == 0:
+            return False
+        claimed = np.logical_and(claim[(candidate["frame"],) + tuple(candidate["mask_box"])], mask).sum()
+        return bool(claimed > max_overlap * area)
 
     def _condition_pass(self, candidate: dict, object_id: int, propagator) -> None:
         """Push one candidate's conditioning onto the propagator, as the object with this id.
@@ -3145,6 +3237,10 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
                     "point": (float(x), float(y)),
                     "score": record["predicted_iou"],
                     "stability": record["stability_score"],
+                    # The mask on the anchor slice, in the tile's frame, which is what the pruning
+                    # between propagation rounds measures the claimed overlap of.
+                    "mask": record["segmentation"],
+                    "mask_box": record["bounding_box"],
                 })
             return candidates
 
@@ -3164,9 +3260,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         if self._n_worker_processes == 0 or self._pool is not None or self._embedding_path is None:
             return
         devices = [device for _, device in self._propagator.predictor_devices]
-        self._pool = build_pool(
-            self._video_predictor, devices, n_worker_processes=self._n_worker_processes,
-        )
+        self._pool = build_pool(self._video_predictor, devices, n_workers=self._n_worker_processes)
         if self._pool is None:
             self._n_worker_processes = 0  # Nothing to spread over, so stop trying.
 
@@ -3197,8 +3291,10 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
     def __del__(self):
         self.close()
 
-    def _propagation_jobs(self, by_tile: Dict[int, List[dict]], n_objects_per_pass: int) -> List[tuple]:
-        """Cut every tile's passes into the jobs the devices pull, longest job first.
+    def _propagation_jobs(
+        self, by_tile: Dict[int, List[dict]], n_objects_per_pass: int, n_workers: int,
+    ) -> List[tuple]:
+        """Cut every tile's passes into the jobs the workers pull, longest job first.
 
         A whole tile per device leaves the schedule with a tail: the tiles differ by an order of
         magnitude in how many candidates they hold, so the last big one runs alone while the other
@@ -3217,9 +3313,6 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
                 for start in range(0, len(group), n_objects_per_pass)
             ]
 
-        n_workers = len(self._propagator.predictor_devices)
-        if getattr(self, "_n_worker_processes", None) not in (None, 0):
-            n_workers = self._n_worker_processes
         n_passes = sum(len(passes) for passes in by_tile_passes.values())
         if n_workers < 2 or n_passes == 0:
             chunk = n_passes or 1  # One job per tile: nothing to balance, so keep every tile's cache.
@@ -3237,7 +3330,7 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
 
     def _propagate_candidates(
         self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
-        verbose: bool,
+        verbose: bool, max_overlap: float, propagation_waves: int = 1,
     ) -> List[Dict[str, Any]]:
         """Propagate every tile's candidates, spreading the work over the inference devices.
 
@@ -3248,31 +3341,45 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         grouped by tile, like the 2d tiled generator's proposals, because the merge still has to
         resolve the halo overlaps.
         """
-        by_tile: Dict[int, List[dict]] = {}
-        for candidate in candidates:
-            by_tile.setdefault(candidate["tile_id"], []).append(candidate)
-
-        jobs = self._propagation_jobs(by_tile, n_objects_per_pass)
-        if not jobs:
+        if not candidates:
             return []
         n_slices = self._volume.shape[0]
-
         pool = self._worker_pool()
-        if pool is not None:
-            results = pool.map_jobs(jobs, early_stop_patience)
-        else:
-            def run_job(job):
-                tile_id, _, passes = job
-                return propagate_passes(self._propagator, tile_id, passes, early_stop_patience, n_slices)
+        n_workers = pool.n_workers if pool is not None else len(self._propagator.predictor_devices)
 
-            with tqdm(total=len(jobs), desc="Propagate prompts", disable=not verbose) as progress:
-                results = self._propagator.map_tile_jobs(jobs, run_job, update_progress=progress.update)
-
-        # Regrouped in the order the passes were cut, not the order the devices finished them in:
-        # the merge breaks score ties by record order.
+        claims: Dict[int, np.ndarray] = {}
         by_tile_records: Dict[int, List[tuple]] = {}
-        for (tile_id, index, _), result in zip(jobs, results):
-            by_tile_records.setdefault(tile_id, []).append((index, result))
+        n_propagated = 0
+        waves = self._candidate_waves(candidates, propagation_waves)
+        for wave_index, wave in enumerate(waves):
+            wave = [candidate for candidate in wave if not self._is_claimed(claims, candidate, max_overlap)]
+            n_propagated += len(wave)
+            by_tile: Dict[int, List[dict]] = {}
+            for candidate in wave:
+                by_tile.setdefault(candidate["tile_id"], []).append(candidate)
+            jobs = self._propagation_jobs(by_tile, n_objects_per_pass, n_workers)
+            if not jobs:
+                continue
+
+            if pool is not None:
+                results = pool.map_jobs(jobs, early_stop_patience)
+            else:
+                def run_job(job):
+                    tile_id, _, passes = job
+                    return propagate_passes(self._propagator, tile_id, passes, early_stop_patience, n_slices)
+
+                with tqdm(total=len(jobs), desc="Propagate prompts", disable=not verbose) as progress:
+                    results = self._propagator.map_tile_jobs(jobs, run_job, update_progress=progress.update)
+
+            # Regrouped in the order the passes were cut, not the order the devices finished them in:
+            # the merge breaks score ties by record order.
+            for (tile_id, index, _), result in zip(jobs, results):
+                by_tile_records.setdefault(tile_id, []).append(((wave_index, index), result))
+                if wave_index + 1 < len(waves):
+                    self._claim_records(claims, tile_id, result[1])
+
+        self._last_generation_stats["propagated_candidates"] = n_propagated
+        self._last_generation_stats["pruned_candidates"] = len(candidates) - n_propagated
 
         proposals = []
         for tile_id in sorted(by_tile_records):
@@ -3283,6 +3390,15 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             if records:
                 proposals.append({"tile_id": tile_id, "bounding_box": bounding_box, "records": records})
         return proposals
+
+    def _claim_key(self, candidate: dict) -> int:
+        """@private"""
+        return candidate["tile_id"]
+
+    def _claim_shape(self, key) -> tuple:
+        """@private"""
+        box = self._tile_bounding_box(key)
+        return (int(self._volume.shape[0]),) + tuple(side.stop - side.start for side in box)
 
     def _region_of(self, context: dict, record_index: int):
         """The tile that produced a record, which is the tile its instance is re-prompted in.

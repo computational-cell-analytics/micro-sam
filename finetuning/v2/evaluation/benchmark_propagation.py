@@ -107,9 +107,19 @@ def run_pass(propagator, tile_id, points, anchor):
 
 
 def time_pass(propagator, tile_id, n_objects, anchor, repeats):
-    """Median seconds of a pass, after one warm-up that fills the feature cache."""
+    """Median seconds of a pass, and the cold pass before it that fills the feature cache.
+
+    The cold pass reads every slice's features from the store, decompresses them and uploads them,
+    which a warm pass finds cached. The gap between the two is what a prefetch could hide, and the
+    schedule pays it once per job rather than once per volume, so it is worth pricing.
+    """
     points = prompt_points(propagator, tile_id, n_objects)
+    torch.cuda.reset_peak_memory_stats()
+    torch.cuda.synchronize()
+    start = time.time()
     run_pass(propagator, tile_id, points, anchor)
+    torch.cuda.synchronize()
+    cold = time.time() - start
 
     timings = []
     for _ in range(repeats):
@@ -118,7 +128,8 @@ def time_pass(propagator, tile_id, n_objects, anchor, repeats):
         segments = run_pass(propagator, tile_id, points, anchor)
         torch.cuda.synchronize()
         timings.append(time.time() - start)
-    return float(np.median(timings)), len(segments)
+    peak = torch.cuda.max_memory_allocated() / 1e9
+    return float(np.median(timings)), len(segments), cold, peak
 
 
 def profile_pass(propagator, tile_id, n_objects, anchor):
@@ -192,16 +203,19 @@ def main():
     n_frames = raw.shape[0]
     rows = []
     for n_objects in args.objects:
-        seconds, tracked = time_pass(propagator, args.tile_id, n_objects, anchor, args.repeats)
+        seconds, tracked, cold, peak = time_pass(propagator, args.tile_id, n_objects, anchor, args.repeats)
         per_frame = 1000 * seconds / max(1, tracked)
         per_object_frame = per_frame / n_objects
         rows.append({
-            "objects": n_objects, "seconds": seconds, "frames": tracked,
+            "objects": n_objects, "seconds": seconds, "frames": tracked, "cold_seconds": cold,
+            "peak_memory_gb": peak,
             "ms_per_frame": per_frame, "ms_per_object_frame": per_object_frame,
         })
         print(
             f"{n_objects:3d} objects: {seconds:6.3f}s over {tracked} frames "
-            f"({per_frame:6.2f} ms/frame, {per_object_frame:5.2f} ms/object-frame)"
+            f"({per_frame:6.2f} ms/frame, {per_object_frame:5.2f} ms/object-frame); "
+            f"cold {cold:6.3f}s, so {cold - seconds:6.3f}s of it is filling the feature cache; "
+            f"peak {peak:.1f} GB"
         )
 
     if len(rows) > 1:
@@ -213,7 +227,8 @@ def main():
     save_path = os.path.join(RESULTS_ROOT, f"{args.dataset_name}_{args.model_type}_{args.tag}.json")
     with open(save_path, "w") as f:
         json.dump({
-            "tag": args.tag, "variant": args.variant, "volume_shape": list(raw.shape),
+            "tag": args.tag, "variant": args.variant,
+            "volume_shape": list(raw.shape),
             "n_frames": n_frames, "rows": rows,
         }, f, indent=2)
 

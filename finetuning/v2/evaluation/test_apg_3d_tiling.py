@@ -27,6 +27,7 @@ import torch
 
 from micro_sam.v2.util import get_sam2_model, FINETUNED_MODELS
 from micro_sam.v2.instance_segmentation import get_decoder, get_instance_segmentation_generator
+from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
 
 from common import DATA_ROOT, VOLUME_SPEED_OPTIONS, load_data, resolve_params, run_dataset_evaluation
 
@@ -74,6 +75,10 @@ def main():
     )
     parser.add_argument("--sample_index", type=int, default=None, help="Score only this one sample, by index.")
     parser.add_argument(
+        "--propagation_waves", type=int, default=None,
+        help="Rounds the candidates are propagated in, pruning between them. 1 propagates them all.",
+    )
+    parser.add_argument(
         "--z_crop", type=int, default=None,
         help="Center-crop the volume to this many z slices, for a fast turnaround. Full depth if unset.",
     )
@@ -86,7 +91,8 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # None fans out over every visible GPU: the decoder, the scoring and the propagation all use them.
     model = build_segmenter(args.model_type, device, args.devices or None, args.n_worker_processes)
-    params = resolve_params(ndim=3)
+    overrides = {} if args.propagation_waves is None else {"propagation_waves": args.propagation_waves}
+    params = resolve_params(overrides, ndim=3)
 
     tag = f"{args.dataset_name}_{args.model_type}"
 
@@ -94,6 +100,9 @@ def main():
         tag = f"{tag}_z{args.z_crop}"
     if args.xy_crop is not None:
         tag = f"{tag}_xy{args.xy_crop}"
+    # Only when it is not the library default, so a default run still reads the results it already wrote.
+    if params["propagation_waves"] != DEFAULT_PROMPT_GENERATION["propagation_waves"]:
+        tag = f"{tag}_waves{params['propagation_waves']}"
 
     # (10**6,) * 3 always exceeds the volume, so an unset axis keeps that axis whole (a center crop).
     crop_shape = (args.z_crop or 10**6, args.xy_crop or 10**6, args.xy_crop or 10**6)

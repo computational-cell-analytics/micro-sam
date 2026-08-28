@@ -426,6 +426,30 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             groups.setdefault(signature, []).append(obj_idx)
         return list(groups.values())
 
+    def _release_stale_mask_memory(
+        self, inference_state, batch_size, frame_idx, reverse, start_frame_idx,
+    ):
+        """Free the mask memory of the frame that has just fallen out of the attention window.
+
+        A step attends the 'num_maskmem' frames behind it in the direction it travels, so once a
+        frame is further back than that, no later step selects its memory again. Its object pointer
+        still is - the encoder reaches back further for those - so the entry stays and only the
+        memory tensors go. The window beside the start stays for a later pass in the other direction.
+        """
+        behind = self.num_maskmem * self.memory_temporal_stride_for_eval
+        stale = frame_idx + behind if reverse else frame_idx - behind
+        needed_after_switch = (
+            start_frame_idx - behind <= stale < start_frame_idx if reverse else
+            start_frame_idx < stale <= start_frame_idx + behind
+        )
+        if needed_after_switch:
+            return
+        for obj_idx in range(batch_size):
+            entry = inference_state["output_dict_per_obj"][obj_idx]["non_cond_frame_outputs"].get(stale)
+            if entry is not None:
+                entry["maskmem_features"] = None
+                entry["maskmem_pos_enc"] = None
+
     def _track_frame_batch(self, inference_state, obj_indices, frame_idx, reverse):
         """Track one frame for a group of objects in a single forward, storing each object's output."""
         per_object = [inference_state["output_dict_per_obj"][obj_idx] for obj_idx in obj_indices]
@@ -513,6 +537,9 @@ class CustomVideoPredictor(SAM2VideoPredictor):
                     pred_masks_per_obj[obj_idx] = pred_masks[index:index + 1]
                     inference_state["frames_tracked_per_obj"][obj_idx][frame_idx] = {"reverse": reverse}
 
+            self._release_stale_mask_memory(
+                inference_state, batch_size, frame_idx, reverse, start_frame_idx,
+            )
             if len(pred_masks_per_obj) > 1:
                 all_pred_masks = torch.cat(pred_masks_per_obj, dim=0)
             else:

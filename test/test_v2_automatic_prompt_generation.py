@@ -2247,7 +2247,8 @@ def test_volume_scoring_without_refinement_carries_only_the_propagation_prompt(m
 
     assert frames_seen == [0, 2]
     assert [candidate["frame"] for candidate in candidates] == [0, 0, 2]
-    assert all(set(candidate) == {"frame", "point", "score", "stability"} for candidate in candidates)
+    expected_keys = {"frame", "point", "score", "stability", "mask", "mask_box"}
+    assert all(set(candidate) == expected_keys for candidate in candidates)
     # No second round means no extra forward: exactly one scoring call per anchor slice.
     assert predictor.refinement_calls == []
     assert len(predictor.calls) == 2
@@ -2634,15 +2635,7 @@ def _candidates(counts):
 def test_propagation_jobs_keep_a_tile_whole_on_one_device():
     # Nothing to balance, so every tile keeps one state and pays for its features once.
     segmenter = _propagation_generator(n_devices=1)
-    jobs = segmenter._propagation_jobs(_candidates({0: 30, 1: 5}), n_objects_per_pass=16)
-
-    assert [(tile_id, len(passes)) for tile_id, _, passes in jobs] == [(0, 30), (1, 5)]
-
-
-def test_propagation_jobs_use_the_requested_worker_count():
-    segmenter = _propagation_generator(n_devices=4)
-    segmenter._n_worker_processes = 1
-    jobs = segmenter._propagation_jobs(_candidates({0: 30, 1: 5}), n_objects_per_pass=16)
+    jobs = segmenter._propagation_jobs(_candidates({0: 30, 1: 5}), n_objects_per_pass=16, n_workers=1)
 
     assert [(tile_id, len(passes)) for tile_id, _, passes in jobs] == [(0, 30), (1, 5)]
 
@@ -2650,7 +2643,7 @@ def test_propagation_jobs_use_the_requested_worker_count():
 def test_propagation_jobs_split_a_dominant_tile_over_the_devices():
     # One tile holding most of the candidates would otherwise run alone while the others idle.
     segmenter = _propagation_generator(n_devices=4)
-    jobs = segmenter._propagation_jobs(_candidates({0: 120, 1: 6, 2: 6}), n_objects_per_pass=16)
+    jobs = segmenter._propagation_jobs(_candidates({0: 120, 1: 6, 2: 6}), n_objects_per_pass=16, n_workers=4)
 
     per_tile = {}
     for tile_id, _, passes in jobs:
@@ -2667,7 +2660,7 @@ def test_propagation_jobs_split_a_dominant_tile_over_the_devices():
 def test_propagation_jobs_never_cut_below_the_minimum():
     # A job too short to pay for building its own video-predictor state is a loss, not a speed-up.
     segmenter = _propagation_generator(n_devices=4)
-    jobs = segmenter._propagation_jobs(_candidates({tile: 2 for tile in range(8)}), n_objects_per_pass=16)
+    jobs = segmenter._propagation_jobs(_candidates({tile: 2 for tile in range(8)}), n_objects_per_pass=16, n_workers=4)
 
     assert all(len(passes) <= 2 for _, _, passes in jobs)
     assert len(jobs) == 8
@@ -2676,7 +2669,7 @@ def test_propagation_jobs_never_cut_below_the_minimum():
 def test_propagation_jobs_cover_every_pass_exactly_once():
     segmenter = _propagation_generator(n_devices=4)
     by_tile = _candidates({0: 33, 1: 17, 2: 4})
-    jobs = segmenter._propagation_jobs(by_tile, n_objects_per_pass=16)
+    jobs = segmenter._propagation_jobs(by_tile, n_objects_per_pass=16, n_workers=4)
 
     seen = {}
     for tile_id, index, passes in jobs:
@@ -2738,7 +2731,7 @@ def test_tiled_generator_passes_the_requested_worker_count(monkeypatch):
     assert calls == [(
         segmenter._video_predictor,
         [torch.device("cuda", index) for index in range(3)],
-        {"n_worker_processes": 1},
+        {"n_workers": 1},
     )]
 
 
@@ -2752,7 +2745,42 @@ def test_empty_propagation_does_not_load_the_worker_pool():
     segmenter._propagation_jobs = lambda *args: []
     segmenter._worker_pool = lambda: pytest.fail("The empty propagation loaded the worker pool.")
 
-    assert segmenter._propagate_candidates([], 16, None, False) == []
+    assert segmenter._propagate_candidates([], 16, None, False, max_overlap=0.8) == []
+
+
+def test_empty_candidates_have_no_propagation_waves():
+    segmenter = object.__new__(AutomaticPromptGenerator)
+
+    assert segmenter._candidate_waves([], propagation_waves=1) == []
+    assert segmenter._candidate_waves([], propagation_waves=4) == []
+
+
+@pytest.mark.parametrize("propagation_waves,expected_claims", [(1, 0), (2, 1)])
+def test_tiled_propagation_builds_claims_only_before_a_later_wave(propagation_waves, expected_claims):
+    class Pool:
+        n_workers = 1
+
+        def map_jobs(self, jobs, early_stop_patience):
+            return [(None, [{"job": index}]) for index, _ in enumerate(jobs)]
+
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._volume = np.zeros((2, 8, 8), dtype="uint8")
+    segmenter._worker_pool = lambda: Pool()
+    segmenter._last_generation_stats = {}
+    claims = []
+    segmenter._claim_records = lambda *args: claims.append(args)
+    candidates = [
+        {"tile_id": 0, "frame": frame, "point": (2.0, 2.0), "score": 1.0 - frame / 10, "stability": 1.0}
+        for frame in range(2)
+    ]
+
+    proposals = segmenter._propagate_candidates(
+        candidates, n_objects_per_pass=1, early_stop_patience=None, verbose=False,
+        max_overlap=0.8, propagation_waves=propagation_waves,
+    )
+
+    assert len(claims) == expected_claims
+    assert len(proposals) == 1
 
 
 class RecordingPropagator:

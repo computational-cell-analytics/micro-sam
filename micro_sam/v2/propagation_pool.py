@@ -52,6 +52,13 @@ def _worker_devices(devices: Sequence) -> List[str]:
     return [str(torch.device(device)) for device in devices]
 
 
+def _assign_workers(devices: Sequence, n_workers: Optional[int]) -> List:
+    """One device per worker, cycling over the devices so more workers than devices share them evenly."""
+    if n_workers is None:
+        return list(devices)
+    return [devices[index % len(devices)] for index in range(n_workers)]
+
+
 def _build_worker_propagator(model, setup: Dict[str, Any], device: str):
     """Rebuild one worker's tiled propagator over the volume it was given."""
     from micro_sam.v2.util import precompute_image_embeddings
@@ -129,9 +136,13 @@ def _worker_main(build_kwargs, overrides, device, n_threads, commands, jobs, res
                 results.put((worker_id, None, traceback.format_exc()))
                 break
 
-        # The volume's states go, the model stays: the next volume reuses it.
-        propagator.reset_predictor()
-        propagator = None
+        try:
+            # The volume's states go, the model stays: the next volume reuses it.
+            propagator.reset_predictor()
+            propagator = None
+            results.put((worker_id, DONE, None))
+        except Exception:
+            results.put((worker_id, None, traceback.format_exc()))
 
 
 class PropagationPool:
@@ -189,6 +200,11 @@ class PropagationPool:
         self._loaded = False
         self._failed = True
 
+    @property
+    def n_workers(self) -> int:
+        """The number of worker processes, which is what the jobs are cut for."""
+        return len(self._workers)
+
     def _take(self):
         """The next message from a worker, or a failure if one died without sending one."""
         while True:
@@ -208,6 +224,7 @@ class PropagationPool:
     ) -> None:
         """Give every worker the volume to propagate, replacing the previous one."""
         self._require_usable()
+        self._end_jobs()
         setup = {
             "volume": volume, "embedding_path": str(embedding_path),
             "tile_shape": tuple(int(s) for s in tile_shape), "halo": tuple(int(s) for s in halo),
@@ -224,19 +241,20 @@ class PropagationPool:
         self._loaded = True
 
     def map_jobs(self, jobs: List[Tuple], early_stop_patience: Optional[int]) -> List:
-        """Run one job per tile-and-passes, returning the results in the order the jobs were given."""
+        """Run one job per tile-and-passes, returning the results in the order the jobs were given.
+
+        The workers stay in their job loop afterwards, so a volume propagated in several rounds -
+        which is what candidate pruning between rounds needs - can call this more than once. They
+        are released by the next `set_volume` or by `close`.
+        """
         self._require_usable()
         if not self._loaded:
             raise RuntimeError("The pool has no volume. Call 'set_volume' first.")
+        if not jobs:
+            return []
 
         for index, (tile_id, _, passes) in enumerate(jobs):
             self._jobs.put((index, tile_id, passes, early_stop_patience))
-        for _ in self._workers:
-            self._jobs.put(DONE)
-        self._loaded = False
-
-        if not jobs:
-            return []
 
         results = [None] * len(jobs)
         for _ in jobs:
@@ -247,8 +265,35 @@ class PropagationPool:
             results[index] = payload
         return results
 
+    def _end_jobs(self) -> None:
+        """Release the workers from their job loop, so each can take its next command.
+
+        Each worker acknowledges its sentinel before a new volume enters the command queues.
+        """
+        if not self._loaded:
+            return
+        for _ in self._workers:
+            self._jobs.put(DONE)
+
+        expected = set(range(len(self._workers)))
+        acknowledged = set()
+        for _ in self._workers:
+            worker_id, payload, error = self._take()
+            if error is not None:
+                self._invalidate()
+                raise RuntimeError(f"Propagation worker {worker_id} failed to finish the volume:\n{error}")
+            if payload != DONE or worker_id not in expected or worker_id in acknowledged:
+                self._invalidate()
+                raise RuntimeError(f"Propagation worker {worker_id} returned an invalid end acknowledgement.")
+            acknowledged.add(worker_id)
+        self._loaded = False
+
     def close(self) -> None:
         """End every worker and release the queues they were served through."""
+        try:
+            self._end_jobs()
+        except (ValueError, OSError):  # The queue is already closed.
+            pass
         for command in self._commands:
             try:
                 command.put(STOP)
@@ -271,32 +316,27 @@ class PropagationPool:
 
 
 def build_pool(
-    model, devices: Sequence, n_threads: Optional[int] = None, n_worker_processes: Optional[int] = None,
+    model, devices: Sequence, n_workers: Optional[int] = None, n_threads: Optional[int] = None,
 ) -> Optional[PropagationPool]:
     """A pool for this model, or None when the propagation has to stay in this process.
 
     Args:
         model: The SAM2 video predictor the workers rebuild.
-        devices: The inference devices, one worker each.
+        devices: The inference devices the workers are spread over.
+        n_workers: Total worker processes. One per device by default; more than there are devices
+            share them, which fills a device that one propagation stream leaves partly idle.
         n_threads: CPU threads per worker.
-        n_worker_processes: The requested number of workers. None uses every device when at least two exist.
 
     Returns:
-        The pool, or None when automatic selection has one device or the model has no build recipe.
+        The pool, or None when it would hold one worker or the model carries no build recipe.
     """
     devices = list(devices)
-    if n_worker_processes is not None:
-        if n_worker_processes < 0 or n_worker_processes > len(devices):
-            raise ValueError(
-                f"The worker process count {n_worker_processes} must be between 0 and {len(devices)}."
-            )
-        if n_worker_processes == 0:
-            return None
-        devices = devices[:n_worker_processes]
-
     build_kwargs = getattr(model, "build_kwargs", None)
-    if build_kwargs is None or (n_worker_processes is None and len(devices) < 2):
+    if build_kwargs is None or len(devices) == 0:
         return None
     if not all(torch.device(device).type == "cuda" for device in devices):
         return None
-    return PropagationPool(build_kwargs, devices, overrides=model_overrides(model), n_threads=n_threads)
+    worker_devices = _assign_workers(devices, n_workers)
+    if len(worker_devices) < 2:
+        return None
+    return PropagationPool(build_kwargs, worker_devices, overrides=model_overrides(model), n_threads=n_threads)
