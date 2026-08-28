@@ -838,6 +838,7 @@ def _compute_3d(
     devices: Devices = None,
     num_prefetch_workers: int = 4,
     num_write_workers: int = 2,
+    norm_bounds: Optional[Tuple[np.ndarray, np.ndarray]] = None,
 ) -> Dict:
     """Compute volume embeddings by batching slices and overlapping preprocessing and zarr writes.
 
@@ -856,6 +857,9 @@ def _compute_3d(
         devices: The device or devices to run inference on (see `_resolve_devices`).
         num_prefetch_workers: The number of threads used to read and preprocess slices.
         num_write_workers: The number of threads used to write embedding slices.
+        norm_bounds: Precomputed (lower, upper) percentile bounds (see `_volume_normalization_bounds`).
+            Computed from `input_` when not given; pass this to share one volume's bounds across a
+            caller's own tiling/blocking of it, e.g. `TiledAutomaticPromptGenerator`'s per-block calls.
 
     Returns:
         The volume embeddings, with the per-slice 'features', 'pos_enc' and 'fpn' outputs of the
@@ -884,7 +888,8 @@ def _compute_3d(
 
     # Computed once over the whole volume, so every slice normalizes against the same statistics
     # instead of each one estimating its own percentiles.
-    norm_bounds = _volume_normalization_bounds(input_)
+    if norm_bounds is None:
+        norm_bounds = _volume_normalization_bounds(input_)
 
     if save_path is None:
         feature_values = [None] * n_slices
@@ -985,6 +990,7 @@ def _compute_tiled_3d(
     devices: Devices = None,
     num_prefetch_workers: int = 4,
     num_write_workers: int = 2,
+    norm_bounds: Optional[Tuple[np.ndarray, np.ndarray]] = None,
 ) -> Dict:
     """Compute tile / slice embeddings as one pipelined job stream across all available GPUs.
 
@@ -1006,6 +1012,9 @@ def _compute_tiled_3d(
         devices: The device or devices to run inference on (see `_resolve_devices`).
         num_prefetch_workers: The number of threads used to read and preprocess tile slices.
         num_write_workers: The number of threads used to write embedding tile slices.
+        norm_bounds: Precomputed (lower, upper) percentile bounds (see `_volume_normalization_bounds`).
+            Computed from `input_` when not given; pass this to share one volume's bounds across a
+            caller's own tiling/blocking of it, e.g. `TiledAutomaticPromptGenerator`'s per-block calls.
 
     Returns:
         The tiled volume embeddings. 'features', 'pos_enc' and 'fpn' are the zarr groups holding the
@@ -1049,7 +1058,8 @@ def _compute_tiled_3d(
 
     # Computed once over the whole volume, so every tile normalizes against the same statistics
     # instead of each one estimating its own percentiles from its own, smaller crop.
-    norm_bounds = _volume_normalization_bounds(input_)
+    if norm_bounds is None:
+        norm_bounds = _volume_normalization_bounds(input_)
 
     model, model_devices, batch_sizes = _prepare_encoder_pipeline(predictor, len(jobs), batch_size, devices)
     tile_datasets = {}

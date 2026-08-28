@@ -53,7 +53,7 @@ from .multimask_selection import (
 )
 from ..util import make_temp_embedding_path
 from .postprocessing import _compute_flow_density
-from .batched_inference import _resolve_devices
+from .batched_inference import _resolve_devices, _volume_normalization_bounds
 from .prompt_based_segmentation import (
     ReplicatedPromptableSegmentation3D, map_jobs_over_devices, _crop_to_original_shape,
 )
@@ -1237,6 +1237,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._i = None
         self._owns_image_embeddings = False
         self._last_generation_stats = {}
+        # Set by 'TiledAutomaticPromptGenerator' to this tile/block's (y, x) halo before propagating,
+        # so pruning never drops a candidate the halo-overlap multicut might need; None elsewhere.
+        self._pruning_protected_margin: Optional[tuple] = None
         self._microscopy_multimask_scorer = None
         self._refinement_gate_model = None
         self._scoring_predictor_pool = None
@@ -1319,6 +1322,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         offload_to_cpu: Optional[bool] = None,
         cache_all_slices: bool = False,
         lazy_embeddings: bool = True,
+        normalization_bounds: Optional[tuple] = None,
         **kwargs,
     ) -> None:
         """Encode the input, run the decoder on that encoding and leave the predictor ready to be prompted.
@@ -1345,6 +1349,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             lazy_embeddings: Whether a volume's embeddings are read from their store slice by slice.
                 False holds them in host memory instead, which makes the fetch above much cheaper
                 without spending device memory.
+            normalization_bounds: Volumes only. Precomputed (lower, upper) percentile bounds (see
+                `batched_inference._volume_normalization_bounds`), normally computed from `image`
+                itself. Pass this when `image` is only a tile/block of a larger volume, so it shares
+                that volume's bounds instead of estimating its own from its own, smaller, biased crop
+                (see `TiledAutomaticPromptGenerator.generate`).
             kwargs: Additional arguments for `UniSAM2InstanceSegmentation.initialize`.
         """
         if ndim not in (2, 3):
@@ -1359,7 +1368,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             self._i = None
             self._initialize_volume(
                 image, image_embeddings, save_path, verbose, offload_to_cpu, cache_all_slices,
-                lazy_embeddings, **kwargs
+                lazy_embeddings, normalization_bounds=normalization_bounds, **kwargs
             )
             return
 
@@ -1382,7 +1391,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
     def _initialize_volume(
         self, volume, image_embeddings, save_path, verbose, offload_to_cpu, cache_all_slices,
-        lazy_embeddings, **kwargs
+        lazy_embeddings, normalization_bounds=None, **kwargs
     ) -> None:
         """Encode the volume, run the decoder on that encoding and initialize the video predictor."""
         if self._video_predictor is None:
@@ -1402,6 +1411,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             image_embeddings = precompute_image_embeddings(
                 self._video_predictor, volume, save_path=path, ndim=3, verbose=verbose,
                 lazy_loading=lazy_embeddings, devices=self._inference_devices(None),
+                norm_bounds=normalization_bounds,
             )
 
         UniSAM2InstanceSegmentation.initialize(self, volume, ndim=3, image_embeddings=image_embeddings, **kwargs)
@@ -2757,6 +2767,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         abutting neighbour then claims a real share of the candidate. Measured on cremi it costs
         0.03 CREMI score, which is why the default is one round, see 'propagation_waves'.
         """
+        if self._is_protected_from_pruning(candidate):
+            return False
         claim = claims.get(self._claim_key(candidate))
         if claim is None:
             return False
@@ -2766,6 +2778,27 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             return False
         claimed = np.logical_and(claim[(candidate["frame"],) + tuple(candidate["mask_box"])], mask).sum()
         return bool(claimed > max_overlap * area)
+
+    def _is_protected_from_pruning(self, candidate: dict) -> bool:
+        """Whether a candidate's anchor-slice mask reaches into the halo margin, if one is set.
+
+        '_pruning_protected_margin' is None outside 'TiledAutomaticPromptGenerator', so this is
+        always False there and pruning behaves exactly as it did before this option existed. A tile
+        or block sets it to its own halo before propagating: a candidate this close to the block's
+        outer edge is exactly the kind of prediction the halo-overlap multicut compares against the
+        neighbouring tile/block, so dropping it as a within-tile duplicate could discard the one
+        candidate that seam needed, even though it looked safe to prune from this tile alone.
+        """
+        margin = getattr(self, "_pruning_protected_margin", None)
+        if margin is None:
+            return False
+        y_margin, x_margin = margin
+        y_box, x_box = candidate["mask_box"]
+        _, height, width = self._volume.shape
+        return (
+            y_box.start < y_margin or y_box.stop > height - y_margin
+            or x_box.start < x_margin or x_box.stop > width - x_margin
+        )
 
     def _condition_pass(self, candidate: dict, object_id: int, propagator) -> None:
         """Push one candidate's conditioning onto the propagator, as the object with this id.
@@ -2861,6 +2894,10 @@ class TiledAutomaticPromptGenerator:
             is on CUDA, a single device stays on it, a sequence pins one pool member per device.
         beta: The multicut boundary bias passed to `stitch_segmentation`; > 0.5 biases towards
             over-segmentation (cutting), < 0.5 towards under-segmentation (merging).
+        workers_per_device: How many independent (decoder, model) copies to build per resolved
+            device. `generate` still gives each worker one tile/block at a time, so this only helps
+            when a single worker leaves a device's compute or memory underused, e.g. a small model
+            on a large GPU.
     """
 
     # Read by `automatic_instance_segmentation` to decide whether to pass the AIS 'mode' argument.
@@ -2873,12 +2910,16 @@ class TiledAutomaticPromptGenerator:
         device: Optional[Union[str, torch.device]] = None,
         inference_device: Devices = USE_MODEL_DEVICE,
         beta: float = DEFAULT_STITCHING_BETA,
+        workers_per_device: int = 1,
     ) -> None:
         self._model = model
         self._predictor = predictor
         self._device = device
         self._inference_device = device if inference_device is USE_MODEL_DEVICE else inference_device
         self._beta = beta
+        if workers_per_device < 1:
+            raise ValueError(f"'workers_per_device' must be >= 1, got {workers_per_device}.")
+        self._workers_per_device = int(workers_per_device)
         self._pool: Optional[List[AutomaticPromptGenerator]] = None
         self._image = None
         self._ndim = None
@@ -2889,18 +2930,33 @@ class TiledAutomaticPromptGenerator:
         self._cache_all_slices = False
 
     def _build_pool(self) -> List[AutomaticPromptGenerator]:
-        """One independent (decoder, model) copy per resolved device, each pinned entirely to it."""
+        """'workers_per_device' independent (decoder, model) copies per resolved device.
+
+        Every worker is pinned entirely to its own device, and only one tile/block ever owns a
+        worker at a time (see `generate`'s queue), so multiple workers sharing a device compete for
+        its compute rather than racing on shared state. This is worth it only because a single
+        worker's block leaves a large GPU's memory and, more importantly, its compute scheduling far
+        from saturated (a `hvit_t` block is a few GB on an 80+ GB H100): plain Python threads sharing
+        a device all submit to its one default CUDA stream, which runs their kernels in submission
+        order and gives no real concurrency, so every worker beyond the first on a device gets its
+        own `torch.cuda.Stream` (`generate` runs it under that stream) to let the driver actually
+        interleave independent tiles' kernels on the same device.
+        """
         devices = _resolve_devices(self._model, self._inference_device)
-        if len(devices) == 1:
-            device = devices[0]
-            return [
-                AutomaticPromptGenerator(self._model, self._predictor, device=device, inference_device=device)
-            ]
         pool = []
         for device in devices:
-            model = copy.deepcopy(self._model).to(device)
-            predictor = copy.deepcopy(self._predictor).to(device)
-            pool.append(AutomaticPromptGenerator(model, predictor, device=device, inference_device=device))
+            device_obj = torch.device(device)
+            for worker_index in range(self._workers_per_device):
+                if len(devices) == 1 and worker_index == 0:
+                    # No copy needed for the sole worker of the sole device: nothing else shares it.
+                    model, predictor = self._model, self._predictor
+                else:
+                    model = copy.deepcopy(self._model).to(device)
+                    predictor = copy.deepcopy(self._predictor).to(device)
+                generator = AutomaticPromptGenerator(model, predictor, device=device, inference_device=device)
+                if self._workers_per_device > 1 and device_obj.type == "cuda":
+                    generator._tile_stream = torch.cuda.Stream(device=device_obj)
+                pool.append(generator)
         return pool
 
     def initialize(
@@ -2953,9 +3009,16 @@ class TiledAutomaticPromptGenerator:
     def generate(self, **params) -> np.ndarray:
         """Segment every tile/block independently and stitch them by halo-overlap multicut.
 
-        `propagation_waves` is dropped from `params`: candidate pruning within one tile/block would
-        discard a prediction a neighbouring tile/block needs for the halo overlap, so it stays off
-        until the tiles/blocks are pruned independently *before* stitching (not yet implemented).
+        `propagation_waves` reaches every tile/block unchanged, but each one propagates with its
+        own halo as a protected margin (see `AutomaticPromptGenerator._is_protected_from_pruning`):
+        a candidate whose anchor-slice mask reaches into that margin is never pruned as a within-tile
+        duplicate, since it is exactly the kind of prediction the halo-overlap multicut compares
+        against the neighbouring tile/block.
+
+        For a volume, every tile/block is also normalized against percentile bounds computed once
+        over the whole image (`normalization_bounds`, see `AutomaticPromptGenerator.initialize`),
+        never its own local crop - the same statistics an untiled `AutomaticPromptGenerator` would
+        use, so a tile's brightness/contrast does not depend on which tile it happens to be.
 
         Args:
             params: Keyword arguments for `AutomaticPromptGenerator.generate`, applied identically
@@ -2968,7 +3031,10 @@ class TiledAutomaticPromptGenerator:
             raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
 
         params = dict(params)
-        params.pop("propagation_waves", None)
+        protected_margin = tuple(self._halo[-2:])
+        # Computed once over the whole image/volume so every tile/block shares one normalization
+        # instead of each estimating its own percentiles from its own, smaller, biased crop.
+        normalization_bounds = _volume_normalization_bounds(self._image) if self._ndim == 3 else None
         if self._pool is None:
             self._pool = self._build_pool()
         available: "queue.Queue[AutomaticPromptGenerator]" = queue.Queue()
@@ -2978,12 +3044,22 @@ class TiledAutomaticPromptGenerator:
         def segment_block(block: np.ndarray, block_id: int) -> np.ndarray:
             block = np.asarray(block)
             generator = available.get()
+            # None (a worker alone on its device) makes this a no-op, keeping the default stream.
+            stream = getattr(generator, "_tile_stream", None)
             try:
-                generator.initialize(
-                    block, ndim=self._ndim, verbose=self._verbose,
-                    offload_to_cpu=self._offload_to_cpu, cache_all_slices=self._cache_all_slices,
-                )
-                return generator.generate(**params)
+                with torch.cuda.stream(stream):
+                    generator.initialize(
+                        block, ndim=self._ndim, verbose=self._verbose,
+                        offload_to_cpu=self._offload_to_cpu, cache_all_slices=self._cache_all_slices,
+                        normalization_bounds=normalization_bounds,
+                    )
+                    generator._pruning_protected_margin = protected_margin
+                    result = generator.generate(**params)
+                    if stream is not None:
+                        # Block until this tile's queued GPU work is done before it is handed off:
+                        # the caller reads 'result' outside the stream context, on another thread.
+                        stream.synchronize()
+                return result
             finally:
                 generator.clear_state()
                 available.put(generator)

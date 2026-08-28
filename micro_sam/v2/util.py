@@ -810,6 +810,7 @@ def precompute_image_embeddings(
     devices: Devices = None,
     num_prefetch_workers: int = 4,
     num_write_workers: int = 2,
+    norm_bounds: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
 ):
@@ -836,6 +837,11 @@ def precompute_image_embeddings(
         num_prefetch_workers: Number of threads used to read and preprocess input jobs.
         num_write_workers: Number of threads used to write the embeddings. Only has an effect for
             volumes and tiled images, which are written incrementally.
+        norm_bounds: Volumes only (`ndim == 3`). Precomputed (lower, upper) percentile bounds (see
+            `batched_inference._volume_normalization_bounds`), computed from `input_` when not
+            given. Pass this to normalize `input_` against a larger volume's bounds instead of its
+            own, e.g. when `input_` is only one tile/block of that volume - every tile/block must
+            share the same bounds, never estimate its own from its own, smaller, biased crop.
         pbar_init: Optional callback to initialize external progress.
         pbar_update: Optional callback to update external progress.
 
@@ -898,7 +904,7 @@ def precompute_image_embeddings(
         embeddings = _compute_3d(
             input_, predictor, f, save_path, lazy_loading, pbar_init, pbar_update,
             batch_size=batch_size, devices=devices, num_prefetch_workers=num_prefetch_workers,
-            num_write_workers=num_write_workers,
+            num_write_workers=num_write_workers, norm_bounds=norm_bounds,
         )
     elif ndim == 3 and tile_shape is not None:
         if halo is None:
@@ -906,7 +912,7 @@ def precompute_image_embeddings(
         embeddings = _compute_tiled_3d(
             input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update,
             batch_size=batch_size, devices=devices, num_prefetch_workers=num_prefetch_workers,
-            num_write_workers=num_write_workers,
+            num_write_workers=num_write_workers, norm_bounds=norm_bounds,
         )
     else:
         raise ValueError(f"Invalid dimensionality {input_.ndim}, expect 2 or 3 dim data.")

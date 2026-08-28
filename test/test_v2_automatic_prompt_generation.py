@@ -13,6 +13,7 @@ from micro_sam.v2.automatic_prompt_generation import (
     postmerge_refinement_gate_features, _lowres_feature_context, REFINEMENT_STATS_3D,
 )
 from micro_sam.v2.normalization import to_image
+from micro_sam.v2.batched_inference import _volume_normalization_bounds
 from micro_sam.v2.transforms.resize import ResizeLongestSideTransforms
 from micro_sam.v2.multimask_selection import (
     GroupwiseMLP, MASK_TOKEN_FEATURE_NAMES, MASK_TOKEN_LOWRES_FEATURE_NAMES,
@@ -120,6 +121,69 @@ def test_factory_returns_the_tiled_apg_class(monkeypatch):
     assert segmenter._model is decoder
     assert segmenter._predictor is predictor
     assert segmenter._pool is None
+
+
+def _fake_apg_predictor():
+    """A minimal image-predictor double, deep-copyable and .to()-able like a real SAM2 predictor."""
+    predictor = types.SimpleNamespace(
+        model=types.SimpleNamespace(image_size=8, model_type="hvit_t"),
+        mask_threshold=0.0,
+        _transforms=types.SimpleNamespace(),
+    )
+    predictor.to = lambda device: predictor
+    return predictor
+
+
+def test_tiled_apg_build_pool_defaults_to_one_worker_and_reuses_the_model():
+    # Backward compatibility: a single device with the default workers_per_device=1 must still
+    # reuse the original model/predictor rather than deep-copying them, exactly as before this
+    # option existed.
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor())
+
+    pool = segmenter._build_pool()
+
+    assert len(pool) == 1
+    assert pool[0]._model is segmenter._model
+    assert pool[0]._predictor is segmenter._predictor
+
+
+def test_tiled_apg_build_pool_multiplies_workers_per_device(monkeypatch):
+    devices = [torch.device("cpu"), torch.device("cpu")]
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation._resolve_devices", lambda model, inference_device: devices,
+    )
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor(), workers_per_device=3)
+
+    pool = segmenter._build_pool()
+
+    assert len(pool) == len(devices) * 3
+    # Every worker of a multi-device pool gets its own deep-copied model, none aliasing the original.
+    assert all(worker._model is not segmenter._model for worker in pool)
+    assert len({id(worker._model) for worker in pool}) == len(pool)
+
+
+def test_tiled_apg_rejects_non_positive_workers_per_device():
+    with pytest.raises(ValueError, match="workers_per_device"):
+        TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor(), workers_per_device=0)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA streams need a real CUDA device.")
+def test_tiled_apg_build_pool_gives_extra_workers_their_own_cuda_stream(monkeypatch):
+    devices = [torch.device("cuda:0")]
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation._resolve_devices", lambda model, inference_device: devices,
+    )
+
+    solo = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor(), workers_per_device=1)
+    assert getattr(solo._build_pool()[0], "_tile_stream", None) is None
+
+    shared = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor(), workers_per_device=2)
+    pool = shared._build_pool()
+    assert len(pool) == 2
+    streams = [worker._tile_stream for worker in pool]
+    assert all(isinstance(stream, torch.cuda.Stream) for stream in streams)
+    # Each worker sharing the device gets its own stream, or they would still serialize on one.
+    assert streams[0] != streams[1]
 
 
 def test_apg_configures_a_direct_image_predictor():
@@ -1937,3 +2001,86 @@ def test_empty_candidates_have_no_propagation_waves():
 
     assert segmenter._candidate_waves([], propagation_waves=1) == []
     assert segmenter._candidate_waves([], propagation_waves=4) == []
+
+
+def test_is_protected_from_pruning_default_margin_is_never_protective():
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._pruning_protected_margin = None
+    segmenter._volume = types.SimpleNamespace(shape=(3, 100, 100))
+
+    edge_candidate = {"mask_box": (slice(0, 5), slice(0, 5))}
+    assert segmenter._is_protected_from_pruning(edge_candidate) is False
+
+
+def test_is_protected_from_pruning_flags_boxes_touching_the_margin():
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._pruning_protected_margin = (10, 10)
+    segmenter._volume = types.SimpleNamespace(shape=(3, 100, 100))
+
+    edge_candidate = {"mask_box": (slice(0, 5), slice(20, 30))}
+    far_edge_candidate = {"mask_box": (slice(20, 30), slice(95, 100))}
+    interior_candidate = {"mask_box": (slice(20, 30), slice(20, 30))}
+
+    assert segmenter._is_protected_from_pruning(edge_candidate) is True
+    assert segmenter._is_protected_from_pruning(far_edge_candidate) is True
+    assert segmenter._is_protected_from_pruning(interior_candidate) is False
+
+
+def test_is_claimed_never_prunes_a_candidate_protected_by_the_halo_margin():
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._pruning_protected_margin = (10, 10)
+    segmenter._volume = types.SimpleNamespace(shape=(3, 100, 100))
+    segmenter._claim_key = lambda candidate: None
+
+    mask = np.ones((5, 5), dtype=bool)
+    claim = np.ones((3, 100, 100), dtype=bool)  # fully claimed everywhere, would normally prune
+
+    interior_candidate = {"mask": mask, "mask_box": (slice(20, 25), slice(20, 25)), "frame": 0}
+    edge_candidate = {"mask": mask, "mask_box": (slice(0, 5), slice(20, 25)), "frame": 0}
+
+    assert segmenter._is_claimed({None: claim}, interior_candidate, max_overlap=0.1) is True
+    assert segmenter._is_claimed({None: claim}, edge_candidate, max_overlap=0.1) is False
+
+
+def test_tiled_apg_generate_sets_halo_margin_and_forwards_propagation_waves(monkeypatch):
+    calls = {}
+
+    class FakeGenerator:
+        _pruning_protected_margin = None
+
+        def initialize(self, block, **kwargs):
+            calls["initialize_kwargs"] = kwargs
+
+        def generate(self, **params):
+            calls["margin"] = self._pruning_protected_margin
+            calls["params"] = params
+            return np.zeros((4, 4, 4), dtype="uint32")
+
+        def clear_state(self):
+            pass
+
+    def fake_stitch_segmentation(*, input, segmentation_function, tile_shape, tile_overlap, **kwargs):
+        return segmentation_function(np.zeros((4, 4, 4), dtype="float32"), 0)
+
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.bp.segmentation.stitch_segmentation", fake_stitch_segmentation,
+    )
+
+    image = np.random.default_rng(0).random((4, 4, 4)).astype("float32")
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor())
+    segmenter._pool = [FakeGenerator()]
+    segmenter._image = image
+    segmenter._ndim = 3
+    segmenter._tile_shape = (4, 4, 4)
+    segmenter._halo = (0, 1, 2)
+
+    segmenter.generate(propagation_waves=4)
+
+    expected_bounds = _volume_normalization_bounds(image)
+    bounds = calls["initialize_kwargs"]["normalization_bounds"]
+    assert bounds is not None
+    np.testing.assert_array_equal(bounds[0], expected_bounds[0])
+    np.testing.assert_array_equal(bounds[1], expected_bounds[1])
+
+    assert calls["margin"] == (1, 2)
+    assert calls["params"]["propagation_waves"] == 4
