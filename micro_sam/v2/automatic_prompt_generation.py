@@ -2921,8 +2921,11 @@ class TiledAutomaticPromptGenerator:
         Args:
             image: The input image, shape (Y, X) or (Y, X, C), or the input volume, shape (Z, Y, X).
             ndim: The number of spatial dimensions, 2 or 3. A volume requires a video predictor.
-            tile_shape: The inner tile/block shape, (y, x) for an image or (z, y, x) for a volume -
-                one entry per spatial axis, so a volume is blocked in z too, not tiled in-plane only.
+            tile_shape: The inner tile/block shape, (y, x) for an image, always the full (z, y, x)
+                for a volume - it is blocked in z too, not tiled in-plane only, so an object crossing
+                a z seam is reconciled by the halo-overlap multicut the same way a y/x one is. Pass
+                the full volume depth as the z entry for in-plane-only tiling (one whole-depth block
+                per xy tile).
             halo: The halo added on each side of a tile/block, matching `tile_shape`'s axes.
             verbose: Whether each tile/block's generator prints progress while it segments it.
             offload_to_cpu: Volumes only, forwarded to every tile/block's own
@@ -2936,7 +2939,7 @@ class TiledAutomaticPromptGenerator:
         if len(tile_shape) != ndim or len(halo) != ndim:
             raise ValueError(
                 f"'tile_shape' and 'halo' must have {ndim} entries for a {ndim}d input, one per spatial "
-                "axis (z too, for a volume - the tiled generator blocks it, not just tiles it in-plane)."
+                "axis - always (z, y, x) for a volume, never in-plane only."
             )
         self._image = image
         self._ndim = ndim

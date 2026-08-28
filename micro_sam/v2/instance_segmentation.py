@@ -877,16 +877,16 @@ def _n_blocks(spatial_shape, ndim, block_shape):
 def _block_shape_and_halo(spatial_shape, ndim, tile_shape, halo):
     """Compute the (z, y, x) block shape and halo for `predict_with_halo`.
 
-    For 3d data a volume is always chunked along z - using the explicit z tile when tiling is on,
-    or the default z block when in-plane tiling is off (the whole in-plane plane per chunk). The
-    model is trained on small z crops, so running every slice at once is both out-of-distribution
-    and a memory blow-up (the cause of the 3d 'killed' reports). 2d data is a single (1, y, x) block.
+    For 3d data a volume is always chunked along z - the default z block when `tile_shape` is None,
+    or its own z entry when tiling is given, since a 3d `tile_shape` is always the full (z, y, x),
+    never in-plane only. The model is trained on small z crops, so running every slice at once is
+    both out-of-distribution and a memory blow-up (the cause of the 3d 'killed' reports). 2d data is
+    a single (1, y, x) block.
 
     Args:
         spatial_shape: The spatial image shape, (Y, X) for 2d or (Z, Y, X) for 3d.
         ndim: The number of spatial dimensions (2 or 3).
-        tile_shape: The tile shape, or None for no tiling. For 3d data either an in-plane (y, x)
-            tile, which keeps the default z chunking, or an explicit (z, y, x) tile.
+        tile_shape: The tile shape, or None for no tiling. Always the full (z, y, x) for 3d data.
         halo: The tile halo, or None for no overlap.
 
     Returns:
@@ -902,20 +902,29 @@ def _block_shape_and_halo(spatial_shape, ndim, tile_shape, halo):
         block_shape = (1, *spatial_shape)
         block_halo = (0, 0, 0)
     elif is_3d:
-        # Tiling is in-plane, so a 2-entry (y, x) tile keeps z chunked as it is without tiling.
-        if len(tile_shape) == 2:
-            n_slices = spatial_shape[0]
-            z_block = min(DEFAULT_TILE_Z, n_slices)
-            block_shape = (z_block, *tile_shape)
-            z_halo = DEFAULT_HALO_Z if z_block < n_slices else 0
-            block_halo = (z_halo, *((0, 0) if halo is None else tuple(halo)[-2:]))
-        else:
-            block_shape = tuple(tile_shape)  # (z, y, x)
-            block_halo = (0, 0, 0) if halo is None else tuple(halo)
+        if len(tile_shape) != 3:
+            raise ValueError(f"A 3d tile_shape must have 3 entries (z, y, x), got {len(tile_shape)}.")
+        block_shape = tuple(int(v) for v in tile_shape)
+        block_halo = (0, 0, 0) if halo is None else tuple(int(v) for v in halo)
     else:
         block_shape = (1, *tile_shape)  # (1, y, x)
         block_halo = (0, *((0, 0) if halo is None else halo))
     return block_shape, block_halo
+
+
+def _resolve_z_chunk(tile_shape, halo, n_slices: int) -> Tuple[int, int]:
+    """Derive the (z_block, z_halo) a 3d decoder-from-embeddings job chunks z with.
+
+    `tile_shape`/`halo` are None (fully automatic) or the full (z, y, x) / (z_halo, y_halo, x_halo);
+    only the z entry matters here - the y, x entries are either not tiled, or the tiling already
+    lives in the embeddings the job decodes from, so they cannot be changed at decode time.
+    """
+    if tile_shape is None:
+        z_block = min(DEFAULT_TILE_Z, n_slices)
+        return z_block, (DEFAULT_HALO_Z if z_block < n_slices else 0)
+    if len(tile_shape) != 3:
+        raise ValueError(f"A 3d tile_shape must have 3 entries (z, y, x), got {len(tile_shape)}.")
+    return int(tile_shape[0]), (0 if halo is None else int(halo[0]))
 
 
 class _StubEncoder(torch.nn.Module):
@@ -1180,8 +1189,6 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         halo: Optional[tuple] = None,
         pbar_init: Optional[callable] = None,
         pbar_update: Optional[callable] = None,
-        z_block: Optional[int] = None,
-        z_halo: Optional[int] = None,
         batch_size: Optional[int] = 1,
         devices: Devices = None,
         num_prefetch_workers: int = 4,
@@ -1195,13 +1202,15 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
             ndim: The number of spatial dimensions (2 or 3).
             image_embeddings: Optional precomputed image embeddings. If given, only the decoder runs.
             i: Index for the image data. Unused here, kept for interface compatibility.
-            tile_shape: Unused for the non-tiled segmenter.
-            halo: Unused for the non-tiled segmenter.
+            tile_shape: Unused for a 2d segmenter. For a 3d one, this segmenter is not itself tiled,
+                but a volume is still chunked along z for memory - None for the default z chunk, or
+                the full (z, y, x) to set it explicitly (the y, x entries are ignored: there is no
+                in-plane tiling here).
+            halo: Unused for a 2d segmenter; for a 3d one, matches `tile_shape` - only its z entry is
+                used, as the halo of the z chunk above.
             normalization: Overrides the input normalization, which defaults to the 2nd / 98th percentile.
             pbar_init: Callback to initialize an external progress bar.
             pbar_update: Callback to update an external progress bar.
-            z_block: Number of slices per decoder z block.
-            z_halo: Overlapping decoder slices used as context.
             batch_size: The batch size used when running inference for multiple z-blocks and / or tiles.
                 Defaults to one; pass None for throughput-based automatic selection.
             devices: Inference device or devices. None uses all visible GPUs when the model is on CUDA.
@@ -1209,6 +1218,8 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
             num_write_workers: Number of output writing threads.
         """
         if image_embeddings is not None and ndim == 3:
+            n_slices = int(image_embeddings["features"].shape[0])
+            z_block, z_halo = _resolve_z_chunk(tile_shape, halo, n_slices)
             self._prediction = self._run_decoder_3d(
                 image_embeddings,
                 z_block=z_block,
@@ -1280,7 +1291,8 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
 class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
     """Generates a tiled instance segmentation with the UniSAM2 decoder (AIS).
 
-    Like `UniSAM2InstanceSegmentation`, but the model inference is tiled in-plane (xy) with a halo.
+    Like `UniSAM2InstanceSegmentation`, but the model inference is tiled in-plane (xy) with a halo,
+    and for a volume also chunked along z (see `initialize`).
 
     Args:
         model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
@@ -1358,8 +1370,6 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
         i: Optional[int] = None,
         pbar_init: Optional[callable] = None,
         pbar_update: Optional[callable] = None,
-        z_block: Optional[int] = None,
-        z_halo: Optional[int] = None,
         batch_size: Optional[int] = 1,
         devices: Devices = None,
         num_prefetch_workers: int = 4,
@@ -1367,6 +1377,12 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
         normalization: Optional[callable] = None,
     ) -> None:
         """Run tiled UniSAM2 inference and store foreground and distance predictions.
+
+        `tile_shape`/`halo` are in-plane (y, x) for an image. For a volume they are always the full
+        (z, y, x) / (z_halo, y_halo, x_halo): a volume is tiled in-plane and chunked along z, and
+        `tile_shape`'s z entry sets that chunk (None keeps the library default). When precomputed
+        `image_embeddings` are given, only the z entry is used - the in-plane tiling was fixed when
+        the embeddings were computed and cannot change at decode time.
 
         `batch_size=None` benchmarks candidate sizes and selects a throughput-efficient batch
         independently on each selected CUDA device.
@@ -1387,6 +1403,8 @@ class TiledUniSAM2InstanceSegmentation(UniSAM2InstanceSegmentation):
                 image_embeddings, i, **decoder_kwargs,
             )
         elif image_embeddings is not None and ndim == 3:
+            n_slices = int(np.asarray(image_embeddings["features"].attrs["shape"])[0])
+            z_block, z_halo = _resolve_z_chunk(tile_shape, halo, n_slices)
             self._prediction = self._run_decoder_tiled_3d(
                 image_embeddings, z_block=z_block, z_halo=z_halo, **decoder_kwargs,
             )

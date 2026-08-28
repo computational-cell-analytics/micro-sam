@@ -127,8 +127,11 @@ def automatic_instance_segmentation(
         checkpoint: Retained for API compatibility; the loaded predictor already contains its weights.
         key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
         ndim: The number of spatial dimensions (2 or 3). By default inferred from the data.
-        tile_shape: Shape of the tiles for tiled prediction. By default prediction runs without tiling.
-        halo: Overlap of the tiles for tiled prediction.
+        tile_shape: Shape of the tiles for tiled prediction, (y, x). For a 3d AIS or APG volume,
+            always the full (z, y, x) instead - it is chunked along z regardless of tiling, so the z
+            entry sets that chunk too (its own default when tile_shape is None). AMG segments a
+            volume slice by slice, so it stays (y, x) even for a 3d volume. By default runs untiled.
+        halo: Overlap of the tiles, matching `tile_shape`'s axes.
         mode: The AIS post-processing mode, 'sparse' (flow) or 'dense' (multicut). Ignored for AMG.
         device: The device to run inference on.
         verbose: Whether to print progress.

@@ -560,31 +560,17 @@ def test_block_shape_3d_tiling_uses_tile():
     assert halo == (2, 64, 64)
 
 
-def test_block_shape_3d_in_plane_tiling_keeps_default_z_chunking():
-    # The CLI and the annotator only ever pass an in-plane (y, x) tile. It must be combined with the
-    # default z block instead of being used as a (z, y, x) block shape.
-    block, halo = _block_shape_and_halo((50, 1024, 1024), ndim=3, tile_shape=(512, 512), halo=(64, 64))
-    assert block == (DEFAULT_TILE_Z, 512, 512)
-    assert halo == (DEFAULT_HALO_Z, 64, 64)
+def test_block_shape_3d_tiling_rejects_in_plane_only():
+    # A 3d tile_shape is always the full (z, y, x); an in-plane (y, x) one is no longer accepted.
+    with pytest.raises(ValueError, match="3 entries"):
+        _block_shape_and_halo((50, 1024, 1024), ndim=3, tile_shape=(512, 512), halo=(64, 64))
 
 
-def test_block_shape_3d_in_plane_tiling_shallow_volume():
-    # Fewer slices than the default z block -> single z block, no z halo.
-    block, halo = _block_shape_and_halo((3, 1024, 1024), ndim=3, tile_shape=(512, 512), halo=(64, 64))
-    assert block == (3, 512, 512)
-    assert halo == (0, 64, 64)
-
-
-def test_block_shape_3d_in_plane_tiling_without_halo():
-    block, halo = _block_shape_and_halo((50, 1024, 1024), ndim=3, tile_shape=(512, 512), halo=None)
-    assert block == (DEFAULT_TILE_Z, 512, 512)
-    assert halo == (DEFAULT_HALO_Z, 0, 0)
-
-
-@pytest.mark.parametrize("tile_shape,halo", [((512, 512), (64, 64)), ((4, 512, 512), (2, 64, 64))])
-def test_block_shape_3d_matches_predict_with_halo_arity(tile_shape, halo):
+def test_block_shape_3d_matches_predict_with_halo_arity():
     # predict_with_halo asserts len(block_shape) == len(halo) == ndim.
-    block, block_halo = _block_shape_and_halo((50, 1024, 1024), ndim=3, tile_shape=tile_shape, halo=halo)
+    block, block_halo = _block_shape_and_halo(
+        (50, 1024, 1024), ndim=3, tile_shape=(4, 512, 512), halo=(2, 64, 64),
+    )
     assert len(block) == len(block_halo) == 3
 
 
