@@ -21,35 +21,43 @@ IMG_MEAN = (0.485, 0.456, 0.406)
 IMG_STD = (0.229, 0.224, 0.225)
 
 
-def _load_frame_as_tensor(raw, image_size):
+def _load_frame_as_tensor(raw, image_size, bounds=None):
     """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
 
     The frame is percentile-normalized per channel, so that any input dtype is mapped to the range
     SAM2's ImageNet normalization expects, and it keeps its aspect ratio: the longest side is resized
     to `image_size` and the remaining bottom/right region is zero-padded. The caller applies the
     ImageNet normalization.
+
+    Args:
+        raw: The frame as a numpy array.
+        image_size: The size the longest side is resized to.
+        bounds: Precomputed (lower, upper) percentile bounds to normalize with (see
+            `normalization.compute_percentile_bounds`), typically computed once over the whole volume
+            this frame belongs to. The frame's own percentiles are used when None.
     """
     from micro_sam.v2.normalization import normalize_raw
     from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_tensor
 
     img_np = np.stack([raw] * 3, axis=-1) if raw.ndim == 2 else raw
-    img_np = normalize_raw(img_np, axis=(0, 1))
+    img_np = normalize_raw(img_np, axis=(0, 1), bounds=bounds)
     img = torch.from_numpy(img_np.astype(np.float32)).permute(2, 0, 1)
     img, _ = resize_longest_side_and_pad_tensor(img[None], image_size)
     return img[0]
 
 
-def _prepare_frame(raw, image_size):
+def _prepare_frame(raw, image_size, bounds=None):
     """Resize and ImageNet-normalize one frame, exactly as the video predictor loads its frames.
 
     Args:
         raw: The frame as a numpy array.
         image_size: The size the longest side is resized to.
+        bounds: Precomputed (lower, upper) percentile bounds, see `_load_frame_as_tensor`.
 
     Returns:
         The frame as a (3, image_size, image_size) float32 tensor on the CPU.
     """
-    image = _load_frame_as_tensor(raw, image_size)
+    image = _load_frame_as_tensor(raw, image_size, bounds=bounds)
     mean = torch.tensor(IMG_MEAN, dtype=torch.float32)[:, None, None]
     std = torch.tensor(IMG_STD, dtype=torch.float32)[:, None, None]
     return (image - mean) / std

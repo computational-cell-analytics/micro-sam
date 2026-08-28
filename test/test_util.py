@@ -200,7 +200,7 @@ class TestUtil(unittest.TestCase):
         from micro_sam.v2.util import _check_saved_embeddings
 
         self.assertEqual(IMAGE_PREPROCESSING, "minmax_per_channel")
-        self.assertEqual(VIDEO_PREPROCESSING, "percentile_2_98_per_channel_torch_resize_v2")
+        self.assertEqual(VIDEO_PREPROCESSING, "percentile_2_98_per_channel_torch_resize_v3")
 
         predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test", device="cpu")
         raw = np.arange(100).reshape(10, 10)

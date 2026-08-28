@@ -79,6 +79,11 @@ def main():
         help="Rounds the candidates are propagated in, pruning between them. 1 propagates them all.",
     )
     parser.add_argument(
+        "--max_size_factor", type=float, default=None,
+        help="Reject a candidate this many times larger than the median size it is merged against. "
+             "Catches SAM2 propagation drift (a track that grows onto background). None disables it.",
+    )
+    parser.add_argument(
         "--z_crop", type=int, default=None,
         help="Center-crop the volume to this many z slices, for a fast turnaround. Full depth if unset.",
     )
@@ -91,7 +96,11 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # None fans out over every visible GPU: the decoder, the scoring and the propagation all use them.
     model = build_segmenter(args.model_type, device, args.devices or None, args.n_worker_processes)
-    overrides = {} if args.propagation_waves is None else {"propagation_waves": args.propagation_waves}
+    overrides = {}
+    if args.propagation_waves is not None:
+        overrides["propagation_waves"] = args.propagation_waves
+    if args.max_size_factor is not None:
+        overrides["max_size_factor"] = args.max_size_factor
     params = resolve_params(overrides, ndim=3)
 
     tag = f"{args.dataset_name}_{args.model_type}"
@@ -103,6 +112,8 @@ def main():
     # Only when it is not the library default, so a default run still reads the results it already wrote.
     if params["propagation_waves"] != DEFAULT_PROMPT_GENERATION["propagation_waves"]:
         tag = f"{tag}_waves{params['propagation_waves']}"
+    if params["max_size_factor"] != DEFAULT_PROMPT_GENERATION["max_size_factor"]:
+        tag = f"{tag}_maxsize{params['max_size_factor']}"
 
     # (10**6,) * 3 always exceeds the volume, so an unset axis keeps that axis whole (a center crop).
     crop_shape = (args.z_crop or 10**6, args.xy_crop or 10**6, args.xy_crop or 10**6)

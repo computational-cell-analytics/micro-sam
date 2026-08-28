@@ -233,6 +233,11 @@ def main():
         "--propagation_waves", type=int, default=None,
         help="Rounds the candidates are propagated in, pruning between them. 1 propagates them all.",
     )
+    parser.add_argument(
+        "--max_size_factor", type=float, default=None,
+        help="Reject a candidate this many times larger than the median size it is merged against. "
+             "Catches SAM2 propagation drift (a track that grows onto background). None disables it.",
+    )
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -248,6 +253,8 @@ def main():
     params = resolve_params(ndim=3)
     if args.propagation_waves is not None:
         params["propagation_waves"] = args.propagation_waves
+    if args.max_size_factor is not None:
+        params["max_size_factor"] = args.max_size_factor
 
     crop_shape = (args.z_crop or 10**6, args.xy_crop or 10**6, args.xy_crop or 10**6)
     samples = load_data(args.dataset_name, args.input_path, ndim=3, crop_shape=crop_shape)
@@ -316,6 +323,7 @@ def main():
             "merge_reasons": merge_tally, "generation_stats": stats, "pass_sizes": pass_sizes,
             "n_worker_processes": args.n_worker_processes,
             "propagation_waves": params.get("propagation_waves"),
+            "max_size_factor": params.get("max_size_factor"),
         }, f, indent=2)
     if args.save_segmentation is not None:
         np.save(args.save_segmentation, segmentation)

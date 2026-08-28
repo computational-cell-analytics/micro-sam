@@ -169,6 +169,10 @@ DEFAULT_PROMPT_GENERATION = {
     # off by default until the data at hand has been measured. Four rounds is the knee: more prune
     # more, but each round is a barrier the devices wait on.
     "propagation_waves": 1,
+    # Reject a candidate this many times larger than the median size among the candidates it is
+    # merged against. Off by default, since SAM2 propagation drift (a track that grows onto
+    # background instead of ending) is dataset dependent; see `merge_by_score`.
+    "max_size_factor": None,
     # Number of image prompts (or refinement boxes) evaluated per forward pass.
     "batch_size": 64,
     # These are constant across all registry backbones and dimensionalities.
@@ -1013,9 +1017,15 @@ def derive_volume_prompts(
     }
 
 
+def _record_mask(record: Dict[str, Any]) -> np.ndarray:
+    """The record's mask as a plain numpy array, whatever tensor type it arrived in."""
+    mask = record["segmentation"]
+    return mask.numpy() if hasattr(mask, "numpy") else np.asarray(mask)
+
+
 def merge_by_score(
     records: List[Dict[str, Any]], shape: tuple, max_overlap: float = 0.3, min_size: int = 50,
-    return_matches: bool = False, return_reasons: bool = False,
+    max_size_factor: Optional[float] = None, return_matches: bool = False, return_reasons: bool = False,
 ) -> Union[np.ndarray, tuple]:
     """Merge prediction records in descending score order, each claiming only unclaimed pixels.
 
@@ -1032,11 +1042,16 @@ def merge_by_score(
         max_overlap: Reject a candidate when more than this fraction of it is already claimed. This is
             the duplicate suppression of the merge.
         min_size: Minimum object size to keep.
+        max_size_factor: Reject a candidate larger than this multiple of the median record size.
+            Catches propagation drift: a track that grows onto background instead of ending produces
+            an occasional candidate many times larger than every real object, most easily seen next
+            to the rest of the same call's candidates rather than by any fixed size. None (the
+            default) applies no such cap.
         return_matches: Whether to also return which record made each instance.
         return_reasons: Whether to also return why each record was kept or dropped. A candidate is
-            'too small', a 'duplicate' when a better-scoring mask already claims more than
-            'max_overlap' of it, 'truncated below min size' when too few of its pixels are free, or
-            'kept'. This is what the merge does, reported rather than recomputed.
+            'too small', 'too large', a 'duplicate' when a better-scoring mask already claims more
+            than 'max_overlap' of it, 'truncated below min size' when too few of its pixels are free,
+            or 'kept'. This is what the merge does, reported rather than recomputed.
     Returns:
         The instance segmentation, uint32 array. If `return_matches`, additionally a mapping from
         every instance id to the index of the record that made it. If `return_reasons`, additionally
@@ -1049,6 +1064,10 @@ def merge_by_score(
     ])
     if not np.isfinite(scores).all():
         raise ValueError("Every merge score must be finite.")
+    max_size = None
+    if max_size_factor is not None and records:
+        areas = np.array([int(_record_mask(record).sum()) for record in records])
+        max_size = max_size_factor * np.median(areas)
     full_box = tuple(slice(None) for _ in shape)
     matches = {}
     reasons = ["" for _ in records]
@@ -1060,11 +1079,13 @@ def merge_by_score(
         if group is not None and group in accepted_groups:
             reasons[index] = "alternative not selected"
             continue
-        mask = record["segmentation"]
-        mask = mask.numpy() if hasattr(mask, "numpy") else np.asarray(mask)
+        mask = _record_mask(record)
         area = int(mask.sum())
         if area < min_size:
             reasons[index] = "too small"
+            continue
+        if max_size is not None and area > max_size:
+            reasons[index] = "too large"
             continue
         # A view, so painting the fresh pixels below writes straight into the output.
         target = out[record.get("bounding_box", full_box)]
@@ -1513,6 +1534,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         score_filter: str = DEFAULT_PROMPT_GENERATION["score_filter"],
         max_overlap: Optional[float] = None,
         min_size: Optional[int] = None,
+        max_size_factor: Optional[float] = DEFAULT_PROMPT_GENERATION["max_size_factor"],
         refinement: Optional[str] = DEFAULT_PROMPT_GENERATION["refinement"],
         refinement_kwargs: Optional[Dict[str, Any]] = DEFAULT_PROMPT_GENERATION["refinement_kwargs"],
         multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
@@ -1547,6 +1569,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             max_overlap: Reject a candidate when more than this fraction of it is already claimed. For a
                 volume this applies on the slice a candidate is prompted on and again on the 3d merge.
             min_size: Minimum object size in the result.
+            max_size_factor: Volumes only. Reject a candidate this many times larger than the median
+                size among the candidates it is merged against, which catches propagation drift (a
+                track that grows onto background instead of ending). None (the default) applies no
+                such cap; see `merge_by_score`.
             refinement: Optional second round, a '+'-joined combination of 'points' (the first
                 round's prompts grouped onto each merged instance, see `derive_refinement_prompts`),
                 'boxes' (its bounding box) and 'masks' (its mask as a logit prompt). None (the default)
@@ -1651,7 +1677,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             # '_merge' does polymorphically; an untiled volume merges them flat.
             return self._merge(
                 records, shape, score_threshold=score_threshold, max_overlap=max_overlap,
-                min_size=min_size,
+                min_size=min_size, max_size_factor=max_size_factor,
             )[0]
 
         proposals = self.propose(
@@ -1851,7 +1877,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
     def _merge(
         self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
-        return_context: bool = False, score_filter: str = "predicted_iou",
+        max_size_factor: Optional[float] = None, return_context: bool = False,
+        score_filter: str = "predicted_iou",
     ) -> tuple:
         """Merge the mask proposals into an instance segmentation.
 
@@ -1872,9 +1899,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if not records:
             return np.zeros(shape, dtype="uint32"), None
         if not return_context:
-            return merge_by_score(records, shape, max_overlap=max_overlap, min_size=min_size), None
+            return merge_by_score(
+                records, shape, max_overlap=max_overlap, min_size=min_size, max_size_factor=max_size_factor,
+            ), None
         segmentation, matches, reasons = merge_by_score(
-            records, shape, max_overlap=max_overlap, min_size=min_size,
+            records, shape, max_overlap=max_overlap, min_size=min_size, max_size_factor=max_size_factor,
             return_matches=True, return_reasons=True,
         )
         self._last_generation_stats.update({
@@ -3071,7 +3100,8 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
 
     def _merge(
         self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
-        return_context: bool = False, score_filter: str = "predicted_iou",
+        max_size_factor: Optional[float] = None, return_context: bool = False,
+        score_filter: str = "predicted_iou",
     ) -> tuple:
         """Stitch the per-tile merges into one segmentation, resolving the halo overlaps.
 
@@ -3116,12 +3146,13 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             if return_context:
                 tile_segmentation, tile_matches, tile_reasons = merge_by_score(
                     tile_records, tile_shape, max_overlap=max_overlap, min_size=min_size,
-                    return_matches=True, return_reasons=True,
+                    max_size_factor=max_size_factor, return_matches=True, return_reasons=True,
                 )
                 reasons.extend(tile_reasons)
             else:
                 tile_segmentation = merge_by_score(
-                    tile_records, tile_shape, max_overlap=max_overlap, min_size=min_size
+                    tile_records, tile_shape, max_overlap=max_overlap, min_size=min_size,
+                    max_size_factor=max_size_factor,
                 )
             max_id = int(tile_segmentation.max())
             if max_id == 0:

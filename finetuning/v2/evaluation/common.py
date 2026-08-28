@@ -668,8 +668,8 @@ DATASET_SPACING: dict = {
 # The parameters `AutomaticPromptGenerator.generate` accepts, so a run can be described by one dict.
 GENERATE_PARAM_KEYS = (
     "candidate_threshold", "foreground_threshold", "n_iter", "dt", "sigma", "min_candidate_size",
-    "score_threshold", "score_filter", "max_overlap", "min_size", "refinement", "refinement_kwargs",
-    "multimasking", "multimask_scorer", "multimask_selection",
+    "score_threshold", "score_filter", "max_overlap", "min_size", "max_size_factor", "refinement",
+    "refinement_kwargs", "multimasking", "multimask_scorer", "multimask_selection",
     "n_objects_per_pass", "early_stop_patience", "propagation_waves", "batch_size", "n_threads",
 )
 
