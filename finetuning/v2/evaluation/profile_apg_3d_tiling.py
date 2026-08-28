@@ -275,8 +275,7 @@ def main():
     instrument_pass_sizes(model, pass_sizes)
     segmentation = profile_volume(
         model, raw, None if args.untiled else tuple(args.tile_shape), tuple(args.halo), params, timings,
-        args.breakdown,
-        tile_times, embedding_path,
+        args.breakdown, tile_times, embedding_path,
     )
     total = time.time() - start
     sampler.stop()

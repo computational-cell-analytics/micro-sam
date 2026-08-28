@@ -183,6 +183,18 @@ class PropagationPool:
         for worker in self._workers:
             worker.start()
         self._loaded = False
+        self._failed = False
+
+    def _require_usable(self) -> None:
+        if self._failed:
+            raise RuntimeError(
+                "A worker failure made the propagation pool unusable. Close this pool. "
+                "Create a new pool before propagation."
+            )
+
+    def _invalidate(self) -> None:
+        self._loaded = False
+        self._failed = True
 
     @property
     def n_workers(self) -> int:
@@ -195,14 +207,19 @@ class PropagationPool:
             try:
                 return self._results.get(timeout=1.0)
             except queue.Empty:
-                if not any(worker.is_alive() for worker in self._workers):
-                    raise RuntimeError("Every propagation worker exited before returning a result.")
+                dead_workers = [index for index, worker in enumerate(self._workers) if not worker.is_alive()]
+                if dead_workers:
+                    self._invalidate()
+                    raise RuntimeError(
+                        f"Propagation workers {dead_workers} exited before returning a result."
+                    )
 
     def set_volume(
         self, volume: np.ndarray, embedding_path: str, tile_shape: Sequence[int], halo: Sequence[int],
         offload_state_to_cpu: Optional[bool], max_cached_frames: Optional[int],
     ) -> None:
         """Give every worker the volume to propagate, replacing the previous one."""
+        self._require_usable()
         self._end_jobs()
         setup = {
             "volume": volume, "embedding_path": str(embedding_path),
@@ -215,6 +232,7 @@ class PropagationPool:
         for _ in self._workers:
             worker_id, _, error = self._take()
             if error is not None:
+                self._invalidate()
                 raise RuntimeError(f"Propagation worker {worker_id} failed to load the volume:\n{error}")
         self._loaded = True
 
@@ -225,6 +243,7 @@ class PropagationPool:
         which is what candidate pruning between rounds needs - can call this more than once. They
         are released by the next `set_volume` or by `close`.
         """
+        self._require_usable()
         if not self._loaded:
             raise RuntimeError("The pool has no volume. Call 'set_volume' first.")
         if not jobs:
@@ -237,6 +256,7 @@ class PropagationPool:
         for _ in jobs:
             index, payload, error = self._take()
             if error is not None:
+                self._invalidate()
                 raise RuntimeError(f"Propagation worker {index} failed:\n{error}")
             results[index] = payload
         return results
@@ -295,6 +315,7 @@ def build_pool(
     Returns:
         The pool, or None when it would hold one worker or the model carries no build recipe.
     """
+    devices = list(devices)
     build_kwargs = getattr(model, "build_kwargs", None)
     if build_kwargs is None or len(devices) == 0:
         return None
