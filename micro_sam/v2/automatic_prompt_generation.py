@@ -27,6 +27,8 @@ predictor in one call rather than several costs 1.75% mSA, because each push re-
 on the conditioning frame. See finetuning/v2/evaluation/optimization/notes/APG_3D_OPTIMIZATION.md, experiment 6.
 """
 
+import copy
+import queue
 import shutil
 import time
 from typing import Any, Dict, List, Optional, Sequence, Union
@@ -40,7 +42,7 @@ import torch.nn.functional as F
 
 from sam2.utils.amg import calculate_stability_score
 
-from bioimage_cpp.utils import Blocking
+import bioimage_py as bp
 from bioimage_cpp.segmentation import label
 
 from .normalization import to_image
@@ -51,21 +53,23 @@ from .multimask_selection import (
 )
 from ..util import make_temp_embedding_path
 from .postprocessing import _compute_flow_density
+from .batched_inference import _resolve_devices
 from .prompt_based_segmentation import (
-    ReplicatedPromptableSegmentation3D, TiledPromptableSegmentation3D, map_jobs_over_devices,
-    _crop_to_original_shape,
+    ReplicatedPromptableSegmentation3D, map_jobs_over_devices, _crop_to_original_shape,
 )
 from .util import (
     DEFAULT_MODEL, autocast, configure_image_predictor, encode_image, get_sam2_image_predictor,
-    precompute_image_embeddings, set_precomputed, _load_list_datasets,
+    precompute_image_embeddings, set_precomputed,
 )
 from .instance_segmentation import (
-    TiledUniSAM2InstanceSegmentation, UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices,
-    _set_image_predictor_from_backbone, _set_image_predictor_from_3d_embeddings,
+    UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices, _set_image_predictor_from_3d_embeddings,
 )
 
 # Only enters the merge order, never a cutoff, so it is a constant.
 STABILITY_SCORE_OFFSET = 1.0
+
+# The multicut boundary bias `TiledAutomaticPromptGenerator` stitches tiles/blocks with by default.
+DEFAULT_STITCHING_BETA = 0.5
 
 # Per (model_type, mode) defaults from the registry parameter search, same methodology as
 # `micro_sam.v2.postprocessing.DEFAULT_POSTPROCESSING`. 2D and 3D are swept independently (a volume
@@ -1170,51 +1174,6 @@ def _volume_records(
             "stability_score": candidate["stability"],
         })
     return records
-
-
-def propagate_passes(propagator, tile_id: int, passes: List[List[dict]], early_stop_patience, n_slices: int):
-    """Propagate a run of one tile's passes on the propagator's state for it, then free that state.
-
-    The passes share the state, so they run in order and pay for the tile's features once, and it is
-    torn down at the end, so the peak is the states running at that moment rather than one per tile
-    in the volume.
-
-    A module-level function rather than a method, because a propagation worker process runs it too,
-    on a propagator it built for itself (see `micro_sam.v2.propagation_pool`).
-
-    Args:
-        propagator: The tiled propagator holding this tile's video-predictor state.
-        tile_id: The tile the passes belong to.
-        passes: The passes, each a list of the candidates conditioned on one slice.
-        early_stop_patience: Consecutive empty slices after which a direction stops, or None.
-        n_slices: The depth of the volume.
-
-    Returns:
-        The tile's (bounding_box, records), the second of which the merge paints from.
-    """
-    records = []
-    bounding_box = None
-    try:
-        for batch in passes:
-            propagator.reset_tile_tracking(tile_id)
-            for object_id, candidate in enumerate(batch, start=1):
-                x, y = candidate["point"]
-                propagator.add_point_prompts(
-                    frame_ids=candidate["frame"],
-                    points=np.array([[y, x]], dtype="float32"),  # The propagator takes YX.
-                    point_labels=np.array([1], dtype="int32"),
-                    object_id=object_id,
-                )
-            video_segments, bounding_box_yx = propagator.propagate_tile(
-                tile_id, early_stop_patience=early_stop_patience,
-            )
-            # A concrete z-slice, not 'slice(None)': '_merge' needs '.start'/'.stop' to size the tile.
-            bounding_box = (slice(0, n_slices),) + bounding_box_yx
-            tile_shape = (n_slices,) + tuple(box.stop - box.start for box in bounding_box_yx)
-            records.extend(_volume_records(video_segments, batch, tile_shape))
-    finally:
-        propagator.release_tile(tile_id)
-    return bounding_box, records
 
 
 class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
@@ -2874,29 +2833,38 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         )
 
 
-class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2InstanceSegmentation):
-    """Generates an instance segmentation with automatically generated prompts, for tiled inference.
+class TiledAutomaticPromptGenerator:
+    """Generates an instance segmentation with automatically generated prompts, tile or block by tile.
 
-    Like `AutomaticPromptGenerator`, but both branches run tile by tile, which keeps the encoder at its
-    native resolution instead of downscaling the whole image to its input size.
+    Like `AutomaticPromptGenerator`, but every tile (an image) or XYZ block (a volume) is segmented
+    independently at native resolution, with a halo, and the results are stitched by
+    `bioimage_py.segmentation.stitch_segmentation`'s multicut over the halo overlap rather than by
+    giving each candidate to exactly one tile. A volume is blocked in Z too, so an object crossing a
+    Z seam is reconciled the same way one crossing a Y or X seam is: independently predicted in both
+    neighbouring blocks and merged by how well their halo predictions agree, instead of being routed
+    to a single owning tile - which a full-depth tile column cannot do for a Z seam at all. This
+    trades some redundant halo computation (every tile/block re-encodes and re-propagates its own
+    halo) for correctness at every seam, including ones the previous tile-column design could not
+    represent. See finetuning/v2/evaluation/apg_3d_blockwise_ab.py for the measurements.
 
-    The prompts are derived once from the stitched prediction, so a candidate spanning a tile border is
-    proposed once. Each is assigned to the tile whose inner block holds its point and prompted within
-    that tile's halo, so no object is segmented twice and no mask is cut off at a nearby border.
-
-    A refinement runs the same way: every instance is re-prompted in the tile that produced it, with
-    its prompts translated into that tile's frame, while the acceptance gates and the final repaint
-    stay global. The negatives an instance takes from its neighbours are chosen across the whole
-    image, so a neighbour beyond the halo is dropped from the re-prompt and counted in the
-    'dropped_negatives' statistic — a large count means the halo is too small for 'n_negatives'.
+    Every resolved device gets its own persistent (decoder, model) copy, built once and reused
+    across every tile/block for the life of the generator, so `generate` keeps every device busy on
+    a different tile/block concurrently rather than rebuilding the model per tile.
 
     Args:
         model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
-        predictor: The SAM2 image predictor for the interactive branch of the same model.
-        device: The device the model lives on.
-        inference_device: The device intent used as the `devices=None` fallback.
-        n_worker_processes: The number of propagation workers. None uses every device. Zero uses the current process.
+        predictor: The SAM2 image predictor for the interactive branch of the same model, or its
+            video predictor for a volume.
+        device: The device the model lives on, used to resolve `inference_device=None`.
+        inference_device: The device(s) to run tiles/blocks on concurrently, resolved the same way
+            as `UniSAM2InstanceSegmentation`'s: None fans out over every visible GPU when the model
+            is on CUDA, a single device stays on it, a sequence pins one pool member per device.
+        beta: The multicut boundary bias passed to `stitch_segmentation`; > 0.5 biases towards
+            over-segmentation (cutting), < 0.5 towards under-segmentation (merging).
     """
+
+    # Read by `automatic_instance_segmentation` to decide whether to pass the AIS 'mode' argument.
+    _has_postprocessing_mode = False
 
     def __init__(
         self,
@@ -2904,587 +2872,151 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         predictor,
         device: Optional[Union[str, torch.device]] = None,
         inference_device: Devices = USE_MODEL_DEVICE,
-        n_worker_processes: Optional[int] = None,
+        beta: float = DEFAULT_STITCHING_BETA,
     ) -> None:
-        if n_worker_processes is not None and n_worker_processes < 0:
-            raise ValueError(f"The worker process count {n_worker_processes} must be non-negative or None.")
-        super().__init__(model, predictor, device=device, inference_device=inference_device)
-        self._tiling = None
+        self._model = model
+        self._predictor = predictor
+        self._device = device
+        self._inference_device = device if inference_device is USE_MODEL_DEVICE else inference_device
+        self._beta = beta
+        self._pool: Optional[List[AutomaticPromptGenerator]] = None
+        self._image = None
+        self._ndim = None
         self._tile_shape = None
         self._halo = None
-        self._embedding_path = None
-        self._pool = None
-        self._n_worker_processes = n_worker_processes
+        self._verbose = False
+        self._offload_to_cpu = None
+        self._cache_all_slices = False
+
+    def _build_pool(self) -> List[AutomaticPromptGenerator]:
+        """One independent (decoder, model) copy per resolved device, each pinned entirely to it."""
+        devices = _resolve_devices(self._model, self._inference_device)
+        if len(devices) == 1:
+            device = devices[0]
+            return [
+                AutomaticPromptGenerator(self._model, self._predictor, device=device, inference_device=device)
+            ]
+        pool = []
+        for device in devices:
+            model = copy.deepcopy(self._model).to(device)
+            predictor = copy.deepcopy(self._predictor).to(device)
+            pool.append(AutomaticPromptGenerator(model, predictor, device=device, inference_device=device))
+        return pool
 
     def initialize(
         self,
         image: np.ndarray,
         ndim: int = 2,
-        image_embeddings: Optional[dict] = None,
-        i: Optional[int] = None,
         tile_shape: Optional[tuple] = None,
         halo: Optional[tuple] = None,
-        save_path: Optional[str] = None,
         verbose: bool = False,
         offload_to_cpu: Optional[bool] = None,
         cache_all_slices: bool = False,
-        devices: Devices = None,
-        **kwargs,
     ) -> None:
-        """Compute the tiled embeddings, run the decoder on them and keep them for the prompting.
+        """Store the input and the tile/block geometry; the actual segmentation happens in `generate`.
 
-        The same tiled embeddings serve both branches. Unlike the non-tiled generator they are needed
-        again in `generate`, so they are held until `clear_state`.
+        Unlike `AutomaticPromptGenerator`, nothing is encoded here: each tile/block is encoded from
+        scratch inside `generate`, since every tile/block needs its own encoder pass over its halo.
 
         Args:
             image: The input image, shape (Y, X) or (Y, X, C), or the input volume, shape (Z, Y, X).
             ndim: The number of spatial dimensions, 2 or 3. A volume requires a video predictor.
-            image_embeddings: Optional precomputed tiled (video-style, for a volume) embeddings. The
-                tiling is taken from them when they are given.
-            i: The slice index for tiled video-style embeddings. By default the embeddings contain one image.
-            tile_shape: The in-plane tile shape, (y, x). Required when no embeddings are given. A
-                volume is not tiled along z.
-            halo: The in-plane overlap between the tiles, (y, x). Required when no embeddings are given.
-            save_path: Optional path to cache the computed embeddings in a zarr container. Without one
-                an ephemeral store is used, which `clear_state` removes.
-            verbose: Whether to print progress while the embeddings are computed.
-            offload_to_cpu: Volumes only. Whether every tile's tracking state is held on the host
-                rather than on the device, see `AutomaticPromptGenerator.initialize`.
-            cache_all_slices: Volumes only. Whether every tile's slices stay cached on the device
-                while it is propagated, see `AutomaticPromptGenerator.initialize`.
-            devices: The devices for decoder inference and volume propagation. If this value is None,
-                the generator uses `inference_device`.
-            kwargs: Additional arguments for `TiledUniSAM2InstanceSegmentation.initialize`.
+            tile_shape: The inner tile/block shape, (y, x) for an image or (z, y, x) for a volume -
+                one entry per spatial axis, so a volume is blocked in z too, not tiled in-plane only.
+            halo: The halo added on each side of a tile/block, matching `tile_shape`'s axes.
+            verbose: Whether each tile/block's generator prints progress while it segments it.
+            offload_to_cpu: Volumes only, forwarded to every tile/block's own
+                `AutomaticPromptGenerator.initialize`.
+            cache_all_slices: Volumes only, forwarded the same way.
         """
         if ndim not in (2, 3):
             raise ValueError(f"Tiled prompt generation supports 2d and 3d inputs, got ndim={ndim}.")
-        if image_embeddings is None and (tile_shape is None or halo is None):
+        if tile_shape is None or halo is None:
             raise ValueError("Both 'tile_shape' and 'halo' have to be passed for the tiled generator.")
-
-        if self._temporary_embedding_path is not None or self._volume is not None:
-            self.clear_state()
-
-        owns_image_embeddings = image_embeddings is None
-        if image_embeddings is None:
-            path = save_path
-            if path is None:
-                self._temporary_embedding_path = make_temp_embedding_path()
-                path = self._temporary_embedding_path
-            encoder = self._video_predictor if ndim == 3 else self._predictor
-            image_embeddings = precompute_image_embeddings(
-                encoder, image, save_path=path, ndim=ndim, tile_shape=tile_shape, halo=halo,
-                verbose=verbose, lazy_loading=True, devices=self._inference_devices(None),
+        if len(tile_shape) != ndim or len(halo) != ndim:
+            raise ValueError(
+                f"'tile_shape' and 'halo' must have {ndim} entries for a {ndim}d input, one per spatial "
+                "axis (z too, for a volume - the tiled generator blocks it, not just tiles it in-plane)."
             )
-
-        if ndim == 3:
-            if self._video_predictor is None:
-                raise ValueError(
-                    "Volumetric prompt generation prompts the SAM2 video predictor, so the tiled "
-                    "generator has to be constructed with one instead of an image predictor."
-                )
-            TiledUniSAM2InstanceSegmentation.initialize(
-                self, image, ndim=3, image_embeddings=image_embeddings, devices=devices, **kwargs
-            )
-            self._volume = image
-            self._i = None
-            self._offload_to_cpu = offload_to_cpu
-            self._max_cached_frames = int(image.shape[0]) if cache_all_slices else None
-            self._propagator = self._build_tiled_propagator(image, image_embeddings, devices)
-        else:
-            TiledUniSAM2InstanceSegmentation.initialize(
-                self, image, ndim=2, image_embeddings=image_embeddings, i=i, devices=devices, **kwargs
-            )
-            self._i = i
-
-        self._image_embeddings = image_embeddings
-        self._owns_image_embeddings = owns_image_embeddings
-        # Where a worker process reads the embeddings from. None for a store that lives in memory,
-        # which nothing outside this process can open, so the propagation then stays here.
-        self._embedding_path = getattr(image_embeddings, "path", None)
-        self._set_tiling(image_embeddings)
-        if ndim == 3:
-            self._start_worker_pool()
-
-    def _build_tiled_propagator(
-        self, volume: np.ndarray, image_embeddings: dict, devices: Devices = None,
-    ) -> TiledPromptableSegmentation3D:
-        """Build the propagator for a tiled volume on the decoder devices."""
-        return TiledPromptableSegmentation3D(
-            self._video_predictor, volume, image_embeddings,
-            devices=self._inference_devices(devices),
-            offload_state_to_cpu=self._offload_to_cpu, max_cached_frames=self._max_cached_frames,
-        )
-
-    def _set_tiling(self, image_embeddings: dict) -> None:
-        # From the embeddings, not the arguments, so the prompting cannot disagree with the encoding.
-        features = image_embeddings["features"]
-        self._tile_shape = [int(s) for s in features.attrs["tile_shape"]]
-        self._tiling = Blocking([0, 0], [int(s) for s in features.attrs["shape"][-2:]], self._tile_shape)
-        self._halo = [int(s) for s in features.attrs["halo"]]
-
-    def _set_tile_embeddings(self, predictor, tile_id: int) -> None:
-        """Set the embeddings for one tile on the given image predictor."""
-        if self._i is None:
-            set_precomputed(predictor, self._image_embeddings, tile_id=tile_id)
-            return
-
-        name = str(tile_id)
-        features = self._image_embeddings["features"][name]
-        fpn_group = self._image_embeddings["fpn"][name]
-        pos_enc_group = self._image_embeddings["pos_enc"][name]
-        fpn = [fpn_group[str(level)] for level in range(len(fpn_group))]
-        pos_enc = [pos_enc_group[str(level)] for level in range(len(pos_enc_group))]
-        _set_image_predictor_from_backbone(
-            predictor, fpn, pos_enc, features, features.attrs["original_size"], self._i,
-        )
-
-    def _tile_bounding_box(self, tile_id: int) -> tuple:
-        """The outer (halo-extended) block of a tile, as a slice tuple."""
-        block = self._tiling.get_block_with_halo(tile_id, list(self._halo)).outer_block
-        return tuple(slice(begin, end) for begin, end in zip(block.begin, block.end))
-
-    def _tiles_for_points(self, points: np.ndarray) -> Dict[int, List[int]]:
-        """Group prompt indices by the tile whose inner block holds their point.
-
-        The inner blocks do not overlap, so every candidate is prompted exactly once.
-        """
-        assignment = {}
-        for index, (x, y) in enumerate(points[:, 0, :]):
-            tile_id = self._tiling.coordinates_to_block_id([int(y), int(x)])
-            assignment.setdefault(tile_id, []).append(index)
-        return assignment
-
-    def _apply(
-        self, prompts: dict, multimasking: bool, batch_size: int, multimask_scorer: str = "predicted_iou",
-        multimask_selection: str = "eager", compute_multimask_uncertainty: bool = False,
-        return_multimask_features: bool = False,
-        multimask_feature_schema: Optional[str] = None,
-        foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
-    ) -> list:
-        """Prompt each tile with the candidates that belong to it, keeping the tiles apart."""
-        points, point_labels = prompts["points"], prompts["point_labels"]
-
-        proposals = []
-        for tile_id, indices in sorted(self._tiles_for_points(points).items()):
-            bounding_box = self._tile_bounding_box(tile_id)
-            # The prompts are in the full image's frame, the tile's embeddings in the tile's.
-            origin = np.array([bounding_box[1].start, bounding_box[0].start], dtype="float32")
-
-            self._set_tile_embeddings(self._predictor, tile_id)
-            local_prompts = {"points": points[indices] - origin, "point_labels": point_labels[indices]}
-            kwargs = {"multimasking": multimasking, "batch_size": batch_size}
-            if (
-                multimask_scorer != "predicted_iou"
-                or multimask_selection != "eager"
-                or compute_multimask_uncertainty
-                or return_multimask_features
-                or multimask_feature_schema is not None
-            ):
-                kwargs.update({
-                    "multimask_scorer": multimask_scorer, "multimask_selection": multimask_selection,
-                    "compute_multimask_uncertainty": compute_multimask_uncertainty,
-                    "return_multimask_features": return_multimask_features,
-                    "multimask_feature_schema": multimask_feature_schema,
-                    "foreground": self._prediction[0][bounding_box],
-                    "foreground_threshold": foreground_threshold,
-                })
-            records = self._apply_prompts(self._predictor, local_prompts, **kwargs)
-            for record in records:
-                # Back into the full image's frame, so the records agree with the non-tiled ones.
-                record["point"] = (record["point"][0] + float(origin[0]), record["point"][1] + float(origin[1]))
-                if "multimask_group" in record:
-                    record["multimask_group"] = (tile_id, record["multimask_group"])
-            if records:
-                proposals.append({"tile_id": tile_id, "bounding_box": bounding_box, "records": records})
-        return proposals
-
-    def _merge(
-        self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
-        max_size_factor: Optional[float] = None, return_context: bool = False,
-        score_filter: str = "predicted_iou",
-    ) -> tuple:
-        """Stitch the per-tile merges into one segmentation, resolving the halo overlaps.
-
-        Each tile is merged on its own and its instance ids are offset to stay unique across the
-        image, so the stitch only decides which tile owns a contested pixel — it never renames an
-        id. The refinement context therefore carries across it: the per-tile matches are shifted by
-        the same offset as the ids, and the instances a neighbouring tile overwrote entirely are
-        pruned, since an id that is no longer in the segmentation has nothing left to refine.
-
-        Post-merge refinement features derive visibility loss from the stitched segmentation, so the
-        context does not need per-tile claim maps.
-        """
-        segmentation = np.zeros(shape, dtype="uint32")
-        offset = 0
-
-        all_records, records, reasons, matches, record_tiles = [], [], [], {}, {}
-        for proposal in proposals:
-            bounding_box = proposal["bounding_box"]
-            tile_shape = tuple(box.stop - box.start for box in bounding_box)
-            # Flattened before the tile can be skipped below, so the record indices cannot shear.
-            all_records.extend(proposal["records"])
-            record_offset = len(records)
-            if score_filter == "none":
-                tile_records = list(proposal["records"])
-            else:
-                missing = [record for record in proposal["records"] if score_filter not in record]
-                if missing:
-                    raise ValueError(
-                        f"Cannot filter by {score_filter!r}: {len(missing)} tile records lack that score."
-                    )
-                tile_records = [
-                    record for record in proposal["records"] if record[score_filter] >= score_threshold
-                ]
-            records.extend(tile_records)
-            if return_context:
-                record_tiles.update({
-                    record_offset + index: proposal["tile_id"] for index in range(len(tile_records))
-                })
-            if not tile_records:
-                continue
-
-            if return_context:
-                tile_segmentation, tile_matches, tile_reasons = merge_by_score(
-                    tile_records, tile_shape, max_overlap=max_overlap, min_size=min_size,
-                    max_size_factor=max_size_factor, return_matches=True, return_reasons=True,
-                )
-                reasons.extend(tile_reasons)
-            else:
-                tile_segmentation = merge_by_score(
-                    tile_records, tile_shape, max_overlap=max_overlap, min_size=min_size,
-                    max_size_factor=max_size_factor,
-                )
-            max_id = int(tile_segmentation.max())
-            if max_id == 0:
-                continue
-            if return_context:
-                matches.update({
-                    instance_id + offset: record_index + record_offset
-                    for instance_id, record_index in tile_matches.items()
-                })
-            # Keep the instance ids unique across tiles before the halo overlaps are resolved.
-            tile_segmentation[tile_segmentation != 0] += offset
-            offset += max_id
-            # An earlier tile keeps every pixel it claimed, which is the halo resolution.
-            previous = segmentation[bounding_box]
-            segmentation[bounding_box] = np.where(previous != 0, previous, tile_segmentation)
-
-        if not return_context:
-            return segmentation, None
-
-        present = {int(instance_id) for instance_id in np.unique(segmentation)} - {0}
-        stitch_dropped = len(matches) - len(present)
-        matches = {
-            instance_id: record_index for instance_id, record_index in matches.items()
-            if instance_id in present
-        }
-        if set(matches) != present:
-            raise RuntimeError(
-                f"The stitched segmentation has {len(present - set(matches))} instances that no tile "
-                "merge accounts for, so the refinement context would be incomplete."
-            )
-        self._last_generation_stats.update({
-            "proposed_candidates": len(all_records),
-            "scored_candidates": len(records),
-            "merge_reasons": {reason: reasons.count(reason) for reason in sorted(set(reasons))},
-            "stitch_dropped_instances": stitch_dropped,
-        })
-        return segmentation, {
-            "proposals": all_records, "records": records, "matches": matches,
-            "record_tiles": record_tiles, "score_threshold": score_threshold,
-            "score_filter": score_filter,
-        }
-
-    def _tile_inner_box(self, tile_id: int, n_slices: int) -> tuple:
-        """The inner (halo-free) block of a tile, as a slice tuple, full z depth included."""
-        block = self._tiling.get_block_with_halo(tile_id, list(self._halo)).inner_block
-        return (slice(0, n_slices),) + tuple(slice(int(b), int(e)) for b, e in zip(block.begin, block.end))
-
-    def _set_tile_embeddings_3d(self, predictor, tile_id: int, frame: int) -> None:
-        """Set one tile's slice ``frame`` on the given image predictor, from the tiled 3d embeddings."""
-        features = self._image_embeddings["features"][str(tile_id)]
-        fpn = _load_list_datasets(self._image_embeddings["fpn"], str(tile_id), lazy_loading=True)
-        pos_enc = _load_list_datasets(self._image_embeddings["pos_enc"], str(tile_id), lazy_loading=True)
-        _set_image_predictor_from_backbone(
-            predictor, fpn, pos_enc, features, features.attrs["original_size"], frame,
-        )
+        self._image = image
+        self._ndim = ndim
+        self._tile_shape = tuple(int(t) for t in tile_shape)
+        self._halo = tuple(int(h) for h in halo)
+        self._verbose = verbose
+        self._offload_to_cpu = offload_to_cpu
+        self._cache_all_slices = cache_all_slices
 
     @torch.no_grad()
-    def _score_candidates(
-        self, prompts: dict, multimasking: bool, batch_size: int, score_threshold: float,
-        max_overlap: float, components: Optional[tuple] = None,
-        refinement_kwargs: Optional[dict] = None,
-    ) -> List[dict]:
-        """Score every candidate in the tile whose inner block holds its anchor point.
+    def generate(self, **params) -> np.ndarray:
+        """Segment every tile/block independently and stitch them by halo-overlap multicut.
 
-        Like `AutomaticPromptGenerator._score_candidates`, but a tile's slice is reconstructed from
-        the tiled 3d embeddings instead of the (untiled) full-resolution ones, and duplicate
-        suppression stays inside one tile's candidates on one frame: a candidate assigned to another
-        tile is never a plausible duplicate, since inner blocks do not overlap.
+        `propagation_waves` is dropped from `params`: candidate pruning within one tile/block would
+        discard a prediction a neighbouring tile/block needs for the halo overlap, so it stays off
+        until the tiles/blocks are pruned independently *before* stitching (not yet implemented).
+
+        Args:
+            params: Keyword arguments for `AutomaticPromptGenerator.generate`, applied identically
+                to every tile/block.
+
+        Returns:
+            The stitched instance segmentation, uint32 array with the shape of the input.
         """
-        if components is not None:
-            raise NotImplementedError(
-                "A refinement round re-prompts one region at a time, which the tiled volumetric path "
-                "does not assemble. Pass refinement=None for a tiled volume."
-            )
-        points, point_labels, frames = prompts["points"], prompts["point_labels"], prompts["frames"]
+        if self._image is None:
+            raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
 
-        jobs = []
-        for frame in np.unique(frames):
-            by_tile: Dict[int, List[int]] = {}
-            for index in np.where(frames == frame)[0]:
-                x, y = points[index, 0]
-                tile_id = self._tiling.coordinates_to_block_id([int(y), int(x)])
-                by_tile.setdefault(tile_id, []).append(index)
-            jobs.extend((int(frame), tile_id, indices) for tile_id, indices in by_tile.items())
-
-        def score_job(worker_id, job):
-            frame, tile_id, indices = job
-            predictor = self._scoring_predictors()[worker_id]
-            self._set_tile_embeddings_3d(predictor, tile_id, frame)
-            bounding_box = self._tile_bounding_box(tile_id)
-            origin = np.array([bounding_box[1].start, bounding_box[0].start], dtype="float32")
-
-            records = self._apply_prompts(
-                predictor, {"points": points[indices] - origin, "point_labels": point_labels[indices]},
-                multimasking=multimasking, batch_size=batch_size,
-            )
-            records = [record for record in records if record["predicted_iou"] >= score_threshold]
-            if not records:
-                return []
-
-            _, kept = merge_by_score(
-                records, _records_shape(records), max_overlap=max_overlap,
-                min_size=default_prompt_generation(self._model_type, is_volume=False)["min_size"],
-                return_matches=True,
-            )
-            candidates = []
-            for record_index in kept.values():
-                record = records[record_index]
-                x, y = points[indices[record["prompt_index"]], 0]
-                candidates.append({
-                    "frame": frame,
-                    "tile_id": int(tile_id),
-                    "point": (float(x), float(y)),
-                    "score": record["predicted_iou"],
-                    "stability": record["stability_score"],
-                    # The mask on the anchor slice, in the tile's frame, which is what the pruning
-                    # between propagation rounds measures the claimed overlap of.
-                    "mask": record["segmentation"],
-                    "mask_box": record["bounding_box"],
-                })
-            return candidates
-
-        # One tile's prompts on one slice, which is independent of every other pair, so they spread.
-        per_job = map_jobs_over_devices(self._scoring_devices(), jobs, score_job)
-        return [candidate for job_candidates in per_job for candidate in job_candidates]
-
-    def _start_worker_pool(self) -> None:
-        """Start the propagation workers, so their models build while this process encodes.
-
-        A worker's model takes about as long to build as the encoder, the decoder and the scoring
-        take together, so starting them here rather than at the first propagation hides the cost
-        entirely. Kept afterwards: an evaluation over many volumes would otherwise pay it per volume.
-        """
-        from .propagation_pool import build_pool
-
-        if self._n_worker_processes == 0 or self._pool is not None or self._embedding_path is None:
-            return
-        devices = [device for _, device in self._propagator.predictor_devices]
-        self._pool = build_pool(self._video_predictor, devices, n_workers=self._n_worker_processes)
+        params = dict(params)
+        params.pop("propagation_waves", None)
         if self._pool is None:
-            self._n_worker_processes = 0  # Nothing to spread over, so stop trying.
+            self._pool = self._build_pool()
+        available: "queue.Queue[AutomaticPromptGenerator]" = queue.Queue()
+        for generator in self._pool:
+            available.put(generator)
 
-    def _worker_pool(self):
-        """The worker processes the propagation runs in, or None when it stays in this process.
+        def segment_block(block: np.ndarray, block_id: int) -> np.ndarray:
+            block = np.asarray(block)
+            generator = available.get()
+            try:
+                generator.initialize(
+                    block, ndim=self._ndim, verbose=self._verbose,
+                    offload_to_cpu=self._offload_to_cpu, cache_all_slices=self._cache_all_slices,
+                )
+                return generator.generate(**params)
+            finally:
+                generator.clear_state()
+                available.put(generator)
 
-        Threads do not scale this over devices - the propagation loop holds the interpreter lock for
-        too much of every frame - so it is handed to one process per device instead.
-        """
-        self._start_worker_pool()
-        if self._pool is None:
-            return None
-
-        self._pool.set_volume(
-            self._volume, self._embedding_path, self._tile_shape, self._halo,
-            self._offload_to_cpu, self._max_cached_frames,
+        output = bp.segmentation.stitch_segmentation(
+            input=self._image,
+            segmentation_function=segment_block,
+            tile_shape=self._tile_shape,
+            tile_overlap=self._halo,
+            beta=self._beta,
+            with_background=True,
+            num_workers=len(self._pool),
+            job_type="local",
         )
-        return self._pool
-
-    def close(self) -> None:
-        """End the propagation workers, if any were started."""
-        # Read defensively: this also runs from '__del__', which a half-built instance reaches too.
-        pool = getattr(self, "_pool", None)
-        if pool is not None:
-            pool.close()
-            self._pool = None
-
-    def __del__(self):
-        self.close()
-
-    def _propagation_jobs(
-        self, by_tile: Dict[int, List[dict]], n_objects_per_pass: int, n_workers: int,
-    ) -> List[tuple]:
-        """Cut every tile's passes into the jobs the workers pull, longest job first.
-
-        A whole tile per device leaves the schedule with a tail: the tiles differ by an order of
-        magnitude in how many candidates they hold, so the last big one runs alone while the other
-        devices idle. Cutting a tile into runs of passes lets several devices work on it, and
-        starting with the longest run keeps the tail short. Each job still holds enough passes to
-        pay for building its own state.
-        """
-        by_tile_passes = {}
-        for tile_id, tile_candidates in sorted(by_tile.items()):
-            by_anchor: Dict[int, List[dict]] = {}
-            for candidate in tile_candidates:
-                by_anchor.setdefault(candidate["frame"], []).append(candidate)
-            by_tile_passes[tile_id] = [
-                group[start:start + n_objects_per_pass]
-                for _, group in sorted(by_anchor.items())
-                for start in range(0, len(group), n_objects_per_pass)
-            ]
-
-        n_passes = sum(len(passes) for passes in by_tile_passes.values())
-        if n_workers < 2 or n_passes == 0:
-            chunk = n_passes or 1  # One job per tile: nothing to balance, so keep every tile's cache.
-        else:
-            target = n_workers * PROPAGATION_JOBS_PER_DEVICE
-            chunk = max(MIN_PASSES_PER_PROPAGATION_JOB, -(-n_passes // target))
-
-        jobs = []
-        for tile_id, passes in by_tile_passes.items():
-            jobs.extend(
-                (tile_id, index, passes[start:start + chunk])
-                for index, start in enumerate(range(0, len(passes), chunk))
-            )
-        return sorted(jobs, key=lambda job: -len(job[2]))
-
-    def _propagate_candidates(
-        self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
-        verbose: bool, max_overlap: float, propagation_waves: int = 1,
-    ) -> List[Dict[str, Any]]:
-        """Propagate every tile's candidates, spreading the work over the inference devices.
-
-        The propagation is where a volume's time goes, and it is embarrassingly parallel: a pass
-        conditions its own objects on one slice of one tile and tracks them to the ends, sharing
-        nothing with the others but the read-only embeddings. So the passes are cut into jobs and
-        handed to one worker per device, each pulling the next job once it is free. The result is
-        grouped by tile, like the 2d tiled generator's proposals, because the merge still has to
-        resolve the halo overlaps.
-        """
-        if not candidates:
-            return []
-        n_slices = self._volume.shape[0]
-        pool = self._worker_pool()
-        n_workers = pool.n_workers if pool is not None else len(self._propagator.predictor_devices)
-
-        claims: Dict[int, np.ndarray] = {}
-        by_tile_records: Dict[int, List[tuple]] = {}
-        n_propagated = 0
-        waves = self._candidate_waves(candidates, propagation_waves)
-        for wave_index, wave in enumerate(waves):
-            wave = [candidate for candidate in wave if not self._is_claimed(claims, candidate, max_overlap)]
-            n_propagated += len(wave)
-            by_tile: Dict[int, List[dict]] = {}
-            for candidate in wave:
-                by_tile.setdefault(candidate["tile_id"], []).append(candidate)
-            jobs = self._propagation_jobs(by_tile, n_objects_per_pass, n_workers)
-            if not jobs:
-                continue
-
-            if pool is not None:
-                results = pool.map_jobs(jobs, early_stop_patience)
-            else:
-                def run_job(job):
-                    tile_id, _, passes = job
-                    return propagate_passes(self._propagator, tile_id, passes, early_stop_patience, n_slices)
-
-                with tqdm(total=len(jobs), desc="Propagate prompts", disable=not verbose) as progress:
-                    results = self._propagator.map_tile_jobs(jobs, run_job, update_progress=progress.update)
-
-            # Regrouped in the order the passes were cut, not the order the devices finished them in:
-            # the merge breaks score ties by record order.
-            for (tile_id, index, _), result in zip(jobs, results):
-                by_tile_records.setdefault(tile_id, []).append(((wave_index, index), result))
-                if wave_index + 1 < len(waves):
-                    self._claim_records(claims, tile_id, result[1])
-
-        self._last_generation_stats["propagated_candidates"] = n_propagated
-        self._last_generation_stats["pruned_candidates"] = len(candidates) - n_propagated
-
-        proposals = []
-        for tile_id in sorted(by_tile_records):
-            bounding_box, records = None, []
-            for _, (job_box, job_records) in sorted(by_tile_records[tile_id], key=lambda item: item[0]):
-                bounding_box = job_box if job_box is not None else bounding_box
-                records.extend(job_records)
-            if records:
-                proposals.append({"tile_id": tile_id, "bounding_box": bounding_box, "records": records})
-        return proposals
-
-    def _claim_key(self, candidate: dict) -> int:
-        """@private"""
-        return candidate["tile_id"]
-
-    def _claim_shape(self, key) -> tuple:
-        """@private"""
-        box = self._tile_bounding_box(key)
-        return (int(self._volume.shape[0]),) + tuple(side.stop - side.start for side in box)
-
-    def _region_of(self, context: dict, record_index: int):
-        """The tile that produced a record, which is the tile its instance is re-prompted in.
-
-        That tile's embeddings made the first-round mask, so the mask, its bounding box and every
-        prompt grouped onto it lie inside the tile's halo-extended block, and the stitch can only
-        take pixels away. Assigning by the instance's interior point instead would carry no such
-        guarantee, and would truncate an instance that the point's tile does not fully cover.
-        """
-        return context["record_tiles"][record_index]
-
-    def _region_box(self, key) -> tuple:
-        """@private"""
-        return self._tile_bounding_box(key)
-
-    def _set_region(self, key) -> None:
-        """@private"""
-        self._set_tile_embeddings(self._predictor, key)
+        return np.asarray(output).astype("uint32")
 
     def get_state(self) -> dict:
-        """@private"""
-        raise NotImplementedError(
-            "The tiled prompt generator cannot serialize its state, because it holds tiled embeddings."
-        )
+        """Return the input and the tile/block geometry, so `set_state` can restore them."""
+        return {"image": self._image, "ndim": self._ndim, "tile_shape": self._tile_shape, "halo": self._halo}
 
     def set_state(self, state: dict) -> None:
-        """Restore a stitched decoder prediction and the tiled embeddings used for prompting."""
-        image_embeddings = state.get("image_embeddings")
-        if image_embeddings is None:
-            raise ValueError("A tiled prompt-generator state must hold its 'image_embeddings'.")
+        """Restore the input and the tile/block geometry `initialize` stored.
 
-        TiledUniSAM2InstanceSegmentation.set_state(self, state)
-        volume = state.get("volume")
-        if volume is not None:
-            if self._video_predictor is None:
-                raise ValueError(
-                    "The video predictor is None. Construct the tiled generator with a SAM2 video predictor."
-                )
-            self._volume = volume
-            self._propagator = self._build_tiled_propagator(volume, image_embeddings)
-            self._i = None
-        else:
-            self._volume = None
-            self._i = state.get("i")
-        self._image_embeddings = image_embeddings
-        self._owns_image_embeddings = False
-        self._scoring_predictor_pool = None
-        self._embedding_path = getattr(image_embeddings, "path", None)
-        self._set_tiling(image_embeddings)
+        Args:
+            state: The state, as returned by `get_state`.
+        """
+        if "image" not in state:
+            raise ValueError("A tiled prompt-generator state must hold its 'image'.")
+        self._image = state["image"]
+        self._ndim = state.get("ndim", 2)
+        self._tile_shape = state.get("tile_shape")
+        self._halo = state.get("halo")
 
     def clear_state(self) -> None:
-        """Clear the decoder predictions and the tiled embeddings, removing an ephemeral store."""
-        super().clear_state()
-        self._tiling = None
+        """Clear the stored input and tile/block geometry. The device pool stays alive."""
+        self._image = None
+        self._ndim = None
         self._tile_shape = None
         self._halo = None
-        self._embedding_path = None
-        # The worker models stay alive. The next propagation call replaces their volume state.

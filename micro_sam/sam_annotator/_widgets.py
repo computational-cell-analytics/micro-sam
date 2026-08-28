@@ -4838,6 +4838,11 @@ class AutoSegmentWidget(_WidgetBase):
                 apg_state["i"] = z
             if ndim == 3:
                 apg_state["volume"] = run_raw
+            # KNOWN GAP: when is_tiled, `self._segmenter` is `TiledAutomaticPromptGenerator`, whose
+            # blockwise/bioimage_py design has no single cached embedding to derive tiling from or
+            # reuse across calls (every block is re-encoded per `generate`), so `set_state` here
+            # raises - it expects {'image', 'tile_shape', 'halo'}. Needs a caching redesign for this
+            # widget, not a call-site patch: cache the per-block segmentations, not a decode step.
             self._segmenter.set_state(apg_state)
             self._segmenter_key = cache_key
 

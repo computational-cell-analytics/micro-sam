@@ -139,8 +139,7 @@ class ImageEmbeddings(dict):
     def path(self):
         """The store these embeddings are backed by, or None when they live in memory.
 
-        A path is what makes them readable from another process, which is how the volumetric
-        propagation reaches them (see `micro_sam.v2.propagation_pool`).
+        A path is what makes them readable from another process.
         """
         return self._path
 
@@ -563,12 +562,6 @@ def get_sam2_model(
     # Both predictor wrappers and direct model use need this metadata for embedding signatures.
     model.model_type = model_type
     model.model_name = model_type  # TODO: What is this exactly?
-    # The arguments that rebuild this model, so a worker process can construct it for itself rather
-    # than receive it (see `micro_sam.v2.propagation_pool`). Weights are not part of it: the path is.
-    model.build_kwargs = {
-        "model_type": model_type, "checkpoint_path": str(checkpoint_path),
-        "input_type": input_type, "peft_kwargs": peft_kwargs,
-    }
 
     return model
 

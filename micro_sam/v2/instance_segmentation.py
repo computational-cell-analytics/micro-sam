@@ -1455,8 +1455,8 @@ def get_instance_segmentation_generator(
             `UniSAM2InstanceSegmentation`).
         ndim: The number of spatial dimensions. Only 'apg' has a separate volumetric segmenter; the
             other modes handle a volume in their front-end (see `automatic_instance_segmentation`).
-        kwargs: Additional keyword arguments for the segmenter, e.g. 'n_worker_processes' for
-            volumetric APG (see `TiledAutomaticPromptGenerator`).
+        kwargs: Additional keyword arguments for the segmenter, e.g. 'beta' for tiled/blocked APG
+            (see `TiledAutomaticPromptGenerator`).
 
     Returns:
         The segmentation generator instance.
