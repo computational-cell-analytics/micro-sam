@@ -93,6 +93,11 @@ APG_GRID_3D = {
     "score_threshold": [0.6],
     "max_overlap": [0.15, 0.5],
     "min_size": [100],
+    # Pruning duplicate candidates between propagation rounds is 1.5-2.7x on most volumes at an equal
+    # or better score, but it costs cremi 0.03 CREMI, so the sweep decides it per dataset rather than
+    # a default doing it for all of them. It roughly halves the propagation, so the extra rung costs
+    # far less than a normal one.
+    "propagation_waves": [1, 4],
 }
 
 # The APG parameters that decide the mask proposals, which is the half that needs the model. Combos

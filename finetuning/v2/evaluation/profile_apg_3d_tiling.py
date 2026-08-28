@@ -165,13 +165,35 @@ def instrument_propagation(timings, job_times):
     apg_module.propagate_passes = timed_job
 
 
-def profile_volume(model, raw, tile_shape, halo, params, stitch, timings, breakdown, tile_times, embedding_path):
+def instrument_pass_sizes(model, sizes):
+    """Record how many candidates each pass carries, which sets its share of the per-frame overhead.
+
+    A frame costs a fixed part plus a part per object, so a pass anchored on a slice that holds few
+    candidates pays the fixed part over few objects. The passes are the tile-and-anchor groups the
+    scored candidates fall into, so they can be counted as soon as the scoring returns.
+    """
+    original = model._score_candidates
+
+    def counted(*args, **kwargs):
+        candidates = original(*args, **kwargs)
+        groups = {}
+        for candidate in candidates:
+            key = (candidate.get("tile_id"), candidate["frame"])
+            groups[key] = groups.get(key, 0) + 1
+        sizes.extend(groups.values())
+        return candidates
+
+    model._score_candidates = counted
+
+
+def profile_volume(model, raw, tile_shape, halo, params, timings, breakdown, tile_times, embedding_path):
     """Run one volume, timing every stage of the generator."""
     model.clear_state()
+    tiling = {} if tile_shape is None else {"tile_shape": tile_shape, "halo": halo}
     with timings.stage("encoder_embeddings"):
         embeddings = precompute_image_embeddings(
             model._video_predictor, raw, save_path=embedding_path, ndim=3,
-            tile_shape=tile_shape, halo=halo, verbose=False, lazy_loading=True,
+            verbose=False, lazy_loading=True, **tiling,
         )
     with timings.stage("decoder"):
         model.initialize(raw, ndim=3, image_embeddings=embeddings, **VOLUME_SPEED_OPTIONS)
@@ -181,9 +203,9 @@ def profile_volume(model, raw, tile_shape, halo, params, stitch, timings, breakd
     timings.wrap(apg_module, "derive_volume_prompts")
     timings.wrap(model, "_score_candidates")
     timings.wrap(model, "_propagate_candidates")
-    timings.wrap(model, "_merge_via_multicut" if stitch == "multicut" else "_merge")
+    timings.wrap(model, "_merge")
     with timings.stage("generate_total"):
-        segmentation = model.generate(stitch=stitch, **params).astype("uint32")
+        segmentation = model.generate(**params).astype("uint32")
     return segmentation
 
 
@@ -194,19 +216,23 @@ def main():
     parser.add_argument("-i", "--input_path", default=DATA_ROOT, help="The root the data lives in.")
     parser.add_argument("--tile_shape", type=int, nargs=2, default=(384, 384), help="In-plane tile shape (y, x).")
     parser.add_argument("--halo", type=int, nargs=2, default=(64, 64), help="In-plane tile halo (y, x).")
-    parser.add_argument("--stitch", default="multicut", choices=("overlap", "multicut"), help="Tile merge rule.")
     parser.add_argument("--sample_index", type=int, default=0, help="Profile only this one sample, by index.")
     parser.add_argument("--z_crop", type=int, default=None, help="Center-crop the volume to this many z slices.")
     parser.add_argument("--xy_crop", type=int, default=None, help="Center-crop the volume in y and x.")
     parser.add_argument("--devices", nargs="*", default=None, help="Devices. Every visible GPU by default.")
     parser.add_argument("--tag", default="baseline", help="Name this profile in the saved json.")
+    parser.add_argument("--untiled", action="store_true", help="Use the untiled volumetric generator.")
     parser.add_argument("--breakdown", action="store_true", help="Also break the propagation into its parts.")
     parser.add_argument("--embedding_dir", default=None, help="Directory the embeddings are cached in.")
     parser.add_argument(
         "--n_worker_processes", type=int, default=None,
-        help="Processes the propagation runs in. One per device by default; 0 keeps it in this process.",
+        help="Total propagation worker processes. One per device by default; 0 keeps it in this process.",
     )
     parser.add_argument("--save_segmentation", default=None, help="Optional npy path for the segmentation.")
+    parser.add_argument(
+        "--propagation_waves", type=int, default=None,
+        help="Rounds the candidates are propagated in, pruning between them. 1 propagates them all.",
+    )
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -214,11 +240,14 @@ def main():
     inference_device = args.devices or None
     model = get_sam2_model(model_type=args.model_type, device=device, input_type="videos")
     decoder = get_decoder(model_type=args.model_type, device=device, encoder=model.image_encoder)
+    tiled_options = {} if args.untiled else {"n_worker_processes": args.n_worker_processes}
     model = get_instance_segmentation_generator(
-        model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=3, is_tiled=True,
-        inference_device=inference_device, n_worker_processes=args.n_worker_processes,
+        model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=3,
+        is_tiled=not args.untiled, inference_device=inference_device, **tiled_options,
     )
     params = resolve_params(ndim=3)
+    if args.propagation_waves is not None:
+        params["propagation_waves"] = args.propagation_waves
 
     crop_shape = (args.z_crop or 10**6, args.xy_crop or 10**6, args.xy_crop or 10**6)
     samples = load_data(args.dataset_name, args.input_path, ndim=3, crop_shape=crop_shape)
@@ -241,10 +270,12 @@ def main():
     sampler.start()
     timings = Timings(sampler)
     start = time.time()
-    tile_times, merge_tally = [], {}
+    tile_times, merge_tally, pass_sizes = [], {}, []
     instrument_merge(merge_tally)
+    instrument_pass_sizes(model, pass_sizes)
     segmentation = profile_volume(
-        model, raw, tuple(args.tile_shape), tuple(args.halo), params, args.stitch, timings, args.breakdown,
+        model, raw, None if args.untiled else tuple(args.tile_shape), tuple(args.halo), params, timings,
+        args.breakdown,
         tile_times, embedding_path,
     )
     total = time.time() - start
@@ -260,6 +291,17 @@ def main():
         print(f"{name}: {total['seconds']:.1f}s over {total['calls']} calls")
     for job in sorted(tile_times, key=lambda entry: -entry["seconds"]):
         print(f"tile {job['tile_id']}: {job['seconds']:.1f}s for {job['passes']} passes")
+    if pass_sizes:
+        counts = np.array(pass_sizes)
+        print(
+            f"passes: {len(counts)} carrying {counts.sum()} candidates, "
+            f"mean {counts.mean():.2f}, median {np.median(counts):.0f}, max {counts.max()}"
+        )
+        histogram = {int(size): int((counts == size).sum()) for size in np.unique(counts)}
+        print(f"pass size histogram: {histogram}")
+    stats = getattr(model, "_last_generation_stats", {}) or {}
+    for name, value in stats.items():
+        print(f"{name}: {value}")
     propagated = sum(merge_tally.values())
     for reason, count in sorted(merge_tally.items(), key=lambda item: -item[1]):
         print(f"merge '{reason}': {count} of {propagated} propagated candidates ({100 * count / propagated:.1f}%)")
@@ -272,7 +314,9 @@ def main():
             "volume_shape": list(raw.shape), "tile_shape": list(args.tile_shape), "halo": list(args.halo),
             "devices": args.devices, "total_seconds": total, "n_objects": int(segmentation.max()),
             "stages": timings.stages, "totals": timings.totals, "tiles": tile_times,
-            "merge_reasons": merge_tally,
+            "merge_reasons": merge_tally, "generation_stats": stats, "pass_sizes": pass_sizes,
+            "n_worker_processes": args.n_worker_processes,
+            "propagation_waves": params.get("propagation_waves"),
         }, f, indent=2)
     if args.save_segmentation is not None:
         np.save(args.save_segmentation, segmentation)

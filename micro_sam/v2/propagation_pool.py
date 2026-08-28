@@ -52,6 +52,13 @@ def _worker_devices(devices: Sequence) -> List[str]:
     return [str(torch.device(device)) for device in devices]
 
 
+def _assign_workers(devices: Sequence, n_workers: Optional[int]) -> List:
+    """One device per worker, cycling over the devices so more workers than devices share them evenly."""
+    if n_workers is None:
+        return list(devices)
+    return [devices[index % len(devices)] for index in range(n_workers)]
+
+
 def _build_worker_propagator(model, setup: Dict[str, Any], device: str):
     """Rebuild one worker's tiled propagator over the volume it was given."""
     from micro_sam.v2.util import precompute_image_embeddings
@@ -177,6 +184,11 @@ class PropagationPool:
             worker.start()
         self._loaded = False
 
+    @property
+    def n_workers(self) -> int:
+        """The number of worker processes, which is what the jobs are cut for."""
+        return len(self._workers)
+
     def _take(self):
         """The next message from a worker, or a failure if one died without sending one."""
         while True:
@@ -191,6 +203,7 @@ class PropagationPool:
         offload_state_to_cpu: Optional[bool], max_cached_frames: Optional[int],
     ) -> None:
         """Give every worker the volume to propagate, replacing the previous one."""
+        self._end_jobs()
         setup = {
             "volume": volume, "embedding_path": str(embedding_path),
             "tile_shape": tuple(int(s) for s in tile_shape), "halo": tuple(int(s) for s in halo),
@@ -206,7 +219,12 @@ class PropagationPool:
         self._loaded = True
 
     def map_jobs(self, jobs: List[Tuple], early_stop_patience: Optional[int]) -> List:
-        """Run one job per tile-and-passes, returning the results in the order the jobs were given."""
+        """Run one job per tile-and-passes, returning the results in the order the jobs were given.
+
+        The workers stay in their job loop afterwards, so a volume propagated in several rounds -
+        which is what candidate pruning between rounds needs - can call this more than once. They
+        are released by the next `set_volume` or by `close`.
+        """
         if not self._loaded:
             raise RuntimeError("The pool has no volume. Call 'set_volume' first.")
         if not jobs:
@@ -214,8 +232,6 @@ class PropagationPool:
 
         for index, (tile_id, _, passes) in enumerate(jobs):
             self._jobs.put((index, tile_id, passes, early_stop_patience))
-        for _ in self._workers:
-            self._jobs.put(DONE)
 
         results = [None] * len(jobs)
         for _ in jobs:
@@ -225,8 +241,24 @@ class PropagationPool:
             results[index] = payload
         return results
 
+    def _end_jobs(self) -> None:
+        """Release the workers from their job loop, so each can take its next command.
+
+        One sentinel per worker, and a worker that takes one leaves the loop rather than reading the
+        queue again, so exactly the workers that are serving a volume are released.
+        """
+        if not self._loaded:
+            return
+        for _ in self._workers:
+            self._jobs.put(DONE)
+        self._loaded = False
+
     def close(self) -> None:
         """End every worker and release the queues they were served through."""
+        try:
+            self._end_jobs()
+        except (ValueError, OSError):  # The queue is already closed.
+            pass
         for command in self._commands:
             try:
                 command.put(STOP)
@@ -248,20 +280,27 @@ class PropagationPool:
             self.close()
 
 
-def build_pool(model, devices: Sequence, n_threads: Optional[int] = None) -> Optional[PropagationPool]:
+def build_pool(
+    model, devices: Sequence, n_workers: Optional[int] = None, n_threads: Optional[int] = None,
+) -> Optional[PropagationPool]:
     """A pool for this model, or None when the propagation has to stay in this process.
 
     Args:
         model: The SAM2 video predictor the workers rebuild.
-        devices: The inference devices, one worker each.
+        devices: The inference devices the workers are spread over.
+        n_workers: Total worker processes. One per device by default; more than there are devices
+            share them, which fills a device that one propagation stream leaves partly idle.
         n_threads: CPU threads per worker.
 
     Returns:
-        The pool, or None when there is one device or the model carries no build recipe.
+        The pool, or None when it would hold one worker or the model carries no build recipe.
     """
     build_kwargs = getattr(model, "build_kwargs", None)
-    if build_kwargs is None or len(devices) < 2:
+    if build_kwargs is None or len(devices) == 0:
         return None
     if not all(torch.device(device).type == "cuda" for device in devices):
         return None
-    return PropagationPool(build_kwargs, devices, overrides=model_overrides(model), n_threads=n_threads)
+    worker_devices = _assign_workers(devices, n_workers)
+    if len(worker_devices) < 2:
+        return None
+    return PropagationPool(build_kwargs, worker_devices, overrides=model_overrides(model), n_threads=n_threads)

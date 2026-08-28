@@ -139,6 +139,10 @@ def main():
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate with the library defaults.")
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
+    parser.add_argument(
+        "--propagation_waves", type=int, default=None,
+        help="Volumes only. Rounds the candidates are propagated in, overriding whatever was tuned.",
+    )
     parser.add_argument("--devices", nargs="*", default=None, help="Inference devices. All visible GPUs by default.")
     args = parser.parse_args()
 
@@ -174,6 +178,11 @@ def main():
                 )
         else:
             print(f"'{args.dataset_name}' has no data held out from the evaluation, so the defaults are used.")
+
+    if args.propagation_waves is not None:
+        # On top of the tuned set, or on its own: a volume takes it either way, and the defaults for
+        # everything else are what 'generate' applies when a key is missing.
+        params = {**(params or {}), "propagation_waves": args.propagation_waves}
 
     run_evaluation(
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,
