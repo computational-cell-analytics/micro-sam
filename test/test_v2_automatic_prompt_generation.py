@@ -2748,6 +2748,41 @@ def test_empty_propagation_does_not_load_the_worker_pool():
     assert segmenter._propagate_candidates([], 16, None, False, max_overlap=0.8) == []
 
 
+def test_empty_candidates_have_no_propagation_waves():
+    segmenter = object.__new__(AutomaticPromptGenerator)
+
+    assert segmenter._candidate_waves([], propagation_waves=1) == []
+    assert segmenter._candidate_waves([], propagation_waves=4) == []
+
+
+@pytest.mark.parametrize("propagation_waves,expected_claims", [(1, 0), (2, 1)])
+def test_tiled_propagation_builds_claims_only_before_a_later_wave(propagation_waves, expected_claims):
+    class Pool:
+        n_workers = 1
+
+        def map_jobs(self, jobs, early_stop_patience):
+            return [(None, [{"job": index}]) for index, _ in enumerate(jobs)]
+
+    segmenter = object.__new__(TiledAutomaticPromptGenerator)
+    segmenter._volume = np.zeros((2, 8, 8), dtype="uint8")
+    segmenter._worker_pool = lambda: Pool()
+    segmenter._last_generation_stats = {}
+    claims = []
+    segmenter._claim_records = lambda *args: claims.append(args)
+    candidates = [
+        {"tile_id": 0, "frame": frame, "point": (2.0, 2.0), "score": 1.0 - frame / 10, "stability": 1.0}
+        for frame in range(2)
+    ]
+
+    proposals = segmenter._propagate_candidates(
+        candidates, n_objects_per_pass=1, early_stop_patience=None, verbose=False,
+        max_overlap=0.8, propagation_waves=propagation_waves,
+    )
+
+    assert len(claims) == expected_claims
+    assert len(proposals) == 1
+
+
 class RecordingPropagator:
     """A stand-in tiled propagator that records the calls one run of passes makes."""
 

@@ -891,6 +891,45 @@ def test_worker_pool_completes_an_empty_job_cycle():
     pool._workers = []
 
 
+def test_worker_pool_ends_every_worker_before_loading_the_next_volume():
+    from micro_sam.v2.propagation_pool import DONE, PropagationPool
+
+    events = []
+
+    class Channel:
+        def __init__(self, name):
+            self.name = name
+
+        def put(self, item):
+            events.append((self.name, item))
+
+    responses = iter([
+        (0, DONE, None), (1, DONE, None),
+        (0, None, None), (1, None, None),
+    ])
+    pool = object.__new__(PropagationPool)
+    pool._loaded = True
+    pool._failed = False
+    pool._workers = [object(), object()]
+    pool._jobs = Channel("job")
+    pool._commands = [Channel("command-0"), Channel("command-1")]
+
+    def take():
+        events.append(("result", None))
+        return next(responses)
+
+    pool._take = take
+    pool.set_volume(
+        np.zeros((2, 4, 4), dtype="uint8"), "embeddings.zarr", (4, 4), (1, 1), True, 2,
+    )
+
+    assert [name for name, _ in events] == [
+        "job", "job", "result", "result", "command-0", "command-1", "result", "result",
+    ]
+    assert pool._loaded is True
+    pool._workers = []
+
+
 def test_worker_pool_fails_when_one_worker_exits():
     from micro_sam.v2.propagation_pool import PropagationPool
 

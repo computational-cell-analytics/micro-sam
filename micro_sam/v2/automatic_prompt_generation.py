@@ -2681,7 +2681,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         claims: Dict[Any, np.ndarray] = {}
         records, anchors = [], set()
         n_passes = propagated_frame_steps = n_propagated = 0
-        for wave in self._candidate_waves(candidates, propagation_waves):
+        waves = self._candidate_waves(candidates, propagation_waves)
+        for wave_index, wave in enumerate(waves):
             wave = [candidate for candidate in wave if not self._is_claimed(claims, candidate, max_overlap)]
             n_propagated += len(wave)
             by_anchor: Dict[int, List[dict]] = {}
@@ -2704,7 +2705,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             for pass_records, steps in per_pass:
                 records.extend(pass_records)
                 propagated_frame_steps += steps
-                self._claim_records(claims, None, pass_records)
+                if wave_index + 1 < len(waves):
+                    self._claim_records(claims, None, pass_records)
 
         possible_frame_steps = n_passes * int(self._volume.shape[0])
         self._last_generation_stats.update({
@@ -2732,6 +2734,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         Descending, because that is the order the merge resolves them in: an instance a later
         candidate would duplicate has already been propagated by the time that candidate is reached.
         """
+        if not candidates:
+            return []
         if propagation_waves <= 1:
             return [list(candidates)]
         order = sorted(candidates, key=lambda candidate: -(candidate["score"] * candidate["stability"]))
@@ -3346,7 +3350,8 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
         claims: Dict[int, np.ndarray] = {}
         by_tile_records: Dict[int, List[tuple]] = {}
         n_propagated = 0
-        for wave_index, wave in enumerate(self._candidate_waves(candidates, propagation_waves)):
+        waves = self._candidate_waves(candidates, propagation_waves)
+        for wave_index, wave in enumerate(waves):
             wave = [candidate for candidate in wave if not self._is_claimed(claims, candidate, max_overlap)]
             n_propagated += len(wave)
             by_tile: Dict[int, List[dict]] = {}
@@ -3370,7 +3375,8 @@ class TiledAutomaticPromptGenerator(AutomaticPromptGenerator, TiledUniSAM2Instan
             # the merge breaks score ties by record order.
             for (tile_id, index, _), result in zip(jobs, results):
                 by_tile_records.setdefault(tile_id, []).append(((wave_index, index), result))
-                self._claim_records(claims, tile_id, result[1])
+                if wave_index + 1 < len(waves):
+                    self._claim_records(claims, tile_id, result[1])
 
         self._last_generation_stats["propagated_candidates"] = n_propagated
         self._last_generation_stats["pruned_candidates"] = len(candidates) - n_propagated

@@ -136,9 +136,13 @@ def _worker_main(build_kwargs, overrides, device, n_threads, commands, jobs, res
                 results.put((worker_id, None, traceback.format_exc()))
                 break
 
-        # The volume's states go, the model stays: the next volume reuses it.
-        propagator.reset_predictor()
-        propagator = None
+        try:
+            # The volume's states go, the model stays: the next volume reuses it.
+            propagator.reset_predictor()
+            propagator = None
+            results.put((worker_id, DONE, None))
+        except Exception:
+            results.put((worker_id, None, traceback.format_exc()))
 
 
 class PropagationPool:
@@ -264,13 +268,24 @@ class PropagationPool:
     def _end_jobs(self) -> None:
         """Release the workers from their job loop, so each can take its next command.
 
-        One sentinel per worker, and a worker that takes one leaves the loop rather than reading the
-        queue again, so exactly the workers that are serving a volume are released.
+        Each worker acknowledges its sentinel before a new volume enters the command queues.
         """
         if not self._loaded:
             return
         for _ in self._workers:
             self._jobs.put(DONE)
+
+        expected = set(range(len(self._workers)))
+        acknowledged = set()
+        for _ in self._workers:
+            worker_id, payload, error = self._take()
+            if error is not None:
+                self._invalidate()
+                raise RuntimeError(f"Propagation worker {worker_id} failed to finish the volume:\n{error}")
+            if payload != DONE or worker_id not in expected or worker_id in acknowledged:
+                self._invalidate()
+                raise RuntimeError(f"Propagation worker {worker_id} returned an invalid end acknowledgement.")
+            acknowledged.add(worker_id)
         self._loaded = False
 
     def close(self) -> None:
