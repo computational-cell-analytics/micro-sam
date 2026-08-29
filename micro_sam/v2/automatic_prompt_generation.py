@@ -31,7 +31,8 @@ import copy
 import queue
 import shutil
 import time
-from typing import Any, Dict, List, Optional, Sequence, Union
+import multiprocessing as mp
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 from tqdm import tqdm
@@ -2866,6 +2867,37 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         )
 
 
+def _process_worker(model_builder: Callable[[str], tuple], device: str, task_queue) -> None:
+    """One persistent OS process per device for `TiledAutomaticPromptGenerator(execution='process')`.
+
+    A live CUDA model cannot cross a process boundary safely (its tensors are tied to the parent's
+    CUDA context), so the worker builds its own copy with `model_builder` instead of receiving one
+    from the parent - the same reason `_build_pool` deep-copies a model per device rather than
+    sharing one, just paid once per process instead of once per thread. Every block after that stays
+    entirely inside this process: no shared Python interpreter, so no GIL contention with the other
+    devices' workers. See finetuning/v2/evaluation for the measurements this is based on.
+    """
+    model, predictor = model_builder(device)
+    generator = AutomaticPromptGenerator(model, predictor, device=device, inference_device=device)
+    while True:
+        task = task_queue.get()
+        if task is None:
+            return
+        result_queue = task["result_queue"]
+        try:
+            generator.clear_state()
+            generator.initialize(
+                task["block"], ndim=task["ndim"], normalization_bounds=task["normalization_bounds"],
+                offload_to_cpu=task["offload_to_cpu"], cache_all_slices=task["cache_all_slices"],
+            )
+            generator._pruning_protected_margin = task["protected_margin"]
+            result_queue.put(("ok", generator.generate(**task["params"])))
+        except Exception as exc:  # surfaced in the parent instead of hanging it on an empty queue
+            result_queue.put(("err", repr(exc)))
+        finally:
+            generator.clear_state()
+
+
 class TiledAutomaticPromptGenerator:
     """Generates an instance segmentation with automatically generated prompts, tile or block by tile.
 
@@ -2897,7 +2929,24 @@ class TiledAutomaticPromptGenerator:
         workers_per_device: How many independent (decoder, model) copies to build per resolved
             device. `generate` still gives each worker one tile/block at a time, so this only helps
             when a single worker leaves a device's compute or memory underused, e.g. a small model
-            on a large GPU.
+            on a large GPU. Not supported together with `execution='process'`.
+        execution: How a tile/block's own segmentation runs. `'thread'` (the default) runs every
+            worker in this process on a `concurrent.futures.ThreadPoolExecutor`, sharing one Python
+            interpreter. `'process'` instead gives every device its own persistent OS process, with
+            its own interpreter and CUDA context, so one device's per-frame propagation bookkeeping
+            never blocks another's behind the GIL - measured at 1.5-4x faster than `'thread'` once
+            the pool is warm (bigger blocks and more of them widen the gap), with no quality change
+            (see finetuning/v2/evaluation). The first `generate` call after building the generator
+            pays extra for it, though: every worker process loads its own model from disk instead of
+            reusing an in-memory copy the way `'thread'`'s pool does, which cost ~10-15s total across
+            4 workers in that same measurement. Worth it for a generator that runs many volumes, not
+            necessarily for a single one-off call. Requires `model_builder`.
+        model_builder: Required for `execution='process'`. A callable `(device) -> (model,
+            predictor)` that builds a fresh model and predictor pair on a device string - every
+            worker process calls this itself rather than receiving `model`/`predictor` from the
+            parent, because a live CUDA model cannot cross a process boundary safely.
+        process_timeout: `execution='process'` only. Seconds a block waits for its worker before
+            raising, rather than hanging forever if a worker process has died or wedged.
     """
 
     # Read by `automatic_instance_segmentation` to decide whether to pass the AIS 'mode' argument.
@@ -2911,6 +2960,9 @@ class TiledAutomaticPromptGenerator:
         inference_device: Devices = USE_MODEL_DEVICE,
         beta: float = DEFAULT_STITCHING_BETA,
         workers_per_device: int = 1,
+        execution: str = "thread",
+        model_builder: Optional[Callable[[str], tuple]] = None,
+        process_timeout: float = 600.0,
     ) -> None:
         self._model = model
         self._predictor = predictor
@@ -2920,7 +2972,25 @@ class TiledAutomaticPromptGenerator:
         if workers_per_device < 1:
             raise ValueError(f"'workers_per_device' must be >= 1, got {workers_per_device}.")
         self._workers_per_device = int(workers_per_device)
+        if execution not in ("thread", "process"):
+            raise ValueError(f"'execution' must be 'thread' or 'process', got {execution!r}.")
+        if execution == "process":
+            if workers_per_device != 1:
+                raise ValueError("'workers_per_device' > 1 is not supported with execution='process'.")
+            if model_builder is None:
+                raise ValueError(
+                    "execution='process' needs 'model_builder', a callable (device) -> (model, "
+                    "predictor) every worker process calls to build its own model copy - a live CUDA "
+                    "model cannot cross a process boundary safely."
+                )
+        self._execution = execution
+        self._model_builder = model_builder
+        self._process_timeout = float(process_timeout)
         self._pool: Optional[List[AutomaticPromptGenerator]] = None
+        self._process_devices: Optional[List[str]] = None
+        self._task_queues: Optional[list] = None
+        self._processes: Optional[list] = None
+        self._manager = None
         self._image = None
         self._ndim = None
         self._tile_shape = None
@@ -2958,6 +3028,47 @@ class TiledAutomaticPromptGenerator:
                     generator._tile_stream = torch.cuda.Stream(device=device_obj)
                 pool.append(generator)
         return pool
+
+    def _build_process_pool(self) -> None:
+        """Start one persistent worker OS process per resolved device, each with its own model copy.
+
+        Sidesteps the thread pool's GIL contention rather than working around it: every worker has
+        its own Python interpreter, so the per-frame propagation bookkeeping of one device's block
+        never blocks another device's. `_manager` backs the per-block reply queues - a `Queue`
+        created after these processes already exist cannot be pickled to a `spawn`-context child,
+        only a manager-proxied one can.
+        """
+        devices = _resolve_devices(self._model, self._inference_device)
+        ctx = mp.get_context("spawn")
+        self._manager = ctx.Manager()
+        self._process_devices = devices
+        self._task_queues = [ctx.Queue() for _ in devices]
+        self._processes = [
+            ctx.Process(target=_process_worker, args=(self._model_builder, device, task_queue), daemon=True)
+            for device, task_queue in zip(devices, self._task_queues)
+        ]
+        for process in self._processes:
+            process.start()
+
+    def close(self) -> None:
+        """Stop the process pool, if `execution='process'` built one. A no-op otherwise.
+
+        Not required for correctness - every worker process is a daemon, so it exits with the main
+        process - but lets a caller reclaim the devices deterministically before that.
+        """
+        if self._processes is None:
+            return
+        for task_queue in self._task_queues:
+            task_queue.put(None)
+        for process in self._processes:
+            process.join(timeout=10)
+            if process.is_alive():
+                process.terminate()
+        self._manager.shutdown()
+        self._processes = None
+        self._task_queues = None
+        self._process_devices = None
+        self._manager = None
 
     def initialize(
         self,
@@ -3035,6 +3146,26 @@ class TiledAutomaticPromptGenerator:
         # Computed once over the whole image/volume so every tile/block shares one normalization
         # instead of each estimating its own percentiles from its own, smaller, biased crop.
         normalization_bounds = _volume_normalization_bounds(self._image) if self._ndim == 3 else None
+
+        if self._execution == "process":
+            segment_block, num_workers = self._process_dispatch(params, normalization_bounds, protected_margin)
+        else:
+            segment_block, num_workers = self._thread_dispatch(params, normalization_bounds, protected_margin)
+
+        output = bp.segmentation.stitch_segmentation(
+            input=self._image,
+            segmentation_function=segment_block,
+            tile_shape=self._tile_shape,
+            tile_overlap=self._halo,
+            beta=self._beta,
+            with_background=True,
+            num_workers=num_workers,
+            job_type="local",
+        )
+        return np.asarray(output).astype("uint32")
+
+    def _thread_dispatch(self, params: dict, normalization_bounds, protected_margin: tuple):
+        """Build the `segment_block` closure for `execution='thread'` (the default)."""
         if self._pool is None:
             self._pool = self._build_pool()
         available: "queue.Queue[AutomaticPromptGenerator]" = queue.Queue()
@@ -3064,17 +3195,49 @@ class TiledAutomaticPromptGenerator:
                 generator.clear_state()
                 available.put(generator)
 
-        output = bp.segmentation.stitch_segmentation(
-            input=self._image,
-            segmentation_function=segment_block,
-            tile_shape=self._tile_shape,
-            tile_overlap=self._halo,
-            beta=self._beta,
-            with_background=True,
-            num_workers=len(self._pool),
-            job_type="local",
-        )
-        return np.asarray(output).astype("uint32")
+        return segment_block, len(self._pool)
+
+    def _process_dispatch(self, params: dict, normalization_bounds, protected_margin: tuple):
+        """Build the `segment_block` closure for `execution='process'`.
+
+        Each call round-trips a block through its worker's task queue and a per-block reply queue,
+        synchronously - the dispatching thread blocks on I/O while it waits, which releases the GIL,
+        so several dispatch threads still overlap even though the real segmentation work now happens
+        in another process entirely.
+        """
+        if self._processes is None:
+            self._build_process_pool()
+        available: "queue.Queue[int]" = queue.Queue()
+        for worker_id in range(len(self._processes)):
+            available.put(worker_id)
+
+        def segment_block(block: np.ndarray, block_id: int) -> np.ndarray:
+            block = np.asarray(block)
+            worker_id = available.get()
+            if not self._processes[worker_id].is_alive():
+                raise RuntimeError(f"process worker {worker_id} died before block {block_id} was dispatched.")
+            result_queue = self._manager.Queue()
+            try:
+                self._task_queues[worker_id].put({
+                    "block": block, "ndim": self._ndim, "protected_margin": protected_margin,
+                    "params": params, "normalization_bounds": normalization_bounds,
+                    "offload_to_cpu": self._offload_to_cpu, "cache_all_slices": self._cache_all_slices,
+                    "result_queue": result_queue,
+                })
+                try:
+                    status, payload = result_queue.get(timeout=self._process_timeout)
+                except queue.Empty:
+                    raise RuntimeError(
+                        f"process worker {worker_id} timed out after {self._process_timeout:.0f}s on "
+                        f"block {block_id}."
+                    )
+                if status == "err":
+                    raise RuntimeError(f"process worker {worker_id} failed on block {block_id}: {payload}")
+                return payload
+            finally:
+                available.put(worker_id)
+
+        return segment_block, len(self._processes)
 
     def get_state(self) -> dict:
         """Return the input and the tile/block geometry, so `set_state` can restore them."""

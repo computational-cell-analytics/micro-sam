@@ -15,11 +15,13 @@ Usage:
     python test_apg_3d_tiling.py -m hvit_s_cells --tile_shape 256 256 --halo 48 48
     python test_apg_3d_tiling.py -m hvit_t_cells --z_block 64 --z_halo 8  # also block z
     python test_apg_3d_tiling.py -m hvit_t_cells --devices cuda:0  # pin to one GPU
+    python test_apg_3d_tiling.py -m hvit_t_cells --execution process  # one OS process per device
 """
 
 import os
 import time
 import argparse
+import functools
 
 import pandas as pd
 
@@ -34,13 +36,28 @@ from common import DATA_ROOT, VOLUME_SPEED_OPTIONS, load_data, resolve_params, r
 RESULTS_ROOT = os.path.join(os.path.dirname(__file__), "results", "apg_3d_tiling")
 
 
-def build_segmenter(model_type, device, devices, workers_per_device=1):
+def _build_worker_model(device, model_type):
+    """Build a fresh (decoder, SAM2 model) pair on 'device', for one 'execution=process' worker.
+
+    A live CUDA model cannot cross a process boundary safely, so every worker process calls this
+    itself instead of receiving a model built in the main process. See
+    `TiledAutomaticPromptGenerator`'s 'model_builder' argument.
+    """
+    model = get_sam2_model(model_type=model_type, device=device, input_type="videos")
+    decoder = get_decoder(model_type=model_type, device=device, encoder=model.image_encoder)
+    return decoder, model
+
+
+def build_segmenter(model_type, device, devices, workers_per_device=1, execution="thread"):
     """Build the tiled 3d prompt generator from the owncloud-ingested registry, no local checkpoints."""
     model = get_sam2_model(model_type=model_type, device=device, input_type="videos")
     decoder = get_decoder(model_type=model_type, device=device, encoder=model.image_encoder)
+    kwargs = {}
+    if execution == "process":
+        kwargs["model_builder"] = functools.partial(_build_worker_model, model_type=model_type)
     return get_instance_segmentation_generator(
         model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=3, is_tiled=True,
-        inference_device=devices, workers_per_device=workers_per_device,
+        inference_device=devices, workers_per_device=workers_per_device, execution=execution, **kwargs,
     )
 
 
@@ -71,6 +88,11 @@ def main():
         help="Independent tile/block workers to run concurrently per device. >1 helps when a "
              "single worker leaves a device's compute or memory underused.",
     )
+    parser.add_argument(
+        "--execution", choices=["thread", "process"], default="thread",
+        help="'thread' (default) runs every device's block in this process, sharing the GIL. "
+             "'process' gives every device its own OS process instead, removing that contention.",
+    )
     parser.add_argument("--sample_index", type=int, default=None, help="Score only this one sample, by index.")
     parser.add_argument(
         "--max_size_factor", type=float, default=None,
@@ -100,7 +122,9 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # None fans out over every visible GPU: the decoder and every tile/block's propagation use them.
-    model = build_segmenter(args.model_type, device, args.devices or None, args.workers_per_device)
+    model = build_segmenter(
+        args.model_type, device, args.devices or None, args.workers_per_device, args.execution,
+    )
     overrides = {}
     if args.max_size_factor is not None:
         overrides["max_size_factor"] = args.max_size_factor
@@ -116,10 +140,14 @@ def main():
         tag = f"{tag}_z{args.z_crop}"
     if args.xy_crop is not None:
         tag = f"{tag}_xy{args.xy_crop}"
+    if tuple(args.tile_shape) != (384, 384) or tuple(args.halo) != (64, 64):
+        tag = f"{tag}_tile{args.tile_shape[0]}x{args.tile_shape[1]}_tilehalo{args.halo[0]}x{args.halo[1]}"
     if args.z_block is not None:
         tag = f"{tag}_zblock{args.z_block}_zhalo{args.z_halo}"
     if args.workers_per_device != 1:
         tag = f"{tag}_workers{args.workers_per_device}"
+    if args.execution != "thread":
+        tag = f"{tag}_{args.execution}"
     # Only when it is not the library default, so a default run still reads the results it already wrote.
     if params["max_size_factor"] != DEFAULT_PROMPT_GENERATION["max_size_factor"]:
         tag = f"{tag}_maxsize{params['max_size_factor']}"
@@ -153,6 +181,9 @@ def main():
 
         results = run_dataset_evaluation([labels], [seg], args.dataset_name, save_path=save_path)
         print(results)
+
+    if hasattr(model, "close"):
+        model.close()
 
 
 if __name__ == "__main__":
