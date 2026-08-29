@@ -3,6 +3,7 @@ channels:
     - conda-forge
 dependencies:
     - bioimage-cpp >=0.7
+    - bioimage-py >=0.2.1
     - bioimageio.core >=0.11
     - click
     - imagecodecs
