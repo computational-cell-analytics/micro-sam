@@ -14,15 +14,16 @@ EPOCHS = {
     "hvit_l": 150,
 }
 
-SCRIPT = "/mnt/vast-nhr/home/archit/u16934/micro-sam/finetuning/v2/generalist/train_joint.py"
+SCRIPT = os.path.expanduser("~/micro-sam/finetuning/v2/generalist/train_joint.py")
 
 PARTITION = "kisski-h100"
 GPU_TYPE = "H100"
 
 
-def write_batch_script(out_path, model_type, n_epochs, dataset_choice, distance_type, save_root, dry):
+def write_batch_script(out_path, model_type, n_epochs, dataset_choice, distance_type, save_root, reservation, dry):
     "Writing the multi-node sbatch script for one joint SAM2 training run (2 nodes x 4 H100 = 8 GPUs)."
     # IB-supported NCCL comms across nodes.
+    reservation_line = f"#SBATCH --reservation={reservation}" if reservation else ""
     batch_script = rf"""#!/bin/bash
 #SBATCH --job-name=μSAM2_joint_{model_type}
 #SBATCH -t 4-00:00:00
@@ -34,6 +35,7 @@ def write_batch_script(out_path, model_type, n_epochs, dataset_choice, distance_
 #SBATCH --mem 384G
 #SBATCH --qos=96h
 #SBATCH --constraint=inet
+{reservation_line}
 
 source ~/.bashrc
 micromamba activate super
@@ -96,6 +98,7 @@ def submit_slurm(args):
             dataset_choice=args.dataset_choice,
             distance_type=args.distance_type,
             save_root=args.save_root,
+            reservation=args.reservation,
             dry=args.dry,
         )
 
@@ -126,6 +129,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--distance_type", type=str, default="geodesic", choices=["geodesic", "directed"],
         help="The regression target of the automatic branch.",
+    )
+    parser.add_argument(
+        "--reservation", type=str, default=None, help="The slurm reservation name to submit the jobs under."
     )
     parser.add_argument(
         "--dry", action="store_true", help="Whether to only write the sbatch scripts without submitting them."
