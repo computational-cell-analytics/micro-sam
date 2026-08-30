@@ -3028,21 +3028,29 @@ class TiledAutomaticPromptGenerator:
         interleave independent tiles' kernels on the same device.
         """
         devices = _resolve_devices(self._model, self._inference_device)
+        worker_devices = [device for device in devices for _ in range(self._workers_per_device)]
+
+        def move_pair(model, predictor, device):
+            model.to(device)
+            getattr(predictor, "model", predictor).to(device)
+
+        worker_pairs = [None] * len(worker_devices)
+        if len(worker_devices) > 1:
+            move_pair(self._model, self._predictor, "cpu")
+            for worker_id in range(1, len(worker_devices)):
+                pair = copy.deepcopy((self._model, self._predictor))
+                move_pair(*pair, worker_devices[worker_id])
+                worker_pairs[worker_id] = pair
+        move_pair(self._model, self._predictor, worker_devices[0])
+        worker_pairs[0] = self._model, self._predictor
+
         pool = []
-        for device in devices:
+        for (model, predictor), device in zip(worker_pairs, worker_devices):
             device_obj = torch.device(device)
-            for worker_index in range(self._workers_per_device):
-                if len(devices) == 1 and worker_index == 0:
-                    # No copy needed for the sole worker of the sole device: nothing else shares it.
-                    model, predictor = self._model, self._predictor
-                else:
-                    model = copy.deepcopy(self._model).to(device)
-                    predictor = copy.deepcopy(self._predictor)
-                    getattr(predictor, "model", predictor).to(device)
-                generator = AutomaticPromptGenerator(model, predictor, device=device, inference_device=device)
-                if self._workers_per_device > 1 and device_obj.type == "cuda":
-                    generator._tile_stream = torch.cuda.Stream(device=device_obj)
-                pool.append(generator)
+            generator = AutomaticPromptGenerator(model, predictor, device=device, inference_device=device)
+            if self._workers_per_device > 1 and device_obj.type == "cuda":
+                generator._tile_stream = torch.cuda.Stream(device=device_obj)
+            pool.append(generator)
         return pool
 
     def _build_process_pool(self) -> None:

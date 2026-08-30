@@ -1,3 +1,4 @@
+import copy
 import types
 
 import numpy as np
@@ -168,9 +169,69 @@ def test_tiled_apg_build_pool_multiplies_workers_per_device(monkeypatch):
     pool = segmenter._build_pool()
 
     assert len(pool) == len(devices) * 3
-    # Every worker of a multi-device pool gets its own deep-copied model, none aliasing the original.
-    assert all(worker._model is not segmenter._model for worker in pool)
+    assert pool[0]._model is segmenter._model
+    assert all(worker._model is not segmenter._model for worker in pool[1:])
     assert len({id(worker._model) for worker in pool}) == len(pool)
+
+
+def test_tiled_apg_build_pool_stages_shared_pairs_through_cpu(monkeypatch):
+    class Encoder:
+        def __init__(self):
+            self.device = "cuda:0"
+
+        def to(self, device):
+            self.device = str(device)
+            return self
+
+    class Decoder:
+        copied_from_devices = []
+        model_type = "hvit_t"
+
+        def __init__(self, encoder):
+            self.encoder = encoder
+
+        def __deepcopy__(self, memo):
+            self.copied_from_devices.append(self.encoder.device)
+            duplicate = type(self)(copy.deepcopy(self.encoder, memo))
+            memo[id(self)] = duplicate
+            return duplicate
+
+        def to(self, device):
+            self.encoder.to(device)
+            return self
+
+    class PredictorModel:
+        image_size = 8
+        model_type = "hvit_t"
+
+        def __init__(self, encoder):
+            self.image_encoder = encoder
+
+        def to(self, device):
+            self.image_encoder.to(device)
+            return self
+
+    encoder = Encoder()
+    decoder = Decoder(encoder)
+    predictor = types.SimpleNamespace(
+        model=PredictorModel(encoder), mask_threshold=0.0, _transforms=types.SimpleNamespace(),
+    )
+    devices = [torch.device("cuda:0"), torch.device("cuda:1")]
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation._resolve_devices", lambda model, inference_device: devices,
+    )
+
+    segmenter = TiledAutomaticPromptGenerator(decoder, predictor)
+    pool = segmenter._build_pool()
+
+    assert Decoder.copied_from_devices == ["cpu"]
+    assert pool[0]._model is decoder
+    assert pool[0]._predictor is predictor
+    assert pool[1]._model is not decoder
+    for worker in pool:
+        assert worker._model.encoder is worker._predictor.model.image_encoder
+    assert pool[0]._model.encoder.device == "cuda:0"
+    assert pool[1]._model.encoder.device == "cuda:1"
 
 
 def test_tiled_apg_rejects_non_positive_workers_per_device():
