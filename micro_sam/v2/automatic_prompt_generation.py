@@ -3037,7 +3037,8 @@ class TiledAutomaticPromptGenerator:
                     model, predictor = self._model, self._predictor
                 else:
                     model = copy.deepcopy(self._model).to(device)
-                    predictor = copy.deepcopy(self._predictor).to(device)
+                    predictor = copy.deepcopy(self._predictor)
+                    getattr(predictor, "model", predictor).to(device)
                 generator = AutomaticPromptGenerator(model, predictor, device=device, inference_device=device)
                 if self._workers_per_device > 1 and device_obj.type == "cuda":
                     generator._tile_stream = torch.cuda.Stream(device=device_obj)

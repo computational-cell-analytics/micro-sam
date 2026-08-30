@@ -132,14 +132,15 @@ def test_factory_returns_the_tiled_apg_class(monkeypatch):
 
 
 def _fake_apg_predictor():
-    """A minimal image-predictor double, deep-copyable and .to()-able like a real SAM2 predictor."""
-    predictor = types.SimpleNamespace(
-        model=types.SimpleNamespace(image_size=8, model_type="hvit_t"),
+    """A minimal SAM2 image-predictor wrapper without its own `to` method."""
+    model = torch.nn.Identity()
+    model.image_size = 8
+    model.model_type = "hvit_t"
+    return types.SimpleNamespace(
+        model=model,
         mask_threshold=0.0,
         _transforms=types.SimpleNamespace(),
     )
-    predictor.to = lambda device: predictor
-    return predictor
 
 
 def test_tiled_apg_build_pool_defaults_to_one_worker_and_reuses_the_model():
@@ -160,7 +161,9 @@ def test_tiled_apg_build_pool_multiplies_workers_per_device(monkeypatch):
     monkeypatch.setattr(
         "micro_sam.v2.automatic_prompt_generation._resolve_devices", lambda model, inference_device: devices,
     )
-    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor(), workers_per_device=3)
+    predictor = _fake_apg_predictor()
+    assert not hasattr(predictor, "to")
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), predictor, workers_per_device=3)
 
     pool = segmenter._build_pool()
 
