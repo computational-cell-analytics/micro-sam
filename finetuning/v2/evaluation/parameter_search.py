@@ -502,7 +502,7 @@ def merge_shards(output_root, dataset_name, mode, model_type, num_shards, checkp
 
 def tune_parameters(
     model, mode, dataset_name, data_root, model_type, output_root, device,
-    n_threads=POSTPROC_THREADS, n_tuning_samples=None, crop_shape=None, criterion=None,
+    n_threads=POSTPROC_THREADS, n_tuning_samples=None, tuning_stride=1, crop_shape=None, criterion=None,
     checkpoint_id=None, shard_index=0, num_shards=1,
 ):
     """Sweep the grid of a mode on the validation split and return the best parameter combination.
@@ -530,6 +530,9 @@ def tune_parameters(
         device: The torch device.
         n_threads: The threads for the postprocessing.
         n_tuning_samples: Cap the sweep to this many validation samples.
+        tuning_stride: Only score every this-th validation sample (after the cell-type-grouped sort
+            order in e.g. livecell, a stride spreads the cap evenly across groups instead of taking
+            only the first few groups in full).
         crop_shape: The 3d center crop.
         criterion: The metric the grid is ranked by.
         checkpoint_id: The checksum of all model weights used by the mode.
@@ -579,18 +582,26 @@ def tune_parameters(
 
     border_min_size = GT_MIN_SIZE_2D.get(dataset_name, 0) if ndim == 2 else 0
     total = n_samples(dataset_name, data_root, split="val")
+    total = len(range(0, total, tuning_stride))
     if n_tuning_samples is not None:
         total = min(total, n_tuning_samples)
-    print(f"{dataset_name}: {len(params_list)} combinations over {total} validation sample(s), mode='{mode}'.")
+    print(
+        f"{dataset_name}: {len(params_list)} combinations over {total} validation sample(s) "
+        f"(stride={tuning_stride}), mode='{mode}'."
+    )
 
     samples = load_data(
         dataset_name, data_root, ndim, split="val", crop_shape=config["crop"], z_range=config["z_range"],
     )
     metric_lists = [[] for _ in params_list]
     t0 = time.perf_counter()
+    n_scored = 0
     for index, (raw, labels, _) in enumerate(tqdm(samples, total=total, desc=f"tune-{mode}")):
-        if n_tuning_samples is not None and index >= n_tuning_samples:
+        if index % tuning_stride != 0:
+            continue
+        if n_tuning_samples is not None and n_scored >= n_tuning_samples:
             break
+        n_scored += 1
         if labels.max() == 0:  # Nothing to score without ground-truth.
             continue
         try:
@@ -914,6 +925,11 @@ def main():
     )
     parser.add_argument("--tuning_root", type=str, default=None, help="Where the sweeps are written and read from.")
     parser.add_argument("--n_tuning_samples", type=int, default=None, help="Cap each sweep to this many samples.")
+    parser.add_argument(
+        "--tuning_stride", type=int, default=1,
+        help="Only score every this-th validation sample, so a cap spreads evenly across a "
+             "cell-type-grouped sort order instead of landing in the first few groups.",
+    )
     parser.add_argument("--criterion", type=str, default=None, choices=sorted(CRITERION_ASCENDING))
     parser.add_argument("--n_threads", type=int, default=POSTPROC_THREADS, help="Threads for the postprocessing.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
@@ -990,7 +1006,7 @@ def main():
                 )
             tune_parameters(
                 models[model_key], mode, dataset_name, args.input_path, args.model_type, tuning_root, device,
-                n_threads=args.n_threads, n_tuning_samples=args.n_tuning_samples,
+                n_threads=args.n_threads, n_tuning_samples=args.n_tuning_samples, tuning_stride=args.tuning_stride,
                 crop_shape=crop_shape, criterion=args.criterion, checkpoint_id=checkpoint_id,
                 shard_index=args.shard_index, num_shards=args.num_shards,
             )
