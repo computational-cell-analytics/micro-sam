@@ -2156,3 +2156,25 @@ def test_tiled_apg_generate_sets_halo_margin_and_forwards_propagation_waves(monk
 
     assert calls["margin"] == (1, 2)
     assert calls["params"]["propagation_waves"] == 4
+
+
+def test_tiled_apg_generate_passes_spatial_shape_for_channel_last_image(monkeypatch):
+    calls = {}
+
+    def fake_stitch_segmentation(*, shape, **kwargs):
+        calls["shape"] = shape
+        return np.zeros(shape, dtype="uint32")
+
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.bp.segmentation.stitch_segmentation", fake_stitch_segmentation,
+    )
+
+    image = np.zeros((8, 12, 3), dtype="uint8")
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor())
+    segmenter._pool = [object()]
+    segmenter.initialize(image, ndim=2, tile_shape=(4, 4), halo=(1, 1))
+
+    segmentation = segmenter.generate()
+
+    assert calls["shape"] == (8, 12)
+    assert segmentation.shape == (8, 12)

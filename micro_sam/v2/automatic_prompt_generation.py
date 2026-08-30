@@ -3179,6 +3179,7 @@ class TiledAutomaticPromptGenerator:
         output = bp.segmentation.stitch_segmentation(
             input=self._image,
             segmentation_function=segment_block,
+            shape=self._image.shape[:self._ndim],
             tile_shape=self._tile_shape,
             tile_overlap=self._halo,
             beta=self._beta,
