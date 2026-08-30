@@ -35,7 +35,9 @@ class TestNormalizePercentile(unittest.TestCase):
             with self.subTest(shape=raw.shape, axis=axis):
                 expected = self._reference(raw, 2.0, 98.0, axis=axis)
                 actual = self._actual(raw, 2.0, 98.0, axis=axis)
-                np.testing.assert_allclose(actual, expected, rtol=0, atol=0)
+                # atol tolerates float32-level rounding noise between the two independent
+                # implementations (observed up to ~1e-7), not a real algorithmic divergence.
+                np.testing.assert_allclose(actual, expected, rtol=0, atol=1e-6)
 
     def test_matches_torch_em_for_constant_input(self):
         # A constant image makes the percentile span zero, so this exercises the eps guard.

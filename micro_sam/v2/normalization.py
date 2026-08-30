@@ -36,6 +36,9 @@ def compute_percentile_bounds(
     Returns:
         The (lower, upper) percentile values, each with `axis` reduced to size 1.
     """
+    # float32 throughout, matching 'normalize_raw's contract - a boolean 'raw' otherwise crashes
+    # inside numpy's percentile interpolation, which subtracts two boolean values.
+    raw = np.asarray(raw, dtype="float32")
     v_lower = np.percentile(raw, lower_percentile, axis=axis, keepdims=True)
     v_upper = np.percentile(raw, upper_percentile, axis=axis, keepdims=True)
     return v_lower, v_upper

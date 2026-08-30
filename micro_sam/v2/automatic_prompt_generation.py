@@ -31,6 +31,7 @@ import copy
 import queue
 import shutil
 import time
+import contextlib
 import multiprocessing as mp
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
@@ -3175,10 +3176,13 @@ class TiledAutomaticPromptGenerator:
         def segment_block(block: np.ndarray, block_id: int) -> np.ndarray:
             block = np.asarray(block)
             generator = available.get()
-            # None (a worker alone on its device) makes this a no-op, keeping the default stream.
+            # None (a worker alone on its device) skips the stream context entirely, keeping the
+            # default stream - torch.cuda.stream(None) resolves the current device even when there
+            # is no CUDA at all, which errors on a CPU/MPS-only machine.
             stream = getattr(generator, "_tile_stream", None)
+            stream_context = torch.cuda.stream(stream) if stream is not None else contextlib.nullcontext()
             try:
-                with torch.cuda.stream(stream):
+                with stream_context:
                     generator.initialize(
                         block, ndim=self._ndim, verbose=self._verbose,
                         offload_to_cpu=self._offload_to_cpu, cache_all_slices=self._cache_all_slices,
