@@ -74,8 +74,11 @@ def load_volume(dataset_name, input_path, z_crop, xy_crop):
 
 def build_propagator(model, raw, embedding_path, tile_shape, halo, device, cache_all_slices=False):
     """One tiled propagator over the volume, reusing a cached embedding store when there is one."""
+    embedding_tile_shape = (raw.shape[0], *tile_shape)
+    embedding_halo = (0, *halo)
     embeddings = precompute_image_embeddings(
-        model, raw, save_path=embedding_path, ndim=3, tile_shape=tile_shape, halo=halo,
+        model, raw, save_path=embedding_path, ndim=3,
+        tile_shape=embedding_tile_shape, halo=embedding_halo,
         verbose=False, lazy_loading=True, devices=device,
     )
     return TiledPromptableSegmentation3D(
