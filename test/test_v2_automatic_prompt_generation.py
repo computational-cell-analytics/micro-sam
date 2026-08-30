@@ -30,6 +30,14 @@ def test_apg_declares_no_postprocessing_mode():
     assert getattr(UniSAM2InstanceSegmentation, "_has_postprocessing_mode", True) is True
 
 
+def test_apg_declares_decoder_frontend_capabilities():
+    assert AutomaticPromptGenerator._is_decoder_based is True
+    assert AutomaticPromptGenerator._precompute_embeddings_in_frontend is True
+    assert TiledAutomaticPromptGenerator._is_decoder_based is True
+    assert TiledAutomaticPromptGenerator._precompute_embeddings_in_frontend is False
+    assert callable(TiledAutomaticPromptGenerator._inference_devices)
+
+
 @pytest.mark.parametrize(
     "schema,expected",
     [("lowres_v1", 19), ("token_v1", 258), ("token_lowres_v1", 275)],

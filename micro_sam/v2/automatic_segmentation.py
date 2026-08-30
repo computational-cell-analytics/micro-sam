@@ -150,14 +150,15 @@ def automatic_instance_segmentation(
 
     from ..util import load_image_data, make_temp_embedding_path
     from .util import precompute_image_embeddings
-    from .instance_segmentation import UniSAM2InstanceSegmentation, amg_3d_segmentation
+    from .instance_segmentation import amg_3d_segmentation
 
     raw = input_path if isinstance(input_path, np.ndarray) else load_image_data(input_path, key=key)
     if ndim is None:
         ndim = raw.ndim
 
-    # AIS post-processes the prediction and 'mode' picks how, APG prompts instead.
-    is_decoder_based = isinstance(segmenter, UniSAM2InstanceSegmentation)
+    # Decoder-based segmenters use this staged path. APG prompts instead of post-processing.
+    is_decoder_based = getattr(segmenter, "_is_decoder_based", False)
+    precompute_embeddings = getattr(segmenter, "_precompute_embeddings_in_frontend", True)
     takes_mode = getattr(segmenter, "_has_postprocessing_mode", True)
 
     if is_decoder_based:
@@ -169,7 +170,7 @@ def automatic_instance_segmentation(
         image_embeddings = None
         temp_embedding_path = None
         try:
-            if embedding_path is not None or ndim == 3:
+            if precompute_embeddings and (embedding_path is not None or ndim == 3):
                 # The tool streams volumes and tiled images from the zarr. Only small 2d stays in memory.
                 is_streamed = ndim == 3 or tile_shape is not None
                 # Owned here, so a multi-input loop does not pile up one store per input.
@@ -193,17 +194,22 @@ def automatic_instance_segmentation(
                     num_prefetch_workers=num_prefetch_workers,
                     num_write_workers=num_write_workers,
                 )
-            segmenter.initialize(
-                raw,
-                ndim=ndim,
-                image_embeddings=image_embeddings,
-                tile_shape=tile_shape,
-                halo=halo,
-                batch_size=batch_size,
-                devices=inference_devices,
-                num_prefetch_workers=num_prefetch_workers,
-                num_write_workers=num_write_workers,
-            )
+            if precompute_embeddings:
+                segmenter.initialize(
+                    raw,
+                    ndim=ndim,
+                    image_embeddings=image_embeddings,
+                    tile_shape=tile_shape,
+                    halo=halo,
+                    batch_size=batch_size,
+                    devices=inference_devices,
+                    num_prefetch_workers=num_prefetch_workers,
+                    num_write_workers=num_write_workers,
+                )
+            else:
+                segmenter.initialize(
+                    raw, ndim=ndim, tile_shape=tile_shape, halo=halo, verbose=verbose,
+                )
             if takes_mode:
                 segmentation = segmenter.generate(mode=mode, **generate_kwargs)
             else:

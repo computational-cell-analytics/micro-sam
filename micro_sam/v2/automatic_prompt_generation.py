@@ -2952,6 +2952,8 @@ class TiledAutomaticPromptGenerator:
 
     # Read by `automatic_instance_segmentation` to decide whether to pass the AIS 'mode' argument.
     _has_postprocessing_mode = False
+    _is_decoder_based = True
+    _precompute_embeddings_in_frontend = False
 
     def __init__(
         self,
@@ -2999,6 +3001,18 @@ class TiledAutomaticPromptGenerator:
         self._verbose = False
         self._offload_to_cpu = None
         self._cache_all_slices = False
+
+    def _inference_devices(self, devices: Devices) -> Devices:
+        """Resolve the inference devices and discard a pool that uses different devices."""
+        inference_devices = self._inference_device if devices is None else devices
+        if inference_devices != self._inference_device:
+            self.close()
+            if self._pool is not None:
+                for generator in self._pool:
+                    generator.clear_state()
+                self._pool = None
+            self._inference_device = inference_devices
+        return inference_devices
 
     def _build_pool(self) -> List[AutomaticPromptGenerator]:
         """'workers_per_device' independent (decoder, model) copies per resolved device.

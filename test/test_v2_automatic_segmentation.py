@@ -510,6 +510,50 @@ def test_precompute_3d_embeddings_requires_full_3d_tile_shape():
         )
 
 
+@pytest.mark.parametrize(
+    "shape,ndim,tile_shape,halo",
+    [((8, 8), 2, (4, 4), (1, 1)), ((2, 8, 8), 3, (1, 4, 4), (0, 1, 1))],
+)
+def test_tiled_apg_uses_decoder_frontend_without_precomputed_embeddings(
+    monkeypatch, shape, ndim, tile_shape, halo,
+):
+    from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
+
+    class TiledAPG:
+        _is_decoder_based = True
+        _precompute_embeddings_in_frontend = False
+        _has_postprocessing_mode = False
+
+        def _inference_devices(self, devices):
+            return devices
+
+        def initialize(self, image, ndim, tile_shape, halo, verbose):
+            self.image = image
+            self.initialize_args = ndim, tile_shape, halo, verbose
+
+        def generate(self, **kwargs):
+            self.generate_kwargs = kwargs
+            return np.ones(shape, dtype="uint32")
+
+    def fail(*args, **kwargs):
+        pytest.fail("Tiled APG must not use whole-image embeddings or slice-wise AMG.")
+
+    monkeypatch.setattr("micro_sam.v2.util.precompute_image_embeddings", fail)
+    monkeypatch.setattr("micro_sam.v2.instance_segmentation.amg_3d_segmentation", fail)
+
+    raw = np.zeros(shape, dtype="uint8")
+    segmenter = TiledAPG()
+    result = automatic_instance_segmentation(
+        predictor=object(), segmenter=segmenter, input_path=raw, embedding_path="unused.zarr",
+        ndim=ndim, tile_shape=tile_shape, halo=halo, devices="cpu", verbose=False,
+    )
+
+    assert segmenter.image is raw
+    assert segmenter.initialize_args == (ndim, tile_shape, halo, False)
+    assert segmenter.generate_kwargs == {}
+    assert result.shape == shape
+
+
 def test_automatic_3d_ais_removes_temp_store_on_error(monkeypatch):
     calls = {"removed": []}
 
