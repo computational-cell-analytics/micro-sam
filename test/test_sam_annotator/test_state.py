@@ -1,3 +1,4 @@
+import types
 import unittest
 
 import pytest
@@ -114,6 +115,34 @@ def test_annotator_pins_inference_to_the_selected_device(monkeypatch, device, ex
 
     run_initialize_predictor_with_embedding_fn(monkeypatch, fake_embedding_fn, device)
     assert captured["devices"] == expected
+
+
+def test_annotator_expands_sam2_volume_tiles_for_embedding_api(monkeypatch):
+    import micro_sam.util as util
+    import micro_sam.sam_annotator._state as state_module
+    import micro_sam.v2.prompt_based_segmentation as prompt_based_segmentation
+
+    captured = {}
+
+    def fake_embedding_fn(**kwargs):
+        captured.update(kwargs)
+        return {"features": object(), "input_size": None}
+
+    monkeypatch.setattr(util, "get_embedding_function", lambda model_type: fake_embedding_fn)
+    monkeypatch.setattr(util, "make_temp_embedding_path", lambda: "temporary.zarr")
+    monkeypatch.setattr(util, "_open_embeddings", lambda *args, **kwargs: types.SimpleNamespace(
+        attrs={"data_signature": "signature"},
+    ))
+    monkeypatch.setattr(prompt_based_segmentation, "TiledPromptableSegmentation3D", lambda **kwargs: object())
+
+    state = state_module.AnnotatorState()
+    state.initialize_predictor(
+        np.zeros((2, 8, 8), dtype="uint8"), model_type="hvit_t", ndim=3,
+        predictor=object(), prefer_decoder=False, tile_shape=(4, 4), halo=(1, 1),
+    )
+
+    assert captured["tile_shape"] == (2, 4, 4)
+    assert captured["halo"] == (0, 1, 1)
 
 
 @pytest.mark.parametrize(
