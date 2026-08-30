@@ -1,3 +1,4 @@
+import copy
 import types
 
 import numpy as np
@@ -28,6 +29,14 @@ def test_apg_declares_no_postprocessing_mode():
     assert AutomaticPromptGenerator._has_postprocessing_mode is False
     assert TiledAutomaticPromptGenerator._has_postprocessing_mode is False
     assert getattr(UniSAM2InstanceSegmentation, "_has_postprocessing_mode", True) is True
+
+
+def test_apg_declares_decoder_frontend_capabilities():
+    assert AutomaticPromptGenerator._is_decoder_based is True
+    assert AutomaticPromptGenerator._precompute_embeddings_in_frontend is True
+    assert TiledAutomaticPromptGenerator._is_decoder_based is True
+    assert TiledAutomaticPromptGenerator._precompute_embeddings_in_frontend is False
+    assert callable(TiledAutomaticPromptGenerator._inference_devices)
 
 
 @pytest.mark.parametrize(
@@ -124,14 +133,15 @@ def test_factory_returns_the_tiled_apg_class(monkeypatch):
 
 
 def _fake_apg_predictor():
-    """A minimal image-predictor double, deep-copyable and .to()-able like a real SAM2 predictor."""
-    predictor = types.SimpleNamespace(
-        model=types.SimpleNamespace(image_size=8, model_type="hvit_t"),
+    """A minimal SAM2 image-predictor wrapper without its own `to` method."""
+    model = torch.nn.Identity()
+    model.image_size = 8
+    model.model_type = "hvit_t"
+    return types.SimpleNamespace(
+        model=model,
         mask_threshold=0.0,
         _transforms=types.SimpleNamespace(),
     )
-    predictor.to = lambda device: predictor
-    return predictor
 
 
 def test_tiled_apg_build_pool_defaults_to_one_worker_and_reuses_the_model():
@@ -152,14 +162,76 @@ def test_tiled_apg_build_pool_multiplies_workers_per_device(monkeypatch):
     monkeypatch.setattr(
         "micro_sam.v2.automatic_prompt_generation._resolve_devices", lambda model, inference_device: devices,
     )
-    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor(), workers_per_device=3)
+    predictor = _fake_apg_predictor()
+    assert not hasattr(predictor, "to")
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), predictor, workers_per_device=3)
 
     pool = segmenter._build_pool()
 
     assert len(pool) == len(devices) * 3
-    # Every worker of a multi-device pool gets its own deep-copied model, none aliasing the original.
-    assert all(worker._model is not segmenter._model for worker in pool)
+    assert pool[0]._model is segmenter._model
+    assert all(worker._model is not segmenter._model for worker in pool[1:])
     assert len({id(worker._model) for worker in pool}) == len(pool)
+
+
+def test_tiled_apg_build_pool_stages_shared_pairs_through_cpu(monkeypatch):
+    class Encoder:
+        def __init__(self):
+            self.device = "cuda:0"
+
+        def to(self, device):
+            self.device = str(device)
+            return self
+
+    class Decoder:
+        copied_from_devices = []
+        model_type = "hvit_t"
+
+        def __init__(self, encoder):
+            self.encoder = encoder
+
+        def __deepcopy__(self, memo):
+            self.copied_from_devices.append(self.encoder.device)
+            duplicate = type(self)(copy.deepcopy(self.encoder, memo))
+            memo[id(self)] = duplicate
+            return duplicate
+
+        def to(self, device):
+            self.encoder.to(device)
+            return self
+
+    class PredictorModel:
+        image_size = 8
+        model_type = "hvit_t"
+
+        def __init__(self, encoder):
+            self.image_encoder = encoder
+
+        def to(self, device):
+            self.image_encoder.to(device)
+            return self
+
+    encoder = Encoder()
+    decoder = Decoder(encoder)
+    predictor = types.SimpleNamespace(
+        model=PredictorModel(encoder), mask_threshold=0.0, _transforms=types.SimpleNamespace(),
+    )
+    devices = [torch.device("cuda:0"), torch.device("cuda:1")]
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation._resolve_devices", lambda model, inference_device: devices,
+    )
+
+    segmenter = TiledAutomaticPromptGenerator(decoder, predictor)
+    pool = segmenter._build_pool()
+
+    assert Decoder.copied_from_devices == ["cpu"]
+    assert pool[0]._model is decoder
+    assert pool[0]._predictor is predictor
+    assert pool[1]._model is not decoder
+    for worker in pool:
+        assert worker._model.encoder is worker._predictor.model.image_encoder
+    assert pool[0]._model.encoder.device == "cuda:0"
+    assert pool[1]._model.encoder.device == "cuda:1"
 
 
 def test_tiled_apg_rejects_non_positive_workers_per_device():
@@ -2084,3 +2156,25 @@ def test_tiled_apg_generate_sets_halo_margin_and_forwards_propagation_waves(monk
 
     assert calls["margin"] == (1, 2)
     assert calls["params"]["propagation_waves"] == 4
+
+
+def test_tiled_apg_generate_passes_spatial_shape_for_channel_last_image(monkeypatch):
+    calls = {}
+
+    def fake_stitch_segmentation(*, shape, **kwargs):
+        calls["shape"] = shape
+        return np.zeros(shape, dtype="uint32")
+
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation.bp.segmentation.stitch_segmentation", fake_stitch_segmentation,
+    )
+
+    image = np.zeros((8, 12, 3), dtype="uint8")
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor())
+    segmenter._pool = [object()]
+    segmenter.initialize(image, ndim=2, tile_shape=(4, 4), halo=(1, 1))
+
+    segmentation = segmenter.generate()
+
+    assert calls["shape"] == (8, 12)
+    assert segmentation.shape == (8, 12)

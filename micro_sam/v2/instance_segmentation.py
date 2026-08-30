@@ -1027,6 +1027,9 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
             model device (single GPU); pass None to fan out over all visible GPUs, or a device / list.
     """
 
+    _is_decoder_based = True
+    _precompute_embeddings_in_frontend = True
+
     def __init__(
         self,
         model: torch.nn.Module,

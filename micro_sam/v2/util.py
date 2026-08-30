@@ -803,8 +803,8 @@ def precompute_image_embeddings(
     save_path: Optional[Union[str, os.PathLike]] = None,
     lazy_loading: bool = False,
     ndim: Optional[int] = None,
-    tile_shape: Optional[Tuple[int, int]] = None,
-    halo: Optional[Tuple[int, int]] = None,
+    tile_shape: Optional[Tuple[int, ...]] = None,
+    halo: Optional[Tuple[int, ...]] = None,
     verbose: bool = True,
     batch_size: Optional[int] = None,
     devices: Devices = None,
@@ -826,8 +826,9 @@ def precompute_image_embeddings(
             `save_path`, the returned `ImageEmbeddings` owns an ephemeral on-disk store; use it as a
             context manager or call `close()` when finished.
         ndim: The number of spatial dimensions. By default this is inferred from the input.
-        tile_shape: Optional in-plane tile shape.
-        halo: Optional in-plane tile halo.
+        tile_shape: Optional tile shape. Pass (y, x) for 2d data or (z, y, x) for 3d data. The
+            encoder uses only the in-plane entries for 3d data.
+        halo: Optional tile halo with the same axes as `tile_shape`.
         verbose: Whether to show progress.
         batch_size: The batch size used when running inference for multiple slices and / or tiles.
             By default it is looked up independently on each CUDA device from its free VRAM (see
@@ -849,6 +850,16 @@ def precompute_image_embeddings(
         An `ImageEmbeddings` resource. Call `close()` when finished or use it as a context manager.
     """
     ndim = input_.ndim if ndim is None else ndim
+    if tile_shape is not None:
+        if halo is None:
+            raise ValueError("The 'halo' parameter is required when 'tile_shape' is set.")
+        if len(tile_shape) != ndim or len(halo) != ndim:
+            raise ValueError(
+                f"'tile_shape' and 'halo' must have {ndim} entries for {ndim}d data, got "
+                f"{len(tile_shape)} and {len(halo)}."
+            )
+    in_plane_tile_shape = tile_shape[-2:] if ndim == 3 and tile_shape is not None else tile_shape
+    in_plane_halo = halo[-2:] if ndim == 3 and halo is not None else halo
     preprocessing = IMAGE_PREPROCESSING if ndim == 2 else VIDEO_PREPROCESSING
     if ndim == 2:
         configure_image_predictor(predictor)
@@ -869,7 +880,9 @@ def precompute_image_embeddings(
     # check that the saved embeddings in there match the parameters of the function call.
     elif os.path.exists(save_path):
         f = _open_embeddings(save_path, mode="a")
-        if _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, preprocessing):
+        if _check_saved_embeddings(
+            input_, predictor, f, save_path, in_plane_tile_shape, in_plane_halo, preprocessing,
+        ):
             # Close the old handle before truncating the store.
             getattr(f, "file", f).close()
             f = _open_embeddings(save_path, mode="w")
@@ -893,10 +906,8 @@ def precompute_image_embeddings(
     if ndim == 2 and tile_shape is None:
         embeddings = _compute_2d(input_, predictor, f, save_path, pbar_init, pbar_update)
     elif ndim == 2 and tile_shape is not None:
-        if halo is None:
-            raise ValueError("To compute tiled embeddings the parameter halo has to be passed.")
         embeddings = _compute_tiled_2d(
-            input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update,
+            input_, predictor, in_plane_tile_shape, in_plane_halo, f, save_path, pbar_init, pbar_update,
             batch_size=batch_size, devices=devices, num_prefetch_workers=num_prefetch_workers,
             num_write_workers=num_write_workers,
         )
@@ -907,10 +918,8 @@ def precompute_image_embeddings(
             num_write_workers=num_write_workers, norm_bounds=norm_bounds,
         )
     elif ndim == 3 and tile_shape is not None:
-        if halo is None:
-            raise ValueError("To compute tiled embeddings the parameter halo has to be passed.")
         embeddings = _compute_tiled_3d(
-            input_, predictor, tile_shape, halo, f, save_path, pbar_init, pbar_update,
+            input_, predictor, in_plane_tile_shape, in_plane_halo, f, save_path, pbar_init, pbar_update,
             batch_size=batch_size, devices=devices, num_prefetch_workers=num_prefetch_workers,
             num_write_workers=num_write_workers, norm_bounds=norm_bounds,
         )
