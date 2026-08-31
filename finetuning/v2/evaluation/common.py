@@ -64,13 +64,21 @@ def drop_excluded_livecell(raw_paths, label_paths) -> Tuple[List[str], List[str]
 
 # Overridable, so a run can point at another training version. A checkpoint that still trains needs
 # a frozen copy, because the trainer overwrites 'best.pt' while jobs queue.
-JOINT_CHECKPOINT_ROOT = os.environ.get(
-    "MICRO_SAM2_JOINT_CHECKPOINT_ROOT", os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints")
-)
+#
+# Read fresh on every call (not bound as a module-level constant at import time): a constant here
+# would silently ignore `os.environ["MICRO_SAM2_JOINT_CHECKPOINT_ROOT"] = ...` set later in the same
+# process, since that assignment always runs after `common` has already been imported. That bit a
+# whole investigation's worth of scratch scripts, each believing it had switched checkpoints within
+# one process when it had not. Set the env var before the process starts (a shell `export`, or a
+# subprocess/sbatch job) for the common case, or pass an explicit path to `build_model` directly.
+def _joint_checkpoint_root() -> str:
+    return os.environ.get("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints"))
+
+
 # The joint checkpoints are split into loadable weight files here, see 'export_joint_checkpoint'.
-JOINT_EXPORT_ROOT = os.environ.get(
-    "MICRO_SAM2_JOINT_EXPORT_ROOT", os.path.join(_MODELS_DIR, "exported", "joint", "v2")
-)
+def _joint_export_root() -> str:
+    return os.environ.get("MICRO_SAM2_JOINT_EXPORT_ROOT", os.path.join(_MODELS_DIR, "exported", "joint", "v2"))
+
 
 DATASETS_2D = [
     "livecell",
@@ -585,7 +593,7 @@ UNISAM2_CHECKPOINT = os.path.join(_UNISAM2_ROOT, "checkpoints", "unisam2-both", 
 
 def get_joint_checkpoint(model_type: str, checkpoint: str = "best") -> str:
     """Return the joint trainer checkpoint for a model type, e.g. 'hvit_b'."""
-    path = os.path.join(JOINT_CHECKPOINT_ROOT, f"joint_sam2_{model_type}_multi_gpu", f"{checkpoint}.pt")
+    path = os.path.join(_joint_checkpoint_root(), f"joint_sam2_{model_type}_multi_gpu", f"{checkpoint}.pt")
     if not os.path.exists(path):
         raise FileNotFoundError(f"There is no joint '{checkpoint}' checkpoint for '{model_type}' at '{path}'.")
     return path
@@ -623,7 +631,7 @@ def combine_checkpoint_checksums(*checksums: str) -> str:
 
 
 def export_joint_checkpoint(
-    model_type: str, checkpoint: str = "best", export_root: str = JOINT_EXPORT_ROOT,
+    model_type: str, checkpoint: str = "best", export_root: Optional[str] = None,
     source_checksum: Optional[str] = None,
 ) -> Tuple[str, str]:
     """Split a joint checkpoint into an interactive and an automatic weight file.
@@ -640,12 +648,14 @@ def export_joint_checkpoint(
     Args:
         model_type: The SAM2 backbone the model was finetuned from, e.g. 'hvit_b'.
         checkpoint: Which trainer checkpoint to export, 'best' or 'latest'.
-        export_root: The directory the exported weight files are written to.
+        export_root: The directory the exported weight files are written to. Defaults to
+            `MICRO_SAM2_JOINT_EXPORT_ROOT`, read fresh at call time.
         source_checksum: A previously computed checksum, to avoid reading the checkpoint twice.
 
     Returns:
         The paths to the interactive (SAM2) and the automatic (UniSAM2 decoder) weight files.
     """
+    export_root = export_root or _joint_export_root()
     checkpoint_path = get_joint_checkpoint(model_type, checkpoint)
     source_checksum = source_checksum or checkpoint_checksum(checkpoint_path)
     name = f"joint_sam2_{model_type}_{checkpoint}_{source_checksum}"
@@ -788,7 +798,8 @@ def build_apg_segmenter(
         interactive_checkpoint_path: Standalone interactive weights (e.g. a downloaded registry
             checkpoint) to use instead of the interactive half exported from the joint checkpoint.
             Requires 'decoder_path' too, since there is then no joint checkpoint to export it from.
-        export_root: Optional directory for the split checkpoint files. Defaults to JOINT_EXPORT_ROOT.
+        export_root: Optional directory for the split checkpoint files. Defaults to
+            `MICRO_SAM2_JOINT_EXPORT_ROOT`, read fresh at call time.
         devices: The devices the decoder, the scoring and the propagation spread over. All visible
             GPUs by default; pass a single device to pin the run to it.
 
@@ -878,15 +889,113 @@ def build_model(
     return load_unisam2_model(decoder_path, device, encoder=model_type)
 
 
+def build_ais_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", device="cuda", ndim=2, cache_dir=None):
+    """Build the AIS (UniSAM2) model from a specific joint-trainer checkpoint file, by explicit path.
+
+    Unlike `build_model`, which resolves a checkpoint through `_joint_checkpoint_root()` /
+    `_joint_export_root()` and the `joint_sam2_{model_type}_multi_gpu` naming convention, this loads
+    `joint_checkpoint_path` directly - handy for a one-off checkpoint that lives outside that
+    directory layout (e.g. a checkpoint from an ad hoc experiment).
+
+    Args:
+        joint_checkpoint_path: Absolute path to a joint checkpoint (has 'model_state', 'unetr_state').
+        model_type: The SAM2 backbone, e.g. 'hvit_t'.
+        device: The torch device.
+        ndim: The number of spatial dimensions, 2 or 3.
+        cache_dir: Where to write the extracted decoder-only file. Defaults to a shared tmp dir.
+
+    Returns:
+        The UniSAM2 decoder in eval mode, loaded from exactly this checkpoint.
+    """
+    if cache_dir is None:
+        cache_dir = "/tmp/micro_sam2_checkpoint_cache"
+    os.makedirs(cache_dir, exist_ok=True)
+
+    key = xxhash.xxh64(joint_checkpoint_path.encode()).hexdigest()
+    decoder_path = os.path.join(cache_dir, f"{model_type}_{key}_decoder.pt")
+
+    if not os.path.exists(decoder_path):
+        state = torch.load(joint_checkpoint_path, map_location="cpu", weights_only=False)
+        _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
+
+    return build_model(mode="ais", model_type=model_type, device=device, ndim=ndim, checkpoint_path=decoder_path)
+
+
+def build_apg_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", device="cuda", ndim=2, cache_dir=None):
+    """Build the APG (prompt generator) from a specific joint-trainer checkpoint file, by explicit path.
+
+    Mirrors `build_apg_segmenter`, but loads both halves (interactive model_state and decoder
+    unetr_state) directly from `joint_checkpoint_path` instead of through `_joint_checkpoint_root()` /
+    `_joint_export_root()` and the `joint_sam2_{model_type}_multi_gpu` naming convention - handy for a
+    one-off checkpoint that lives outside that directory layout.
+
+    Args:
+        joint_checkpoint_path: Absolute path to a joint checkpoint (has 'model_state', 'unetr_state').
+        model_type: The SAM2 backbone, e.g. 'hvit_t'.
+        device: The torch device.
+        ndim: The number of spatial dimensions, 2 or 3.
+        cache_dir: Where to write the extracted interactive/decoder files. Defaults to a shared tmp dir.
+
+    Returns:
+        The automatic prompt generator, built through the same library factory `build_apg_segmenter` uses.
+    """
+    from micro_sam.v2.util import get_sam2_model
+    from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
+
+    if cache_dir is None:
+        cache_dir = "/tmp/micro_sam2_checkpoint_cache"
+    os.makedirs(cache_dir, exist_ok=True)
+
+    key = xxhash.xxh64(joint_checkpoint_path.encode()).hexdigest()
+    interactive_path = os.path.join(cache_dir, f"{model_type}_{key}_interactive.pt")
+    decoder_path = os.path.join(cache_dir, f"{model_type}_{key}_decoder.pt")
+
+    if not (os.path.exists(interactive_path) and os.path.exists(decoder_path)):
+        state = torch.load(joint_checkpoint_path, map_location="cpu", weights_only=False)
+        _save_atomic({"model": _strip_ddp_prefix(state["model_state"]), "model_type": model_type}, interactive_path)
+        _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
+
+    model = get_sam2_model(
+        model_type=model_type, device=device, checkpoint_path=interactive_path,
+        **({"input_type": "videos"} if ndim == 3 else {}),
+    )
+    decoder = load_unisam2_model(decoder_path, device, encoder=model.image_encoder, encoder_model_type=model_type)
+    return get_instance_segmentation_generator(
+        model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
+    )
+
+
 def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None):
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
-    # UniSAM2 takes single-channel input, so a trailing channel axis is averaged away.
-    if raw.ndim > ndim:
-        raw = raw.mean(axis=-1)
 
     is_3d = (ndim == 3)
+    has_channels = raw.ndim > ndim
     # Tiling an image that fits the training patch changes the encoder's scale and the normalization.
     is_tiled = is_3d or any(size > TRAINING_PATCH_SHAPE[-1] for size in raw.shape[:2])
+
+    if has_channels and raw.shape[-1] > 1 and not is_tiled:
+        # Real multi-channel data (e.g. RGB histopathology): keep the distinct channels, matching
+        # training's raw_transform. `_run_full_inference`'s tiling machinery is single-channel only
+        # (it averages a trailing channel axis to grayscale, then triplicates that single value into
+        # 3 identical channels), which discards exactly the color signal H&E staining encodes and the
+        # model was trained on. A non-tiled image is small enough to run directly instead, bypassing
+        # that machinery. Tiled (large or 3d) multi-channel inputs still take the grayscale path below.
+        from micro_sam.v2.util import to_float32
+        from micro_sam.v2.instance_segmentation import ResizeLongestSideWrapper
+
+        chw = np.moveaxis(raw, -1, 0).astype("float32")  # (H, W, C) -> (C, H, W)
+        norm = normalize_raw(chw, axis=(-2, -1)) if normalization is None else normalization(chw)
+        inp = torch.from_numpy(norm)[None, :, None].to(device)  # (1, C, 1, H, W)
+        img_size = getattr(getattr(model, "encoder", None), "img_size", 1024)
+        resize_model = ResizeLongestSideWrapper(model, img_size).to(device)
+        with torch.no_grad():
+            out = to_float32(resize_model(inp))
+        return out[0, :, 0].cpu().numpy()
+
+    # UniSAM2 takes single-channel input, so a trailing channel axis is averaged away.
+    if has_channels:
+        raw = raw.mean(axis=-1)
+
     segmenter = get_unisam2_segmentation_generator(
         model, is_tiled=is_tiled, device=device, inference_device=devices
     )
