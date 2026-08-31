@@ -124,11 +124,14 @@ def test_factory_returns_the_tiled_apg_class(monkeypatch):
     decoder = object()
     segmenter = get_instance_segmentation_generator(
         model=predictor.model, decoder=decoder, segmentation_mode="apg", is_tiled=True,
+        beta=0.123, workers_per_device=3,
     )
     assert type(segmenter) is TiledAutomaticPromptGenerator
     # Nothing is built eagerly: every tile/block gets its own generator, lazily, in 'generate'.
     assert segmenter._model is decoder
     assert segmenter._predictor is predictor
+    assert segmenter._beta == 0.123
+    assert segmenter._workers_per_device == 3
     assert segmenter._pool is None
 
 

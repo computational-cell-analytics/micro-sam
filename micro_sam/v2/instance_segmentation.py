@@ -1515,7 +1515,7 @@ def get_instance_segmentation_generator(
             return cls(decoder, model, device=device, inference_device=inference_device, **kwargs)
         cls = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
         return cls(
-            decoder, get_sam2_image_predictor(model), device=device, inference_device=inference_device,
+            decoder, get_sam2_image_predictor(model), device=device, inference_device=inference_device, **kwargs,
         )
     else:
         raise ValueError(
