@@ -668,9 +668,9 @@ DATASET_SPACING: dict = {
 # The parameters `AutomaticPromptGenerator.generate` accepts, so a run can be described by one dict.
 GENERATE_PARAM_KEYS = (
     "candidate_threshold", "foreground_threshold", "n_iter", "dt", "sigma", "min_candidate_size",
-    "score_threshold", "score_filter", "max_overlap", "min_size", "refinement", "refinement_kwargs",
-    "multimasking", "multimask_scorer", "multimask_selection",
-    "n_objects_per_pass", "early_stop_patience", "batch_size", "n_threads",
+    "score_threshold", "score_filter", "max_overlap", "min_size", "max_size_factor", "refinement",
+    "refinement_kwargs", "multimasking", "multimask_scorer", "multimask_selection",
+    "n_objects_per_pass", "early_stop_patience", "propagation_waves", "batch_size", "n_threads",
 )
 
 
@@ -758,7 +758,7 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t", encoder_model_
 
 def build_apg_segmenter(
     model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None,
-    interactive_checkpoint_path=None, export_root=None,
+    interactive_checkpoint_path=None, export_root=None, devices=None,
 ):
     """Build the automatic prompt generator from both halves of a joint checkpoint.
 
@@ -775,6 +775,8 @@ def build_apg_segmenter(
             checkpoint) to use instead of the interactive half exported from the joint checkpoint.
             Requires 'decoder_path' too, since there is then no joint checkpoint to export it from.
         export_root: Optional directory for the split checkpoint files. Defaults to JOINT_EXPORT_ROOT.
+        devices: The devices the decoder, the scoring and the propagation spread over. All visible
+            GPUs by default; pass a single device to pin the run to it.
 
     Returns:
         The prompt generator, built through the library factory that the CLI and the API use.
@@ -800,6 +802,7 @@ def build_apg_segmenter(
     )
     return get_instance_segmentation_generator(
         model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
+        inference_device=devices,
     )
 
 
@@ -829,7 +832,7 @@ def resolve_checkpoint_identity(
 
 def build_model(
     mode, model_type, device, ndim, joint_checkpoint="best", checkpoint_path=None, joint_checksum=None,
-    interactive_checkpoint_path=None,
+    interactive_checkpoint_path=None, devices=None,
 ):
     """Load the model a mode runs on, from the two halves of the joint checkpoint.
 
@@ -843,6 +846,7 @@ def build_model(
         joint_checksum: The checksum of the joint checkpoint, from `resolve_checkpoint_identity`.
         interactive_checkpoint_path: Standalone interactive weights for 'apg', bypassing the joint
             checkpoint entirely. See `build_apg_segmenter`.
+        devices: The devices inference spreads over. All visible GPUs by default.
 
     Returns:
         The UniSAM2 decoder for 'ais', or the prompt generator for 'apg'.
@@ -851,6 +855,7 @@ def build_model(
         return build_apg_segmenter(
             model_type, ndim, device, joint_checkpoint, decoder_path=checkpoint_path,
             joint_checksum=joint_checksum, interactive_checkpoint_path=interactive_checkpoint_path,
+            devices=devices,
         )
 
     decoder_path = checkpoint_path or export_joint_checkpoint(
@@ -859,7 +864,7 @@ def build_model(
     return load_unisam2_model(decoder_path, device, encoder=model_type)
 
 
-def predict_unisam2(model, raw, ndim, device, normalization=None):
+def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None):
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
     # UniSAM2 takes single-channel input, so a trailing channel axis is averaged away.
     if raw.ndim > ndim:
@@ -868,7 +873,9 @@ def predict_unisam2(model, raw, ndim, device, normalization=None):
     is_3d = (ndim == 3)
     # Tiling an image that fits the training patch changes the encoder's scale and the normalization.
     is_tiled = is_3d or any(size > TRAINING_PATCH_SHAPE[-1] for size in raw.shape[:2])
-    segmenter = get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
+    segmenter = get_unisam2_segmentation_generator(
+        model, is_tiled=is_tiled, device=device, inference_device=devices
+    )
     if is_tiled:
         tile_shape = (4, 384, 384) if is_3d else (384, 384)
         halo = (2, 64, 64) if is_3d else (64, 64)

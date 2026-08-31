@@ -197,42 +197,61 @@ class TestUtil(unittest.TestCase):
 
         from micro_sam.util import _get_embedding_signature
         from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING
-        from micro_sam.v2.util import _check_saved_embeddings
+        from micro_sam.v2.util import _check_saved_embeddings, _normalization_bounds_digest
 
         self.assertEqual(IMAGE_PREPROCESSING, "minmax_per_channel")
-        self.assertEqual(VIDEO_PREPROCESSING, "percentile_2_98_per_channel_torch_resize_v2")
+        self.assertEqual(VIDEO_PREPROCESSING, "percentile_2_98_per_channel_torch_resize_v3")
 
         predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test", device="cpu")
         raw = np.arange(100).reshape(10, 10)
         signature = _get_embedding_signature(raw, predictor, tile_shape=None, halo=None)
 
-        def run(embeddings, preprocessing):
-            return _check_saved_embeddings(raw, predictor, embeddings, "cache.zarr", None, None, preprocessing)
+        def run(embeddings, preprocessing, norm_bounds=None):
+            return _check_saved_embeddings(
+                raw, predictor, embeddings, "cache.zarr", None, None, preprocessing, norm_bounds,
+            )
 
-        def full_cache(normalization):
+        def full_cache(normalization, norm_bounds=None):
             attrs = {"input_size": [10, 10], "precision": "fp32", **signature}
             if normalization is not None:
                 attrs["normalization"] = normalization
+            if norm_bounds is not None:
+                attrs["normalization_bounds_digest"] = _normalization_bounds_digest(norm_bounds)
             return SimpleNamespace(attrs=attrs)
+
+        norm_bounds = (np.array([[[2.0]]]), np.array([[[98.0]]]))
+        other_norm_bounds = (np.array([[[5.0]]]), np.array([[[95.0]]]))
 
         # A complete cache is reused only under the policy it was written with.
         self.assertFalse(run(full_cache(IMAGE_PREPROCESSING), IMAGE_PREPROCESSING))
-        self.assertFalse(run(full_cache(VIDEO_PREPROCESSING), VIDEO_PREPROCESSING))
+        self.assertFalse(run(full_cache(VIDEO_PREPROCESSING, norm_bounds), VIDEO_PREPROCESSING, norm_bounds))
         # A 2d min-max cache is not reused for the 3d percentile policy and vice versa.
-        self.assertTrue(run(full_cache(IMAGE_PREPROCESSING), VIDEO_PREPROCESSING))
-        self.assertTrue(run(full_cache(VIDEO_PREPROCESSING), IMAGE_PREPROCESSING))
+        self.assertTrue(run(full_cache(IMAGE_PREPROCESSING), VIDEO_PREPROCESSING, norm_bounds))
+        self.assertTrue(run(full_cache(VIDEO_PREPROCESSING, norm_bounds), IMAGE_PREPROCESSING))
         # A missing tag is stale.
         self.assertTrue(run(full_cache(None), IMAGE_PREPROCESSING))
+        self.assertTrue(run(full_cache(VIDEO_PREPROCESSING), VIDEO_PREPROCESSING, norm_bounds))
+        self.assertTrue(
+            run(full_cache(VIDEO_PREPROCESSING, norm_bounds), VIDEO_PREPROCESSING, other_norm_bounds)
+        )
 
         class PartialEmbeddings(dict):
-            def __init__(self, normalization=None):
+            def __init__(self, normalization=None, norm_bounds=None):
                 super().__init__(features=object())
                 self.attrs = {} if normalization is None else {"normalization": normalization}
+                if norm_bounds is not None:
+                    self.attrs["normalization_bounds_digest"] = _normalization_bounds_digest(norm_bounds)
 
         # Partial caches (no 'input_size') resume only when the tag matches the requested policy.
         self.assertTrue(run(PartialEmbeddings(), IMAGE_PREPROCESSING))
         self.assertTrue(run(PartialEmbeddings(VIDEO_PREPROCESSING), IMAGE_PREPROCESSING))
         self.assertFalse(run(PartialEmbeddings(IMAGE_PREPROCESSING), IMAGE_PREPROCESSING))
+        self.assertFalse(
+            run(PartialEmbeddings(VIDEO_PREPROCESSING, norm_bounds), VIDEO_PREPROCESSING, norm_bounds)
+        )
+        self.assertTrue(
+            run(PartialEmbeddings(VIDEO_PREPROCESSING, norm_bounds), VIDEO_PREPROCESSING, other_norm_bounds)
+        )
 
         # An empty cache (no features) is never stale.
         empty_cache = PartialEmbeddings(IMAGE_PREPROCESSING)
@@ -646,6 +665,7 @@ class TestSAM2Util(unittest.TestCase):
         self.assertEqual(f["features"].shape, (2, 1, 256, 64, 64))
         self.assertEqual(f.attrs["model_name"], self.model_type)
         self.assertEqual(f.attrs["normalization"], VIDEO_PREPROCESSING)
+        self.assertIn("normalization_bounds_digest", f.attrs)
 
         # Check that everything still works when we load the image embeddings from file.
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)

@@ -716,8 +716,8 @@ class TestAutoSegStatePersistence:
         assert widget._decoder_state_save_path == "/tmp/embeddings.zarr"
 
 
-@pytest.mark.parametrize("is_tiled,z", [(False, None), (True, None), (True, 3)])
-def test_apg_widget_reuses_the_decoder_state(monkeypatch, is_tiled, z):
+@pytest.mark.parametrize("z", [None, 3])
+def test_apg_widget_reuses_the_decoder_state(monkeypatch, z):
     from types import MethodType, SimpleNamespace
 
     import micro_sam.precompute_state as precompute_state
@@ -756,7 +756,7 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch, is_tiled, z):
     def fake_cache(*args, **kwargs):
         calls["cache"] += 1
         assert args[0] == "ais"
-        assert kwargs["is_tiled"] is is_tiled
+        assert kwargs["is_tiled"] is False
         assert kwargs["i"] == z
         return DecoderSegmenter()
 
@@ -768,15 +768,11 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch, is_tiled, z):
     monkeypatch.setattr(precompute_state, "cache_autoseg_state", fake_cache)
     monkeypatch.setattr(instance_segmentation, "get_instance_segmentation_generator", fake_factory)
 
-    if is_tiled:
-        features = SimpleNamespace(attrs={"tile_shape": (4, 4), "halo": (1, 1)})
-        image_embeddings = {"features": features, "input_size": None}
-    else:
-        image_embeddings = {
-            "features": np.zeros((1, 4, 8, 8), dtype="float32"),
-            "input_size": 1024,
-            "original_size": (8, 8),
-        }
+    image_embeddings = {
+        "features": np.zeros((1, 4, 8, 8), dtype="float32"),
+        "input_size": 1024,
+        "original_size": (8, 8),
+    }
     state = SimpleNamespace(
         predictor=SimpleNamespace(model=object(), model_type="hvit_t_cells"),
         decoder=Decoder(), image_embeddings=image_embeddings, inference_devices=None,
@@ -815,6 +811,76 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch, is_tiled, z):
     assert calls == {"cache": 1, "factory": 2}
     assert prompt_generator.propose_calls == 2
     assert np.array_equal(result, third_result)
+
+
+@pytest.mark.parametrize("z", [None, 3])
+def test_tiled_apg_widget_initializes_from_the_raw_image(monkeypatch, z):
+    from types import MethodType, SimpleNamespace
+
+    import micro_sam.precompute_state as precompute_state
+    import micro_sam.v2.instance_segmentation as instance_segmentation
+    from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+    calls = {"factory": 0, "initialize": 0, "generate": 0}
+
+    class Decoder:
+        def parameters(self):
+            yield SimpleNamespace(device="cpu")
+
+    class TiledPromptGenerator:
+        def initialize(self, image, **kwargs):
+            calls["initialize"] += 1
+            self.image = image
+            self.initialize_kwargs = kwargs
+
+        def generate(self, **kwargs):
+            calls["generate"] += 1
+            self.generate_kwargs = kwargs
+            return np.ones((8, 8), dtype="uint32")
+
+        def clear_state(self):
+            pass
+
+    prompt_generator = TiledPromptGenerator()
+
+    def fail_cache(*args, **kwargs):
+        pytest.fail("Tiled APG must not use the whole-image decoder state.")
+
+    def fake_factory(**kwargs):
+        calls["factory"] += 1
+        assert kwargs["is_tiled"] is True
+        assert kwargs["segmentation_mode"] == "apg"
+        return prompt_generator
+
+    monkeypatch.setattr(precompute_state, "cache_autoseg_state", fail_cache)
+    monkeypatch.setattr(instance_segmentation, "get_instance_segmentation_generator", fake_factory)
+
+    features = SimpleNamespace(attrs={"tile_shape": (4, 4), "halo": (1, 1)})
+    image_embeddings = {"features": features, "input_size": None}
+    state = SimpleNamespace(
+        predictor=SimpleNamespace(model=object(), model_type="hvit_t_cells"),
+        decoder=Decoder(), image_embeddings=image_embeddings, inference_devices=None,
+        data_signature="image", widgets={}, embedding_path=None,
+    )
+    widget = SimpleNamespace(
+        _segmenter=None, _segmenter_key=None, _decoder_state=None, _decoder_state_key=None,
+        _decoder_state_save_path=None, _proposals=None, _proposals_key=None,
+        _state_save_path=lambda state: "/tmp/embeddings.zarr",
+        _apg_kwargs=lambda ndim: {"candidate_threshold": 1.5, "score_threshold": 0.6},
+    )
+    widget._release_segmenter = MethodType(AutoSegmentWidget._release_segmenter, widget)
+
+    raw = np.zeros((8, 8), dtype="uint8")
+    result = AutoSegmentWidget._run_apg(widget, state, raw, ndim=2, z=z)
+    second_result = AutoSegmentWidget._run_apg(widget, state, raw, ndim=2, z=z)
+
+    assert calls == {"factory": 1, "initialize": 1, "generate": 2}
+    assert prompt_generator.image is raw
+    assert prompt_generator.initialize_kwargs == {
+        "ndim": 2, "tile_shape": (4, 4), "halo": (1, 1), "verbose": False,
+    }
+    assert prompt_generator.generate_kwargs == {"candidate_threshold": 1.5, "score_threshold": 0.6}
+    assert np.array_equal(result, second_result)
 
 
 @pytest.mark.gui

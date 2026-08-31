@@ -4718,8 +4718,10 @@ class AutoSegmentWidget(_WidgetBase):
         save_path = self._state_save_path(state)
 
         # All decoder auto-seg cases reuse the precomputed embeddings and run the decoder on them (no
-        # encoder re-run). The tiling is taken from the embeddings (tiled embeddings have a top-level
-        # 'input_size' of None). This covers 2d and 3d, tiled and untiled.
+        # encoder re-run). The in-plane tiling is taken from the embeddings (tiled embeddings have a
+        # top-level 'input_size' of None), so only the z entry of 'tile_shape'/'halo' below matters -
+        # the y, x entries are filler, ignored by the decoder-from-embeddings path. This covers 2d
+        # and 3d, tiled and untiled.
         tile_shape, halo = None, None
         z_block, z_halo = None, None
         if not self.volumetric or ndim == 3:
@@ -4728,6 +4730,8 @@ class AutoSegmentWidget(_WidgetBase):
             is_tiled = image_embeddings["input_size"] is None
             if ndim == 3:  # the decoder pass is z-chunked using the auto-seg z block / halo controls.
                 z_block, z_halo = self._z_tiling(int(run_raw.shape[0]))
+                tile_shape = (z_block, run_raw.shape[1], run_raw.shape[2])
+                halo = (z_halo, 0, 0)
         else:
             # A single slice of a 3d volume: reuse that slice's features (no re-encode). For untiled
             # embeddings, build the slice's 2d embedding. For tiled embeddings, pass the tiled 3d
@@ -4760,7 +4764,6 @@ class AutoSegmentWidget(_WidgetBase):
                     model_type=model_type,
                     i=z, state_index=(None if ndim == 3 else z), is_tiled=is_tiled,
                     tile_shape=tile_shape, halo=halo, device=device, devices=state.inference_devices,
-                    z_block=z_block, z_halo=z_halo,
                     pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
                 )
                 decoder_state = self._segmenter.get_state()
@@ -4803,43 +4806,55 @@ class AutoSegmentWidget(_WidgetBase):
             halo = tuple(int(value) for value in attrs["halo"])
 
         z_block, z_halo = None, None
+        decoder_tile_shape, decoder_halo = tile_shape, halo
         if ndim == 3:
             z_block, z_halo = self._z_tiling(int(run_raw.shape[0]))
+            # The decoder's z chunk goes in front; y, x are the in-plane tiling above, or filler
+            # (ignored by the decoder-from-embeddings path) when there is none.
+            decoder_tile_shape = (z_block, *(tile_shape or run_raw.shape[1:3]))
+            decoder_halo = (z_halo, *(halo or (0, 0)))
 
         cache_key = (
             state.data_signature, "apg", ndim, z, tile_shape, halo, z_block, z_halo,
             image_embeddings is not None, save_path,
         )
-        decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
         if self._segmenter is None or self._segmenter_key != cache_key:
             self._release_segmenter()
             self._segmenter = get_instance_segmentation_generator(
                 model=model, decoder=state.decoder, is_tiled=is_tiled, segmentation_mode="apg",
                 device=device, inference_device=state.inference_devices, ndim=ndim,
             )
-
-            decoder_state = self._cached_decoder_state(decoder_key)
-            if decoder_state is None:
-                decoder_segmenter = cache_autoseg_state(
-                    "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
-                    model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
-                    is_tiled=is_tiled, tile_shape=tile_shape, halo=halo, device=device,
-                    devices=state.inference_devices, z_block=z_block, z_halo=z_halo,
-                    pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
+            if is_tiled:
+                self._segmenter.initialize(
+                    run_raw, ndim=ndim, tile_shape=decoder_tile_shape, halo=decoder_halo, verbose=False,
                 )
-                decoder_state = decoder_segmenter.get_state()
-                self._store_decoder_state(decoder_key, decoder_state, save_path=save_path)
-            self._persist_decoder_state(
-                decoder_state, save_path, state_index=(None if ndim == 3 else z), model_type=model_type,
-            )
-            apg_state = dict(decoder_state)
-            apg_state["image_embeddings"] = image_embeddings
-            if z is not None:
-                apg_state["i"] = z
-            if ndim == 3:
-                apg_state["volume"] = run_raw
-            self._segmenter.set_state(apg_state)
+            else:
+                decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
+                decoder_state = self._cached_decoder_state(decoder_key)
+                if decoder_state is None:
+                    decoder_segmenter = cache_autoseg_state(
+                        "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
+                        model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
+                        is_tiled=False, tile_shape=decoder_tile_shape, halo=decoder_halo, device=device,
+                        devices=state.inference_devices,
+                        pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
+                    )
+                    decoder_state = decoder_segmenter.get_state()
+                    self._store_decoder_state(decoder_key, decoder_state, save_path=save_path)
+                self._persist_decoder_state(
+                    decoder_state, save_path, state_index=(None if ndim == 3 else z), model_type=model_type,
+                )
+                apg_state = dict(decoder_state)
+                apg_state["image_embeddings"] = image_embeddings
+                if z is not None:
+                    apg_state["i"] = z
+                if ndim == 3:
+                    apg_state["volume"] = run_raw
+                self._segmenter.set_state(apg_state)
             self._segmenter_key = cache_key
+
+        if is_tiled:
+            return self._segmenter.generate(**self._apg_kwargs(ndim))
 
         if ndim == 3:  # One pass: the volumetric stages are not separable the way the 2d ones are.
             return self._segmenter.generate(**self._apg_kwargs(ndim))

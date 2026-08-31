@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -7,6 +8,7 @@ from bioimage_cpp.utils import Blocking
 
 from micro_sam.v2.prompt_based_segmentation import (
     PromptableSegmentation3D,
+    ReplicatedPromptableSegmentation3D,
     TiledPromptableSegmentation3D,
     promptable_segmentation_2d,
 )
@@ -791,3 +793,42 @@ def test_add_prompt_set_never_pushes_a_negative_stride(n_points):
         # The check torch itself makes, which is what the strides are about.
         torch.tensor(pushed)
     assert np.asarray(call["points"]).shape == (n_points, 2)
+
+
+def _replicated_segmenter(n_devices):
+    """A propagation pool whose per-device states are just their worker index."""
+    pool = ReplicatedPromptableSegmentation3D.__new__(ReplicatedPromptableSegmentation3D)
+    pool._predictor_devices = [(None, torch.device("cpu"))] * n_devices
+    pool._segmenters = {}
+    pool._get_segmenter = lambda worker_id: pool._segmenters.setdefault(worker_id, f"state-{worker_id}")
+    return pool
+
+
+def test_replicated_propagation_gives_every_worker_its_own_state():
+    # A pass conditions its own objects, so two passes must never share one video-predictor state.
+    pool = _replicated_segmenter(3)
+    barrier = threading.Barrier(3, timeout=30)
+    seen = []
+
+    def run(segmenter, job):
+        barrier.wait()  # Only returns if all three workers really run at the same time.
+        seen.append(segmenter)
+        return job
+
+    assert pool.map_passes([0, 1, 2], run) == [0, 1, 2]
+    assert sorted(seen) == ["state-0", "state-1", "state-2"]
+
+
+def test_replicated_propagation_builds_no_state_it_cannot_use():
+    # A run with one pass must not pay for a full model replica per device.
+    pool = _replicated_segmenter(4)
+
+    assert pool.map_passes(["only"], lambda segmenter, job: (segmenter, job)) == [("state-0", "only")]
+    assert list(pool._segmenters) == [0]
+
+
+def test_replicated_propagation_returns_the_jobs_in_order():
+    pool = _replicated_segmenter(2)
+    jobs = list(range(6))
+
+    assert pool.map_passes(jobs, lambda segmenter, job: job * 2) == [job * 2 for job in jobs]
