@@ -1,6 +1,8 @@
-import threading
+import os
 import time
+import tempfile
 import unittest
+import threading
 from unittest import mock
 
 import numpy as np
@@ -76,8 +78,10 @@ class FakeVideoBackbone(torch.nn.Module):
         super().__init__()
         self.channels = channels
         self.levels = levels
+        self.forward_calls = 0
 
     def forward_image(self, batch):
+        self.forward_calls += 1
         batch_size = batch.shape[0]
         height, width = batch.shape[-2:]
         pos_enc, fpn = [], []
@@ -110,6 +114,36 @@ class TestVolumeNormalization(unittest.TestCase):
         bounds = batched_inference._volume_normalization_bounds(volume)
 
         self.assertEqual(tuple(bound.shape for bound in bounds), ((1, 1, 1), (1, 1, 1)))
+
+    def test_embedding_cache_distinguishes_normalization_bounds(self):
+        from micro_sam.v2.util import precompute_image_embeddings
+
+        predictor = FakeVideoBackbone()
+        predictor.image_size = 8
+        predictor.model_type = "hvit_t"
+        predictor.model_name = "hvit_t"
+        predictor.device = "cpu"
+        volume = np.linspace(0.0, 1.0, 2 * 4 * 8, dtype="float32").reshape(2, 4, 8)
+        bounds = (np.array([[[0.0]]], dtype="float32"), np.array([[[1.0]]], dtype="float32"))
+        other_bounds = (np.array([[[0.0]]], dtype="float32"), np.array([[[2.0]]], dtype="float32"))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = os.path.join(tmpdir, "embeddings.zarr")
+            first = precompute_image_embeddings(
+                predictor, volume, save_path=save_path, ndim=3, batch_size=2, norm_bounds=bounds, verbose=False,
+            )["features"].copy()
+            first_calls = predictor.forward_calls
+            cached = precompute_image_embeddings(
+                predictor, volume, save_path=save_path, ndim=3, batch_size=2, norm_bounds=bounds, verbose=False,
+            )["features"].copy()
+            changed = precompute_image_embeddings(
+                predictor, volume, save_path=save_path, ndim=3, batch_size=2,
+                norm_bounds=other_bounds, verbose=False,
+            )["features"].copy()
+
+        self.assertEqual(predictor.forward_calls, first_calls + 1)
+        np.testing.assert_array_equal(cached, first)
+        self.assertFalse(np.array_equal(changed, first))
 
 
 class TestSharedPositionalEncoding(unittest.TestCase):

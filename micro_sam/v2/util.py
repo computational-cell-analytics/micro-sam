@@ -1,19 +1,20 @@
 import os
 import sys
-import pooch
 import shutil
+import hashlib
 import warnings
 import contextlib
 from pathlib import Path
 from typing import Any, Union, Literal, Optional, Sequence, Tuple
 
-import sam2
-from sam2.build_sam import build_sam2
-from sam2.sam2_image_predictor import SAM2ImagePredictor
-
+import pooch
 import numpy as np
 
 import torch
+
+import sam2
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
 from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
@@ -668,21 +669,39 @@ def _predictor_device(predictor) -> torch.device:
     return torch.device(device)
 
 
-def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, preprocessing):
+def _normalization_bounds_digest(norm_bounds):
+    """Return a stable digest of the arrays that determine volume normalization."""
+    if norm_bounds is None:
+        return None
+    digest = hashlib.sha1()
+    for bound in norm_bounds:
+        array = np.asarray(bound)
+        digest.update(array.dtype.str.encode("utf-8"))
+        digest.update(np.asarray([array.ndim], dtype="<i8").tobytes())
+        digest.update(np.asarray(array.shape, dtype="<i8").tobytes())
+        digest.update(np.ascontiguousarray(array).tobytes())
+    return digest.hexdigest()
+
+
+def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, preprocessing, norm_bounds=None):
     """Validate saved embeddings against the requested configuration.
 
-    Returns True if the saved embeddings are stale and should be recomputed (the model, tiling or
-    preprocessing changed), False if they can be loaded. Raises if they belong to different image
-    data (data signature mismatch). `preprocessing` is the policy expected for the current path
-    (2d image or 3d / video, see `micro_sam.v2.normalization`).
+    Returns True if the saved embeddings are stale and should be recomputed (the model, tiling,
+    preprocessing or normalization bounds changed), False if they can be loaded. Raises if they
+    belong to different image data (data signature mismatch). `preprocessing` is the policy expected
+    for the current path (2d image or 3d / video, see `micro_sam.v2.normalization`).
     """
     # We can have an empty zarr file that was already created to save the embeddings in. A
     # feature-bearing file without the completion metadata is a partial cache: reject it unless it
     # explicitly records the current preprocessing policy. Untagged caches can use the former video
     # resize implementation and cannot be safely resumed.
+    bounds_digest = _normalization_bounds_digest(norm_bounds) if preprocessing == VIDEO_PREPROCESSING else None
     if "input_size" not in f.attrs:
         normalization = f.attrs.get("normalization")
-        return "features" in f and normalization != preprocessing
+        bounds_changed = (
+            bounds_digest is not None and f.attrs.get("normalization_bounds_digest") != bounds_digest
+        )
+        return "features" in f and (normalization != preprocessing or bounds_changed)
 
     # Creates all the metadata that is stored along with the embeddings.
     # TODO: This is currently paired with `micro_sam`-level metadata. Should we get separate for `micro_sam.v2`?
@@ -690,12 +709,14 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, p
     signature = _get_embedding_signature(input_, predictor, tile_shape, halo)
     signature["normalization"] = preprocessing
     signature["precision"] = precision_name(_predictor_device(predictor))
+    if bounds_digest is not None:
+        signature["normalization_bounds_digest"] = bounds_digest
 
     stale = False
     for key, val in signature.items():
         # Missing current preprocessing metadata means stale. We still tolerate other legacy signature fields.
         if key not in f.attrs:
-            if key in ("normalization", "precision"):
+            if key in ("normalization", "normalization_bounds_digest", "precision"):
                 stale = True
             continue
         if f.attrs[key] == val:
@@ -719,12 +740,17 @@ def _check_saved_embeddings(input_, predictor, f, save_path, tile_shape, halo, p
     return stale
 
 
-def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_size, original_size, preprocessing):
-    """Write the common embedding metadata plus the SAM2 preprocessing policy and precision."""
+def _write_embedding_signature(
+    f, input_, predictor, tile_shape, halo, input_size, original_size, preprocessing, norm_bounds=None,
+):
+    """Write the common embedding metadata plus the SAM2 preprocessing policy, bounds and precision."""
     from micro_sam.util import _write_embedding_signature as _write_common_signature
 
     _write_common_signature(f, input_, predictor, tile_shape, halo, input_size, original_size)
     f.attrs["normalization"] = preprocessing
+    bounds_digest = _normalization_bounds_digest(norm_bounds) if preprocessing == VIDEO_PREPROCESSING else None
+    if bounds_digest is not None:
+        f.attrs["normalization_bounds_digest"] = bounds_digest
     # The encoder precision changes the stored values, so another one is stale.
     f.attrs["precision"] = precision_name(_predictor_device(predictor))
 
@@ -863,6 +889,9 @@ def precompute_image_embeddings(
     preprocessing = IMAGE_PREPROCESSING if ndim == 2 else VIDEO_PREPROCESSING
     if ndim == 2:
         configure_image_predictor(predictor)
+    elif ndim == 3 and norm_bounds is None:
+        from micro_sam.v2.batched_inference import _volume_normalization_bounds
+        norm_bounds = _volume_normalization_bounds(input_)
 
     is_streamed = ndim == 3 or tile_shape is not None
     temporary_path = None
@@ -881,7 +910,7 @@ def precompute_image_embeddings(
     elif os.path.exists(save_path):
         f = _open_embeddings(save_path, mode="a")
         if _check_saved_embeddings(
-            input_, predictor, f, save_path, in_plane_tile_shape, in_plane_halo, preprocessing,
+            input_, predictor, f, save_path, in_plane_tile_shape, in_plane_halo, preprocessing, norm_bounds,
         ):
             # Close the old handle before truncating the store.
             getattr(f, "file", f).close()
@@ -892,10 +921,11 @@ def precompute_image_embeddings(
     else:
         f = _open_embeddings(save_path, mode="a")
 
-    # Persist the policy before writing any feature data, so an interrupted partial cache can only
-    # be resumed under the same preprocessing policy.
+    # Persist normalization metadata before any features, so a partial cache is validated the same way.
     if save_path is not None:
         f.attrs["normalization"] = preprocessing
+        if ndim == 3:
+            f.attrs["normalization_bounds_digest"] = _normalization_bounds_digest(norm_bounds)
 
     from micro_sam.util import handle_pbar
     from micro_sam.v2.batched_inference import _compute_3d, _compute_tiled_2d, _compute_tiled_3d

@@ -966,6 +966,7 @@ def _compute_3d(
         _write_embedding_signature(
             root, input_, predictor, tile_shape=None, halo=None,
             input_size=image_size, original_size=original_size, preprocessing=VIDEO_PREPROCESSING,
+            norm_bounds=norm_bounds,
         )
         features = feature_dataset if lazy_loading else feature_dataset[:]
         pos_enc = _load_feature_levels(root["pos_enc"], lazy_loading)
@@ -1123,7 +1124,7 @@ def _compute_tiled_3d(
     if save_path is not None:
         _write_embedding_signature(
             root, input_, predictor, tile_shape=tile_shape, halo=halo, input_size=None,
-            original_size=None, preprocessing=VIDEO_PREPROCESSING,
+            original_size=None, preprocessing=VIDEO_PREPROCESSING, norm_bounds=norm_bounds,
         )
     features.attrs["complete"] = True
     return {
