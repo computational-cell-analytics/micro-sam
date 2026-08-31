@@ -14,15 +14,31 @@ EPOCHS = {
     "hvit_l": 150,
 }
 
-SCRIPT = "/mnt/vast-kisski/home/archit/u28048/micro-sam/finetuning/v2/generalist/train_joint.py"
+# GDR_LEVEL=LOC is mandatory with IB: every other level hangs on this cluster's H100 nodes.
+NCCL_ENV = {
+    True: {
+        "NCCL_IB_DISABLE": "0",
+        "NCCL_SOCKET_IFNAME": "ib0",
+        "NCCL_NET_GDR_LEVEL": "LOC",
+        "NCCL_DEBUG": "WARN",
+    },
+    False: {
+        "NCCL_IB_DISABLE": "1",
+        "NCCL_SOCKET_IFNAME": "ib0",
+        "NCCL_DEBUG": "WARN",
+    },
+}
 
+SCRIPT = "/mnt/vast-kisski/home/archit/u28048/micro-sam/finetuning/v2/generalist/train_joint.py"
 PARTITION = "kisski-h100"
 GPU_TYPE = "H100"
+SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v4"
 
 
-def write_batch_script(out_path, model_type, n_epochs, dataset_choice, save_root, reservation, dry):
+def write_batch_script(out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry):
     "Writing the multi-node sbatch script for one joint SAM2 training run (2 nodes x 4 H100 = 8 GPUs)."
-    # TCP-over-IPoIB: IB verbs disabled, sockets still routed over the IB NIC's IP interface.
+    nccl_block = "\n".join(f"export {key}={value}" for key, value in NCCL_ENV[enable_ib].items())
+
     batch_script = rf"""#!/bin/bash
 #SBATCH --job-name=μSAM2_joint_{model_type}
 #SBATCH -t 4-00:00:00
@@ -45,9 +61,7 @@ GPUS_PER_NODE=4
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
 export MASTER_PORT=29500
 
-export NCCL_IB_DISABLE=1
-export NCCL_SOCKET_IFNAME=ib0
-export NCCL_DEBUG=WARN
+{nccl_block}
 
 srun --cpu-bind=none bash -c "torchrun \
     --nnodes=$SLURM_NNODES \
@@ -97,8 +111,9 @@ def submit_slurm(args):
             model_type=model_type,
             n_epochs=EPOCHS[model_type],
             dataset_choice=args.dataset_choice,
-            save_root=args.save_root,
+            save_root=SAVE_ROOT,
             reservation=args.reservation,
+            enable_ib=args.enable_ib == "yes",
             dry=args.dry,
         )
 
@@ -119,15 +134,14 @@ if __name__ == "__main__":
         help="The choice of model type. Submits all four models if not specified.",
     )
     parser.add_argument(
-        "-s", "--save_root", type=str, default="/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v4",
-        help="The path where to store the model checkpoints and logs.",
-    )
-    parser.add_argument(
         "--dataset_choice", type=str, default="all", choices=["lm", "em", "hp", "all"],
         help="The choice of datasets for joint training.",
     )
     parser.add_argument(
         "-r", "--reservation", type=str, default=None, help="Slurm reservation to submit under, if any."
+    )
+    parser.add_argument(
+        "--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB verbs instead of sockets."
     )
     parser.add_argument(
         "--dry", action="store_true", help="Whether to only write the sbatch scripts without submitting them."
