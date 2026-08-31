@@ -77,7 +77,7 @@ DATASETS_2D = [
     "arvidsson", "bitdepth_nucseg", "cellbindb", "cellpose_data",
     "covid_if", "cvz_fluo", "deepbacs", "deepseas", "dic_hepg2", "dsb",
     "dynamicnuclearnet", "hpa", "microbeseg", "neurips_cellseg", "omnipose",
-    "segpc", "tissuenet", "usiigaci", "vicar", "yeaz",
+    "puma", "segpc", "tissuenet", "tnbc", "usiigaci", "vicar", "yeaz",
 ]
 
 # Ground-truth size floor that drops the crop-severed slivers relabelling promotes to objects. It
@@ -120,6 +120,8 @@ VAL_SPLITS = {
     "covid_if": "val",
     "yeaz": "val",
     "neurips_cellseg": "val",
+    "puma": "val",
+    "tnbc": "val",
     "gonuclear": None,
     "cremi": None,
     "snemi": None,
@@ -285,6 +287,14 @@ def _get_2d_data_paths(
                 warnings.warn(f"Skipping omnipose choice '{choice}': {e}")
         return (*_sorted_pairs(img, gt), None, None)
 
+    if dataset_name == "puma":
+        # PUMA ROIs are 1024x1024 natively; load_evaluation_sample_2d center-crops every 2d dataset
+        # to CROP_SHAPE_2D=(512, 512), so no extra cropping is needed here.
+        paths = datasets.puma.get_puma_paths(
+            path=os.path.join(p, "puma"), split=split, annotations="nuclei", download=download,
+        )
+        return sorted(paths), sorted(paths), "raw", "labels/instances/nuclei"
+
     if dataset_name == "segpc":
         # The dataset has no test split, so the evaluation uses the validation split.
         paths = datasets.segpc.get_segpc_paths(
@@ -298,6 +308,10 @@ def _get_2d_data_paths(
         )
         # The rgb composite and the cell labels are what the training used.
         return sorted(paths), sorted(paths), "raw/rgb", "labels/cell"
+
+    if dataset_name == "tnbc":
+        paths = datasets.tnbc.get_tnbc_paths(path=os.path.join(p, "tnbc"), split=split, download=download)
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
 
     if dataset_name == "usiigaci":
         # The dataset has no test split, so the evaluation uses the validation split.
