@@ -19,6 +19,7 @@ Usage:
 """
 
 import os
+import sys
 import time
 import argparse
 import functools
@@ -31,9 +32,12 @@ from micro_sam.v2.util import get_sam2_model, FINETUNED_MODELS
 from micro_sam.v2.instance_segmentation import get_decoder, get_instance_segmentation_generator
 from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
 
-from common import DATA_ROOT, VOLUME_SPEED_OPTIONS, load_data, resolve_params, run_dataset_evaluation
+EVALUATION_ROOT = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, EVALUATION_ROOT)
 
-RESULTS_ROOT = os.path.join(os.path.dirname(__file__), "results", "apg_3d_tiling")
+from common import DATA_ROOT, VOLUME_SPEED_OPTIONS, load_data, resolve_params, run_dataset_evaluation  # noqa
+
+RESULTS_ROOT = os.path.join(EVALUATION_ROOT, "results", "apg_3d_tiling")
 
 
 def _build_worker_model(device, model_type):

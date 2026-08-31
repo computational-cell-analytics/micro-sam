@@ -13,6 +13,7 @@ Usage:
 """
 
 import os
+import sys
 import time
 import json
 import argparse
@@ -25,9 +26,12 @@ from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings, FINET
 from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 from micro_sam.v2.prompt_based_segmentation import TiledPromptableSegmentation3D
 
-from common import DATA_ROOT, load_data
+EVALUATION_ROOT = os.path.dirname(os.path.dirname(__file__))
+sys.path.insert(0, EVALUATION_ROOT)
 
-RESULTS_ROOT = os.path.join(os.path.dirname(__file__), "results", "propagation_benchmark")
+from common import DATA_ROOT, load_data  # noqa
+
+RESULTS_ROOT = os.path.join(EVALUATION_ROOT, "results", "propagation_benchmark")
 
 
 VARIANTS = ("baseline", "low_res_output", "cache_prepared")
