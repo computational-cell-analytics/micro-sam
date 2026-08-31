@@ -2,7 +2,7 @@ import platform
 
 import numpy as np
 import pytest
-from napari.layers import Points
+from napari.layers import Points, Shapes
 from skimage.data import binary_blobs
 
 from micro_sam.v2.util import DEFAULT_MODEL
@@ -49,6 +49,37 @@ def test_tracking_uses_timeseries_layer_label(qtbot):
 
     assert tracking_widget.image_layer_label.text() == "Timeseries Layer:"
     assert image_widget.image_layer_label.text() == "Image Layer:"
+
+
+def test_box_selection_updates_current_track_id(qtbot):
+    from micro_sam.sam_annotator._state import AnnotatorState
+    from micro_sam.sam_annotator.annotator_tracking import create_tracking_menu
+
+    property_choices = {
+        "label": ["positive", "negative"],
+        "state": ["track", "division"],
+        "track_id": ["1", "2"],
+    }
+    points = Points(ndim=2, property_choices=property_choices)
+    boxes = Shapes(
+        data=[np.array([[0, 0], [8, 8]]), np.array([[16, 16], [24, 24]])],
+        shape_type="rectangle",
+        properties={"track_id": np.array(["1", "2"])},
+        ndim=2,
+    )
+    tracking_widget = create_tracking_menu(
+        points_layer=points,
+        box_layer=boxes,
+        states=property_choices["state"],
+        track_ids=property_choices["track_id"],
+        point_labels=property_choices["label"],
+    )
+    qtbot.addWidget(tracking_widget.native)
+
+    boxes.selected_data = {1}
+
+    assert tracking_widget[2].value == "2"
+    assert AnnotatorState().current_track_id == 2
 
 
 def test_division_frame_detection():

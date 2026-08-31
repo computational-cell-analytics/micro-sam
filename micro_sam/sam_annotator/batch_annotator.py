@@ -327,6 +327,12 @@ class BatchAnnotator(widgets._WidgetBase):
         self._rebuilt_on_show = False
 
     def showEvent(self, event):
+        # napari 0.9 caps the height of dock widget content at its size hint (napari/napari#9393).
+        size_policy = self.sizePolicy()
+        size_policy_enum = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
+        size_policy.setVerticalPolicy(size_policy_enum.Expanding)
+        self.setSizePolicy(size_policy)
+
         # The first embedding widget is built before napari styles the console, so its path fields keep
         # the wider default font and the console opens wider than it is after any task change. Build it
         # once more here, under the same conditions as a task change, so the width stays the same.

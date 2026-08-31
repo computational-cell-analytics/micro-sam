@@ -34,7 +34,7 @@ from common import (
 )
 
 
-def segment(model, mode, raw, ndim, dataset_name, params, device, backend="cpp", spacing=None):
+def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, spacing=None, devices=None):
     """Segment one sample with the tuned parameters of a mode."""
     if mode == "apg":
         model.clear_state()
@@ -42,13 +42,13 @@ def segment(model, mode, raw, ndim, dataset_name, params, device, backend="cpp",
         volume_params = {"spacing": spacing} if ndim == 3 else {}
         return model.generate(**{**volume_params, **params}).astype("uint32")
 
-    prediction = predict_unisam2(model, raw, ndim=ndim, device=device)
-    return postprocess_unisam2(prediction, dataset_name, backend=backend, params=params)
+    prediction = predict_unisam2(model, raw, ndim=ndim, device=device, devices=devices)
+    return postprocess_unisam2(prediction, dataset_name, model_type=model_type, params=params)
 
 
 def run_evaluation(
     model, mode, dataset_name, data_root, experiment_folder, model_type, params, device,
-    backend="cpp", crop_shape=None, checkpoint_id=None,
+    crop_shape=None, checkpoint_id=None, devices=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -64,9 +64,9 @@ def run_evaluation(
         model_type: The SAM2 backbone, which names the result file.
         params: The parameters to segment with, or None for the library defaults.
         device: The torch device.
-        backend: The backend for the flow computation.
         crop_shape: The 3d center crop.
         checkpoint_id: The checksum of all model weights used by the mode.
+        devices: The devices inference spreads over. All visible GPUs by default.
 
     Returns:
         The results as a DataFrame.
@@ -97,7 +97,8 @@ def run_evaluation(
         if labels.max() == 0:  # Nothing to score without ground-truth.
             continue
         seg = segment(
-            model, mode, raw, ndim, dataset_name, params or {}, device, backend=backend, spacing=spacing,
+            model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing,
+            devices=devices,
         )
         if valid_roi is not None:
             seg[~valid_roi] = 0
@@ -137,8 +138,12 @@ def main():
     )
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate with the library defaults.")
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
-    parser.add_argument("--backend", type=str, default="cpp", choices=("cpp", "python"), help="Flow backend.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
+    parser.add_argument(
+        "--propagation_waves", type=int, default=None,
+        help="Volumes only. Rounds the candidates are propagated in, overriding whatever was tuned.",
+    )
+    parser.add_argument("--devices", nargs="*", default=None, help="Inference devices. All visible GPUs by default.")
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
@@ -156,6 +161,7 @@ def main():
         args.mode, args.model_type, device, ndim,
         joint_checkpoint=args.joint_checkpoint, checkpoint_path=args.checkpoint,
         joint_checksum=joint_checksum, interactive_checkpoint_path=args.interactive_checkpoint,
+        devices=args.devices or None,
     )
 
     params = None
@@ -173,9 +179,15 @@ def main():
         else:
             print(f"'{args.dataset_name}' has no data held out from the evaluation, so the defaults are used.")
 
+    if args.propagation_waves is not None:
+        # On top of the tuned set, or on its own: a volume takes it either way, and the defaults for
+        # everything else are what 'generate' applies when a key is missing.
+        params = {**(params or {}), "propagation_waves": args.propagation_waves}
+
     run_evaluation(
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,
-        params, device, backend=args.backend, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
+        params, device, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
+        devices=args.devices or None,
     )
 
 

@@ -13,8 +13,8 @@ from micro_sam.v2.instance_segmentation import (
     TiledAutomaticMaskGenerationSegmenter, amg_3d_segmentation,
     get_instance_segmentation_generator, get_decoder,
 )
-from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, run_multicut
-from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z, ImageEmbeddings
+from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, default_postprocessing, run_multicut
+from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, ImageEmbeddings
 
 
 def _run_decoder_3d(model, image_embeddings, device="cpu"):
@@ -29,8 +29,9 @@ def _run_decoder_2d(model, image_embeddings, device="cpu"):
 
 def test_run_multicut_uses_dense_defaults():
     signature = inspect.signature(run_multicut)
-    for name, value in DEFAULT_POSTPROCESSING["dense"].items():
-        assert signature.parameters[name].default == value
+    assert signature.parameters["model_type"].default == DEFAULT_MODEL
+    for backbone, modes in DEFAULT_POSTPROCESSING.items():
+        assert default_postprocessing(backbone, "dense") == modes["dense"]
 
 
 class _FakeSAM2Model:
@@ -406,6 +407,7 @@ def test_full_inference_normalizes_each_volume_slice_independently(monkeypatch):
 
 def _stage_3d_ais(
     monkeypatch, embedding_path, initialize=None, calls=None, segmenter=None, device=None, devices=None,
+    tile_shape=None, halo=None,
 ):
     """Drive `automatic_instance_segmentation` for 3d AIS with fakes, capturing the temp-store calls."""
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
@@ -436,7 +438,7 @@ def _stage_3d_ais(
     result = automatic_instance_segmentation(
         predictor=types.SimpleNamespace(model=embedding_model),
         segmenter=segmenter, input_path=raw, ndim=3, embedding_path=embedding_path, verbose=False,
-        device=device, devices=devices,
+        device=device, devices=devices, tile_shape=tile_shape, halo=halo,
     )
     return calls, embeddings, embedding_model, raw, temp_path, result
 
@@ -462,6 +464,94 @@ def test_automatic_3d_ais_keeps_user_embedding_path(monkeypatch):
     assert calls["precompute"][2]["save_path"] == "user.zarr"
     assert calls["removed"] == []
     assert calls["embedding_file"].closed
+
+
+def test_automatic_3d_ais_keeps_full_3d_tile_shape(monkeypatch):
+    tile_shape = (1, 4, 4)
+    halo = (0, 1, 1)
+    calls, _, _, _, _, _ = _stage_3d_ais(
+        monkeypatch, embedding_path=None, tile_shape=tile_shape, halo=halo,
+    )
+
+    assert calls["precompute"][2]["tile_shape"] == tile_shape
+    assert calls["precompute"][2]["halo"] == halo
+    assert calls["initialize"][1]["tile_shape"] == tile_shape
+    assert calls["initialize"][1]["halo"] == halo
+
+
+def test_precompute_3d_embeddings_uses_in_plane_tiles_internally(monkeypatch):
+    from micro_sam.v2.util import precompute_image_embeddings
+
+    calls = {}
+
+    def fake_compute(input_, predictor, tile_shape, halo, *args, **kwargs):
+        calls["tile_shape"] = tile_shape
+        calls["halo"] = halo
+        return {}
+
+    monkeypatch.setattr("micro_sam.v2.batched_inference._compute_tiled_3d", fake_compute)
+    embeddings = precompute_image_embeddings(
+        object(), np.zeros((2, 8, 8), dtype="uint8"), ndim=3,
+        tile_shape=(1, 4, 4), halo=(0, 1, 1), verbose=False,
+    )
+    embeddings.close()
+
+    assert calls["tile_shape"] == (4, 4)
+    assert calls["halo"] == (1, 1)
+
+
+def test_precompute_3d_embeddings_requires_full_3d_tile_shape():
+    from micro_sam.v2.util import precompute_image_embeddings
+
+    with pytest.raises(ValueError, match="must have 3 entries for 3d data"):
+        precompute_image_embeddings(
+            object(), np.zeros((2, 8, 8), dtype="uint8"), ndim=3,
+            tile_shape=(4, 4), halo=(1, 1), verbose=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "shape,ndim,tile_shape,halo",
+    [((8, 8), 2, (4, 4), (1, 1)), ((2, 8, 8), 3, (1, 4, 4), (0, 1, 1))],
+)
+def test_tiled_apg_uses_decoder_frontend_without_precomputed_embeddings(
+    monkeypatch, shape, ndim, tile_shape, halo,
+):
+    from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
+
+    class TiledAPG:
+        _is_decoder_based = True
+        _precompute_embeddings_in_frontend = False
+        _has_postprocessing_mode = False
+
+        def _inference_devices(self, devices):
+            return devices
+
+        def initialize(self, image, ndim, tile_shape, halo, verbose):
+            self.image = image
+            self.initialize_args = ndim, tile_shape, halo, verbose
+
+        def generate(self, **kwargs):
+            self.generate_kwargs = kwargs
+            return np.ones(shape, dtype="uint32")
+
+    def fail(*args, **kwargs):
+        pytest.fail("Tiled APG must not use whole-image embeddings or slice-wise AMG.")
+
+    monkeypatch.setattr("micro_sam.v2.util.precompute_image_embeddings", fail)
+    monkeypatch.setattr("micro_sam.v2.instance_segmentation.amg_3d_segmentation", fail)
+
+    raw = np.zeros(shape, dtype="uint8")
+    segmenter = TiledAPG()
+    result = automatic_instance_segmentation(
+        predictor=object(), segmenter=segmenter, input_path=raw, embedding_path="unused.zarr",
+        ndim=ndim, tile_shape=tile_shape, halo=halo, devices="cpu", verbose=False,
+    )
+
+    assert segmenter.image is raw
+    assert segmenter.initialize_args == (ndim, tile_shape, halo, False)
+    assert segmenter.generate_kwargs == {}
+    assert result.shape == shape
 
 
 def test_automatic_3d_ais_removes_temp_store_on_error(monkeypatch):
@@ -559,31 +649,17 @@ def test_block_shape_3d_tiling_uses_tile():
     assert halo == (2, 64, 64)
 
 
-def test_block_shape_3d_in_plane_tiling_keeps_default_z_chunking():
-    # The CLI and the annotator only ever pass an in-plane (y, x) tile. It must be combined with the
-    # default z block instead of being used as a (z, y, x) block shape.
-    block, halo = _block_shape_and_halo((50, 1024, 1024), ndim=3, tile_shape=(512, 512), halo=(64, 64))
-    assert block == (DEFAULT_TILE_Z, 512, 512)
-    assert halo == (DEFAULT_HALO_Z, 64, 64)
+def test_block_shape_3d_tiling_rejects_in_plane_only():
+    # A 3d tile_shape is always the full (z, y, x); an in-plane (y, x) one is no longer accepted.
+    with pytest.raises(ValueError, match="3 entries"):
+        _block_shape_and_halo((50, 1024, 1024), ndim=3, tile_shape=(512, 512), halo=(64, 64))
 
 
-def test_block_shape_3d_in_plane_tiling_shallow_volume():
-    # Fewer slices than the default z block -> single z block, no z halo.
-    block, halo = _block_shape_and_halo((3, 1024, 1024), ndim=3, tile_shape=(512, 512), halo=(64, 64))
-    assert block == (3, 512, 512)
-    assert halo == (0, 64, 64)
-
-
-def test_block_shape_3d_in_plane_tiling_without_halo():
-    block, halo = _block_shape_and_halo((50, 1024, 1024), ndim=3, tile_shape=(512, 512), halo=None)
-    assert block == (DEFAULT_TILE_Z, 512, 512)
-    assert halo == (DEFAULT_HALO_Z, 0, 0)
-
-
-@pytest.mark.parametrize("tile_shape,halo", [((512, 512), (64, 64)), ((4, 512, 512), (2, 64, 64))])
-def test_block_shape_3d_matches_predict_with_halo_arity(tile_shape, halo):
+def test_block_shape_3d_matches_predict_with_halo_arity():
     # predict_with_halo asserts len(block_shape) == len(halo) == ndim.
-    block, block_halo = _block_shape_and_halo((50, 1024, 1024), ndim=3, tile_shape=tile_shape, halo=halo)
+    block, block_halo = _block_shape_and_halo(
+        (50, 1024, 1024), ndim=3, tile_shape=(4, 512, 512), halo=(2, 64, 64),
+    )
     assert len(block) == len(block_halo) == 3
 
 

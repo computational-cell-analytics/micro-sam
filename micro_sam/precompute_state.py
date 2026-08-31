@@ -553,12 +553,10 @@ def _cache_ais_state_v2(
     i: Optional[int] = None,
     state_index: Optional[int] = None,
     is_tiled: Optional[bool] = None,
-    tile_shape: Optional[Tuple[int, int]] = None,
-    halo: Optional[Tuple[int, int]] = None,
+    tile_shape: Optional[Tuple[int, ...]] = None,
+    halo: Optional[Tuple[int, ...]] = None,
     device: Optional[str] = None,
     devices: Optional[Union[str, torch.device, Sequence[Union[str, torch.device]]]] = None,
-    z_block: Optional[int] = None,
-    z_halo: Optional[int] = None,
     verbose: bool = True,
     pbar_init: Optional[callable] = None,
     pbar_update: Optional[callable] = None,
@@ -583,13 +581,13 @@ def _cache_ais_state_v2(
         i: The slice index passed to the segmenter's `initialize`.
         state_index: The index used for the on-disk state (defaults to `i`).
         is_tiled: Whether to use the tiled segmenter. By default inferred from the embeddings.
-        tile_shape: The tile shape for the tiled segmenter.
-        halo: The tile overlap for the tiled segmenter.
+        tile_shape: The tile shape for the tiled segmenter, (y, x) for an image. For a volume,
+            always the full (z, y, x) - its z entry also sets the z chunk a volume is decoded in
+            (None for the library default), tiled or not.
+        halo: The tile overlap, matching `tile_shape`'s axes.
         device: The device the decoder lives on.
         devices: The device or devices to run the decoder inference on. By default all visible CUDA
             devices are used; pass a single device to pin inference to it.
-        z_block: Number of slices to decode per z block for volumes.
-        z_halo: Number of overlapping slices between z blocks for volumes.
         verbose: Whether to run verbose.
         pbar_init: Callback to initialize an external progress bar.
         pbar_update: Callback to update an external progress bar.
@@ -625,7 +623,7 @@ def _cache_ais_state_v2(
 
     segmenter.initialize(
         raw, ndim, image_embeddings=image_embeddings, i=i, tile_shape=tile_shape, halo=halo,
-        z_block=z_block, z_halo=z_halo, pbar_init=pbar_init, pbar_update=pbar_update,
+        pbar_init=pbar_init, pbar_update=pbar_update,
     )
     if key is not None:
         _save_ais_state_v2(segmenter, save_path, key, model_type, embedding_signature=signature)

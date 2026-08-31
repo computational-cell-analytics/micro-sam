@@ -1,6 +1,8 @@
-import threading
+import os
 import time
+import tempfile
 import unittest
+import threading
 from unittest import mock
 
 import numpy as np
@@ -76,8 +78,10 @@ class FakeVideoBackbone(torch.nn.Module):
         super().__init__()
         self.channels = channels
         self.levels = levels
+        self.forward_calls = 0
 
     def forward_image(self, batch):
+        self.forward_calls += 1
         batch_size = batch.shape[0]
         height, width = batch.shape[-2:]
         pos_enc, fpn = [], []
@@ -87,6 +91,59 @@ class FakeVideoBackbone(torch.nn.Module):
             pos_enc.append(grid.repeat(batch_size, self.channels, 1, 1))
             fpn.append(batch[:, :1, :size[0], :size[1]].repeat(1, self.channels, 1, 1).clone())
         return {"vision_features": fpn[0].clone(), "vision_pos_enc": pos_enc, "backbone_fpn": fpn}
+
+
+class TestVolumeNormalization(unittest.TestCase):
+    def test_rgb_bounds_are_channelwise_and_loadable(self):
+        from micro_sam.v2.normalization import compute_percentile_bounds
+        from micro_sam.v2.models._video_predictor import _load_frame_as_tensor
+
+        volume = np.random.default_rng(0).random((3, 4, 8, 3)).astype("float32")
+        bounds = batched_inference._volume_normalization_bounds(volume)
+        expected = compute_percentile_bounds(volume, axis=(0, 1, 2))
+
+        for bound, expected_bound in zip(bounds, expected):
+            self.assertEqual(bound.shape, (1, 1, 3))
+            np.testing.assert_array_equal(bound, expected_bound[0])
+
+        frame = _load_frame_as_tensor(volume[0], image_size=8, bounds=bounds)
+        self.assertEqual(frame.shape, (3, 8, 8))
+
+    def test_grayscale_bounds_keep_their_frame_compatible_shape(self):
+        volume = np.arange(3 * 4 * 8, dtype="float32").reshape(3, 4, 8)
+        bounds = batched_inference._volume_normalization_bounds(volume)
+
+        self.assertEqual(tuple(bound.shape for bound in bounds), ((1, 1, 1), (1, 1, 1)))
+
+    def test_embedding_cache_distinguishes_normalization_bounds(self):
+        from micro_sam.v2.util import precompute_image_embeddings
+
+        predictor = FakeVideoBackbone()
+        predictor.image_size = 8
+        predictor.model_type = "hvit_t"
+        predictor.model_name = "hvit_t"
+        predictor.device = "cpu"
+        volume = np.linspace(0.0, 1.0, 2 * 4 * 8, dtype="float32").reshape(2, 4, 8)
+        bounds = (np.array([[[0.0]]], dtype="float32"), np.array([[[1.0]]], dtype="float32"))
+        other_bounds = (np.array([[[0.0]]], dtype="float32"), np.array([[[2.0]]], dtype="float32"))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            save_path = os.path.join(tmpdir, "embeddings.zarr")
+            first = precompute_image_embeddings(
+                predictor, volume, save_path=save_path, ndim=3, batch_size=2, norm_bounds=bounds, verbose=False,
+            )["features"].copy()
+            first_calls = predictor.forward_calls
+            cached = precompute_image_embeddings(
+                predictor, volume, save_path=save_path, ndim=3, batch_size=2, norm_bounds=bounds, verbose=False,
+            )["features"].copy()
+            changed = precompute_image_embeddings(
+                predictor, volume, save_path=save_path, ndim=3, batch_size=2,
+                norm_bounds=other_bounds, verbose=False,
+            )["features"].copy()
+
+        self.assertEqual(predictor.forward_calls, first_calls + 1)
+        np.testing.assert_array_equal(cached, first)
+        self.assertFalse(np.array_equal(changed, first))
 
 
 class TestSharedPositionalEncoding(unittest.TestCase):
@@ -601,9 +658,10 @@ class TestInteractiveTileScheduling(unittest.TestCase):
         segmenter.halo = (0, 0)
         segmenter.tiling = Blocking([0, 0], [8, 8], [4, 4])
         segmenter._predictor_devices = [(None, torch.device("cpu")), (None, torch.device("cpu"))]
-        segmenter._tile_workers = {}
+        segmenter._active_worker = threading.local()
+        segmenter._tile_workers = {tile_id: tile_id % 2 for tile_id in range(4)}
         segmenter._segmenters = {
-            tile_id: FakeInteractiveTile(tile_id + 1)
+            (tile_id, tile_id % 2): FakeInteractiveTile(tile_id + 1)
             for tile_id in range(4)
         }
         progress = []
@@ -670,25 +728,68 @@ class TestTileDeviceAffinity(unittest.TestCase):
         segmenter = TiledPromptableSegmentation3D.__new__(TiledPromptableSegmentation3D)
         segmenter._predictor_devices = [(None, torch.device("cpu"))] * n_devices
         segmenter._tile_workers = {}
+        segmenter._segmenters = {}
+        segmenter._active_worker = threading.local()
         return segmenter
 
     def test_sparse_tiles_are_spread_over_devices(self):
         # Regression: 'tile_id % n_devices' mapped the tiles 0, 2, 4, 6 to the same device.
         segmenter = self._segmenter(2)
-        segmenter._run_tile_jobs([0, 2, 4, 6], lambda tile_id: tile_id)
-        self.assertEqual([segmenter._worker_id(tile_id) for tile_id in (0, 2, 4, 6)], [0, 1, 0, 1])
+        barrier = threading.Barrier(2, timeout=30)
+
+        def job(tile_id):
+            barrier.wait()  # Only returns if both workers really run at the same time.
+            return tile_id
+
+        results = segmenter.map_tiles([0, 2, 4, 6], job)
+        self.assertEqual([tile_id for tile_id, _ in results], [0, 2, 4, 6])
+        self.assertEqual(set(segmenter._tile_workers.values()), {0, 1})
 
     def test_tile_affinity_is_kept_across_jobs(self):
         # The tile state lives on one device, so its assignment must not change between jobs.
         segmenter = self._segmenter(3)
-        segmenter._run_tile_jobs([3, 6], lambda tile_id: tile_id)
+        segmenter.map_tiles([3, 6], lambda tile_id: tile_id)
         assignment = dict(segmenter._tile_workers)
-        self.assertEqual(sorted(assignment.values()), [0, 1])
+        self.assertEqual(sorted(assignment), [3, 6])
 
-        segmenter._run_tile_jobs([6, 3, 9], lambda tile_id: tile_id)
+        segmenter.map_tiles([6, 3, 9], lambda tile_id: tile_id)
         for tile_id, worker_id in assignment.items():
             self.assertEqual(segmenter._worker_id(tile_id), worker_id)
-        self.assertEqual(segmenter._worker_id(9), 2)
+        self.assertIn(9, segmenter._tile_workers)
+
+    def test_results_keep_the_job_order_however_the_devices_finish(self):
+        # The merge breaks score ties by record order, so a run must not depend on the schedule.
+        segmenter = self._segmenter(4)
+        delays = {0: 0.05, 1: 0.0, 2: 0.03, 3: 0.0}
+
+        def job(index):
+            time.sleep(delays[index])
+            return index
+
+        results = segmenter.map_tile_jobs(sorted(delays), job)
+        self.assertEqual(results, [0, 1, 2, 3])
+
+    def test_one_tile_can_run_on_several_devices_at_once(self):
+        # The propagation cuts a tile's passes into jobs, so two devices hold the same tile.
+        segmenter = self._segmenter(2)
+        built = []
+        barrier = threading.Barrier(2, timeout=30)
+
+        def get_segmenter(tile_id):
+            key = (tile_id, segmenter._worker_id(tile_id))
+            if key not in segmenter._segmenters:
+                segmenter._segmenters[key] = key
+                built.append(key)
+            return segmenter._segmenters[key]
+
+        segmenter._get_segmenter = get_segmenter
+
+        def job(_):
+            barrier.wait()
+            return get_segmenter(7)
+
+        self.assertEqual(sorted(segmenter.map_tile_jobs([0, 1], job)), [(7, 0), (7, 1)])
+        self.assertEqual(sorted(built), [(7, 0), (7, 1)])
 
 
 if __name__ == "__main__":

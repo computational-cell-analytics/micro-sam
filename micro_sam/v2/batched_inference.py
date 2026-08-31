@@ -18,10 +18,30 @@ import torch
 
 from .util import Devices, autocast, recommend_batch_size, to_float32
 from micro_sam.util import _create_dataset_without_data
-from .normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
+from .normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, compute_percentile_bounds, to_image
 
 
 STOP = object()
+
+# Slices sampled to estimate whole-volume normalization statistics, so a lazy volume (dask / zarr /
+# h5py) is never materialized all at once just to compute them.
+NORMALIZATION_SAMPLE_SLICES = 32
+
+
+def _volume_normalization_bounds(input_: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Percentile bounds from a sample of z slices spanning the whole volume.
+
+    Every slice or tile the volume is later split into is normalized with these bounds (see
+    `_compute_3d` / `_compute_tiled_3d`), so they all share one normalization instead of each
+    estimating its own from a smaller, biased crop.
+    """
+    n_slices = int(input_.shape[0])
+    step = max(1, n_slices // NORMALIZATION_SAMPLE_SLICES)
+    sample = np.stack([np.asarray(input_[z]) for z in range(0, n_slices, step)])
+    if sample.ndim == 4:
+        bounds = compute_percentile_bounds(sample, axis=(0, 1, 2))
+        return tuple(bound[0] for bound in bounds)
+    return compute_percentile_bounds(sample)
 
 
 class _PipelineAborted(Exception):
@@ -740,10 +760,10 @@ def _compute_tiled_2d(
     return {"features": features, "high_res_feats": high_res_group, "input_size": None, "original_size": None}
 
 
-def _prepare_video_frame(raw: np.ndarray, image_size: int) -> torch.Tensor:
+def _prepare_video_frame(raw: np.ndarray, image_size: int, bounds=None) -> torch.Tensor:
     from micro_sam.v2.models._video_predictor import _prepare_frame
 
-    return _prepare_frame(np.asarray(raw), image_size)
+    return _prepare_frame(np.asarray(raw), image_size, bounds=bounds)
 
 
 def _forward_video_batch(model: torch.nn.Module, items: List[Dict], device: torch.device) -> List[Dict]:
@@ -821,6 +841,7 @@ def _compute_3d(
     devices: Devices = None,
     num_prefetch_workers: int = 4,
     num_write_workers: int = 2,
+    norm_bounds: Optional[Tuple[np.ndarray, np.ndarray]] = None,
 ) -> Dict:
     """Compute volume embeddings by batching slices and overlapping preprocessing and zarr writes.
 
@@ -839,6 +860,9 @@ def _compute_3d(
         devices: The device or devices to run inference on (see `_resolve_devices`).
         num_prefetch_workers: The number of threads used to read and preprocess slices.
         num_write_workers: The number of threads used to write embedding slices.
+        norm_bounds: Precomputed (lower, upper) percentile bounds (see `_volume_normalization_bounds`).
+            Computed from `input_` when not given; pass this to share one volume's bounds across a
+            caller's own tiling/blocking of it, e.g. `TiledAutomaticPromptGenerator`'s per-block calls.
 
     Returns:
         The volume embeddings, with the per-slice 'features', 'pos_enc' and 'fpn' outputs of the
@@ -865,6 +889,11 @@ def _compute_3d(
     pbar_init(n_slices, "Compute Image Embeddings 3D")
     model, model_devices, batch_sizes = _prepare_encoder_pipeline(predictor, n_slices, batch_size, devices)
 
+    # Computed once over the whole volume, so every slice normalizes against the same statistics
+    # instead of each one estimating its own percentiles.
+    if norm_bounds is None:
+        norm_bounds = _volume_normalization_bounds(input_)
+
     if save_path is None:
         feature_values = [None] * n_slices
         fpn_values = [None] * n_slices
@@ -879,7 +908,7 @@ def _compute_3d(
     def load_slice(z):
         raw = np.asarray(input_[z])
         return {
-            "tensor": _prepare_video_frame(raw, image_size),
+            "tensor": _prepare_video_frame(raw, image_size, bounds=norm_bounds),
             "original_size": tuple(int(value) for value in raw.shape[:2]),
         }
 
@@ -937,6 +966,7 @@ def _compute_3d(
         _write_embedding_signature(
             root, input_, predictor, tile_shape=None, halo=None,
             input_size=image_size, original_size=original_size, preprocessing=VIDEO_PREPROCESSING,
+            norm_bounds=norm_bounds,
         )
         features = feature_dataset if lazy_loading else feature_dataset[:]
         pos_enc = _load_feature_levels(root["pos_enc"], lazy_loading)
@@ -964,6 +994,7 @@ def _compute_tiled_3d(
     devices: Devices = None,
     num_prefetch_workers: int = 4,
     num_write_workers: int = 2,
+    norm_bounds: Optional[Tuple[np.ndarray, np.ndarray]] = None,
 ) -> Dict:
     """Compute tile / slice embeddings as one pipelined job stream across all available GPUs.
 
@@ -985,6 +1016,9 @@ def _compute_tiled_3d(
         devices: The device or devices to run inference on (see `_resolve_devices`).
         num_prefetch_workers: The number of threads used to read and preprocess tile slices.
         num_write_workers: The number of threads used to write embedding tile slices.
+        norm_bounds: Precomputed (lower, upper) percentile bounds (see `_volume_normalization_bounds`).
+            Computed from `input_` when not given; pass this to share one volume's bounds across a
+            caller's own tiling/blocking of it, e.g. `TiledAutomaticPromptGenerator`'s per-block calls.
 
     Returns:
         The tiled volume embeddings. 'features', 'pos_enc' and 'fpn' are the zarr groups holding the
@@ -1021,20 +1055,25 @@ def _compute_tiled_3d(
     features.attrs["complete"] = False
     pbar_init(len(jobs), "Compute Image Embeddings 3D tiled")
 
-    bounds = {}
+    tile_bounds = {}
     for tile_id in range(n_tiles):
         block = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
-        bounds[tile_id] = tuple(slice(begin, end) for begin, end in zip(block.begin, block.end))
+        tile_bounds[tile_id] = tuple(slice(begin, end) for begin, end in zip(block.begin, block.end))
+
+    # Computed once over the whole volume, so every tile normalizes against the same statistics
+    # instead of each one estimating its own percentiles from its own, smaller crop.
+    if norm_bounds is None:
+        norm_bounds = _volume_normalization_bounds(input_)
 
     model, model_devices, batch_sizes = _prepare_encoder_pipeline(predictor, len(jobs), batch_size, devices)
     tile_datasets = {}
 
     def load_tile_slice(job):
         tile_id, z = job
-        bb = bounds[tile_id]
+        bb = tile_bounds[tile_id]
         raw = np.asarray(input_[z, bb[0], bb[1]])
         return {
-            "tensor": _prepare_video_frame(raw, image_size),
+            "tensor": _prepare_video_frame(raw, image_size, bounds=norm_bounds),
             "original_size": tuple(int(value) for value in raw.shape[:2]),
         }
 
@@ -1085,7 +1124,7 @@ def _compute_tiled_3d(
     if save_path is not None:
         _write_embedding_signature(
             root, input_, predictor, tile_shape=tile_shape, halo=halo, input_size=None,
-            original_size=None, preprocessing=VIDEO_PREPROCESSING,
+            original_size=None, preprocessing=VIDEO_PREPROCESSING, norm_bounds=norm_bounds,
         )
     features.attrs["complete"] = True
     return {

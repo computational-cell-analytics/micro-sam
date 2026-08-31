@@ -100,6 +100,8 @@ def test_propagation_waits_before_batching_offloaded_memory(monkeypatch):
     events = []
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
     predictor.clear_non_cond_mem_around_input = False
+    predictor.num_maskmem = 3
+    predictor.memory_temporal_stride_for_eval = 1
     monkeypatch.setattr(predictor, "propagate_in_video_preflight", lambda state: None)
     monkeypatch.setattr(predictor, "_get_obj_num", lambda state: 1)
     monkeypatch.setattr(
@@ -125,6 +127,36 @@ def test_propagation_waits_before_batching_offloaded_memory(monkeypatch):
 
     assert len(outputs) == 1
     assert events == ["wait", "batch"]
+
+
+def test_mask_memory_release_keeps_the_window_for_a_direction_switch():
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    predictor.num_maskmem = 3
+    predictor.memory_temporal_stride_for_eval = 1
+    outputs = {
+        frame: {"maskmem_features": object(), "maskmem_pos_enc": object()}
+        for frame in range(12)
+    }
+    inference_state = {
+        "output_dict_per_obj": {0: {"non_cond_frame_outputs": outputs}},
+    }
+
+    for frame_idx in range(4, 12):
+        predictor._release_stale_mask_memory(
+            inference_state, batch_size=1, frame_idx=frame_idx, reverse=False, start_frame_idx=4,
+        )
+
+    assert outputs[5]["maskmem_features"] is not None
+    assert outputs[7]["maskmem_features"] is not None
+    assert outputs[8]["maskmem_features"] is None
+
+    predictor._release_stale_mask_memory(
+        inference_state, batch_size=1, frame_idx=4, reverse=True, start_frame_idx=4,
+    )
+
+    assert outputs[7]["maskmem_features"] is None
 
 
 def test_state_kept_on_the_device_is_not_awaited(monkeypatch):

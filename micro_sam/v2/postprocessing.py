@@ -13,44 +13,67 @@ from concurrent import futures
 from typing import Optional, Tuple
 
 import numpy as np
-from tqdm import tqdm, trange
-from skimage.filters import gaussian
-from scipy.ndimage import map_coordinates
+from tqdm import tqdm
 
+from bioimage_cpp.flow import compute_flow_density
 from bioimage_cpp.segmentation import label, watershed
 
-FLOW_BACKENDS = ("python", "cpp")
+from .util import DEFAULT_MODEL
 
+# Per (model_type, mode) defaults from the registry parameter search: the best-average-rank
+# combination across every dataset that shares that mode's grid, computed separately for each of the
+# 4 registry backbones.
 DEFAULT_POSTPROCESSING = {
-    "sparse": {
-        "foreground_threshold": 0.7,
-        "density_threshold": 10.0,
-        "min_size": 50,
-        "n_iter": 50,
-        "dt": 0.25,
-        "sigma": 0.5,
-        "foreground_weight": 0.75,
+    "hvit_t": {
+        "sparse": {
+            "foreground_threshold": 0.5, "density_threshold": 10.0, "min_size": 100,
+            "sigma": 0.5, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5,
+        },
+        "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
-    # For the geodesic hybrid target, whose flow converges to a point rather than onto a medial
-    # axis. Tuned on ground truth fields for the best worst-case mSA over DSB, LIVECell and
-    # GoNuclear; the "sparse" values are tuned for the euclidean target and under-perform here.
-    "sparse_hybrid": {
-        "foreground_threshold": 0.7,
-        "density_threshold": 2.0,
-        "min_size": 50,
-        "n_iter": 200,
-        "dt": 0.25,
-        "sigma": 2.0,
-        "foreground_weight": 0.75,
+    "hvit_s": {
+        "sparse": {
+            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
+            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.75,
+        },
+        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 25, "dt": 0.5},
     },
-    "dense": {
-        "beta": 0.5,
-        "density_threshold": 3.0,
-        "n_iter": 50,
-        "dt": 0.5,
-        "sigma": 1.0,
+    "hvit_b": {
+        "sparse": {
+            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
+            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.65,
+        },
+        "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+    },
+    "hvit_l": {
+        "sparse": {
+            "foreground_threshold": 0.4, "density_threshold": 10.0, "min_size": 50,
+            "sigma": 0.5, "n_iter": 50, "dt": 0.25, "foreground_weight": 0.65,
+        },
+        "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 1.0, "n_iter": 50, "dt": 0.5},
     },
 }
+
+
+def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse") -> dict:
+    """The default postprocessing parameters for one model type and mode.
+
+    Args:
+        model_type: The SAM2 backbone, e.g. 'hvit_t', or a finetuned model built on one, e.g.
+            'hvit_t_cells' (only the backbone prefix is used to look up the table). Must be one of the
+            4 registry backbones.
+        mode: 'sparse' (`flow_instance_segmentation`) or 'dense' (`run_multicut`).
+
+    Returns:
+        The default parameter dict for that model type and mode.
+    """
+    backbone = model_type[:6]
+    if backbone not in DEFAULT_POSTPROCESSING:
+        raise ValueError(
+            f"No default postprocessing parameters for model type '{model_type}'. "
+            f"Choose one built on a backbone in {sorted(DEFAULT_POSTPROCESSING)}."
+        )
+    return DEFAULT_POSTPROCESSING[backbone][mode]
 
 
 def _compute_flow_density(
@@ -60,9 +83,7 @@ def _compute_flow_density(
     dt: float = 0.5,
     sigma: float = 1.0,
     spacing: Optional[Tuple] = None,
-    verbose: bool = False,
-    backend: str = "cpp",
-    n_threads: int = 1,
+    n_threads: int = 8,
 ) -> np.ndarray:
     """Integrate a flow field and return a convergence-density map.
 
@@ -79,60 +100,15 @@ def _compute_flow_density(
         sigma: Gaussian smoothing sigma applied to the density map.
         spacing: Anisotropic voxel spacing for 3D data, e.g. (4, 1, 1).
             Used for physically-isotropic Gaussian smoothing.
-        verbose: Show tqdm progress bar (python backend only).
-        backend: Flow computation backend. ``"python"`` uses the pure-Python
-            Euler integrator; ``"cpp"`` uses ``bioimage_cpp.flow.compute_flow_density``
-            (requires bioimage-cpp to be installed).
-        n_threads: Number of threads for the cpp backend. Ignored for the python backend.
+        n_threads: Number of threads for ``bioimage_cpp.flow.compute_flow_density``.
 
     Returns:
         Smoothed convergence-density map, same spatial shape as fg_mask.
     """
-    if backend not in FLOW_BACKENDS:
-        raise ValueError(f"backend must be one of {FLOW_BACKENDS}, got '{backend}'.")
-
-    if backend == "cpp":
-        from bioimage_cpp.flow import compute_flow_density
-        # RK2 integration rather than the python backend's Euler, so the densities are not identical.
-        return compute_flow_density(
-            -directed_distances, fg_mask,
-            n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing, number_of_threads=n_threads,
-        )
-
-    shape, ndim = fg_mask.shape, fg_mask.ndim
-    flow = (-directed_distances).astype(np.float32)
-
-    fg_coords = np.stack(np.where(fg_mask), axis=1).astype(np.float32)
-    if len(fg_coords) == 0:
-        return np.zeros(shape, dtype="float32")
-
-    positions = fg_coords.copy()
-    for _ in trange(n_iter, disable=not verbose):
-        for d in range(ndim):
-            positions[:, d] = np.clip(positions[:, d], 0, shape[d] - 1)
-        coords_list = [positions[:, d] for d in range(ndim)]
-        step = np.stack(
-            [map_coordinates(flow[d], coords_list, order=1, mode="nearest") for d in range(ndim)],
-            axis=1,
-        )
-        positions += dt * step
-
-    for d in range(ndim):
-        positions[:, d] = np.clip(positions[:, d], 0, shape[d] - 1)
-
-    final_pos = np.round(positions).astype(np.int32)
-    density = np.zeros(shape, dtype="float32")
-    np.add.at(density, tuple(final_pos[:, d] for d in range(ndim)), 1.0)
-
-    if spacing is not None and ndim == 3:
-        sp = np.array(spacing, dtype="float32")
-        sigma_aniso = (sigma / sp).tolist()
-    else:
-        sigma_aniso = sigma
-    density = gaussian(density, sigma=sigma_aniso)
-    density *= fg_mask
-
-    return density
+    return compute_flow_density(
+        -directed_distances, fg_mask,
+        n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing, number_of_threads=n_threads,
+    )
 
 
 def watershed_heightmap(
@@ -162,17 +138,16 @@ def watershed_heightmap(
 def flow_instance_segmentation(
     foreground: np.ndarray,
     directed_distances: np.ndarray,
-    foreground_threshold: float = DEFAULT_POSTPROCESSING["sparse"]["foreground_threshold"],
-    n_iter: int = DEFAULT_POSTPROCESSING["sparse"]["n_iter"],
-    dt: float = DEFAULT_POSTPROCESSING["sparse"]["dt"],
-    sigma: float = DEFAULT_POSTPROCESSING["sparse"]["sigma"],
+    model_type: str = DEFAULT_MODEL,
+    foreground_threshold: Optional[float] = None,
+    n_iter: Optional[int] = None,
+    dt: Optional[float] = None,
+    sigma: Optional[float] = None,
     spacing: Optional[Tuple] = None,
-    density_threshold: float = DEFAULT_POSTPROCESSING["sparse"]["density_threshold"],
-    min_size: int = DEFAULT_POSTPROCESSING["sparse"]["min_size"],
-    foreground_weight: float = DEFAULT_POSTPROCESSING["sparse"]["foreground_weight"],
-    verbose: bool = False,
-    backend: str = "cpp",
-    n_threads: int = 1,
+    density_threshold: Optional[float] = None,
+    min_size: Optional[int] = None,
+    foreground_weight: Optional[float] = None,
+    n_threads: int = 8,
 ) -> np.ndarray:
     """Instance segmentation from directed-distance predictions via flow following.
 
@@ -188,6 +163,8 @@ def flow_instance_segmentation(
         foreground: Foreground probability map, shape (Y, X) or (Z, Y, X).
         directed_distances: Distance channels stacked along axis 0,
             shape (ndim, *spatial) or (3, *spatial) for 2D input.
+        model_type: The SAM2 backbone the predictions came from, e.g. 'hvit_t'. Selects the default
+            for any of the tunable parameters below left as None, see `default_postprocessing`.
         foreground_threshold: Foreground binarisation threshold.
         n_iter: Number of flow-integration steps.
         dt: Integration step size.
@@ -197,13 +174,27 @@ def flow_instance_segmentation(
         min_size: Minimum object size (pixels/voxels) to keep.
         foreground_weight: Weight of the foreground term in the watershed heightmap, see
             `watershed_heightmap`.
-        verbose: Show tqdm progress bar during flow integration (python backend only).
-        backend: Flow computation backend, ``"python"`` or ``"cpp"``.
-        n_threads: Number of threads for the cpp backend flow computation.
+        n_threads: Number of threads for the flow computation.
 
     Returns:
         Instance segmentation, uint32 array, same spatial shape as foreground.
     """
+    defaults = default_postprocessing(model_type, "sparse")
+    if foreground_threshold is None:
+        foreground_threshold = defaults["foreground_threshold"]
+    if n_iter is None:
+        n_iter = defaults["n_iter"]
+    if dt is None:
+        dt = defaults["dt"]
+    if sigma is None:
+        sigma = defaults["sigma"]
+    if density_threshold is None:
+        density_threshold = defaults["density_threshold"]
+    if min_size is None:
+        min_size = defaults["min_size"]
+    if foreground_weight is None:
+        foreground_weight = defaults["foreground_weight"]
+
     ndim = foreground.ndim
     if directed_distances.shape[0] > ndim:
         directed_distances = directed_distances[-ndim:]
@@ -214,9 +205,7 @@ def flow_instance_segmentation(
     fg_mask = foreground > foreground_threshold
 
     density = _compute_flow_density(
-        directed_distances, fg_mask,
-        n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing, verbose=verbose,
-        backend=backend, n_threads=n_threads,
+        directed_distances, fg_mask, n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing, n_threads=n_threads,
     )
 
     seeds = label(density > density_threshold)
@@ -235,13 +224,13 @@ def flow_instance_segmentation(
 def run_multicut(
     boundary_map: np.ndarray,
     distances: np.ndarray,
-    beta: float = DEFAULT_POSTPROCESSING["dense"]["beta"],
-    density_threshold: float = DEFAULT_POSTPROCESSING["dense"]["density_threshold"],
-    n_iter: int = DEFAULT_POSTPROCESSING["dense"]["n_iter"],
-    dt: float = DEFAULT_POSTPROCESSING["dense"]["dt"],
-    sigma: float = DEFAULT_POSTPROCESSING["dense"]["sigma"],
+    model_type: str = DEFAULT_MODEL,
+    beta: Optional[float] = None,
+    density_threshold: Optional[float] = None,
+    n_iter: Optional[int] = None,
+    dt: Optional[float] = None,
+    sigma: Optional[float] = None,
     n_threads: int = 8,
-    backend: str = "cpp",
 ) -> np.ndarray:
     """Instance segmentation for 3D EM data via slice-wise oversegmentation + multicut.
 
@@ -253,6 +242,8 @@ def run_multicut(
         boundary_map: Boundary probability map, shape (Z, Y, X).
             Typically ``1 - foreground`` or ``fg.max() - fg``.
         distances: In-plane distance channels (ydist, xdist), shape (2, Z, Y, X).
+        model_type: The SAM2 backbone the predictions came from, e.g. 'hvit_t'. Selects the default
+            for any of the tunable parameters below left as None, see `default_postprocessing`.
         beta: Multicut boundary bias; higher values favour more merging.
         density_threshold: Convergence-density threshold for seed extraction
             in the slice-wise oversegmentation.
@@ -260,11 +251,22 @@ def run_multicut(
         dt: Flow integration step size.
         sigma: Gaussian sigma for smoothing the convergence-density map.
         n_threads: Number of threads for the parallel slice-wise oversegmentation.
-        backend: Flow computation backend, ``"python"`` or ``"cpp"``.
 
     Returns:
         Instance segmentation, uint64 array, shape (Z, Y, X).
     """
+    defaults = default_postprocessing(model_type, "dense")
+    if beta is None:
+        beta = defaults["beta"]
+    if density_threshold is None:
+        density_threshold = defaults["density_threshold"]
+    if n_iter is None:
+        n_iter = defaults["n_iter"]
+    if dt is None:
+        dt = defaults["dt"]
+    if sigma is None:
+        sigma = defaults["sigma"]
+
     from elf.segmentation.features import (
         compute_rag, compute_boundary_mean_and_length,
         compute_z_edge_mask, project_node_labels_to_pixels,
@@ -278,10 +280,9 @@ def run_multicut(
         bd = boundary_map[z]
         dists = distances[:, z]
         fg_mask = np.ones(bd.shape, dtype="bool")
-        density = _compute_flow_density(
-            dists, fg_mask, n_iter=n_iter, dt=dt, sigma=sigma, verbose=False,
-            backend=backend, n_threads=1,
-        )
+        # 1 thread per slice: the ThreadPoolExecutor above already parallelizes across slices, so a
+        # higher value here would oversubscribe instead of adding throughput.
+        density = _compute_flow_density(dists, fg_mask, n_iter=n_iter, dt=dt, sigma=sigma, n_threads=1)
         seeds = label(density > density_threshold)
         # watershed requires a float heightmap. Boundary maps are usually float already.
         bd = bd if np.issubdtype(bd.dtype, np.floating) else bd.astype("float32")

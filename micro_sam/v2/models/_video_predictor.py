@@ -21,35 +21,43 @@ IMG_MEAN = (0.485, 0.456, 0.406)
 IMG_STD = (0.229, 0.224, 0.225)
 
 
-def _load_frame_as_tensor(raw, image_size):
+def _load_frame_as_tensor(raw, image_size, bounds=None):
     """Load a single frame as a float32 [0, 1] tensor of shape (3, image_size, image_size).
 
     The frame is percentile-normalized per channel, so that any input dtype is mapped to the range
     SAM2's ImageNet normalization expects, and it keeps its aspect ratio: the longest side is resized
     to `image_size` and the remaining bottom/right region is zero-padded. The caller applies the
     ImageNet normalization.
+
+    Args:
+        raw: The frame as a numpy array.
+        image_size: The size the longest side is resized to.
+        bounds: Precomputed (lower, upper) percentile bounds to normalize with (see
+            `normalization.compute_percentile_bounds`), typically computed once over the whole volume
+            this frame belongs to. The frame's own percentiles are used when None.
     """
     from micro_sam.v2.normalization import normalize_raw
     from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_tensor
 
     img_np = np.stack([raw] * 3, axis=-1) if raw.ndim == 2 else raw
-    img_np = normalize_raw(img_np, axis=(0, 1))
+    img_np = normalize_raw(img_np, axis=(0, 1), bounds=bounds)
     img = torch.from_numpy(img_np.astype(np.float32)).permute(2, 0, 1)
     img, _ = resize_longest_side_and_pad_tensor(img[None], image_size)
     return img[0]
 
 
-def _prepare_frame(raw, image_size):
+def _prepare_frame(raw, image_size, bounds=None):
     """Resize and ImageNet-normalize one frame, exactly as the video predictor loads its frames.
 
     Args:
         raw: The frame as a numpy array.
         image_size: The size the longest side is resized to.
+        bounds: Precomputed (lower, upper) percentile bounds, see `_load_frame_as_tensor`.
 
     Returns:
         The frame as a (3, image_size, image_size) float32 tensor on the CPU.
     """
-    image = _load_frame_as_tensor(raw, image_size)
+    image = _load_frame_as_tensor(raw, image_size, bounds=bounds)
     mean = torch.tensor(IMG_MEAN, dtype=torch.float32)[:, None, None]
     std = torch.tensor(IMG_STD, dtype=torch.float32)[:, None, None]
     return (image - mean) / std
@@ -367,10 +375,15 @@ class CustomVideoPredictor(SAM2VideoPredictor):
 
             from micro_sam.v2.util import _to_device_tensor, _shared_pos_enc, _backbone_fpn
             device = inference_state["device"]
+            # Shared by every slice: a copy per entry made it 88 of 105 MB and sized the cache short.
+            vision_pos_enc = inference_state.get("shared_pos_enc")
+            if vision_pos_enc is None:
+                # In-memory embeddings keep 'pos_enc'/'fpn' as device tensors, which 'np.asarray'
+                # cannot convert (fails on mps/cuda); '_to_device_tensor' handles tensors and zarr.
+                vision_pos_enc = [_to_device_tensor(_shared_pos_enc(t), device) for t in embeddings["pos_enc"]]
+                inference_state["shared_pos_enc"] = vision_pos_enc
+            # Measured after the shared encoding, so a slice is priced at what a slice actually adds.
             allocated_before = _allocated(device)
-            # In-memory embeddings keep 'pos_enc'/'fpn' as device tensors, which 'np.asarray' cannot
-            # convert (fails on mps/cuda); '_to_device_tensor' handles both tensors and numpy/zarr.
-            vision_pos_enc = [_to_device_tensor(_shared_pos_enc(t), device) for t in embeddings["pos_enc"]]
             vision_features = _to_device_tensor(embeddings["features"][frame_idx], device)
             backbone_fpn = _backbone_fpn(
                 [_to_device_tensor(t[frame_idx], device) for t in embeddings["fpn"]], vision_features
@@ -420,6 +433,30 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             )
             groups.setdefault(signature, []).append(obj_idx)
         return list(groups.values())
+
+    def _release_stale_mask_memory(
+        self, inference_state, batch_size, frame_idx, reverse, start_frame_idx,
+    ):
+        """Free the mask memory of the frame that has just fallen out of the attention window.
+
+        A step attends the 'num_maskmem' frames behind it in the direction it travels, so once a
+        frame is further back than that, no later step selects its memory again. Its object pointer
+        still is - the encoder reaches back further for those - so the entry stays and only the
+        memory tensors go. The window beside the start stays for a later pass in the other direction.
+        """
+        behind = self.num_maskmem * self.memory_temporal_stride_for_eval
+        stale = frame_idx + behind if reverse else frame_idx - behind
+        needed_after_switch = (
+            start_frame_idx - behind <= stale < start_frame_idx if reverse else
+            start_frame_idx < stale <= start_frame_idx + behind
+        )
+        if needed_after_switch:
+            return
+        for obj_idx in range(batch_size):
+            entry = inference_state["output_dict_per_obj"][obj_idx]["non_cond_frame_outputs"].get(stale)
+            if entry is not None:
+                entry["maskmem_features"] = None
+                entry["maskmem_pos_enc"] = None
 
     def _track_frame_batch(self, inference_state, obj_indices, frame_idx, reverse):
         """Track one frame for a group of objects in a single forward, storing each object's output."""
@@ -508,6 +545,9 @@ class CustomVideoPredictor(SAM2VideoPredictor):
                     pred_masks_per_obj[obj_idx] = pred_masks[index:index + 1]
                     inference_state["frames_tracked_per_obj"][obj_idx][frame_idx] = {"reverse": reverse}
 
+            self._release_stale_mask_memory(
+                inference_state, batch_size, frame_idx, reverse, start_frame_idx,
+            )
             if len(pred_masks_per_obj) > 1:
                 all_pred_masks = torch.cat(pred_masks_per_obj, dim=0)
             else:

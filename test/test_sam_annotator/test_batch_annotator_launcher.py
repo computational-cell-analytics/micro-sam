@@ -13,6 +13,22 @@ from micro_sam.sam_annotator.batch_annotator import BatchAnnotator, TASKS
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_launcher_expands_to_dock_height(make_napari_viewer_proxy):
+    from qtpy import QtWidgets
+
+    viewer = make_napari_viewer_proxy()
+    widget = BatchAnnotator(viewer)
+    viewer.window.add_dock_widget(widget, name="Batch Annotator")
+
+    viewer.show()
+    QtWidgets.QApplication.processEvents()
+
+    size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
+    assert widget.sizePolicy().verticalPolicy() == size_policy.Expanding
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_launcher_task_selector_toggles_segmentation_folder(make_napari_viewer_proxy):
     viewer = make_napari_viewer_proxy()
     widget = BatchAnnotator(viewer)
@@ -172,7 +188,7 @@ def test_launcher_can_restart_segmentation_from_first_image(make_napari_viewer_p
 def test_launcher_removes_itself_after_launch(make_napari_viewer_proxy, monkeypatch):
     # Once the task + settings are locked in and a launch happens, the console dock removes itself so
     # the annotator has the screen to itself.
-    from qtpy.QtWidgets import QApplication, QDockWidget
+    from qtpy.QtWidgets import QApplication
     isa = importlib.import_module("micro_sam.sam_annotator.batch_annotator")
 
     def launch(*args, **kwargs):
@@ -189,21 +205,22 @@ def test_launcher_removes_itself_after_launch(make_napari_viewer_proxy, monkeypa
         widget.folder = tmpdir
         widget.output_folder = os.path.join(tmpdir, "out")
         widget.pattern = "*.tif"
-        dock = viewer.window.add_dock_widget(widget, name="Batch Annotator")
-        assert dock in viewer.window._qt_window.findChildren(QDockWidget)
+        viewer.window.add_dock_widget(widget, name="Batch Annotator")
+        removed_widgets = []
+        monkeypatch.setattr(viewer.window, "remove_dock_widget", removed_widgets.append)
 
         widget(skip_validate=True)
         # The removal is deferred to the event loop. Flush it.
         for _ in range(3):
             QApplication.processEvents()
 
-        assert dock not in viewer.window._qt_window.findChildren(QDockWidget)
+        assert removed_widgets == [widget]
 
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_launcher_stays_open_when_all_images_are_annotated(make_napari_viewer_proxy, monkeypatch):
-    from qtpy.QtWidgets import QApplication, QDockWidget
+    from qtpy.QtWidgets import QApplication
     isa = importlib.import_module("micro_sam.sam_annotator.batch_annotator")
     messages = []
     monkeypatch.setattr(isa, "image_folder_annotator", lambda *args, **kwargs: None)
@@ -217,13 +234,15 @@ def test_launcher_stays_open_when_all_images_are_annotated(make_napari_viewer_pr
         widget.folder = tmpdir
         widget.output_folder = os.path.join(tmpdir, "out")
         widget.pattern = "*.tif"
-        dock = viewer.window.add_dock_widget(widget, name="Batch Annotator")
+        viewer.window.add_dock_widget(widget, name="Batch Annotator")
+        removed_widgets = []
+        monkeypatch.setattr(viewer.window, "remove_dock_widget", removed_widgets.append)
 
         widget(skip_validate=True)
         for _ in range(3):
             QApplication.processEvents()
 
-        assert dock in viewer.window._qt_window.findChildren(QDockWidget)
+        assert removed_widgets == []
         assert len(messages) == 1
         assert messages[0][0] == "info"
         assert "All images have already been annotated" in messages[0][1]

@@ -19,18 +19,22 @@ def main():
     parser.add_argument("--model_type", default="hvit_t", choices=["hvit_t", "hvit_s", "hvit_b", "hvit_l"])
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--dataset_choice", default="all", choices=["lm", "em", "hp", "all"])
-    parser.add_argument("--distance_type", default="geodesic", choices=["geodesic", "directed"])
     args = parser.parse_args()
 
     model_type = args.model_type
     # Pinned per-model config (batch_size_2d, z_slices, max_num_objects); not CLI-tunable.
+    # Overridable via env vars for GPU-memory-constrained runs (e.g. A100 40GB debug jobs)
+    # without changing the pinned defaults used by the production H100 submissions.
     batch_size_2d, z_slice, max_num_objects = CHOSEN_PARAMETERS[model_type]
+    batch_size_2d = int(os.environ.get("BATCH_SIZE_2D", batch_size_2d))
+    z_slice = int(os.environ.get("Z_SLICE", z_slice))
+    max_num_objects = int(os.environ.get("MAX_NUM_OBJECTS", max_num_objects))
     z_slices = [z_slice]
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
     save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v4")
 
     is_multi_gpu = "RANK" in os.environ
-    name = f"joint_sam2_{model_type}_{args.distance_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
+    name = f"joint_sam2_{model_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
 
     # Set 'peft_kwargs' to jointly finetune with a parameter efficient method instead of full
     # finetuning (the SAM2 image encoder is frozen and the method is applied on top of it). Examples:
@@ -73,7 +77,7 @@ def main():
         average_over_frames=False,  # sum over frames so 3D keeps its per-slice weight
         peft_kwargs=peft_kwargs,  # None = full finetuning; set above to use LoRA / late finetuning
         initial_features=32,  # decoder bottleneck matches the hvit_t embed_dim
-        distance_type=args.distance_type,  # regression target of the automatic branch
+        distance_type="geodesic",  # regression target of the automatic branch
     )
 
     if is_multi_gpu:

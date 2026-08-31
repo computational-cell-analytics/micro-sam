@@ -341,6 +341,13 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._populate_widget_layout()
         self._create_keybindings()
 
+    # napari 0.9 caps the height of dock widget content at its size hint (napari/napari#9393).
+    def showEvent(self, event):
+        size_policy = self.sizePolicy()
+        size_policy.setVerticalPolicy(QtWidgets.QSizePolicy.Policy.Expanding)
+        self.setSizePolicy(size_policy)
+        super().showEvent(event)
+
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
 
@@ -873,6 +880,13 @@ class _ClassifierBase(QtWidgets.QScrollArea):
 
         self.setWidgetResizable(True)
         self.setWidget(self._annotator_widget)
+
+    # napari 0.9 caps the height of dock widget content at its size hint (napari/napari#9393).
+    def showEvent(self, event):
+        size_policy = self.sizePolicy()
+        size_policy.setVerticalPolicy(QtWidgets.QSizePolicy.Policy.Expanding)
+        self.setSizePolicy(size_policy)
+        super().showEvent(event)
 
     #
     # Train / predict / clear / load / save / spec.

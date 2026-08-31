@@ -1,4 +1,5 @@
 import os
+import re
 import ast
 import csv
 import warnings
@@ -96,8 +97,17 @@ DATASETS_3D_EM = ["platynereis_nuclei", "cremi", "snemi", "humanneurons"]
 
 DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
+# The EM datasets that segment densely packed neurons need the dense (multicut) pipeline and are
+# ranked by the CREMI score. platynereis_nuclei is EM but segments sparse, blob-shaped nuclei, so it
+# stays on the sparse (flow) pipeline and mSA ranking like the LM datasets, despite the EM modality.
+DATASETS_DENSE = [name for name in DATASETS_3D_EM if name != "platynereis_nuclei"]
+
 # The split to tune on, or None where the loader has no splits and VAL_Z_RANGE holds out a z-slab.
 # A dataset whose 'val' is the evaluated split is absent: tuning there would select on scored samples.
+# deepseas reuses its 'train' split like embedseg: real train/test files, and deepseas is never seen
+# during joint training, so there is no leakage into what evaluation scores. covid_if has no split of
+# its own; 'val' here is an internal marker _get_2d_data_paths reads to reserve the last 5 of its 49
+# samples via sample_range, disjoint from the 44 'test' scores.
 VAL_SPLITS = {
     "livecell": "val",
     "tissuenet": "val",
@@ -106,9 +116,15 @@ VAL_SPLITS = {
     "dic_hepg2": "val",
     "celegans_atlas": "val",
     "embedseg": "train",
+    "deepseas": "train",
+    "covid_if": "val",
+    "yeaz": "val",
+    "neurips_cellseg": "val",
     "gonuclear": None,
     "cremi": None,
     "snemi": None,
+    "platynereis_nuclei": None,
+    "humanneurons": None,
 }
 
 # The tuning slab for volumes with no splits, disjoint from the slab the evaluation scores. Indices
@@ -117,7 +133,22 @@ VAL_Z_RANGE = {
     "cremi": (0, 32),
     "snemi": (0, 8),
     "gonuclear": (32, 96),
+    "humanneurons": (0, 16),
 }
+
+# platynereis_nuclei has 12 volumes, all of which the evaluation reads in full (crop centered on each
+# volume's own depth), so tuning cannot afford to sweep every volume: instead of an equal z-slab like
+# VAL_Z_RANGE, tuning uses only these 3 sample ids (of 12), the ones with the most annotated (valid_roi,
+# i.e. label != -1) foreground voxels, each restricted to its own 16-slice z-window that maximizes that
+# foreground count while staying clear of the slab the evaluation's own center crop reads. Chosen by
+# measuring per-slice foreground density on the actual data; see load_volume for the valid_roi masking.
+PLATYNEREIS_NUCLEI_VAL_SAMPLES = {1: (28, 44), 5: (2, 18), 8: (99, 115)}
+
+
+def platynereis_nuclei_val_z_range(raw_path: str) -> Tuple[int, int]:
+    """The z-window PLATYNEREIS_NUCLEI_VAL_SAMPLES picked for one 'train_data_nuclei_%02i.h5' path."""
+    sample_id = int(re.search(r"nuclei_(\d+)\.h5$", raw_path).group(1))
+    return PLATYNEREIS_NUCLEI_VAL_SAMPLES[sample_id]
 
 
 def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
@@ -170,8 +201,11 @@ def _get_2d_data_paths(
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "covid_if":
+        # 49 samples total, none of which is held out anywhere else. Reserve the last 5 for tuning
+        # so evaluation still scores a disjoint 44, see VAL_SPLITS.
+        sample_range = (44, 49) if split == "val" else (0, 44)
         paths = datasets.covid_if.get_covid_if_paths(
-            path=os.path.join(p, "covid_if"), download=download,
+            path=os.path.join(p, "covid_if"), sample_range=sample_range, download=download,
         )
         return sorted(paths), sorted(paths), "raw/nuclei/s0", "labels/nuclei/s0"
 
@@ -195,7 +229,7 @@ def _get_2d_data_paths(
 
     if dataset_name == "deepseas":
         img, gt = datasets.deepseas.get_deepseas_paths(
-            path=os.path.join(p, "deepseas"), split="test", download=download,
+            path=os.path.join(p, "deepseas"), split=split, download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
@@ -233,7 +267,7 @@ def _get_2d_data_paths(
 
     if dataset_name == "neurips_cellseg":
         img, gt = datasets.neurips_cell_seg.get_neurips_cellseg_paths(
-            root=os.path.join(p, "neurips_cellseg"), split="test", download=download,
+            root=os.path.join(p, "neurips_cellseg"), split=split, download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
@@ -282,7 +316,7 @@ def _get_2d_data_paths(
         img, gt = [], []
         for choice in ("bf", "phc"):
             i, g = datasets.yeaz.get_yeaz_paths(
-                path=os.path.join(p, "yeaz"), choice=choice, split="test", download=download,
+                path=os.path.join(p, "yeaz"), choice=choice, split=split, download=download,
             )
             img.extend(i)
             gt.extend(g)
@@ -385,13 +419,15 @@ def _get_3d_lm_data_paths(
 
 
 def _get_3d_em_data_paths(
-    dataset_name: str, data_root: str, download: bool = False
+    dataset_name: str, data_root: str, download: bool = False, is_val: bool = False
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
 
     if dataset_name == "platynereis_nuclei":
+        # The val split restricts to the 3 richest sample ids, see PLATYNEREIS_NUCLEI_VAL_SAMPLES.
+        sample_ids = sorted(PLATYNEREIS_NUCLEI_VAL_SAMPLES) if is_val else None
         paths = datasets.platynereis.get_platynereis_paths(
-            path=os.path.join(p, "platynereis"), sample_ids=None, name="nuclei", download=download,
+            path=os.path.join(p, "platynereis"), sample_ids=sample_ids, name="nuclei", download=download,
         )
         return paths, paths, "volumes/raw", "volumes/labels/nucleus_instance_labels"
 
@@ -433,21 +469,23 @@ def get_data_paths(
         f"Unsupported dataset: '{dataset_name}'. Choose from {all_datasets}."
     )
 
-    if split == "val":
+    is_val = split == "val"
+    if is_val:
         if dataset_name not in VAL_SPLITS:
             raise ValueError(
                 f"There is no data held out from the evaluation for '{dataset_name}', so it cannot be "
                 f"tuned on a validation split. Datasets that can: {sorted(VAL_SPLITS)}."
             )
-        # None means the loader has no split of its own; the holdout is the z-slab in VAL_Z_RANGE,
-        # which load_volume applies to the very same volumes.
+        # None means the loader has no split of its own; the holdout is the z-slab in VAL_Z_RANGE
+        # (or, for platynereis_nuclei, the sample_ids in PLATYNEREIS_NUCLEI_VAL_SAMPLES), which
+        # load_volume / _get_3d_em_data_paths apply on top of the very same volumes.
         split = VAL_SPLITS[dataset_name] or "test"
 
     if dataset_name in DATASETS_2D:
         return _get_2d_data_paths(dataset_name, data_root, download=download, split=split)
     if dataset_name in DATASETS_3D_LM:
         return _get_3d_lm_data_paths(dataset_name, data_root, download=download, split=split)
-    return _get_3d_em_data_paths(dataset_name, data_root, download=download)
+    return _get_3d_em_data_paths(dataset_name, data_root, download=download, is_val=is_val)
 
 
 def _center_crop_roi(shape, crop_shape):
@@ -630,12 +668,13 @@ DATASET_SPACING: dict = {
 # The parameters `AutomaticPromptGenerator.generate` accepts, so a run can be described by one dict.
 GENERATE_PARAM_KEYS = (
     "candidate_threshold", "foreground_threshold", "n_iter", "dt", "sigma", "min_candidate_size",
-    "score_threshold", "max_overlap", "min_size", "refine_with_box_prompts", "box_extension",
-    "multimasking", "n_objects_per_pass", "early_stop_patience", "n_threads",
+    "score_threshold", "score_filter", "max_overlap", "min_size", "max_size_factor", "refinement",
+    "refinement_kwargs", "multimasking", "multimask_scorer", "multimask_selection",
+    "n_objects_per_pass", "early_stop_patience", "propagation_waves", "batch_size", "n_threads",
 )
 
 
-def resolve_params(overrides=None, ndim=2):
+def resolve_params(overrides=None, ndim=2, model_type=None):
     """The generation parameters for one run, with 'overrides' applied on top of the library defaults.
 
     The single definition of what a run's parameters are, so that a benchmark, a walk-through and a
@@ -645,18 +684,23 @@ def resolve_params(overrides=None, ndim=2):
         overrides: The parameters to change, by the name `generate` gives them. A volume also accepts
             'candidate_threshold_3d', which is the name the defaults give its own threshold.
         ndim: The number of spatial dimensions, 2 or 3.
+        model_type: The SAM2 backbone the defaults are looked up for, see `default_prompt_generation`.
 
     Returns:
         The parameters, keyed as `generate` takes them.
     """
-    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION, default_prompt_generation
+    from micro_sam.v2.util import DEFAULT_MODEL
 
     overrides = overrides or {}
-    params = {key: DEFAULT_PROMPT_GENERATION[key] for key in GENERATE_PARAM_KEYS}
+    model_type = model_type or DEFAULT_MODEL
+    per_model_defaults = default_prompt_generation(model_type, is_volume=False)
+    defaults = {**DEFAULT_PROMPT_GENERATION, **per_model_defaults}
+    params = {key: defaults[key] for key in GENERATE_PARAM_KEYS}
     params.update(overrides)
     if ndim == 3:
         # A candidate's density scales with the object's size, so a volume has its own threshold.
-        default_3d = DEFAULT_PROMPT_GENERATION["candidate_threshold_3d"]
+        default_3d = default_prompt_generation(model_type, is_volume=True)["candidate_threshold"]
         params["candidate_threshold"] = overrides.get("candidate_threshold_3d", default_3d)
     params.pop("candidate_threshold_3d", None)
     return params
@@ -690,7 +734,7 @@ def _alias_micro_sam2_modules():
     setattr(transforms, "raw", transforms_raw)
 
 
-def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
+def load_unisam2_model(checkpoint_path, device, encoder="hvit_t", encoder_model_type=None):
     """Load a UniSAM2 model for automatic segmentation.
 
     Handles the standalone UniSAM2 checkpoints ('model_state'), the joint checkpoints
@@ -699,19 +743,22 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t"):
     Args:
         checkpoint_path: The filepath to the checkpoint.
         device: The torch device.
-        encoder: The SAM2 backbone the decoder was trained on, e.g. 'hvit_b'.
+        encoder: The SAM2 backbone the decoder was trained on, e.g. 'hvit_b', or a prebuilt encoder
+            module to reuse.
+        encoder_model_type: The SAM2 backbone, when 'encoder' is a prebuilt module rather than a
+            name. Sets 'model.model_type', which the postprocessing defaults are looked up by.
 
     Returns:
         The UniSAM2 model in eval mode.
     """
     from micro_sam.v2.instance_segmentation import get_unisam2_model
     _alias_micro_sam2_modules()
-    return get_unisam2_model(checkpoint_path, device=device, encoder=encoder)
+    return get_unisam2_model(checkpoint_path, device=device, encoder=encoder, encoder_model_type=encoder_model_type)
 
 
 def build_apg_segmenter(
     model_type, ndim, device, joint_checkpoint="best", decoder_path=None, joint_checksum=None,
-    interactive_checkpoint_path=None,
+    interactive_checkpoint_path=None, export_root=None, devices=None,
 ):
     """Build the automatic prompt generator from both halves of a joint checkpoint.
 
@@ -727,6 +774,9 @@ def build_apg_segmenter(
         interactive_checkpoint_path: Standalone interactive weights (e.g. a downloaded registry
             checkpoint) to use instead of the interactive half exported from the joint checkpoint.
             Requires 'decoder_path' too, since there is then no joint checkpoint to export it from.
+        export_root: Optional directory for the split checkpoint files. Defaults to JOINT_EXPORT_ROOT.
+        devices: The devices the decoder, the scoring and the propagation spread over. All visible
+            GPUs by default; pass a single device to pin the run to it.
 
     Returns:
         The prompt generator, built through the library factory that the CLI and the API use.
@@ -739,18 +789,20 @@ def build_apg_segmenter(
             raise ValueError("'interactive_checkpoint_path' requires 'decoder_path' too.")
         interactive_path, exported_decoder = interactive_checkpoint_path, None
     else:
+        export_kwargs = {} if export_root is None else {"export_root": export_root}
         interactive_path, exported_decoder = export_joint_checkpoint(
-            model_type, joint_checkpoint, source_checksum=joint_checksum
+            model_type, joint_checkpoint, source_checksum=joint_checksum, **export_kwargs
         )
     model = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=interactive_path,
         **({"input_type": "videos"} if ndim == 3 else {}),
     )
     decoder = load_unisam2_model(
-        decoder_path or exported_decoder, device, encoder=model.image_encoder
+        decoder_path or exported_decoder, device, encoder=model.image_encoder, encoder_model_type=model_type,
     )
     return get_instance_segmentation_generator(
         model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
+        inference_device=devices,
     )
 
 
@@ -780,7 +832,7 @@ def resolve_checkpoint_identity(
 
 def build_model(
     mode, model_type, device, ndim, joint_checkpoint="best", checkpoint_path=None, joint_checksum=None,
-    interactive_checkpoint_path=None,
+    interactive_checkpoint_path=None, devices=None,
 ):
     """Load the model a mode runs on, from the two halves of the joint checkpoint.
 
@@ -794,6 +846,7 @@ def build_model(
         joint_checksum: The checksum of the joint checkpoint, from `resolve_checkpoint_identity`.
         interactive_checkpoint_path: Standalone interactive weights for 'apg', bypassing the joint
             checkpoint entirely. See `build_apg_segmenter`.
+        devices: The devices inference spreads over. All visible GPUs by default.
 
     Returns:
         The UniSAM2 decoder for 'ais', or the prompt generator for 'apg'.
@@ -802,6 +855,7 @@ def build_model(
         return build_apg_segmenter(
             model_type, ndim, device, joint_checkpoint, decoder_path=checkpoint_path,
             joint_checksum=joint_checksum, interactive_checkpoint_path=interactive_checkpoint_path,
+            devices=devices,
         )
 
     decoder_path = checkpoint_path or export_joint_checkpoint(
@@ -810,7 +864,7 @@ def build_model(
     return load_unisam2_model(decoder_path, device, encoder=model_type)
 
 
-def predict_unisam2(model, raw, ndim, device, normalization=None):
+def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None):
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
     # UniSAM2 takes single-channel input, so a trailing channel axis is averaged away.
     if raw.ndim > ndim:
@@ -819,7 +873,9 @@ def predict_unisam2(model, raw, ndim, device, normalization=None):
     is_3d = (ndim == 3)
     # Tiling an image that fits the training patch changes the encoder's scale and the normalization.
     is_tiled = is_3d or any(size > TRAINING_PATCH_SHAPE[-1] for size in raw.shape[:2])
-    segmenter = get_unisam2_segmentation_generator(model, is_tiled=is_tiled, device=device)
+    segmenter = get_unisam2_segmentation_generator(
+        model, is_tiled=is_tiled, device=device, inference_device=devices
+    )
     if is_tiled:
         tile_shape = (4, 384, 384) if is_3d else (384, 384)
         halo = (2, 64, 64) if is_3d else (64, 64)
@@ -829,23 +885,24 @@ def predict_unisam2(model, raw, ndim, device, normalization=None):
     return segmenter.get_state()["prediction"]
 
 
-def postprocess_unisam2(out, dataset_name, backend="cpp", params=None):
+def postprocess_unisam2(out, dataset_name, model_type, params=None):
     """Turn a (4, *spatial) prediction into an instance segmentation.
 
     EM datasets use the dense (multicut) mode, all others the sparse (flow) mode. 'params' overrides
     the postprocessing defaults, e.g. with the best combination found by grid_search_automatic_cells.
+    Without 'params', 'model_type' selects the per-model library default.
     """
     from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
     params = {} if params is None else params
     fg = out[0]
-    if dataset_name in DATASETS_3D_EM:
+    if dataset_name in DATASETS_DENSE:
         boundary_map = fg.max() - fg
         boundary_map /= boundary_map.max()
         distances = np.stack([out[2], out[3]])
-        seg = run_multicut(boundary_map, distances, backend=backend, **params)
+        seg = run_multicut(boundary_map, distances, model_type=model_type, **params)
     else:
         spacing = DATASET_SPACING.get(dataset_name, None)
-        seg = flow_instance_segmentation(fg, out[1:], spacing=spacing, backend=backend, **params)
+        seg = flow_instance_segmentation(fg, out[1:], model_type=model_type, spacing=spacing, **params)
     return seg.astype("uint32")
 
 
@@ -866,7 +923,7 @@ def run_dataset_evaluation(gt_paths, prediction_paths, dataset_name: str, save_p
     """
     from micro_sam.v1.evaluation.evaluation import run_evaluation
 
-    if dataset_name not in DATASETS_3D_EM:
+    if dataset_name not in DATASETS_DENSE:
         return run_evaluation(gt_paths=gt_paths, prediction_paths=prediction_paths, save_path=save_path)
 
     import pandas as pd
@@ -954,15 +1011,23 @@ def _check_key(path: str, key: Optional[str], kind: str) -> None:
         raise RuntimeError(f"Could not open {kind} data key '{key}' in '{path}': {e}") from e
 
 
-def check_data_download(dataset_name: str, data_root: str, download: bool = True) -> None:
+def check_data_download(dataset_name: str, data_root: str, download: bool = True, split: str = "test") -> None:
     """Fail fast if a dataset cannot be resolved from the local data root.
 
     The check goes through `get_data_paths(..., download=download)`, so it catches a missing download,
     an invalid split and an unavailable cached file before the model loads. It may download a missing
     dataset once. The evaluation itself reads the cached local data afterwards.
+
+    Args:
+        dataset_name: The dataset to check.
+        data_root: The root the data lives in.
+        download: Whether a missing dataset may be downloaded.
+        split: The split to check, 'test' or the held-out 'val' a parameter search tunes on.
     """
     try:
-        raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root, download=download)
+        raw_paths, label_paths, raw_key, label_key = get_data_paths(
+            dataset_name, data_root, download=download, split=split
+        )
     except Exception as e:
         raise RuntimeError(
             f"Data check failed for dataset '{dataset_name}' in '{data_root}'. "
@@ -1014,7 +1079,10 @@ def ensure_8bit_range(raw):
     """Scale raw data into the [0, 255] range the evaluation feeds the models with."""
     if raw.size == 0:
         return raw.astype("float32", copy=False)
-    return normalize_raw(raw) * 255.0
+    # `read_2d` returns channel-last images. Preserve the contrast of every microscopy channel
+    # instead of letting the channel with the largest values determine the shared percentile range.
+    spatial_axes = (0, 1) if raw.ndim == 3 and raw.shape[-1] in (1, 2, 3, 4) else None
+    return normalize_raw(raw, axis=spatial_axes) * 255.0
 
 
 def read_2d(path, key):
@@ -1236,11 +1304,13 @@ def load_data(dataset_name, data_root, ndim, min_size=0, split="test", crop_shap
         One (image_or_volume, labels, valid_roi) triple per sample.
     """
     raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root, split=split)
+    per_sample_z_range = dataset_name == "platynereis_nuclei" and split == "val"
     for raw_path, label_path in sorted_path_pairs(raw_paths, label_paths):
         if ndim == 3:
+            sample_z_range = platynereis_nuclei_val_z_range(raw_path) if per_sample_z_range else z_range
             yield load_evaluation_sample_3d(
                 raw_path, label_path, raw_key, label_key, dataset_name,
-                crop_shape=crop_shape or CROP_SHAPE_3D, z_range=z_range, min_size=min_size,
+                crop_shape=crop_shape or CROP_SHAPE_3D, z_range=sample_z_range, min_size=min_size,
             )
         else:
             image, gt = load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name)

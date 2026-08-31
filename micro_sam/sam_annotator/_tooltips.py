@@ -72,7 +72,7 @@ tooltips = {
         "score_threshold": "Enter the minimum predicted IoU score for an APG mask.",
         "max_overlap": "Enter the maximum fraction of an APG candidate that another mask can claim.",
         "multimasking": "Let APG predict multiple masks for each point and keep the mask with the best score.",
-        "refine_with_box_prompts": "Refine each APG mask with a box prompt. This setting applies to images.",
+        "refine_with_box_prompts": "Refine each APG mask with a box prompt.",
         "box_extension": "Enter the number of pixels that APG adds to each refinement box.",
         "prompt_batch_size": "Enter the number of APG prompts in each model batch.",
         "n_objects_per_pass": "Enter the number of APG objects in each volume propagation pass.",

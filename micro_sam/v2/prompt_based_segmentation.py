@@ -3,7 +3,9 @@ import queue
 import ctypes
 import hashlib
 import platform
+import threading
 import contextlib
+from dataclasses import dataclass
 from copy import copy
 from concurrent import futures
 from typing import Callable, List, Optional, Tuple, Union
@@ -16,6 +18,38 @@ from micro_sam.v2.util import Devices
 from micro_sam.util import device_type
 from micro_sam.v1.prompt_based_segmentation import _process_box, _compute_logits_from_mask
 from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy, ResizeLongestSideTransforms
+
+
+@dataclass(frozen=True)
+class _PromptOperation:
+    """One successful mutation of a SAM2 video-predictor prompt state.
+
+    The active prompt maps below are sufficient for deduplication, but not for reconstruction:
+    SAM2 uses the preceding decoder logits when a point set is replaced, and batching points changes
+    the decoder result. Replaying these operations verbatim preserves both pieces of state.
+    """
+
+    kind: str
+    frame_id: int
+    object_id: int
+    clear_old_points: bool = True
+    points: Optional[np.ndarray] = None  # (y, x), before conversion to SAM2's (x, y).
+    point_labels: Optional[np.ndarray] = None
+    box: Optional[np.ndarray] = None  # (y0, x0, y1, x1), before SAM2 box processing.
+    mask_signature: Optional[str] = None
+    mask: Optional[np.ndarray] = None  # Prepared in SAM2's padded square frame.
+
+    def copied(self):
+        """Return a snapshot whose arrays cannot be changed through caller-owned inputs."""
+        return _PromptOperation(
+            kind=self.kind, frame_id=self.frame_id, object_id=self.object_id,
+            clear_old_points=self.clear_old_points,
+            points=None if self.points is None else self.points.copy(),
+            point_labels=None if self.point_labels is None else self.point_labels.copy(),
+            box=None if self.box is None else self.box.copy(),
+            mask_signature=self.mask_signature,
+            mask=None if self.mask is None else self.mask.copy(),
+        )
 
 
 def _trim_cpu_heap():
@@ -32,6 +66,61 @@ def _trim_cpu_heap():
         ctypes.CDLL("libc.so.6").malloc_trim(0)
     except (OSError, AttributeError):
         pass
+
+
+def _device_context(device):
+    """Make a worker thread's default CUDA device the one its tile's state lives on."""
+    device = torch.device(device)
+    return torch.cuda.device(device) if device.type == "cuda" else contextlib.nullcontext()
+
+
+def map_jobs_over_devices(devices, jobs: List, function: Callable, update_progress=None) -> List:
+    """Run independent jobs over one worker per device, each taking the next job once it is free.
+
+    The results come back in the order the jobs were given, never the order the devices finished in,
+    because a caller that merges them may break ties by position.
+
+    Args:
+        devices: The devices to spread the jobs over, one worker each.
+        jobs: The jobs, passed to `function` one at a time.
+        function: Called as `function(worker_id, job)`, with the index of the device it runs on.
+        update_progress: Optional callback, called with 1 after every finished job.
+
+    Returns:
+        One result per job, in the order the jobs were given.
+    """
+    jobs = list(jobs)
+    if not jobs:
+        return []
+
+    results = [None] * len(jobs)
+    n_workers = min(len(devices), len(jobs))
+    if n_workers < 2:
+        for index, job in enumerate(jobs):
+            results[index] = function(0, job)
+            if update_progress is not None:
+                update_progress(1)
+        return results
+
+    pending = queue.Queue()
+    for index, job in enumerate(jobs):
+        pending.put((index, job))
+
+    def run_worker(worker_id):
+        with _device_context(devices[worker_id]):
+            while True:
+                try:
+                    index, job = pending.get_nowait()
+                except queue.Empty:
+                    break
+                results[index] = function(worker_id, job)
+                if update_progress is not None:
+                    update_progress(1)
+
+    with futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
+        for task in [pool.submit(run_worker, worker_id) for worker_id in range(n_workers)]:
+            task.result()
+    return results
 
 
 def _free_device_memory():
@@ -464,7 +553,10 @@ class PromptableSegmentation3D:
         # What the SAM2 state already holds, so a re-run pushes only the newly placed prompts.
         self._pushed_points = {}  # (object_id, frame_id) -> set of (y, x, label)
         self._pushed_boxes = {}  # (object_id, frame_id) -> set of box corner tuples
-        self._pushed_masks = {}  # (object_id, frame_id) -> set of mask content digests
+        self._pushed_masks = {}  # (object_id, frame_id) -> mask digest -> prepared mask
+        # Successful predictor calls in their original order and batching. The active maps above
+        # deliberately omit prompts that SAM2 replaced; the history retains their decoder effects.
+        self._prompt_history = []
         # Signature of the prompt set of the previous round, see 'sync_prompt_state'.
         self._prompt_signatures = set()
         self._image_style_trafo = None  # Built lazily for the per-slice mask refinement.
@@ -480,6 +572,7 @@ class PromptableSegmentation3D:
         self._pushed_points = {}
         self._pushed_boxes = {}
         self._pushed_masks = {}
+        self._prompt_history = []
         self._prompt_signatures = set()
 
     def _anchor_per_object(self):
@@ -491,36 +584,79 @@ class PromptableSegmentation3D:
         return anchors
 
     def _replay_prompts(self, snapshot, object_ids):
-        """Push the recorded prompts of these objects onto a fresh state, in the order they were added.
+        """Replay these objects' successful predictor operations onto a fresh state.
 
         The snapshot is taken before the first replay, because resetting the state also clears the
-        bookkeeping this reads, and a later group's prompts would be gone by then.
-
-        A box has to precede the points of its object and frame, which 'add_box_prompts' takes care of
-        by re-adding the points it clears.
+        history this reads, and a later group's prompts would be gone by then. Preserving operation
+        order, point batching and replacement flags is necessary because SAM2 feeds the previous
+        decoder logits into the next point/box operation.
         """
-        points, boxes, masks = snapshot
         self.reset_predictor()
-        for (object_id, frame_id), pushed in points.items():
-            if object_id not in object_ids:
-                continue
-            for y, x, label in pushed:
-                self.add_point_prompts(
-                    frame_ids=frame_id, points=np.array([[y, x]]),
-                    point_labels=np.array([label]), object_id=object_id,
-                )
-        for (object_id, frame_id), pushed in boxes.items():
-            if object_id in object_ids:
-                self.add_box_prompts(frame_ids=frame_id, boxes=[np.array(box) for box in pushed], object_id=object_id)
-        for (object_id, frame_id), pushed in masks.items():
-            if object_id not in object_ids:
-                continue
-            seen = self._pushed_masks.setdefault((object_id, frame_id), {})
-            for signature, mask in pushed.items():
-                seen[signature] = mask
-                self.predictor.add_new_mask(
-                    inference_state=self.inference_state, frame_idx=frame_id, obj_id=object_id, mask=mask,
-                )
+        skip_output = getattr(self.predictor, "skip_prompt_output", None)
+        with (skip_output() if skip_output is not None else contextlib.nullcontext()):
+            for operation in snapshot:
+                if operation.object_id in object_ids:
+                    self._apply_prompt_operation(operation)
+
+    def _apply_prompt_operation(self, operation):
+        """Apply and record one predictor operation, updating active state only after it succeeds."""
+        operation = operation.copied()
+        key = (operation.object_id, operation.frame_id)
+
+        if operation.kind == "points_or_box":
+            if operation.box is not None and not operation.clear_old_points:
+                raise ValueError("SAM2 requires 'clear_old_points=True' whenever a box is given.")
+            kwargs = {}
+            if operation.points is not None and len(operation.points):
+                if operation.point_labels is None or len(operation.points) != len(operation.point_labels):
+                    raise AssertionError("The number of points and labels do not match.")
+                # SAM2 expects (x, y). This unconditional copy also removes negative strides for a
+                # single point, whose reversed view numpy can otherwise still call contiguous.
+                kwargs["points"] = np.array(operation.points[:, ::-1], dtype="float32")
+                kwargs["labels"] = np.array(operation.point_labels, dtype="int32")
+            if operation.box is not None:
+                kwargs["box"] = np.array([_process_box(operation.box, self.volume.shape[-2:])])
+            if not kwargs:
+                return
+
+            self.predictor.add_new_points_or_box(
+                inference_state=self.inference_state,
+                frame_idx=operation.frame_id,
+                obj_id=operation.object_id,
+                clear_old_points=operation.clear_old_points,
+                **kwargs,
+            )
+
+            # Mirror SAM2's mutually exclusive active input maps. A replacement discards the active
+            # point/box set, but its earlier decoder effect remains in '_prompt_history'.
+            if operation.clear_old_points:
+                self._pushed_points.pop(key, None)
+                self._pushed_boxes.pop(key, None)
+            self._pushed_masks.pop(key, None)
+            if operation.points is not None and len(operation.points):
+                seen = self._pushed_points.setdefault(key, set())
+                for (y, x), label in zip(operation.points, operation.point_labels):
+                    seen.add((int(round(float(y))), int(round(float(x))), int(label)))
+            if operation.box is not None:
+                signature = tuple(np.round(operation.box).astype(int).tolist())
+                self._pushed_boxes.setdefault(key, set()).add(signature)
+
+        elif operation.kind == "mask":
+            if operation.mask is None or operation.mask_signature is None:
+                raise ValueError("A mask operation requires a prepared mask and its signature.")
+            self.predictor.add_new_mask(
+                inference_state=self.inference_state,
+                frame_idx=operation.frame_id,
+                obj_id=operation.object_id,
+                mask=operation.mask,
+            )
+            self._pushed_points.pop(key, None)
+            self._pushed_boxes.pop(key, None)
+            self._pushed_masks[key] = {operation.mask_signature: operation.mask.copy()}
+        else:
+            raise ValueError(f"Unknown prompt operation kind '{operation.kind}'.")
+
+        self._prompt_history.append(operation)
 
     def sync_prompt_state(self, signatures):
         """Discard the persistent state when prompts were removed or changed since the last round.
@@ -537,12 +673,21 @@ class PromptableSegmentation3D:
             self.reset_predictor()
         self._prompt_signatures = signatures
 
-    def reset_predictor(self):
+    def release(self):
+        """Drop the tracked objects and the cached slice features, keeping the allocator's cache.
+
+        What a caller that builds another state of the same size on this device right afterwards
+        needs: the blocks go back to the caching allocator, which hands them to the next state.
+        Emptying that cache instead would make every rebuild pay for a fresh allocation.
+        """
         self.predictor.reset_state(self.inference_state)
         self._clear_pushed_prompts()
-        # 'reset_state' clears the tracking outputs but not this cache, which holds high-res
-        # features per frame. The embeddings are disk-backed, so the next prompt re-reads its frame.
+        # 'reset_state' clears the tracking outputs, not the cached features or the encoding they share.
         self.inference_state["cached_features"] = {}
+        self.inference_state.pop("shared_pos_enc", None)
+
+    def reset_predictor(self):
+        self.release()
         _free_device_memory()
 
     def reset_tracking(self):
@@ -613,18 +758,78 @@ class PromptableSegmentation3D:
         with (skip_output() if skip_output is not None else contextlib.nullcontext()):
             for frame_id, (y, x), label, obj_id in zip(frame_ids, points, point_labels, object_ids):
                 signature = (int(round(float(y))), int(round(float(x))), int(label))
-                seen = self._pushed_points.setdefault((obj_id, frame_id), set())
-                if signature in seen:
+                if signature in self._pushed_points.get((obj_id, frame_id), set()):
                     continue
-                seen.add(signature)
-                self.predictor.add_new_points_or_box(
-                    inference_state=self.inference_state,
-                    frame_idx=frame_id,
-                    obj_id=obj_id,
-                    clear_old_points=False,
-                    points=np.array([[x, y]]),  # SAM2 expects (x, y).
-                    labels=np.array([label]),
+                self._apply_prompt_operation(
+                    _PromptOperation(
+                        kind="points_or_box", frame_id=frame_id, object_id=obj_id,
+                        clear_old_points=False,
+                        points=np.array([[y, x]], dtype="float32"),
+                        point_labels=np.array([label], dtype="int32"),
+                    )
                 )
+
+    def add_prompt_set(
+        self,
+        frame_id: int,
+        points: Optional[np.ndarray] = None,
+        point_labels: Optional[np.ndarray] = None,
+        box: Optional[np.ndarray] = None,
+        object_id: int = 1,
+        clear_old_points: bool = True,
+    ):
+        """Condition one object on a whole prompt set at once, in a single SAM2 call.
+
+        'add_point_prompts' pushes one point at a time, and 'add_box_prompts' pushes a box and then
+        replays the points it had to clear. That is what an annotator placing corrections needs: each
+        push returns the running segmentation, and re-running only sends what is new. A caller that
+        has the whole set up front pays for it, because every push re-runs the mask decoder on the
+        conditioning frame - eight of them for a box and seven points. SAM2 takes the set in one
+        call instead, with the box as the first two coordinates, which is also the order it wants.
+
+        The prompts are recorded in the same bookkeeping the incremental methods use, so the anchor
+        of each object and a replay onto a fresh state still see them.
+
+        Args:
+            frame_id: The slice to condition.
+            points: The points, (N, 2) in (y, x) order. None conditions on the box alone.
+            point_labels: One label per point: 1 positive, 0 negative.
+            box: An optional box, in (y0, x0, y1, x1) order.
+            object_id: The object being conditioned.
+            clear_old_points: Whether the push replaces what this object already carries on the
+                frame. SAM2 requires it whenever a box is given. False appends, which is how a
+                points-only push is added after a box.
+        """
+        has_points = points is not None and len(points) > 0
+        if not has_points and box is None:
+            return
+        frame_id, object_id = int(frame_id), int(object_id)
+        if box is not None and not clear_old_points:
+            # Validate before touching bookkeeping or invoking SAM2, whose implementation rejects
+            # this combination as well.
+            raise ValueError("SAM2 requires 'clear_old_points=True' whenever a box is given.")
+
+        normalized_points, normalized_labels = None, None
+        if has_points:
+            points = np.asarray(points, dtype="float32").reshape(-1, 2)
+            if point_labels is None:
+                raise ValueError("'point_labels' is required when points are given.")
+            point_labels = np.asarray(point_labels, dtype="int32").reshape(-1)
+            if len(points) != len(point_labels):
+                raise AssertionError("The number of points and labels do not match.")
+            normalized_points, normalized_labels = points, point_labels
+        normalized_box = None if box is None else np.asarray(box, dtype="float32").reshape(4)
+
+        # The preview mask is discarded, as in the incremental methods.
+        skip_output = getattr(self.predictor, "skip_prompt_output", None)
+        with (skip_output() if skip_output is not None else contextlib.nullcontext()):
+            self._apply_prompt_operation(
+                _PromptOperation(
+                    kind="points_or_box", frame_id=frame_id, object_id=object_id,
+                    clear_old_points=bool(clear_old_points),
+                    points=normalized_points, point_labels=normalized_labels, box=normalized_box,
+                )
+            )
 
     def add_box_prompts(
         self,
@@ -647,29 +852,31 @@ class PromptableSegmentation3D:
         frame_ids = self._broadcast(frame_ids, n)
         object_ids = self._broadcast(1 if object_id is None else object_id, n)
 
-        for frame_id, box, obj_id in zip(frame_ids, boxes, object_ids):
-            key = (obj_id, frame_id)
-            signature = tuple(np.round(box).astype(int).tolist())
-            seen = self._pushed_boxes.setdefault(key, set())
-            if signature in seen:
-                continue
-            seen.add(signature)
-            self.predictor.add_new_points_or_box(
-                inference_state=self.inference_state,
-                frame_idx=frame_id,
-                obj_id=obj_id,
-                clear_old_points=True,
-                box=np.array([_process_box(box, self.volume.shape[-2:])]),
-            )
-            for y, x, label in self._pushed_points.get(key, set()):
-                self.predictor.add_new_points_or_box(
-                    inference_state=self.inference_state,
-                    frame_idx=frame_id,
-                    obj_id=obj_id,
-                    clear_old_points=False,
-                    points=np.array([[x, y]]),
-                    labels=np.array([label]),
+        # As in 'add_point_prompts': the preview mask each push returns is discarded here, and
+        # consolidating it costs a pass over every object of the state.
+        skip_output = getattr(self.predictor, "skip_prompt_output", None)
+        with (skip_output() if skip_output is not None else contextlib.nullcontext()):
+            for frame_id, box, obj_id in zip(frame_ids, boxes, object_ids):
+                key = (obj_id, frame_id)
+                signature = tuple(np.round(box).astype(int).tolist())
+                if signature in self._pushed_boxes.get(key, set()):
+                    continue
+                existing_points = sorted(self._pushed_points.get(key, set()))
+                self._apply_prompt_operation(
+                    _PromptOperation(
+                        kind="points_or_box", frame_id=frame_id, object_id=obj_id,
+                        clear_old_points=True, box=np.asarray(box, dtype="float32").reshape(4),
+                    )
                 )
+                for y, x, label in existing_points:
+                    self._apply_prompt_operation(
+                        _PromptOperation(
+                            kind="points_or_box", frame_id=frame_id, object_id=obj_id,
+                            clear_old_points=False,
+                            points=np.array([[y, x]], dtype="float32"),
+                            point_labels=np.array([label], dtype="int32"),
+                        )
+                    )
 
     def _prepare_mask(self, mask):
         """Bring a full-resolution 2d boolean mask into the padded-square frame the video predictor
@@ -687,6 +894,7 @@ class PromptableSegmentation3D:
         frame_ids: Union[int, List[int]],
         masks: Optional[List[np.ndarray]] = None,
         object_id: Optional[Union[int, List[int]]] = None,
+        refine: bool = True,
     ):
         """Add mask prompts (full-resolution 2d boolean masks) to the persistent SAM2 state.
 
@@ -697,6 +905,14 @@ class PromptableSegmentation3D:
         a frame on either a mask or points/box (not both), so a mask prompt does not combine with
         points on the same object/frame. A mask already pushed (same object, frame, content) is
         skipped so re-runs only add newly drawn masks.
+
+        Args:
+            frame_ids: The slice each mask conditions, one per mask or one for all of them.
+            masks: The masks, at the volume's full resolution.
+            object_id: The object each mask belongs to, one per mask or one for all of them.
+            refine: Whether to refine each mask into the object on its frame first. True for a shape
+                somebody drew; False for a mask that is already a prediction for this frame, which a
+                second refinement would only pull away from what it was accepted as.
         """
         if masks is None or len(masks) == 0:
             return
@@ -706,30 +922,33 @@ class PromptableSegmentation3D:
         frame_ids = self._broadcast(frame_ids, n)
         object_ids = self._broadcast(1 if object_id is None else object_id, n)
 
-        for frame_id, mask, obj_id in zip(frame_ids, masks, object_ids):
-            key = (obj_id, frame_id)
-            # A stable digest, so the signature does not change between processes.
-            signature = hashlib.sha1(np.ascontiguousarray(mask).tobytes()).hexdigest()
-            seen = self._pushed_masks.setdefault(key, {})
-            if signature in seen:
-                continue
+        # As in 'add_point_prompts': the preview mask each push returns is discarded here, and
+        # consolidating it costs a pass over every object of the state.
+        skip_output = getattr(self.predictor, "skip_prompt_output", None)
+        with (skip_output() if skip_output is not None else contextlib.nullcontext()):
+            for frame_id, mask, obj_id in zip(frame_ids, masks, object_ids):
+                key = (obj_id, frame_id)
+                # A stable digest, so the signature does not change between processes.
+                signature = hashlib.sha1(np.ascontiguousarray(mask).tobytes()).hexdigest()
+                if signature in self._pushed_masks.get(key, {}):
+                    continue
 
-            # Refined on the seed frame first, so the propagation starts from the object rather
-            # than from the drawn shape. The box is the filled mask's extent.
-            ys, xs = np.nonzero(mask)
-            if len(ys) == 0:
-                continue
-            box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype="float32")  # (x0, y0, x1, y1)
-            refined = self._image_style_predict(frame_id, box=box, mask=mask)
+                # Refined on the seed frame first, so the propagation starts from the object rather
+                # than from the drawn shape. The box is the filled mask's extent.
+                ys, xs = np.nonzero(mask)
+                if len(ys) == 0:
+                    continue
+                if refine:
+                    box = np.array([xs.min(), ys.min(), xs.max(), ys.max()], dtype="float32")  # (x0,y0,x1,y1)
+                    mask = self._image_style_predict(frame_id, box=box, mask=mask)
 
-            prepared = self._prepare_mask(refined)
-            seen[signature] = prepared
-            self.predictor.add_new_mask(
-                inference_state=self.inference_state,
-                frame_idx=frame_id,
-                obj_id=obj_id,
-                mask=prepared,
-            )
+                prepared = self._prepare_mask(mask)
+                self._apply_prompt_operation(
+                    _PromptOperation(
+                        kind="mask", frame_id=frame_id, object_id=obj_id,
+                        mask_signature=signature, mask=prepared,
+                    )
+                )
 
     def _propagate_in_direction(
         self, reverse, update_progress=None, early_stop_patience=None, z_range=None, seen_frames=None
@@ -804,7 +1023,9 @@ class PromptableSegmentation3D:
         if len(groups) <= 1:
             return self._propagate_both_directions(update_progress, early_stop_patience, z_range)
 
-        snapshot = (dict(self._pushed_points), dict(self._pushed_boxes), dict(self._pushed_masks))
+        # The active maps intentionally omit replaced prompts. Reconstruct from successful calls so
+        # point batches, replacement boundaries and the previous-logit chain stay unchanged.
+        snapshot = tuple(operation.copied() for operation in self._prompt_history)
         prompt_signatures = set(self._prompt_signatures)
         video_segments = {}
         for object_ids in groups.values():
@@ -990,6 +1211,69 @@ class PromptableSegmentation3D:
         return segmentation
 
 
+class ReplicatedPromptableSegmentation3D:
+    """One `PromptableSegmentation3D` per inference device over the same volume, for independent passes.
+
+    Automatic prompt generation propagates a volume in passes that share nothing but the volume and
+    its embeddings: each conditions its own objects on one slice and tracks them to both ends. So a
+    pass goes to whichever device is free, with one video-predictor state per device rather than one
+    in total. `TiledPromptableSegmentation3D` spreads tiles for the same reason; this spreads the
+    passes of a volume that is not tiled, where one state covers the whole volume.
+
+    Device memory is the cost: a state per device instead of a state in total. Pass a single device
+    to give that back.
+
+    Args:
+        predictor: The SAM2 video predictor.
+        volume: The input volume, shape (Z, Y, X).
+        volume_embeddings: The precomputed 3d embeddings.
+        devices: Devices the passes are spread over. By default all visible CUDA devices are used
+            when the predictor is on CUDA. Pass a single device to pin the propagation to it.
+    """
+
+    def __init__(self, predictor, volume, volume_embeddings, devices: Devices = None, **kwargs):
+        from micro_sam.v2.batched_inference import _prepare_models, _resolve_devices
+
+        self._predictor_devices = _prepare_models(predictor, _resolve_devices(predictor, devices))
+        self.volume = volume
+        self.volume_embeddings = volume_embeddings
+        self._kwargs = kwargs
+        # Built lazily, so a run with fewer passes than devices never pays for a state it cannot use.
+        self._segmenters = {}
+
+    def _get_segmenter(self, worker_id):
+        if worker_id not in self._segmenters:
+            predictor, device = self._predictor_devices[worker_id]
+            self._segmenters[worker_id] = PromptableSegmentation3D(
+                predictor, self.volume, self.volume_embeddings, device=device, **self._kwargs
+            )
+        return self._segmenters[worker_id]
+
+    @property
+    def predictor_devices(self):
+        """The (predictor, device) replica per inference device, for a caller that needs its own."""
+        return self._predictor_devices
+
+    def map_passes(self, jobs: List, function: Callable, update_progress=None) -> List:
+        """Run one job per pass, one worker per device, each taking the next job once it is free.
+
+        `function` is called as `function(segmenter, job)` with the worker's own state, so a job may
+        prompt and propagate it freely. The results keep the order the jobs were given in, which the
+        merge needs: it breaks score ties by record order.
+        """
+        devices = [device for _, device in self._predictor_devices]
+        return map_jobs_over_devices(
+            devices, jobs, lambda worker_id, job: function(self._get_segmenter(worker_id), job),
+            update_progress=update_progress,
+        )
+
+    def reset_predictor(self):
+        """Free every worker's video-predictor state."""
+        for segmenter in self._segmenters.values():
+            segmenter.reset_predictor()
+        self._segmenters = {}
+
+
 class TiledPromptableSegmentation3D:
     """Tiled promptable segmentation for volumetric data.
 
@@ -1025,10 +1309,13 @@ class TiledPromptableSegmentation3D:
         self.halo = tuple(int(s) for s in feats.attrs["halo"])
         self.tiling = Blocking([0, 0], list(self.shape[1:]), list(self.tile_shape))
 
-        # Per-tile state, built lazily for the tiles that actually receive prompts.
+        # State per (tile, worker), built lazily for the tiles that actually receive prompts. Keyed by
+        # the worker as well, so 'map_tile_jobs' can put a tile's passes on several devices at once.
         self._segmenters = {}
         # Device assigned to each active tile, see '_worker_id'.
         self._tile_workers = {}
+        # The worker a thread is running as, which overrides the per-tile assignment while it is set.
+        self._active_worker = threading.local()
         # Signature of the prompt set of the previous round, see 'sync_prompt_state'.
         self._prompt_signatures = set()
 
@@ -1077,10 +1364,26 @@ class TiledPromptableSegmentation3D:
         The tile state (inference state + embedding cache) lives on one device, so the affinity is
         kept for the tile's lifetime. Assigning by 'tile_id % n_devices' instead would leave devices
         idle, because the active tile ids are sparse (e.g. the tiles 0, 2, 4 share one residue).
+
+        A thread running as a worker uses that worker's device instead, so two workers can hold the
+        same tile without either reaching into the other's state.
         """
+        bound = getattr(self._active_worker, "index", None)
+        if bound is not None:
+            return bound
         if tile_id not in self._tile_workers:
             self._tile_workers[tile_id] = len(self._tile_workers) % len(self._predictor_devices)
         return self._tile_workers[tile_id]
+
+    @contextlib.contextmanager
+    def _as_worker(self, worker_id):
+        """Run this thread as one worker: its device, and its own state for whatever tile it touches."""
+        self._active_worker.index = worker_id
+        try:
+            with _device_context(self._predictor_devices[worker_id][1]):
+                yield
+        finally:
+            self._active_worker.index = None
 
     def _outer_offset(self, tile_id):
         """Return the (y0, x0) origin of the tile's outer (halo-included) block."""
@@ -1088,7 +1391,8 @@ class TiledPromptableSegmentation3D:
         return int(outer.begin[0]), int(outer.begin[1])
 
     def _get_segmenter(self, tile_id):
-        if tile_id not in self._segmenters:
+        key = (tile_id, self._worker_id(tile_id))
+        if key not in self._segmenters:
             from micro_sam.v2.util import _load_list_datasets
 
             outer = self.tiling.get_block_with_halo(tile_id, list(self.halo)).outer_block
@@ -1105,11 +1409,11 @@ class TiledPromptableSegmentation3D:
                 "input_size": tile_dataset.attrs["input_size"],
                 "original_size": tile_dataset.attrs["original_size"],
             }
-            predictor, device = self._predictor_devices[self._worker_id(tile_id)]
-            self._segmenters[tile_id] = PromptableSegmentation3D(
+            predictor, device = self._predictor_devices[key[1]]
+            self._segmenters[key] = PromptableSegmentation3D(
                 predictor, sub_volume, tile_embeddings, device=device, **self._kwargs
             )
-        return self._segmenters[tile_id]
+        return self._segmenters[key]
 
     def _inner_slices(self, tile_id):
         """Return the (local, global) inner-block slices for placing a tile result into the volume."""
@@ -1118,29 +1422,47 @@ class TiledPromptableSegmentation3D:
         glob = tuple(slice(b, e) for b, e in zip(block.inner_block.begin, block.inner_block.end))
         return local, glob
 
-    def _run_tile_jobs(
+    def map_tiles(
         self, tile_ids: List[int], function: Callable, update_progress: Optional[Callable[[int], None]] = None,
     ) -> List[Tuple]:
-        """Run tile jobs concurrently across devices and serially within each device."""
-        groups = {}
-        for tile_id in tile_ids:
-            groups.setdefault(self._worker_id(tile_id), []).append(tile_id)
+        """Run one job per tile, one worker per device, each pulling the next tile once it is free.
 
-        def run_group(group, worker_update=None):
+        A tile that already holds a state keeps the device that state lives on. An unassigned tile is
+        bound to whichever worker picks it up, so tiles with very different costs (as in automatic
+        prompt generation, where a tile costs what its candidates cost) balance over the devices
+        instead of being dealt out round-robin before their cost is known.
+        """
+        tile_ids = list(tile_ids)
+        if not tile_ids:
+            return []
+
+        preassigned = {}
+        unassigned = queue.Queue()
+        for tile_id in tile_ids:
+            if tile_id in self._tile_workers:
+                preassigned.setdefault(self._tile_workers[tile_id], []).append(tile_id)
+            else:
+                unassigned.put(tile_id)
+
+        def run_worker(worker_id, worker_update=None):
+            def call(tile_id):
+                return function(tile_id) if worker_update is None else function(tile_id, worker_update)
+
             results = []
-            for tile_id in group:
-                if worker_update is None:
-                    result = function(tile_id)
-                else:
-                    result = function(tile_id, worker_update)
-                results.append((tile_id, result))
+            with self._as_worker(worker_id):
+                for tile_id in preassigned.get(worker_id, []):
+                    results.append((tile_id, call(tile_id)))
+                while True:
+                    try:
+                        tile_id = unassigned.get_nowait()
+                    except queue.Empty:
+                        break
+                    self._tile_workers[tile_id] = worker_id
+                    results.append((tile_id, call(tile_id)))
             return results
 
-        if len(groups) < 2:
-            if not groups:
-                return []
-            group = next(iter(groups.values()))
-            return run_group(group, update_progress)
+        if len(self._predictor_devices) < 2:
+            return sorted(run_worker(0, update_progress), key=lambda result: result[0])
 
         progress_queue = queue.Queue()
 
@@ -1155,9 +1477,10 @@ class TiledPromptableSegmentation3D:
                 update_progress(increment)
 
         results = []
-        with futures.ThreadPoolExecutor(max_workers=len(groups)) as pool:
+        n_workers = len(self._predictor_devices)
+        with futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
             worker_update = progress_queue.put if update_progress is not None else None
-            tasks = [pool.submit(run_group, group, worker_update) for group in groups.values()]
+            tasks = [pool.submit(run_worker, worker_id, worker_update) for worker_id in range(n_workers)]
             pending = set(tasks)
             while pending:
                 done, pending = futures.wait(pending, timeout=0.05, return_when=futures.FIRST_COMPLETED)
@@ -1166,6 +1489,67 @@ class TiledPromptableSegmentation3D:
                     results.extend(task.result())
         forward_progress()
         return sorted(results, key=lambda result: result[0])
+
+    @property
+    def predictor_devices(self):
+        """The (predictor, device) replica per inference device, for a caller that needs its own."""
+        return self._predictor_devices
+
+    @property
+    def active_tiles(self) -> List[int]:
+        """The tiles that currently hold a state, in ascending order."""
+        return sorted({tile_id for tile_id, _ in self._segmenters})
+
+    def map_tile_jobs(self, jobs: List, function: Callable, update_progress=None) -> List:
+        """Run jobs that each name a tile, one worker per device, each on its own state for that tile.
+
+        Unlike `map_tiles`, several jobs of one tile can run at once: a job prompts the state of its
+        tile *on its worker's device*, so a single tile whose work dwarfs the others spreads over the
+        devices instead of pinning them to one. The extra states are what it costs, and a job that
+        moves to a new device re-reads that tile's features, so give a job enough work to pay for it.
+
+        `function` is called as `function(job)`, and `update_progress` from the worker rather than
+        from the caller's thread - unlike `map_tiles`, whose callback the GUI drives.
+        """
+        devices = [device for _, device in self._predictor_devices]
+
+        def run(worker_id, job):
+            with self._as_worker(worker_id):
+                return function(job)
+
+        return map_jobs_over_devices(devices, jobs, run, update_progress=update_progress)
+
+    def reset_tile_tracking(self, tile_id: int) -> None:
+        """Reset one tile's tracked objects, keeping its cached encoding. A no-op before its first use."""
+        segmenter = self._segmenters.get((tile_id, self._worker_id(tile_id)))
+        if segmenter is not None:
+            segmenter.reset_tracking()
+
+    def propagate_tile(self, tile_id: int, update_progress=None, early_stop_patience=None, z_range=None):
+        """Propagate one tile's prompts, returning its own segments and its outer (halo-included) block.
+
+        Never merges across tiles, unlike `predict`, which stitches by object identity: it is for a
+        caller whose object ids are tile-local, e.g. automatic prompt generation, where a candidate
+        belongs to exactly one tile and its id would otherwise collide with another tile's.
+        """
+        video_segments = self._get_segmenter(tile_id).propagate_prompts(
+            update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+        )
+        outer = self.tiling.get_block_with_halo(tile_id, list(self.halo)).outer_block
+        bounding_box = tuple(slice(int(b), int(e)) for b, e in zip(outer.begin, outer.end))
+        return video_segments, bounding_box
+
+    def release_tile(self, tile_id: int) -> None:
+        """Free one tile's video-predictor state, leaving the other tiles' states alive.
+
+        Keeps the CUDA cache rather than emptying it: the next state on this device is the same size,
+        so the allocator reuses the blocks, and a collection from every worker after every job costs
+        more than it frees - it holds the interpreter lock while the other devices wait for work.
+        """
+        segmenter = self._segmenters.pop((tile_id, self._worker_id(tile_id)), None)
+        self._tile_workers.pop(tile_id, None)
+        if segmenter is not None:
+            segmenter.release()
 
     def segment_slice(self, frame_idx, points=None, labels=None, boxes=None, masks=None, object_id=1):
         """Segment a single slice. Points are (x, y), boxes (x0, y0, x1, y1), as passed by the annotator.
@@ -1223,7 +1607,7 @@ class TiledPromptableSegmentation3D:
 
         out = np.zeros(self.shape[1:], dtype="uint32")
         found = False
-        for tile_id, tile_seg in self._run_tile_jobs(sorted(tile_jobs), segment_tile):
+        for tile_id, tile_seg in self.map_tiles(sorted(tile_jobs), segment_tile):
             if tile_seg is None:
                 continue
             local, glob = self._inner_slices(tile_id)
@@ -1279,7 +1663,7 @@ class TiledPromptableSegmentation3D:
                 frame_ids=frame_ids, boxes=np.array(local_boxes), object_id=tile_ids[tile_id],
             )
 
-    def add_mask_prompts(self, frame_ids, masks=None, object_id=None):
+    def add_mask_prompts(self, frame_ids, masks=None, object_id=None, refine=True):
         """Add mask prompts. Each mask is routed to the tiles its filled region overlaps, cropped to
         each tile's outer block, and added there (so a mask spanning tiles is added on both sides)."""
         if masks is None or len(masks) == 0:
@@ -1299,7 +1683,7 @@ class TiledPromptableSegmentation3D:
             for tid in _box_to_tiles(self.tiling, self.halo, box_yx):
                 self._get_segmenter(tid).add_mask_prompts(
                     frame_ids=frame_ids, masks=[_crop_mask_to_tile(self.tiling, self.halo, tid, mask)],
-                    object_id=obj_id,
+                    object_id=obj_id, refine=refine,
                 )
 
     def predict(self, update_progress=None, early_stop_patience=None, z_range=None):
@@ -1311,12 +1695,12 @@ class TiledPromptableSegmentation3D:
         segmentation = np.zeros(self.shape, dtype="uint64")
 
         def predict_tile(tile_id, tile_update=None):
-            return self._segmenters[tile_id].predict(
+            return self._get_segmenter(tile_id).predict(
                 update_progress=tile_update, early_stop_patience=early_stop_patience, z_range=z_range,
             )
 
-        for tile_id, tile_seg in self._run_tile_jobs(
-            sorted(self._segmenters), predict_tile, update_progress=update_progress,
+        for tile_id, tile_seg in self.map_tiles(
+            self.active_tiles, predict_tile, update_progress=update_progress,
         ):
             local, glob = self._inner_slices(tile_id)
             inner = tile_seg[(slice(None),) + local]

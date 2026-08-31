@@ -231,13 +231,19 @@ class AnnotatorState(metaclass=Singleton):
             # ~200 MB/slice and OOMs); it only applies when the embeddings are cached on disk.
             lazy_loading = needs_disk_cache
 
+            embedding_tile_shape, embedding_halo = tile_shape, halo
+            if self.is_sam2 and ndim == 3 and tile_shape is not None:
+                # The GUI configures xy tiling, while the SAM2 embedding API uses all spatial axes.
+                embedding_tile_shape = (image_data.shape[0], *tile_shape)
+                embedding_halo = None if halo is None else (0, *halo)
+
             self.image_embeddings = _comp_embed_fn(
                 predictor=self.predictor,
                 input_=image_data,
                 save_path=save_path,
                 ndim=ndim,
-                tile_shape=tile_shape,
-                halo=halo,
+                tile_shape=embedding_tile_shape,
+                halo=embedding_halo,
                 batch_size=batch_size,
                 verbose=True,
                 lazy_loading=lazy_loading,

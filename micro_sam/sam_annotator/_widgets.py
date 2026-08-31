@@ -4245,8 +4245,6 @@ class AutoSegmentWidget(_WidgetBase):
         # fallback (and only mode) when no decoder is available.
         self.mode = "sparse" if with_decoder else "amg"
         self.settings = None
-        # The flow computation backend is always the (faster) cpp implementation.
-        self.backend = "cpp"
         # z block / halo for 3d decoder inference: the volume is decoded in z chunks to bound memory.
         # These only matter for volumetric decoder modes. Set 'tile_z' >= the slice count for no z-tiling.
         from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
@@ -4445,8 +4443,9 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _sparse_settings(self, settings):
         # Flow-based instance segmentation parameters (LM data).
-        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
-        defaults = DEFAULT_POSTPROCESSING["sparse"]
+        from micro_sam.v2.postprocessing import default_postprocessing
+        from micro_sam.v2.util import DEFAULT_MODEL
+        defaults = default_postprocessing(getattr(self, "model_type", None) or DEFAULT_MODEL, "sparse")
 
         self.foreground_threshold = defaults["foreground_threshold"]
         self.foreground_threshold_param, layout = self._add_float_param(
@@ -4474,8 +4473,9 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _dense_settings(self, settings):
         # Multicut-based instance segmentation parameters (EM data, 2d and 3d).
-        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
-        defaults = DEFAULT_POSTPROCESSING["dense"]
+        from micro_sam.v2.postprocessing import default_postprocessing
+        from micro_sam.v2.util import DEFAULT_MODEL
+        defaults = default_postprocessing(getattr(self, "model_type", None) or DEFAULT_MODEL, "dense")
 
         self.beta = defaults["beta"]
         self.beta_param, layout = self._add_float_param(
@@ -4495,8 +4495,12 @@ class AutoSegmentWidget(_WidgetBase):
         )
 
     def _apg_settings(self, settings):
-        from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
-        defaults = DEFAULT_PROMPT_GENERATION
+        from micro_sam.v2.automatic_prompt_generation import (
+            DEFAULT_PROMPT_GENERATION, DEFAULT_REFINEMENT, default_prompt_generation,
+        )
+        from micro_sam.v2.util import DEFAULT_MODEL
+        model_type = getattr(self, "model_type", None) or DEFAULT_MODEL
+        defaults = default_prompt_generation(model_type, is_volume=False)
 
         self.candidate_threshold = defaults["candidate_threshold"]
         self.candidate_threshold_param, layout = self._add_float_param(
@@ -4506,7 +4510,8 @@ class AutoSegmentWidget(_WidgetBase):
         settings.layout().addLayout(layout)
 
         if self.volumetric and not self._is_tracking:
-            self.candidate_threshold_high = defaults["candidate_threshold_3d"][1]
+            volume_defaults = default_prompt_generation(model_type, is_volume=True)
+            self.candidate_threshold_high = volume_defaults["candidate_threshold"][1]
             self.candidate_threshold_high_param, layout = self._add_float_param(
                 "candidate_threshold_high", self.candidate_threshold_high, min_val=0.0, max_val=100.0, step=0.1,
                 tooltip=get_tooltip("autosegment", "candidate_threshold_high"),
@@ -4548,27 +4553,27 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addLayout(layout)
 
-        self.multimasking = defaults["multimasking"]
+        self.multimasking = DEFAULT_PROMPT_GENERATION["multimasking"]
         self.multimasking_checkbox = self._add_boolean_param(
             "multimasking", self.multimasking, tooltip=get_tooltip("autosegment", "multimasking"),
         )
         settings.layout().addWidget(self.multimasking_checkbox)
 
-        self.refine_with_box_prompts = defaults["refine_with_box_prompts"]
+        self.refine_with_box_prompts = DEFAULT_PROMPT_GENERATION["refinement"] == "boxes"
         self.refine_with_box_prompts_checkbox = self._add_boolean_param(
             "refine_with_box_prompts", self.refine_with_box_prompts,
             tooltip=get_tooltip("autosegment", "refine_with_box_prompts"),
         )
         settings.layout().addWidget(self.refine_with_box_prompts_checkbox)
 
-        self.box_extension = defaults["box_extension"]
+        self.box_extension = DEFAULT_REFINEMENT["box_extension"]
         self.box_extension_param, layout = self._add_int_param(
             "box_extension", self.box_extension, min_val=0, max_val=100,
             tooltip=get_tooltip("autosegment", "box_extension"),
         )
         settings.layout().addLayout(layout)
 
-        self.prompt_batch_size = 64
+        self.prompt_batch_size = DEFAULT_PROMPT_GENERATION["batch_size"]
         self.prompt_batch_size_param, layout = self._add_int_param(
             "prompt_batch_size", self.prompt_batch_size, min_val=1, max_val=1024,
             tooltip=get_tooltip("autosegment", "prompt_batch_size"),
@@ -4576,14 +4581,14 @@ class AutoSegmentWidget(_WidgetBase):
         settings.layout().addLayout(layout)
 
         if self.volumetric and not self._is_tracking:
-            self.n_objects_per_pass = defaults["n_objects_per_pass"]
+            self.n_objects_per_pass = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"]
             self.n_objects_per_pass_param, layout = self._add_int_param(
                 "n_objects_per_pass", self.n_objects_per_pass, min_val=1, max_val=1024,
                 tooltip=get_tooltip("autosegment", "n_objects_per_pass"),
             )
             settings.layout().addLayout(layout)
 
-            self.early_stop_patience = 0
+            self.early_stop_patience = DEFAULT_PROMPT_GENERATION["early_stop_patience"]
             self.early_stop_patience_param, layout = self._add_int_param(
                 "early_stop_patience", self.early_stop_patience, min_val=0, max_val=1024,
                 tooltip=get_tooltip("autosegment", "early_stop_patience"),
@@ -4591,31 +4596,33 @@ class AutoSegmentWidget(_WidgetBase):
             settings.layout().addLayout(layout)
 
         self._add_flow_integration_params(
-            settings, n_iter=defaults["n_iter"], dt=defaults["dt"], sigma=defaults["sigma"],
+            settings, n_iter=defaults["n_iter"], dt=DEFAULT_PROMPT_GENERATION["dt"], sigma=defaults["sigma"],
         )
 
     def _postproc_kwargs(self):
         if self.mode == "dense":
             return dict(
                 beta=self.beta, density_threshold=self.density_threshold, n_iter=self.n_iter,
-                dt=self.dt, sigma=self.sigma, n_threads=self.n_threads, backend=self.backend,
+                dt=self.dt, sigma=self.sigma, n_threads=self.n_threads,
             )
         return dict(
             foreground_threshold=self.foreground_threshold, density_threshold=self.density_threshold,
             min_size=self.min_object_size, n_iter=self.n_iter, dt=self.dt, sigma=self.sigma,
-            n_threads=self.n_threads, backend=self.backend,
+            n_threads=self.n_threads,
         )
 
     def _apg_kwargs(self, ndim):
         candidate_threshold = self.candidate_threshold
         if ndim == 3:
             candidate_threshold = (candidate_threshold, self.candidate_threshold_high)
+        refinement = "boxes" if self.refine_with_box_prompts else None
+        refinement_kwargs = {"box_extension": self.box_extension} if refinement is not None else None
 
         kwargs = dict(
             candidate_threshold=candidate_threshold, foreground_threshold=self.foreground_threshold,
             min_candidate_size=self.min_candidate_size, score_threshold=self.score_threshold,
-            max_overlap=self.max_overlap, min_size=self.min_object_size,
-            refine_with_box_prompts=bool(self.refine_with_box_prompts), box_extension=self.box_extension,
+            score_filter="predicted_iou", max_overlap=self.max_overlap, min_size=self.min_object_size,
+            refinement=refinement, refinement_kwargs=refinement_kwargs,
             multimasking=bool(self.multimasking), batch_size=self.prompt_batch_size,
             n_iter=self.n_iter, dt=self.dt, sigma=self.sigma, n_threads=self.n_threads,
         )
@@ -4634,9 +4641,11 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _apg_select_kwargs(self):
         # The merge stage: post-processing of the proposals, cheap next to the prompting.
+        refinement = "boxes" if self.refine_with_box_prompts else None
+        refinement_kwargs = {"box_extension": self.box_extension} if refinement is not None else None
         return dict(
             score_threshold=self.score_threshold, max_overlap=self.max_overlap, min_size=self.min_object_size,
-            refine_with_box_prompts=bool(self.refine_with_box_prompts), box_extension=self.box_extension,
+            score_filter="predicted_iou", refinement=refinement, refinement_kwargs=refinement_kwargs,
             batch_size=self.prompt_batch_size,
         )
 
@@ -4709,8 +4718,10 @@ class AutoSegmentWidget(_WidgetBase):
         save_path = self._state_save_path(state)
 
         # All decoder auto-seg cases reuse the precomputed embeddings and run the decoder on them (no
-        # encoder re-run). The tiling is taken from the embeddings (tiled embeddings have a top-level
-        # 'input_size' of None). This covers 2d and 3d, tiled and untiled.
+        # encoder re-run). The in-plane tiling is taken from the embeddings (tiled embeddings have a
+        # top-level 'input_size' of None), so only the z entry of 'tile_shape'/'halo' below matters -
+        # the y, x entries are filler, ignored by the decoder-from-embeddings path. This covers 2d
+        # and 3d, tiled and untiled.
         tile_shape, halo = None, None
         z_block, z_halo = None, None
         if not self.volumetric or ndim == 3:
@@ -4719,6 +4730,8 @@ class AutoSegmentWidget(_WidgetBase):
             is_tiled = image_embeddings["input_size"] is None
             if ndim == 3:  # the decoder pass is z-chunked using the auto-seg z block / halo controls.
                 z_block, z_halo = self._z_tiling(int(run_raw.shape[0]))
+                tile_shape = (z_block, run_raw.shape[1], run_raw.shape[2])
+                halo = (z_halo, 0, 0)
         else:
             # A single slice of a 3d volume: reuse that slice's features (no re-encode). For untiled
             # embeddings, build the slice's 2d embedding. For tiled embeddings, pass the tiled 3d
@@ -4751,7 +4764,6 @@ class AutoSegmentWidget(_WidgetBase):
                     model_type=model_type,
                     i=z, state_index=(None if ndim == 3 else z), is_tiled=is_tiled,
                     tile_shape=tile_shape, halo=halo, device=device, devices=state.inference_devices,
-                    z_block=z_block, z_halo=z_halo,
                     pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
                 )
                 decoder_state = self._segmenter.get_state()
@@ -4794,43 +4806,55 @@ class AutoSegmentWidget(_WidgetBase):
             halo = tuple(int(value) for value in attrs["halo"])
 
         z_block, z_halo = None, None
+        decoder_tile_shape, decoder_halo = tile_shape, halo
         if ndim == 3:
             z_block, z_halo = self._z_tiling(int(run_raw.shape[0]))
+            # The decoder's z chunk goes in front; y, x are the in-plane tiling above, or filler
+            # (ignored by the decoder-from-embeddings path) when there is none.
+            decoder_tile_shape = (z_block, *(tile_shape or run_raw.shape[1:3]))
+            decoder_halo = (z_halo, *(halo or (0, 0)))
 
         cache_key = (
             state.data_signature, "apg", ndim, z, tile_shape, halo, z_block, z_halo,
             image_embeddings is not None, save_path,
         )
-        decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
         if self._segmenter is None or self._segmenter_key != cache_key:
             self._release_segmenter()
             self._segmenter = get_instance_segmentation_generator(
                 model=model, decoder=state.decoder, is_tiled=is_tiled, segmentation_mode="apg",
                 device=device, inference_device=state.inference_devices, ndim=ndim,
             )
-
-            decoder_state = self._cached_decoder_state(decoder_key)
-            if decoder_state is None:
-                decoder_segmenter = cache_autoseg_state(
-                    "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
-                    model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
-                    is_tiled=is_tiled, tile_shape=tile_shape, halo=halo, device=device,
-                    devices=state.inference_devices, z_block=z_block, z_halo=z_halo,
-                    pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
+            if is_tiled:
+                self._segmenter.initialize(
+                    run_raw, ndim=ndim, tile_shape=decoder_tile_shape, halo=decoder_halo, verbose=False,
                 )
-                decoder_state = decoder_segmenter.get_state()
-                self._store_decoder_state(decoder_key, decoder_state, save_path=save_path)
-            self._persist_decoder_state(
-                decoder_state, save_path, state_index=(None if ndim == 3 else z), model_type=model_type,
-            )
-            apg_state = dict(decoder_state)
-            apg_state["image_embeddings"] = image_embeddings
-            if z is not None:
-                apg_state["i"] = z
-            if ndim == 3:
-                apg_state["volume"] = run_raw
-            self._segmenter.set_state(apg_state)
+            else:
+                decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
+                decoder_state = self._cached_decoder_state(decoder_key)
+                if decoder_state is None:
+                    decoder_segmenter = cache_autoseg_state(
+                        "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
+                        model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
+                        is_tiled=False, tile_shape=decoder_tile_shape, halo=decoder_halo, device=device,
+                        devices=state.inference_devices,
+                        pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
+                    )
+                    decoder_state = decoder_segmenter.get_state()
+                    self._store_decoder_state(decoder_key, decoder_state, save_path=save_path)
+                self._persist_decoder_state(
+                    decoder_state, save_path, state_index=(None if ndim == 3 else z), model_type=model_type,
+                )
+                apg_state = dict(decoder_state)
+                apg_state["image_embeddings"] = image_embeddings
+                if z is not None:
+                    apg_state["i"] = z
+                if ndim == 3:
+                    apg_state["volume"] = run_raw
+                self._segmenter.set_state(apg_state)
             self._segmenter_key = cache_key
+
+        if is_tiled:
+            return self._segmenter.generate(**self._apg_kwargs(ndim))
 
         if ndim == 3:  # One pass: the volumetric stages are not separable the way the 2d ones are.
             return self._segmenter.generate(**self._apg_kwargs(ndim))

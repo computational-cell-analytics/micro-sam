@@ -3,11 +3,12 @@ channels:
     - conda-forge
 dependencies:
     - bioimage-cpp >=0.7
+    - bioimage-py >=0.2.1
     - bioimageio.core >=0.11
     - click
     - imagecodecs
     - magicgui
-    - napari >=0.7.1,<0.9
+    - napari >=0.7.1,<0.10
     - natsort
     - pip
     - pooch
