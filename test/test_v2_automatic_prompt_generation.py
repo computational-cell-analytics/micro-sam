@@ -2084,15 +2084,19 @@ def test_is_protected_from_pruning_default_margin_is_never_protective():
     assert segmenter._is_protected_from_pruning(edge_candidate) is False
 
 
-def test_is_protected_from_pruning_flags_boxes_touching_the_margin():
+def test_is_protected_from_pruning_flags_candidates_touching_the_margin():
     segmenter = object.__new__(AutomaticPromptGenerator)
-    segmenter._pruning_protected_margin = (10, 10)
-    segmenter._volume = types.SimpleNamespace(shape=(3, 100, 100))
+    segmenter._pruning_protected_margin = (1, 10, 10)
+    segmenter._volume = types.SimpleNamespace(shape=(5, 100, 100))
 
-    edge_candidate = {"mask_box": (slice(0, 5), slice(20, 30))}
-    far_edge_candidate = {"mask_box": (slice(20, 30), slice(95, 100))}
-    interior_candidate = {"mask_box": (slice(20, 30), slice(20, 30))}
+    near_z_candidate = {"frame": 0, "mask_box": (slice(20, 30), slice(20, 30))}
+    far_z_candidate = {"frame": 4, "mask_box": (slice(20, 30), slice(20, 30))}
+    edge_candidate = {"frame": 2, "mask_box": (slice(0, 5), slice(20, 30))}
+    far_edge_candidate = {"frame": 2, "mask_box": (slice(20, 30), slice(95, 100))}
+    interior_candidate = {"frame": 2, "mask_box": (slice(20, 30), slice(20, 30))}
 
+    assert segmenter._is_protected_from_pruning(near_z_candidate) is True
+    assert segmenter._is_protected_from_pruning(far_z_candidate) is True
     assert segmenter._is_protected_from_pruning(edge_candidate) is True
     assert segmenter._is_protected_from_pruning(far_edge_candidate) is True
     assert segmenter._is_protected_from_pruning(interior_candidate) is False
@@ -2100,18 +2104,20 @@ def test_is_protected_from_pruning_flags_boxes_touching_the_margin():
 
 def test_is_claimed_never_prunes_a_candidate_protected_by_the_halo_margin():
     segmenter = object.__new__(AutomaticPromptGenerator)
-    segmenter._pruning_protected_margin = (10, 10)
+    segmenter._pruning_protected_margin = (1, 10, 10)
     segmenter._volume = types.SimpleNamespace(shape=(3, 100, 100))
     segmenter._claim_key = lambda candidate: None
 
     mask = np.ones((5, 5), dtype=bool)
     claim = np.ones((3, 100, 100), dtype=bool)  # fully claimed everywhere, would normally prune
 
-    interior_candidate = {"mask": mask, "mask_box": (slice(20, 25), slice(20, 25)), "frame": 0}
-    edge_candidate = {"mask": mask, "mask_box": (slice(0, 5), slice(20, 25)), "frame": 0}
+    interior_candidate = {"mask": mask, "mask_box": (slice(20, 25), slice(20, 25)), "frame": 1}
+    edge_candidate = {"mask": mask, "mask_box": (slice(0, 5), slice(20, 25)), "frame": 1}
+    z_halo_candidate = {"mask": mask, "mask_box": (slice(20, 25), slice(20, 25)), "frame": 0}
 
     assert segmenter._is_claimed({None: claim}, interior_candidate, max_overlap=0.1) is True
     assert segmenter._is_claimed({None: claim}, edge_candidate, max_overlap=0.1) is False
+    assert segmenter._is_claimed({None: claim}, z_halo_candidate, max_overlap=0.1) is False
 
 
 def test_tiled_apg_generate_sets_halo_margin_and_forwards_propagation_waves(monkeypatch):
@@ -2144,7 +2150,7 @@ def test_tiled_apg_generate_sets_halo_margin_and_forwards_propagation_waves(monk
     segmenter._image = image
     segmenter._ndim = 3
     segmenter._tile_shape = (4, 4, 4)
-    segmenter._halo = (0, 1, 2)
+    segmenter._halo = (1, 1, 2)
 
     segmenter.generate(propagation_waves=4)
 
@@ -2154,7 +2160,7 @@ def test_tiled_apg_generate_sets_halo_margin_and_forwards_propagation_waves(monk
     np.testing.assert_array_equal(bounds[0], expected_bounds[0])
     np.testing.assert_array_equal(bounds[1], expected_bounds[1])
 
-    assert calls["margin"] == (1, 2)
+    assert calls["margin"] == (1, 1, 2)
     assert calls["params"]["propagation_waves"] == 4
 
 

@@ -1239,7 +1239,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._i = None
         self._owns_image_embeddings = False
         self._last_generation_stats = {}
-        # Set by 'TiledAutomaticPromptGenerator' to this tile/block's (y, x) halo before propagating,
+        # Set by 'TiledAutomaticPromptGenerator' to this block's full spatial halo before propagating,
         # so pruning never drops a candidate the halo-overlap multicut might need; None elsewhere.
         self._pruning_protected_margin: Optional[tuple] = None
         self._microscopy_multimask_scorer = None
@@ -2782,7 +2782,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         return bool(claimed > max_overlap * area)
 
     def _is_protected_from_pruning(self, candidate: dict) -> bool:
-        """Whether a candidate's anchor-slice mask reaches into the halo margin, if one is set.
+        """Whether a candidate's anchor frame or mask reaches into the halo margin, if one is set.
 
         '_pruning_protected_margin' is None outside 'TiledAutomaticPromptGenerator', so this is
         always False there and pruning behaves exactly as it did before this option existed. A tile
@@ -2794,11 +2794,13 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         margin = getattr(self, "_pruning_protected_margin", None)
         if margin is None:
             return False
-        y_margin, x_margin = margin
+        z_margin, y_margin, x_margin = margin
+        frame = candidate["frame"]
         y_box, x_box = candidate["mask_box"]
-        _, height, width = self._volume.shape
+        depth, height, width = self._volume.shape
         return (
-            y_box.start < y_margin or y_box.stop > height - y_margin
+            frame < z_margin or frame >= depth - z_margin
+            or y_box.start < y_margin or y_box.stop > height - y_margin
             or x_box.start < x_margin or x_box.stop > width - x_margin
         )
 
@@ -3146,9 +3148,9 @@ class TiledAutomaticPromptGenerator:
 
         `propagation_waves` reaches every tile/block unchanged, but each one propagates with its
         own halo as a protected margin (see `AutomaticPromptGenerator._is_protected_from_pruning`):
-        a candidate whose anchor-slice mask reaches into that margin is never pruned as a within-tile
-        duplicate, since it is exactly the kind of prediction the halo-overlap multicut compares
-        against the neighbouring tile/block.
+        a candidate whose anchor frame or mask reaches into that margin is never pruned as a
+        within-tile duplicate, since it is exactly the kind of prediction the halo-overlap multicut
+        compares against the neighbouring tile/block.
 
         For a volume, every tile/block is also normalized against percentile bounds computed once
         over the whole image (`normalization_bounds`, see `AutomaticPromptGenerator.initialize`),
@@ -3166,7 +3168,7 @@ class TiledAutomaticPromptGenerator:
             raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
 
         params = dict(params)
-        protected_margin = tuple(self._halo[-2:])
+        protected_margin = tuple(self._halo)
         # Computed once over the whole image/volume so every tile/block shares one normalization
         # instead of each estimating its own percentiles from its own, smaller, biased crop.
         normalization_bounds = _volume_normalization_bounds(self._image) if self._ndim == 3 else None
