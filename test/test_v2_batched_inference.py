@@ -89,6 +89,29 @@ class FakeVideoBackbone(torch.nn.Module):
         return {"vision_features": fpn[0].clone(), "vision_pos_enc": pos_enc, "backbone_fpn": fpn}
 
 
+class TestVolumeNormalization(unittest.TestCase):
+    def test_rgb_bounds_are_channelwise_and_loadable(self):
+        from micro_sam.v2.normalization import compute_percentile_bounds
+        from micro_sam.v2.models._video_predictor import _load_frame_as_tensor
+
+        volume = np.random.default_rng(0).random((3, 4, 8, 3)).astype("float32")
+        bounds = batched_inference._volume_normalization_bounds(volume)
+        expected = compute_percentile_bounds(volume, axis=(0, 1, 2))
+
+        for bound, expected_bound in zip(bounds, expected):
+            self.assertEqual(bound.shape, (1, 1, 3))
+            np.testing.assert_array_equal(bound, expected_bound[0])
+
+        frame = _load_frame_as_tensor(volume[0], image_size=8, bounds=bounds)
+        self.assertEqual(frame.shape, (3, 8, 8))
+
+    def test_grayscale_bounds_keep_their_frame_compatible_shape(self):
+        volume = np.arange(3 * 4 * 8, dtype="float32").reshape(3, 4, 8)
+        bounds = batched_inference._volume_normalization_bounds(volume)
+
+        self.assertEqual(tuple(bound.shape for bound in bounds), ((1, 1, 1), (1, 1, 1)))
+
+
 class TestSharedPositionalEncoding(unittest.TestCase):
     """The encodings are shape-determined, so only one copy is computed, stored and read back."""
 

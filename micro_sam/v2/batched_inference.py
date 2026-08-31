@@ -38,6 +38,9 @@ def _volume_normalization_bounds(input_: np.ndarray) -> Tuple[np.ndarray, np.nda
     n_slices = int(input_.shape[0])
     step = max(1, n_slices // NORMALIZATION_SAMPLE_SLICES)
     sample = np.stack([np.asarray(input_[z]) for z in range(0, n_slices, step)])
+    if sample.ndim == 4:
+        bounds = compute_percentile_bounds(sample, axis=(0, 1, 2))
+        return tuple(bound[0] for bound in bounds)
     return compute_percentile_bounds(sample)
 
 
