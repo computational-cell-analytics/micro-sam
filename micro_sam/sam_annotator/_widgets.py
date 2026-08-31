@@ -4818,41 +4818,43 @@ class AutoSegmentWidget(_WidgetBase):
             state.data_signature, "apg", ndim, z, tile_shape, halo, z_block, z_halo,
             image_embeddings is not None, save_path,
         )
-        decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
         if self._segmenter is None or self._segmenter_key != cache_key:
             self._release_segmenter()
             self._segmenter = get_instance_segmentation_generator(
                 model=model, decoder=state.decoder, is_tiled=is_tiled, segmentation_mode="apg",
                 device=device, inference_device=state.inference_devices, ndim=ndim,
             )
-
-            decoder_state = self._cached_decoder_state(decoder_key)
-            if decoder_state is None:
-                decoder_segmenter = cache_autoseg_state(
-                    "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
-                    model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
-                    is_tiled=is_tiled, tile_shape=decoder_tile_shape, halo=decoder_halo, device=device,
-                    devices=state.inference_devices,
-                    pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
+            if is_tiled:
+                self._segmenter.initialize(
+                    run_raw, ndim=ndim, tile_shape=decoder_tile_shape, halo=decoder_halo, verbose=False,
                 )
-                decoder_state = decoder_segmenter.get_state()
-                self._store_decoder_state(decoder_key, decoder_state, save_path=save_path)
-            self._persist_decoder_state(
-                decoder_state, save_path, state_index=(None if ndim == 3 else z), model_type=model_type,
-            )
-            apg_state = dict(decoder_state)
-            apg_state["image_embeddings"] = image_embeddings
-            if z is not None:
-                apg_state["i"] = z
-            if ndim == 3:
-                apg_state["volume"] = run_raw
-            # KNOWN GAP: when is_tiled, `self._segmenter` is `TiledAutomaticPromptGenerator`, whose
-            # blockwise/bioimage_py design has no single cached embedding to derive tiling from or
-            # reuse across calls (every block is re-encoded per `generate`), so `set_state` here
-            # raises - it expects {'image', 'tile_shape', 'halo'}. Needs a caching redesign for this
-            # widget, not a call-site patch: cache the per-block segmentations, not a decode step.
-            self._segmenter.set_state(apg_state)
+            else:
+                decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
+                decoder_state = self._cached_decoder_state(decoder_key)
+                if decoder_state is None:
+                    decoder_segmenter = cache_autoseg_state(
+                        "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
+                        model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
+                        is_tiled=False, tile_shape=decoder_tile_shape, halo=decoder_halo, device=device,
+                        devices=state.inference_devices,
+                        pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
+                    )
+                    decoder_state = decoder_segmenter.get_state()
+                    self._store_decoder_state(decoder_key, decoder_state, save_path=save_path)
+                self._persist_decoder_state(
+                    decoder_state, save_path, state_index=(None if ndim == 3 else z), model_type=model_type,
+                )
+                apg_state = dict(decoder_state)
+                apg_state["image_embeddings"] = image_embeddings
+                if z is not None:
+                    apg_state["i"] = z
+                if ndim == 3:
+                    apg_state["volume"] = run_raw
+                self._segmenter.set_state(apg_state)
             self._segmenter_key = cache_key
+
+        if is_tiled:
+            return self._segmenter.generate(**self._apg_kwargs(ndim))
 
         if ndim == 3:  # One pass: the volumetric stages are not separable the way the 2d ones are.
             return self._segmenter.generate(**self._apg_kwargs(ndim))
