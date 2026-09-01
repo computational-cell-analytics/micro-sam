@@ -2,7 +2,7 @@
 
 **New in version 1.8.13**
 
-Fix pip installations by using `segment-anything-py>=1.0.1`. This package contains the corrected PyTorch image resize.
+Fix pip installations that used a stale Segment Anything release with an incorrect PyTorch image resize. Pip now installs `segment-anything-py>=1.0.1`.
 
 **New in version 1.8.12**
 
