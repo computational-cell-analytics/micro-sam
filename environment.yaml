@@ -22,7 +22,7 @@ dependencies:
     # or, to enforce a CPU installation, change to
     # - "pytorch=*=cpu*"
     - pytorch >=2.5
-    - segment-anything
+    - segment-anything >=1.0.1
     - torchvision
     - torch_em >=0.9
     - tqdm
