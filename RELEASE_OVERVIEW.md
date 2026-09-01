@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.8.13**
+
+Fix pip installations by using `segment-anything-py>=1.0.1`. This package contains the corrected PyTorch image resize.
+
 **New in version 1.8.12**
 
 Support napari 0.9, pin `napari<0.10`, and fix the tracking annotator when prompt layers already exist and when selecting box prompts.
