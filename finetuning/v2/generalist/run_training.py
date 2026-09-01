@@ -14,7 +14,7 @@ EPOCHS = {
     "hvit_l": 150,
 }
 
-# GDR_LEVEL=LOC is mandatory with IB: every other level hangs on this cluster's H100 nodes.
+# GDR_LEVEL=LOC is mandatory with IB: GPUDirect RDMA fails on these nodes with IBV_WC_LOC_PROT_ERR.
 NCCL_ENV = {
     True: {
         "NCCL_IB_DISABLE": "0",
