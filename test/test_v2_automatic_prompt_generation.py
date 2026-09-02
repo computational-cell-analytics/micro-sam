@@ -118,6 +118,26 @@ def test_factory_returns_the_non_tiled_apg_class(monkeypatch):
     assert predictor.model_type == "hvit_b"
 
 
+@pytest.mark.parametrize("is_tiled", [False, True])
+def test_volumetric_apg_is_not_restricted_to_an_accelerator(is_tiled):
+    """The annotator refuses APG on a volume unless it runs on a GPU / MPS (see
+    'micro_sam.sam_annotator._widgets._apg_volume_error'). That restriction is the annotator's
+    alone: a script or the CLI can still build and run the volumetric generator on the CPU."""
+    video_predictor = types.SimpleNamespace(
+        model=types.SimpleNamespace(image_size=8, model_type="hvit_b"),
+        mask_threshold=0.0,
+        _transforms=types.SimpleNamespace(),
+    )
+
+    segmenter = get_instance_segmentation_generator(
+        model=video_predictor, decoder=object(), segmentation_mode="apg",
+        is_tiled=is_tiled, ndim=3, device="cpu",
+    )
+    expected = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
+    assert type(segmenter) is expected
+    assert torch.device(segmenter._device).type == "cpu"
+
+
 def test_factory_returns_the_tiled_apg_class(monkeypatch):
     predictor = types.SimpleNamespace(model=types.SimpleNamespace(image_size=8, model_type="hvit_b"))
     monkeypatch.setattr("micro_sam.v2.util.get_sam2_image_predictor", lambda model: predictor)

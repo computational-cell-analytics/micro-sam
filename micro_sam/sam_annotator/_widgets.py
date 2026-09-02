@@ -3789,6 +3789,58 @@ _NO_DECODER_MESSAGE = (
     "or the 'custom weights' path in the embedding widget."
 )
 
+# APG prompts the SAM2 video predictor with every candidate, which needs an accelerator to finish in
+# a reasonable time. This applies to a whole volume and to tracking (which prompts per frame); plain
+# 2d APG on an image or a single slice has no such restriction and runs on the CPU like the other
+# modes. This is an annotator-level restriction only - 'micro_sam.v2.automatic_prompt_generation' and
+# the CLI still run wherever they are pointed.
+_APG_ACCELERATORS = ("cuda", "mps")
+
+
+def _apg_runs_on_this_device(state):
+    """Whether APG's video-predictor path can run on the device the model is loaded on.
+
+    Args:
+        state: The annotator state, holding the loaded decoder.
+
+    Returns:
+        Whether the device is one APG's volume / tracking path supports.
+    """
+    return util.device_type(next(state.decoder.parameters()).device) in _APG_ACCELERATORS
+
+
+def _apg_error(state, volumetric, ndim, is_tracking=False):
+    """Why APG cannot run in the annotator for this data, if it cannot.
+
+    The device rule is per data kind, not per run: volumetric data and a timeseries go through the
+    video predictor, so APG is unavailable for the whole widget on the CPU - a single slice or frame
+    of them included. A plain 2d image prompts the image predictor and runs anywhere.
+
+    Args:
+        state: The annotator state, holding the loaded decoder and the image embeddings.
+        volumetric: Whether the widget's data is volumetric (a volume or a timeseries).
+        ndim: The dimensionality of the run, 2 for a single slice / frame and 3 for a whole volume.
+        is_tracking: Whether this is the automatic tracking widget.
+
+    Returns:
+        The error message, or None if the APG run is supported.
+    """
+    if (volumetric or is_tracking) and not _apg_runs_on_this_device(state):
+        data_kind = "tracking" if is_tracking else "volumetric data"
+        return (
+            f"APG is not available for {data_kind} on the CPU, since it prompts the video predictor "
+            "for every candidate. Use the 'sparse' or 'dense' mode instead."
+        )
+
+    image_embeddings = state.image_embeddings
+    if ndim == 3 and image_embeddings is not None and image_embeddings.get("input_size") is None:
+        return (
+            "APG cannot segment a full volume with tiled embeddings. Disable in-plane tiling or run APG "
+            "on the current slice."
+        )
+
+    return None
+
 
 class AutoSegmentWidget(_WidgetBase):
     """Automatic segmentation widget for SAM2 with the APG, sparse and dense modes.
@@ -3823,8 +3875,9 @@ class AutoSegmentWidget(_WidgetBase):
         self._viewer = viewer
         self.with_decoder = with_decoder
         self.volumetric = volumetric
-        # Every mode needs a decoder, so the mode list never changes; only whether it can run does.
-        self.mode = self.DEFAULT_MODE
+        # Every mode needs a decoder. APG additionally needs an accelerator for volumetric data and
+        # for tracking, so it is dropped from the list there - see '_available_modes'.
+        self.mode = self._default_mode()
         self.settings = None
         # z block / halo for 3d decoder inference: the volume is decoded in z chunks to bound memory.
         # These only matter for volumetric decoder modes. Set 'tile_z' >= the slice count for no z-tiling.
@@ -3844,6 +3897,32 @@ class AutoSegmentWidget(_WidgetBase):
         self._proposals_key = None
         self._create_widget()
 
+    def _apg_is_available(self):
+        # A plain 2d image prompts the image predictor and runs anywhere. Volumetric data and a
+        # timeseries go through the video predictor, which needs an accelerator. Before the model is
+        # loaded ('Compute Embeddings') the device is not known yet, so APG is offered and the sync
+        # afterwards ('_reset_segmentation_mode') settles it.
+        if not (self.volumetric or self._is_tracking):
+            return True
+        state = AnnotatorState()
+        return state.decoder is None or _apg_runs_on_this_device(state)
+
+    def _available_modes(self):
+        """The modes offered for this widget's data on the loaded device.
+
+        Returns:
+            The mode names, in dropdown order. The first is the default.
+        """
+        if self._apg_is_available():
+            return self.MODES
+        return tuple(mode for mode in self.MODES if mode != "apg")
+
+    def _default_mode(self):
+        return self._available_modes()[0]
+
+    def _mode_choices(self):
+        return tuple(self.mode_dropdown.itemText(i) for i in range(self.mode_dropdown.count()))
+
     def _create_widget(self):
         # Top row: the mode dropdown on the left, the 'Apply to Volume' switch (3d only) on the right.
         top_row = QtWidgets.QHBoxLayout()
@@ -3851,7 +3930,7 @@ class AutoSegmentWidget(_WidgetBase):
         self.mode_dropdown, mode_layout = self._add_choice_param(
             "mode",
             self.mode,
-            list(self.MODES),
+            list(self._available_modes()),
             title="mode:",
             update=self._on_mode_changed,
             tooltip=get_tooltip("autosegment", "mode"),
@@ -3892,15 +3971,20 @@ class AutoSegmentWidget(_WidgetBase):
         )
 
     def _reset_segmentation_mode(self, with_decoder):
-        # If the decoder availability is unchanged there is nothing to rebuild.
-        if with_decoder == self.with_decoder:
+        # If neither the decoder availability nor the offered modes changed there is nothing to
+        # rebuild. The mode list can change without the former: the device decides whether APG is
+        # offered for volumetric data and for tracking.
+        modes = self._available_modes()
+        if with_decoder == self.with_decoder and modes == self._mode_choices():
             return
         self.with_decoder = with_decoder
         self._update_run_button()
 
-        # Back to the default mode for the newly loaded model.
+        # Rebuild the list and go back to the default mode for the newly loaded model.
         self.mode_dropdown.blockSignals(True)
-        self.mode_dropdown.setCurrentText(self.DEFAULT_MODE)
+        self.mode_dropdown.clear()
+        self.mode_dropdown.addItems(list(modes))
+        self.mode_dropdown.setCurrentText(self._default_mode())
         self.mode_dropdown.blockSignals(False)
 
         # Drop the cached segmenter and the decoder prediction, since the loaded model (and so its
@@ -4458,14 +4542,10 @@ class AutoSegmentWidget(_WidgetBase):
         else:
             run_raw, ndim = raw, 2
 
-        if self.mode == "apg" and ndim == 3:
-            image_embeddings = state.image_embeddings
-            if image_embeddings is not None and image_embeddings.get("input_size") is None:
-                return _generate_message(
-                    "error",
-                    "APG cannot segment a full volume with tiled embeddings. Disable in-plane tiling or run APG "
-                    "on the current slice.",
-                )
+        if self.mode == "apg":
+            apg_error = _apg_error(state, self.volumetric, ndim, is_tracking=self._is_tracking)
+            if apg_error is not None:
+                return _generate_message("error", apg_error)
 
         # Show a progress bar in the napari activity dock (and the status-bar wheel) that advances
         # with the actual work: per tile for tiled runs, per slice for 3d, and as a single step for a
@@ -4523,7 +4603,7 @@ class AutoTrackWidget(AutoSegmentWidget):
         self.mode_dropdown, mode_layout = self._add_choice_param(
             "mode",
             self.mode,
-            list(self.MODES),
+            list(self._available_modes()),
             title="mode:",
             update=self._on_mode_changed,
             tooltip=get_tooltip("autosegment", "mode"),
@@ -4636,10 +4716,18 @@ class AutoTrackWidget(AutoSegmentWidget):
 
     def __call__(self):
         state = AnnotatorState()
-        if not (self.volumetric and getattr(self, "apply_to_volume", False)):
-            return super().__call__()
         if not self.with_decoder or state.decoder is None:
             return _generate_message("error", _NO_DECODER_MESSAGE)
+        # Tracking prompts the video predictor per frame, so APG needs an accelerator here for a
+        # single frame just as much as for the whole timeseries. Checked before the single-frame
+        # delegation below so both paths are covered.
+        if self.mode == "apg":
+            apg_error = _apg_error(state, self.volumetric, ndim=2, is_tracking=True)
+            if apg_error is not None:
+                return _generate_message("error", apg_error)
+
+        if not (self.volumetric and getattr(self, "apply_to_volume", False)):
+            return super().__call__()
         if _validate_layers(self._viewer, automatic_segmentation=True):
             return None
         if state.committed_lineages:
