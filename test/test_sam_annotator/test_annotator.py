@@ -2,6 +2,7 @@ import platform
 
 import numpy as np
 import pytest
+import torch
 from skimage.data import binary_blobs
 
 from micro_sam.v2.util import DEFAULT_MODEL
@@ -520,7 +521,7 @@ class TestAutoSegVolumeDispatch:
     off -> only the current slice (2d); on -> the whole volume (3d), segmented slice by slice.
     This is what makes the state caching happen per-slice, on demand."""
 
-    def _dispatch(self, monkeypatch, *, apply_to_volume, current_slice=2):
+    def _dispatch(self, monkeypatch, *, apply_to_volume, current_slice=2, device="cuda"):
         from types import SimpleNamespace
         from micro_sam.sam_annotator import _widgets
         from micro_sam.sam_annotator._widgets import AutoSegmentWidget
@@ -534,14 +535,14 @@ class TestAutoSegVolumeDispatch:
 
         calls = {}
 
-        def fake_run_amg(state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
+        def fake_run_apg(state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
             calls.update(run_raw_shape=tuple(run_raw.shape), ndim=ndim, z=z)
             return np.zeros(run_raw.shape if ndim == 3 else run_raw.shape[-2:], dtype="uint32")
 
         # Duck-typed stand-in so we exercise the '__call__' dispatch without instantiating a QWidget.
         widget = SimpleNamespace(
-            _viewer=viewer, mode="amg", volumetric=True, apply_to_volume=apply_to_volume,
-            _run_amg=fake_run_amg,
+            _viewer=viewer, mode="apg", volumetric=True, apply_to_volume=apply_to_volume,
+            with_decoder=True, _is_tracking=False, _run_apg=fake_run_apg,
         )
 
         def fake_pbar():
@@ -551,7 +552,12 @@ class TestAutoSegVolumeDispatch:
             )
             return SimpleNamespace(), signals
 
-        monkeypatch.setattr(_widgets, "AnnotatorState", lambda: SimpleNamespace(get_image_name=lambda v: "image"))
+        # A decoder on 'device'; APG on a whole volume is only offered on an accelerator.
+        decoder = SimpleNamespace(parameters=lambda: iter([SimpleNamespace(device=torch.device(device))]))
+        monkeypatch.setattr(
+            _widgets, "AnnotatorState",
+            lambda: SimpleNamespace(get_image_name=lambda v: "image", decoder=decoder, image_embeddings=None),
+        )
         monkeypatch.setattr(_widgets, "_validate_layers", lambda *a, **k: False)
         monkeypatch.setattr(_widgets, "_validate_embeddings", lambda *a, **k: False)
         monkeypatch.setattr(_widgets, "_select_layer", lambda *a, **k: None)
@@ -576,6 +582,167 @@ class TestAutoSegVolumeDispatch:
         assert calls["z"] is None
         assert calls["run_raw_shape"] == (5, 16, 16)
 
+    @pytest.mark.parametrize("apply_to_volume", [False, True])
+    def test_apg_on_a_volume_is_refused_on_the_cpu(self, monkeypatch, apply_to_volume):
+        """Volumetric data rules APG out on the CPU as a whole - the current slice included, since
+        it is the data kind and not the individual run that decides."""
+        from micro_sam.sam_annotator import _widgets
+
+        messages = []
+        monkeypatch.setattr(_widgets, "_generate_message", lambda kind, msg: messages.append((kind, msg)))
+        calls = self._dispatch(monkeypatch, apply_to_volume=apply_to_volume, device="cpu")
+
+        assert calls == {}  # the run never starts
+        assert len(messages) == 1
+        kind, msg = messages[0]
+        assert kind == "error"
+        assert "CPU" in msg
+
+
+class TestApgAvailability:
+    """APG prompts the video predictor, so the annotator offers it for volumetric data and for
+    tracking only on an accelerator. A plain 2d image runs it anywhere. The restriction is the
+    annotator's; the backend runs wherever it is pointed (see test_v2_automatic_prompt_generation)."""
+
+    def _state(self, device, embeddings=None):
+        from types import SimpleNamespace
+
+        decoder = SimpleNamespace(parameters=lambda: iter([SimpleNamespace(device=torch.device(device))]))
+        return SimpleNamespace(decoder=decoder, image_embeddings=embeddings or {"input_size": (8, 8)})
+
+    @pytest.mark.parametrize("device", ["cpu", "cuda", "mps"])
+    def test_a_plain_2d_image_runs_anywhere(self, device):
+        from micro_sam.sam_annotator._widgets import _apg_error
+
+        assert _apg_error(self._state(device), volumetric=False, ndim=2) is None
+
+    @pytest.mark.parametrize("device", ["cuda", "cuda:1", "mps"])
+    @pytest.mark.parametrize("ndim", [2, 3])
+    def test_accelerators_run_volumetric_apg(self, device, ndim):
+        from micro_sam.sam_annotator._widgets import _apg_error
+
+        # An indexed device ('cuda:1') must be recognized just like the bare one.
+        assert _apg_error(self._state(device), volumetric=True, ndim=ndim) is None
+        assert _apg_error(self._state(device), volumetric=True, ndim=2, is_tracking=True) is None
+
+    @pytest.mark.parametrize("ndim", [2, 3])
+    def test_volumetric_data_is_refused_on_the_cpu(self, ndim):
+        """Not just the whole-volume run: a single slice of a volume is refused too."""
+        from micro_sam.sam_annotator._widgets import _apg_error
+
+        error = _apg_error(self._state("cpu"), volumetric=True, ndim=ndim)
+        assert error is not None
+        assert "CPU" in error and "volumetric data" in error
+        assert "'sparse' or 'dense'" in error  # it says what to use instead
+
+    def test_tracking_is_refused_on_the_cpu(self):
+        from micro_sam.sam_annotator._widgets import _apg_error
+
+        error = _apg_error(self._state("cpu"), volumetric=True, ndim=2, is_tracking=True)
+        assert error is not None
+        assert "CPU" in error and "tracking" in error
+
+    def test_tiled_embeddings_are_refused_for_a_volume_on_an_accelerator(self):
+        from micro_sam.sam_annotator._widgets import _apg_error
+
+        # Tiled embeddings have no top-level 'input_size'. Only the whole-volume run is affected;
+        # a single slice of a tiled volume is fine.
+        tiled = self._state("cuda", embeddings={"input_size": None})
+        error = _apg_error(tiled, volumetric=True, ndim=3)
+        assert error is not None and "tiled embeddings" in error
+        assert _apg_error(self._state("cuda", embeddings={"input_size": None}), volumetric=True, ndim=2) is None
+
+    def test_the_device_check_comes_first(self):
+        """Both wrong at once reports the device, which is the one the user cannot work around by
+        changing a setting in the widget."""
+        from micro_sam.sam_annotator._widgets import _apg_error
+
+        error = _apg_error(self._state("cpu", embeddings={"input_size": None}), volumetric=True, ndim=3)
+        assert "CPU" in error
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+class TestApgModeIsHiddenOnCpu:
+    """A mode that cannot run is not offered: on the CPU the dropdown drops APG for volumetric data
+    and for tracking. The device is only known once the model is loaded, so the list is rebuilt by
+    the sync that runs after 'Compute Embeddings'."""
+
+    def _load_decoder(self, device):
+        """Put a decoder on 'device' into the state, as computing the embeddings would."""
+        from types import SimpleNamespace
+        from micro_sam.sam_annotator._state import AnnotatorState
+
+        state = AnnotatorState()
+        state.decoder = SimpleNamespace(
+            parameters=lambda: iter([SimpleNamespace(device=torch.device(device))])
+        )
+        return state
+
+    def _choices(self, widget):
+        return [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
+
+    def test_a_2d_annotator_keeps_apg_on_the_cpu(self, make_napari_viewer_proxy):
+        viewer = make_napari_viewer_proxy()
+        autoseg = Annotator(viewer, ndim=2)._widgets["autosegment"]
+        self._load_decoder("cpu")
+        autoseg._reset_segmentation_mode(True)
+
+        assert self._choices(autoseg) == ["apg", "sparse", "dense"]
+        assert autoseg.mode == "apg"
+        viewer.close()
+
+    def test_a_3d_annotator_drops_apg_on_the_cpu(self, make_napari_viewer_proxy):
+        viewer = make_napari_viewer_proxy()
+        autoseg = Annotator(viewer, ndim=3)._widgets["autosegment"]
+        # Before the model is loaded the device is unknown, so APG is still offered.
+        assert "apg" in self._choices(autoseg)
+
+        self._load_decoder("cpu")
+        autoseg._reset_segmentation_mode(True)
+
+        assert self._choices(autoseg) == ["sparse", "dense"]
+        assert autoseg.mode == "sparse"  # the default falls back to the first mode that can run
+        assert autoseg.run_button.isEnabled() is True  # sparse and dense still work on the CPU
+        viewer.close()
+
+    def test_a_3d_annotator_keeps_apg_on_an_accelerator(self, make_napari_viewer_proxy):
+        viewer = make_napari_viewer_proxy()
+        autoseg = Annotator(viewer, ndim=3)._widgets["autosegment"]
+        self._load_decoder("cuda")
+        autoseg._reset_segmentation_mode(True)
+
+        assert self._choices(autoseg) == ["apg", "sparse", "dense"]
+        assert autoseg.mode == "apg"
+        viewer.close()
+
+    def test_the_tracking_widget_drops_apg_on_the_cpu(self, qtbot):
+        from micro_sam.sam_annotator._widgets import AutoTrackWidget
+
+        widget = AutoTrackWidget(viewer=None, with_decoder=True, volumetric=True)
+        qtbot.addWidget(widget)
+        self._load_decoder("cpu")
+        widget._reset_segmentation_mode(True)
+
+        assert self._choices(widget) == ["sparse", "dense"]
+        assert widget.mode == "sparse"
+
+    def test_switching_the_device_puts_apg_back(self, make_napari_viewer_proxy):
+        """Recomputing on a GPU after a CPU run must offer APG again, even though the decoder
+        availability did not change."""
+        viewer = make_napari_viewer_proxy()
+        autoseg = Annotator(viewer, ndim=3)._widgets["autosegment"]
+
+        self._load_decoder("cpu")
+        autoseg._reset_segmentation_mode(True)
+        assert "apg" not in self._choices(autoseg)
+
+        self._load_decoder("cuda")
+        autoseg._reset_segmentation_mode(True)
+        assert self._choices(autoseg) == ["apg", "sparse", "dense"]
+        assert autoseg.mode == "apg"
+        viewer.close()
+
 
 class TestAutoSegStatePersistence:
     """By default (caching off) auto-seg persists no state, so the embedding zarr gets no
@@ -598,50 +765,6 @@ class TestAutoSegStatePersistence:
 
     def test_no_persist_without_embedding_widget(self):
         assert self._state_save_path(cache_state=True, with_widget=False) is None
-
-    def test_enabling_persistence_invalidates_the_in_memory_cache(self, monkeypatch):
-        """Turning disk caching on after an in-memory run must route through the cache helper again."""
-        from types import MethodType, SimpleNamespace
-
-        import micro_sam.precompute_state as precompute_state
-        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
-
-        calls = []
-
-        class _Segmenter:
-            def generate(self, **kwargs):
-                return np.zeros((8, 8), dtype="uint32")
-
-            def clear_state(self):
-                pass
-
-        def fake_cache_autoseg_state(*args, **kwargs):
-            calls.append(args[4])  # save_path
-            return _Segmenter()
-
-        monkeypatch.setattr(precompute_state, "cache_autoseg_state", fake_cache_autoseg_state)
-
-        embedding_widget = SimpleNamespace(cache_state=False)
-        state = SimpleNamespace(
-            predictor=SimpleNamespace(model=object(), model_type="hvit_t"),
-            image_embeddings={"input_size": (8, 8)},
-            embedding_path="/tmp/embeddings.zarr",
-            data_signature="data",
-            widgets={"embeddings": embedding_widget},
-        )
-        widget = SimpleNamespace(
-            volumetric=False, min_object_size=0, points_per_side=32,
-            pred_iou_thresh=0.8, stability_score_thresh=0.9,
-            _segmenter=None, _segmenter_key=None,
-        )
-        widget._state_save_path = MethodType(AutoSegmentWidget._state_save_path, widget)
-        widget._release_segmenter = MethodType(AutoSegmentWidget._release_segmenter, widget)
-
-        raw = np.zeros((8, 8), dtype="uint8")
-        AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
-        embedding_widget.cache_state = True
-        AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
-        assert calls == [None, "/tmp/embeddings.zarr"]
 
     def test_enabling_decoder_persistence_writes_the_in_memory_state(self, monkeypatch):
         from types import MethodType, SimpleNamespace
@@ -893,17 +1016,60 @@ class TestAutoSegDefaultMode:
         assert has_registered_decoder(DEFAULT_MODEL) is True  # the Microscopy default has a decoder
         assert has_registered_decoder("hvit_t") is False  # a plain backbone does not
 
-    def test_autoseg_defaults_to_sparse_for_decoder_model(self, make_napari_viewer_proxy):
+    def test_autoseg_defaults_to_apg_for_decoder_model(self, make_napari_viewer_proxy):
         # Regression: with the Microscopy default model (which has a decoder) the auto-seg widget must
-        # start in a decoder mode ('sparse'), not 'amg', even before embeddings are computed.
+        # start in 'apg', not 'amg', even before embeddings are computed.
         viewer = make_napari_viewer_proxy()
         widget = Annotator(viewer, ndim=2)
         autoseg = widget._widgets["autosegment"]
         assert autoseg.with_decoder is True
-        assert autoseg.mode == "sparse"
-        assert autoseg.mode_dropdown.currentText() == "sparse"
+        assert autoseg.mode == "apg"
+        assert autoseg.mode_dropdown.currentText() == "apg"
         choices = [autoseg.mode_dropdown.itemText(i) for i in range(autoseg.mode_dropdown.count())]
-        assert choices == ["sparse", "dense", "apg"]
+        assert choices == ["apg", "sparse", "dense"]
+        # The settings panel built at startup is the APG one.
+        assert hasattr(autoseg, "candidate_threshold_param")
+        viewer.close()
+
+    def test_autoseg_is_disabled_without_a_decoder(self, make_napari_viewer_proxy):
+        # Every mode runs off the decoder predictions - AMG is not offered in the annotator - so a
+        # model without a decoder disables the run button instead of falling back to another mode.
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        viewer = make_napari_viewer_proxy()
+        autoseg = AutoSegmentWidget(viewer, with_decoder=False, volumetric=False)
+        choices = [autoseg.mode_dropdown.itemText(i) for i in range(autoseg.mode_dropdown.count())]
+        assert choices == ["apg", "sparse", "dense"]  # never 'amg'
+        assert autoseg.mode == "apg"
+        assert autoseg.run_button.isEnabled() is False
+
+        autoseg._reset_segmentation_mode(True)
+        assert autoseg.mode == "apg"
+        assert autoseg.run_button.isEnabled() is True
+
+        autoseg._reset_segmentation_mode(False)
+        assert autoseg.run_button.isEnabled() is False
+        viewer.close()
+
+    def test_running_without_a_decoder_reports_the_reason(self, make_napari_viewer_proxy, monkeypatch):
+        # Clicking run anyway (the button can be enabled from a stale decoder state) explains why
+        # nothing happens rather than falling back to AMG.
+        from micro_sam.sam_annotator import _widgets
+        from micro_sam.sam_annotator._state import AnnotatorState
+
+        messages = []
+        monkeypatch.setattr(_widgets, "_generate_message", lambda kind, msg: messages.append((kind, msg)))
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=2)
+        autoseg = widget._widgets["autosegment"]
+        assert AnnotatorState().decoder is None  # no embeddings computed yet
+        autoseg()
+
+        assert len(messages) == 1
+        kind, msg = messages[0]
+        assert kind == "error"
+        assert "decoder" in msg
         viewer.close()
 
     def test_apg_controls_use_backend_defaults(self, make_napari_viewer_proxy):
@@ -970,6 +1136,35 @@ class TestAutoSegDefaultMode:
 
         # Together they are what the single-call form would have passed.
         assert set(propose_kwargs) | set(select_kwargs) == set(autoseg._apg_kwargs(ndim=2))
+        viewer.close()
+
+    def test_commit_settings_cover_every_mode(self, make_napari_viewer_proxy):
+        """Committing an automatic segmentation to a commit path records the widget's settings, so
+        every mode must report parameters it actually has, in a json-serializable form."""
+        import json
+
+        from micro_sam.sam_annotator._state import AnnotatorState
+        from micro_sam.sam_annotator._widgets import _get_auto_segmentation_options
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=3)
+        autoseg = widget._widgets["autosegment"]
+        state = AnnotatorState()
+
+        for mode in ("apg", "sparse", "dense"):
+            autoseg.mode_dropdown.setCurrentText(mode)
+            for apply_to_volume in (False, True):
+                autoseg.apply_to_volume = apply_to_volume
+                options = _get_auto_segmentation_options(state, np.array([1, 2]))
+                assert options["object_ids"] == [1, 2]
+                assert options["mode"] == mode
+                assert options["apply_to_volume"] is apply_to_volume
+                # The z block / halo are part of a volumetric decoder run.
+                assert options["tile_z"] == autoseg.tile_z
+                assert options["halo_z"] == autoseg.halo_z
+                json.dumps(options)  # It is written to the zarr attributes of the commit path.
+
+        assert _get_auto_segmentation_options(state, [])["mode"] == "dense"
         viewer.close()
 
     def test_autoseg_settings_use_v2_defaults(self):

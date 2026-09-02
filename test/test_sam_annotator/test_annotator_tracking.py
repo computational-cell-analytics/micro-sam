@@ -7,8 +7,8 @@ from skimage.data import binary_blobs
 
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator import annotator_tracking
+from micro_sam.sam_annotator._tooltips import get_tooltip
 from micro_sam.sam_annotator._widgets import (
-    AutoSegmentV1Widget,
     AutoSegmentWidget,
     AutoTrackWidget,
     EmbeddingWidget,
@@ -171,16 +171,42 @@ def test_tracking_rejects_sam1_models():
 
 
 def test_auto_tracking_uses_sam2_widget():
+    import micro_sam.sam_annotator._widgets as widgets
+
     assert issubclass(AutoTrackWidget, AutoSegmentWidget)
-    assert not issubclass(AutoTrackWidget, AutoSegmentV1Widget)
+    # The SAM (v1) auto-seg widget is gone; nothing may bring it back as the tracking base.
+    assert not hasattr(widgets, "AutoSegmentV1Widget")
 
 
-def test_auto_tracking_offers_apg(qtbot):
+def test_auto_tracking_defaults_to_apg(qtbot):
     widget = AutoTrackWidget(viewer=None, with_decoder=True, volumetric=True)
     qtbot.addWidget(widget)
 
     choices = [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
-    assert choices == ["sparse", "dense", "apg"]
-    widget.mode_dropdown.setCurrentText("apg")
+    assert choices == ["apg", "sparse", "dense"]
     assert widget.mode == "apg"
+    assert widget.mode_dropdown.currentText() == "apg"
     assert hasattr(widget, "candidate_threshold_param")
+    # Tracking segments per frame in 2d, so the volumetric-only APG controls are not built.
+    assert not hasattr(widget, "candidate_threshold_high_param")
+    assert not hasattr(widget, "n_objects_per_pass_param")
+
+    widget.mode_dropdown.setCurrentText("sparse")
+    assert widget.mode == "sparse"
+
+
+def test_auto_tracking_does_not_offer_amg(qtbot):
+    # AMG is gone from the annotator: without a decoder the modes stay the same and the run button
+    # is disabled, rather than falling back to grid-based mask generation.
+    widget = AutoTrackWidget(viewer=None, with_decoder=False, volumetric=True)
+    qtbot.addWidget(widget)
+
+    choices = [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
+    assert choices == ["apg", "sparse", "dense"]
+    assert widget.run_button.isEnabled() is False
+    assert not hasattr(widget, "_run_amg")
+
+    widget._reset_segmentation_mode(True)
+    assert widget.run_button.isEnabled() is True
+    # The enabled button keeps the tracking tooltip, not the segmentation one.
+    assert widget.run_button.toolTip() == get_tooltip("autotrack", "run_button")

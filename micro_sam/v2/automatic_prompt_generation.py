@@ -44,8 +44,15 @@ import torch.nn.functional as F
 
 from sam2.utils.amg import calculate_stability_score
 
-import bioimage_py as bp
 from bioimage_cpp.segmentation import label
+
+# Only the tiled stitching in 'TiledAutomaticPromptGenerator.generate' uses this, so a missing
+# 'bioimage_py' must not stop this module - and with it the annotator, which reads the parameter
+# defaults below when it builds the APG settings - from importing.
+try:
+    import bioimage_py as bp
+except ImportError:
+    bp = None
 
 from .normalization import to_image
 from .transforms.resize import resize_longest_side_and_pad_tensor
@@ -3166,6 +3173,8 @@ class TiledAutomaticPromptGenerator:
         """
         if self._image is None:
             raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
+        if bp is None:
+            raise RuntimeError("Tiled automatic prompt generation requires 'bioimage_py'. Install bioimage-py.")
 
         params = dict(params)
         protected_margin = tuple(self._halo)
