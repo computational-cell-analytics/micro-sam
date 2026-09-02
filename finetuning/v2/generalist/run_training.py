@@ -32,7 +32,7 @@ NCCL_ENV = {
 SCRIPT = "/mnt/vast-kisski/home/archit/u28048/micro-sam/finetuning/v2/generalist/train_joint.py"
 PARTITION = "kisski-h100"
 GPU_TYPE = "H100"
-SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v4"
+SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v5"
 
 
 def write_batch_script(
@@ -116,7 +116,7 @@ def submit_slurm(args):
             model_type=model_type,
             n_epochs=EPOCHS[model_type],
             dataset_choice=args.dataset_choice,
-            save_root=SAVE_ROOT,
+            save_root=os.path.abspath(args.save_root),
             reservation=args.reservation,
             enable_ib=args.enable_ib == "yes",
             use_compile=args.compile,
@@ -146,6 +146,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-r", "--reservation", type=str, default=None, help="Slurm reservation to submit under, if any."
     )
+    parser.add_argument("-s", "--save_root", type=str, default=SAVE_ROOT, help="Where to save checkpoints and logs.")
     parser.add_argument(
         "--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB verbs instead of sockets."
     )

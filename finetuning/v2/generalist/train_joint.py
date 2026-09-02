@@ -5,10 +5,10 @@ import torch
 
 
 CHOSEN_PARAMETERS = {
-    "hvit_t": (10, 10, 5),
-    "hvit_s": (10, 10, 5),
-    "hvit_b": (8, 10, 5),
-    "hvit_l": (8, 8, 4),
+    "hvit_t": (12, 12, 5),
+    "hvit_s": (12, 12, 5),
+    "hvit_b": (8, 10, 6),
+    "hvit_l": (8, 8, 5),
 }
 
 
@@ -25,7 +25,7 @@ def build_common(model_type, n_epochs, n_iterations, batch_size, dataset_choice,
     max_num_objects = int(os.environ.get("MAX_NUM_OBJECTS", max_num_objects))
     z_slices = [z_slice]
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
-    save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v4")
+    save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v5")
 
     is_multi_gpu = "RANK" in os.environ
     name = f"joint_sam2_{model_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
