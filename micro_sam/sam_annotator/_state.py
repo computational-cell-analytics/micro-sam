@@ -23,10 +23,10 @@ from qtpy.QtWidgets import QWidget
 
 import micro_sam
 import micro_sam.util as util
-from micro_sam.util import AutoSegBase, _get_sam_model
+from micro_sam.util import _get_sam_model
 from micro_sam.v1.instance_segmentation import get_decoder
 from micro_sam.precompute_state import (
-    cache_amg_state, cache_is_state, cache_autoseg_state, _cache_amg_volume_state
+    cache_is_state, cache_autoseg_state
 )
 
 
@@ -62,10 +62,9 @@ class AnnotatorState(metaclass=Singleton):
     # Whether the tool showed the one-time CPU info popup this session (not reset on recompute).
     cpu_info_shown: Optional[bool] = None
 
-    # The segmenter and its cached state for automatic segmentation. The state contains grid masks
-    # for AMG or decoder predictions for AIS and is loaded on demand for SAM2.
+    # The cached state for automatic segmentation: the decoder predictions (AIS), loaded on demand
+    # for SAM2. The segmenter itself is owned by the automatic segmentation widget.
     # decoder: for direct prediction of instance segmentation
-    automatic_segmenter: Optional[AutoSegBase] = None
     autoseg_state: Optional[Dict] = None
     decoder: Optional[nn.Module] = None
 
@@ -281,9 +280,10 @@ class AnnotatorState(metaclass=Singleton):
         else:
             self.data_signature = util._compute_data_signature(image_data)
 
-        # Precompute the automatic-segmentation state (if specified). Decoder present -> AIS
-        # (decoder predictions), otherwise -> AMG (grid masks); this mirrors the v1 dispatch.
-        if precompute_autoseg_state:
+        # Precompute the automatic-segmentation state (if specified). This is the AIS state, the
+        # decoder predictions every automatic segmentation mode in the annotator runs off, so there
+        # is nothing to precompute for a model without a decoder.
+        if precompute_autoseg_state and self.decoder is not None:
             if save_path is None:
                 raise RuntimeError("Require a save path to precompute the automatic segmentation state")
 
@@ -295,11 +295,9 @@ class AnnotatorState(metaclass=Singleton):
                 self._precompute_autoseg_state_sam1(image_data, ndim, save_path, skip_load)
 
     def _precompute_autoseg_state_sam1(self, image_data, ndim, save_path, skip_load):
-        cache_state = cache_amg_state if self.decoder is None else partial(
-            cache_is_state, decoder=self.decoder, skip_load=skip_load,
-        )
+        cache_state = partial(cache_is_state, decoder=self.decoder, skip_load=skip_load)
         if ndim == 2:
-            self.automatic_segmenter = cache_state(
+            cache_state(
                 predictor=self.predictor, raw=image_data,
                 image_embeddings=self.image_embeddings, save_path=save_path,
             )
@@ -315,41 +313,22 @@ class AnnotatorState(metaclass=Singleton):
     def _precompute_autoseg_state_sam2(
         self, image_data, ndim, save_path, model_type, pbar_init=None, pbar_update=None,
     ):
-        model = getattr(self.predictor, "model", self.predictor)
         resolved_model_type = getattr(self.predictor, "model_type", model_type)
 
-        # The decoder / AMG functions drive the bar per tile / slice / z-block, but label it as if it
-        # were the actual run. Relabel it with a single clear description while keeping the real unit
-        # total, so the precompute phase (after the embeddings) reads meaningfully.
+        # The decoder drives the bar per tile / slice / z-block, but labels it as if it were the
+        # actual run. Relabel it with a single clear description while keeping the real unit total,
+        # so the precompute phase (after the embeddings) reads meaningfully.
         def relabel_pbar_init(total, _description):
             pbar_init(total, "Precompute automatic segmentation state")
         init_cb = relabel_pbar_init if pbar_init is not None else None
 
-        if self.decoder is not None:  # AIS: decoder over the whole image / volume (per tile / z-block).
-            device = next(self.decoder.parameters()).device
-            cache_autoseg_state(
-                "ais", self.decoder, image_data, self.image_embeddings, save_path, ndim=ndim,
-                model_type=resolved_model_type, device=device, devices=self.inference_devices,
-                pbar_init=init_cb, pbar_update=pbar_update,
-            )
-        elif ndim == 2:  # AMG on a single 2d image.
-            if pbar_init is not None:
-                pbar_init(1, "Precompute automatic segmentation state")
-            cache_autoseg_state(
-                "amg", model, image_data, self.image_embeddings, save_path, model_type=resolved_model_type,
-            )
-            if pbar_update is not None:
-                pbar_update(1)
-        else:  # AMG on a volume: cache the grid-prediction state per slice, reusing the 3d embeddings.
-            n_slices = image_data.shape[0] if image_data.ndim == 3 else image_data.shape[1]
-
-            def get_slice(i):
-                return image_data[np.s_[i] if image_data.ndim == 3 else np.s_[:, i]]
-
-            _cache_amg_volume_state(
-                model, get_slice, n_slices, self.image_embeddings, save_path,
-                model_type=resolved_model_type, pbar_init=pbar_init, pbar_update=pbar_update,
-            )
+        # AIS: the decoder over the whole image / volume (per tile / z-block).
+        device = next(self.decoder.parameters()).device
+        cache_autoseg_state(
+            "ais", self.decoder, image_data, self.image_embeddings, save_path, ndim=ndim,
+            model_type=resolved_model_type, device=device, devices=self.inference_devices,
+            pbar_init=init_cb, pbar_update=pbar_update,
+        )
 
     # Get the name of the image layer used to compute the embeddings.
     # If the 'image_name' attribute exists we can just use it.
@@ -430,7 +409,6 @@ class AnnotatorState(metaclass=Singleton):
         self.image_name = None
         self.embedding_path = None
         self.inference_devices = None
-        self.automatic_segmenter = None
         self.autoseg_state = None
         self.decoder = None
         self.current_track_id = None

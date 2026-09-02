@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 
+from micro_sam.v2 import automatic_prompt_generation
 from micro_sam.v2.instance_segmentation import (
     UniSAM2InstanceSegmentation, get_instance_segmentation_generator,
 )
@@ -115,6 +116,26 @@ def test_factory_returns_the_non_tiled_apg_class(monkeypatch):
     assert isinstance(predictor._transforms, ResizeLongestSideTransforms)
     # The embedding cache is keyed on these, which a SAM2 image predictor does not carry by itself.
     assert predictor.model_type == "hvit_b"
+
+
+@pytest.mark.parametrize("is_tiled", [False, True])
+def test_volumetric_apg_is_not_restricted_to_an_accelerator(is_tiled):
+    """The annotator refuses APG on a volume unless it runs on a GPU / MPS (see
+    'micro_sam.sam_annotator._widgets._apg_volume_error'). That restriction is the annotator's
+    alone: a script or the CLI can still build and run the volumetric generator on the CPU."""
+    video_predictor = types.SimpleNamespace(
+        model=types.SimpleNamespace(image_size=8, model_type="hvit_b"),
+        mask_threshold=0.0,
+        _transforms=types.SimpleNamespace(),
+    )
+
+    segmenter = get_instance_segmentation_generator(
+        model=video_predictor, decoder=object(), segmentation_mode="apg",
+        is_tiled=is_tiled, ndim=3, device="cpu",
+    )
+    expected = TiledAutomaticPromptGenerator if is_tiled else AutomaticPromptGenerator
+    assert type(segmenter) is expected
+    assert torch.device(segmenter._device).type == "cpu"
 
 
 def test_factory_returns_the_tiled_apg_class(monkeypatch):
@@ -2123,6 +2144,9 @@ def test_is_claimed_never_prunes_a_candidate_protected_by_the_halo_margin():
     assert segmenter._is_claimed({None: claim}, z_halo_candidate, max_overlap=0.1) is False
 
 
+@pytest.mark.skipif(
+    automatic_prompt_generation.bp is None, reason="Tiled stitching requires the optional 'bioimage_py'."
+)
 def test_tiled_apg_generate_sets_halo_margin_and_forwards_propagation_waves(monkeypatch):
     calls = {}
 
@@ -2167,6 +2191,9 @@ def test_tiled_apg_generate_sets_halo_margin_and_forwards_propagation_waves(monk
     assert calls["params"]["propagation_waves"] == 4
 
 
+@pytest.mark.skipif(
+    automatic_prompt_generation.bp is None, reason="Tiled stitching requires the optional 'bioimage_py'."
+)
 def test_tiled_apg_generate_passes_spatial_shape_for_channel_last_image(monkeypatch):
     calls = {}
 

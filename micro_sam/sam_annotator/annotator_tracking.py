@@ -428,10 +428,9 @@ class AnnotatorTracking(_AnnotatorBase):
         super()._update_image()
         self._init_track_state()
         state = AnnotatorState()
+        # Without a decoder there is no automatic tracking, and so no state to load.
         if self._with_decoder:
             state.autoseg_state = vutil._load_is_state(state.embedding_path)
-        else:
-            state.autoseg_state = vutil._load_amg_state(state.embedding_path)
 
 
 def annotator_tracking(
@@ -462,10 +461,10 @@ def annotator_tracking(
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
-        precompute_autoseg_state: Whether to precompute the automatic segmentation state (AMG masks, or
-            decoder predictions if the model has a decoder). Requires an embedding path.
-            This will take more time when precomputing embeddings, but will then make
-            automatic mask generation much faster. By default, set to 'False'.
+        precompute_autoseg_state: Whether to precompute the automatic segmentation state (the decoder
+            predictions). Requires an embedding path and a model with a decoder; it is ignored for a
+            model without one. This will take more time when precomputing embeddings, but will then
+            make automatic segmentation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         decoder_path: Path to a custom decoder checkpoint from which to load the 'micro-sam` decoder.
         device: The computational device to use for the SAM model.
@@ -643,8 +642,8 @@ def batch_tracking_annotator(
         decoder_path: Path to a custom decoder checkpoint from which to load the `micro-sam` decoder.
         device: The computational device to use for the SAM model.
             By default, automatically chooses the best available device.
-        precompute_autoseg_state: Whether to precompute the automatic segmentation state (AMG masks, or
-            decoder predictions if the model has a decoder). Requires an embedding path.
+        precompute_autoseg_state: Whether to precompute the automatic segmentation state (the decoder
+            predictions). Requires an embedding path and a model with a decoder.
         viewer: The viewer to which the functionality should be added.
         return_viewer: Whether to return the napari viewer instead of starting the event loop.
         skip_done: Whether to skip videos whose tracking result already exists in `output_folder`.
