@@ -35,9 +35,12 @@ GPU_TYPE = "H100"
 SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v4"
 
 
-def write_batch_script(out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry):
+def write_batch_script(
+    out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, use_compile, dry
+):
     "Writing the multi-node sbatch script for one joint SAM2 training run (2 nodes x 4 H100 = 8 GPUs)."
     nccl_block = "\n".join(f"export {key}={value}" for key, value in NCCL_ENV[enable_ib].items())
+    compile_flag = " --compile" if use_compile else ""
 
     batch_script = rf"""#!/bin/bash
 #SBATCH --job-name=μSAM2_joint_{model_type}
@@ -56,6 +59,8 @@ micromamba activate super
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export SAVE_ROOT={save_root}
+# The torch.compile cache must be node-local. A cache on the shared filesystem blocks the compile on its file locks.
+export TORCHINDUCTOR_CACHE_DIR=/local/jobs/${{USER}}_${{SLURM_JOB_ID}}/inductor
 
 GPUS_PER_NODE=4
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
@@ -69,7 +74,7 @@ srun --cpu-bind=none bash -c "torchrun \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     --node_rank=\$SLURM_NODEID \
-    {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {dataset_choice}"
+    {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {dataset_choice}{compile_flag}"
 """
     if reservation:
         batch_script = batch_script.replace(
@@ -114,6 +119,7 @@ def submit_slurm(args):
             save_root=SAVE_ROOT,
             reservation=args.reservation,
             enable_ib=args.enable_ib == "yes",
+            use_compile=args.compile,
             dry=args.dry,
         )
 
@@ -142,6 +148,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB verbs instead of sockets."
+    )
+    parser.add_argument(
+        "--compile", action=argparse.BooleanOptionalAction, default=True,
+        help="Compile the encoder, the decoder and the loss with torch.compile. The first iterations take longer.",
     )
     parser.add_argument(
         "--dry", action="store_true", help="Whether to only write the sbatch scripts without submitting them."
