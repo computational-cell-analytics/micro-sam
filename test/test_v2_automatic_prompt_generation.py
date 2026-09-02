@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 
+from micro_sam.v2 import automatic_prompt_generation
 from micro_sam.v2.instance_segmentation import (
     UniSAM2InstanceSegmentation, get_instance_segmentation_generator,
 )
@@ -2123,6 +2124,9 @@ def test_is_claimed_never_prunes_a_candidate_protected_by_the_halo_margin():
     assert segmenter._is_claimed({None: claim}, z_halo_candidate, max_overlap=0.1) is False
 
 
+@pytest.mark.skipif(
+    automatic_prompt_generation.bp is None, reason="Tiled stitching requires the optional 'bioimage_py'."
+)
 def test_tiled_apg_generate_sets_halo_margin_and_forwards_propagation_waves(monkeypatch):
     calls = {}
 
@@ -2167,6 +2171,9 @@ def test_tiled_apg_generate_sets_halo_margin_and_forwards_propagation_waves(monk
     assert calls["params"]["propagation_waves"] == 4
 
 
+@pytest.mark.skipif(
+    automatic_prompt_generation.bp is None, reason="Tiled stitching requires the optional 'bioimage_py'."
+)
 def test_tiled_apg_generate_passes_spatial_shape_for_channel_last_image(monkeypatch):
     calls = {}
 

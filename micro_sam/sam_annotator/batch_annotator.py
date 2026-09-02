@@ -131,13 +131,10 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         return annotator
 
     def advance(self, viewer, annotator, entry, image, embedding_path, index):
-        state = AnnotatorState()
         # Clear the committed segmentation first to avoid laggy removal of the previous result.
         viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
         segmentation_result = self._resolve_initial_result(entry, index)
         viewer.layers["image"].data = image
-        if state.automatic_segmenter is not None:
-            state.automatic_segmenter.clear_state()
         self._init_predictor(viewer, image, embedding_path)
         annotator._update_image(segmentation_result=segmentation_result)
 
@@ -187,10 +184,10 @@ def batch_annotator(
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
             By default, does not return the napari viewer.
-        precompute_autoseg_state: Whether to precompute the automatic segmentation state (AMG masks, or
-            decoder predictions if the model has a decoder). Requires an embedding path.
-            This will take more time when precomputing embeddings, but will then make
-            automatic mask generation much faster. By default, set to 'False'.
+        precompute_autoseg_state: Whether to precompute the automatic segmentation state (the decoder
+            predictions). Requires an embedding path and a model with a decoder; it is ignored for a
+            model without one. This will take more time when precomputing embeddings, but will then
+            make automatic segmentation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         prefer_decoder: Whether to use decoder based instance segmentation if
             the model used has an additional decoder for instance segmentation.

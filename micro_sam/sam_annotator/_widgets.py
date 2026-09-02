@@ -3,13 +3,11 @@
 import gc
 import os
 import json
-import pickle
 import hashlib
 import multiprocessing as mp
 from pathlib import Path
 from typing import Optional
 
-import h5py
 import z5py
 import numpy as np
 
@@ -37,14 +35,12 @@ from .. import util
 from . import util as vutil
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-from ..v1 import instance_segmentation
 from ..v1.multi_dimensional_segmentation import (
     PROJECTION_MODES,
     export_tracking_result_to_ctc,
     export_tracking_result_to_geff,
     export_tracking_result_to_trackmate_xml,
     get_napari_track_data,
-    merge_instance_segmentation_3d,
     segment_mask_in_volume,
     track_across_frames,
 )
@@ -812,30 +808,14 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
 
 
 def _get_auto_segmentation_options(state, object_ids):
+    # Which parameters describe a run depends on the widget (SAM2 vs. v1) and, for SAM2, on the
+    # mode, so the widget reports them itself rather than this function guessing the attributes.
     widget = state.widgets["autosegment"]
 
     segmentation_options = {
         "object_ids": [int(object_id) for object_id in object_ids]
     }
-    if widget.with_decoder:
-        segmentation_options["boundary_distance_thresh"] = (
-            widget.boundary_distance_thresh
-        )
-        segmentation_options["center_distance_thresh"] = (
-            widget.center_distance_thresh
-        )
-    else:
-        segmentation_options["pred_iou_thresh"] = widget.pred_iou_thresh
-        segmentation_options["stability_score_thresh"] = (
-            widget.stability_score_thresh
-        )
-        segmentation_options["box_nms_thresh"] = widget.box_nms_thresh
-
-    segmentation_options["min_object_size"] = widget.min_object_size
-    if widget.volumetric:
-        segmentation_options["apply_to_volume"] = widget.apply_to_volume
-        segmentation_options["gap_closing"] = widget.gap_closing
-        segmentation_options["min_extent"] = widget.min_extent
+    segmentation_options.update(widget.commit_settings())
 
     return segmentation_options
 
@@ -1815,17 +1795,16 @@ class EmbeddingWidget(_WidgetBase):
                 self.custom_weights,
                 update_decoder=with_decoder,
             )
-            # Load the AMG/AIS state cache. For SAM2 the state cache (grid masks or decoder
-            # predictions) is recorded via '_autoseg_state_descriptor', and the widget reads and writes
-            # it on demand. SAM1 preloads the per-slice 3d state as before.
-            if state.is_sam2:
-                state.autoseg_state = vutil._autoseg_state_descriptor(
-                    state.embedding_path, "ais" if with_decoder else "amg",
-                )
-            elif state.widgets["autosegment"].volumetric and with_decoder:
+            # Load the AIS state cache. For SAM2 the state cache (the decoder predictions) is
+            # recorded via '_autoseg_state_descriptor', and the widget reads and writes it on demand.
+            # SAM1 preloads the per-slice 3d state as before. Without a decoder there is no automatic
+            # segmentation in the annotator, and so no state to load.
+            if not with_decoder:
+                state.autoseg_state = None
+            elif state.is_sam2:
+                state.autoseg_state = vutil._autoseg_state_descriptor(state.embedding_path, "ais")
+            elif state.widgets["autosegment"].volumetric:
                 state.autoseg_state = vutil._load_is_state(state.embedding_path)
-            elif state.widgets["autosegment"].volumetric and not with_decoder:
-                state.autoseg_state = vutil._load_amg_state(state.embedding_path)
 
         # Set the default settings for this model in the nd-segmentation widget if it is part of
         # the currently used plugin.
@@ -3456,91 +3435,8 @@ class UnifiedSegmentWidget(_WidgetBase):
 
 
 #
-# The functionality and widgets for automatic segmentation.
+# The widgets for interactive segmentation and tracking.
 #
-
-
-# Messy automatic-segmentation state handling, would be good to refactor this properly at some point.
-def _handle_autoseg_state(state, i, pbar_init, pbar_update):
-    if state.automatic_segmenter is None:
-        is_tiled = state.image_embeddings["input_size"] is None
-        state.automatic_segmenter = instance_segmentation.get_instance_segmentation_generator(
-            state.predictor, is_tiled=is_tiled, decoder=state.decoder
-        )
-
-    shape = state.image_shape
-
-    # Further optimization: refactor parts of this so that we can also use it in the automatic 3d segmentation fucnction
-    # For 3D we store the amg state in a dict and check if it is computed already.
-    if state.autoseg_state is not None:
-        assert i is not None
-        if i in state.autoseg_state:
-            segmentation_state_i = state.autoseg_state[i]
-            state.automatic_segmenter.set_state(segmentation_state_i)
-
-        else:
-            dummy_image = np.zeros(shape[-2:], dtype="uint8")
-            state.automatic_segmenter.initialize(
-                dummy_image,
-                image_embeddings=state.image_embeddings,
-                i=i,
-                verbose=pbar_init is not None,
-                pbar_init=pbar_init,
-                pbar_update=pbar_update,
-            )
-            segmentation_state_i = state.automatic_segmenter.get_state()
-            state.autoseg_state[i] = segmentation_state_i
-
-            cache_folder = state.autoseg_state.get("cache_folder", None)
-            if cache_folder is not None:
-                cache_path = os.path.join(cache_folder, f"state-{i}.pkl")
-                with open(cache_path, "wb") as f:
-                    pickle.dump(segmentation_state_i, f)
-
-            cache_path = state.autoseg_state.get("cache_path", None)
-            if cache_path is not None:
-                save_key = f"state-{i}"
-                with h5py.File(cache_path, "a") as f:
-                    g = f.create_group(save_key)
-                    g.create_dataset(
-                        "foreground",
-                        data=segmentation_state_i["foreground"],
-                        compression="gzip",
-                    )
-                    g.create_dataset(
-                        "boundary_distances",
-                        data=segmentation_state_i["boundary_distances"],
-                        compression="gzip",
-                    )
-                    g.create_dataset(
-                        "center_distances",
-                        data=segmentation_state_i["center_distances"],
-                        compression="gzip",
-                    )
-
-    # Otherwise (2d segmentation) we just check if the amg is initialized or not.
-    elif not state.automatic_segmenter.is_initialized:
-        assert i is None
-        # We don't need to pass the actual image data here, since the embeddings are passed.
-        # (The image data is only used by the amg to compute image embeddings, so not needed here.)
-        dummy_image = np.zeros(shape, dtype="uint8")
-        state.automatic_segmenter.initialize(
-            dummy_image,
-            image_embeddings=state.image_embeddings,
-            verbose=pbar_init is not None,
-            pbar_init=pbar_init,
-            pbar_update=pbar_update,
-        )
-
-
-def _instance_segmentation_impl(
-    min_object_size, i=None, pbar_init=None, pbar_update=None, **kwargs
-):
-    state = AnnotatorState()
-    _handle_autoseg_state(state, i, pbar_init, pbar_update)
-    seg = state.automatic_segmenter.generate(**kwargs)
-    assert isinstance(seg, np.ndarray)
-    return seg
 
 
 class InteractiveSegmentationWidget(_WidgetBase):
@@ -3881,346 +3777,29 @@ class InteractiveTrackingWidget(_WidgetBase):
         gc.collect()
 
 
-class AutoSegmentV1Widget(_WidgetBase):
-    """Automatic segmentation widget for the SAM (v1) AMG/AIS generators.
+#
+# The functionality and widgets for automatic segmentation.
+#
 
-    This implementation backs the automatic tracking widget. The SAM2 segmentation annotator
-    uses `AutoSegmentWidget` (dense/sparse modes) instead.
-    """
 
-    def __init__(self, viewer, with_decoder, volumetric, parent=None):
-        super().__init__(parent)
-
-        self._viewer = viewer
-        self.with_decoder = with_decoder
-        self.volumetric = volumetric
-        self._create_widget()
-
-    def _create_widget(self):
-        # Add the switch for segmenting the slice vs. the volume if we have a volume.
-        if self.volumetric:
-            self.layout().addWidget(self._create_volumetric_switch())
-
-        # Add the nested settings widget.
-        self.settings = self._create_settings()
-        self.layout().addWidget(self.settings)
-
-        # Add the run button.
-        self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
-        self.run_button.clicked.connect(self.__call__)
-        self.run_button.setToolTip(get_tooltip("autosegment", "run_button"))
-        self.layout().addWidget(self.run_button)
-
-    def _reset_segmentation_mode(self, with_decoder):
-        # If we already have the same segmentation mode we don't need to do anything.
-        if with_decoder == self.with_decoder:
-            return
-
-        # Otherwise we change the value of with_decoder.
-        self.with_decoder = with_decoder
-
-        # Then we clear the whole widget.
-        layout = self.layout()
-        while layout.count():
-            child = layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-        # And then we reset it.
-        self._create_widget()
-
-    def _create_volumetric_switch(self):
-        self.apply_to_volume = False
-        return self._add_boolean_param(
-            "apply_to_volume",
-            self.apply_to_volume,
-            title="Apply to Volume",
-            tooltip=get_tooltip("autosegment", "apply_to_volume"),
-        )
-
-    def _add_common_settings(self, settings):
-        # Create the UI element for min object size.
-        self.min_object_size = 100
-        self.min_object_size_param, layout = self._add_int_param(
-            "min_object_size",
-            self.min_object_size,
-            min_val=0,
-            max_val=int(1e4),
-            tooltip=get_tooltip("autosegment", "min_object_size"),
-        )
-        settings.layout().addLayout(layout)
-
-        # Add extra settings for volumetric segmentation: gap_closing and min_extent.
-        if self.volumetric:
-            self.gap_closing = 2
-            self.gap_closing_param, layout = self._add_int_param(
-                "gap_closing",
-                self.gap_closing,
-                min_val=0,
-                max_val=10,
-                tooltip=get_tooltip("autosegment", "gap_closing"),
-            )
-            settings.layout().addLayout(layout)
-
-            self.min_extent = 2
-            self.min_extent_param, layout = self._add_int_param(
-                "min_extent",
-                self.min_extent,
-                min_val=0,
-                max_val=10,
-                tooltip=get_tooltip("autosegment", "min_extent"),
-            )
-            settings.layout().addLayout(layout)
-
-    def _ais_settings(self):
-        settings = QtWidgets.QWidget()
-        settings.setLayout(QtWidgets.QVBoxLayout())
-
-        # Create the UI element for center_distance_threshold.
-        self.center_distance_thresh = 0.5
-        self.center_distance_thresh_param, layout = self._add_float_param(
-            "center_distance_thresh",
-            self.center_distance_thresh,
-            tooltip=get_tooltip("autosegment", "center_distance_thresh"),
-        )
-        settings.layout().addLayout(layout)
-
-        # Create the UI element for boundary_distance_threshold.
-        self.boundary_distance_thresh = 0.5
-        self.boundary_distance_thresh_param, layout = self._add_float_param(
-            "boundary_distance_thresh",
-            self.boundary_distance_thresh,
-            tooltip=get_tooltip("autosegment", "boundary_distance_thresh"),
-        )
-        settings.layout().addLayout(layout)
-
-        # Add min_object_size.
-        self._add_common_settings(settings)
-
-        return settings
-
-    def _amg_settings(self):
-        settings = QtWidgets.QWidget()
-        settings.setLayout(QtWidgets.QVBoxLayout())
-
-        # Create the UI element for pred_iou_thresh.
-        self.pred_iou_thresh = 0.88
-        self.pred_iou_thresh_param, layout = self._add_float_param(
-            "pred_iou_thresh",
-            self.pred_iou_thresh,
-            tooltip=get_tooltip("autosegment", "pred_iou_thresh"),
-        )
-        settings.layout().addLayout(layout)
-
-        # Create the UI element for stability score thresh.
-        self.stability_score_thresh = 0.95
-        self.stability_score_thresh_param, layout = self._add_float_param(
-            "stability_score_thresh",
-            self.stability_score_thresh,
-            tooltip=get_tooltip("autosegment", "stability_score_thresh"),
-        )
-        settings.layout().addLayout(layout)
-
-        # Create the UI element for box nms thresh.
-        self.box_nms_thresh = 0.7
-        self.box_nms_thresh_param, layout = self._add_float_param(
-            "box_nms_thresh",
-            self.box_nms_thresh,
-            tooltip=get_tooltip("autosegment", "box_nms_thresh"),
-        )
-        settings.layout().addLayout(layout)
-
-        # Add min_object_size.
-        self._add_common_settings(settings)
-
-        return settings
-
-    def _create_settings(self):
-        setting_values = (
-            self._ais_settings() if self.with_decoder else self._amg_settings()
-        )
-        settings = _make_collapsible(
-            setting_values, title="Automatic Segmentation Settings", tooltip=get_tooltip("autosegment", "settings"),
-        )
-        return settings
-
-    def _empty_segmentation_warning(self):
-        msg = "The automatic segmentation result does not contain any objects."
-        msg += "Setting a smaller value for 'min_object_size' may help."
-        if not self.with_decoder:
-            msg += "Setting smaller values for 'pred_iou_thresh' and 'stability_score_thresh' may also help."
-        val_results = {"message_type": "error", "message": msg}
-        return _generate_message(
-            val_results["message_type"], val_results["message"]
-        )
-
-    def _run_segmentation_2d(self, kwargs, i=None):
-        pbar, pbar_signals = _create_pbar_for_threadworker()
-
-        # @thread_worker
-        def seg_impl():
-            def pbar_init(total, description):
-                pbar_signals.pbar_total.emit(total)
-                pbar_signals.pbar_description.emit(description)
-
-            seg = _instance_segmentation_impl(
-                self.min_object_size,
-                i=i,
-                pbar_init=pbar_init,
-                pbar_update=lambda update: pbar_signals.pbar_update.emit(
-                    update
-                ),
-                **kwargs,
-            )
-            pbar_signals.pbar_stop.emit()
-            return seg
-
-        def update_segmentation(seg):
-            is_empty = seg.max() == 0
-            if is_empty:
-                self._empty_segmentation_warning()
-
-            if i is None:
-                self._viewer.layers["auto_segmentation"].data = seg
-            else:
-                self._viewer.layers["auto_segmentation"].data[i] = seg
-            self._viewer.layers["auto_segmentation"].refresh()
-
-        # Validate all layers.
-        _validate_layers(self._viewer, automatic_segmentation=True)
-
-        seg = seg_impl()
-        update_segmentation(seg)
-        # worker = seg_impl()
-        # worker.returned.connect(update_segmentation)
-        # worker.start()
-        # return worker
-
-    # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
-    # are precomputed. Otherwise this would take too long.
-    def _allow_segment_3d(self):
-        if self.with_decoder:
-            return True
-        state = AnnotatorState()
-        predictor = state.predictor
-        if util.device_type(predictor.device) in ("cpu", "mps"):
-            n_slices = self._viewer.layers["auto_segmentation"].data.shape[0]
-            if state.is_sam2:
-                from micro_sam.precompute_state import _has_autoseg_state
-                embeddings_are_precomputed = _has_autoseg_state(
-                    state.embedding_path, "amg", state_count=n_slices,
-                )
-            else:
-                embeddings_are_precomputed = (state.autoseg_state is not None) and (
-                    len(state.autoseg_state) > n_slices
-                )
-            if not embeddings_are_precomputed:
-                return False
-        return True
-
-    def _run_segmentation_3d(self, kwargs):
-        allow_segment_3d = self._allow_segment_3d()
-        if not allow_segment_3d:
-            val_results = {
-                "message_type": "error",
-                "message": "Volumetric segmentation with AMG is only supported if you have a GPU.",
-            }
-            return _generate_message(
-                val_results["message_type"], val_results["message"]
-            )
-
-        pbar, pbar_signals = _create_pbar_for_threadworker()
-
-        # @thread_worker
-        def seg_impl():
-            segmentation = np.zeros_like(
-                self._viewer.layers["auto_segmentation"].data
-            )
-            offset = 0
-
-            def pbar_init(total, description):
-                pbar_signals.pbar_total.emit(total)
-                pbar_signals.pbar_description.emit(description)
-
-            pbar_init(segmentation.shape[0], "Segment volume")
-
-            # Further optimization: parallelize if state is precomputed for all slices
-            for i in range(segmentation.shape[0]):
-                seg = _instance_segmentation_impl(
-                    self.min_object_size, i=i, **kwargs
-                )
-                seg_max = seg.max()
-                if seg_max == 0:
-                    continue
-                seg[seg != 0] += offset
-                offset = seg_max + offset
-                segmentation[i] = seg
-                pbar_signals.pbar_update.emit(1)
-
-            pbar_signals.pbar_reset.emit()
-            segmentation = merge_instance_segmentation_3d(
-                segmentation,
-                beta=0.5,
-                gap_closing=self.gap_closing,
-                min_z_extent=self.min_extent,
-                verbose=True,
-                pbar_init=pbar_init,
-                pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
-            )
-            pbar_signals.pbar_stop.emit()
-            return segmentation
-
-        def update_segmentation(segmentation):
-            is_empty = segmentation.max() == 0
-            if is_empty:
-                self._empty_segmentation_warning()
-            self._viewer.layers["auto_segmentation"].data = segmentation
-            self._viewer.layers["auto_segmentation"].refresh()
-
-        seg = seg_impl()
-        update_segmentation(seg)
-        # worker = seg_impl()
-        # worker.returned.connect(update_segmentation)
-        # worker.start()
-        # return worker
-
-    def __call__(self):
-        if _validate_embeddings(self._viewer):
-            return None
-
-        if self.with_decoder:
-            kwargs = {
-                "center_distance_threshold": self.center_distance_thresh,
-                "boundary_distance_threshold": self.boundary_distance_thresh,
-                "min_size": self.min_object_size,
-            }
-        else:
-            kwargs = {
-                "pred_iou_thresh": self.pred_iou_thresh,
-                "stability_score_thresh": self.stability_score_thresh,
-                "box_nms_thresh": self.box_nms_thresh,
-            }
-        if self.volumetric and self.apply_to_volume:
-            worker = self._run_segmentation_3d(kwargs)
-        elif self.volumetric and not self.apply_to_volume:
-            i = int(self._viewer.dims.point[0])
-            worker = self._run_segmentation_2d(kwargs, i=i)
-        else:
-            worker = self._run_segmentation_2d(kwargs)
-        _select_layer(self._viewer, "auto_segmentation")
-        return worker
+# Every automatic segmentation mode runs off the UniSAM2 decoder predictions, so a model without a
+# decoder has no automatic segmentation at all.
+_NO_DECODER_MESSAGE = (
+    "Automatic segmentation requires a UniSAM2 model with a decoder. Load one via the model dropdown "
+    "or the 'custom weights' path in the embedding widget."
+)
 
 
 class AutoSegmentWidget(_WidgetBase):
-    """Automatic segmentation widget for SAM2 with AMG, AIS, and APG modes.
+    """Automatic segmentation widget for SAM2 with the APG, sparse and dense modes.
 
     Subclasses set `_is_tracking = True` to hide the z-tiling controls (tracking segments per frame
     in 2d, so z-tiling does not apply).
 
-    A UniSAM2 decoder enables the 'sparse', 'dense', and 'apg' modes. The sparse and dense modes
-    post-process the decoder predictions. Automatic prompt generation (APG) derives point prompts
-    from these predictions and applies them to the interactive branch. The 'amg' mode is the fallback
-    when no decoder is available.
+    All modes need a UniSAM2 decoder. Automatic prompt generation (APG) derives point prompts from
+    the decoder predictions and applies them to the interactive branch; it is the default. The sparse
+    and dense modes post-process the decoder predictions directly. Without a decoder there is no
+    automatic segmentation: the run button is disabled until a model that has one is loaded.
 
     Disk-backed caching of the state is opted into via the 'cache automatic segmentation state'
     checkbox in the embedding settings (read here through the embedding widget); when off, the state
@@ -4234,16 +3813,18 @@ class AutoSegmentWidget(_WidgetBase):
     """
 
     _is_tracking = False
-    DECODER_MODES = ("sparse", "dense", "apg")
+    MODES = ("apg", "sparse", "dense")
+    DEFAULT_MODE = "apg"
+    # The (section, name) of the run button's tooltip; the tracking subclass has its own.
+    _RUN_TOOLTIP = ("autosegment", "run_button")
 
     def __init__(self, viewer, with_decoder, volumetric, parent=None):
         super().__init__(parent)
         self._viewer = viewer
         self.with_decoder = with_decoder
         self.volumetric = volumetric
-        # With a decoder we default to (and only offer) the decoder-based modes; 'amg' is the
-        # fallback (and only mode) when no decoder is available.
-        self.mode = "sparse" if with_decoder else "amg"
+        # Every mode needs a decoder, so the mode list never changes; only whether it can run does.
+        self.mode = self.DEFAULT_MODE
         self.settings = None
         # z block / halo for 3d decoder inference: the volume is decoded in z chunks to bound memory.
         # These only matter for volumetric decoder modes. Set 'tile_z' >= the slice count for no z-tiling.
@@ -4267,12 +3848,10 @@ class AutoSegmentWidget(_WidgetBase):
         # Top row: the mode dropdown on the left, the 'Apply to Volume' switch (3d only) on the right.
         top_row = QtWidgets.QHBoxLayout()
 
-        # A decoder enables AIS and APG. AMG is the fallback when no decoder is available.
-        mode_choices = self.DECODER_MODES if self.with_decoder else ["amg"]
         self.mode_dropdown, mode_layout = self._add_choice_param(
             "mode",
             self.mode,
-            mode_choices,
+            list(self.MODES),
             title="mode:",
             update=self._on_mode_changed,
             tooltip=get_tooltip("autosegment", "mode"),
@@ -4299,24 +3878,29 @@ class AutoSegmentWidget(_WidgetBase):
         self.settings = self._make_settings_widget()
         self.layout().addWidget(self.settings)
 
-        # Run button.
+        # Run button. It is only active with a decoder, since every mode needs one.
         self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
         self.run_button.clicked.connect(self.__call__)
-        self.run_button.setToolTip(get_tooltip("autosegment", "run_button"))
         self.layout().addWidget(self.run_button)
+        self._update_run_button()
+
+    def _update_run_button(self):
+        # Without a decoder none of the modes can run, so the button is disabled and says why.
+        self.run_button.setEnabled(self.with_decoder)
+        self.run_button.setToolTip(
+            get_tooltip(*self._RUN_TOOLTIP) if self.with_decoder else _NO_DECODER_MESSAGE
+        )
 
     def _reset_segmentation_mode(self, with_decoder):
         # If the decoder availability is unchanged there is nothing to rebuild.
         if with_decoder == self.with_decoder:
             return
         self.with_decoder = with_decoder
+        self._update_run_button()
 
-        # Rebuild the mode list when the loaded model changes.
-        mode_choices = self.DECODER_MODES if with_decoder else ["amg"]
+        # Back to the default mode for the newly loaded model.
         self.mode_dropdown.blockSignals(True)
-        self.mode_dropdown.clear()
-        self.mode_dropdown.addItems(mode_choices)
-        self.mode_dropdown.setCurrentText("sparse" if with_decoder else "amg")
+        self.mode_dropdown.setCurrentText(self.DEFAULT_MODE)
         self.mode_dropdown.blockSignals(False)
 
         # Drop the cached segmenter and the decoder prediction, since the loaded model (and so its
@@ -4339,9 +3923,7 @@ class AutoSegmentWidget(_WidgetBase):
         advanced.setLayout(QtWidgets.QVBoxLayout())
         advanced.layout().setContentsMargins(0, 0, 0, 0)
         self._add_z_tiling_params(advanced)
-        if self.mode == "amg":
-            self._amg_settings(advanced)
-        elif self.mode == "apg":
+        if self.mode == "apg":
             self._apg_settings(advanced)
         elif self.mode == "dense":
             self._dense_settings(advanced)
@@ -4367,9 +3949,8 @@ class AutoSegmentWidget(_WidgetBase):
     def _add_z_tiling_params(self, settings):
         # 3d decoder inference decodes the volume in z blocks (with a halo for context) to bound
         # memory. 'tile_z' and 'halo_z' sit side by side at the top of the settings. Only for
-        # volumetric decoder segmentation - not 2d, not tracking (per-frame 2d) and not amg
-        # (slice-by-slice, no z decoder pass).
-        if not self.volumetric or self._is_tracking or self.mode == "amg":
+        # volumetric segmentation - not 2d and not tracking (which segments each frame in 2d).
+        if not self.volumetric or self._is_tracking:
             return
         row = QtWidgets.QHBoxLayout()
         self.tile_z_param, _ = self._add_int_param(
@@ -4406,38 +3987,6 @@ class AutoSegmentWidget(_WidgetBase):
         self.n_threads = min(8, mp.cpu_count())
         self.n_threads_param, layout = self._add_int_param(
             "n_threads", self.n_threads, min_val=1, max_val=64, tooltip=get_tooltip("autosegment", "n_threads"),
-        )
-        settings.layout().addLayout(layout)
-
-    def _amg_settings(self, settings):
-        # Grid-based SAM2 AMG parameters (no decoder required). points_per_side / pred_iou_thresh /
-        # stability_score_thresh control the (expensive) mask generation. min_object_size is applied
-        # in the (cheap) post-processing.
-        self.points_per_side = 32
-        self.points_per_side_param, layout = self._add_int_param(
-            "points_per_side", self.points_per_side, min_val=1, max_val=256,
-            tooltip=get_tooltip("autosegment", "points_per_side"),
-        )
-        settings.layout().addLayout(layout)
-
-        self.pred_iou_thresh = 0.8
-        self.pred_iou_thresh_param, layout = self._add_float_param(
-            "pred_iou_thresh", self.pred_iou_thresh, min_val=0.0, max_val=1.0, step=0.05,
-            tooltip=get_tooltip("autosegment", "pred_iou_thresh"),
-        )
-        settings.layout().addLayout(layout)
-
-        self.stability_score_thresh = 0.9
-        self.stability_score_thresh_param, layout = self._add_float_param(
-            "stability_score_thresh", self.stability_score_thresh, min_val=0.0, max_val=1.0, step=0.05,
-            tooltip=get_tooltip("autosegment", "stability_score_thresh"),
-        )
-        settings.layout().addLayout(layout)
-
-        self.min_object_size = 50
-        self.min_object_size_param, layout = self._add_int_param(
-            "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4),
-            tooltip=get_tooltip("autosegment", "min_object_size"),
         )
         settings.layout().addLayout(layout)
 
@@ -4649,17 +4198,32 @@ class AutoSegmentWidget(_WidgetBase):
             batch_size=self.prompt_batch_size,
         )
 
-    def _get_tiling(self):
-        # In-plane (xy) tiling for automatic segmentation, taken from the embedding widget (where the
-        # embeddings' tiling is configured). Returns (None, None) when tiling is off. z-tiling is not
-        # handled here - it is a decoder-inference concern driven by this widget's 'tile_z'/'halo_z'.
-        state = AnnotatorState()
-        embed_widget = state.widgets.get("embeddings")
-        if embed_widget is None or getattr(embed_widget, "tiling", "no") != "yes":
-            return None, None
-        return _process_tiling_inputs(
-            embed_widget.tile_x, embed_widget.tile_y, embed_widget.halo_x, embed_widget.halo_y,
-        )
+    def _run_ndim(self):
+        # The dimensionality of the next run: 3 only for a volume segmented as a whole. Tracking
+        # segments each frame in 2d, so it stays 2 there even with 'Track Timeseries' on.
+        if self.volumetric and not self._is_tracking and getattr(self, "apply_to_volume", False):
+            return 3
+        return 2
+
+    def commit_settings(self):
+        """The parameters of the current automatic segmentation, for the commit history.
+
+        Returns:
+            A json-serializable dict with the mode and the parameters that mode runs with.
+        """
+        settings = {"mode": self.mode}
+        if self.mode == "apg":
+            settings.update(self._apg_kwargs(self._run_ndim()))
+        else:
+            settings.update(self._postproc_kwargs())
+
+        if self.volumetric:
+            settings["apply_to_volume"] = bool(getattr(self, "apply_to_volume", False))
+        # The z block / halo exist only while the z-tiling controls are shown, see '_add_z_tiling_params'.
+        if hasattr(self, "tile_z_param"):
+            settings["tile_z"], settings["halo_z"] = self.tile_z, self.halo_z
+
+        return settings
 
     def _z_tiling(self, n_slices):
         # The z block / halo for 3d decoder inference. 'tile_z' >= the slice count means no z-tiling
@@ -4868,81 +4432,13 @@ class AutoSegmentWidget(_WidgetBase):
             self._proposals_key = proposals_key
         return self._segmenter.select(self._proposals, **self._apg_select_kwargs())
 
-    def _run_amg(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
-        from micro_sam.v2.instance_segmentation import get_amg_segmenter, amg_3d_segmentation
-        from micro_sam.precompute_state import cache_autoseg_state
-
-        # The SAM2 model: 'state.predictor' is the image predictor (2d) wrapping the model, or the
-        # video predictor itself (3d); both can drive the grid-based mask generator.
-        model = getattr(state.predictor, "model", state.predictor)
-        model_type = getattr(state.predictor, "model_type", None)
-        save_path = self._state_save_path(state)
-
-        generate_kwargs = dict(min_object_size=self.min_object_size, with_background=True)
-        amg_params = dict(
-            points_per_side=self.points_per_side, pred_iou_thresh=self.pred_iou_thresh,
-            stability_score_thresh=self.stability_score_thresh,
-        )
-
-        if ndim == 3:  # Segment slice-by-slice and stitch across z. Tiling is in-plane (None if off).
-            tile_shape, halo = self._get_tiling()
-            segmenter = get_amg_segmenter(model, is_tiled=tile_shape is not None, model_type=model_type, **amg_params)
-            # Reuse the precomputed 3d embeddings per slice (tiled or not) so AMG does not re-encode,
-            # and cache each slice's grid-prediction state in the embedding Zarr.
-            return amg_3d_segmentation(
-                run_raw, segmenter, tile_shape=tile_shape, halo=halo,
-                image_embeddings=state.image_embeddings, state_save_path=save_path,
-                pbar_init=pbar_init, pbar_update=pbar_update, **generate_kwargs,
-            )
-
-        # For plain 2d the annotator has already precomputed the embeddings, so we reuse them (the
-        # tiling is taken from the embeddings). For a single slice of a volume the embeddings are
-        # video-style, so we compute the slice embedding - tiling stays None when it is not configured.
-        if self.volumetric:
-            tile_shape, halo = self._get_tiling()
-            image_embeddings, is_tiled = None, tile_shape is not None
-        else:
-            tile_shape, halo, image_embeddings = None, None, state.image_embeddings
-            is_tiled = image_embeddings["input_size"] is None
-
-        # The in-memory cache lets changing the post-processing parameters re-run only the cheap
-        # 'generate'; the on-disk cache (via 'cache_autoseg_state') persists the state across sessions.
-        cache_key = (
-            state.data_signature, "amg", z, tile_shape, halo, image_embeddings is not None,
-            self.points_per_side, self.pred_iou_thresh, self.stability_score_thresh, save_path,
-        )
-        if self._segmenter is None or self._segmenter_key != cache_key:
-            self._release_segmenter()
-            if is_tiled:  # The tiled segmenter reports per-tile progress.
-                self._segmenter = cache_autoseg_state(
-                    "amg", model, run_raw, image_embeddings, save_path, model_type=model_type,
-                    state_index=z, is_tiled=True, tile_shape=tile_shape, halo=halo,
-                    pbar_init=pbar_init, pbar_update=pbar_update, verbose=False, **amg_params,
-                )
-            else:  # A single 2d image is one step.
-                if pbar_init is not None:
-                    pbar_init(1, "Automatic segmentation")
-                self._segmenter = cache_autoseg_state(
-                    "amg", model, run_raw, image_embeddings, save_path, model_type=model_type,
-                    state_index=z, is_tiled=False, verbose=False, **amg_params,
-                )
-                if pbar_update is not None:
-                    pbar_update(1)
-            self._segmenter_key = cache_key
-
-        return self._segmenter.generate(**generate_kwargs)
-
     def __call__(self):
         state = AnnotatorState()
-        if self.mode != "amg" and (not self.with_decoder or state.decoder is None):
-            return _generate_message(
-                "error",
-                "The 'sparse', 'dense', and 'apg' modes require a finetuned UniSAM2 model with a decoder. "
-                "Load one via the 'custom weights' path in the embedding widget, or use the 'amg' mode.",
-            )
+        if not self.with_decoder or state.decoder is None:
+            return _generate_message("error", _NO_DECODER_MESSAGE)
         if _validate_layers(self._viewer, automatic_segmentation=True):
             return
-        # The (2d) decoder modes reuse the precomputed image embeddings, so they must exist and match
+        # Every mode reuses the precomputed image embeddings, so they must exist and match
         # the current image. If embeddings were reset (e.g. after an image change) this prompts the
         # user to recompute them instead of segmenting with stale embeddings.
         if _validate_embeddings(self._viewer):
@@ -4992,9 +4488,7 @@ class AutoSegmentWidget(_WidgetBase):
         pbar_signals.pbar_description.emit(f"Running automatic segmentation ({self.mode})")
         QtWidgets.QApplication.processEvents()
         try:
-            if self.mode == "amg":
-                seg = self._run_amg(state, run_raw, ndim, z, pbar_init=pbar_init, pbar_update=pbar_update)
-            elif self.mode == "apg":
+            if self.mode == "apg":
                 seg = self._run_apg(state, run_raw, ndim, z, pbar_init=pbar_init, pbar_update=pbar_update)
             else:
                 seg = self._run_unisam2(state, run_raw, ndim, z, pbar_init=pbar_init, pbar_update=pbar_update)
@@ -5011,6 +4505,7 @@ class AutoSegmentWidget(_WidgetBase):
 
 class AutoTrackWidget(AutoSegmentWidget):
     _is_tracking = True
+    _RUN_TOOLTIP = ("autotrack", "run_button")
 
     def _create_widget(self):
         # Top row: the 'Track Timeseries' switch on the left, the mode dropdown on the right.
@@ -5025,11 +4520,10 @@ class AutoTrackWidget(AutoSegmentWidget):
         )
         top_row.addWidget(self.apply_to_volume_checkbox)
 
-        mode_choices = self.DECODER_MODES if self.with_decoder else ["amg"]
         self.mode_dropdown, mode_layout = self._add_choice_param(
             "mode",
             self.mode,
-            mode_choices,
+            list(self.MODES),
             title="mode:",
             update=self._on_mode_changed,
             tooltip=get_tooltip("autosegment", "mode"),
@@ -5045,10 +4539,11 @@ class AutoTrackWidget(AutoSegmentWidget):
         self.settings = self._make_settings_widget()
         self.layout().addWidget(self.settings)
 
+        # The run button is only active with a decoder, since every mode needs one.
         self.run_button = QtWidgets.QPushButton("Automatic Tracking")
         self.run_button.clicked.connect(self.__call__)
-        self.run_button.setToolTip(get_tooltip("autotrack", "run_button"))
         self.layout().addWidget(self.run_button)
+        self._update_run_button()
 
     def _empty_tracking_warning(self):
         return _generate_message(
@@ -5060,8 +4555,6 @@ class AutoTrackWidget(AutoSegmentWidget):
     def _run_frame_segmentation(self, state, frame, frame_id, pbar_init=None, pbar_update=None):
         # Forward the progress callbacks so a frame advances the overall bar per tile (tiled) or by
         # one step (untiled). The caller passes a no-op 'pbar_init' so a frame cannot reset the total.
-        if self.mode == "amg":
-            return self._run_amg(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
         if self.mode == "apg":
             return self._run_apg(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
         return self._run_unisam2(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
@@ -5071,13 +4564,11 @@ class AutoTrackWidget(AutoSegmentWidget):
         # advances per tile, so its total is this times the number of frames.
         from bioimage_cpp.utils import Blocking
 
-        if self.mode == "amg":
-            tile_shape, _ = self._get_tiling()
-        else:  # decoder modes reuse the precomputed embeddings; tiled ones have no top-level input_size.
-            emb = state.image_embeddings
-            tile_shape = None
-            if emb is not None and emb.get("input_size") is None:
-                tile_shape = tuple(int(s) for s in emb["features"].attrs["tile_shape"])
+        # The modes reuse the precomputed embeddings; tiled ones have no top-level input_size.
+        emb = state.image_embeddings
+        tile_shape = None
+        if emb is not None and emb.get("input_size") is None:
+            tile_shape = tuple(int(s) for s in emb["features"].attrs["tile_shape"])
         if tile_shape is None:
             return 1
         return Blocking([0, 0], list(raw.shape[1:3]), list(tile_shape)).number_of_blocks
@@ -5147,12 +4638,8 @@ class AutoTrackWidget(AutoSegmentWidget):
         state = AnnotatorState()
         if not (self.volumetric and getattr(self, "apply_to_volume", False)):
             return super().__call__()
-        if self.mode != "amg" and (not self.with_decoder or state.decoder is None):
-            return _generate_message(
-                "error",
-                "The 'sparse', 'dense', and 'apg' modes require a finetuned UniSAM2 model with a decoder. "
-                "Load one via the 'custom weights' path in the embedding widget, or use the 'amg' mode.",
-            )
+        if not self.with_decoder or state.decoder is None:
+            return _generate_message("error", _NO_DECODER_MESSAGE)
         if _validate_layers(self._viewer, automatic_segmentation=True):
             return None
         if state.committed_lineages:

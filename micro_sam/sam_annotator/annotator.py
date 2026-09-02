@@ -15,7 +15,6 @@ from ..v2.util import DEFAULT_MODEL
 from ._titles import get_dock_title
 from ._annotator import _AnnotatorBase
 from .util import (
-    _load_amg_state,
     _load_is_state,
     _sync_embedding_widget,
 )
@@ -97,11 +96,11 @@ class Annotator(_AnnotatorBase):
         The interactive segmentation widget merges the prompt menu, the segment and the
         clear controls into a single ndim-aware widget placed right after the embeddings.
         """
-        # The default automatic-segmentation mode depends on whether a UniSAM2 decoder is available.
-        # At startup the decoder is not loaded yet (only on 'Compute Embeddings'), so also treat the
-        # default model as decoder-capable when it has a registered decoder - otherwise the Microscopy
-        # default would wrongly start in 'amg'. The mode is re-synced after compute via
-        # '_sync_autosegment_widget' once the actual decoder is known.
+        # Automatic segmentation needs a UniSAM2 decoder. At startup the decoder is not loaded yet
+        # (only on 'Compute Embeddings'), so also treat the default model as decoder-capable when it
+        # has a registered decoder - otherwise the widget would start disabled for the Microscopy
+        # default. This is re-synced after compute via '_sync_autosegment_widget' once the actual
+        # decoder is known.
         from ..v2.util import DEFAULT_MODEL, has_registered_decoder
         with_decoder = AnnotatorState().decoder is not None or has_registered_decoder(DEFAULT_MODEL)
         return {
@@ -294,16 +293,14 @@ class Annotator(_AnnotatorBase):
         self._rebuild_for_ndim(ndim, force=True)
 
     def _update_image(self, segmentation_result=None):
-        """Update the image and load AMG state for 3D."""
+        """Update the image and load the automatic segmentation state for 3D."""
         super()._update_image(segmentation_result=segmentation_result)
 
-        # Load the AMG state from the embedding path (3D only)
-        if self._ndim == 3:
+        # Load the decoder state from the embedding path (3D only). Without a decoder there is no
+        # automatic segmentation in the annotator, and so no state to load.
+        if self._ndim == 3 and AnnotatorState().decoder is not None:
             state = AnnotatorState()
-            if state.decoder is not None:
-                state.autoseg_state = _load_is_state(state.embedding_path)
-            else:
-                state.autoseg_state = _load_amg_state(state.embedding_path)
+            state.autoseg_state = _load_is_state(state.embedding_path)
 
 
 def annotator(
@@ -342,10 +339,10 @@ def annotator(
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
-        precompute_autoseg_state: Whether to precompute the automatic segmentation state (AMG masks, or
-            decoder predictions if the model has a decoder). Requires an embedding path.
-            This will take more time when precomputing embeddings, but will then make
-            automatic mask generation much faster. By default, set to 'False'.
+        precompute_autoseg_state: Whether to precompute the automatic segmentation state (the decoder
+            predictions). Requires an embedding path and a model with a decoder; it is ignored for a
+            model without one. This will take more time when precomputing embeddings, but will then
+            make automatic segmentation much faster. By default, set to 'False'.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         decoder_path: Path to a custom decoder checkpoint from which to load the `micro-sam` decoder.
         device: The computational device to use for the SAM model.

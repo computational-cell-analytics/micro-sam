@@ -534,14 +534,14 @@ class TestAutoSegVolumeDispatch:
 
         calls = {}
 
-        def fake_run_amg(state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
+        def fake_run_apg(state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
             calls.update(run_raw_shape=tuple(run_raw.shape), ndim=ndim, z=z)
             return np.zeros(run_raw.shape if ndim == 3 else run_raw.shape[-2:], dtype="uint32")
 
         # Duck-typed stand-in so we exercise the '__call__' dispatch without instantiating a QWidget.
         widget = SimpleNamespace(
-            _viewer=viewer, mode="amg", volumetric=True, apply_to_volume=apply_to_volume,
-            _run_amg=fake_run_amg,
+            _viewer=viewer, mode="apg", volumetric=True, apply_to_volume=apply_to_volume,
+            with_decoder=True, _run_apg=fake_run_apg,
         )
 
         def fake_pbar():
@@ -551,7 +551,10 @@ class TestAutoSegVolumeDispatch:
             )
             return SimpleNamespace(), signals
 
-        monkeypatch.setattr(_widgets, "AnnotatorState", lambda: SimpleNamespace(get_image_name=lambda v: "image"))
+        monkeypatch.setattr(
+            _widgets, "AnnotatorState",
+            lambda: SimpleNamespace(get_image_name=lambda v: "image", decoder=object(), image_embeddings=None),
+        )
         monkeypatch.setattr(_widgets, "_validate_layers", lambda *a, **k: False)
         monkeypatch.setattr(_widgets, "_validate_embeddings", lambda *a, **k: False)
         monkeypatch.setattr(_widgets, "_select_layer", lambda *a, **k: None)
@@ -598,50 +601,6 @@ class TestAutoSegStatePersistence:
 
     def test_no_persist_without_embedding_widget(self):
         assert self._state_save_path(cache_state=True, with_widget=False) is None
-
-    def test_enabling_persistence_invalidates_the_in_memory_cache(self, monkeypatch):
-        """Turning disk caching on after an in-memory run must route through the cache helper again."""
-        from types import MethodType, SimpleNamespace
-
-        import micro_sam.precompute_state as precompute_state
-        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
-
-        calls = []
-
-        class _Segmenter:
-            def generate(self, **kwargs):
-                return np.zeros((8, 8), dtype="uint32")
-
-            def clear_state(self):
-                pass
-
-        def fake_cache_autoseg_state(*args, **kwargs):
-            calls.append(args[4])  # save_path
-            return _Segmenter()
-
-        monkeypatch.setattr(precompute_state, "cache_autoseg_state", fake_cache_autoseg_state)
-
-        embedding_widget = SimpleNamespace(cache_state=False)
-        state = SimpleNamespace(
-            predictor=SimpleNamespace(model=object(), model_type="hvit_t"),
-            image_embeddings={"input_size": (8, 8)},
-            embedding_path="/tmp/embeddings.zarr",
-            data_signature="data",
-            widgets={"embeddings": embedding_widget},
-        )
-        widget = SimpleNamespace(
-            volumetric=False, min_object_size=0, points_per_side=32,
-            pred_iou_thresh=0.8, stability_score_thresh=0.9,
-            _segmenter=None, _segmenter_key=None,
-        )
-        widget._state_save_path = MethodType(AutoSegmentWidget._state_save_path, widget)
-        widget._release_segmenter = MethodType(AutoSegmentWidget._release_segmenter, widget)
-
-        raw = np.zeros((8, 8), dtype="uint8")
-        AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
-        embedding_widget.cache_state = True
-        AutoSegmentWidget._run_amg(widget, state, raw, ndim=2, z=None)
-        assert calls == [None, "/tmp/embeddings.zarr"]
 
     def test_enabling_decoder_persistence_writes_the_in_memory_state(self, monkeypatch):
         from types import MethodType, SimpleNamespace
@@ -893,17 +852,60 @@ class TestAutoSegDefaultMode:
         assert has_registered_decoder(DEFAULT_MODEL) is True  # the Microscopy default has a decoder
         assert has_registered_decoder("hvit_t") is False  # a plain backbone does not
 
-    def test_autoseg_defaults_to_sparse_for_decoder_model(self, make_napari_viewer_proxy):
+    def test_autoseg_defaults_to_apg_for_decoder_model(self, make_napari_viewer_proxy):
         # Regression: with the Microscopy default model (which has a decoder) the auto-seg widget must
-        # start in a decoder mode ('sparse'), not 'amg', even before embeddings are computed.
+        # start in 'apg', not 'amg', even before embeddings are computed.
         viewer = make_napari_viewer_proxy()
         widget = Annotator(viewer, ndim=2)
         autoseg = widget._widgets["autosegment"]
         assert autoseg.with_decoder is True
-        assert autoseg.mode == "sparse"
-        assert autoseg.mode_dropdown.currentText() == "sparse"
+        assert autoseg.mode == "apg"
+        assert autoseg.mode_dropdown.currentText() == "apg"
         choices = [autoseg.mode_dropdown.itemText(i) for i in range(autoseg.mode_dropdown.count())]
-        assert choices == ["sparse", "dense", "apg"]
+        assert choices == ["apg", "sparse", "dense"]
+        # The settings panel built at startup is the APG one.
+        assert hasattr(autoseg, "candidate_threshold_param")
+        viewer.close()
+
+    def test_autoseg_is_disabled_without_a_decoder(self, make_napari_viewer_proxy):
+        # Every mode runs off the decoder predictions - AMG is not offered in the annotator - so a
+        # model without a decoder disables the run button instead of falling back to another mode.
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+
+        viewer = make_napari_viewer_proxy()
+        autoseg = AutoSegmentWidget(viewer, with_decoder=False, volumetric=False)
+        choices = [autoseg.mode_dropdown.itemText(i) for i in range(autoseg.mode_dropdown.count())]
+        assert choices == ["apg", "sparse", "dense"]  # never 'amg'
+        assert autoseg.mode == "apg"
+        assert autoseg.run_button.isEnabled() is False
+
+        autoseg._reset_segmentation_mode(True)
+        assert autoseg.mode == "apg"
+        assert autoseg.run_button.isEnabled() is True
+
+        autoseg._reset_segmentation_mode(False)
+        assert autoseg.run_button.isEnabled() is False
+        viewer.close()
+
+    def test_running_without_a_decoder_reports_the_reason(self, make_napari_viewer_proxy, monkeypatch):
+        # Clicking run anyway (the button can be enabled from a stale decoder state) explains why
+        # nothing happens rather than falling back to AMG.
+        from micro_sam.sam_annotator import _widgets
+        from micro_sam.sam_annotator._state import AnnotatorState
+
+        messages = []
+        monkeypatch.setattr(_widgets, "_generate_message", lambda kind, msg: messages.append((kind, msg)))
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=2)
+        autoseg = widget._widgets["autosegment"]
+        assert AnnotatorState().decoder is None  # no embeddings computed yet
+        autoseg()
+
+        assert len(messages) == 1
+        kind, msg = messages[0]
+        assert kind == "error"
+        assert "decoder" in msg
         viewer.close()
 
     def test_apg_controls_use_backend_defaults(self, make_napari_viewer_proxy):
@@ -970,6 +972,35 @@ class TestAutoSegDefaultMode:
 
         # Together they are what the single-call form would have passed.
         assert set(propose_kwargs) | set(select_kwargs) == set(autoseg._apg_kwargs(ndim=2))
+        viewer.close()
+
+    def test_commit_settings_cover_every_mode(self, make_napari_viewer_proxy):
+        """Committing an automatic segmentation to a commit path records the widget's settings, so
+        every mode must report parameters it actually has, in a json-serializable form."""
+        import json
+
+        from micro_sam.sam_annotator._state import AnnotatorState
+        from micro_sam.sam_annotator._widgets import _get_auto_segmentation_options
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=3)
+        autoseg = widget._widgets["autosegment"]
+        state = AnnotatorState()
+
+        for mode in ("apg", "sparse", "dense"):
+            autoseg.mode_dropdown.setCurrentText(mode)
+            for apply_to_volume in (False, True):
+                autoseg.apply_to_volume = apply_to_volume
+                options = _get_auto_segmentation_options(state, np.array([1, 2]))
+                assert options["object_ids"] == [1, 2]
+                assert options["mode"] == mode
+                assert options["apply_to_volume"] is apply_to_volume
+                # The z block / halo are part of a volumetric decoder run.
+                assert options["tile_z"] == autoseg.tile_z
+                assert options["halo_z"] == autoseg.halo_z
+                json.dumps(options)  # It is written to the zarr attributes of the commit path.
+
+        assert _get_auto_segmentation_options(state, [])["mode"] == "dense"
         viewer.close()
 
     def test_autoseg_settings_use_v2_defaults(self):

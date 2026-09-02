@@ -44,25 +44,14 @@ tooltips = {
     "autosegment": {
         # General settings.
         "apply_to_volume": "Choose whether to run automatic segmentation on the full volume or only the current slice.",
-        "gap_closing": "Enter the value to close gaps across slices for volumetric segmentation. Higher values reduce artifacts from missing slices in objects, but can wrongly merge objects.",  # noqa
-        "min_extent": "Enter the minimal number of slices for objects in volumetric segmentation. This filters out small segmentation artifacts.",  # noqa
         "min_object_size": "Enter the minimal object size in pixels. This refers to the size per slice for volumetric segmentation.",  # noqa
         "run_button": "Run automatic segmentation.",
-        "with_background": "Choose whether your image has a large background area.",
         "tile_z": "Number of slices per z-block for 3d automatic segmentation. The volume is decoded in z-blocks to bound memory. Set this to the number of slices (or more) to process the whole volume in one block (no z-tiling).",  # noqa
         "halo_z": "Number of overlapping slices between z-blocks for 3d automatic segmentation, used as context and discarded when stitching.",  # noqa
-        # Settings for AIS.
-        "boundary_distance_thresh": "Enter the boundary distance threshold.",
-        "center_distance_thresh": "Enter the center distance threshold.",
-        # Settings for AMG.
-        "box_nms_thresh": "Enter the non-maximum suppression threshold.",
-        "pred_iou_thresh": "Enter the threshold for filtering objects based on the predicted IOU.",
-        "stability_score_thresh": "Enter the threshold for filtering objects based on the stability score.",
-        "points_per_side": "Number of points sampled along one side of the image for AMG grid prompting.",
         # Settings for the SAM2 automatic segmentation modes.
         "mode": (
-            "Select the automatic segmentation mode: 'amg' (grid-based, no decoder needed), "
-            "'sparse' (flow-based), 'dense' (multicut-based), or 'apg' (prompt-based)."
+            "Select the automatic segmentation mode: 'apg' (prompt-based, the default), "
+            "'sparse' (flow-based) or 'dense' (multicut-based). All of them need a model with a decoder."
         ),
         "foreground_threshold": "Enter the threshold for binarizing the foreground probability map.",
         "density_threshold": "Enter the convergence-density threshold used for seed extraction.",
@@ -82,7 +71,6 @@ tooltips = {
         "dt": "Enter the flow-integration step size.",
         "sigma": "Enter the Gaussian sigma for smoothing the convergence-density map.",
         "n_threads": "Enter the number of threads for the post-processing.",
-        "settings": "Settings for automatic segmentation: the mode and its thresholds.",
         "advanced_settings": "Advanced automatic-segmentation parameters.",
     },
     "autotrack": {

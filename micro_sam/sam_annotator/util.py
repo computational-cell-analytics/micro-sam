@@ -1,8 +1,5 @@
 import os
-import pickle
 import warnings
-from glob import glob
-from pathlib import Path
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -1369,22 +1366,11 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
 
 # Read parameters from checkpoint path if it is given instead.
 def _sync_autosegment_widget(widget, model_type, checkpoint_path, update_decoder=None):
+    # The automatic segmentation widget builds its parameters from the backend defaults for the
+    # loaded model and mode (see 'AutoSegmentWidget._make_settings_widget'), so the only thing to
+    # sync here is whether the loaded model can drive it at all.
     if update_decoder is not None:
         widget._reset_segmentation_mode(update_decoder)
-
-    # Apply per-model default settings for the v1 generators if the widget exposes them
-    # (e.g. the automatic tracking widget). The new dense/sparse segmentation widget does not
-    # expose these parameters, since its backend is deferred, so the updates are skipped there.
-    if getattr(widget, "with_decoder", False):
-        settings = model_settings.AIS_SETTINGS.get(model_type, {})
-        params = ("center_distance_thresh", "boundary_distance_thresh")
-    else:
-        settings = model_settings.AMG_SETTINGS.get(model_type, {})
-        params = ("pred_iou_thresh", "stability_score_thresh", "min_object_size")
-
-    for param in params:
-        if param in settings and hasattr(widget, f"{param}_param"):
-            getattr(widget, f"{param}_param").setValue(settings[param])
 
 
 # Read parameters from checkpoint path if it is given instead.
@@ -1402,23 +1388,6 @@ def _sync_ndsegment_widget(widget, model_type, checkpoint_path):
     for param in params:
         if param in settings:
             getattr(widget, f"{param}_param").setValue(settings[param])
-
-
-def _load_amg_state(embedding_path):
-    if embedding_path is None or not os.path.exists(embedding_path):
-        return {"cache_folder": None}
-
-    cache_folder = os.path.join(embedding_path, "amg_state")
-    os.makedirs(cache_folder, exist_ok=True)
-    amg_state = {"cache_folder": cache_folder}
-
-    state_paths = glob(os.path.join(cache_folder, "*.pkl"))
-    for path in state_paths:
-        with open(path, "rb") as f:
-            state = pickle.load(f)
-        i = int(Path(path).stem.split("-")[-1])
-        amg_state[i] = state
-    return amg_state
 
 
 def _load_is_state(embedding_path):
@@ -1444,7 +1413,8 @@ def _load_is_state(embedding_path):
 def _autoseg_state_descriptor(embedding_path, mode):
     """Descriptor of the SAM2 automatic-segmentation state cache in the embedding Zarr.
 
-    Returns the embedding path and mode ('amg' or 'ais'); the state itself is loaded on demand by
+    Returns the embedding path and mode (the annotator only caches the 'ais' decoder predictions);
+    the state itself is loaded on demand by
     `micro_sam.precompute_state.cache_autoseg_state`. The SAM2 automatic segmentation widget
     reads/writes the cache directly, so this only records where it lives.
     """
