@@ -32,7 +32,7 @@ NCCL_ENV = {
 SCRIPT = "/mnt/vast-kisski/home/archit/u28048/micro-sam/finetuning/v2/generalist/train_joint.py"
 PARTITION = "kisski-h100"
 GPU_TYPE = "H100"
-SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v4"
+SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v5"
 
 
 def write_batch_script(out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry):
@@ -56,6 +56,8 @@ micromamba activate super
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export SAVE_ROOT={save_root}
+# The torch.compile cache must be node-local. A cache on the shared filesystem blocks the compile on its file locks.
+export TORCHINDUCTOR_CACHE_DIR=/local/jobs/${{USER}}_${{SLURM_JOB_ID}}/inductor
 
 GPUS_PER_NODE=4
 export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -1)
@@ -69,7 +71,7 @@ srun --cpu-bind=none bash -c "torchrun \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     --node_rank=\$SLURM_NODEID \
-    {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {dataset_choice}"
+    {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {dataset_choice} --compile"
 """
     if reservation:
         batch_script = batch_script.replace(
@@ -111,7 +113,7 @@ def submit_slurm(args):
             model_type=model_type,
             n_epochs=EPOCHS[model_type],
             dataset_choice=args.dataset_choice,
-            save_root=SAVE_ROOT,
+            save_root=os.path.abspath(args.save_root),
             reservation=args.reservation,
             enable_ib=args.enable_ib == "yes",
             dry=args.dry,
@@ -140,6 +142,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "-r", "--reservation", type=str, default=None, help="Slurm reservation to submit under, if any."
     )
+    parser.add_argument("-s", "--save_root", type=str, default=SAVE_ROOT, help="Where to save checkpoints and logs.")
     parser.add_argument(
         "--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB verbs instead of sockets."
     )

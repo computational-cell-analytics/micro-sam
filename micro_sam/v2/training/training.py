@@ -1,9 +1,12 @@
 import os
 import re
 import time
+from datetime import timedelta
 from typing import Any, Dict, List, Optional, Union
 
 import torch
+import torch._dynamo
+import torch._inductor.config
 import torch.distributed as dist
 from torch.utils.data import DataLoader
 
@@ -884,6 +887,59 @@ def train_automatic_multi_gpu(
     )
 
 
+# The parts of the joint model that torch.compile can compile.
+COMPILE_COMPONENTS = ("encoder", "decoder", "loss")
+
+# The process-group timeout with torch.compile. Each rank compiles the 2D and the 3D graph at its first
+# iteration with that shape, and the other ranks wait in their collectives until it is done.
+COMPILE_PG_TIMEOUT = timedelta(minutes=60)
+
+
+def _check_compile(compile):
+    if isinstance(compile, str):
+        compile = [compile]
+    compile = [] if compile is None else list(compile)
+    unknown = set(compile) - set(COMPILE_COMPONENTS)
+    if unknown:
+        raise ValueError(
+            f"The compile components {sorted(unknown)} are unknown. Pass a subset of {COMPILE_COMPONENTS}."
+        )
+    return compile
+
+
+def _compile_threads_per_rank():
+    """Return the number of Inductor compile workers per rank.
+
+    The ranks on one node share the CPUs of the job. With the default of one worker per core, the
+    ranks compete for the CPUs and the first iterations take many minutes.
+    """
+    n_cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
+    local_ranks = int(os.environ.get("LOCAL_WORLD_SIZE", "1"))
+    return max(1, n_cpus // local_ranks)
+
+
+def _configure_joint_speed(sam2_model, unetr, compile):
+    """Apply the backend speed settings of the joint training functions."""
+    # The convolution shapes are fixed per data group. cuDNN autotuning finds a much faster kernel for
+    # the mask downsampler of the memory encoder than the heuristic choice.
+    torch.backends.cudnn.benchmark = True
+    torch.set_float32_matmul_precision("high")
+    if "encoder" in compile or "decoder" in compile:
+        # The decoder blocks share one class, so torch.compile stores one specialization per block width
+        # and per 2D/3D shape. With the default limit of 8, the other blocks run in eager mode.
+        torch._dynamo.config.cache_size_limit = max(torch._dynamo.config.cache_size_limit, 64)
+        torch._inductor.config.compile_threads = _compile_threads_per_rank()
+    if "encoder" in compile:
+        # The in-place compile keeps the module and its state_dict keys. The SAM2 forward and the UNETR
+        # encoder adapter both hold this module.
+        sam2_model.image_encoder.compile(dynamic=False)
+    if "decoder" in compile:
+        # Compile the decoder blocks one by one, so the encode and decode methods stay plain Python.
+        for name, module in unetr.named_children():
+            if name != "encoder":
+                module.compile(dynamic=False)
+
+
 def train_joint_sam2(
     name: str,
     model_type: str,
@@ -925,6 +981,7 @@ def train_joint_sam2(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
+    compile: Optional[List[str]] = None,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly with a shared image encoder (single GPU).
 
@@ -982,6 +1039,9 @@ def train_joint_sam2(
         distance_type: Directed distance target for the automatic branch. "geodesic" uses the
             geodesic hybrid field around each object's center, "directed" the euclidean vector
             to the nearest boundary.
+        compile: The parts to compile with ``torch.compile``. "encoder" is the shared image encoder,
+            "decoder" are the blocks of the UNETR decoder and "loss" are the Dice and focal kernels
+            of the interactive loss. The default compiles nothing.
     """
     from micro_sam.v2.datasets.generalist_loader import _build_joint_datasets, _prepare_data_loader
     from micro_sam.v2.models.util import UniSAM2
@@ -1018,12 +1078,16 @@ def train_joint_sam2(
         bidirectional=bidirectional,
     )
     unetr = UniSAM2(
-        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features, device=device
+        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features, device=device,
+        perform_range_checks=False,  # The trainer checks the input range once.
     )
+    compile = _check_compile(compile)
+    _configure_joint_speed(sam2_model, unetr, compile)
 
     interactive_loss = CustomSAM2Loss(
         use_focal_loss=use_focal_loss, focal_weight=focal_weight,
         use_object_score_loss=use_object_score_loss, average_over_frames=average_over_frames,
+        compile_kernels="loss" in compile,
     )
     automatic_loss = DirectedDistanceLoss(mask_distances_in_bg=True)
     convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
@@ -1032,7 +1096,10 @@ def train_joint_sam2(
         scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
     sam2_params = list(sam2_model.parameters())
     unetr_decoder_params = [p for n, p in unetr.named_parameters() if not n.startswith("encoder")]
-    optimizer = torch.optim.AdamW(sam2_params + unetr_decoder_params, lr=lr)
+    # The fused AdamW kernel exists for CUDA only.
+    optimizer = torch.optim.AdamW(
+        sam2_params + unetr_decoder_params, lr=lr, fused=torch.device(device).type == "cuda"
+    )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, **scheduler_kwargs)
 
     trainer = JointSam2Trainer(
@@ -1107,6 +1174,7 @@ def _train_joint_rank(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
+    compile: Optional[List[str]] = None,
 ):
     """Single-rank torchrun worker for train_joint_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
@@ -1115,7 +1183,8 @@ def _train_joint_rank(
     from micro_sam.v2.datasets.sampler import DistributedUniBatchSampler, _build_group_map
     from micro_sam.v2.models.util import UniSAM2
 
-    dist.init_process_group("nccl")
+    pg_kwargs = {"timeout": COMPILE_PG_TIMEOUT} if compile else {}
+    dist.init_process_group("nccl", **pg_kwargs)
     world_size = dist.get_world_size()
 
     device = torch.device(f"cuda:{local_rank}")
@@ -1163,8 +1232,17 @@ def _train_joint_rank(
         bidirectional=bidirectional,
     )
     unetr = UniSAM2(
-        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features, device=device
+        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features, device=device,
+        perform_range_checks=False,  # The trainer checks the input range once.
     )
+    compile = _check_compile(compile)
+    _configure_joint_speed(sam2_model, unetr, compile)
+
+    sam2_params = list(sam2_model.parameters())
+    unetr_decoder_params = [p for n, p in unetr.named_parameters() if not n.startswith("encoder")]
+    # DDP does not broadcast the decoder, so every rank starts from the parameters of rank 0.
+    for param in unetr_decoder_params:
+        dist.broadcast(param.data, src=0)
 
     # Only DDP-wrap sam2_model. We sync the unetr decoder grads manually.
     ddp_model = DDP(sam2_model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
@@ -1172,15 +1250,17 @@ def _train_joint_rank(
     interactive_loss = CustomSAM2Loss(
         use_focal_loss=use_focal_loss, focal_weight=focal_weight,
         use_object_score_loss=use_object_score_loss, average_over_frames=average_over_frames,
+        compile_kernels="loss" in compile,
     )
     automatic_loss = DirectedDistanceLoss(mask_distances_in_bg=True)
     convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
 
     if scheduler_kwargs is None:
         scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
-    sam2_params = list(sam2_model.parameters())
-    unetr_decoder_params = [p for n, p in unetr.named_parameters() if not n.startswith("encoder")]
-    optimizer = torch.optim.AdamW(sam2_params + unetr_decoder_params, lr=lr)
+    # The fused AdamW kernel exists for CUDA only.
+    optimizer = torch.optim.AdamW(
+        sam2_params + unetr_decoder_params, lr=lr, fused=torch.device(device).type == "cuda"
+    )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer=optimizer, **scheduler_kwargs)
 
     trainer = JointSam2Trainer(
@@ -1257,6 +1337,7 @@ def train_joint_sam2_multi_gpu(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
+    compile: Optional[List[str]] = None,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly across multiple GPUs with DDP.
 
@@ -1317,6 +1398,9 @@ def train_joint_sam2_multi_gpu(
         distance_type: Directed distance target for the automatic branch. "geodesic" uses the
             geodesic hybrid field around each object's center, "directed" the euclidean vector
             to the nearest boundary.
+        compile: The parts to compile with ``torch.compile``. "encoder" is the shared image encoder,
+            "decoder" are the blocks of the UNETR decoder and "loss" are the Dice and focal kernels
+            of the interactive loss. The default compiles nothing.
     """
     if z_slices is None:
         z_slices = [8]
@@ -1374,4 +1458,5 @@ def train_joint_sam2_multi_gpu(
         automatic_metric_weight=automatic_metric_weight,
         initial_features=initial_features,
         distance_type=distance_type,
+        compile=compile,
     )

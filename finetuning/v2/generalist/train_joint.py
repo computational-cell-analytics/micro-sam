@@ -5,33 +5,27 @@ import torch
 
 
 CHOSEN_PARAMETERS = {
-    "hvit_t": (10, 10, 5),
-    "hvit_s": (10, 10, 5),
-    "hvit_b": (8, 10, 5),
-    "hvit_l": (8, 8, 4),
+    "hvit_t": (12, 12, 5),
+    "hvit_s": (12, 12, 5),
+    "hvit_b": (8, 10, 6),
+    "hvit_l": (8, 8, 5),
 }
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--n_epochs", type=int, default=100)
-    parser.add_argument("--n_iterations", type=int, default=None)
-    parser.add_argument("--model_type", default="hvit_t", choices=["hvit_t", "hvit_s", "hvit_b", "hvit_l"])
-    parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--dataset_choice", default="all", choices=["lm", "em", "hp", "all"])
-    args = parser.parse_args()
+def build_common(model_type, n_epochs, n_iterations, batch_size, dataset_choice, use_compile=False, **overrides):
+    """Build the keyword arguments that the single-GPU and the multi-GPU entry points share.
 
-    model_type = args.model_type
-    # Pinned per-model config (batch_size_2d, z_slices, max_num_objects); not CLI-tunable.
-    # Overridable via env vars for GPU-memory-constrained runs (e.g. A100 40GB debug jobs)
-    # without changing the pinned defaults used by the production H100 submissions.
+    The per-model config (batch_size_2d, z_slices, max_num_objects) is fixed and not a CLI option.
+    The env vars BATCH_SIZE_2D, Z_SLICE and MAX_NUM_OBJECTS override it for debug jobs on smaller GPUs.
+    ``overrides`` update the returned dict. The speed benchmark uses them to set engine options.
+    """
     batch_size_2d, z_slice, max_num_objects = CHOSEN_PARAMETERS[model_type]
     batch_size_2d = int(os.environ.get("BATCH_SIZE_2D", batch_size_2d))
     z_slice = int(os.environ.get("Z_SLICE", z_slice))
     max_num_objects = int(os.environ.get("MAX_NUM_OBJECTS", max_num_objects))
     z_slices = [z_slice]
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
-    save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v4")
+    save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v5")
 
     is_multi_gpu = "RANK" in os.environ
     name = f"joint_sam2_{model_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
@@ -49,13 +43,13 @@ def main():
         name=name,
         model_type=model_type,
         input_path=data_path,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         batch_size_2d=batch_size_2d,
         z_slices=z_slices,
-        dataset_choice=args.dataset_choice,
+        dataset_choice=dataset_choice,
         n_workers=8,
-        n_epochs=args.n_epochs,
-        n_iterations=args.n_iterations,
+        n_epochs=n_epochs,
+        n_iterations=n_iterations,
         lr=1e-5,  # single LR for all parameters
         save_root=save_root,
         checkpoint_path=None,  # downloads default SAM2 weights if None
@@ -78,25 +72,52 @@ def main():
         peft_kwargs=peft_kwargs,  # None = full finetuning; set above to use LoRA / late finetuning
         initial_features=32,  # decoder bottleneck matches the hvit_t embed_dim
         distance_type="geodesic",  # regression target of the automatic branch
+        # The first 2D and the first 3D iteration then take a few minutes longer.
+        compile=["encoder", "decoder", "loss"] if use_compile else None,
     )
+    common.update(overrides)
+    return common
 
-    if is_multi_gpu:
+
+def run_training(common):
+    """Run the multi-GPU entry point under torchrun, otherwise the single-GPU one."""
+    if "RANK" in os.environ:
         from micro_sam.v2.training import train_joint_sam2_multi_gpu
         train_joint_sam2_multi_gpu(**common)
     else:
         from micro_sam.v2.training import train_joint_sam2
         train_joint_sam2(**common)
 
+
+def report_peak_memory(common):
     rank = int(os.environ.get("RANK", "0"))
     if torch.cuda.is_available() and rank == 0:
         peak_alloc = torch.cuda.max_memory_allocated() / 1024**3
         peak_reserved = torch.cuda.max_memory_reserved() / 1024**3
         print(
-            f"[peak-memory] model_type={model_type} batch_size={args.batch_size} "
-            f"batch_size_2d={batch_size_2d} z_slices={z_slices} "
-            f"max_num_objects={max_num_objects} "
+            f"[peak-memory] model_type={common['model_type']} batch_size={common['batch_size']} "
+            f"batch_size_2d={common['batch_size_2d']} z_slices={common['z_slices']} "
+            f"max_num_objects={common['max_num_objects']} "
             f"allocated={peak_alloc:.2f}GiB reserved={peak_reserved:.2f}GiB", flush=True
         )
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--n_epochs", type=int, default=100)
+    parser.add_argument("--n_iterations", type=int, default=None)
+    parser.add_argument("--model_type", default="hvit_t", choices=["hvit_t", "hvit_s", "hvit_b", "hvit_l"])
+    parser.add_argument("--batch_size", type=int, default=1)
+    parser.add_argument("--dataset_choice", default="all", choices=["lm", "em", "hp", "all"])
+    parser.add_argument("--compile", action="store_true", help="Compile the encoder, the decoder and the loss.")
+    args = parser.parse_args()
+
+    common = build_common(
+        args.model_type, args.n_epochs, args.n_iterations, args.batch_size, args.dataset_choice,
+        use_compile=args.compile,
+    )
+    run_training(common)
+    report_peak_memory(common)
 
 
 if __name__ == "__main__":

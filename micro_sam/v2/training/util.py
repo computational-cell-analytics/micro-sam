@@ -1,10 +1,142 @@
 import os
+import functools
 from typing import Callable, Dict, List, Optional, Union
 
 import torch
 
 from micro_sam.util import get_device
 from micro_sam.v2.util import CFG_PATHS, _get_checkpoint
+
+
+@functools.lru_cache(maxsize=1)
+def sam2_train_class():
+    """Build the SAM2Train subclass that micro_sam uses for training.
+
+    The function builds the class once. It imports the SAM2 training package, which exists only in
+    training environments.
+    """
+    from training.model.sam2 import SAM2Train
+
+    class MicroSAM2Train(SAM2Train):
+        """SAM2Train with optional bidirectional 3D propagation.
+
+        With ``bidirectional`` set, each 3D training step samples a random start frame. The model
+        propagates forward from the start frame to the last frame. Then it propagates backward from the
+        frame before the start to the first frame, with ``track_in_reverse=True``, and reads the memory
+        of the forward pass. It samples correction clicks for both directions. 2D inputs (T=1) and eval
+        use the standard SAM2Train pass.
+        """
+
+        bidirectional = False
+
+        def forward(self, input):
+            if not (self.bidirectional and self.training and input.num_frames > 1):
+                return super().forward(input)
+            backbone_out = self.forward_image(input.flat_img_batch)
+            # Clamp so there are always enough forward frames for num_init_cond_frames.
+            # prepare_prompt_inputs samples (num_init_cond_frames - 1) additional cond
+            # frames from range(start + 1, T), which is empty if start >= T - 1 when
+            # num_init_cond_frames > 1.
+            max_start = max(0, input.num_frames - self.num_init_cond_frames_for_train)
+            start_frame_idx = int(self.rng.integers(0, max_start + 1))
+            backbone_out = self.prepare_prompt_inputs(backbone_out, input, start_frame_idx)
+            return self._forward_bidirectional(backbone_out, input, start_frame_idx)
+
+        def _forward_bidirectional(self, backbone_out, input, start_frame_idx):
+            img_feats_already_computed = backbone_out["backbone_fpn"] is not None
+            feat_sizes = None
+            if img_feats_already_computed:
+                _, vision_feats, vision_pos_embeds, feat_sizes = self._prepare_backbone_features(backbone_out)
+
+            num_frames = backbone_out["num_frames"]
+            init_cond_frames = backbone_out["init_cond_frames"]
+            forward_order = init_cond_frames + backbone_out["frames_not_in_init_cond"]
+            backward_order = list(range(start_frame_idx - 1, -1, -1))
+
+            # Extend correction frames symmetrically to backward frames.
+            # Only when use_pt_input=True: when False, prepare_prompt_inputs sets
+            # frames_to_add_correction_pt=[] (no corrections in mask-input mode),
+            # so backward frames must follow the same rule.
+            frames_to_add_correction_pt = list(backbone_out["frames_to_add_correction_pt"])
+            if backbone_out["use_pt_input"] and backward_order and self.num_frames_to_correct_for_train > 0:
+                n_back = min(self.num_frames_to_correct_for_train, len(backward_order))
+                if self.rand_frames_to_correct_for_train and n_back > 1:
+                    n_back = int(self.rng.integers(1, n_back, endpoint=True))
+                back_correct = list(self.rng.choice(backward_order, n_back, replace=False))
+                frames_to_add_correction_pt = frames_to_add_correction_pt + back_correct
+
+            output_dict = {"cond_frame_outputs": {}, "non_cond_frame_outputs": {}}
+
+            for stage_id in forward_order:
+                img_ids = input.flat_obj_to_img_idx[stage_id]
+                if img_feats_already_computed:
+                    cvf = [x[:, img_ids] for x in vision_feats]
+                    cvpe = [x[:, img_ids] for x in vision_pos_embeds]
+                else:
+                    _, cvf, cvpe, feat_sizes = self._prepare_backbone_features_per_frame(
+                        input.flat_img_batch, img_ids
+                    )
+                current_out = self.track_step(
+                    frame_idx=stage_id,
+                    is_init_cond_frame=stage_id in init_cond_frames,
+                    current_vision_feats=cvf,
+                    current_vision_pos_embeds=cvpe,
+                    feat_sizes=feat_sizes,
+                    point_inputs=backbone_out["point_inputs_per_frame"].get(stage_id, None),
+                    mask_inputs=backbone_out["mask_inputs_per_frame"].get(stage_id, None),
+                    gt_masks=backbone_out["gt_masks_per_frame"].get(stage_id, None),
+                    frames_to_add_correction_pt=frames_to_add_correction_pt,
+                    output_dict=output_dict,
+                    num_frames=num_frames,
+                    track_in_reverse=False,
+                )
+                add_as_cond = stage_id in init_cond_frames or (
+                    self.add_all_frames_to_correct_as_cond and stage_id in frames_to_add_correction_pt
+                )
+                if add_as_cond:
+                    output_dict["cond_frame_outputs"][stage_id] = current_out
+                else:
+                    output_dict["non_cond_frame_outputs"][stage_id] = current_out
+
+            for stage_id in backward_order:
+                img_ids = input.flat_obj_to_img_idx[stage_id]
+                if img_feats_already_computed:
+                    cvf = [x[:, img_ids] for x in vision_feats]
+                    cvpe = [x[:, img_ids] for x in vision_pos_embeds]
+                else:
+                    _, cvf, cvpe, feat_sizes = self._prepare_backbone_features_per_frame(
+                        input.flat_img_batch, img_ids
+                    )
+                current_out = self.track_step(
+                    frame_idx=stage_id,
+                    is_init_cond_frame=False,
+                    current_vision_feats=cvf,
+                    current_vision_pos_embeds=cvpe,
+                    feat_sizes=feat_sizes,
+                    point_inputs=None,
+                    mask_inputs=None,
+                    gt_masks=backbone_out["gt_masks_per_frame"].get(stage_id, None),
+                    frames_to_add_correction_pt=frames_to_add_correction_pt,
+                    output_dict=output_dict,
+                    num_frames=num_frames,
+                    track_in_reverse=True,
+                )
+                add_as_cond = (
+                    self.add_all_frames_to_correct_as_cond and stage_id in frames_to_add_correction_pt
+                )
+                if add_as_cond:
+                    output_dict["cond_frame_outputs"][stage_id] = current_out
+                else:
+                    output_dict["non_cond_frame_outputs"][stage_id] = current_out
+
+            all_frame_outputs = {}
+            all_frame_outputs.update(output_dict["cond_frame_outputs"])
+            all_frame_outputs.update(output_dict["non_cond_frame_outputs"])
+            all_frame_outputs = [all_frame_outputs[t] for t in range(num_frames)]
+            all_frame_outputs = [{k: v for k, v in d.items() if k != "obj_ptr"} for d in all_frame_outputs]
+            return all_frame_outputs
+
+    return MicroSAM2Train
 
 
 def get_sam2_train_model(
@@ -132,129 +264,8 @@ def get_sam2_train_model(
             if any(name.startswith(c) for c in components):
                 param.requires_grad = False
 
-    if bidirectional:
-        from training.model.sam2 import SAM2Train as _SAM2TrainBase
-
-        class SAM2TrainBidirectional(_SAM2TrainBase):
-            """SAM2Train with random center-frame + bidirectional propagation.
-
-            On each 3D training step:
-            - A random start frame is sampled uniformly from [0, T-1].
-            - Forward frames (start -> T-1) are processed with track_in_reverse=False.
-            - Backward frames (start-1 -> 0) are processed with track_in_reverse=True,
-              reading memory built during the forward pass.
-            - Correction clicks are sampled symmetrically for both directions.
-            Falls back to the standard SAM2Train forward for 2D inputs (T=1) and eval.
-            """
-
-            def forward(self, input):
-                if not self.training or input.num_frames == 1:
-                    return super().forward(input)
-                backbone_out = self.forward_image(input.flat_img_batch)
-                # Clamp so there are always enough forward frames for num_init_cond_frames.
-                # prepare_prompt_inputs samples (num_init_cond_frames - 1) additional cond
-                # frames from range(start + 1, T), which is empty if start >= T - 1 when
-                # num_init_cond_frames > 1.
-                max_start = max(0, input.num_frames - self.num_init_cond_frames_for_train)
-                start_frame_idx = int(self.rng.integers(0, max_start + 1))
-                backbone_out = self.prepare_prompt_inputs(backbone_out, input, start_frame_idx)
-                return self._forward_bidirectional(backbone_out, input, start_frame_idx)
-
-            def _forward_bidirectional(self, backbone_out, input, start_frame_idx):
-                img_feats_already_computed = backbone_out["backbone_fpn"] is not None
-                feat_sizes = None
-                if img_feats_already_computed:
-                    _, vision_feats, vision_pos_embeds, feat_sizes = self._prepare_backbone_features(backbone_out)
-
-                num_frames = backbone_out["num_frames"]
-                init_cond_frames = backbone_out["init_cond_frames"]
-                forward_order = init_cond_frames + backbone_out["frames_not_in_init_cond"]
-                backward_order = list(range(start_frame_idx - 1, -1, -1))
-
-                # Extend correction frames symmetrically to backward frames.
-                # Only when use_pt_input=True: when False, prepare_prompt_inputs sets
-                # frames_to_add_correction_pt=[] (no corrections in mask-input mode),
-                # so backward frames must follow the same rule.
-                frames_to_add_correction_pt = list(backbone_out["frames_to_add_correction_pt"])
-                if backbone_out["use_pt_input"] and backward_order and self.num_frames_to_correct_for_train > 0:
-                    n_back = min(self.num_frames_to_correct_for_train, len(backward_order))
-                    if self.rand_frames_to_correct_for_train and n_back > 1:
-                        n_back = int(self.rng.integers(1, n_back, endpoint=True))
-                    back_correct = list(self.rng.choice(backward_order, n_back, replace=False))
-                    frames_to_add_correction_pt = frames_to_add_correction_pt + back_correct
-
-                output_dict = {"cond_frame_outputs": {}, "non_cond_frame_outputs": {}}
-
-                for stage_id in forward_order:
-                    img_ids = input.flat_obj_to_img_idx[stage_id]
-                    if img_feats_already_computed:
-                        cvf = [x[:, img_ids] for x in vision_feats]
-                        cvpe = [x[:, img_ids] for x in vision_pos_embeds]
-                    else:
-                        _, cvf, cvpe, feat_sizes = self._prepare_backbone_features_per_frame(
-                            input.flat_img_batch, img_ids
-                        )
-                    current_out = self.track_step(
-                        frame_idx=stage_id,
-                        is_init_cond_frame=stage_id in init_cond_frames,
-                        current_vision_feats=cvf,
-                        current_vision_pos_embeds=cvpe,
-                        feat_sizes=feat_sizes,
-                        point_inputs=backbone_out["point_inputs_per_frame"].get(stage_id, None),
-                        mask_inputs=backbone_out["mask_inputs_per_frame"].get(stage_id, None),
-                        gt_masks=backbone_out["gt_masks_per_frame"].get(stage_id, None),
-                        frames_to_add_correction_pt=frames_to_add_correction_pt,
-                        output_dict=output_dict,
-                        num_frames=num_frames,
-                        track_in_reverse=False,
-                    )
-                    add_as_cond = stage_id in init_cond_frames or (
-                        self.add_all_frames_to_correct_as_cond and stage_id in frames_to_add_correction_pt
-                    )
-                    if add_as_cond:
-                        output_dict["cond_frame_outputs"][stage_id] = current_out
-                    else:
-                        output_dict["non_cond_frame_outputs"][stage_id] = current_out
-
-                for stage_id in backward_order:
-                    img_ids = input.flat_obj_to_img_idx[stage_id]
-                    if img_feats_already_computed:
-                        cvf = [x[:, img_ids] for x in vision_feats]
-                        cvpe = [x[:, img_ids] for x in vision_pos_embeds]
-                    else:
-                        _, cvf, cvpe, feat_sizes = self._prepare_backbone_features_per_frame(
-                            input.flat_img_batch, img_ids
-                        )
-                    current_out = self.track_step(
-                        frame_idx=stage_id,
-                        is_init_cond_frame=False,
-                        current_vision_feats=cvf,
-                        current_vision_pos_embeds=cvpe,
-                        feat_sizes=feat_sizes,
-                        point_inputs=None,
-                        mask_inputs=None,
-                        gt_masks=backbone_out["gt_masks_per_frame"].get(stage_id, None),
-                        frames_to_add_correction_pt=frames_to_add_correction_pt,
-                        output_dict=output_dict,
-                        num_frames=num_frames,
-                        track_in_reverse=True,
-                    )
-                    add_as_cond = (
-                        self.add_all_frames_to_correct_as_cond and stage_id in frames_to_add_correction_pt
-                    )
-                    if add_as_cond:
-                        output_dict["cond_frame_outputs"][stage_id] = current_out
-                    else:
-                        output_dict["non_cond_frame_outputs"][stage_id] = current_out
-
-                all_frame_outputs = {}
-                all_frame_outputs.update(output_dict["cond_frame_outputs"])
-                all_frame_outputs.update(output_dict["non_cond_frame_outputs"])
-                all_frame_outputs = [all_frame_outputs[t] for t in range(num_frames)]
-                all_frame_outputs = [{k: v for k, v in d.items() if k != "obj_ptr"} for d in all_frame_outputs]
-                return all_frame_outputs
-
-        model.__class__ = SAM2TrainBidirectional
+    model.__class__ = sam2_train_class()
+    model.bidirectional = bidirectional
 
     return model
 
