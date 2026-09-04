@@ -40,6 +40,9 @@ VALIDATION_SEED = 42
 TRAIN_LOWER_PERCENTILE_BOUNDS = (0.0, 5.0)
 VALIDATION_LOWER_PERCENTILE_BOUNDS = (2.0, 2.0)
 
+# Platynereis maps its neuropil ids to this value, see torch_em's CELL_NEUROPIL_IDS.
+PLATY_IGNORE_LABEL = datasets.platynereis.CELL_IGNORE_LABEL
+
 
 def seed_worker(worker_id):
     """DataLoader worker_init_fn that pins per-worker RNG for deterministic validation crops.
@@ -589,11 +592,14 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     platy_cell_template = "membrane/train_data_membrane_%02i.n5"
     label_key = "volumes/labels/segmentation/s1"
 
+    # Volume 9 is held out: its neuropil id covers 41% of the volume, the largest share of any volume.
+    platy_train_ids, platy_val_ids = [1, 2, 3, 4, 5, 6], [7, 8]
+
     train_rois = _compute_platy_rois(
-        platy_root, [1, 2, 3, 4, 5, 6], ignore_label=0, file_template=platy_cell_template, label_key=label_key,
+        platy_root, platy_train_ids, ignore_label=0, file_template=platy_cell_template, label_key=label_key,
     )
     val_rois = _compute_platy_rois(
-        platy_root, [7, 8], ignore_label=0, file_template=platy_cell_template, label_key=label_key,
+        platy_root, platy_val_ids, ignore_label=0, file_template=platy_cell_template, label_key=label_key,
     )
 
     for z in z_slices:
@@ -602,18 +608,22 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             "patch_shape": (z, *patch_shape),
             # sampling=None: ~20nm isotropic
             "label_transform2": (
-                partial(_em_label_trafo, label_trafo=label_trafo(instances=True))
+                partial(
+                    _em_label_trafo, label_trafo=label_trafo(instances=True), ignore_label=PLATY_IGNORE_LABEL
+                )
                 if label_trafo is not None else kwargs.get("label_transform2")
             ),
-            "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
-            "n_samples": max(1, 500 // n_z),
+            # The neuropil ignore label is not an instance, so the sampler must not count it.
+            "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0, PLATY_IGNORE_LABEL]),
+            # get_platynereis_cell_dataset concatenates one dataset per volume, so n_samples is per volume.
+            "n_samples": max(1, 500 // (n_z * len(platy_train_ids))),
             **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]}
         }
 
         train_ds.append(
             UniDataWrapper(
                 datasets.get_platynereis_cell_dataset(
-                    sample_ids=[1, 2, 3, 4, 5, 6], rois=train_rois, **platynereis_kwargs
+                    sample_ids=platy_train_ids, rois=train_rois, **platynereis_kwargs
                 ),
                 source_ndim=3, group_key=(3, z),
             )
@@ -621,7 +631,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
         val_ds.append(
             UniDataWrapper(
                 datasets.get_platynereis_cell_dataset(
-                    sample_ids=[7, 8], rois=val_rois, **platynereis_kwargs
+                    sample_ids=platy_val_ids, rois=val_rois, **platynereis_kwargs
                 ),
                 source_ndim=3, group_key=(3, z),
             )
