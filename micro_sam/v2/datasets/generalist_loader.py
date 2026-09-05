@@ -1964,9 +1964,6 @@ TUMOR_SPHEROID_VAL_SLICES = ("Au_01-vol_01-z_0212.h5", "Au_01-vol_01-z_0274.h5")
 # The last of the five NISB base training cubes validates.
 NISB_VAL_CUBES = ("seed4",)
 
-# CoNIC tiles cut from PanNuke source images could overlap the blind PanNuke fold 3.
-CONIC_EXCLUDED_COHORTS = ("pannuke",)
-
 SPATCH_HE_SUBSETS = ["visium_hd_ov", "visium_hd_hcc", "visium_hd_coad", "stereoseq_ov"]
 
 
@@ -1995,25 +1992,6 @@ def _compute_label_rois(label_paths, label_key, min_ids=1):
         if cached["n_ids"] >= min_ids:
             rois[path] = tuple(slice(start, stop) for start, stop in cached["roi"])
     return rois
-
-
-def _conic_cohort_roi(path, split, excluded_cohorts):
-    """Return the roi over the tiles of a CoNIC split that do not come from the excluded source cohorts.
-
-    torch_em writes the tiles of a split into one h5 stack in index order, and patch_info.csv lists the source
-    cohort per index, so the excluded tiles must form the tail of the stack for a single roi to cover the rest.
-    """
-    import pandas as pd
-
-    data_dir = os.path.join(path, "data")
-    cohorts = pd.read_csv(os.path.join(data_dir, "patch_info.csv"))["patch_info"].str.split("_").str[0]
-    indices = np.sort(pd.read_csv(os.path.join(data_dir, "split.csv"))[split].dropna().astype(int).to_numpy())
-    excluded = cohorts.to_numpy()[indices]
-    excluded = np.isin(excluded, list(excluded_cohorts))
-    n_kept = int(np.argmax(excluded)) if excluded.any() else len(indices)
-    if not excluded[n_kept:].all():
-        raise RuntimeError(f"The excluded CoNIC cohorts do not form the tail of the '{split}' split.")
-    return np.s_[:n_kept, :, :]
 
 
 def _pannuke_random_resize_and_pad_trafo(raw, labels, patch_shape):
@@ -2124,9 +2102,10 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         )
     )
 
-    # 3. Lizard (nucleus segmentation in H&E histopathology images)
-    # NOTE: Oversampled to 700 from the 361 patches that tile the 70 train images. CoNIC and lizard-mitosis are the
-    # same source images re-tiled, so only Lizard is used here to avoid train/test leakage.
+    # 3. Lizard (nucleus segmentation in H&E colon, 238 images from six cohorts)
+    # NOTE: The train and val splits hold only the crag, dpath and glas cohorts; every PanNuke and CoNSeP source
+    # image sits in the test split, so training here never touches the blind PanNuke fold 3. CoNIC is the same
+    # material re-tiled and is not used.
     lizard_kwargs = {
         "path": os.path.join(input_path, "lizard"), "patch_shape": patch_shape, "download": True, **kwargs
     }
@@ -2137,7 +2116,23 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         UniDataWrapper(datasets.get_lizard_dataset(split="val", n_samples=100, **lizard_kwargs), source_ndim=2)
     )
 
-    # 4. MoNuSeg (nucleus segmentation in H&E histopathology images)
+    # 4. Lizard-Mitosis (nucleus segmentation in H&E colon, the dedicated mitosis tile set)
+    # NOTE: Only the 'mitosis' subset is used: its tiles are new material, while the 'lizard' subset is CoNIC
+    # re-split. Tiles are 256x256 and are resized/padded to 512 like PanNuke.
+    lizard_mitosis_kwargs = {
+        "path": os.path.join(input_path, "lizard_mitosis"), "patch_shape": (1, 256, 256), "subset": "mitosis",
+        "label_choice": "instances", "download": True,
+        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+    }
+    for split, ds_list, n_samples in [("train", train_ds, 500), ("val", val_ds, 50)]:
+        ds_list.append(
+            UniDataWrapper(
+                datasets.get_lizard_mitosis_dataset(split=split, n_samples=n_samples, **lizard_mitosis_kwargs),
+                source_ndim=2,
+            )
+        )
+
+    # 5. MoNuSeg (nucleus segmentation in H&E histopathology images)
     # NOTE: No native val split. Split the train image/label paths so train and val get
     # independent dataset instances (a shared random_split Subset would alias raw_transform).
     monuseg_raw_paths, monuseg_label_paths = datasets.monuseg.get_monuseg_paths(
@@ -2164,7 +2159,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         )
     )
 
-    # 5. PanNuke (nucleus segmentation in H&E histopathology images)
+    # 6. PanNuke (nucleus segmentation in H&E histopathology images)
     # NOTE: fold_1 + fold_2 for training, split 80/20 for internal val, matching patho-sam's
     # generalist training set. fold_3 is left untouched: it is the held-out benchmark test split
     # used across patho-sam's own evaluation scripts.
@@ -2187,12 +2182,12 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
     val_ds.append(UniDataWrapper(torch.utils.data.Subset(pannuke_val_full, pannuke_val_idx), source_ndim=2))
 
-    # 6. PUMA (nucleus segmentation in H&E histopathology images)
+    # 7. PUMA (nucleus segmentation in H&E histopathology images)
     puma_kwargs = {"path": os.path.join(input_path, "puma"), "patch_shape": patch_shape, "download": True, **kwargs}
     train_ds.append(UniDataWrapper(datasets.get_puma_dataset(split="train", **puma_kwargs), source_ndim=2))
     val_ds.append(UniDataWrapper(datasets.get_puma_dataset(split="val", **puma_kwargs), source_ndim=2))
 
-    # 7. TNBC CellType (nucleus segmentation in H&E triple-negative breast cancer plus TCGA brain sections)
+    # 8. TNBC CellType (nucleus segmentation in H&E triple-negative breast cancer plus TCGA brain sections)
     # NOTE: Replaces plain `tnbc`, which it contains with near-identical masks, and adds 18 TCGA brain sections.
     # ndim is explicit: the raw is channels-last (H, W, 3) and auto-detection reads the 3 as a depth axis.
     tnbc_kwargs = {
@@ -2206,7 +2201,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         UniDataWrapper(datasets.get_tnbc_celltype_dataset(split="val", n_samples=50, **tnbc_kwargs), source_ndim=2)
     )
 
-    # 8. NuInsSeg (nucleus segmentation in H&E histopathology images from 31 human and mouse organs)
+    # 9. NuInsSeg (nucleus segmentation in H&E histopathology images from 31 human and mouse organs)
     # NOTE: No native split. Split the image/label paths so train and val get independent dataset instances.
     nuinsseg_raw_paths, nuinsseg_label_paths = datasets.nuinsseg.get_nuinsseg_paths(
         path=os.path.join(input_path, "nuinsseg")
@@ -2232,7 +2227,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         )
     )
 
-    # 9. LyNSeC (nucleus segmentation in IHC and H&E lymphoma images)
+    # 10. LyNSeC (nucleus segmentation in IHC and H&E lymphoma images)
     # NOTE: Both stains are used ('choice' left unset). The raw images are stored as int32 RGB tifs with an 8-bit
     # value range and the labels as int32; the percentile normalization and the label dtype cast handle both.
     # The split files 'lynsec_{ihc,h&e}_split.csv' live with the data.
@@ -2244,7 +2239,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         UniDataWrapper(datasets.get_lynsec_dataset(split="val", n_samples=50, **lynsec_kwargs), source_ndim=2)
     )
 
-    # 10. SRSA-Net / IHC TMA (nucleus segmentation in IHC tissue microarray images of non-small cell lung cancer)
+    # 11. SRSA-Net / IHC TMA (nucleus segmentation in IHC tissue microarray images of non-small cell lung cancer)
     # NOTE: Native 256x256 tiles, handled like PanNuke: crop at native size, then randomly upscale and pad to the
     # patch shape in the joint transform. Labels are uint64 connected components of the positive and negative masks.
     # The 35-image test split (fold 3) is kept blind.
@@ -2259,7 +2254,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         UniDataWrapper(datasets.get_srsanet_dataset(split="val", n_samples=50, **srsanet_kwargs), source_ndim=2)
     )
 
-    # 11. CryoNuSeg (nucleus segmentation in H&E cryosection images from 10 organs)
+    # 12. CryoNuSeg (nucleus segmentation in H&E cryosection images from 10 organs)
     # NOTE: Small dataset (20 train / 4 val images, rater 'b1'). The 6-image test split is kept blind.
     # The split file 'cryonuseg_split.csv' lives with the data.
     cryonuseg_kwargs = {"path": os.path.join(input_path, "cryonuseg"), "patch_shape": patch_shape, **kwargs}
@@ -2270,7 +2265,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         UniDataWrapper(datasets.get_cryonuseg_dataset(split="val", n_samples=20, **cryonuseg_kwargs), source_ndim=2)
     )
 
-    # 12. GLySAC (nucleus segmentation in H&E gastric cancer histopathology images)
+    # 13. GLySAC (nucleus segmentation in H&E gastric cancer histopathology images)
     # NOTE: Densely annotated (median 124 nuclei per 512x512 area, comparable to MoNuSeg), unlike MoNuSAC.
     # No native val split, so the 34 train tiles are split 80/20. The 25-image test split is kept blind.
     glysac_paths = datasets.glysac.get_glysac_paths(path=os.path.join(input_path, "glysac"), split="train")
@@ -2286,7 +2281,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             )
         )
 
-    # 13. Histo-Miner (nucleus segmentation in H&E cutaneous squamous cell carcinoma)
+    # 14. Histo-Miner (nucleus segmentation in H&E cutaneous squamous cell carcinoma)
     # NOTE: Tiles are 256x256, so patches are sampled at 256 and resized/padded to 512 like PanNuke; asking
     # torch_em for 512 directly would give 75 % zero padding. Only train and val are public.
     histo_miner_kwargs = {
@@ -2305,7 +2300,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         )
     )
 
-    # 14. sPATCH (nucleus segmentation in spatial-omics tissue: ovarian cancer, HCC and colon adenocarcinoma)
+    # 15. sPATCH (nucleus segmentation in spatial-omics tissue: ovarian cancer, HCC and colon adenocarcinoma)
     # NOTE: The four H&E subsets only; the six DAPI subsets are a light-microscopy evaluation set. No native
     # split, so the 20 tiles are split 80/20 by path.
     spatch_paths = datasets.spatch.get_spatch_paths(
@@ -2320,21 +2315,6 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                     raw_paths=paths, raw_key="raw/rgb", label_paths=paths, label_key="labels/nuclei",
                     is_seg_dataset=True, n_samples=n_samples, **spatch_kwargs,
                 ), source_ndim=2,
-            )
-        )
-
-    # 15. CoNIC (nucleus segmentation in H&E colon, 256x256 tiles cut from the Lizard images)
-    # NOTE: 88 train and 24 test tiles come from PanNuke source images, some of which may sit in the blind fold 3,
-    # so the pannuke cohort is cut out by roi. Tiles are 256x256 and are resized/padded to 512 like PanNuke.
-    conic_kwargs = {
-        "path": os.path.join(input_path, "conic"), "patch_shape": (1, 256, 256), "download": True,
-        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
-    }
-    for split, ds_list, n_samples in [("train", train_ds, 700), ("test", val_ds, 50)]:
-        roi = _conic_cohort_roi(conic_kwargs["path"], split, excluded_cohorts=CONIC_EXCLUDED_COHORTS)
-        ds_list.append(
-            UniDataWrapper(
-                datasets.get_conic_dataset(split=split, rois=roi, n_samples=n_samples, **conic_kwargs), source_ndim=2
             )
         )
 
