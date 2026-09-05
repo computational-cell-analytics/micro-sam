@@ -88,6 +88,45 @@ def _cellpose_raw_trafo(x):
     return x
 
 
+def _select_channel(raw, channel):
+    """Keep one channel of a multi-channel image, triplicate it and percentile-normalize.
+
+    Several datasets store a single informative channel inside an RGB or multi-channel array:
+    enseg puts all its signal in green, and micro_bench's opencell subset has the nuclear stain in channel 2.
+    """
+    plane = raw[channel] if raw.shape[0] <= 8 else raw[..., channel]
+    return normalize_raw(np.stack([plane] * 3), axis=(1, 2))
+
+
+def _enseg_green_channel(raw):
+    """enseg is stored RGB but only the green channel carries signal."""
+    return _select_channel(raw, 1)
+
+
+def _micro_bench_nuclei_channel(raw):
+    """micro_bench opencell: channel 2 is the nuclear counterstain, channel 0 is empty."""
+    return _select_channel(raw, 2)
+
+
+def _xenium_cell_channels(raw):
+    """Xenium cell target: drop the DAPI channel and keep the three morphology stains.
+
+    Channel 0 is DAPI, which the nucleus target uses. Channels 1-3 are the membrane, cytoplasmic and
+    stromal stains that XOA grew the cells from, so they are the ones the cell masks correspond to.
+    """
+    return normalize_raw(np.asarray(raw[1:4], dtype="float32"), axis=(1, 2))
+
+
+def _pan_multiplex_tissuenet_order(raw):
+    """Reorder pan_multiplex to TissueNet's convention: membrane, nucleus, zeros.
+
+    The loader hands over the two composites as (nuclei, membrane); TissueNet puts membrane first.
+    """
+    nuclei, membrane = raw[0], raw[1]
+    stacked = np.stack([membrane, nuclei, np.zeros_like(membrane)])
+    return normalize_raw(stacked, axis=(1, 2))
+
+
 def _resize_to_512(x, is_label=False):
     """Resize trailing spatial dimensions to longest side 512 and pad bottom/right."""
     from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy

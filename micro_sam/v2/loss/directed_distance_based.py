@@ -3,6 +3,8 @@ import torch.nn as nn
 
 from torch_em.loss import DiceLoss
 
+from ..transforms.labels import IGNORE_FOREGROUND
+
 
 def _masked_mse(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
     """Mean squared error over the masked elements only, normalized per sample.
@@ -47,7 +49,13 @@ class DirectedDistanceLoss(nn.Module):
         # and treats it differently (sums over it independently).
         # This will lead to a very large dice loss that dominates over everything else.
         fg_input, fg_target = input_[:, 0:1], target[:, 0:1]
-        fg_loss = self.foreground_loss(fg_input, fg_target)
+
+        # Voxels of unknown ground truth carry IGNORE_FOREGROUND and must contribute no loss.
+        # Zeroing both tensors there is equivalent to a Dice loss_mask, and zeroing fg_target
+        # also drops those voxels from the distance masks below.
+        valid = (fg_target != IGNORE_FOREGROUND).to(fg_target.dtype)
+        fg_target = fg_target * valid
+        fg_loss = self.foreground_loss(fg_input * valid, fg_target)
 
         # Check whether the input is 2d or not.
         # For 2d inputs, we avoid computing gradients for masked (pseudo) z-distances.
