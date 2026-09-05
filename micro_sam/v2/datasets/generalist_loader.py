@@ -24,7 +24,7 @@ from ..transforms.raw import (
 )
 from ..transforms.labels import (
     _em_cell_label_trafo, _joint_em_cell_label_trafo, _background_id_label_trafo,
-    _plantseg_label_trafo, _axondeepseg_pre_label_transform, _astih_pre_label_transform, _instance_labels,
+    _plantseg_label_trafo, _astih_pre_label_transform, _instance_labels,
     _ignore_missing_raw_trafo, _ignore_unlabelled_blobs_trafo, _labels_to_uint32,
     _JointLabelTransform, _JointGeodesicLabelTransform,
 )
@@ -1366,41 +1366,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             )
         )
 
-    # 5. AxonDeepSeg (myelinated axon segmentation in SEM and TEM)
-    # NOTE: Labels are semantic (0=bg, 1=myelin, 2=axon). label_transform2 extracts axons only (class 2)
-    # so the sampler and distance transform both see axon instances, not myelin.
-    axondeepseg_kwargs = {
-        "path": os.path.join(input_path, "axondeepseg"),
-        "patch_shape": patch_shape,
-        "raw_transform": _to_8bit,  # ensures C=3 input for the model (SEM/TEM are grayscale)
-        "pre_label_transform": _axondeepseg_pre_label_transform,  # semantic to instances before sampler
-        "label_transform2": (
-            partial(_em_label_trafo, label_trafo=label_trafo(instances=True))
-            if label_trafo is not None else kwargs.get("label_transform2")
-        ),
-        "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
-        "n_samples": 300,
-        **{
-            k: v for k, v in kwargs.items()
-            if k not in ["raw_transform", "label_transform2", "sampler"]
-        },
-    }
-
-    for name in ["sem"]:
-        train_ds.append(
-            UniDataWrapper(
-                datasets.get_axondeepseg_dataset(name=name, val_fraction=0.2, split="train", **axondeepseg_kwargs),
-                source_ndim=2,
-            )
-        )
-        val_ds.append(
-            UniDataWrapper(
-                datasets.get_axondeepseg_dataset(name=name, val_fraction=0.2, split="val", **axondeepseg_kwargs),
-                source_ndim=2,
-            )
-        )
-
-    # 6. Igor cells (cell segmentation in vEM)
+    # 5. Igor cells (cell segmentation in vEM)
     # NOTE: This data is used for training only. No validation data is added for it.
     # The volumes are (16, 1024, 1024) uint8 blocks with dense uint32 instance labels.
     igor_cells_root = os.path.join(input_path, "igor_cells")
@@ -1433,7 +1399,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             )
         )
 
-    # 7. AxonEM (axon segmentation in vEM of human and mouse cortex)
+    # 6. AxonEM (axon segmentation in vEM of human and mouse cortex)
     # NOTE: Only a central 50x512x512 block per volume is annotated, so each is cropped to its label bounding
     # box. Three mouse blocks lie inside a soma (one or two ids, no neurite boundaries) and are dropped.
     axonem_raw_paths, axonem_label_paths = datasets.axonem.get_axonem_paths(
@@ -1480,7 +1446,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 8. FAFB (neuron segmentation in ssTEM of the full adult fly brain, FlyWire v783 labels)
+    # 7. FAFB (neuron segmentation in ssTEM of the full adult fly brain, FlyWire v783 labels)
     # NOTE: Streamed from GCS and cached per box at 16x16x40 nm, the finest level of the segmentation. torch_em's
     # default boxes are tissue-verified 1024x1024x410 crops; one is the validation set.
     for z in z_slices:
@@ -1504,7 +1470,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 9. ASTIH (myelinated axon segmentation in SEM and brightfield nerve)
+    # 8. ASTIH (myelinated axon segmentation in SEM and brightfield nerve)
     # NOTE: SEM1, BF1 and BF2 only; TEM is covered by AxonDeepSeg and TEM1 alone would dominate. Labels are
     # semantic (1=myelin, 2=axon): instances are components of the axon class, since touching sheaths would
     # bridge neighbouring fibres. The 22 train images split 80/20, the 4 test images stay blind.
@@ -1534,7 +1500,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             )
         )
 
-    # 10. FIB-25 (neuron segmentation in FIB-SEM of the Drosophila medulla, 8 nm isotropic)
+    # 9. FIB-25 (neuron segmentation in FIB-SEM of the Drosophila medulla, 8 nm isotropic)
     # NOTE: All three volumes are used; validation is the top fifth of z of validation_sample, cut out with rois.
     for z in z_slices:
         fib25_kwargs = {
@@ -1566,7 +1532,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             )
         )
 
-    # 11. Hemibrain (neuron segmentation in FIB-SEM of the Drosophila central brain, 8 nm isotropic)
+    # 10. Hemibrain (neuron segmentation in FIB-SEM of the Drosophila central brain, 8 nm isotropic)
     # NOTE: One cached 1024^3 crop (torch_em's default box), ~99% of voxels labelled, proofread. Same pipeline as
     # MANC and MaleCNS. Validation is the top fifth of z, cut out of training with rois.
     for z in z_slices:
@@ -1591,7 +1557,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 12. MANC (neuron segmentation in FIB-SEM of the Drosophila male adult nerve cord, 8 nm isotropic)
+    # 11. MANC (neuron segmentation in FIB-SEM of the Drosophila male adult nerve cord, 8 nm isotropic)
     # NOTE: A separate specimen from MaleCNS (bucket flyem-vnc-2-26), so the two do not overlap. One cached
     # 1024^3 crop (torch_em's default box); validation is the top fifth of z, cut out of training with rois.
     for z in z_slices:
@@ -1615,7 +1581,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 13. MaleCNS (neuron segmentation in FIB-SEM of the whole Drosophila male CNS, 8 nm isotropic)
+    # 12. MaleCNS (neuron segmentation in FIB-SEM of the whole Drosophila male CNS, 8 nm isotropic)
     # NOTE: Six 1024^3 crops streamed from GCS, placed by probing the segmentation density along the
     # brain-neck-VNC axis (MALECNS_TRAIN_BOXES); one VNC crop is the validation set.
     for z in z_slices:
@@ -1640,7 +1606,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 14. Wafer4 (neuron segmentation in multi-beam SEM of mouse medial entorhinal cortex, layer 6)
+    # 13. Wafer4 (neuron segmentation in multi-beam SEM of mouse medial entorhinal cortex, layer 6)
     # NOTE: One 125x1250x1250 volume at 8x8x35 nm. The authors' split is z < 100 train, z >= 100 test; the test
     # sections stay blind and validation is the last fifth of the training sections.
     for z in z_slices:
@@ -1664,7 +1630,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 15. MICrONS minnie65 (neuron segmentation in the cubic-millimetre mouse visual cortex, 8x8x40 nm)
+    # 14. MICrONS minnie65 (neuron segmentation in the cubic-millimetre mouse visual cortex, 8x8x40 nm)
     # NOTE: torch_em's own split of 14 cached 512x4096x4096 boxes: 8 train, 2 val, 4 test kept blind. At 69 G
     # voxels the train split is the largest EM source by far; n_samples keeps its epoch share in line.
     for z in z_slices:
@@ -1689,7 +1655,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 16. SynapseWeb hippocampus (axon, dendrite and glia instances in ssTEM of rat CA1, ~2x2x50 nm)
+    # 15. SynapseWeb hippocampus (axon, dendrite and glia instances in ssTEM of rat CA1, ~2x2x50 nm)
     # NOTE: Only an irregular core of each volume is annotated, so each is cropped to its dense core and the
     # sampler rejects patches with less than half their pixels labelled.
     for z in z_slices:
@@ -1721,7 +1687,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             )
         )
 
-    # 17. MICrONS pinky (hand-annotated neuron instances in ssEM of mouse visual cortex, 4x4x40 nm)
+    # 16. MICrONS pinky (hand-annotated neuron instances in ssEM of mouse visual cortex, 4x4x40 nm)
     # NOTE: Each file is cropped to the bounding box of 'volumes/mask', the annotated region inside padded
     # context. Only the neuropil blocks are used; basil splits nucleus and cytoplasm into separate ids.
     pinky_root = os.path.join(input_path, "microns", "pinky")
@@ -1748,7 +1714,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 18. Zebrafinch j0126 (neuron segmentation in FIB-SEM of zebra finch Area X, 10x10x20 nm, Kornfeld lab)
+    # 17. Zebrafinch j0126 (neuron segmentation in FIB-SEM of zebra finch Area X, 10x10x20 nm, Kornfeld lab)
     # NOTE: Somata, vessels and missing tiles carry no id, so unlabelled blobs above 2 um^2 map to the ignore
     # label. The last fifth of z validates. j0251 (10x10x25 nm) uses boxes placed by a tissue scan, since
     # torch_em's cached boxes sit at the empty volume corner.
@@ -1808,7 +1774,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                     )
                 )
 
-    # 19. Wildenberg 2023 (dense automated segmentation of all processes in FIB-SEM of mouse V1 layer 4, 12x12x40 nm)
+    # 18. Wildenberg 2023 (dense automated segmentation of all processes in FIB-SEM of mouse V1 layer 4, 12x12x40 nm)
     # NOTE: The 'saturated' channel labels every process and soma. The box must be given explicitly, the module
     # default would stream the full 120 x 136 x 36 um experiment.
     for z in z_slices:
@@ -1837,7 +1803,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 20. DenseCell (platelet cells in SBF-SEM of human platelet tissue, 10x10x50 nm)
+    # 19. DenseCell (platelet cells in SBF-SEM of human platelet tissue, 10x10x50 nm)
     # NOTE: The source labels are a semantic mask; torch-em derives and caches 3D cell instances
     # (label_choice 'cell_instances'). The test split is sparsely annotated and not used.
     for z in z_slices:
@@ -1862,7 +1828,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 21. Tumor spheroid EM (FaDu tumor spheroid cells in SBF-SEM, 20 manually annotated 2D slices at 50 nm)
+    # 20. Tumor spheroid EM (FaDu tumor spheroid cells in SBF-SEM, 20 manually annotated 2D slices at 50 nm)
     # NOTE: 2D data. The 100 nm set is the same 20 slices downsampled and is not used; the 3D zarr holds automated
     # segmentation only. Validation is the two deepest z slices, training the other 18 (5 x, 5 y, 8 z).
     spheroid_paths, spheroid_raw_key, spheroid_label_key = datasets.tumor_spheroid_em.get_tumor_spheroid_paths(
@@ -1890,6 +1856,35 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 ), source_ndim=2,
             )
         )
+
+    # 21. NISB (synthetic neuron instance segmentation benchmark, 27 um cubes at 9x9x20 nm)
+    # NOTE: The base setting's five training cubes; the last cube validates, since the official val and test cubes
+    # are not cached. Synthetic labels are dense by construction.
+    nisb_paths = datasets.nisb.get_nisb_paths(os.path.join(input_path, "nisb"), setting="base", split="train")
+    nisb_val = [p for p in nisb_paths if os.path.basename(os.path.dirname(p)) in NISB_VAL_CUBES]
+    nisb_train = [p for p in nisb_paths if p not in nisb_val]
+    for z in z_slices:
+        nisb_kwargs = {
+            "patch_shape": (z, *patch_shape),
+            "ndim": 3,
+            "is_seg_dataset": True,
+            "label_transform2": (
+                partial(_em_label_trafo, label_trafo=label_trafo(instances=True, sampling=(2.2, 1, 1)))
+                if label_trafo is not None else kwargs.get("label_transform2")
+            ),
+            "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+        }
+        for paths, ds_list, n_samples in [(nisb_train, train_ds, 300), (nisb_val, val_ds, 50)]:
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=paths, raw_key="img", label_paths=paths, label_key="seg",
+                        n_samples=max(1, n_samples // n_z), **nisb_kwargs,
+                    ),
+                    source_ndim=3, group_key=(3, z),
+                )
+            )
 
     return train_ds, val_ds
 
@@ -1966,6 +1961,12 @@ ASTIH_SUBSETS = ["SEM1", "BF1", "BF2"]
 # The two deepest z slices of the tumor spheroid volume; x, y and the other z slices train.
 TUMOR_SPHEROID_VAL_SLICES = ("Au_01-vol_01-z_0212.h5", "Au_01-vol_01-z_0274.h5")
 
+# The last of the five NISB base training cubes validates.
+NISB_VAL_CUBES = ("seed4",)
+
+# CoNIC tiles cut from PanNuke source images could overlap the blind PanNuke fold 3.
+CONIC_EXCLUDED_COHORTS = ("pannuke",)
+
 SPATCH_HE_SUBSETS = ["visium_hd_ov", "visium_hd_hcc", "visium_hd_coad", "stereoseq_ov"]
 
 
@@ -1994,6 +1995,25 @@ def _compute_label_rois(label_paths, label_key, min_ids=1):
         if cached["n_ids"] >= min_ids:
             rois[path] = tuple(slice(start, stop) for start, stop in cached["roi"])
     return rois
+
+
+def _conic_cohort_roi(path, split, excluded_cohorts):
+    """Return the roi over the tiles of a CoNIC split that do not come from the excluded source cohorts.
+
+    torch_em writes the tiles of a split into one h5 stack in index order, and patch_info.csv lists the source
+    cohort per index, so the excluded tiles must form the tail of the stack for a single roi to cover the rest.
+    """
+    import pandas as pd
+
+    data_dir = os.path.join(path, "data")
+    cohorts = pd.read_csv(os.path.join(data_dir, "patch_info.csv"))["patch_info"].str.split("_").str[0]
+    indices = np.sort(pd.read_csv(os.path.join(data_dir, "split.csv"))[split].dropna().astype(int).to_numpy())
+    excluded = cohorts.to_numpy()[indices]
+    excluded = np.isin(excluded, list(excluded_cohorts))
+    n_kept = int(np.argmax(excluded)) if excluded.any() else len(indices)
+    if not excluded[n_kept:].all():
+        raise RuntimeError(f"The excluded CoNIC cohorts do not form the tail of the '{split}' split.")
+    return np.s_[:n_kept, :, :]
 
 
 def _pannuke_random_resize_and_pad_trafo(raw, labels, patch_shape):
@@ -2299,6 +2319,81 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                 torch_em.default_segmentation_dataset(
                     raw_paths=paths, raw_key="raw/rgb", label_paths=paths, label_key="labels/nuclei",
                     is_seg_dataset=True, n_samples=n_samples, **spatch_kwargs,
+                ), source_ndim=2,
+            )
+        )
+
+    # 15. CoNIC (nucleus segmentation in H&E colon, 256x256 tiles cut from the Lizard images)
+    # NOTE: 88 train and 24 test tiles come from PanNuke source images, some of which may sit in the blind fold 3,
+    # so the pannuke cohort is cut out by roi. Tiles are 256x256 and are resized/padded to 512 like PanNuke.
+    conic_kwargs = {
+        "path": os.path.join(input_path, "conic"), "patch_shape": (1, 256, 256), "download": True,
+        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+    }
+    for split, ds_list, n_samples in [("train", train_ds, 700), ("test", val_ds, 50)]:
+        roi = _conic_cohort_roi(conic_kwargs["path"], split, excluded_cohorts=CONIC_EXCLUDED_COHORTS)
+        ds_list.append(
+            UniDataWrapper(
+                datasets.get_conic_dataset(split=split, rois=roi, n_samples=n_samples, **conic_kwargs), source_ndim=2
+            )
+        )
+
+    # 16. CoNSeP (nucleus segmentation in H&E colorectal adenocarcinoma, 1000x1000 images)
+    # NOTE: CoNSeP is one of Lizard's source cohorts, so it can never serve as a test set; its test split validates.
+    consep_kwargs = {
+        "path": os.path.join(input_path, "consep"), "patch_shape": patch_shape, "download": True, **kwargs
+    }
+    for split, ds_list, n_samples in [("train", train_ds, 150), ("test", val_ds, 50)]:
+        ds_list.append(
+            UniDataWrapper(
+                datasets.get_consep_dataset(split=split, n_samples=n_samples, **consep_kwargs), source_ndim=2
+            )
+        )
+
+    # 17. CytoNuke (nucleus segmentation in H&E head-and-neck squamous cell carcinoma, 256x256 crops)
+    # NOTE: Nucleus annotations only; the paired whole-cell polygons cover fewer objects than the nuclei.
+    # Tiles are 256x256 and are resized/padded to 512 like PanNuke.
+    cytonuke_kwargs = {
+        "path": os.path.join(input_path, "cytonuke"), "patch_shape": (256, 256), "annotations": "nuclei",
+        "download": True,
+        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+    }
+    for split, ds_list, n_samples in [("train", train_ds, 100), ("val", val_ds, 20)]:
+        ds_list.append(
+            UniDataWrapper(
+                datasets.get_cytonuke_dataset(split=split, n_samples=n_samples, **cytonuke_kwargs), source_ndim=2
+            )
+        )
+
+    # 18. DeepLIIF (nucleus segmentation in IHC of lung, bladder and Ki67 breast cancer, 512x512 images)
+    # NOTE: The IHC modality only; the co-registered mpIF panels are not used.
+    deepliif_kwargs = {
+        "path": os.path.join(input_path, "deepliif"), "patch_shape": patch_shape, "modality": "ihc",
+        "label_choice": "instances", "download": True, **kwargs,
+    }
+    for split, ds_list, n_samples in [("train", train_ds, 400), ("val", val_ds, 50)]:
+        ds_list.append(
+            UniDataWrapper(
+                datasets.get_deepliif_dataset(split=split, n_samples=n_samples, **deepliif_kwargs), source_ndim=2
+            )
+        )
+
+    # 19. PanopTILs (nucleus segmentation in H&E TCGA invasive breast cancer, 1024x1024 ROIs at 0.25 MPP)
+    # NOTE: Built from paths, since the torch-em dataset binarizes the instances. No native split, so the 1349
+    # ROIs are split 80/20 by path.
+    panoptils_raw, panoptils_labels = datasets.panoptils.get_panoptils_paths(
+        path=os.path.join(input_path, "panoptils"), label_choice="instances", download=True,
+    )
+    panoptils_train, panoptils_val = train_test_split(
+        list(zip(panoptils_raw, panoptils_labels)), test_size=0.2, random_state=42
+    )
+    panoptils_kwargs = {"patch_shape": patch_shape, "with_channels": True, "ndim": 2, **kwargs}
+    for pairs, ds_list, n_samples in [(panoptils_train, train_ds, 600), (panoptils_val, val_ds, 50)]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=[r for r, _ in pairs], raw_key=None, label_paths=[l for _, l in pairs], label_key=None,
+                    is_seg_dataset=False, n_samples=n_samples, **panoptils_kwargs,
                 ), source_ndim=2,
             )
         )
