@@ -48,7 +48,9 @@ SAM_V1_MODEL_TYPE = "vit_b_lm"
 
 # Per-dataset z/xy anisotropy for CellPose do_3D mode (z_voxel / xy_voxel).
 DATASET_ANISOTROPY = {
-    "embedseg": 4.0,
+    "embedseg_mouse_skull": 4.0,
+    "embedseg_organoid": 6.0,
+    "embedseg_platy_nuclei": 5.0,
     "blastospim": 10.0,
     "mouse_embryo": 4.0,
     "cremi": 10.0,   # z=40nm, xy=4nm

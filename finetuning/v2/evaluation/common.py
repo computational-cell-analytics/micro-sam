@@ -10,6 +10,7 @@ import xxhash
 import numpy as np
 import imageio.v3 as imageio
 from skimage.measure import label as connected_components
+from sklearn.model_selection import train_test_split
 
 import torch
 
@@ -25,6 +26,14 @@ from micro_sam.v2.datasets.generalist_loader import (
     ASTIH_SUBSETS, AXONEM_TEST_VOLUMES, AXONEM_VAL_VOLUMES, FAFB_TEST_BOXES, FAFB_VAL_BOXES, FIB25_TEST_SAMPLE,
     LICONN_ROI, MALECNS_TEST_BOXES, MALECNS_VAL_BOXES, TUMOR_SPHEROID_TEST_SLICES, TUMOR_SPHEROID_VAL_SLICES,
     WILDENBERG_P105_BOX, XPRESS_CORE, ZEBRAFINCH_J0126_BOX, ZEBRAFINCH_J0251_TEST_BOXES, ZEBRAFINCH_J0251_VAL_BOXES,
+    BITDEPTH_MAGNIFICATIONS, CARTOCELL_TEST_FOLDER, CARTOCELL_VAL_FOLDER, CELL_ACDC_TEST_MOVIES, CELL_ACDC_VAL_MOVIES,
+    CELLBINDB_STAINS, CELLULAR_TEST_WELLS, CELLULAR_VAL_WELLS, CISD_TEST_SLIDES, CISD_VAL_SLIDES, CVZ_TEST_GROUPS,
+    CVZ_VAL_GROUPS, EMBEDSEG_ORGANOID_TEST_TIMEPOINTS, EMBEDSEG_ORGANOID_VAL_TIMEPOINTS,
+    EMBEDSEG_PLATY_NUCLEI_TEST_TIMEPOINTS, EMBEDSEG_PLATY_NUCLEI_VAL_TIMEPOINTS, EMBEDSEG_VAL_Z, ENSEG_TEST_ANIMALS,
+    ENSEG_VAL_ANIMALS, GONUCLEAR_TEST_SAMPLES, GONUCLEAR_VAL_SAMPLES, NIS3D_VAL_Z, NUCVERSE_GLIA_VAL_VOLUME,
+    NUCVERSE_GLIA_VAL_Z, NUCVERSE_VAL_VOLUMES, ORGANOID_SOURCES, PHMAMM_TEST_TIMEPOINTS, PHMAMM_VAL_TIMEPOINTS,
+    PNAS_TEST_PLANTS, PNAS_VAL_PLANTS, TOIAM_TEST_MOVIES, TOIAM_VAL_MOVIES, WING_DISC_TEST_VOLUMES, WING_DISC_VAL_Z,
+    XENIUM_TEST_SAMPLES, XENIUM_VAL_SAMPLES, cell_acdc_movie, cvz_group, _train_val_test_split,
 )
 
 
@@ -87,14 +96,35 @@ def _joint_export_root() -> str:
 
 # HPA is evaluated on the microtubules, nuclei and ER channels, stacked in that order.
 HPA_CHANNELS = ("raw/microtubules", "raw/nuclei", "raw/er")
+SPATCH_DAPI_SUBSETS = ["xenium_ov", "xenium_hcc", "xenium_coad", "cosmx_ov", "cosmx_hcc", "cosmx_coad"]
 
-DATASETS_2D_LM = [
-    "livecell",
-    "arvidsson", "bitdepth_nucseg", "cellbindb", "cellpose_data",
-    "covid_if", "cvz_fluo", "deepbacs", "deepseas", "dic_hepg2", "dsb",
-    "dynamicnuclearnet", "hpa", "microbeseg", "neurips_cellseg", "omnipose",
-    "segpc", "tissuenet", "usiigaci", "vicar", "yeaz",
+# Light microscopy, 2d. In-domain: the blind test data of the v5 training datasets, the split the generalist loader
+# never touches (see the loader constants). Out-of-domain: datasets kept out of training. Datasets with a cell and a
+# nucleus target are listed per target, omnipose per subset.
+DATASETS_2D_LM_CELL_ID = [
+    "cvz_fluo_cell", "tissuenet", "omnipose_bact_fluor", "neurips_cellseg", "dememseg", "flywing", "enseg",
+    "pan_multiplex", "xenium_cells",
 ]
+DATASETS_2D_LM_CELL_OOD = ["covid_if_cells", "medussa", "hpa"]
+DATASETS_2D_LM_NUCLEUS_ID = [
+    "cvz_fluo_dapi", "bitdepth_nucseg", "bmgd", "cellbindb", "dynamicnuclearnet", "u20s", "ifnuclei", "xenium_nuclei",
+    "tsakiroglou",
+]
+DATASETS_2D_LM_NUCLEUS_OOD = [
+    "cardioblast_nuclei", "hela_cytonuc", "covid_if_nuclei", "arvidsson", "mndino", "micro_bench", "spatch_dapi",
+]
+DATASETS_2D_LM_LABEL_FREE_ID = [
+    "livecell", "deepbacs", "orgasegment", "organoidnet", "omnipose_bact_phase", "omnipose_worm",
+    "omnipose_worm_high_res", "yeaz", "bccd", "cell_acdc", "cellular", "cisd", "vicar", "microbeseg", "orgline",
+    "organoid", "mcellseg", "toiam", "bbbc030",
+]
+DATASETS_2D_LM_LABEL_FREE_OOD = [
+    "cellapp", "deepseas", "dic_hepg2", "yeastsam", "yeastcellseg", "bac_mother", "ecoli_microcolony_lineage",
+]
+DATASETS_2D_LM = (
+    DATASETS_2D_LM_CELL_ID + DATASETS_2D_LM_CELL_OOD + DATASETS_2D_LM_NUCLEUS_ID + DATASETS_2D_LM_NUCLEUS_OOD
+    + DATASETS_2D_LM_LABEL_FREE_ID + DATASETS_2D_LM_LABEL_FREE_OOD
+)
 
 # Histopathology nuclei. In-domain: the official test splits of the v5 training datasets, which the
 # generalist loader never touches. Out-of-domain: datasets kept out of training. lynsec is split by
@@ -116,14 +146,21 @@ DATASETS_2D = DATASETS_2D_LM + DATASETS_HP + DATASETS_2D_EM
 # defines the ground truth, so it is measured, never tuned.
 GT_MIN_SIZE_2D = {
     "livecell": 50,
-    "cellpose_data": 20, "deepbacs": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
+    "deepbacs": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
     "u20s": 10, "vicar": 25, "yeaz": 10,
 }
 
-DATASETS_3D_LM = [
-    "blastospim", "cartocell", "celegans_atlas", "cellseg_3d", "embedseg",
-    "gonuclear", "mouse_embryo", "nis3d", "plantseg", "pnas_arabidopsis",
+# Light microscopy, 3d, grouped as the 2d datasets. nis3d is the Drosophila pair the loader trains on.
+DATASETS_3D_LM_CELL_ID = ["plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid"]
+DATASETS_3D_LM_CELL_OOD = ["plantseg_ovules", "cshaper", "morphonet"]
+DATASETS_3D_LM_NUCLEUS_ID = [
+    "embedseg_mouse_skull", "embedseg_platy_ish", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear",
+    "nucverse3d",
 ]
+DATASETS_3D_LM_NUCLEUS_OOD = ["parhyale_regen", "vibrio_cholerae", "mouse_embryo", "blastospim"]
+DATASETS_3D_LM = (
+    DATASETS_3D_LM_CELL_ID + DATASETS_3D_LM_CELL_OOD + DATASETS_3D_LM_NUCLEUS_ID + DATASETS_3D_LM_NUCLEUS_OOD
+)
 
 # Neurite segmentation: the blind in-domain regions of the v5 training sets (see EM_ROIS and the path resolver) and
 # the out-of-domain sets. humanneurons is the cached H01 crop. synapseweb is scored inside its annotated cores only.
@@ -147,26 +184,34 @@ DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_OOD
 
 # The split to tune on, or None where the loader has no splits and VAL_Z_RANGE holds out a z-slab.
-# A dataset whose 'val' is the evaluated split is absent: tuning there would select on scored samples.
-# deepseas reuses its 'train' split like embedseg: real train/test files, and deepseas is never seen
-# during joint training, so there is no leakage into what evaluation scores. covid_if has no split of
-# its own; 'val' here is an internal marker _get_2d_data_paths reads to reserve the last 5 of its 49
-# samples via sample_range, disjoint from the 44 'test' scores.
+# The tuning data of the light microscopy datasets: 'val' is the split the generalist loader validates on, 'train'
+# is used for out-of-domain datasets that have no validation split of their own but do have training data the
+# loader never sees. None means the tuning data is a z-slab of the evaluated volumes, see LM_VAL_Z_SLABS, or the
+# reserved sample range covid_if uses. Datasets without held-out data are absent and cannot be tuned.
 VAL_SPLITS = {
-    "livecell": "val",
-    "tissuenet": "val",
-    "dynamicnuclearnet": "val",
-    "deepbacs": "val",
-    "dic_hepg2": "val",
-    "celegans_atlas": "val",
-    "embedseg": "train",
-    "deepseas": "train",
-    "covid_if": "val",
-    "yeaz": "val",
-    "neurips_cellseg": "val",
-    "gonuclear": None,
-    "platynereis_nuclei": None,
-    "humanneurons": None,
+    name: "val" for name in (
+        DATASETS_2D_LM_CELL_ID + DATASETS_2D_LM_NUCLEUS_ID + DATASETS_2D_LM_LABEL_FREE_ID
+        + ["plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "embedseg_organoid", "embedseg_platy_nuclei",
+           "celegans_atlas", "gonuclear", "nucverse3d"]
+    )
+}
+VAL_SPLITS.update({
+    "covid_if_cells": None, "covid_if_nuclei": None, "medussa": "train", "cardioblast_nuclei": "train",
+    "hela_cytonuc": "val", "arvidsson": "val", "mndino": "val", "cellapp": "train", "deepseas": "train",
+    "dic_hepg2": "val", "bac_mother": "val", "plantseg_ovules": "val", "cshaper": "train", "mouse_embryo": "train",
+    "wing_disc": None, "embedseg_mouse_skull": None, "embedseg_platy_ish": None, "nis3d": None,
+    "platynereis_nuclei": None, "humanneurons": None,
+})
+
+# Volumes whose tuning data is the first slices of the blind test volume, as (file name, z-slab), following the
+# loader; the evaluation scores the whole volume. nucverse3d holds separate tuning volumes for its liver
+# collections and a slab for drosophila_glia, see _get_3d_lm_data_paths.
+LM_VAL_Z_SLABS = {
+    "wing_disc": {f"{name}.h5": WING_DISC_VAL_Z for name in WING_DISC_TEST_VOLUMES},
+    "embedseg_mouse_skull": {"X2_right.tif": EMBEDSEG_VAL_Z["Mouse-Skull-Nuclei-CBG"]},
+    "embedseg_platy_ish": {"X02_test.tif": EMBEDSEG_VAL_Z["Platynereis-ISH-Nuclei-CBG"]},
+    "nis3d": {"data.tif": NIS3D_VAL_Z},
+    "nucverse3d": {NUCVERSE_GLIA_VAL_VOLUME: NUCVERSE_GLIA_VAL_Z},
 }
 
 # EM: None means the tuning data is a different region (EM_ROIS) or different files (see _get_3d_em_data_paths) of
@@ -191,7 +236,6 @@ VAL_SPLITS.update({
 # The tuning slab for volumes with no splits, disjoint from the slab the evaluation scores. Indices
 # count from what load_volume keeps, so snemi starts at slice 70, and gonuclear skips its sparse start.
 VAL_Z_RANGE = {
-    "gonuclear": (32, 96),
     "humanneurons": (0, 16),
 }
 
@@ -250,6 +294,16 @@ def platynereis_nuclei_val_z_range(raw_path: str) -> Tuple[int, int]:
     return PLATYNEREIS_NUCLEI_VAL_SAMPLES[sample_id]
 
 
+def val_z_range(dataset_name: str, raw_path: str, split: str) -> Optional[Tuple[int, int]]:
+    """The tuning slab of a volume whose validation data is part of the scored volume, None otherwise."""
+    if split != "val":
+        return None
+    if dataset_name == "platynereis_nuclei":
+        return platynereis_nuclei_val_z_range(raw_path)
+    slab = LM_VAL_Z_SLABS.get(dataset_name, {}).get(os.path.basename(raw_path))
+    return None if slab is None else (slab.start, slab.stop)
+
+
 def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
     """Sort raw and label paths as pairs.
 
@@ -288,6 +342,102 @@ def _tiles_from_stack(stack_path: str, raw_key: str, label_key: str, out_dir: st
                 g.create_dataset("raw", data=raw[:, i], compression="gzip")
                 g.create_dataset("labels", data=labels[i], compression="gzip")
     return paths
+
+
+def _frames_from_movie(raw_path: str, label_path: str, out_dir: str, stride: int) -> List[str]:
+    """Write every stride-th frame of a 2d+t tif pair into its own h5 file once ('raw' and 'labels').
+
+    Consecutive frames of a time-lapse are near-duplicates, so the evaluation scores a regular subset of them.
+    """
+    import h5py
+    import tifffile
+
+    with tifffile.TiffFile(raw_path) as f:
+        n_frames = f.series[0].shape[0]
+    frames = range(0, n_frames, stride)
+    paths = [os.path.join(out_dir, f"frame_{t:04d}.h5") for t in frames]
+    if all(os.path.exists(path) for path in paths):
+        return paths
+    os.makedirs(out_dir, exist_ok=True)
+    raw, labels = tifffile.imread(raw_path), tifffile.imread(label_path)
+    for t, path in zip(frames, paths):
+        if os.path.exists(path):
+            continue
+        with h5py.File(path, "w") as g:
+            g.create_dataset("raw", data=raw[t], compression="gzip")
+            g.create_dataset("labels", data=labels[t], compression="gzip")
+    return paths
+
+
+def _tiles_from_slide(
+    slide_path: str, keys: Tuple[str, ...], count_key: str, out_dir: str, n_tiles: int,
+    tile_shape: Tuple[int, int] = (1024, 1024), min_instances: int = 20, seed: int = 42,
+) -> List[str]:
+    """Cut n_tiles windows with at least min_instances labelled objects out of a whole-slide h5 once.
+
+    The windows lie on a grid of tile_shape and are drawn in a fixed random order, so the same tiles are scored
+    every time. Every key of the slide is copied into the tile file under the same name.
+    """
+    import h5py
+
+    paths = [os.path.join(out_dir, f"tile_{i:03d}.h5") for i in range(n_tiles)]
+    if all(os.path.exists(path) for path in paths):
+        return paths
+    os.makedirs(out_dir, exist_ok=True)
+    with h5py.File(slide_path, "r") as f:
+        height, width = f[count_key].shape[-2:]
+        th, tw = tile_shape
+        grid = [(y, x) for y in range(0, height - th + 1, th) for x in range(0, width - tw + 1, tw)]
+        np.random.default_rng(seed).shuffle(grid)
+        written = 0
+        for y, x in grid:
+            if written == n_tiles:
+                break
+            window = (slice(y, y + th), slice(x, x + tw))
+            labels = f[count_key][window]
+            if len(np.unique(labels)) - 1 < min_instances:
+                continue
+            with h5py.File(paths[written], "w") as g:
+                for key in keys:
+                    source = f[key]
+                    data = source[(slice(None),) + window] if source.ndim == 3 else source[window]
+                    g.create_dataset(key, data=data, compression="gzip")
+            written += 1
+    if written < n_tiles:
+        raise RuntimeError(f"Only {written} of {n_tiles} tiles with {min_instances} objects found in {slide_path}.")
+    return paths
+
+
+def _loader_val_part(raw_paths, label_paths, split):
+    """The random 10 % (seed 42) of a training split the generalist loader validates on, or the rest of it."""
+    train_r, val_r, train_l, val_l = train_test_split(raw_paths, label_paths, test_size=0.1, random_state=42)
+    return (val_r, val_l) if split == "val" else (train_r, train_l)
+
+
+def _held_out_part(raw_paths, label_paths, split):
+    """The blind test part (or the validation part) of the loader's 80 / 10 / 10 split of a dataset."""
+    (_, val_r, test_r), (_, val_l, test_l) = _train_val_test_split(raw_paths, label_paths)
+    return (val_r, val_l) if split == "val" else (test_r, test_l)
+
+
+# Channels the 2d light microscopy models see, as indices into the stored channel-last image. A single index gives
+# a grayscale image. Datasets not listed are fed as stored; a two-channel image gets a zero third channel, which is
+# the TissueNet layout pan_multiplex trains with.
+LM_IMAGE_CHANNELS = {
+    "cvz_fluo_cell": (0, 2, 1), "cvz_fluo_dapi": (0,), "enseg": (1,), "xenium_cells": (1, 2, 3),
+    "hela_cytonuc": (2,), "micro_bench": (2,), "spatch_dapi": (0,), "bac_mother": (0,),
+}
+
+
+def select_channels(image: np.ndarray, dataset_name: str) -> np.ndarray:
+    """Pick the channels of a channel-last 2d image the model was trained on, see LM_IMAGE_CHANNELS."""
+    channels = LM_IMAGE_CHANNELS.get(dataset_name)
+    if channels is None:
+        if image.ndim == 3 and image.shape[-1] == 2:
+            image = np.concatenate([image, np.zeros_like(image[..., :1])], axis=-1)
+        return image
+    image = image[..., list(channels)]
+    return image[..., 0] if len(channels) == 1 else image
 
 
 def _get_hp_data_paths(
@@ -402,7 +552,6 @@ def _get_2d_data_paths(
                 path=os.path.join(p, "astih"), name=ASTIH_SUBSETS, split="test", download=download,
             )
         else:
-            from sklearn.model_selection import train_test_split
             train_paths = datasets.electron_microscopy.astih.get_astih_paths(
                 path=os.path.join(p, "astih"), name=ASTIH_SUBSETS, split="train", download=download,
             )
@@ -418,247 +567,491 @@ def _get_2d_data_paths(
         paths = [path for path in paths if os.path.basename(path) in names]
         return paths, paths, raw_key, label_key
 
+    return _get_2d_lm_data_paths(dataset_name, p, download, split)
+
+
+def _get_2d_lm_data_paths(
+    dataset_name: str, p: str, download: bool, split: str
+) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
+    """The 2d light microscopy datasets. 'test' is the blind split, 'val' the loader's validation data."""
+    lm = datasets.light_microscopy
+
     if dataset_name == "livecell":
         img, gt = _get_livecell_paths(input_folder=os.path.join(p, "livecell"), split=split)
         img, gt = drop_excluded_livecell(img, gt)
         return (*_sorted_pairs(img, gt), None, None)
 
-    if dataset_name == "arvidsson":
-        img, gt = datasets.arvidsson.get_arvidsson_paths(
-            path=os.path.join(p, "arvidsson"), split="test", download=download,
+    if dataset_name in ("cvz_fluo_cell", "cvz_fluo_dapi"):
+        img, gt = lm.cvz_fluo.get_cvz_fluo_paths(
+            path=os.path.join(p, "cvz"), stain_choice=dataset_name.split("_")[-1], download=download,
         )
+        groups = CVZ_TEST_GROUPS if split == "test" else CVZ_VAL_GROUPS
+        keep = [cvz_group(path) in groups for path in img]
+        img = [path for path, k in zip(img, keep) if k]
+        gt = [path for path, k in zip(gt, keep) if k]
         return (*_sorted_pairs(img, gt), None, None)
 
-    if dataset_name == "bitdepth_nucseg":
-        img, gt = datasets.bitdepth_nucseg.get_bitdepth_nucseg_paths(
-            path=os.path.join(p, "bitdepth_nucseg"), download=download,
-        )
-        return (*_sorted_pairs(img, gt), None, None)
+    if dataset_name == "tissuenet":
+        paths = lm.tissuenet.get_tissuenet_paths(path=os.path.join(p, "tissuenet"), split=split, download=download)
+        return sorted(paths), sorted(paths), "raw/rgb", "labels/cell"
 
-    if dataset_name == "cellbindb":
-        img, gt = datasets.cellbindb.get_cellbindb_paths(
-            path=os.path.join(p, "cellbindb"), download=download,
-        )
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "cellpose_data":
-        img, gt = datasets.cellpose.get_cellpose_paths(
-            path=os.path.join(p, "cellpose"), split="test", choice="cyto", download=download,
-        )
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "covid_if":
-        # 49 samples total, none of which is held out anywhere else. Reserve the last 5 for tuning
-        # so evaluation still scores a disjoint 44, see VAL_SPLITS.
-        sample_range = (44, 49) if split == "val" else (0, 44)
-        paths = datasets.covid_if.get_covid_if_paths(
-            path=os.path.join(p, "covid_if"), sample_range=sample_range, download=download,
-        )
-        return sorted(paths), sorted(paths), "raw/nuclei/s0", "labels/nuclei/s0"
-
-    if dataset_name == "cvz_fluo":
-        img, gt = [], []
-        for stain in ("cell", "dapi"):
-            i, g = datasets.cvz_fluo.get_cvz_fluo_paths(
-                path=os.path.join(p, "cvz"), stain_choice=stain, download=download,
+    if dataset_name.startswith("omnipose_"):
+        choice = dataset_name[len("omnipose_"):]
+        if split == "test":
+            img, gt = lm.omnipose.get_omnipose_paths(
+                path=os.path.join(p, "omnipose"), split="test", data_choice=choice, download=download,
             )
-            img.extend(i)
-            gt.extend(g)
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "deepbacs":
-        img_folder, label_folder = datasets.deepbacs.get_deepbacs_paths(
-            path=os.path.join(p, "deepbacs"), bac_type="mixed", split=split, download=download,
-        )
-        img = sorted(glob(os.path.join(img_folder, "*.tif")))
-        gt = sorted(glob(os.path.join(label_folder, "*.tif")))
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "deepseas":
-        img, gt = datasets.deepseas.get_deepseas_paths(
-            path=os.path.join(p, "deepseas"), split=split, download=download,
-        )
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "dic_hepg2":
-        img, gt = datasets.dic_hepg2.get_dic_hepg2_paths(
-            path=os.path.join(p, "dic_hepg2"), split=split, download=download,
-        )
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "dsb":
-        img, gt = datasets.dsb.get_dsb_paths(
-            path=os.path.join(p, "dsb"), source="full", split=None, download=download,
-        )
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "dynamicnuclearnet":
-        paths = datasets.dynamicnuclearnet.get_dynamicnuclearnet_paths(
-            path=os.path.join(p, "dynamicnuclearnet"), split=split, download=download,
-        )
-        return sorted(paths), sorted(paths), "raw", "labels"
-
-    if dataset_name == "hpa":
-        paths = datasets.hpa.get_hpa_segmentation_paths(
-            path=os.path.join(p, "hpa"), split="val", download=download,
-        )
-        return sorted(paths), sorted(paths), HPA_CHANNELS, "labels"
-
-    if dataset_name == "microbeseg":
-        img, gt = datasets.microbeseg.get_microbeseg_paths(
-            path=os.path.join(p, "microbeseg"), split="test",
-            annotation_type="30min-man", download=download,
-        )
+        else:
+            img, gt = _loader_val_part(*lm.omnipose.get_omnipose_paths(
+                path=os.path.join(p, "omnipose"), split="train", data_choice=choice, download=download,
+            ), split)
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "neurips_cellseg":
-        img, gt = datasets.neurips_cell_seg.get_neurips_cellseg_paths(
+        img, gt = lm.neurips_cell_seg.get_neurips_cellseg_paths(
             root=os.path.join(p, "neurips_cellseg"), split=split, download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
-    if dataset_name == "omnipose":
+    if dataset_name == "dememseg":
+        paths = lm.dememseg.get_dememseg_paths(path=os.path.join(p, "dememseg"), split=split, download=download)
+        return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "flywing":
+        img, gt = lm.flywing.get_flywing_paths(path=os.path.join(p, "flywing"), split=split, download=download)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "enseg":
+        animals = ENSEG_TEST_ANIMALS if split == "test" else ENSEG_VAL_ANIMALS
+        img, gt = lm.enseg.get_enseg_paths(path=os.path.join(p, "enseg"), animal_tags=list(animals), download=download)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "pan_multiplex":
+        paths = []
+        for subset in ("codex_colon", "mibi_breast", "mibi_decidua", "vectra_colon", "vectra_pancreas"):
+            paths.extend(lm.pan_multiplex.get_pan_multiplex_paths(
+                path=os.path.join(p, "pan_multiplex"), subset=subset, split=split, download=download,
+            ))
+        return sorted(paths), sorted(paths), ("raw/membrane", "raw/nuclei"), "labels/cell"
+
+    if dataset_name in ("xenium_cells", "xenium_nuclei"):
+        # Whole slides are scored on a fixed set of 1024x1024 tiles with at least 20 nuclei, cut once per slide.
+        samples = XENIUM_TEST_SAMPLES if split == "test" else XENIUM_VAL_SAMPLES
+        paths = []
+        for sample in samples:
+            slide = lm.xenium.get_xenium_paths(path=os.path.join(p, "xenium"), sample=[sample], download=download)[0]
+            paths.extend(_tiles_from_slide(
+                slide, ("raw/dapi", "raw/stack", "labels/nuclei", "labels/cells"), "labels/nuclei",
+                os.path.join(p, "xenium", "eval_tiles", sample), n_tiles=60 if split == "test" else 20,
+            ))
+        if dataset_name == "xenium_cells":
+            return paths, paths, "raw/stack", "labels/cells"
+        return paths, paths, "raw/dapi", "labels/nuclei"
+
+    if dataset_name == "bitdepth_nucseg":
         img, gt = [], []
-        for choice in ("bact_fluor", "bact_phase", "worm", "worm_high_res"):
-            try:
-                i, g = datasets.omnipose.get_omnipose_paths(
-                    path=os.path.join(p, "omnipose"), split="test",
-                    data_choice=choice, download=download,
-                )
-                img.extend(i)
-                gt.extend(g)
-            except Exception as e:
-                warnings.warn(f"Skipping omnipose choice '{choice}': {e}")
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "segpc":
-        # The dataset has no test split, so the evaluation uses the validation split.
-        paths = datasets.segpc.get_segpc_paths(
-            path=os.path.join(p, "segpc"), split="validation", download=download,
-        )
-        return sorted(paths), sorted(paths), "raw", "labels/cells"
-
-    if dataset_name == "tissuenet":
-        paths = datasets.tissuenet.get_tissuenet_paths(
-            path=os.path.join(p, "tissuenet"), split=split, download=download,
-        )
-        # The rgb composite and the cell labels are what the training used.
-        return sorted(paths), sorted(paths), "raw/rgb", "labels/cell"
-
-    if dataset_name == "usiigaci":
-        # The dataset has no test split, so the evaluation uses the validation split.
-        img, gt = datasets.usiigaci.get_usiigaci_paths(
-            path=os.path.join(p, "usiigaci"), split="val", download=download,
-        )
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "vicar":
-        img, gt = datasets.vicar.get_vicar_paths(
-            path=os.path.join(p, "vicar"), download=download,
-        )
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "yeaz":
-        img, gt = [], []
-        for choice in ("bf", "phc"):
-            i, g = datasets.yeaz.get_yeaz_paths(
-                path=os.path.join(p, "yeaz"), choice=choice, split=split, download=download,
-            )
+        for magnification in BITDEPTH_MAGNIFICATIONS:
+            i, g = _held_out_part(*lm.bitdepth_nucseg.get_bitdepth_nucseg_paths(
+                path=os.path.join(p, "bitdepth_nucseg"), magnification=magnification, download=download,
+            ), split)
             img.extend(i)
             gt.extend(g)
         return (*_sorted_pairs(img, gt), None, None)
 
-    raise ValueError(f"Unknown 2D dataset: {dataset_name!r}")
+    if dataset_name == "bmgd":
+        paths = lm.bmgd.get_bmgd_paths(path=os.path.join(p, "bmgd"), download=download)
+        paths, _ = _held_out_part(paths, paths, split)
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "cellbindb":
+        img, gt = [], []
+        for stain in CELLBINDB_STAINS:
+            i, g = _held_out_part(*lm.cellbindb.get_cellbindb_paths(
+                path=os.path.join(p, "cellbindb"), data_choice=stain, download=download,
+            ), split)
+            img.extend(i)
+            gt.extend(g)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "dynamicnuclearnet":
+        paths = lm.dynamicnuclearnet.get_dynamicnuclearnet_paths(
+            path=os.path.join(p, "dynamicnuclearnet"), split=split, download=download,
+        )
+        return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "u20s":
+        img, gt = _held_out_part(*lm.u20s.get_u20s_paths(path=os.path.join(p, "u20s"), download=download), split)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "ifnuclei":
+        if split == "test":
+            img, gt = lm.ifnuclei.get_ifnuclei_paths(path=os.path.join(p, "ifnuclei"), split="test", download=download)
+        else:
+            img, gt = _loader_val_part(*lm.ifnuclei.get_ifnuclei_paths(
+                path=os.path.join(p, "ifnuclei"), split="train", download=download,
+            ), split)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "tsakiroglou":
+        tsakiroglou = datasets.histopathology.tsakiroglou
+        if split == "test":
+            img, gt = tsakiroglou.get_tsakiroglou_paths(os.path.join(p, "tsakiroglou"), split="test", download=download)
+        else:
+            img, gt = _loader_val_part(
+                *tsakiroglou.get_tsakiroglou_paths(os.path.join(p, "tsakiroglou"), split="train", download=download),
+                split,
+            )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "deepbacs":
+        img_folder, label_folder = lm.deepbacs.get_deepbacs_paths(
+            path=os.path.join(p, "deepbacs"), bac_type="mixed", split="test" if split == "test" else "train",
+            download=download,
+        )
+        img = sorted(glob(os.path.join(img_folder, "*.tif")))
+        gt = sorted(glob(os.path.join(label_folder, "*.tif")))
+        if split != "test":
+            img, gt = _loader_val_part(img, gt, split)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "orgasegment":
+        img, gt = lm.orgasegment.get_orgasegment_paths(
+            path=os.path.join(p, "orgasegment"), split="eval" if split == "test" else "val", download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "organoidnet":
+        img, gt = lm.organoidnet.get_organoidnet_paths(
+            path=os.path.join(p, "organoidnet"), split="Test" if split == "test" else "Validation", download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "yeaz":
+        img, gt = lm.yeaz.get_yeaz_paths(path=os.path.join(p, "yeaz"), choice="bf", split=split, download=download)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "bccd":
+        if split == "test":
+            paths = lm.bccd.get_bccd_paths(path=os.path.join(p, "bccd"), split="test", download=download)
+        else:
+            paths = lm.bccd.get_bccd_paths(path=os.path.join(p, "bccd"), split="train", download=download)
+            paths, _ = _loader_val_part(paths, paths, split)
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "cell_acdc":
+        # One movie per split; every 20th frame is scored.
+        movies = CELL_ACDC_TEST_MOVIES if split == "test" else CELL_ACDC_VAL_MOVIES
+        img, gt = lm.cell_acdc.get_cell_acdc_paths(path=os.path.join(p, "cell_acdc"), download=download)
+        paths = []
+        for raw_path, label_path in zip(img, gt):
+            movie = cell_acdc_movie(raw_path)
+            if movie in movies:
+                paths.extend(_frames_from_movie(
+                    raw_path, label_path, os.path.join(p, "cell_acdc", "eval_frames", movie.replace("/", "_")),
+                    stride=20,
+                ))
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "cellular":
+        wells = CELLULAR_TEST_WELLS if split == "test" else CELLULAR_VAL_WELLS
+        paths = lm.cellular.get_cellular_paths(path=os.path.join(p, "cellular"), download=download)
+        paths = [path for path in paths if os.path.basename(path).split("_")[3] in wells]
+        return sorted(paths), sorted(paths), "raw/brightfield", "labels/instances"
+
+    if dataset_name == "cisd":
+        slides = CISD_TEST_SLIDES if split == "test" else CISD_VAL_SLIDES
+        img, gt = lm.cisd.get_cisd_paths(path=os.path.join(p, "cisd"), mode="center_slice", download=download)
+        keep = [os.path.basename(path).split("_")[0] in slides for path in img]
+        img = [path for path, k in zip(img, keep) if k]
+        gt = [path for path, k in zip(gt, keep) if k]
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "vicar":
+        img, gt = [], []
+        for cell_type in lm.vicar.VALID_CELL_TYPES:
+            i, g = _held_out_part(*lm.vicar.get_vicar_paths(
+                path=os.path.join(p, "vicar"), cell_types=[cell_type], download=download,
+            ), split)
+            img.extend(i)
+            gt.extend(g)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "microbeseg":
+        img, gt = lm.microbeseg.get_microbeseg_paths(
+            path=os.path.join(p, "microbeseg"), split=split, download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "orgline":
+        paths = lm.orgline.get_orgline_paths(path=os.path.join(p, "orgline"), split=split, download=download)
+        return sorted(paths), sorted(paths), "image", "masks"
+
+    if dataset_name == "organoid":
+        paths = []
+        for source in ORGANOID_SOURCES:
+            paths.extend(lm.organoid.get_organoid_paths(
+                path=os.path.join(p, "organoid"), split=split, source=source, download=download,
+            ))
+        return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "mcellseg":
+        img, gt = _held_out_part(
+            *lm.mcellseg.get_mcellseg_paths(path=os.path.join(p, "mcellseg"), download=download), split
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "toiam":
+        # One movie per split; every 20th frame is scored.
+        movies = TOIAM_TEST_MOVIES if split == "test" else TOIAM_VAL_MOVIES
+        img, gt = lm.toiam.get_toiam_paths(path=os.path.join(p, "toiam"), download=download)
+        img, gt = _sorted_pairs(img, gt)
+        keep = [os.path.basename(os.path.dirname(path)) in movies for path in img]
+        img = [path for path, k in zip(img, keep) if k][::20]
+        gt = [path for path, k in zip(gt, keep) if k][::20]
+        return img, gt, None, None
+
+    if dataset_name == "bbbc030":
+        img, gt = lm.bbbc030.get_bbbc030_paths(path=os.path.join(p, "bbbc030"), split=split, download=download)
+        return (*_sorted_pairs(img, gt), "raw", "labels")
+
+    if dataset_name in ("covid_if_cells", "covid_if_nuclei"):
+        # 49 samples with no split anywhere; the last 5 are reserved for tuning, the first 44 are scored.
+        sample_range = (44, 49) if split == "val" else (0, 44)
+        paths = lm.covid_if.get_covid_if_paths(
+            path=os.path.join(p, "covid_if"), sample_range=sample_range, download=download,
+        )
+        if dataset_name == "covid_if_cells":
+            return sorted(paths), sorted(paths), "raw/serum_IgG/s0", "labels/cells/s0"
+        return sorted(paths), sorted(paths), "raw/nuclei/s0", "labels/nuclei/s0"
+
+    if dataset_name == "medussa":
+        paths = lm.medussa.get_medussa_paths(path=os.path.join(p, "medussa"), split=split, download=download)
+        return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "hpa":
+        paths = lm.hpa.get_hpa_segmentation_paths(path=os.path.join(p, "hpa"), split="val", download=download)
+        return sorted(paths), sorted(paths), HPA_CHANNELS, "labels"
+
+    if dataset_name == "cardioblast_nuclei":
+        # Time-lapse projections of 350 frames; every 35th frame is scored.
+        img, gt = lm.cardioblast_nuclei.get_cardioblast_nuclei_paths(
+            path=os.path.join(p, "cardioblast_nuclei"), split=split, download=download,
+        )
+        paths = []
+        for raw_path, label_path in zip(img, gt):
+            movie = os.path.splitext(os.path.basename(raw_path))[0]
+            paths.extend(_frames_from_movie(
+                raw_path, label_path, os.path.join(p, "cardioblast_nuclei", "eval_frames", split, movie), stride=35,
+            ))
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "hela_cytonuc":
+        img, gt = lm.hela_cytonuc.get_hela_cytonuc_paths(
+            path=os.path.join(p, "hela_cytonuc"), split=split, download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "arvidsson":
+        img, gt = lm.arvidsson.get_arvidsson_paths(path=os.path.join(p, "arvidsson"), split=split, download=download)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "mndino":
+        paths = lm.mndino.get_mndino_paths(path=os.path.join(p, "mndino"), split=split, download=download)
+        return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "micro_bench":
+        img, gt = lm.micro_bench.get_micro_bench_paths(
+            path=os.path.join(p, "micro_bench"), source="protein_localization_nuclei", download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "spatch_dapi":
+        paths = datasets.histopathology.spatch.get_spatch_paths(
+            path=os.path.join(p, "spatch"), subset=SPATCH_DAPI_SUBSETS, download=download,
+        )
+        return sorted(paths), sorted(paths), "raw/rgb", "labels/nuclei"
+
+    if dataset_name == "cellapp":
+        # The per-cell-line subsets; HeLa has no training images. Tuning uses the RPE1 and U2OS train splits.
+        sources = ("rpe1", "u2os", "hela") if split == "test" else ("rpe1", "u2os")
+        paths = []
+        for source in sources:
+            paths.extend(lm.cellapp.get_cellapp_paths(
+                path=os.path.join(p, "cellapp"), source=source, split=split, download=download,
+            ))
+        return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "deepseas":
+        img, gt = lm.deepseas.get_deepseas_paths(path=os.path.join(p, "deepseas"), split=split, download=download)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "dic_hepg2":
+        img, gt = lm.dic_hepg2.get_dic_hepg2_paths(path=os.path.join(p, "dic_hepg2"), split=split, download=download)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "yeastsam":
+        img_folder, label_folder = lm.yeastsam.get_yeastsam_paths(path=os.path.join(p, "yeastsam"), download=download)
+        img = sorted(glob(os.path.join(img_folder, "*.tif")))
+        gt = sorted(glob(os.path.join(label_folder, "*.tif")))
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "yeastcellseg":
+        paths = lm.yeastcellseg.get_yeastcellseg_paths(path=os.path.join(p, "yeastcellseg"), download=download)
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "bac_mother":
+        # Mother-machine frames of 345x41 pixels; every 10th frame is scored at its native size.
+        img, gt = lm.bac_mother.get_bac_mother_paths(path=os.path.join(p, "bac_mother"), split=split, download=download)
+        img, gt = _sorted_pairs(img, gt)
+        return img[::10], gt[::10], None, None
+
+    if dataset_name == "ecoli_microcolony_lineage":
+        img, gt = lm.ecoli_microcolony_lineage.get_ecoli_microcolony_lineage_paths(
+            path=os.path.join(p, "ecoli_microcolony_lineage"), download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    raise ValueError(f"Unknown 2D light microscopy dataset: {dataset_name!r}")
 
 
 def _get_3d_lm_data_paths(
     dataset_name: str, data_root: str, download: bool = False, split: str = "test"
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
-    p = data_root
+    """The 3d light microscopy datasets. 'test' is the blind split, 'val' the loader's validation data.
 
-    if dataset_name == "blastospim":
-        paths = datasets.blastospim.get_blastospim_paths(
-            path=os.path.join(p, "blastospim"), download=download,
+    Datasets whose tuning data is a z-slab of the test volumes return the same files for both, see LM_VAL_Z_SLABS.
+    """
+    p = data_root
+    lm = datasets.light_microscopy
+
+    if dataset_name in ("plantseg_root", "plantseg_ovules"):
+        name = dataset_name.split("_")[1]
+        paths = lm.plantseg.get_plantseg_paths(
+            path=os.path.join(p, "plantseg"), name=name, split=split, download=download,
+        )
+        return sorted(paths), sorted(paths), "raw", "label_with_ignore" if name == "ovules" else "label"
+
+    if dataset_name == "pnas_arabidopsis":
+        plants = PNAS_TEST_PLANTS if split == "test" else PNAS_VAL_PLANTS
+        paths = lm.pnas_arabidopsis.get_pnas_arabidopsis_paths(
+            path=os.path.join(p, "pnas_arabidopsis"), plants=plants, download=download,
         )
         return sorted(paths), sorted(paths), "raw", "labels"
 
     if dataset_name == "cartocell":
-        cartocell_root = os.path.join(p, "cartocell")
-        current_data_root = os.path.join(cartocell_root, "CartoCell")
-        if os.path.exists(current_data_root):
-            img = sorted(glob(os.path.join(current_data_root, "test", "x", "*.tif")))
-            gt = [ipath.replace(os.sep + "x" + os.sep, os.sep + "y" + os.sep) for ipath in img]
-        else:
-            img, gt = [], []
-            for name in ("eggChambers", "embryoids", "MDCK-Normoxia", "MDCK-Hypoxia"):
-                try:
-                    i, g = datasets.cartocell.get_cartocell_paths(
-                        path=cartocell_root, split="test", name=name, download=download,
-                    )
-                    img.extend(i)
-                    gt.extend(g)
-                except Exception as e:
-                    warnings.warn(f"Skipping cartocell name '{name}': {e}")
+        folder = CARTOCELL_TEST_FOLDER if split == "test" else CARTOCELL_VAL_FOLDER
+        img = sorted(glob(os.path.join(p, "cartocell", "CartoCell", folder, "x", "*.tif")))
+        gt = [path.replace(os.sep + "x" + os.sep, os.sep + "y" + os.sep) for path in img]
+        return img, gt, None, None
+
+    if dataset_name == "phmamm":
+        timepoints = PHMAMM_TEST_TIMEPOINTS if split == "test" else PHMAMM_VAL_TIMEPOINTS
+        img, gt = lm.phmamm.get_phmamm_paths(path=os.path.join(p, "phmamm"), timepoints=timepoints, download=download)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "wing_disc":
+        paths = lm.wing_disc.get_wing_disc_paths(
+            path=os.path.join(p, "wing_disc"), volumes=WING_DISC_TEST_VOLUMES, download=download,
+        )
+        return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "embedseg_organoid":
+        img, gt = lm.embedseg_data.get_embedseg_paths(
+            path=os.path.join(p, "embedseg"), name="Mouse-Organoid-Cells-CBG", split="train", download=download,
+        )
+        part = EMBEDSEG_ORGANOID_TEST_TIMEPOINTS if split == "test" else EMBEDSEG_ORGANOID_VAL_TIMEPOINTS
+        return img[part], gt[part], None, None
+
+    if dataset_name in ("embedseg_mouse_skull", "embedseg_platy_ish"):
+        name = "Mouse-Skull-Nuclei-CBG" if dataset_name == "embedseg_mouse_skull" else "Platynereis-ISH-Nuclei-CBG"
+        img, gt = lm.embedseg_data.get_embedseg_paths(
+            path=os.path.join(p, "embedseg"), name=name, split="test", download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "embedseg_platy_nuclei":
+        img, gt = lm.embedseg_data.get_embedseg_paths(
+            path=os.path.join(p, "embedseg"), name="Platynereis-Nuclei-CBG", split="train", download=download,
+        )
+        part = EMBEDSEG_PLATY_NUCLEI_TEST_TIMEPOINTS if split == "test" else EMBEDSEG_PLATY_NUCLEI_VAL_TIMEPOINTS
+        return img[part], gt[part], None, None
+
+    if dataset_name == "nis3d":
+        img, gt = lm.nis3d.get_nis3d_paths(
+            path=os.path.join(p, "nis3d"), split="test", split_type="cross-image", download=download,
+        )
+        keep = ["Drosophila" in path for path in img]
+        img = [path for path, k in zip(img, keep) if k]
+        gt = [path for path, k in zip(gt, keep) if k]
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "celegans_atlas":
-        img, gt = datasets.celegans_atlas.get_celegans_atlas_paths(
+        img, gt = lm.celegans_atlas.get_celegans_atlas_paths(
             path=os.path.join(p, "celegans_atlas"), split=split, download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
-    if dataset_name == "cellseg_3d":
-        img, gt = datasets.cellseg_3d.get_cellseg_3d_paths(
-            path=os.path.join(p, "cellseg_3d"), download=download,
-        )
-        return (*_sorted_pairs(img, gt), None, None)
-
-    if dataset_name == "embedseg":
-        img, gt = datasets.embedseg_data.get_embedseg_paths(
-            path=os.path.join(p, "embedseg"),
-            name="Mouse-Skull-Nuclei-CBG", split=split, download=download,
-        )
-        return (*_sorted_pairs(img, gt), None, None)
-
     if dataset_name == "gonuclear":
-        paths = datasets.gonuclear.get_gonuclear_paths(
-            path=os.path.join(p, "gonuclear"), download=download,
+        sample_ids = GONUCLEAR_TEST_SAMPLES if split == "test" else GONUCLEAR_VAL_SAMPLES
+        paths = lm.gonuclear.get_gonuclear_paths(
+            path=os.path.join(p, "gonuclear"), sample_ids=sample_ids, download=download,
         )
         return sorted(paths), sorted(paths), "raw/nuclei", "labels/nuclei"
 
-    if dataset_name == "mouse_embryo":
-        # The dataset has no test split, so the evaluation uses the validation split.
-        paths = datasets.mouse_embryo.get_mouse_embryo_paths(
-            path=os.path.join(p, "mouse_embryo"), name="nuclei", split="val", download=download,
-        )
-        return sorted(paths), sorted(paths), "raw", "label"
+    if dataset_name == "nucverse3d":
+        root = os.path.join(p, "nucverse3d")
+        if split == "test":
+            paths = lm.nucverse3d.get_nucverse3d_paths(path=root, split="test", download=download)
+        else:
+            # One training volume per liver collection and a slab of one glia test volume, as in the loader.
+            paths = []
+            for name in ("liver", "liver_hcc"):
+                paths += [
+                    path for path in lm.nucverse3d.get_nucverse3d_paths(
+                        path=root, dataset=name, split="train", download=download,
+                    ) if os.path.basename(path) == NUCVERSE_VAL_VOLUMES[name]
+                ]
+            paths += [
+                path for path in lm.nucverse3d.get_nucverse3d_paths(
+                    path=root, dataset="drosophila_glia", split="test", download=download,
+                ) if os.path.basename(path) == NUCVERSE_GLIA_VAL_VOLUME
+            ]
+        return sorted(paths), sorted(paths), "raw", "labels"
 
-    if dataset_name == "nis3d":
-        img, gt = datasets.nis3d.get_nis3d_paths(
-            path=os.path.join(p, "nis3d"), split="test", split_type="cross-image", download=download,
+    if dataset_name == "cshaper":
+        # Out of domain: the paper's evaluation samples are scored, its training samples are the tuning data.
+        img, gt = lm.cshaper.get_cshaper_paths(
+            path=os.path.join(p, "cshaper"), split="val" if split == "test" else "train", download=download,
+        )
+        return (*_sorted_pairs(img, gt), "raw", "labels")
+
+    if dataset_name == "morphonet":
+        # All 20 Arabidopsis timepoints and every 10th of the 184 C. elegans timepoints.
+        root = os.path.join(p, "morphonet")
+        paths = lm.morphonet.get_morphonet_paths(path=root, organism="arabidopsis_thaliana", download=download)
+        paths += lm.morphonet.get_morphonet_paths(path=root, organism="caenorhabditis_elegans", download=download)[::10]
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "parhyale_regen":
+        paths = lm.parhyale_regen.get_parhyale_regen_paths(path=os.path.join(p, "parhyale_regen"), download=download)
+        return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "vibrio_cholerae":
+        img, gt = lm.vibrio_cholerae.get_vibrio_cholerae_paths(
+            path=os.path.join(p, "vibrio_cholerae"), download=download,
         )
         return (*_sorted_pairs(img, gt), None, None)
 
-    if dataset_name == "plantseg":
-        all_paths = []
-        for name, folder, split in (
-            ("nuclei", "plantseg", "train"),
-            ("ovules", "plantseg_ovules", "test"),
-            ("root", "plantseg_root", "test"),
-        ):
-            try:
-                ps = datasets.plantseg.get_plantseg_paths(
-                    path=os.path.join(p, folder), name=name, split=split, download=download,
-                )
-                all_paths.extend(ps)
-            except Exception as e:
-                warnings.warn(f"Skipping plantseg name '{name}': {e}")
-        return sorted(all_paths), sorted(all_paths), "raw", "label"
-
-    if dataset_name == "pnas_arabidopsis":
-        paths = datasets.pnas_arabidopsis.get_pnas_arabidopsis_paths(
-            path=os.path.join(p, "pnas_arabidopsis"), download=download,
+    if dataset_name == "mouse_embryo":
+        # Out of domain: the official val split is scored, the train split is the tuning data.
+        paths = lm.mouse_embryo.get_mouse_embryo_paths(
+            path=os.path.join(p, "mouse_embryo"), name="nuclei", split="val" if split == "test" else "train",
+            download=download,
         )
+        return sorted(paths), sorted(paths), "raw", "label"
+
+    if dataset_name == "blastospim":
+        paths = lm.blastospim.get_blastospim_paths(path=os.path.join(p, "blastospim"), download=download)
         return sorted(paths), sorted(paths), "raw", "labels"
 
     raise ValueError(f"Unknown 3D LM dataset: {dataset_name!r}")
@@ -897,6 +1290,17 @@ def load_volume(
     elif dataset_name == "synapseweb":
         # Annotation covers only part of the core, so the unlabelled voxels are excluded from scoring.
         valid_roi = labels != 0
+    elif dataset_name == "plantseg_root":
+        # Label 1 is the background, label 0 the unannotated deeper tissue.
+        valid_roi = labels != 0
+        labels[labels == 1] = 0
+    elif dataset_name == "plantseg_ovules":
+        labels = labels.astype("int64")
+        valid_roi = labels != -1
+        labels[labels == -1] = 0
+    elif dataset_name == "pnas_arabidopsis" or (dataset_name == "morphonet" and "arabidopsis" in raw_path):
+        # The background carries id 1.
+        labels[labels == 1] = 0
 
     if ensure_8bit:
         raw = normalize_raw(raw) * 255.0
@@ -1013,7 +1417,9 @@ VOLUME_SPEED_OPTIONS = {"offload_to_cpu": False}
 
 DATASET_SPACING: dict = {
     # z/xy voxel ratios from published acquisition parameters
-    "embedseg": (4, 1, 1),  # Mouse-Skull-Nuclei-CBG: z=1µm, xy=0.25µm
+    "embedseg_mouse_skull": (4, 1, 1),  # z=1µm, xy=0.25µm
+    "embedseg_organoid": (6, 1, 1),  # z=1µm, xy=0.1733µm
+    "embedseg_platy_nuclei": (5, 1, 1),  # z=2.031µm, xy=0.406µm
     "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
     "densecell": (5, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels
@@ -1726,7 +2132,7 @@ def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_
     The parameter search and the evaluation both call this function, so both use the same data.
     """
     # Normalize before cropping, so that the percentiles cover the whole image.
-    image = ensure_8bit_range(read_2d(raw_path, raw_key))
+    image = ensure_8bit_range(select_channels(read_2d(raw_path, raw_key), dataset_name))
     roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
     labels = read_2d(label_path, label_key)[roi]
     if dataset_name == "astih":
@@ -1770,10 +2176,9 @@ def load_data(dataset_name, data_root, ndim, min_size=0, split="test", crop_shap
         One (image_or_volume, labels, valid_roi) triple per sample.
     """
     raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root, split=split)
-    per_sample_z_range = dataset_name == "platynereis_nuclei" and split == "val"
     for raw_path, label_path in sorted_path_pairs(raw_paths, label_paths):
         if ndim == 3:
-            sample_z_range = platynereis_nuclei_val_z_range(raw_path) if per_sample_z_range else z_range
+            sample_z_range = val_z_range(dataset_name, raw_path, split) or z_range
             yield load_evaluation_sample_3d(
                 raw_path, label_path, raw_key, label_key, dataset_name,
                 crop_shape=crop_shape or CROP_SHAPE_3D, z_range=sample_z_range, min_size=min_size, split=split,
