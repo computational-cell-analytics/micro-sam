@@ -9,9 +9,8 @@ from bioimage_cpp.distance import distance_transform, geodesic_distance_field, v
 from bioimage_cpp.segmentation import label as connected_components, relabel_sequential
 
 
-# Sentinel in the foreground channel for voxels with unknown ground truth, so the loss can skip them.
-# The target reaches the loss as float32, where the uint32 label-space sentinel is not representable.
-IGNORE_FOREGROUND = 255
+# Written into the foreground target channel, which otherwise holds 0 or 1, for voxels without ground truth.
+FOREGROUND_IGNORE_VALUE = -1
 
 
 def _instance_labels(labels):
@@ -46,9 +45,9 @@ def _em_cell_label_trafo(y, label_trafo, ignore_label=None):
 
     bd = find_boundaries(instances.astype("uint32"), mode="outer").astype("uint8")
     fg = (instances > 0).astype("uint8")
-    expected_fg = (fg & ~bd).astype("uint8")
+    expected_fg = (fg & ~bd).astype("float32")
     if ignore is not None:
-        expected_fg[ignore] = IGNORE_FOREGROUND
+        expected_fg[ignore] = FOREGROUND_IGNORE_VALUE
 
     expected_y = np.concatenate([expected_fg[None], y[2:]], axis=0)
 
@@ -80,7 +79,7 @@ def _joint_em_cell_label_trafo(y, label_trafo, ignore_label=None):
     dropping the instance channel. ``label_trafo`` must produce a 5-channel
     array (i.e. be a :class:`_JointLabelTransform` / ``instances=True``).
 
-    Voxels equal to ``ignore_label`` are marked with ``IGNORE_FOREGROUND`` in the foreground channel
+    Voxels equal to ``ignore_label`` are marked with ``FOREGROUND_IGNORE_VALUE`` in the foreground channel
     and removed from the instance channel, so neither branch trains on them.
     """
     ignore = None if ignore_label is None else np.asarray(y) == ignore_label
@@ -88,9 +87,9 @@ def _joint_em_cell_label_trafo(y, label_trafo, ignore_label=None):
     instances = y[0]
     bd = find_boundaries(instances.astype("uint32"), mode="outer").astype("uint8")
     fg = (instances > 0).astype("uint8")
-    expected_fg = (fg & ~bd).astype("uint8")
+    expected_fg = (fg & ~bd).astype("float32")
     if ignore is not None:
-        expected_fg[ignore] = IGNORE_FOREGROUND
+        expected_fg[ignore] = FOREGROUND_IGNORE_VALUE
         # Channel 0 feeds the interactive branch, which samples objects from it (largest first).
         instances = np.where(ignore, 0, instances)
     return np.concatenate([instances[None], expected_fg[None], y[2:]], axis=0)
