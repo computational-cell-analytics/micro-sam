@@ -327,7 +327,9 @@ checksum covers five files (the benchmark, `common.py`, `parameter_search.py`,
 columns) → `a65e2eb08c23538f11544860736961a3` (epoch A1, 2026-09-06: opt-in `boundary_magnitude_max`
 filter in `micro_sam/v2/postprocessing.py`, default off; the cached sweep scorer applies it) →
 `576a85c8ffd4314627812fd30a3c1223` (epoch A2, 2026-09-06: the optimized `hvit_t` defaults with volume overrides, the fast filter
-and dimension-aware `default_postprocessing`). Decision log and results: `notes/AIS_V4_OPTIMIZATION.md`.
+and dimension-aware `default_postprocessing`) → `e9d02380e340edfaccd30bf5cbf1bf03` (epoch A3, 2026-09-07: volume defaults
+reverted to the registry smoothing and size floor plus the filter after the 3D test manifest). Decision log
+and results: `notes/AIS_V4_OPTIMIZATION.md`.
 
 ## 14. Baseline results of the cleaned harness (2026-09-06)
 

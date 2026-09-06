@@ -509,3 +509,70 @@ configuration (`configs/ais_control_v4_old_defaults.json`, filter off via `Infin
   default_a2-defaults`, which reports the twelve strictly unseen 2d datasets separately.
 - 3D test manifest (`manifest_test_apg3d-v1.json`, 56 crops of the seven test-only LM datasets, opened
   once): predictions cached on the session GPU, then `screen` old vs new defaults (trial `test-1`).
+
+### Canonical A2 runs (2026-09-06 23:50, job 15767503, trial `a2-1`; reports `ais/reports/a2_*`)
+
+New library defaults (`current-defaults`) against the explicit old values (`v4-old-defaults`), one node per
+manifest:
+
+| instrument | old | new | change | up | worst |
+|---|---:|---:|---:|---:|---:|
+| 2D development, eleven datasets (generalization gate) | 0.3357 | 0.3437 | **+2.4 %, passes** | 9 / 11 | −0.8 % (tnbc) |
+| 2D holdout, five datasets | 0.2337 | 0.2437 | **+4.3 %, passes** | 5 / 5 | +0.9 % |
+| 3D LM deep crops, primary (6 sources) | 0.1765 | 0.2165 | **+22.7 %, passes** | 6 / 6 | +1.4 % |
+| 3D LM deep crops, holdout (6 sources) | 0.1998 | 0.2438 | **+22.0 %, passes** | 5 / 6 | −0.2 % |
+
+`compare_apg_optimization.py --target quality` on the 2D-only runs of the five primary datasets: macro mSA
+0.2366 → 0.2457 (**+3.9 %**) on primary and 0.2337 → 0.2437 (**+4.3 %**) on holdout, every dataset up
+(deepbacs +12.7 %, tissuenet +6.3 / +8.1 %, livecell +3.1 / +2.8 %, dynamicnuclearnet +0.4 / +0.9 %,
+dic_hepg2 +60 / +2 % on a near-zero base), every dataset's runtime within +2.9 % (total +1.3 % / +0.6 %,
+post-processing on one node, prediction time from the cache records). The comparator's quality gate is
+**not** met because its macro bar is +5 % on this five-dataset instrument; its runtime and per-dataset
+checks pass, and the generalization gate of the campaign (the eleven-dataset rule) passes on every
+instrument. Recorded as such: the promotion rests on the generalization rule, not on the +5 % quality
+target that was set for the APG campaigns.
+
+## 3D test manifest, opened once (2026-09-07 00:00, screen `a2_apg3d_test`, trial `test-1`)
+
+56 crops, eight per test-only dataset, new defaults (with the volume overrides) against the old values:
+
+| dataset | old | new | change | matched old → new |
+|---|---:|---:|---:|---|
+| blastospim | 0.1209 | 0.1203 | −0.5 % | 61 → 61 |
+| cartocell | 0.0142 | 0.0120 | −15 % (−0.002 absolute) | 24 → 22 |
+| cellseg_3d | 0.000 | 0.000 | n/a (nothing matched either way) | 0 → 0 |
+| mouse_embryo | 0.0663 | 0.0823 | **+24 %** | 217 → 218 |
+| nis3d | 0.1079 | 0.1017 | −5.8 % (−0.006) | 762 → 622 |
+| plantseg | 0.1573 | 0.2115 | **+35 %** | 553 → 497 |
+| pnas_arabidopsis | 0.2889 | 0.2690 | −6.9 % (−0.020) | 1437 → 1362 |
+| balanced (7) | 0.1083 | 0.1141 | +5.4 % | 3072 → 2784; background seeds 4065 → 783; unseeded objects 3065 → 3930 |
+
+Two of six scorable datasets up, two below the loss limit: **the volume overrides (foreground 0.6, size
+floor 200 voxels) do not pass the out-of-domain check**, although they passed the tuning crops (+22 % on
+primary and holdout). The pattern (background seeds −80 %, unseeded objects +28 %, matched −9 %) says the
+filter does its job while the higher foreground threshold and the voxel floor remove real objects on the
+unseen nuclei data (nis3d, pnas_arabidopsis). Decision rule, fixed before looking further: the volume
+defaults fall back to the only volume candidate that passed the gate on both tuning instruments without a
+dataset down, the old values plus the boundary filter (A1 screen: +4.7 % / +9.7 %, worst 0.0 %); it is
+evaluated once on the test manifest (`configs/ais_v_filter_only.json`) and, if it fails too, volumes revert
+to the old values. The image defaults are unaffected. The library change waits until the running production
+jobs (which import the library per dataset) have finished, so that their `a2-defaults` results stay what
+their tag says.
+
+- 2026-09-07 00:10: the 66 production jobs of 23:15 all failed at start-up (`torch.save ... Permission denied`):
+  `build_model(mode="ais")` exports the decoder into `MICRO_SAM2_JOINT_EXPORT_ROOT`, which was not set in the
+  submitting shell, so the library's default export root (not writable for this user) was used. Both
+  variables must be exported before submitting (EXPERIMENTAL_SETUP.md §2 pins both). Resubmitted with
+  `MICRO_SAM2_JOINT_EXPORT_ROOT=<root>/model_exports` (the v4 export already exists there).
+
+### Volume fallback on the test manifest and epoch A3 (2026-09-07 00:30)
+
+`v-filter-only` (volumes: registry values + filter 0.4) on the 56 test crops: **+3.4 %, 6 / 6 scorable
+datasets up** (blastospim +1.2, cartocell +1.9, mouse_embryo +6.8, nis3d +2.9, plantseg +9.3,
+pnas_arabidopsis +0.7; cellseg_3d 0 either way), worst +0.7 %: passes. With the tuning crops (+4.7 %
+primary, +9.7 % holdout, nothing down) this is the volume setting that generalizes.
+
+**Epoch A3 `e9d02380e340edfaccd30bf5cbf1bf03`: `DEFAULT_POSTPROCESSING["hvit_t"]["sparse_volume"]` = min_size 100, sigma 0.5**
+(the registry values; foreground 0.5 and the filter 0.4 are inherited from the image table). Images
+unchanged from A2. The 3D production jobs tagged `a2-defaults` were cancelled before they could import the
+new table and are resubmitted as `a3-defaults`; the 2D jobs are unaffected (image table unchanged).
