@@ -1,0 +1,35 @@
+{
+  "name": "s-refine-isolated-boxes",
+  "params_2d": {
+    "candidate_threshold": 3.0,
+    "dt": 0.5,
+    "sigma": 0.5,
+    "min_candidate_size": 4,
+    "n_iter": 50,
+    "foreground_threshold": 0.7,
+    "score_threshold": 0.6,
+    "score_filter": "predicted_iou",
+    "max_overlap": 0.3,
+    "min_size": 50,
+    "multimasking": true,
+    "multimask_scorer": "predicted_iou",
+    "multimask_selection": "eager",
+    "refinement": "points+boxes",
+    "refinement_kwargs": {
+      "policy": "replace",
+      "multimasking": false,
+      "min_consistency": 0.7,
+      "max_foreign_overlap": 0.15,
+      "gate": "isolated",
+      "gate_threshold": 0.0,
+      "n_positives": 1,
+      "n_negatives": 6,
+      "max_negative_distance": null,
+      "negative_source": "prompts",
+      "min_negative_distance": 0,
+      "box_extension": 0,
+      "isolated_fallback": "boxes"
+    }
+  },
+  "params_3d": {}
+}

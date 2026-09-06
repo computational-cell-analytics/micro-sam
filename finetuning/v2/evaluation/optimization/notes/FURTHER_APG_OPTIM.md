@@ -1318,12 +1318,3 @@ that gains is preferred, and structural label-free changes rank above any score.
 Everything in 1-5 reuses the existing infrastructure (`apg3d_manifest.py`, `benchmark_apg_3d.py`,
 `extract_apg_3d_tracks.py`, `train_apg_3d_filter.py`, `screen_apg_3d_filter.py`, `screen_apg_3d_hybrid.py`,
 the submitter and job builders). Step 2 needs one new replay script; step 3 needs an extractor option.
-
-## Status on this branch
-
-Removed on `apg-clean-up` (all preserved on `apg-optim-fable`): `train_apg_multimask_selector.py`,
-`train_apg_3d_filter.py`, `screen_apg_3d_filter.py`, `screen_apg_3d_hybrid.py`, `extract_apg_3d_tracks.py`,
-the module `micro_sam/v2/multimask_selection.py`, and every learned or structural hook these proposals
-relied on (see the status sections of `APG_2D_OPTIMIZATION.md` and `APG_3D_OPTIMIZATION.md`). The
-proposals themselves were tested and refuted under the generalization rule; nothing in this note is open.
-Kept: the second-round refinement, the tiled generator, and the generic harness.

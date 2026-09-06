@@ -1,0 +1,1555 @@
+[
+ {
+  "name": "compact-eager-none",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.6-fo0.1-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.1,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.6-fo0.1-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.1,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.6-fo0.15-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.15,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.6-fo0.15-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.15,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.6-fo0.25-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.25,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.6-fo0.25-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.25,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.7-fo0.1-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.1,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.7-fo0.1-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.1,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.7-fo0.15-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.15,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.7-fo0.15-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.15,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.7-fo0.25-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.25,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.7-fo0.25-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.25,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.85-fo0.1-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.1,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.85-fo0.1-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.1,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.85-fo0.15-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.15,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.85-fo0.15-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.15,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.85-fo0.25-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.25,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n4-mc0.85-fo0.25-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 4,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.25,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.6-fo0.1-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.1,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.6-fo0.1-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.1,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.6-fo0.15-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.15,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.6-fo0.15-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.15,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.6-fo0.25-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.25,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.6-fo0.25-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.25,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.7-fo0.1-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.1,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.7-fo0.1-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.1,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.7-fo0.15-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.15,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.7-fo0.15-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.15,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.7-fo0.25-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.25,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.7-fo0.25-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.25,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.85-fo0.1-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.1,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.85-fo0.1-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.1,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.85-fo0.15-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.15,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.85-fo0.15-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.15,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.85-fo0.25-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.25,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n6-mc0.85-fo0.25-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 6,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.25,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.6-fo0.1-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.1,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.6-fo0.1-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.1,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.6-fo0.15-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.15,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.6-fo0.15-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.15,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.6-fo0.25-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.25,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.6-fo0.25-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.6,
+    "max_foreign_overlap": 0.25,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.7-fo0.1-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.1,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.7-fo0.1-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.1,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.7-fo0.15-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.15,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.7-fo0.15-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.15,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.7-fo0.25-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.25,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.7-fo0.25-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.7,
+    "max_foreign_overlap": 0.25,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.85-fo0.1-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.1,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.85-fo0.1-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.1,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.85-fo0.15-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.15,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.85-fo0.15-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.15,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.85-fo0.25-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.25,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-gate15-n8-mc0.85-fo0.25-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "gate": "uncertainty",
+    "gate_threshold": 0.0075367484,
+    "n_negatives": 8,
+    "min_consistency": 0.85,
+    "max_foreign_overlap": 0.25,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-ungated-n4-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "n_negatives": 4,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-ungated-n4-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "n_negatives": 4,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-ungated-n6-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "n_negatives": 6,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-ungated-n6-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "n_negatives": 6,
+    "multimasking": true
+   }
+  }
+ },
+ {
+  "name": "retune-ungated-n8-sm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "n_negatives": 8,
+    "multimasking": false
+   }
+  }
+ },
+ {
+  "name": "retune-ungated-n8-mm",
+  "params_2d": {
+   "candidate_threshold": 1.5,
+   "dt": 0.25,
+   "sigma": 0.5,
+   "min_candidate_size": 4,
+   "foreground_threshold": 0.7,
+   "max_overlap": 0.15,
+   "min_size": 50,
+   "multimasking": true,
+   "multimask_scorer": "microscopy",
+   "multimask_selection": "eager",
+   "score_filter": "selection_score",
+   "score_threshold": 0.375,
+   "refinement": "points+boxes",
+   "refinement_kwargs": {
+    "n_negatives": 8,
+    "multimasking": true
+   }
+  }
+ }
+]
