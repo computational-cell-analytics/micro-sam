@@ -658,3 +658,18 @@ object (the merge mechanism); the earlier floor test on the old defaults failed 
 spurious seeds, which the promoted defaults (sigma 1.0, filter 0.4) now remove. Screen `f2_floor`: floors
 zero / ring, each with the promoted size floor and with min_size 100, against the promoted defaults, on
 v5 primary / training_extra / holdout and apg3d primary / holdout (trial `f2-1`, one node per manifest).
+
+### Result of the seed-floor screen (2026-09-06 23:45, job 15768572, trial `f2-1`, baseline = promoted A3 defaults)
+
+| configuration | 2D dev (11) | 2D holdout (5) | 3D LM holdout (6) | 3D LM primary (6) |
+|---|---:|---:|---:|---:|
+| zero floor | −0.6 % (4 up; livecell +2.5, tissuenet +5.5, deepbacs −6.7, tnbc −2.5, neurips −2.2) | −1.2 % (2 up) | **−51.5 %** (0 up, skull −84 %) | **−40.6 %** (0 up) |
+| ring floor | −1.3 % (3 up; dic_hepg2 −24 %, deepbacs −8.9) | −1.2 % (2 up) | **−25.9 %** (1 up) | **−24.6 %** (2 up, skull −60 %) |
+| zero / ring with min_size 100 | −1.1 % / −1.8 % | −3.1 % / −3.2 % | identical to the above (100 is the volume floor already) | |
+
+Object counts (2D dev, zero floor): merges −1895, matched +1476, but the released seeds add instances
+faster than they add matches, so mSA falls on 7 of 11 datasets; in 3D every large nucleus carries several
+weak sinks and all of them flood. **Not adopted in either dimension; the A3 defaults stay.** The seed floor
+stays available as the opt-in keyword `seed_floor`. This closes the last post-processing lever the
+diagnostics pointed at: the remaining merges need a sharper field from the decoder
+(`AIS_DECODER_TRAINING_PROPOSAL.md` at the repository root).
