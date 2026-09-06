@@ -8,6 +8,7 @@ import torch
 import torchvision.transforms.functional as TF
 from torchvision.transforms import ColorJitter
 
+from torch_em.transform.generic import Compose
 from torch_em.transform.raw import RandomPercentileNormalization, RawTransform
 
 from .labels import _em_cell_label_trafo  # noqa
@@ -88,43 +89,38 @@ def _cellpose_raw_trafo(x):
     return x
 
 
-def _select_channel(raw, channel):
-    """Keep one channel of a multi-channel image, triplicate it and percentile-normalize.
-
-    Several datasets store a single informative channel inside an RGB or multi-channel array:
-    enseg puts all its signal in green, and micro_bench's opencell subset has the nuclear stain in channel 2.
-    """
+def _prepare_select_channel(raw, channel):
+    """Keep one channel of a multi-channel image and triplicate it, without normalizing."""
     plane = raw[channel] if raw.shape[0] <= 8 else raw[..., channel]
-    return normalize_raw(np.stack([plane] * 3), axis=(1, 2))
+    return np.stack([plane] * 3).astype("float32")
+
+
+def _prepare_enseg_green_channel(raw):
+    """enseg is stored RGB but only the green channel carries signal."""
+    return _prepare_select_channel(raw, 1)
 
 
 def _enseg_green_channel(raw):
-    """enseg is stored RGB but only the green channel carries signal."""
-    return _select_channel(raw, 1)
+    return normalize_raw(_prepare_enseg_green_channel(raw), axis=(1, 2))
 
 
-def _micro_bench_nuclei_channel(raw):
-    """micro_bench opencell: channel 2 is the nuclear counterstain, channel 0 is empty."""
-    return _select_channel(raw, 2)
+def _prepare_xenium_cell_channels(raw):
+    """Xenium cell target: drop the DAPI channel (0) and keep the three morphology stains the cells were grown from."""
+    return np.asarray(raw[1:4], dtype="float32")
 
 
 def _xenium_cell_channels(raw):
-    """Xenium cell target: drop the DAPI channel and keep the three morphology stains.
+    return normalize_raw(_prepare_xenium_cell_channels(raw), axis=(1, 2))
 
-    Channel 0 is DAPI, which the nucleus target uses. Channels 1-3 are the membrane, cytoplasmic and
-    stromal stains that XOA grew the cells from, so they are the ones the cell masks correspond to.
-    """
-    return normalize_raw(np.asarray(raw[1:4], dtype="float32"), axis=(1, 2))
+
+def _prepare_pan_multiplex_tissuenet_order(raw):
+    """Reorder pan_multiplex from (nuclei, membrane) to TissueNet's membrane, nucleus, zeros."""
+    nuclei, membrane = raw[0], raw[1]
+    return np.stack([membrane, nuclei, np.zeros_like(membrane)]).astype("float32")
 
 
 def _pan_multiplex_tissuenet_order(raw):
-    """Reorder pan_multiplex to TissueNet's convention: membrane, nucleus, zeros.
-
-    The loader hands over the two composites as (nuclei, membrane); TissueNet puts membrane first.
-    """
-    nuclei, membrane = raw[0], raw[1]
-    stacked = np.stack([membrane, nuclei, np.zeros_like(membrane)])
-    return normalize_raw(stacked, axis=(1, 2))
+    return normalize_raw(_prepare_pan_multiplex_tissuenet_order(raw), axis=(1, 2))
 
 
 def _resize_to_512(x, is_label=False):
@@ -450,6 +446,13 @@ def get_random_percentile_normalization(
     normalizer receives data in its original intensity range. An existing ``augmentation2`` is preserved.
     """
     augmentation2 = None
+    if isinstance(raw_transform, Compose):
+        # torch-em datasets such as ifnuclei and hela_cytonuc prepend a channel selection to the given transform.
+        *prepare, inner = raw_transform.transforms
+        base = get_random_percentile_normalization(inner, lower_percentile_bounds, distribution, distribution_kwargs)
+        steps = prepare + ([base.augmentation1] if base.augmentation1 is not None else [])
+        augmentation1 = Compose(*steps, is_multi_tensor=False)
+        return RawTransform(normalizer=base.normalizer, augmentation1=augmentation1, augmentation2=base.augmentation2)
     if isinstance(raw_transform, RawTransform):
         augmentation1, augmentation2 = raw_transform.augmentation1, raw_transform.augmentation2
         if isinstance(raw_transform.normalizer, RandomPercentileNormalization):
@@ -470,6 +473,12 @@ def get_random_percentile_normalization(
         augmentation1, axis = _prepare_cellpose_raw, (1, 2)
     elif raw_transform is _resize_raw_to_512:
         augmentation1, axis = _prepare_resize_raw_to_512, (1, 2)
+    elif raw_transform is _enseg_green_channel:
+        augmentation1, axis = _prepare_enseg_green_channel, (1, 2)
+    elif raw_transform is _xenium_cell_channels:
+        augmentation1, axis = _prepare_xenium_cell_channels, (1, 2)
+    elif raw_transform is _pan_multiplex_tissuenet_order:
+        augmentation1, axis = _prepare_pan_multiplex_tissuenet_order, (1, 2)
     elif raw_transform is _normalize_percentile:
         augmentation1, axis = None, None
     elif isinstance(raw_transform, partial) and raw_transform.func is _normalize_percentile:

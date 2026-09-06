@@ -19,7 +19,7 @@ from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, _build_group_map
 from ..transforms.raw import (
     _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile, _resize_raw_to_512, _resize_to_512,
-    _enseg_green_channel, _micro_bench_nuclei_channel, _xenium_cell_channels, _pan_multiplex_tissuenet_order,
+    _enseg_green_channel, _xenium_cell_channels, _pan_multiplex_tissuenet_order,
     get_random_percentile_normalization,
 )
 from ..transforms.labels import (
@@ -932,37 +932,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         UniDataWrapper(datasets.get_yeastcellseg_dataset(n_samples=150, **yeastcellseg_kwargs), source_ndim=2)
     )
 
-    # 50. micro-bench (nucleus segmentation in the OpenCell subset)
-    # NOTE: Only 'opencell' is multi-object. Channel 0 is empty in all 1105 files and channel 1 is the varying
-    # GFP-tagged protein, so channel 2, the nuclear counterstain, is the one to feed.
-    micro_bench_root = os.path.join(input_path, "micro_bench")
-    micro_bench_raw = sorted(glob(os.path.join(micro_bench_root, "images", "opencell", "*.tif")))
-    micro_bench_labels = [
-        os.path.join(micro_bench_root, "labels", "opencell", "instances", os.path.basename(p))
-        for p in micro_bench_raw
-    ]
-    assert micro_bench_raw and all(os.path.exists(p) for p in micro_bench_labels)
-    mb_train_r, mb_val_r, mb_train_l, mb_val_l = train_test_split(
-        micro_bench_raw, micro_bench_labels, test_size=0.2, random_state=42,
-    )
-    micro_bench_kwargs = {
-        "patch_shape": patch_shape, "is_seg_dataset": False, "ndim": 2, "with_channels": True,
-        "raw_transform": _micro_bench_nuclei_channel,
-        **{k: v for k, v in kwargs.items() if k != "raw_transform"},
-    }
-    for raws, labs, ds_list, n_samples in [
-        (mb_train_r, mb_train_l, train_ds, 300), (mb_val_r, mb_val_l, val_ds, 50)
-    ]:
-        ds_list.append(
-            UniDataWrapper(
-                torch_em.default_segmentation_dataset(
-                    raw_paths=raws, raw_key=None, label_paths=labs, label_key=None,
-                    n_samples=n_samples, **micro_bench_kwargs,
-                ), source_ndim=2,
-            )
-        )
-
-    # 51. Pan-multiplex (cell segmentation in MIBI, CODEX and Vectra tissue imaging)
+    # 50. Pan-multiplex (cell segmentation in MIBI, CODEX and Vectra tissue imaging)
     # NOTE: The loader returns (nuclei, membrane); they are reordered into TissueNet's membrane, nucleus, zeros.
     pan_kwargs = {
         "path": os.path.join(input_path, "pan_multiplex"), "patch_shape": patch_shape,
@@ -977,7 +947,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             )
         )
 
-    # 52. Xenium (nucleus and cell segmentation in whole-slide multi-tissue stain)
+    # 51. Xenium (nucleus and cell segmentation in whole-slide multi-tissue stain)
     # NOTE: XOA segmented nuclei on DAPI (channel 0) and grew cells from the three morphology stains (channels
     # 1-3), so each target gets the channels it was made from. Whole slides are largely empty, hence the sampler.
     xenium_sampler = MinInstanceSampler(min_num_instances=10, exclude_ids=[0])
@@ -998,7 +968,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         UniDataWrapper(datasets.get_xenium_dataset(n_samples=400, **xenium_cells_kwargs), source_ndim=2)
     )
 
-    # 53. GoNuclear (3D nucleus segmentation in confocal Arabidopsis root)
+    # 52. GoNuclear (3D nucleus segmentation in confocal Arabidopsis root)
     # NOTE: Volume 1170 is held out by convention and is not used for training.
     for z in z_slices:
         gonuclear_kwargs = {
@@ -1013,7 +983,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             UniDataWrapper(datasets.get_gonuclear_dataset(**gonuclear_kwargs), source_ndim=3, group_key=(3, z))
         )
 
-    # 54. NucVerse3D (3D nucleus segmentation in two-photon liver and confocal fly glia)
+    # 53. NucVerse3D (3D nucleus segmentation in two-photon liver and confocal fly glia)
     # NOTE: Volumes are 320 px or smaller in plane, so a 256 crop is resized up rather than zero-padded.
     for z in z_slices:
         nucverse_kwargs = {
@@ -1038,7 +1008,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             )
         )
 
-    # 55. PhMamm (3D cell segmentation in light-sheet Phallusia embryo membranes)
+    # 54. PhMamm (3D cell segmentation in light-sheet Phallusia embryo membranes)
     # NOTE: Volumes are 256 cubed, so the patch is taken at the native in-plane size and resized up.
     for z in z_slices:
         phmamm_kwargs = {
@@ -1056,7 +1026,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             UniDataWrapper(datasets.get_phmamm_dataset(**phmamm_kwargs), source_ndim=3, group_key=(3, z))
         )
 
-    # 56. Wing disc (3D cell segmentation in confocal Drosophila wing epithelium)
+    # 55. Wing disc (3D cell segmentation in confocal Drosophila wing epithelium)
     # NOTE: Native in-plane size is exactly 512, so no resize or padding is needed.
     for z in z_slices:
         wing_disc_kwargs = {
@@ -1069,7 +1039,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             UniDataWrapper(datasets.get_wing_disc_dataset(**wing_disc_kwargs), source_ndim=3, group_key=(3, z))
         )
 
-    # 57. Parhyale regeneration (3D nucleus segmentation in light-sheet H2B-EGFP)
+    # 56. Parhyale regeneration (3D nucleus segmentation in light-sheet H2B-EGFP)
     for z in z_slices:
         parhyale_kwargs = {
             "path": os.path.join(input_path, "parhyale_regen"),
@@ -1081,7 +1051,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             UniDataWrapper(datasets.get_parhyale_regen_dataset(**parhyale_kwargs), source_ndim=3, group_key=(3, z))
         )
 
-    # 58. Vibrio cholerae (3D bacteria segmentation in confocal biofilms)
+    # 57. Vibrio cholerae (3D bacteria segmentation in confocal biofilms)
     for z in z_slices:
         vibrio_kwargs = {
             "path": os.path.join(input_path, "vibrio_cholerae"),
@@ -1093,7 +1063,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             UniDataWrapper(datasets.get_vibrio_cholerae_dataset(**vibrio_kwargs), source_ndim=3, group_key=(3, z))
         )
 
-    # 59. MorphoNet (3D cell and nucleus segmentation across five organisms)
+    # 58. MorphoNet (3D cell and nucleus segmentation across five organisms)
     # NOTE: The Arabidopsis subset numbers its background as id 1, covering about 35 % of the volume, so it is
     # remapped to 0. Phallusia has no prepared volumes on disk and is skipped.
     for z in z_slices:
@@ -1124,7 +1094,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                 )
             )
 
-    # 60. LICONN (3D neurite segmentation in expansion-microscopy connectomics)
+    # 59. LICONN (3D neurite segmentation in expansion-microscopy connectomics)
     # NOTE: Shard coverage is partial. seg_proofread covers only part of the volume, so 14 of 40 random
     # full-volume patches returned all-zero labels. Sampling is restricted to the covered ROI, where 0 of 40 did.
     for z in z_slices:
