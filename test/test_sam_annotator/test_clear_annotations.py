@@ -1,7 +1,12 @@
+import platform
+
 import pytest
 import numpy as np
 
 from micro_sam.sam_annotator.util import toggle_label, clear_annotations, clear_annotations_slice
+
+
+pytestmark = pytest.mark.skipif(platform.system() == "Windows", reason="GUI tests require working OpenGL.")
 
 
 @pytest.mark.gui
