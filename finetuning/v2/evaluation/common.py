@@ -112,7 +112,7 @@ ECOLI_GENES = ("cib", "crosstalk", "recA", "rpsM")
 # panel. Out-of-domain (OOD): datasets kept out of training. Datasets with a cell and a nucleus target are listed
 # per target, omnipose per subset.
 DATASETS_2D_LM_CELL_ID = ["tissuenet", "omnipose_bact_fluor", "cvz_fluo_cell", "flywing", "enseg", "neurips_cellseg"]
-DATASETS_2D_LM_CELL_SUPPLEMENTARY = ["dememseg", "pan_multiplex", "xenium_cells"]
+DATASETS_2D_LM_CELL_SUPPLEMENTARY = ["dememseg", "pan_multiplex", "xenium_cells", "deepbacs_fluorescence"]
 DATASETS_2D_LM_CELL_OOD = ["covid_if_cells", "medussa", "hpa"]
 DATASETS_2D_LM_NUCLEUS_ID = [
     "dsb", "cvz_fluo_dapi", "dynamicnuclearnet", "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei",
@@ -126,8 +126,8 @@ DATASETS_2D_LM_NUCLEUS_OOD = [
 # rather than an independent OOD collection until the patient overlap is resolved.
 DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM = ["spatch_dapi"]
 DATASETS_2D_LM_LABEL_FREE_ID = [
-    "livecell", "deepbacs", "omnipose_bact_phase", "yeaz", "neurips_cellseg", "cell_acdc", "cellular", "vicar",
-    "microbeseg",
+    "livecell", "deepbacs_label_free", "omnipose_bact_phase", "yeaz", "neurips_cellseg", "cell_acdc", "cellular",
+    "vicar", "microbeseg",
 ]
 DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY = [
     "orgasegment", "organoidnet", "omnipose_worm", "omnipose_worm_high_res", "bccd", "cisd", "orgline", "organoid",
@@ -167,7 +167,7 @@ DATASETS_2D = DATASETS_2D_LM + DATASETS_HP + DATASETS_2D_EM
 # defines the ground truth, so it is measured, never tuned.
 GT_MIN_SIZE_2D = {
     "livecell": 50, "dsb": 10,
-    "deepbacs": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
+    "deepbacs_label_free": 50, "deepbacs_fluorescence": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
     "u20s": 10, "vicar": 25, "yeaz": 10,
 }
 
@@ -227,6 +227,8 @@ DATASETS_SUPPLEMENTARY = (
 VAL_SPLITS = {
     name: "val" for name in (
         DATASETS_2D_LM_CELL_ID + DATASETS_2D_LM_NUCLEUS_ID + DATASETS_2D_LM_LABEL_FREE_ID
+        + DATASETS_2D_LM_CELL_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY
+        + DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY
         + ["plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "embedseg_organoid", "embedseg_platy_nuclei",
            "celegans_atlas", "gonuclear", "nucverse3d"]
     )
@@ -450,6 +452,12 @@ def _tiles_from_slide(
     if written < n_tiles:
         raise RuntimeError(f"Only {written} of {n_tiles} tiles with {min_instances} objects found in {slide_path}.")
     return paths
+
+
+def deepbacs_is_fluorescence(path: str) -> bool:
+    """Whether a DeepBacs 'mixed' image is fluorescence: the Nile Red S. aureus and the B. subtilis families."""
+    name = os.path.basename(path)
+    return name.endswith("_NR.tif") or name.startswith(("train", "test"))
 
 
 def _loader_val_part(raw_paths, label_paths, split):
@@ -765,7 +773,9 @@ def _get_2d_lm_data_paths(
             )
         return (*_sorted_pairs(img, gt), None, None)
 
-    if dataset_name == "deepbacs":
+    if dataset_name in ("deepbacs_label_free", "deepbacs_fluorescence"):
+        # The 'mixed' archive pools S. aureus in brightfield and Nile Red fluorescence, B. subtilis in membrane
+        # fluorescence and E. coli in phase contrast; the file name families tell the modalities apart.
         img_folder, label_folder = lm.deepbacs.get_deepbacs_paths(
             path=os.path.join(p, "deepbacs"), bac_type="mixed", split="test" if split == "test" else "train",
             download=download,
@@ -774,6 +784,9 @@ def _get_2d_lm_data_paths(
         gt = sorted(glob(os.path.join(label_folder, "*.tif")))
         if split != "test":
             img, gt = _loader_val_part(img, gt, split)
+        keep = [deepbacs_is_fluorescence(path) == (dataset_name == "deepbacs_fluorescence") for path in img]
+        img = [path for path, k in zip(img, keep) if k]
+        gt = [path for path, k in zip(gt, keep) if k]
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "orgasegment":

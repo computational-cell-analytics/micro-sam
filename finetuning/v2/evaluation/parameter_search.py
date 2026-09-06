@@ -661,7 +661,8 @@ REGISTRY_EXPERIMENT_FOLDER = (
 
 # Every dataset requested for the registry sweep that has a validation split to tune on.
 REGISTRY_DATASETS = [
-    "livecell", "tissuenet", "dynamicnuclearnet", "deepbacs", "yeaz", "covid_if_cells", "covid_if_nuclei", "deepseas",
+    "livecell", "tissuenet", "dynamicnuclearnet", "deepbacs_label_free", "deepbacs_fluorescence", "yeaz",
+    "covid_if_cells", "covid_if_nuclei", "deepseas",
     "neurips_cellseg", "gonuclear", "platynereis_nuclei", "cremi", "snemi", "humanneurons",
     # Histopathology, tuned on the pools of common.VAL_SPLITS (loader val splits, or train where none exists).
     "cpm17", "glysac", "histo_miner", "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc", "monuseg",
