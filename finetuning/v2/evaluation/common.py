@@ -39,6 +39,9 @@ from micro_sam.v2.datasets.generalist_loader import (
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 
+# Derived evaluation data (slide tiles, movie frames) is cached here, since not every dataset folder is writable.
+EVAL_CACHE_ROOT = os.path.join(DATA_ROOT, "eval_cache")
+
 _MODELS_DIR = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2"
 
 # The pretrained SAM2 backbones. Only SAM2.1 is supported by micro_sam.v2.
@@ -196,15 +199,15 @@ VAL_SPLITS = {
     )
 }
 VAL_SPLITS.update({
-    "covid_if_cells": None, "covid_if_nuclei": None, "medussa": "train", "cardioblast_nuclei": "train",
+    "covid_if_cells": "val", "covid_if_nuclei": "val", "medussa": "train", "cardioblast_nuclei": "train",
     "hela_cytonuc": "val", "arvidsson": "val", "mndino": "val", "cellapp": "train", "deepseas": "train",
     "dic_hepg2": "val", "bac_mother": "val", "plantseg_ovules": "val", "cshaper": "train", "mouse_embryo": "train",
     "wing_disc": None, "embedseg_mouse_skull": None, "embedseg_platy_ish": None, "nis3d": None,
     "platynereis_nuclei": None, "humanneurons": None,
 })
 
-# Volumes whose tuning data is the first slices of the blind test volume, as (file name, z-slab), following the
-# loader; the evaluation scores the whole volume. nucverse3d holds separate tuning volumes for its liver
+# Volumes whose tuning data is a z-slab of the blind test volume, as (file name, z-slab), following the loader;
+# the evaluation scores the whole volume. nucverse3d holds separate tuning volumes for its liver
 # collections and a slab for drosophila_glia, see _get_3d_lm_data_paths.
 LM_VAL_Z_SLABS = {
     "wing_disc": {f"{name}.h5": WING_DISC_VAL_Z for name in WING_DISC_TEST_VOLUMES},
@@ -352,8 +355,9 @@ def _frames_from_movie(raw_path: str, label_path: str, out_dir: str, stride: int
     import h5py
     import tifffile
 
-    with tifffile.TiffFile(raw_path) as f:
-        n_frames = f.series[0].shape[0]
+    # One cardioblast movie carries more raw than label frames, so the frame range follows the labels.
+    with tifffile.TiffFile(raw_path) as f, tifffile.TiffFile(label_path) as g:
+        n_frames = min(f.series[0].shape[0], g.series[0].shape[0])
     frames = range(0, n_frames, stride)
     paths = [os.path.join(out_dir, f"frame_{t:04d}.h5") for t in frames]
     if all(os.path.exists(path) for path in paths):
@@ -432,7 +436,7 @@ LM_IMAGE_CHANNELS = {
 def select_channels(image: np.ndarray, dataset_name: str) -> np.ndarray:
     """Pick the channels of a channel-last 2d image the model was trained on, see LM_IMAGE_CHANNELS."""
     channels = LM_IMAGE_CHANNELS.get(dataset_name)
-    if channels is None:
+    if channels is None or image.ndim == 2:
         if image.ndim == 3 and image.shape[-1] == 2:
             image = np.concatenate([image, np.zeros_like(image[..., :1])], axis=-1)
         return image
@@ -642,7 +646,7 @@ def _get_2d_lm_data_paths(
             slide = lm.xenium.get_xenium_paths(path=os.path.join(p, "xenium"), sample=[sample], download=download)[0]
             paths.extend(_tiles_from_slide(
                 slide, ("raw/dapi", "raw/stack", "labels/nuclei", "labels/cells"), "labels/nuclei",
-                os.path.join(p, "xenium", "eval_tiles", sample), n_tiles=60 if split == "test" else 20,
+                os.path.join(EVAL_CACHE_ROOT, "xenium", sample), n_tiles=60 if split == "test" else 20,
             ))
         if dataset_name == "xenium_cells":
             return paths, paths, "raw/stack", "labels/cells"
@@ -747,7 +751,7 @@ def _get_2d_lm_data_paths(
             movie = cell_acdc_movie(raw_path)
             if movie in movies:
                 paths.extend(_frames_from_movie(
-                    raw_path, label_path, os.path.join(p, "cell_acdc", "eval_frames", movie.replace("/", "_")),
+                    raw_path, label_path, os.path.join(EVAL_CACHE_ROOT, "cell_acdc", movie.replace("/", "_")),
                     stride=20,
                 ))
         return paths, paths, "raw", "labels"
@@ -841,7 +845,7 @@ def _get_2d_lm_data_paths(
         for raw_path, label_path in zip(img, gt):
             movie = os.path.splitext(os.path.basename(raw_path))[0]
             paths.extend(_frames_from_movie(
-                raw_path, label_path, os.path.join(p, "cardioblast_nuclei", "eval_frames", split, movie), stride=35,
+                raw_path, label_path, os.path.join(EVAL_CACHE_ROOT, "cardioblast_nuclei", split, movie), stride=35,
             ))
         return paths, paths, "raw", "labels"
 

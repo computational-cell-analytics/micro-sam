@@ -239,8 +239,8 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2"]},
         }
 
-    # Mouse-Skull and Platynereis-ISH train on the official train volumes; the first slices of the official test
-    # volume validate and the whole test volume is the blind test. Platynereis-Nuclei and the organoid cells are
+    # Mouse-Skull and Platynereis-ISH train on the official train volumes; a slab of the official test volume
+    # validates and the whole test volume is the blind test. Platynereis-Nuclei and the organoid cells are
     # time-lapses and are split along time.
     embedseg_root = os.path.join(input_path, "embedseg")
     platy_nuclei_raw, platy_nuclei_labels = datasets.embedseg_data.get_embedseg_paths(
@@ -288,7 +288,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
 
     # 5. NIS3D (nucleus segmentation in light-sheet microscopy images)
     # NOTE: Only the Drosophila volumes are used, the others carry giant unannotated-region instances. Drosophila_2
-    # (official train) trains, the first slices of Drosophila_1 (official test) validate and the whole volume is blind.
+    # (official train) trains, the last slices of Drosophila_1 (official test) validate and the whole volume is blind.
     nis3d_kwargs = {"path": os.path.join(input_path, "nis3d"), "split_type": "cross-image"}
 
     train_raw_paths, train_label_paths = datasets.nis3d.get_nis3d_paths(split="train", **nis3d_kwargs)
@@ -2215,9 +2215,9 @@ NUCVERSE_VAL_VOLUMES = {
 NUCVERSE_GLIA_VAL_VOLUME = "C2_M01.h5"
 NUCVERSE_GLIA_VAL_Z = slice(0, 11)  # of 53
 
-# Where a blind test volume also validates, its first 20 % of slices are the validation region.
-NIS3D_VAL_Z = slice(0, 40)  # Drosophila_1, of 198
-EMBEDSEG_VAL_Z = {"Mouse-Skull-Nuclei-CBG": slice(0, 25), "Platynereis-ISH-Nuclei-CBG": slice(0, 21)}  # of 125 / 105
+# Where a blind test volume also validates, a 20 % slab of its slices is the validation region.
+NIS3D_VAL_Z = slice(158, 198)  # Drosophila_1, of 198; the first slices hold almost no nuclei in the centre
+EMBEDSEG_VAL_Z = {"Mouse-Skull-Nuclei-CBG": slice(100, 125), "Platynereis-ISH-Nuclei-CBG": slice(0, 21)}  # of 125 / 105
 
 # EmbedSeg Platynereis-Nuclei is one time-lapse of 9 volumes; timepoint 300 validates, 350 is blind.
 EMBEDSEG_PLATY_NUCLEI_TRAIN_TIMEPOINTS = slice(0, 7)
