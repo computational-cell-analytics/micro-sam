@@ -36,10 +36,8 @@ CHECKS = {
     "points+boxes": ("points+boxes", {}),
     "points+boxes/mask": ("points+boxes", {"conditioning": "mask"}),
     "points+boxes/ungated": ("points+boxes", {"min_consistency": None, "max_foreign_overlap": None}),
-    "recover": ("recover", {}),
-    "points+boxes+recover": ("points+boxes+recover", {}),
 }
-DEFAULT_MODES = ("none", "boxes", "points+boxes", "points+boxes/mask", "recover")
+DEFAULT_MODES = ("none", "boxes", "points+boxes", "points+boxes/mask")
 
 
 def _load(path, key):
@@ -84,8 +82,7 @@ def _report(name, segmentation, labels, stats, seconds, baseline):
     print(line)
     interesting = (
         "scored_candidates", "propagation_passes", "propagated_frame_steps", "refined_candidates",
-        "replaced_candidates", "gated_consistency", "gated_foreign", "recovery_candidates",
-        "recovered_candidates",
+        "replaced_candidates", "gated_consistency", "gated_foreign",
     )
     print(f"  {'':<24} " + "  ".join(f"{key}={stats[key]}" for key in interesting if key in stats))
 

@@ -100,10 +100,12 @@ SAMPLE_COUNTS_2D_HOLDOUT = {
     "dic_hepg2": 43,
 }
 HOLDOUT_REUSED_DATASETS = ("deepbacs",)
-# A training-only 2d subset drawn from the validation splits of datasets outside the benchmark. It
-# widens what a learned selector sees, and its datasets stay outside the primary and holdout scores,
-# so a selector fitted on it is still confirmed on the same holdout as before. Counts are what the
-# validation pools hold, capped so that no single dataset dominates the extra rows.
+# A 2d subset drawn from the validation splits of datasets outside the primary benchmark. It was the
+# training set of the (since refuted and removed) learned selectors and, together with the primary
+# datasets, forms the eleven-dataset development corpus of the 2026-09 structural campaign. Its datasets
+# stay outside the primary and holdout scores. Counts are what the validation pools hold, capped so that
+# no single dataset dominates the extra rows. The subset's 'role' string below is part of the manifest
+# identity and therefore frozen.
 TRAINING_EXTRA_DATASETS = ("yeaz", "neurips_cellseg", "puma", "tnbc", "covid_if", "deepseas")
 SAMPLE_COUNTS_2D_TRAINING_EXTRA = {
     "yeaz": 40,
@@ -152,19 +154,8 @@ VOLUME_DIAGNOSTICS = (
 )
 # Only a refinement run reports these; they read 0 for every other run.
 IMAGE_DIAGNOSTICS = (
-    "multimask_alternatives", "multimask_changed_from_iou",
-    "refinement_eligible_instances", "uncertainty_selected_instances",
-    "refined_instances", "replaced_instances", "gated_consistency", "gated_foreign",
-    # The label-free refinement rules (isolated gate, box fallback, neighbour protection, negatives used).
-    "refinement_isolated_instances", "refinement_fallback_instances", "refinement_protected_pixels",
-    "refinement_negatives",
-    # The structural opt-ins (fusion, arbitration, residual recovery); 0 for every run without them.
-    "fusion_fallback_added", "fusion_conflicts", "fusion_conflicts_split", "arbitration_dropped",
-    "residual_prompts", "residual_added",
-)
-IMAGE_TIMINGS = (
-    "multimask_feature_seconds", "multimask_scorer_seconds",
-    "multimask_transfer_seconds", "multimask_record_seconds",
+    "refinement_eligible_instances", "refined_instances", "replaced_instances", "gated_consistency",
+    "gated_foreign", "refinement_negatives", "dropped_negatives",
 )
 
 IMPLEMENTATION_FILES = (

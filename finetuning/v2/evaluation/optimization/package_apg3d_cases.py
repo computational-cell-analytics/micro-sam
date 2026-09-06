@@ -3,9 +3,10 @@
 Reads the per-crop results of the 3d benchmark (`benchmark_apg_3d.py run --save-outputs`) for two checkpoints
 (joint/v2 and joint/v4 geodesic) and two configurations (volume defaults, `points+boxes` refinement), ranks the
 crops of every dataset by (a) the refinement's effect on v4 and (b) the checkpoint's effect with the defaults, and
-writes one HDF5 file per selected crop with the raw volume, the ground truth, the four segmentations and the
-anchors (all proposed, the scored ones, the merged ones) of each run, plus a `cases.csv` index. Open a file with
-`view_apg3d_cases.py <file.h5>`.
+writes one HDF5 file per selected crop with the raw volume, the ground truth and the four segmentations, plus a
+`cases.csv` index. Outputs written on the `apg-optim-fable` branch also carry the anchors of each run (all
+proposed, the scored ones, the merged ones); they are packaged when present, the current runner does not record
+them. Open a file with `view_apg3d_cases.py <file.h5>`.
 
 Usage:
     python package_apg3d_cases.py --subset primary --n 1
@@ -46,8 +47,12 @@ SCORE_KEYS = (
 
 
 def load_run(checkpoint: str, config: str, subset: str) -> tuple:
-    """The run directory and the per-crop table of one (checkpoint, configuration) on a subset."""
-    from benchmark_apg_3d import load_volume_config, run_dir
+    """The run directory and the per-crop table of one (checkpoint, configuration) on a subset.
+
+    Like `benchmark_apg_3d.aggregate`, the crops are read from the run directory and its siblings under
+    other implementation checksums, the current implementation winning when a crop was run under both.
+    """
+    from benchmark_apg_3d import load_volume_config, run_dir, sibling_run_dirs
 
     campaign_root, checkpoint_root = CHECKPOINTS[checkpoint]
     if checkpoint_root is not None:
@@ -55,12 +60,28 @@ def load_run(checkpoint: str, config: str, subset: str) -> tuple:
     else:
         os.environ.pop("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", None)
     config_name, params_3d = load_volume_config(CONFIGS[config])
-    path = run_dir(campaign_root, subset, config_name, params_3d, {})
-    rows = [json.load(open(crop)) for crop in sorted((path / "crops").glob("*.json"))]
+    path = run_dir(campaign_root, subset, config_name, params_3d)
+    rows: Dict[str, dict] = {}
+    for sibling in sibling_run_dirs(path):
+        for crop in sorted((sibling / "crops").glob("*.json")):
+            row = json.load(open(crop))
+            if row["sample_id"] not in rows or sibling == path:
+                rows[row["sample_id"]] = row
     if not rows:
-        raise SystemExit(f"No crop results under {path}.")
-    table = pd.DataFrame(rows).set_index("sample_id")
+        raise SystemExit(f"No crop results under {path} or its siblings.")
+    table = pd.DataFrame(list(rows.values())).set_index("sample_id")
     return path, table
+
+
+def _output_path(run_path: Path, stem: str) -> Optional[Path]:
+    """The saved outputs of one crop, from the run directory or the sibling that holds them."""
+    from benchmark_apg_3d import sibling_run_dirs
+
+    for candidate in (run_path, *sibling_run_dirs(run_path)):
+        output = candidate / "outputs" / f"{stem}.npz"
+        if output.exists():
+            return output
+    return None
 
 
 def select_cases(tables: Dict[tuple, pd.DataFrame], n: int) -> pd.DataFrame:
@@ -114,9 +135,9 @@ def package_case(
             f.create_dataset("valid", data=valid.astype("uint8"), compression="gzip", compression_opts=4)
         for (checkpoint, config), run_path in runs.items():
             name = f"{checkpoint}_{config}"
-            output = run_path / "outputs" / f"{stem}.npz"
-            if not output.exists():
-                print(f"  missing outputs for {name}: {output}")
+            output = _output_path(run_path, stem)
+            if output is None:
+                print(f"  missing outputs for {name}: {run_path / 'outputs' / f'{stem}.npz'}")
                 continue
             with np.load(output) as arrays:
                 f.create_dataset(

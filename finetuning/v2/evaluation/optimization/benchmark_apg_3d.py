@@ -1,15 +1,13 @@
 """Run one APG configuration on the crops of an `apg3d_manifest` subset, one crop per invocation.
 
-Each crop is scored, attributed and timed on its own so that a Slurm array can spread a subset over
-many MIG slices, and `aggregate` folds the per-crop results into a summary with per-crop bootstrap
-confidence intervals, a family macro and seen/unseen macros. `--serial` runs every crop of a subset
-in one process, which is what a timing trial needs.
+Each crop is scored and timed on its own so that a Slurm array can spread a subset over many MIG
+slices, and `aggregate` folds the per-crop results into a summary with per-crop bootstrap confidence
+intervals, a family macro and seen/unseen macros. `--serial` runs every crop of a subset in one
+process, which is what a timing trial needs.
 
-Recall attribution per crop, from the generation trace (`generate(keep_trace=True)`):
-  seeded_<ladder>: ground-truth objects containing a candidate anchor of that density ladder,
-  anchor_kept:     objects containing the anchor of a candidate that survived the anchor scoring,
-  tracked:         objects some propagated record overlaps at IoU >= 0.5 before the merge,
-  merged:          objects matched in the output; genuine_misses excludes the crop-severed ones.
+Object counts per crop, next to the metrics: gt_objects, severed_objects (cut by the crop border),
+merged (ground-truth objects matched in the output) and unmatched / genuine_misses (the misses, the
+latter excluding the crop-severed ones).
 
 Usage examples:
     python benchmark_apg_3d.py run --subset primary --config configs/apg3d_defaults.json --sample-index 3
@@ -20,7 +18,6 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import platform
 import sys
@@ -45,12 +42,10 @@ from optimization.benchmark_apg_optimization import (  # noqa
 )
 from optimization.apg3d_manifest import CAMPAIGN_ROOT, load_manifest, load_normalized_source, load_sample  # noqa
 
-DEFAULT_LADDERS = ((1.5, 10.0), (1.0, 3.0, 10.0), (0.5, 2.0, 10.0))
 LEGACY_FAMILIES = ("celegans", "embedseg", "gonuclear", "cremi", "snemi")
 STATS_KEYS = (
     "proposed_candidates", "scored_candidates", "unique_anchor_slices", "propagation_passes",
     "propagated_candidates", "pruned_candidates", "propagated_frame_steps", "early_stopped_frame_steps",
-    "filtered_candidates", "budgeted_candidates", "candidate_scorer_seconds",
     "refined_candidates", "replaced_candidates", "gated_consistency", "gated_foreign", "refinement_negatives",
 )
 BOOTSTRAP_SAMPLES = 2000
@@ -60,7 +55,6 @@ VOLUME_PARAM_KEYS = (
     "candidate_threshold", "foreground_threshold", "n_iter", "dt", "sigma", "min_candidate_size",
     "score_threshold", "max_overlap", "min_size", "max_size_factor", "refinement", "refinement_kwargs",
     "multimasking", "n_objects_per_pass", "early_stop_patience", "propagation_waves", "batch_size", "n_threads",
-    "candidate_scorer_threshold", "candidate_order", "candidate_budget",
 )
 
 
@@ -98,25 +92,16 @@ def load_volume_config(path: Optional[Path], model_type: str = "hvit_t") -> Tupl
     return str(config.get("name", path.stem)), resolve_volume_params(config.get("params_3d", {}), model_type)
 
 
-def _ladder_key(ladder: Sequence[float]) -> str:
-    return "seeded_" + "_".join(f"{value:g}" for value in ladder).replace(".", "p")
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
-def run_identity(config_name: str, params_3d: Dict[str, Any], artifacts: Dict[str, Path]) -> str:
-    identity = {
-        "params_3d": params_3d,
-        "artifacts": {name: _sha256(path) for name, path in sorted(artifacts.items())},
-    }
+def run_identity(config_name: str, params_3d: Dict[str, Any]) -> str:
+    # 'artifacts' is a frozen empty field: the learned artifacts it once recorded are gone, but keeping
+    # the key leaves the run-directory family of a configuration intact, so the historical crops of the
+    # campaign still aggregate with the current ones.
+    identity = {"params_3d": params_3d, "artifacts": {}}
     return f"{config_name}-{_content_checksum(identity)[:12]}-{_implementation_checksum()[:12]}"
 
 
-def run_dir(campaign_root: Path, subset: str, config_name: str, params_3d: Dict[str, Any],
-            artifacts: Dict[str, Path]) -> Path:
-    return campaign_root / "runs" / subset / run_identity(config_name, params_3d, artifacts)
+def run_dir(campaign_root: Path, subset: str, config_name: str, params_3d: Dict[str, Any]) -> Path:
+    return campaign_root / "runs" / subset / run_identity(config_name, params_3d)
 
 
 def sibling_run_dirs(run_path: Path) -> List[Path]:
@@ -131,74 +116,17 @@ def sibling_run_dirs(run_path: Path) -> List[Path]:
 
 
 # ----------------------------------------------------------------------------------------------
-# attribution
+# object counts
 
 
-def _objects_containing(labels: np.ndarray, anchors_zyx: np.ndarray) -> set:
-    if len(anchors_zyx) == 0:
-        return set()
-    valid = np.all((anchors_zyx >= 0) & (anchors_zyx < np.asarray(labels.shape)), axis=1)
-    hits = labels[tuple(anchors_zyx[valid].T)]
-    return set(int(value) for value in np.unique(hits) if value != 0)
-
-
-def _tracked_objects(labels: np.ndarray, records: List[dict], iou_threshold: float = 0.5) -> set:
-    """Ground-truth ids some pre-merge record overlaps at IoU >= threshold."""
-    sizes = np.bincount(labels.ravel())
-    tracked = set()
-    for record in records:
-        mask = record["segmentation"]
-        area = int(mask.sum())
-        if area == 0:
-            continue
-        overlap = np.bincount(labels[record["bounding_box"]][mask], minlength=len(sizes))
-        overlap[0] = 0
-        best = int(overlap.argmax())
-        if best == 0:
-            continue
-        intersection = int(overlap[best])
-        iou = intersection / (area + int(sizes[best]) - intersection)
-        if iou >= iou_threshold:
-            tracked.add(best)
-    return tracked
-
-
-def _anchors_of(prompts: Optional[dict]) -> np.ndarray:
-    if prompts is None:
-        return np.zeros((0, 3), dtype="int64")
-    points = np.asarray(prompts["points"])[:, 0]
-    frames = np.asarray(prompts["frames"])
-    return np.stack([frames, points[:, 1].astype("int64"), points[:, 0].astype("int64")], axis=1)
-
-
-def attribute_recall(
-    segmenter, labels: np.ndarray, segmentation: np.ndarray, trace: Optional[dict], ladders: Sequence[Sequence[float]],
-    spacing: Optional[tuple],
-) -> Dict[str, Any]:
-    from micro_sam.v2.automatic_prompt_generation import derive_volume_prompts
-
+def object_counts(labels: np.ndarray, segmentation: np.ndarray) -> Dict[str, Any]:
+    """Ground-truth object counts of one crop: all, crop-severed, matched in the output, and the misses."""
     gt_ids = set(int(value) for value in np.unique(labels) if value != 0)
     _, severed_ids = severed_objects(labels)
     severed = set(int(value) for value in severed_ids)
     genuine = gt_ids - severed
-    result = {"gt_objects": len(gt_ids), "severed_objects": len(severed)}
-    prediction = segmenter._prediction
-    for ladder in ladders:
-        prompts = derive_volume_prompts(
-            prediction[0], prediction[1:], model_type=segmenter._model_type, candidate_threshold=tuple(ladder),
-            spacing=spacing,
-        )
-        result[_ladder_key(ladder)] = len(_objects_containing(labels, _anchors_of(prompts)) & genuine)
-        result[_ladder_key(ladder).replace("seeded", "candidates")] = 0 if prompts is None else len(prompts["points"])
-    if trace is not None:
-        candidates = trace["candidates"]
-        anchors = np.array(
-            [(c["frame"], int(c["point"][1]), int(c["point"][0])) for c in candidates], dtype="int64",
-        ).reshape(-1, 3)
-        result["anchor_kept"] = len(_objects_containing(labels, anchors) & genuine)
-        result["tracked"] = len(_tracked_objects(labels, trace["records"]) & genuine)
     unmatched = set(int(value) for value in np.unique(unmatched_objects(labels, segmentation)) if value != 0)
-    result["merged"] = len(genuine - unmatched)
+    result = {"gt_objects": len(gt_ids), "severed_objects": len(severed), "merged": len(genuine - unmatched)}
     result["unmatched"], result["genuine_misses"] = genuine_misses(labels, segmentation)
     return result
 
@@ -207,41 +135,19 @@ def attribute_recall(
 # running
 
 
-def _build(model_type: str, joint_checkpoint: str, device: str, export_root: Path, artifacts: Dict[str, Path]):
+def _build(model_type: str, joint_checkpoint: str, device: str, export_root: Path):
     checkpoint_id = checkpoint_checksum(get_joint_checkpoint(model_type, joint_checkpoint))
     segmenter = build_apg_segmenter(
         model_type, 3, device, joint_checkpoint=joint_checkpoint, joint_checksum=checkpoint_id,
         export_root=str(export_root),
     )
-    if "volume_candidate_scorer" in artifacts:
-        from optimization.train_apg_3d_filter import load_volume_candidate_scorer
-        segmenter.set_multimask_models(
-            volume_candidate_scorer=load_volume_candidate_scorer(artifacts["volume_candidate_scorer"], device=device),
-        )
     return segmenter, checkpoint_id
 
 
-def _save_outputs(path: Path, segmentation: np.ndarray, trace: Optional[dict]) -> None:
-    """Keep what a visual inspection needs: the segmentation, every proposed anchor and which ones survived.
-
-    Anchors are (z, y, x) voxel coordinates of the density-ladder candidates; 'scored_prompt_index' lists
-    the anchors whose candidates passed the anchor scoring and were propagated, 'merged_prompt_index' those
-    whose track made it into the output (in output instance id order, 'merged_instance_id').
-    """
+def _save_outputs(path: Path, segmentation: np.ndarray) -> None:
+    """Keep what a visual inspection needs: the crop's segmentation."""
     dtype = "uint16" if segmentation.max() < np.iinfo("uint16").max else "uint32"
     arrays = {"segmentation": segmentation.astype(dtype)}
-    if trace is not None:
-        arrays["anchors"] = _anchors_of(trace.get("prompts"))
-        candidates = trace.get("candidates") or []
-        arrays["scored_prompt_index"] = np.array(
-            [int(candidate.get("prompt_index", -1)) for candidate in candidates], dtype="int64",
-        )
-        records, matches = trace.get("records") or [], trace.get("matches") or {}
-        arrays["merged_instance_id"] = np.array(sorted(matches), dtype="int64")
-        arrays["merged_prompt_index"] = np.array(
-            [int(records[matches[instance_id]].get("prompt_index", -1)) for instance_id in sorted(matches)],
-            dtype="int64",
-        )
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp.npz")
     np.savez_compressed(tmp, **arrays)
@@ -250,7 +156,7 @@ def _save_outputs(path: Path, segmentation: np.ndarray, trace: Optional[dict]) -
 
 def run_crop(
     segmenter, sample: Dict[str, Any], raw: np.ndarray, labels: np.ndarray, valid: Optional[np.ndarray],
-    params_3d: Dict[str, Any], device: str, ladders: Sequence[Sequence[float]], save_dir: Optional[Path] = None,
+    params_3d: Dict[str, Any], device: str, save_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     segmenter.clear_state()
     cuda_device = torch.device(device) if device.startswith("cuda") else None
@@ -260,7 +166,7 @@ def run_crop(
     started = time.perf_counter()
     segmenter.initialize(raw, ndim=3, **VOLUME_SPEED_OPTIONS)
     initialized = time.perf_counter()
-    segmentation = segmenter.generate(**params_3d, spacing=spacing, keep_trace=True).astype("uint32")
+    segmentation = segmenter.generate(**params_3d, spacing=spacing).astype("uint32")
     generated = time.perf_counter()
     if valid is not None:
         segmentation[~valid] = 0
@@ -282,12 +188,9 @@ def run_crop(
     }
     stats = getattr(segmenter, "_last_generation_stats", {}) or {}
     row.update({key: stats.get(key, 0) for key in STATS_KEYS})
-    row.update(attribute_recall(segmenter, labels, segmentation, segmenter._last_generation_trace, ladders, spacing))
+    row.update(object_counts(labels, segmentation))
     if save_dir is not None:
-        _save_outputs(
-            save_dir / f"{sample['sample_id'].replace(':', '_')}.npz", segmentation, segmenter._last_generation_trace,
-        )
-    segmenter._last_generation_trace = None
+        _save_outputs(save_dir / f"{sample['sample_id'].replace(':', '_')}.npz", segmentation)
     return row
 
 
@@ -297,15 +200,13 @@ def _write_crop(run_path: Path, row: Dict[str, Any]) -> None:
 
 
 def _write_metadata(run_path: Path, manifest: Dict[str, Any], config_name: str, params_3d: Dict[str, Any],
-                    artifacts: Dict[str, Path], model_type: str, joint_checkpoint: str, checkpoint_id: str,
-                    device: str, ladders: Sequence[Sequence[float]], status: str, extra: Optional[dict] = None) -> None:
+                    model_type: str, joint_checkpoint: str, checkpoint_id: str, device: str, status: str,
+                    extra: Optional[dict] = None) -> None:
     metadata = {
         "campaign": "apg3d",
         "status": status,
         "config_name": config_name,
         "params_3d": params_3d,
-        "artifacts": {name: str(Path(path).resolve()) for name, path in artifacts.items()},
-        "artifact_checksums": {name: _sha256(path) for name, path in artifacts.items()},
         "manifest_checksum": manifest["manifest_checksum"],
         "subset": manifest["subset"],
         "datasets": sorted({sample["dataset"] for sample in manifest["samples"]}),
@@ -318,7 +219,6 @@ def _write_metadata(run_path: Path, manifest: Dict[str, Any], config_name: str, 
         "platform": platform.platform(),
         "torch": torch.__version__,
         "git_revision": _git_revision(),
-        "ladders": [list(ladder) for ladder in ladders],
         **(extra or {}),
     }
     _atomic_write_json(run_path / "metadata.json", metadata)
@@ -327,10 +227,7 @@ def _write_metadata(run_path: Path, manifest: Dict[str, Any], config_name: str, 
 def run(args: argparse.Namespace) -> None:
     manifest = load_manifest(args.subset, args.campaign_root, args.data_root)
     config_name, params_3d = load_volume_config(args.config, args.model_type)
-    artifacts = {}
-    if args.volume_candidate_scorer_artifact is not None:
-        artifacts["volume_candidate_scorer"] = Path(args.volume_candidate_scorer_artifact)
-    run_path = run_dir(args.campaign_root, args.subset, config_name, params_3d, artifacts)
+    run_path = run_dir(args.campaign_root, args.subset, config_name, params_3d)
     samples = manifest["samples"]
     if args.sample_index is not None:
         samples = [samples[args.sample_index]]
@@ -347,14 +244,13 @@ def run(args: argparse.Namespace) -> None:
     if not pending:
         print(f"All {len(samples)} crop(s) already done in {run_path}.")
         return
-    ladders = tuple(tuple(ladder) for ladder in args.ladders) if args.ladders else DEFAULT_LADDERS
     segmenter, checkpoint_id = _build(
-        args.model_type, args.joint_checkpoint, args.device, DEFAULT_OUTPUT_ROOT / "model_exports", artifacts,
+        args.model_type, args.joint_checkpoint, args.device, DEFAULT_OUTPUT_ROOT / "model_exports",
     )
     if not (run_path / "metadata.json").exists():
         _write_metadata(
-            run_path, manifest, config_name, params_3d, artifacts, args.model_type, args.joint_checkpoint,
-            checkpoint_id, args.device, ladders, status="running",
+            run_path, manifest, config_name, params_3d, args.model_type, args.joint_checkpoint,
+            checkpoint_id, args.device, status="running",
         )
     source_cache: Dict[tuple, np.ndarray] = {}
     started = time.perf_counter()
@@ -365,7 +261,7 @@ def run(args: argparse.Namespace) -> None:
             source_cache[key] = load_normalized_source(sample, args.data_root)
         raw, labels, valid = load_sample(sample, args.data_root, source_cache[key])
         row = run_crop(
-            segmenter, sample, raw, labels, valid, params_3d, args.device, ladders,
+            segmenter, sample, raw, labels, valid, params_3d, args.device,
             save_dir=(run_path / "outputs") if args.save_outputs else None,
         )
         row["trial_id"] = args.trial_id
@@ -400,9 +296,8 @@ def summarize(samples: pd.DataFrame) -> pd.DataFrame:
     metric = "msa"
     rows = []
     numeric = [column for column in samples.columns if pd.api.types.is_numeric_dtype(samples[column])]
-    sums = [column for column in numeric if column.startswith(("seeded_", "candidates_")) or column in (
-        "gt_objects", "severed_objects", "anchor_kept", "tracked", "merged", "unmatched", "genuine_misses",
-        "predicted_objects", "candidates", "tracks", "slice_instances", "chains", "hybrid_prompts", *STATS_KEYS,
+    sums = [column for column in numeric if column in (
+        "gt_objects", "severed_objects", "merged", "unmatched", "genuine_misses", "predicted_objects", *STATS_KEYS,
     )]
     per_dataset = {}
     for dataset, group in samples.groupby("dataset", sort=True):
@@ -449,10 +344,7 @@ def summarize(samples: pd.DataFrame) -> pd.DataFrame:
 def aggregate(args: argparse.Namespace) -> None:
     manifest = load_manifest(args.subset, args.campaign_root, args.data_root)
     config_name, params_3d = load_volume_config(args.config, args.model_type)
-    artifacts = {}
-    if args.volume_candidate_scorer_artifact is not None:
-        artifacts["volume_candidate_scorer"] = Path(args.volume_candidate_scorer_artifact)
-    run_path = run_dir(args.campaign_root, args.subset, config_name, params_3d, artifacts)
+    run_path = run_dir(args.campaign_root, args.subset, config_name, params_3d)
     by_sample: Dict[str, Dict[str, Any]] = {}
     implementations = []
     for sibling in sibling_run_dirs(run_path):
@@ -508,11 +400,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--joint-checkpoint", default="best")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--time-budget-minutes", type=float, default=None)
-    parser.add_argument("--ladders", type=json.loads, default=None, help='JSON, e.g. "[[1.5,10],[1,3,10]]".')
-    parser.add_argument("--volume-candidate-scorer-artifact", type=Path, default=None)
     parser.add_argument(
         "--save-outputs", action="store_true",
-        help="Also store each crop's segmentation and anchors under <run dir>/outputs/, for visual inspection.",
+        help="Also store each crop's segmentation under <run dir>/outputs/, for visual inspection.",
     )
     args = parser.parse_args(argv)
     if args.command == "run":
