@@ -330,3 +330,58 @@ sharper field, or a target with an explicit contact channel), out of scope here.
   every backbone's table), mirrored in the harness (`sparse_pipeline`) and in the cached sweep scorer
   (`parameter_search.score_image_sparse_cached`); tests in `test/test_v2_automatic_segmentation.py`. The
   default path is unchanged; the baselines are rerun under this epoch and checked per sample.
+
+### Look ahead to Phase 5: the dense multicut on the deep EM crops (2026-09-06 21:00)
+
+AIS defaults on the apg3d manifests (epoch `5700c6e0…`): family macro **0.091** primary / 0.109 holdout
+(APG: 0.327 / 0.342). The sparse LM families: celegans_atlas 0.10, gonuclear 0.20 (352 of 726 objects
+split, **1127 background seeds**), embedseg_platy_ish 0.35, embedseg_platy_nuclei 0.23, embedseg_skull 0.10,
+platynereis_nuclei 0.08 (720 background seeds for 127 objects). The dense EM families: cremi CREMI 0.94
+with 22004 instances for 840 objects, cremi_seen 0.40 (27698 / 7469), snemi 0.82 (14066 / 526),
+humanneurons 1.30 (49939 / 1601).
+
+One cremi and one snemi crop by hand: the slice-wise oversegmentation already produces 15104 / 5566
+fragments for 295 / 93 objects (the EM foreground is predicted at 0.71 on average with 29 % of the
+neuron voxels below 0.5, so the seeds shatter every cross-section and most fragment boundaries look like
+membranes: median edge boundary value 0.74 / 0.81), and the multicut at `beta` 0.5 → 0.95 goes from 7400
+to 11456 instances (CREMI 1.02 → 2.08) — in elf's `compute_edge_costs` a **higher beta cuts more**, the
+opposite of the `run_multicut` docstring ("higher values favour more merging"), and `EM_GRID` (0.5-0.8)
+never enters the merging regime (< 0.5). Both the seeding granularity (fewer, larger fragments; the
+boundary filter does not apply, the fragments are not instances) and the beta range are Phase 5 items.
+
+- 2026-09-06 21:05: epoch A1 baselines (`current-defaults`) on v5 primary / training_extra / holdout and
+  apg3d primary / holdout are identical per sample to the epoch `5700c6e0…` runs (755 samples: mSA and
+  instance counts equal, 0 pipeline mismatches); balanced 0.1841 / 0.4183 / 0.1826, apg3d dataset-balanced
+  0.1091 / 0.1221. Filter screens `a1_filter_2d` (job 15767179, 27 tasks) and `a1_filter_3d` (15767180,
+  18 tasks) and the sweeps `a1_sweep_primary` / `a1_sweep_extra` (15767181 / 15767182, grid
+  `configs/ais_grid_lm_v4.json`, 1728 combinations) submitted at 19:55.
+
+## Epoch A1 screen (2026-09-06 21:10, jobs 15767179 / 15767180, reports `ais/reports/a1_filter_*.csv`)
+
+Relative change of mSA against the defaults; "balanced" over the eleven development datasets (2D) or the
+six sparse LM sources of the deep 3D crops (the dense EM sources are untouched by these parameters).
+
+| configuration | 2D dev balanced | up / 11 | worst | 2D holdout (5) | 3D LM primary (6) | 3D LM holdout (6) |
+|---|---:|---:|---:|---:|---:|---:|
+| filter 0.4, travel 25 (defaults otherwise) | **+1.4 %** | **9** | −0.1 % | +1.0 % | **+4.7 %, 5/6 up, passes** | **+9.7 %, 5/6 up, passes** |
+| filter 0.6, travel 25 | +0.9 % | 7 | 0.0 % | +0.5 % | +0.8 % | +4.5 % |
+| travel 400 alone | +0.3 % | 3 | −1.7 % (tnbc) | +2.5 % | +22 % (skull +281 %, platy_ish −6 %, platy_nuclei −6 %) | +19 % |
+| filter 0.4, travel 400 | +1.7 % | 6 | −0.9 % (tissuenet) | **+3.5 %, 5/5 up, passes** | +27 % (2 sources down) | +28 % |
+| filter 0.3, travel 400 | +1.8 % | 6 | −1.1 % | +3.5 % | +32 % | +35 % |
+| filter 0.4, travel 400, min_size 25 | −0.3 % | 3 | −6.7 % (tnbc) | +4.5 % (tissuenet +12 %) | +2.6 % | +2.2 % |
+| filter 0.4, travel 400, foreground 0.6 | −0.9 % | 5 | −6.5 % (dnn) | +1.0 % | +29 % | +27 % |
+
+Per dataset, filter 0.4 at travel 25 (2D): deepseas +23.6 %, dic_hepg2 +10.6 %, deepbacs +4.4 %,
+neurips_cellseg +4.2 %, dynamicnuclearnet +1.4 %, tnbc +0.9 %, puma +0.2 %, covid_if / livecell / yeaz
+0.0 %, tissuenet −0.1 %; 3D primary: embedseg_skull +25 %, platynereis_nuclei +16 %, gonuclear +5 %,
+celegans_atlas +1.4 %, platy_nuclei +0.4 %, platy_ish 0.0 %; 3D holdout: platy_nuclei +35 %, platynereis
++29 %, skull +8 %, celegans +1 %. Travel 400 with the filter reaches +19 % on deepbacs and +18 % on
+deepseas but costs covid_if, tissuenet, tnbc, yeaz 0.5-0.9 % each and, in 3D, the two large EmbedSeg
+nuclei sources 5-7 % (the converged sinks split large nuclei).
+
+Reading: the boundary filter is a generalizing improvement (never below −0.1 % on any of the 22 dataset
+× subset cells, up wherever background seeds exist) but alone it stays under the +2 % balanced bar in
+2D; the travel is the second lever in 3D and on the small-object 2D data and needs a compensating change
+where it splits large objects. The shared-default sweep (`configs/ais_grid_lm_v4.json`, 1728
+combinations over the eleven 2D datasets; a reduced grid over the six 3D LM sources) decides the
+combination.
