@@ -152,11 +152,17 @@ def _em_cell_label_trafo(y, label_trafo, ignore_label=None):
 
 
 def _plantseg_label_trafo(y, data, label_trafo):
-    # Let's reject the samples first.
+    """Map the PlantSeg unannotated regions to ignore and the background id to 0.
+
+    In root, label 1 is the background and label 0 the unannotated deeper tissue. In ovules (with the
+    'label_with_ignore' key), 0 is the background and -1 marks the unannotated regions.
+    """
     if data == "root":
+        ignore = y == 0
         y[y == 1] = 0
     elif data == "ovules":
-        y[y == -1] = 0
+        ignore = y == -1
+        y[ignore] = 0
     else:
         raise ValueError
 
@@ -164,7 +170,8 @@ def _plantseg_label_trafo(y, data, label_trafo):
         return y
 
     y = label_trafo(y)
-
+    fg_channel = 1 if getattr(label_trafo, "instances", False) else 0
+    y[fg_channel][ignore] = FOREGROUND_IGNORE_VALUE
     return y
 
 

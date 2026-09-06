@@ -123,6 +123,29 @@ def _pan_multiplex_tissuenet_order(raw):
     return normalize_raw(_prepare_pan_multiplex_tissuenet_order(raw), axis=(1, 2))
 
 
+def _prepare_cvz_cell_channels(raw):
+    """Reorder the CVZ cell composite from (membrane, membrane, DAPI) to membrane, DAPI, membrane."""
+    raw = to_rgb(raw)
+    return np.stack([raw[0], raw[2], raw[1]]).astype("float32")
+
+
+def _cvz_cell_channels(raw):
+    return normalize_raw(_prepare_cvz_cell_channels(raw), axis=(1, 2))
+
+
+def _minmax_normalize(raw):
+    """Scale every channel to [0, 1] by its minimum and maximum."""
+    raw = raw.astype("float32")
+    lo = raw.min(axis=(1, 2), keepdims=True)
+    hi = raw.max(axis=(1, 2), keepdims=True)
+    return (raw - lo) / (hi - lo + 1e-7)
+
+
+def _minmax_raw_trafo(raw):
+    """Min-max normalization for images whose background covers almost the whole percentile range (BBBC030)."""
+    return _minmax_normalize(_prepare_to_8bit(raw))
+
+
 def _resize_to_512(x, is_label=False):
     """Resize trailing spatial dimensions to longest side 512 and pad bottom/right."""
     from micro_sam.v2.transforms.resize import resize_longest_side_and_pad_spatial_numpy
@@ -479,6 +502,12 @@ def get_random_percentile_normalization(
         augmentation1, axis = _prepare_xenium_cell_channels, (1, 2)
     elif raw_transform is _pan_multiplex_tissuenet_order:
         augmentation1, axis = _prepare_pan_multiplex_tissuenet_order, (1, 2)
+    elif raw_transform is _cvz_cell_channels:
+        augmentation1, axis = _prepare_cvz_cell_channels, (1, 2)
+    elif raw_transform is _minmax_raw_trafo:
+        # BBBC030's background spans about 4 % of the intensity range, so any percentile normalization saturates
+        # the cells; this transform stays min-max and is not randomized.
+        return RawTransform(normalizer=_minmax_normalize, augmentation1=_prepare_to_8bit)
     elif raw_transform is _normalize_percentile:
         augmentation1, axis = None, None
     elif isinstance(raw_transform, partial) and raw_transform.func is _normalize_percentile:

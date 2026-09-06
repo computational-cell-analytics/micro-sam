@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import random
 from glob import glob
@@ -19,13 +20,14 @@ from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, _build_group_map
 from ..transforms.raw import (
     _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile, _resize_raw_to_512, _resize_to_512,
-    _enseg_green_channel, _xenium_cell_channels, _pan_multiplex_tissuenet_order,
+    _enseg_green_channel, _xenium_cell_channels, _pan_multiplex_tissuenet_order, _cvz_cell_channels,
+    _minmax_raw_trafo,
     get_random_percentile_normalization,
 )
 from ..transforms.labels import (
     _em_cell_label_trafo, _joint_em_cell_label_trafo, _background_id_label_trafo,
     _plantseg_label_trafo, _astih_pre_label_transform, _instance_labels,
-    _ignore_missing_raw_trafo, _ignore_unlabelled_blobs_trafo, _labels_to_uint32,
+    _ignore_missing_raw_trafo, _ignore_unlabelled_blobs_trafo, _labels_to_uint32, _drop_oversized_label_trafo,
     _JointLabelTransform, _JointGeodesicLabelTransform,
 )
 
@@ -147,14 +149,13 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
 
     # 1. CellPose (cell segmentation in (2d) fluoroscence microscopy imaging modalities)
     # NOTE: Training uses both 'cyto' (540) and 'cyto2' (256 additional, disjoint) images. 'cyto2' has no test
-    # split, so the validation set is the 68-image 'cyto' test split.
+    # split, so the 68-image 'cyto' test split validates; CellPose has no blind in-domain test.
     cellpose_kwargs = {
         "path": os.path.join(input_path, "cellpose"),
         "patch_shape": patch_shape,
         "raw_transform": _cellpose_raw_trafo,
         **{k: v for k, v in kwargs.items() if k != "raw_transform"}
     }
-
     train_ds.append(
         UniDataWrapper(
             datasets.get_cellpose_dataset(split="train", choice=None, n_samples=600, **cellpose_kwargs), source_ndim=2
@@ -165,21 +166,25 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
 
     # 2. CVZ Fluo (cell and nucleus segmentation in (2d) fluorescence CODEX images)
+    # NOTE: Cell and DAPI crops of one field of view are paired, so both stains share one split by patient or
+    # slide (see CVZ_VAL_GROUPS and CVZ_TEST_GROUPS); the test groups are blind.
     def _get_cvz_dataset(stain_choice, split_choice):
         raw_paths, label_paths = datasets.cvz_fluo.get_cvz_fluo_paths(
             path=os.path.join(input_path, "cvz"), stain_choice=stain_choice,
         )
-        train_raw_paths, test_raw_paths, train_label_paths, test_label_paths = train_test_split(
-            raw_paths, label_paths, test_size=0.2, random_state=42,
-        )
+        groups = [cvz_group(p) for p in raw_paths]
+        if split_choice == "train":
+            keep = [g not in CVZ_VAL_GROUPS and g not in CVZ_TEST_GROUPS for g in groups]
+        else:
+            keep = [g in CVZ_VAL_GROUPS for g in groups]
         ds = torch_em.default_segmentation_dataset(
-            raw_paths=train_raw_paths if split_choice == "train" else test_raw_paths,
+            raw_paths=[p for p, k in zip(raw_paths, keep) if k],
             raw_key=None,
-            label_paths=train_label_paths if split_choice == "train" else test_label_paths,
+            label_paths=[p for p, k in zip(label_paths, keep) if k],
             label_key=None,
             is_seg_dataset=False,
             patch_shape=patch_shape,
-            raw_transform=_to_8bit,
+            raw_transform=_cvz_cell_channels if stain_choice == "cell" else _to_8bit,
             n_samples=200 if split_choice == "train" else 100,
             **{k: v for k, v in kwargs.items() if k != "raw_transform"}
         )
@@ -187,16 +192,27 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
 
     train_ds.append(UniDataWrapper(_get_cvz_dataset("cell", "train"), source_ndim=2))
     train_ds.append(UniDataWrapper(_get_cvz_dataset("dapi", "train"), source_ndim=2))
-    val_ds.append(UniDataWrapper(_get_cvz_dataset("cell", "test"), source_ndim=2))
-    val_ds.append(UniDataWrapper(_get_cvz_dataset("dapi", "test"), source_ndim=2))
+    val_ds.append(UniDataWrapper(_get_cvz_dataset("cell", "val"), source_ndim=2))
+    val_ds.append(UniDataWrapper(_get_cvz_dataset("dapi", "val"), source_ndim=2))
 
-    # 3. DSB dataset (nucleus segmentation in fluorescence images)
-    dsb_kwargs = {"path": os.path.join(input_path, "dsb"), "patch_shape": patch_shape, "domain": "fluo", **kwargs}
-
-    train_ds.append(
-        UniDataWrapper(datasets.get_dsb_dataset(split="train", n_samples=600, **dsb_kwargs), source_ndim=2)
+    # 3. DSB dataset (nucleus segmentation in fluorescence and histopathology images)
+    # NOTE: The 'full' source holds all 661 images of the Kaggle stage-1 training set, 554 fluorescence and 107
+    # histopathology. A random 10 % (seed 42) validates; DSB has no blind in-domain test.
+    dsb_raw, dsb_labels = datasets.dsb.get_dsb_paths(os.path.join(input_path, "dsb"), source="full")
+    dsb_train_r, dsb_val_r, dsb_train_l, dsb_val_l = train_test_split(
+        dsb_raw, dsb_labels, test_size=0.1, random_state=42
     )
-    val_ds.append(UniDataWrapper(datasets.get_dsb_dataset(split="test", **dsb_kwargs), source_ndim=2))
+    dsb_kwargs = {"patch_shape": patch_shape, "is_seg_dataset": False, "raw_key": None, "label_key": None, **kwargs}
+    for raws, labs, n_samples, ds_list in [
+        (dsb_train_r, dsb_train_l, 600, train_ds), (dsb_val_r, dsb_val_l, 50, val_ds),
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, label_paths=labs, n_samples=n_samples, **dsb_kwargs
+                ), source_ndim=2,
+            )
+        )
 
     # 4. EmbedSeg (cell and nucleus segmentation in fluorescence microscopy images)
     # Anisotropy factors (z/xy) from file metadata or EmbedSeg paper (Table 3, arXiv:2101.10033).
@@ -211,41 +227,68 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "Platynereis-Nuclei-CBG": (5, 1, 1),
     }
 
-    def _get_embedseg_datasets(split_choice, z):
-        if split_choice == "train":
-            names = [
-                "Mouse-Organoid-Cells-CBG", "Mouse-Skull-Nuclei-CBG",
-                "Platynereis-ISH-Nuclei-CBG", "Platynereis-Nuclei-CBG",
-            ]
-        else:  # Only two datasets have the test split.
-            names = ["Mouse-Skull-Nuclei-CBG", "Platynereis-ISH-Nuclei-CBG"]
+    def _embedseg_kwargs(name, z):
+        return {
+            "patch_shape": (z, *patch_shape),
+            "raw_transform": _to_8bit,
+            "n_samples": max(1, 200 // n_z),
+            "label_transform2": (
+                label_trafo(sampling=embedseg_sampling[name])
+                if label_trafo is not None else kwargs.get("label_transform2")
+            ),
+            **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2"]},
+        }
 
-        all_embedseg_datasets = [
-            datasets.get_embedseg_dataset(
-                path=os.path.join(input_path, "embedseg"),
-                name=name,
-                patch_shape=(z, *patch_shape),
-                split=split_choice,
-                raw_transform=_to_8bit,
-                n_samples=max(1, 200 // n_z),
-                label_transform2=(
-                    label_trafo(sampling=embedseg_sampling[name])
-                    if label_trafo is not None else kwargs.get("label_transform2")
-                ),
-                **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2"]}
-            ) for name in names
-        ]
-        return all_embedseg_datasets
+    # Mouse-Skull and Platynereis-ISH train on the official train volumes; the first slices of the official test
+    # volume validate and the whole test volume is the blind test. Platynereis-Nuclei and the organoid cells are
+    # time-lapses and are split along time.
+    embedseg_root = os.path.join(input_path, "embedseg")
+    platy_nuclei_raw, platy_nuclei_labels = datasets.embedseg_data.get_embedseg_paths(
+        embedseg_root, name="Platynereis-Nuclei-CBG", split="train",
+    )
+    organoid_raw, organoid_labels = datasets.embedseg_data.get_embedseg_paths(
+        embedseg_root, name="Mouse-Organoid-Cells-CBG", split="train",
+    )
+
+    def _embedseg_paths_dataset(name, raw, labels, z):
+        return torch_em.default_segmentation_dataset(
+            raw_paths=raw, raw_key=None, label_paths=labels, label_key=None, is_seg_dataset=True,
+            **_embedseg_kwargs(name, z),
+        )
 
     for z in z_slices:
-        train_ds.extend(
-            [UniDataWrapper(ds, source_ndim=3, group_key=(3, z)) for ds in _get_embedseg_datasets("train", z)]
-        )
-        val_ds.extend(
-            [UniDataWrapper(ds, source_ndim=3, group_key=(3, z)) for ds in _get_embedseg_datasets("test", z)]
-        )
+        for name in ["Mouse-Skull-Nuclei-CBG", "Platynereis-ISH-Nuclei-CBG"]:
+            train_ds.append(
+                UniDataWrapper(
+                    datasets.get_embedseg_dataset(embedseg_root, name=name, split="train", **_embedseg_kwargs(name, z)),
+                    source_ndim=3, group_key=(3, z),
+                )
+            )
+            val_ds.append(
+                UniDataWrapper(
+                    datasets.get_embedseg_dataset(
+                        embedseg_root, name=name, split="test", rois=[(EMBEDSEG_VAL_Z[name],)],
+                        **_embedseg_kwargs(name, z)
+                    ), source_ndim=3, group_key=(3, z),
+                )
+            )
+        for name, raw, labels, splits in [
+            ("Platynereis-Nuclei-CBG", platy_nuclei_raw, platy_nuclei_labels,
+             (EMBEDSEG_PLATY_NUCLEI_TRAIN_TIMEPOINTS, EMBEDSEG_PLATY_NUCLEI_VAL_TIMEPOINTS)),
+            ("Mouse-Organoid-Cells-CBG", organoid_raw, organoid_labels,
+             (EMBEDSEG_ORGANOID_TRAIN_TIMEPOINTS, EMBEDSEG_ORGANOID_VAL_TIMEPOINTS)),
+        ]:
+            for timepoints, ds_list in zip(splits, (train_ds, val_ds)):
+                ds_list.append(
+                    UniDataWrapper(
+                        _embedseg_paths_dataset(name, raw[timepoints], labels[timepoints], z),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
 
     # 5. NIS3D (nucleus segmentation in light-sheet microscopy images)
+    # NOTE: Only the Drosophila volumes are used, the others carry giant unannotated-region instances. Drosophila_2
+    # (official train) trains, the first slices of Drosophila_1 (official test) validate and the whole volume is blind.
     nis3d_kwargs = {"path": os.path.join(input_path, "nis3d"), "split_type": "cross-image"}
 
     train_raw_paths, train_label_paths = datasets.nis3d.get_nis3d_paths(split="train", **nis3d_kwargs)
@@ -282,46 +325,40 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             UniDataWrapper(
                 torch_em.default_segmentation_dataset(
                     raw_paths=val_raw_paths, raw_key=None, label_paths=val_label_paths, label_key=None,
-                    **nis3d_kwargs,
+                    rois=[(NIS3D_VAL_Z,)] * len(val_raw_paths), **nis3d_kwargs,
                 ), source_ndim=3, group_key=(3, z),
             )
         )
 
     # 6. PlantSeg (cell segmentation in confocal microscopy images)
+    # NOTE: Root trains on the official split, the test split stays blind. Label 1 is the background and label 0
+    # the unannotated deeper tissue, which is mapped to the ignore value. Ovules is held out for OOD evaluation
+    # (its 'label_with_ignore' key marks unannotated regions as -1); nuclei is 98-99 % background and redundant
+    # with gonuclear.
     for z in z_slices:
         plantseg_kwargs = {
             "path": os.path.join(input_path, "plantseg"),
             "patch_shape": (z, *patch_shape),
             "n_samples": max(1, 200 // n_z),
-            "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[-1, 1]),
             **{k: v for k, v in kwargs.items() if k not in ["sampler", "label_transform2"]}
         }
 
-        # NOTE: Only root trains. In ovules the 'label' key folds 1.2-9.2 % annotator-ignore regions into
-        # background, so it is held out for evaluation; nuclei is 98-99 % background and redundant with gonuclear.
-        for ds_name in ["root"]:
+        for ds_name, exclude_ids in [("root", [0, 1])]:
             _plantseg_trafo = partial(
                 _plantseg_label_trafo, data=ds_name,
                 label_trafo=label_trafo() if label_trafo is not None else kwargs.get("label_transform2"),
             )
-            train_ds.append(
-                UniDataWrapper(
-                    datasets.get_plantseg_dataset(
-                        name=ds_name, split="train",
-                        label_transform2=_plantseg_trafo,
-                        **plantseg_kwargs
-                    ), source_ndim=3, group_key=(3, z),
+            for split, ds_list in [("train", train_ds), ("val", val_ds)]:
+                ds_list.append(
+                    UniDataWrapper(
+                        datasets.get_plantseg_dataset(
+                            name=ds_name, split=split, with_ignore=ds_name == "ovules",
+                            label_transform2=_plantseg_trafo,
+                            sampler=MinInstanceSampler(min_num_instances=3, exclude_ids=exclude_ids),
+                            **plantseg_kwargs
+                        ), source_ndim=3, group_key=(3, z),
+                    )
                 )
-            )
-            val_ds.append(
-                UniDataWrapper(
-                    datasets.get_plantseg_dataset(
-                        name=ds_name, split="val",
-                        label_transform2=_plantseg_trafo,
-                        **plantseg_kwargs
-                    ), source_ndim=3, group_key=(3, z),
-                )
-            )
 
     # 7. TissueNet (cell segmentation in tissue images)
     tissuenet_kwargs = {
@@ -365,28 +402,41 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
 
     # 9. DeepBacs (bacteria segmentation in label-free microscopy images)
+    # NOTE: The 'mixed' archive pools S. aureus, E. coli and B. subtilis; a random 10 % of its official train images
+    # (seed 42) validate and its official test split is blind. 'e_coli_stationary' is a separate acquisition of
+    # stationary-phase cells with a train split only, which trains as well.
     deepbacs_kwargs = {
-        "path": os.path.join(input_path, "deepbacs"),
         "patch_shape": patch_shape,
-        "bac_type": "mixed",
         "raw_transform": _to_8bit,
         **{k: v for k, v in kwargs.items() if k != "raw_transform"}
     }
-
-    train_ds.append(
-        UniDataWrapper(datasets.get_deepbacs_dataset(split="train", n_samples=400, **deepbacs_kwargs), source_ndim=2)
+    mixed_images, mixed_labels = datasets.deepbacs.get_deepbacs_paths(
+        os.path.join(input_path, "deepbacs"), bac_type="mixed", split="train",
     )
-
-    # The 'mixed' archive pools S. aureus, E. coli and B. subtilis. 'e_coli_stationary' is a separate acquisition
-    # of stationary-phase cells and is the only other bac_type torch-em implements. It has no val split.
-    deepbacs_stat_kwargs = {**deepbacs_kwargs, "bac_type": "e_coli_stationary"}
+    mixed_raw = sorted(glob(os.path.join(mixed_images, "*.tif")))
+    mixed_lab = sorted(glob(os.path.join(mixed_labels, "*.tif")))
+    assert len(mixed_raw) == len(mixed_lab) and mixed_raw
+    mixed_train_r, mixed_val_r, mixed_train_l, mixed_val_l = train_test_split(
+        mixed_raw, mixed_lab, test_size=0.1, random_state=42
+    )
+    for raws, labs, n_samples, ds_list in [
+        (mixed_train_r, mixed_train_l, 400, train_ds), (mixed_val_r, mixed_val_l, 100, val_ds),
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, raw_key=None, label_paths=labs, label_key=None, is_seg_dataset=False, ndim=2,
+                    n_samples=n_samples, **deepbacs_kwargs,
+                ), source_ndim=2,
+            )
+        )
     train_ds.append(
         UniDataWrapper(
-            datasets.get_deepbacs_dataset(split="train", n_samples=200, **deepbacs_stat_kwargs), source_ndim=2
+            datasets.get_deepbacs_dataset(
+                path=os.path.join(input_path, "deepbacs"), bac_type="e_coli_stationary", split="train", n_samples=200,
+                **deepbacs_kwargs,
+            ), source_ndim=2,
         )
-    )
-    val_ds.append(
-        UniDataWrapper(datasets.get_deepbacs_dataset(split="test", n_samples=200, **deepbacs_kwargs), source_ndim=2)
     )
 
     # 10. OrgaSegment (organoid segmentation in bright field images)
@@ -422,38 +472,59 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
 
     # 12. Omnipose (bacteria and worm segmentation in mixed modality microscopy images)
+    # NOTE: All four subsets are used. The official train split gives up a random 10 % of images (seed 42) for
+    # validation, the official test split is blind. The worm images hold few objects, so the default sampler's three
+    # instances apply there as well.
+    omnipose_root = os.path.join(input_path, "omnipose")
     omnipose_kwargs = {
-        "path": os.path.join(input_path, "omnipose"),
         "patch_shape": patch_shape,
         "raw_transform": _to_8bit,
+        "is_seg_dataset": False,
+        "raw_key": None,
+        "label_key": None,
         **{k: v for k, v in kwargs.items() if k != "raw_transform"}
     }
-
-    train_ds.append(
-        UniDataWrapper(datasets.get_omnipose_dataset(split="train", n_samples=500, **omnipose_kwargs), source_ndim=2)
-    )
-    val_ds.append(
-        UniDataWrapper(datasets.get_omnipose_dataset(split="test", n_samples=200, **omnipose_kwargs), source_ndim=2)
-    )
+    for data_choice, n_train in OMNIPOSE_TRAIN_SAMPLES.items():
+        raw, labels = datasets.omnipose.get_omnipose_paths(omnipose_root, split="train", data_choice=data_choice)
+        train_raw, val_raw, train_labels, val_labels = train_test_split(raw, labels, test_size=0.1, random_state=42)
+        for raw_paths, label_paths, n_samples, ds_list in [
+            (train_raw, train_labels, n_train, train_ds), (val_raw, val_labels, n_train // 5, val_ds),
+        ]:
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=raw_paths, label_paths=label_paths, n_samples=n_samples, **omnipose_kwargs
+                    ), source_ndim=2,
+                )
+            )
 
     # 13. CTC (cell segmentation from Cell Tracking Challenge)
-    # NOTE: CTC only supports the train split. No validation data is added for CTC.
+    # NOTE: The same eight datasets as the v1 generalist (GOWT1 and N2DL-HeLa are held out), both movies of each.
+    # Only the training data has labels, so a random 10 % of the labelled frames (seed 42) validate; there is no
+    # blind test.
     ctc_kwargs = {
-        "path": os.path.join(input_path, "ctc"),
-        "patch_shape": (1, *patch_shape),
+        "patch_shape": patch_shape,
         "raw_transform": _to_8bit,
+        "is_seg_dataset": False,
+        "raw_key": None,
+        "label_key": None,
         **{k: v for k, v in kwargs.items() if k != "raw_transform"}
     }
-
-    for name in datasets.ctc.CTC_CHECKSUMS["train"].keys():
-        if name in ["Fluo-N2DH-GOWT1", "Fluo-N2DL-HeLa"]:
-            continue
-
-        train_ds.append(
-            UniDataWrapper(
-                datasets.get_ctc_segmentation_dataset(dataset_name=name, split="train", **ctc_kwargs), source_ndim=2,
-            )
+    for name in CTC_DATASETS:
+        image_dirs, label_dirs = datasets.ctc.get_ctc_segmentation_paths(
+            os.path.join(input_path, "ctc"), dataset_name=name, split="train",
         )
+        raw = sorted(p for d in image_dirs for p in glob(os.path.join(d, "*.tif")))
+        labels = sorted(p for d in label_dirs for p in glob(os.path.join(d, "*.tif")))
+        assert len(raw) == len(labels) and raw
+        train_raw, val_raw, train_labels, val_labels = train_test_split(raw, labels, test_size=0.1, random_state=42)
+        for raw_paths, label_paths, ds_list in [(train_raw, train_labels, train_ds), (val_raw, val_labels, val_ds)]:
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(raw_paths=raw_paths, label_paths=label_paths, **ctc_kwargs),
+                    source_ndim=2,
+                )
+            )
 
     # 14. YeaZ (yeast cell segmentation in brightfield microscopy images)
     # NOTE: Only the brightfield subset is used. 14 of the 28 phase contrast train files are 2D+t stacks and the
@@ -466,11 +537,11 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     val_ds.append(UniDataWrapper(datasets.get_yeaz_dataset(split="val", n_samples=50, **yeaz_kwargs), source_ndim=2))
 
     # 15. BCCD (blood cell segmentation in brightfield blood smear images)
-    # NOTE: No native val split is used: the 146-image test split is kept blind and the 1063 train images are
-    # split 80/20 instead. The instance labels are connected components of a binary mask, but the cells are
+    # NOTE: No native val split exists: the 146-image test split is blind and a random 10 % of the 1063 train images
+    # (seed 42) validate. The instance labels are connected components of a binary mask, but the cells are
     # separated cleanly in practice (only 0.8 % of the labelled area sits in objects larger than 2.5x the median).
     bccd_paths = datasets.bccd.get_bccd_paths(path=os.path.join(input_path, "bccd"), split="train")
-    bccd_train, bccd_val = train_test_split(bccd_paths, test_size=0.2, random_state=42)
+    bccd_train, bccd_val = train_test_split(bccd_paths, test_size=0.1, random_state=42)
     bccd_kwargs = {"patch_shape": patch_shape, "with_channels": True, "ndim": 2, **kwargs}
     for paths, ds_list, n_samples in [(bccd_train, train_ds, 400), (bccd_val, val_ds, 50)]:
         ds_list.append(
@@ -501,14 +572,19 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
 
     # 17. BitDepth NucSeg (nucleus segmentation in DAPI fluorescence images at four magnifications)
-    bitdepth_kwargs = {"path": os.path.join(input_path, "bitdepth_nucseg"), "patch_shape": patch_shape, **kwargs}
-    bitdepth_raw, bitdepth_labels = datasets.bitdepth_nucseg.get_bitdepth_nucseg_paths(
-        path=os.path.join(input_path, "bitdepth_nucseg")
-    )
-    bd_train_r, bd_val_r, bd_train_l, bd_val_l = train_test_split(
-        bitdepth_raw, bitdepth_labels, test_size=0.2, random_state=42,
-    )
-    del bitdepth_kwargs["path"]
+    # NOTE: 70 images over four magnifications, split 80 / 10 / 10 at random (seed 42) within each magnification, so
+    # that every magnification validates and is tested; the test images are blind.
+    bitdepth_kwargs = {"patch_shape": patch_shape, **kwargs}
+    bd_train_r, bd_val_r, bd_train_l, bd_val_l = [], [], [], []
+    for magnification in BITDEPTH_MAGNIFICATIONS:
+        bitdepth_raw, bitdepth_labels = datasets.bitdepth_nucseg.get_bitdepth_nucseg_paths(
+            path=os.path.join(input_path, "bitdepth_nucseg"), magnification=magnification,
+        )
+        (train_r, val_r, _), (train_l, val_l, _) = _train_val_test_split(bitdepth_raw, bitdepth_labels)
+        bd_train_r.extend(train_r)
+        bd_val_r.extend(val_r)
+        bd_train_l.extend(train_l)
+        bd_val_l.extend(val_l)
     for raws, labs, ds_list, n_samples in [
         (bd_train_r, bd_train_l, train_ds, 200), (bd_val_r, bd_val_l, val_ds, 50)
     ]:
@@ -522,9 +598,10 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         )
 
     # 18. BMGD (nucleus segmentation in DAPI fluorescence images on four substrate stiffnesses)
-    # NOTE: Native images are only 345x382, so they are randomly upscaled and padded to the patch shape.
+    # NOTE: Native images are only 345x382, so they are randomly upscaled and padded to the patch shape. The 819
+    # crops are split 80 / 10 / 10 at random (seed 42); the test crops are blind.
     bmgd_paths = datasets.bmgd.get_bmgd_paths(path=os.path.join(input_path, "bmgd"))
-    bmgd_train, bmgd_val = train_test_split(bmgd_paths, test_size=0.2, random_state=42)
+    ((bmgd_train, bmgd_val, _),) = _train_val_test_split(bmgd_paths)
     bmgd_kwargs = {
         "patch_shape": (345, 382), "with_channels": False, "ndim": 2,
         **{**kwargs, "transform": partial(_random_resize_and_pad_trafo, patch_shape=patch_shape)},
@@ -539,65 +616,61 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             )
         )
 
-    # 19. Cardioblast nuclei (nucleus segmentation in confocal fluorescence time-lapse projections)
-    cardio_kwargs = {
-        "path": os.path.join(input_path, "cardioblast_nuclei"), "patch_shape": patch_shape, **kwargs
-    }
-    train_ds.append(
-        UniDataWrapper(
-            datasets.get_cardioblast_nuclei_dataset(split="train", n_samples=200, **cardio_kwargs), source_ndim=2
-        )
-    )
-    val_ds.append(
-        UniDataWrapper(
-            datasets.get_cardioblast_nuclei_dataset(split="test", n_samples=50, **cardio_kwargs), source_ndim=2
-        )
-    )
-
     # 20. Cell-ACDC (yeast cell segmentation in phase contrast time-lapse)
-    # NOTE: Native fields are only ~200x300, so they are randomly upscaled and padded to the patch shape.
+    # NOTE: Native fields are only ~200x300, so they are randomly upscaled and padded to the patch shape. The seven
+    # movies are split by movie: one control position validates, one treated position is blind.
+    acdc_raw, acdc_labels = datasets.cell_acdc.get_cell_acdc_paths(os.path.join(input_path, "cell_acdc"))
+    acdc_movies = [cell_acdc_movie(p) for p in acdc_raw]
     cell_acdc_kwargs = {
-        "path": os.path.join(input_path, "cell_acdc"), "patch_shape": (1, 200, 200),
+        "patch_shape": (1, 200, 200), "raw_key": None, "label_key": None, "is_seg_dataset": True, "ndim": 2,
         **{**kwargs, "transform": partial(_random_resize_and_pad_trafo, patch_shape=patch_shape)},
     }
-    train_ds.append(
-        UniDataWrapper(datasets.get_cell_acdc_dataset(n_samples=200, **cell_acdc_kwargs), source_ndim=2)
-    )
-
-    # 21. cellapp (cell segmentation in transmitted light images)
-    cellapp_kwargs = {"path": os.path.join(input_path, "cellapp"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(
-        UniDataWrapper(datasets.get_cellapp_dataset(split="train", n_samples=200, **cellapp_kwargs), source_ndim=2)
-    )
-    val_ds.append(
-        UniDataWrapper(datasets.get_cellapp_dataset(split="test", n_samples=50, **cellapp_kwargs), source_ndim=2)
-    )
-
-    # 22. CellBinDB (nucleus segmentation in DAPI, ssDNA, mIF and H&E images)
-    cellbindb_raw, cellbindb_labels = datasets.cellbindb.get_cellbindb_paths(
-        path=os.path.join(input_path, "cellbindb")
-    )
-    cb_train_r, cb_val_r, cb_train_l, cb_val_l = train_test_split(
-        cellbindb_raw, cellbindb_labels, test_size=0.2, random_state=42,
-    )
-    cellbindb_kwargs = {"patch_shape": patch_shape, "is_seg_dataset": False, "ndim": 2, **kwargs}
-    for raws, labs, ds_list, n_samples in [
-        (cb_train_r, cb_train_l, train_ds, 400), (cb_val_r, cb_val_l, val_ds, 50)
+    for keep, n_samples, ds_list in [
+        ([m not in CELL_ACDC_VAL_MOVIES and m not in CELL_ACDC_TEST_MOVIES for m in acdc_movies], 200, train_ds),
+        ([m in CELL_ACDC_VAL_MOVIES for m in acdc_movies], 50, val_ds),
     ]:
         ds_list.append(
             UniDataWrapper(
                 torch_em.default_segmentation_dataset(
-                    raw_paths=raws, raw_key=None, label_paths=labs, label_key=None,
-                    n_samples=n_samples, **cellbindb_kwargs,
+                    raw_paths=[p for p, k in zip(acdc_raw, keep) if k],
+                    label_paths=[p for p, k in zip(acdc_labels, keep) if k],
+                    n_samples=n_samples, **cell_acdc_kwargs,
                 ), source_ndim=2,
             )
         )
 
+    # 22. CellBinDB (nucleus segmentation in DAPI, ssDNA, mIF and H&E images)
+    # NOTE: All four stains train. The tiles are 256x256 (some H&E tiles 512x512), so they are randomly upscaled
+    # and padded to the patch shape. Each stain is split 80 / 10 / 10 at random (seed 42); the test tiles are blind.
+    cellbindb_kwargs = {
+        "patch_shape": (256, 256), "is_seg_dataset": False, "ndim": 2,
+        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+    }
+    for stain in CELLBINDB_STAINS:
+        cellbindb_raw, cellbindb_labels = datasets.cellbindb.get_cellbindb_paths(
+            path=os.path.join(input_path, "cellbindb"), data_choice=stain,
+        )
+        (cb_train_r, cb_val_r, _), (cb_train_l, cb_val_l, _) = _train_val_test_split(cellbindb_raw, cellbindb_labels)
+        for raws, labs, ds_list, n_samples in [
+            (cb_train_r, cb_train_l, train_ds, 150), (cb_val_r, cb_val_l, val_ds, 30)
+        ]:
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=raws, raw_key=None, label_paths=labs, label_key=None,
+                        n_samples=n_samples, **cellbindb_kwargs,
+                    ), source_ndim=2,
+                )
+            )
+
     # 23. CELLULAR (cell segmentation in Drosophila cells)
     # NOTE: Only the brightfield channel is used. The two fluorescence channels light up a few strongly
     # expressing cells, while the labels cover every cell in the field, which only brightfield resolves.
+    # The 53 fields come from six wells and are split by well: I04 validates, C06 is blind.
     cellular_paths = datasets.cellular.get_cellular_paths(path=os.path.join(input_path, "cellular"))
-    cellular_train, cellular_val = train_test_split(cellular_paths, test_size=0.2, random_state=42)
+    cellular_wells = [os.path.basename(p).split("_")[3] for p in cellular_paths]
+    cellular_train = [p for p, w in zip(cellular_paths, cellular_wells) if w in CELLULAR_TRAIN_WELLS]
+    cellular_val = [p for p, w in zip(cellular_paths, cellular_wells) if w in CELLULAR_VAL_WELLS]
     cellular_kwargs = {"patch_shape": patch_shape, "ndim": 2, **kwargs}
     for paths, ds_list, n_samples in [(cellular_train, train_ds, 400), (cellular_val, val_ds, 50)]:
         ds_list.append(
@@ -610,28 +683,28 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         )
 
     # 24. CISD (urothelial cell segmentation in brightfield urine cytology)
-    # NOTE: Only 2-3 cells per image, so the shared 3-instance sampler would reject nearly every patch.
+    # NOTE: Only 2-3 cells per image, so the shared 3-instance sampler would reject nearly every patch. The 3911
+    # crops come from 30 slides and are split by slide (see CISD_VAL_SLIDES, CISD_TEST_SLIDES); the test slides
+    # are blind.
+    cisd_raw, cisd_labels = datasets.cisd.get_cisd_paths(os.path.join(input_path, "cisd"), mode="center_slice")
+    cisd_slides = [os.path.basename(p).split("_")[0] for p in cisd_raw]
     cisd_kwargs = {
-        "path": os.path.join(input_path, "cisd"), "patch_shape": patch_shape, "mode": "center_slice",
+        "patch_shape": patch_shape, "raw_key": None, "label_key": None, "is_seg_dataset": False, "ndim": 2,
         **{**kwargs, "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0])},
     }
-    train_ds.append(UniDataWrapper(datasets.get_cisd_dataset(n_samples=200, **cisd_kwargs), source_ndim=2))
-
-    # 25. DeepSeas (stem cell segmentation in phase contrast images)
-    # NOTE: The source masks are binary and the labelling is partial, so touching cells merge and many
-    # visible cells are unlabelled. Kept at a modest sample count for that reason.
-    # NOTE: The masks are binary, so the shared 3-instance sampler sees a single foreground id and rejects
-    # every patch. The instances only appear after the connected-component label transform, which runs later.
-    deepseas_kwargs = {
-        "path": os.path.join(input_path, "deepseas"), "patch_shape": patch_shape,
-        **{**kwargs, "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0])},
-    }
-    train_ds.append(
-        UniDataWrapper(datasets.get_deepseas_dataset(split="train", n_samples=300, **deepseas_kwargs), source_ndim=2)
-    )
-    val_ds.append(
-        UniDataWrapper(datasets.get_deepseas_dataset(split="test", n_samples=50, **deepseas_kwargs), source_ndim=2)
-    )
+    for keep, n_samples, ds_list in [
+        ([sl not in CISD_VAL_SLIDES and sl not in CISD_TEST_SLIDES for sl in cisd_slides], 200, train_ds),
+        ([sl in CISD_VAL_SLIDES for sl in cisd_slides], 50, val_ds),
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=[p for p, k in zip(cisd_raw, keep) if k],
+                    label_paths=[p for p, k in zip(cisd_labels, keep) if k],
+                    n_samples=n_samples, **cisd_kwargs,
+                ), source_ndim=2,
+            )
+        )
 
     # 26. DeMemSeg (prospore membrane segmentation in fluorescence yeast crops)
     # NOTE: Native crops are 200x200, so they are randomly upscaled and padded to the patch shape.
@@ -650,15 +723,6 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
     val_ds.append(
         UniDataWrapper(datasets.get_dememseg_dataset(split="val", n_samples=50, **dememseg_kwargs), source_ndim=2)
-    )
-
-    # 27. DIC-HepG2 (cell segmentation in DIC images)
-    dic_kwargs = {"path": os.path.join(input_path, "dic_hepg2"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(
-        UniDataWrapper(datasets.get_dic_hepg2_dataset(split="train", n_samples=300, **dic_kwargs), source_ndim=2)
-    )
-    val_ds.append(
-        UniDataWrapper(datasets.get_dic_hepg2_dataset(split="val", n_samples=50, **dic_kwargs), source_ndim=2)
     )
 
     # 28. DynamicNuclearNet (nucleus segmentation in fluorescence time-lapse frames)
@@ -702,35 +766,49 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         }
         train_ds.append(
             UniDataWrapper(
-                datasets.get_pnas_arabidopsis_dataset(**pnas_kwargs), source_ndim=3, group_key=(3, z),
+                datasets.get_pnas_arabidopsis_dataset(plants=PNAS_TRAIN_PLANTS, **pnas_kwargs),
+                source_ndim=3, group_key=(3, z),
+            )
+        )
+        val_ds.append(
+            UniDataWrapper(
+                datasets.get_pnas_arabidopsis_dataset(plants=PNAS_VAL_PLANTS, **pnas_kwargs),
+                source_ndim=3, group_key=(3, z),
             )
         )
 
     # 31. EpiCure (epithelial cell segmentation in fluorescence membrane movies)
     # NOTE: Four model systems (Drosophila notum and histoblasts, zebrafish telencephalon, quail gastrula).
     # The frames are exhaustively labelled and very dense, 250-370 cells per patch. Patch shape is
-    # (1, 512, 512) because the movies are stored as time series, so one frame is drawn per sample.
+    # (1, 512, 512) because the movies are stored as time series, so one frame is drawn per sample. The quail
+    # frame labels an unannotated corner as one cell, 54x the median cell, which the oversized-label rule drops.
     epicure_kwargs = {
-        "path": os.path.join(input_path, "epicure"), "patch_shape": (1, *patch_shape), **kwargs
+        "path": os.path.join(input_path, "epicure"), "patch_shape": (1, *patch_shape),
+        "label_transform2": partial(
+            _drop_oversized_label_trafo, max_fraction=0.02,
+            label_trafo=label_trafo() if label_trafo is not None else kwargs.get("label_transform2"),
+        ),
+        **{k: v for k, v in kwargs.items() if k != "label_transform2"},
     }
     train_ds.append(
         UniDataWrapper(datasets.get_epicure_dataset(n_samples=500, **epicure_kwargs), source_ndim=2)
     )
 
     # 32. CartoCell (3D cell segmentation in confocal epithelial cysts)
-    # NOTE: The on-disk layout is 'CartoCell/{train_M1,train_M2}/{x,y}', which the torch-em loader does not expect,
-    # so the paths are given explicitly. Native volumes are only ~84-128 px in XY, so an 80x80 crop is always
-    # resized up to 512x512 rather than zero-padded.
+    # NOTE: The on-disk layout is 'CartoCell/{train_M1,train_M2,validation,test}/{x,y}', which the torch-em loader
+    # does not expect, so the paths are given explicitly. The official folders are used: train_M1 and train_M2
+    # train, validation validates and test stays blind. Native volumes are only ~84-128 px in XY, so an 80x80 crop
+    # is always resized up to 512x512 rather than zero-padded.
     cartocell_root = os.path.join(input_path, "cartocell", "CartoCell")
-    cartocell_raw = sorted(
-        glob(os.path.join(cartocell_root, "train_M1", "x", "*.tif"))
-        + glob(os.path.join(cartocell_root, "train_M2", "x", "*.tif"))
-    )
-    cartocell_labels = [p.replace(os.sep + "x" + os.sep, os.sep + "y" + os.sep) for p in cartocell_raw]
-    assert cartocell_raw and all(os.path.exists(p) for p in cartocell_labels)
-    cc_train_r, cc_val_r, cc_train_l, cc_val_l = train_test_split(
-        cartocell_raw, cartocell_labels, test_size=0.2, random_state=42,
-    )
+
+    def _cartocell_paths(*folders):
+        raw = sorted(p for folder in folders for p in glob(os.path.join(cartocell_root, folder, "x", "*.tif")))
+        labels = [p.replace(os.sep + "x" + os.sep, os.sep + "y" + os.sep) for p in raw]
+        assert raw and all(os.path.exists(p) for p in labels)
+        return raw, labels
+
+    cc_train_r, cc_train_l = _cartocell_paths(*CARTOCELL_TRAIN_FOLDERS)
+    cc_val_r, cc_val_l = _cartocell_paths(CARTOCELL_VAL_FOLDER)
 
     for z in z_slices:
         cartocell_kwargs = {
@@ -780,61 +858,69 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             )
         )
 
-    # 34. CShaper (3D cell segmentation in confocal C. elegans embryo membranes)
-    # NOTE: Volumes are only ~285x131 in XY, so a 128x128 crop is resized up to 512x512.
-    for z in z_slices:
-        cshaper_kwargs = {
-            "path": os.path.join(input_path, "cshaper"),
-            "patch_shape": (z, 128, 128),
-            "raw_transform": _resize_raw_to_512,
-            "label_transform2": (
-                partial(_resize_then_em_label_trafo, em_trafo_fn=label_trafo(instances=True))
-                if label_trafo is not None else kwargs.get("label_transform2")
-            ),
-            "n_samples": max(1, 300 // n_z),
-            **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2"]},
-        }
-        train_ds.append(
-            UniDataWrapper(
-                datasets.get_cshaper_dataset(split="train", **cshaper_kwargs), source_ndim=3, group_key=(3, z),
-            )
-        )
-        val_ds.append(
-            UniDataWrapper(
-                datasets.get_cshaper_dataset(split="val", **cshaper_kwargs), source_ndim=3, group_key=(3, z),
-            )
-        )
-
     # 35. U2OS (nucleus segmentation in Hoechst fluorescence images)
-    u20s_kwargs = {"path": os.path.join(input_path, "u20s"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(UniDataWrapper(datasets.get_u20s_dataset(n_samples=300, **u20s_kwargs), source_ndim=2))
+    # NOTE: 200 images without an official split, split 80 / 10 / 10 at random (seed 42); the test images are blind.
+    u20s_raw, u20s_labels = datasets.u20s.get_u20s_paths(os.path.join(input_path, "u20s"))
+    (u20s_train_r, u20s_val_r, _), (u20s_train_l, u20s_val_l, _) = _train_val_test_split(u20s_raw, u20s_labels)
+    u20s_kwargs = {
+        "patch_shape": patch_shape, "is_seg_dataset": False, "raw_key": None, "label_key": None, "ndim": 2, **kwargs
+    }
+    for raws, labs, n_samples, ds_list in [
+        (u20s_train_r, u20s_train_l, 300, train_ds), (u20s_val_r, u20s_val_l, 50, val_ds),
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, label_paths=labs, n_samples=n_samples, **u20s_kwargs
+                ), source_ndim=2,
+            )
+        )
 
     # 36. IFNuclei (nucleus segmentation in immunofluorescence images)
-    ifnuclei_kwargs = {"path": os.path.join(input_path, "ifnuclei"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(
-        UniDataWrapper(datasets.get_ifnuclei_dataset(split="train", n_samples=200, **ifnuclei_kwargs), source_ndim=2)
+    # NOTE: A random 10 % of the official train split (seed 42) validates; the official test split is blind.
+    ifnuclei_raw, ifnuclei_labels = datasets.ifnuclei.get_ifnuclei_paths(
+        os.path.join(input_path, "ifnuclei"), split="train",
     )
-    val_ds.append(
-        UniDataWrapper(datasets.get_ifnuclei_dataset(split="test", n_samples=50, **ifnuclei_kwargs), source_ndim=2)
+    if_train_r, if_val_r, if_train_l, if_val_l = train_test_split(
+        ifnuclei_raw, ifnuclei_labels, test_size=0.1, random_state=42
     )
+    ifnuclei_kwargs = {
+        "patch_shape": patch_shape, "is_seg_dataset": False, "raw_key": None, "label_key": None, "ndim": 2, **kwargs
+    }
+    for raws, labs, n_samples, ds_list in [(if_train_r, if_train_l, 200, train_ds), (if_val_r, if_val_l, 50, val_ds)]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, label_paths=labs, n_samples=n_samples, **ifnuclei_kwargs
+                ), source_ndim=2,
+            )
+        )
 
     # 37. VICAR (cell segmentation in quantitative phase imaging of five cell lines)
-    vicar_kwargs = {"path": os.path.join(input_path, "vicar"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(UniDataWrapper(datasets.get_vicar_dataset(n_samples=300, **vicar_kwargs), source_ndim=2))
-
-    # 38. HeLaCytoNuc (nucleus segmentation in fluorescence images)
-    # NOTE: The raw is RGB with red cytoplasm, blue nuclei and an unused green channel. The loader's own
-    # raw_channel="nuclei" selects the blue channel, which is the one the nucleus labels correspond to.
-    hela_kwargs = {
-        "path": os.path.join(input_path, "hela_cytonuc"), "patch_shape": patch_shape,
-        "raw_channel": "nuclei", "label_choice": "nuclei", **kwargs,
+    # NOTE: Each cell line is split 80 / 10 / 10 at random (seed 42); the test images are blind.
+    vicar_kwargs = {
+        "patch_shape": patch_shape, "raw_key": None, "label_key": None, "is_seg_dataset": False, "ndim": 2, **kwargs
     }
-    train_ds.append(
-        UniDataWrapper(datasets.get_hela_cytonuc_dataset(split="train", n_samples=400, **hela_kwargs), source_ndim=2)
-    )
-    val_ds.append(
-        UniDataWrapper(datasets.get_hela_cytonuc_dataset(split="val", n_samples=50, **hela_kwargs), source_ndim=2)
-    )
+    vicar_train_r, vicar_val_r, vicar_train_l, vicar_val_l = [], [], [], []
+    for cell_type in datasets.vicar.VALID_CELL_TYPES:
+        vicar_raw, vicar_labels = datasets.vicar.get_vicar_paths(
+            os.path.join(input_path, "vicar"), cell_types=[cell_type]
+        )
+        (train_r, val_r, _), (train_l, val_l, _) = _train_val_test_split(vicar_raw, vicar_labels)
+        vicar_train_r.extend(train_r)
+        vicar_val_r.extend(val_r)
+        vicar_train_l.extend(train_l)
+        vicar_val_l.extend(val_l)
+    for raws, labs, n_samples, ds_list in [
+        (vicar_train_r, vicar_train_l, 300, train_ds), (vicar_val_r, vicar_val_l, 50, val_ds),
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, label_paths=labs, n_samples=n_samples, **vicar_kwargs
+                ), source_ndim=2,
+            )
+        )
 
     # 39. microbeSEG (bacteria segmentation in phase contrast images)
     # NOTE: Native images are 320x320, so they are randomly upscaled and padded to the patch shape.
@@ -860,15 +946,17 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
 
     # 41. OrganoID (pancreatic organoid segmentation in brightfield culture wells)
+    # NOTE: The 'original' (human) and 'mouse' subsets train on their official splits, their test splits are blind.
+    # The 'gemcitabine' subset has no split and is left out.
     organoid_kwargs = {"path": os.path.join(input_path, "organoid"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(
-        UniDataWrapper(datasets.get_organoid_dataset(split="train", source="original", n_samples=200,
-                                                     **organoid_kwargs), source_ndim=2)
-    )
-    val_ds.append(
-        UniDataWrapper(datasets.get_organoid_dataset(split="val", source="original", n_samples=50,
-                                                     **organoid_kwargs), source_ndim=2)
-    )
+    for source, n_train in ORGANOID_SOURCES.items():
+        for split, n_samples, ds_list in [("train", n_train, train_ds), ("val", n_train // 4, val_ds)]:
+            ds_list.append(
+                UniDataWrapper(
+                    datasets.get_organoid_dataset(split=split, source=source, n_samples=n_samples, **organoid_kwargs),
+                    source_ndim=2,
+                )
+            )
 
     # 42. EnSeg (enteric neuron segmentation in immunofluorescence whole-mount myenteric plexus)
     # NOTE: Stored RGB but only the green channel carries signal (maxima 41/251/43).
@@ -877,38 +965,91 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "raw_transform": _enseg_green_channel,
         **{k: v for k, v in kwargs.items() if k != "raw_transform"},
     }
-    train_ds.append(UniDataWrapper(datasets.get_enseg_dataset(n_samples=200, **enseg_kwargs), source_ndim=2))
+    for animal_tags, n_samples, ds_list in [(ENSEG_TRAIN_ANIMALS, 200, train_ds), (ENSEG_VAL_ANIMALS, 50, val_ds)]:
+        ds_list.append(
+            UniDataWrapper(
+                datasets.get_enseg_dataset(animal_tags=list(animal_tags), n_samples=n_samples, **enseg_kwargs),
+                source_ndim=2,
+            )
+        )
 
     # 43. LPC-NucSeg (nucleus segmentation in DNA fluorescence images)
-    lpc_kwargs = {"path": os.path.join(input_path, "lpc_nucseg"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(UniDataWrapper(datasets.get_lpc_nucseg_dataset(n_samples=150, **lpc_kwargs), source_ndim=2))
+    # NOTE: Two cell lines, U2OS (gnf) and NIH3T3 (ic100); a random 10 % of each (seed 42) validates, there is no
+    # blind test.
+    lpc_kwargs = {"patch_shape": patch_shape, "raw_key": "raw", "label_key": "labels", "ndim": 2, **kwargs}
+    for source in LPC_NUCSEG_SOURCES:
+        lpc_paths = datasets.lpc_nucseg.get_lpc_nucseg_paths(os.path.join(input_path, "lpc_nucseg"), source=source)
+        lpc_train, lpc_val = train_test_split(lpc_paths, test_size=0.1, random_state=42)
+        for paths, n_samples, ds_list in [(lpc_train, 100, train_ds), (lpc_val, 25, val_ds)]:
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=paths, label_paths=paths, n_samples=n_samples, **lpc_kwargs
+                    ), source_ndim=2,
+                )
+            )
 
     # 44. DCIS.COM nuclei (nucleus segmentation in spinning-disk confocal SiR-DNA images)
-    dcis_kwargs = {"path": os.path.join(input_path, "dcis_com_nuclei"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(
-        UniDataWrapper(datasets.get_dcis_com_nuclei_dataset(split="train", n_samples=200, **dcis_kwargs),
-                       source_ndim=2)
+    # NOTE: The official train split trains and the two official test images validate; there is no blind test.
+    dcis_train_r, dcis_train_l = datasets.dcis_com_nuclei.get_dcis_com_nuclei_paths(
+        os.path.join(input_path, "dcis_com_nuclei"), split="train",
     )
+    dcis_val_r, dcis_val_l = datasets.dcis_com_nuclei.get_dcis_com_nuclei_paths(
+        os.path.join(input_path, "dcis_com_nuclei"), split="test",
+    )
+    dcis_kwargs = {
+        "patch_shape": patch_shape, "is_seg_dataset": False, "raw_key": None, "label_key": None, "ndim": 2, **kwargs
+    }
+    for raws, labs, n_samples, ds_list in [
+        (dcis_train_r, dcis_train_l, 200, train_ds), (dcis_val_r, dcis_val_l, 50, val_ds),
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, label_paths=labs, n_samples=n_samples, **dcis_kwargs
+                ), source_ndim=2,
+            )
+        )
 
     # 45. mCellSeg (cell segmentation in DIC and brightfield images of HEK-293T and HUVEC)
-    mcellseg_kwargs = {"path": os.path.join(input_path, "mcellseg"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(
-        UniDataWrapper(datasets.get_mcellseg_dataset(split="train", val_fraction=0.2, n_samples=200,
-                                                     **mcellseg_kwargs), source_ndim=2)
-    )
-    val_ds.append(
-        UniDataWrapper(datasets.get_mcellseg_dataset(split="val", val_fraction=0.2, n_samples=50,
-                                                     **mcellseg_kwargs), source_ndim=2)
-    )
+    # NOTE: The 200 images are split 80 / 10 / 10 at random (seed 42); the test images are blind.
+    mcellseg_raw, mcellseg_labels = datasets.mcellseg.get_mcellseg_paths(os.path.join(input_path, "mcellseg"))
+    (mc_train_r, mc_val_r, _), (mc_train_l, mc_val_l, _) = _train_val_test_split(mcellseg_raw, mcellseg_labels)
+    mcellseg_kwargs = {
+        "patch_shape": patch_shape, "raw_key": None, "label_key": None, "is_seg_dataset": False, "ndim": 2, **kwargs
+    }
+    for raws, labs, n_samples, ds_list in [(mc_train_r, mc_train_l, 200, train_ds), (mc_val_r, mc_val_l, 50, val_ds)]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, label_paths=labs, n_samples=n_samples, **mcellseg_kwargs
+                ), source_ndim=2,
+            )
+        )
 
     # 46. TOIAM (bacteria segmentation in phase contrast time-lapse colonies)
     # NOTE: The colony grows over time, so density is bimodal: a 512 patch holds a median of 39 objects with
     # quartiles at 8 and 305. A 25-instance minimum keeps 56 % of patches and cuts the near-empty early frames.
+    # The five movies are split by movie: 03 validates, 04 is blind.
+    toiam_raw, toiam_labels = datasets.toiam.get_toiam_paths(os.path.join(input_path, "toiam"))
+    toiam_movies = [os.path.basename(os.path.dirname(p)) for p in toiam_raw]
     toiam_kwargs = {
-        "path": os.path.join(input_path, "toiam"), "patch_shape": patch_shape,
+        "patch_shape": patch_shape, "raw_key": None, "label_key": None, "is_seg_dataset": False, "ndim": 2,
         **{**kwargs, "sampler": MinInstanceSampler(min_num_instances=25, exclude_ids=[0])},
     }
-    train_ds.append(UniDataWrapper(datasets.get_toiam_dataset(n_samples=400, **toiam_kwargs), source_ndim=2))
+    for keep, n_samples, ds_list in [
+        ([m in TOIAM_TRAIN_MOVIES for m in toiam_movies], 400, train_ds),
+        ([m in TOIAM_VAL_MOVIES for m in toiam_movies], 50, val_ds),
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=[p for p, k in zip(toiam_raw, keep) if k],
+                    label_paths=[p for p, k in zip(toiam_labels, keep) if k],
+                    n_samples=n_samples, **toiam_kwargs,
+                ), source_ndim=2,
+            )
+        )
 
     # 47. Usiigaci (cell segmentation in phase contrast fibroblast images)
     usiigaci_kwargs = {"path": os.path.join(input_path, "usiigaci"), "patch_shape": patch_shape, **kwargs}
@@ -919,19 +1060,6 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         UniDataWrapper(datasets.get_usiigaci_dataset(split="val", n_samples=50, **usiigaci_kwargs), source_ndim=2)
     )
 
-    # 48. YeastSAM (budding yeast segmentation in DIC images)
-    yeastsam_kwargs = {"path": os.path.join(input_path, "yeastsam"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(UniDataWrapper(datasets.get_yeastsam_dataset(n_samples=100, **yeastsam_kwargs), source_ndim=2))
-
-    # 49. YeastCellSeg (budding yeast segmentation in brightfield images)
-    yeastcellseg_kwargs = {
-        "path": os.path.join(input_path, "yeastcellseg"), "patch_shape": patch_shape,
-        "segmentation_type": "instances", **kwargs,
-    }
-    train_ds.append(
-        UniDataWrapper(datasets.get_yeastcellseg_dataset(n_samples=150, **yeastcellseg_kwargs), source_ndim=2)
-    )
-
     # 50. Pan-multiplex (cell segmentation in MIBI, CODEX and Vectra tissue imaging)
     # NOTE: The loader returns (nuclei, membrane); they are reordered into TissueNet's membrane, nucleus, zeros.
     pan_kwargs = {
@@ -939,13 +1067,15 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "raw_channel": "both", "raw_transform": _pan_multiplex_tissuenet_order,
         **{k: v for k, v in kwargs.items() if k != "raw_transform"},
     }
+    # The official train / val / test split is used per subset; the test split is blind.
     for subset in ["codex_colon", "mibi_breast", "mibi_decidua", "vectra_colon", "vectra_pancreas"]:
-        train_ds.append(
-            UniDataWrapper(
-                datasets.get_pan_multiplex_dataset(subset=subset, split="train", n_samples=150, **pan_kwargs),
-                source_ndim=2,
+        for split, n_samples, ds_list in [("train", 150, train_ds), ("val", 30, val_ds)]:
+            ds_list.append(
+                UniDataWrapper(
+                    datasets.get_pan_multiplex_dataset(subset=subset, split=split, n_samples=n_samples, **pan_kwargs),
+                    source_ndim=2,
+                )
             )
-        )
 
     # 51. Xenium (nucleus and cell segmentation in whole-slide multi-tissue stain)
     # NOTE: XOA segmented nuclei on DAPI (channel 0) and grew cells from the three morphology stains (channels
@@ -956,39 +1086,68 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "raw_channel": "dapi", "label_channel": "nuclei",
         **{**kwargs, "sampler": xenium_sampler},
     }
-    train_ds.append(
-        UniDataWrapper(datasets.get_xenium_dataset(n_samples=400, **xenium_nuclei_kwargs), source_ndim=2)
-    )
     xenium_cells_kwargs = {
         "path": os.path.join(input_path, "xenium"), "patch_shape": patch_shape,
         "raw_channel": "stack", "label_channel": "cells", "raw_transform": _xenium_cell_channels,
         **{k: v for k, v in kwargs.items() if k != "raw_transform"}, "sampler": xenium_sampler,
     }
-    train_ds.append(
-        UniDataWrapper(datasets.get_xenium_dataset(n_samples=400, **xenium_cells_kwargs), source_ndim=2)
-    )
+    # The slides are split for both targets: four train, human_skin validates, human_breast is blind.
+    for xenium_kwargs in (xenium_nuclei_kwargs, xenium_cells_kwargs):
+        for samples, n_samples, ds_list in [(XENIUM_TRAIN_SAMPLES, 400, train_ds), (XENIUM_VAL_SAMPLES, 50, val_ds)]:
+            ds_list.append(
+                UniDataWrapper(
+                    datasets.get_xenium_dataset(sample=list(samples), n_samples=n_samples, **xenium_kwargs),
+                    source_ndim=2,
+                )
+            )
 
-    # 52. GoNuclear (3D nucleus segmentation in confocal Arabidopsis root)
-    # NOTE: Volume 1170 is held out by convention and is not used for training.
+    # 52. GoNuclear (3D nucleus segmentation in confocal Arabidopsis ovules)
+    # NOTE: Volume 1170 is the blind test volume by convention, 1139 validates.
     for z in z_slices:
         gonuclear_kwargs = {
             "path": os.path.join(input_path, "gonuclear"),
             "patch_shape": (z, *patch_shape),
             "segmentation_task": "nuclei",
-            "sample_ids": (1135, 1136, 1137, 1139),
             "n_samples": max(1, 400 // n_z),
             **kwargs,
         }
         train_ds.append(
-            UniDataWrapper(datasets.get_gonuclear_dataset(**gonuclear_kwargs), source_ndim=3, group_key=(3, z))
+            UniDataWrapper(
+                datasets.get_gonuclear_dataset(sample_ids=GONUCLEAR_TRAIN_SAMPLES, **gonuclear_kwargs),
+                source_ndim=3, group_key=(3, z),
+            )
+        )
+        val_ds.append(
+            UniDataWrapper(
+                datasets.get_gonuclear_dataset(sample_ids=GONUCLEAR_VAL_SAMPLES, **gonuclear_kwargs),
+                source_ndim=3, group_key=(3, z),
+            )
         )
 
     # 53. NucVerse3D (3D nucleus segmentation in two-photon liver and confocal fly glia)
-    # NOTE: Volumes are 320 px or smaller in plane, so a 256 crop is resized up rather than zero-padded.
+    # NOTE: Volumes are 320 px or smaller in plane, so a 256 crop is resized up rather than zero-padded. The official
+    # test volumes are blind. Liver and liver_hcc give up one train volume for validation; drosophila_glia has only
+    # three train volumes, so the first 20 % of slices of one test volume validate instead.
+    nucverse_root = os.path.join(input_path, "nucverse3d")
+    nucverse_train, nucverse_val, nucverse_val_rois = [], [], []
+    for name in ("liver", "liver_hcc", "drosophila_glia"):
+        paths = datasets.nucverse3d.get_nucverse3d_paths(nucverse_root, dataset=name, split="train")
+        val_volume = NUCVERSE_VAL_VOLUMES.get(name)
+        nucverse_train.extend(p for p in paths if os.path.basename(p) != val_volume)
+        if val_volume is not None:
+            nucverse_val.extend(p for p in paths if os.path.basename(p) == val_volume)
+            nucverse_val_rois.append((slice(None),))
+    glia_test = datasets.nucverse3d.get_nucverse3d_paths(nucverse_root, dataset="drosophila_glia", split="test")
+    nucverse_val.extend(p for p in glia_test if os.path.basename(p) == NUCVERSE_GLIA_VAL_VOLUME)
+    nucverse_val_rois.append((NUCVERSE_GLIA_VAL_Z,))
+    assert len(nucverse_val) == 3 and len(nucverse_train) == 15
+
     for z in z_slices:
         nucverse_kwargs = {
-            "path": os.path.join(input_path, "nucverse3d"),
             "patch_shape": (z, 256, 256),
+            "raw_key": "raw",
+            "label_key": "labels",
+            "is_seg_dataset": True,
             "raw_transform": _resize_raw_to_512,
             "label_transform2": (
                 partial(_resize_then_em_label_trafo, em_trafo_fn=label_trafo(instances=True))
@@ -999,12 +1158,16 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         }
         train_ds.append(
             UniDataWrapper(
-                datasets.get_nucverse3d_dataset(split="train", **nucverse_kwargs), source_ndim=3, group_key=(3, z),
+                torch_em.default_segmentation_dataset(
+                    raw_paths=nucverse_train, label_paths=nucverse_train, **nucverse_kwargs
+                ), source_ndim=3, group_key=(3, z),
             )
         )
         val_ds.append(
             UniDataWrapper(
-                datasets.get_nucverse3d_dataset(split="test", **nucverse_kwargs), source_ndim=3, group_key=(3, z),
+                torch_em.default_segmentation_dataset(
+                    raw_paths=nucverse_val, label_paths=nucverse_val, rois=nucverse_val_rois, **nucverse_kwargs
+                ), source_ndim=3, group_key=(3, z),
             )
         )
 
@@ -1023,7 +1186,57 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2"]},
         }
         train_ds.append(
-            UniDataWrapper(datasets.get_phmamm_dataset(**phmamm_kwargs), source_ndim=3, group_key=(3, z))
+            UniDataWrapper(
+                datasets.get_phmamm_dataset(timepoints=PHMAMM_TRAIN_TIMEPOINTS, **phmamm_kwargs),
+                source_ndim=3, group_key=(3, z),
+            )
+        )
+        val_ds.append(
+            UniDataWrapper(
+                datasets.get_phmamm_dataset(timepoints=PHMAMM_VAL_TIMEPOINTS, **phmamm_kwargs),
+                source_ndim=3, group_key=(3, z),
+            )
+        )
+
+    # 56. BBBC030 (CHO cell segmentation in DIC images)
+    # NOTE: 60 images of 1032x1376 with 1-3 cells per 512 crop, hence the 1-instance sampler. The background spans
+    # about 4 % of the intensity range, so the raw is min-max normalized instead of percentile normalized. The
+    # torch-em split (seed 42) gives 40 / 8 / 12 images; the test split is blind.
+    bbbc030_kwargs = {
+        "path": os.path.join(input_path, "bbbc030"), "patch_shape": patch_shape, "raw_transform": _minmax_raw_trafo,
+        **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "sampler"]},
+        "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
+    }
+    for split, n_samples, ds_list in [("train", 100, train_ds), ("val", 25, val_ds)]:
+        ds_list.append(
+            UniDataWrapper(
+                datasets.get_bbbc030_dataset(split=split, n_samples=n_samples, **bbbc030_kwargs), source_ndim=2,
+            )
+        )
+
+    # 57. Tsakiroglou (nucleus segmentation in the DAPI channel of multiplex IF lymphoma TMA cores)
+    # NOTE: 41 grayscale crops smaller than 256 px on at least one side, so the whole image is drawn and randomly
+    # upscaled and padded to the patch shape. A random 10 % of the official train split (seed 42) validates, the
+    # three official test images are blind.
+    tsakiroglou_raw, tsakiroglou_labels = datasets.histopathology.tsakiroglou.get_tsakiroglou_paths(
+        os.path.join(input_path, "tsakiroglou"), split="train",
+    )
+    ts_train_r, ts_val_r, ts_train_l, ts_val_l = train_test_split(
+        tsakiroglou_raw, tsakiroglou_labels, test_size=0.1, random_state=42
+    )
+    tsakiroglou_kwargs = {
+        "patch_shape": None, "raw_key": None, "label_key": None, "is_seg_dataset": False, "ndim": 2,
+        "raw_transform": _to_8bit,
+        **{k: v for k, v in kwargs.items() if k != "raw_transform"},
+        "transform": partial(_random_resize_and_pad_trafo, patch_shape=patch_shape),
+    }
+    for raws, labs, n_samples, ds_list in [(ts_train_r, ts_train_l, 100, train_ds), (ts_val_r, ts_val_l, 25, val_ds)]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, label_paths=labs, n_samples=n_samples, **tsakiroglou_kwargs
+                ), source_ndim=2,
+            )
         )
 
     # 55. Wing disc (3D cell segmentation in confocal Drosophila wing epithelium)
@@ -1036,63 +1249,19 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             **kwargs,
         }
         train_ds.append(
-            UniDataWrapper(datasets.get_wing_disc_dataset(**wing_disc_kwargs), source_ndim=3, group_key=(3, z))
-        )
-
-    # 56. Parhyale regeneration (3D nucleus segmentation in light-sheet H2B-EGFP)
-    for z in z_slices:
-        parhyale_kwargs = {
-            "path": os.path.join(input_path, "parhyale_regen"),
-            "patch_shape": (z, *patch_shape),
-            "n_samples": max(1, 200 // n_z),
-            **kwargs,
-        }
-        train_ds.append(
-            UniDataWrapper(datasets.get_parhyale_regen_dataset(**parhyale_kwargs), source_ndim=3, group_key=(3, z))
-        )
-
-    # 57. Vibrio cholerae (3D bacteria segmentation in confocal biofilms)
-    for z in z_slices:
-        vibrio_kwargs = {
-            "path": os.path.join(input_path, "vibrio_cholerae"),
-            "patch_shape": (z, *patch_shape),
-            "n_samples": max(1, 300 // n_z),
-            **kwargs,
-        }
-        train_ds.append(
-            UniDataWrapper(datasets.get_vibrio_cholerae_dataset(**vibrio_kwargs), source_ndim=3, group_key=(3, z))
-        )
-
-    # 58. MorphoNet (3D cell and nucleus segmentation across five organisms)
-    # NOTE: The Arabidopsis subset numbers its background as id 1, covering about 35 % of the volume, so it is
-    # remapped to 0. Phallusia has no prepared volumes on disk and is skipped.
-    for z in z_slices:
-        for organism, background_id in [
-            ("arabidopsis_thaliana", 1), ("caenorhabditis_elegans", None),
-            ("patiria_miniata", None), ("tribolium_castaneum", None),
-        ]:
-            morphonet_trafo = (
-                partial(
-                    _background_id_label_trafo, background_id=background_id,
-                    label_trafo=label_trafo(instances=True) if label_trafo is not None
-                    else kwargs.get("label_transform2"),
-                )
-                if background_id is not None
-                else (label_trafo(instances=True) if label_trafo is not None else kwargs.get("label_transform2"))
+            UniDataWrapper(
+                datasets.get_wing_disc_dataset(volumes=WING_DISC_TRAIN_VOLUMES, **wing_disc_kwargs),
+                source_ndim=3, group_key=(3, z),
             )
-            morphonet_kwargs = {
-                "path": os.path.join(input_path, "morphonet"),
-                "patch_shape": (z, *patch_shape),
-                "organism": organism,
-                "label_transform2": morphonet_trafo,
-                "n_samples": max(1, 150 // n_z),
-                **{k: v for k, v in kwargs.items() if k != "label_transform2"},
-            }
-            train_ds.append(
-                UniDataWrapper(
-                    datasets.get_morphonet_dataset(**morphonet_kwargs), source_ndim=3, group_key=(3, z),
-                )
+        )
+        val_ds.append(
+            UniDataWrapper(
+                datasets.get_wing_disc_dataset(
+                    volumes=WING_DISC_TEST_VOLUMES, rois=[(WING_DISC_VAL_Z,)] * len(WING_DISC_TEST_VOLUMES),
+                    **wing_disc_kwargs,
+                ), source_ndim=3, group_key=(3, z),
             )
+        )
 
     return train_ds, val_ds
 
@@ -1964,6 +2133,126 @@ LICONN_ROI = (slice(64, 640), slice(0, 4608), slice(None))
 XPRESS_CORE = (slice(128, 328), slice(128, 328), slice(128, 328))
 
 SPATCH_HE_SUBSETS = ["visium_hd_ov", "visium_hd_hcc", "visium_hd_coad", "stereoseq_ov"]
+
+# CartoCell uses the official folders; 'test' is the blind split.
+CARTOCELL_TRAIN_FOLDERS = ("train_M1", "train_M2")
+CARTOCELL_VAL_FOLDER = "validation"
+CARTOCELL_TEST_FOLDER = "test"
+
+GONUCLEAR_TRAIN_SAMPLES = (1135, 1136, 1137)
+GONUCLEAR_VAL_SAMPLES = (1139,)
+GONUCLEAR_TEST_SAMPLES = (1170,)
+
+BITDEPTH_MAGNIFICATIONS = ("20x", "40x_air", "40x_oil", "63x_oil")
+CELLBINDB_STAINS = ("DAPI", "ssDNA", "mIF", "HE")
+LPC_NUCSEG_SOURCES = ("gnf", "ic100")
+
+# Xenium is split by slide, shared by the nucleus and cell targets.
+XENIUM_TRAIN_SAMPLES = ("human_pancreas", "human_lung_cancer", "mouse_colon", "human_prostate")
+XENIUM_VAL_SAMPLES = ("human_skin",)
+XENIUM_TEST_SAMPLES = ("human_breast",)
+
+# EnSeg is split by animal; the C and TW tags are the two experimental groups.
+ENSEG_TRAIN_ANIMALS = ("2C", "4C", "22TW", "23TW")
+ENSEG_VAL_ANIMALS = ("5C",)
+ENSEG_TEST_ANIMALS = ("28TW",)
+
+# CTC datasets of the v1 generalist; Fluo-N2DH-GOWT1 and Fluo-N2DL-HeLa stay out.
+CTC_DATASETS = (
+    "BF-C2DL-HSC", "BF-C2DL-MuSC", "DIC-C2DH-HeLa", "Fluo-C2DL-Huh7", "Fluo-C2DL-MSC", "Fluo-N2DH-SIM+",
+    "PhC-C2DH-U373", "PhC-C2DL-PSC",
+)
+
+# Omnipose subsets and their samples per epoch; a random 10 % of each official train subset validates.
+OMNIPOSE_TRAIN_SAMPLES = {"bact_fluor": 150, "bact_phase": 250, "worm": 50, "worm_high_res": 50}
+
+# TOIAM is split by movie (the folder name).
+TOIAM_TRAIN_MOVIES = ("00", "01", "02")
+TOIAM_VAL_MOVIES = ("03",)
+TOIAM_TEST_MOVIES = ("04",)
+
+# OrganoID subsets and their samples per epoch; both use the official splits.
+ORGANOID_SOURCES = {"original": 200, "mouse": 60}
+
+# CISD is split by slide (the filename prefix); three slides validate, three are blind, drawn with seed 42.
+CISD_VAL_SLIDES = ("0239", "0243", "0248")
+CISD_TEST_SLIDES = ("0235", "0251", "0255")
+
+# CELLULAR is split by well.
+CELLULAR_TRAIN_WELLS = ("C03", "C05", "I06", "K07")
+CELLULAR_VAL_WELLS = ("I04",)
+CELLULAR_TEST_WELLS = ("C06",)
+
+# Cell-ACDC is split by movie, named '<experiment folder>/Position_<n>'.
+CELL_ACDC_VAL_MOVIES = ("MIA_KC_htb1_mCitrine_flu_control_labeled/Position_1",)
+CELL_ACDC_TEST_MOVIES = ("MIA_KC_htb1_mCitrine_labeled/Position_8",)
+
+
+def cell_acdc_movie(path):
+    """The movie a Cell-ACDC frame stack belongs to, as '<experiment folder>/Position_<n>'."""
+    parts = os.path.normpath(path).split(os.sep)
+    return "/".join(parts[parts.index("TimeLapse_2D") + 1:parts.index("TimeLapse_2D") + 3])
+
+
+# CVZ Fluo is split by Vectra patient or CODEX / Zeiss slide, shared by the cell and DAPI stains.
+CVZ_VAL_GROUPS = ("Vectra:P07", "Vectra:P12", "Zeiss:ZP-10002")
+CVZ_TEST_GROUPS = ("Vectra:P01", "Vectra:P11", "Zeiss:Spleen", "CODEX:CODEX_LN")
+
+
+def cvz_group(path):
+    """The patient (Vectra) or slide (CODEX, Zeiss) a CVZ crop belongs to, as 'instrument:name'."""
+    parts = os.path.normpath(path).split(os.sep)
+    instrument = parts[parts.index("cvz") + 1]
+    name = os.path.basename(path)
+    match = re.match(r"(P\d+)-", name)
+    return f"{instrument}:{match.group(1) if match else name.split('(')[0]}"
+
+
+# NucVerse3D: one train volume per liver collection validates; the glia validation is a slab of a test volume.
+NUCVERSE_VAL_VOLUMES = {
+    "liver": "20221006_13_Control_8w_Periportal.h5", "liver_hcc": "20221014_6_control_16w_centro.h5",
+}
+NUCVERSE_GLIA_VAL_VOLUME = "C2_M01.h5"
+NUCVERSE_GLIA_VAL_Z = slice(0, 11)  # of 53
+
+# Where a blind test volume also validates, its first 20 % of slices are the validation region.
+NIS3D_VAL_Z = slice(0, 40)  # Drosophila_1, of 198
+EMBEDSEG_VAL_Z = {"Mouse-Skull-Nuclei-CBG": slice(0, 25), "Platynereis-ISH-Nuclei-CBG": slice(0, 21)}  # of 125 / 105
+
+# EmbedSeg Platynereis-Nuclei is one time-lapse of 9 volumes; timepoint 300 validates, 350 is blind.
+EMBEDSEG_PLATY_NUCLEI_TRAIN_TIMEPOINTS = slice(0, 7)
+EMBEDSEG_PLATY_NUCLEI_VAL_TIMEPOINTS = slice(7, 8)
+EMBEDSEG_PLATY_NUCLEI_TEST_TIMEPOINTS = slice(8, 9)
+
+# EmbedSeg Mouse-Organoid-Cells is one time-lapse of 108 volumes and is split along time; the last block is blind.
+EMBEDSEG_ORGANOID_TRAIN_TIMEPOINTS = slice(0, 86)
+EMBEDSEG_ORGANOID_VAL_TIMEPOINTS = slice(86, 97)
+EMBEDSEG_ORGANOID_TEST_TIMEPOINTS = slice(97, 108)
+
+# PhMamm is one time-lapse (t001-t101, t008 missing) and is split along time; the last block is blind.
+PHMAMM_TRAIN_TIMEPOINTS = range(1, 82)
+PHMAMM_VAL_TIMEPOINTS = range(82, 92)
+PHMAMM_TEST_TIMEPOINTS = range(92, 102)
+
+# Wing disc has one confocal and one multiphoton volume for training; the other two are the blind test volumes,
+# of which the first slices validate (20 % of the 60-slice volume; the 38-slice volume gives up 12 as well).
+WING_DISC_TRAIN_VOLUMES = ("WD1_15-02_WT_confocalonly", "WD1.1_17-03_WT_MP")
+WING_DISC_TEST_VOLUMES = ("WD2.1_21-02_WT_confocalonly", "WD3.2_21-03_WT_MP")
+WING_DISC_VAL_Z = slice(0, 12)
+
+# PNAS Arabidopsis is split by plant, since the timepoints of one plant are near-duplicates.
+PNAS_TRAIN_PLANTS = ("plant1", "plant2", "plant13", "plant15")
+PNAS_VAL_PLANTS = ("plant4",)
+PNAS_TEST_PLANTS = ("plant18",)
+
+
+def _train_val_test_split(*lists, seed=42):
+    """Split parallel path lists 80 / 10 / 10 with a fixed seed; returns (train, val, test) per list."""
+    rest_and_test = train_test_split(*lists, test_size=0.1, random_state=seed)
+    rest, test = rest_and_test[0::2], rest_and_test[1::2]
+    train_and_val = train_test_split(*rest, test_size=1 / 9, random_state=seed)
+    train, val = train_and_val[0::2], train_and_val[1::2]
+    return [(tr, va, te) for tr, va, te in zip(train, val, test)]
 
 
 def _compute_label_rois(label_paths, label_key, min_ids=1):
