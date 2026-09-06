@@ -493,3 +493,19 @@ density 10, min_size 50, sigma 1.0, n_iter 50, dt 0.5, foreground weight 0.5, bo
 `["sparse_volume"]` = min_size 200, foreground 0.6. The other backbones keep their registry values and
 an empty volume table; the dense pipeline is unchanged. The old values remain reachable as an explicit
 configuration (`configs/ais_control_v4_old_defaults.json`, filter off via `Infinity`).
+
+## Phase 6: canonical runs, production and the 3D test manifest (submitted 2026-09-06 23:15)
+
+- Canonical A2 screens (job 15767503 `a2_canonical`, trial `a2-1`): `v4-old-defaults` (explicit old values)
+  against `current-defaults` (the promoted library defaults) on v5 primary / training_extra / holdout and
+  apg3d primary / holdout, plus `--ndim 2` runs of v5 primary and holdout for
+  `compare_apg_optimization.py --target quality`.
+- Production (`submit_all_evaluations.py --segmentation_type automatic --segmentation_mode ais
+  --all_datasets --modality lm -m hvit_t --skip_tuning`, experiment folder
+  `experiments/v4_geodesic_ais_optimization`): jobs 15767555-57 with the new defaults (result tag
+  `a2-defaults`) and 15767589-91 with `--ais_params configs/ais_control_v4_old_defaults.json` (tag
+  `old-defaults`), 33 LM datasets each (23 2d + 10 3d LM; the dense EM pipeline is unchanged, its §14.3
+  numbers stand). Reader: `report_ais_production.py -e <folder> --baseline default_old-defaults --candidate
+  default_a2-defaults`, which reports the twelve strictly unseen 2d datasets separately.
+- 3D test manifest (`manifest_test_apg3d-v1.json`, 56 crops of the seven test-only LM datasets, opened
+  once): predictions cached on the session GPU, then `screen` old vs new defaults (trial `test-1`).
