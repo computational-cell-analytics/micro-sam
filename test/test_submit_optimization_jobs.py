@@ -1,4 +1,5 @@
 import sys
+import shlex
 from pathlib import Path
 
 import pytest
@@ -50,7 +51,7 @@ def test_job_script_header_and_activation_order(tmp_path):
     assert all(i < first_command for i, line in enumerate(lines) if line.startswith("#SBATCH"))
     order = [
         lines.index("set -eo pipefail"), lines.index("source ~/.bashrc"), lines.index("set -u"),
-        lines.index("micromamba activate new-stack"), lines.index(f"cd {soj.REPOSITORY_ROOT}"),
+        lines.index("micromamba activate super"), lines.index(f"cd {soj.REPOSITORY_ROOT}"),
         lines.index("export PYTHONUNBUFFERED=1"),
     ]
     assert order == sorted(order)
@@ -133,7 +134,10 @@ def test_benchmark_builder(tmp_path):
     assert len(tags) == len(set(tags)) == 4
     for _, command in tasks:
         assert "--trial-id" in command and "--ndim 2" in command and "--subset holdout" in command
-    assert any(f"--config {config.resolve()}" in command for _, command in tasks)
+    arguments = [shlex.split(command) for _, command in tasks]
+    assert any(
+        args[args.index("--config") + 1] == str(config.resolve()) for args in arguments if "--config" in args
+    )
     assert any("my_config" in tag for tag in tags)
     serial = campaign.benchmark_tasks([config], ["trial-1"], serialize=True, bracket=True)
     assert len(serial) == 1
