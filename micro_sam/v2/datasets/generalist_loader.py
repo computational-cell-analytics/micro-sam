@@ -216,10 +216,11 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     val_ds.append(UniDataWrapper(_get_cvz_dataset("cell", "val"), source_ndim=2))
     val_ds.append(UniDataWrapper(_get_cvz_dataset("dapi", "val"), source_ndim=2))
 
-    # 3. DSB dataset (nucleus segmentation in fluorescence and histopathology images)
-    # NOTE: The 'full' source holds all 661 images of the Kaggle stage-1 training set, 554 fluorescence and 107
-    # histopathology. A random 10 % (seed 42) validates; DSB has no blind in-domain test.
-    dsb_raw, dsb_labels = datasets.dsb.get_dsb_paths(os.path.join(input_path, "dsb"), source="full")
+    # 3. DSB dataset (nucleus segmentation in fluorescence images)
+    # NOTE: The 554 fluorescence images of the 'full' source (all Kaggle stage-1 training images) minus the 50 images
+    # of the StarDist test split, which is the blind test. A random 10 % of the rest (seed 42) validates. The 107
+    # histopathology images train with the histopathology datasets.
+    dsb_raw, dsb_labels = dsb_fluorescence_training_paths(os.path.join(input_path, "dsb"))
     dsb_train_r, dsb_val_r, dsb_train_l, dsb_val_l = train_test_split(
         dsb_raw, dsb_labels, test_size=0.1, random_state=42
     )
@@ -1350,6 +1351,11 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     emneuron_path = os.path.join(input_path, "emneuron")
     all_train_raw, all_train_lbl = get_emneuron_paths(emneuron_path, "train")
     all_val_raw, all_val_lbl = get_emneuron_paths(emneuron_path, "val")
+    # Only the in-distribution validation volumes validate. The out-of-distribution folder holds the Harris
+    # hippocampus volume, the source of the SynapseWeb OOD test, next to Ionsem and Microns.
+    keep = [os.sep + "InDistribution" + os.sep in p for p in all_val_raw]
+    all_val_raw = [p for p, k in zip(all_val_raw, keep) if k]
+    all_val_lbl = [p for p, k in zip(all_val_lbl, keep) if k]
 
     def _split(raw_paths, label_paths, small_keys):
         small_r = [r for r in raw_paths if any(k in r for k in small_keys)]
@@ -1982,34 +1988,6 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             )
         )
 
-    # 20. NISB (synthetic neuron instance segmentation benchmark, 27 um cubes at 9x9x20 nm)
-    # NOTE: The base setting's official split: five training cubes train, the val cube validates and the test cube is
-    # blind. Synthetic labels are dense by construction.
-    nisb_train = datasets.nisb.get_nisb_paths(os.path.join(input_path, "nisb"), setting="base", split="train")
-    nisb_val = datasets.nisb.get_nisb_paths(os.path.join(input_path, "nisb"), setting="base", split="val")
-    for z in z_slices:
-        nisb_kwargs = {
-            "patch_shape": (z, *patch_shape),
-            "ndim": 3,
-            "is_seg_dataset": True,
-            "label_transform2": (
-                partial(_em_label_trafo, label_trafo=label_trafo(instances=True, sampling=(2.2, 1, 1)))
-                if label_trafo is not None else kwargs.get("label_transform2")
-            ),
-            "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
-            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
-        }
-        for paths, ds_list, n_samples in [(nisb_train, train_ds, 300), (nisb_val, val_ds, 50)]:
-            ds_list.append(
-                UniDataWrapper(
-                    torch_em.default_segmentation_dataset(
-                        raw_paths=paths, raw_key="img", label_paths=paths, label_key="seg",
-                        n_samples=max(1, n_samples // n_z), **nisb_kwargs,
-                    ),
-                    source_ndim=3, group_key=(3, z),
-                )
-            )
-
     # 21. LICONN (neurite segmentation in expansion microscopy of mouse CA1, 18x18x24 nm raw, ~16x expansion)
     # NOTE: Light-based connectomics, so it belongs to the EM neurite pool. The proofread segmentation covers
     # only z 64-640 and y < 4608 of the volume (LICONN_ROI); within it z < 512 trains, 512 <= z < 576 validates
@@ -2268,6 +2246,21 @@ WING_DISC_VAL_Z = slice(0, 12)
 PNAS_TRAIN_PLANTS = ("plant1", "plant2", "plant13", "plant15")
 PNAS_VAL_PLANTS = ("plant4",)
 PNAS_TEST_PLANTS = ("plant18",)
+
+
+def dsb_fluorescence_training_paths(path):
+    """The DSB fluorescence images of the 'full' source without the StarDist test images.
+
+    The StarDist test files are named by their Kaggle image id, which is the folder name in the 'full' source, so
+    the blind test images are excluded by id.
+    """
+    test_ids = {
+        os.path.splitext(os.path.basename(p))[0]
+        for p in datasets.dsb.get_dsb_paths(path, source="reduced", split="test")[0]
+    }
+    raw, labels = datasets.dsb.get_dsb_paths(path, source="full", domain="fluo")
+    keep = [os.path.basename(os.path.dirname(os.path.dirname(p))) not in test_ids for p in raw]
+    return [p for p, k in zip(raw, keep) if k], [p for p, k in zip(labels, keep) if k]
 
 
 def _train_val_test_split(*lists, seed=42):
@@ -2678,7 +2671,28 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             )
         )
 
-    # 17. CellBinDB H&E (nucleus segmentation in H&E tiles of 512x512)
+    # 17. DSB histopathology (nucleus segmentation in the 107 H&E images of the Kaggle stage-1 training set)
+    # NOTE: A random 10 % (seed 42) validates; there is no blind test. The fluorescence images train with light
+    # microscopy, see dsb_fluorescence_training_paths.
+    dsb_hp_raw, dsb_hp_labels = datasets.dsb.get_dsb_paths(
+        os.path.join(input_path, "dsb"), source="full", domain="histopatho",
+    )
+    dsb_hp_train_r, dsb_hp_val_r, dsb_hp_train_l, dsb_hp_val_l = train_test_split(
+        dsb_hp_raw, dsb_hp_labels, test_size=0.1, random_state=42
+    )
+    dsb_hp_kwargs = {"patch_shape": patch_shape, "is_seg_dataset": False, "raw_key": None, "label_key": None, **kwargs}
+    for raws, labs, ds_list, n_samples in [
+        (dsb_hp_train_r, dsb_hp_train_l, train_ds, 100), (dsb_hp_val_r, dsb_hp_val_l, val_ds, 25)
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, label_paths=labs, n_samples=n_samples, **dsb_hp_kwargs
+                ), source_ndim=2,
+            )
+        )
+
+    # 18. CellBinDB H&E (nucleus segmentation in H&E tiles of 512x512)
     # NOTE: The H&E tiles of CellBinDB; split 80 / 10 / 10 at random (seed 42), the test tiles are blind.
     cb_he_raw, cb_he_labels = datasets.cellbindb.get_cellbindb_paths(
         path=os.path.join(input_path, "cellbindb"), data_choice=CELLBINDB_HE_STAIN,

@@ -34,7 +34,8 @@ from micro_sam.v2.datasets.generalist_loader import (
     NUCVERSE_GLIA_VAL_Z, NUCVERSE_VAL_VOLUMES, ORGANOID_SOURCES, PANNUKE_FOLD2_VAL_TILES, PHMAMM_TEST_TIMEPOINTS,
     PHMAMM_VAL_TIMEPOINTS,
     PNAS_TEST_PLANTS, PNAS_VAL_PLANTS, TOIAM_TEST_MOVIES, TOIAM_VAL_MOVIES, WING_DISC_TEST_VOLUMES, WING_DISC_VAL_Z,
-    XENIUM_TEST_SAMPLES, XENIUM_VAL_SAMPLES, cell_acdc_movie, cvz_group, _train_val_test_split,
+    XENIUM_TEST_SAMPLES, XENIUM_VAL_SAMPLES, cell_acdc_movie, cvz_group, dsb_fluorescence_training_paths,
+    _train_val_test_split,
 )
 
 
@@ -114,7 +115,8 @@ DATASETS_2D_LM_CELL_ID = ["tissuenet", "omnipose_bact_fluor", "cvz_fluo_cell", "
 DATASETS_2D_LM_CELL_SUPPLEMENTARY = ["dememseg", "pan_multiplex", "xenium_cells"]
 DATASETS_2D_LM_CELL_OOD = ["covid_if_cells", "medussa", "hpa"]
 DATASETS_2D_LM_NUCLEUS_ID = [
-    "cvz_fluo_dapi", "dynamicnuclearnet", "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei", "tsakiroglou",
+    "dsb", "cvz_fluo_dapi", "dynamicnuclearnet", "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei",
+    "tsakiroglou",
 ]
 DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY = ["xenium_nuclei"]
 DATASETS_2D_LM_NUCLEUS_OOD = [
@@ -143,15 +145,15 @@ DATASETS_2D_LM = list(dict.fromkeys(
     + DATASETS_2D_LM_LABEL_FREE_OOD + DATASETS_2D_LM_LABEL_FREE_RESERVE
 ))
 
-# Histopathology nuclei. In-domain: the official test splits of the v5 training datasets, which the
-# generalist loader never touches. Out-of-domain: datasets kept out of training. lynsec is split by
-# stain so H&E and IHC are reported apart.
-DATASETS_2D_HP_ID = [
-    "cpm17", "glysac", "histo_miner", "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc",
-    "monuseg", "pannuke", "puma", "srsanet", "tnbc_celltype",
+# Histopathology nuclei. The main panel holds the official test splits of the v5 training datasets shared with the
+# baselines, which the generalist loader never touches. Supplementary: training datasets with a blind split outside
+# the main panel; lizard (overlap with CoNSeP and PanNuke), lynsec and tnbc_celltype (baseline exposure) stay there
+# until those are resolved. Out-of-domain: datasets kept out of training. lynsec is split by stain so H&E and IHC
+# are reported apart.
+DATASETS_2D_HP_ID = ["cpm17", "glysac", "histo_miner", "monuseg", "pannuke", "puma"]
+DATASETS_2D_HP_SUPPLEMENTARY = [
+    "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc", "srsanet", "tnbc_celltype", "cellbindb_he",
 ]
-# Supplementary: the CellBinDB H&E tiles train with histopathology and keep a blind split, outside the main panel.
-DATASETS_2D_HP_SUPPLEMENTARY = ["cellbindb_he"]
 DATASETS_2D_HP_OOD = ["cytodark0", "deepliif", "khoshdeli", "panoptils", "pcns"]
 DATASETS_HP = DATASETS_2D_HP_ID + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_2D_HP_OOD
 
@@ -164,7 +166,7 @@ DATASETS_2D = DATASETS_2D_LM + DATASETS_HP + DATASETS_2D_EM
 # Ground-truth size floor that drops the crop-severed slivers relabelling promotes to objects. It
 # defines the ground truth, so it is measured, never tuned.
 GT_MIN_SIZE_2D = {
-    "livecell": 50,
+    "livecell": 50, "dsb": 10,
     "deepbacs": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
     "u20s": 10, "vicar": 25, "yeaz": 10,
 }
@@ -185,15 +187,15 @@ DATASETS_3D_LM = (
 )
 
 # Neurite segmentation: the blind regions of the v5 training sets (see EM_ROIS and the path resolver). The main
-# panel holds the sources shared with the baselines, the supplementary panel the remaining training sets. nisb stays
-# in the main panel until its move to synthetic OOD is decided. synapseweb is scored inside its annotated cores only.
-# humanneurons (the cached H01 crop) is no OOD set: H01 trains through EMNeuron, so it is supplementary at most.
-DATASETS_3D_EM_NEURITE_ID = ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress", "nisb"]
+# panel holds the sources shared with the baselines, the supplementary panel the remaining training sets. nisb is
+# synthetic and kept out of training, so it is a synthetic OOD test. synapseweb is scored inside its annotated cores
+# only. humanneurons (the cached H01 crop) is no OOD set: H01 trains through EMNeuron, so it is supplementary at most.
+DATASETS_3D_EM_NEURITE_ID = ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress"]
 DATASETS_3D_EM_NEURITE_SUPPLEMENTARY = [
     "snemi", "axonem", "fib25", "manc", "malecns", "wafer4", "minnie65", "zebrafinch_j0251", "wildenberg",
     "humanneurons",
 ]
-DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb"]
+DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb", "nisb"]
 # Cell segmentation: Platynereis volume 9 and the DenseCell val volume are blind; the tumor spheroid slices are 2d.
 DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell"]
 
@@ -639,6 +641,16 @@ def _get_2d_lm_data_paths(
         keep = [cvz_group(path) in groups for path in img]
         img = [path for path, k in zip(img, keep) if k]
         gt = [path for path, k in zip(gt, keep) if k]
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "dsb":
+        # The StarDist fluorescence test split is blind; tuning uses the loader's 10 % of the remaining images.
+        if split == "test":
+            img, gt = lm.dsb.get_dsb_paths(
+                path=os.path.join(p, "dsb"), source="reduced", split="test", download=download,
+            )
+        else:
+            img, gt = _loader_val_part(*dsb_fluorescence_training_paths(os.path.join(p, "dsb")), split)
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "tissuenet":
@@ -1221,7 +1233,7 @@ def _get_3d_em_data_paths(
         return [raw], [labels], "raw", "labels"
 
     if dataset_name == "nisb":
-        # The official val cube tunes, the official test cube is blind; both are 27 um synthetic cubes.
+        # Synthetic OOD: the official test cube is scored, the official val cube tunes; nisb is not trained on.
         paths = em.nisb.get_nisb_paths(
             os.path.join(p, "nisb"), setting="base", split="val" if is_val else "test", download=download,
         )
