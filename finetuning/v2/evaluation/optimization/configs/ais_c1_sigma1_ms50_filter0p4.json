@@ -1,0 +1,9 @@
+{
+  "name": "c1-sigma1-ms50-filter0p4",
+  "mode": "auto",
+  "params_2d": {
+    "sigma": 1.0,
+    "min_size": 50,
+    "boundary_magnitude_max": 0.4
+  }
+}

@@ -24,12 +24,21 @@ from .util import DEFAULT_MODEL
 # combination across every dataset that shares that mode's grid, computed separately for each of the
 # 4 registry backbones.
 # 'boundary_magnitude_max' is the instance filter of `flow_instance_segmentation`; None keeps it off.
+# 'sparse_volume' holds the keys whose default differs for a volume (a size floor counts voxels, not
+# pixels); it is layered over 'sparse' by `default_postprocessing(..., ndim=3)`.
+#
+# The hvit_t entry is the result of the 2026-09 AIS optimization on the joint/v4 geodesic checkpoint
+# (finetuning/v2/evaluation/optimization/notes/AIS_V4_OPTIMIZATION.md): against the registry values
+# (min_size 100, sigma 0.5, no filter) it gains +2.4 % balanced mSA on eleven 2d development datasets
+# (9 up, worst -0.8 %), +4.3 % on the 2d holdout and +22 % on the 3d LM crops, with the wider density
+# smoothing merging the jittering sinks of large cells and the boundary filter removing false regions.
 DEFAULT_POSTPROCESSING = {
     "hvit_t": {
         "sparse": {
-            "foreground_threshold": 0.5, "density_threshold": 10.0, "min_size": 100,
-            "sigma": 0.5, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5, "boundary_magnitude_max": None,
+            "foreground_threshold": 0.5, "density_threshold": 10.0, "min_size": 50,
+            "sigma": 1.0, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5, "boundary_magnitude_max": 0.4,
         },
+        "sparse_volume": {"min_size": 200, "foreground_threshold": 0.6},
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_s": {
@@ -37,6 +46,7 @@ DEFAULT_POSTPROCESSING = {
             "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
             "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.75, "boundary_magnitude_max": None,
         },
+        "sparse_volume": {},
         "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 25, "dt": 0.5},
     },
     "hvit_b": {
@@ -44,6 +54,7 @@ DEFAULT_POSTPROCESSING = {
             "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
             "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.65, "boundary_magnitude_max": None,
         },
+        "sparse_volume": {},
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_l": {
@@ -51,22 +62,25 @@ DEFAULT_POSTPROCESSING = {
             "foreground_threshold": 0.4, "density_threshold": 10.0, "min_size": 50,
             "sigma": 0.5, "n_iter": 50, "dt": 0.25, "foreground_weight": 0.65, "boundary_magnitude_max": None,
         },
+        "sparse_volume": {},
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 1.0, "n_iter": 50, "dt": 0.5},
     },
 }
 
 
-def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse") -> dict:
-    """The default postprocessing parameters for one model type and mode.
+def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse", ndim: int = 2) -> dict:
+    """The default postprocessing parameters for one model type, mode and dimensionality.
 
     Args:
         model_type: The SAM2 backbone, e.g. 'hvit_t', or a finetuned model built on one, e.g.
             'hvit_t_cells' (only the backbone prefix is used to look up the table). Must be one of the
             4 registry backbones.
         mode: 'sparse' (`flow_instance_segmentation`) or 'dense' (`run_multicut`).
+        ndim: The number of spatial dimensions of the data, 2 or 3. A volume takes the
+            '<mode>_volume' overrides of the table on top of the mode's defaults.
 
     Returns:
-        The default parameter dict for that model type and mode.
+        The default parameter dict for that model type, mode and dimensionality.
     """
     backbone = model_type[:6]
     if backbone not in DEFAULT_POSTPROCESSING:
@@ -74,7 +88,11 @@ def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse"
             f"No default postprocessing parameters for model type '{model_type}'. "
             f"Choose one built on a backbone in {sorted(DEFAULT_POSTPROCESSING)}."
         )
-    return DEFAULT_POSTPROCESSING[backbone][mode]
+    table = DEFAULT_POSTPROCESSING[backbone]
+    defaults = dict(table[mode])
+    if ndim == 3:
+        defaults.update(table.get(f"{mode}_volume", {}))
+    return defaults
 
 
 def _compute_flow_density(
@@ -156,17 +174,30 @@ def drop_instances_without_boundary_dip(
     Returns:
         The filtered segmentation, same dtype and shape.
     """
-    from scipy.ndimage import median as labelled_median
-    from skimage.segmentation import find_boundaries
-
-    boundary = find_boundaries(segmentation, mode="inner") & (segmentation != 0)
-    ids = np.unique(segmentation[boundary])
-    ids = ids[ids != 0]
-    if len(ids) == 0:
+    # The inner boundary: instance pixels with an axis neighbour of another label (or background).
+    boundary = np.zeros(segmentation.shape, dtype=bool)
+    for axis in range(segmentation.ndim):
+        lower = [slice(None)] * segmentation.ndim
+        upper = [slice(None)] * segmentation.ndim
+        lower[axis], upper[axis] = slice(None, -1), slice(1, None)
+        differs = segmentation[tuple(lower)] != segmentation[tuple(upper)]
+        boundary[tuple(lower)] |= differs
+        boundary[tuple(upper)] |= differs
+    boundary &= segmentation != 0
+    if not boundary.any():
         return segmentation
-    magnitude = np.linalg.norm(directed_distances, axis=0)
-    medians = np.asarray(labelled_median(magnitude, labels=np.where(boundary, segmentation, 0), index=ids))
-    drop = ids[medians > max_median]
+    labels = segmentation[boundary]
+    values = np.linalg.norm(directed_distances[(slice(None),) + np.nonzero(boundary)], axis=0)
+    # One sort over the boundary pixels gives every instance's median (the mean of the two middle values
+    # for an even count, like `scipy.ndimage.median`).
+    order = np.lexsort((values, labels))
+    labels, values = labels[order], values[order]
+    starts = np.flatnonzero(np.r_[True, labels[1:] != labels[:-1]])
+    counts = np.diff(np.r_[starts, len(labels)])
+    upper_middle = values[starts + counts // 2]
+    lower_middle = values[starts + (counts - 1) // 2]
+    medians = 0.5 * (upper_middle + lower_middle)
+    drop = labels[starts][medians > max_median]
     if drop.size == 0:
         return segmentation
     return np.where(np.isin(segmentation, drop), 0, segmentation).astype(segmentation.dtype)
@@ -220,7 +251,7 @@ def flow_instance_segmentation(
     Returns:
         Instance segmentation, uint32 array, same spatial shape as foreground.
     """
-    defaults = default_postprocessing(model_type, "sparse")
+    defaults = default_postprocessing(model_type, "sparse", ndim=foreground.ndim)
     if foreground_threshold is None:
         foreground_threshold = defaults["foreground_threshold"]
     if boundary_magnitude_max is None:

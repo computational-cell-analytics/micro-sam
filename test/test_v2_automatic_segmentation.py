@@ -973,8 +973,24 @@ def test_drop_instances_without_boundary_dip_removes_false_regions_only():
     assert np.array_equal(disabled, unfiltered)
 
 
-def test_flow_instance_segmentation_default_filter_is_off():
+def test_default_postprocessing_per_backbone_and_dimension():
     from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, default_postprocessing
 
-    for backbone in DEFAULT_POSTPROCESSING:
+    # The optimized hvit_t defaults: filter on, wider smoothing, ground-truth-like size floor; a volume
+    # counts voxels and takes a higher foreground threshold. The other backbones keep the registry values.
+    images = default_postprocessing("hvit_t", "sparse", ndim=2)
+    volumes = default_postprocessing("hvit_t", "sparse", ndim=3)
+    assert images["boundary_magnitude_max"] == 0.4 and images["sigma"] == 1.0 and images["min_size"] == 50
+    assert volumes["min_size"] == 200 and volumes["foreground_threshold"] == 0.6
+    assert {k: v for k, v in volumes.items() if k not in ("min_size", "foreground_threshold")} == {
+        k: v for k, v in images.items() if k not in ("min_size", "foreground_threshold")
+    }
+    for backbone in ("hvit_s", "hvit_b", "hvit_l"):
         assert default_postprocessing(backbone, "sparse")["boundary_magnitude_max"] is None
+        assert default_postprocessing(backbone, "sparse", ndim=3) == default_postprocessing(backbone, "sparse")
+    assert "sparse_volume" in DEFAULT_POSTPROCESSING["hvit_t"]
+    # A finetuned model built on the backbone resolves to the backbone's table.
+    assert default_postprocessing("hvit_t_cells", "sparse") == images
+    # The returned dict is a copy: mutating it must not change the table.
+    images["sigma"] = 99.0
+    assert default_postprocessing("hvit_t", "sparse")["sigma"] == 1.0
