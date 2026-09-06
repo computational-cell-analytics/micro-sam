@@ -279,3 +279,6 @@ out to be one-pixel boundary conventions on small objects (see the closing secti
   The epoch after the clean-up is `f76ee7170ca77da882c0078dfaa5b301`.
 - Everything under "Continuation checklist", "Session 3" and "Visual case check" describes jobs and files
   of the closed campaigns; the output-root trees they name stay as data.
+- 2026-09-06: the production submitter defaults were fixed (`submit_all_evaluations.py`: environment `new-stack`,
+  3D jobs on `1g.20gb:1`; `parameter_search.py` array scripts activate `new-stack`), so the overrides this note
+  describes for the `super` environment are no longer needed.

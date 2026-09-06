@@ -29,8 +29,9 @@ the refinement statistics columns, and the configuration files under `optimizati
 
 ## 2. Environment and cluster
 
-- Environment: `micromamba activate new-stack`. The `super` environment that `submit_all_evaluations.py`
-  and `parameter_search.py` default to does not exist on grete.
+- Environment: `micromamba activate new-stack`. Both submitters (`submit_all_evaluations.py`,
+  `parameter_search.py`) activate it by default since 2026-09-06; the earlier default `super` does not exist
+  on grete.
 - Partition `grete:preemptible` (2-day limit). GRES pools: `1g.10gb:1` (plentiful), `1g.20gb:1`
   (8 slices), `2g.20gb:1` (16 slices), `3g.40gb:1` (8). `grete:interactive` allows two jobs per user
   for 12 h. Every job needs `--constraint=inet`. Account `nim00007`; QOS `2h` and `normal` only.
@@ -55,6 +56,9 @@ the refinement statistics columns, and the configuration files under `optimizati
   re-submits the unfinished tasks; `--local` runs the same tasks sequentially on the session GPU.
   `MICRO_SAM2_JOINT_CHECKPOINT_ROOT` and `MICRO_SAM2_JOINT_EXPORT_ROOT` are pinned into `job.sh`
   (`PINNED_ENV_VARS`), so a job resolves the same checkpoints as the shell that submitted it.
+- Production evaluations go through `submit_all_evaluations.py` (one job per dataset and mode, 8 h,
+  `grete:preemptible`, `--constraint=inet`): 2D jobs `1g.10gb:1` / 16G, 3D jobs `1g.20gb:1` / 64G, both
+  checkpoint variables pinned into the script; `--gpu`, `--memory`, `--env`, `--dry` override or inspect.
 - Always `--dry-run` first and read `job.sh`; `sbatch --test-only job.sh` checks the header.
 - Runs resume per sample from `samples.csv` (2D) or `crops/*.json` (3D), both written atomically, so a
   requeued task continues where it stopped.
@@ -265,7 +269,9 @@ Epochs of the 2026-09 campaigns: `aeb1aca09a5fff43d2b8bb8bacff2b06` (campaign st
 `d11e2404…` (phase 0 hooks) → `14800942…` (NaN stability fix) → `26a1003788ea2825356b486da1496fd7`
 (harness-only edit, accidental) → `41abe8ca0cf86fadcf5d46ea183bb296` (structural hooks) →
 `4fa97979b2aa4173e3c1d3fd38d00b66` (refinement kwargs; the last epoch of `apg-optim-fable`) →
-`f76ee7170ca77da882c0078dfaa5b301` (this branch after the clean-up commit). Historical run directories
+`f76ee7170ca77da882c0078dfaa5b301` (this branch after the clean-up commit; the baselines of section 14) →
+`e1903b1b3c1e4e3610c71e1d0bd81f1d` (2026-09-06, harness-only: the `parameter_search.py` job template activates `new-stack`,
+results unaffected). Historical run directories
 stay valid records under their own epochs; the 3D aggregate reads them through `sibling_run_dirs`.
 
 ## 12. Output root layout
@@ -310,3 +316,80 @@ Historical trees written only by code that lives on `apg-optim-fable` (data, rea
 6. Judge every candidate under the generalization rule: development on primary + training_extra,
    confirmation on holdout, one production run on the 23 (2D) or the test manifest (3D) at the very
    end, with the twelve strictly unseen 2D datasets as the out-of-domain check.
+
+## 14. Baseline results of the cleaned harness (2026-09-06)
+
+Reruns of the default settings with the joint/v4 hvit_t geodesic checkpoint (checksum `5a729846…`) on the
+harness of this branch (implementation epoch `f76ee7170ca77da882c0078dfaa5b301`), run to verify the
+clean-up and to serve as the baselines for the next optimization. Everything below is on this machine.
+
+### 14.1 APG, 2D subset benchmark (registry defaults, trial `verify-1`)
+
+Run directories under `<root>/hvit_t/5a729846c141daf73c27b24f52d8af4f/`, each with `summary.csv`,
+`samples.csv` and `metadata.json`; the parameter checksum is `d914b807f7c6719914ae4b3e6fbcac80` (the
+recorded v4 controls of session 3 carry `9a58f84a…` for the same configuration, because the resolved
+parameter dict lost the removed keys):
+
+| subset | run directory | balanced mSA | per-dataset mSA |
+|---|---|---:|---|
+| primary | `0f8fb67b3650a71f9f44b53037e89546-d914b807f7c6719914ae4b3e6fbcac80-f76ee7170ca77da882c0078dfaa5b301` | 0.295460 | livecell 0.391248, tissuenet 0.289299, dynamicnuclearnet 0.461289, deepbacs 0.320974, dic_hepg2 0.014491 |
+| holdout | `bf8f3c28befe1fb06d62309dc302d1c4-d914b807f7c6719914ae4b3e6fbcac80-f76ee7170ca77da882c0078dfaa5b301` | 0.289588 | livecell 0.390674, tissuenet 0.293459, dynamicnuclearnet 0.434222, deepbacs 0.320974, dic_hepg2 0.008612 |
+| training_extra | `cee6224d6a93cec5a54a5c522a0f7bf5-d914b807f7c6719914ae4b3e6fbcac80-f76ee7170ca77da882c0078dfaa5b301` | 0.463378 | yeaz 0.677109, neurips_cellseg 0.240862, puma 0.523091, tnbc 0.419334, covid_if 0.744593, deepseas 0.175276 |
+
+All 630 per-sample scores are identical to the recorded v4 controls (`…-9a58f84a…-4fa97979…`). Run
+locally on a `1g.20gb` slice; runtimes are therefore not comparable with the recorded `1g.10gb` runs.
+
+### 14.2 APG, 3D deep crops (`configs/apg3d_defaults.json`, trial `verify-1`)
+
+Run directories `<root>/3d_v4geo/runs/{primary,holdout}/apg3d-defaults-70b90e407d4b-f76ee7170ca7/` with
+`crops/*.json`, `samples.csv` and `summary.csv` (written by `benchmark_apg_3d.py aggregate`); job
+directories `<root>/jobs/20260906_132801_verify_v4_3d_defaults_primary` and
+`<root>/jobs/20260906_132802_verify_v4_3d_defaults_holdout` (`1g.20gb:1`, throttle 8).
+
+| subset | crops | family macro | dataset balanced | unseen macro | matched / misses / gt objects |
+|---|---:|---:|---:|---:|---|
+| primary | 57 | 0.32703 (recorded 0.32666) | 0.32798 | 0.32711 | 3751 / 1805 / 13793 (recorded 3750 / 1806) |
+| holdout | 18 | 0.34239 (identical) | 0.36990 | 0.31947 | 1162 / 564 / 2127 (identical) |
+
+Per-source means (primary): celegans_atlas 0.1521, cremi 0.1341, cremi_seen 0.0300, embedseg_platy_ish
+0.4458, embedseg_platy_nuclei 0.2569, embedseg_skull 0.6602, gonuclear 0.3536, humanneurons 0.4367,
+platynereis_nuclei 0.2514, snemi 0.5590. Holdout: celegans_atlas 0.1375, cremi 0.1623, cremi_seen 0.3168,
+embedseg_platy_ish 0.3899, embedseg_platy_nuclei 0.5222, embedseg_skull 0.6819, gonuclear 0.4399,
+humanneurons 0.3410, platynereis_nuclei 0.1907, snemi 0.5167.
+
+56 of the 57 primary crops and all 18 holdout crops are identical to the recorded v4 run
+(`…-4fa97979b2aa`). The crop `gonuclear:4ea4ece3dbe1` is nondeterministic run to run (0.1364, 0.1579 and
+0.1623 were observed across four runs, two of them with the pre-clean-up code on the same node): its 26
+anchor candidates are the same, but one borderline anchor decision flips, which moves one merged object.
+
+### 14.3 AIS and APG defaults on the production test splits
+
+`evaluate_automatic_segmentation.py --skip_tuning` for both modes on nine datasets, results in
+`/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/v4_geodesic_cleanup_verification/results/`
+as `<dataset>_micro_sam2_hvit_t_{ais,apg}_default_ckpt-5a729846c141daf73c27b24f52d8af4f.csv` (one row:
+mSA/SA50/SA75/precision/recall/F1, or cremi/vi_split/vi_merge/adapted_rand for the dense EM datasets). The
+job scripts and logs are under `finetuning/v2/evaluation/gpu_jobs/20260906_132906/` (git-ignored).
+
+| dataset | metric | AIS v4 default | APG v4 default | AIS v2 ref | APG v2 ref |
+|---|---|---:|---:|---:|---:|
+| livecell | mSA | 0.2575 | 0.3863 | 0.2533 | 0.3422 |
+| deepbacs | mSA | 0.2056 | 0.4097 | 0.2940 | 0.4133 |
+| dsb | mSA | 0.4631 | 0.5587 | 0.4248 | 0.5167 |
+| dynamicnuclearnet | mSA | 0.5083 | 0.4648 | 0.5075 | 0.4744 |
+| gonuclear | mSA | 0.2689 | 0.3730 | 0.2459 | 0.3570 |
+| embedseg | mSA | 0.4105 | 0.6402 | | |
+| cremi | CREMI (lower is better) | 0.4858 | 0.4418 | | |
+| snemi | CREMI | 0.9085 | 0.5958 | | |
+| humanneurons | CREMI | 0.6999 | 0.3429 | 0.6698 | 0.3992 |
+
+References: v2 `best` defaults for both modes in
+`experiments/v2_registry_default_evaluation/results/<dataset>_micro_sam2_hvit_t_{ais,apg}_default_ckpt-85fb099c….csv`;
+an earlier v4 AIS default run of 2026-08-30 (six datasets) in
+`experiments/v4_joint_evaluation_hvit_t_geodesic/results/`, which the rerun matches within 3 % everywhere
+(livecell −0.1 %, gonuclear +0.2 %, embedseg +2.9 %, cremi +0.2 %, snemi −0.5 %, humanneurons +0.0 %).
+Against v2: APG v4 gains on average (+4.5 % over the five mSA datasets; livecell +12.9 %, dsb +8.1 %,
+gonuclear +4.5 %, deepbacs −0.9 %, dynamicnuclearnet −2.0 %) and improves the CREMI score on humanneurons;
+AIS v4 is mixed (−2.0 % on average: dsb +9.0 %, gonuclear +9.4 %, livecell +1.7 %, dynamicnuclearnet +0.1 %,
+deepbacs −30.1 %) and worsens humanneurons. APG beats AIS on every dataset except dynamicnuclearnet, as
+under v2. Note that deepbacs APG gained +28.5 % on its validation subset (section 14.1 vs the v2 control)
+but is flat on the test split.

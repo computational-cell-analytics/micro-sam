@@ -666,6 +666,8 @@ REGISTRY_DATASETS = [
 ]
 
 PARTITION = "grete:preemptible"
+# The micro-sam2 environment on grete; every array task activates it.
+ENV = "new-stack"
 CPUS = 4
 TIME_LIMIT_2D = "02:00:00"
 TIME_LIMIT_3D = "04:00:00"
@@ -829,7 +831,7 @@ def write_array_script(job_folder, name, tasks_path, n_tasks, gpu, memory, time_
 #SBATCH -e {job_folder}/logs/{name}_%A_%a.err
 
 source ~/.bashrc
-micromamba activate super
+micromamba activate {ENV}
 
 line=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" {tasks_path})
 tag=$(cut -f1 <<< "$line")
