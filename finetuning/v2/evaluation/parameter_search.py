@@ -36,7 +36,9 @@ from elf.evaluation import mean_segmentation_accuracy
 
 from bioimage_cpp.segmentation import label as connected_components, watershed
 
-from micro_sam.v2.postprocessing import drop_instances_without_boundary_dip, watershed_heightmap, _compute_flow_density
+from micro_sam.v2.postprocessing import (
+    drop_instances_without_boundary_dip, lower_height_under_seeds, watershed_heightmap, _compute_flow_density,
+)
 
 from common import (
     DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
@@ -263,12 +265,13 @@ def score_image_sparse_cached(
     # The base watershed does not depend on min_size, so all min_size values of a combo reuse it.
     base_cache, base_lock = {}, threading.Lock()
 
-    def base_segmentation(key, fg_mask, density, density_threshold, hmap):
+    def base_segmentation(key, fg_mask, density, density_threshold, hmap, seed_floor):
         with base_lock:
             cached = base_cache.get(key)
         if cached is None:
             seeds = connected_components(density > density_threshold)
-            cached = watershed(hmap, markers=seeds, mask=fg_mask)
+            hmap = lower_height_under_seeds(hmap, seeds, seed_floor)
+            cached = (watershed(hmap, markers=seeds, mask=fg_mask), hmap)
             with base_lock:
                 base_cache[key] = cached
         return cached
@@ -276,11 +279,13 @@ def score_image_sparse_cached(
     def score(params):
         ft, sigma, n_iter, dt = (params[k] for k in FLOW_DENSITY_KEYS)
         fw, density_threshold = params["foreground_weight"], params["density_threshold"]
+        seed_floor = params.get("seed_floor", "none")
         fg_mask = fg_mask_cache[ft]
-        hmap = hmap_cache[fw]
         try:
-            key = (ft, sigma, n_iter, dt, density_threshold, fw)
-            seg = base_segmentation(key, fg_mask, density_cache[(ft, sigma, n_iter, dt)], density_threshold, hmap)
+            key = (ft, sigma, n_iter, dt, density_threshold, fw, seed_floor)
+            seg, hmap = base_segmentation(
+                key, fg_mask, density_cache[(ft, sigma, n_iter, dt)], density_threshold, hmap_cache[fw], seed_floor,
+            )
             min_size = params["min_size"]
             if min_size > 0:
                 seg = seg.copy()

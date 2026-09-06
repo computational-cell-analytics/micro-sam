@@ -1,0 +1,8 @@
+{
+  "name": "f2-floor-zero-ms100",
+  "mode": "auto",
+  "params_2d": {
+    "seed_floor": "zero",
+    "min_size": 100
+  }
+}

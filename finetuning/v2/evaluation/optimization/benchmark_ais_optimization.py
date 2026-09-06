@@ -78,7 +78,7 @@ from optimization.benchmark_apg_3d import _bootstrap_ci  # noqa
 
 from micro_sam.v2.postprocessing import (  # noqa
     _compute_flow_density, default_postprocessing, drop_instances_without_boundary_dip, flow_instance_segmentation,
-    run_multicut, watershed_heightmap,
+    lower_height_under_seeds, run_multicut, watershed_heightmap,
 )
 from bioimage_cpp.segmentation import label as connected_components, watershed  # noqa
 
@@ -91,7 +91,7 @@ BALANCED_ROW = "__dataset_balanced__"
 # The keywords of the two post-processing functions, i.e. what a configuration may override.
 SPARSE_KEYS = (
     "foreground_threshold", "n_iter", "dt", "sigma", "density_threshold", "min_size", "foreground_weight",
-    "boundary_magnitude_max",
+    "boundary_magnitude_max", "seed_floor",
 )
 DENSE_KEYS = ("beta", "density_threshold", "n_iter", "dt", "sigma")
 # Metric columns of a sample row; means and standard deviations are reported per dataset.
@@ -428,6 +428,7 @@ def sparse_pipeline(
     )
     seeds = connected_components(density > params["density_threshold"])
     hmap = watershed_heightmap(foreground, directed, params["foreground_weight"])
+    hmap = lower_height_under_seeds(hmap, seeds, params.get("seed_floor", "none"))
     before = watershed(hmap, markers=seeds, mask=fg_mask)
     seg = before
     min_size = int(params["min_size"])

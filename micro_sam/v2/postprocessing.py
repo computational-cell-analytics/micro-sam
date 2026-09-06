@@ -24,6 +24,7 @@ from .util import DEFAULT_MODEL
 # combination across every dataset that shares that mode's grid, computed separately for each of the
 # 4 registry backbones.
 # 'boundary_magnitude_max' is the instance filter of `flow_instance_segmentation`; None keeps it off.
+# 'seed_floor' lowers the height map under the seeds before the watershed ('none', 'zero' or 'ring').
 # 'sparse_volume' holds the keys whose default differs for a volume (a size floor counts voxels, not
 # pixels); it is layered over 'sparse' by `default_postprocessing(..., ndim=3)`.
 #
@@ -39,6 +40,7 @@ DEFAULT_POSTPROCESSING = {
         "sparse": {
             "foreground_threshold": 0.5, "density_threshold": 10.0, "min_size": 50,
             "sigma": 1.0, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5, "boundary_magnitude_max": 0.4,
+            "seed_floor": "none",
         },
         "sparse_volume": {"min_size": 100, "sigma": 0.5},
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
@@ -47,6 +49,7 @@ DEFAULT_POSTPROCESSING = {
         "sparse": {
             "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
             "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.75, "boundary_magnitude_max": None,
+            "seed_floor": "none",
         },
         "sparse_volume": {},
         "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 25, "dt": 0.5},
@@ -55,6 +58,7 @@ DEFAULT_POSTPROCESSING = {
         "sparse": {
             "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
             "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.65, "boundary_magnitude_max": None,
+            "seed_floor": "none",
         },
         "sparse_volume": {},
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
@@ -63,6 +67,7 @@ DEFAULT_POSTPROCESSING = {
         "sparse": {
             "foreground_threshold": 0.4, "density_threshold": 10.0, "min_size": 50,
             "sigma": 0.5, "n_iter": 50, "dt": 0.25, "foreground_weight": 0.65, "boundary_magnitude_max": None,
+            "seed_floor": "none",
         },
         "sparse_volume": {},
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 1.0, "n_iter": 50, "dt": 0.5},
@@ -156,6 +161,48 @@ def watershed_heightmap(
     return np.ascontiguousarray(hmap, dtype="float32")
 
 
+def lower_height_under_seeds(heightmap: np.ndarray, seeds: np.ndarray, mode: str) -> np.ndarray:
+    """Lower the height map under the seeds so that a seed's own height does not hold its front back.
+
+    The watershed floods monotonically: a front never drops below the height it started from. Every proper
+    seed sits on a peak of the inverted-magnitude height map (the predicted magnitude dips at the object's
+    centre), so a seed whose centre dip is deeper than the contact dip to its neighbour loses the object to
+    the neighbour's front. 'zero' sets the height under every seed to zero; 'ring' sets it to the minimum
+    height of a ring of 2-3 pixels around the seed, so that a seed inherits the level of its own basin
+    and a seed on a high plateau (a spurious one) keeps a high floor.
+
+    Args:
+        heightmap: The watershed height map, shape (*spatial).
+        seeds: The seed components, integer labels, same shape.
+        mode: 'none' (return the height map unchanged), 'zero' or 'ring'.
+
+    Returns:
+        The height map with the seeds lowered, float32 and C-contiguous.
+    """
+    if mode == "none":
+        return heightmap
+    out = np.array(heightmap, dtype="float32", copy=True)
+    if mode == "zero":
+        out[seeds != 0] = 0.0
+        return np.ascontiguousarray(out)
+    if mode != "ring":
+        raise ValueError(f"Unknown seed floor '{mode}'; expected 'none', 'zero' or 'ring'.")
+    from scipy.ndimage import grey_dilation, minimum as labelled_minimum
+
+    inner = grey_dilation(seeds, size=(3,) * seeds.ndim)
+    outer = grey_dilation(seeds, size=(7,) * seeds.ndim)
+    ring = np.where((outer != 0) & (inner == 0), outer, 0)
+    ids = np.unique(ring)
+    ids = ids[ids != 0]
+    if len(ids) == 0:
+        return np.ascontiguousarray(out)
+    floors = np.zeros(int(seeds.max()) + 1, dtype="float32")
+    floors[ids] = labelled_minimum(heightmap, labels=ring, index=ids)
+    core = inner != 0
+    out[core] = np.minimum(out[core], floors[inner[core]])
+    return np.ascontiguousarray(out)
+
+
 def drop_instances_without_boundary_dip(
     segmentation: np.ndarray, directed_distances: np.ndarray, max_median: float
 ) -> np.ndarray:
@@ -219,6 +266,7 @@ def flow_instance_segmentation(
     foreground_weight: Optional[float] = None,
     n_threads: int = 8,
     boundary_magnitude_max: Optional[float] = None,
+    seed_floor: Optional[str] = None,
 ) -> np.ndarray:
     """Instance segmentation from directed-distance predictions via flow following.
 
@@ -249,6 +297,8 @@ def flow_instance_segmentation(
         boundary_magnitude_max: Drop instances whose median boundary magnitude exceeds this value, see
             `drop_instances_without_boundary_dip`. None takes the per-model default, which may itself be
             None (no filtering); pass ``float("inf")`` to disable a default filter explicitly.
+        seed_floor: How the height map is lowered under the seeds before the watershed, see
+            `lower_height_under_seeds`. None takes the per-model default.
 
     Returns:
         Instance segmentation, uint32 array, same spatial shape as foreground.
@@ -258,6 +308,8 @@ def flow_instance_segmentation(
         foreground_threshold = defaults["foreground_threshold"]
     if boundary_magnitude_max is None:
         boundary_magnitude_max = defaults.get("boundary_magnitude_max")
+    if seed_floor is None:
+        seed_floor = defaults.get("seed_floor", "none")
     if n_iter is None:
         n_iter = defaults["n_iter"]
     if dt is None:
@@ -286,6 +338,7 @@ def flow_instance_segmentation(
 
     seeds = label(density > density_threshold)
     hmap = watershed_heightmap(foreground, directed_distances, foreground_weight)
+    hmap = lower_height_under_seeds(hmap, seeds, seed_floor)
     seg = watershed(hmap, markers=seeds, mask=fg_mask)
 
     if min_size > 0:

@@ -1,0 +1,8 @@
+{
+  "name": "f2-floor-ring-ms100",
+  "mode": "auto",
+  "params_2d": {
+    "seed_floor": "ring",
+    "min_size": 100
+  }
+}

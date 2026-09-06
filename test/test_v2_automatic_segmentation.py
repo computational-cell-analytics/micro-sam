@@ -998,3 +998,39 @@ def test_default_postprocessing_per_backbone_and_dimension():
     # The returned dict is a copy: mutating it must not change the table.
     images["sigma"] = 99.0
     assert default_postprocessing("hvit_t", "sparse")["sigma"] == 1.0
+
+
+def test_lower_height_under_seeds_modes():
+    from micro_sam.v2.postprocessing import lower_height_under_seeds
+    from bioimage_cpp.segmentation import watershed
+
+    # Two touching squares; a single-pixel seed on a height spike at each centre. With the monotone flooding
+    # the seed on the higher spike floods last and loses its square; a floor restores both.
+    hmap = np.full((20, 40), 0.3, dtype="float32")
+    hmap[:, 19:21] = 0.45  # the contact ridge
+    seeds = np.zeros((20, 40), dtype="uint64")
+    seeds[10, 10], seeds[10, 30] = 1, 2
+    hmap[10, 10], hmap[10, 30] = 0.5, 0.6
+    mask = np.ones((20, 40), dtype=bool)
+    broken = watershed(hmap, markers=seeds, mask=mask)
+    assert (broken == 2).sum() <= 1, "the test needs the monotone-flooding failure to be present"
+    for mode in ("zero", "ring"):
+        lowered = lower_height_under_seeds(hmap, seeds, mode)
+        assert lowered.dtype == np.float32 and lowered.flags["C_CONTIGUOUS"]
+        fixed = watershed(lowered, markers=seeds, mask=mask)
+        assert abs(int((fixed == 1).sum()) - int((fixed == 2).sum())) <= 40
+    assert lower_height_under_seeds(hmap, seeds, "zero")[10, 10] == 0.0
+    ring = lower_height_under_seeds(hmap, seeds, "ring")
+    assert ring[10, 10] == pytest.approx(0.3) and ring[10, 30] == pytest.approx(0.3)
+    assert ring[5, 5] == pytest.approx(0.3) and ring[10, 19] == pytest.approx(0.45)
+    assert lower_height_under_seeds(hmap, seeds, "none") is hmap
+    with pytest.raises(ValueError, match="Unknown seed floor"):
+        lower_height_under_seeds(hmap, seeds, "deep")
+
+
+def test_seed_floor_default_is_off_everywhere():
+    from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, default_postprocessing
+
+    for backbone in DEFAULT_POSTPROCESSING:
+        for ndim in (2, 3):
+            assert default_postprocessing(backbone, "sparse", ndim=ndim)["seed_floor"] == "none"
