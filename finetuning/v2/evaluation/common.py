@@ -111,7 +111,9 @@ ECOLI_GENES = ("cib", "crosstalk", "recA", "rpsM")
 # the remaining training datasets ("extra training"), resolvable and scorable on request but outside the main
 # panel. Out-of-domain (OOD): datasets kept out of training. Datasets with a cell and a nucleus target are listed
 # per target, omnipose per subset.
-DATASETS_2D_LM_CELL_ID = ["tissuenet", "omnipose_bact_fluor", "cvz_fluo_cell", "flywing", "enseg", "neurips_cellseg"]
+DATASETS_2D_LM_CELL_ID = [
+    "tissuenet", "omnipose_bact_fluor", "cvz_fluo_cell", "flywing", "enseg", "neurips_cellseg_fluorescence",
+]
 DATASETS_2D_LM_CELL_SUPPLEMENTARY = ["dememseg", "pan_multiplex", "xenium_cells", "deepbacs_fluorescence"]
 DATASETS_2D_LM_CELL_OOD = ["covid_if_cells", "medussa", "hpa"]
 DATASETS_2D_LM_NUCLEUS_ID = [
@@ -126,8 +128,8 @@ DATASETS_2D_LM_NUCLEUS_OOD = [
 # rather than an independent OOD collection until the patient overlap is resolved.
 DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM = ["spatch_dapi"]
 DATASETS_2D_LM_LABEL_FREE_ID = [
-    "livecell", "deepbacs_label_free", "omnipose_bact_phase", "yeaz", "neurips_cellseg", "cell_acdc", "cellular",
-    "vicar", "microbeseg",
+    "livecell", "deepbacs_label_free", "omnipose_bact_phase", "yeaz", "neurips_cellseg_label_free", "cell_acdc",
+    "cellular", "vicar", "microbeseg",
 ]
 DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY = [
     "orgasegment", "organoidnet", "omnipose_worm", "omnipose_worm_high_res", "bccd", "cisd", "orgline", "organoid",
@@ -454,6 +456,21 @@ def _tiles_from_slide(
     return paths
 
 
+# The fluorescence images of the NeurIPS CellSeg 2022 Tuning (val) and public Testing splits, checked by eye. The
+# remaining images form the 'label_free' part, which also holds the stained brightfield blood smears next to the
+# unstained brightfield, phase contrast and DIC images.
+NEURIPS_FLUORESCENCE_IMAGES = {
+    "val": tuple(f"cell_{i:05d}.png" for i in range(43, 70))
+    + ("cell_00071.tif", "cell_00072.tif", "cell_00073.tif", "cell_00100.tif", "cell_00101.tif"),
+    "test": (
+        "OpenTest_001.png", "OpenTest_006.png", "OpenTest_013.png", "OpenTest_014.png", "OpenTest_015.tif",
+        "OpenTest_016.png", "OpenTest_017.png", "OpenTest_019.tif", "OpenTest_021.png", "OpenTest_023.png",
+        "OpenTest_026.tif", "OpenTest_028.tif", "OpenTest_031.png", "OpenTest_035.tif", "OpenTest_041.png",
+        "OpenTest_044.png", "OpenTest_045.png", "OpenTest_046.tif", "OpenTest_047.tif",
+    ),
+}
+
+
 def deepbacs_is_fluorescence(path: str) -> bool:
     """Whether a DeepBacs 'mixed' image is fluorescence: the Nile Red S. aureus and the B. subtilis families."""
     name = os.path.basename(path)
@@ -677,11 +694,17 @@ def _get_2d_lm_data_paths(
             ), split)
         return (*_sorted_pairs(img, gt), None, None)
 
-    if dataset_name == "neurips_cellseg":
+    if dataset_name in ("neurips_cellseg_fluorescence", "neurips_cellseg_label_free"):
         img, gt = lm.neurips_cell_seg.get_neurips_cellseg_paths(
             root=os.path.join(p, "neurips_cellseg"), split=split, download=download,
         )
-        return (*_sorted_pairs(img, gt), None, None)
+        img, gt = _sorted_pairs(img, gt)
+        fluorescence = NEURIPS_FLUORESCENCE_IMAGES[split]
+        want_fluorescence = dataset_name == "neurips_cellseg_fluorescence"
+        keep = [(os.path.basename(path) in fluorescence) == want_fluorescence for path in img]
+        img = [path for path, k in zip(img, keep) if k]
+        gt = [path for path, k in zip(gt, keep) if k]
+        return img, gt, None, None
 
     if dataset_name == "dememseg":
         paths = lm.dememseg.get_dememseg_paths(path=os.path.join(p, "dememseg"), split=split, download=download)
