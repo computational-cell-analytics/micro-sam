@@ -169,7 +169,7 @@ DATASETS_3D_LM = (
 # the out-of-domain sets. humanneurons is the cached H01 crop. synapseweb is scored inside its annotated cores only.
 DATASETS_3D_EM_NEURITE_ID = [
     "cremi", "snemi", "axonem", "fafb", "fib25", "hemibrain", "manc", "malecns", "wafer4", "minnie65",
-    "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress",
+    "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress", "nisb",
 ]
 DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "humanneurons", "synapseweb"]
 # Cell segmentation: Platynereis volume 9 and the DenseCell val volume are blind; the tumor spheroid slices are 2d.
@@ -222,7 +222,8 @@ LM_VAL_Z_SLABS = {
 VAL_SPLITS.update({
     name: None for name in (
         "cremi", "snemi", "axonem", "fafb", "hemibrain", "manc", "malecns", "wafer4", "minnie65",
-        "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress", "platynereis_cells", "densecell",
+        "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress", "nisb", "platynereis_cells",
+        "densecell",
         "astih", "tumor_spheroid",
     )
 })
@@ -1171,6 +1172,13 @@ def _get_3d_em_data_paths(
         )
         return [raw], [labels], "raw", "labels"
 
+    if dataset_name == "nisb":
+        # The official val cube tunes, the official test cube is blind; both are 27 um synthetic cubes.
+        paths = em.nisb.get_nisb_paths(
+            os.path.join(p, "nisb"), setting="base", split="val" if is_val else "test", download=download,
+        )
+        return paths, paths, "img", "seg"
+
     if dataset_name == "densecell":
         # The val volume is the blind test set; the top 15 sections of the train volume are the tuning data.
         path = em.densecell.get_densecell_paths(
@@ -1427,6 +1435,7 @@ DATASET_SPACING: dict = {
     "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
     "densecell": (5, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels
+    "nisb": (2.2, 1, 1),  # synthetic: 20 nm sections, 9 nm pixels
 }
 
 

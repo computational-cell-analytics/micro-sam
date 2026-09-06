@@ -1962,11 +1962,10 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
         )
 
     # 20. NISB (synthetic neuron instance segmentation benchmark, 27 um cubes at 9x9x20 nm)
-    # NOTE: The base setting's five training cubes; the last cube validates, since the official val and test cubes
-    # are not cached. Synthetic labels are dense by construction.
-    nisb_paths = datasets.nisb.get_nisb_paths(os.path.join(input_path, "nisb"), setting="base", split="train")
-    nisb_val = [p for p in nisb_paths if os.path.basename(os.path.dirname(p)) in NISB_VAL_CUBES]
-    nisb_train = [p for p in nisb_paths if p not in nisb_val]
+    # NOTE: The base setting's official split: five training cubes train, the val cube validates and the test cube is
+    # blind. Synthetic labels are dense by construction.
+    nisb_train = datasets.nisb.get_nisb_paths(os.path.join(input_path, "nisb"), setting="base", split="train")
+    nisb_val = datasets.nisb.get_nisb_paths(os.path.join(input_path, "nisb"), setting="base", split="val")
     for z in z_slices:
         nisb_kwargs = {
             "patch_shape": (z, *patch_shape),
@@ -2123,8 +2122,6 @@ TUMOR_SPHEROID_TEST_SLICES = (
     "Au_01-vol_01-x_1300.h5", "Au_01-vol_01-y_1606.h5", "Au_01-vol_01-z_0212.h5", "Au_01-vol_01-z_0274.h5"
 )
 
-# The last of the five NISB base training cubes validates.
-NISB_VAL_CUBES = ("seed4",)
 
 # The part of the LICONN volume the proofread segmentation covers; z 576-640 of it is the blind test slab.
 LICONN_ROI = (slice(64, 640), slice(0, 4608), slice(None))
