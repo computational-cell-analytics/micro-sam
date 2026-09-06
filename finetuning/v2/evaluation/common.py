@@ -239,6 +239,7 @@ VAL_SPLITS.update({
     "covid_if_cells": "val", "covid_if_nuclei": "val", "medussa": "train", "cardioblast_nuclei": "train",
     "hela_cytonuc": "val", "arvidsson": "val", "mndino": "val", "cellapp": "train", "deepseas": "train",
     "dic_hepg2": "val", "bac_mother": "val", "plantseg_ovules": "val", "cshaper": "train", "mouse_embryo": "train",
+    "blastospim": "val",
     "wing_disc": None, "embedseg_mouse_skull": None, "embedseg_platy_ish": None, "nis3d": None,
     "platynereis_nuclei": None, "humanneurons": None,
 })
@@ -470,6 +471,18 @@ NEURIPS_FLUORESCENCE_IMAGES = {
     ),
 }
 
+
+# The volumes of our BlastoSPIM copy (250 of the 653 released) that the authors' official split archives put in the
+# test (low and moderate SNR, both releases) and validation sets; the remaining 200 are official training volumes.
+BLASTOSPIM_TEST_VOLUMES = (
+    "Blast_074", "Blast_075", "F11_070", "F24_002", "F24_010", "F25_008", "F27_009", "F27_010", "F29_003",
+    "F29_004", "F2_012", "F30_004", "F30_008", "F30_009", "F33_067", "F34_073", "F39_117", "F40_136", "F44_087",
+    "F49_148", "F9_071", "H1_006", "H2_016", "H3_002", "H4_012", "H5_007", "H7_004", "H7_008", "H8_016", "H8_021",
+    "H9_008", "M10_015", "M14_020", "M3_008", "M4_012", "M6_021", "M7_000", "M7_007", "M8_015", "M8_016",
+)
+BLASTOSPIM_VAL_VOLUMES = (
+    "Blast_022", "F19_067", "F30_001", "F32_052", "F38_105", "F38_109", "F41_053", "F42_065", "F46_107", "M6_011",
+)
 
 # The PCNS patch ids whose TCGA patient also provides a MoNuSeg training image (pcns_crosswalk.txt: patients
 # TCGA-38-6178, TCGA-49-4488, TCGA-CH-5767, TCGA-G2-A2EK, TCGA-G9-6336 and TCGA-G9-6363), left out of the OOD test.
@@ -1166,6 +1179,8 @@ def _get_3d_lm_data_paths(
 
     if dataset_name == "blastospim":
         paths = lm.blastospim.get_blastospim_paths(path=os.path.join(p, "blastospim"), download=download)
+        volumes = BLASTOSPIM_VAL_VOLUMES if split == "val" else BLASTOSPIM_TEST_VOLUMES
+        paths = [path for path in paths if os.path.basename(path).split("_image_")[0] in volumes]
         return sorted(paths), sorted(paths), "raw", "labels"
 
     raise ValueError(f"Unknown 3D LM dataset: {dataset_name!r}")
