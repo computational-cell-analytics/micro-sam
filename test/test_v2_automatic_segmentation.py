@@ -958,7 +958,10 @@ def test_drop_instances_without_boundary_dip_removes_false_regions_only():
 
     prediction, labels, false_blob = _geodesic_field_with_false_region()
     params = dict(model_type="hvit_t", min_size=20, n_iter=200, dt=0.5, density_threshold=5.0, n_threads=1)
-    unfiltered = flow_instance_segmentation(prediction[0], prediction[1:], **params)
+    # The hvit_t default filter is on, so the unfiltered reference disables it explicitly.
+    unfiltered = flow_instance_segmentation(
+        prediction[0], prediction[1:], boundary_magnitude_max=float("inf"), **params
+    )
     assert len(np.unique(unfiltered)) - 1 == 3, "expected two objects and the false region"
     filtered = drop_instances_without_boundary_dip(unfiltered, prediction[1:][-2:], max_median=0.5)
     assert len(np.unique(filtered)) - 1 == 2
@@ -966,11 +969,11 @@ def test_drop_instances_without_boundary_dip_removes_false_regions_only():
     for index in (1, 2):
         kept = np.unique(filtered[labels == index])
         assert len(kept[kept != 0]) == 1
-    # Through the keyword, and inf disables the filter again.
+    # Through the keyword, and through the hvit_t default (0.4), which drops the same false region here.
     via_keyword = flow_instance_segmentation(prediction[0], prediction[1:], boundary_magnitude_max=0.5, **params)
     assert np.array_equal(via_keyword, filtered)
-    disabled = flow_instance_segmentation(prediction[0], prediction[1:], boundary_magnitude_max=float("inf"), **params)
-    assert np.array_equal(disabled, unfiltered)
+    via_default = flow_instance_segmentation(prediction[0], prediction[1:], **params)
+    assert np.array_equal(via_default, filtered)
 
 
 def test_default_postprocessing_per_backbone_and_dimension():
