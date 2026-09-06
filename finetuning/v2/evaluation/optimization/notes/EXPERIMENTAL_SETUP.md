@@ -317,6 +317,13 @@ Historical trees written only by code that lives on `apg-optim-fable` (data, rea
    confirmation on holdout, one production run on the 23 (2D) or the test manifest (3D) at the very
    end, with the twelve strictly unseen 2D datasets as the out-of-domain check.
 
+Status (2026-09-06): implemented as `optimization/benchmark_ais_optimization.py` (`predict` caches the
+decoder predictions per manifest sample under `<root>/ais/predictions/`, `run` / `screen` / `sweep` /
+`oracle` / `report` work on the cache), task builder `optimization/ais_campaign_tasks.py`, configurations
+`optimization/configs/ais_*.json`, decision log `notes/AIS_V4_OPTIMIZATION.md`. The AIS implementation
+checksum covers five files (the benchmark, `common.py`, `parameter_search.py`,
+`micro_sam/v2/{instance_segmentation, postprocessing}.py`); first epoch `f57b117edfda5420d9df761b1db4db2d`.
+
 ## 14. Baseline results of the cleaned harness (2026-09-06)
 
 Reruns of the default settings with the joint/v4 hvit_t geodesic checkpoint (checksum `5a729846…`) on the
