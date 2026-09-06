@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.8.14**
+
+Fix prompt clearing with napari 0.9.1 to prevent crashes when toggling labels after commit. Preserve point labels and track IDs when clearing individual slices.
+
 **New in version 1.8.13**
 
 Fix pip installations that used a stale Segment Anything release with an incorrect PyTorch image resize. Pip now installs `segment-anything-py>=1.0.1`.
