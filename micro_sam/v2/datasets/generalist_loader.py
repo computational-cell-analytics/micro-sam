@@ -35,6 +35,10 @@ from ..transforms.labels import (
 # Each access is a random crop (see UniDataWrapper.max_samples), so this is N random samples.
 N_SAMPLES_VAL = 50
 
+# Crops the sampler may reject before a leaf gives up. Sparse image sets (the worm and CTC HSC frames, the
+# Tsakiroglou crops) reject up to 85 crops per accepted one, so torch-em's default of 500 fails now and then.
+MAX_SAMPLING_ATTEMPTS = 5000
+
 # Fixed seed for deterministic validation. The same value is used to seed the main process
 # (prompt sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch) in
 # Sam2Trainer._validate_impl, so the validation metric is comparable across epochs.
@@ -94,6 +98,22 @@ def _set_percentile_normalization(dataset, lower_percentile_bounds):
     )
 
 
+def _set_max_sampling_attempts(dataset, n_attempts):
+    """Raise the sampler attempt limit in all torch-em leaves of a dataset tree."""
+    if isinstance(dataset, (list, tuple)):
+        for ds in dataset:
+            _set_max_sampling_attempts(ds, n_attempts)
+    elif isinstance(dataset, UniDataWrapper):
+        _set_max_sampling_attempts(dataset.ds, n_attempts)
+    elif isinstance(dataset, torch.utils.data.Subset):
+        _set_max_sampling_attempts(dataset.dataset, n_attempts)
+    elif getattr(dataset, "datasets", None) is not None:
+        for ds in dataset.datasets:
+            _set_max_sampling_attempts(ds, n_attempts)
+    elif hasattr(dataset, "max_sampling_attempts"):
+        dataset.max_sampling_attempts = n_attempts
+
+
 def _configure_training_normalization(train_datasets, val_datasets):
     """Enable random percentile augmentation for training and deterministic 2nd/98th validation."""
     _set_percentile_normalization(
@@ -102,6 +122,7 @@ def _configure_training_normalization(train_datasets, val_datasets):
     _set_percentile_normalization(
         val_datasets, lower_percentile_bounds=VALIDATION_LOWER_PERCENTILE_BOUNDS,
     )
+    _set_max_sampling_attempts([train_datasets, val_datasets], MAX_SAMPLING_ATTEMPTS)
 
 
 def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32, deterministic=False):
@@ -2210,7 +2231,7 @@ NUCVERSE_VAL_VOLUMES = {
     "liver": "20221006_13_Control_8w_Periportal.h5", "liver_hcc": "20221014_6_control_16w_centro.h5",
 }
 NUCVERSE_GLIA_VAL_VOLUME = "C2_M01.h5"
-NUCVERSE_GLIA_VAL_Z = slice(0, 11)  # of 53
+NUCVERSE_GLIA_VAL_Z = slice(0, 12)  # of 53; at least the deepest training patch
 
 # Where a blind test volume also validates, a 20 % slab of its slices is the validation region.
 NIS3D_VAL_Z = slice(158, 198)  # Drosophila_1, of 198; the first slices hold almost no nuclei in the centre

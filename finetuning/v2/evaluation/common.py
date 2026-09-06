@@ -101,6 +101,9 @@ def _joint_export_root() -> str:
 HPA_CHANNELS = ("raw/microtubules", "raw/nuclei", "raw/er")
 SPATCH_DAPI_SUBSETS = ["xenium_ov", "xenium_hcc", "xenium_coad", "cosmx_ov", "cosmx_hcc", "cosmx_coad"]
 
+# The four E. coli pathways on disk; the remaining four are 6 GB archives each and are not fetched.
+ECOLI_GENES = ("cib", "crosstalk", "recA", "rpsM")
+
 # Light microscopy, 2d. In-domain: the blind test data of the v5 training datasets, the split the generalist loader
 # never touches (see the loader constants). Out-of-domain: datasets kept out of training. Datasets with a cell and a
 # nucleus target are listed per target, omnipose per subset.
@@ -861,8 +864,9 @@ def _get_2d_lm_data_paths(
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "mndino":
+        # The nuclei are scored; the disjoint micronuclei labels are left out.
         paths = lm.mndino.get_mndino_paths(path=os.path.join(p, "mndino"), split=split, download=download)
-        return sorted(paths), sorted(paths), "raw", "labels"
+        return sorted(paths), sorted(paths), "raw", "labels/nuclei"
 
     if dataset_name == "micro_bench":
         img, gt = lm.micro_bench.get_micro_bench_paths(
@@ -911,10 +915,12 @@ def _get_2d_lm_data_paths(
         return img[::10], gt[::10], None, None
 
     if dataset_name == "ecoli_microcolony_lineage":
+        # Time-lapse frames of growing colonies; every 10th frame is scored.
         img, gt = lm.ecoli_microcolony_lineage.get_ecoli_microcolony_lineage_paths(
-            path=os.path.join(p, "ecoli_microcolony_lineage"), download=download,
+            path=os.path.join(p, "ecoli_microcolony_lineage"), genes=list(ECOLI_GENES), download=download,
         )
-        return (*_sorted_pairs(img, gt), None, None)
+        img, gt = _sorted_pairs(img, gt)
+        return img[::10], gt[::10], None, None
 
     raise ValueError(f"Unknown 2D light microscopy dataset: {dataset_name!r}")
 
