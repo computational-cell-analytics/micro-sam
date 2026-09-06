@@ -663,6 +663,9 @@ REGISTRY_EXPERIMENT_FOLDER = (
 REGISTRY_DATASETS = [
     "livecell", "tissuenet", "dynamicnuclearnet", "deepbacs", "yeaz", "covid_if", "deepseas",
     "neurips_cellseg", "embedseg", "gonuclear", "platynereis_nuclei", "cremi", "snemi", "humanneurons",
+    # Histopathology, tuned on the pools of common.VAL_SPLITS (loader val splits, or train where none exists).
+    "cpm17", "glysac", "histo_miner", "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc", "monuseg",
+    "pannuke", "puma", "srsanet", "tnbc_celltype", "cytodark0", "deepliif", "pcns",
 ]
 
 PARTITION = "grete:preemptible"
@@ -700,7 +703,12 @@ def gpu_pool_label(gpu):
 # since its cost is 24 fixed propose() calls per sample, see shard_params_list). tissuenet (3118 val
 # images), deepseas (3169) and dynamicnuclearnet (1417) would otherwise take 26-77 hours per sweep;
 # capped to a still-plenty-large random subset instead. livecell (570) is left uncapped.
-REGISTRY_N_TUNING_SAMPLES = {"tissuenet": 300, "deepseas": 300, "dynamicnuclearnet": 300}
+# The three histopathology tile pools (pannuke fold 2: 2523, lizard_mitosis val: 1017, pcns train: 1084) are
+# capped the same way.
+REGISTRY_N_TUNING_SAMPLES = {
+    "tissuenet": 300, "deepseas": 300, "dynamicnuclearnet": 300,
+    "pannuke": 300, "lizard_mitosis": 300, "pcns": 300,
+}
 
 # Extra shard counts for the 2d datasets whose (uncapped or capped) sample count still makes an
 # unsharded sweep too slow. APG's usable shard ceiling is 24 (one proposal group per shard, see
@@ -715,6 +723,11 @@ REGISTRY_2D_SHARDS = {
     ("dynamicnuclearnet", "ais"): 5, ("dynamicnuclearnet", "apg"): 24,
     ("livecell", "ais"): 14, ("livecell", "apg"): 24,
     ("neurips_cellseg", "ais"): 2, ("neurips_cellseg", "apg"): 4,
+    ("pannuke", "ais"): 4, ("pannuke", "apg"): 24,
+    ("lizard_mitosis", "ais"): 4, ("lizard_mitosis", "apg"): 24,
+    ("pcns", "ais"): 4, ("pcns", "apg"): 24,
+    ("deepliif", "ais"): 2, ("deepliif", "apg"): 12,
+    ("histo_miner", "ais"): 2, ("histo_miner", "apg"): 12,
 }
 
 

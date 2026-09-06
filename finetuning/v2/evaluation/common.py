@@ -80,13 +80,25 @@ def _joint_export_root() -> str:
     return os.environ.get("MICRO_SAM2_JOINT_EXPORT_ROOT", os.path.join(_MODELS_DIR, "exported", "joint", "v2"))
 
 
-DATASETS_2D = [
+DATASETS_2D_LM = [
     "livecell",
     "arvidsson", "bitdepth_nucseg", "cellbindb", "cellpose_data",
     "covid_if", "cvz_fluo", "deepbacs", "deepseas", "dic_hepg2", "dsb",
     "dynamicnuclearnet", "hpa", "microbeseg", "neurips_cellseg", "omnipose",
-    "puma", "segpc", "tissuenet", "tnbc", "usiigaci", "vicar", "yeaz",
+    "segpc", "tissuenet", "usiigaci", "vicar", "yeaz",
 ]
+
+# Histopathology nuclei. In-domain: the official test splits of the v5 training datasets, which the
+# generalist loader never touches. Out-of-domain: datasets kept out of training. lynsec is split by
+# stain so H&E and IHC are reported apart.
+DATASETS_2D_HP_ID = [
+    "cpm17", "glysac", "histo_miner", "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc",
+    "monuseg", "pannuke", "puma", "srsanet", "tnbc_celltype",
+]
+DATASETS_2D_HP_OOD = ["cytodark0", "deepliif", "khoshdeli", "panoptils", "pcns"]
+DATASETS_HP = DATASETS_2D_HP_ID + DATASETS_2D_HP_OOD
+
+DATASETS_2D = DATASETS_2D_LM + DATASETS_HP
 
 # Ground-truth size floor that drops the crop-severed slivers relabelling promotes to objects. It
 # defines the ground truth, so it is measured, never tuned.
@@ -128,14 +140,21 @@ VAL_SPLITS = {
     "covid_if": "val",
     "yeaz": "val",
     "neurips_cellseg": "val",
-    "puma": "val",
-    "tnbc": "val",
     "gonuclear": None,
     "cremi": None,
     "snemi": None,
     "platynereis_nuclei": None,
     "humanneurons": None,
 }
+
+# Histopathology tuning splits. The 'val' splits are the loader's validation data, 'train' is used where a
+# dataset has no val split (cpm17, monuseg, glysac); both are disjoint from the scored test split. pannuke
+# tunes on fold 2 (see _get_hp_data_paths). pcns is out of domain and its train split is otherwise unused.
+VAL_SPLITS.update({
+    "cpm17": "train", "glysac": "train", "histo_miner": "val", "lizard": "val", "lizard_mitosis": "val",
+    "lynsec_he": "val", "lynsec_ihc": "val", "monuseg": "train", "pannuke": "val", "puma": "val",
+    "srsanet": "val", "tnbc_celltype": "val", "cytodark0": "val", "deepliif": "val", "pcns": "train",
+})
 
 # The tuning slab for volumes with no splits, disjoint from the slab the evaluation scores. Indices
 # count from what load_volume keeps, so snemi starts at slice 70, and gonuclear skips its sparse start.
@@ -176,10 +195,135 @@ def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
     return [pair[0] for pair in pairs], [pair[1] for pair in pairs]
 
 
+def _tiles_from_stack(stack_path: str, raw_key: str, label_key: str, out_dir: str) -> List[str]:
+    """Write every tile of a stacked h5 (raw (C, N, H, W), labels (N, H, W)) into its own h5 file once.
+
+    The evaluation scores one file per sample, so the stacked tile sets of pannuke and lizard_mitosis are
+    unpacked next to the data. Each tile file holds 'raw' (C, H, W) and 'labels' (H, W).
+    """
+    import h5py
+
+    with h5py.File(stack_path, "r") as f:
+        n_tiles = f[label_key].shape[0]
+    paths = [os.path.join(out_dir, f"tile_{i:05d}.h5") for i in range(n_tiles)]
+    if all(os.path.exists(path) for path in paths):
+        return paths
+    os.makedirs(out_dir, exist_ok=True)
+    with h5py.File(stack_path, "r") as f:
+        raw, labels = f[raw_key], f[label_key]
+        for i, path in enumerate(paths):
+            if os.path.exists(path):
+                continue
+            with h5py.File(path, "w") as g:
+                g.create_dataset("raw", data=raw[:, i], compression="gzip")
+                g.create_dataset("labels", data=labels[i], compression="gzip")
+    return paths
+
+
+def _get_hp_data_paths(
+    dataset_name: str, p: str, download: bool, split: str
+) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
+    """The histopathology datasets. 'test' is the official test split, see DATASETS_2D_HP_ID."""
+    if dataset_name == "cpm17":
+        img, gt = datasets.cpm.get_cpm_paths(
+            path=os.path.join(p, "cpm17"), data_choice="cpm17", split=split, download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "glysac":
+        paths = datasets.glysac.get_glysac_paths(path=os.path.join(p, "glysac"), split=split, download=download)
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "histo_miner":
+        img, gt = datasets.histo_miner.get_histo_miner_paths(
+            path=os.path.join(p, "histo_miner"), split=split, task="nuclei", label_choice="instances",
+            download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "lizard":
+        paths = datasets.lizard.get_lizard_paths(path=os.path.join(p, "lizard"), split=split, download=download)
+        return sorted(paths), sorted(paths), "image", "labels/segmentation"
+
+    if dataset_name == "lizard_mitosis":
+        stack = datasets.lizard_mitosis.get_lizard_mitosis_paths(
+            path=os.path.join(p, "lizard_mitosis"), subset="mitosis", split=split, download=download,
+        )
+        paths = _tiles_from_stack(
+            stack, "raw", "labels/instances", os.path.join(p, "lizard_mitosis", "mitosis", f"{split}_tiles")
+        )
+        return paths, paths, "raw", "labels"
+
+    if dataset_name in ("lynsec_he", "lynsec_ihc"):
+        choice = "h&e" if dataset_name == "lynsec_he" else "ihc"
+        img, gt = datasets.lynsec.get_lynsec_paths(
+            path=os.path.join(p, "lynsec"), split=split, choice=choice, download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "monuseg":
+        img, gt = datasets.monuseg.get_monuseg_paths(path=os.path.join(p, "monuseg"), split=split, download=download)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "pannuke":
+        # Folds 1 and 2 train, fold 3 is the blind benchmark; tuning uses fold 2.
+        fold = "fold_3" if split == "test" else "fold_2"
+        stack = datasets.pannuke.get_pannuke_paths(path=os.path.join(p, "pannuke"), folds=[fold], download=download)
+        paths = _tiles_from_stack(
+            stack[0], "images", "labels/instances", os.path.join(p, "pannuke", f"{fold}_tiles")
+        )
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "puma":
+        paths = datasets.puma.get_puma_paths(
+            path=os.path.join(p, "puma"), split=split, annotations="nuclei", download=download,
+        )
+        return sorted(paths), sorted(paths), "raw", "labels/instances/nuclei"
+
+    if dataset_name == "srsanet":
+        img, gt = datasets.srsanet.get_srsanet_paths(path=os.path.join(p, "srsanet"), split=split, download=download)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "tnbc_celltype":
+        paths = datasets.tnbc_celltype.get_tnbc_celltype_paths(
+            path=os.path.join(p, "tnbc_celltype"), split=split, download=download,
+        )
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "cytodark0":
+        paths = datasets.cytodark0.get_cytodark0_paths(
+            path=os.path.join(p, "cytodark0"), split=split, download=download,
+        )
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "deepliif":
+        paths = datasets.deepliif.get_deepliif_paths(path=os.path.join(p, "deepliif"), split=split, download=download)
+        return sorted(paths), sorted(paths), "raw/ihc", "labels/instances"
+
+    if dataset_name == "khoshdeli":
+        img, gt = datasets.khoshdeli.get_khoshdeli_paths(path=os.path.join(p, "khoshdeli"), download=download)
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "panoptils":
+        img, gt = datasets.panoptils.get_panoptils_paths(
+            path=os.path.join(p, "panoptils"), label_choice="instances", download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "pcns":
+        paths = datasets.pcns.get_pcns_paths(path=os.path.join(p, "pcns"), split=split, download=download)
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    raise ValueError(f"Unknown histopathology dataset: {dataset_name!r}")
+
+
 def _get_2d_data_paths(
     dataset_name: str, data_root: str, download: bool = False, split: str = "test"
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
     p = data_root
+
+    if dataset_name in DATASETS_HP:
+        return _get_hp_data_paths(dataset_name, p, download, split)
 
     if dataset_name == "livecell":
         img, gt = _get_livecell_paths(input_folder=os.path.join(p, "livecell"), split=split)
@@ -295,14 +439,6 @@ def _get_2d_data_paths(
                 warnings.warn(f"Skipping omnipose choice '{choice}': {e}")
         return (*_sorted_pairs(img, gt), None, None)
 
-    if dataset_name == "puma":
-        # PUMA ROIs are 1024x1024 natively; load_evaluation_sample_2d center-crops every 2d dataset
-        # to CROP_SHAPE_2D=(512, 512), so no extra cropping is needed here.
-        paths = datasets.puma.get_puma_paths(
-            path=os.path.join(p, "puma"), split=split, annotations="nuclei", download=download,
-        )
-        return sorted(paths), sorted(paths), "raw", "labels/instances/nuclei"
-
     if dataset_name == "segpc":
         # The dataset has no test split, so the evaluation uses the validation split.
         paths = datasets.segpc.get_segpc_paths(
@@ -316,10 +452,6 @@ def _get_2d_data_paths(
         )
         # The rgb composite and the cell labels are what the training used.
         return sorted(paths), sorted(paths), "raw/rgb", "labels/cell"
-
-    if dataset_name == "tnbc":
-        paths = datasets.tnbc.get_tnbc_paths(path=os.path.join(p, "tnbc"), split=split, download=download)
-        return sorted(paths), sorted(paths), "raw", "labels/instances"
 
     if dataset_name == "usiigaci":
         # The dataset has no test split, so the evaluation uses the validation split.

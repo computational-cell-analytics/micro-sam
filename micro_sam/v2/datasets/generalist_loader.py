@@ -2037,13 +2037,30 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     train_ds, val_ds = [], []
 
     # 1. CPM15 (nucleus segmentation in H&E histopathology images)
-    cpm15_kwargs = {
-        "path": os.path.join(input_path, "cpm15"), "patch_shape": patch_shape, "data_choice": "cpm15", **kwargs
-    }
-    train_ds.append(
-        UniDataWrapper(datasets.get_cpm_dataset(split="train", n_samples=50, **cpm15_kwargs), source_ndim=2)
+    # NOTE: No official split, and torch-em's own one is an unseeded random pick. All 15 images are pooled and split
+    # 80/20 here, so there is no blind set; CPM17's official test split covers that.
+    cpm15_raw_paths, cpm15_label_paths = [], []
+    for split in ["train", "val", "test"]:
+        raws, labels = datasets.cpm.get_cpm_paths(
+            path=os.path.join(input_path, "cpm15"), data_choice="cpm15", split=split
+        )
+        cpm15_raw_paths += raws
+        cpm15_label_paths += labels
+    cpm15_train_raw, cpm15_val_raw, cpm15_train_labels, cpm15_val_labels = train_test_split(
+        cpm15_raw_paths, cpm15_label_paths, test_size=0.2, random_state=42,
     )
-    val_ds.append(UniDataWrapper(datasets.get_cpm_dataset(split="val", n_samples=50, **cpm15_kwargs), source_ndim=2))
+    cpm15_kwargs = {"patch_shape": patch_shape, "with_channels": True, "ndim": 2, **kwargs}
+    for raws, labels, ds_list in [
+        (cpm15_train_raw, cpm15_train_labels, train_ds), (cpm15_val_raw, cpm15_val_labels, val_ds)
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, raw_key=None, label_paths=labels, label_key=None, is_seg_dataset=False,
+                    n_samples=50, **cpm15_kwargs,
+                ), source_ndim=2,
+            )
+        )
 
     # 2. CPM17 (nucleus segmentation in H&E histopathology images)
     # NOTE: No native val split. Split the train image/label paths so train and val get
@@ -2225,15 +2242,31 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
 
     # 12. CryoNuSeg (nucleus segmentation in H&E cryosection images from 10 organs)
-    # NOTE: Small dataset (20 train / 4 val images, rater 'b1'). The 6-image test split is kept blind.
-    # The split file 'cryonuseg_split.csv' lives with the data.
-    cryonuseg_kwargs = {"path": os.path.join(input_path, "cryonuseg"), "patch_shape": patch_shape, **kwargs}
-    train_ds.append(
-        UniDataWrapper(datasets.get_cryonuseg_dataset(split="train", n_samples=50, **cryonuseg_kwargs), source_ndim=2)
+    # NOTE: 30 images, rater 'b1'. No official split, and torch-em's own one is an unseeded random pick, so all 30
+    # images are pooled and split 80/20 here; there is no blind set.
+    cryonuseg_raw_paths, cryonuseg_label_paths = [], []
+    for split in ["train", "val", "test"]:
+        raws, labels = datasets.cryonuseg.get_cryonuseg_paths(
+            path=os.path.join(input_path, "cryonuseg"), split=split, rater_choice="b1"
+        )
+        cryonuseg_raw_paths += raws
+        cryonuseg_label_paths += labels
+    cryonuseg_train_raw, cryonuseg_val_raw, cryonuseg_train_labels, cryonuseg_val_labels = train_test_split(
+        cryonuseg_raw_paths, cryonuseg_label_paths, test_size=0.2, random_state=42,
     )
-    val_ds.append(
-        UniDataWrapper(datasets.get_cryonuseg_dataset(split="val", n_samples=20, **cryonuseg_kwargs), source_ndim=2)
-    )
+    cryonuseg_kwargs = {"patch_shape": patch_shape, "with_channels": True, "ndim": 2, **kwargs}
+    for raws, labels, ds_list, n_samples in [
+        (cryonuseg_train_raw, cryonuseg_train_labels, train_ds, 50),
+        (cryonuseg_val_raw, cryonuseg_val_labels, val_ds, 20),
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, raw_key=None, label_paths=labels, label_key=None, is_seg_dataset=False,
+                    n_samples=n_samples, **cryonuseg_kwargs,
+                ), source_ndim=2,
+            )
+        )
 
     # 13. GLySAC (nucleus segmentation in H&E gastric cancer histopathology images)
     # NOTE: Densely annotated (median 124 nuclei per 512x512 area, comparable to MoNuSeg), unlike MoNuSAC.
@@ -2297,39 +2330,6 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         ds_list.append(
             UniDataWrapper(
                 datasets.get_consep_dataset(split=split, n_samples=n_samples, **consep_kwargs), source_ndim=2
-            )
-        )
-
-    # 17. DeepLIIF (nucleus segmentation in IHC of lung, bladder and Ki67 breast cancer, 512x512 images)
-    # NOTE: The IHC modality only; the co-registered mpIF panels are not used.
-    deepliif_kwargs = {
-        "path": os.path.join(input_path, "deepliif"), "patch_shape": patch_shape, "modality": "ihc",
-        "label_choice": "instances", "download": True, **kwargs,
-    }
-    for split, ds_list, n_samples in [("train", train_ds, 400), ("val", val_ds, 50)]:
-        ds_list.append(
-            UniDataWrapper(
-                datasets.get_deepliif_dataset(split=split, n_samples=n_samples, **deepliif_kwargs), source_ndim=2
-            )
-        )
-
-    # 18. PanopTILs (nucleus segmentation in H&E TCGA invasive breast cancer, 1024x1024 ROIs at 0.25 MPP)
-    # NOTE: Built from paths, since the torch-em dataset binarizes the instances. No native split, so the 1349
-    # ROIs are split 80/20 by path.
-    panoptils_raw, panoptils_labels = datasets.panoptils.get_panoptils_paths(
-        path=os.path.join(input_path, "panoptils"), label_choice="instances", download=True,
-    )
-    panoptils_train, panoptils_val = train_test_split(
-        list(zip(panoptils_raw, panoptils_labels)), test_size=0.2, random_state=42
-    )
-    panoptils_kwargs = {"patch_shape": patch_shape, "with_channels": True, "ndim": 2, **kwargs}
-    for pairs, ds_list, n_samples in [(panoptils_train, train_ds, 600), (panoptils_val, val_ds, 50)]:
-        ds_list.append(
-            UniDataWrapper(
-                torch_em.default_segmentation_dataset(
-                    raw_paths=[r for r, _ in pairs], raw_key=None, label_paths=[l for _, l in pairs], label_key=None,
-                    is_seg_dataset=False, n_samples=n_samples, **panoptils_kwargs,
-                ), source_ndim=2,
             )
         )
 
