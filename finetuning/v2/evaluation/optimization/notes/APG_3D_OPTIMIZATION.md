@@ -1,5 +1,17 @@
 # Targeted 3D APG optimization
 
+> **Status on branch `apg-clean-up` (2026-09).** This note is the historical record of experiments whose
+> mechanisms were tested, refuted and removed from the library and the evaluation harness on this branch.
+> The complete state that produced these numbers (library hooks, scripts, configs, artifact loaders, tests)
+> is preserved unchanged on branch `apg-optim-fable` (commit `356b76d`, on origin). What remains here is the
+> generic harness (`benchmark_apg_optimization.py`, `benchmark_apg_3d.py`, `apg3d_manifest.py`,
+> `compare_apg_optimization.py`, `submit_optimization_jobs.py`, `apg_campaign_tasks.py`) and the plain
+> refinement round (`generate(refinement=..., refinement_kwargs=...)`); the reproducible set-up is in
+> `EXPERIMENTAL_SETUP.md`. Removed items named below are listed under "Status on this branch" at the end
+> of this note. Experiments 1-5 measured parameters that are kept (the candidate ladder, `early_stop_patience`,
+> `propagation_waves`) and temporary implementations that were never merged; "Experiment 6: refining the
+> anchor slice" describes KEPT functionality (`refinement="points+boxes"` on a volume, `REFINEMENT_STATS_3D`).
+
 ## Outcome
 
 **A second refinement round is now available for volumes, as an opt-in.**
@@ -1276,3 +1288,24 @@ misses 77 fewer for six more extra predictions; humanneurons (−4) and the sing
 +6 (v2) and −8 (v4). Cases: `3d_cases/holdout/` (17 crops). Combined with the primary manifest the v4 checkpoint
 matches 342 more objects out of 15,920 with 74 more extra predictions, and no setting change of either campaign
 comes near that; the object-level reading and the napari cases are what decide from here, not mSA.
+
+## Status on this branch
+
+Removed on `apg-clean-up` (all preserved on `apg-optim-fable`):
+
+- Scripts: `train_apg_3d_filter.py`, `screen_apg_3d_filter.py`, `screen_apg_3d_hybrid.py`,
+  `extract_apg_3d_tracks.py`. The slice-wise 2d-APG + z-linking hybrid and the learned pre-propagation
+  candidate filter ("C3") existed only in these scripts and in the library hooks below.
+- Library hooks in `micro_sam/v2/automatic_prompt_generation.py`: `generate(keep_trace=...)` and
+  `_last_generation_trace`, `generate(prompts=...)`, `candidate_scorer_threshold`, `candidate_order`,
+  `candidate_budget`, `set_multimask_models(volume_candidate_scorer=...)`,
+  `derive_volume_prompts(return_metadata=...)` and `VOLUME_CANDIDATE_FEATURE_NAMES`.
+- `benchmark_apg_3d.py` lost its trace-based recall attribution (`seeded_*`, `anchor_kept`, `tracked`,
+  `--ladders`) and the anchor arrays of `--save-outputs`; the object counts `gt_objects`, `severed_objects`,
+  `merged`, `unmatched`, `genuine_misses` are still reported. `package_apg3d_cases.py` and
+  `view_apg3d_cases.py` show anchor layers only for cases packaged from pre-clean-up outputs.
+- Kept: `apg3d_manifest.py`, `benchmark_apg_3d.py`, `compare_apg3d_runs.py`, `package_apg3d_cases.py`,
+  `view_apg3d_cases.py`, the configs `apg3d_defaults.json`, `apg3d_legacy_defaults.json`,
+  `apg3d_refine_points_boxes.json`, and the volume refinement itself.
+- `<root>/3d_v2/{c3, cache, hybrid, screens}` and `<root>/3d_campaign/` stay as data; their readers live on
+  `apg-optim-fable`.

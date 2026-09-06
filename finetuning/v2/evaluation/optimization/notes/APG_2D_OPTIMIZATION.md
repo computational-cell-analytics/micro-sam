@@ -1,5 +1,17 @@
 # Targeted 2D APG optimization
 
+> **Status on branch `apg-clean-up` (2026-09).** This note is the historical record of experiments whose
+> mechanisms were tested, refuted and removed from the library and the evaluation harness on this branch.
+> The complete state that produced these numbers (library hooks, scripts, configs, artifact loaders, tests)
+> is preserved unchanged on branch `apg-optim-fable` (commit `356b76d`, on origin). What remains here is the
+> generic harness (`benchmark_apg_optimization.py`, `benchmark_apg_3d.py`, `apg3d_manifest.py`,
+> `compare_apg_optimization.py`, `submit_optimization_jobs.py`, `apg_campaign_tasks.py`) and the plain
+> refinement round (`generate(refinement=..., refinement_kwargs=...)`); the reproducible set-up is in
+> `EXPERIMENTAL_SETUP.md`. Removed items named below are listed under "Status on this branch" at the end
+> of this note. The section "Second-round refinement from grouped prompts" describes KEPT functionality (the 2d
+> refinement round and `DEFAULT_REFINEMENT`); the campaigns from "Refinement campaign 2" onwards concern
+> removed hooks, except for their control runs.
+
 ## Outcome
 
 The original point-placement, blanket-refinement and batching campaign below found no accepted
@@ -2416,3 +2428,32 @@ boundary-tolerant or object-count-based measure next to mSA (per-object IoU dist
 area ratio, as the visual tool does, or SA at a single tolerant threshold), and the visual check should come
 before the screen, not after it: two campaigns' worth of gates were read from a score whose per-dataset movements
 a handful of figures explained in an hour.
+
+## Status on this branch
+
+Removed on `apg-clean-up` (all preserved on `apg-optim-fable`):
+
+- Scripts: `screen_apg_structural.py`, `screen_apg_refinement.py`, `evaluate_apg_generalization.py`,
+  `train_apg_multimask_selector.py`, `train_apg_refinement_gate.py`, `screen_apg_candidate_supply.py`,
+  `screen_apg_compact_selector.py`, `screen_apg_mask_head_filters.py`, `screen_apg_multimask.py`,
+  `report_refinement_screen.py`, `visualize_refinement_cases.py`, `summarize_generic_replay.py`,
+  `summarize_generic_selector_grid.py`.
+- Configs: `apg_s_*.json`, `apg_e2_*.json`, `apg_token_lowres_*.json`, `apg_dense_h64_eager.json`,
+  `apg_accepted_*.json`, `apg_refit_*.json`, `apg_r_refinement_screen.json`, `apg_refinement_*.json`. Kept:
+  `apg_control_registry_defaults.json`, `apg_control_campaign_defaults.json`.
+- Library hooks in `micro_sam/v2/automatic_prompt_generation.py`: the learned multimask selector and filter
+  (`multimask_scorer`, `multimask_selection`, `score_filter`, `set_multimask_models`, the module
+  `micro_sam/v2/multimask_selection.py`), the learned refinement gate (`gate`, `gate_threshold`,
+  `postmerge_refinement_gate_features`), the structural hooks (`prompt_type`, `arbitration`, `fusion`,
+  `recover_residual`, `decoder_basins`, `fuse_with_instances`, `residual_point_prompts`) and the label-free
+  refinement rules (`protect_neighbours`, `negative_scope`, `gate="isolated"`, `isolated_fallback`,
+  `touch_radius`). The `--multimask_scorer_artifact` / `--refinement_gate_artifact` flags of the evaluation
+  scripts are gone with them.
+- Kept: the second-round refinement (`refinement`, `refinement_kwargs` with `policy`, `multimasking`,
+  `min_consistency`, `max_foreign_overlap`, `n_positives`, `n_negatives`, `max_negative_distance`,
+  `negative_source`, `min_negative_distance`, `box_extension`), the benchmark, the comparator and the
+  submitter.
+- Output-root trees written by the removed scripts (`structural_2d/`, `refinement_screening/`,
+  `multimask_selection/`, `candidate_supply_screening/`, `compact_selector_screening/`,
+  `mask_head_filter_screening/`, `multimask_screening/`, `production_generalization/`) and the
+  `campaign*_*.json` / `e2_*.json` decision files stay as data; their readers live on `apg-optim-fable`.

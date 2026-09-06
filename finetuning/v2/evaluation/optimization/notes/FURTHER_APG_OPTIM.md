@@ -1,5 +1,16 @@
 # Further APG Optimization Opportunities
 
+> **Status on branch `apg-clean-up` (2026-09).** This note is the historical record of experiments whose
+> mechanisms were tested, refuted and removed from the library and the evaluation harness on this branch.
+> The complete state that produced these numbers (library hooks, scripts, configs, artifact loaders, tests)
+> is preserved unchanged on branch `apg-optim-fable` (commit `356b76d`, on origin). What remains here is the
+> generic harness (`benchmark_apg_optimization.py`, `benchmark_apg_3d.py`, `apg3d_manifest.py`,
+> `compare_apg_optimization.py`, `submit_optimization_jobs.py`, `apg_campaign_tasks.py`) and the plain
+> refinement round (`generate(refinement=..., refinement_kwargs=...)`); the reproducible set-up is in
+> `EXPERIMENTAL_SETUP.md`. Removed items named below are listed under "Status on this branch" at the end
+> of this note. The 2d multimask-selection and uncertainty-gated refinement proposals, the ranked 3d agenda and the
+> stopped learned-funnel report all concern removed code.
+
 ## Scope and status
 
 **Update 2026-09-03.** The consolidated findings of the generalization campaign and the current 3d
@@ -1307,3 +1318,12 @@ that gains is preferred, and structural label-free changes rank above any score.
 Everything in 1-5 reuses the existing infrastructure (`apg3d_manifest.py`, `benchmark_apg_3d.py`,
 `extract_apg_3d_tracks.py`, `train_apg_3d_filter.py`, `screen_apg_3d_filter.py`, `screen_apg_3d_hybrid.py`,
 the submitter and job builders). Step 2 needs one new replay script; step 3 needs an extractor option.
+
+## Status on this branch
+
+Removed on `apg-clean-up` (all preserved on `apg-optim-fable`): `train_apg_multimask_selector.py`,
+`train_apg_3d_filter.py`, `screen_apg_3d_filter.py`, `screen_apg_3d_hybrid.py`, `extract_apg_3d_tracks.py`,
+the module `micro_sam/v2/multimask_selection.py`, and every learned or structural hook these proposals
+relied on (see the status sections of `APG_2D_OPTIMIZATION.md` and `APG_3D_OPTIMIZATION.md`). The
+proposals themselves were tested and refuted under the generalization rule; nothing in this note is open.
+Kept: the second-round refinement, the tiled generator, and the generic harness.
