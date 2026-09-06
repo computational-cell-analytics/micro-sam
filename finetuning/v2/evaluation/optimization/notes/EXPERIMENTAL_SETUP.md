@@ -105,8 +105,9 @@ the refinement statistics columns, and the configuration files under `optimizati
 - v4 staging recipe: create `<root>/v4_geodesic_checkpoints/joint_sam2_hvit_t_multi_gpu/best.pt` as a
   symlink to `.../joint/v4/checkpoints/joint_sam2_hvit_t_geodesic_multi_gpu/best.pt`, then
   `export MICRO_SAM2_JOINT_CHECKPOINT_ROOT=<root>/v4_geodesic_checkpoints` before submitting. The v4
-  decoders are 32 features wide; `UniSAM2(initial_features=32)` (`micro_sam/v2/models/util.py`)
-  rebuilds the decoder at that width when the installed torch_em ignores the argument.
+  decoders are 32 features wide (the v2 ones 64); the loader reads the width off `out_conv.weight` and
+  passes `initial_features` through `UniSAM2` to torch_em's `UNETR3D`, which honours it from torch_em
+  0.10.4 on (0.10.1 silently built a 64-wide decoder, so v4 checkpoints need the newer torch_em).
 - 3D campaign roots per checkpoint: v2 under `<root>/3d_v2`, v4 geodesic under `<root>/3d_v4geo`
   (`package_apg3d_cases.CHECKPOINTS`).
 
