@@ -1,5 +1,17 @@
 # Campaign operations
 
+> **Status on branch `apg-clean-up` (2026-09).** This note is the historical record of experiments whose
+> mechanisms were tested, refuted and removed from the library and the evaluation harness on this branch.
+> The complete state that produced these numbers (library hooks, scripts, configs, artifact loaders, tests)
+> is preserved unchanged on branch `apg-optim-fable` (commit `356b76d`, on origin). What remains here is the
+> generic harness (`benchmark_apg_optimization.py`, `benchmark_apg_3d.py`, `apg3d_manifest.py`,
+> `compare_apg_optimization.py`, `submit_optimization_jobs.py`, `apg_campaign_tasks.py`) and the plain
+> refinement round (`generate(refinement=..., refinement_kwargs=...)`); the reproducible set-up is in
+> `EXPERIMENTAL_SETUP.md`. Removed items named below are listed under "Status on this branch" at the end
+> of this note. The reusable operations (cluster, submitting, preemption, timing trials, checksum epochs, decision log,
+> configuration shapes, v4 staging) are folded into `EXPERIMENTAL_SETUP.md`; the session checklists below
+> are historical.
+
 How the APG optimization jobs are run on grete, and the rules that keep their numbers comparable.
 Written for the campaigns started on 2026-09-02; the facts about the cluster were verified then.
 
@@ -249,3 +261,21 @@ the shown cases with the real model on the session slice (about a minute per dat
 `<root>/structural_2d/visual/<checkpoint>/<dataset>/<variant>/{improvements,decreases}/` plus `ranking.csv`. Run it
 before reading a screen's per-dataset table: the 2d campaigns of 2026-09-03 were decided on mSA movements that turned
 out to be one-pixel boundary conventions on small objects (see the closing section of `APG_2D_OPTIMIZATION.md`).
+
+## Status on this branch
+
+- Removed scripts referenced above (all on `apg-optim-fable`): `screen_apg_multimask.py`,
+  `screen_apg_compact_selector.py`, `screen_apg_candidate_supply.py`, `screen_apg_mask_head_filters.py`,
+  `screen_apg_refinement.py`, `screen_apg_structural.py`, `screen_apg_3d_hybrid.py`, `screen_apg_3d_filter.py`,
+  `train_apg_multimask_selector.py`, `train_apg_refinement_gate.py`, `train_apg_3d_filter.py`,
+  `extract_apg_3d_tracks.py`, `evaluate_apg_generalization.py`, `report_refinement_screen.py`,
+  `visualize_refinement_cases.py`, `summarize_generic_replay.py`, `summarize_generic_selector_grid.py`.
+- `apg_campaign_tasks.py` keeps the `benchmark`, `benchmark-3d` and `per-sample` task builders only; the
+  `screen` and `train` builders went with their scripts.
+- `PINNED_PROPOSAL_2D` was removed with `screen_apg_multimask.py`; its values are recorded in
+  `EXPERIMENTAL_SETUP.md`, section 8. List-shaped configuration files (the refinement screens) are gone; only
+  dict-shaped ones remain.
+- The implementation checksum now covers seven files: `micro_sam/v2/multimask_selection.py` was deleted.
+  The epoch after the clean-up is `f76ee7170ca77da882c0078dfaa5b301`.
+- Everything under "Continuation checklist", "Session 3" and "Visual case check" describes jobs and files
+  of the closed campaigns; the output-root trees they name stay as data.

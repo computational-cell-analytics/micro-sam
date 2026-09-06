@@ -1,5 +1,17 @@
 # APG 2d: campaign plan for generalizing improvements over the defaults
 
+> **Status on branch `apg-clean-up` (2026-09).** This note is the historical record of experiments whose
+> mechanisms were tested, refuted and removed from the library and the evaluation harness on this branch.
+> The complete state that produced these numbers (library hooks, scripts, configs, artifact loaders, tests)
+> is preserved unchanged on branch `apg-optim-fable` (commit `356b76d`, on origin). What remains here is the
+> generic harness (`benchmark_apg_optimization.py`, `benchmark_apg_3d.py`, `apg3d_manifest.py`,
+> `compare_apg_optimization.py`, `submit_optimization_jobs.py`, `apg_campaign_tasks.py`) and the plain
+> refinement round (`generate(refinement=..., refinement_kwargs=...)`); the reproducible set-up is in
+> `EXPERIMENTAL_SETUP.md`. Removed items named below are listed under "Status on this branch" at the end
+> of this note. This is the plan of the structural campaign (fusion, arbitration, recall, calibration); every
+> experiment in it was run and closed negative, see the "Generalization campaign of 2026-09-03/04" section
+> of `APG_2D_OPTIMIZATION.md`.
+
 Written 2026-09-03 at the close of the generalization campaign; to be executed in a fresh session. Background
 and evidence: `APG_2D_OPTIMIZATION.md` (dated sections of 2026-09-03), `FURTHER_APG_OPTIM.md` ("Session of
 2026-09-03"), operations in `CAMPAIGN_OPERATIONS.md`.
@@ -177,3 +189,13 @@ built (epoch 4, `41abe8ca…`), screened on the eleven datasets and the holdout,
 passes the gate (best: arbitration, a wash; fusion −1 to −4%; box prompts −5 to −10%; the adaptive threshold degenerates
 to a fixed 0.4). No production run, no timing trials. Side result: joint/v4 geodesic with the registry defaults is
 +9-10% over v2 on the primary and holdout manifests; the v4 decoders needed a `UniSAM2` width fix to load.
+
+## Status on this branch
+
+- Removed (all on `apg-optim-fable`): `evaluate_apg_generalization.py`, `screen_apg_structural.py`, the
+  library hooks `fusion`, `arbitration`, `prompt_type`, `recover_residual` and their helpers
+  (`fuse_with_instances`, `decoder_basins`, `residual_point_prompts`), and the `configs/apg_s_*.json`
+  variants.
+- The 9-of-11 generalization gate of section 3 is documented in `EXPERIMENTAL_SETUP.md`, section 9; its
+  implementation (`gate_table`) went with `screen_apg_structural.py`.
+- `configs/apg_control_registry_defaults.json` (the control of section 3) is kept.
