@@ -576,3 +576,47 @@ primary, +9.7 % holdout, nothing down) this is the volume setting that generaliz
 (the registry values; foreground 0.5 and the filter 0.4 are inherited from the image table). Images
 unchanged from A2. The 3D production jobs tagged `a2-defaults` were cancelled before they could import the
 new table and are resubmitted as `a3-defaults`; the 2D jobs are unaffected (image table unchanged).
+
+### Canonical A3 runs on the 3D crops (2026-09-07 01:00, job 15767918, trial `a3-1`; reports `ais/reports/a3_apg3d_*`)
+
+Library defaults (`current-defaults`, epoch `e9d02380…`) against the old values, sparse LM sources:
+
+| instrument | old | new | change | up | worst | per source |
+|---|---:|---:|---:|---:|---:|---|
+| primary (57 crops) | 0.1765 | 0.1847 | **+4.7 %, passes** | 5 / 6 | 0.0 % | celegans +1.4, platy_ish 0.0, platy_nuclei +0.4, skull +25, gonuclear +5.2, platynereis +16 |
+| holdout (18 crops) | 0.1998 | 0.2193 | **+9.7 %, passes** | 5 / 6 | 0.0 % | celegans +1.0, platy_ish 0.0, platy_nuclei +35, skull +8.4, gonuclear +0.2, platynereis +29 |
+| test manifest (56 crops, opened once) | 0.1083 | 0.1120 | **+3.4 %, passes** | 6 / 6 scorable | +0.7 % | blastospim +1.2, cartocell +1.9, mouse_embryo +6.8, nis3d +2.9, plantseg +9.3, pnas_arabidopsis +0.7 |
+
+Identical to the `v-filter-only` configuration, as intended; the dense EM sources are unchanged.
+
+## Production, 2D test splits (2026-09-07 01:30; `experiments/v4_geodesic_ais_optimization/results/`, report `ais/reports/production_2d_old_vs_new.csv`)
+
+`evaluate_automatic_segmentation.py --skip_tuning` on the full test split of every 2D dataset, old defaults
+(`--ais_params configs/ais_control_v4_old_defaults.json`, tag `old-defaults`) against the new library defaults
+(tag `a2-defaults`; images are identical under A2 and A3). mSA:
+
+| dataset | old | new | change | | dataset | old | new | change |
+|---|---:|---:|---:|---|---|---:|---:|---:|
+| livecell | 0.2575 | 0.2660 | +3.3 % | | arvidsson* | 0.3581 | 0.3554 | −0.8 % |
+| tissuenet | 0.2508 | 0.2583 | +3.0 % | | bitdepth_nucseg* | 0.2298 | 0.2340 | +1.8 % |
+| dynamicnuclearnet | 0.5083 | 0.5509 | +8.4 % | | cellbindb* | 0.2787 | 0.2961 | +6.2 % |
+| deepbacs | 0.2056 | 0.2319 | +12.8 % | | cellpose_data* | 0.1982 | 0.2063 | +4.1 % |
+| dic_hepg2 | 0.0018 | 0.0028 | +55 % | | cvz_fluo* | 0.1404 | 0.1507 | +7.3 % |
+| yeaz | 0.5964 | 0.6021 | +0.9 % | | dsb* | 0.4631 | 0.4862 | +5.0 % |
+| neurips_cellseg | 0.2916 | 0.3138 | +7.6 % | | hpa* | 0.0003 | 0.0003 | +15 % |
+| deepseas | 0.1048 | 0.1549 | +47.8 % | | **microbeseg*** | **0.1420** | **0.1258** | **−11.4 %** |
+| puma | 0.4556 | 0.4613 | +1.3 % | | omnipose* | 0.2153 | 0.2537 | +17.8 % |
+| covid_if | 0.7656 | 0.7686 | +0.4 % | | segpc* | 0.0066 | 0.0116 | +76 % |
+| tnbc | 0.3277 | 0.3470 | +5.9 % | | usiigaci* | 0.0891 | 0.0995 | +11.7 % |
+| | | | | | vicar* | 0.4032 | 0.4100 | +1.7 % |
+
+\* strictly unseen by any tuning. **All 23: 21 up, balanced 0.2735 → 0.2864 (+4.7 %)**; the eleven development
+datasets 0.3423 → 0.3598 (+5.1 %, 11 up); the twelve unseen datasets 0.2104 → 0.2191 (+4.2 %, 10 up).
+The gate's production variant (loss limit −5 % and 0.005) is violated by one dataset, microbeseg
+(−0.016 absolute). Single-change ablations on microbeseg (tags `d-filter-only`, `d-sigma-only`,
+`d-ms50-only`): filter alone 0.1420 (no change), size floor 50 alone 0.1580 (+11 %), **sigma 1.0 alone 0.1208
+(−15 %)**: the wider density smoothing merges the small, dense bacteria of microbeseg, the same mechanism
+that lets it merge the jittering sinks of large cells everywhere else. This is the one known cost of the new
+defaults; it is reported, not tuned away (the test split is not a tuning set). Against the §14.3 v4 numbers
+the new AIS defaults now beat the v2 AIS defaults on every dataset that was compared there (deepbacs
+0.2319 vs v2 0.2940 remains below v2).
