@@ -28,17 +28,19 @@ from .util import DEFAULT_MODEL
 # pixels); it is layered over 'sparse' by `default_postprocessing(..., ndim=3)`.
 #
 # The hvit_t entry is the result of the 2026-09 AIS optimization on the joint/v4 geodesic checkpoint
-# (finetuning/v2/evaluation/optimization/notes/AIS_V4_OPTIMIZATION.md): against the registry values
-# (min_size 100, sigma 0.5, no filter) it gains +2.4 % balanced mSA on eleven 2d development datasets
-# (9 up, worst -0.8 %), +4.3 % on the 2d holdout and +22 % on the 3d LM crops, with the wider density
-# smoothing merging the jittering sinks of large cells and the boundary filter removing false regions.
+# (finetuning/v2/evaluation/optimization/notes/AIS_V4_OPTIMIZATION.md). Images: against the registry values
+# (min_size 100, sigma 0.5, no filter) the wider density smoothing, the ground-truth-like size floor and the
+# boundary filter gain +2.4 % balanced mSA on eleven 2d development datasets (9 up, worst -0.8 %) and
+# +4.3 % on the 2d holdout. Volumes keep the registry values and add the filter only (+4.7 % / +9.7 % on
+# the 3d tuning crops, +3.4 % on the seven test-only 3d datasets, none down); the stronger volume settings
+# that won on the tuning crops did not carry over to the test datasets.
 DEFAULT_POSTPROCESSING = {
     "hvit_t": {
         "sparse": {
             "foreground_threshold": 0.5, "density_threshold": 10.0, "min_size": 50,
             "sigma": 1.0, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5, "boundary_magnitude_max": 0.4,
         },
-        "sparse_volume": {"min_size": 200, "foreground_threshold": 0.6},
+        "sparse_volume": {"min_size": 100, "sigma": 0.5},
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_s": {

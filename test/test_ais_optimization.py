@@ -64,7 +64,7 @@ def test_load_config_defaults_and_file(tmp_path):
     assert (name, mode) == ("current-defaults", "auto")
     assert params_2d == ais.resolve_postprocessing({}, "hvit_t", ndim=2)
     assert params_3d == ais.resolve_postprocessing({}, "hvit_t", ndim=3)
-    assert params_3d["sparse"]["min_size"] == 200 and params_2d["sparse"]["min_size"] == 50
+    assert params_3d["sparse"]["min_size"] == 100 and params_2d["sparse"]["min_size"] == 50
 
     path = tmp_path / "candidate.json"
     path.write_text(json.dumps({"name": "travel", "params_2d": {"n_iter": 400}, "params_3d": {"n_iter": 100}}))

@@ -1,0 +1,19 @@
+{
+  "name": "v-filter-only",
+  "mode": "auto",
+  "params_2d": {
+    "sigma": 1.0,
+    "min_size": 50,
+    "boundary_magnitude_max": 0.4
+  },
+  "params_3d": {
+    "foreground_threshold": 0.5,
+    "density_threshold": 10.0,
+    "min_size": 100,
+    "sigma": 0.5,
+    "n_iter": 50,
+    "dt": 0.5,
+    "foreground_weight": 0.5,
+    "boundary_magnitude_max": 0.4
+  }
+}
