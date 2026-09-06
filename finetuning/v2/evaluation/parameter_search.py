@@ -700,11 +700,7 @@ REGISTRY_DATASETS = [
 
 PARTITION = "grete:preemptible"
 # The micro-sam2 environment on grete; every array task activates it.
-ENV = "super"
-
-# Which joint training version a task sweeps. Pinned into the array script, so a queued task sweeps
-# the weights the submission chose rather than whatever the environment holds when it starts.
-JOINT_ENV_VARS = ("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", "MICRO_SAM2_JOINT_EXPORT_ROOT")
+ENV = "new-stack"
 CPUS = 4
 # A 2d task took 54 min at worst as a shard and 62 min unsharded, with the slow histopathology datasets
 # sharded (REGISTRY_2D_SHARDS). A longer limit only keeps the task out of the backfill window.
@@ -947,7 +943,7 @@ def write_array_script(job_folder, name, tasks_path, n_tasks, gpu, memory, time_
 
 source ~/.bashrc
 micromamba activate {ENV}
-{env_exports()}
+
 line=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" {tasks_path})
 tag=$(cut -f1 <<< "$line")
 command=$(cut -f2- <<< "$line")

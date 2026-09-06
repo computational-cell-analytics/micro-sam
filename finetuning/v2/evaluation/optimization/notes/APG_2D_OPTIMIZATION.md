@@ -2457,3 +2457,5 @@ Removed on `apg-clean-up` (all preserved on `apg-optim-fable`):
   `multimask_selection/`, `candidate_supply_screening/`, `compact_selector_screening/`,
   `mask_head_filter_screening/`, `multimask_screening/`, `production_generalization/`) and the
   `campaign*_*.json` / `e2_*.json` decision files stay as data; their readers live on `apg-optim-fable`.
+- Baseline reruns of 2026-09-06 with the cleaned harness (joint/v4 geodesic, registry defaults): bit-identical
+  to the v4 controls above; paths and numbers in `EXPERIMENTAL_SETUP.md`, section 14.

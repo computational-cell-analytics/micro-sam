@@ -84,18 +84,11 @@ METHOD_SUPPORT = {
     ("interactive", "microsam_vol"): {"ndim": (3,), "modality": ("lm",)},
 }
 
-# The data that one model of a method can run on, on top of METHOD_SUPPORT. The key is (method, model), since model
-# names repeat across methods. The CellPose 3 generalists are not histopathology models.
-MODEL_SUPPORT = {("cellpose", "cyto3"): {"modality": ("lm", "em")}, ("cellpose", "nuclei"): {"modality": ("lm", "em")}}
-
-# Use --env to override the method-specific environments. StarDist runs in its own because it needs
-# TensorFlow, which does not belong next to torch in the main environment.
-METHOD_ENV = {"stardist": "stardist"}
-
-# cyto3 and nuclei are CellPose 3 checkpoints, which the CellPose 4 of the main environment cannot load.
-MODEL_ENV = {("cellpose", "cyto3"): "cellpose3", ("cellpose", "nuclei"): "cellpose3"}
-
-DEFAULT_ENV = "super"
+# Methods whose packages do not live in the default environment. The names are per machine, so
+# --env overrides them and a missing one is reported before anything is submitted. 'new-stack' is
+# the micro-sam2 environment on grete; the earlier default 'super' does not exist there.
+METHOD_ENV = {"cellpose": "cp3", "stardist": "sd"}
+DEFAULT_ENV = "new-stack"
 
 # Slurm resources per job. Only the grete partitions are available. 'grete:preemptible' is usually
 # free and starts within minutes, where the shared pools queue for days. It is MIG only, so the GPU

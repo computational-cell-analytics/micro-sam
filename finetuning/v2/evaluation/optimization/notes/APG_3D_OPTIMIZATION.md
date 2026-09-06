@@ -1309,3 +1309,6 @@ Removed on `apg-clean-up` (all preserved on `apg-optim-fable`):
   `apg3d_refine_points_boxes.json`, and the volume refinement itself.
 - `<root>/3d_v2/{c3, cache, hybrid, screens}` and `<root>/3d_campaign/` stay as data; their readers live on
   `apg-optim-fable`.
+- Baseline reruns of 2026-09-06 with the cleaned harness (joint/v4 geodesic, `apg3d_defaults.json`): holdout
+  identical, primary identical on 56/57 crops (one nondeterministic gonuclear crop); paths and numbers in
+  `EXPERIMENTAL_SETUP.md`, section 14.
