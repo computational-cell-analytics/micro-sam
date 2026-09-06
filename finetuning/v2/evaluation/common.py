@@ -308,8 +308,31 @@ SYNAPSEWEB_CORE_ROIS = {
 }
 
 
+# Volumes that are mostly empty around a small labelled specimen (e.g. one embryo in a 2048x2048 light-sheet
+# frame): the evaluation crop is centered on the bounding box of the labels instead of on the volume.
+LABEL_CENTERED_VOLUMES = {"blastospim": "labels"}
+
+
+def _label_bbox_roi(dataset_name, label_path):
+    """The bounding box of the non-zero labels of one volume, cached under EVAL_CACHE_ROOT."""
+    import json
+    cache_dir = os.path.join(EVAL_CACHE_ROOT, dataset_name)
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_path = os.path.join(cache_dir, os.path.basename(label_path) + "_roi.json")
+    if not os.path.exists(cache_path):
+        labels = np.asarray(open_file(label_path, mode="r")[LABEL_CENTERED_VOLUMES[dataset_name]])
+        fg = np.nonzero(labels != 0)
+        roi = [[int(ax.min()), int(ax.max()) + 1] for ax in fg]
+        with open(cache_path, "w") as f:
+            json.dump({"roi": roi}, f)
+    with open(cache_path) as f:
+        return tuple(slice(a, b) for a, b in json.load(f)["roi"])
+
+
 def em_roi(dataset_name: str, label_path: str, split: str):
-    """The (z, y, x) roi of one EM volume for the 'test' or 'val' region, or None to read it whole."""
+    """The (z, y, x) roi of one volume for the 'test' or 'val' region, or None to read it whole."""
+    if dataset_name in LABEL_CENTERED_VOLUMES:
+        return _label_bbox_roi(dataset_name, label_path)
     if dataset_name == "axonem":
         # Only a central block of each volume is annotated; its bounding box is cached next to the labels.
         import json
