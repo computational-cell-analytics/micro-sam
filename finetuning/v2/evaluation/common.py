@@ -173,19 +173,19 @@ GT_MIN_SIZE_2D = {
     "u20s": 10, "vicar": 25, "yeaz": 10,
 }
 
-# Light microscopy, 3d, grouped as the 2d datasets. nis3d is the Drosophila pair the loader trains on. MorphoNet is
-# pending its specimen mapping against PNAS Arabidopsis and is not part of a panel.
+# Light microscopy, 3d, grouped as the 2d datasets. nis3d is the Drosophila pair the loader trains on. Of MorphoNet
+# only the C. elegans nuclei (CTC Fluo-N3DH-CE) are scored: its Arabidopsis volumes are the PNAS plant1 time series
+# and its Phallusia volumes come from the PhMamm source, both of which train.
 DATASETS_3D_LM_CELL_ID = ["plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid"]
 DATASETS_3D_LM_CELL_OOD = ["plantseg_ovules", "cshaper", "vibrio_cholerae"]
-DATASETS_3D_LM_CELL_PENDING = ["morphonet"]
 DATASETS_3D_LM_NUCLEUS_ID = [
     "embedseg_mouse_skull", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear", "nucverse3d",
 ]
 DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY = ["embedseg_platy_ish"]
-DATASETS_3D_LM_NUCLEUS_OOD = ["parhyale_regen", "mouse_embryo", "blastospim"]
+DATASETS_3D_LM_NUCLEUS_OOD = ["parhyale_regen", "mouse_embryo", "blastospim", "morphonet_celegans"]
 DATASETS_3D_LM = (
-    DATASETS_3D_LM_CELL_ID + DATASETS_3D_LM_CELL_OOD + DATASETS_3D_LM_CELL_PENDING + DATASETS_3D_LM_NUCLEUS_ID
-    + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_3D_LM_NUCLEUS_OOD
+    DATASETS_3D_LM_CELL_ID + DATASETS_3D_LM_CELL_OOD + DATASETS_3D_LM_NUCLEUS_ID + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY
+    + DATASETS_3D_LM_NUCLEUS_OOD
 )
 
 # Neurite segmentation: the blind regions of the v5 training sets (see EM_ROIS and the path resolver). The main
@@ -213,12 +213,12 @@ DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 # platynereis_nuclei segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
 DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_OOD
 
-# Everything outside the main in-domain and OOD panels: supplementary, held-out platform, reserve and pending sets.
+# Everything outside the main in-domain and OOD panels: supplementary, held-out platform and reserve sets.
 # The submission script skips them unless asked for them.
 DATASETS_SUPPLEMENTARY = (
     DATASETS_2D_LM_CELL_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM
-    + DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY + DATASETS_2D_LM_LABEL_FREE_RESERVE + DATASETS_3D_LM_CELL_PENDING
-    + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_2D_HP_SUPPLEMENTARY
+    + DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY + DATASETS_2D_LM_LABEL_FREE_RESERVE + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY
+    + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_2D_HP_SUPPLEMENTARY
 )
 
 # The split to tune on, or None where the loader has no splits and VAL_Z_RANGE holds out a z-slab.
@@ -1126,11 +1126,11 @@ def _get_3d_lm_data_paths(
         )
         return (*_sorted_pairs(img, gt), "raw", "labels")
 
-    if dataset_name == "morphonet":
-        # All 20 Arabidopsis timepoints and every 10th of the 184 C. elegans timepoints.
+    if dataset_name == "morphonet_celegans":
+        # Every 10th of the 184 C. elegans timepoints.
         root = os.path.join(p, "morphonet")
-        paths = lm.morphonet.get_morphonet_paths(path=root, organism="arabidopsis_thaliana", download=download)
-        paths += lm.morphonet.get_morphonet_paths(path=root, organism="caenorhabditis_elegans", download=download)[::10]
+        paths = lm.morphonet.get_morphonet_paths(path=root, organism="caenorhabditis_elegans", download=download)
+        paths = sorted(paths)[::10]
         return paths, paths, "raw", "labels"
 
     if dataset_name == "parhyale_regen":
@@ -1407,7 +1407,7 @@ def load_volume(
         labels = labels.astype("int64")
         valid_roi = labels != -1
         labels[labels == -1] = 0
-    elif dataset_name == "pnas_arabidopsis" or (dataset_name == "morphonet" and "arabidopsis" in raw_path):
+    elif dataset_name == "pnas_arabidopsis":
         # The background carries id 1.
         labels[labels == 1] = 0
 
