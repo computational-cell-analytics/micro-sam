@@ -91,11 +91,11 @@ BALANCED_ROW = "__dataset_balanced__"
 # The keywords of the two post-processing functions, i.e. what a configuration may override.
 SPARSE_KEYS = (
     "foreground_threshold", "n_iter", "dt", "sigma", "density_threshold", "min_size", "foreground_weight",
-    "boundary_magnitude_max", "seed_floor",
+    "boundary_magnitude_max", "seed_floor", "contact_weight", "contact_mask_threshold",
 )
 DENSE_KEYS = ("beta", "density_threshold", "n_iter", "dt", "sigma")
 # Metric columns of a sample row; means and standard deviations are reported per dataset.
-METRIC_COLUMNS = ("msa", "cremi", "vi_split", "vi_merge", "adapted_rand", "fg_iou", "matched_iou")
+METRIC_COLUMNS = ("msa", "cremi", "vi_split", "vi_merge", "adapted_rand", "fg_iou", "fg_area_ratio", "matched_iou")
 # Count columns; sums are reported per dataset.
 COUNT_COLUMNS = (
     "gt_objects", "predicted_objects", "matched", "unmatched", "severed_objects", "genuine_misses",
@@ -403,8 +403,10 @@ def segment_prediction(
         else:
             seg = run_multicut(boundary_map, distances, model_type=model_type, n_threads=n_threads, **params)
     else:
+        contact = {"contact": prediction[4]} if prediction.shape[0] > 4 else {}
         seg = flow_instance_segmentation(
-            prediction[0], prediction[1:], model_type=model_type, spacing=spacing, n_threads=n_threads, **params,
+            prediction[0], prediction[1:4], model_type=model_type, spacing=spacing, n_threads=n_threads, **contact,
+            **params,
         )
     return seg.astype("uint32")
 
@@ -417,7 +419,8 @@ def sparse_pipeline(
     'params' must be fully resolved (see `resolve_postprocessing`). The segmentation must equal the
     library's; `score_sample` records a mismatch per sample, which is the bit-identity check of an epoch.
     """
-    foreground, directed = prediction[0], prediction[1:]
+    foreground, directed = prediction[0], prediction[1:4]
+    contact = prediction[4] if prediction.shape[0] > 4 else None
     ndim = foreground.ndim
     if directed.shape[0] > ndim:
         directed = directed[-ndim:]
@@ -428,8 +431,17 @@ def sparse_pipeline(
     )
     seeds = connected_components(density > params["density_threshold"])
     hmap = watershed_heightmap(foreground, directed, params["foreground_weight"])
+    contact_weight = params.get("contact_weight")
+    if contact is not None and contact_weight is not None and contact_weight != 0:
+        hmap = np.ascontiguousarray(hmap + np.float32(contact_weight) * np.clip(contact, 0, 1), dtype="float32")
     hmap = lower_height_under_seeds(hmap, seeds, params.get("seed_floor", "none"))
-    before = watershed(hmap, markers=seeds, mask=fg_mask)
+    contact_mask_threshold = params.get("contact_mask_threshold")
+    if contact is not None and contact_mask_threshold is not None:
+        open_mask = fg_mask & ~(contact > contact_mask_threshold)
+        first = watershed(hmap, markers=np.where(open_mask, seeds, 0).astype(seeds.dtype), mask=open_mask)
+        before = watershed(hmap, markers=first, mask=fg_mask)
+    else:
+        before = watershed(hmap, markers=seeds, mask=fg_mask)
     seg = before
     min_size = int(params["min_size"])
     if min_size > 0:
@@ -550,7 +562,8 @@ def seed_diagnostics(
 
     Per ground-truth object the number of seed components inside it (0 = a miss before any
     assignment, 2+ = a split), seeds whose majority pixel is background, objects matched before the
-    size filter, the IoU of the thresholded foreground with the ground-truth foreground, and the fate of
+    size filter, the IoU of the thresholded foreground with the ground-truth foreground and its area ratio
+    ('fg_area_ratio', the extent calibration), and the fate of
     the objects the result lost (IoU below 0.5): seeded ones are 'split' (two or more seeds), 'merged'
     (their instance also covers another object), 'undersized' or 'oversized' (an extent error);
     unseeded ones are 'absorbed' (mostly covered by a neighbour's instance) or 'missing'. 'matched_iou'
@@ -584,6 +597,7 @@ def seed_diagnostics(
     extent = seeded_lost & ~split & ~merged
     fg_mask, gt_fg = intermediates["fg_mask"], labels != 0
     union = int((fg_mask | gt_fg).sum())
+    gt_area = int(gt_fg.sum())
     return {
         "n_seeds": n_seeds,
         "gt_with_0_seeds": int((per_object == 0).sum()),
@@ -599,6 +613,7 @@ def seed_diagnostics(
         "unseeded_missing": int((~seeded & lost & ~fates["absorbed"]).sum()),
         "matched_before_min_size": int(len(matched_ids(labels, intermediates["before_min_size"]))),
         "fg_iou": float((fg_mask & gt_fg).sum() / union) if union else float("nan"),
+        "fg_area_ratio": float(fg_mask.sum() / gt_area) if gt_area else float("nan"),
         "matched_iou": float(fates["iou"][is_matched].mean()) if is_matched.any() else float("nan"),
     }
 

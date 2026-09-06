@@ -241,7 +241,7 @@ def score_image_sparse_cached(
     (None where a combo failed), aligned with params_list.
     """
     foreground = prediction[0]
-    directed = prediction[1:]
+    directed = prediction[1:4]
     ndim = foreground.ndim
     if directed.shape[0] > ndim:
         directed = directed[-ndim:]

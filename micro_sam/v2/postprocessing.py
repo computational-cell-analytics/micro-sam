@@ -267,6 +267,9 @@ def flow_instance_segmentation(
     n_threads: int = 8,
     boundary_magnitude_max: Optional[float] = None,
     seed_floor: Optional[str] = None,
+    contact: Optional[np.ndarray] = None,
+    contact_weight: Optional[float] = None,
+    contact_mask_threshold: Optional[float] = None,
 ) -> np.ndarray:
     """Instance segmentation from directed-distance predictions via flow following.
 
@@ -275,8 +278,9 @@ def flow_instance_segmentation(
     watershed. Works for both 2D and 3D inputs.
 
     If 3 distance channels are supplied for a 2D foreground map the leading
-    z-channel is automatically dropped, so you can always pass ``out[1:]``
-    regardless of dimensionality.
+    z-channel is automatically dropped, so you can always pass the three distance
+    channels ``out[1:4]`` regardless of dimensionality. Any other channel count raises,
+    so that an auxiliary channel appended to the prediction is never read as a distance.
 
     Args:
         foreground: Foreground probability map, shape (Y, X) or (Z, Y, X).
@@ -299,6 +303,13 @@ def flow_instance_segmentation(
             None (no filtering); pass ``float("inf")`` to disable a default filter explicitly.
         seed_floor: How the height map is lowered under the seeds before the watershed, see
             `lower_height_under_seeds`. None takes the per-model default.
+        contact: The predicted contact (touching boundary) probability, same shape as the foreground, from a
+            decoder with a fifth output channel. Only used through the two keywords below.
+        contact_weight: Adds ``contact_weight * contact`` to the watershed height map, so that the fronts of
+            two touching objects meet on the predicted contact line. None or 0 leaves the height map unchanged.
+        contact_mask_threshold: Excludes the pixels with ``contact > threshold`` from the first seeded watershed
+            and assigns them afterwards by flooding from the resulting instances, so that no instance grows
+            across a contact line. None disables the exclusion.
 
     Returns:
         Instance segmentation, uint32 array, same spatial shape as foreground.
@@ -324,11 +335,17 @@ def flow_instance_segmentation(
         foreground_weight = defaults["foreground_weight"]
 
     ndim = foreground.ndim
-    if directed_distances.shape[0] > ndim:
-        directed_distances = directed_distances[-ndim:]
-    assert directed_distances.shape[0] == ndim, (
-        f"Expected {ndim} distance channels, got {directed_distances.shape[0]}."
-    )
+    if directed_distances.shape[0] == 3 and ndim == 2:
+        directed_distances = directed_distances[1:]  # Drop the (pseudo) z channel of a 2d prediction.
+    if directed_distances.shape[0] != ndim:
+        raise ValueError(
+            f"Expected {ndim} distance channels (or 3 for 2d input), got {directed_distances.shape[0]}. Pass the "
+            "three distance channels 'prediction[1:4]'; an auxiliary channel goes into 'contact'."
+        )
+    if contact is None and (contact_weight is not None or contact_mask_threshold is not None):
+        raise ValueError("'contact_weight' and 'contact_mask_threshold' need the predicted contact map 'contact'.")
+    if contact is not None and contact.shape != foreground.shape:
+        raise ValueError(f"The contact map {contact.shape} must have the shape of the foreground {foreground.shape}.")
 
     fg_mask = foreground > foreground_threshold
 
@@ -338,8 +355,17 @@ def flow_instance_segmentation(
 
     seeds = label(density > density_threshold)
     hmap = watershed_heightmap(foreground, directed_distances, foreground_weight)
+    if contact is not None and contact_weight is not None and contact_weight != 0:
+        # The contact line becomes a ridge, so the fronts of two touching objects meet on it.
+        hmap = np.ascontiguousarray(hmap + np.float32(contact_weight) * np.clip(contact, 0, 1), dtype="float32")
     hmap = lower_height_under_seeds(hmap, seeds, seed_floor)
-    seg = watershed(hmap, markers=seeds, mask=fg_mask)
+    if contact is not None and contact_mask_threshold is not None:
+        # Flood everything but the contact pixels first, then let the instances claim the contact pixels.
+        open_mask = fg_mask & ~(contact > contact_mask_threshold)
+        first = watershed(hmap, markers=np.where(open_mask, seeds, 0).astype(seeds.dtype), mask=open_mask)
+        seg = watershed(hmap, markers=first, mask=fg_mask)
+    else:
+        seg = watershed(hmap, markers=seeds, mask=fg_mask)
 
     if min_size > 0:
         ids, sizes = np.unique(seg, return_counts=True)

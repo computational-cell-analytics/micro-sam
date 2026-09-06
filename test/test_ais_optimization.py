@@ -380,3 +380,37 @@ def test_rank_shared_flags_gate_against_the_reference():
     assert ranked["mean_relative_optimum"].max() <= 1.0
     with pytest.raises(ValueError, match="matches 0 rows"):
         rs.rank_shared(tables, reference={"sigma": 2.0, "boundary_magnitude_max": None})
+
+
+@pytest.fixture(scope="module")
+def contact_prediction(geodesic_prediction):
+    """The fixture's field plus a fifth channel with the ground-truth contact lines."""
+    from micro_sam.v2.transforms.labels import touching_boundaries
+
+    prediction, labels = geodesic_prediction
+    contact = touching_boundaries(labels).astype("float32")[None]
+    return np.concatenate([prediction, contact], axis=0), labels
+
+
+def test_resolve_postprocessing_accepts_the_contact_keywords():
+    params = ais.resolve_postprocessing({"contact_weight": 1.0, "contact_mask_threshold": 0.5}, "hvit_t")["sparse"]
+    assert params["contact_weight"] == 1.0 and params["contact_mask_threshold"] == 0.5
+    assert "contact_weight" not in ais.resolve_postprocessing({}, "hvit_t")["sparse"]
+
+
+@pytest.mark.parametrize("overrides", [{}, {"contact_weight": 1.0}, {"contact_mask_threshold": 0.5}])
+def test_sparse_pipeline_matches_library_with_a_contact_channel(contact_prediction, overrides):
+    from micro_sam.v2.postprocessing import flow_instance_segmentation
+
+    prediction, labels = contact_prediction
+    params = ais.resolve_postprocessing({"min_size": 20, "foreground_weight": 1.0, **overrides}, "hvit_t")["sparse"]
+    expected = flow_instance_segmentation(
+        prediction[0], prediction[1:4], model_type="hvit_t", n_threads=2, contact=prediction[4], **params,
+    )
+    intermediates = ais.sparse_pipeline(prediction, params, None, 2)
+    assert np.array_equal(intermediates["segmentation"], expected)
+    mine = ais.segment_prediction(prediction, params, dense=False, spacing=None, model_type="hvit_t", n_threads=2)
+    assert np.array_equal(mine, expected)
+    diagnostics = ais.seed_diagnostics(intermediates, labels, expected)
+    assert 0.5 < diagnostics["fg_area_ratio"] < 2.0
+    assert "fg_area_ratio" in ais.METRIC_COLUMNS

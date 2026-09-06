@@ -1038,7 +1038,7 @@ def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None):
 
 
 def postprocess_unisam2(out, dataset_name, model_type, params=None):
-    """Turn a (4, *spatial) prediction into an instance segmentation.
+    """Turn a (4, *spatial) prediction (or (5, *spatial) with a contact channel) into an instance segmentation.
 
     EM datasets use the dense (multicut) mode, all others the sparse (flow) mode. 'params' overrides
     the postprocessing defaults, e.g. with the best combination found by grid_search_automatic_cells.
@@ -1054,7 +1054,8 @@ def postprocess_unisam2(out, dataset_name, model_type, params=None):
         seg = run_multicut(boundary_map, distances, model_type=model_type, **params)
     else:
         spacing = DATASET_SPACING.get(dataset_name, None)
-        seg = flow_instance_segmentation(fg, out[1:], model_type=model_type, spacing=spacing, **params)
+        contact = {"contact": out[4]} if out.shape[0] > 4 else {}
+        seg = flow_instance_segmentation(fg, out[1:4], model_type=model_type, spacing=spacing, **contact, **params)
     return seg.astype("uint32")
 
 

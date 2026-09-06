@@ -697,7 +697,8 @@ def _convert_automatic_qlora_state(model, model_state):
 
 
 def get_unisam2_model(
-    checkpoint_path, device=None, encoder=_DEFAULT_MODEL, output_channels=4, peft_kwargs=None, encoder_model_type=None
+    checkpoint_path, device=None, encoder=_DEFAULT_MODEL, output_channels=None, peft_kwargs=None,
+    encoder_model_type=None,
 ):
     """Load a UniSAM2 model for automatic segmentation from a checkpoint.
 
@@ -707,7 +708,8 @@ def get_unisam2_model(
         encoder: The SAM2 encoder to build the decoder on. Either the backbone name to build from
             scratch, e.g. 'hvit_t', or a prebuilt SAM2 image-encoder module to reuse (which avoids
             rebuilding / downloading the base backbone). Its weights are (re)defined by the checkpoint.
-        output_channels: The number of output channels (foreground + directed distances).
+        output_channels: The number of output channels (foreground, directed distances and optional auxiliary
+            channels). By default it is read off the checkpoint's output layer.
         peft_kwargs: The arguments for `PEFT_Sam2`. The function uses the saved arguments by default.
         encoder_model_type: The SAM2 model type for a prebuilt PEFT encoder. You must set this argument for modules.
 
@@ -747,8 +749,10 @@ def get_unisam2_model(
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         encoder = sam2_model.image_encoder
 
-    # The decoder width is not recorded in the checkpoint, so read it off 'out_conv'.
+    # Neither the decoder width nor the channel count is recorded in the checkpoint, so read them off 'out_conv'.
     initial_features = model_state["out_conv.weight"].shape[1]
+    if output_channels is None:
+        output_channels = model_state["out_conv.weight"].shape[0]
 
     model = UniSAM2(encoder=encoder, output_channels=output_channels, initial_features=initial_features, device=device)
     if peft_kwargs and is_qlora:
@@ -980,8 +984,9 @@ def _segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kw
     """Convert UniSAM2 predictions into an instance segmentation.
 
     Args:
-        prediction: The UniSAM2 predictions, shape (4, *spatial). Channel 0 is the foreground
-            probability and channels 1-3 are the directed distances.
+        prediction: The UniSAM2 predictions, shape (4, *spatial) or (5, *spatial). Channel 0 is the foreground
+            probability, channels 1-3 are the directed distances and the optional channel 4 is the contact
+            probability, which the sparse mode forwards as 'contact'.
         mode: The segmentation mode. 'sparse' uses flow-based segmentation (LM data, 2d and 3d),
             'dense' uses multicut-based segmentation (EM data, 2d and 3d).
         kwargs: Additional parameters forwarded to the postprocessing function
@@ -1004,7 +1009,9 @@ def _segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kw
         else:
             seg = run_multicut(boundary_map, distances, **kwargs)
     else:
-        seg = flow_instance_segmentation(foreground, prediction[1:], **kwargs)
+        if prediction.shape[0] > 4:
+            kwargs = {"contact": prediction[4], **kwargs}
+        seg = flow_instance_segmentation(foreground, prediction[1:4], **kwargs)
     return seg.astype("uint32")
 
 
@@ -1090,12 +1097,13 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
             desc = "Automatic segmentation (volume)" if is_3d else "Automatic segmentation"
             pbar_init(n_blocks, desc)
 
+        n_channels = int(getattr(self._model, "out_channels", 4))
         if is_3d:
             input_ = raw[np.newaxis].astype("float32")
-            output = np.zeros((4, *raw.shape), dtype="float32")
+            output = np.zeros((n_channels, *raw.shape), dtype="float32")
         else:
             input_ = raw[np.newaxis, np.newaxis].astype("float32")
-            output = np.zeros((4, 1, *raw.shape), dtype="float32")
+            output = np.zeros((n_channels, 1, *raw.shape), dtype="float32")
 
         img_size = getattr(getattr(self._model, "encoder", None), "img_size", 1024)
         resize_model = ResizeLongestSideWrapper(self._model, img_size)

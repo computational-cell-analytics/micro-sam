@@ -1336,7 +1336,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             if refinement is not None:
                 components, resolved = _parse_refinement(refinement, refinement_kwargs, is_volume=True)
             prompts = derive_volume_prompts(
-                self._prediction[0], self._prediction[1:], model_type=self._model_type,
+                self._prediction[0], self._prediction[1:4], model_type=self._model_type,
                 candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
                 n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing,
                 min_candidate_size=min_candidate_size, n_threads=n_threads,
@@ -1435,7 +1435,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             raise ValueError("Proposals can only be reused for an image, because a volume gates its propagation.")
 
         prompts = derive_point_prompts(
-            self._prediction[0], self._prediction[1:], model_type=self._model_type,
+            self._prediction[0], self._prediction[1:4], model_type=self._model_type,
             candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
             n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size, n_threads=n_threads,
         )

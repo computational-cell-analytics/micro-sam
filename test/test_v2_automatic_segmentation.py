@@ -1034,3 +1034,92 @@ def test_seed_floor_default_is_off_everywhere():
     for backbone in DEFAULT_POSTPROCESSING:
         for ndim in (2, 3):
             assert default_postprocessing(backbone, "sparse", ndim=ndim)["seed_floor"] == "none"
+
+
+def _touching_ellipses(shape, centers, radii):
+    """Ellipses with consecutive ids; later ones do not overwrite earlier ones."""
+    labels = np.zeros(shape, dtype="uint32")
+    grid = np.indices(shape)
+    for index, (center, radius) in enumerate(zip(centers, radii), start=1):
+        distance = sum(((g - c) / r) ** 2 for g, c, r in zip(grid, center, radius))
+        labels[(distance <= 1) & (labels == 0)] = index
+    return labels
+
+
+def _best_iou(labels, segmentation, label_id):
+    mask = labels == label_id
+    ious = [
+        (mask & (segmentation == seg_id)).sum() / (mask | (segmentation == seg_id)).sum()
+        for seg_id in np.unique(segmentation) if seg_id != 0
+    ]
+    return max(ious) if ious else 0.0
+
+
+@pytest.fixture(scope="module")
+def big_small_contact_prediction():
+    """A large and a small ellipse touching each other, with the contact line as a fifth channel.
+
+    With a flat height map (foreground weight 1) the fronts of the two seeds meet halfway between the seeds,
+    so the small object's basin falls below the size floor and the big instance swallows it. The contact
+    channel puts the split back onto the true contact line.
+    """
+    from micro_sam.v2.transforms.labels import GeodesicHybridDistanceTransform
+
+    labels = _touching_ellipses((128, 160), [(64, 50), (64, 104)], [(40, 40), (16, 16)])
+    prediction = GeodesicHybridDistanceTransform(contact=True)(labels).astype("float32")
+    return prediction, labels
+
+
+def test_flow_segmentation_contact_ridge_and_mask_split_touching_objects(big_small_contact_prediction):
+    from micro_sam.v2.postprocessing import flow_instance_segmentation
+
+    prediction, labels = big_small_contact_prediction
+    foreground, distances, contact = prediction[0], prediction[1:4], prediction[4]
+    common = dict(model_type="hvit_t", foreground_weight=1.0, boundary_magnitude_max=float("inf"))
+
+    merged = flow_instance_segmentation(foreground, distances, **common)
+    assert len(np.unique(merged)) - 1 == 1
+    assert _best_iou(labels, merged, 2) < 0.2
+
+    # An unused contact map changes nothing.
+    assert np.array_equal(flow_instance_segmentation(foreground, distances, contact=contact, **common), merged)
+
+    ridge = flow_instance_segmentation(foreground, distances, contact=contact, contact_weight=1.0, **common)
+    masked = flow_instance_segmentation(foreground, distances, contact=contact, contact_mask_threshold=0.5, **common)
+    for segmentation in (ridge, masked):
+        assert len(np.unique(segmentation)) - 1 == 2
+        assert _best_iou(labels, segmentation, 1) > 0.95 and _best_iou(labels, segmentation, 2) > 0.9
+        # Every foreground pixel is assigned, also the excluded contact pixels of the mask mode.
+        assert np.array_equal(segmentation > 0, foreground > 0.5)
+
+
+def test_flow_segmentation_rejects_wrong_channel_counts_and_orphan_contact_keywords(big_small_contact_prediction):
+    from micro_sam.v2.postprocessing import flow_instance_segmentation
+
+    prediction, _ = big_small_contact_prediction
+    foreground, distances, contact = prediction[0], prediction[1:4], prediction[4]
+    # Three channels for a 2d prediction drop the z channel; the 2d channels alone work as well.
+    reference = flow_instance_segmentation(foreground, distances, model_type="hvit_t")
+    assert np.array_equal(flow_instance_segmentation(foreground, distances[1:], model_type="hvit_t"), reference)
+    with pytest.raises(ValueError, match="distance channels"):
+        flow_instance_segmentation(foreground, prediction[1:], model_type="hvit_t")
+    with pytest.raises(ValueError, match="contact"):
+        flow_instance_segmentation(foreground, distances, model_type="hvit_t", contact_weight=1.0)
+    with pytest.raises(ValueError, match="contact"):
+        flow_instance_segmentation(foreground, distances, model_type="hvit_t", contact_mask_threshold=0.5)
+    with pytest.raises(ValueError, match="shape"):
+        flow_instance_segmentation(foreground, distances, model_type="hvit_t", contact=contact[:-1], contact_weight=1.0)
+
+
+def test_segment_from_predictions_forwards_the_contact_channel(big_small_contact_prediction):
+    from micro_sam.v2.instance_segmentation import _segment_from_predictions
+
+    prediction, labels = big_small_contact_prediction
+    common = dict(model_type="hvit_t", foreground_weight=1.0, boundary_magnitude_max=float("inf"))
+    four = _segment_from_predictions(prediction[:4], mode="sparse", **common)
+    five = _segment_from_predictions(prediction, mode="sparse", **common)
+    assert np.array_equal(four, five)
+    ridge = _segment_from_predictions(prediction, mode="sparse", contact_weight=1.0, **common)
+    assert len(np.unique(ridge)) - 1 == 2 and _best_iou(labels, ridge, 2) > 0.9
+    with pytest.raises(ValueError, match="contact"):
+        _segment_from_predictions(prediction[:4], mode="sparse", contact_weight=1.0, **common)
