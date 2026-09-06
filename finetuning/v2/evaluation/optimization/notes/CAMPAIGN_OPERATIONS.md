@@ -17,8 +17,7 @@ Written for the campaigns started on 2026-09-02; the facts about the cluster wer
 
 ## Cluster and environment
 
-- Environment: `micromamba activate new-stack`. The `super` environment that
-  `submit_all_evaluations.py` and `parameter_search.py` default to does not exist on this host.
+- Environment: `micromamba activate super`. The evaluation and optimization launchers default to `super`.
 - Partition `grete:preemptible` (2-day limit): GRES `1g.10gb:1` (plentiful), `1g.20gb:1` (8 slices),
   `2g.20gb:1` (16 slices), `3g.40gb:1` (8). `grete:interactive` allows two jobs per user for 12 h.
   Every job needs `--constraint=inet`. Account `nim00007`; QOS `2h` and `normal` only.
@@ -281,4 +280,5 @@ out to be one-pixel boundary conventions on small objects (see the closing secti
   of the closed campaigns; the output-root trees they name stay as data.
 - 2026-09-06: the production submitter defaults were fixed (`submit_all_evaluations.py`: environment `new-stack`,
   3D jobs on `1g.20gb:1`; `parameter_search.py` array scripts activate `new-stack`), so the overrides this note
-  describes for the `super` environment are no longer needed.
+  describes for the `super` environment were no longer needed at that point.
+- The current evaluation and optimization launchers default to `super`, as requested by the user.

@@ -112,10 +112,9 @@ def main():
     tiled = _build(model, decoder, args.device, is_tiled=True)
     # One tile covering the image. Its outer block is clipped to the image, so the halo is irrelevant.
     tiled.initialize(image, ndim=2, tile_shape=tuple(image.shape[:2]), halo=(0, 0))
-    tiled_proposals = tiled.propose()
-    tiled_plain = tiled.select(tiled_proposals)
+    tiled_plain = tiled.generate()
     tiled._last_generation_stats = {}
-    tiled_refined = tiled.select(tiled_proposals, **generate_kwargs)
+    tiled_refined = tiled.generate(**generate_kwargs)
     _report("tiled, one tile", tiled_refined, labels, tiled._last_generation_stats)
     tiled.clear_state()
 
@@ -130,11 +129,9 @@ def main():
 
     print(f"\nSmoke run with tiles {tuple(args.tile_shape)} and halo {tuple(args.halo)}:")
     tiled.initialize(image, ndim=2, tile_shape=tuple(args.tile_shape), halo=tuple(args.halo))
-    # One round of prompting for both, as the screening harness does: only the selection differs.
-    proposals = tiled.propose()
     for name, kwargs in (("tiled, no refinement", {}), ("tiled, refined", generate_kwargs)):
         tiled._last_generation_stats = {}
-        segmentation = tiled.select(proposals, **kwargs)
+        segmentation = tiled.generate(**kwargs)
         _report(name, segmentation, labels, tiled._last_generation_stats)
     tiled.clear_state()
 

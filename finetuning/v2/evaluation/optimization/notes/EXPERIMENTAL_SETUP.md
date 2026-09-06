@@ -29,9 +29,8 @@ the refinement statistics columns, and the configuration files under `optimizati
 
 ## 2. Environment and cluster
 
-- Environment: `micromamba activate new-stack`. Both submitters (`submit_all_evaluations.py`,
-  `parameter_search.py`) activate it by default since 2026-09-06; the earlier default `super` does not exist
-  on grete.
+- Environment: `micromamba activate super`. The launchers `submit_all_evaluations.py`, `parameter_search.py`,
+  and `submit_optimization_jobs.py` activate it by default.
 - Partition `grete:preemptible` (2-day limit). GRES pools: `1g.10gb:1` (plentiful), `1g.20gb:1`
   (8 slices), `2g.20gb:1` (16 slices), `3g.40gb:1` (8). `grete:interactive` allows two jobs per user
   for 12 h. Every job needs `--constraint=inet`. Account `nim00007`; QOS `2h` and `normal` only.

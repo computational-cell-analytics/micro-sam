@@ -92,16 +92,22 @@ def load_volume_config(path: Optional[Path], model_type: str = "hvit_t") -> Tupl
     return str(config.get("name", path.stem)), resolve_volume_params(config.get("params_3d", {}), model_type)
 
 
-def run_identity(config_name: str, params_3d: Dict[str, Any]) -> str:
-    # 'artifacts' is a frozen empty field: the learned artifacts it once recorded are gone, but keeping
-    # the key leaves the run-directory family of a configuration intact, so the historical crops of the
-    # campaign still aggregate with the current ones.
-    identity = {"params_3d": params_3d, "artifacts": {}}
+def run_identity(
+    config_name: str, params_3d: Dict[str, Any], checkpoint_id: str, manifest_checksum: str, trial_id: str,
+) -> str:
+    identity = {
+        "params_3d": params_3d, "checkpoint_checksum": checkpoint_id,
+        "manifest_checksum": manifest_checksum, "trial_id": trial_id,
+    }
     return f"{config_name}-{_content_checksum(identity)[:12]}-{_implementation_checksum()[:12]}"
 
 
-def run_dir(campaign_root: Path, subset: str, config_name: str, params_3d: Dict[str, Any]) -> Path:
-    return campaign_root / "runs" / subset / run_identity(config_name, params_3d)
+def run_dir(
+    campaign_root: Path, subset: str, config_name: str, params_3d: Dict[str, Any],
+    checkpoint_id: str, manifest_checksum: str, trial_id: str,
+) -> Path:
+    identity = run_identity(config_name, params_3d, checkpoint_id, manifest_checksum, trial_id)
+    return campaign_root / "runs" / subset / identity
 
 
 def sibling_run_dirs(run_path: Path) -> List[Path]:
@@ -126,7 +132,10 @@ def object_counts(labels: np.ndarray, segmentation: np.ndarray) -> Dict[str, Any
     severed = set(int(value) for value in severed_ids)
     genuine = gt_ids - severed
     unmatched = set(int(value) for value in np.unique(unmatched_objects(labels, segmentation)) if value != 0)
-    result = {"gt_objects": len(gt_ids), "severed_objects": len(severed), "merged": len(genuine - unmatched)}
+    result = {
+        "gt_objects": len(gt_ids), "severed_objects": len(severed),
+        "merged": len(gt_ids - unmatched), "non_severed_matches": len(genuine - unmatched),
+    }
     result["unmatched"], result["genuine_misses"] = genuine_misses(labels, segmentation)
     return result
 
@@ -135,13 +144,12 @@ def object_counts(labels: np.ndarray, segmentation: np.ndarray) -> Dict[str, Any
 # running
 
 
-def _build(model_type: str, joint_checkpoint: str, device: str, export_root: Path):
-    checkpoint_id = checkpoint_checksum(get_joint_checkpoint(model_type, joint_checkpoint))
+def _build(model_type: str, joint_checkpoint: str, checkpoint_id: str, device: str, export_root: Path):
     segmenter = build_apg_segmenter(
         model_type, 3, device, joint_checkpoint=joint_checkpoint, joint_checksum=checkpoint_id,
         export_root=str(export_root),
     )
-    return segmenter, checkpoint_id
+    return segmenter
 
 
 def _save_outputs(path: Path, segmentation: np.ndarray) -> None:
@@ -227,7 +235,11 @@ def _write_metadata(run_path: Path, manifest: Dict[str, Any], config_name: str, 
 def run(args: argparse.Namespace) -> None:
     manifest = load_manifest(args.subset, args.campaign_root, args.data_root)
     config_name, params_3d = load_volume_config(args.config, args.model_type)
-    run_path = run_dir(args.campaign_root, args.subset, config_name, params_3d)
+    checkpoint_id = checkpoint_checksum(get_joint_checkpoint(args.model_type, args.joint_checkpoint))
+    run_path = run_dir(
+        args.campaign_root, args.subset, config_name, params_3d,
+        checkpoint_id, manifest["manifest_checksum"], args.trial_id,
+    )
     samples = manifest["samples"]
     if args.sample_index is not None:
         samples = [samples[args.sample_index]]
@@ -244,13 +256,13 @@ def run(args: argparse.Namespace) -> None:
     if not pending:
         print(f"All {len(samples)} crop(s) already done in {run_path}.")
         return
-    segmenter, checkpoint_id = _build(
-        args.model_type, args.joint_checkpoint, args.device, DEFAULT_OUTPUT_ROOT / "model_exports",
+    segmenter = _build(
+        args.model_type, args.joint_checkpoint, checkpoint_id, args.device, DEFAULT_OUTPUT_ROOT / "model_exports",
     )
     if not (run_path / "metadata.json").exists():
         _write_metadata(
             run_path, manifest, config_name, params_3d, args.model_type, args.joint_checkpoint,
-            checkpoint_id, args.device, status="running",
+            checkpoint_id, args.device, status="running", extra={"trial_id": args.trial_id},
         )
     source_cache: Dict[tuple, np.ndarray] = {}
     started = time.perf_counter()
@@ -297,7 +309,8 @@ def summarize(samples: pd.DataFrame) -> pd.DataFrame:
     rows = []
     numeric = [column for column in samples.columns if pd.api.types.is_numeric_dtype(samples[column])]
     sums = [column for column in numeric if column in (
-        "gt_objects", "severed_objects", "merged", "unmatched", "genuine_misses", "predicted_objects", *STATS_KEYS,
+        "gt_objects", "severed_objects", "merged", "non_severed_matches", "unmatched", "genuine_misses",
+        "predicted_objects", *STATS_KEYS,
     )]
     per_dataset = {}
     for dataset, group in samples.groupby("dataset", sort=True):
@@ -344,7 +357,11 @@ def summarize(samples: pd.DataFrame) -> pd.DataFrame:
 def aggregate(args: argparse.Namespace) -> None:
     manifest = load_manifest(args.subset, args.campaign_root, args.data_root)
     config_name, params_3d = load_volume_config(args.config, args.model_type)
-    run_path = run_dir(args.campaign_root, args.subset, config_name, params_3d)
+    checkpoint_id = checkpoint_checksum(get_joint_checkpoint(args.model_type, args.joint_checkpoint))
+    run_path = run_dir(
+        args.campaign_root, args.subset, config_name, params_3d,
+        checkpoint_id, manifest["manifest_checksum"], args.trial_id,
+    )
     by_sample: Dict[str, Dict[str, Any]] = {}
     implementations = []
     for sibling in sibling_run_dirs(run_path):
@@ -369,6 +386,8 @@ def aggregate(args: argparse.Namespace) -> None:
     metadata_path = run_path / "metadata.json"
     metadata = json.load(open(metadata_path)) if metadata_path.exists() else {}
     metadata.update({
+        "checkpoint_checksum": checkpoint_id, "manifest_checksum": manifest["manifest_checksum"],
+        "trial_id": args.trial_id,
         "status": "complete" if done == expected else "partial",
         "n_crops": len(rows), "n_expected": len(expected), "missing": sorted(expected - done),
         "implementation_checksums": sorted(set(implementations)),

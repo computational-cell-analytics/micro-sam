@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import numpy as np
 
 
 OPTIMIZATION_ROOT = Path(__file__).parents[1] / "finetuning/v2/evaluation/optimization"
@@ -36,6 +37,32 @@ def test_volume_params_apply_overrides_and_reject_unknown_keys(tmp_path):
 
 
 def test_run_identity_is_stable():
-    first = runner.run_identity("cfg", {"a": 1})
-    assert first == runner.run_identity("cfg", {"a": 1})
-    assert first != runner.run_identity("cfg", {"a": 2})
+    first = runner.run_identity("cfg", {"a": 1}, "checkpoint", "manifest", "trial-1")
+    assert first == runner.run_identity("cfg", {"a": 1}, "checkpoint", "manifest", "trial-1")
+    assert first != runner.run_identity("cfg", {"a": 2}, "checkpoint", "manifest", "trial-1")
+
+
+@pytest.mark.parametrize("field", ["checkpoint_id", "manifest_checksum", "trial_id"])
+def test_run_identity_separates_experiments(tmp_path, field):
+    identity = {"checkpoint_id": "checkpoint", "manifest_checksum": "manifest", "trial_id": "trial-1"}
+    first = runner.run_dir(tmp_path, "primary", "cfg", {}, **identity)
+    first.mkdir(parents=True)
+    identity[field] = "different"
+    second = runner.run_dir(tmp_path, "primary", "cfg", {}, **identity)
+    assert first != second
+    assert runner.sibling_run_dirs(second) == []
+
+
+@pytest.mark.parametrize("missed_id", [0, 1, 2])
+def test_object_counts_include_matched_severed_objects(missed_id):
+    labels = np.zeros((8, 8, 8), dtype="uint32")
+    labels[2:5, 2:4, 2:4] = 1
+    labels[5:7, 5:7, 6:] = 2
+    segmentation = labels.copy()
+    segmentation[segmentation == missed_id] = 0
+    counts = runner.object_counts(labels, segmentation)
+    assert counts == {
+        "gt_objects": 2, "severed_objects": 1, "merged": 2 - int(missed_id != 0),
+        "non_severed_matches": int(missed_id != 1), "unmatched": int(missed_id != 0),
+        "genuine_misses": int(missed_id == 1),
+    }

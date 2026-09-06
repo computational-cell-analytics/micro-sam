@@ -75,11 +75,9 @@ METHOD_SUPPORT = {
     ("interactive", "microsam_vol"): {"ndim": (3,), "modality": ("lm",)},
 }
 
-# Methods whose packages do not live in the default environment. The names are per machine, so
-# --env overrides them and a missing one is reported before anything is submitted. 'new-stack' is
-# the micro-sam2 environment on grete; the earlier default 'super' does not exist there.
+# Use --env to override the method-specific environments.
 METHOD_ENV = {"cellpose": "cp3", "stardist": "sd"}
-DEFAULT_ENV = "new-stack"
+DEFAULT_ENV = "super"
 
 # Slurm resources per job. Only the grete partitions are available. 'grete:preemptible' is usually
 # free and starts within minutes, where the shared pools queue for days. It is MIG only, so the GPU

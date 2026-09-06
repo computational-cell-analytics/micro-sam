@@ -35,7 +35,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 # The benchmark's DEFAULT_OUTPUT_ROOT, duplicated so this module does not import torch.
 OUTPUT_ROOT = Path("/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization")
 JOBS_ROOT = OUTPUT_ROOT / "jobs"
-ENV = "new-stack"
+ENV = "super"
 PARTITION = "grete:preemptible"
 CONSTRAINT = "inet"
 N_ATTEMPTS = 3

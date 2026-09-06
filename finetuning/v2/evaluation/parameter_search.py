@@ -667,7 +667,7 @@ REGISTRY_DATASETS = [
 
 PARTITION = "grete:preemptible"
 # The micro-sam2 environment on grete; every array task activates it.
-ENV = "new-stack"
+ENV = "super"
 CPUS = 4
 TIME_LIMIT_2D = "02:00:00"
 TIME_LIMIT_3D = "04:00:00"
