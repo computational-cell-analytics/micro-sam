@@ -23,32 +23,33 @@ from .util import DEFAULT_MODEL
 # Per (model_type, mode) defaults from the registry parameter search: the best-average-rank
 # combination across every dataset that shares that mode's grid, computed separately for each of the
 # 4 registry backbones.
+# 'boundary_magnitude_max' is the instance filter of `flow_instance_segmentation`; None keeps it off.
 DEFAULT_POSTPROCESSING = {
     "hvit_t": {
         "sparse": {
             "foreground_threshold": 0.5, "density_threshold": 10.0, "min_size": 100,
-            "sigma": 0.5, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5,
+            "sigma": 0.5, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5, "boundary_magnitude_max": None,
         },
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_s": {
         "sparse": {
             "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
-            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.75,
+            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.75, "boundary_magnitude_max": None,
         },
         "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 25, "dt": 0.5},
     },
     "hvit_b": {
         "sparse": {
             "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
-            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.65,
+            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.65, "boundary_magnitude_max": None,
         },
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_l": {
         "sparse": {
             "foreground_threshold": 0.4, "density_threshold": 10.0, "min_size": 50,
-            "sigma": 0.5, "n_iter": 50, "dt": 0.25, "foreground_weight": 0.65,
+            "sigma": 0.5, "n_iter": 50, "dt": 0.25, "foreground_weight": 0.65, "boundary_magnitude_max": None,
         },
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 1.0, "n_iter": 50, "dt": 0.5},
     },
@@ -135,6 +136,42 @@ def watershed_heightmap(
     return np.ascontiguousarray(hmap, dtype="float32")
 
 
+def drop_instances_without_boundary_dip(
+    segmentation: np.ndarray, directed_distances: np.ndarray, max_median: float
+) -> np.ndarray:
+    """Drop the instances whose boundary shows no dip of the distance magnitude.
+
+    The magnitude of the directed distances falls to (almost) zero along the boundary of every object
+    the decoder recognised, because the distance to the object's boundary is what it predicts. A false
+    foreground region carries no such structure: its boundary runs through the decoder's background
+    output (magnitude about one) or through the interior of a field that belongs to something else. An
+    instance whose median boundary magnitude exceeds 'max_median' is therefore removed. The rule is
+    label-free and scale-free, and a real object passes it at any size.
+
+    Args:
+        segmentation: The instance segmentation, shape (*spatial).
+        directed_distances: Distance channels stacked along axis 0, shape (ndim, *spatial).
+        max_median: Instances whose median boundary magnitude exceeds this value are dropped.
+
+    Returns:
+        The filtered segmentation, same dtype and shape.
+    """
+    from scipy.ndimage import median as labelled_median
+    from skimage.segmentation import find_boundaries
+
+    boundary = find_boundaries(segmentation, mode="inner") & (segmentation != 0)
+    ids = np.unique(segmentation[boundary])
+    ids = ids[ids != 0]
+    if len(ids) == 0:
+        return segmentation
+    magnitude = np.linalg.norm(directed_distances, axis=0)
+    medians = np.asarray(labelled_median(magnitude, labels=np.where(boundary, segmentation, 0), index=ids))
+    drop = ids[medians > max_median]
+    if drop.size == 0:
+        return segmentation
+    return np.where(np.isin(segmentation, drop), 0, segmentation).astype(segmentation.dtype)
+
+
 def flow_instance_segmentation(
     foreground: np.ndarray,
     directed_distances: np.ndarray,
@@ -148,6 +185,7 @@ def flow_instance_segmentation(
     min_size: Optional[int] = None,
     foreground_weight: Optional[float] = None,
     n_threads: int = 8,
+    boundary_magnitude_max: Optional[float] = None,
 ) -> np.ndarray:
     """Instance segmentation from directed-distance predictions via flow following.
 
@@ -175,6 +213,9 @@ def flow_instance_segmentation(
         foreground_weight: Weight of the foreground term in the watershed heightmap, see
             `watershed_heightmap`.
         n_threads: Number of threads for the flow computation.
+        boundary_magnitude_max: Drop instances whose median boundary magnitude exceeds this value, see
+            `drop_instances_without_boundary_dip`. None takes the per-model default, which may itself be
+            None (no filtering); pass ``float("inf")`` to disable a default filter explicitly.
 
     Returns:
         Instance segmentation, uint32 array, same spatial shape as foreground.
@@ -182,6 +223,8 @@ def flow_instance_segmentation(
     defaults = default_postprocessing(model_type, "sparse")
     if foreground_threshold is None:
         foreground_threshold = defaults["foreground_threshold"]
+    if boundary_magnitude_max is None:
+        boundary_magnitude_max = defaults.get("boundary_magnitude_max")
     if n_iter is None:
         n_iter = defaults["n_iter"]
     if dt is None:
@@ -217,6 +260,10 @@ def flow_instance_segmentation(
         discard = ids[(sizes < min_size) & (ids > 0)]
         seg[np.isin(seg, discard)] = 0
         seg = watershed(hmap, markers=seg, mask=fg_mask)
+
+    # After the size filter, so that a dropped region is not refilled by its neighbours.
+    if boundary_magnitude_max is not None and np.isfinite(boundary_magnitude_max):
+        seg = drop_instances_without_boundary_dip(seg, directed_distances, boundary_magnitude_max)
 
     return seg.astype("uint32")
 

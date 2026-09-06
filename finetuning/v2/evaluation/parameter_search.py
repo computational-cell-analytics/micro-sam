@@ -36,7 +36,7 @@ from elf.evaluation import mean_segmentation_accuracy
 
 from bioimage_cpp.segmentation import label as connected_components, watershed
 
-from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_density
+from micro_sam.v2.postprocessing import drop_instances_without_boundary_dip, watershed_heightmap, _compute_flow_density
 
 from common import (
     DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
@@ -288,6 +288,9 @@ def score_image_sparse_cached(
                 discard = ids[(sizes < min_size) & (ids > 0)]
                 seg[np.isin(seg, discard)] = 0
                 seg = watershed(hmap, markers=seg, mask=fg_mask)
+            max_median = params.get("boundary_magnitude_max")
+            if max_median is not None and np.isfinite(max_median):
+                seg = drop_instances_without_boundary_dip(seg, directed, max_median)
             return compute_metrics(seg.astype("uint32"), labels, "sparse", border_min_size)
         except Exception as e:
             warnings.warn(f"Sparse postprocessing failed for {params}: {e}")

@@ -77,7 +77,8 @@ from optimization.benchmark_apg_optimization import (  # noqa
 from optimization.benchmark_apg_3d import _bootstrap_ci  # noqa
 
 from micro_sam.v2.postprocessing import (  # noqa
-    _compute_flow_density, default_postprocessing, flow_instance_segmentation, run_multicut, watershed_heightmap,
+    _compute_flow_density, default_postprocessing, drop_instances_without_boundary_dip, flow_instance_segmentation,
+    run_multicut, watershed_heightmap,
 )
 from bioimage_cpp.segmentation import label as connected_components, watershed  # noqa
 
@@ -88,15 +89,19 @@ MODES = ("auto", "sparse", "dense")
 BALANCED_ROW = "__dataset_balanced__"
 
 # The keywords of the two post-processing functions, i.e. what a configuration may override.
-SPARSE_KEYS = ("foreground_threshold", "n_iter", "dt", "sigma", "density_threshold", "min_size", "foreground_weight")
+SPARSE_KEYS = (
+    "foreground_threshold", "n_iter", "dt", "sigma", "density_threshold", "min_size", "foreground_weight",
+    "boundary_magnitude_max",
+)
 DENSE_KEYS = ("beta", "density_threshold", "n_iter", "dt", "sigma")
 # Metric columns of a sample row; means and standard deviations are reported per dataset.
-METRIC_COLUMNS = ("msa", "cremi", "vi_split", "vi_merge", "adapted_rand", "fg_iou")
+METRIC_COLUMNS = ("msa", "cremi", "vi_split", "vi_merge", "adapted_rand", "fg_iou", "matched_iou")
 # Count columns; sums are reported per dataset.
 COUNT_COLUMNS = (
     "gt_objects", "predicted_objects", "matched", "unmatched", "severed_objects", "genuine_misses",
     "matched_before_min_size", "n_seeds", "gt_with_0_seeds", "gt_with_1_seed", "gt_with_2plus_seeds",
-    "background_seeds", "seeded_unmatched", "pipeline_mismatch",
+    "background_seeds", "seeded_unmatched", "seeded_split", "seeded_merged", "seeded_undersized",
+    "seeded_oversized", "unseeded_absorbed", "unseeded_missing", "pipeline_mismatch",
 )
 # The generalization gate of the 2026-09 screens (EXPERIMENTAL_SETUP.md, section 9).
 GATE = {"max_down": 2, "max_relative_loss": -0.02, "max_absolute_loss": -0.005, "min_balanced_gain": 0.02}
@@ -429,6 +434,9 @@ def sparse_pipeline(
         seg = before.copy()
         seg[np.isin(seg, discard)] = 0
         seg = watershed(hmap, markers=seg, mask=fg_mask)
+    max_median = params.get("boundary_magnitude_max")
+    if max_median is not None and np.isfinite(max_median):
+        seg = drop_instances_without_boundary_dip(seg, directed, max_median)
     return {
         "segmentation": seg.astype("uint32"), "before_min_size": before.astype("uint32"), "seeds": seeds,
         "fg_mask": fg_mask, "density": density, "heightmap": hmap,
@@ -495,16 +503,57 @@ def object_counts(labels: np.ndarray, segmentation: np.ndarray, max_span: int = 
     }
 
 
+def object_fates(labels: np.ndarray, segmentation: np.ndarray) -> Dict[str, np.ndarray]:
+    """What became of every ground-truth object: its majority instance, the IoU with it, and flags.
+
+    Returns arrays over the ground-truth ids ('ids'): 'iou' (with the instance overlapping most of the
+    object, 0 without any), 'absorbed' (that instance covers at least half of the object), 'merged' (that
+    instance covers at least half of two or more objects) and 'undersized' (the instance is smaller than
+    the object).
+    """
+    ids = np.unique(labels)
+    ids = ids[ids != 0]
+    gt, seg, inter = contingency(labels, segmentation)
+    keep = (gt != 0) & (seg != 0)
+    gt, seg, inter = gt[keep], seg[keep], inter[keep]
+    n = int(labels.max()) + 1
+    iou = np.zeros(n, dtype="float64")
+    absorbed = np.zeros(n, dtype=bool)
+    merged = np.zeros(n, dtype=bool)
+    undersized = np.zeros(n, dtype=bool)
+    if gt.size:
+        gt_sizes = np.bincount(labels.ravel().astype("int64"), minlength=n)
+        seg_sizes = np.bincount(segmentation.ravel().astype("int64"))
+        order = np.lexsort((-inter, gt))
+        first = np.ones(len(order), dtype=bool)
+        first[1:] = gt[order][1:] != gt[order][:-1]
+        major_gt, major_seg, major_inter = gt[order][first], seg[order][first], inter[order][first]
+        iou[major_gt] = major_inter / (gt_sizes[major_gt] + seg_sizes[major_seg] - major_inter)
+        strong = major_inter >= 0.5 * gt_sizes[major_gt]
+        absorbed[major_gt] = strong
+        claims = np.bincount(major_seg[strong], minlength=len(seg_sizes))
+        merged[major_gt] = strong & (claims[major_seg] >= 2)
+        undersized[major_gt] = seg_sizes[major_seg] < gt_sizes[major_gt]
+    return {
+        "ids": ids, "iou": iou[ids], "absorbed": absorbed[ids], "merged": merged[ids], "undersized": undersized[ids],
+    }
+
+
 def seed_diagnostics(
-    intermediates: Dict[str, np.ndarray], labels: np.ndarray, matched: np.ndarray,
+    intermediates: Dict[str, np.ndarray], labels: np.ndarray, segmentation: np.ndarray,
 ) -> Dict[str, Any]:
     """Where the sparse pipeline loses objects: the seeds, the size filter, or the assignment.
 
     Per ground-truth object the number of seed components inside it (0 = a miss before any
-    assignment, 2+ = a split), seeds whose majority pixel is background, objects that were seeded but
-    still unmatched (lost in the watershed), objects matched before the size filter, and the IoU of the
-    thresholded foreground with the ground-truth foreground.
+    assignment, 2+ = a split), seeds whose majority pixel is background, objects matched before the
+    size filter, the IoU of the thresholded foreground with the ground-truth foreground, and the fate of
+    the objects the result lost (IoU below 0.5): seeded ones are 'split' (two or more seeds), 'merged'
+    (their instance also covers another object), 'undersized' or 'oversized' (an extent error);
+    unseeded ones are 'absorbed' (mostly covered by a neighbour's instance) or 'missing'. 'matched_iou'
+    is the mean IoU of the matched objects, a boundary-precision figure.
     """
+    matched = matched_ids(labels, segmentation)
+    fates = object_fates(labels, segmentation)
     seeds = intermediates["seeds"]
     seed_ids, gt_ids, counts = contingency(seeds, labels)
     n_seeds = int(seeds.max())
@@ -523,7 +572,12 @@ def seed_diagnostics(
         majority_label = gt_ids[order][first]
         majority_seed = seed_ids[order][first]
         background_seeds = int(((majority_label == 0) & (majority_seed != 0)).sum())
-    seeded = gt_present[per_object >= 1]
+    is_matched = np.isin(gt_present, matched)
+    seeded, lost = per_object >= 1, ~is_matched
+    seeded_lost = seeded & lost
+    split = seeded_lost & (per_object >= 2)
+    merged = seeded_lost & ~split & fates["merged"]
+    extent = seeded_lost & ~split & ~merged
     fg_mask, gt_fg = intermediates["fg_mask"], labels != 0
     union = int((fg_mask | gt_fg).sum())
     return {
@@ -532,9 +586,16 @@ def seed_diagnostics(
         "gt_with_1_seed": int((per_object == 1).sum()),
         "gt_with_2plus_seeds": int((per_object >= 2).sum()),
         "background_seeds": background_seeds,
-        "seeded_unmatched": int((~np.isin(seeded, matched)).sum()),
+        "seeded_unmatched": int(seeded_lost.sum()),
+        "seeded_split": int(split.sum()),
+        "seeded_merged": int(merged.sum()),
+        "seeded_undersized": int((extent & fates["undersized"]).sum()),
+        "seeded_oversized": int((extent & ~fates["undersized"]).sum()),
+        "unseeded_absorbed": int((~seeded & lost & fates["absorbed"]).sum()),
+        "unseeded_missing": int((~seeded & lost & ~fates["absorbed"]).sum()),
         "matched_before_min_size": int(len(matched_ids(labels, intermediates["before_min_size"]))),
         "fg_iou": float((fg_mask & gt_fg).sum() / union) if union else float("nan"),
+        "matched_iou": float(fates["iou"][is_matched].mean()) if is_matched.any() else float("nan"),
     }
 
 
@@ -610,8 +671,7 @@ def score_sample(
         if context["ndim"] == 2:
             mirrored = drop_severed_objects(mirrored, context["border_min_size"])
         row["pipeline_mismatch"] = int(not np.array_equal(mirrored, segmentation))
-        matched = matched_ids(labels, segmentation)
-        row.update(seed_diagnostics(intermediates, labels, matched))
+        row.update(seed_diagnostics(intermediates, labels, segmentation))
     return row
 
 
@@ -849,15 +909,24 @@ def load_run(run_dir: Path) -> Tuple[Dict[str, Any], pd.DataFrame]:
     return metadata, pd.read_csv(run_dir / "samples.csv")
 
 
-def report(run_dirs_by_config: Dict[str, List[Path]], baseline_name: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def report(
+    run_dirs_by_config: Dict[str, List[Path]], baseline_name: str, ndim: Optional[int] = None,
+    datasets: Optional[Sequence[str]] = None,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Join the sample tables of every configuration over its subsets and compare with the baseline.
 
-    Returns the per-configuration table (balanced score, gain, gate verdict, count sums) and the
-    per-(configuration, dataset) table of relative changes.
+    'ndim' and 'datasets' restrict the samples (the 2d screens read the eleven image datasets; a
+    manifest's single volumes are too few to compare). Returns the per-configuration table (balanced
+    score, gain, gate verdict, count sums) and the per-(configuration, dataset) table of relative changes.
     """
     joined: Dict[str, pd.DataFrame] = {}
     for name, run_dirs in run_dirs_by_config.items():
-        joined[name] = pd.concat([load_run(run_dir)[1] for run_dir in run_dirs], ignore_index=True)
+        samples = pd.concat([load_run(run_dir)[1] for run_dir in run_dirs], ignore_index=True)
+        if ndim is not None:
+            samples = samples[samples["ndim"] == ndim]
+        if datasets:
+            samples = samples[samples["dataset"].isin(datasets)]
+        joined[name] = samples.reset_index(drop=True)
     if baseline_name not in joined:
         raise ValueError(f"Baseline '{baseline_name}' is not among the configurations {sorted(joined)}.")
     baseline_scores = dataset_scores(joined[baseline_name])
@@ -874,7 +943,8 @@ def report(run_dirs_by_config: Dict[str, List[Path]], baseline_name: str) -> Tup
             "generation_seconds": float(samples["generation_seconds"].sum()),
         }
         for column in ("matched", "unmatched", "predicted_objects", "gt_with_0_seeds", "gt_with_2plus_seeds",
-                       "background_seeds", "seeded_unmatched", "pipeline_mismatch"):
+                       "background_seeds", "seeded_unmatched", "seeded_split", "seeded_merged", "seeded_undersized",
+                       "seeded_oversized", "unseeded_absorbed", "unseeded_missing", "pipeline_mismatch"):
             if column in counts:
                 row[column] = int(counts[column])
                 row[f"{column}_delta"] = int(counts[column] - baseline_counts.get(column, 0))
@@ -895,8 +965,9 @@ def _format_relative(value: float) -> str:
 def print_report(table: pd.DataFrame, details: pd.DataFrame) -> None:
     pivot = details.pivot(index="config", columns="dataset", values="relative").loc[table["config"]]
     columns = ["config", "balanced", "balanced_gain", "n_up", "n_datasets", "worst_relative", "passed"]
-    columns += [c for c in ("matched_delta", "unmatched_delta", "gt_with_0_seeds_delta", "gt_with_2plus_seeds_delta",
-                            "background_seeds_delta", "pipeline_mismatch") if c in table]
+    columns += [c for c in ("matched_delta", "gt_with_0_seeds_delta", "gt_with_2plus_seeds_delta",
+                            "background_seeds_delta", "seeded_split_delta", "seeded_merged_delta",
+                            "seeded_undersized_delta", "seeded_oversized_delta", "pipeline_mismatch") if c in table]
     shown = table[columns].copy()
     for column in ("balanced_gain", "worst_relative"):
         shown[column] = shown[column].map(_format_relative)
@@ -1294,6 +1365,7 @@ def cmd_screen(args: argparse.Namespace) -> None:
     if args.baseline in index:
         table, details = report(
             {name: [Path(p) for p in runs.values()] for name, runs in index.items()}, args.baseline,
+            ndim=None if args.ndim == "both" else int(args.ndim),
         )
         print_report(table, details)
 
@@ -1310,7 +1382,9 @@ def cmd_report(args: argparse.Namespace) -> None:
         runs_by_config.setdefault(metadata["config_name"], []).append(Path(run_dir))
     if not runs_by_config:
         raise SystemExit("Pass --index and/or --runs.")
-    table, details = report(runs_by_config, args.baseline)
+    table, details = report(
+        runs_by_config, args.baseline, ndim=None if args.ndim == "both" else int(args.ndim), datasets=args.datasets,
+    )
     print_report(table, details)
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -1387,6 +1461,8 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--index", type=Path, nargs="*", default=None, help="Screen index files.")
     rep.add_argument("--runs", type=Path, nargs="*", default=None, help="Run directories.")
     rep.add_argument("--baseline", default="current-defaults")
+    rep.add_argument("--ndim", choices=("2", "3", "both"), default="both", help="Restrict to images or volumes.")
+    rep.add_argument("--datasets", nargs="*", default=None, help="Restrict to these datasets.")
     rep.add_argument("--output", type=Path, default=None, help="CSV path for the tables.")
 
     oracle = sub.add_parser("oracle", help="Score the pipeline with ground-truth seeds, height map or foreground.")

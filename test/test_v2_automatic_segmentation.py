@@ -936,3 +936,45 @@ def test_decoder_output_is_moved_to_cpu_before_the_float_cast():
 
     assert out is array
     assert calls == ["detach", "cpu", "float"]
+
+
+def _geodesic_field_with_false_region():
+    """Two real objects in the geodesic hybrid field plus a false foreground blob carrying the background fill."""
+    from micro_sam.v2.transforms.labels import GeodesicHybridDistanceTransform
+
+    labels = np.zeros((96, 128), dtype="uint32")
+    yy, xx = np.indices(labels.shape)
+    labels[((yy - 30) / 18) ** 2 + ((xx - 32) / 16) ** 2 <= 1] = 1
+    labels[((yy - 60) / 16) ** 2 + ((xx - 90) / 20) ** 2 <= 1] = 2
+    target = GeodesicHybridDistanceTransform(foreground=True)(labels).astype("float32")
+    false_blob = ((yy - 22) / 9) ** 2 + ((xx - 100) / 12) ** 2 <= 1
+    target[0][false_blob] = 1.0  # confident foreground ...
+    target[1:, false_blob] = 1.0  # ... with the fill value the decoder emits in the background
+    return target, labels, false_blob
+
+
+def test_drop_instances_without_boundary_dip_removes_false_regions_only():
+    from micro_sam.v2.postprocessing import drop_instances_without_boundary_dip, flow_instance_segmentation
+
+    prediction, labels, false_blob = _geodesic_field_with_false_region()
+    params = dict(model_type="hvit_t", min_size=20, n_iter=200, dt=0.5, density_threshold=5.0, n_threads=1)
+    unfiltered = flow_instance_segmentation(prediction[0], prediction[1:], **params)
+    assert len(np.unique(unfiltered)) - 1 == 3, "expected two objects and the false region"
+    filtered = drop_instances_without_boundary_dip(unfiltered, prediction[1:][-2:], max_median=0.5)
+    assert len(np.unique(filtered)) - 1 == 2
+    assert (filtered[false_blob] == 0).all()
+    for index in (1, 2):
+        kept = np.unique(filtered[labels == index])
+        assert len(kept[kept != 0]) == 1
+    # Through the keyword, and inf disables the filter again.
+    via_keyword = flow_instance_segmentation(prediction[0], prediction[1:], boundary_magnitude_max=0.5, **params)
+    assert np.array_equal(via_keyword, filtered)
+    disabled = flow_instance_segmentation(prediction[0], prediction[1:], boundary_magnitude_max=float("inf"), **params)
+    assert np.array_equal(disabled, unfiltered)
+
+
+def test_flow_instance_segmentation_default_filter_is_off():
+    from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, default_postprocessing
+
+    for backbone in DEFAULT_POSTPROCESSING:
+        assert default_postprocessing(backbone, "sparse")["boundary_magnitude_max"] is None

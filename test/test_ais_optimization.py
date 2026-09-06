@@ -154,23 +154,49 @@ def test_seed_diagnostics_count_misses_splits_and_background_seeds():
     seeds[5, 90] = 4  # background
     seeds[60, 5] = 5  # background
     segmentation = labels.copy()
-    segmentation[labels == 3] = 0  # object 3 lost at assignment although... it had no seed
+    segmentation[labels == 3] = 0  # object 3 (no seed) is missing from the result
     intermediates = {"seeds": seeds, "fg_mask": labels != 0, "before_min_size": labels}
-    matched = ais.matched_ids(labels, segmentation)
-    diagnostics = ais.seed_diagnostics(intermediates, labels, matched)
+    diagnostics = ais.seed_diagnostics(intermediates, labels, segmentation)
     assert diagnostics["n_seeds"] == 5
     assert diagnostics["gt_with_0_seeds"] == 1
     assert diagnostics["gt_with_1_seed"] == 1
     assert diagnostics["gt_with_2plus_seeds"] == 1
     assert diagnostics["background_seeds"] == 2
     assert diagnostics["seeded_unmatched"] == 0
+    assert diagnostics["unseeded_missing"] == 1 and diagnostics["unseeded_absorbed"] == 0
     assert diagnostics["matched_before_min_size"] == 3
     assert diagnostics["fg_iou"] == 1.0
+    assert diagnostics["matched_iou"] == 1.0
 
-    # A seeded object that the watershed then loses counts as lost at the assignment.
+    # A seeded object the watershed then loses is lost at the assignment; here object 1 is undersized
+    # (only a quarter of it survives) and object 2, with two seeds, is a split.
+    segmentation = labels.copy()
     segmentation[labels == 1] = 0
-    diagnostics = ais.seed_diagnostics(intermediates, labels, ais.matched_ids(labels, segmentation))
-    assert diagnostics["seeded_unmatched"] == 1
+    segmentation[16:24, 16:24][labels[16:24, 16:24] == 1] = 1
+    columns = np.indices(labels.shape)[1]
+    segmentation[(labels == 2) & (columns >= 56) & (columns < 64)] = 9  # three parts, none above IoU 0.5
+    segmentation[(labels == 2) & (columns >= 64)] = 10
+    diagnostics = ais.seed_diagnostics(intermediates, labels, segmentation)
+    assert diagnostics["seeded_unmatched"] == 2
+    assert diagnostics["seeded_undersized"] == 1 and diagnostics["seeded_split"] == 1
+    assert diagnostics["seeded_merged"] == 0 and diagnostics["seeded_oversized"] == 0
+
+    # One instance covering all three objects: object 1 (one seed) is merged, object 2 (two seeds) is a
+    # split, and the unseeded object 3 is absorbed (less than half of the instance is its own).
+    segmentation = np.where(labels != 0, 1, 0).astype("uint32")
+    diagnostics = ais.seed_diagnostics(intermediates, labels, segmentation)
+    assert diagnostics["seeded_merged"] == 1 and diagnostics["seeded_split"] == 1
+    assert diagnostics["unseeded_absorbed"] == 1 and diagnostics["unseeded_missing"] == 0
+
+
+def test_object_fates_reports_iou_and_flags():
+    labels = _blobs((64, 96), [(20, 20), (20, 60), (48, 40)], [(10, 10), (10, 12), (9, 20)])
+    fates = ais.object_fates(labels, labels)
+    assert fates["ids"].tolist() == [1, 2, 3]
+    assert np.allclose(fates["iou"], 1.0) and fates["absorbed"].all() and not fates["merged"].any()
+    assert not fates["undersized"].any()
+    fates = ais.object_fates(labels, np.zeros_like(labels))
+    assert np.allclose(fates["iou"], 0.0) and not fates["absorbed"].any()
 
 
 def _sample_rows(datasets, msa_by_dataset, family=None, seen=""):
