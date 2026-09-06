@@ -2300,22 +2300,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             )
         )
 
-    # 17. CytoNuke (nucleus segmentation in H&E head-and-neck squamous cell carcinoma, 256x256 crops)
-    # NOTE: Nucleus annotations only; the paired whole-cell polygons cover fewer objects than the nuclei.
-    # Tiles are 256x256 and are resized/padded to 512 like PanNuke.
-    cytonuke_kwargs = {
-        "path": os.path.join(input_path, "cytonuke"), "patch_shape": (256, 256), "annotations": "nuclei",
-        "download": True,
-        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
-    }
-    for split, ds_list, n_samples in [("train", train_ds, 100), ("val", val_ds, 20)]:
-        ds_list.append(
-            UniDataWrapper(
-                datasets.get_cytonuke_dataset(split=split, n_samples=n_samples, **cytonuke_kwargs), source_ndim=2
-            )
-        )
-
-    # 18. DeepLIIF (nucleus segmentation in IHC of lung, bladder and Ki67 breast cancer, 512x512 images)
+    # 17. DeepLIIF (nucleus segmentation in IHC of lung, bladder and Ki67 breast cancer, 512x512 images)
     # NOTE: The IHC modality only; the co-registered mpIF panels are not used.
     deepliif_kwargs = {
         "path": os.path.join(input_path, "deepliif"), "patch_shape": patch_shape, "modality": "ihc",
@@ -2328,7 +2313,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             )
         )
 
-    # 19. PanopTILs (nucleus segmentation in H&E TCGA invasive breast cancer, 1024x1024 ROIs at 0.25 MPP)
+    # 18. PanopTILs (nucleus segmentation in H&E TCGA invasive breast cancer, 1024x1024 ROIs at 0.25 MPP)
     # NOTE: Built from paths, since the torch-em dataset binarizes the instances. No native split, so the 1349
     # ROIs are split 80/20 by path.
     panoptils_raw, panoptils_labels = datasets.panoptils.get_panoptils_paths(
