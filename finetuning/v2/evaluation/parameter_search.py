@@ -661,13 +661,15 @@ REGISTRY_EXPERIMENT_FOLDER = (
 
 # Every dataset requested for the registry sweep that has a validation split to tune on.
 REGISTRY_DATASETS = [
-    "livecell", "tissuenet", "dynamicnuclearnet", "deepbacs", "yeaz", "covid_if_cells", "covid_if_nuclei", "deepseas",
-    "neurips_cellseg", "gonuclear", "platynereis_nuclei", "cremi", "snemi", "humanneurons",
+    "livecell", "tissuenet", "dynamicnuclearnet", "deepbacs_label_free", "deepbacs_fluorescence", "yeaz",
+    "covid_if_cells", "covid_if_nuclei", "deepseas",
+    "neurips_cellseg_fluorescence", "neurips_cellseg_label_free", "gonuclear", "platynereis_nuclei", "cremi", "snemi",
+    "humanneurons",
     # Histopathology, tuned on the pools of common.VAL_SPLITS (loader val splits, or train where none exists).
     "cpm17", "glysac", "histo_miner", "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc", "monuseg",
     "pannuke", "puma", "srsanet", "tnbc_celltype", "cytodark0", "deepliif", "pcns",
     # Light microscopy 2d, tuned on the loader val splits. The sets above already cover livecell, tissuenet,
-    # dynamicnuclearnet, deepbacs, yeaz and neurips_cellseg.
+    # dynamicnuclearnet, deepbacs, yeaz and neurips_cellseg (fluorescence and label-free).
     "cvz_fluo_cell", "cvz_fluo_dapi", "omnipose_bact_fluor", "omnipose_bact_phase", "omnipose_worm",
     "omnipose_worm_high_res", "dememseg", "flywing", "enseg", "pan_multiplex", "xenium_cells", "xenium_nuclei",
     "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei", "tsakiroglou", "orgasegment", "organoidnet",
@@ -718,7 +720,7 @@ def gpu_pool_label(gpu):
 REGISTRY_N_TUNING_SAMPLES = {
     "tissuenet": 300, "deepseas": 300, "dynamicnuclearnet": 300,
     "pannuke": 300, "lizard_mitosis": 300, "pcns": 300,
-    "dememseg": 300, "flywing": 300, "orgline": 300, "neurips_cellseg": 300, "cisd": 300, "toiam": 300,
+    "dememseg": 300, "flywing": 300, "orgline": 300, "cisd": 300, "toiam": 300,
     "bmgd": 300, "pan_multiplex": 300,
 }
 
@@ -734,7 +736,8 @@ REGISTRY_2D_SHARDS = {
     ("deepseas", "ais"): 2, ("deepseas", "apg"): 24,
     ("dynamicnuclearnet", "ais"): 5, ("dynamicnuclearnet", "apg"): 24,
     ("livecell", "ais"): 14, ("livecell", "apg"): 24,
-    ("neurips_cellseg", "ais"): 2, ("neurips_cellseg", "apg"): 4,
+    ("neurips_cellseg_fluorescence", "ais"): 2, ("neurips_cellseg_fluorescence", "apg"): 4,
+    ("neurips_cellseg_label_free", "ais"): 2, ("neurips_cellseg_label_free", "apg"): 4,
     ("pannuke", "ais"): 4, ("pannuke", "apg"): 24,
     ("lizard_mitosis", "ais"): 4, ("lizard_mitosis", "apg"): 24,
     ("pcns", "ais"): 4, ("pcns", "apg"): 24,

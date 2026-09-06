@@ -35,7 +35,8 @@ from typing import Optional
 from datetime import datetime
 
 from common import (
-    DATA_ROOT, DATASETS_2D_LM, DATASETS_HP, DATASETS_3D_LM, DATASETS_EM, DATASETS_3D_EM, MODEL_TYPES,
+    DATA_ROOT, DATASETS_2D_LM, DATASETS_HP, DATASETS_3D_LM, DATASETS_EM, DATASETS_3D_EM, DATASETS_SUPPLEMENTARY,
+    MODEL_TYPES,
 )
 
 EVAL_ROOT = Path(__file__).resolve().parent
@@ -160,6 +161,8 @@ def select_datasets(args: argparse.Namespace, method: Optional[str], mode: Optio
     the node, so a broad selection stays usable without listing exceptions by hand.
     """
     datasets = tuple(args.data) if args.data else DATASETS
+    if not args.supplementary and not args.data:
+        datasets = tuple(d for d in datasets if d not in DATASETS_SUPPLEMENTARY)
 
     if args.modality != "all":
         datasets = tuple(d for d in datasets if modality_of(d) == args.modality)
@@ -295,6 +298,10 @@ def main():
     parser.add_argument("-d", "--data", nargs="+", default=None, choices=DATASETS,
                         help="Datasets to evaluate. Required unless --all_datasets is set.")
     parser.add_argument("--all_datasets", action="store_true", help="Evaluate every dataset of the selection.")
+    parser.add_argument(
+        "--supplementary", action="store_true",
+        help="Include the supplementary datasets, which --all_datasets leaves out by default.",
+    )
     parser.add_argument("--modality", default="all", choices=("lm", "em", "hp", "all"), help="Restrict to a modality.")
     parser.add_argument("--ndim", type=int, default=None, choices=(2, 3), help="Restrict to a dimensionality.")
     parser.add_argument("--segmentation_type", required=True, choices=("automatic", "interactive"))
