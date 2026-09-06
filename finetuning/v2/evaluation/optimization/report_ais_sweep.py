@@ -30,7 +30,7 @@ from optimization import benchmark_ais_optimization as ais  # noqa
 
 def load_sweep_tables(
     grid_path: Path, subsets: Sequence[str], output_root: Path, data_root: Path, campaign_root: Path,
-    model_type: str, joint_checkpoint: str, datasets: Optional[Sequence[str]] = None,
+    model_type: str, joint_checkpoint: str, datasets: Optional[Sequence[str]] = None, kind: str = "v5",
 ) -> Dict[str, pd.DataFrame]:
     """The per-dataset sweep tables of one grid over the given manifests, keyed by dataset."""
     with open(grid_path) as f:
@@ -38,7 +38,7 @@ def load_sweep_tables(
     checkpoint_id = ais._checkpoint_identity(model_type, joint_checkpoint)
     tables: Dict[str, pd.DataFrame] = {}
     for subset in subsets:
-        manifest = ais.load_campaign_manifest("v5", subset, output_root, data_root, campaign_root)
+        manifest = ais.load_campaign_manifest(kind, subset, output_root, data_root, campaign_root)
         sweep_dir = ais.sweep_dir(output_root, checkpoint_id, manifest["manifest_checksum"], grid_path.stem, grid)
         for path in sorted(sweep_dir.glob("*.csv")):
             if ".shard" in path.name or path.stem in ("shared_config",):
@@ -110,6 +110,7 @@ def _same(a: object, b: object) -> bool:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--grid", type=Path, required=True)
+    parser.add_argument("--kind", choices=ais.KINDS, default="v5", help="Manifest family the sweep ran on.")
     parser.add_argument("--subset", nargs="+", default=["primary", "training_extra"])
     parser.add_argument("--datasets", nargs="*", default=None)
     parser.add_argument("--data-root", type=Path, default=ais.DEFAULT_DATA_ROOT)
@@ -125,7 +126,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     tables = load_sweep_tables(
         args.grid, args.subset, args.output_root.resolve(), args.data_root.resolve(), args.campaign_root,
-        args.model_type, args.joint_checkpoint, args.datasets,
+        args.model_type, args.joint_checkpoint, args.datasets, kind=args.kind,
     )
     reference = None if args.no_reference else ais.default_postprocessing(args.model_type, "sparse")
     ranked = rank_shared(tables, reference)

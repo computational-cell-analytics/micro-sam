@@ -223,13 +223,10 @@ def build_command(
                 command.append("--skip_tuning")
             if args.tuning_root is not None:
                 command.extend(["--tuning_root", args.tuning_root])
-            if args.apg_params is not None and mode == "apg":
-                command.extend(["--apg_params", args.apg_params])
-
-    if args.n_samples is not None:
-        command.extend(["--n_samples", str(args.n_samples)])
-    if sample_index is not None:
-        command.extend(["--sample_index", str(sample_index)])
+            if args.ais_params is not None and mode == "ais":
+                command.extend(["--ais_params", args.ais_params])
+            if args.result_tag is not None:
+                command.extend(["--result_tag", args.result_tag])
 
     if args.segmentation_type == "interactive":
         command.extend(["-p", args.prompt_choice, "-iter", str(args.n_iterations)])
@@ -333,10 +330,10 @@ def main():
         help="Automatic only. Submit one array task per sample. The task that finds all rows writes the result.",
     )
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
-    parser.add_argument(
-        "--apg_params", type=str, default=None,
-        help="A JSON configuration of APG parameters, passed to every micro-sam2 APG task.",
-    )
+    parser.add_argument("--ais_params", type=str, default=None,
+                        help="AIS benchmark configuration passed to every automatic AIS job (see "
+                             "evaluate_automatic_segmentation.py --ais_params).")
+    parser.add_argument("--result_tag", type=str, default=None, help="Result tag passed to every automatic job.")
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=("box", "point"))
     parser.add_argument("-iter", "--n_iterations", type=int, default=8, help="Iterative prompting rounds.")
     parser.add_argument("--min_size", type=int, default=0,
