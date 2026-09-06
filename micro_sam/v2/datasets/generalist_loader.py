@@ -1094,22 +1094,6 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                 )
             )
 
-    # 59. LICONN (3D neurite segmentation in expansion-microscopy connectomics)
-    # NOTE: Shard coverage is partial. seg_proofread covers only part of the volume, so 14 of 40 random
-    # full-volume patches returned all-zero labels. Sampling is restricted to the covered ROI, where 0 of 40 did.
-    for z in z_slices:
-        liconn_kwargs = {
-            "path": os.path.join(input_path, "liconn"),
-            "patch_shape": (z, *patch_shape),
-            "segmentation": "proofread",
-            "roi": (slice(64, 640), slice(0, 4608), slice(None)),
-            "n_samples": max(1, 300 // n_z),
-            **kwargs,
-        }
-        train_ds.append(
-            UniDataWrapper(datasets.get_liconn_dataset(**liconn_kwargs), source_ndim=3, group_key=(3, z))
-        )
-
     return train_ds, val_ds
 
 
@@ -1837,6 +1821,63 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
+    # 21. LICONN (neurite segmentation in expansion microscopy of mouse CA1, 18x18x24 nm raw, ~16x expansion)
+    # NOTE: Light-based connectomics, so it belongs to the EM neurite pool. The proofread segmentation covers
+    # only z 64-640 and y < 4608 of the volume (LICONN_ROI); within it z < 512 trains, 512 <= z < 576 validates
+    # and z >= 576 stays blind.
+    for z in z_slices:
+        liconn_kwargs = {
+            "path": os.path.join(input_path, "liconn"),
+            "patch_shape": (z, *patch_shape),
+            "segmentation": "proofread",
+            "label_transform2": (
+                partial(_em_label_trafo, label_trafo=label_trafo(instances=True, sampling=(1.33, 1, 1)))
+                if label_trafo is not None else kwargs.get("label_transform2")
+            ),
+            "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+        }
+        for z_range, ds_list, n_samples in [(slice(64, 512), train_ds, 300), (slice(512, 576), val_ds, 50)]:
+            ds_list.append(
+                UniDataWrapper(
+                    datasets.get_liconn_dataset(
+                        roi=(z_range, *LICONN_ROI[1:]), n_samples=max(1, n_samples // n_z), **liconn_kwargs
+                    ),
+                    source_ndim=3, group_key=(3, z),
+                )
+            )
+
+    # 22. XPRESS (myelinated axon segmentation in X-ray holographic nano-tomography of mouse white matter, 33 nm)
+    # NOTE: One volume with voxel labels in a 200^3 core (XPRESS_CORE); like ASTIH the target class is myelinated
+    # axons only. Patches are sampled at the native 200x200 and resized to 512 like the small EMNeuron volumes.
+    # z 128-288 of the core trains, 288-308 validates, 308-328 stays blind.
+    for z in z_slices:
+        xpress_kwargs = {
+            "path": os.path.join(input_path, "xpress"),
+            "patch_shape": (z, 200, 200),
+            "download": True,
+            "ndim": 3,
+            "raw_transform": _resize_raw_to_512,
+            "label_transform2": (
+                partial(
+                    _resize_then_em_label_trafo,
+                    em_trafo_fn=partial(_em_label_trafo, label_trafo=label_trafo(instances=True)),
+                )
+                if label_trafo is not None else kwargs.get("label_transform2")
+            ),
+            "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
+            **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2", "sampler"]},
+        }
+        for z_range, ds_list, n_samples in [(slice(128, 288), train_ds, 100), (slice(288, 308), val_ds, 20)]:
+            ds_list.append(
+                UniDataWrapper(
+                    datasets.get_xpress_dataset(
+                        rois=[(z_range, *XPRESS_CORE[1:])], n_samples=max(1, n_samples // n_z), **xpress_kwargs
+                    ),
+                    source_ndim=3, group_key=(3, z),
+                )
+            )
+
     return train_ds, val_ds
 
 
@@ -1915,6 +1956,12 @@ TUMOR_SPHEROID_TEST_SLICES = (
 
 # The last of the five NISB base training cubes validates.
 NISB_VAL_CUBES = ("seed4",)
+
+# The part of the LICONN volume the proofread segmentation covers; z 576-640 of it is the blind test slab.
+LICONN_ROI = (slice(64, 640), slice(0, 4608), slice(None))
+
+# The voxel-labelled core of the XPRESS volume; z 308-328 of it is the blind test slab.
+XPRESS_CORE = (slice(128, 328), slice(128, 328), slice(128, 328))
 
 SPATCH_HE_SUBSETS = ["visium_hd_ov", "visium_hd_hcc", "visium_hd_coad", "stereoseq_ov"]
 
