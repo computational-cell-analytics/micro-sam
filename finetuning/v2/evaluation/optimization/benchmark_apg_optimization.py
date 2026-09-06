@@ -34,7 +34,6 @@ The optional JSON configuration has this shape:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -54,7 +53,6 @@ from skimage.measure import label as connected_components
 from tqdm import tqdm
 
 from micro_sam.v2.normalization import normalize_raw
-from micro_sam.v2.multimask_selection import load_feature_scorer
 
 EVALUATION_ROOT = Path(__file__).resolve().parent.parent
 REPOSITORY_ROOT = EVALUATION_ROOT.parents[2]
@@ -102,10 +100,12 @@ SAMPLE_COUNTS_2D_HOLDOUT = {
     "dic_hepg2": 43,
 }
 HOLDOUT_REUSED_DATASETS = ("deepbacs",)
-# A training-only 2d subset drawn from the validation splits of datasets outside the benchmark. It
-# widens what a learned selector sees, and its datasets stay outside the primary and holdout scores,
-# so a selector fitted on it is still confirmed on the same holdout as before. Counts are what the
-# validation pools hold, capped so that no single dataset dominates the extra rows.
+# A 2d subset drawn from the validation splits of datasets outside the primary benchmark. It was the
+# training set of the (since refuted and removed) learned selectors and, together with the primary
+# datasets, forms the eleven-dataset development corpus of the 2026-09 structural campaign. Its datasets
+# stay outside the primary and holdout scores. Counts are what the validation pools hold, capped so that
+# no single dataset dominates the extra rows. The subset's 'role' string below is part of the manifest
+# identity and therefore frozen.
 TRAINING_EXTRA_DATASETS = ("yeaz", "neurips_cellseg", "puma", "tnbc", "covid_if", "deepseas")
 SAMPLE_COUNTS_2D_TRAINING_EXTRA = {
     "yeaz": 40,
@@ -152,20 +152,10 @@ VOLUME_DIAGNOSTICS = (
     "refined_candidates", "replaced_candidates", "gated_consistency", "gated_foreign",
     "refinement_negatives",
 )
+# Only a refinement run reports these; they read 0 for every other run.
 IMAGE_DIAGNOSTICS = (
-    "multimask_alternatives", "multimask_changed_from_iou",
-    "refinement_eligible_instances", "uncertainty_selected_instances",
-    "refined_instances", "replaced_instances", "gated_consistency", "gated_foreign",
-    # The label-free refinement rules (isolated gate, box fallback, neighbour protection, negatives used).
-    "refinement_isolated_instances", "refinement_fallback_instances", "refinement_protected_pixels",
-    "refinement_negatives",
-    # The structural opt-ins (fusion, arbitration, residual recovery); 0 for every run without them.
-    "fusion_fallback_added", "fusion_conflicts", "fusion_conflicts_split", "arbitration_dropped",
-    "residual_prompts", "residual_added",
-)
-IMAGE_TIMINGS = (
-    "multimask_feature_seconds", "multimask_scorer_seconds",
-    "multimask_transfer_seconds", "multimask_record_seconds",
+    "refinement_eligible_instances", "refined_instances", "replaced_instances", "gated_consistency",
+    "gated_foreign", "refinement_negatives", "dropped_negatives",
 )
 
 IMPLEMENTATION_FILES = (
@@ -173,7 +163,6 @@ IMPLEMENTATION_FILES = (
     Path(common.__file__),
     EVALUATION_ROOT / "parameter_search.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/automatic_prompt_generation.py",
-    Path(common.__file__).parents[3] / "micro_sam/v2/multimask_selection.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/instance_segmentation.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/postprocessing.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/prompt_based_segmentation.py",
@@ -965,9 +954,6 @@ def _summarize(samples: pd.DataFrame) -> pd.DataFrame:
             if diagnostic in group:
                 values = group[diagnostic].dropna()
                 row[diagnostic] = int(values.sum()) if len(values) else np.nan
-        for timing in IMAGE_TIMINGS:
-            if timing in group:
-                row[timing] = float(group[timing].fillna(0).sum())
         rows.append(row)
     summary = pd.DataFrame(rows)
     overall = {
@@ -988,9 +974,6 @@ def _summarize(samples: pd.DataFrame) -> pd.DataFrame:
         if diagnostic in summary:
             values = summary[diagnostic].dropna()
             overall[diagnostic] = int(values.sum()) if len(values) else np.nan
-    for timing in IMAGE_TIMINGS:
-        if timing in samples:
-            overall[timing] = float(samples[timing].fillna(0).sum())
     return pd.concat([summary, pd.DataFrame([overall])], ignore_index=True)
 
 
@@ -1035,7 +1018,6 @@ def _sample_row(
     else:
         generation_stats = generation_stats or {}
         row.update({key: int(generation_stats.get(key, 0)) for key in IMAGE_DIAGNOSTICS})
-        row.update({key: float(generation_stats.get(key, 0.0)) for key in IMAGE_TIMINGS})
     return row
 
 
@@ -1081,8 +1063,6 @@ def _run_dimension(
     device: str,
     started: float,
     budget_seconds: float,
-    multimask_scorer_artifact: Optional[Path] = None,
-    refinement_gate_artifact: Optional[Path] = None,
 ) -> pd.DataFrame:
     completed_ids = set(completed["sample_id"]) if not completed.empty else set()
     pending = [sample for sample in samples if sample["ndim"] == ndim and sample["sample_id"] not in completed_ids]
@@ -1097,17 +1077,6 @@ def _run_dimension(
         model_type, ndim, device, joint_checkpoint=joint_checkpoint,
         joint_checksum=checkpoint_id, export_root=str(export_root),
     )
-    if ndim == 2 and (multimask_scorer_artifact is not None or refinement_gate_artifact is not None):
-        segmenter.set_multimask_models(
-            scorer=(
-                load_feature_scorer(multimask_scorer_artifact, device=device)
-                if multimask_scorer_artifact is not None else None
-            ),
-            refinement_gate=(
-                load_feature_scorer(refinement_gate_artifact, device=device)
-                if refinement_gate_artifact is not None else None
-            ),
-        )
     current_source = None
     normalized_source = None
     try:
@@ -1144,8 +1113,6 @@ def run_benchmark(
     device: str, time_budget_minutes: float, dimensions: Sequence[int] = (2, 3),
     trial_id: str = "trial-1", started: Optional[float] = None, crops_3d: str = "standard",
     subset: str = "primary",
-    multimask_scorer_artifact: Optional[Path] = None,
-    refinement_gate_artifact: Optional[Path] = None,
 ) -> Tuple[Path, pd.DataFrame, Dict[str, Any]]:
     started = time.perf_counter() if started is None else started
     checkpoint_path = get_joint_checkpoint(model_type, joint_checkpoint)
@@ -1156,14 +1123,6 @@ def run_benchmark(
         raise ValueError(f"Dimensions must be a non-empty subset of (2, 3), got {dimensions}.")
     if not trial_id:
         raise ValueError("The timing trial id must not be empty.")
-    artifact_paths = {
-        "multimask_scorer": multimask_scorer_artifact,
-        "refinement_gate": refinement_gate_artifact,
-    }
-    artifact_checksums = {
-        name: hashlib.sha256(Path(path).resolve(strict=True).read_bytes()).hexdigest()
-        for name, path in artifact_paths.items() if path is not None
-    }
     hardware = _hardware_identity(device)
     config_identity = {
         "params_2d": params_2d,
@@ -1172,7 +1131,9 @@ def run_benchmark(
         "trial_id": trial_id,
         "device": device,
         "hardware": hardware,
-        "model_artifacts": artifact_checksums,
+        # Frozen empty field: the learned artifacts it once recorded are gone, but keeping the key
+        # leaves the config checksums comparable with the runs the notes record.
+        "model_artifacts": {},
     }
     config_checksum = _content_checksum(config_identity)
     manifest_checksum = manifest["manifest_checksum"]
@@ -1217,10 +1178,7 @@ def run_benchmark(
         "torch": torch.__version__,
         "git_revision": _git_revision(),
         "time_budget_minutes": time_budget_minutes,
-        "model_artifacts": artifact_checksums,
-        "model_artifact_paths": {
-            name: str(Path(path).resolve()) for name, path in artifact_paths.items() if path is not None
-        },
+        "model_artifacts": {},
     }
     _atomic_write_json(metadata_path, metadata)
 
@@ -1230,7 +1188,7 @@ def run_benchmark(
             completed = _run_dimension(
                 ndim, manifest["samples"], completed, samples_path, data_root, model_type,
                 joint_checkpoint, checkpoint_id, export_root, params_by_dimension[ndim], device, started,
-                time_budget_minutes * 60, multimask_scorer_artifact, refinement_gate_artifact,
+                time_budget_minutes * 60,
             )
         expected_ids = {
             sample["sample_id"] for sample in manifest["samples"] if sample["ndim"] in dimensions
@@ -1262,14 +1220,6 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--manifest", type=Path, default=None, help="Subset manifest; defaults below output-root.")
     parser.add_argument("--config", type=Path, default=None, help="One JSON APG configuration to evaluate.")
-    parser.add_argument(
-        "--multimask-scorer-artifact", type=Path, default=None,
-        help="Fitted feature scorer used by params_2d.multimask_scorer='microscopy'.",
-    )
-    parser.add_argument(
-        "--refinement-gate-artifact", type=Path, default=None,
-        help="Fitted utility scorer used by refinement_kwargs.gate='uncertainty'.",
-    )
     parser.add_argument(
         "--ndim", choices=("2", "3", "both"), default="both",
         help="Evaluate only images, only volumes, or both (default).",
@@ -1332,8 +1282,7 @@ def main() -> None:
         manifest, data_root, output_root, args.model_type, args.joint_checkpoint,
         config_name, params_2d, params_3d, args.device, args.time_budget_minutes,
         dimensions=dimensions, trial_id=args.trial_id, started=started, crops_3d=args.crops_3d,
-        subset=args.subset, multimask_scorer_artifact=args.multimask_scorer_artifact,
-        refinement_gate_artifact=args.refinement_gate_artifact,
+        subset=args.subset,
     )
     print(summary.to_string(index=False))
     print(f"Run directory: {run_dir}")

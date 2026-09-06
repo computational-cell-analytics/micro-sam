@@ -18,7 +18,6 @@ Usage examples:
 
 import os
 import json
-import hashlib
 import argparse
 import warnings
 
@@ -50,7 +49,6 @@ def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, sp
 def run_evaluation(
     model, mode, dataset_name, data_root, experiment_folder, model_type, params, device,
     crop_shape=None, checkpoint_id=None, devices=None, tuned=None, result_tag=None, config_name=None,
-    artifacts=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -72,9 +70,8 @@ def run_evaluation(
         tuned: Whether 'params' came from the tuning sweep. Names the result file 'tuned' or
             'default'; by default inferred from whether there are parameters at all.
         result_tag: Optional tag appended to the result file name, so that a run with explicit
-            parameter overrides or learned artifacts does not collide with the plain evaluation.
+            parameter overrides does not collide with the plain evaluation.
         config_name: The name of the configuration the overrides came from, stored in the results.
-        artifacts: Paths of learned artifacts installed on the model, stored as checksums.
 
     Returns:
         The results as a DataFrame.
@@ -131,11 +128,6 @@ def run_evaluation(
     results["parameters"] = json.dumps(params, sort_keys=True, default=str) if params else "default"
     if config_name is not None:
         results["config_name"] = config_name
-    if artifacts:
-        checksums = {
-            name: hashlib.sha256(open(path, "rb").read()).hexdigest() for name, path in sorted(artifacts.items())
-        }
-        results["artifacts"] = json.dumps(checksums, sort_keys=True)
     results.to_csv(save_path, index=False)
     print(results)
     return results
@@ -169,25 +161,14 @@ def main():
              "parameters (or the defaults with --skip_tuning).",
     )
     parser.add_argument(
-        "--multimask_scorer_artifact", type=str, default=None,
-        help="APG 2d only. Fitted feature scorer used by multimask_scorer='microscopy'.",
-    )
-    parser.add_argument(
-        "--refinement_gate_artifact", type=str, default=None,
-        help="APG 2d only. Fitted utility scorer used by refinement_kwargs.gate='uncertainty'.",
-    )
-    parser.add_argument(
         "--result_tag", type=str, default=None,
         help="Tag appended to the result file name. Defaults to the --apg_params configuration name.",
     )
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
-    learned = (args.apg_params, args.multimask_scorer_artifact, args.refinement_gate_artifact)
-    if any(option is not None for option in learned) and args.mode != "apg":
-        parser.error("--apg_params and the learned artifacts apply to --mode apg only.")
-    if (args.multimask_scorer_artifact or args.refinement_gate_artifact) and args.dataset_name in DATASETS_3D:
-        parser.error("The learned multimask scorer and refinement gate support 2d datasets only.")
+    if args.apg_params is not None and args.mode != "apg":
+        parser.error("--apg_params applies to --mode apg only.")
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -204,25 +185,6 @@ def main():
         joint_checksum=joint_checksum, interactive_checkpoint_path=args.interactive_checkpoint,
         devices=args.devices or None,
     )
-    artifacts = {
-        name: path for name, path in (
-            ("multimask_scorer", args.multimask_scorer_artifact),
-            ("refinement_gate", args.refinement_gate_artifact),
-        ) if path is not None
-    }
-    if artifacts:
-        from micro_sam.v2.multimask_selection import load_feature_scorer
-        model.set_multimask_models(
-            scorer=(
-                load_feature_scorer(args.multimask_scorer_artifact, device=device)
-                if args.multimask_scorer_artifact else None
-            ),
-            refinement_gate=(
-                load_feature_scorer(args.refinement_gate_artifact, device=device)
-                if args.refinement_gate_artifact else None
-            ),
-        )
-
     params = None
     tuned = False
     if not args.skip_tuning:
@@ -256,7 +218,6 @@ def main():
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,
         params, device, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
         devices=args.devices or None, tuned=tuned, result_tag=result_tag, config_name=config_name,
-        artifacts=artifacts or None,
     )
 
 

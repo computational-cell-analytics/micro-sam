@@ -5,15 +5,15 @@ and submits them through `submit_optimization_jobs.submit_tasks`. '--extra' appe
 arguments to every command, which is how artifact paths and time budgets reach the scripts.
 
 Usage examples:
-    # Three serialized, bracketed 2d timing trials of two configs on the holdout, one at a time.
+    # Three serialized, bracketed 2d timing trials of one config on the holdout, one at a time.
     python apg_campaign_tasks.py benchmark --name holdout_timing --preset 2d --gres 1g.20gb:1 \\
         --ndim 2 --subset holdout --trial-ids trial-1 trial-2 trial-3 --serialize --bracket --throttle 1 \\
-        --config configs/apg_accepted_selector_only.json configs/apg_accepted_selector_gate15.json \\
-        --extra "--multimask-scorer-artifact <selector.pt> --refinement-gate-artifact <gate.pt>"
+        --config configs/apg_control_registry_defaults.json
 
-    # One array task per crop of a 3d script.
-    python apg_campaign_tasks.py per-sample --name extract3d --preset 3d-large \\
-        --script optimization/extract_apg_3d_tracks.py --indices 0-74 --throttle 12 --extra "--subset primary"
+    # One array task per crop of the 3d runner (the sample index is appended after '--extra').
+    python apg_campaign_tasks.py per-sample --name apg3d_primary --preset 3d \\
+        --script optimization/benchmark_apg_3d.py --indices 0-56 --throttle 12 \\
+        --extra "run --subset primary --config configs/apg3d_defaults.json"
 """
 
 from __future__ import annotations
@@ -32,12 +32,7 @@ from submit_optimization_jobs import add_submit_arguments, sanitize, submit_from
 CONFIG_ROOT = OPTIMIZATION_ROOT / "configs"
 SCRIPTS = {
     "benchmark": OPTIMIZATION_ROOT / "benchmark_apg_optimization.py",
-    "screen-refinement": OPTIMIZATION_ROOT / "screen_apg_refinement.py",
-    "screen-multimask": OPTIMIZATION_ROOT / "screen_apg_multimask.py",
-    "screen-mask-head-filters": OPTIMIZATION_ROOT / "screen_apg_mask_head_filters.py",
-    "screen-compact-selector": OPTIMIZATION_ROOT / "screen_apg_compact_selector.py",
-    "train-selector": OPTIMIZATION_ROOT / "train_apg_multimask_selector.py",
-    "train-gate": OPTIMIZATION_ROOT / "train_apg_refinement_gate.py",
+    "benchmark-3d": OPTIMIZATION_ROOT / "benchmark_apg_3d.py",
 }
 
 Task = Tuple[str, str]
@@ -90,29 +85,6 @@ def benchmark_tasks(
     return tasks
 
 
-def screen_tasks(
-    kind: str, subset: str = "primary", config_lists: Sequence[Path] = (), extra: Sequence[str] = (),
-    tag: Optional[str] = None,
-) -> List[Task]:
-    """One task per screening script invocation; the refinement screen takes one task per config list."""
-    script = SCRIPTS[f"screen-{kind}"]
-    if kind == "refinement" and config_lists:
-        return [
-            (
-                tag or f"screen_refinement_{subset}_{_config_stem(path)}",
-                _command(script, "--subset", subset, "--configs", Path(path).resolve(), *extra),
-            )
-            for path in config_lists
-        ]
-    return [(tag or f"screen_{sanitize(kind)}_{subset}", _command(script, "--subset", subset, *extra))]
-
-
-def trainer_tasks(kind: str, stage: str = "all", extra: Sequence[str] = (), tag: Optional[str] = None) -> List[Task]:
-    """One task running a trainer stage. Trainers are not resumable, so submit them with one attempt."""
-    script = SCRIPTS[f"train-{kind}"]
-    return [(tag or f"train_{sanitize(kind)}_{sanitize(stage)}", _command(script, "--stage", stage, *extra))]
-
-
 def parse_indices(spec: str) -> List[int]:
     """'1-3,7' -> [1, 2, 3, 7]."""
     indices: List[int] = []
@@ -156,26 +128,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     bench.add_argument("--serialize", action="store_true")
     bench.add_argument("--bracket", action="store_true")
 
-    screen = subparsers.add_parser("screen", help="Screening scripts.")
-    screen.add_argument(
-        "--kind", required=True, choices=("refinement", "multimask", "mask-head-filters", "compact-selector"),
-    )
-    screen.add_argument("--subset", default="primary")
-    screen.add_argument("--configs", type=Path, nargs="*", default=[])
-    screen.add_argument("--tag", default=None)
-
-    train = subparsers.add_parser("train", help="Trainer scripts.")
-    train.add_argument("--kind", required=True, choices=("selector", "gate"))
-    train.add_argument("--stage", default="all")
-    train.add_argument("--tag", default=None)
-
     per_sample = subparsers.add_parser("per-sample", help="One task per sample index of a script.")
     per_sample.add_argument("--script", type=Path, required=True)
     per_sample.add_argument("--indices", required=True, help="e.g. 0-30 or 1,4,7")
     per_sample.add_argument("--sample-flag", default="--sample-index")
     per_sample.add_argument("--tag-prefix", default="sample")
 
-    for sub in (bench, screen, train, per_sample):
+    for sub in (bench, per_sample):
         sub.add_argument("--extra", default="", help="Arguments appended verbatim to every command.")
         sub.add_argument("--print-only", action="store_true", help="Print the tasks and stop.")
         add_submit_arguments(sub)
@@ -191,10 +150,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             configs, trial_ids, ndim=args.ndim, subset=args.subset, crops_3d=args.crops_3d, extra=extra,
             serialize=args.serialize, bracket=args.bracket,
         )
-    elif args.command == "screen":
-        tasks = screen_tasks(args.kind, subset=args.subset, config_lists=args.configs, extra=extra, tag=args.tag)
-    elif args.command == "train":
-        tasks = trainer_tasks(args.kind, stage=args.stage, extra=extra, tag=args.tag)
     else:
         tasks = per_sample_tasks(
             args.script, parse_indices(args.indices), sample_flag=args.sample_flag, extra=extra,

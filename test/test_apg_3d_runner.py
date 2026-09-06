@@ -27,15 +27,15 @@ def test_volume_params_apply_overrides_and_reject_unknown_keys(tmp_path):
     assert params["candidate_threshold"] == [1.0, 3.0, 10.0] and params["refinement"] == "points+boxes"
     with pytest.raises(ValueError, match="Unknown volume parameters"):
         runner.resolve_volume_params({"multimask_scorer": "microscopy"})
+    with pytest.raises(ValueError, match="Unknown volume parameters"):
+        runner.resolve_volume_params({"candidate_budget": 8})
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"name": "x", "params_2d": {"score_threshold": 0.1}, "params_3d": {"sigma": 0.5}}))
     name, params = runner.load_volume_config(config)
     assert name == "x" and params["sigma"] == 0.5 and params["score_threshold"] != 0.1
 
 
-def test_ladder_keys_and_run_identity_are_stable():
-    assert runner._ladder_key((1.5, 10.0)) == "seeded_1p5_10"
-    assert runner._ladder_key((0.5, 2.0, 10.0)) == "seeded_0p5_2_10"
-    first = runner.run_identity("cfg", {"a": 1}, {})
-    assert first == runner.run_identity("cfg", {"a": 1}, {})
-    assert first != runner.run_identity("cfg", {"a": 2}, {})
+def test_run_identity_is_stable():
+    first = runner.run_identity("cfg", {"a": 1})
+    assert first == runner.run_identity("cfg", {"a": 1})
+    assert first != runner.run_identity("cfg", {"a": 2})

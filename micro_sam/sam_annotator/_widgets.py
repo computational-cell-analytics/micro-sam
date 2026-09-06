@@ -4254,7 +4254,7 @@ class AutoSegmentWidget(_WidgetBase):
         kwargs = dict(
             candidate_threshold=candidate_threshold, foreground_threshold=self.foreground_threshold,
             min_candidate_size=self.min_candidate_size, score_threshold=self.score_threshold,
-            score_filter="predicted_iou", max_overlap=self.max_overlap, min_size=self.min_object_size,
+            max_overlap=self.max_overlap, min_size=self.min_object_size,
             refinement=refinement, refinement_kwargs=refinement_kwargs,
             multimasking=bool(self.multimasking), batch_size=self.prompt_batch_size,
             n_iter=self.n_iter, dt=self.dt, sigma=self.sigma, n_threads=self.n_threads,
@@ -4278,7 +4278,7 @@ class AutoSegmentWidget(_WidgetBase):
         refinement_kwargs = {"box_extension": self.box_extension} if refinement is not None else None
         return dict(
             score_threshold=self.score_threshold, max_overlap=self.max_overlap, min_size=self.min_object_size,
-            score_filter="predicted_iou", refinement=refinement, refinement_kwargs=refinement_kwargs,
+            refinement=refinement, refinement_kwargs=refinement_kwargs,
             batch_size=self.prompt_batch_size,
         )
 

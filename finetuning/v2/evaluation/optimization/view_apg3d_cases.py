@@ -1,10 +1,12 @@
 """Open one packaged 3d case (`package_apg3d_cases.py`) in napari.
 
-Layers: the raw volume, the ground truth, one labels layer per segmentation (v2 / v4 checkpoint, volume
-defaults / points+boxes refinement), and per run three points layers with the anchors: every proposed
-density-ladder candidate (grey), the candidates that passed the anchor scoring and were propagated (yellow),
-and the ones whose track is in the output (green). All segmentation layers but the v4 defaults start hidden;
-toggle them with the eye icons. The scores of every run are printed to the terminal.
+Layers: the raw volume, the ground truth, and one labels layer per segmentation (v2 / v4 checkpoint, volume
+defaults / points+boxes refinement). Cases packaged from runs of the `apg-optim-fable` branch additionally
+carry, per run, three points layers with the anchors: every proposed density-ladder candidate (grey), the
+candidates that passed the anchor scoring and were propagated (yellow), and the ones whose track is in the
+output (green); the current runner no longer records anchors, so those layers are absent for new cases. All
+segmentation layers but the v4 defaults start hidden; toggle them with the eye icons. The scores of every run
+are printed to the terminal.
 
 Usage:
     python view_apg3d_cases.py /path/to/3d_cases/primary/gonuclear__gonuclear_1234abcd.h5
