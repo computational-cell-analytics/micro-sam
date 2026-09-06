@@ -27,7 +27,7 @@ from tqdm import tqdm
 import torch
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, GT_MIN_SIZE_2D, MODEL_TYPES, MODES,
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, GT_MIN_SIZE_2D, MODEL_TYPES, MODES,
     VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, genuine_misses,
     has_val_split, load_apg_overrides, load_data, n_samples, postprocess_unisam2, predict_unisam2,
     read_tuned_params, resolve_checkpoint_identity, run_dataset_evaluation,
@@ -35,15 +35,38 @@ from common import (
 
 
 def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, spacing=None, devices=None):
-    """Segment one sample with the tuned parameters of a mode."""
+    """Segment one sample with the tuned parameters of a mode.
+
+    For 'ais' the parameters may be the nested form ``{"sparse": {...}, "dense": {...}}`` of an AIS
+    benchmark configuration (see `load_ais_params`); the dataset's pipeline picks its own dict.
+    """
     if mode == "apg":
         model.clear_state()
         model.initialize(raw, ndim=ndim, **(VOLUME_SPEED_OPTIONS if ndim == 3 else {}))
         volume_params = {"spacing": spacing} if ndim == 3 else {}
         return model.generate(**{**volume_params, **params}).astype("uint32")
 
+    if set(params) & {"sparse", "dense"}:
+        params = params["dense" if dataset_name in DATASETS_DENSE else "sparse"]
     prediction = predict_unisam2(model, raw, ndim=ndim, device=device, devices=devices)
     return postprocess_unisam2(prediction, dataset_name, model_type=model_type, params=params)
+
+
+def load_ais_params(path, model_type, ndim):
+    """Read an AIS benchmark configuration and resolve its parameters for images or volumes.
+
+    The file has the shape `benchmark_ais_optimization.py` uses (``{"name", "mode", "params_2d",
+    "params_3d"}``); the result is ``{"sparse": {...}, "dense": {...}}`` with every post-processing
+    keyword resolved against the library defaults, so the evaluation runs exactly the benchmarked
+    configuration.
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "optimization"))
+    from benchmark_ais_optimization import load_config
+
+    name, _, params_2d, params_3d = load_config(Path(path), model_type)
+    return name, (params_3d if ndim == 3 else params_2d)
 
 
 def run_evaluation(
@@ -161,14 +184,21 @@ def main():
              "parameters (or the defaults with --skip_tuning).",
     )
     parser.add_argument(
+        "--ais_params", type=str, default=None,
+        help="AIS only. An AIS benchmark configuration ('params_2d' / 'params_3d', flat or "
+             "{'sparse', 'dense'}) whose resolved post-processing parameters replace the tuned ones.",
+    )
+    parser.add_argument(
         "--result_tag", type=str, default=None,
-        help="Tag appended to the result file name. Defaults to the --apg_params configuration name.",
+        help="Tag appended to the result file name. Defaults to the --apg_params / --ais_params configuration name.",
     )
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
     if args.apg_params is not None and args.mode != "apg":
         parser.error("--apg_params applies to --mode apg only.")
+    if args.ais_params is not None and args.mode != "ais":
+        parser.error("--ais_params applies to --mode ais only.")
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -211,6 +241,12 @@ def main():
     if args.apg_params is not None:
         config_name, overrides = load_apg_overrides(args.apg_params)
         params = {**(params or {}), **overrides}
+        if result_tag is None:
+            result_tag = config_name
+    if args.ais_params is not None:
+        # The configuration is complete (every keyword resolved), so it replaces rather than layers.
+        config_name, params = load_ais_params(args.ais_params, args.model_type, ndim)
+        tuned = False
         if result_tag is None:
             result_tag = config_name
 

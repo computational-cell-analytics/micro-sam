@@ -209,6 +209,10 @@ def build_command(
                 command.append("--skip_tuning")
             if args.tuning_root is not None:
                 command.extend(["--tuning_root", args.tuning_root])
+            if args.ais_params is not None and mode == "ais":
+                command.extend(["--ais_params", args.ais_params])
+            if args.result_tag is not None:
+                command.extend(["--result_tag", args.result_tag])
 
     if args.segmentation_type == "interactive":
         command.extend(["-p", args.prompt_choice, "-iter", str(args.n_iterations)])
@@ -312,6 +316,10 @@ def main():
                              "without the '.pt' suffix, e.g. 'best' or the name of a frozen copy.")
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate micro-sam2 with the library defaults.")
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
+    parser.add_argument("--ais_params", type=str, default=None,
+                        help="AIS benchmark configuration passed to every automatic AIS job (see "
+                             "evaluate_automatic_segmentation.py --ais_params).")
+    parser.add_argument("--result_tag", type=str, default=None, help="Result tag passed to every automatic job.")
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=("box", "point"))
     parser.add_argument("-iter", "--n_iterations", type=int, default=8, help="Iterative prompting rounds.")
     parser.add_argument("--min_size", type=int, default=0,
