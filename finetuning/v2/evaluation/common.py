@@ -27,11 +27,12 @@ from micro_sam.v2.datasets.generalist_loader import (
     LICONN_ROI, MALECNS_TEST_BOXES, MALECNS_VAL_BOXES, TUMOR_SPHEROID_TEST_SLICES, TUMOR_SPHEROID_VAL_SLICES,
     WILDENBERG_P105_BOX, XPRESS_CORE, ZEBRAFINCH_J0126_BOX, ZEBRAFINCH_J0251_TEST_BOXES, ZEBRAFINCH_J0251_VAL_BOXES,
     BITDEPTH_MAGNIFICATIONS, CARTOCELL_TEST_FOLDER, CARTOCELL_VAL_FOLDER, CELL_ACDC_TEST_MOVIES, CELL_ACDC_VAL_MOVIES,
-    CELLBINDB_STAINS, CELLULAR_TEST_WELLS, CELLULAR_VAL_WELLS, CISD_TEST_SLIDES, CISD_VAL_SLIDES, CVZ_TEST_GROUPS,
-    CVZ_VAL_GROUPS, EMBEDSEG_ORGANOID_TEST_TIMEPOINTS, EMBEDSEG_ORGANOID_VAL_TIMEPOINTS,
+    CELLBINDB_HE_STAIN, CELLBINDB_STAINS, CELLULAR_TEST_WELLS, CELLULAR_VAL_WELLS, CISD_TEST_SLIDES, CISD_VAL_SLIDES,
+    CVZ_TEST_GROUPS, CVZ_VAL_GROUPS, EMBEDSEG_ORGANOID_TEST_TIMEPOINTS, EMBEDSEG_ORGANOID_VAL_TIMEPOINTS,
     EMBEDSEG_PLATY_NUCLEI_TEST_TIMEPOINTS, EMBEDSEG_PLATY_NUCLEI_VAL_TIMEPOINTS, EMBEDSEG_VAL_Z, ENSEG_TEST_ANIMALS,
     ENSEG_VAL_ANIMALS, GONUCLEAR_TEST_SAMPLES, GONUCLEAR_VAL_SAMPLES, NIS3D_VAL_Z, NUCVERSE_GLIA_VAL_VOLUME,
-    NUCVERSE_GLIA_VAL_Z, NUCVERSE_VAL_VOLUMES, ORGANOID_SOURCES, PHMAMM_TEST_TIMEPOINTS, PHMAMM_VAL_TIMEPOINTS,
+    NUCVERSE_GLIA_VAL_Z, NUCVERSE_VAL_VOLUMES, ORGANOID_SOURCES, PANNUKE_FOLD2_VAL_TILES, PHMAMM_TEST_TIMEPOINTS,
+    PHMAMM_VAL_TIMEPOINTS,
     PNAS_TEST_PLANTS, PNAS_VAL_PLANTS, TOIAM_TEST_MOVIES, TOIAM_VAL_MOVIES, WING_DISC_TEST_VOLUMES, WING_DISC_VAL_Z,
     XENIUM_TEST_SAMPLES, XENIUM_VAL_SAMPLES, cell_acdc_movie, cvz_group, _train_val_test_split,
 )
@@ -104,33 +105,43 @@ SPATCH_DAPI_SUBSETS = ["xenium_ov", "xenium_hcc", "xenium_coad", "cosmx_ov", "co
 # The four E. coli pathways on disk; the remaining four are 6 GB archives each and are not fetched.
 ECOLI_GENES = ("cib", "crosstalk", "recA", "rpsM")
 
-# Light microscopy, 2d. In-domain: the blind test data of the v5 training datasets, the split the generalist loader
-# never touches (see the loader constants). Out-of-domain: datasets kept out of training. Datasets with a cell and a
-# nucleus target are listed per target, omnipose per subset.
-DATASETS_2D_LM_CELL_ID = [
-    "cvz_fluo_cell", "tissuenet", "omnipose_bact_fluor", "neurips_cellseg", "dememseg", "flywing", "enseg",
-    "pan_multiplex", "xenium_cells",
-]
+# Light microscopy, 2d. The in-domain (ID) panels hold the blind test splits of the v5 training datasets that the
+# main comparison scores: the sources shared with the baselines. The supplementary panels hold the blind splits of
+# the remaining training datasets ("extra training"), resolvable and scorable on request but outside the main
+# panel. Out-of-domain (OOD): datasets kept out of training. Datasets with a cell and a nucleus target are listed
+# per target, omnipose per subset.
+DATASETS_2D_LM_CELL_ID = ["tissuenet", "omnipose_bact_fluor", "cvz_fluo_cell", "flywing", "enseg", "neurips_cellseg"]
+DATASETS_2D_LM_CELL_SUPPLEMENTARY = ["dememseg", "pan_multiplex", "xenium_cells"]
 DATASETS_2D_LM_CELL_OOD = ["covid_if_cells", "medussa", "hpa"]
 DATASETS_2D_LM_NUCLEUS_ID = [
-    "cvz_fluo_dapi", "bitdepth_nucseg", "bmgd", "cellbindb", "dynamicnuclearnet", "u20s", "ifnuclei", "xenium_nuclei",
-    "tsakiroglou",
+    "cvz_fluo_dapi", "dynamicnuclearnet", "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei", "tsakiroglou",
 ]
+DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY = ["xenium_nuclei"]
 DATASETS_2D_LM_NUCLEUS_OOD = [
-    "cardioblast_nuclei", "hela_cytonuc", "covid_if_nuclei", "arvidsson", "mndino", "micro_bench", "spatch_dapi",
+    "cardioblast_nuclei", "hela_cytonuc", "covid_if_nuclei", "arvidsson", "mndino", "micro_bench",
 ]
+# sPATCH DAPI shares tissue sections with the sPATCH H&E training data, so it is a held-out platform evaluation
+# rather than an independent OOD collection until the patient overlap is resolved.
+DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM = ["spatch_dapi"]
 DATASETS_2D_LM_LABEL_FREE_ID = [
-    "livecell", "deepbacs", "orgasegment", "organoidnet", "omnipose_bact_phase", "omnipose_worm",
-    "omnipose_worm_high_res", "yeaz", "bccd", "cell_acdc", "cellular", "cisd", "vicar", "microbeseg", "orgline",
-    "organoid", "mcellseg", "toiam", "bbbc030",
+    "livecell", "deepbacs", "omnipose_bact_phase", "yeaz", "neurips_cellseg", "cell_acdc", "cellular", "vicar",
+    "microbeseg",
+]
+DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY = [
+    "orgasegment", "organoidnet", "omnipose_worm", "omnipose_worm_high_res", "bccd", "cisd", "orgline", "organoid",
+    "mcellseg", "toiam", "bbbc030",
 ]
 DATASETS_2D_LM_LABEL_FREE_OOD = [
-    "cellapp", "deepseas", "dic_hepg2", "yeastsam", "yeastcellseg", "bac_mother", "ecoli_microcolony_lineage",
+    "cellapp", "deepseas", "dic_hepg2", "yeastsam", "bac_mother", "ecoli_microcolony_lineage",
 ]
-DATASETS_2D_LM = (
-    DATASETS_2D_LM_CELL_ID + DATASETS_2D_LM_CELL_OOD + DATASETS_2D_LM_NUCLEUS_ID + DATASETS_2D_LM_NUCLEUS_OOD
-    + DATASETS_2D_LM_LABEL_FREE_ID + DATASETS_2D_LM_LABEL_FREE_OOD
-)
+# Reserve: kept resolvable, not part of any panel until its labels are checked.
+DATASETS_2D_LM_LABEL_FREE_RESERVE = ["yeastcellseg"]
+DATASETS_2D_LM = list(dict.fromkeys(
+    DATASETS_2D_LM_CELL_ID + DATASETS_2D_LM_CELL_SUPPLEMENTARY + DATASETS_2D_LM_CELL_OOD
+    + DATASETS_2D_LM_NUCLEUS_ID + DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_OOD
+    + DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM + DATASETS_2D_LM_LABEL_FREE_ID + DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY
+    + DATASETS_2D_LM_LABEL_FREE_OOD + DATASETS_2D_LM_LABEL_FREE_RESERVE
+))
 
 # Histopathology nuclei. In-domain: the official test splits of the v5 training datasets, which the
 # generalist loader never touches. Out-of-domain: datasets kept out of training. lynsec is split by
@@ -139,8 +150,10 @@ DATASETS_2D_HP_ID = [
     "cpm17", "glysac", "histo_miner", "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc",
     "monuseg", "pannuke", "puma", "srsanet", "tnbc_celltype",
 ]
+# Supplementary: the CellBinDB H&E tiles train with histopathology and keep a blind split, outside the main panel.
+DATASETS_2D_HP_SUPPLEMENTARY = ["cellbindb_he"]
 DATASETS_2D_HP_OOD = ["cytodark0", "deepliif", "khoshdeli", "panoptils", "pcns"]
-DATASETS_HP = DATASETS_2D_HP_ID + DATASETS_2D_HP_OOD
+DATASETS_HP = DATASETS_2D_HP_ID + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_2D_HP_OOD
 
 # Electron microscopy. The 2d sets are ASTIH (myelinated axons, neurite category) and the tumor spheroid slices
 # (cell category); their splits and the 3d regions below come from the generalist loader constants.
@@ -156,30 +169,37 @@ GT_MIN_SIZE_2D = {
     "u20s": 10, "vicar": 25, "yeaz": 10,
 }
 
-# Light microscopy, 3d, grouped as the 2d datasets. nis3d is the Drosophila pair the loader trains on.
+# Light microscopy, 3d, grouped as the 2d datasets. nis3d is the Drosophila pair the loader trains on. MorphoNet is
+# pending its specimen mapping against PNAS Arabidopsis and is not part of a panel.
 DATASETS_3D_LM_CELL_ID = ["plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid"]
-DATASETS_3D_LM_CELL_OOD = ["plantseg_ovules", "cshaper", "morphonet"]
+DATASETS_3D_LM_CELL_OOD = ["plantseg_ovules", "cshaper", "vibrio_cholerae"]
+DATASETS_3D_LM_CELL_PENDING = ["morphonet"]
 DATASETS_3D_LM_NUCLEUS_ID = [
-    "embedseg_mouse_skull", "embedseg_platy_ish", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear",
-    "nucverse3d",
+    "embedseg_mouse_skull", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear", "nucverse3d",
 ]
-DATASETS_3D_LM_NUCLEUS_OOD = ["parhyale_regen", "vibrio_cholerae", "mouse_embryo", "blastospim"]
+DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY = ["embedseg_platy_ish"]
+DATASETS_3D_LM_NUCLEUS_OOD = ["parhyale_regen", "mouse_embryo", "blastospim"]
 DATASETS_3D_LM = (
-    DATASETS_3D_LM_CELL_ID + DATASETS_3D_LM_CELL_OOD + DATASETS_3D_LM_NUCLEUS_ID + DATASETS_3D_LM_NUCLEUS_OOD
+    DATASETS_3D_LM_CELL_ID + DATASETS_3D_LM_CELL_OOD + DATASETS_3D_LM_CELL_PENDING + DATASETS_3D_LM_NUCLEUS_ID
+    + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_3D_LM_NUCLEUS_OOD
 )
 
-# Neurite segmentation: the blind in-domain regions of the v5 training sets (see EM_ROIS and the path resolver) and
-# the out-of-domain sets. humanneurons is the cached H01 crop. synapseweb is scored inside its annotated cores only.
-DATASETS_3D_EM_NEURITE_ID = [
-    "cremi", "snemi", "axonem", "fafb", "fib25", "hemibrain", "manc", "malecns", "wafer4", "minnie65",
-    "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress", "nisb",
+# Neurite segmentation: the blind regions of the v5 training sets (see EM_ROIS and the path resolver). The main
+# panel holds the sources shared with the baselines, the supplementary panel the remaining training sets. nisb stays
+# in the main panel until its move to synthetic OOD is decided. synapseweb is scored inside its annotated cores only.
+# humanneurons (the cached H01 crop) is no OOD set: H01 trains through EMNeuron, so it is supplementary at most.
+DATASETS_3D_EM_NEURITE_ID = ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress", "nisb"]
+DATASETS_3D_EM_NEURITE_SUPPLEMENTARY = [
+    "snemi", "axonem", "fib25", "manc", "malecns", "wafer4", "minnie65", "zebrafinch_j0251", "wildenberg",
+    "humanneurons",
 ]
-DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "humanneurons", "synapseweb"]
+DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb"]
 # Cell segmentation: Platynereis volume 9 and the DenseCell val volume are blind; the tumor spheroid slices are 2d.
 DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell"]
 
 DATASETS_3D_EM = (
-    ["platynereis_nuclei"] + DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_OOD + DATASETS_3D_EM_CELL_ID
+    ["platynereis_nuclei"] + DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY
+    + DATASETS_3D_EM_NEURITE_OOD + DATASETS_3D_EM_CELL_ID
 )
 DATASETS_EM = DATASETS_2D_EM + DATASETS_3D_EM
 
@@ -187,7 +207,15 @@ DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
 # The neurite datasets need the dense (multicut) pipeline and are ranked by the CREMI score. The EM cell datasets and
 # platynereis_nuclei segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
-DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_OOD
+DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_OOD
+
+# Everything outside the main in-domain and OOD panels: supplementary, held-out platform, reserve and pending sets.
+# The submission script skips them unless asked for them.
+DATASETS_SUPPLEMENTARY = (
+    DATASETS_2D_LM_CELL_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM
+    + DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY + DATASETS_2D_LM_LABEL_FREE_RESERVE + DATASETS_3D_LM_CELL_PENDING
+    + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_2D_HP_SUPPLEMENTARY
+)
 
 # The split to tune on, or None where the loader has no splits and VAL_Z_RANGE holds out a z-slab.
 # The tuning data of the light microscopy datasets: 'val' is the split the generalist loader validates on, 'train'
@@ -209,8 +237,8 @@ VAL_SPLITS.update({
     "platynereis_nuclei": None, "humanneurons": None,
 })
 
-# Volumes whose tuning data is a z-slab of the blind test volume, as (file name, z-slab), following the loader;
-# the evaluation scores the whole volume. nucverse3d holds separate tuning volumes for its liver
+# Volumes whose tuning data is a z-slab of the test volume, as (file name, z-slab), following the loader; the
+# evaluation scores the rest of the volume, see val_z_range. nucverse3d holds separate tuning volumes for its liver
 # collections and a slab for drosophila_glia, see _get_3d_lm_data_paths.
 LM_VAL_Z_SLABS = {
     "wing_disc": {f"{name}.h5": WING_DISC_VAL_Z for name in WING_DISC_TEST_VOLUMES},
@@ -238,6 +266,7 @@ VAL_SPLITS.update({
     "cpm17": "train", "glysac": "train", "histo_miner": "val", "lizard": "val", "lizard_mitosis": "val",
     "lynsec_he": "val", "lynsec_ihc": "val", "monuseg": "train", "pannuke": "val", "puma": "val",
     "srsanet": "val", "tnbc_celltype": "val", "cytodark0": "val", "deepliif": "val", "pcns": "train",
+    "cellbindb_he": "val",
 })
 
 # The tuning slab for volumes with no splits, disjoint from the slab the evaluation scores. Indices
@@ -301,14 +330,19 @@ def platynereis_nuclei_val_z_range(raw_path: str) -> Tuple[int, int]:
     return PLATYNEREIS_NUCLEI_VAL_SAMPLES[sample_id]
 
 
-def val_z_range(dataset_name: str, raw_path: str, split: str) -> Optional[Tuple[int, int]]:
-    """The tuning slab of a volume whose validation data is part of the scored volume, None otherwise."""
-    if split != "val":
-        return None
+def val_z_range(dataset_name: str, raw_path: str, split: str) -> Optional[Tuple[int, Optional[int]]]:
+    """The z-range of a volume that holds both tuning and test data: the tuning slab for 'val', its complement
+    for 'test', so the scored region never overlaps the validation region. None where the two are separate files.
+    """
     if dataset_name == "platynereis_nuclei":
-        return platynereis_nuclei_val_z_range(raw_path)
+        return platynereis_nuclei_val_z_range(raw_path) if split == "val" else None
     slab = LM_VAL_Z_SLABS.get(dataset_name, {}).get(os.path.basename(raw_path))
-    return None if slab is None else (slab.start, slab.stop)
+    if slab is None:
+        return None
+    if split == "val":
+        return slab.start, slab.stop
+    # The slabs sit at one end of the volume, so the complement is one contiguous range.
+    return (slab.stop, None) if slab.start == 0 else (0, slab.start)
 
 
 def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
@@ -494,12 +528,14 @@ def _get_hp_data_paths(
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "pannuke":
-        # Folds 1 and 2 train, fold 3 is the blind benchmark; tuning uses fold 2.
+        # fold_3 is the blind benchmark; tuning uses the fold_2 tiles the loader validates on.
         fold = "fold_3" if split == "test" else "fold_2"
         stack = datasets.pannuke.get_pannuke_paths(path=os.path.join(p, "pannuke"), folds=[fold], download=download)
         paths = _tiles_from_stack(
             stack[0], "images", "labels/instances", os.path.join(p, "pannuke", f"{fold}_tiles")
         )
+        if split != "test":
+            paths = paths[PANNUKE_FOLD2_VAL_TILES]
         return paths, paths, "raw", "labels"
 
     if dataset_name == "puma":
@@ -517,6 +553,12 @@ def _get_hp_data_paths(
             path=os.path.join(p, "tnbc_celltype"), split=split, download=download,
         )
         return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "cellbindb_he":
+        img, gt = _held_out_part(*datasets.cellbindb.get_cellbindb_paths(
+            path=os.path.join(p, "cellbindb"), data_choice=CELLBINDB_HE_STAIN, download=download,
+        ), split)
+        return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "cytodark0":
         paths = datasets.cytodark0.get_cytodark0_paths(
@@ -1260,7 +1302,8 @@ def _read_window(shape, roi, z_range, crop_shape):
     for axis, (extent, sl) in enumerate(zip(shape, roi)):
         start, stop, _ = sl.indices(extent)
         if axis == 0 and z_range is not None:
-            start, stop = start + z_range[0], min(stop, start + z_range[1])
+            z_stop = stop if z_range[1] is None else min(stop, start + z_range[1])
+            start, stop = start + z_range[0], z_stop
         starts.append(start)
         sizes.append(stop - start)
     crop = _center_crop_roi(sizes, crop_shape)

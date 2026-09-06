@@ -660,9 +660,9 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             )
         )
 
-    # 22. CellBinDB (nucleus segmentation in DAPI, ssDNA, mIF and H&E images)
-    # NOTE: All four stains train. The tiles are 256x256 (some H&E tiles 512x512), so they are randomly upscaled
-    # and padded to the patch shape. Each stain is split 80 / 10 / 10 at random (seed 42); the test tiles are blind.
+    # 22. CellBinDB (nucleus segmentation in DAPI, ssDNA and mIF images; the H&E tiles train with histopathology)
+    # NOTE: The tiles are 256x256, so they are randomly upscaled and padded to the patch shape. Each stain is split
+    # 80 / 10 / 10 at random (seed 42); the test tiles are blind.
     cellbindb_kwargs = {
         "patch_shape": (256, 256), "is_seg_dataset": False, "ndim": 2,
         **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
@@ -2150,6 +2150,10 @@ LICONN_ROI = (slice(64, 640), slice(0, 4608), slice(None))
 # The voxel-labelled core of the XPRESS volume; z 308-328 of it is the blind test slab.
 XPRESS_CORE = (slice(128, 328), slice(128, 328), slice(128, 328))
 
+# PanNuke fold_2 holds 2523 tiles; the first 80 % train, the last 20 % validate. fold_3 is blind.
+PANNUKE_FOLD2_TRAIN_TILES = slice(0, 2018)
+PANNUKE_FOLD2_VAL_TILES = slice(2018, 2523)
+
 SPATCH_HE_SUBSETS = ["visium_hd_ov", "visium_hd_hcc", "visium_hd_coad", "stereoseq_ov"]
 
 # CartoCell uses the official folders; 'test' is the blind split.
@@ -2162,7 +2166,9 @@ GONUCLEAR_VAL_SAMPLES = (1139,)
 GONUCLEAR_TEST_SAMPLES = (1170,)
 
 BITDEPTH_MAGNIFICATIONS = ("20x", "40x_air", "40x_oil", "63x_oil")
-CELLBINDB_STAINS = ("DAPI", "ssDNA", "mIF", "HE")
+# CellBinDB fluorescence stains train with light microscopy, the H&E tiles with histopathology.
+CELLBINDB_STAINS = ("DAPI", "ssDNA", "mIF")
+CELLBINDB_HE_STAIN = "HE"
 LPC_NUCSEG_SOURCES = ("gnf", "ic100")
 
 # Xenium is split by slide, shared by the nucleus and cell targets.
@@ -2483,27 +2489,30 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
 
     # 6. PanNuke (nucleus segmentation in H&E histopathology images)
-    # NOTE: fold_1 + fold_2 for training, split 80/20 for internal val, matching patho-sam's
-    # generalist training set. fold_3 is left untouched: it is the held-out benchmark test split
-    # used across patho-sam's own evaluation scripts.
-    # The full dataset is built twice (independent instances) so train and val get their own
-    # raw_transform, rather than a shared random_split Subset that would alias the two.
-    # patch_shape is requested at PanNuke's native 256x256, so torch_em's own padding is a no-op;
-    # _pannuke_random_resize_and_pad_trafo does the resize+pad up to 512x512 instead.
+    # NOTE: fold_1 and the first 80 % of the fold_2 tiles train, the last 20 % of the fold_2 tiles validate (a fixed
+    # tile partition, see PANNUKE_FOLD2_TRAIN_TILES). fold_3 is the blind benchmark split. patch_shape is requested
+    # at PanNuke's native 256x256, so torch_em's own padding is a no-op; _pannuke_random_resize_and_pad_trafo does
+    # the resize+pad up to 512x512 instead.
     pannuke_kwargs = {
-        "path": os.path.join(input_path, "pannuke"), "patch_shape": (1, 256, 256),
-        "download": True, "ndim": 2, "folds": ["fold_1", "fold_2"],
+        "path": os.path.join(input_path, "pannuke"), "patch_shape": (1, 256, 256), "download": True, "ndim": 2,
         **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
     }
-    pannuke_train_full = datasets.get_pannuke_dataset(**pannuke_kwargs)
-    pannuke_val_full = datasets.get_pannuke_dataset(**pannuke_kwargs)
-    pannuke_train_idx, pannuke_val_idx = train_test_split(
-        range(len(pannuke_train_full)), test_size=0.2, random_state=42,
-    )
     train_ds.append(
-        UniDataWrapper(torch.utils.data.Subset(pannuke_train_full, pannuke_train_idx), source_ndim=2)
+        UniDataWrapper(
+            datasets.get_pannuke_dataset(
+                folds=["fold_1", "fold_2"], rois={"fold_2": (PANNUKE_FOLD2_TRAIN_TILES, slice(None), slice(None))},
+                **pannuke_kwargs,
+            ), source_ndim=2,
+        )
     )
-    val_ds.append(UniDataWrapper(torch.utils.data.Subset(pannuke_val_full, pannuke_val_idx), source_ndim=2))
+    val_ds.append(
+        UniDataWrapper(
+            datasets.get_pannuke_dataset(
+                folds=["fold_2"], rois={"fold_2": (PANNUKE_FOLD2_VAL_TILES, slice(None), slice(None))},
+                **pannuke_kwargs,
+            ), source_ndim=2,
+        )
+    )
 
     # 7. PUMA (nucleus segmentation in H&E histopathology images)
     puma_kwargs = {"path": os.path.join(input_path, "puma"), "patch_shape": patch_shape, "download": True, **kwargs}
@@ -2666,6 +2675,24 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         ds_list.append(
             UniDataWrapper(
                 datasets.get_consep_dataset(split=split, n_samples=n_samples, **consep_kwargs), source_ndim=2
+            )
+        )
+
+    # 17. CellBinDB H&E (nucleus segmentation in H&E tiles of 512x512)
+    # NOTE: The H&E tiles of CellBinDB; split 80 / 10 / 10 at random (seed 42), the test tiles are blind.
+    cb_he_raw, cb_he_labels = datasets.cellbindb.get_cellbindb_paths(
+        path=os.path.join(input_path, "cellbindb"), data_choice=CELLBINDB_HE_STAIN,
+    )
+    (cb_he_train_r, cb_he_val_r, _), (cb_he_train_l, cb_he_val_l, _) = _train_val_test_split(cb_he_raw, cb_he_labels)
+    cb_he_kwargs = {"patch_shape": patch_shape, "is_seg_dataset": False, "ndim": 2, **kwargs}
+    for raws, labs, ds_list, n_samples in [
+        (cb_he_train_r, cb_he_train_l, train_ds, 150), (cb_he_val_r, cb_he_val_l, val_ds, 30)
+    ]:
+        ds_list.append(
+            UniDataWrapper(
+                torch_em.default_segmentation_dataset(
+                    raw_paths=raws, raw_key=None, label_paths=labs, label_key=None, n_samples=n_samples, **cb_he_kwargs,
+                ), source_ndim=2,
             )
         )
 
