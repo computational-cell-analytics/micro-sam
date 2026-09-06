@@ -407,3 +407,25 @@ AIS v4 is mixed (−2.0 % on average: dsb +9.0 %, gonuclear +9.4 %, livecell +1.
 deepbacs −30.1 %) and worsens humanneurons. APG beats AIS on every dataset except dynamicnuclearnet, as
 under v2. Note that deepbacs APG gained +28.5 % on its validation subset (section 14.1 vs the v2 control)
 but is flat on the test split.
+
+### 14.4 AIS with the optimized `hvit_t` defaults (2026-09-07, epoch A3 `e9d02380e340edfaccd30bf5cbf1bf03`)
+
+The AIS optimization campaign (`notes/AIS_V4_OPTIMIZATION.md`) promoted new `hvit_t` post-processing
+defaults into `micro_sam/v2/postprocessing.py`: images `sigma 1.0, min_size 50, boundary_magnitude_max 0.4`
+(the new instance filter that drops instances without a distance-magnitude dip along their boundary), volumes
+`min_size 100, sigma 0.5` (the registry values) with the same filter; everything else unchanged, the dense
+multicut untouched. The old values remain reachable as `optimization/configs/ais_control_v4_old_defaults.json`.
+
+Development / confirmation (cached predictions, `<root>/ais/`): 2D eleven-dataset development corpus balanced
+mSA 0.3357 → 0.3437 (+2.4 %, 9 up, worst −0.8 %), 2D holdout 0.2337 → 0.2437 (+4.3 %, 5 / 5 up), 3D LM crops
+primary 0.1765 → 0.1847 (+4.7 %), holdout 0.1998 → 0.2193 (+9.7 %), 3D test manifest (opened once) 0.1083 →
+0.1120 (+3.4 %, 6 / 6 up). `compare_apg_optimization.py --target quality` on the five primary datasets: macro
++3.9 % (primary) / +4.3 % (holdout), every dataset up, runtime within +2.9 % per dataset; the +5 % macro bar of
+that gate is not reached, the generalization gate of section 9 is.
+
+Production 2D test splits (`experiments/v4_geodesic_ais_optimization/results/`, tags `old-defaults` vs
+`a2-defaults`, `report_ais_production.py`): 21 of 23 datasets up, balanced 0.2735 → 0.2864 (+4.7 %); the twelve
+strictly unseen datasets 0.2104 → 0.2191 (+4.2 %, 10 up). Regressions: microbeseg 0.1420 → 0.1258 (−11.4 %,
+attributed by ablation to `sigma 1.0` alone) and arvidsson −0.8 %. Reference rows for the datasets of 14.3:
+livecell 0.2660, deepbacs 0.2319, dsb 0.4862, dynamicnuclearnet 0.5509 (AIS old: 0.2575 / 0.2056 / 0.4631 /
+0.5083). 3D LM production (tag `a3-defaults`): see the decision log once complete.
