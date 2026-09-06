@@ -1314,6 +1314,11 @@ def _resolve_z_blocking(z_block: Optional[int], z_halo: Optional[int]) -> Tuple[
     return z_block, z_halo
 
 
+def _n_output_channels(model) -> int:
+    """The decoder's output channel count: 4 (foreground and three distances) unless the model says otherwise."""
+    return int(getattr(model, "out_channels", 4))
+
+
 def _decode_volume_embeddings(
     model: torch.nn.Module,
     image_embeddings: Dict,
@@ -1362,7 +1367,7 @@ def _decode_volume_embeddings(
     z_block, z_halo = _resolve_z_blocking(z_block, z_halo)
 
     original_size = tuple(int(value) for value in np.asarray(image_embeddings["original_size"]).reshape(-1)[:2])
-    output = np.zeros((4, n_slices, *original_size), dtype="float32")
+    output = np.zeros((_n_output_channels(model), n_slices, *original_size), dtype="float32")
     jobs = []
     for z0 in range(0, n_slices, z_block):
         z1 = min(z0 + z_block, n_slices)
@@ -1431,7 +1436,7 @@ def _decode_tiled_2d_embeddings(
         The stitched decoder predictions, shape (4, Y, X): foreground and the three distance channels.
     """
     features, shape, halo, tiling = _tiled_metadata(image_embeddings, is_3d=False)
-    output = np.zeros((4, *shape), dtype="float32")
+    output = np.zeros((_n_output_channels(model), *shape), dtype="float32")
     jobs = []
     for tile_id in range(tiling.number_of_blocks):
         tile_features = features[str(tile_id)]
@@ -1521,7 +1526,7 @@ def _decode_tiled_3d_embeddings(
     n_slices = shape[0]
     z_block, z_halo = _resolve_z_blocking(z_block, z_halo)
     jobs = _tiled_3d_jobs(features, tiling, n_slices, z_block, z_halo)
-    output = np.zeros((4, *shape), dtype="float32")
+    output = np.zeros((_n_output_channels(model), *shape), dtype="float32")
 
     if pbar_init is not None:
         pbar_init(tiling.number_of_blocks * n_slices, "Automatic segmentation (tiles)")
@@ -1588,7 +1593,7 @@ def _decode_tiled_3d_slice(
     if not 0 <= index < n_slices:
         raise ValueError(f"The slice index must be in [0, {n_slices}), got {index}.")
 
-    output = np.zeros((4, *shape[1:]), dtype="float32")
+    output = np.zeros((_n_output_channels(model), *shape[1:]), dtype="float32")
     jobs = []
     for tile_id in range(tiling.number_of_blocks):
         tile_features = features[str(tile_id)]

@@ -3,8 +3,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from scipy.ndimage import binary_dilation
-
+from scipy.ndimage import binary_dilation, maximum_filter, minimum_filter
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 
@@ -277,7 +276,7 @@ def _joint_em_cell_label_trafo(y, label_trafo, ignore_label=None):
     """EM label transform for joint training - keeps instance IDs as channel 0.
 
     Like :func:`_em_cell_label_trafo` but returns
-    ``[instance_ids, expected_fg, d_x, d_y, d_z]`` (5 channels) instead of
+    ``[instance_ids, expected_fg, d_z, d_y, d_x]`` (5 channels) instead of
     dropping the instance channel. ``label_trafo`` must produce a 5-channel
     array (i.e. be a :class:`_JointLabelTransform` / ``instances=True``).
     """
@@ -294,30 +293,51 @@ def _joint_em_cell_label_trafo(y, label_trafo, ignore_label=None):
     return np.concatenate([instances[None], expected_fg[None], y[2:]], axis=0)
 
 
-def object_boundaries(labels: np.ndarray) -> np.ndarray:
-    """Return a dilated mask of all object boundaries.
+def touching_boundaries(labels: np.ndarray, radius: int = 1, dilation: int = 1) -> np.ndarray:
+    """The contact lines between touching objects.
 
-    The transform dilates each inner boundary once. The target includes isolated objects and objects that touch.
+    A pixel is a contact pixel if its ``(2 * radius + 1)`` neighbourhood holds two different non-zero labels.
+    Directly touching objects therefore contribute their two facing boundary lines, and a one pixel annotation
+    gap between two objects contributes the gap itself. Object interiors and background away from any pair of
+    objects are never contacts. The mask is then dilated by ``dilation`` pixels, so that the target is a few
+    pixels wide and learnable.
+
+    Args:
+        labels: The instance segmentation, 2d or 3d, any integer dtype.
+        radius: The neighbourhood radius in pixels.
+        dilation: The number of binary dilation passes applied to the contact mask.
+
+    Returns:
+        The boolean contact mask with the shape of ``labels``.
     """
-    boundary = find_boundaries(np.asarray(labels), mode="inner")
-    if boundary.any():
-        boundary = binary_dilation(boundary, iterations=1)
-    return boundary
+    labels = np.asarray(labels).astype("int64")
+    size = 2 * radius + 1
+    highest = maximum_filter(labels, size=size, mode="nearest")
+    # Background must not count as a label: send it above every id, so the minimum picks the smallest object id.
+    sentinel = labels.max() + 1
+    lowest = minimum_filter(np.where(labels > 0, labels, sentinel), size=size, mode="nearest")
+    # A neighbourhood with at least one object has a real minimum id; two different ids give lowest < highest.
+    contact = (highest > 0) & (lowest != highest)
+    if dilation > 0 and contact.any():
+        contact = binary_dilation(contact, iterations=dilation)
+    return contact
 
 
 class DirectedPerObjectBoundaryDistanceTransform:
-    """Compute directed-distance targets with an optional boundary channel.
+    """Per object directed distances with optional foreground, instance and contact channels.
 
-    The channel layout is ``[instance_ids?, foreground?, d_z, d_y, d_x, boundaries?]``.
+    Output layout along the channel axis: ``[instance_ids?, foreground?, d_z, d_y, d_x, contact?]``, i.e. the
+    optional instance channel comes first, the foreground mask second, then the three distance channels in axis
+    order and finally the optional contact channel (see :func:`touching_boundaries`).
 
     Args:
-        min_size: The minimum object size. The transform removes smaller objects.
-        foreground: The flag to prepend the binary foreground mask.
-        instances: The flag to prepend the instance IDs.
-        apply_label: The flag to relabel the input with connected components.
+        min_size: Objects smaller than this are removed before the transform.
+        foreground: Whether to prepend the binary foreground mask.
+        instances: Whether to prepend the instance ids (joint training).
+        apply_label: Whether to relabel the input with connected components.
         sampling: The voxel spacing for anisotropic data.
-        with_boundaries: The flag to append the full object-boundary mask.
-        n_threads: The number of threads for distance computation across objects.
+        contact: Whether to append the contact channel, the touching boundaries between objects.
+        contact_dilation: The dilation of the contact lines in pixels, see :func:`touching_boundaries`.
     """
     eps = 1e-7
 
@@ -328,8 +348,8 @@ class DirectedPerObjectBoundaryDistanceTransform:
         instances: bool = False,
         apply_label: bool = True,
         sampling: Optional[Tuple[float, ...]] = None,
-        with_boundaries: bool = False,
-        n_threads: int = 1,
+        contact: bool = False,
+        contact_dilation: int = 1,
     ):
         self.min_size = min_size
         self.n_threads = n_threads
@@ -338,7 +358,8 @@ class DirectedPerObjectBoundaryDistanceTransform:
         self.instances = instances
         self.apply_label = apply_label
         self.sampling = sampling
-        self.with_boundaries = with_boundaries
+        self.contact = contact
+        self.contact_dilation = contact_dilation
 
     def compute_normalized_directed_distances(self, labels, label_id, boundaries, bb, distances):
         """@private
@@ -425,9 +446,10 @@ class DirectedPerObjectBoundaryDistanceTransform:
         to_channel_first = (ndim,) + tuple(range(ndim))
         distances = distances.transpose(to_channel_first)
 
-        if self.with_boundaries:
-            boundaries = object_boundaries(labels).astype("float32")
-            distances = np.concatenate([distances, boundaries[None]], axis=0)
+        # Append the contact channel (touching boundaries) after the distances if specified.
+        if self.contact:
+            contact = touching_boundaries(labels, radius=1, dilation=self.contact_dilation).astype("float32")
+            distances = np.concatenate([distances, contact[None]], axis=0)
 
         # Add the foreground mask as first channel if specified.
         if self.foreground:
@@ -519,9 +541,9 @@ class GeodesicHybridDistanceTransform(DirectedPerObjectBoundaryDistanceTransform
 class _JointLabelTransform(DirectedPerObjectBoundaryDistanceTransform):
     """Distance transform for joint interactive + automatic training.
 
-    This transform sets ``instances=True`` by default.
-    The output layout is ``[instance_ids, foreground_mask, d_z, d_y, d_x, boundaries?]``.
-    Set ``with_boundaries=True`` to append the sixth channel.
+    Identical to :class:`DirectedPerObjectBoundaryDistanceTransform` but
+    defaults to ``instances=True`` so the output always has 5 channels:
+    ``[instance_ids, foreground_mask, d_z, d_y, d_x]`` (6 with ``contact=True``).
 
     The interactive branch uses channel 0 (cast to int64 as instance IDs)
     and the automatic branch uses channels 1 onward.
@@ -534,8 +556,11 @@ class _JointLabelTransform(DirectedPerObjectBoundaryDistanceTransform):
 class _JointGeodesicLabelTransform(GeodesicHybridDistanceTransform):
     """Geodesic hybrid distance transform for joint interactive + automatic training.
 
-    The output layout is ``[instance_ids, foreground_mask, d_z, d_y, d_x, boundaries?]``.
-    The directed distances come from the geodesic field around each object's center.
+    The :class:`GeodesicHybridDistanceTransform` counterpart of
+    :class:`_JointLabelTransform`: same 5-channel output
+    ``[instance_ids, foreground_mask, d_z, d_y, d_x]``, but the directed distances come from
+    the geodesic field around each object's center instead of the euclidean vector to the
+    nearest boundary.
     """
 
     def __init__(self, instances: bool = True, **kwargs):
