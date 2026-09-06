@@ -428,4 +428,5 @@ Production 2D test splits (`experiments/v4_geodesic_ais_optimization/results/`, 
 strictly unseen datasets 0.2104 → 0.2191 (+4.2 %, 10 up). Regressions: microbeseg 0.1420 → 0.1258 (−11.4 %,
 attributed by ablation to `sigma 1.0` alone) and arvidsson −0.8 %. Reference rows for the datasets of 14.3:
 livecell 0.2660, deepbacs 0.2319, dsb 0.4862, dynamicnuclearnet 0.5509 (AIS old: 0.2575 / 0.2056 / 0.4631 /
-0.5083). 3D LM production (tag `a3-defaults`): see the decision log once complete.
+0.5083). 3D LM production (tag `a3-defaults`): 9 of 10 datasets up, none down, balanced 0.1455 → 0.1507
+(+3.6 %; embedseg 0.4310, gonuclear 0.2873, plantseg 0.1469); the dense EM rows of 14.3 are unchanged.

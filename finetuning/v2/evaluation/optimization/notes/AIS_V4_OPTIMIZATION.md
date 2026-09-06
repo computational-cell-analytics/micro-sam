@@ -620,3 +620,30 @@ that lets it merge the jittering sinks of large cells everywhere else. This is t
 defaults; it is reported, not tuned away (the test split is not a tuning set). Against the §14.3 v4 numbers
 the new AIS defaults now beat the v2 AIS defaults on every dataset that was compared there (deepbacs
 0.2319 vs v2 0.2940 remains below v2).
+
+## Production, 3D LM test splits (2026-09-07 02:30; tags `old-defaults` vs `a3-defaults`, report `ais/reports/production_3d_old_vs_new.csv`)
+
+| dataset | old | new | change | | dataset | old | new | change |
+|---|---:|---:|---:|---|---|---:|---:|---:|
+| blastospim | 0.0644 | 0.0658 | +2.3 % | | mouse_embryo | 0.0341 | 0.0344 | +1.0 % |
+| cartocell | 0.0088 | 0.0088 | +0.2 % | | nis3d | 0.1037 | 0.1039 | +0.2 % |
+| celegans_atlas | 0.1118 | 0.1125 | +0.7 % | | plantseg | 0.1371 | 0.1469 | +7.2 % |
+| cellseg_3d | 0.0000 | 0.0000 | 0 (nothing matched either way) | | pnas_arabidopsis | 0.3160 | 0.3162 | +0.1 % |
+| embedseg | 0.4105 | 0.4310 | +5.0 % | | gonuclear | 0.2689 | 0.2873 | +6.8 % |
+
+**9 of 10 up, none down, balanced 0.1455 → 0.1507 (+3.6 %), gate passed.** The dense EM datasets are
+unchanged (their §14.3 numbers stand).
+
+## Status (2026-09-07 02:30)
+
+Done: Phases 0-4 and 6 of the plan, Phase 5 for the sparse pipeline (3D crops, holdout, test manifest).
+Promoted (epoch A3, commit 117f210 and the notes commits after it): `hvit_t` AIS defaults images
+`sigma 1.0, min_size 50, boundary_magnitude_max 0.4`, volumes `min_size 100, sigma 0.5` plus the filter;
+the new `drop_instances_without_boundary_dip` and the dimension-aware `default_postprocessing`. Every
+instrument of the protocol improved (2D dev +2.4 %, 2D holdout +4.3 %, 3D primary +4.7 %, 3D holdout
++9.7 %, 3D test manifest +3.4 %, production 2D +4.7 % with 21 / 23 up, production 3D LM +3.6 % with 9 / 10
+up). Known cost: microbeseg −11.4 % on its test split (sigma 1.0; a decision for the user), arvidsson −0.8 %.
+Open: Phase 5.3, the dense multicut (beta direction, oversegmentation granularity), and the C++ port of the
+filter is not needed (the numpy version is 3 ms per image). Unfinished ideas that did not pass and should
+not be retried without a sharper decoder field: seed floors, decoder-consistency merge, relative /
+particle-count seeds, trajectory assignment, direction ridges (numbers above).
