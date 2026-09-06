@@ -4,7 +4,7 @@ import ast
 import csv
 import warnings
 from glob import glob
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import xxhash
 import numpy as np
@@ -21,6 +21,11 @@ from torch_em.util.segmentation import size_filter
 
 from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 from micro_sam.v2.normalization import normalize_raw
+from micro_sam.v2.datasets.generalist_loader import (
+    ASTIH_SUBSETS, AXONEM_TEST_VOLUMES, AXONEM_VAL_VOLUMES, FAFB_TEST_BOXES, FAFB_VAL_BOXES, FIB25_TEST_SAMPLE,
+    LICONN_ROI, MALECNS_TEST_BOXES, MALECNS_VAL_BOXES, TUMOR_SPHEROID_TEST_SLICES, TUMOR_SPHEROID_VAL_SLICES,
+    WILDENBERG_P105_BOX, XPRESS_CORE, ZEBRAFINCH_J0126_BOX, ZEBRAFINCH_J0251_TEST_BOXES, ZEBRAFINCH_J0251_VAL_BOXES,
+)
 
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
@@ -80,6 +85,9 @@ def _joint_export_root() -> str:
     return os.environ.get("MICRO_SAM2_JOINT_EXPORT_ROOT", os.path.join(_MODELS_DIR, "exported", "joint", "v2"))
 
 
+# HPA is evaluated on the microtubules, nuclei and ER channels, stacked in that order.
+HPA_CHANNELS = ("raw/microtubules", "raw/nuclei", "raw/er")
+
 DATASETS_2D_LM = [
     "livecell",
     "arvidsson", "bitdepth_nucseg", "cellbindb", "cellpose_data",
@@ -98,7 +106,11 @@ DATASETS_2D_HP_ID = [
 DATASETS_2D_HP_OOD = ["cytodark0", "deepliif", "khoshdeli", "panoptils", "pcns"]
 DATASETS_HP = DATASETS_2D_HP_ID + DATASETS_2D_HP_OOD
 
-DATASETS_2D = DATASETS_2D_LM + DATASETS_HP
+# Electron microscopy. The 2d sets are ASTIH (myelinated axons, neurite category) and the tumor spheroid slices
+# (cell category); their splits and the 3d regions below come from the generalist loader constants.
+DATASETS_2D_EM = ["astih", "tumor_spheroid"]
+
+DATASETS_2D = DATASETS_2D_LM + DATASETS_HP + DATASETS_2D_EM
 
 # Ground-truth size floor that drops the crop-severed slivers relabelling promotes to objects. It
 # defines the ground truth, so it is measured, never tuned.
@@ -113,14 +125,26 @@ DATASETS_3D_LM = [
     "gonuclear", "mouse_embryo", "nis3d", "plantseg", "pnas_arabidopsis",
 ]
 
-DATASETS_3D_EM = ["platynereis_nuclei", "cremi", "snemi", "humanneurons"]
+# Neurite segmentation: the blind in-domain regions of the v5 training sets (see EM_ROIS and the path resolver) and
+# the out-of-domain sets. humanneurons is the cached H01 crop. synapseweb is scored inside its annotated cores only.
+DATASETS_3D_EM_NEURITE_ID = [
+    "cremi", "snemi", "axonem", "fafb", "fib25", "hemibrain", "manc", "malecns", "wafer4", "minnie65",
+    "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress",
+]
+DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "humanneurons", "synapseweb"]
+# Cell segmentation: Platynereis volume 9 and the DenseCell val volume are blind; the tumor spheroid slices are 2d.
+DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell"]
+
+DATASETS_3D_EM = (
+    ["platynereis_nuclei"] + DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_OOD + DATASETS_3D_EM_CELL_ID
+)
+DATASETS_EM = DATASETS_2D_EM + DATASETS_3D_EM
 
 DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
-# The EM datasets that segment densely packed neurons need the dense (multicut) pipeline and are
-# ranked by the CREMI score. platynereis_nuclei is EM but segments sparse, blob-shaped nuclei, so it
-# stays on the sparse (flow) pipeline and mSA ranking like the LM datasets, despite the EM modality.
-DATASETS_DENSE = [name for name in DATASETS_3D_EM if name != "platynereis_nuclei"]
+# The neurite datasets need the dense (multicut) pipeline and are ranked by the CREMI score. The EM cell datasets and
+# platynereis_nuclei segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
+DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_OOD
 
 # The split to tune on, or None where the loader has no splits and VAL_Z_RANGE holds out a z-slab.
 # A dataset whose 'val' is the evaluated split is absent: tuning there would select on scored samples.
@@ -141,11 +165,19 @@ VAL_SPLITS = {
     "yeaz": "val",
     "neurips_cellseg": "val",
     "gonuclear": None,
-    "cremi": None,
-    "snemi": None,
     "platynereis_nuclei": None,
     "humanneurons": None,
 }
+
+# EM: None means the tuning data is a different region (EM_ROIS) or different files (see _get_3d_em_data_paths) of
+# the same dataset, both disjoint from the blind test region. fib25 has no validation data and is not listed.
+VAL_SPLITS.update({
+    name: None for name in (
+        "cremi", "snemi", "axonem", "fafb", "hemibrain", "manc", "malecns", "wafer4", "minnie65",
+        "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress", "platynereis_cells", "densecell",
+        "astih", "tumor_spheroid",
+    )
+})
 
 # Histopathology tuning splits. The 'val' splits are the loader's validation data, 'train' is used where a
 # dataset has no val split (cpm17, monuseg, glysac); both are disjoint from the scored test split. pannuke
@@ -159,11 +191,49 @@ VAL_SPLITS.update({
 # The tuning slab for volumes with no splits, disjoint from the slab the evaluation scores. Indices
 # count from what load_volume keeps, so snemi starts at slice 70, and gonuclear skips its sparse start.
 VAL_Z_RANGE = {
-    "cremi": (0, 32),
-    "snemi": (0, 8),
     "gonuclear": (32, 96),
     "humanneurons": (0, 16),
 }
+
+# The regions of the EM volumes the evaluation scores ('test', blind for training) and the parameter search tunes on
+# ('val', the loader's validation region), as (z, y, x) slices in the cached volume. Datasets whose test and tuning
+# data are different files (cremi, axonem, fafb, malecns, minnie65, zebrafinch_j0251) are resolved by path instead.
+EM_ROIS = {
+    "snemi": {"test": np.s_[80:, :, :], "val": np.s_[60:80, :, :]},
+    "hemibrain": {"test": np.s_[820:, :, :], "val": np.s_[700:820, :, :]},
+    "manc": {"test": np.s_[820:, :, :], "val": np.s_[700:820, :, :]},
+    "wafer4": {"test": np.s_[100:, :, :], "val": np.s_[80:100, :, :]},
+    "wildenberg": {"test": np.s_[120:, :, :], "val": np.s_[100:120, :, :]},
+    "zebrafinch_j0126": {"test": np.s_[512:, :, :], "val": np.s_[448:512, :, :]},
+    "liconn": {"test": (slice(576, 640), *LICONN_ROI[1:]), "val": (slice(512, 576), *LICONN_ROI[1:])},
+    "xpress": {"test": (slice(308, 328), *XPRESS_CORE[1:]), "val": (slice(288, 308), *XPRESS_CORE[1:])},
+    "cremi": {"test": np.s_[:, :, :], "val": np.s_[100:, :, :]},
+    # Volume 9 (test) and volumes 7-8 (val) are read inside the bounding boxes of their labelled cells.
+    "platynereis_cells": {"test": np.s_[10:110, 128:1152, 128:1152], "val": np.s_[:, :, :]},
+    "densecell": {"test": np.s_[:, :, :], "val": np.s_[35:, :, :]},
+}
+
+# SynapseWeb is annotated in an irregular core of each volume; these are the bounding boxes of the dense cores.
+SYNAPSEWEB_CORE_ROIS = {
+    "spine": np.s_[0:42, 768:1984, 1024:1984],
+    "oblique": np.s_[5:75, 896:3584, 1344:3328],
+    "apical": np.s_[5:111, 192:3776, 320:4032],
+}
+
+
+def em_roi(dataset_name: str, label_path: str, split: str):
+    """The (z, y, x) roi of one EM volume for the 'test' or 'val' region, or None to read it whole."""
+    if dataset_name == "axonem":
+        # Only a central block of each volume is annotated; its bounding box is cached next to the labels.
+        import json
+        with open(label_path.replace(".h5", "_roi.json")) as f:
+            return tuple(slice(a, b) for a, b in json.load(f)["roi"])
+    if dataset_name == "synapseweb":
+        region = os.path.basename(label_path).replace("synapseweb_hippocampus_", "").replace(".h5", "")
+        return SYNAPSEWEB_CORE_ROIS[region]
+    rois = EM_ROIS.get(dataset_name)
+    return None if rois is None else rois[split]
+
 
 # platynereis_nuclei has 12 volumes, all of which the evaluation reads in full (crop centered on each
 # volume's own depth), so tuning cannot afford to sweep every volume: instead of an equal z-slab like
@@ -325,6 +395,29 @@ def _get_2d_data_paths(
     if dataset_name in DATASETS_HP:
         return _get_hp_data_paths(dataset_name, p, download, split)
 
+    if dataset_name == "astih":
+        # The 4 official test images; tuning uses the loader's 80/20 val part of the 22 train images.
+        if split == "test":
+            paths = datasets.electron_microscopy.astih.get_astih_paths(
+                path=os.path.join(p, "astih"), name=ASTIH_SUBSETS, split="test", download=download,
+            )
+        else:
+            from sklearn.model_selection import train_test_split
+            train_paths = datasets.electron_microscopy.astih.get_astih_paths(
+                path=os.path.join(p, "astih"), name=ASTIH_SUBSETS, split="train", download=download,
+            )
+            paths = train_test_split(train_paths, test_size=0.2, random_state=42)[1]
+        return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "tumor_spheroid":
+        paths, raw_key, label_key = datasets.electron_microscopy.tumor_spheroid_em.get_tumor_spheroid_paths(
+            os.path.join(p, "tumor_spheroid_em"), source="2d_manual", resolution="50-50-50", target="cells",
+            download=download,
+        )
+        names = TUMOR_SPHEROID_TEST_SLICES if split == "test" else TUMOR_SPHEROID_VAL_SLICES
+        paths = [path for path in paths if os.path.basename(path) in names]
+        return paths, paths, raw_key, label_key
+
     if dataset_name == "livecell":
         img, gt = _get_livecell_paths(input_folder=os.path.join(p, "livecell"), split=split)
         img, gt = drop_excluded_livecell(img, gt)
@@ -409,8 +502,7 @@ def _get_2d_data_paths(
         paths = datasets.hpa.get_hpa_segmentation_paths(
             path=os.path.join(p, "hpa"), split="val", download=download,
         )
-        # protein channel for cell body segmentation (peft-sam convention)
-        return sorted(paths), sorted(paths), "raw/protein", "labels"
+        return sorted(paths), sorted(paths), HPA_CHANNELS, "labels"
 
     if dataset_name == "microbeseg":
         img, gt = datasets.microbeseg.get_microbeseg_paths(
@@ -575,7 +667,9 @@ def _get_3d_lm_data_paths(
 def _get_3d_em_data_paths(
     dataset_name: str, data_root: str, download: bool = False, is_val: bool = False
 ) -> Tuple[List[str], List[str], Optional[str], Optional[str]]:
+    """The 3d EM datasets. 'is_val' selects the tuning files where they differ from the test files."""
     p = data_root
+    em = datasets.electron_microscopy
 
     if dataset_name == "platynereis_nuclei":
         # The val split restricts to the 3 richest sample ids, see PLATYNEREIS_NUCLEI_VAL_SAMPLES.
@@ -585,24 +679,120 @@ def _get_3d_em_data_paths(
         )
         return paths, paths, "volumes/raw", "volumes/labels/nucleus_instance_labels"
 
-    if dataset_name == "cremi":
-        # The joint training used samples A and B, so only C is held out.
-        paths = datasets.cremi.get_cremi_paths(
-            path=os.path.join(p, "cremi"), samples=("C",), download=download,
+    if dataset_name == "platynereis_cells":
+        # Volume 9 is the blind test set, volumes 7 and 8 validate; the neuropil carries the ignore label.
+        sample_ids = [7, 8] if is_val else [9]
+        paths = em.platynereis.prepare_platynereis_cell_data(
+            os.path.join(p, "platynereis"), sample_ids=sample_ids, download=download,
         )
+        return paths, paths, "volumes/raw/s1", em.platynereis.get_platynereis_cell_label_key()
+
+    if dataset_name == "cremi":
+        samples = ("A", "B") if is_val else ("C",)
+        paths = datasets.cremi.get_cremi_paths(path=os.path.join(p, "cremi"), samples=samples, download=download)
         return sorted(paths), sorted(paths), "volumes/raw", "volumes/labels/neuron_ids"
 
     if dataset_name == "snemi":
-        # The test file has no labels, so the holdout is the part of the train file that the joint
-        # training did not use, see load_volume.
-        path = datasets.snemi.get_snemi_paths(
-            path=os.path.join(p, "snemi"), sample="train", download=download,
-        )
+        path = datasets.snemi.get_snemi_paths(path=os.path.join(p, "snemi"), sample="train", download=download)
         return [path], [path], "volumes/raw", "volumes/labels/neuron_ids"
 
+    if dataset_name == "axonem":
+        raw, labels = em.axonem.get_axonem_paths(
+            path=os.path.join(p, "axonem"), samples=("human", "mouse"), download=download,
+        )
+        names = AXONEM_VAL_VOLUMES if is_val else AXONEM_TEST_VOLUMES
+        keep = [i for i, path in enumerate(labels) if os.path.basename(path) in names]
+        return [raw[i] for i in keep], [labels[i] for i in keep], "main", "main"
+
+    if dataset_name == "fafb":
+        boxes = FAFB_VAL_BOXES if is_val else FAFB_TEST_BOXES
+        paths = em.fafb.get_fafb_paths(path=os.path.join(p, "fafb"), bounding_boxes=boxes, download=download)
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "fib25":
+        raw, labels = em.fib25.get_fib25_paths(
+            path=os.path.join(p, "fib25"), samples=(FIB25_TEST_SAMPLE,), download=download,
+        )
+        return raw, labels, "raw", "neuron_ids"
+
+    if dataset_name == "hemibrain":
+        paths = em.hemibrain.get_hemibrain_paths(path=os.path.join(p, "hemibrain"), download=download)
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "manc":
+        paths = em.manc.get_manc_paths(path=os.path.join(p, "manc"), download=download)
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "malecns":
+        boxes = MALECNS_VAL_BOXES if is_val else MALECNS_TEST_BOXES
+        paths = em.malecns.get_malecns_paths(path=os.path.join(p, "malecns"), bounding_boxes=boxes, download=download)
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "wafer4":
+        raw, labels = em.wafer4.get_wafer4_paths(path=os.path.join(p, "wafer4"), download=download)
+        return [raw], [labels], "main", "main"
+
+    if dataset_name == "minnie65":
+        paths = em.microns.get_microns_minnie65_paths(
+            path=os.path.join(p, "microns-minnie65"), split="val" if is_val else "test", download=download,
+        )
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "zebrafinch_j0126":
+        path = em.zebrafinch.get_zebrafinch_data(
+            os.path.join(p, "zebrafinch"), bounding_box=ZEBRAFINCH_J0126_BOX, mip=0, dataset="j0126", download=download,
+        )
+        return [path], [path], "raw", "labels"
+
+    if dataset_name == "zebrafinch_j0251":
+        # The loader constants are mip-0 voxels; torch-em takes nm (10 x 10 x 25 nm at mip 0).
+        boxes = ZEBRAFINCH_J0251_VAL_BOXES if is_val else ZEBRAFINCH_J0251_TEST_BOXES
+        paths = [
+            em.zebrafinch.get_zebrafinch_data(
+                os.path.join(p, "zebrafinch"), bounding_box=tuple(v * r for v, r in zip(box, (10, 10, 10, 10, 25, 25))),
+                mip=0, dataset="j0251", download=download,
+            ) for box in boxes
+        ]
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "wildenberg":
+        paths = em.wildenberg.get_wildenberg_paths(
+            path=os.path.join(p, "wildenberg2023"), experiments=("p105",), label_choice="saturated",
+            bounding_box=WILDENBERG_P105_BOX, download=download,
+        )
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "liconn":
+        path = datasets.light_microscopy.liconn.get_liconn_paths(
+            path=os.path.join(p, "liconn"), segmentation="proofread", download=download,
+        )
+        return [path], [path], "raw", "seg_proofread"
+
+    if dataset_name == "xpress":
+        raw, labels = datasets.light_microscopy.xpress.get_xpress_paths(
+            path=os.path.join(p, "xpress"), download=download,
+        )
+        return [raw], [labels], "raw", "labels"
+
+    if dataset_name == "densecell":
+        # The val volume is the blind test set; the top 15 sections of the train volume are the tuning data.
+        path = em.densecell.get_densecell_paths(
+            path=os.path.join(p, "densecell"), split="train" if is_val else "val", download=download,
+        )
+        em.densecell._add_cell_instances(path)
+        return [path], [path], "raw", em.densecell.CELL_INSTANCE_KEY
+
+    if dataset_name == "isbi2012":
+        path = em.isbi2012.get_isbi_paths(path=os.path.join(p, "isbi2012"), download=download)
+        return [path], [path], "raw", "labels/gt_segmentation"
+
     if dataset_name == "humanneurons":
-        # Resolved directly: the installed torch-em has no loader for this dataset.
+        # The cached H01 crop. Resolved directly: it predates the torch-em loader for this dataset.
         paths = sorted(glob(os.path.join(p, "humanneurons", "*.h5")))
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "synapseweb":
+        paths = sorted(glob(os.path.join(p, "synapseweb_hippocampus", "synapseweb_hippocampus_*.h5")))
         return paths, paths, "raw", "labels"
 
     raise ValueError(f"Unknown 3D EM dataset: {dataset_name!r}")
@@ -652,6 +842,20 @@ def _center_crop_roi(shape, crop_shape):
     return tuple(roi)
 
 
+def _read_window(shape, roi, z_range, crop_shape):
+    """Compose a dataset roi, a z-slab and the center crop into one tuple of slices on the stored array."""
+    roi = tuple(slice(None) for _ in shape) if roi is None else roi
+    starts, sizes = [], []
+    for axis, (extent, sl) in enumerate(zip(shape, roi)):
+        start, stop, _ = sl.indices(extent)
+        if axis == 0 and z_range is not None:
+            start, stop = start + z_range[0], min(stop, start + z_range[1])
+        starts.append(start)
+        sizes.append(stop - start)
+    crop = _center_crop_roi(sizes, crop_shape)
+    return tuple(slice(start + c.start, start + c.stop) for start, c in zip(starts, crop))
+
+
 def load_volume(
     raw_path: str,
     label_path: str,
@@ -662,46 +866,40 @@ def load_volume(
     ensure_8bit: bool = True,
     ensure_instances: bool = True,
     z_range: Optional[Tuple[int, int]] = None,
+    split: str = "test",
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
 
-    valid_roi is a boolean mask that is True where the data is annotated. It is None for every
-    dataset except platynereis_nuclei, which is annotated only in part.
+    valid_roi is a boolean mask that is True where the data is annotated. It is None except for the datasets
+    that are annotated only in part (platynereis_nuclei, platynereis_cells, synapseweb).
 
-    'z_range' restricts the volume to a z-slab before the center crop, which is how a dataset without
-    splits holds tuning data out of the evaluated slab. See VAL_Z_RANGE.
+    'split' selects the test or the tuning region of the EM volumes, see EM_ROIS. 'z_range' restricts the
+    volume to a z-slab before the center crop, which is how a dataset without splits holds tuning data out
+    of the evaluated slab. See VAL_Z_RANGE.
     """
-    if raw_key is None:
-        raw = load_image(raw_path)
-    else:
-        raw = open_file(raw_path, mode="r")[raw_key][:]
-
-    if label_key is None:
-        labels = load_image(label_path)
-    else:
-        labels = open_file(label_path, mode="r")[label_key][:]
-
-    if dataset_name == "snemi":
-        # Training used slices [0:70], so only slices 70+ are held out.
-        raw, labels = raw[70:], labels[70:]
-
-    if z_range is not None:
-        z_start, z_stop = z_range
-        raw, labels = raw[z_start:z_stop], labels[z_start:z_stop]
+    # Only the scored region is read: the dataset roi, the z-slab and the center crop are composed into one
+    # window first, so the multi-gigavoxel connectome volumes are never loaded whole.
+    raw_source = load_image(raw_path) if raw_key is None else open_file(raw_path, mode="r")[raw_key]
+    label_source = load_image(label_path) if label_key is None else open_file(label_path, mode="r")[label_key]
+    window = _read_window(label_source.shape, em_roi(dataset_name, label_path, split), z_range, crop_shape)
+    raw, labels = np.asarray(raw_source[window]), np.asarray(label_source[window])
 
     valid_roi = None
     if dataset_name == "platynereis_nuclei":
         labels = labels.astype("int64")
         valid_roi = labels != -1
         labels[labels == -1] = 0
+    elif dataset_name == "platynereis_cells":
+        # The neuropil is not resolved into cells and carries the ignore label; it is excluded from scoring.
+        ignore = labels == datasets.electron_microscopy.platynereis.CELL_IGNORE_LABEL
+        valid_roi = ~ignore
+        labels[ignore] = 0
+    elif dataset_name == "synapseweb":
+        # Annotation covers only part of the core, so the unlabelled voxels are excluded from scoring.
+        valid_roi = labels != 0
 
     if ensure_8bit:
         raw = normalize_raw(raw) * 255.0
-
-    roi = _center_crop_roi(raw.shape, crop_shape)
-    raw, labels = raw[roi], labels[roi]
-    if valid_roi is not None:
-        valid_roi = valid_roi[roi]
 
     # Restrict to the annotated z-range. Interior empty slices stay, or the volume is not contiguous.
     annotated = np.any(labels != 0, axis=tuple(range(1, labels.ndim)))
@@ -818,6 +1016,7 @@ DATASET_SPACING: dict = {
     "embedseg": (4, 1, 1),  # Mouse-Skull-Nuclei-CBG: z=1µm, xy=0.25µm
     "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
+    "densecell": (5, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels
 }
 
 
@@ -1255,13 +1454,15 @@ def read_tuned_params(
     return params
 
 
-def _check_key(path: str, key: Optional[str], kind: str) -> None:
+def _check_key(path: str, key: Optional[Union[str, Tuple[str, ...]]], kind: str) -> None:
     if key is None:
         return
+    keys = key if isinstance(key, tuple) else (key,)
     try:
         with open_file(path, mode="r") as f:
-            if key not in f:
-                raise RuntimeError(f"Missing {kind} key '{key}' in '{path}'.")
+            for k in keys:
+                if k not in f:
+                    raise RuntimeError(f"Missing {kind} key '{k}' in '{path}'.")
     except Exception as e:
         raise RuntimeError(f"Could not open {kind} data key '{key}' in '{path}': {e}") from e
 
@@ -1341,7 +1542,13 @@ def ensure_8bit_range(raw):
 
 
 def read_2d(path, key):
-    """Read a 2d array from an image file, or from an H5 / zarr file using 'key'."""
+    """Read a 2d array from an image file, or from an H5 / zarr file using 'key'.
+
+    A tuple of keys reads one channel per key and stacks them channel-last.
+    """
+    if isinstance(key, tuple):
+        with open_file(path, mode="r") as f:
+            return np.stack([f[k][:] for k in key], axis=-1)
     if key is not None:
         arr = open_file(path, mode="r")[key][:]
     else:
@@ -1521,17 +1728,21 @@ def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_
     # Normalize before cropping, so that the percentiles cover the whole image.
     image = ensure_8bit_range(read_2d(raw_path, raw_key))
     roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
-    gt = connected_components(read_2d(label_path, label_key)[roi]).astype("uint32")
+    labels = read_2d(label_path, label_key)[roi]
+    if dataset_name == "astih":
+        # Semantic labels (1 myelin, 2 axon); the instances are the axon class, as in training.
+        labels = labels == 2
+    gt = connected_components(labels).astype("uint32")
     return image[roi], drop_severed_objects(gt, GT_MIN_SIZE_2D.get(dataset_name, 0))
 
 
 def load_evaluation_sample_3d(
     raw_path, label_path, raw_key, label_key, dataset_name,
-    crop_shape=CROP_SHAPE_3D, z_range=None, min_size=0,
+    crop_shape=CROP_SHAPE_3D, z_range=None, min_size=0, split="test",
 ):
     """Load one volumetric sample the way the evaluation scores it."""
     raw, labels, valid_roi = load_volume(
-        raw_path, label_path, raw_key, label_key, dataset_name, crop_shape, z_range=z_range
+        raw_path, label_path, raw_key, label_key, dataset_name, crop_shape, z_range=z_range, split=split
     )
     return raw, apply_min_size(labels, min_size, dataset_name), valid_roi
 
@@ -1565,7 +1776,7 @@ def load_data(dataset_name, data_root, ndim, min_size=0, split="test", crop_shap
             sample_z_range = platynereis_nuclei_val_z_range(raw_path) if per_sample_z_range else z_range
             yield load_evaluation_sample_3d(
                 raw_path, label_path, raw_key, label_key, dataset_name,
-                crop_shape=crop_shape or CROP_SHAPE_3D, z_range=sample_z_range, min_size=min_size,
+                crop_shape=crop_shape or CROP_SHAPE_3D, z_range=sample_z_range, min_size=min_size, split=split,
             )
         else:
             image, gt = load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name)

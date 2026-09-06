@@ -32,7 +32,7 @@ from skimage.measure import label as connected_components
 import torch
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_EM,
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_EM,
     check_data_download, interactive_result_name, interactive_run_tag, load_data, n_samples,
     run_dataset_evaluation,
 )
@@ -46,7 +46,7 @@ SAM_V1_MODEL_TYPE = "vit_b"
 MICROSAM_V1_LM_MODEL = "vit_b_lm"
 MICROSAM_V1_EM_MODEL = "vit_b_em_organelles"
 
-EM_DATASETS = set(DATASETS_3D_EM)
+EM_DATASETS = set(DATASETS_EM)
 
 
 def _get_largest_region_center(mask):

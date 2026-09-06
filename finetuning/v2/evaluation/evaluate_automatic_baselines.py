@@ -28,13 +28,13 @@ from tqdm import tqdm
 import torch
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_3D_EM,
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_EM,
     GT_MIN_SIZE_2D, check_data_download, drop_severed_objects, load_data, n_samples,
     run_dataset_evaluation,
 )
 
 LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
-EM_DATASETS = set(DATASETS_3D_EM)
+EM_DATASETS = set(DATASETS_EM)
 METHODS = ["cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron"]
 
 SEGNEURON_ROOT = "/mnt/vast-nhr/home/archit/u12090/SegNeuron"
