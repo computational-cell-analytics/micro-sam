@@ -1,0 +1,8 @@
+{
+  "name": "s0-travel-12p5",
+  "mode": "auto",
+  "params_2d": {
+    "n_iter": 25,
+    "dt": 0.5
+  }
+}
