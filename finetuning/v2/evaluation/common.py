@@ -471,6 +471,14 @@ NEURIPS_FLUORESCENCE_IMAGES = {
 }
 
 
+# The PCNS patch ids whose TCGA patient also provides a MoNuSeg training image (pcns_crosswalk.txt: patients
+# TCGA-38-6178, TCGA-49-4488, TCGA-CH-5767, TCGA-G2-A2EK, TCGA-G9-6336 and TCGA-G9-6363), left out of the OOD test.
+PCNS_MONUSEG_PATCHES = (41, 42, 498, 511, 512, 794, 821, 822)
+
+# The Lizard source cohorts that are independent of our other training data, see the lizard path resolver.
+LIZARD_SCORED_SOURCES = ("crag", "dpath", "glas")
+
+
 def deepbacs_is_fluorescence(path: str) -> bool:
     """Whether a DeepBacs 'mixed' image is fluorescence: the Nile Red S. aureus and the B. subtilis families."""
     name = os.path.basename(path)
@@ -532,6 +540,9 @@ def _get_hp_data_paths(
 
     if dataset_name == "lizard":
         paths = datasets.lizard.get_lizard_paths(path=os.path.join(p, "lizard"), split=split, download=download)
+        # The test split also holds CoNSeP images and images stitched from PanNuke tiles of all folds, both of which
+        # train (CoNSeP directly, PanNuke folds 1 and 2), so only the crag, dpath and glas images are scored.
+        paths = [path for path in paths if os.path.basename(path).split("_")[0] in LIZARD_SCORED_SOURCES]
         return sorted(paths), sorted(paths), "image", "labels/segmentation"
 
     if dataset_name == "lizard_mitosis":
@@ -609,6 +620,8 @@ def _get_hp_data_paths(
 
     if dataset_name == "pcns":
         paths = datasets.pcns.get_pcns_paths(path=os.path.join(p, "pcns"), split=split, download=download)
+        # Patches cut from the TCGA slides or patients of MoNuSeg training images, see PCNS_MONUSEG_PATCHES.
+        paths = [path for path in paths if int(os.path.splitext(os.path.basename(path))[0]) not in PCNS_MONUSEG_PATCHES]
         return sorted(paths), sorted(paths), "raw", "labels/instances"
 
     raise ValueError(f"Unknown histopathology dataset: {dataset_name!r}")
