@@ -1137,7 +1137,6 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
         cremi_kwargs = {
             "path": os.path.join(input_path, "cremi"),
             "patch_shape": (z, *patch_shape),
-            "n_samples": max(1, 500 // n_z),
             "label_transform2": (
                 partial(_em_label_trafo, label_trafo=label_trafo(instances=True, sampling=(10, 1, 1)))
                 if label_trafo is not None else kwargs.get("label_transform2")
@@ -1152,16 +1151,20 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]}
         }
 
-        train_ds.append(
-            UniDataWrapper(
-                datasets.get_cremi_dataset(samples=("A", "B"), **cremi_kwargs), source_ndim=3, group_key=(3, z)
+        # Sample C is the blind in-domain test set (shared with NeuronSeg); the last 25 of the 125 sections of
+        # A and B validate.
+        for rois, ds_list, n_samples in [
+            ({"A": np.s_[:100, :, :], "B": np.s_[:100, :, :]}, train_ds, 500),
+            ({"A": np.s_[100:, :, :], "B": np.s_[100:, :, :]}, val_ds, 50),
+        ]:
+            ds_list.append(
+                UniDataWrapper(
+                    datasets.get_cremi_dataset(
+                        samples=("A", "B"), rois=rois, n_samples=max(1, n_samples // n_z), **cremi_kwargs
+                    ),
+                    source_ndim=3, group_key=(3, z),
+                )
             )
-        )
-        val_ds.append(
-            UniDataWrapper(
-                datasets.get_cremi_dataset(samples=("C", ), **cremi_kwargs), source_ndim=3, group_key=(3, z)
-            )
-        )
 
     # 2. EMNeuron (neuron segmentation in vEM)
     # NOTE: Large neurons - use min_num_instances=1 (same reasoning as CREMI).
@@ -1286,9 +1289,16 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             ),
             # The neuropil ignore label is not an instance, so the sampler must not count it.
             "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0, PLATY_IGNORE_LABEL]),
+            # Volumes 7 and 8 hold an unannotated tissue band (12 % and 8 % of the roi) next to the labelled
+            # cells; it maps to the ignore label instead of being trained as background. Volumes 1-6 are fully
+            # labelled, so the transform leaves them unchanged.
+            "transform": partial(
+                _ignore_unlabelled_blobs_trafo, ignore_label=PLATY_IGNORE_LABEL, min_area=2000,
+                transform=get_augmentations(ndim=3),
+            ),
             # get_platynereis_cell_dataset concatenates one dataset per volume, so n_samples is per volume.
             "n_samples": max(1, 500 // (n_z * len(platy_train_ids))),
-            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]}
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler", "transform"]}
         }
 
         train_ds.append(
@@ -1309,8 +1319,10 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
         )
 
     # 4. SNEMI (neuron segmentation in vEM)
-    snemi_train_rois = np.s_[:70, :, :]
-    snemi_val_rois = np.s_[70:, :, :]
+    # The official test volume has no public labels, so the 100 training sections split into train, val and a
+    # blind test slab: z < 60, 60 <= z < 80, z >= 80.
+    snemi_train_rois = np.s_[:60, :, :]
+    snemi_val_rois = np.s_[60:80, :, :]
 
     for z in z_slices:
         snemi_kwargs = {
@@ -1379,8 +1391,9 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     axonem_raw_paths = [p for p, lp in zip(axonem_raw_paths, axonem_label_paths) if lp in axonem_rois]
     axonem_label_paths = [lp for lp in axonem_label_paths if lp in axonem_rois]
     axonem_val = [p for p in axonem_label_paths if os.path.basename(p) in AXONEM_VAL_VOLUMES]
-    axonem_train = [p for p in axonem_label_paths if p not in axonem_val]
-    assert len(axonem_val) == len(AXONEM_VAL_VOLUMES), axonem_val
+    axonem_test = [p for p in axonem_label_paths if os.path.basename(p) in AXONEM_TEST_VOLUMES]
+    axonem_train = [p for p in axonem_label_paths if p not in axonem_val + axonem_test]
+    assert len(axonem_val) == len(AXONEM_VAL_VOLUMES) and len(axonem_test) == len(AXONEM_TEST_VOLUMES)
 
     for z in z_slices:
         axonem_kwargs = {
@@ -1471,7 +1484,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
         )
 
     # 9. FIB-25 (neuron segmentation in FIB-SEM of the Drosophila medulla, 8 nm isotropic)
-    # NOTE: All three volumes are used; validation is the top fifth of z of validation_sample, cut out with rois.
+    # NOTE: training_sample2 and validation_sample train, tstvol-520-1 stays blind; FIB-25 adds no validation leaf.
     for z in z_slices:
         fib25_kwargs = {
             "path": os.path.join(input_path, "fib25"),
@@ -1488,23 +1501,14 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
         }
         train_ds.append(
             UniDataWrapper(
-                datasets.get_fib25_dataset(
-                    samples=FIB25_SAMPLES, rois=FIB25_TRAIN_ROIS, n_samples=max(1, 500 // n_z), **fib25_kwargs
-                ), source_ndim=3, group_key=(3, z),
-            )
-        )
-        val_ds.append(
-            UniDataWrapper(
-                datasets.get_fib25_dataset(
-                    samples=("validation_sample",), rois=[np.s_[416:, :, :]], n_samples=max(1, 50 // n_z),
-                    **fib25_kwargs
-                ), source_ndim=3, group_key=(3, z),
+                datasets.get_fib25_dataset(samples=FIB25_TRAIN_SAMPLES, n_samples=max(1, 500 // n_z), **fib25_kwargs),
+                source_ndim=3, group_key=(3, z),
             )
         )
 
     # 10. Hemibrain (neuron segmentation in FIB-SEM of the Drosophila central brain, 8 nm isotropic)
     # NOTE: One cached 1024^3 crop (torch_em's default box), ~99% of voxels labelled, proofread. Same pipeline as
-    # MANC and MaleCNS. Validation is the top fifth of z, cut out of training with rois.
+    # MANC and MaleCNS.
     for z in z_slices:
         hemibrain_kwargs = {
             "path": os.path.join(input_path, "hemibrain"),
@@ -1519,7 +1523,8 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
             **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
         }
-        for roi, ds_list, n_samples in [(np.s_[:820, :, :], train_ds, 500), (np.s_[820:, :, :], val_ds, 50)]:
+        # Of the 1024 sections, z < 700 train, 700 <= z < 820 validate and z >= 820 stay blind.
+        for roi, ds_list, n_samples in [(np.s_[:700, :, :], train_ds, 500), (np.s_[700:820, :, :], val_ds, 50)]:
             ds_list.append(
                 UniDataWrapper(
                     datasets.get_hemibrain_dataset(rois=[roi], n_samples=max(1, n_samples // n_z), **hemibrain_kwargs),
@@ -1529,7 +1534,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
 
     # 11. MANC (neuron segmentation in FIB-SEM of the Drosophila male adult nerve cord, 8 nm isotropic)
     # NOTE: A separate specimen from MaleCNS (bucket flyem-vnc-2-26), so the two do not overlap. One cached
-    # 1024^3 crop (torch_em's default box); validation is the top fifth of z, cut out of training with rois.
+    # 1024^3 crop (torch_em's default box).
     for z in z_slices:
         manc_kwargs = {
             "path": os.path.join(input_path, "manc"),
@@ -1543,7 +1548,8 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
             **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
         }
-        for roi, ds_list, n_samples in [(np.s_[:820, :, :], train_ds, 500), (np.s_[820:, :, :], val_ds, 50)]:
+        # Of the 1024 sections, z < 700 train, 700 <= z < 820 validate and z >= 820 stay blind.
+        for roi, ds_list, n_samples in [(np.s_[:700, :, :], train_ds, 500), (np.s_[700:820, :, :], val_ds, 50)]:
             ds_list.append(
                 UniDataWrapper(
                     datasets.get_manc_dataset(rois=[roi], n_samples=max(1, n_samples // n_z), **manc_kwargs),
@@ -1553,7 +1559,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
 
     # 12. MaleCNS (neuron segmentation in FIB-SEM of the whole Drosophila male CNS, 8 nm isotropic)
     # NOTE: Six 1024^3 crops streamed from GCS, placed by probing the segmentation density along the
-    # brain-neck-VNC axis (MALECNS_TRAIN_BOXES); one VNC crop is the validation set.
+    # brain-neck-VNC axis; four train, one VNC crop validates and the neck connective crop stays blind.
     for z in z_slices:
         malecns_kwargs = {
             "path": os.path.join(input_path, "malecns"),
@@ -1625,39 +1631,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 15. SynapseWeb hippocampus (axon, dendrite and glia instances in ssTEM of rat CA1, ~2x2x50 nm)
-    # NOTE: Only an irregular core of each volume is annotated, so each is cropped to its dense core and the
-    # sampler rejects patches with less than half their pixels labelled.
-    for z in z_slices:
-        synapseweb_kwargs = {
-            "path": os.path.join(input_path, "synapseweb_hippocampus"),
-            "patch_shape": (z, *patch_shape),
-            "download": True,
-            "ndim": 3,
-            "label_transform2": (
-                partial(_em_label_trafo, label_trafo=label_trafo(instances=True, sampling=(25, 1, 1)))
-                if label_trafo is not None else kwargs.get("label_transform2")
-            ),
-            "sampler": DenseInstanceSampler(min_num_instances=3, min_fraction=0.5),
-            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
-        }
-        train_ds.append(
-            UniDataWrapper(
-                datasets.get_synapseweb_hippocampus_dataset(
-                    regions=("spine", "apical"), rois=SYNAPSEWEB_CORE_ROIS, n_samples=max(1, 300 // n_z),
-                    **synapseweb_kwargs
-                ), source_ndim=3, group_key=(3, z),
-            )
-        )
-        val_ds.append(
-            UniDataWrapper(
-                datasets.get_synapseweb_hippocampus_dataset(
-                    regions=("oblique",), rois=SYNAPSEWEB_CORE_ROIS, n_samples=max(1, 50 // n_z), **synapseweb_kwargs
-                ), source_ndim=3, group_key=(3, z),
-            )
-        )
-
-    # 16. MICrONS pinky (hand-annotated neuron instances in ssEM of mouse visual cortex, 4x4x40 nm)
+    # 15. MICrONS pinky (hand-annotated neuron instances in ssEM of mouse visual cortex, 4x4x40 nm)
     # NOTE: Each file is cropped to the bounding box of 'volumes/mask', the annotated region inside padded
     # context. Only the neuropil blocks are used; basil splits nucleus and cytoplasm into separate ids.
     pinky_root = os.path.join(input_path, "microns", "pinky")
@@ -1684,7 +1658,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 17. Zebrafinch j0126 (neuron segmentation in FIB-SEM of zebra finch Area X, 10x10x20 nm, Kornfeld lab)
+    # 16. Zebrafinch j0126 (neuron segmentation in FIB-SEM of zebra finch Area X, 10x10x20 nm, Kornfeld lab)
     # NOTE: Somata, vessels and missing tiles carry no id, so unlabelled blobs above 2 um^2 map to the ignore
     # label. The last fifth of z validates. j0251 (10x10x25 nm) uses boxes placed by a tissue scan, since
     # torch_em's cached boxes sit at the empty volume corner.
@@ -1714,7 +1688,8 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0, MISSING_RAW_IGNORE_LABEL]),
             **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler", "transform"]},
         }
-        for roi, ds_list, n_samples in [(np.s_[:512, :, :], train_ds, 500), (np.s_[512:, :, :], val_ds, 50)]:
+        # Of the 640 cached sections, z < 448 train, 448 <= z < 512 validate and z >= 512 stay blind.
+        for roi, ds_list, n_samples in [(np.s_[:448, :, :], train_ds, 500), (np.s_[448:512, :, :], val_ds, 50)]:
             ds_list.append(
                 UniDataWrapper(
                     datasets.get_zebrafinch_dataset(
@@ -1744,7 +1719,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                     )
                 )
 
-    # 18. Wildenberg 2023 (dense automated segmentation of all processes in FIB-SEM of mouse V1 layer 4, 12x12x40 nm)
+    # 17. Wildenberg 2023 (dense automated segmentation of all processes in FIB-SEM of mouse V1 layer 4, 12x12x40 nm)
     # NOTE: The 'saturated' channel labels every process and soma. The box must be given explicitly, the module
     # default would stream the full 120 x 136 x 36 um experiment.
     for z in z_slices:
@@ -1763,7 +1738,8 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
             **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
         }
-        for roi, ds_list, n_samples in [(np.s_[:120, :, :], train_ds, 300), (np.s_[120:, :, :], val_ds, 50)]:
+        # Of the 150 cached sections, z < 100 train, 100 <= z < 120 validate and z >= 120 stay blind.
+        for roi, ds_list, n_samples in [(np.s_[:100, :, :], train_ds, 300), (np.s_[100:120, :, :], val_ds, 50)]:
             ds_list.append(
                 UniDataWrapper(
                     datasets.get_wildenberg_dataset(
@@ -1773,9 +1749,10 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 19. DenseCell (platelet cells in SBF-SEM of human platelet tissue, 10x10x50 nm)
+    # 18. DenseCell (platelet cells in SBF-SEM of human platelet tissue, 10x10x50 nm)
     # NOTE: The source labels are a semantic mask; torch-em derives and caches 3D cell instances
-    # (label_choice 'cell_instances'). The test split is sparsely annotated and not used.
+    # (label_choice 'cell_instances'). The train volume splits into z < 35 for training and z >= 35 for validation;
+    # the val volume is the blind in-domain test set. The test split is sparsely annotated and not used.
     for z in z_slices:
         densecell_kwargs = {
             "path": os.path.join(input_path, "densecell"),
@@ -1790,23 +1767,27 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
             **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
         }
-        for split, ds_list, n_samples in [("train", train_ds, 200), ("val", val_ds, 40)]:
+        for roi, ds_list, n_samples in [(np.s_[:35, :, :], train_ds, 200), (np.s_[35:, :, :], val_ds, 40)]:
             ds_list.append(
                 UniDataWrapper(
-                    datasets.get_densecell_dataset(split=split, n_samples=max(1, n_samples // n_z), **densecell_kwargs),
+                    datasets.get_densecell_dataset(
+                        split="train", rois=roi, n_samples=max(1, n_samples // n_z), **densecell_kwargs
+                    ),
                     source_ndim=3, group_key=(3, z),
                 )
             )
 
-    # 20. Tumor spheroid EM (FaDu tumor spheroid cells in SBF-SEM, 20 manually annotated 2D slices at 50 nm)
+    # 19. Tumor spheroid EM (FaDu tumor spheroid cells in SBF-SEM, 20 manually annotated 2D slices at 50 nm)
     # NOTE: 2D data. The 100 nm set is the same 20 slices downsampled and is not used; the 3D zarr holds automated
-    # segmentation only. Validation is the two deepest z slices, training the other 18 (5 x, 5 y, 8 z).
+    # segmentation only. Our split: 14 slices train, 2 z slices validate, 4 slices stay blind (see the constants).
     spheroid_paths, spheroid_raw_key, spheroid_label_key = datasets.tumor_spheroid_em.get_tumor_spheroid_paths(
         os.path.join(input_path, "tumor_spheroid_em"), source="2d_manual", resolution="50-50-50", target="cells",
         download=True,
     )
     spheroid_val = [p for p in spheroid_paths if os.path.basename(p) in TUMOR_SPHEROID_VAL_SLICES]
-    spheroid_train = [p for p in spheroid_paths if p not in spheroid_val]
+    spheroid_test = [p for p in spheroid_paths if os.path.basename(p) in TUMOR_SPHEROID_TEST_SLICES]
+    spheroid_train = [p for p in spheroid_paths if p not in spheroid_val + spheroid_test]
+    assert len(spheroid_train) == 14 and len(spheroid_val) == 2 and len(spheroid_test) == 4
     spheroid_kwargs = {
         "patch_shape": patch_shape,
         "label_transform2": (
@@ -1827,7 +1808,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             )
         )
 
-    # 21. NISB (synthetic neuron instance segmentation benchmark, 27 um cubes at 9x9x20 nm)
+    # 20. NISB (synthetic neuron instance segmentation benchmark, 27 um cubes at 9x9x20 nm)
     # NOTE: The base setting's five training cubes; the last cube validates, since the official val and test cubes
     # are not cached. Synthetic labels are dense by construction.
     nisb_paths = datasets.nisb.get_nisb_paths(os.path.join(input_path, "nisb"), setting="base", split="train")
@@ -1862,13 +1843,14 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
 # Cached boxes in nm; both modules would otherwise default to far larger regions.
 ZEBRAFINCH_J0126_BOX = (0, 51200, 0, 51200, 0, 12800)
 # j0251 boxes in mip-0 voxels (x0, x1, y0, y1, z0, z1) at 10x10x25 nm, converted to nm at use.
+# Our 3 / 1 / 1 split of the five density-verified j0251 boxes; the mid-depth box (z 7500) is the blind test set.
 ZEBRAFINCH_J0251_TRAIN_BOXES = [
     (6656, 8704, 15360, 17408, 3000, 3256),
     (23040, 25088, 1792, 3840, 3000, 3256),
-    (9472, 11520, 15360, 17408, 7500, 7756),
     (12544, 14592, 20992, 23040, 12000, 12256),
 ]
 ZEBRAFINCH_J0251_VAL_BOXES = [(24576, 26624, 3072, 5120, 12000, 12256)]
+ZEBRAFINCH_J0251_TEST_BOXES = [(9472, 11520, 15360, 17408, 7500, 7756)]
 WILDENBERG_P105_BOX = (576, 24576, 576, 24576, 160, 6160)
 
 # Bounding boxes of 'volumes/mask' (the annotated region) as (z, y, x) slices.
@@ -1881,55 +1863,55 @@ PINKY_TRAIN_FILES = ["pinky_stitched_vol19-vol34_realigned.h5", "pinky_stitched_
 PINKY_VAL_FILES = ["pinky_vol401.h5"]
 
 
-class DenseInstanceSampler:
-    """Accept a patch only if it holds enough instances and enough labelled pixels."""
-
-    def __init__(self, min_num_instances, min_fraction):
-        self.instances = MinInstanceSampler(min_num_instances=min_num_instances, exclude_ids=[0])
-        self.min_fraction = min_fraction
-
-    def __call__(self, x, y):
-        return self.instances(x, y) and (y > 0).mean() >= self.min_fraction
-
-
-# SynapseWeb dense cores as (z, y, x) slices: bounding boxes of the region with coarse labelled density > 0.4.
-SYNAPSEWEB_CORE_ROIS = {
-    "spine": np.s_[0:42, 768:1984, 1024:1984],
-    "oblique": np.s_[5:75, 896:3584, 1344:3328],
-    "apical": np.s_[5:111, 192:3776, 320:4032],
-}
-
 # MaleCNS 1024^3 crops in 8 nm voxel coordinates. z runs from the brain through the neck connective into the VNC.
+# Our 4 / 1 / 1 split of the six density-verified boxes; the neck connective box is the blind in-domain test set,
+# a region no other dataset in the pool covers.
 MALECNS_TRAIN_BOXES = [
     (40000, 41024, 40000, 41024, 20000, 21024),  # brain, torch_em default
     (38912, 39936, 19456, 20480, 15000, 16024),  # brain
     (81920, 82944, 33792, 34816, 35000, 36024),  # brain, far lateral
-    (49152, 50176, 51200, 52224, 55000, 56024),  # neck connective
     (63488, 64512, 57344, 58368, 75000, 76024),  # VNC
 ]
 MALECNS_VAL_BOXES = [(40960, 41984, 50176, 51200, 95000, 96024)]  # VNC
+MALECNS_TEST_BOXES = [(49152, 50176, 51200, 52224, 55000, 56024)]  # neck connective
 
-FIB25_SAMPLES = ("training_sample2", "validation_sample", "tstvol-520-1")
-FIB25_TRAIN_ROIS = [np.s_[:, :, :], np.s_[:416, :, :], np.s_[:, :, :]]
+# training_sample2 and validation_sample train in full, tstvol-520-1 is the blind in-domain test set. All three are
+# at 8 nm; the training sample is only a smaller cube (250^3), not a coarser one.
+FIB25_TRAIN_SAMPLES = ("training_sample2", "validation_sample")
+FIB25_TEST_SAMPLE = "tstvol-520-1"
 
 PLATY_IGNORE_LABEL = datasets.platynereis.CELL_IGNORE_LABEL
 
 # Mouse volumes 0-0-0, 0-0-3584 and 0-3584-3584 are soma blocks with 1, 10 and 4 ids; this threshold drops them.
 AXONEM_MIN_IDS = 50
+# Our split of the 15 usable blocks: human 6 / 1 / 2 and mouse 3 / 1 / 2 (train / val / blind test).
 AXONEM_VAL_VOLUMES = ("seg_950-3584-3584_pad.h5", "seg_700-3584-3584_pad.h5")
+AXONEM_TEST_VOLUMES = (
+    "seg_950-0-3584_pad.h5", "seg_950-3584-0_pad.h5",  # human
+    "seg_700-0-3584_pad.h5", "seg_700-3584-0_pad.h5",  # mouse
+)
 
 # Voxels of missing raw data are mapped to this label and excluded from the loss.
 MISSING_RAW_IGNORE_LABEL = datasets.platynereis.CELL_IGNORE_LABEL
 
 # FAFB crops in 16 nm voxel coordinates, 1024x1024x410 voxels each, chosen inside brain tissue with dense
 # segmentation at three depths (torch_em's DEFAULT_BOUNDING_BOXES). One mid-depth central crop is the validation set.
+# Of torch-em's nine tissue-verified boxes, the left dorsal mid-depth box validates and the midline ventral anterior
+# box is the blind in-domain test set (the only ventral-anterior fly brain region in the pool); the other seven train.
 FAFB_VAL_BOXES = [(24576, 25600, 11776, 12800, 3500, 3910)]
-FAFB_TRAIN_BOXES = [box for box in datasets.fafb.DEFAULT_BOUNDING_BOXES if box not in FAFB_VAL_BOXES]
+FAFB_TEST_BOXES = [(32768, 33792, 18944, 19968, 1500, 1910)]
+FAFB_TRAIN_BOXES = [
+    box for box in datasets.fafb.DEFAULT_BOUNDING_BOXES if box not in FAFB_VAL_BOXES + FAFB_TEST_BOXES
+]
 
 ASTIH_SUBSETS = ["SEM1", "BF1", "BF2"]
 
-# The two deepest z slices of the tumor spheroid volume; x, y and the other z slices train.
-TUMOR_SPHEROID_VAL_SLICES = ("Au_01-vol_01-z_0212.h5", "Au_01-vol_01-z_0274.h5")
+# Our 14 / 2 / 4 split of the 20 manually annotated tumor spheroid slices: the two z slices below validate,
+# the deepest x, y and two z slices are the blind in-domain test set, the other 14 train.
+TUMOR_SPHEROID_VAL_SLICES = ("Au_01-vol_01-z_0180.h5", "Au_01-vol_01-z_0192.h5")
+TUMOR_SPHEROID_TEST_SLICES = (
+    "Au_01-vol_01-x_1300.h5", "Au_01-vol_01-y_1606.h5", "Au_01-vol_01-z_0212.h5", "Au_01-vol_01-z_0274.h5"
+)
 
 # The last of the five NISB base training cubes validates.
 NISB_VAL_CUBES = ("seed4",)
