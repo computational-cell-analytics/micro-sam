@@ -9,6 +9,10 @@ from bioimage_cpp.distance import distance_transform, geodesic_distance_field, v
 from bioimage_cpp.segmentation import label as connected_components, relabel_sequential
 
 
+# Written into the foreground target channel, which otherwise holds 0 or 1, for voxels without ground truth.
+FOREGROUND_IGNORE_VALUE = -1
+
+
 def _instance_labels(labels):
     """Relabel each connected region as a unique integer instance.
 
@@ -31,7 +35,9 @@ def _axondeepseg_pre_label_transform(y):
     return connected_components(y == 2).astype("uint32")
 
 
-def _em_cell_label_trafo(y, label_trafo):
+def _em_cell_label_trafo(y, label_trafo, ignore_label=None):
+    # Take the ignore mask before label_trafo, which replaces the instance ids with distances.
+    ignore = None if ignore_label is None else np.asarray(y) == ignore_label
     y = label_trafo(y)
 
     # Prepare the true background.
@@ -39,7 +45,9 @@ def _em_cell_label_trafo(y, label_trafo):
 
     bd = find_boundaries(instances.astype("uint32"), mode="outer").astype("uint8")
     fg = (instances > 0).astype("uint8")
-    expected_fg = (fg & ~bd).astype("uint8")
+    expected_fg = (fg & ~bd).astype("float32")
+    if ignore is not None:
+        expected_fg[ignore] = FOREGROUND_IGNORE_VALUE
 
     expected_y = np.concatenate([expected_fg[None], y[2:]], axis=0)
 
@@ -63,19 +71,27 @@ def _plantseg_label_trafo(y, data, label_trafo):
     return y
 
 
-def _joint_em_cell_label_trafo(y, label_trafo):
+def _joint_em_cell_label_trafo(y, label_trafo, ignore_label=None):
     """EM label transform for joint training - keeps instance IDs as channel 0.
 
     Like :func:`_em_cell_label_trafo` but returns
     ``[instance_ids, expected_fg, d_x, d_y, d_z]`` (5 channels) instead of
     dropping the instance channel. ``label_trafo`` must produce a 5-channel
     array (i.e. be a :class:`_JointLabelTransform` / ``instances=True``).
+
+    Voxels equal to ``ignore_label`` are marked with ``FOREGROUND_IGNORE_VALUE`` in the foreground channel
+    and removed from the instance channel, so neither branch trains on them.
     """
+    ignore = None if ignore_label is None else np.asarray(y) == ignore_label
     y = label_trafo(y)  # (5, H, W) or (5, Z, H, W)
     instances = y[0]
     bd = find_boundaries(instances.astype("uint32"), mode="outer").astype("uint8")
     fg = (instances > 0).astype("uint8")
-    expected_fg = (fg & ~bd).astype("uint8")
+    expected_fg = (fg & ~bd).astype("float32")
+    if ignore is not None:
+        expected_fg[ignore] = FOREGROUND_IGNORE_VALUE
+        # Channel 0 feeds the interactive branch, which samples objects from it (largest first).
+        instances = np.where(ignore, 0, instances)
     return np.concatenate([instances[None], expected_fg[None], y[2:]], axis=0)
 
 
