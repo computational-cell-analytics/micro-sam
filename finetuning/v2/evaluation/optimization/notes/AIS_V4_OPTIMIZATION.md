@@ -647,3 +647,14 @@ Open: Phase 5.3, the dense multicut (beta direction, oversegmentation granularit
 filter is not needed (the numpy version is 3 ms per image). Unfinished ideas that did not pass and should
 not be retried without a sharper decoder field: seed floors, decoder-consistency merge, relative /
 particle-count seeds, trajectory assignment, direction ridges (numbers above).
+
+
+## Follow-up screen: seed floors on the promoted defaults (2026-09-07)
+
+Epoch A4 `184eba917bd0cff28b5719b5584f6967`: opt-in keyword `seed_floor` ('none' default, 'zero', 'ring') in
+`flow_instance_segmentation`, implemented by `lower_height_under_seeds` (mirrored in the harness and the
+sweep scorer, default path unchanged). Rationale: the monotone flooding lets a seed on a height peak lose its
+object (the merge mechanism); the earlier floor test on the old defaults failed because it also released the
+spurious seeds, which the promoted defaults (sigma 1.0, filter 0.4) now remove. Screen `f2_floor`: floors
+zero / ring, each with the promoted size floor and with min_size 100, against the promoted defaults, on
+v5 primary / training_extra / holdout and apg3d primary / holdout (trial `f2-1`, one node per manifest).
