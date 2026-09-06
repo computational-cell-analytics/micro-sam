@@ -322,7 +322,11 @@ decoder predictions per manifest sample under `<root>/ais/predictions/`, `run` /
 `oracle` / `report` work on the cache), task builder `optimization/ais_campaign_tasks.py`, configurations
 `optimization/configs/ais_*.json`, decision log `notes/AIS_V4_OPTIMIZATION.md`. The AIS implementation
 checksum covers five files (the benchmark, `common.py`, `parameter_search.py`,
-`micro_sam/v2/{instance_segmentation, postprocessing}.py`); first epoch `f57b117edfda5420d9df761b1db4db2d`.
+`micro_sam/v2/{instance_segmentation, postprocessing}.py`). AIS epochs: `f57b117edfda5420d9df761b1db4db2d`
+(frozen Phase 0 harness) → `5700c6e0f471b360013551a442b1e53d` (harness only: refined loss decomposition
+columns) → `a65e2eb08c23538f11544860736961a3` (epoch A1, 2026-09-06: opt-in `boundary_magnitude_max`
+filter in `micro_sam/v2/postprocessing.py`, default off; the cached sweep scorer applies it). Decision
+log and results: `notes/AIS_V4_OPTIMIZATION.md`.
 
 ## 14. Baseline results of the cleaned harness (2026-09-06)
 

@@ -351,3 +351,28 @@ def test_oracle_sample_recovers_ground_truth_with_gt_seeds_and_foreground(geodes
     assert summary.loc["toy", "gain_gt_seeds_gt_fg"] == pytest.approx(
         row["msa_gt_seeds_gt_fg"] / row["msa_baseline"] - 1.0
     )
+
+
+def test_rank_shared_flags_gate_against_the_reference():
+    import report_ais_sweep as rs
+
+    grid = pd.DataFrame({"sigma": [0.5, 1.0, 0.5, 1.0], "boundary_magnitude_max": [np.nan, np.nan, 0.4, 0.4]})
+    tables = {}
+    msa = {"a": [0.50, 0.48, 0.55, 0.54], "b": [0.30, 0.31, 0.33, 0.30], "c": [0.20, 0.22, 0.22, 0.10]}
+    for dataset, scores in msa.items():
+        table = grid.copy()
+        table["n_images"], table["msa_mean"], table["msa_std"] = 5, scores, 0.0
+        tables[dataset] = table
+    ranked = rs.rank_shared(tables, reference={"sigma": 0.5, "boundary_magnitude_max": None})
+    ranked = ranked.set_index(["sigma", "boundary_magnitude_max"])
+    # The reference row: no change, not passing.
+    assert ranked.loc[(0.5, "none"), "balanced_gain"] == pytest.approx(0.0)
+    assert not ranked.loc[(0.5, "none"), "passed"]
+    # sigma 0.5 with the filter improves every dataset by at least 10 %: passes.
+    assert ranked.loc[(0.5, 0.4), "passed"] and ranked.loc[(0.5, 0.4), "n_up"] == 3
+    assert ranked.loc[(0.5, 0.4), "rel_c"] == pytest.approx(0.10)
+    # sigma 1.0 with the filter halves dataset c: fails the loss limit despite the balanced gain.
+    assert not ranked.loc[(1.0, 0.4), "passed"]
+    assert ranked["mean_relative_optimum"].max() <= 1.0
+    with pytest.raises(ValueError, match="matches 0 rows"):
+        rs.rank_shared(tables, reference={"sigma": 2.0, "boundary_magnitude_max": None})
