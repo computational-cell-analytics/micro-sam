@@ -130,12 +130,15 @@ def implementation_checksum() -> str:
 # configurations
 
 
-def resolve_postprocessing(overrides: Optional[Dict[str, Any]], model_type: str) -> Dict[str, Dict[str, Any]]:
+def resolve_postprocessing(
+    overrides: Optional[Dict[str, Any]], model_type: str, ndim: int = 2,
+) -> Dict[str, Dict[str, Any]]:
     """The sparse and dense parameters a run uses, with 'overrides' on top of the library defaults.
 
     A flat dict is read as sparse overrides; the nested form ``{"sparse": {...}, "dense": {...}}`` sets
-    both. The result is what `flow_instance_segmentation` / `run_multicut` receive, so a run without
-    overrides is exactly the library default and shares its run directory with an explicit copy of it.
+    both. 'ndim' selects the image or volume defaults. The result is what `flow_instance_segmentation` /
+    `run_multicut` receive, so a run without overrides is exactly the library default and shares its run
+    directory with an explicit copy of it.
     """
     overrides = dict(overrides or {})
     if set(overrides) & {"sparse", "dense"}:
@@ -149,8 +152,8 @@ def resolve_postprocessing(overrides: Optional[Dict[str, Any]], model_type: str)
     if unknown_sparse or unknown_dense:
         raise ValueError(f"Unknown AIS parameters: sparse={sorted(unknown_sparse)}, dense={sorted(unknown_dense)}.")
     return {
-        "sparse": {**default_postprocessing(model_type, "sparse"), **sparse},
-        "dense": {**default_postprocessing(model_type, "dense"), **dense},
+        "sparse": {**default_postprocessing(model_type, "sparse", ndim=ndim), **sparse},
+        "dense": {**default_postprocessing(model_type, "dense", ndim=ndim), **dense},
     }
 
 
@@ -168,9 +171,9 @@ def load_config(path: Optional[Path], model_type: str) -> Tuple[str, str, Dict[s
     if mode not in MODES:
         raise ValueError(f"Unknown mode '{mode}'; expected one of {MODES}.")
     name = config.get("name", path.stem if path is not None else "current-defaults")
-    params_2d = resolve_postprocessing(config.get("params_2d", {}), model_type)
-    # Without its own overrides a volume takes the image ones: the library has one default table.
-    params_3d = resolve_postprocessing(config.get("params_3d", config.get("params_2d", {})), model_type)
+    params_2d = resolve_postprocessing(config.get("params_2d", {}), model_type, ndim=2)
+    # Without its own overrides a volume takes the image overrides, over the library's volume defaults.
+    params_3d = resolve_postprocessing(config.get("params_3d", config.get("params_2d", {})), model_type, ndim=3)
     return str(name), mode, params_2d, params_3d
 
 
@@ -1012,7 +1015,7 @@ def sweep_dataset(
     contexts = [sample_context(sample, manifest["kind"], mode) for sample in samples]
     postproc_mode = contexts[0]["postprocessing_mode"]
     # The grid keys the sweep did not name stay at the library defaults, and the row records them.
-    defaults = default_postprocessing(model_type, postproc_mode)
+    defaults = default_postprocessing(model_type, postproc_mode, ndim=contexts[0]["ndim"])
     combinations = [{**defaults, **combo} for combo in grid_combinations(grid, postproc_mode)]
     if num_shards > 1:
         combinations = combinations[shard_index::num_shards]

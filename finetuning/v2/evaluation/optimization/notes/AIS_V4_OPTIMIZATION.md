@@ -385,3 +385,111 @@ Reading: the boundary filter is a generalizing improvement (never below −0.1 %
 where it splits large objects. The shared-default sweep (`configs/ais_grid_lm_v4.json`, 1728
 combinations over the eleven 2D datasets; a reduced grid over the six 3D LM sources) decides the
 combination.
+
+## Phase 4: shared-default sweep, 2D (2026-09-06 21:40, jobs 15767181 / 15767182, ranking `ais/reports/a1_sweep_dev_ranking.csv`)
+
+Grid `configs/ais_grid_lm_v4.json` (1728 combinations: foreground 0.4-0.7, density 5-50, size floor
+25 / 50 / 100, sigma 0.5 / 1.0, travel 25 / 400 px, foreground weight 0.25 / 0.5 / 0.75, filter off / 0.4 /
+0.6) scored on every image of the eleven development datasets from the cache (`sweep`, 8-20 s per
+image). `report_ais_sweep.py` ranks the combinations as shared defaults against the library defaults.
+**7 of 1728 pass the gate**; all seven keep foreground 0.5, density 10, foreground weight 0.5 and use
+sigma 1.0.
+
+| combination (changes to the defaults) | balanced | gain | up / 11 | worst | per dataset |
+|---|---:|---:|---:|---:|---|
+| defaults | 0.3357 | | | | |
+| filter 0.4 | 0.3404 | +1.4 % | 9 | −0.1 % | deepseas +24, dic +11, deepbacs +4, neurips +4 |
+| sigma 1.0 | 0.3420 | +1.9 % | 8 | −1.3 % (tnbc) | deepbacs +10, deepseas +30, livecell +2.9, neurips +6, tissuenet −1.2 |
+| min_size 50 | 0.3333 | −0.7 % | 2 | −13.5 % | tissuenet +9.7, everything else down: the lower floor alone admits the small spurious seeds |
+| sigma 1.0 + min_size 50 | 0.3430 | +2.2 % | 9 | −1.1 % | tissuenet +6.4 (the smoothing removes the spurious seeds the lower floor would keep) |
+| **C1: sigma 1.0 + min_size 50 + filter 0.4** | **0.3437** | **+2.4 %** | **9** | **−0.8 % (tnbc)** | covid −0.2, deepbacs +12.7, deepseas +31.9, dic +59.6, dnn +0.4, livecell +3.1, neurips +4.4, puma +0.4, tissuenet +6.3, tnbc −0.8, yeaz +0.5 |
+| C1 + travel 400 | 0.3437 | +2.4 % | 6 | −0.8 % | deepbacs +17.4, tissuenet +8.8, livecell +4.0, dnn +1.1; deepseas +20, five datasets −0.0 to −0.8 |
+| sigma 1.0 + travel 400 + filter 0.4 (size floor 100) | 0.3431 | +2.2 % | 9 | −0.5 % | |
+
+The best by mean ratio to each dataset's optimum (0.878) is foreground 0.4 / filter 0.6, which fails the
+gate (6 up); C1 is second (0.877). Reading: the sweep changes the *interpretation* of the seeding rather
+than its logic: a wider smoothing of the convergence density (sigma 1.0) merges the jittering sinks of a
+large cell into one seed and drops the isolated one-pixel seeds (tissuenet's were 1 px), which is what
+the seed floors and the merge rule tried and failed to do structurally; with those gone the size floor can
+follow the ground-truth floors (50), and the boundary filter removes the remaining false regions. Travel
+to convergence is neutral in 2D (same balanced, more datasets marginally down); the 3D sweep decides it.
+
+Confirmation (job `a1_confirmation`, one task per manifest, trial `timing-1`, control and candidates on
+the same node): `configs/ais_c1_sigma1_ms50_filter0p4.json`, `ais_c1_t400.json`, `ais_c3_sigma1_ms50.json`
+on v5 primary / training_extra / holdout and apg3d primary / holdout.
+
+## Phase 4: shared-default sweep, 3D LM crops (2026-09-06 22:15, job 15767263, ranking `ais/reports/a1_sweep_3d_primary_ranking.csv`)
+
+Grid `configs/ais_grid_lm3d_v4.json` (576 combinations; size floor 50 / 100 / 200 voxels, foreground
+weight fixed at 0.5) on the six sparse LM sources of the 57 primary deep crops. **22 of 576 pass the gate**
+(all six sources up in the best of them). Balanced over the six sources, defaults 0.1714:
+
+| combination (changes to the defaults) | balanced | gain | up / 6 | worst | celegans | platy_ish | platy_nuclei | skull | gonuclear | platynereis |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| C1 (sigma 1.0, min_size 50, filter 0.4) | 0.1804 | +5.3 % | 3 | −6.1 % | −6.1 | −0.3 | −0.7 | +27 | +8.7 | +43 |
+| sigma 1.0, filter 0.4 (min_size 100) | 0.1910 | +11.4 % | 5 | −5.8 % | −5.8 | +2.5 | +0.7 | +56 | +14 | +66 |
+| sigma 1.0, filter 0.4, min_size 200 | 0.2030 | +18.4 % | 5 | −4.6 % | −4.6 | +2.9 | +1.0 | +109 | +16 | +95 |
+| **sigma 1.0, filter 0.4, min_size 200, foreground 0.6** | **0.2081** | **+21.4 %** | **6** | **+1.4 %** | +8.2 | +1.4 | +2.0 | +108 | +25 | +106 |
+| same with foreground 0.7 | 0.2073 | +20.9 % | 5 | −4.3 % | +18 | −4.3 | +0.1 | +100 | +32 | +108 |
+| sigma 1.0, filter 0.4, min_size 100, travel 400 | | +29.4 % | 3 | −3.5 % | | | | | | |
+| top by balanced: density 20, foreground 0.6, min_size 200, sigma 1.0, filter 0.4 | 0.2644 | +54 % | 3 | −7.3 % | the two EmbedSeg platy sources lose |
+
+Joint view over the 384 combinations both grids share: 4 pass the 2D gate, 11 the 3D gate, **none both**.
+The disagreement is the size floor (50 px is right for the 2D nuclei data, 200 voxels for the volumes: a
+voxel floor of 50 keeps fragments that no 3D object is) and the foreground threshold (celegans_atlas turns
+from −6 % to +8 % between 0.5 and 0.6, while 0.6 costs dynamicnuclearnet, tissuenet and tnbc in 2D). Sigma
+1.0, the boundary filter at 0.4, density 10, foreground weight 0.5 and the default travel are shared by the
+winners of both dimensions. Travel to convergence does not enter the 3D winners either (it splits the large
+EmbedSeg nuclei), so the runtime stays as it is.
+
+Proposal: dimension-aware defaults, as the APG module has for volumes (`default_prompt_generation(...,
+is_volume=True)`): images `{sigma 1.0, min_size 50, boundary_magnitude_max 0.4}` on top of the current
+table; volumes additionally `{min_size 200, foreground_threshold 0.6}`. The volume part is confirmed on the
+3D holdout before anything is promoted (`configs/ais_c1v_volume.json`).
+
+## Confirmation of C1 (2026-09-06 22:30, job 15767364, trial `timing-1`, control and candidates on one node per manifest)
+
+| configuration | 2D dev (11) | up | worst | 2D holdout (5) | up | worst | 3D LM primary (6) | 3D LM holdout (6) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **C1** sigma 1.0, min_size 50, filter 0.4 | **+2.4 %, passes** | 9 | −0.8 % | **+4.3 %, passes** | 5 | +0.9 % | +5.6 % (3 up, celegans −6.1 %) | +1.4 % (2 up, celegans −5.0 %) |
+| C1 + travel 400 | +2.4 % | 6 | −0.8 % | +5.7 %, passes | 5 | +0.6 % | +18 % (2 up, platy_ish −7 %) | +21 % (2 up, celegans −7 %) |
+| C3 sigma 1.0, min_size 50 (no filter) | +2.2 %, passes | 9 | −1.1 % | +4.1 % | 4 | −3.4 % (dic) | +2.1 % | −2.6 % |
+
+2D holdout per dataset, C1: deepbacs +12.7 %, dic_hepg2 +2.3 %, dynamicnuclearnet +0.9 %, livecell +2.8 %,
+tissuenet +8.1 %. Object counts on the development images: +526 matched, −2589 objects with two or more
+seeds, −2453 background seeds, −1364 splits (of 38 000 objects). C1 confirms in 2D; as a volume setting it
+fails on celegans_atlas, which is what the volume overrides (foreground 0.6, size floor 200) address
+(confirmation job `a1_confirmation_volume`, trial `timing-2`).
+
+Post-processing time on the same node: v5 primary 6.0 s (defaults) → 15.3 s (C1) for 240 images, i.e. +0.04 s
+per image, all of it the boundary filter (sigma / size floor alone: 12.1 s → the density smoothing is not
+the cost; C3 on holdout 5.2 s); apg3d primary 32.8 s → 159 s for 57 crops (+2.2 s per 32-slice crop).
+
+Runtime of the confirmation (2D images, prediction time from the A100 cache records, post-processing on
+one cluster node): C1 with the first filter implementation +4 % to +31 % total per dataset (the filter's
+`scipy.ndimage.median` per instance cost 0.06 s per image and 2.9 s per 32-slice crop); the same
+configuration without the filter (C3) +0 % to +9 % (livecell +9.3 %, the wider density smoothing). The filter
+was then rewritten (2026-09-06 22:45): the inner boundary from axis shifts and every instance's median from one
+`lexsort` over the boundary pixels (mean of the two middle values for even counts, as `ndimage.median`) —
+identical output on 60 images and 3 crops, 18× faster (3 ms per 512² image, 0.12 s per crop), so the
+runtime overhead of C1 is that of C3.
+
+`default_postprocessing` gained an `ndim` argument and the table a `sparse_volume` sub-table of volume
+overrides (empty until the volume confirmation), which `flow_instance_segmentation` resolves from the
+foreground's dimensionality and the harness from `params_2d` / `params_3d`.
+
+
+## Volume confirmation and promotion (2026-09-06 23:05, job 15767420, trial `timing-2`)
+
+`c1v-volume` (images: sigma 1.0, min_size 50, filter 0.4; volumes: the same plus min_size 200 and
+foreground 0.6): 3D LM primary **+22.7 %, 6 / 6 up** (celegans +8.2, platy_ish +1.4, platy_nuclei +2.0,
+skull +108, gonuclear +25, platynereis +90); 3D LM holdout **+22.0 %, 5 / 6 up, worst −0.2 %** (celegans
++20, platy_ish −0.2, platy_nuclei +38, skull +98, gonuclear +1.6, platynereis +131); the twelve-slice
+volumes of the 2D manifests: celegans +14.5 %, embedseg +39.6 %, gonuclear +18 %; the images are C1
+(+2.4 %). Without the foreground change (`c1v-ms200`) holdout is +19.8 % with celegans −1.8 %.
+
+**Epoch A2 `576a85c8ffd4314627812fd30a3c1223`: promoted.** `DEFAULT_POSTPROCESSING["hvit_t"]["sparse"]` = foreground 0.5,
+density 10, min_size 50, sigma 1.0, n_iter 50, dt 0.5, foreground weight 0.5, boundary_magnitude_max 0.4;
+`["sparse_volume"]` = min_size 200, foreground 0.6. The other backbones keep their registry values and
+an empty volume table; the dense pipeline is unchanged. The old values remain reachable as an explicit
+configuration (`configs/ais_control_v4_old_defaults.json`, filter off via `Infinity`).

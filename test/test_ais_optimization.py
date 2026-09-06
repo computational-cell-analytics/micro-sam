@@ -43,6 +43,8 @@ def test_resolve_postprocessing_fills_library_defaults():
     resolved = ais.resolve_postprocessing({}, "hvit_t")
     assert resolved["sparse"] == default_postprocessing("hvit_t", "sparse")
     assert resolved["dense"] == default_postprocessing("hvit_t", "dense")
+    volumes = ais.resolve_postprocessing({}, "hvit_t", ndim=3)
+    assert volumes["sparse"] == default_postprocessing("hvit_t", "sparse", ndim=3)
 
     flat = ais.resolve_postprocessing({"n_iter": 200, "dt": 1.0}, "hvit_t")
     assert flat["sparse"]["n_iter"] == 200 and flat["sparse"]["dt"] == 1.0
@@ -60,7 +62,9 @@ def test_resolve_postprocessing_fills_library_defaults():
 def test_load_config_defaults_and_file(tmp_path):
     name, mode, params_2d, params_3d = ais.load_config(None, "hvit_t")
     assert (name, mode) == ("current-defaults", "auto")
-    assert params_2d == params_3d == ais.resolve_postprocessing({}, "hvit_t")
+    assert params_2d == ais.resolve_postprocessing({}, "hvit_t", ndim=2)
+    assert params_3d == ais.resolve_postprocessing({}, "hvit_t", ndim=3)
+    assert params_3d["sparse"]["min_size"] == 200 and params_2d["sparse"]["min_size"] == 50
 
     path = tmp_path / "candidate.json"
     path.write_text(json.dumps({"name": "travel", "params_2d": {"n_iter": 400}, "params_3d": {"n_iter": 100}}))
