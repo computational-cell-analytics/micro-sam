@@ -44,7 +44,7 @@ import torch.nn.functional as F
 
 from sam2.utils.amg import calculate_stability_score
 
-from bioimage_cpp.segmentation import label
+from bioimage_cpp.segmentation import label, watershed
 
 # Only the tiled stitching in 'TiledAutomaticPromptGenerator.generate' uses this, so a missing
 # 'bioimage_py' must not stop this module - and with it the annotator, which reads the parameter
@@ -58,10 +58,12 @@ from .normalization import to_image
 from .transforms.resize import resize_longest_side_and_pad_tensor
 from .multimask_selection import (
     POSTMERGE_REFINEMENT_GATE_FEATURE_NAMES, combine_selector_features_torch, extract_multimask_features_torch,
-    refinement_gate_features_torch, refinement_gate_stage, selector_input_schema,
+    refinement_gate_features_torch, refinement_gate_stage, selector_input_schema, SELECTOR_FEATURE_SCHEMAS,
 )
 from ..util import make_temp_embedding_path
-from .postprocessing import _compute_flow_density
+from .postprocessing import (
+    _compute_flow_density, default_postprocessing, flow_instance_segmentation, watershed_heightmap,
+)
 from .batched_inference import _resolve_devices, _volume_normalization_bounds
 from .prompt_based_segmentation import (
     ReplicatedPromptableSegmentation3D, map_jobs_over_devices, _crop_to_original_shape,
@@ -188,6 +190,24 @@ DEFAULT_PROMPT_GENERATION = {
     "max_size_factor": None,
     # Number of image prompts (or refinement boxes) evaluated per forward pass.
     "batch_size": 64,
+    # Images only. What the first pass prompts SAM2 with per candidate: its interior 'point' (the
+    # historical default), the bounding 'box' of its decoder basin, 'point_box' (both), or
+    # 'box_thin', the box only for candidates whose basin fills less than half of that box. See
+    # `derive_point_prompts` and `PROMPT_TYPES`.
+    "prompt_type": "point",
+    # Images only. How the merge treats a candidate that overlaps an already accepted mask by no more
+    # than 'max_overlap': 'drop' truncates it to the free pixels (the historical merge); 'decoder'
+    # and 'euclidean' let both survive and hand the contested pixels to the mask whose seed owns
+    # them, by the decoder's watershed basin or by seed distance. See `merge_by_score`.
+    "arbitration": "drop",
+    # Images only. Optional label-free fusion with the decoder's own instance segmentation after the
+    # merge: 'fallback' adds instances no accepted mask covers, 'conflict' resolves a mask that
+    # covers several instances by its stability, 'both' does both. None (the default) fuses nothing.
+    # See `fuse_with_instances`.
+    "fusion": None,
+    # Images only. Prompt once more on the connected components of predicted foreground the merge
+    # left uncovered, and merge those masks onto the result. Off by default.
+    "recover_residual": False,
     # These are constant across all registry backbones and dimensionalities.
     "foreground_threshold": 0.7,
     "n_iter": 50,
@@ -198,6 +218,24 @@ DEFAULT_PROMPT_GENERATION = {
     "n_threads": 8,
 }
 
+# The first-pass prompt per candidate, see 'DEFAULT_PROMPT_GENERATION["prompt_type"]'.
+PROMPT_TYPES = ("point", "box", "point_box", "box_thin")
+# A 'box_thin' candidate gets the box when its basin fills less than this fraction of the box.
+THIN_BASIN_OCCUPANCY = 0.5
+# How the merge resolves a partial overlap, see 'DEFAULT_PROMPT_GENERATION["arbitration"]'.
+ARBITRATION_MODES = ("drop", "decoder", "euclidean")
+# What the optional fusion with the decoder's instance segmentation does, see `fuse_with_instances`.
+FUSION_MODES = ("fallback", "conflict", "both")
+# The fixed constants of `fuse_with_instances`: an accepted mask agrees with a decoder instance at
+# this IoU, a mask keeps a split-merge conflict at this stability, and a decoder instance counts as
+# covered by a mask when this fraction of it lies inside. Fixed rather than tuned, so that the
+# fusion adds no dataset-dependent knob.
+FUSION_AGREEMENT_IOU = 0.5
+FUSION_STABILITY_THRESHOLD = 0.9
+FUSION_COVERAGE = 0.5
+# A mask that keeps less than this fraction of its area after an arbitration is dropped.
+ARBITRATION_MIN_RETAINED = 0.5
+
 # The components a refinement mode can be assembled from, and the keyword arguments each accepts.
 # A mode is a '+'-joined combination, e.g. 'points', 'boxes' or 'points+boxes': every component
 # contributes its prompt to one joint re-prompt per instance, so 'points+boxes' conditions on both.
@@ -205,14 +243,21 @@ REFINEMENT_COMPONENTS = ("points", "boxes", "masks")
 REFINEMENT_KWARGS = {
     "shared": (
         "policy", "multimasking", "min_consistency", "max_foreign_overlap", "gate", "gate_threshold",
+        "protect_neighbours", "touch_radius", "isolated_fallback",
     ),
     "points": (
         "n_positives", "n_negatives", "max_negative_distance", "negative_source",
-        "min_negative_distance",
+        "min_negative_distance", "negative_scope",
     ),
     "boxes": ("box_extension",),
     "masks": (),
 }
+# The keyword arguments an image accepts and a volume rejects: the learned gate and the label-free
+# neighbourhood rules of the 2026-09 refinement campaign, none of which the anchor refinement
+# implements. Listed explicitly so that a volume call fails instead of silently ignoring them.
+IMAGE_ONLY_REFINEMENT_KWARGS = (
+    "gate", "gate_threshold", "protect_neighbours", "touch_radius", "isolated_fallback", "negative_scope",
+)
 DEFAULT_REFINEMENT = {
     # The defaults are the measured optimum of the recommended mode, 'points+boxes': +4.2% macro mSA
     # on the tuned subset and +4.9% on the held-out one, for about +35-50% runtime. See
@@ -233,8 +278,23 @@ DEFAULT_REFINEMENT = {
     "max_foreign_overlap": 0.15,
     # `all` preserves the established opt-in refinement. `uncertainty` evaluates the installed
     # refinement gate and only re-prompts records whose predicted utility reaches the threshold.
+    # `isolated` re-prompts only the instances without a touching neighbour (see 'touch_radius'):
+    # the second round's measured gain is a size correction of free-standing objects, its loss the
+    # growth into neighbours on dense data.
     "gate": "all",
     "gate_threshold": 0.0,
+    # Images only. Clip the second-round mask to the background and the instance's own first-round
+    # pixels, so a re-prompt can grow into free space or shrink but never onto a neighbour. Off by
+    # default: the ascending-score repaint otherwise lets the more confident instance take the
+    # contested pixels, which is the measured loss on dense nuclei and confluent cells.
+    "protect_neighbours": False,
+    # Images only. Two instances touch when some pixel of one lies within this many pixels
+    # (Euclidean) of the other; 2 includes diagonal contact and one-pixel gaps, 1 only 4-connected
+    # contact. Read by 'negative_scope' and the 'isolated' gate; the one geometric constant of both.
+    "touch_radius": 2,
+    # Images only, with gate='isolated': None keeps the touching instances' first-round masks, 'boxes'
+    # re-prompts them with their box alone, which lost least on dense data.
+    "isolated_fallback": None,
     # The surviving prompt only: grouped extra positives measurably hurt (p1 > p2 > p3 on both
     # subsets). The suppressed prompts' productive role is as the neighbours' negative pool.
     "n_positives": 1,
@@ -247,6 +307,11 @@ DEFAULT_REFINEMENT = {
     # Where an instance's negatives come from: the other instances' first-round 'prompts', or the
     # deepest 'interior' point of each other instance's mask, which sits away from shared borders.
     "negative_source": "prompts",
+    # Which other instances may supply an instance's negatives: the 'nearest' ones (the historical
+    # rule) or only the 'touching' ones within 'touch_radius'; without a touching neighbour the
+    # instance gets no negatives. A negative from an instance that does not touch adds nothing the
+    # box does not already say, and every negative is a chance to cut into the object.
+    "negative_scope": "nearest",
     # Exclude negatives closer than this (in pixels) to the instance's own first-round mask: a
     # negative touching the instance's true extent cuts into the object instead of bounding it.
     "min_negative_distance": 0,
@@ -265,14 +330,14 @@ DEFAULT_REFINEMENT = {
 CONDITIONING_MODES = ("prompts", "prompts-grouped", "prompts-joint", "mask")
 REFINEMENT_KWARGS_3D = {
     "shared": tuple(
-        key for key in REFINEMENT_KWARGS["shared"] if key not in ("gate", "gate_threshold")
+        key for key in REFINEMENT_KWARGS["shared"] if key not in IMAGE_ONLY_REFINEMENT_KWARGS
     ) + ("conditioning",),
-    "points": REFINEMENT_KWARGS["points"],
+    "points": tuple(key for key in REFINEMENT_KWARGS["points"] if key not in IMAGE_ONLY_REFINEMENT_KWARGS),
     "boxes": REFINEMENT_KWARGS["boxes"],
     "masks": REFINEMENT_KWARGS["masks"],
 }
 DEFAULT_REFINEMENT_3D = {
-    key: value for key, value in DEFAULT_REFINEMENT.items() if key not in ("gate", "gate_threshold")
+    key: value for key, value in DEFAULT_REFINEMENT.items() if key not in IMAGE_ONLY_REFINEMENT_KWARGS
 }
 # The counters a volume's refinement reports, all of them accumulated over the anchor slices. Zeroed
 # together when a refinement runs, so a mode that cannot produce one still reports it as 0 rather
@@ -353,9 +418,9 @@ def _parse_refinement(
     resolved.update(refinement_kwargs)
     if resolved["policy"] not in ("replace", "keep-if-better"):
         raise ValueError(f"Invalid refinement policy {resolved['policy']!r}: expected 'replace' or 'keep-if-better'.")
-    if resolved.get("gate", "all") not in ("all", "uncertainty"):
+    if resolved.get("gate", "all") not in ("all", "uncertainty", "isolated"):
         raise ValueError(
-            f"Invalid refinement gate {resolved['gate']!r}: expected 'all' or 'uncertainty'."
+            f"Invalid refinement gate {resolved['gate']!r}: expected 'all', 'uncertainty' or 'isolated'."
         )
     if not np.isfinite(resolved.get("gate_threshold", 0.0)):
         raise ValueError("The refinement gate threshold must be finite.")
@@ -363,6 +428,20 @@ def _parse_refinement(
         raise ValueError(
             f"Invalid negative_source {resolved['negative_source']!r}: expected 'prompts' or 'interior'."
         )
+    if resolved.get("negative_scope", "nearest") not in ("nearest", "touching"):
+        raise ValueError(
+            f"Invalid negative_scope {resolved['negative_scope']!r}: expected 'nearest' or 'touching'."
+        )
+    fallback = resolved.get("isolated_fallback")
+    if fallback not in (None, "boxes"):
+        raise ValueError(f"Invalid isolated_fallback {fallback!r}: expected None or 'boxes'.")
+    if fallback is not None and resolved.get("gate") != "isolated":
+        raise ValueError("isolated_fallback requires gate='isolated'.")
+    if fallback == "boxes" and "boxes" not in components:
+        raise ValueError("isolated_fallback='boxes' requires the 'boxes' component in the refinement mode.")
+    radius = resolved.get("touch_radius", 1)
+    if isinstance(radius, bool) or not isinstance(radius, (int, np.integer)) or radius < 1:
+        raise ValueError(f"Invalid touch_radius {radius!r}: expected an integer of at least 1.")
     if resolved.get("conditioning", "prompts") not in CONDITIONING_MODES:
         raise ValueError(
             f"Invalid conditioning {resolved['conditioning']!r}: expected one of "
@@ -495,6 +574,46 @@ def _distances_to_mask(
     return distances
 
 
+def _touching_instances(segmentation: np.ndarray, radius: int) -> Dict[int, set]:
+    """The instances within 'radius' pixels of each instance, from the label image alone.
+
+    Two instances touch when some pixel of one lies within the Euclidean distance 'radius' of some
+    pixel of the other (pixel centres). Computed by comparing the label image with its shifted
+    copies, one shift per offset in a half-plane, so the cost is a few passes over the image
+    however many instances there are. A radius of 1 is 4-connected contact only (diagonal contact
+    lies at distance sqrt 2); 2 includes diagonal contact and one-pixel gaps.
+
+    Args:
+        segmentation: The instance segmentation.
+        radius: The contact distance in pixels, at least 1.
+
+    Returns:
+        A set of touching instance ids per instance id present in the segmentation, symmetric.
+    """
+    labels = np.asarray(segmentation).astype("int64")
+    touching = {index + 1: set() for index, box in enumerate(find_objects(labels)) if box is not None}
+    if len(touching) < 2:
+        return touching
+    radius = int(radius)
+    n_labels = int(labels.max()) + 1
+    height, width = labels.shape
+    for dy in range(0, radius + 1):
+        for dx in range(-radius, radius + 1):
+            # One offset of every antisymmetric pair, inside the disc.
+            if (dy == 0 and dx <= 0) or dy * dy + dx * dx > radius * radius:
+                continue
+            first = labels[dy:, max(dx, 0):width + min(dx, 0)]
+            second = labels[:height - dy, max(-dx, 0):width + min(-dx, 0)]
+            contact = (first != 0) & (second != 0) & (first != second)
+            if not contact.any():
+                continue
+            for code in np.unique(first[contact] * n_labels + second[contact]):
+                one, other = divmod(int(code), n_labels)
+                touching[one].add(other)
+                touching[other].add(one)
+    return touching
+
+
 def derive_refinement_prompts(
     segmentation: np.ndarray,
     points: np.ndarray,
@@ -504,6 +623,9 @@ def derive_refinement_prompts(
     max_negative_distance: Optional[float] = DEFAULT_REFINEMENT["max_negative_distance"],
     negative_source: str = DEFAULT_REFINEMENT["negative_source"],
     min_negative_distance: float = DEFAULT_REFINEMENT["min_negative_distance"],
+    negative_scope: str = DEFAULT_REFINEMENT["negative_scope"],
+    touch_radius: int = DEFAULT_REFINEMENT["touch_radius"],
+    touching: Optional[Dict[int, set]] = None,
 ) -> Dict[int, Dict[str, np.ndarray]]:
     """Group the first round's prompts onto the instances they landed in and derive re-prompts.
 
@@ -528,6 +650,12 @@ def derive_refinement_prompts(
         min_negative_distance: Exclude negatives closer than this to the instance's own mask. A
             negative that touches the instance's true extent cuts into the object instead of
             bounding it, which is the suspected failure on densely packed data.
+        negative_scope: Which other instances may supply an instance's negatives: the 'nearest'
+            ones, or only the 'touching' ones within 'touch_radius' (see `_touching_instances`);
+            an instance without a touching neighbour then gets no negatives.
+        touch_radius: The contact distance of 'touching', in pixels.
+        touching: The touching instances per instance, if the caller has them already; computed
+            here otherwise when the scope needs them.
 
     Returns:
         The prompts per instance, as {instance_id: {'points': (M, 2) XY, 'point_labels': (M,),
@@ -536,6 +664,10 @@ def derive_refinement_prompts(
     """
     points = np.asarray(points, dtype="float32").reshape(-1, 2)
     assignment = _assign_points_to_instances(segmentation, points)
+    if negative_scope not in ("nearest", "touching"):
+        raise ValueError(f"Invalid negative_scope {negative_scope!r}: expected 'nearest' or 'touching'.")
+    if negative_scope == "touching" and touching is None:
+        touching = _touching_instances(segmentation, touch_radius)
 
     if negative_source == "interior":
         # One deep interior point per instance, ordered by ascending instance id; converted to XY.
@@ -558,7 +690,11 @@ def derive_refinement_prompts(
         grouped = grouped[np.linalg.norm(grouped - anchor, axis=1) > 0]
         positives = _subsample_positives(anchor, grouped, n_positives)
 
-        candidates = negative_points[negative_owners != index]
+        allowed = negative_owners != index
+        if negative_scope == "touching":
+            # Owner ids rather than positions, so the rule reads the same for both negative sources.
+            allowed &= np.isin(negative_owners, list(touching.get(index, ())))
+        candidates = negative_points[allowed]
         if min_negative_distance > 0 and len(candidates) and n_negatives > 0:
             distances = _distances_to_mask(segmentation, index, bounding_box, candidates, min_negative_distance)
             candidates = candidates[distances >= min_negative_distance]
@@ -853,6 +989,7 @@ def derive_point_prompts(
     sigma: Optional[float] = None,
     min_candidate_size: Optional[int] = None,
     n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
+    return_boxes: bool = False,
 ) -> Optional[Dict[str, np.ndarray]]:
     """Derive one positive point prompt per convergence-density component.
 
@@ -876,6 +1013,12 @@ def derive_point_prompts(
         sigma: Gaussian sigma for smoothing the convergence-density map.
         min_candidate_size: Discard components smaller than this, which are noise rather than objects.
         n_threads: Number of threads for the flow computation.
+        return_boxes: Whether to also return each candidate's extent. The density components are the
+            objects' convergence peaks, not the objects, so the extent comes from the decoder's
+            seeded watershed of the foreground with the components as markers (see `decoder_basins`,
+            the way `flow_instance_segmentation` finishes its instances): 'boxes' holds the
+            bounding box of every candidate's basin as (N, 4) XYXY and 'occupancy' the fraction of
+            that box the basin fills, (N,).
 
     Returns:
         The prompts as {'points': (N, 1, 2) in XY, 'point_labels': (N, 1)}, or None if none were found.
@@ -916,10 +1059,32 @@ def derive_point_prompts(
     if len(centers) == 0:
         return None
 
-    return {
+    prompts = {
         "points": np.ascontiguousarray(centers[:, ::-1], dtype="float32")[:, None, :],  # SAM2 wants XY
         "point_labels": np.ones((len(centers), 1), dtype="int32"),
     }
+    if return_boxes:
+        basins = decoder_basins(
+            foreground, directed_distances, candidates, foreground_threshold,
+            default_postprocessing(model_type, "sparse")["foreground_weight"],
+        )
+        boxes = np.zeros((len(centers), 4), dtype="float32")
+        occupancy = np.ones(len(centers), dtype="float32")
+        # 'interior_points' walks the labels in ascending order, skipping the ids the size filter removed.
+        candidate_ids = [index for index, box in enumerate(find_objects(candidates), start=1) if box is not None]
+        basin_boxes = find_objects(basins)
+        for row, (candidate_id, center) in enumerate(zip(candidate_ids, centers)):
+            box = basin_boxes[candidate_id - 1] if candidate_id - 1 < len(basin_boxes) else None
+            if box is None:
+                # The marker reached nothing beyond itself: the box degenerates to the point.
+                boxes[row] = (center[1], center[0], center[1] + 1, center[0] + 1)
+                continue
+            boxes[row] = (box[1].start, box[0].start, box[1].stop, box[0].stop)
+            extent = (box[0].stop - box[0].start) * (box[1].stop - box[1].start)
+            occupancy[row] = np.count_nonzero(basins[box] == candidate_id) / extent
+        prompts["boxes"] = boxes
+        prompts["occupancy"] = occupancy
+    return prompts
 
 
 def derive_volume_prompts(
@@ -934,7 +1099,8 @@ def derive_volume_prompts(
     spacing: Optional[tuple] = None,
     min_candidate_size: Optional[int] = None,
     n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
-) -> Optional[Dict[str, np.ndarray]]:
+    return_metadata: bool = False,
+) -> Optional[Union[Dict[str, np.ndarray], tuple]]:
     """Derive one positive point prompt, on one slice, per volumetric convergence-density component.
 
     The volumetric counterpart of `derive_point_prompts`. The flow is integrated in 3d, so a component
@@ -959,10 +1125,15 @@ def derive_volume_prompts(
         spacing: Anisotropic voxel spacing, e.g. (4, 1, 1), for physically isotropic smoothing.
         min_candidate_size: Discard components smaller than this, which are noise rather than objects.
         n_threads: Number of threads for the flow computation.
+        return_metadata: Whether to also return what the ladder knows about each candidate and
+            otherwise discards: the threshold it was born at, the one it merges into an earlier
+            candidate at, and the density, size, extent and foreground statistics of its component.
+            See `VOLUME_CANDIDATE_FEATURE_NAMES`. Off by default; the prompts are identical either way.
 
     Returns:
         The prompts as {'points': (N, 1, 2) in XY, 'point_labels': (N, 1), 'frames': (N,) slice
-        indices}, or None if no candidate was found.
+        indices}, or None if no candidate was found. With 'return_metadata' a tuple of the prompts
+        and the metadata dict (both None when nothing was found).
     """
     if foreground.ndim != 3:
         raise ValueError(f"Volumetric prompt generation expects a (Z, Y, X) foreground map, got {foreground.shape}.")
@@ -992,15 +1163,19 @@ def derive_volume_prompts(
         n_threads=n_threads,
     )
 
+    levels = sorted(np.atleast_1d(np.asarray(candidate_threshold, dtype="float32")).tolist(), reverse=True)
     points, frames, seen = [], [], set()
+    births, components, label_maps = [], [], []
     # Descending, so that the peaks a lower threshold merges into one component are proposed first.
-    for threshold in sorted(np.atleast_1d(np.asarray(candidate_threshold, dtype="float32")), reverse=True):
+    for threshold in levels:
         candidates = label(density > threshold)
         if min_candidate_size > 0:
             ids, sizes = np.unique(candidates, return_counts=True)
             discard = ids[(sizes < min_candidate_size) & (ids > 0)]
             if discard.size:
                 candidates[np.isin(candidates, discard)] = 0
+        if return_metadata:
+            label_maps.append(candidates)
 
         for index, bounding_box in enumerate(find_objects(candidates)):
             if bounding_box is None:
@@ -1019,14 +1194,127 @@ def derive_volume_prompts(
             seen.add(anchor)
             frames.append(anchor[0])
             points.append((anchor[2], anchor[1]))  # SAM2 wants XY.
+            if return_metadata:
+                births.append(float(threshold))
+                components.append((bounding_box, component, component_density))
 
     if not points:
-        return None
+        return (None, None) if return_metadata else None
 
-    return {
+    prompts = {
         "points": np.array(points, dtype="float32")[:, None, :],
         "point_labels": np.ones((len(points), 1), dtype="int32"),
         "frames": np.array(frames, dtype="int64"),
+    }
+    if not return_metadata:
+        return prompts
+    metadata = _volume_candidate_metadata(
+        prompts, births, components, label_maps, levels, density, foreground, fg_mask, directed_distances,
+        spacing,
+    )
+    metadata["density"] = density
+    return prompts, metadata
+
+
+# What `derive_volume_prompts(return_metadata=True)` reports per candidate, in this order. The
+# ladder's own evidence about a candidate, which the propagation-based pipeline otherwise discards.
+VOLUME_CANDIDATE_FEATURE_NAMES = (
+    "birth_threshold", "merge_threshold", "persistence", "ladder_level_count",
+    "log_peak_density", "log_integrated_density", "density_q25", "density_q50", "density_q75",
+    "log_component_volume", "box_occupancy", "log_z_extent", "anchor_relative_z",
+    "foreground_mean", "foreground_precision", "flow_magnitude_mean",
+    "log_nearest_anchor_distance", "same_slice_candidates", "expected_pass_occupancy", "anchor_frame_fraction",
+)
+
+
+def _volume_candidate_metadata(
+    prompts: dict, births: List[float], components: list, label_maps: list, levels: List[float],
+    density: np.ndarray, foreground: np.ndarray, fg_mask: np.ndarray, directed_distances: np.ndarray,
+    spacing: Optional[tuple],
+) -> Dict[str, Any]:
+    """The per-candidate features of the threshold ladder, see `VOLUME_CANDIDATE_FEATURE_NAMES`.
+
+    A candidate is born at the highest level whose component peaks at its anchor. It merges at the
+    highest level at which its component also contains a candidate born earlier (at a higher level,
+    or at the same level but proposed first). Persistence is the difference; a candidate that never
+    merges persists down to the lowest level of the ladder.
+    """
+    n_candidates = len(births)
+    frames = prompts["frames"]
+    anchors_zyx = np.stack(
+        [frames, prompts["points"][:, 0, 1].astype("int64"), prompts["points"][:, 0, 0].astype("int64")], axis=1,
+    )
+    order = np.arange(n_candidates)
+    births_array = np.asarray(births, dtype="float32")
+    lowest = float(levels[-1])
+    merge = np.full(n_candidates, lowest, dtype="float32")
+    merged = np.zeros(n_candidates, dtype=bool)
+    level_count = np.zeros(n_candidates, dtype="int64")
+    for level, label_map in zip(levels, label_maps):
+        labels_at_level = label_map[anchors_zyx[:, 0], anchors_zyx[:, 1], anchors_zyx[:, 2]]
+        level_count += labels_at_level > 0
+        for component_id in np.unique(labels_at_level[labels_at_level > 0]):
+            members = order[labels_at_level == component_id]
+            if len(members) < 2:
+                continue
+            # The earliest born member owns the component at this level; the others merge into it.
+            ranks = sorted(members, key=lambda index: (-births_array[index], index))
+            for index in ranks[1:]:
+                if not merged[index]:
+                    merged[index] = True
+                    merge[index] = float(level)
+    persistence = births_array - merge
+
+    features = np.zeros((n_candidates, len(VOLUME_CANDIDATE_FEATURE_NAMES)), dtype="float32")
+    bboxes = np.zeros((n_candidates, 6), dtype="int64")
+    depth = density.shape[0]
+    same_slice = np.array([int(np.sum(frames == frame)) for frame in frames], dtype="float32")
+    if n_candidates > 1:
+        scale = np.asarray(spacing if spacing is not None else (1.0, 1.0, 1.0), dtype="float32")
+        scaled = anchors_zyx.astype("float32") * scale
+        distances = np.sqrt(((scaled[:, None, :] - scaled[None, :, :]) ** 2).sum(-1))
+        np.fill_diagonal(distances, np.inf)
+        nearest = distances.min(axis=1)
+    else:
+        nearest = np.full(n_candidates, float(max(density.shape)), dtype="float32")
+    magnitude = np.sqrt((directed_distances.astype("float32") ** 2).sum(axis=0))
+    for index, (bounding_box, component, component_density) in enumerate(components):
+        values = component_density[component]
+        volume = int(component.sum())
+        z0, z1 = bounding_box[0].start, bounding_box[0].stop
+        box_volume = int(np.prod([side.stop - side.start for side in bounding_box]))
+        bboxes[index] = [z0, z1, bounding_box[1].start, bounding_box[1].stop,
+                         bounding_box[2].start, bounding_box[2].stop]
+        fg_values = foreground[bounding_box][component]
+        features[index] = (
+            births_array[index],
+            merge[index],
+            persistence[index],
+            level_count[index],
+            np.log1p(float(density[tuple(anchors_zyx[index])])),
+            np.log1p(float(values.sum())),
+            float(np.percentile(values, 25)),
+            float(np.percentile(values, 50)),
+            float(np.percentile(values, 75)),
+            np.log1p(volume),
+            volume / box_volume,
+            np.log1p(z1 - z0),
+            (anchors_zyx[index, 0] - z0) / max(z1 - z0 - 1, 1),
+            float(fg_values.mean()),
+            float(fg_mask[bounding_box][component].mean()),
+            float(magnitude[bounding_box][component].mean()),
+            np.log1p(float(nearest[index])),
+            same_slice[index],
+            np.ceil(same_slice[index] / 16.0),
+            anchors_zyx[index, 0] / max(depth - 1, 1),
+        )
+    return {
+        "feature_names": VOLUME_CANDIDATE_FEATURE_NAMES,
+        "features": features,
+        "component_bbox": bboxes,
+        "birth_threshold": births_array,
+        "merge_threshold": merge,
+        "levels": np.asarray(levels, dtype="float32"),
     }
 
 
@@ -1036,9 +1324,76 @@ def _record_mask(record: Dict[str, Any]) -> np.ndarray:
     return mask.numpy() if hasattr(mask, "numpy") else np.asarray(mask)
 
 
+def _validate_volume_prompts(prompts: dict, shape: tuple) -> dict:
+    """Check user-supplied volumetric prompts, see `AutomaticPromptGenerator.generate(prompts=...)`."""
+    required = {"points", "point_labels", "frames"}
+    missing = required - set(prompts)
+    if missing:
+        raise ValueError(f"Volume prompts lack {sorted(missing)}.")
+    points = np.asarray(prompts["points"], dtype="float32")
+    labels = np.asarray(prompts["point_labels"], dtype="int32")
+    frames = np.asarray(prompts["frames"], dtype="int64")
+    if points.ndim != 3 or points.shape[1:] != (1, 2):
+        raise ValueError(f"Volume prompt points must have shape (N, 1, 2), got {points.shape}.")
+    if labels.shape != (len(points), 1) or frames.shape != (len(points),):
+        raise ValueError("Volume prompt labels and frames must align with the points.")
+    if len(frames) and (frames.min() < 0 or frames.max() >= shape[0]):
+        raise ValueError(f"Volume prompt frames must lie in [0, {shape[0]}).")
+    conditioning = prompts.get("conditioning")
+    if conditioning is not None and len(conditioning) != len(points):
+        raise ValueError("The prompts' conditioning list must align with the points.")
+    validated = {"points": points, "point_labels": labels, "frames": frames}
+    if conditioning is not None:
+        validated["conditioning"] = list(conditioning)
+    if prompts.get("metadata") is not None:
+        validated["metadata"] = prompts["metadata"]
+    return validated
+
+
+def _record_seed(record: Dict[str, Any], box: tuple) -> np.ndarray:
+    """A record's seed in array (y, x, ...) order: its prompt point, or its mask's centroid without one."""
+    point = record.get("point")
+    if point is not None:
+        # Image records store the prompt as (x, y).
+        return np.asarray(point[::-1], dtype="float64")
+    offset = np.array([axis.start or 0 for axis in box], dtype="float64")
+    coordinates = np.nonzero(_record_mask(record))
+    if len(coordinates[0]) == 0:
+        return offset
+    return np.array([axis.mean() for axis in coordinates], dtype="float64") + offset
+
+
+def _marker_id(record: Dict[str, Any], index: int) -> int:
+    """The basin marker of a record: its prompt (shared by multimask alternatives), else its index."""
+    return int(record.get("prompt_index", index)) + 1
+
+
+def _closer_to_candidate(
+    contested: np.ndarray, owners: np.ndarray, box: tuple, candidate_seed: np.ndarray,
+    seeds: Dict[int, np.ndarray],
+) -> np.ndarray:
+    """The contested pixels that lie closer to the candidate's seed than to their current owner's."""
+    won = np.zeros(contested.shape, dtype=bool)
+    coordinates = np.nonzero(contested)
+    if len(coordinates[0]) == 0:
+        return won
+    offset = np.array([axis.start or 0 for axis in box], dtype="float64")
+    points = np.stack(coordinates, axis=1).astype("float64") + offset
+    to_candidate = ((points - candidate_seed) ** 2).sum(axis=1)
+    pixel_owners = owners[coordinates]
+    to_owner = np.empty(len(pixel_owners), dtype="float64")
+    for owner in np.unique(pixel_owners):
+        selected = pixel_owners == owner
+        to_owner[selected] = ((points[selected] - seeds[int(owner)]) ** 2).sum(axis=1)
+    closer = to_candidate < to_owner
+    won[tuple(axis[closer] for axis in coordinates)] = True
+    return won
+
+
 def merge_by_score(
     records: List[Dict[str, Any]], shape: tuple, max_overlap: float = 0.3, min_size: int = 50,
     max_size_factor: Optional[float] = None, return_matches: bool = False, return_reasons: bool = False,
+    arbitration: str = "drop", basins: Optional[np.ndarray] = None, initial: Optional[np.ndarray] = None,
 ) -> Union[np.ndarray, tuple]:
     """Merge prediction records in descending score order, each claiming only unclaimed pixels.
 
@@ -1064,13 +1419,41 @@ def merge_by_score(
         return_reasons: Whether to also return why each record was kept or dropped. A candidate is
             'too small', 'too large', a 'duplicate' when a better-scoring mask already claims more
             than 'max_overlap' of it, 'truncated below min size' when too few of its pixels are free,
-            or 'kept'. This is what the merge does, reported rather than recomputed.
+            or 'kept'. Under a split arbitration it can also be 'arbitrated away' (it won less than
+            half of its own area) or 'split away' (an accepted mask that later lost more than half of
+            its area to arbitration). This is what the merge does, reported rather than recomputed.
+        arbitration: What happens to a candidate's pixels that an accepted mask already claims, once
+            the candidate is not a duplicate. 'drop' (the default) leaves them with the earlier mask,
+            so the candidate is truncated to the free pixels. 'split' hands a contested pixel to the
+            candidate when the candidate's seed owns it: by 'basins' where given, and by the smaller
+            Euclidean distance to the two seeds (the records' 'point', or their box centre) for pixels
+            in no basin. Both masks survive, unless one keeps less than `ARBITRATION_MIN_RETAINED`
+            of its area, which drops it.
+        basins: Optional label image of the shape of the output whose value at a pixel is the marker
+            of the record that owns it (a record's 'prompt_index' + 1, or its index + 1 without one),
+            0 where no record owns the pixel. `AutomaticPromptGenerator.select` derives it from the
+            decoder's watershed seeded at the records' prompts. Only read under 'split'.
+        initial: An existing segmentation to merge onto instead of an empty canvas. Its instances
+            are never touched or reported; new ids continue after its largest one.
+
     Returns:
         The instance segmentation, uint32 array. If `return_matches`, additionally a mapping from
         every instance id to the index of the record that made it. If `return_reasons`, additionally
         the reason per record, in the order the records were given.
     """
-    out = np.zeros(shape, dtype="uint32")
+    if arbitration not in ("drop", "split"):
+        raise ValueError(f"Invalid arbitration {arbitration!r}: expected 'drop' or 'split'.")
+    if initial is None:
+        out = np.zeros(shape, dtype="uint32")
+        next_id = 1
+    else:
+        if tuple(initial.shape) != tuple(shape):
+            raise ValueError(f"The initial segmentation has shape {initial.shape}, expected {tuple(shape)}.")
+        out = np.array(initial, dtype="uint32", copy=True)
+        next_id = int(out.max()) + 1
+    if basins is not None and tuple(basins.shape) != tuple(shape):
+        raise ValueError(f"The basins have shape {basins.shape}, expected {tuple(shape)}.")
+    split = arbitration == "split"
     scores = np.array([
         record.get("merge_score", record["predicted_iou"] * record["stability_score"])
         for record in records
@@ -1085,7 +1468,11 @@ def merge_by_score(
     matches = {}
     reasons = ["" for _ in records]
     accepted_groups = set()
-    next_id = 1
+    # Split arbitration only: per accepted instance, its box, seed, painted and remaining area.
+    boxes: Dict[int, tuple] = {}
+    seeds: Dict[int, np.ndarray] = {}
+    painted: Dict[int, int] = {}
+    remaining: Dict[int, int] = {}
     for index in sorted(range(len(records)), key=lambda candidate: (-scores[candidate], candidate)):
         record = records[index]
         group = record.get("multimask_group")
@@ -1101,20 +1488,60 @@ def merge_by_score(
             reasons[index] = "too large"
             continue
         # A view, so painting the fresh pixels below writes straight into the output.
-        target = out[record.get("bounding_box", full_box)]
+        box = record.get("bounding_box", full_box)
+        target = out[box]
         claimed = target[mask]
-        if int(np.count_nonzero(claimed)) / area > max_overlap:
+        n_claimed = int(np.count_nonzero(claimed))
+        if n_claimed / area > max_overlap:
             reasons[index] = "duplicate"
             continue
         fresh = mask & (target == 0)
-        if int(fresh.sum()) < min_size:
+        gained = fresh
+        losers = None
+        if split and n_claimed:
+            contested = mask & (target != 0)
+            if initial is not None:
+                # Pixels of the initial segmentation are never contested.
+                contested &= np.isin(target, list(remaining)) if remaining else np.zeros_like(contested)
+            seed = _record_seed(record, box)
+            if basins is not None:
+                basin_crop = basins[box]
+                won = contested & (basin_crop == _marker_id(record, index))
+                unassigned = contested & (basin_crop == 0)
+                if unassigned.any():
+                    won |= _closer_to_candidate(unassigned, target, box, seed, seeds)
+            else:
+                won = _closer_to_candidate(contested, target, box, seed, seeds)
+            if won.any():
+                gained = fresh | won
+                losers = np.unique(target[won], return_counts=True)
+        n_gained = int(gained.sum())
+        if split and n_gained < ARBITRATION_MIN_RETAINED * area:
+            reasons[index] = "arbitrated away"
+            continue
+        if n_gained < min_size:
             reasons[index] = "truncated below min size"
             continue
-        target[fresh] = next_id
+        target[gained] = next_id
         reasons[index] = "kept"
         matches[next_id] = int(index)
         if group is not None:
             accepted_groups.add(group)
+        if split:
+            boxes[next_id] = box
+            seeds[next_id] = _record_seed(record, box)
+            painted[next_id] = remaining[next_id] = n_gained
+            if losers is not None:
+                for loser, count in zip(*losers):
+                    loser = int(loser)
+                    remaining[loser] -= int(count)
+                    if remaining[loser] < max(min_size, ARBITRATION_MIN_RETAINED * painted[loser]):
+                        # The mask was mostly an under-segmentation of what its rivals now hold.
+                        loser_view = out[boxes[loser]]
+                        loser_view[loser_view == loser] = 0
+                        reasons[matches.pop(loser)] = "split away"
+                        for table in (boxes, seeds, painted, remaining):
+                            table.pop(loser)
         next_id += 1
 
     result = (out,)
@@ -1123,6 +1550,167 @@ def merge_by_score(
     if return_reasons:
         result += (reasons,)
     return result[0] if len(result) == 1 else result
+
+
+def decoder_basins(
+    foreground: np.ndarray, directed_distances: np.ndarray, markers: np.ndarray, foreground_threshold: float,
+    foreground_weight: float,
+) -> np.ndarray:
+    """Partition the predicted foreground among markers by the decoder's watershed.
+
+    The same seeded watershed the sparse post-processing finishes its instances with, so a pixel
+    goes to the marker the decoder's boundary evidence assigns it to, rather than to the nearest one.
+
+    Args:
+        foreground: Foreground probability map, shape (Y, X).
+        directed_distances: Distance channels stacked along axis 0. A leading z-channel is dropped.
+        markers: Label image of the markers, 0 where there is none.
+        foreground_threshold: Pixels below this foreground probability belong to no basin.
+        foreground_weight: Weight of the foreground term in the heightmap, see `watershed_heightmap`.
+
+    Returns:
+        The basins, an array of the shape of `foreground` with the marker id at every foreground pixel
+        that a marker reaches and 0 elsewhere.
+    """
+    if directed_distances.shape[0] > foreground.ndim:
+        directed_distances = directed_distances[-foreground.ndim:]
+    fg_mask = foreground > foreground_threshold
+    if not markers.any() or not fg_mask.any():
+        return np.zeros(foreground.shape, dtype="uint32")
+    hmap = watershed_heightmap(foreground, directed_distances, foreground_weight)
+    basins = watershed(hmap, markers=np.ascontiguousarray(markers, dtype="uint32"), mask=fg_mask)
+    return np.asarray(basins, dtype="uint32")
+
+
+def fuse_with_instances(
+    segmentation: np.ndarray, instances: np.ndarray, stability: Dict[int, float], mode: str,
+    min_size: int, agreement: float = FUSION_AGREEMENT_IOU,
+    stability_threshold: float = FUSION_STABILITY_THRESHOLD, coverage: float = FUSION_COVERAGE,
+) -> tuple:
+    """Fuse accepted SAM2 masks with an independent instance segmentation of the same image, per object.
+
+    The decoder's own instances (see `flow_instance_segmentation`) and the SAM2 masks segment the
+    same objects independently. Where they agree, nothing changes. 'fallback' adds an instance that
+    no accepted mask covers, which recovers objects no prompt reached. 'conflict' looks at a mask
+    that covers several substantial instances - either SAM2 merged touching objects or the decoder
+    split one - and keeps the mask if its stability reaches the threshold, else replaces it by the
+    instances. Every constant is fixed (see `FUSION_AGREEMENT_IOU`, `FUSION_STABILITY_THRESHOLD`,
+    `FUSION_COVERAGE`), so the fusion adds no dataset-dependent knob.
+
+    Args:
+        segmentation: The accepted masks, an instance segmentation.
+        instances: The independent instance segmentation, same shape.
+        stability: The stability score per instance id of `segmentation`.
+        mode: 'fallback', 'conflict' or 'both'.
+        min_size: Minimum size of an added instance, and of an instance's part inside a mask for it
+            to count in a conflict.
+        agreement: An instance whose IoU with some accepted mask reaches this is that mask's object.
+        stability_threshold: A mask in conflict is kept from this stability on.
+        coverage: An instance counts as covered by a mask when this fraction of it lies inside.
+
+    Returns:
+        The fused segmentation, uint32, and a dict with the counts 'fusion_fallback_added',
+        'fusion_conflicts' and 'fusion_conflicts_split'.
+    """
+    if mode not in FUSION_MODES:
+        raise ValueError(f"Invalid fusion mode {mode!r}: expected one of {FUSION_MODES}.")
+    if segmentation.shape != instances.shape:
+        raise ValueError(f"Shapes differ: {segmentation.shape} vs {instances.shape}.")
+    out = np.array(segmentation, dtype="uint32", copy=True)
+    instances = np.asarray(instances)
+    stats = {"fusion_fallback_added": 0, "fusion_conflicts": 0, "fusion_conflicts_split": 0}
+    instance_boxes = {
+        index + 1: box for index, box in enumerate(find_objects(instances)) if box is not None
+    }
+    instance_areas = {
+        instance_id: int(np.count_nonzero(instances[box] == instance_id))
+        for instance_id, box in instance_boxes.items()
+    }
+    next_id = int(out.max()) + 1
+
+    def paint(instance_id: int) -> bool:
+        """Paint the free pixels of an instance as a new object, if enough of them are free."""
+        nonlocal next_id
+        box = instance_boxes[instance_id]
+        view = out[box]
+        free = (instances[box] == instance_id) & (view == 0)
+        if int(free.sum()) < min_size:
+            return False
+        view[free] = next_id
+        next_id += 1
+        return True
+
+    if mode in ("conflict", "both"):
+        for mask_id, box in enumerate(find_objects(out), start=1):
+            if box is None:
+                continue
+            inside = instances[box][out[box] == mask_id]
+            ids, counts = np.unique(inside[inside != 0], return_counts=True)
+            covered = [
+                int(instance_id) for instance_id, count in zip(ids, counts)
+                if count >= min_size and count / instance_areas[int(instance_id)] >= coverage
+            ]
+            if len(covered) < 2:
+                continue
+            stats["fusion_conflicts"] += 1
+            if stability.get(mask_id, 1.0) >= stability_threshold:
+                continue
+            view = out[box]
+            view[view == mask_id] = 0
+            # Each covered instance has at least 'min_size' pixels inside the mask, all free now.
+            for instance_id in covered:
+                paint(instance_id)
+            stats["fusion_conflicts_split"] += 1
+
+    if mode in ("fallback", "both"):
+        mask_areas = dict(zip(*np.unique(out[out != 0], return_counts=True)))
+        for instance_id, box in instance_boxes.items():
+            instance = instances[box] == instance_id
+            owners = out[box][instance]
+            ids, counts = np.unique(owners[owners != 0], return_counts=True)
+            area = instance_areas[instance_id]
+            if len(ids):
+                claimed = int(counts.sum()) / area
+                best_iou = max(
+                    int(count) / (area + int(mask_areas[int(mask_id)]) - int(count))
+                    for mask_id, count in zip(ids, counts)
+                )
+                if best_iou >= agreement or claimed > coverage:
+                    continue
+            if paint(instance_id):
+                stats["fusion_fallback_added"] += 1
+    return out, stats
+
+
+def residual_point_prompts(
+    foreground: np.ndarray, segmentation: np.ndarray, foreground_threshold: float, min_size: int,
+) -> Optional[Dict[str, np.ndarray]]:
+    """One interior point prompt per connected foreground component the segmentation leaves uncovered.
+
+    Args:
+        foreground: Foreground probability map, shape (Y, X).
+        segmentation: The instance segmentation so far.
+        foreground_threshold: Foreground binarisation threshold.
+        min_size: Components smaller than this are not prompted.
+
+    Returns:
+        The prompts in the layout of `derive_point_prompts`, or None if nothing is left uncovered.
+    """
+    residual = label((foreground > foreground_threshold) & (segmentation == 0))
+    if min_size > 0 and residual.max() > 0:
+        ids, sizes = np.unique(residual, return_counts=True)
+        discard = ids[(sizes < min_size) & (ids > 0)]
+        if discard.size:
+            residual[np.isin(residual, discard)] = 0
+    if residual.max() == 0:
+        return None
+    centers = interior_points(residual)
+    if len(centers) == 0:
+        return None
+    return {
+        "points": np.ascontiguousarray(centers[:, ::-1], dtype="float32")[:, None, :],
+        "point_labels": np.ones((len(centers), 1), dtype="int32"),
+    }
 
 
 def _records_shape(records: List[Dict[str, Any]]) -> tuple:
@@ -1176,12 +1764,18 @@ def _volume_records(
         for frame, from_y, to_y, from_x, to_x, mask in entries:
             local[frame - z0, from_y - y0:to_y - y0, from_x - x0:to_x - x0] = mask
 
-        records.append({
+        record = {
             "segmentation": local,
             "bounding_box": (slice(z0, z1), slice(y0, y1), slice(x0, x1)),
             "predicted_iou": candidate["score"],
             "stability_score": candidate["stability"],
-        })
+        }
+        if "merge_score" in candidate:
+            # A learned candidate order replaces the anchor score in the 3d merge.
+            record["merge_score"] = candidate["merge_score"]
+        if "prompt_index" in candidate:
+            record["prompt_index"] = candidate["prompt_index"]
+        records.append(record)
     return records
 
 
@@ -1251,6 +1845,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         self._pruning_protected_margin: Optional[tuple] = None
         self._microscopy_multimask_scorer = None
         self._refinement_gate_model = None
+        self._volume_candidate_scorer = None
+        self._last_generation_trace = None
         self._scoring_predictor_pool = None
         # The embedding cache is keyed on these, which a SAM2 image predictor does not carry itself.
         sam2_model = getattr(predictor, "model", None)
@@ -1259,17 +1855,39 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if getattr(predictor, "model_name", None) is None:
             predictor.model_name = getattr(sam2_model, "model_name", None) or predictor.model_type
 
-    def set_multimask_models(self, scorer=None, refinement_gate=None) -> None:
-        """Install fitted feature models used by the optional 2D APG optimization modes.
+    def set_multimask_models(self, scorer=None, refinement_gate=None, volume_candidate_scorer=None) -> None:
+        """Install fitted feature models used by the optional APG optimization modes.
 
-        Both objects implement ``predict(features)`` and are intentionally injected rather than
-        loaded from an implicit global path. This keeps checkpoints and evaluation artifacts
-        attributable. The normal predicted-IoU path does not require either model.
+        All objects are intentionally injected rather than loaded from an implicit global path. This
+        keeps checkpoints and evaluation artifacts attributable. The normal predicted-IoU path does
+        not require any of them.
+
+        Args:
+            scorer: The 2d multimask scorer, implementing ``predict(features)`` (or its tensor forms).
+            refinement_gate: The 2d refinement gate, see `refinement_gate_stage`.
+            volume_candidate_scorer: A volumetric candidate scorer with an ``input_schema`` (one of
+                `SELECTOR_FEATURE_SCHEMAS`), a ``component_feature_names`` tuple (a subset of
+                `VOLUME_CANDIDATE_FEATURE_NAMES`, possibly empty) and
+                ``predict_candidates(features, component_features)`` mapping (N, 3, F) anchor
+                alternatives and (N, C) ladder features to one score per candidate. It filters and
+                orders candidates before the propagation, see `generate`.
         """
         if refinement_gate is not None:
             refinement_gate_stage(refinement_gate)
+        if volume_candidate_scorer is not None:
+            schema = getattr(volume_candidate_scorer, "input_schema", None)
+            if schema not in SELECTOR_FEATURE_SCHEMAS:
+                raise ValueError(f"The volume candidate scorer declares an unknown input schema {schema!r}.")
+            unknown = set(getattr(volume_candidate_scorer, "component_feature_names", ())) - set(
+                VOLUME_CANDIDATE_FEATURE_NAMES
+            )
+            if unknown:
+                raise ValueError(f"Unknown volume candidate features: {sorted(unknown)}.")
+            if not callable(getattr(volume_candidate_scorer, "predict_candidates", None)):
+                raise TypeError("The volume candidate scorer must implement 'predict_candidates'.")
         self._microscopy_multimask_scorer = scorer
         self._refinement_gate_model = refinement_gate
+        self._volume_candidate_scorer = volume_candidate_scorer
 
     def _validate_multimask_options(
         self, multimasking: bool, multimask_scorer: str, multimask_selection: str, is_volume: bool,
@@ -1524,6 +2142,15 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
         n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
         verbose: bool = False,
+        prompts: Optional[dict] = None,
+        candidate_scorer_threshold: Optional[float] = None,
+        candidate_order: str = "anchor",
+        candidate_budget: Optional[int] = None,
+        keep_trace: bool = False,
+        prompt_type: str = DEFAULT_PROMPT_GENERATION["prompt_type"],
+        arbitration: str = DEFAULT_PROMPT_GENERATION["arbitration"],
+        fusion: Optional[str] = DEFAULT_PROMPT_GENERATION["fusion"],
+        recover_residual: bool = DEFAULT_PROMPT_GENERATION["recover_residual"],
     ) -> np.ndarray:
         """Derive prompts from the stored predictions, apply them and merge the masks.
 
@@ -1580,6 +2207,29 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             batch_size: Number of prompts per forward pass.
             n_threads: Number of threads for the flow integration the candidates come from.
             verbose: Whether to show progress over the propagation passes of a volume.
+            prompts: Volumes only. Candidate prompts to use instead of deriving them from the density
+                ladder, in the form `derive_volume_prompts` returns, optionally with a 'conditioning'
+                list aligned with the points: an entry `{"mask": ...}` conditions that candidate's
+                anchor frame on the mask instead of its point (an unrefined candidate keeps None).
+                This is how an experiment supplies candidates from another source.
+            candidate_scorer_threshold: Volumes only. Drop scored candidates whose installed volume
+                candidate scorer (see `set_multimask_models`) scores them below this, before the
+                propagation. None (the default) propagates every candidate the anchor scoring kept.
+            candidate_order: Volumes only. 'anchor' (the default) orders the 3d merge by the anchor
+                slice's predicted IoU times stability; 'learned' orders it by the installed scorer.
+            candidate_budget: Volumes only. Propagate at most this many candidates, the best by the
+                chosen order. None (the default) propagates all of them.
+            keep_trace: Volumes only. Keep the prompts, ladder metadata, scored candidates and the
+                pre-merge records in `_last_generation_trace` for diagnostics. Off by default, since
+                the records hold every propagated mask.
+            prompt_type: Images only. What SAM2 is prompted with per candidate: 'point' (the
+                default), 'box', 'point_box' or 'box_thin'; see `propose`.
+            arbitration: Images only. How the merge treats partial overlaps: 'drop' (the default),
+                'decoder' or 'euclidean'; see `select` and `merge_by_score`.
+            fusion: Images only. Optional fusion with the decoder's instance segmentation after the
+                merge: None (the default), 'fallback', 'conflict' or 'both'; see `fuse_with_instances`.
+            recover_residual: Images only. Whether to prompt the uncovered foreground once more after
+                the merge; see `select`. Off by default.
 
         Returns:
             The instance segmentation, uint32 array with the spatial shape of the prediction.
@@ -1588,9 +2238,32 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
 
         self._last_generation_stats = {}
+        self._last_generation_trace = None
         shape = self._prediction[0].shape
         # The prediction carries the dimensionality it was run at: (4, Y, X) or (4, Z, Y, X).
         is_volume = self._prediction.ndim == 4
+        if not is_volume and any(
+            option is not None and option is not False and option != "anchor"
+            for option in (prompts, candidate_scorer_threshold, candidate_order, candidate_budget, keep_trace)
+        ):
+            raise ValueError(
+                "'prompts', 'candidate_scorer_threshold', 'candidate_order', 'candidate_budget' and "
+                "'keep_trace' apply to volumes only."
+            )
+        if is_volume and (
+            prompt_type != "point" or arbitration != "drop" or fusion is not None or recover_residual
+        ):
+            raise ValueError(
+                "'prompt_type', 'arbitration', 'fusion' and 'recover_residual' currently apply to images only."
+            )
+        if candidate_order not in ("anchor", "learned"):
+            raise ValueError(f"Invalid candidate order {candidate_order!r}: expected 'anchor' or 'learned'.")
+        uses_scorer = candidate_scorer_threshold is not None or candidate_order == "learned"
+        if uses_scorer and getattr(self, "_volume_candidate_scorer", None) is None:
+            raise RuntimeError(
+                "A candidate scorer threshold or a learned candidate order requires an installed volume "
+                "candidate scorer; call set_multimask_models(volume_candidate_scorer=...) first."
+            )
         defaults = default_prompt_generation(self._model_type, is_volume=is_volume)
         self._validate_multimask_options(
             multimasking, multimask_scorer, multimask_selection, is_volume=is_volume,
@@ -1610,12 +2283,24 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             components = resolved = None
             if refinement is not None:
                 components, resolved = _parse_refinement(refinement, refinement_kwargs, is_volume=True)
-            prompts = derive_volume_prompts(
-                self._prediction[0], self._prediction[1:], model_type=self._model_type,
-                candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
-                n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing,
-                min_candidate_size=min_candidate_size, n_threads=n_threads,
-            )
+            metadata = None
+            if prompts is not None:
+                prompts = _validate_volume_prompts(prompts, shape)
+                metadata = prompts.get("metadata")
+            elif uses_scorer or keep_trace:
+                prompts, metadata = derive_volume_prompts(
+                    self._prediction[0], self._prediction[1:], model_type=self._model_type,
+                    candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
+                    n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing,
+                    min_candidate_size=min_candidate_size, n_threads=n_threads, return_metadata=True,
+                )
+            else:
+                prompts = derive_volume_prompts(
+                    self._prediction[0], self._prediction[1:], model_type=self._model_type,
+                    candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
+                    n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing,
+                    min_candidate_size=min_candidate_size, n_threads=n_threads,
+                )
             if prompts is None:
                 self._last_generation_stats = {
                     "proposed_candidates": 0,
@@ -1631,12 +2316,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             self._last_generation_stats["proposed_candidates"] = len(prompts["points"])
             if components is not None:
                 self._last_generation_stats.update({key: 0 for key in REFINEMENT_STATS_3D})
+            feature_schema = (
+                getattr(self._volume_candidate_scorer, "input_schema", None) if uses_scorer else None
+            )
             # The refinement's forwards are not wrapped by '_apply_prompts', which has its own.
             if components is None:
                 candidates = self._score_candidates(
                     prompts, multimasking=multimasking, batch_size=batch_size,
                     score_threshold=score_threshold, max_overlap=max_overlap,
                     components=components, refinement_kwargs=resolved,
+                    candidate_feature_schema=feature_schema,
                 )
             else:
                 with autocast(self._predictor.device):
@@ -1644,8 +2333,13 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                         prompts, multimasking=multimasking, batch_size=batch_size,
                         score_threshold=score_threshold, max_overlap=max_overlap,
                         components=components, refinement_kwargs=resolved,
+                        candidate_feature_schema=feature_schema,
                     )
             self._last_generation_stats["scored_candidates"] = len(candidates)
+            if uses_scorer or candidate_budget is not None:
+                candidates = self._select_volume_candidates(
+                    candidates, metadata, candidate_scorer_threshold, candidate_order, candidate_budget,
+                )
             records = self._propagate_candidates(
                 candidates, n_objects_per_pass=n_objects_per_pass,
                 early_stop_patience=early_stop_patience, verbose=verbose, max_overlap=max_overlap,
@@ -1653,10 +2347,28 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             )
             # Tiled records arrive grouped by tile and need their halo overlaps resolved, which
             # '_merge' does polymorphically; an untiled volume merges them flat.
-            return self._merge(
+            n_proposed = self._last_generation_stats["proposed_candidates"]
+            n_scored = self._last_generation_stats["scored_candidates"]
+            segmentation, context = self._merge(
                 records, shape, score_threshold=score_threshold, max_overlap=max_overlap,
-                min_size=min_size, max_size_factor=max_size_factor,
-            )[0]
+                min_size=min_size, max_size_factor=max_size_factor, return_context=keep_trace,
+            )
+            if keep_trace:
+                # '_merge' with a context reports the 2d meaning of these two counters (records
+                # entering the merge); a volume keeps the candidate counts and reports the records apart.
+                self._last_generation_stats.update({
+                    "proposed_candidates": n_proposed,
+                    "scored_candidates": n_scored,
+                    "merged_records": len(records),
+                })
+                self._last_generation_trace = {
+                    "prompts": prompts,
+                    "metadata": metadata,
+                    "candidates": candidates,
+                    "records": records,
+                    "matches": None if context is None else context["matches"],
+                }
+            return segmentation
 
         proposals = self.propose(
             candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
@@ -1668,11 +2380,13 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 and (refinement_kwargs or {}).get("gate", DEFAULT_REFINEMENT["gate"]) == "uncertainty"
                 and refinement_gate_stage(self._refinement_gate_model) == "premerge"
             ),
+            prompt_type=prompt_type,
         )
         return self.select(
             proposals, score_threshold=score_threshold, score_filter=score_filter,
             max_overlap=max_overlap, min_size=min_size,
             refinement=refinement, refinement_kwargs=refinement_kwargs, batch_size=batch_size,
+            arbitration=arbitration, fusion=fusion, recover_residual=recover_residual,
         )
 
     @torch.no_grad()
@@ -1692,6 +2406,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         compute_multimask_uncertainty: bool = False,
         return_multimask_features: bool = False,
         multimask_feature_schema: Optional[str] = None,
+        prompt_type: str = DEFAULT_PROMPT_GENERATION["prompt_type"],
     ) -> list:
         """Derive the prompts and turn them into scored mask proposals, without selecting any of them.
 
@@ -1716,6 +2431,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             return_multimask_features: Attach the selector feature vector for training or diagnostics.
             multimask_feature_schema: Internal extraction override for compact scorer training. None
                 takes the installed scorer's schema, or the historical dense schema without one.
+            prompt_type: What SAM2 is prompted with per candidate: its interior 'point' (the default),
+                the bounding 'box' of its decoder basin, 'point_box' (both) or 'box_thin' (the box
+                for candidates whose basin fills less than `THIN_BASIN_OCCUPANCY` of it, the point
+                otherwise); see `derive_point_prompts`. Every record keeps the point as its seed.
 
         Returns:
             The proposals, to be passed to `select`. Their layout is an implementation detail of the
@@ -1725,6 +2444,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
         if self._prediction.ndim == 4:
             raise ValueError("Proposals can only be reused for an image, because a volume gates its propagation.")
+        if prompt_type not in PROMPT_TYPES:
+            raise ValueError(f"Invalid prompt type {prompt_type!r}: expected one of {PROMPT_TYPES}.")
         self._validate_multimask_options(
             multimasking, multimask_scorer, multimask_selection, is_volume=False,
         )
@@ -1743,17 +2464,31 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             self._prediction[0], self._prediction[1:], model_type=self._model_type,
             candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
             n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size, n_threads=n_threads,
+            return_boxes=prompt_type != "point",
         )
         if prompts is None:
             return []
-        return self._apply(
-            prompts, multimasking=multimasking, batch_size=batch_size,
-            multimask_scorer=multimask_scorer, multimask_selection=multimask_selection,
-            compute_multimask_uncertainty=compute_multimask_uncertainty,
-            return_multimask_features=return_multimask_features,
-            multimask_feature_schema=multimask_feature_schema,
-            foreground_threshold=foreground_threshold,
-        )
+        apply_kwargs = {
+            "multimasking": multimasking, "batch_size": batch_size,
+            "multimask_scorer": multimask_scorer, "multimask_selection": multimask_selection,
+            "compute_multimask_uncertainty": compute_multimask_uncertainty,
+            "return_multimask_features": return_multimask_features,
+            "multimask_feature_schema": multimask_feature_schema,
+            "foreground_threshold": foreground_threshold,
+        }
+        if prompt_type != "box_thin":
+            return self._apply(prompts, prompt_type=prompt_type, **apply_kwargs)
+        # A forward pass takes one prompt structure, so the boxed and the pointed candidates run as
+        # two blocks; the prompt indices stay unique through the offset.
+        thin = prompts["occupancy"] < THIN_BASIN_OCCUPANCY
+        records, offset = [], 0
+        for selected, block_type in ((thin, "box"), (~thin, "point")):
+            if not selected.any():
+                continue
+            block = {key: value[selected] for key, value in prompts.items()}
+            records.extend(self._apply(block, prompt_type=block_type, prompt_offset=offset, **apply_kwargs))
+            offset += int(selected.sum())
+        return records
 
     def select(
         self,
@@ -1765,6 +2500,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         refinement: Optional[str] = DEFAULT_PROMPT_GENERATION["refinement"],
         refinement_kwargs: Optional[Dict[str, Any]] = DEFAULT_PROMPT_GENERATION["refinement_kwargs"],
         batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
+        arbitration: str = DEFAULT_PROMPT_GENERATION["arbitration"],
+        fusion: Optional[str] = DEFAULT_PROMPT_GENERATION["fusion"],
+        recover_residual: bool = DEFAULT_PROMPT_GENERATION["recover_residual"],
     ) -> np.ndarray:
         """Merge the proposals of `propose` into an instance segmentation.
 
@@ -1780,6 +2518,20 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             refinement_kwargs: Keyword arguments of that second round, validated against the mode's
                 components; see `DEFAULT_REFINEMENT` for the accepted keys and their defaults.
             batch_size: Number of prompts per forward pass of the refinement.
+            arbitration: How the merge treats a proposal's pixels that an accepted mask already
+                claims, once the proposal is not a duplicate: 'drop' (the default) truncates it to
+                the free pixels; 'decoder' and 'euclidean' keep both masks and hand each contested
+                pixel to the one whose seed owns it, by the decoder's watershed basin
+                (`decoder_basins`, seeded at the accepted prompts) or by seed distance. See
+                `merge_by_score`.
+            fusion: Optional fusion with the decoder's own instance segmentation after the merge and
+                the refinement: 'fallback', 'conflict' or 'both', see `fuse_with_instances`. None
+                (the default) fuses nothing.
+            recover_residual: Whether to prompt once more on the connected components of predicted
+                foreground that are still uncovered (at least 'min_size' pixels each, one interior
+                point per component, SAM2's predicted-IoU choice among its masks), filter those
+                masks by the same score threshold and merge them onto the free pixels. Off by
+                default; this is a second forward pass.
 
         Returns:
             The instance segmentation, uint32 array with the spatial shape of the prediction.
@@ -1798,19 +2550,90 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 f"Invalid score filter {score_filter!r}: expected 'predicted_iou', "
                 "'selection_score' or 'none'."
             )
+        if arbitration not in ARBITRATION_MODES:
+            raise ValueError(f"Invalid arbitration {arbitration!r}: expected one of {ARBITRATION_MODES}.")
+        if fusion is not None and fusion not in FUSION_MODES:
+            raise ValueError(f"Invalid fusion mode {fusion!r}: expected None or one of {FUSION_MODES}.")
         if refinement is not None:
             components, resolved = _parse_refinement(refinement, refinement_kwargs)
 
         shape = self._prediction[0].shape
-        if not proposals:
+        # The fusion and the residual recovery can add instances to an image no proposal covers.
+        if not proposals and fusion is None and not recover_residual:
             return np.zeros(shape, dtype="uint32")
 
         segmentation, context = self._merge(
             proposals, shape, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
-            return_context=components is not None, score_filter=score_filter,
+            return_context=components is not None or fusion is not None, score_filter=score_filter,
+            arbitration=arbitration,
         )
         if components is not None and segmentation.max() > 0:
             segmentation = self._refine(segmentation, context, components, resolved, batch_size)
+        if fusion is not None:
+            segmentation = self._fuse(segmentation, context, fusion, min_size)
+        if recover_residual:
+            segmentation = self._recover_residual(
+                segmentation, proposals, score_threshold, score_filter, max_overlap, min_size, batch_size,
+            )
+        return segmentation
+
+    def _decoder_basins(self, records: list) -> np.ndarray:
+        """Partition the predicted foreground among the records' prompts by the decoder's watershed."""
+        foreground = self._prediction[0]
+        markers = np.zeros(foreground.shape, dtype="uint32")
+        for index, record in enumerate(records):
+            y, x = np.round(_record_seed(record, record.get("bounding_box", (slice(0, 1), slice(0, 1))))).astype(int)
+            y, x = int(np.clip(y, 0, foreground.shape[0] - 1)), int(np.clip(x, 0, foreground.shape[1] - 1))
+            markers[y, x] = _marker_id(record, index)
+        foreground_threshold = float(records[0].get(
+            "foreground_threshold", default_prompt_generation(self._model_type)["foreground_threshold"],
+        ))
+        return decoder_basins(
+            foreground, self._prediction[1:], markers, foreground_threshold,
+            default_postprocessing(self._model_type, "sparse")["foreground_weight"],
+        )
+
+    def _fuse(self, segmentation: np.ndarray, context: Optional[dict], mode: str, min_size: int) -> np.ndarray:
+        """Fuse the accepted masks with the decoder's instance segmentation, see `fuse_with_instances`."""
+        instances = flow_instance_segmentation(
+            self._prediction[0], self._prediction[1:], model_type=self._model_type,
+        )
+        stability = {} if context is None else {
+            instance_id: float(context["records"][record_index]["stability_score"])
+            for instance_id, record_index in context["matches"].items()
+        }
+        segmentation, stats = fuse_with_instances(segmentation, instances, stability, mode, min_size=min_size)
+        self._last_generation_stats.update(stats)
+        return segmentation
+
+    def _recover_residual(
+        self, segmentation: np.ndarray, proposals: list, score_threshold: float, score_filter: str,
+        max_overlap: float, min_size: int, batch_size: int,
+    ) -> np.ndarray:
+        """Prompt the uncovered foreground components once more and merge the masks onto the result."""
+        default_threshold = default_prompt_generation(self._model_type)["foreground_threshold"]
+        foreground_threshold = float(
+            proposals[0].get("foreground_threshold", default_threshold) if proposals else default_threshold
+        )
+        prompts = residual_point_prompts(self._prediction[0], segmentation, foreground_threshold, min_size)
+        stats = {"residual_prompts": 0, "residual_added": 0}
+        if prompts is not None:
+            stats["residual_prompts"] = len(prompts["points"])
+            with torch.no_grad():
+                records = self._apply(
+                    prompts, multimasking=True, batch_size=batch_size, foreground_threshold=foreground_threshold,
+                )
+            if score_filter != "none":
+                records = [record for record in records if record[score_filter] >= score_threshold]
+            if records:
+                # The residual masks only fill free pixels: a mask reaching back onto an accepted one
+                # beyond 'max_overlap' is that object's duplicate.
+                segmentation, matches = merge_by_score(
+                    records, segmentation.shape, max_overlap=max_overlap, min_size=min_size,
+                    return_matches=True, initial=segmentation,
+                )
+                stats["residual_added"] = len(matches)
+        self._last_generation_stats.update(stats)
         return segmentation
 
     def _region_of(self, context: dict, record_index: int):
@@ -1834,9 +2657,12 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         return_multimask_features: bool = False,
         multimask_feature_schema: Optional[str] = None,
         foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
+        prompt_type: str = "point", prompt_offset: int = 0,
     ) -> list:
         """Turn the prompts into mask proposals."""
         kwargs = {"multimasking": multimasking, "batch_size": batch_size}
+        if prompt_type != "point" or prompt_offset:
+            kwargs.update({"prompt_type": prompt_type, "prompt_offset": prompt_offset, "boxes": prompts.get("boxes")})
         if (
             multimask_scorer != "predicted_iou"
             or multimask_selection != "eager"
@@ -1856,7 +2682,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     def _merge(
         self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
         max_size_factor: Optional[float] = None, return_context: bool = False,
-        score_filter: str = "predicted_iou",
+        score_filter: str = "predicted_iou", arbitration: str = "drop",
     ) -> tuple:
         """Merge the mask proposals into an instance segmentation.
 
@@ -1876,19 +2702,27 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             records = [record for record in proposals if record[score_filter] >= score_threshold]
         if not records:
             return np.zeros(shape, dtype="uint32"), None
-        if not return_context:
-            return merge_by_score(
-                records, shape, max_overlap=max_overlap, min_size=min_size, max_size_factor=max_size_factor,
-            ), None
+        merge_kwargs = {"max_overlap": max_overlap, "min_size": min_size, "max_size_factor": max_size_factor}
+        if arbitration != "drop":
+            merge_kwargs["arbitration"] = "split"
+            if arbitration == "decoder":
+                merge_kwargs["basins"] = self._decoder_basins(records)
+        if not return_context and arbitration == "drop":
+            return merge_by_score(records, shape, **merge_kwargs), None
         segmentation, matches, reasons = merge_by_score(
-            records, shape, max_overlap=max_overlap, min_size=min_size, max_size_factor=max_size_factor,
-            return_matches=True, return_reasons=True,
+            records, shape, return_matches=True, return_reasons=True, **merge_kwargs,
         )
         self._last_generation_stats.update({
             "proposed_candidates": len(proposals),
             "scored_candidates": len(records),
             "merge_reasons": {reason: reasons.count(reason) for reason in sorted(set(reasons))},
         })
+        if arbitration != "drop":
+            self._last_generation_stats["arbitration_dropped"] = (
+                reasons.count("arbitrated away") + reasons.count("split away")
+            )
+        if not return_context:
+            return segmentation, None
         return segmentation, {
             "proposals": proposals, "records": records, "matches": matches,
             "score_threshold": score_threshold, "score_filter": score_filter,
@@ -1923,6 +2757,12 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         once, since a tiled generator pays for each switch. Within a region everything runs on its
         crop of the segmentation, which is the frame the predictor works in; only the repaint at
         the end is global, so the score order arbitrates across regions as well as within them.
+
+        Two label-free rules of the 2026-09 refinement campaign are opt-in here: 'protect_neighbours'
+        clips every second-round mask to the background and the instance's own first-round pixels,
+        so a re-prompt never repaints a neighbour; the 'isolated' gate re-prompts only instances
+        without a touching neighbour and, with 'isolated_fallback', the touching ones with their box
+        alone. Both are off by default and leave the historical behaviour untouched.
         """
         shape = segmentation.shape
         all_instances = [
@@ -1931,8 +2771,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             if bounding_box is not None
         ]
         instances = all_instances
-        unselected = []
-        gate_requested = refinement_kwargs.get("gate", "all") == "uncertainty"
+        unselected, fallback = [], []
+        gate = refinement_kwargs.get("gate", "all")
+        gate_requested = gate == "uncertainty"
         gate_model = getattr(self, "_refinement_gate_model", None)
         gate_stage = refinement_gate_stage(gate_model)
         if gate_requested and gate_stage == "premerge":
@@ -1947,6 +2788,23 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                         "Generate them with a fitted refinement gate model."
                     )
                 (instances if record["uncertainty_score"] >= threshold else unselected).append(instance)
+
+        protect = bool(refinement_kwargs.get("protect_neighbours", False))
+        negative_scope = refinement_kwargs.get("negative_scope", "nearest")
+        touching = None
+        if gate == "isolated" or ("points" in components and negative_scope == "touching"):
+            touching = _touching_instances(
+                segmentation, int(refinement_kwargs.get("touch_radius", DEFAULT_REFINEMENT["touch_radius"])),
+            )
+        isolated = []
+        if gate == "isolated":
+            isolated = [instance for instance in all_instances if not touching[instance[0]]]
+            crowded = [instance for instance in all_instances if touching[instance[0]]]
+            instances = isolated
+            if refinement_kwargs.get("isolated_fallback") == "boxes":
+                fallback = crowded
+            else:
+                unselected = crowded
 
         point_prompts = None
         if "points" in components:
@@ -1968,6 +2826,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 max_negative_distance=refinement_kwargs["max_negative_distance"],
                 negative_source=refinement_kwargs["negative_source"],
                 min_negative_distance=refinement_kwargs["min_negative_distance"],
+                negative_scope=negative_scope, touching=touching,
             )
 
         if gate_requested and gate_stage == "postmerge":
@@ -1998,33 +2857,43 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 record["uncertainty_score"] = by_id[instance_id]
                 (instances if by_id[instance_id] >= threshold else unselected).append(instance)
 
+        n_negatives_used = 0
+        if point_prompts is not None:
+            n_negatives_used = sum(
+                int(np.count_nonzero(point_prompts[instance_id]["point_labels"] == 0)) for instance_id, _ in instances
+            )
         self._last_generation_stats.update({
             "refinement_eligible_instances": len(all_instances),
             "uncertainty_selected_instances": len(instances),
+            "refinement_isolated_instances": len(isolated),
+            "refinement_fallback_instances": len(fallback),
+            "refinement_negatives": n_negatives_used,
         })
-        if not instances:
+        if not instances and not fallback:
             self._last_generation_stats.update({
                 "refined_instances": 0, "replaced_instances": 0,
-                "dropped_negatives": 0,
+                "dropped_negatives": 0, "refinement_protected_pixels": 0,
                 "gated_consistency": 0, "gated_foreign": 0,
             })
             return segmentation
 
-        # Every instance needs the record that made it, for its first-round score.
+        # Every instance needs the record that made it, for its first-round score. The fallback
+        # instances are re-prompted with the box alone, in their own batches.
         groups = {}
-        for instance_id, bounding_box in instances:
-            if instance_id not in context["matches"]:
-                raise RuntimeError(
-                    f"Instance {instance_id} is in the segmentation but not in the merge context. The "
-                    "refinement cannot score it against its first round."
-                )
-            key = self._region_of(context, context["matches"][instance_id])
-            groups.setdefault(key, []).append((instance_id, bounding_box))
+        for role, members in (("primary", instances), ("fallback", fallback)):
+            for instance_id, bounding_box in members:
+                if instance_id not in context["matches"]:
+                    raise RuntimeError(
+                        f"Instance {instance_id} is in the segmentation but not in the merge context. The "
+                        "refinement cannot score it against its first round."
+                    )
+                key = self._region_of(context, context["matches"][instance_id])
+                groups.setdefault(key, {"primary": [], "fallback": []})[role].append((instance_id, bounding_box))
 
         min_consistency = refinement_kwargs["min_consistency"]
         max_foreign_overlap = refinement_kwargs["max_foreign_overlap"]
         keep_if_better = refinement_kwargs["policy"] == "keep-if-better"
-        chosen, replaced, dropped = [], 0, 0
+        chosen, replaced, dropped, protected = [], 0, 0, 0
         for instance_id, bounding_box in unselected:
             record = context["records"][context["matches"][instance_id]]
             chosen.append((
@@ -2037,58 +2906,77 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             region_box = self._region_box(key)
             crop = segmentation[region_box]
             origin = tuple(box.start or 0 for box in region_box)
+            claimed = crop != 0
+            primary = groups[key]["primary"]
 
             region_prompts = point_prompts
             if point_prompts is not None and (any(origin) or crop.shape != shape):
                 region_prompts = {}
-                for instance_id, _ in groups[key]:
+                for instance_id, _ in primary:
                     region_prompts[instance_id], region_dropped = _localize_prompts(
                         point_prompts[instance_id], origin, crop.shape
                     )
                     dropped += region_dropped
-            region_instances = [
-                (instance_id, _shift_box(bounding_box, tuple(-shift for shift in origin)))
-                for instance_id, bounding_box in groups[key]
-            ]
 
-            for start in range(0, len(region_instances), batch_size):
-                batch = region_instances[start:start + batch_size]
-                predictions = self._predict_refinement_batch(
-                    crop, batch, components, region_prompts, refinement_kwargs,
-                )
-                for (instance_id, bounding_box), (mask, score) in zip(batch, predictions):
-                    record = context["records"][context["matches"][instance_id]]
-                    first_round_score = record["predicted_iou"] * record["stability_score"]
-                    first_round_merge_score = record.get("merge_score", first_round_score)
-                    take_second = mask.any() and (not keep_if_better or score > first_round_score)
-                    if take_second and min_consistency is not None:
-                        first_round_mask = crop == instance_id
-                        union = int(np.count_nonzero(mask | first_round_mask))
-                        iou = int(np.count_nonzero(mask & first_round_mask)) / union if union else 0.0
-                        if iou < min_consistency:
-                            take_second = False
-                            gated["gated_consistency"] += 1
-                    if take_second and max_foreign_overlap is not None:
-                        on_mask = crop[mask]
-                        foreign = int(np.count_nonzero((on_mask != 0) & (on_mask != instance_id)))
-                        if foreign / int(mask.sum()) > max_foreign_overlap:
-                            take_second = False
-                            gated["gated_foreign"] += 1
-                    if take_second:
-                        replaced += 1
-                        rows, columns = np.nonzero(mask)
-                        box = (slice(int(rows.min()), int(rows.max()) + 1),
-                               slice(int(columns.min()), int(columns.max()) + 1))
-                        chosen.append((score, instance_id, _shift_box(box, origin), mask[box]))
-                    else:
-                        chosen.append((
-                            first_round_merge_score, instance_id, _shift_box(bounding_box, origin),
-                            crop[bounding_box] == instance_id,
-                        ))
+            def accept(instance_id: int, bounding_box: tuple, mask: np.ndarray, score: float) -> None:
+                """Decide between the second-round mask and the first round, and queue the repaint."""
+                nonlocal replaced, protected
+                record = context["records"][context["matches"][instance_id]]
+                first_round_score = record["predicted_iou"] * record["stability_score"]
+                first_round_merge_score = record.get("merge_score", first_round_score)
+                if protect:
+                    # Never onto a neighbour: the clipped mask is what the gates and the repaint see, and
+                    # a mask clipped to nothing keeps the first round below.
+                    foreign_pixels = claimed & (crop != instance_id)
+                    stolen = int(np.count_nonzero(mask & foreign_pixels))
+                    if stolen:
+                        mask = mask & ~foreign_pixels
+                        protected += stolen
+                take_second = mask.any() and (not keep_if_better or score > first_round_score)
+                if take_second and min_consistency is not None:
+                    first_round_mask = crop == instance_id
+                    union = int(np.count_nonzero(mask | first_round_mask))
+                    iou = int(np.count_nonzero(mask & first_round_mask)) / union if union else 0.0
+                    if iou < min_consistency:
+                        take_second = False
+                        gated["gated_consistency"] += 1
+                if take_second and max_foreign_overlap is not None:
+                    on_mask = crop[mask]
+                    foreign = int(np.count_nonzero((on_mask != 0) & (on_mask != instance_id)))
+                    if foreign / int(mask.sum()) > max_foreign_overlap:
+                        take_second = False
+                        gated["gated_foreign"] += 1
+                if take_second:
+                    replaced += 1
+                    rows, columns = np.nonzero(mask)
+                    box = (slice(int(rows.min()), int(rows.max()) + 1),
+                           slice(int(columns.min()), int(columns.max()) + 1))
+                    chosen.append((score, instance_id, _shift_box(box, origin), mask[box]))
+                else:
+                    chosen.append((
+                        first_round_merge_score, instance_id, _shift_box(bounding_box, origin),
+                        crop[bounding_box] == instance_id,
+                    ))
+
+            # One prompt structure per forward pass: the full mode for the selected instances, the
+            # box alone for the fallback ones.
+            passes = ((components, region_prompts, primary), (("boxes",), None, groups[key]["fallback"]))
+            for pass_components, pass_prompts, members in passes:
+                region_instances = [
+                    (instance_id, _shift_box(bounding_box, tuple(-shift for shift in origin)))
+                    for instance_id, bounding_box in members
+                ]
+                for start in range(0, len(region_instances), batch_size):
+                    batch = region_instances[start:start + batch_size]
+                    predictions = self._predict_refinement_batch(
+                        crop, batch, pass_components, pass_prompts, refinement_kwargs,
+                    )
+                    for (instance_id, bounding_box), (mask, score) in zip(batch, predictions):
+                        accept(instance_id, bounding_box, mask, score)
 
         self._last_generation_stats.update({
-            "refined_instances": len(instances), "replaced_instances": replaced,
-            "dropped_negatives": dropped, **gated,
+            "refined_instances": len(instances) + len(fallback), "replaced_instances": replaced,
+            "dropped_negatives": dropped, "refinement_protected_pixels": protected, **gated,
         })
         # Ascending score, so that the most confident instance is painted last and wins contested pixels.
         refined = np.zeros(shape, dtype="uint32")
@@ -2163,13 +3051,27 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         multimask_feature_schema: Optional[str] = None,
         foreground: Optional[np.ndarray] = None,
         foreground_threshold: float = DEFAULT_PROMPT_GENERATION["foreground_threshold"],
+        boxes: Optional[np.ndarray] = None,
+        prompt_type: str = "point",
+        prompt_offset: int = 0,
     ) -> List[Dict[str, Any]]:
         """Prompt in batches and return eager records or grouped multimask alternatives.
 
         Takes the predictor rather than reading `self._predictor`, so the volumetric scoring
         can hand every worker the replica on its own device.
+
+        'boxes' are (N, 4) XYXY boxes aligned with the points; 'prompt_type' says what reaches the
+        model: the 'point', the 'box', or both ('point_box'). The point stays every record's seed.
+        'prompt_offset' shifts the recorded prompt indices when the prompts are applied in blocks.
         """
         points, point_labels = prompts["points"], prompts["point_labels"]
+        if prompt_type not in ("point", "box", "point_box"):
+            raise ValueError(f"Invalid prompt type {prompt_type!r} for a forward pass.")
+        if prompt_type != "point":
+            if boxes is None or len(boxes) != len(points):
+                raise ValueError("Box prompts require one box per point.")
+            boxes = np.asarray(boxes, dtype="float32")
+        feed_points, feed_boxes = prompt_type != "box", prompt_type != "point"
         mask_threshold = getattr(predictor, "mask_threshold", 0.0)
         if multimask_feature_schema is None:
             multimask_feature_schema = (
@@ -2206,19 +3108,21 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             stop = start + batch_size
             batch_points, batch_labels = points[start:stop], point_labels[start:stop]
             n_prompts = len(batch_points)
+            batch_boxes = boxes[start:stop] if feed_boxes else None
             # Reduced on the device, so only the kept mask is transferred rather than every proposal.
-            mask_input, coords, labels, _ = predictor._prep_prompts(
-                batch_points, batch_labels, None, None, True,
+            mask_input, coords, labels, box_input = predictor._prep_prompts(
+                batch_points if feed_points else None, batch_labels if feed_points else None, batch_boxes,
+                None, True,
             )
             with autocast(predictor.device):
                 if compact_features:
                     lowres_logits, scores, mask_tokens = _predict_three_lowres(
-                        predictor, coords, labels, None, mask_input,
+                        predictor, coords, labels, box_input, mask_input,
                     )
                     logits = None
                 else:
                     logits, scores, _ = predictor._predict(
-                        coords, labels, None, mask_input, multimasking, return_logits=True,
+                        coords, labels, box_input, mask_input, multimasking, return_logits=True,
                     )
                     logits = logits.reshape(n_prompts, -1, *logits.shape[-2:])
                     lowres_logits = mask_tokens = None
@@ -2244,6 +3148,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                     source_logits.reshape(n_prompts * n_alternatives, *source_logits.shape[-2:]),
                     mask_threshold, STABILITY_SCORE_OFFSET,
                 ).reshape(n_prompts, n_alternatives)
+                # An alternative whose mask is empty at both offsets has a 0/0 stability. It is dropped
+                # as a record anyway, but its row still enters the group's features, so it gets 0.
+                stability = torch.nan_to_num(stability, nan=0.0)
                 feature_binary = source_logits > mask_threshold
                 cuda_timing = scores.device.type == "cuda"
                 if cuda_timing:
@@ -2412,7 +3319,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                         "bounding_box": (slice(y0, y1), slice(x0, x1)),
                         "predicted_iou": raw_score,
                         "stability_score": stable,
-                        "prompt_index": start + offset,
+                        "prompt_index": prompt_offset + start + offset,
                         "point": (float(batch_points[offset, 0, 0]), float(batch_points[offset, 0, 1])),
                         "foreground_threshold": float(foreground_threshold),
                         "multimask_index": alternative_index,
@@ -2421,10 +3328,13 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                             selection_score if multimask_scorer == "microscopy" else raw_score * stable
                         ),
                     }
+                    if batch_boxes is not None:
+                        record["prompt_type"] = prompt_type
+                        record["box"] = tuple(float(value) for value in batch_boxes[offset])
                     if return_multimask_features or multimask_selection == "deferred":
                         record["multimask_features"] = features[offset, alternative_index].copy()
                     if multimask_selection == "deferred" and masks_np.shape[1] > 1:
-                        record["multimask_group"] = start + offset
+                        record["multimask_group"] = prompt_offset + start + offset
                     if gate_scores is not None:
                         record["uncertainty_score"] = float(gate_scores[offset, alternative_index])
                     records.append(record)
@@ -2432,21 +3342,83 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             if advanced:
                 record_seconds += time.perf_counter() - records_started
         if advanced:
+            # A later block of the same proposal adds to the counters of the earlier ones.
+            previous = self._last_generation_stats if prompt_offset else {}
             self._last_generation_stats.update({
-                "multimask_alternatives": alternatives_returned,
-                "multimask_changed_from_iou": int(changed_from_iou.cpu()),
+                "multimask_alternatives": alternatives_returned + previous.get("multimask_alternatives", 0),
+                "multimask_changed_from_iou": (
+                    int(changed_from_iou.cpu()) + previous.get("multimask_changed_from_iou", 0)
+                ),
                 "multimask_feature_schema": multimask_feature_schema,
-                "multimask_feature_seconds": feature_seconds,
-                "multimask_scorer_seconds": scorer_seconds,
-                "multimask_transfer_seconds": transfer_seconds,
-                "multimask_record_seconds": record_seconds,
+                "multimask_feature_seconds": feature_seconds + previous.get("multimask_feature_seconds", 0.0),
+                "multimask_scorer_seconds": scorer_seconds + previous.get("multimask_scorer_seconds", 0.0),
+                "multimask_transfer_seconds": transfer_seconds + previous.get("multimask_transfer_seconds", 0.0),
+                "multimask_record_seconds": record_seconds + previous.get("multimask_record_seconds", 0.0),
             })
         return records
+
+    def _select_volume_candidates(
+        self, candidates: List[dict], metadata: Optional[dict], threshold: Optional[float], order: str,
+        budget: Optional[int],
+    ) -> List[dict]:
+        """Score the anchor-slice survivors with the installed volume candidate scorer, then filter,
+        order and cap them before the propagation, which is where a volume's cost is.
+
+        The scorer sees the three anchor alternatives' features that `_score_candidates` attached and
+        the ladder features of `derive_volume_prompts`, matched by the candidate's global prompt index.
+        Without a scorer only the budget applies, on the anchor score.
+        """
+        stats = self._last_generation_stats
+        scorer = getattr(self, "_volume_candidate_scorer", None)
+        if scorer is not None and (threshold is not None or order == "learned"):
+            started = time.perf_counter()
+            names = tuple(getattr(scorer, "component_feature_names", ()))
+            component_features = None
+            if names:
+                if metadata is None:
+                    raise RuntimeError("The volume candidate scorer needs ladder metadata, which the prompts lack.")
+                columns = [VOLUME_CANDIDATE_FEATURE_NAMES.index(name) for name in names]
+                component_features = np.asarray(metadata["features"], dtype="float32")[:, columns]
+            missing = [candidate for candidate in candidates if "alternative_features" not in candidate]
+            if missing:
+                raise RuntimeError(
+                    f"{len(missing)} candidates carry no anchor features; the scoring did not extract them."
+                )
+            if candidates:
+                features = torch.as_tensor(
+                    np.stack([candidate["alternative_features"] for candidate in candidates]), dtype=torch.float32,
+                )
+                components = None
+                if component_features is not None:
+                    components = torch.as_tensor(
+                        component_features[[candidate["prompt_index"] for candidate in candidates]],
+                        dtype=torch.float32,
+                    )
+                scores = np.asarray(scorer.predict_candidates(features, components), dtype="float32").reshape(-1)
+                if scores.shape[0] != len(candidates) or not np.isfinite(scores).all():
+                    raise RuntimeError("The volume candidate scorer returned an invalid score vector.")
+                for candidate, score in zip(candidates, scores):
+                    candidate["learned_score"] = float(score)
+                    if order == "learned":
+                        candidate["merge_score"] = float(score)
+            if threshold is not None:
+                kept = [candidate for candidate in candidates if candidate["learned_score"] >= threshold]
+                stats["filtered_candidates"] = len(candidates) - len(kept)
+                candidates = kept
+            stats["candidate_scorer_seconds"] = time.perf_counter() - started
+        if budget is not None and len(candidates) > budget:
+            ranked = sorted(
+                candidates,
+                key=lambda candidate: -candidate.get("merge_score", candidate["score"] * candidate["stability"]),
+            )
+            stats["budgeted_candidates"] = len(candidates) - budget
+            candidates = ranked[:budget]
+        return candidates
 
     def _score_candidates(
         self, prompts: dict, multimasking: bool, batch_size: int, score_threshold: float,
         max_overlap: float, components: Optional[tuple] = None,
-        refinement_kwargs: Optional[dict] = None,
+        refinement_kwargs: Optional[dict] = None, candidate_feature_schema: Optional[str] = None,
     ) -> List[dict]:
         """Prompt every candidate in 2d on its anchor slice, and keep the strong, non-duplicate ones.
 
@@ -2465,11 +3437,18 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             max_overlap: Reject a candidate when more than this fraction of it is already claimed.
             components: The refinement components, or None to run no second round.
             refinement_kwargs: The resolved refinement keyword arguments.
+            candidate_feature_schema: Optional selector feature schema (see `SELECTOR_FEATURE_SCHEMAS`).
+                When given, one extra deferred multimask forward per anchor slice extracts the three
+                alternatives' features and attaches them to the surviving candidates as
+                'alternative_features' (3, F), 'alternative_scores' and 'alternative_stability'. The
+                decision which candidates survive is unchanged: the features are side information.
 
         Returns:
-            The surviving candidates, each with the prompt it will be propagated with.
+            The surviving candidates, each with the prompt it will be propagated with and its global
+            'prompt_index' into the prompts.
         """
         points, point_labels, frames = prompts["points"], prompts["point_labels"], prompts["frames"]
+        conditioning = prompts.get("conditioning")
         slice_shape = self._prediction[0].shape[-2:]
         min_size = default_prompt_generation(self._model_type, is_volume=False)["min_size"]
         # A refinement round re-prompts through 'self._predictor', so those slices keep to it and to
@@ -2483,13 +3462,29 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             indices = np.where(frames == frame)[0]
             # Reads the slice's features out of the volume's embeddings, so nothing is re-encoded.
             _set_image_predictor_from_3d_embeddings(predictor, self._image_embeddings, int(frame))
+            frame_prompts = {"points": points[indices], "point_labels": point_labels[indices]}
             records = self._apply_prompts(
-                predictor, {"points": points[indices], "point_labels": point_labels[indices]},
-                multimasking=multimasking, batch_size=batch_size,
+                predictor, frame_prompts, multimasking=multimasking, batch_size=batch_size,
             )
+            features_by_prompt = None
+            if candidate_feature_schema is not None:
+                features_by_prompt = self._anchor_alternative_features(
+                    predictor, frame_prompts, int(frame), candidate_feature_schema, batch_size,
+                )
             records = [record for record in records if record["predicted_iou"] >= score_threshold]
             if not records:
                 return []
+
+            def finish(candidate, record):
+                local_index = int(record["prompt_index"])
+                candidate["prompt_index"] = int(indices[local_index])
+                if features_by_prompt is not None:
+                    candidate.update(features_by_prompt[local_index])
+                if conditioning is not None and "conditioning" not in candidate:
+                    supplied = conditioning[candidate["prompt_index"]]
+                    if supplied is not None:
+                        candidate["conditioning"] = supplied
+                return candidate
 
             if not refining:
                 _, kept = merge_by_score(
@@ -2497,7 +3492,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                     min_size=min_size, return_matches=True,
                 )
                 return [
-                    self._anchor_candidate(int(frame), records[record_index])
+                    finish(self._anchor_candidate(int(frame), records[record_index]), records[record_index])
                     for record_index in kept.values()
                 ]
 
@@ -2512,10 +3507,51 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 "frame": int(frame), "segmentation": segmentation, "records": records,
                 "matches": matches, "points": points[indices][:, 0, :],
             }
-            return list(self._refine_anchors(context, components, refinement_kwargs, batch_size))
+            refined = self._refine_anchors(context, components, refinement_kwargs, batch_size)
+            return [
+                finish(candidate, records[record_index])
+                for candidate, record_index in zip(refined, matches.values())
+            ]
 
         per_frame = map_jobs_over_devices(devices, np.unique(frames), score_frame)
         return [candidate for frame_candidates in per_frame for candidate in frame_candidates]
+
+    def _anchor_alternative_features(
+        self, predictor, frame_prompts: dict, frame: int, schema: str, batch_size: int,
+    ) -> Dict[int, dict]:
+        """The three multimask alternatives' selector features for every prompt of one anchor slice.
+
+        One deferred forward with feature extraction, separate from the historical scoring call so that
+        the candidate set stays exactly what it was. An alternative whose mask came back empty has no
+        record and leaves NaN in its row.
+        """
+        records = self._apply_prompts(
+            predictor, frame_prompts, multimasking=True, batch_size=batch_size,
+            multimask_scorer="predicted_iou", multimask_selection="deferred",
+            return_multimask_features=True, multimask_feature_schema=schema,
+            foreground=self._prediction[0, frame],
+        )
+        n_prompts = len(frame_prompts["points"])
+        n_features = None
+        for record in records:
+            n_features = len(record["multimask_features"])
+            break
+        by_prompt = {}
+        for local_index in range(n_prompts):
+            by_prompt[local_index] = {
+                "alternative_features": np.full((3, n_features or 0), np.nan, dtype="float32"),
+                "alternative_scores": np.full(3, np.nan, dtype="float32"),
+                "alternative_stability": np.full(3, np.nan, dtype="float32"),
+            }
+        for record in records:
+            entry = by_prompt[int(record["prompt_index"])]
+            alternative = int(record["multimask_index"])
+            if alternative >= 3:
+                continue
+            entry["alternative_features"][alternative] = record["multimask_features"]
+            entry["alternative_scores"][alternative] = record["predicted_iou"]
+            entry["alternative_stability"][alternative] = record["stability_score"]
+        return by_prompt
 
     def _scoring_predictors(self) -> list:
         """One image predictor per inference device, built on the video predictor's own replicas.
@@ -2745,7 +3781,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             return []
         if propagation_waves <= 1:
             return [list(candidates)]
-        order = sorted(candidates, key=lambda candidate: -(candidate["score"] * candidate["stability"]))
+        order = sorted(
+            candidates,
+            key=lambda candidate: -candidate.get("merge_score", candidate["score"] * candidate["stability"]),
+        )
         size = -(-len(order) // propagation_waves)
         return [order[start:start + size] for start in range(0, len(order), size)]
 

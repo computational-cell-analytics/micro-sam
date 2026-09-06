@@ -35,6 +35,7 @@ from optimization.benchmark_apg_optimization import (  # noqa
     _validate_roots, prepare_manifest,
 )
 from optimization.screen_apg_multimask import (  # noqa
+    PINNED_PROPOSAL_2D,
     _configured_records, _load_oof_lookup, _oof_predictions_for_sample, _predict_records,
 )
 from optimization.train_apg_multimask_selector import _stable_folds  # noqa
@@ -123,7 +124,7 @@ def extract_gate_dataset(
             segmenter.initialize(raw, ndim=2)
             raw_proposals = segmenter.propose(
                 multimasking=True, multimask_scorer="predicted_iou", multimask_selection="deferred",
-                return_multimask_features=True, multimask_feature_schema=proposal_schema,
+                return_multimask_features=True, multimask_feature_schema=proposal_schema, **PINNED_PROPOSAL_2D,
             )
             if not raw_proposals:
                 continue

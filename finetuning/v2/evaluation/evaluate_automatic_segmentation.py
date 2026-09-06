@@ -18,6 +18,7 @@ Usage examples:
 
 import os
 import json
+import hashlib
 import argparse
 import warnings
 
@@ -29,8 +30,8 @@ import torch
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, GT_MIN_SIZE_2D, MODEL_TYPES, MODES,
     VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, genuine_misses,
-    has_val_split, load_data, n_samples, postprocess_unisam2, predict_unisam2, read_tuned_params,
-    resolve_checkpoint_identity, run_dataset_evaluation,
+    has_val_split, load_apg_overrides, load_data, n_samples, postprocess_unisam2, predict_unisam2,
+    read_tuned_params, resolve_checkpoint_identity, run_dataset_evaluation,
 )
 
 
@@ -48,7 +49,8 @@ def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, sp
 
 def run_evaluation(
     model, mode, dataset_name, data_root, experiment_folder, model_type, params, device,
-    crop_shape=None, checkpoint_id=None, devices=None,
+    crop_shape=None, checkpoint_id=None, devices=None, tuned=None, result_tag=None, config_name=None,
+    artifacts=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -67,11 +69,21 @@ def run_evaluation(
         crop_shape: The 3d center crop.
         checkpoint_id: The checksum of all model weights used by the mode.
         devices: The devices inference spreads over. All visible GPUs by default.
+        tuned: Whether 'params' came from the tuning sweep. Names the result file 'tuned' or
+            'default'; by default inferred from whether there are parameters at all.
+        result_tag: Optional tag appended to the result file name, so that a run with explicit
+            parameter overrides or learned artifacts does not collide with the plain evaluation.
+        config_name: The name of the configuration the overrides came from, stored in the results.
+        artifacts: Paths of learned artifacts installed on the model, stored as checksums.
 
     Returns:
         The results as a DataFrame.
     """
-    tag = "tuned" if params else "default"
+    if tuned is None:
+        tuned = bool(params)
+    tag = "tuned" if tuned else "default"
+    if result_tag:
+        tag = f"{tag}_{result_tag}"
     legacy_path = os.path.join(
         experiment_folder, "results", f"{dataset_name}_micro_sam2_{model_type}_{mode}_{tag}.csv"
     )
@@ -117,6 +129,13 @@ def run_evaluation(
         results["unmatched"] = sum(count[0] for count in misses)
         results["genuine_misses"] = sum(count[1] for count in misses)
     results["parameters"] = json.dumps(params, sort_keys=True, default=str) if params else "default"
+    if config_name is not None:
+        results["config_name"] = config_name
+    if artifacts:
+        checksums = {
+            name: hashlib.sha256(open(path, "rb").read()).hexdigest() for name, path in sorted(artifacts.items())
+        }
+        results["artifacts"] = json.dumps(checksums, sort_keys=True)
     results.to_csv(save_path, index=False)
     print(results)
     return results
@@ -144,9 +163,31 @@ def main():
         help="Volumes only. Rounds the candidates are propagated in, overriding whatever was tuned.",
     )
     parser.add_argument("--devices", nargs="*", default=None, help="Inference devices. All visible GPUs by default.")
+    parser.add_argument(
+        "--apg_params", type=str, default=None,
+        help="APG only. A benchmark-style JSON configuration whose 'params_2d' are layered over the tuned "
+             "parameters (or the defaults with --skip_tuning).",
+    )
+    parser.add_argument(
+        "--multimask_scorer_artifact", type=str, default=None,
+        help="APG 2d only. Fitted feature scorer used by multimask_scorer='microscopy'.",
+    )
+    parser.add_argument(
+        "--refinement_gate_artifact", type=str, default=None,
+        help="APG 2d only. Fitted utility scorer used by refinement_kwargs.gate='uncertainty'.",
+    )
+    parser.add_argument(
+        "--result_tag", type=str, default=None,
+        help="Tag appended to the result file name. Defaults to the --apg_params configuration name.",
+    )
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
+    learned = (args.apg_params, args.multimask_scorer_artifact, args.refinement_gate_artifact)
+    if any(option is not None for option in learned) and args.mode != "apg":
+        parser.error("--apg_params and the learned artifacts apply to --mode apg only.")
+    if (args.multimask_scorer_artifact or args.refinement_gate_artifact) and args.dataset_name in DATASETS_3D:
+        parser.error("The learned multimask scorer and refinement gate support 2d datasets only.")
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -163,14 +204,34 @@ def main():
         joint_checksum=joint_checksum, interactive_checkpoint_path=args.interactive_checkpoint,
         devices=args.devices or None,
     )
+    artifacts = {
+        name: path for name, path in (
+            ("multimask_scorer", args.multimask_scorer_artifact),
+            ("refinement_gate", args.refinement_gate_artifact),
+        ) if path is not None
+    }
+    if artifacts:
+        from micro_sam.v2.multimask_selection import load_feature_scorer
+        model.set_multimask_models(
+            scorer=(
+                load_feature_scorer(args.multimask_scorer_artifact, device=device)
+                if args.multimask_scorer_artifact else None
+            ),
+            refinement_gate=(
+                load_feature_scorer(args.refinement_gate_artifact, device=device)
+                if args.refinement_gate_artifact else None
+            ),
+        )
 
     params = None
+    tuned = False
     if not args.skip_tuning:
         if has_val_split(args.dataset_name):
             tuning_root = args.tuning_root or os.path.join(args.experiment_folder, "tuning")
             tuning_root = os.path.join(tuning_root, args.mode)
             try:
                 params = read_tuned_params(tuning_root, args.dataset_name, args.model_type, checkpoint_id)
+                tuned = True
             except FileNotFoundError:
                 warnings.warn(
                     f"No tuned parameters for '{args.dataset_name}' under '{tuning_root}'. Run "
@@ -184,10 +245,18 @@ def main():
         # everything else are what 'generate' applies when a key is missing.
         params = {**(params or {}), "propagation_waves": args.propagation_waves}
 
+    config_name, result_tag = None, args.result_tag
+    if args.apg_params is not None:
+        config_name, overrides = load_apg_overrides(args.apg_params)
+        params = {**(params or {}), **overrides}
+        if result_tag is None:
+            result_tag = config_name
+
     run_evaluation(
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,
         params, device, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
-        devices=args.devices or None,
+        devices=args.devices or None, tuned=tuned, result_tag=result_tag, config_name=config_name,
+        artifacts=artifacts or None,
     )
 
 

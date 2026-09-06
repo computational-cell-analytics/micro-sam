@@ -2,6 +2,10 @@
 
 ## Scope and status
 
+**Update 2026-09-03.** The consolidated findings of the generalization campaign and the current 3d
+agenda are in the final section, "Session of 2026-09-03: generalization campaign, findings and the 3D
+agenda"; the 2d plan for the next session is `APG_2D_GENERALIZATION_CAMPAIGN_PLAN.md`.
+
 This note began as a read-only review of the APG2d and APG3d optimization work on the `apg-optim`
 branch, followed by small sandbox experiments intended to identify useful next directions. The 2d
 directions have now been implemented and evaluated on the established 240-image primary and
@@ -1189,3 +1193,117 @@ The most important preserved files are:
 3d_campaign/correction_v2/screening/counterfactual/dae562dc67233831110bcc2925779aa2/gate.json
 3d_campaign/correction_v2/screening/counterfactual/dae562dc67233831110bcc2925779aa2/track_diagnostics.csv
 ```
+
+## Session of 2026-09-03: generalization campaign, findings and the 3D agenda
+
+This section consolidates everything learned in the two sessions of 3 September 2026 (details, tables
+and job ids are in `APG_2D_OPTIMIZATION.md` and `APG_3D_OPTIMIZATION.md`, dated sections; operations
+in `CAMPAIGN_OPERATIONS.md`). It supersedes the "Ranked 3D agenda" and "Recommended experiment
+sequence" above wherever they conflict.
+
+### The rule that now governs every decision
+
+Only changes that generalize count: an APG change must improve consistently on all datasets, or improve
+enough on most that minor regressions are tolerable. Per-dataset fitting of learned components and
+dataset-specific modes are out. Development evidence is per-dataset deltas over the eleven 2d datasets
+with legal validation splits (primary five, `training_extra` six) or the ten 3d sources of the 57-crop
+manifest, with leave-one-dataset-out (LODO) for anything learned; the production test splits (12 never-used
+2d datasets, 56-crop 3d test manifest) are opened once per shortlist. Formal comparator gates
+(`compare_apg_optimization.py`) remain the runtime and quality bookkeeping, but their +5% quality bar is
+not the acceptance criterion any more; consistency across datasets is.
+
+### 2d findings (hvit_t, joint/v2 `best`)
+
+1. **The learned token selector is within-distribution.** Re-fitted on the current tree it is +21% holdout
+   mSA and passes every gate, but on the production test splits it is +8.3% on the five datasets it was
+   fitted on and −8.0% on the eighteen it was not (arvidsson −26%, tnbc −46%, puma −23%). LODO on the
+   eleven datasets never beats predicted IoU; the 256 mask-token dimensions carry dataset identity (E1, E4, E4b).
+2. **Generic features remove the damage, not the absence of a gain.** 48 + 27 fits over six generic feature
+   sets × per-image standardization × {linear, H64} × {IoU regression, matched classification}, replayed as
+   mSA over eleven datasets (G1, G2): the best out-of-domain candidate is a three-feature linear scorer
+   (predicted IoU, stability, product, with per-image z) at +0.4% LODO, worst dataset −1.6%; the H64 on the
+   19 statistics is +3% in-domain and −4% LODO (dic_hepg2 −84% through its learned filter; −1.2% with SAM2's
+   filter). Every H64 variant is negative out of domain on any input: capacity overfits dataset
+   interactions. Decomposition: the in-domain gain of any selector sits in the head choice among the three
+   masks (+4.5% with SAM2's filter); the catastrophic out-of-domain loss sits in the learned filter's global
+   threshold. Per-image standardization and rank/percentile thresholds do not transfer.
+3. **Proposal-side settings are a wash on the test splits.** The supply screen's winner (candidate
+   threshold 2.0, foreground 0.7, `max_overlap` 0.3, `min_size` 25, predicted-IoU filter 0.5, no learned
+   component) is +4.3% primary, +1.5% extra, +3.5% holdout (three deterministic bracketed trials, runtime
+   +1%), nine of eleven validation datasets up; on all 23 production test splits it is +0.6% overall,
+   +0.1% on the eighteen not in the primary five, arvidsson −12%, microbeseg +13%, usiigaci +15%. The
+   optimum of every global scalar is dataset-dependent; the per-model registry defaults are already close
+   to the best single compromise. Not adopted.
+4. **Candidate ladder and refinement are exhausted** (E2 recall diagnostic: lower thresholds add duplicates,
+   9-19% of objects are never seeded; E3a: 61 refinement configurations move the third decimal, multimasking
+   in the refinement pass hurts). The 15% post-merge signed gate is +0.75% and remains the only accepted
+   refinement policy, itself an opt-in.
+5. **Verdict.** Under the rule, no 2d change of this campaign is adopted; SAM2's predicted IoU with the
+   per-model defaults is the best general-purpose 2d configuration measured. The plan for the next 2d
+   campaign, built on structural rather than scored changes, is `APG_2D_GENERALIZATION_CAMPAIGN_PLAN.md`.
+
+### 3d findings (hvit_t, joint/v2 `best`, new 57-crop primary / 18-crop holdout / 56-crop test manifests)
+
+1. **Setup corrections that stand.** Leak-free SNEMI slabs (z 70:81 and 89:100), `seen_in_training` flags
+   for CREMI A/B and EmbedSeg, source-grouped folds, per-crop bootstrap CIs, family / unseen macros,
+   volume-default parameter resolution (`resolve_volume_params`), a track cache with CPU replay.
+2. **Baselines.** Family macro 0.3048 primary, 0.3218 holdout (unseen macro 0.2923). Anchor refinement with
+   points and boxes: +0.8% primary, +0.4% holdout (+1.7% unseen; EM/ISH families +4% to +10%, nuclei flat,
+   one platynereis crop −12%) at +5% runtime. Stays opt-in.
+3. **The slice-wise hybrid is closed.** 2d APG per slice with multicut linking is +46% on CREMI primary and
+   −40% on SNEMI/human neurons; on the holdout it is +16% on the one unseen CREMI crop, −41% on CREMI A/B,
+   −43% family macro. The learned 2d selector collapses on video embeddings. Union-point recall recovers
+   objects on every dataset but only CREMI gains mSA (precision loss elsewhere).
+4. **Recall is the dominant 3d loss.** Holdout baseline merges 89 of 384 C. elegans objects, 80 of 297 CREMI
+   objects; refinement does not change that.
+5. **The learned pre-propagation filter (C3) is trained but unread.** 84,485 cached candidates from 57 crops,
+   20 filter models (three schemas × component features × three widths, plus dropout 0.3 and unseen-only
+   variants); LODO track-IoU correlations 0.22-0.77 by source. The CPU replay (`screen_apg_3d_filter.py`,
+   job 15721312) was single-threaded and slow at the close of the session.
+
+### Operational pitfalls found (all recorded in `CAMPAIGN_OPERATIONS.md`)
+
+Two conflicting 2d "defaults" (pin every proposal parameter); OOF identity checks require the pinned
+proposal settings, and `training_extra_features.npz` (library defaults) is not pinned; `feature_path()`
+names every output `primary_features_*.npz`; per-candidate indexing of a compressed `NpzFile` decompresses
+the whole array each time (OOM at 128 GB); never edit a checksum file while arrays run; background shells
+drift their cwd; `micromamba` is a shell function, so `timeout micromamba ...` fails.
+
+### Next steps on 3d, in order
+
+The 2d result fixes how 3d is read: only unseen-source LODO with generic inputs decides, the smallest model
+that gains is preferred, and structural label-free changes rank above any score. Concretely:
+
+1. **Read the C3 replay** (`3d_v2/c3/screen_primary/summary.csv`, job 15721312; if it timed out, parallelize
+   the replay over crops, unpacking each crop's tracks once, and rerun). Eligible rows: `lowres_v1` schema
+   (19 generic anchor statistics, with or without the 20 ladder/component features), `lodo` and
+   `__unseen_macro__` columns. Gate: unseen-source LODO family macro up, no source below −2%, passes ≤ 0.92x
+   control, and the same sign at H32 and H64. `token_*` rows are diagnostics of identity leakage only. If it
+   passes: `benchmark_apg_3d.py run --config <filter config> --volume-candidate-scorer-artifact <pt>` on
+   primary, then the 18-crop holdout without re-fitting, then a linear filter (port `GroupwiseLinear` from
+   `train_apg_multimask_selector.py` into `train_apg_3d_filter.py`) as the width control. If it fails, the
+   learned 3d selection line is closed like the 2d one.
+2. **Agreement-filtered recall union (label-free).** The union-point variant recovers objects everywhere;
+   keep a union track only where it agrees with the independent per-slice segmentation in ≥ k slices (IoU ≥
+   0.5 per slice), so recall is kept without the precision loss. Replay first: the C2 slice cache and the
+   union-point track cache exist; a replay script that scores each union track's slice agreement against the
+   cached slice segmentation and re-merges costs CPU only. Gate as above on the 10 sources; end-to-end on the
+   57 crops (~8 GPU-h) only if the replay passes; holdout once.
+3. **Track continuation and anchor choice (label-free).** Re-prompt an object from its last consistent slice
+   when the track dies before the object's expected z-extent (the ladder's component z-extent is in the
+   metadata), and anchor at the slice where the component is largest instead of the ladder's first hit. Both
+   screen on the cached tracks for the anchor question and need one extractor pass for continuation.
+4. **Refinement, filter-aware.** If 1 passes, refine only the kept candidates (`refinement="points+boxes"`
+   after the filter) and re-measure the +0.8% / +0.4%; the EM/ISH gains suggest the policy is worth keeping
+   as an opt-in either way.
+5. **Controls that the 2d result predicts to be a wash** (run last, as controls): 3d merge `max_overlap`
+   0.15 / 0.3 / 0.5 and `min_size` 50 / 100 replayed from the cached tracks; density ladders (1,3,10) /
+   (0.5,2,10) with and without a pass budget (C4 as designed).
+6. **Confirmation.** Holdout (18 crops) for every survivor without re-fitting, then the 56-crop test manifest
+   once, three serial bracketed timing trials on 2g.20gb, and the v4 (geodesic) sign check. A modality rule
+   keyed on physical anisotropy from metadata (not on dataset identity) may be defensible for the EM
+   families, but it is a different method and should be proposed as such, not as an APG improvement.
+
+Everything in 1-5 reuses the existing infrastructure (`apg3d_manifest.py`, `benchmark_apg_3d.py`,
+`extract_apg_3d_tracks.py`, `train_apg_3d_filter.py`, `screen_apg_3d_filter.py`, `screen_apg_3d_hybrid.py`,
+the submitter and job builders). Step 2 needs one new replay script; step 3 needs an extractor option.

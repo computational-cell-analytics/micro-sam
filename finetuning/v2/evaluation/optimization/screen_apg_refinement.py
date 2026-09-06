@@ -68,6 +68,8 @@ SELECT_KEYS = (
 STAT_COLUMNS = (
     "proposed_candidates", "scored_candidates", "refinement_eligible_instances",
     "uncertainty_selected_instances", "refined_instances", "replaced_instances",
+    "gated_consistency", "gated_foreign", "refinement_negatives", "refinement_isolated_instances",
+    "refinement_fallback_instances", "refinement_protected_pixels",
     "merged_kept", "merged_duplicate", "merged_too_small", "merged_truncated",
 )
 
@@ -152,6 +154,12 @@ def _flatten_stats(stats: Dict[str, Any]) -> Dict[str, int]:
         "uncertainty_selected_instances": int(stats.get("uncertainty_selected_instances", 0)),
         "refined_instances": int(stats.get("refined_instances", 0)),
         "replaced_instances": int(stats.get("replaced_instances", 0)),
+        "gated_consistency": int(stats.get("gated_consistency", 0)),
+        "gated_foreign": int(stats.get("gated_foreign", 0)),
+        "refinement_negatives": int(stats.get("refinement_negatives", 0)),
+        "refinement_isolated_instances": int(stats.get("refinement_isolated_instances", 0)),
+        "refinement_fallback_instances": int(stats.get("refinement_fallback_instances", 0)),
+        "refinement_protected_pixels": int(stats.get("refinement_protected_pixels", 0)),
         "merged_kept": int(reasons.get("kept", 0)),
         "merged_duplicate": int(reasons.get("duplicate", 0)),
         "merged_too_small": int(reasons.get("too small", 0)),

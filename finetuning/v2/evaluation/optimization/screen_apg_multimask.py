@@ -31,6 +31,14 @@ from optimization.benchmark_apg_optimization import (  # noqa
 )
 
 
+# The candidate-generation settings every learned 2d artifact was extracted with. The library's
+# per-model hvit_t defaults resolve differently since commit 9fd3b57 (3.0 / 0.5 / 0.3), so a screen
+# that proposes with bare defaults regenerates other prompts than its OOF feature dataset holds.
+PINNED_PROPOSAL_2D = {
+    "candidate_threshold": 1.5, "dt": 0.25, "sigma": 0.5, "min_candidate_size": 4, "foreground_threshold": 0.7,
+}
+
+
 def _default_configs(models: dict) -> list:
     configs = [
         {"name": "predicted-iou-eager", "scorer": None, "selection": "eager", "merge": "raw"},
@@ -229,6 +237,7 @@ def run_screening(
             segmenter.initialize(raw, ndim=2)
             proposals = segmenter.propose(
                 multimasking=True, multimask_scorer="predicted_iou", multimask_selection="deferred",
+                **PINNED_PROPOSAL_2D,
             )
             if use_oof:
                 model_predictions = _oof_predictions_for_sample(

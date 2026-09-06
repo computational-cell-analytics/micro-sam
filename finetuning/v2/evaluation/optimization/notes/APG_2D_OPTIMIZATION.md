@@ -1241,5 +1241,1178 @@ The main artifacts below the optimization output root are:
   `2760e6a9d54c1ce9337896fee2cc13ae`, and `87d46d134d369d6324785bf0c770cb18`.
 
 The deployment configuration is
-`apg_token_lowres_h64_eager_postmerge_signed_15.json`. Both fitted artifacts remain explicit inputs;
+`optimization/configs/apg_token_lowres_h64_eager_postmerge_signed_15.json`. Both fitted artifacts remain explicit inputs;
 library defaults are unchanged.
+
+---
+
+## Campaign of 2026-09-03: generalization, candidate supply, refinement retune
+
+Started 2026-09-03 on branch `apg-optim-fable` (from `dev` at `f9c2abb`). Everything below runs
+on hvit_t joint/v2 `best` (`85fb099c…`). Implementation checksum of the epoch after the Phase 0
+edits (evaluation plumbing, `training_extra` manifest subset, the volume hooks of the 3d campaign):
+`d11e240452d84052916d0f16e1a1cfb1`; the campaign's job directories live under `<output root>/jobs/`, see
+`CAMPAIGN_OPERATIONS.md`.
+
+### Phase 0: two defaults, and what the accepted runs reproduce to
+
+The accepted 2d runs (`campaign_postmerge_signed_refinement.json`) resolved to
+`candidate_threshold=1.5, dt=0.25, max_overlap=0.15, sigma=0.5, min_candidate_size=4, min_size=50`,
+while the per-model hvit_t defaults of commit 9fd3b57 resolve to `3.0 / 0.5 / 0.3`. Every campaign
+configuration in `optimization/configs/` now pins the former; `apg_control_registry_defaults.json`
+is the library default and `apg_control_campaign_defaults.json` the pinned one.
+
+Reproduction on the current implementation, one trial each (quality only):
+
+| configuration | primary | recorded | holdout | recorded |
+|---|---:|---:|---:|---:|
+| registry defaults (3.0 / 0.5 / 0.3) | 0.268121 | - | 0.265033 | - |
+| campaign defaults (1.5 / 0.25 / 0.15) | 0.269264 | 0.269577 | 0.264336 | 0.264318 |
+| accepted selector only (refit artifact) | 0.327071* | 0.306835 (OOF) | 0.314209 | 0.315633 |
+| accepted selector + 15% gate | 0.330903* | 0.310112 (OOF) | 0.317531 | 0.318550 |
+
+\* The recorded primary values of the learned configurations are out-of-fold screening numbers;
+a refit artifact evaluated on the images it was fitted on is optimistic by construction, which is
+what the primary rows show. The holdout is the honest comparison: the selector reproduces to within
+-0.45% (0.314209 vs 0.315633) and the pinned campaign defaults to within 1e-5. The residual is
+behaviour drift between the accepted runs' revision (`4224b5c9` on `apg-optim`, not an ancestor of
+`f9c2abb`) and the current tree; the new controls are the reference from here on. The drift also
+shows in the selector features: the stored `token_lowres_v1` OOF dataset no longer matches the
+features the current tree regenerates (the screens' identity check refuses it, see E3a below). The
+candidate sets themselves moved - 450 prompts regenerated against 471 stored on one LIVECell image,
+441 against 438 on a TissueNet one - so the flow-density candidates, not only the features, differ
+from the accepted runs' tree. The learned artifacts are therefore re-extracted and re-fitted on the
+current implementation before any OOF-based screen. On the holdout the learned gain survives the drift: +18.9% (selector) and +20.1%
+(selector + gate) over the campaign defaults, against +19.4% / +20.5% recorded.
+
+### Epoch 2 (2026-09-03 05:00): empty alternatives no longer poison the selector features
+
+An alternative whose mask is empty at both stability offsets has a 0/0 stability score. The learned
+selector's feature path carried that NaN into the group's features, and `_apply_prompts` refused it:
+the E2 extraction crashed on a DynamicNuclearNet image at `foreground_threshold=0.5`, and the E1
+production run of the selector on `cvz_fluo` crashed the same way. `_apply_prompts` now maps that
+stability to 0 (`torch.nan_to_num`) before the features are built; a finite run is unchanged.
+Implementation checksum after the edit: `14800942c30b0c62ee919988feffd64a`. The 3d aggregates read
+sibling run directories of one configuration across checksums and record whether they mixed, because
+the C1 arrays were running through this boundary (the volume path does not touch the edited code).
+
+### Epoch 3 (2026-09-03 05:03): harness-only edit
+
+`benchmark_apg_optimization.py` learned to cap the `training_extra` counts at a dataset's pool size
+(PUMA has 26 validation images). The file is part of the implementation checksum, so the checksum
+moved to `26a1003788ea2825356b486da1496fd7` without any change to what a run computes; the C1 arrays
+now span three checksums and their aggregates say so (`mixed_implementations`). From here on the eight
+checksum files are frozen until the round's canonical runs are in.
+
+### Phase 0 timing: the two control configurations on the holdout
+
+Three serialized, bracketed trials on the session's 1g.20gb slice (`phase0_holdout_timing_controls`),
+233 images each; the brackets are registry-default runs before and after.
+
+| configuration | holdout mSA | seconds per trial | median |
+|---|---:|---|---:|
+| registry defaults (ct 3.0, dt 0.5, mo 0.3) | 0.265033 | 144.6 / 144.3 / 144.5 | 144.5 |
+| campaign defaults (ct 1.5, dt 0.25, mo 0.15) | 0.264336 | 180.5 / 179.9 / 180.1 | 180.1 |
+| brackets (registry defaults) | 0.265033 | 147.7, 144.5 / 144.3, 144.6 / 144.4, 151.9 | - |
+
+The pinned campaign defaults cost 25% more than the library's per-model defaults for the same
+holdout quality: the lower candidate threshold proposes more prompts. The brackets drifted by at most
+5%, so the cost figures stand. The learned configurations are timed against these once the re-fitted
+artifacts exist.
+
+### E2, first result: the candidate supply saturates at the current threshold
+
+The extraction over ten proposal settings (`candidate_threshold` 3.0 / 2.0 / 1.5 / 1.0 / 0.5 x
+`foreground_threshold` 0.7 / 0.5) records, per image, the objects a prompt lands in (*seeded*) and
+the objects some alternative matches at IoU 0.5 (*proposed*). Fraction of the primary objects:
+
+| dataset | objects | seeded at ct 3.0 | ct 2.0 | ct 1.5 | ct 1.0 | ct 0.5 | proposed at 1.5 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| LIVECell | 17389 | 0.766 | 0.804 | 0.810 | 0.730 | 0.331 | 0.748 |
+| TissueNet | 4011 | 0.847 | 0.906 | 0.911 | 0.886 | 0.489 | 0.866 |
+| DynamicNuclearNet | 2592 | 0.976 | 0.983 | 0.984 | 0.984 | 0.963 | 0.963 |
+| DeepBacs | 892 | 0.946 | 0.963 | 0.946 | 0.864 | 0.682 | 0.862 |
+| DIC HepG2 | 490 | 0.649 | 0.798 | 0.820 | 0.816 | 0.792 | 0.429 |
+
+(all at `foreground_threshold=0.7`; 0.5 moves each cell by at most 0.02, mostly up, for 10-30% more
+prompts). Lowering the threshold does not buy candidates: below 1.5 the density components fuse, the
+prompt count falls and with it the seeded fraction (LIVECell 0.33 at 0.5). The pinned 1.5 is already
+the recall optimum of the ladder, and the objects it never seeds - 19% of LIVECell, 18% of DIC, 9% of
+TissueNet - are a ceiling no threshold reaches. Any further recall has to come from a different
+proposal mechanism, not from this threshold. The learned-threshold / overlap / size screen still runs
+on the settings that keep the seeding (ct 1.0 / 1.5 / 2.0, both foreground thresholds), but its
+headroom is bounded by the small seeded gains above.
+
+### E1 result: the accepted selector does not generalize beyond the datasets it was fitted on
+
+Production evaluation (`evaluate_automatic_segmentation.py --mode apg --skip_tuning`, test splits,
+hvit_t joint/v2 `best`) on all 23 2d datasets; `*` marks the five datasets the selector and gate
+were fitted on. mSA per dataset (relative change against the registry defaults in brackets):
+
+| dataset | registry defaults | campaign defaults | selector only | selector + 15% gate |
+|---|---:|---:|---:|---:|
+| arvidsson | 0.5961 | 0.6018 | 0.4421 (-25.8%) | 0.4454 (-25.3%) |
+| bitdepth_nucseg | 0.2751 | 0.2661 | 0.2442 (-11.2%) | 0.2413 (-12.3%) |
+| cellbindb | 0.2282 | 0.2328 | 0.1999 (-12.4%) | 0.2036 (-10.8%) |
+| cellpose_data | 0.3128 | 0.3112 | 0.2929 (-6.3%) | 0.2928 (-6.4%) |
+| covid_if | 0.7661 | 0.7665 | 0.7427 (-3.1%) | 0.7401 (-3.4%) |
+| cvz_fluo | 0.1875 | 0.1868 | 0.1941 (+3.5%) | 0.1947 (+3.9%) |
+| deepbacs * | 0.4139 | 0.4067 | 0.3978 (-3.9%) | 0.3959 (-4.4%) |
+| deepseas | 0.1342 | 0.1249 | 0.1588 (+18.4%) | 0.1594 (+18.8%) |
+| dic_hepg2 * | 0.0187 | 0.0198 | 0.0423 (+126.3%) | 0.0425 (+127.4%) |
+| dsb | 0.5178 | 0.5195 | 0.4779 (-7.7%) | 0.4805 (-7.2%) |
+| dynamicnuclearnet * | 0.4491 | 0.4485 | 0.5303 (+18.1%) | 0.5402 (+20.3%) |
+| hpa | 0.0000 | 0.0000 | 0.0076 (n/a) | 0.0083 (n/a) |
+| livecell * | 0.3408 | 0.3366 | 0.3533 (+3.7%) | 0.3528 (+3.5%) |
+| microbeseg | 0.1690 | 0.1724 | 0.1667 (-1.4%) | 0.1657 (-2.0%) |
+| neurips_cellseg | 0.3603 | 0.3538 | 0.3356 (-6.8%) | 0.3363 (-6.7%) |
+| omnipose | 0.3803 | 0.3620 | 0.3663 (-3.7%) | 0.3657 (-3.8%) |
+| puma | 0.1206 | 0.1175 | 0.0924 (-23.3%) | 0.0918 (-23.9%) |
+| segpc | 0.0282 | 0.0311 | 0.0215 (-23.5%) | 0.0225 (-20.2%) |
+| tissuenet * | 0.2857 | 0.2856 | 0.3098 (+8.4%) | 0.3112 (+8.9%) |
+| tnbc | 0.1100 | 0.1064 | 0.0589 (-46.4%) | 0.0601 (-45.4%) |
+| usiigaci | 0.0895 | 0.0901 | 0.0999 (+11.7%) | 0.0994 (+11.1%) |
+| vicar | 0.3357 | 0.3438 | 0.2821 (-16.0%) | 0.2870 (-14.5%) |
+| yeaz | 0.7095 | 0.7067 | 0.7113 (+0.3%) | 0.7107 (+0.2%) |
+
+Macros (equal weight per dataset):
+
+| configuration | seen (5) | unseen (18) | all (23) |
+|---|---:|---:|---:|
+| registry defaults | 0.3016 | 0.2956 | 0.2969 |
+| campaign defaults | 0.2994 (-0.7%) | 0.2941 (-0.5%) | 0.2952 (-0.6%) |
+| selector only | 0.3267 (+8.3%) | 0.2719 (-8.0%) | 0.2838 (-4.4%) |
+| selector + 15% gate | 0.3285 (+8.9%) | 0.2725 (-7.8%) | 0.2847 (-4.1%) |
+
+The learned selector gains on every dataset it was fitted on (DynamicNuclearNet +18%, DIC HepG2
+more than doubles from a near-zero base, LIVECell +4%, TissueNet +9%) and loses on ten of the
+eighteen it was not: arvidsson -26%, tnbc -46%, puma -23%, vicar -16%, dsb -8%, cellbindb -12%,
+neurips_cellseg -7%, cellpose -6%, bitdepth_nucseg -11%, segpc -24%. The three unseen datasets it
+helps (deepseas +18%, usiigaci +12%, cvz_fluo +4%) are fluorescence nuclei or cells, close to the
+training modalities. This is the same failure the 3d probe showed on C. elegans slices: the score
+learned on five light-microscopy datasets encodes their appearance, not mask quality in general.
+Consequences: the accepted configuration must not become a default; the +19% holdout figure is a
+within-distribution number; E4 (pooling six more datasets, with a leave-one-dataset-out diagnostic)
+is now the decisive 2d experiment. The gate adds +0.6% on the seen datasets and +0.2% on the unseen
+ones on top of the selector, in line with its earlier +0.9%. The campaign defaults (1.5 / 0.25 /
+0.15) are 0.6% below the per-model registry defaults on the test splits, so the earlier per-model
+tuning did its job; the HPA split scores zero with every configuration (a modality the model does
+not segment at all, nine protein-channel images) and is kept in the macros as a constant.
+
+### E4 result: pooling six more datasets does not make the selector transfer
+
+Selectors re-fitted on the current implementation (`token_lowres_v1`, H64), screened on the primary
+images with image-level OOF predictions; the leave-one-dataset-out (LODO) rows score every dataset
+with a model that never saw it. Balanced primary mSA at the best threshold; the campaign-default
+baseline on this implementation is 0.269264:
+
+| selector | training data | OOF (in distribution) | LODO (held-out dataset) |
+|---|---|---:|---:|
+| primary only | 5 datasets, 240 images | 0.3057 (t 0.375) | 0.2535 (t 0.25) |
+| pooled | + yeaz, neurips_cellseg, deepseas, puma, tnbc, covid_if (157 images) | 0.2972 (t 0.40) | 0.2637 (t 0.25) |
+
+In distribution the re-fitted primary selector reproduces the recorded 0.3068. Held out, both
+selectors fall *below* the predicted-IoU baseline: the learned score does not beat SAM2's own IoU on
+a dataset it has not seen, and pooling six more datasets softens that loss (0.2535 to 0.2637) without
+turning it. The per-dataset correlations say the same: OOF 0.62-0.79 against LODO 0.08 (DIC HepG2),
+0.32 (DynamicNuclearNet), 0.59-0.64 (LIVECell, TissueNet, DeepBacs) for the primary selector; the
+pooled one holds 0.60-0.77 on the datasets closest to its training mix (yeaz, covid_if, LIVECell,
+TissueNet) and 0.08-0.51 elsewhere. Together with E1 this settles the deployment question: the
+selector is a within-distribution optimization. E4b asks which inputs carry the dataset identity -
+the 256 mask-token dimensions or the 19 geometry statistics - by fitting both halves separately with
+the same LODO protocol.
+
+### Canonical holdout runs of the re-fitted artifacts (current implementation)
+
+Three serialized, bracketed trials each on the session's 1g.20gb slice; comparator decisions in
+`campaign2_selector_vs_registry.json`, `campaign2_selector_vs_campaign_defaults.json` and
+`campaign2_gate15_vs_selector.json` beside the output root.
+
+| configuration | holdout mSA | median seconds | vs registry defaults | vs campaign defaults |
+|---|---:|---:|---:|---:|
+| registry defaults | 0.265033 | 144.4 | - | - |
+| campaign defaults | 0.264336 | 180.1 | -0.3% / +24.7% | - |
+| re-fitted selector, t 0.375 | 0.321314 | 177.5 | **+21.2%** / +22.9% | **+21.6%** / -1.4% |
+| re-fitted selector + 15% signed gate | 0.323727 | 191.1 | +22.1% / +32.3% | +22.5% / +6.1% |
+
+Both learned configurations pass their gates on the holdout: the selector clears the +5% quality
+bar by a wide margin (the runtime cap is waived by the >=10% all-datasets exception against the
+registry defaults, and not even needed against the campaign defaults, where the learned filter is
+marginally faster than predicted-IoU filtering), and the gate passes the incremental refinement route
+(+0.75% macro, worst dataset runtime +14.4%, no dataset loss). Re-fitting on the current
+implementation recovered what the drift had cost (0.3213 against 0.3142 with the old artifact). These
+are within-distribution numbers; E1 above is what they are worth elsewhere.
+
+### E3a result: the refinement round has nothing left to tune
+
+Sixty-one configurations on the re-fitted selector and gate, primary OOF replay (job
+`e3a_retune_refit_v2`), control 0.304733 (selector only):
+
+| configuration | primary mSA | change | select seconds (240 images) |
+|---|---:|---:|---:|
+| ungated points+boxes, n8, single-mask head | 0.307909 | +1.04% | 76.8 |
+| gated 15%, n6, mc 0.6, fo 0.15, single-mask | 0.307256 | +0.83% | 16.3 |
+| gated 15%, n6, mc 0.7, fo 0.15 (current defaults) | 0.307029 | +0.75% | 16.3 |
+| gated 15%, n4, any gate | 0.3066-0.3067 | +0.6% | 16.3 |
+| any configuration with `multimasking=True` in the refinement pass | 0.3010-0.3035 | -1.2% to -0.4% | 16.3-79.0 |
+
+Loosening the consistency gate from 0.7 to 0.6 is worth +0.0002; the negative count and the foreign
+gate move the third decimal; refining every instance buys +0.3 points over the 15% gate for five
+times the second-round time. Asking the refinement decoder for three masks and picking the best by
+predicted IoU is the one change that hurts, so a learned head choice in the refinement pass (E3b) is
+not pursued. E3 is closed: the accepted refinement defaults stand.
+
+### E4b result: the mask tokens carry the dataset identity
+
+Same protocol as E4, with the selector fitted on the two halves of `token_lowres_v1` separately
+(`lowres_v1`: 19 mask, seed and foreground statistics; `token_v1`: predicted IoU, alternative index
+and the 256 mask-token dimensions). Balanced primary mSA at the best threshold; baseline 0.269264:
+
+| inputs | training | OOF | LODO |
+|---|---|---:|---:|
+| tokens + statistics (E4) | primary | 0.3057 | 0.2535 |
+| tokens only | primary | 0.3043 | 0.2498 |
+| statistics only | primary | 0.2954 | 0.2547 |
+| tokens + statistics (E4) | pooled | 0.2972 | 0.2637 |
+| tokens only | pooled | 0.2954 | 0.2576 |
+| statistics only | pooled | 0.2925 | 0.2685 |
+
+The tokens are the in-distribution gain (0.3043 against 0.2954 for statistics alone) and the
+out-of-distribution loss (LODO 0.2498 against 0.2547). The statistics transfer - their held-out
+correlations stay at 0.59-0.72 on every dataset but DIC, where the tokens' fall to 0.28-0.55 - but on
+a dataset they have not seen they only reach the predicted-IoU baseline (0.2685 pooled LODO against
+0.2693), never above it. No learned variant beats SAM2's own IoU score on an unseen dataset.
+
+### Where this leaves 2d
+
+1. The learned selector and gate are real within a dataset: +21% holdout mSA on the current tree,
+   +8% on the seen datasets' test splits, both gates passed. They are not a general default: -8% on
+   the eighteen unseen production datasets, and leave-one-dataset-out never beats predicted IoU.
+2. The candidate ladder is exhausted (E2): the pinned threshold is the recall optimum and 9-19% of the
+   objects are never seeded; the refinement round is tuned out (E3a).
+3. The deployment that follows from 1 is per-dataset fitting inside the existing tuning protocol: a
+   dataset with a validation split (`common.VAL_SPLITS`, thirteen of them) fits its own selector
+   there, exactly as `parameter_search.py` already tunes its thresholds there, and a dataset without
+   one keeps predicted IoU. That is the follow-up this campaign hands over; it needs no new method.
+
+### E2, second result: a slightly higher candidate threshold with a looser merge
+
+The screen (`screen_apg_candidate_supply.py`, job `e2_train_screen_v2`): one selector pooled over
+six proposal settings (ct 1.0 / 1.5 / 2.0 x fg 0.5 / 0.7, image-level OOF), then every setting
+replayed against learned thresholds 0.25-0.60, `max_overlap` 0.15 / 0.3 / 0.5 and `min_size` 25 / 50.
+Balanced primary mSA:
+
+| configuration | mSA | prompts (240 images) | objects seeded / proposed / scored / merged of 25374 |
+|---|---:|---:|---|
+| **ct 2.0, fg 0.7, t 0.35, mo 0.3, ms 25** | **0.3115** | 34632 | 21406 / 18235 / 17215 / 17391 |
+| ct 2.0, fg 0.7, t 0.30, mo 0.3, ms 25 | 0.3113 | 34632 | 21406 / 18235 / 17358 / 17533 |
+| ct 2.0, fg 0.5, t 0.40, mo 0.3, ms 25 | 0.3106 | 36388 | 21526 / 18358 / 17081 / 17255 |
+| ct 2.0, fg 0.7, t 0.35, mo 0.15, ms 25 | 0.3102 | 34632 | 21406 / 18235 / 16925 / 17104 |
+| ct 1.5, fg 0.7, t 0.375, mo 0.15, ms 50 (the accepted setting) | 0.3046 | 48240 | 21536 / 18208 / 16466 / 16699 |
+
+Three small effects add up to +2.3% over the accepted setting with 28% fewer prompts: candidate
+threshold 2.0 seeds as many objects as 1.5 with far fewer prompts (the extra prompts at 1.5 are
+duplicates the merge then has to reject), `max_overlap` 0.3 keeps 700 more objects through the merge,
+and the size floor of 25 keeps the smallest ones. The learned filter's threshold moves from 0.375 to
+0.35 for the pooled selector. The setting is confirmed on the holdout with three bracketed timing
+trials against the re-fitted selector (`holdout_timing_e2_winner`).
+
+### E2 holdout confirmation: accepted on the efficiency route, not the quality route
+
+Three serialized bracketed trials on the local 1g.20gb (`holdout_timing_e2_winner`, checksum
+`26a1003788ea…`, pooled selector `…-pooled6.pt`, config `apg_e2_winner.json`). Holdout balanced mSA
+0.325675 in all three trials (deterministic) against 0.314209 for the re-fitted selector-only trials and
+0.265033 for the campaign-defaults brackets, which did not drift (144-162 s; the first bracket carried the
+warm-up). The comparator's equal-weight macro over the five datasets is 0.3213 → 0.3257 for the selector.
+
+| comparison (`compare_apg_optimization.py`) | macro mSA | macro runtime | verdict |
+|---|---:|---:|---|
+| vs re-fitted selector-only, `--target quality` | +1.4% | -18.5% | rejected (needs +5%) |
+| vs re-fitted selector-only, `--target efficiency` | same | same | accepted |
+| vs campaign defaults, `--target quality` | +23.2% | -19.7% | accepted |
+
+Per dataset against the re-fitted selector: deepbacs +4.2%, dic_hepg2 +8.3%, livecell +1.8%, tissuenet
+−0.1%, dynamicnuclearnet −0.5%; runtime −7% to −28% on every dataset (fewer prompts through the SAM2
+decoder and the merge). The E2 setting is therefore a strictly better operating point for the learned
+selector: it does not clear the +5% quality bar on its own, it passes the efficiency gate (every dataset
+≥ 5% faster, no dataset loses more than 0.5%), and against the defaults it is accepted with the same
+margin as the selector plus the runtime saving. Decision files at the output root:
+`e2_winner_vs_refit_selector_quality.json`, `e2_winner_vs_refit_selector_efficiency.json`,
+`e2_winner_vs_campaign_defaults.json`. It inherits the E1 caveat (the selector inside it is
+within-distribution); the proposal-side changes (ct 2.0, mo 0.3, ms 25) are selector-agnostic and could be
+re-screened with the plain predicted-IoU filter for the generalist setting.
+
+### Direction change (2026-09-03, 08:30): only what generalizes counts
+
+The user's decision after the E1/E4/E4b results: per-dataset selector fitting is not an option, and neither
+is any dataset-specific mode. An APG change is acceptable only if it improves consistently on all datasets,
+or improves enough on most that minor regressions are tolerable. The hand-over recommendation in "Where this
+leaves 2d" is withdrawn. The suspected cause of the generalization failure is the embedding-derived input
+(the 256 mask-token dimensions); the next round therefore returns to generic inputs (SAM2's predicted IoU
+and stability, the low-resolution mask statistics) and treats out-of-domain generalization as a
+first-class development metric.
+
+### G campaign: a selector that transfers (design)
+
+**What E4b already tells us.** With the 19 generic statistics alone, pooled over 11 datasets, the
+leave-one-dataset-out (LODO) mSA on the primary images is 0.2685 against 0.2693 for predicted IoU: the
+statistics stop the damage but do not yet gain. The in-domain OOF gain of the statistics is +9.7%
+(primary) / +8.6% (pooled). So the question is not whether tokens hurt (they do) but which generic
+formulation carries a gain across a dataset boundary.
+
+**Development corpus and metrics (the design change).** The eleven 2d datasets with a legal validation
+split (`common.VAL_SPLITS`): the five primary datasets (240 images) and the six `training_extra` datasets
+(157 images: yeaz, neurips_cellseg, deepseas, puma, tnbc, covid_if). Features for all of them exist
+(`multimask_selection/token_lowres_v1/candidate_supply/primary_features_ct1p5_fg0p7.npz` and
+`training_extra_features.npz`; the first 19 columns are the generic statistics, so no re-extraction).
+Every candidate is scored twice on the same images and reported dataset-balanced over the eleven:
+
+- in-domain: image-level out-of-fold (OOF) mSA;
+- out-of-domain: LODO mSA, every dataset scored by a model that never saw it;
+
+both relative to the predicted-IoU baseline on the same proposals (the baseline is replayed as a
+candidate whose values are column 0 of the feature dataset, thresholds 0.5 / 0.6), with per-dataset
+deltas. Acceptance for the development stage: LODO macro > baseline, no dataset below −2% in LODO, and a
+retained in-domain gain. The twelve production datasets never used for training (arvidsson,
+bitdepth_nucseg, cellbindb, cellpose_data, cvz_fluo, dsb, hpa, microbeseg, omnipose, segpc, usiigaci,
+vicar) are opened once, at the end, for at most three shortlisted candidates through
+`evaluate_apg_generalization.py`; the holdout timing trials follow for the final one.
+
+**Factors (trainer options added today, `train_apg_multimask_selector.py`).**
+
+1. Feature set (`--feature-set`): `lowres_all` (19), `iou_stab` (SAM2's own two scores and their
+   product), `sam_scores` (the score-derived seven), `scale_free` (no absolute size or distance),
+   `no_decoder` (no foreground-map features), `scale_free_no_decoder`.
+2. Per-image standardization (`--per-image replace|append`): z-scoring every feature within its image
+   removes dataset-level offsets and scales (an image-relative "is this mask better than its peers").
+3. Model (`--model linear|mlp`, widths 16/64): a linear scorer cannot memorize dataset interactions.
+4. Target (`--target iou|matched`): IoU regression against classifying IoU ≥ 0.5, the definition of a
+   match that the metric uses and that does not shift with a dataset's difficulty.
+5. Decomposition (`screen_apg_compact_selector.py --score-filter predicted_iou`): learned head selection
+   with SAM2's own filter, to see which of the two decisions transfers.
+
+**Stages.** G1 (CPU array, `cpu` preset): fit the grid with `--lodo` on the pooled eleven; the trainer now
+writes LODO proxies per dataset (matched-AUC and selected IoU of the model and of predicted IoU) so the
+grid can be pruned without GPU. G2 (GPU replay, `1g.10gb`): the top configurations by LODO proxy replayed
+on both manifests (`--subset primary`, `--subset training_extra`) with OOF and LODO files and the
+baseline candidate, thresholds 0.3-0.6. G3: shortlist to production generalization and holdout timing;
+a winner with a feature subset or per-image standardization needs a small library hook (feature
+selection / image statistics in `multimask_selection.load_feature_scorer`) before it can run end to end,
+which opens a new checksum epoch. G4: carry the finding into 3d (the anchor-slice scorer and the
+candidate filter must use the same generic inputs).
+
+### G1 result: on the leave-one-dataset-out proxies, generic features only reach predicted IoU
+
+48 fits (`g1_generic_grid`, ~2-15 min each on CPU), pooled over the eleven datasets with source-grouped
+folds; proxy = matched-AUC (does the score rank IoU ≥ 0.5 masks above the rest) per held-out dataset minus
+the same AUC for SAM2's predicted IoU. Calibration of the proxy on the token selector whose mSA we know:
+its in-domain OOF proxy is +0.040 / +0.054 (primary / extra datasets; +9% / +8.6% mSA) and its LODO proxy
+−0.044 / −0.011 (−2% mSA), so ±0.005 is noise level.
+
+| model | inputs | LODO proxy, mean over 11 | worst dataset | datasets improved | in-domain OOF proxy |
+|---|---|---:|---:|---:|---:|
+| linear, matched target | lowres_all, per-image z appended | +0.005 | −0.040 (dynamicnuclearnet) | 8 / 11 | +0.009 |
+| linear, IoU regression | scale_free | +0.003 | −0.026 | 6 / 11 | — |
+| linear, matched | iou_stab, per-image z appended | +0.003 | −0.011 | 5 / 11 | — |
+| linear, any other | any | −0.007 … +0.002 | −0.011 … −0.066 | 2-8 / 11 | ≤ +0.011 |
+| MLP H64, any target | any generic set | −0.002 … −0.031 | −0.025 … −0.206 (tnbc, dic_hepg2) | 2-6 / 11 | — |
+
+Two clear statements. (1) The 64-unit MLP overfits dataset interactions even on generic inputs: every
+one of its 24 variants is negative out of domain, and its worst-dataset loss is 5-20 AUC points. Model
+capacity, not only the token inputs, was part of the E1 failure. (2) A linear scorer on generic statistics
+is safe (it never loses more than a few points anywhere) but, on a ranking proxy, adds nothing over
+predicted IoU: SAM2's own IoU head is already a near-optimal dataset-independent ranking of its
+alternatives. The proxy is threshold-free within a dataset, so it cannot see the one effect the per-image
+variants are designed for, a threshold that calibrates itself per image; that is measured by the G2 replays
+(mSA with one global threshold over eleven datasets), which therefore include the per-image-standardized
+linear models and two unsupervised adaptive candidates: the per-image percentile of predicted IoU
+(`iou_rank`) and its average with the raw value (`iou_blend`). Jobs: `g2_generic_replay` (15720930, wave 1:
+plain linear / H64 per feature set), `g2b_perimage_replay_extra` and the local `g2b_perimage_replay_primary_local`
+(wave 2). Summary: `multimask_selection/generalization_g1/models/g1_proxy_summary.csv`.
+
+### G2 wave 2, primary manifest: per-image standardization and adaptive thresholds do not transfer either
+
+Local replay (`g2b_perimage_replay_primary_local`, 240 images, 15 candidates × 7 thresholds; summary
+`generalization_g1/g2b_primary_summary.csv`). Dataset-balanced mSA over the five primary datasets, each
+candidate at its best threshold, against SAM2's predicted IoU at its best threshold (0.45, 0.2790):
+
+| candidate | OOF (in-domain) | LODO (out-of-domain) | worst dataset (LODO) |
+|---|---:|---:|---:|
+| `iou_blend` (½ predicted IoU + ½ its per-image percentile; no learning) | +0.5% | same | −1.4% deepbacs |
+| linear, iou_stab + per-image z, matched target | +0.1% | −0.3% | −2.5% deepbacs |
+| `iou_rank` (per-image percentile of predicted IoU; no learning) | −0.8% | same | −3.4% dic_hepg2 |
+| linear, iou_stab + per-image z, IoU regression | −1.9% | −2.1% | −4.4% deepbacs |
+| linear, lowres_all + per-image z, matched | −1.9% | −6.7% | −72% dic_hepg2 |
+| linear, sam_scores + per-image z, either target | −3.1% … −3.8% | −3.3% … −3.5% | −6% … −11% |
+| linear, lowres_all + per-image z, regression | −2.4% | −6.1% | −44% dic_hepg2 |
+
+Nothing in this wave beats predicted IoU by more than noise, in-domain or out. Image-relative
+standardization does not supply the per-dataset calibration the token selector had learned: DIC HepG2, the
+dataset where the token selector more than doubled mSA, is where the standardized statistics collapse
+(−44% to −72% under LODO), because its images have few, low-scoring candidates and any within-image
+normalization inflates them. The unsupervised adaptive filters bracket the effect: a pure per-image
+percentile threshold is worse than an absolute one, the blend is +0.5%. Wave 1 (plain linear and H64 on
+each feature set, and the predicted-IoU-filter decomposition) and the six extra datasets complete the
+picture (`g2_generic_replay`, `g2_extra_library_replay`).
+
+### G2 wave 1, primary manifest: the in-domain gain sits in the head choice, the out-of-domain loss in the filter
+
+`g2_generic_replay` primary tasks (240 images; summaries `generalization_g1/g2_primary_{selection_score,predicted_iou}_summary.csv`).
+Dataset-balanced mSA over the five primary datasets at each candidate's best threshold, against predicted IoU at
+its best threshold (0.2790 with the learned-filter path at 0.45, 0.2783 with SAM2's filter at 0.5):
+
+| candidate | learned filter, OOF | learned filter, LODO (worst dataset) | SAM2 filter, OOF | SAM2 filter, LODO (worst) |
+|---|---:|---:|---:|---:|
+| H64, lowres_all (19 statistics) | +4.8% | −4.3% (dic_hepg2 −84%) | +4.5% | −2.5% (tissuenet −4.7%) |
+| H64, scale_free_no_decoder | +2.4% | −6.9% (dic_hepg2 −79%) | +2.9% | −4.9% (dynamicnuclearnet −8.7%) |
+| H64, sam_scores | −0.6% | −3.3% (dic_hepg2 −14%) | +0.2% | −2.4% |
+| H64, iou_stab | −1.1% | −1.8% (dic_hepg2 −34%) | −0.5% | −0.5% (deepbacs −1.8%) |
+| linear, iou_stab | −1.0% | −1.8% | −0.9% | −0.9% |
+| linear, lowres_all / sam_scores / scale_free_no_decoder | −2.6% … −4.6% | −4.5% … −5.4% | −2.4% … −4.5% | −4.5% … −4.8% |
+
+Three things follow. (1) With SAM2's own filter (learned head choice only), the generic H64 model still
+gains +4.5% in-domain, so most of the in-domain gain of any selector is the choice among the three masks, not
+the filter. (2) The catastrophic out-of-domain losses (−80% on DIC HepG2) come from the learned *filter*: a
+score fitted on ten datasets puts DIC's few low-scoring candidates below any global threshold. With SAM2's
+filter the same model loses 2.5% out of domain, spread evenly. (3) Neither route yields an out-of-domain
+gain: the head choice learned from generic statistics is −0.5% to −2.5% on a dataset it has not seen, and the
+linear scorers are below baseline even in-domain. Caveat on this wave: every learned candidate peaked at the
+lowest threshold of the 0.3-0.6 grid, so the learned-filter rows are upper-bounded by the grid edge; the
+0.1-0.25 range is added (`g2_primary_lowthr` locally, and the pinned chain's tasks were extended) before the
+learned-filter numbers are final.
+
+### G2 over eleven datasets: no generic learned selector transfers by more than noise
+
+Primary (240 images, pinned proposals) and training_extra (157 images, library-default proposals, each
+dataset against its own baseline) joined; dataset-balanced mSA over the eleven datasets, each candidate at
+its best threshold, predicted IoU at its best (0.3158). Tables:
+`generalization_g1/g2_{w1_selection_score,w1_predicted_iou,w2_selection_score}_11datasets.csv` (with
+per-dataset companions).
+
+| candidate | filter | OOF (in-domain) | LODO (out-of-domain) | LODO: datasets up / below −2% / worst |
+|---|---|---:|---:|---|
+| H64, lowres_all | learned | +3.3% | −4.3% | 3 / 5 / dic_hepg2 −84% |
+| H64, lowres_all | SAM2's | +2.8% | −1.2% | 5 / 4 / neurips_cellseg −8.8% |
+| H64, iou_stab | SAM2's | −0.0% | −0.0% | 6 / 0 / deepbacs −1.8% |
+| H64, scale_free_no_decoder | learned | +0.4% | −5.9% | 2 / 9 / dic_hepg2 −79% |
+| linear, iou_stab | learned | −0.1% | −1.0% | 3 / 4 / deepseas −4.8% |
+| linear, iou_stab + per-image z, matched target | learned (0.35) | **+0.7%** | **+0.4%** | 8 / 0 / deepbacs −1.6% |
+| `iou_blend` (no learning) | learned (0.45) | +0.5% | same | 8 / 2 / tnbc −4.9% |
+| `iou_rank` (no learning) | learned (0.30) | −0.9% | same | 2 / 3 / tnbc −8.6% |
+| every other linear or H64 variant | either | −0.3% … −4.6% | −1.0% … −5.9% | ≤ 5 / 3-9 / −8% … −84% |
+
+Verdict of the G campaign so far. On a dataset the scorer has not seen, nothing beats SAM2's predicted IoU
+by more than noise: the best out-of-domain candidate, a three-feature linear scorer on predicted IoU,
+stability and their product with their per-image z-scores, is +0.4% with no dataset below −1.6%, i.e. safe
+and consistent but too small to matter, and its in-domain gain is +0.7%. The in-domain gains that remain
+(+3% for the 19-statistics MLP) come with out-of-domain losses on a third of the datasets, and the MLP's
+loss is largest exactly where the token selector had gained most (DIC HepG2), because its learned
+threshold does not calibrate across appearance. The user's hypothesis is confirmed in one half: removing the
+mask tokens removes the catastrophic transfer failure (−8% unseen macro in E1 becomes −1% with generic
+inputs and SAM2's filter, or +0.4% with the tiny linear model). It does not hold in the other half: generic
+inputs do not carry a transferable gain, because SAM2's IoU head is already the best dataset-independent
+ranking of its own three masks that these statistics can express. The learned head-choice/filter line for
+2d is therefore closed under the generalization rule, unless the pinned re-run (`g2p_pinned_replay`) or
+the low-threshold sweep (`g2_primary_lowthr_local`) contradicts it; both are read next session. The 2d
+levers that remain are non-learned and selector-agnostic: the E2 proposal-side setting (candidate
+threshold 2.0, overlap 0.3, size floor 25) re-screened on the plain predicted-IoU path across all eleven
+datasets, and the refinement round. For 3d the consequence is that the anchor filter (C3) must be judged
+on its unseen-source LODO with generic inputs only, and that a plain-predicted-IoU anchor policy is the
+reference to beat.
+
+### G2 low-threshold sweep (primary): the grid edge hid nothing
+
+`g2_primary_lowthr_local` added thresholds 0.10-0.25 for the wave-1 candidates on the learned-filter path
+(joined table `generalization_g1/g2_w1_selection_score_primary_allthr.csv`). In-domain, the H64
+19-statistics model moves from +4.8% (0.30) to +5.2% (0.25); out of domain every learned filter stays
+negative at its own best threshold: H64 iou_stab −1.2% (0.15), linear iou_stab −1.2% (0.20), H64 sam_scores
+−3.1%, H64 lowres_all −3.9% (dic_hepg2 −81%), the rest −4.5% to −6.7%. The wave-1 verdict stands.
+
+### G1 on the pinned corpus: same ranking, same size
+
+`g1p_pinned_grid` (24 linear fits done at 09:45; `generalization_g1/models_pinned/g1_proxy_summary.csv`).
+With all eleven datasets on the pinned proposals, the linear matched-target scorers gain a little on the
+LODO proxy: lowres_all + per-image z +0.009 (9 / 11 datasets, worst −0.036 dynamicnuclearnet), scale_free
++0.006 (9 / 11), lowres_all +0.006; iou_stab variants +0.001 (worst −0.013); regression targets −0.009 to
++0.004. In the token-selector calibration (+0.04 proxy ≈ +9% mSA) this is at most +2% out-of-domain mSA
+before the filter threshold is applied globally; `g2p_pinned_replay` measures it. The clean pinned corpus
+(`extract_extra_pinned_v2`: 135,447 extra alternatives with the full setting; `g1p_v2_pinned_grid`,
+`models_pinned_v2/g1_proxy_summary.csv`) gives the same ranking and size: lowres_all + per-image z, linear,
+matched +0.008 (9 / 11, worst −0.038), scale_free +0.007, iou_stab +0.002; the mixed-corpus conclusion did not
+depend on the proposal mismatch.
+
+### E2 on the plain path: the proposal-side setting is the first 2d change that travels
+
+`e2plain_generalization` (single runs, 1g.10gb, trial `plain-1`; holdout rows added when its runs finish).
+No learned component: candidate threshold 2.0, dt 0.25, sigma 0.5, min_candidate_size 4, foreground 0.7,
+`max_overlap` 0.3, `min_size` 25, SAM2's predicted-IoU head and filter. Balanced mSA:
+
+| manifest | registry defaults (3.0 / 0.6 / 0.3) | campaign defaults (1.5 / 0.5 / 0.15) | E2 plain, filter 0.6 | **E2 plain, filter 0.5** |
+|---|---:|---:|---:|---:|
+| primary (5 datasets, 240 images) | 0.2681 | 0.2693 | 0.2695 | **0.2796 (+4.3%)** |
+| training_extra (6 datasets, 157 images) | 0.3433 | 0.3425 | 0.3437 | **0.3486 (+1.5%)** |
+| primary seconds | 168 | 210 | 170 | 191 |
+| training_extra seconds | 111 | 176 | 117 | 117 |
+
+Per dataset against the registry defaults, E2 plain at 0.5: livecell +5.5%, tissuenet +5.8%,
+dynamicnuclearnet −0.0%, deepbacs +6.7%, dic_hepg2 +24%; yeaz −0.4%, neurips_cellseg +1.4%, puma +9.2%,
+tnbc +14.2%, covid_if +0.8%, deepseas −6.3%. Nine of eleven datasets improve, one is flat, one (deepseas,
+0.115 → 0.108) loses. At filter 0.6 the setting is a wash, so the gain is the combination of the lower
+candidate threshold with the 0.5 filter and the looser merge, and it costs 5-13% runtime against the
+registry defaults (it is still faster than the campaign defaults it replaces). This is the first 2d change in
+the campaign that meets the generalization rule on the eleven legal datasets, with one regression to weigh.
+Holdout (233 images, single runs on 1g.10gb): registry 0.2650, campaign 0.2643, E2 plain 0.6 0.2659, **E2 plain
+0.5 0.2742 (+3.5%)**; per dataset livecell +4.7%, tissuenet +4.2%, dynamicnuclearnet −1.3%, deepbacs +6.7%,
+dic_hepg2 +40% (0.018 → 0.025); 165 s against 164 s for the registry defaults on that node. The holdout
+reproduces the primary picture without re-tuning. Decision path: the twelve never-used production datasets
+once (`e2plain_production`), three bracketed timing trials on the session GPU (`holdout_timing_e2_plain`), and
+the v4 sign check.
+
+### E2 plain, canonical holdout timing trials
+
+`holdout_timing_e2_plain`: three serialized bracketed trials on the session 1g.20gb (checksum `26a1003788ea…`),
+0.274202 in all three (deterministic); brackets 144-163 s (the second trial's opening bracket drifted +13%,
+so its cost column is discounted). Comparator decisions at the output root (`e2_plain_vs_{registry,campaign}_{quality,efficiency}.json`):
+
+| against | macro mSA | total runtime | worst-dataset runtime | verdict of the formal gates |
+|---|---:|---:|---:|---|
+| registry defaults (3 trials) | +3.5% | +1.2% | +5.9% | quality: below the +5% bar; efficiency: not a speedup |
+| campaign defaults (3 trials) | +3.7% | −18.8% | −7.5% | quality: below +5%; efficiency: dynamicnuclearnet −1.3% exceeds the 0.5% allowance |
+
+The formal gates were written for the learned-selector campaign and ask for +5%; the plain E2 setting is a
++3.5% change with no dataset below −5% on the holdout and, with the eleven-dataset development table above,
+nine datasets up, one flat, one down 6% (deepseas). Under the generalization rule it is the one 2d candidate
+worth carrying to the twelve never-used production datasets (`e2plain_production`, running) and the v4 sign
+check; whether a 6% loss on one dataset out of eleven counts as a tolerable minor regression is the user's
+call, and the deepseas loss should be looked at (its images are dense and low-contrast; the lower candidate
+threshold and looser merge may admit fragments) before the setting is adopted. Per-image check: on the 40
+deepseas images E2 plain predicts 8.3 objects per image against 6.3 annotated and 6.0 for the registry defaults,
+so the loss is over-segmentation (false positives or split cells), not missed objects; a per-image object-count
+or fragment-size guard is the natural fix if the setting goes forward.
+
+### E2 plain on the production test splits: the gain does not carry over
+
+`e2plain_production` (all 23 datasets, 10:27; `evaluate_apg_generalization.py report`,
+`production_generalization/v2_best/generalization_summary.csv`). mSA against the registry defaults on the test
+splits; `*` marks the eleven datasets whose validation splits chose the setting:
+
+| dataset | registry | E2 plain | change | | dataset | registry | E2 plain | change |
+|---|---:|---:|---:|---|---|---:|---:|---:|
+| arvidsson | 0.5961 | 0.5240 | −12.1% | | livecell * | 0.3408 | 0.3593 | +5.4% |
+| bitdepth_nucseg | 0.2751 | 0.2699 | −1.9% | | tissuenet * | 0.2857 | 0.2975 | +4.1% |
+| cellbindb | 0.2282 | 0.2387 | +4.6% | | dynamicnuclearnet * | 0.4491 | 0.4500 | +0.2% |
+| cellpose_data | 0.3128 | 0.3137 | +0.3% | | deepbacs * | 0.4139 | 0.4153 | +0.3% |
+| cvz_fluo | 0.1875 | 0.2058 | +9.8% | | dic_hepg2 * | 0.0187 | 0.0243 | +30% |
+| dsb | 0.5178 | 0.5252 | +1.4% | | yeaz * | 0.7095 | 0.7020 | −1.1% |
+| hpa | 0.0000 | 0.0000 | — | | neurips_cellseg * | 0.3603 | 0.3591 | −0.3% |
+| microbeseg | 0.1690 | 0.1903 | +12.6% | | puma * | 0.1206 | 0.1355 | +12.4% |
+| omnipose | 0.3803 | 0.3927 | +3.3% | | tnbc * | 0.1100 | 0.1058 | −3.8% |
+| segpc | 0.0282 | 0.0246 | −12.8% (−0.004 abs.) | | covid_if * | 0.7661 | 0.7677 | +0.2% |
+| usiigaci | 0.0895 | 0.1031 | +15.2% | | deepseas * | 0.1342 | 0.1287 | −4.1% |
+| vicar | 0.3357 | 0.3381 | +0.7% | | | | | |
+
+Macros over all 23 datasets: +0.6% overall, +0.1% on the report's eighteen "unseen" datasets, +2.5% on the
+five seen ones. On the twelve datasets that played no part in choosing the setting: eight up
+(microbeseg +13%, usiigaci +15%, cvz_fluo +10%, cellbindb +5%, omnipose +3%), one flat (HPA at zero), three
+down (arvidsson −12%, bitdepth_nucseg −2%, segpc −13% on a near-zero base). The +3.5% to +4.3% measured on the
+validation splits of the eleven tuning datasets shrinks to about zero on the test splits, and arvidsson's 12%
+loss is not a minor regression. Verdict under the generalization rule: the plain E2 setting is a **wash**, not
+a win: it moves individual datasets by ±10% in both directions and the average not at all. It is not adopted.
+The one useful reading is the same as for the selectors: the per-model registry defaults, tuned per dataset
+family by `parameter_search.py`, are already close to the best single setting for hvit_t, and what remains is
+dataset-specific, which is exactly what is not wanted.
+
+### Where this leaves 2d under the generalization rule (10:25)
+
+Nothing tried in 2d transfers: not the token selector (−8% unseen), not a generic-feature selector (linear at
+baseline, MLP negative out of domain), not per-image calibration, not the proposal-side setting (a wash on the
+test splits). SAM2's own predicted IoU with the per-model defaults is the best general-purpose 2d
+configuration measured. The open, unexplored generalizable directions are structural rather than a score:
+(a) making the merge itself smarter without learning (the overlap arbitration decides 5-10% of objects and
+the E2 gain on the validation splits came mostly from `max_overlap` 0.3 with a smaller size floor); (b) a
+test-time, label-free per-image adaptation of the filter threshold that is not a rank (the percentile
+variants failed), for example an image-level agreement between the decoder foreground and the accepted masks;
+(c) checking whether the joint v4 (geodesic) checkpoint changes the picture. None of these is a learned
+selector, and each needs the eleven-dataset LODO-style protocol used here plus the production splits once.
+
+### Experiments in flight (job ids)
+
+- E1 domain generalization: `evaluate_apg_generalization.py`, 4 configurations x 23 production
+  datasets, array `15715958`. Report: `production_generalization/v2_best/generalization_decision.json`.
+- E2 candidate supply: `screen_apg_candidate_supply.py --stage extract` (job `15715936`), then a
+  pooled OOF selector over 10 proposal settings and the threshold / overlap / size screen.
+- E3a refinement retune on the frozen selector: `screen_apg_refinement.py --configs
+  configs/apg_refinement_retune_screen.json` (61 configurations). The first submission (job
+  `15715957`) failed the OOF identity check (`Regenerated proposal features differ from the OOF
+  dataset`); it is re-run once the selector and gate are re-fitted on the current implementation.
+- `g1_generic_grid` (15720917, 48 CPU tasks, 08:33): generic-feature selector grid with LODO proxies,
+  artifacts under `multimask_selection/generalization_g1/models/`; smoke-tested locally first.
+- `g2_generic_replay` (15720930, afterany on G1): OOF/LODO replay screens on the primary and training_extra
+  manifests, learned filter (thresholds 0.3-0.6) and predicted-IoU filter (0.5/0.6), with the
+  predicted-IoU baseline candidate; results under `compact_selector_screening/hvit_t/<ckpt>/<hash>/summary.csv`
+  (metadata.json carries `subset` and `score_filter`).
+- `g2b_perimage_replay_extra` (15721326, 1g.10gb) and `g2b_perimage_replay_primary_local` (session GPU, 09:12):
+  wave 2 of the G2 replay, per-image-standardized linear models (lowres_all / iou_stab / sam_scores ×
+  regression / matched, OOF and LODO) plus the unsupervised `iou_rank` and `iou_blend` candidates and the
+  predicted-IoU baseline, thresholds 0.3-0.6, learned filter.
+- The three training_extra replay tasks (wave 1 and 2) failed with "Proposal ... missing from the selector
+  dataset": `training_extra_features.npz` was extracted by the trainer's plain path, i.e. with the library's
+  per-model proposal defaults, not `PINNED_PROPOSAL_2D` (so E4's pooled selector was trained on two proposal
+  distributions). The screen gained `--proposal-settings {pinned,library}`; resubmitted as
+  `g2_extra_library_replay` (15721431, 3 tasks, 09:17). Each dataset is compared with its own baseline on the
+  same proposals, so the deltas stay valid; a pinned re-extraction of training_extra is the clean follow-up.
+- Pinned re-extraction of the six extra datasets on the session GPU (09:25, 167 s):
+  `token_lowres_v1/candidate_supply/training_extra_features_ct1p5_fg0p7.npz` (110,571 alternatives against
+  68,688 with the library defaults). With it, all eleven datasets share one proposal distribution.
+- `g1p_pinned_grid` (15721581; 27 CPU fits: the six feature sets × per-image none/append × linear × iou/matched, plus
+  three H64 references) → `g2p_pinned_replay` (15721582, afterany; primary and training_extra replays with
+  `--proposal-settings pinned`, 7 linear/H64 candidates as OOF and LODO, the baseline, `iou_rank`, `iou_blend`).
+  Artifacts under `generalization_g1/models_pinned/`. This is the clean version of G1/G2; read it with
+  `summarize_generic_selector_grid.py` and `summarize_generic_replay.py <run dirs>`.
+- `e2plain_generalization` (15721819, 12 runs on 1g.10gb, 09:31): the selector-agnostic E2 proposal setting on the
+  plain predicted-IoU path (`configs/apg_e2_plain_t0p5.json`, `apg_e2_plain_t0p6.json`: ct 2.0, dt 0.25, sigma 0.5,
+  min_candidate_size 4, fg 0.7, max_overlap 0.3, min_size 25, predicted-IoU filter 0.5 / 0.6) against the registry
+  and campaign defaults on primary, training_extra and holdout (trial `plain-1`). Read with
+  `benchmark_apg_optimization.py`'s summaries in `hvit_t/<ckpt>/<manifest>-<config>-<impl>/summary.csv`; the
+  question is whether the +2.3% / −28% prompts of E2 survive without any learned component and across eleven
+  datasets. If it does, it is the one 2d change that meets the generalization rule.
+- `g2_primary_lowthr_local` (session GPU, 09:29): wave-1 candidates at thresholds 0.1-0.25 on primary.
+- `e2plain_production` (15722179, 23 runs on 1g.10gb, 09:46): the plain E2 setting (`apg_e2_plain_t0p5.json`) on
+  every 2d production test split, `production_generalization/v2_best`, result tag `e2-plain-t0p5`; registered in
+  `evaluate_apg_generalization.py` CONFIGS. Read with `evaluate_apg_generalization.py --report`; for this
+  configuration the strictly unseen set is the twelve datasets outside the eleven with validation splits.
+- Correction (09:58): the 09:25 re-extraction of the extra datasets passed only the candidate and foreground
+  thresholds, so dt / sigma / min_candidate_size stayed at the library values; the file is kept as
+  `candidate_supply/training_extra_features_ct1p5_fg0p7_partialpinned.npz`, and `g1p_pinned_grid` /
+  `models_pinned/` and the running `g2p_pinned_replay` primary task are a *partial-pinned* corpus (their
+  training_extra screen failed on the prompt mismatch). The clean chain is `extract_extra_pinned_v2` (15722759,
+  through `screen_apg_candidate_supply.stage_extract` with the full setting) → `g1p_v2_pinned_grid` (15722760,
+  artifacts `models_pinned_v2/`) → `g2p_v2_pinned_replay` (15722761). A first version of that chain was cancelled
+  before it ran because its script would have renamed the primary feature file; the fixed script extracts into
+  `candidate_supply/training_extra_tmp/` and moves the result to `training_extra_features_ct1p5_fg0p7.npz`.
+- 10:28: the clean chain's training_extra screen failed once because the baseline / `iou_rank` / `iou_blend`
+  candidate files for that stem had been built from the partial extraction (110,571 rows vs 135,447); rebuilt
+  from the clean file and resubmitted as `g2p_v2_extra_replay` (15723413). The primary task of
+  `g2p_v2_pinned_replay` (15722761) is running. Join both with `summarize_generic_replay.py`.
+
+## Generalization campaign of 2026-09-03/04: structural, label-free changes (plan `APG_2D_GENERALIZATION_CAMPAIGN_PLAN.md`)
+
+Session 3, started 2026-09-03 ~19:30 on `apg-optim-fable`. Everything below runs on hvit_t joint/v2 `best`
+(`85fb099c…`) against the per-model registry defaults (ct 3.0, dt 0.5, sigma 0.5, mcs 4, fg 0.7, filter 0.6,
+`max_overlap` 0.3, `min_size` 50). Rule: a change counts only if it is up on ≥ 9 of the 11 development datasets
+with no dataset below −2% relative (−0.005 absolute allowance near zero) and a balanced gain ≥ +2%, then once on the
+production splits. Nothing is learned or tuned; every constant a change introduces is fixed a priori and reported.
+
+### P0, production side: the dataset-level fusion ceiling is one dataset
+
+From the existing production results (`production_generalization/v2_best`, APG registry defaults, test splits) and
+the AIS results of the joint evaluation (`experiments/v2_joint_evaluation/results/*_auto_tuned.csv`, per-dataset
+tuned AIS post-processing, so an optimistic AIS): `max(AIS, APG) − APG` per dataset, table in
+`production_generalization/v2_best/p0_fusion_ceiling_production.csv`.
+
+| | balanced mSA | relative to APG |
+|---|---:|---:|
+| APG registry defaults (23 datasets) | 0.2969 | - |
+| max(AIS tuned, APG) per dataset | 0.3091 | +4.1% |
+| the same without dynamicnuclearnet | | +0.4% |
+
+AIS beats APG on only four datasets: dynamicnuclearnet (0.707 vs 0.449, the whole ceiling), deepseas (+8.6%),
+cellbindb (+4.4%), usiigaci (+2.2%); everywhere else APG is ahead by 4-55%. Caveat: the AIS evaluation's checkpoint
+is not recorded in its result files (assumed the same joint v2 `best`), and per-dataset tuning inflates it. The
+dataset-level ceiling is formally above the plan's +3% demotion line but rests on one dataset; the per-object
+ceiling on the development corpus (same checkpoint, AIS defaults) is the decisive P0 reading and comes from the
+cache stage of `screen_apg_structural.py` (`oracle`). P1 stays in the plan; every hook was built in one epoch
+anyway, so the order only affects the reading.
+
+### Epoch 4 (2026-09-03 ~20:00): the structural hooks, default-off and bit-identical when off
+
+Implementation checksum `26a1003788ea2825356b486da1496fd7` → `41abe8ca0cf86fadcf5d46ea183bb296`. One edit to the
+checksum files (`automatic_prompt_generation.py`, `common.py` GENERATE_PARAM_KEYS, the benchmark's
+IMAGE_DIAGNOSTICS), all opt-in through `generate()` / `propose()` / `select()`:
+
+- `prompt_type` (P3a): `point` (default), `box`, `point_box`, `box_thin`. The box is the bounding box of the
+  candidate's basin in the decoder's seeded watershed (`decoder_basins`: the same heightmap and markers the sparse
+  post-processing finishes its instances with, the density components as markers); `box_thin` boxes only the
+  candidates whose basin fills < 0.5 of the box, the rest keep the point. Every record keeps the point as its seed.
+- `arbitration` (P2): `drop` (default), `decoder`, `euclidean`. `merge_by_score(arbitration="split", basins=...)`:
+  a non-duplicate candidate keeps the contested pixels whose basin marker is its own prompt (`decoder`, basins from
+  the decoder watershed seeded at the filtered records' prompts; Euclidean seed distance for pixels in no basin) or
+  that lie closer to its seed (`euclidean`); a candidate winning < 50% of its area is "arbitrated away", an accepted
+  mask that falls below 50% of its painted area (or `min_size`) is "split away". `max_overlap` still rejects
+  duplicates; 1.0 is pure arbitration.
+- `fusion` (P1): None (default), `fallback`, `conflict`, `both` (`fuse_with_instances`, AIS instances from
+  `flow_instance_segmentation` with the model's registry defaults). Fallback adds a decoder instance when no
+  accepted mask reaches IoU 0.5 with it and ≤ 50% of it is claimed, on its free pixels (≥ `min_size`). Conflict:
+  a mask covering ≥ 2 instances (each ≥ 50% inside and ≥ `min_size` inside) is kept at stability ≥ 0.9, else
+  replaced by the instances. Constants `FUSION_AGREEMENT_IOU` 0.5, `FUSION_STABILITY_THRESHOLD` 0.9,
+  `FUSION_COVERAGE` 0.5, fixed.
+- `recover_residual` (P3b): one interior point per uncovered connected foreground component ≥ `min_size` after the
+  merge (and after refinement / fusion), SAM2's predicted-IoU choice, the same filter threshold, merged onto the free
+  pixels (`merge_by_score(initial=...)`).
+- Diagnostics: `fusion_fallback_added`, `fusion_conflicts`, `fusion_conflicts_split`, `arbitration_dropped`,
+  `residual_prompts`, `residual_added` in `_last_generation_stats` and the benchmark's samples.csv; merge reasons
+  gain "arbitrated away" / "split away".
+
+Tests: 13 new unit tests in `test/test_v2_automatic_prompt_generation.py` (129 pass), `test/test_screen_apg_structural.py`.
+Smoke test on four primary images: the registry defaults reproduce the `plain-1` control's mSA exactly; the options
+run at 0.3-0.5 s per image on the session 1g.10gb.
+
+Configs: `configs/apg_s_*.json` (all proposal parameters pinned to the registry values). Round 1 GPU arrays on
+`grete:preemptible` 1g.10gb, trial `plain-1`: registry control, `s-box`, `s-point-box`, `s-box-thin`, `s-residual`
+on primary (15732201), training_extra (15732202), holdout (15732206). Cache pass (`screen_apg_structural.py cache`)
+on the session slice for the three manifests → `structural_2d/cache/<subset>/<identity>/`; the CPU screens
+(`replay`, 29 variants: fusion modes + sensitivity a ∈ {0.4, 0.6}, s ∈ {0.85, 0.95}; arbitration decoder /
+euclidean × `max_overlap` 0.3 / 0.5 / 1.0; box prompt types alone and with fusion / arbitration; adaptive
+foreground-agreement threshold {0.4, 0.5, 0.6, 0.7} (P4)) and the `oracle` (P0 on the development corpus) follow.
+
+### Round 1 (GPU, 2026-09-03 20:20): the registry control reproduces bit for bit; box prompts and residual recovery fail
+
+Identity: the epoch-4 registry control (`plain-1`, 1g.10gb) equals the epoch-3 control on every image of the three
+manifests (max |Δ mSA| = 0, no object-count difference), so the hooks are bit-identical when off on real data too.
+Runtime of the control moved 168 → 174 s (primary), 111 → 118 s, 164 → 175 s across nodes: node drift, not code.
+
+**P3a, box prompts** (`s-box`, `s-point-box`, `s-box-thin`; box = the candidate's decoder basin, see epoch 4):
+
+| dataset | registry | box | point+box | box_thin | | residual (P3b) |
+|---|---:|---:|---:|---:|---|---:|
+| livecell | 0.3465 | −13.3% | −12.9% | −6.3% | | +1.1% |
+| tissuenet | 0.2709 | −2.5% | −3.1% | −3.9% | | +1.5% |
+| dynamicnuclearnet | 0.4485 | +6.9% | +4.6% | −0.0% | | +0.2% |
+| deepbacs | 0.2498 | −11.0% | −7.0% | −5.3% | | −0.3% |
+| dic_hepg2 | 0.0249 | −75.8% | −78.5% | −52.2% | | +1.1% |
+| yeaz | 0.6986 | +1.2% | −0.2% | −0.2% | | −0.2% |
+| neurips_cellseg | 0.2370 | −24.3% | −26.2% | −13.7% | | −0.1% |
+| puma | 0.1306 | −13.4% | −4.7% | −9.9% | | +2.7% |
+| tnbc | 0.1453 | −38.8% | −34.7% | −20.8% | | −1.3% |
+| covid_if | 0.7334 | +2.4% | +2.1% | −0.1% | | +0.2% |
+| deepseas | 0.1151 | −35.1% | −35.1% | −20.1% | | −4.9% |
+| **balanced (11)** | 0.3091 | **−6.3%** (3 up / 8 down) | **−6.3%** (2 / 9) | **−4.7%** (0 / 11) | | **+0.1%** (6 / 5) |
+| holdout balanced (5) | 0.2785 | −6.8% | −6.6% | −5.2% | | +0.5% |
+
+The decoder basin is the wrong extent exactly where APG is weakest: on dense, touching data (tnbc, deepseas, puma,
+neurips) the basins are fragments or fused neighbours and a box prompt commits SAM2 to that error, where a point
+leaves it free. The gains on the separated, well-contrasted nuclei (dynamicnuclearnet +6.9%, covid_if +2.4%) do not
+compensate. `box_thin` (box only for basins filling < 0.5 of their box) is down on all eleven datasets. **P3a is
+rejected**; the same number of decoder calls, so no cost story either.
+
+**P3b, foreground-residual prompting** (`s-residual`): 3425 residual prompts on primary (240 images) add 326 objects
+(10%), 4970 add 189 on training_extra; +0.1% balanced, six datasets up by ≤ 2.7%, deepseas −4.9%, +7-15% runtime.
+It does not reach the +2% bar and adds a regression: **rejected**. The recall the E2 diagnostic left on the table
+(9-19% of objects never seeded) is not recoverable by prompting the uncovered foreground: what SAM2 returns there
+mostly fails the predicted-IoU filter or duplicates an accepted mask. P3 is closed; P1/P2/P4 follow as CPU replays.
+
+P5 preparation (20:28): staged checkpoint root
+`<root>/v4_geodesic_checkpoints/joint_sam2_hvit_t_multi_gpu/best.pt -> joint/v4/checkpoints/joint_sam2_hvit_t_geodesic_multi_gpu/best.pt`
+(checksum `5a729846c141daf73c27b24f52d8af4f`), same output root (run directories are keyed by the checkpoint checksum).
+v4 controls (registry and campaign defaults, trial `v4-1`, 1g.10gb) on the three manifests: jobs 15732353/54/55.
+
+### P0, development side (primary, 20:30): AIS matches objects APG misses, but the dataset-level ceiling is dynamicnuclearnet alone
+
+`screen_apg_structural.py oracle --subset primary` (cache `structural_2d/cache/primary/7c7fe1d6…`, same checkpoint,
+AIS = `flow_instance_segmentation` with the hvit_t registry defaults, no tuning; `structural_2d/oracle/primary/`):
+
+| dataset | APG mSA | AIS mSA | max per image | APG recall | AIS recall | union recall | seeded | proposed (IoU ≥ 0.5) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| livecell | 0.3465 | 0.2528 | 0.3491 | 0.512 | 0.424 | 0.568 | 0.807 | 0.683 |
+| tissuenet | 0.2709 | 0.2157 | 0.2811 | 0.627 | 0.569 | 0.707 | 0.878 | 0.754 |
+| dynamicnuclearnet | 0.4485 | 0.5544 | 0.5573 | 0.903 | 0.919 | 0.940 | 0.980 | 0.908 |
+| deepbacs | 0.2498 | 0.1986 | 0.2680 | 0.585 | 0.620 | 0.704 | 0.974 | 0.700 |
+| dic_hepg2 | 0.0249 | 0.0110 | 0.0287 | 0.074 | 0.071 | 0.112 | 0.782 | 0.218 |
+| balanced | 0.2681 | 0.2465 | 0.2968 (+10.7%) | 0.564 | 0.497 | 0.624 | 0.842 | 0.709 |
+
+Dataset-level fusion ceiling: 0 on four datasets, +23.6% on dynamicnuclearnet (the same picture as the production
+side). The per-image oracle (+10.7%) and the object-level union recall (+6 points over APG) say the two segmentations
+do complement each other object by object, so the per-object fusion (P1) has real headroom in principle. The recall
+ceiling is confirmed on the current proposals: 84% of the objects are seeded and 71% have a proposal at IoU ≥ 0.5
+(dic_hepg2 22%), against 56% matched after the filter and the merge; the filter and the merge, not the seeding, lose
+the 15 points in between.
+
+### P1, P2, P4 over the eleven development datasets (CPU replays, 2026-09-03 20:40): nothing passes the gate
+
+`screen_apg_structural.py replay` on the cached registry proposals of primary (240 images) and training_extra
+(157), joined by `report --subsets primary training_extra` (`structural_2d/reports/primary+training_extra/`; the
+registry replay reproduces the canonical runs on all 397 images). Balanced mSA of the registry defaults over the
+eleven datasets: 0.3091. Relative change per dataset (%):
+
+| dataset | registry | fusion fallback | fusion conflict | fusion both | arb. decoder mo 0.3 | arb. decoder mo 0.5 | arb. euclid. mo 0.5 | arb. decoder mo 1.0 | adaptive fg | fixed 0.5 | fixed 0.4 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| livecell | 0.3465 | −0.7 | −0.0 | −0.7 | 0.0 | −0.1 | +0.3 | −0.7 | +5.2 | +5.4 | +5.2 |
+| tissuenet | 0.2709 | +1.3 | −0.0 | +1.3 | +0.2 | +0.7 | +0.9 | −0.4 | +4.9 | +4.5 | +4.9 |
+| dynamicnuclearnet | 0.4485 | −0.8 | 0.0 | −0.8 | 0.0 | 0.0 | −0.1 | −0.3 | +0.8 | −0.1 | +0.8 |
+| deepbacs | 0.2498 | +4.9 | −0.9 | +4.1 | −0.1 | −0.2 | +0.4 | −0.2 | +6.5 | +5.6 | +6.5 |
+| dic_hepg2 | 0.0249 | −10.5 | −27.7 | −30.9 | −1.0 | −1.2 | −2.5 | −26.9 | +25.9 | +24.8 | +22.6 |
+| yeaz | 0.6986 | −0.1 | 0.0 | −0.1 | 0.0 | 0.0 | −0.0 | +0.2 | −0.5 | −0.4 | −0.6 |
+| neurips_cellseg | 0.2370 | −1.6 | +0.2 | −1.4 | 0.0 | +0.7 | +0.6 | −5.0 | +1.6 | +1.7 | +1.2 |
+| puma | 0.1306 | −7.2 | −0.1 | −7.3 | −0.1 | −0.3 | −0.2 | +1.2 | +9.3 | +11.1 | +9.4 |
+| tnbc | 0.1453 | −13.8 | +1.0 | −13.3 | +0.1 | +0.1 | +0.1 | −0.5 | +1.3 | +11.8 | +7.6 |
+| covid_if | 0.7334 | −0.2 | 0.0 | −0.2 | 0.0 | −0.2 | −0.2 | −0.2 | −0.4 | −0.3 | −0.4 |
+| deepseas | 0.1151 | −8.9 | −0.2 | −9.0 | −0.1 | −0.3 | −0.3 | −5.5 | −4.9 | −2.8 | −5.1 |
+| **balanced** | 0.3091 | **−1.1** (2 up / 9 down) | −0.2 (2 / 6) | −1.3 (2 / 9) | **+0.0** (6 / 4) | +0.0 (5 / 6) | +0.1 (5 / 6) | −0.9 (2 / 9) | **+1.9** (8 / 3) | +2.3 (7 / 4) | +2.1 (8 / 3) |
+| predicted / gt objects | 0.62 | 0.82 | 0.62 | 0.82 | 0.62 | 0.62 | 0.62 | 0.62 | 0.85 | 0.76 | 0.86 |
+
+**P1, fusion.** The fallback adds 7,658 decoder instances to the 23,566 accepted masks (397 images) and matches 2,123
+more objects, so three in four additions are false positives or fragments: dense, low-contrast data (tnbc −13.8%,
+deepseas −8.9%, puma −7.2%, dic −10.5%) pays, deepbacs (+4.9%) and tissuenet (+1.3%) gain. The conflict rule fires
+on 485 masks and splits 55 (stability < 0.9), for a loss on dic_hepg2 and nothing elsewhere. The sensitivity
+variants (a 0.4 / 0.6, s 0.85 / 0.95) are all between −1.1% and −1.9%; s 0.95 splits more and loses more. The
+object-level headroom of P0 (union recall +6-8 points) is real, but no label-free rule tells the good decoder
+instances from the bad ones: the masks the SAM2 filter rejected were rejected for a reason. **Rejected.**
+
+**P2, arbitration.** With `max_overlap` 0.3 the decoder arbitration changes 3 accepted masks in 397 images and the
+result is the registry's to four digits (+0.01%); at 0.5 it is still ±1% per dataset; at 1.0 (pure arbitration)
+7,789 masks are arbitrated or split away and the balanced score falls 0.9% (dic −27%, deepseas −5.5%, neurips −5%):
+two prompts in one object then split it along the basin boundary, which is exactly what duplicate suppression
+prevents. The Euclidean variant behaves the same. The overlap threshold is not where the 5-10% of contested objects
+are decided in a way a label-free rule could improve on: the score order already agrees with the decoder's basins
+where it matters. **A wash; rejected.**
+
+**P4, adaptive threshold by foreground agreement.** The rule picks 0.4 on 228 of 240 primary images (0.5-0.7 only on
+dic_hepg2): the Dice of the mask union with the predicted foreground is monotone in the threshold, so the "adaptation"
+is a global retune to 0.4 in disguise, and its table is the fixed-0.4 table (+2.1% vs +1.9%). Both, and the fixed
+0.5, gain 5-25% on livecell, tissuenet, deepbacs, dic, puma, tnbc and lose 3-5% on deepseas (over-segmentation, as
+under E2): 7-8 datasets up, deepseas below the line, below the 9-of-11 rule, and a global-scalar retune is excluded
+by the campaign rule anyway. E2 on the plain path already showed what happens to such a threshold on the production
+splits (+3.5% development → +0.6% test, arvidsson −12%). **The threshold-adaptation line is closed.**
+
+No variant of the 33 passes the protocol gate (≥ 9 of 11 up, no dataset below −2% / −0.005, balanced ≥ +2%), so no
+candidate is carried to the production splits and no timing trials are run (the CPU cost of the options is
+recorded: fusion +0.08 s per image for the AIS pass, decoder arbitration +0.01 s, both negligible on the GPU path).
+
+### Holdout replay (233 images, 20:45): the same picture
+
+`structural_2d/reports/85fb099c…/holdout/`; the registry replay reproduces the holdout control on all 233 images.
+Balanced over the five holdout datasets (registry 0.2650): fixed 0.4 / adaptive +3.5% and fixed 0.5 +3.3% (4 up,
+dynamicnuclearnet −1.0%, dic_hepg2 +35-42% on a 0.018 base); arbitration decoder / euclidean at mo 0.3-0.5 within
+±0.2%; fusion fallback −0.1% (deepbacs +4.9%, dic −19%), conflict −0.2%, both −0.3%; box prompts −5 to −7%; mo 1.0
+−1.0%. Nothing changes the eleven-dataset verdict.
+
+### P5 blocker and fix (20:50): the v4 decoders could not be loaded by this environment
+
+Every v4 run failed at model load: the joint v4 checkpoints (`initial_features=32` in `train_automatic`) have a
+half-width UNETR3D decoder (`out_conv` 4×32, first block 256), while the installed `torch_em` 0.10.1 hardcodes the
+width at 64 and silently swallows the `initial_features` argument that `UniSAM2` and `get_unisam2_model` pass
+through. Fix in `micro_sam/v2/models/util.py` (not a checksum file, so epoch 4 stands): `UniSAM2` takes
+`initial_features` explicitly and, when the built `out_conv` width differs, rebuilds the decoder tail at the
+requested width from torch_em's own blocks (`_rebuild_decoder`, mirroring `UNETR3D.__init__`). The v4 geodesic
+export then loads strictly with every tensor equal; v2 loads as before. This also means a `train_automatic` run in
+this environment now really trains at the width it asks for. v4 controls resubmitted (`s5b_v4_controls_*`,
+15732478/79/80) with the v4 cache (`s5b_v4_cache`, 15732481, primary + training_extra) for the replay-based sign
+check of the negatives.
+
+### P5, controls on joint/v4 geodesic (21:05): the checkpoint moves more than any setting did
+
+Registry defaults, trial `v4-1`, 1g.10gb, same manifests (`hvit_t/5a729846…/`):
+
+| manifest | v2 registry | v4 registry | change | v4 campaign defaults vs v4 registry | seconds v2 → v4 |
+|---|---:|---:|---:|---:|---:|
+| primary (5) | 0.2681 | 0.2955 | +10.2% | −0.1% | 174 → 144 |
+| training_extra (6) | 0.3433 | 0.4634 | +35.0% | −1.1% | 118 → 85 |
+| holdout (5) | 0.2650 | 0.2896 | +9.3% | +0.3% | 175 → 138 |
+
+Per dataset (v4 vs v2, registry defaults, primary / training_extra): livecell +12.9%, tissuenet +6.8%,
+dynamicnuclearnet +2.9%, deepbacs +28.5%, dic_hepg2 −42% (0.025 → 0.015), covid_if +1.5%, deepseas +52%,
+neurips_cellseg +1.6%, puma 0.131 → 0.523, tnbc 0.145 → 0.419, yeaz −3.1%. Whether the v4 training saw puma / tnbc /
+deepseas training splits is not recorded in the checkpoint's `init` (dataset objects only) and should be checked
+before reading the training_extra jump as generalization; the primary and holdout gains (+9-10%) are on the five
+datasets both checkpoints were tuned against. The campaign defaults against the registry defaults have the same sign
+on v4 as on v2 (a wash within ±1%), so that fallback comparison of the plan stands. The structural variants are
+replayed on v4 next (`s5b_v4_cache` → CPU replay) to check the sign of the negatives.
+
+### P5, the structural variants on joint/v4 geodesic (21:15): every sign agrees
+
+`structural_2d/reports/5a729846…/primary+training_extra/` (cache `s5b_v4_cache`, replays `s5b_v4_cpu`; the registry
+replay reproduces the v4 controls on all 397 images). Balanced over the eleven datasets, v4 registry defaults 0.3871:
+fusion fallback / both **−4.0%** (0 of 11 up; the decoder's instances are now clearly worse than v4's SAM2 masks),
+conflict −0.0%; arbitration decoder / euclidean at mo 0.3-0.5 **+0.0 to +0.1%** (7 up / 1-2 down by ≤ 0.5% each:
+noise), mo 1.0 −2.3%; box prompts −10%, box_thin −2.8%; fixed 0.5 / adaptive-without-0.4 **+0.9%** (6 / 5), fixed 0.4
++0.3% (4 / 7), fixed 0.7 −5.2%. The threshold gain of v2 (+2%) shrinks to +1% on v4 with more datasets down, which
+is the checkpoint dependence the rule is meant to exclude. Every negative of the v2 screen keeps its sign on v4;
+nothing turns positive.
+
+### Where this leaves 2d after the structural campaign (2026-09-03, 21:20)
+
+The four structural, label-free levers the plan named have all been built, screened on the eleven development
+datasets, confirmed on the holdout and re-screened on the second checkpoint, and none passes the rule:
+
+| lever | v2, 11 datasets | v4, 11 datasets | verdict |
+|---|---:|---:|---|
+| P1 AIS/APG fusion (fallback / conflict / both, fixed a = 0.5, s = 0.9) | −1.1 / −0.2 / −1.3% | −4.0 / −0.0 / −4.0% | rejected: the uncovered decoder instances are mostly wrong |
+| P2 decoder-arbitrated merge (mo 0.3 / 0.5 / 1.0) | +0.0 / +0.0 / −0.9% | +0.0 / +0.1 / −2.3% | wash: score order already agrees with the basins |
+| P3a box prompts from decoder basins (box / point+box / thin) | −6.3 / −6.3 / −4.7% | −10 / −10 / −2.8% | rejected: wrong extents where APG is weakest |
+| P3b foreground-residual prompting | +0.1% (deepseas −4.9%, +8-15% runtime) | not run | rejected |
+| P4 adaptive threshold by foreground agreement | +1.9% (= fixed 0.4; 8 / 11, deepseas −5%) | +0.4% | degenerate; threshold line closed |
+
+The headroom is real but not reachable label-free: 84% of objects are seeded and 71% have a proposal at IoU ≥ 0.5
+against 56% matched (v2 primary), and the AIS/APG union recall is 6-8 points above APG alone; every rule that tries
+to collect it (adding decoder instances, arbitrating overlaps, re-prompting the residual, loosening the filter) adds
+more false positives than objects on the dense datasets (tnbc, deepseas, puma, dic_hepg2) and only the separated
+nuclei gain. Together with the previous campaign this closes the 2d APG optimization line for hvit_t under the
+generalization rule: learned selectors, proposal-side scalars, per-image thresholds and structural changes all move
+individual datasets by ±10% and the cross-dataset balance by nothing that survives the production splits. The one
+large, general effect measured in this session is the checkpoint: joint/v4 geodesic with the unchanged registry
+defaults is +9-10% on the five primary datasets (holdout confirmed) and 17% faster than v2; that, not the APG, is
+where the next gain is.
+
+No candidate reached the production splits or the timing trials; the 23-dataset production run was not opened.
+Library: the hooks stay opt-in and default-off (checksum epoch 4, bit-identical when off on 630 images and two
+checkpoints); `UniSAM2` now loads the half-width v4 decoders. Nothing committed.
+
+### Refinement re-examination (2026-09-03, 21:40): the recommended `points+boxes` on eleven datasets and on v4
+
+Asked whether the refinement strategies leave room, the accepted opt-in (`points+boxes`, p1-n6, mc 0.7, fo 0.15,
+replace; `configs/apg_s_refine_pb*.json`, proposals pinned to the registry defaults) and its `boxes`-only ablation
+were run for the first time on the six training_extra datasets and on joint/v4 geodesic (jobs `s6_refine_*`).
+Relative mSA vs the registry control:
+
+| dataset | v2 pb | v2 pb interior | v2 boxes | v4 pb | v4 pb interior | v4 boxes |
+|---|---:|---:|---:|---:|---:|---:|
+| livecell | −1.5 | −1.6 | +1.0 | −1.4 | −1.7 | +0.6 |
+| tissuenet | +1.3 | +1.4 | +1.6 | +1.4 | +1.4 | +2.0 |
+| dynamicnuclearnet | **+12.1** | +12.4 | +5.0 | **+8.7** | +8.6 | +1.4 |
+| deepbacs | +3.8 | +4.1 | +1.7 | +2.9 | +1.7 | +0.6 |
+| dic_hepg2 | +4.1 | +6.6 | −0.2 | +1.2 | +3.7 | +1.8 |
+| yeaz | +1.1 | +1.4 | +2.0 | +1.4 | +1.6 | +1.8 |
+| neurips_cellseg | −0.6 | −0.8 | +1.9 | +4.4 | +4.5 | +2.9 |
+| puma | **−11.9** | −11.9 | −4.0 | **−4.5** | −4.5 | −0.7 |
+| tnbc | −2.1 | −2.6 | −1.1 | +3.4 | +3.8 | +5.6 |
+| covid_if | +0.9 | +1.0 | +0.6 | +0.5 | +0.6 | −0.3 |
+| deepseas | −2.2 | −1.7 | −0.8 | −1.1 | +1.2 | −3.1 |
+| **balanced (11)** | **+1.6** (6 up) | +1.8 (6) | +1.5 (7) | **+1.4** (8 up) | +1.5 (9) | +1.1 (8) |
+| holdout (5) | +4.7 | +4.9 | +2.3 | +4.2 | +3.9 | +1.8 |
+| runtime (primary) | +40% | +40% | +37% | +50% | +51% | +48% |
+
+Readings. (1) The historical +4.2% / +4.9% was a five-dataset figure: the holdout reproduces it (+4.7% v2, +4.2%
+v4), but the six extra datasets pull the eleven-dataset balance to +1.4-1.8%, with puma below the regression line
+on both checkpoints (−11.9% v2, −4.5% v4), so the refinement fails the campaign rule as it stands, at +40-50%
+runtime. (2) The gain is a size-bias correction: on the accepted first-round masks of dynamicnuclearnet 75% are
+undersized (median predicted/GT area 0.70, pixel precision 0.99, recall 0.70, on v2 and v4 alike), and the box
+prompt fills the object; deepbacs and v2 puma are oversized (median 1.3, precision 0.73), where the negatives cut;
+livecell / tissuenet / yeaz are balanced (ratio 0.9-1.0), where the negatives only cost. (3) The geometric gates do
+not select: 15,629 of 15,800 primary instances take the second-round mask (consistency vetoes 113, foreign 58), so
+the mode is blanket replacement. (4) A label-free per-instance gate on decoder-foreground disagreement (uncovered
+foreground in a 3-px ring, foreground inside the mask) does not target the bias: on dynamicnuclearnet the decoder
+foreground agrees with the undersized masks (gate would select 2-4% of instances, Spearman with the area ratio
+−0.09 / −0.36), and the sign of the correlation flips between datasets (`reports/instance_fg_disagreement_v2_v4.csv`,
+`reports/matched_object_iou_v2_v4.csv`). (5) The first-round predicted IoU was tested as a gate in the first
+campaign (least gain on the least confident masks) and the learned signed gate is the only selector that worked,
+which the generalization rule excludes. What is left untested and label-free: protecting neighbours' first-round
+pixels from the second-round repaint (the theft mechanism on dense nuclei) and drawing negatives only from touching
+instances; both aim at the puma / livecell loss, neither at a new gain. Expected ceiling of such a probe: +2-3%
+balanced at +40-50% runtime, on either checkpoint.
+
+## Refinement campaign of 2026-09-03 (session 3, 21:45): label-free rules against the second round's losses
+
+Plan `~/.claude/plans/glistening-dazzling-fountain.md`, approved 21:45. Develop on joint/v4 geodesic, confirm on v2;
+the refinement stays an opt-in mode (runtime reported, no cap); production splits once, v4 only, for ≤ 2 candidates.
+Rule as before: ≥ 9 of 11 development datasets up, none below −2% / −0.005, balanced ≥ +2%, on both checkpoints.
+
+### Epoch 5 (22:00): three label-free refinement kwargs, 2d only
+
+Implementation checksum `41abe8ca0cf86fadcf5d46ea183bb296` → `4fa97979b2aa4173e3c1d3fd38d00b66`
+(`automatic_prompt_generation.py` and the benchmark's `IMAGE_DIAGNOSTICS`). All default-off, `refinement=None` and
+the historical `points+boxes` unchanged (135 tests, 11 new):
+
+- `protect_neighbours` (shared): the second-round mask is clipped to background + the instance's own first-round
+  pixels before the gates, so a re-prompt grows into free space or shrinks but never onto a neighbour; a mask
+  clipped to nothing keeps the first round. The consistency IoU sees the clipped mask (weakly relaxed), the
+  foreign-overlap gate never fires for protected masks; `keep-if-better` still scores the unclipped mask. Stat
+  `refinement_protected_pixels`.
+- `negative_scope="touching"` (points): negatives only from instances within `touch_radius` (shared, 2 px,
+  Euclidean; 1 = 4-connected contact only, 2 includes diagonal contact and one-pixel gaps) of the instance's mask,
+  none without a touching neighbour; works for both negative sources by owner id. `_touching_instances` compares the
+  label image with its shifted copies (six offsets at r 2), independent of the instance count. Stat
+  `refinement_negatives`.
+- `gate="isolated"` (+ `isolated_fallback=None|"boxes"`): only instances without a touching neighbour take the
+  full second pass; the touching ones keep the first round or, with the fallback, are re-prompted with the box
+  alone in their own batches. Stats `refinement_isolated_instances`, `refinement_fallback_instances`.
+- All six image-only kwargs (`IMAGE_ONLY_REFINEMENT_KWARGS`) are rejected by the volume surface instead of being
+  silently accepted (the previous derivation-by-subtraction would have accepted them); the one existing test
+  assertion about the volume surface was updated accordingly.
+
+Screen grid `configs/apg_r_refinement_screen.json` (11 entries, proposals pinned to the registry defaults, current
+refinement defaults otherwise): none, pb, boxes, pb-protect, pb-touch, pb-touch-protect, pb-isolated,
+pb-isolated-boxes, pb-isolated-boxes-protect, and the sensitivity rows pb-touch-protect-r1 / -r4 (reported only).
+`screen_apg_refinement.py` now flattens the gate and refinement counters; `report_refinement_screen.py` joins the
+screens of one checkpoint, applies the rule against `none`, checks `none` against the epoch-5 registry benchmark and
+`pb` against the epoch-4 `apg_s_refine_pb` run image by image, and writes the per-dataset cost columns.
+
+Jobs (22:03): screens `s7_refine_screen_v2` (15733313, primary + training_extra), `s7_refine_screen_v4` (15733314,
+primary; the v4 training_extra screen runs on the session slice, log
+`structural_2d/logs/screen_refine_v4_training_extra.log`); epoch-5 registry controls `s7_e5_controls_{v4,v2}_*`
+(15733315-15733320).
+
+### Screen (22:25): no label-free rule passes; the crowding gate is the one cost saver
+
+Screens `refinement_screening/hvit_t/{5a729846…,85fb099c…}/<manifest>-9d4ab712…-4fa97979…/`, reports
+`structural_2d/refinement_reports/<checkpoint>/primary+training_extra/`. Identity: the `none` entry equals the
+epoch-5 registry benchmark and the `pb` entry the epoch-4 canonical `apg_s_refine_pb` run on every one of the 397
+images, on both checkpoints; the epoch-5 registry controls equal epoch 4 on all six manifest / checkpoint pairs.
+Relative mSA vs `none` (%), eleven datasets; v4 `none` = 0.3871, v2 `none` = 0.3091:
+
+| dataset | v4 pb | v4 protect | v4 touch | v4 isolated | v4 isolated+boxes | v4 boxes | v2 pb | v2 protect | v2 touch | v2 isolated | v2 isolated+boxes | v2 boxes |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| livecell | −1.4 | −1.5 | −0.4 | −0.5 | −0.2 | +0.6 | −1.5 | −1.7 | −0.4 | −0.8 | +0.0 | +1.0 |
+| tissuenet | +1.4 | +1.4 | −1.2 | +1.3 | +2.4 | +2.0 | +1.3 | +1.0 | −0.3 | +0.8 | +2.1 | +1.6 |
+| dynamicnuclearnet | +8.7 | +8.7 | −4.7 | +8.7 | +8.6 | +1.4 | +12.1 | +12.1 | −1.6 | +11.7 | +11.9 | +5.0 |
+| deepbacs | +2.9 | +2.9 | +4.7 | +1.9 | +2.7 | +0.6 | +3.8 | +4.2 | +6.5 | +1.6 | +2.1 | +1.7 |
+| dic_hepg2 | +1.2 | +1.2 | −2.0 | +1.2 | +2.1 | +1.8 | +4.1 | +5.1 | +5.0 | +7.1 | +1.0 | −0.2 |
+| yeaz | +1.4 | +1.5 | +1.0 | +0.9 | +1.9 | +1.8 | +1.1 | +1.2 | +0.8 | +0.7 | +2.0 | +2.0 |
+| neurips_cellseg | +4.4 | +4.4 | +1.7 | +3.3 | +4.2 | +2.9 | −0.6 | −0.4 | +0.2 | −0.7 | −0.2 | +1.9 |
+| puma | −4.5 | −4.5 | +0.0 | −4.4 | −4.4 | −0.7 | −11.9 | −11.7 | +6.8 | −11.2 | −11.7 | −4.0 |
+| tnbc | +3.4 | +3.4 | +0.8 | +3.5 | +3.4 | +5.6 | −2.1 | −2.3 | +1.9 | −1.8 | −2.1 | −1.1 |
+| covid_if | +0.5 | +0.5 | −2.7 | +0.1 | +0.2 | −0.3 | +0.9 | +0.9 | −0.8 | +0.7 | +0.7 | +0.6 |
+| deepseas | −1.1 | −1.0 | −1.7 | −1.1 | −1.0 | −3.1 | −2.2 | −3.0 | +1.8 | −1.9 | −2.1 | −0.8 |
+| **balanced** | +1.4 (8 up) | +1.4 (8) | −0.5 (5) | +1.2 (8) | **+1.6** (8) | +1.1 (8) | +1.6 (6) | +1.6 (6) | +0.6 (7) | +1.4 (6) | **+1.8** (7) | +1.5 (7) |
+| second-pass forwards / eligible | 1.00 | 1.00 | 1.00 | **0.39** | 1.00 (0.61 box-only) | 1.00 | 1.00 | 1.00 | 1.00 | **0.37** | 1.00 (0.63 box-only) | 1.00 |
+
+Sensitivity rows (touch_radius 1 / 4 on pb-touch-protect): v4 −0.4 / −0.5%, v2 +0.8 / +0.5%; the radius does not
+change the reading. Readings:
+
+- **Neighbour protection does nothing.** It clips 82k pixels over 397 images (v4; 55k of them on LiveCELL) and moves
+  no dataset by more than 0.1 points; puma keeps its −4.5% / −11.7%. The second round does not lose on dense data
+  by stealing neighbours' pixels: the loss happens inside the instance's own extent.
+- **Puma is not a crowding problem.** At radius 2, 91% (v4) / 73% (v2) of puma's instances are isolated, as are
+  94% of dynamicnuclearnet's: the same geometry, opposite responses (+8.7% / −4.5%). `boxes` alone is −0.7% / −4.0%
+  on puma, so the negatives cost 4 (v4) to 8 (v2) points there; on v2, touching-only negatives turn puma to +6.8%
+  and tnbc / deepseas positive, but cost dynamicnuclearnet's gain on both checkpoints (−1.6% / −4.7%) and covid_if
+  on v4 (−2.7%), for +0.6% (v2) / −0.5% (v4) balanced. Where the negatives help (undersized nuclei) and where they
+  hurt (small, correctly sized nuclei) is a property of the object, not of its neighbourhood; no label-free rule of
+  this campaign separates the two, and the sensitivity rows say the contact radius is not the missing knob.
+- **The isolated gate is a cost story, not a quality one.** `pb-isolated` re-prompts 39% / 37% of the instances
+  for 87% / 84% of `pb`'s gain (second-pass select time 55 s vs 125 s on v4, 41 s vs 94 s on v2, over 397 images);
+  the box fallback for the touching instances brings the quality back to `pb`'s and slightly above (+1.6% / +1.8%,
+  tissuenet, LiveCELL and yeaz up) at `pb`'s full cost. Neither passes the rule: 8 (v4) / 7 (v2) datasets up, puma
+  below the line on both checkpoints, balanced below +2% on v4.
+- The geometric gates still fire on ≤ 1% of the instances (replaced fraction 0.98-1.00 everywhere).
+
+Verdict under the rule: **no candidate.** Two variants are carried to canonical runs for the record only:
+`pb-isolated` (the Pareto point on cost) and `pb-isolated-boxes` (the best quality, equal to `pb` in cost), on
+primary / training_extra / holdout for both checkpoints (`s8_isolated*`, 15733519-24 and the isolated-only runs), and
+three serialized bracketed holdout timing trials on v4 of `pb`, `pb-isolated`, `pb-isolated-boxes`
+(`s8_timing_v4_holdout`). The production splits are not opened.
+
+### Canonical runs and timing (23:00): the screen reproduces; the crowding gate buys the second pass at a third of the cost
+
+Canonical benchmark runs (`s8_isolated*`, single runs, 1g.10gb, trial `plain-1` / `v4-1`) reproduce the screen's
+per-dataset numbers exactly on both checkpoints. Balanced relative change vs the epoch-5 registry control:
+
+| configuration | v4 dev (11) | v4 holdout (5) | v2 dev (11) | v2 holdout (5) | second-pass forwards | v4 holdout runtime, 3 bracketed trials (median per dataset) |
+|---|---:|---:|---:|---:|---:|---:|
+| registry defaults | 0.3871 | 0.2896 | 0.3091 | 0.2650 | – | 138 s (brackets 138-154 s) |
+| `points+boxes` (pb, current opt-in) | +1.42% (8 up, puma −4.5%) | +4.19% | +1.61% (6 up, puma −11.9%) | +4.71% | 100% | 206 s (+49%) |
+| pb + `gate="isolated"` | +1.23% (8 up, puma −4.4%) | +3.87% | +1.36% (6 up, puma −11.2%) | +4.23% | 39% / 37% | **159 s (+15%; −23% vs pb)** |
+| pb + isolated + `isolated_fallback="boxes"` | **+1.63%** (8 up, puma −4.4%) | **+4.52%** | **+1.84%** (7 up, puma −11.7%) | +4.74% | 100% (61% box-only) | 209 s (+51%) |
+| … + `protect_neighbours` | +1.63% | +4.50% | +1.85% | +4.68% | 100% | not timed (screen: +3% select time) |
+
+Per dataset the gate loses at most 0.9 points against `pb` (deepbacs, neurips), keeps dynamicnuclearnet (+8.7% /
++11.7%) and softens LiveCELL (−0.5% instead of −1.4%); the box fallback lifts tissuenet (+2.4% / +2.1%), yeaz
+(+1.9% / +2.0%) and LiveCELL (−0.2% / +0.0%) above `pb` while keeping its gains elsewhere. The first timing trial ran
+on a slower node (brackets 146 / 154 s against 138 / 139 s in trials 2 and 3, a 5% bracket drift) and is discounted
+in the totals above, which are per-dataset medians over the three trials; LiveCELL carries the saving (89 s against
+126 s per 80 images), dic_hepg2 and dynamicnuclearnet (94% isolated) cost the same as `pb`.
+
+### Verdict (23:05)
+
+Under the campaign rule (≥ 9 of 11 development datasets up, none below −2% / −0.005, balanced ≥ +2%, on both
+checkpoints) **no refinement variant is a candidate**, so the production splits stay closed and `DEFAULT_REFINEMENT`
+is unchanged. What the campaign established, for the record:
+
+1. The second round's loss on dense nuclei and confluent cells is not pixel theft from neighbours: clipping every
+   second-round mask to its own first-round extent plus background (82k pixels over 397 images on v4) moves no
+   dataset by more than 0.1 points. The loss happens inside the instance, from the negatives (`boxes` alone loses
+   0.7% on v4 puma against 4.5% with negatives) on small, correctly sized objects; the same negatives are the whole
+   gain on undersized nuclei (dynamicnuclearnet: box alone +1.4%, box + point + negatives +8.7%). Which of the two
+   an object is does not show in its neighbourhood (puma and dynamicnuclearnet are both > 90% isolated at radius
+   2), in the decoder foreground (the earlier disagreement oracle), or in the first-round score (the first
+   campaign): the label-free signals available to the second pass do not tell the objects that benefit from the
+   objects that lose.
+2. Touching-only negatives are the one rule that fixes puma (v2 +6.8%), and it costs dynamicnuclearnet on both
+   checkpoints; the contact radius (1 / 2 / 4) does not change that.
+3. The crowding gate is a genuine cost result: re-prompting only instances without a touching neighbour keeps
+   87% (v4 dev) / 92% (v4 holdout) of the opt-in refinement's gain at 31% of its added runtime (+15% over the
+   defaults instead of +49%). With the box fallback for the touching instances the quality is slightly above `pb`
+   (+0.2 points on both checkpoints, LiveCELL no longer negative) at `pb`'s cost.
+
+Both gate variants ship as opt-in kwargs (`refinement="points+boxes", refinement_kwargs={"gate": "isolated"}`,
+optionally `"isolated_fallback": "boxes"`), documented in `DEFAULT_REFINEMENT`. Whether the recommended opt-in values
+should move to the gate (cheaper, same puma regression) is a product decision, not one the rule makes; the library
+defaults were not changed. Epoch 5 (`4fa97979…`) stands; the six registry controls are bit-identical to epoch 4.
+Runs: screens `s7_refine_screen_*`, canonical `s8_isolated*`, timing `s8_timing_v4_holdout` (15733546), reports
+`structural_2d/refinement_reports/<checkpoint>/primary+training_extra/`. Nothing committed.
+
+## Visual check of the refinement and the end of the 2d APG optimization (2026-09-04)
+
+### The visual check
+
+`optimization/visualize_refinement_cases.py --dataset <name> --variant pb --n 5 --checkpoint v4` ranks a dataset's
+images by the per-image mSA change of a screened refinement variant against the `none` control (read from the
+refinement screen's `samples.csv`), recomputes the first round, the refinement prompts and the refined result for
+the N largest improvements and the N largest decreases with the real model (the recomputed scores are checked
+against the screen), and writes one six-panel figure per image: the image, the first-round masks, the refined
+masks (ground truth as white outlines on both), the refinement prompts (positives, negatives, boxes) on the
+first-round outlines, the pixel-level change (gained / lost / re-assigned, with the median mask-to-truth area ratio
+of the matched objects before and after), and the per-object IoU change on the ground-truth footprints. Figures for
+all eleven development datasets, v4 geodesic, `points+boxes` with the current defaults:
+`<root>/structural_2d/visual/v4/<dataset>/pb/{improvements,decreases}/` (91 figures; `ranking.csv` beside them
+holds every image's before / after score); puma also on v2 under `visual/v2/puma/pb/`.
+
+Per-image direction of the refinement (v4, `pb` against the registry defaults):
+
+| dataset | images | up | down | unchanged | median relative change | worst image | best image |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| dynamicnuclearnet | 40 | 32 | 7 | 1 | +5.8% | −6.9% | +108% |
+| neurips_cellseg | 40 | 27 | 11 | 2 | +3.6% | −23% | +134% |
+| deepbacs | 30 | 16 | 13 | 1 | +2.2% | −26% | +80% |
+| yeaz | 40 | 30 | 10 | 0 | +1.4% | −3.4% | +8.3% |
+| tnbc | 6 | 4 | 2 | 0 | +1.0% | −1.5% | +16% |
+| tissuenet | 40 | 23 | 16 | 1 | +0.6% | −9.9% | +38% |
+| covid_if | 5 | 4 | 1 | 0 | +0.1% | −1.8% | +3.2% |
+| deepseas | 40 | 11 | 14 | 15 | 0.0% | −52% | +100% |
+| dic_hepg2 | 50 | 1 | 0 | 49 | 0.0% | 0 | 0 |
+| livecell | 80 | 17 | 63 | 0 | −1.5% | −7.4% | +6.4% |
+| puma | 26 | 4 | 22 | 0 | −5.1% | −20% | +7.0% |
+
+### What the figures show
+
+- **The segmentations are virtually unchanged.** On the puma images that lose 15-20% mSA the refinement adds
+  3,000-4,000 pixels and removes 300-400 over 100-150 nuclei: a rim of one to two pixels per object, invisible at
+  image scale. The first-round masks already cover 1.3-1.4 times the annotated area on those images (annotations
+  drawn tight to the chromatin), the refinement takes the ratio from 1.35 to 1.42, and 124 of 154 objects drop in
+  IoU. On the puma image that gains 7% the annotations are larger and the same rim helps. The same holds, with
+  smaller amplitude, on LiveCELL (63 of 80 images down by a median 1.5%).
+- **mSA is therefore not measuring what we care about here.** mSA averages the matching accuracy over IoU
+  thresholds 0.5 to 0.95, so on small objects a one-pixel boundary shift moves many of them across several
+  thresholds at once; a change no annotator would notice moves the score by ±20% on a dataset. The per-dataset
+  swings that drove both campaigns of this session (puma −4.5% / −12%, dynamicnuclearnet +9% / +12%) are of this
+  kind: boundary conventions of the annotation relative to SAM2's mask, not segmentation errors. The large relative
+  values on deepseas, neurips and deepbacs (±50-130%) are single images with a near-zero baseline where one object
+  crossing IoU 0.5 doubles or halves the score.
+- **Where the refinement does something visible, it is small.** Even the best cases (dynamicnuclearnet, the boxes
+  filling undersized nuclei) are boundary adjustments of a few pixels; the refinement never adds or removes
+  objects (instance counts are identical before and after on every figure), so it cannot touch the recall that
+  the diagnostics identified as the dominant loss.
+
+### Decision
+
+The user decided on 2026-09-04 to **stop the 2d APG optimization**: the visible effect of the refinement is
+insignificant, and mSA, the score every gate of these campaigns was built on, responds to one-pixel boundary
+conventions more than to segmentation quality on the small-object datasets that decided the campaigns. Joint/v4
+geodesic becomes the default model independently of this work (its +9-10% over v2 with the unchanged registry
+defaults is the one large, general effect measured in this session), and the code is to be simplified.
+
+For the record, what this leaves in the tree, all opt-in and default-off, none of it having passed a gate:
+the structural hooks of epoch 4 (`prompt_type`, `arbitration`, `fusion`, `recover_residual`, with
+`decoder_basins`, `fuse_with_instances`, `residual_point_prompts`, the arbitrating `merge_by_score`), the
+refinement kwargs of epoch 5 (`protect_neighbours`, `negative_scope`, `gate="isolated"`, `isolated_fallback`,
+`touch_radius`, `IMAGE_ONLY_REFINEMENT_KWARGS`), the learned selector / gate path of the earlier campaigns, and the
+refinement mode itself. The `UniSAM2(initial_features=...)` width fix in `models/util.py` is the one library change
+of this session that is needed regardless (v4 checkpoints cannot be loaded without it). The evaluation harness
+additions (`screen_apg_structural.py`, `report_refinement_screen.py`, `visualize_refinement_cases.py`, the
+`apg_s_*` / `apg_r_*` configs) and the result caches under `structural_2d/` (5.2 GB) document the campaigns and can
+be removed once the notes are considered sufficient.
+
+Two lessons for whatever follows: any future evaluation of boundary-level changes should report a
+boundary-tolerant or object-count-based measure next to mSA (per-object IoU distributions and the mask-to-truth
+area ratio, as the visual tool does, or SA at a single tolerant threshold), and the visual check should come
+before the screen, not after it: two campaigns' worth of gates were read from a score whose per-dataset movements
+a handful of figures explained in an hour.

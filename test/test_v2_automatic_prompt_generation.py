@@ -1690,7 +1690,9 @@ def test_parse_refinement_resolves_the_volume_surface():
     # Learned uncertainty gates are 2d-only; volumes add their propagation conditioning strategy.
     _, image = _parse_refinement("points+boxes", None)
     _, volume = _parse_refinement("points+boxes", None, is_volume=True)
-    assert set(image) - set(volume) == {"gate", "gate_threshold"}
+    # The learned gate and the label-free neighbourhood rules are image-only, and listed as such.
+    assert set(image) - set(volume) == set(automatic_prompt_generation.IMAGE_ONLY_REFINEMENT_KWARGS)
+    assert {"gate", "gate_threshold", "protect_neighbours", "negative_scope"} <= set(image) - set(volume)
     assert set(volume) - set(image) == {"conditioning"}
     assert volume["conditioning"] == "prompts"
     # Two values were measured separately in 3d and differ from 2d; the rest are shared.
@@ -1704,6 +1706,12 @@ def test_parse_refinement_resolves_the_volume_surface():
         _parse_refinement("points+boxes", {"gate": "uncertainty"}, is_volume=True)
     with pytest.raises(ValueError, match="gate_threshold"):
         _parse_refinement("points+boxes", {"gate_threshold": 0.5}, is_volume=True)
+    for key, value in (
+        ("protect_neighbours", True), ("negative_scope", "touching"), ("touch_radius", 3),
+        ("isolated_fallback", "boxes"),
+    ):
+        with pytest.raises(ValueError, match=key):
+            _parse_refinement("points+boxes", {key: value}, is_volume=True)
     with pytest.raises(ValueError, match="Invalid conditioning"):
         _parse_refinement("points+boxes", {"conditioning": "logits"}, is_volume=True)
     with pytest.raises(ValueError, match="dense-only"):
@@ -1722,8 +1730,10 @@ def test_volume_scoring_without_refinement_carries_only_the_propagation_prompt(m
 
     assert frames_seen == [0, 2]
     assert [candidate["frame"] for candidate in candidates] == [0, 0, 2]
-    expected_keys = {"frame", "point", "score", "stability", "mask", "mask_box"}
+    # 'prompt_index' is bookkeeping (which prompt made the candidate); it carries no conditioning.
+    expected_keys = {"frame", "point", "score", "stability", "mask", "mask_box", "prompt_index"}
     assert all(set(candidate) == expected_keys for candidate in candidates)
+    assert [candidate["prompt_index"] for candidate in candidates] == [0, 1, 2]
     # No second round means no extra forward: exactly one scoring call per anchor slice.
     assert predictor.refinement_calls == []
     assert len(predictor.calls) == 2
@@ -2214,3 +2224,857 @@ def test_tiled_apg_generate_passes_spatial_shape_for_channel_last_image(monkeypa
 
     assert calls["shape"] == (8, 12)
     assert segmentation.shape == (8, 12)
+
+
+# ----------------------------------------------------------------------------------------------
+# Opt-in volume hooks of the 3d optimization campaign: ladder metadata, anchor features, candidate
+# scorer, supplied prompts and the generation trace. All default-off; the default path is unchanged.
+
+
+def _two_peak_density(shape):
+    """A density with two peaks that merge into one component below a threshold of 5."""
+    density = np.zeros(shape, dtype="float32")
+    density[1, 8, 8] = 12.0
+    density[1, 8, 20] = 8.0
+    density[1, 7:10, 7:22] = np.maximum(density[1, 7:10, 7:22], 3.0)
+    return density
+
+
+def test_derive_volume_prompts_metadata_reports_birth_merge_and_persistence(monkeypatch):
+    from micro_sam.v2.automatic_prompt_generation import (
+        VOLUME_CANDIDATE_FEATURE_NAMES, derive_volume_prompts,
+    )
+    shape = (3, 16, 28)
+    density = _two_peak_density(shape)
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation._compute_flow_density", lambda *args, **kwargs: density,
+    )
+    foreground = np.full(shape, 0.9, dtype="float32")
+    distances = np.zeros((3, *shape), dtype="float32")
+    plain = derive_volume_prompts(
+        foreground, distances, candidate_threshold=(1.0, 5.0, 10.0), min_candidate_size=1,
+    )
+    prompts, metadata = derive_volume_prompts(
+        foreground, distances, candidate_threshold=(1.0, 5.0, 10.0), min_candidate_size=1, return_metadata=True,
+    )
+    # The metadata does not change the prompts.
+    for key in ("points", "point_labels", "frames"):
+        np.testing.assert_array_equal(prompts[key], plain[key])
+    assert len(prompts["points"]) == 2
+    assert metadata["feature_names"] == VOLUME_CANDIDATE_FEATURE_NAMES
+    assert metadata["features"].shape == (2, len(VOLUME_CANDIDATE_FEATURE_NAMES))
+    assert np.isfinite(metadata["features"]).all()
+    names = list(VOLUME_CANDIDATE_FEATURE_NAMES)
+    births = metadata["features"][:, names.index("birth_threshold")]
+    merges = metadata["features"][:, names.index("merge_threshold")]
+    persistence = metadata["features"][:, names.index("persistence")]
+    # The strong peak is born at 10 and never merges (persists to the lowest level, 1); the weak one
+    # is born at 5 and merges into the strong one at 1.
+    assert births.tolist() == [10.0, 5.0]
+    assert merges.tolist() == [1.0, 1.0]
+    assert persistence.tolist() == [9.0, 4.0]
+    assert metadata["features"][:, names.index("same_slice_candidates")].tolist() == [2.0, 2.0]
+    assert metadata["density"] is density
+    # Nothing found: both halves are None.
+    monkeypatch.setattr(
+        "micro_sam.v2.automatic_prompt_generation._compute_flow_density",
+        lambda *args, **kwargs: np.zeros(shape, dtype="float32"),
+    )
+    nothing = derive_volume_prompts(foreground, distances, candidate_threshold=(1.0,), return_metadata=True)
+    assert nothing == (None, None)
+
+
+class _ThreeMaskPredictor(_VolumePredictor):
+    """Answers a multimask request with three alternatives per prompt, a plain one with the first."""
+
+    def _predict(self, coords, labels, boxes, mask_input, multimask_output, return_logits):
+        masks, scores = self.responses.pop(0)
+        masks = torch.as_tensor(np.asarray(masks))  # (n, 3, H, W)
+        scores = torch.as_tensor(np.asarray(scores), dtype=torch.float32)  # (n, 3)
+        if not multimask_output:
+            masks, scores = masks[:, :1], scores[:, :1]
+        logits = torch.where(masks, 10.0, -10.0)
+        return logits, scores, None
+
+
+def _three_alternatives(shape, base):
+    # All above the 2d default 'min_size' of 50 pixels that the anchor-slice merge applies.
+    small = _mask(shape, slice(base[0], base[0] + 8), slice(base[1], base[1] + 8))
+    medium = _mask(shape, slice(base[0], base[0] + 10), slice(base[1], base[1] + 10))
+    large = _mask(shape, slice(base[0], base[0] + 12), slice(base[1], base[1] + 12))
+    return [small, medium, large]
+
+
+def test_volume_scoring_can_attach_anchor_alternative_features(monkeypatch):
+    shape = (32, 32)
+    alternatives = [_three_alternatives(shape, (4, 4)), _three_alternatives(shape, (4, 20))]
+    scores = [[0.9, 0.8, 0.7], [0.85, 0.6, 0.5]]
+    # One plain call for the decision, one three-mask call for the features, per anchor slice.
+    predictor = _ThreeMaskPredictor([(alternatives, scores), (alternatives, scores)])
+    segmenter, _ = _volume_generator(monkeypatch, (2, *shape), predictor)
+    segmenter._prediction[0] = 0.9
+    prompts = {
+        "points": np.array([[[6, 6]], [[22, 6]]], dtype="float32"),
+        "point_labels": np.ones((2, 1), dtype="int32"),
+        "frames": np.array([0, 0], dtype="int64"),
+    }
+    plain = segmenter._score_candidates(
+        prompts, multimasking=False, batch_size=64, score_threshold=0.6, max_overlap=0.15,
+    )
+    predictor.responses = [(alternatives, scores), (alternatives, scores)]
+    with_features = segmenter._score_candidates(
+        prompts, multimasking=False, batch_size=64, score_threshold=0.6, max_overlap=0.15,
+        candidate_feature_schema="dense_v1",
+    )
+    # The decision is untouched: same candidates, same masks, same scores.
+    assert [c["prompt_index"] for c in plain] == [c["prompt_index"] for c in with_features] == [0, 1]
+    for before, after in zip(plain, with_features):
+        assert before["score"] == after["score"]
+        np.testing.assert_array_equal(before["mask"], after["mask"])
+        assert after["alternative_features"].shape == (3, 19)
+        assert np.isfinite(after["alternative_features"]).all()
+        assert after["alternative_scores"].tolist() == pytest.approx(scores[after["prompt_index"]])
+        assert after["alternative_stability"].tolist() == [1.0, 1.0, 1.0]
+    # One anchor slice: one plain call without features, one plain plus one feature call with them.
+    assert len(predictor.calls) == 3
+
+
+class _AdaptivePropagator(_RecordingPropagator):
+    """Answers a pass with one mask per object that was conditioned since the last reset."""
+
+    def __init__(self, masks_by_point):
+        super().__init__()
+        self.masks_by_point = masks_by_point
+        self.active = {}
+
+    def reset_tracking(self):
+        super().reset_tracking()
+        self.active = {}
+
+    def add_point_prompts(self, frame_ids, points, point_labels, object_id=None, **kwargs):
+        super().add_point_prompts(frame_ids, points, point_labels, object_id=object_id, **kwargs)
+        self.active[int(object_id)] = tuple(int(value) for value in np.asarray(points)[0])
+
+    def add_mask_prompts(self, frame_ids, masks=None, object_id=None, refine=True):
+        super().add_mask_prompts(frame_ids, masks=masks, object_id=object_id, refine=refine)
+        self.active[int(object_id)] = ("mask", int(np.asarray(masks[0]).sum()))
+
+    def propagate_prompts(self, early_stop_patience=None):
+        return {0: {object_id: self.masks_by_point[key][None] for object_id, key in self.active.items()}}
+
+
+class _FakeVolumeScorer:
+    input_schema = "dense_v1"
+    component_feature_names = ("persistence", "same_slice_candidates")
+
+    def __init__(self):
+        self.seen = []
+
+    def predict_candidates(self, features, component_features):
+        components = None if component_features is None else tuple(component_features.shape)
+        self.seen.append((tuple(features.shape), components))
+        # Score by the first alternative's predicted IoU, which lives in feature column 0.
+        return features[:, 0, 0]
+
+
+def _hooked_volume(monkeypatch, propagated_first=True):
+    from micro_sam.v2.automatic_prompt_generation import VOLUME_CANDIDATE_FEATURE_NAMES
+    shape = (32, 32)
+    alternatives = [_three_alternatives(shape, (4, 4)), _three_alternatives(shape, (4, 20))]
+    # Both first alternatives pass the anchor filter (0.6); the learned scorer, which reads that
+    # predicted IoU back out of the features, can still separate them with a threshold of 0.7.
+    scores = [[0.9, 0.8, 0.7], [0.65, 0.4, 0.3]]
+    predictor = _ThreeMaskPredictor([(alternatives, scores), (alternatives, scores)])
+    mask = _mask((32, 32), slice(4, 12), slice(4, 12))
+    # Keyed by the YX point the propagator receives, or by the mask conditioning.
+    propagator = _AdaptivePropagator({
+        (6, 6): alternatives[0][0], (6, 22): alternatives[1][0], ("mask", int(mask.sum())): mask,
+    })
+    propagator.predictor_devices = [(predictor, "cpu")]
+    segmenter, _ = _volume_generator(monkeypatch, (2, *shape), predictor, propagator)
+    segmenter._scoring_predictor_pool = [predictor]
+    segmenter._prediction[0] = 0.9
+    segmenter._last_generation_stats = {}
+    n_features = len(VOLUME_CANDIDATE_FEATURE_NAMES)
+    metadata = {
+        "feature_names": VOLUME_CANDIDATE_FEATURE_NAMES,
+        "features": np.arange(2 * n_features, dtype="float32").reshape(2, n_features),
+    }
+    prompts = {
+        "points": np.array([[[6, 6]], [[22, 6]]], dtype="float32"),
+        "point_labels": np.ones((2, 1), dtype="int32"),
+        "frames": np.array([0, 0], dtype="int64"),
+        "metadata": metadata,
+    }
+    return segmenter, propagator, prompts
+
+
+def test_volume_candidate_scorer_filters_orders_and_budgets(monkeypatch):
+    segmenter, propagator, prompts = _hooked_volume(monkeypatch)
+    scorer = _FakeVolumeScorer()
+    segmenter.set_multimask_models(volume_candidate_scorer=scorer)
+
+    segmentation = segmenter.generate(
+        prompts=prompts, candidate_scorer_threshold=0.7, candidate_order="learned", min_size=1, keep_trace=True,
+    )
+    stats = segmenter._last_generation_stats
+    # The second candidate (learned score 0.65) is filtered before the propagation.
+    assert stats["scored_candidates"] == 2
+    assert stats["filtered_candidates"] == 1
+    assert stats["propagation_passes"] == 1
+    assert sorted(np.unique(segmentation)) == [0, 1]
+    assert scorer.seen == [((2, 3, 19), (2, 2))]
+    trace = segmenter._last_generation_trace
+    assert trace["metadata"] is prompts["metadata"]
+    assert [c["learned_score"] for c in trace["candidates"]] == [pytest.approx(0.9)]
+    assert trace["records"][0]["merge_score"] == pytest.approx(0.9)
+    assert trace["matches"] == {1: 0}
+    # Only the survivor reached the propagator, from its point.
+    assert [entry[0] for entry in propagator.pushed] == ["reset", "points"]
+
+
+def test_volume_candidate_budget_keeps_the_best_by_anchor_score(monkeypatch):
+    segmenter, propagator, prompts = _hooked_volume(monkeypatch)
+    segmenter.generate(prompts=prompts, candidate_budget=1, min_size=1)
+    stats = segmenter._last_generation_stats
+    assert stats["budgeted_candidates"] == 1
+    assert stats["propagation_passes"] == 1
+    assert "filtered_candidates" not in stats
+    # Budget without a scorer keeps the higher anchor score, the candidate at (6, 6).
+    assert propagator.pushed[1][3] == [[6.0, 6.0]]
+
+
+def test_volume_scorer_options_require_an_installed_scorer_and_a_volume(monkeypatch):
+    segmenter, _, prompts = _hooked_volume(monkeypatch)
+    with pytest.raises(RuntimeError, match="volume candidate scorer"):
+        segmenter.generate(prompts=prompts, candidate_scorer_threshold=0.5)
+    with pytest.raises(ValueError, match="candidate order"):
+        segmenter.generate(prompts=prompts, candidate_order="random")
+    with pytest.raises(ValueError, match="lack"):
+        segmenter.generate(prompts={"points": prompts["points"]})
+    with pytest.raises(ValueError, match="unknown input schema"):
+        segmenter.set_multimask_models(volume_candidate_scorer=type("S", (), {"input_schema": "x"})())
+    image = object.__new__(AutomaticPromptGenerator)
+    image._prediction = np.zeros((4, 8, 8), dtype="float32")
+    image._is_initialized = True
+    image._model_type = "hvit_t"
+    image._microscopy_multimask_scorer = None
+    image._volume_candidate_scorer = None
+    with pytest.raises(ValueError, match="volumes only"):
+        image.generate(keep_trace=True)
+
+
+def test_supplied_prompts_can_condition_the_anchor_frame_on_a_mask(monkeypatch):
+    segmenter, propagator, prompts = _hooked_volume(monkeypatch)
+    mask = _mask((32, 32), slice(4, 12), slice(4, 12))
+    prompts["conditioning"] = [{"mask": mask}, None]
+    segmenter.generate(prompts=prompts, min_size=1)
+    kinds = [(entry[0], entry[2]) for entry in propagator.pushed if entry[0] != "reset"]
+    # Object 1 is conditioned on the mask (not refined again), object 2 on its point.
+    assert kinds == [("mask", 1), ("points", 2)]
+    assert propagator.pushed[1][3] == int(mask.sum()) and propagator.pushed[1][4] is False
+
+
+def test_volume_defaults_leave_no_trace_and_no_scorer_columns(monkeypatch):
+    segmenter, _, prompts = _hooked_volume(monkeypatch)
+    prompts.pop("metadata")
+    segmenter.generate(prompts=prompts, min_size=1)
+    assert segmenter._last_generation_trace is None
+    stats = segmenter._last_generation_stats
+    assert "filtered_candidates" not in stats and "budgeted_candidates" not in stats
+    assert stats["propagation_passes"] == 1 and stats["scored_candidates"] == 2
+
+
+# --- structural opt-ins of the 2026-09 generalization campaign: arbitration, fusion, box prompts, residual ---
+
+
+def _square(shape, y0, y1, x0, x1):
+    mask = np.zeros(shape, dtype=bool)
+    mask[y0:y1, x0:x1] = True
+    return mask
+
+
+def test_merge_by_score_split_arbitration_hands_contested_pixels_to_the_owning_basin():
+    from micro_sam.v2.automatic_prompt_generation import merge_by_score
+
+    shape = (16, 16)
+    # Two objects side by side; the better-scoring mask leaks two columns into its neighbour.
+    first = _square(shape, 2, 14, 2, 10)
+    second = _square(shape, 2, 14, 8, 14)
+    records = [
+        {"segmentation": first, "predicted_iou": 0.9, "stability_score": 1.0, "point": (5.0, 8.0), "prompt_index": 0},
+        {"segmentation": second, "predicted_iou": 0.8, "stability_score": 1.0, "point": (11.0, 8.0), "prompt_index": 1},
+    ]
+    basins = np.zeros(shape, dtype="uint32")
+    basins[:, :8] = 1
+    basins[:, 8:] = 2
+
+    dropped = merge_by_score(records, shape, max_overlap=0.5, min_size=1)
+    split, matches, reasons = merge_by_score(
+        records, shape, max_overlap=0.5, min_size=1, arbitration="split", basins=basins,
+        return_matches=True, return_reasons=True,
+    )
+    # 'drop' is the historical merge: the earlier mask keeps the contested columns.
+    assert int((dropped == 1).sum()) == int(first.sum())
+    assert int((dropped == 2).sum()) == int(second.sum()) - int((first & second).sum())
+    # 'split' gives them to the mask whose seed owns the basin.
+    assert int((split == 1).sum()) == int(first.sum()) - int((first & second).sum())
+    assert int((split == 2).sum()) == int(second.sum())
+    assert matches == {1: 0, 2: 1} and reasons == ["kept", "kept"]
+
+
+def test_merge_by_score_split_arbitration_falls_back_to_the_nearer_seed():
+    from micro_sam.v2.automatic_prompt_generation import merge_by_score
+
+    shape = (16, 16)
+    first = _square(shape, 2, 14, 2, 10)
+    second = _square(shape, 2, 14, 8, 14)
+    records = [
+        {"segmentation": first, "predicted_iou": 0.9, "stability_score": 1.0, "point": (4.0, 8.0)},
+        {"segmentation": second, "predicted_iou": 0.8, "stability_score": 1.0, "point": (11.0, 8.0)},
+    ]
+    split = merge_by_score(records, shape, max_overlap=0.5, min_size=1, arbitration="split")
+    # Columns 8 and 9 lie closer to x=11 than to x=4, so the second mask wins them.
+    assert int((split == 2).sum()) == int(second.sum())
+    assert int((split == 1).sum()) == int(first.sum()) - 2 * 12
+    # Without a 'point' the mask centroid is the seed (x=5.5 and x=10.5): column 9 still flips, but
+    # column 8 is a tie and stays with the earlier mask.
+    for record in records:
+        record.pop("point")
+    centroid = merge_by_score(records, shape, max_overlap=0.5, min_size=1, arbitration="split")
+    assert int((centroid == 2).sum()) == int(second.sum()) - 12
+    assert int((centroid == 1).sum()) == int(first.sum()) - 12
+
+
+def test_merge_by_score_split_arbitration_drops_a_mask_that_loses_most_of_its_area():
+    from micro_sam.v2.automatic_prompt_generation import merge_by_score
+
+    shape = (16, 16)
+    # An under-segmentation covering two objects, then the two objects' own masks.
+    merged = _square(shape, 2, 14, 2, 14)
+    left = _square(shape, 2, 14, 2, 8)
+    right = _square(shape, 2, 14, 8, 14)
+    records = [
+        {"segmentation": merged, "predicted_iou": 0.95, "stability_score": 1.0, "point": (7.0, 8.0), "prompt_index": 0},
+        {"segmentation": left, "predicted_iou": 0.9, "stability_score": 1.0, "point": (4.0, 8.0), "prompt_index": 1},
+        {"segmentation": right, "predicted_iou": 0.85, "stability_score": 1.0, "point": (11.0, 8.0), "prompt_index": 2},
+    ]
+    basins = np.zeros(shape, dtype="uint32")
+    basins[:, :8] = 2
+    basins[:, 8:] = 3
+
+    segmentation, matches, reasons = merge_by_score(
+        records, shape, max_overlap=1.0, min_size=1, arbitration="split", basins=basins,
+        return_matches=True, return_reasons=True,
+    )
+    assert reasons == ["split away", "kept", "kept"]
+    assert 1 not in matches and set(matches.values()) == {1, 2}
+    assert int((segmentation == 2).sum()) == int(left.sum()) and int((segmentation == 3).sum()) == int(right.sum())
+    assert not (segmentation == 1).any()
+    # A candidate that wins less than half of its own area is dropped too.
+    weak = {
+        "segmentation": merged, "predicted_iou": 0.5, "stability_score": 1.0, "point": (7.0, 8.0), "prompt_index": 3,
+    }
+    _, _, reasons = merge_by_score(
+        [*records, weak], shape, max_overlap=1.0, min_size=1, arbitration="split", basins=basins,
+        return_matches=True, return_reasons=True,
+    )
+    assert reasons[-1] == "arbitrated away"
+
+
+def test_merge_by_score_merges_onto_an_initial_segmentation_without_touching_it():
+    from micro_sam.v2.automatic_prompt_generation import merge_by_score
+
+    shape = (16, 16)
+    initial = np.zeros(shape, dtype="uint32")
+    initial[2:8, 2:8] = 4
+    overlapping = _square(shape, 6, 12, 6, 12)
+    records = [{"segmentation": overlapping, "predicted_iou": 0.9, "stability_score": 1.0, "point": (9.0, 9.0)}]
+
+    merged, matches = merge_by_score(records, shape, max_overlap=0.3, min_size=1, initial=initial, return_matches=True)
+    assert np.array_equal(merged == 4, initial == 4)
+    assert matches == {5: 0} and int((merged == 5).sum()) == int(overlapping.sum()) - 4
+    # Under a split arbitration the initial instance is never contested either.
+    split = merge_by_score(records, shape, max_overlap=0.3, min_size=1, initial=initial, arbitration="split")
+    assert np.array_equal(split, merged)
+    with pytest.raises(ValueError, match="Invalid arbitration"):
+        merge_by_score(records, shape, arbitration="vote")
+
+
+def test_fuse_with_instances_fallback_adds_only_uncovered_instances():
+    from micro_sam.v2.automatic_prompt_generation import fuse_with_instances
+
+    shape = (32, 32)
+    segmentation = np.zeros(shape, dtype="uint32")
+    segmentation[2:10, 2:10] = 1
+    instances = np.zeros(shape, dtype="uint32")
+    instances[2:10, 2:10] = 1   # agrees with mask 1
+    instances[20:28, 20:28] = 2  # no mask covers it
+    instances[4:8, 8:18] = 3     # half of it lies under mask 1 -> mostly claimed? no: 4x2 of 4x10 claimed
+    instances[28:32, 0:2] = 4    # smaller than min_size
+
+    fused, stats = fuse_with_instances(segmentation, instances, {1: 1.0}, "fallback", min_size=10)
+    assert stats == {"fusion_fallback_added": 2, "fusion_conflicts": 0, "fusion_conflicts_split": 0}
+    assert np.array_equal(fused == 1, segmentation == 1)
+    assert int((fused == 2).sum()) == 64
+    # The third instance is added on its free pixels only.
+    assert int((fused == 3).sum()) == 4 * 8
+    assert not np.isin(4, fused)
+
+
+def test_fuse_with_instances_conflict_resolves_a_split_merge_by_stability():
+    from micro_sam.v2.automatic_prompt_generation import fuse_with_instances
+
+    shape = (16, 16)
+    segmentation = np.zeros(shape, dtype="uint32")
+    segmentation[2:14, 2:14] = 1  # one mask over two decoder instances
+    instances = np.zeros(shape, dtype="uint32")
+    instances[2:14, 2:8] = 1
+    instances[2:14, 8:14] = 2
+
+    kept, stats = fuse_with_instances(segmentation, instances, {1: 0.95}, "conflict", min_size=5)
+    assert stats == {"fusion_fallback_added": 0, "fusion_conflicts": 1, "fusion_conflicts_split": 0}
+    assert np.array_equal(kept, segmentation)
+
+    split, stats = fuse_with_instances(segmentation, instances, {1: 0.5}, "both", min_size=5)
+    assert stats["fusion_conflicts"] == 1 and stats["fusion_conflicts_split"] == 1
+    assert stats["fusion_fallback_added"] == 0
+    assert not (split == 1).any()
+    assert int((split == 2).sum()) == 72 and int((split == 3).sum()) == 72
+    # A mask without a recorded stability is kept.
+    kept_again, _ = fuse_with_instances(segmentation, instances, {}, "conflict", min_size=5)
+    assert np.array_equal(kept_again, segmentation)
+    with pytest.raises(ValueError, match="Invalid fusion mode"):
+        fuse_with_instances(segmentation, instances, {}, "union", min_size=5)
+
+
+def test_residual_point_prompts_target_the_uncovered_foreground_components():
+    from micro_sam.v2.automatic_prompt_generation import residual_point_prompts
+
+    foreground = np.zeros((32, 32), dtype="float32")
+    foreground[2:10, 2:10] = 1.0
+    foreground[20:30, 20:30] = 1.0
+    foreground[0:2, 30:32] = 1.0  # too small
+    segmentation = np.zeros((32, 32), dtype="uint32")
+    segmentation[2:10, 2:10] = 1
+
+    prompts = residual_point_prompts(foreground, segmentation, foreground_threshold=0.5, min_size=10)
+    assert prompts is not None and prompts["points"].shape == (1, 1, 2)
+    x, y = prompts["points"][0, 0]
+    assert 20 <= y < 30 and 20 <= x < 30 and (prompts["point_labels"] == 1).all()
+    segmentation[20:30, 20:30] = 2
+    assert residual_point_prompts(foreground, segmentation, foreground_threshold=0.5, min_size=10) is None
+
+
+def test_derive_point_prompts_boxes_bound_the_decoder_basins():
+    foreground = np.zeros((32, 32), dtype="float32")
+    foreground[4:12, 20:28] = 1.0
+    foreground[16:30, 2:8] = 1.0  # a thin, tall object
+    distances = np.zeros((2, 32, 32), dtype="float32")
+    ys, xs = np.mgrid[0:32, 0:32]
+    blob = np.zeros_like(foreground)
+    blob[4:12, 20:28] = 1.0
+    thin = np.zeros_like(foreground)
+    thin[16:30, 2:8] = 1.0
+    distances[0] = (ys - 8.0) * blob + (ys - 23.0) * thin
+    distances[1] = (xs - 24.0) * blob + (xs - 5.0) * thin
+
+    prompts = derive_point_prompts(
+        foreground, distances, candidate_threshold=1.0, foreground_threshold=0.5, min_candidate_size=1,
+        return_boxes=True,
+    )
+    assert prompts is not None and len(prompts["boxes"]) == len(prompts["points"])
+    assert prompts["occupancy"].shape == (len(prompts["points"]),)
+    for (x, y), (x0, y0, x1, y1) in zip(prompts["points"][:, 0, :], prompts["boxes"]):
+        assert x0 <= x < x1 and y0 <= y < y1
+        # The box is the basin's extent: it stays inside its own object's foreground.
+        assert foreground[int(y0):int(y1), int(x0):int(x1)].mean() > 0.9
+    without = derive_point_prompts(
+        foreground, distances, candidate_threshold=1.0, foreground_threshold=0.5, min_candidate_size=1,
+    )
+    assert "boxes" not in without and np.array_equal(without["points"], prompts["points"])
+
+
+def test_apply_prompts_feed_boxes_and_keep_the_point_as_seed():
+    shape = (32, 32)
+    predictor = _BlockPredictor(shape)
+    segmenter = _make_plain_generator(shape, predictor)
+    prompts = {
+        "points": np.array([[[8.0, 8.0]], [[24.0, 24.0]]], dtype="float32"),
+        "point_labels": np.ones((2, 1), dtype="int32"),
+        "boxes": np.array([[4.0, 4.0, 12.0, 12.0], [20.0, 20.0, 28.0, 28.0]], dtype="float32"),
+    }
+    boxed = segmenter._apply(prompts, multimasking=True, batch_size=8, prompt_type="box", prompt_offset=5)
+    assert predictor.calls[-1]["points"] is None and predictor.calls[-1]["boxes"].shape == (2, 4)
+    assert [record["prompt_index"] for record in boxed] == [5, 6]
+    assert boxed[0]["point"] == (8.0, 8.0) and boxed[0]["box"] == (4.0, 4.0, 12.0, 12.0)
+    assert boxed[0]["prompt_type"] == "box"
+
+    both = segmenter._apply(prompts, multimasking=True, batch_size=8, prompt_type="point_box")
+    assert predictor.calls[-1]["points"] is not None and predictor.calls[-1]["boxes"] is not None
+    assert [record["prompt_index"] for record in both] == [0, 1]
+
+    plain = segmenter._apply(prompts, multimasking=True, batch_size=8)
+    assert predictor.calls[-1]["boxes"] is None and "box" not in plain[0]
+    with pytest.raises(ValueError, match="one box per point"):
+        segmenter._apply_prompts(
+            predictor, {k: prompts[k] for k in ("points", "point_labels")}, True, 8, prompt_type="box",
+        )
+
+
+def test_propose_box_thin_prompts_thin_candidates_with_boxes_and_the_rest_with_points(monkeypatch):
+    shape = (32, 32)
+    predictor = _BlockPredictor(shape)
+    segmenter = _make_plain_generator(shape, predictor)
+    segmenter._is_initialized = True
+    segmenter._microscopy_multimask_scorer = None
+    segmenter._refinement_gate_model = None
+    fixed = {
+        "points": np.array([[[8.0, 8.0]], [[24.0, 24.0]], [[24.0, 8.0]]], dtype="float32"),
+        "point_labels": np.ones((3, 1), dtype="int32"),
+        "boxes": np.array([[4, 4, 12, 12], [20, 20, 28, 28], [20, 4, 28, 12]], dtype="float32"),
+        "occupancy": np.array([0.9, 0.3, 0.2], dtype="float32"),
+    }
+    seen = {}
+
+    def fake_prompts(*args, **kwargs):
+        seen["return_boxes"] = kwargs.get("return_boxes")
+        return fixed
+
+    monkeypatch.setattr(automatic_prompt_generation, "derive_point_prompts", fake_prompts)
+    records = segmenter.propose(prompt_type="box_thin")
+    assert seen["return_boxes"] is True
+    # The two thin candidates run first as a box block, the compact one after as a point block.
+    assert sorted(record["prompt_index"] for record in records) == [0, 1, 2]
+    by_index = {record["prompt_index"]: record for record in records}
+    assert by_index[0]["prompt_type"] == "box" and by_index[1]["prompt_type"] == "box"
+    assert "box" not in by_index[2] and by_index[2]["point"] == (8.0, 8.0)
+    assert len(predictor.calls) == 2
+    with pytest.raises(ValueError, match="Invalid prompt type"):
+        segmenter.propose(prompt_type="circle")
+
+
+def test_select_structural_options_are_validated_and_off_by_default():
+    shape = (16, 16)
+    segmenter = _make_plain_generator(shape, _BlockPredictor(shape))
+    proposals = [{"segmentation": _square(shape, 2, 8, 2, 8), "predicted_iou": 0.9, "stability_score": 1.0,
+                  "point": (4.0, 4.0), "prompt_index": 0}]
+    plain = segmenter.select(proposals, min_size=1)
+    assert np.array_equal(plain, merge_by_score(proposals, shape, min_size=1))
+    assert segmenter._last_generation_stats == {}
+    with pytest.raises(ValueError, match="Invalid arbitration"):
+        segmenter.select(proposals, arbitration="vote")
+    with pytest.raises(ValueError, match="Invalid fusion mode"):
+        segmenter.select(proposals, fusion="union")
+    # Volumes reject every structural option.
+    volume = object.__new__(AutomaticPromptGenerator)
+    volume._prediction = np.zeros((4, 4, 8, 8), dtype="float32")
+    volume._is_initialized = True
+    volume._volume_candidate_scorer = None
+    volume._microscopy_multimask_scorer = None
+    volume._refinement_gate_model = None
+    for option in ({"prompt_type": "box"}, {"arbitration": "decoder"}, {"fusion": "both"}, {"recover_residual": True}):
+        with pytest.raises(ValueError, match="images only"):
+            volume.generate(**option)
+
+
+def test_select_with_decoder_arbitration_partitions_by_the_decoder_watershed():
+    shape = (16, 16)
+    segmenter = _make_plain_generator(shape, _BlockPredictor(shape))
+    # Foreground everywhere with a flat heightmap: the watershed from the two seeds splits the
+    # image by the flooding order, which is a partition either way; what matters here is that the
+    # contested columns go to exactly one of the two masks and both survive.
+    segmenter._prediction[0] = 1.0
+    first = _square(shape, 2, 14, 2, 10)
+    second = _square(shape, 2, 14, 8, 14)
+    proposals = [
+        {"segmentation": first, "predicted_iou": 0.9, "stability_score": 1.0, "point": (4.0, 8.0),
+         "prompt_index": 0, "foreground_threshold": 0.5},
+        {"segmentation": second, "predicted_iou": 0.8, "stability_score": 1.0, "point": (11.0, 8.0),
+         "prompt_index": 1, "foreground_threshold": 0.5},
+    ]
+    dropped = segmenter.select(proposals, max_overlap=0.5, min_size=1)
+    decoder = segmenter.select(proposals, max_overlap=0.5, min_size=1, arbitration="decoder")
+    euclidean = segmenter.select(proposals, max_overlap=0.5, min_size=1, arbitration="euclidean")
+    for result in (decoder, euclidean):
+        assert set(np.unique(result)) == {0, 1, 2}
+        assert int((result != 0).sum()) == int((first | second).sum())
+    assert int((dropped == 2).sum()) < int((euclidean == 2).sum())
+    assert segmenter._last_generation_stats["arbitration_dropped"] == 0
+
+
+def test_select_with_fusion_and_residual_recovery_adds_what_the_merge_missed():
+    shape = (32, 32)
+    predictor = _BlockPredictor(shape)
+    segmenter = _make_plain_generator(shape, predictor)
+    segmenter._microscopy_multimask_scorer = None
+    segmenter._refinement_gate_model = None
+    # The prediction: foreground on two objects, but the proposals only cover the first one.
+    foreground = np.zeros(shape, dtype="float32")
+    foreground[2:10, 2:10] = 1.0
+    foreground[20:28, 20:28] = 1.0
+    segmenter._prediction[0] = foreground
+    proposals = [{"segmentation": _square(shape, 2, 10, 2, 10), "predicted_iou": 0.9, "stability_score": 1.0,
+                  "point": (5.0, 5.0), "prompt_index": 0, "foreground_threshold": 0.5}]
+
+    def fake_instances(fg, distances, model_type):
+        instances = np.zeros(shape, dtype="uint32")
+        instances[2:10, 2:10] = 1
+        instances[20:28, 20:28] = 2
+        return instances
+
+    import micro_sam.v2.automatic_prompt_generation as module
+    original = module.flow_instance_segmentation
+    module.flow_instance_segmentation = fake_instances
+    try:
+        fused = segmenter.select(proposals, min_size=10, fusion="fallback")
+    finally:
+        module.flow_instance_segmentation = original
+    assert set(np.unique(fused)) == {0, 1, 2} and int((fused == 2).sum()) == 64
+    assert segmenter._last_generation_stats["fusion_fallback_added"] == 1
+
+    recovered = segmenter.select(proposals, score_threshold=0.5, min_size=10, recover_residual=True)
+    # The block predictor answers the residual prompt with a 10x8 block around the interior point.
+    assert set(np.unique(recovered)) == {0, 1, 2}
+    assert segmenter._last_generation_stats["residual_prompts"] == 1
+    assert segmenter._last_generation_stats["residual_added"] == 1
+    assert predictor.calls[-1]["points"].shape == (1, 1, 2)
+    x, y = predictor.calls[-1]["points"][0, 0]
+    assert 20 <= y < 28 and 20 <= x < 28
+
+
+# --- label-free refinement rules of the 2026-09 campaign: touching, protection, isolated gate ---------
+
+
+def _brute_force_touching(segmentation, radius):
+    """Reference for `_touching_instances`: minimal pixel-centre distance between every pair of instances."""
+    ids = [int(index) for index in np.unique(segmentation) if index != 0]
+    coordinates = {index: np.argwhere(segmentation == index).astype("float64") for index in ids}
+    touching = {index: set() for index in ids}
+    for first in ids:
+        for second in ids:
+            if first >= second:
+                continue
+            distances = np.linalg.norm(coordinates[first][:, None, :] - coordinates[second][None, :, :], axis=2)
+            if distances.min() <= radius:
+                touching[first].add(second)
+                touching[second].add(first)
+    return touching
+
+
+def test_touching_instances_measure_euclidean_contact():
+    from micro_sam.v2.automatic_prompt_generation import _touching_instances
+
+    segmentation = np.zeros((32, 32), dtype="uint32")
+    segmentation[4:12, 4:12] = 1
+    segmentation[4:12, 13:20] = 2   # one-pixel gap to 1: distance 2
+    segmentation[4:12, 23:30] = 3   # gap of three to 2: distance 4
+    segmentation[12:16, 12:16] = 4  # corner contact with 1 (sqrt 2), side contact with 2 (1)
+    segmentation[0:2, 28:32] = 6    # a border instance (id 5 is absent), three rows above 3
+    for radius in (1, 2, 4):
+        assert _touching_instances(segmentation, radius) == _brute_force_touching(segmentation, radius), radius
+    touching = _touching_instances(segmentation, 2)
+    assert touching[1] == {2, 4} and touching[2] == {1, 4} and touching[3] == set() and touching[6] == set()
+    # Radius 1 is 4-connected contact only: the diagonal contact with 1 goes, the side contact with 2 stays.
+    assert 4 not in _touching_instances(segmentation, 1)[1] and 4 in _touching_instances(segmentation, 1)[2]
+    assert 3 in _touching_instances(segmentation, 4)[2]
+    # Degenerate inputs: nothing, and a single instance.
+    assert _touching_instances(np.zeros((8, 8), dtype="uint32"), 2) == {}
+    assert _touching_instances((segmentation == 1).astype("uint32"), 2) == {1: set()}
+
+
+def test_touching_only_negatives_come_from_touching_instances():
+    segmentation = np.zeros((32, 32), dtype="uint32")
+    segmentation[4:12, 4:12] = 1
+    segmentation[4:12, 13:20] = 2
+    segmentation[24:30, 4:12] = 3
+    points = np.array([[6, 6], [13, 6], [6, 26]], dtype="float32")
+    surviving = {1: (6.0, 6.0), 2: (13.0, 6.0), 3: (6.0, 26.0)}
+
+    nearest = derive_refinement_prompts(segmentation, points, surviving, n_positives=1, n_negatives=2)
+    assert len(nearest[1]["points"]) == 3 and len(nearest[3]["points"]) == 3
+    touching = derive_refinement_prompts(
+        segmentation, points, surviving, n_positives=1, n_negatives=2, negative_scope="touching", touch_radius=2,
+    )
+    assert touching[1]["points"][touching[1]["point_labels"] == 0].tolist() == [[13.0, 6.0]]
+    assert touching[2]["points"][touching[2]["point_labels"] == 0].tolist() == [[6.0, 6.0]]
+    # The instance without a touching neighbour keeps its positive only.
+    assert touching[3]["point_labels"].tolist() == [1]
+    interior = derive_refinement_prompts(
+        segmentation, points, surviving, n_positives=1, n_negatives=2, negative_scope="touching",
+        negative_source="interior",
+    )
+    expected = interior_points(segmentation)[1][::-1].astype("float32")
+    assert interior[1]["points"][interior[1]["point_labels"] == 0].tolist() == [expected.tolist()]
+    with pytest.raises(ValueError, match="negative_scope"):
+        derive_refinement_prompts(segmentation, points, surviving, negative_scope="nearby")
+
+
+def _adjacent_pair():
+    segmentation = np.zeros((32, 32), dtype="uint32")
+    segmentation[4:12, 4:12] = 1
+    segmentation[4:12, 12:20] = 2
+    records = [
+        {"predicted_iou": 0.9, "stability_score": 1.0, "point": (6.0, 6.0)},
+        {"predicted_iou": 0.8, "stability_score": 1.0, "point": (16.0, 6.0)},
+    ]
+    return segmentation, records
+
+
+def _refine_pair(segmentation, records, predictions, **kwargs):
+    segmenter = _make_refinement_generator(segmentation, records, {1: 0, 2: 1})
+    queue = iter([predictions])
+    segmenter._predict_refinement_batch = lambda *args, **kw: next(queue)
+    resolved = _parse_refinement("boxes", {"policy": "replace", **kwargs})[1]
+    refined = segmenter._reprompt_instances(segmentation, segmenter._context, ("boxes",), resolved, batch_size=8)
+    return refined, segmenter._last_generation_stats
+
+
+def test_protect_neighbours_never_repaints_a_neighbour():
+    segmentation, records = _adjacent_pair()
+    grown = np.zeros_like(segmentation, dtype=bool)
+    grown[4:12, 4:16] = True  # four columns onto instance 2
+    own = segmentation == 2
+
+    unprotected, _ = _refine_pair(
+        segmentation, records, [(grown, 0.99), (own, 0.5)], min_consistency=None, max_foreign_overlap=None,
+    )
+    # Without protection the more confident second round steals the neighbour's columns.
+    assert (unprotected[4:12, 12:16] == 1).all()
+
+    refined, stats = _refine_pair(
+        segmentation, records, [(grown, 0.99), (own, 0.5)],
+        protect_neighbours=True, min_consistency=None, max_foreign_overlap=None,
+    )
+    assert np.array_equal(refined == 2, segmentation == 2)
+    assert np.array_equal(refined == 1, segmentation == 1)
+    assert stats["refinement_protected_pixels"] == 8 * 4
+    assert stats["replaced_instances"] == 2 and stats["gated_foreign"] == 0
+
+    # Protection makes the foreign-overlap gate moot: same result with the gate on.
+    gated, stats = _refine_pair(
+        segmentation, records, [(grown, 0.99), (own, 0.5)],
+        protect_neighbours=True, min_consistency=None, max_foreign_overlap=0.15,
+    )
+    assert np.array_equal(gated, refined) and stats["gated_foreign"] == 0
+
+    # A second round lying entirely on the neighbour is clipped to nothing and keeps the first round.
+    onto_neighbour = segmentation == 2
+    kept, stats = _refine_pair(
+        segmentation, records, [(onto_neighbour, 0.99), (own, 0.5)],
+        protect_neighbours=True, min_consistency=None, max_foreign_overlap=None,
+    )
+    assert np.array_equal(kept, segmentation) and stats["replaced_instances"] == 1
+
+    # Growth into the background is not protection's business.
+    into_background = np.zeros_like(segmentation, dtype=bool)
+    into_background[2:14, 2:12] = True
+    grown_out, stats = _refine_pair(
+        segmentation, records, [(into_background, 0.99), (own, 0.5)],
+        protect_neighbours=True, min_consistency=None, max_foreign_overlap=None,
+    )
+    assert int((grown_out == 1).sum()) == 12 * 10 and stats["refinement_protected_pixels"] == 0
+
+
+def _three_instances_with_isolated_one():
+    segmentation = np.zeros((32, 32), dtype="uint32")
+    segmentation[4:12, 4:12] = 1
+    segmentation[4:12, 12:20] = 2
+    segmentation[20:28, 20:28] = 3
+    records = [
+        {"predicted_iou": 0.9, "stability_score": 1.0, "point": (6.0, 6.0)},
+        {"predicted_iou": 0.8, "stability_score": 1.0, "point": (16.0, 6.0)},
+        {"predicted_iou": 0.7, "stability_score": 1.0, "point": (24.0, 24.0)},
+    ]
+    return segmentation, records
+
+
+def test_isolated_gate_reprompts_only_isolated_instances_and_can_fall_back_to_boxes():
+    segmentation, records = _three_instances_with_isolated_one()
+    calls = []
+
+    def run(kwargs):
+        segmenter = _make_refinement_generator(segmentation, records, {1: 0, 2: 1, 3: 2})
+
+        def predict(crop, batch, components, point_prompts, refinement_kwargs):
+            calls.append(([instance_id for instance_id, _ in batch], components, point_prompts is None))
+            return [(crop == instance_id, 0.9) for instance_id, _ in batch]
+
+        segmenter._predict_refinement_batch = predict
+        resolved = _parse_refinement("points+boxes", kwargs)[1]
+        refined = segmenter._reprompt_instances(
+            segmentation, segmenter._context, ("points", "boxes"), resolved, batch_size=8,
+        )
+        return refined, segmenter._last_generation_stats
+
+    refined, stats = run({"gate": "isolated"})
+    assert calls == [([3], ("points", "boxes"), False)]
+    assert np.array_equal(refined, segmentation)
+    assert stats["refined_instances"] == 1 and stats["refinement_isolated_instances"] == 1
+    assert stats["refinement_fallback_instances"] == 0 and stats["refinement_eligible_instances"] == 3
+
+    calls.clear()
+    refined, stats = run({"gate": "isolated", "isolated_fallback": "boxes"})
+    assert calls == [([3], ("points", "boxes"), False), ([1, 2], ("boxes",), True)]
+    assert np.array_equal(refined, segmentation)
+    assert stats["refined_instances"] == 3 and stats["refinement_fallback_instances"] == 2
+    assert stats["refinement_isolated_instances"] == 1 and stats["replaced_instances"] == 3
+
+    # An image whose instances all touch has nothing to refine without a fallback.
+    calls.clear()
+    segmentation[20:28, 20:28] = 0
+    refined, stats = run({"gate": "isolated"})
+    assert calls == [] and np.array_equal(refined, segmentation) and stats["refined_instances"] == 0
+
+
+def test_refinement_neighbourhood_rules_are_off_by_default(monkeypatch):
+    shape = (32, 32)
+    first = np.zeros(shape, dtype=bool)
+    first[4:12, 4:12] = True
+    second = np.zeros(shape, dtype=bool)
+    second[4:12, 12:20] = True
+    proposals = [
+        {"segmentation": first, "predicted_iou": 0.9, "stability_score": 1.0, "point": (6.0, 6.0), "prompt_index": 0},
+        {"segmentation": second, "predicted_iou": 0.8, "stability_score": 1.0, "point": (16.0, 6.0), "prompt_index": 1},
+    ]
+
+    def run(kwargs):
+        segmenter = _make_plain_generator(shape, _BlockPredictor(shape))
+        segmenter._refinement_gate_model = None
+        segmenter._microscopy_multimask_scorer = None
+        refined = segmenter.select(
+            proposals, score_threshold=0.5, min_size=1, refinement="points+boxes", refinement_kwargs=kwargs,
+        )
+        return refined, dict(segmenter._last_generation_stats), segmenter._predictor.calls
+
+    def never(*args, **kwargs):
+        raise AssertionError("the touching helper must not run when the rules are off")
+
+    monkeypatch.setattr(automatic_prompt_generation, "_touching_instances", never)
+    plain, plain_stats, plain_calls = run(None)
+    explicit, explicit_stats, explicit_calls = run({
+        "protect_neighbours": False, "negative_scope": "nearest", "gate": "all", "isolated_fallback": None,
+        "touch_radius": 2,
+    })
+    assert np.array_equal(plain, explicit)
+    assert plain_stats == explicit_stats and len(plain_calls) == len(explicit_calls)
+    assert plain_stats["refinement_protected_pixels"] == 0 and plain_stats["refinement_isolated_instances"] == 0
+    assert plain_stats["refinement_fallback_instances"] == 0 and plain_stats["refinement_negatives"] == 2
+
+
+def test_parse_refinement_validates_the_neighbourhood_rules():
+    _, resolved = _parse_refinement("points+boxes", {"gate": "isolated", "isolated_fallback": "boxes"})
+    assert resolved["gate"] == "isolated" and resolved["isolated_fallback"] == "boxes"
+    assert resolved["negative_scope"] == "nearest" and resolved["touch_radius"] == 2
+    with pytest.raises(ValueError, match="isolated_fallback"):
+        _parse_refinement("points+boxes", {"gate": "all", "isolated_fallback": "boxes"})
+    with pytest.raises(ValueError, match="boxes"):
+        _parse_refinement("points", {"gate": "isolated", "isolated_fallback": "boxes"})
+    with pytest.raises(ValueError, match="isolated_fallback"):
+        _parse_refinement("points+boxes", {"gate": "isolated", "isolated_fallback": "points"})
+    with pytest.raises(ValueError, match="negative_scope"):
+        _parse_refinement("points+boxes", {"negative_scope": "nearby"})
+    with pytest.raises(ValueError, match="touch_radius"):
+        _parse_refinement("points+boxes", {"touch_radius": 0})
+    with pytest.raises(ValueError, match="refinement gate"):
+        _parse_refinement("points+boxes", {"gate": "crowded"})

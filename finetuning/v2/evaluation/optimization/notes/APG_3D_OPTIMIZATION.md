@@ -910,3 +910,369 @@ order, batching and `clear_old_points` flags verbatim. Active deduplication maps
 SAM2's mutually exclusive point/box and mask inputs. The fixed masks are bit-identical to the oracle
 for every selected object in both protocols, and the predictor-call counts equal the logical minimum
 for the initial push, grouped replay and final state restoration.
+
+---
+
+## Campaign of 2026-09-03: a new 3d setup before a new 3d method
+
+Started 2026-09-03 on branch `apg-optim-fable`, hvit_t joint/v2 `best`. Implementation checksum of
+the epoch with the opt-in volume hooks: `d11e240452d84052916d0f16e1a1cfb1`.
+
+### What the survey of the stopped funnel campaign changed
+
+1. **The tuning corpus.** The old primary manifest held 32 crops, 22 of them GoNuclear. The new
+   manifests (`apg3d_manifest.py`, schema `apg3d-v1`, under `<output root>/3d_v2/`) draw deep crops
+   from every source `common.VAL_SPLITS` allows: primary `1cf951b9…` with 57 crops from 10 sources
+   (celegans 6, cremi C 3, cremi A/B 4 as seen-in-training, embedseg platy-ISH 7, platy-nuclei 8,
+   skull 3, gonuclear 10, humanneurons 8, platynereis_nuclei 2, snemi 6), holdout `5ddc25cb…` with
+   18 source-disjoint crops. EmbedSeg's organoid volumes are excluded: they annotate four cells each.
+2. **A leak.** The production SNEMI test crop is original z 81:89; the old deep manifest's SNEMI
+   range (0:30 after the z>=70 offset) and the funnel campaign's SNEMI crops contained it. The new
+   SNEMI crops use z 70:81 and 89:100 and the validator refuses anything overlapping the test slab.
+   The old deep manifest stays as a regression instrument for the runs recorded against it.
+3. **Seen sources.** CREMI A/B and the EmbedSeg train sub-datasets were joint-training data; every
+   crop carries `seen_in_training` and every summary reports an unseen-only macro next to the family
+   macro.
+4. **Hooks, default-off and bit-identical when off** (`micro_sam/v2/automatic_prompt_generation.py`):
+   `derive_volume_prompts(return_metadata=True)` (ladder birth/merge/persistence and component
+   statistics, `VOLUME_CANDIDATE_FEATURE_NAMES`), `_score_candidates(candidate_feature_schema=)`
+   (the three anchor alternatives' selector features as side information), and in `generate`
+   `prompts=`, `candidate_scorer_threshold`, `candidate_order`, `candidate_budget`, `keep_trace`
+   with `set_multimask_models(volume_candidate_scorer=)`.
+
+5. **Two 3d "defaults" too.** `common.resolve_params(ndim=3)` fills every parameter from the 2d
+   per-model table and only swaps the candidate threshold, so every 3d run of the earlier benchmark
+   used `sigma=0.5, min_candidate_size=4, min_size=50, dt=0.25` - the image values - where a plain
+   `generate()` on a volume uses `sigma=1.0, min_candidate_size=1, min_size=100, dt=0.5`
+   (`default_prompt_generation(is_volume=True)`). The new runner resolves against the volume defaults
+   (`benchmark_apg_3d.resolve_volume_params`), so its control is what a user gets;
+   `configs/apg3d_legacy_defaults.json` pins the earlier benchmark's values for continuity.
+
+### Epoch 2 (2026-09-03 05:00): empty alternatives no longer poison the selector features
+
+An alternative whose mask is empty at both stability offsets has a 0/0 stability score. The learned
+selector's feature path carried that NaN into the group's features, and `_apply_prompts` refused it:
+the E2 extraction crashed on a DynamicNuclearNet image at `foreground_threshold=0.5`, and the E1
+production run of the selector on `cvz_fluo` crashed the same way. `_apply_prompts` now maps that
+stability to 0 (`torch.nan_to_num`) before the features are built; a finite run is unchanged.
+Implementation checksum after the edit: `14800942c30b0c62ee919988feffd64a`. The 3d aggregates read
+sibling run directories of one configuration across checksums and record whether they mixed, because
+the C1 arrays were running through this boundary (the volume path does not touch the edited code).
+
+### Epoch 3 (2026-09-03 05:03): harness-only edit
+
+`benchmark_apg_optimization.py` learned to cap the `training_extra` counts at a dataset's pool size
+(PUMA has 26 validation images). The file is part of the implementation checksum, so the checksum
+moved to `26a1003788ea2825356b486da1496fd7` without any change to what a run computes; the C1 arrays
+now span three checksums and their aggregates say so (`mixed_implementations`). From here on the eight
+checksum files are frozen until the round's canonical runs are in.
+
+### C1: the baseline on the new primary manifest (volume defaults, 57 crops)
+
+One crop per array task on 2g.20gb slices (array `c1_apg3d_defaults_v2`, aggregated across the epoch
+checksums it ran through). mSA with a per-crop bootstrap 95% interval; the family macro averages the
+ten sources into their eight families first; `merged` counts ground-truth objects matched at IoU 0.5,
+`genuine_misses` the unmatched ones the crop did not sever.
+
+| dataset | crops | mSA [95% CI] | objects | merged | genuine misses | passes | seconds |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| celegans_atlas | 6 | 0.1183 [0.045, 0.204] | 1119 | 234 | 805 | 153 | 369 |
+| cremi | 3 | 0.1078 [0.099, 0.122] | 840 | 177 | 251 | 162 | 1289 |
+| cremi_seen | 4 | 0.0302 [0.026, 0.035] | 7469 | 243 | 58 | 243 | 1942 |
+| embedseg_platy_ish | 7 | 0.4161 [0.372, 0.466] | 422 | 316 | 71 | 227 | 1040 |
+| embedseg_platy_nuclei | 8 | 0.2153 [0.188, 0.249] | 901 | 449 | 348 | 244 | 524 |
+| embedseg_skull | 3 | 0.6240 [0.564, 0.722] | 62 | 53 | 5 | 96 | 541 |
+| gonuclear | 10 | 0.3379 [0.261, 0.409] | 726 | 511 | 144 | 229 | 603 |
+| humanneurons | 8 | 0.3915 [0.362, 0.422] | 1601 | 978 | 304 | 276 | 1138 |
+| platynereis_nuclei | 2 | 0.2669 [0.254, 0.280] | 127 | 78 | 44 | 43 | 149 |
+| snemi | 6 | 0.5318 [0.502, 0.560] | 526 | 446 | 41 | 115 | 317 |
+| __family_macro__ | 57 | 0.3048 | 13793 | 3485 | 2071 | 1788 | 7909 |
+| __dataset_balanced__ | 57 | 0.3040 | 13793 | 3485 | 2071 | 1788 | 7909 |
+| __unseen_macro__ | 33 | 0.2974 | 4812 | 2346 | 1545 | 935 | 3714 |
+| __legacy_macro__ | 47 | 0.2951 | 12065 | 2429 | 1723 | 1469 | 6623 |
+
+Recall remains the dominant loss: 3485 of 13793 objects are matched, and 2071 genuine misses remain
+after severed objects are excluded. C. elegans (234 of 1119 matched) and CREMI C (177 of 840) are the
+recall-limited sources the earlier notes named; the seen CREMI A/B slabs are worse still (243 of 7469,
+mSA 0.03) - they hold thousands of thin processes a 32-slice crop cuts into slivers.
+
+### C1: anchor refinement on the new manifest
+
+`refinement="points+boxes"` (the opt-in of experiment 6) against the volume-default baseline on the
+same 57 crops: family macro 0.3074 against 0.3048 (+0.8%), unseen macro 0.3018 against 0.2974
+(+1.5%), for +8.9% total time (8614 s against 7909 s). Per source: CREMI C +7.9%, EmbedSeg skull
++4.9%, GoNuclear +3.1%, humanneurons +1.3%, SNEMI +0.1%, EmbedSeg Platynereis-ISH -0.8%, Platynereis
+nuclei -2.3%, C. elegans -2.1%, platynereis_nuclei -2.6%. The +2.3% the earlier five-crop deep set
+reported shrinks to +0.8% on a balanced set with 57 crops, and three sources lose. The refinement
+stays an opt-in; it is not a lever for the +5% gate.
+
+### C2 result: the slice-wise hybrid is a CREMI mode, not a 3d mode
+
+Hybrid-only (2d APG with predicted-IoU scoring on a fresh encode of every slice, then linking) on the
+21 EM crops of the primary manifest, linking replayed from the slice cache; the baseline is the
+propagation pipeline with the volume defaults on the same crops:
+
+| source | crops | baseline | multicut beta 0.5 | beta 0.4 | beta 0.3 | beta 0.2 | greedy IoU 0.3 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| cremi (C) | 3 | 0.108 | 0.120 | 0.149 | **0.157** | 0.147 | 0.142 |
+| cremi_seen (A, B) | 4 | 0.030 | 0.027 | 0.027 | 0.027 | 0.027 | 0.028 |
+| humanneurons | 8 | 0.391 | 0.157 | 0.193 | 0.219 | 0.237 | 0.181 |
+| snemi | 6 | 0.532 | 0.265 | 0.295 | 0.310 | 0.317 | 0.284 |
+
+On CREMI C the hybrid matches 289 of 840 objects against the baseline's 177 and lifts mSA by 46% at
+beta 0.3, in a tenth of the time. On humanneurons and SNEMI, where the propagation already matches
+most objects (978 of 1601, 446 of 526), the slice masks do not stack into 3d objects at IoU 0.5 and
+the hybrid loses 40% however the linking prior is set. The mode is therefore modality-specific -
+worth keeping as an explicit option for dense anisotropic EM of the CREMI kind, not as a 3d default -
+and its general use is the `union-point` recall variant, whose CREMI crops so far gain 12-29% with the
+propagation intact (see the arrays below).
+
+### C2 result, recall variant: hybrid chains as extra prompts recover objects, but not precision
+
+`union-point`: the density ladder's candidates plus one point prompt per hybrid chain whose anchor no
+density candidate already covers, all propagated by the unchanged pipeline (array
+`c2_union_point_recall`, 27 crops of the recall-limited sources; hybrid slices with predicted-IoU
+scoring, multicut beta 0.5):
+
+| source | crops | baseline mSA | union mSA | matched objects | passes | seconds |
+|---|---:|---:|---:|---|---|---|
+| cremi (C) | 3 | 0.108 | **0.126 (+17%)** | 177 -> 209 of 840 | 162 -> 188 | +36% |
+| cremi_seen (A, B) | 4 | 0.030 | 0.031 (+4%) | 243 -> 253 of 7469 | 243 -> 252 | +18% |
+| celegans | 6 | 0.118 | 0.114 (-4%) | 234 -> 255 of 1119 | 153 -> 172 | +113% |
+| humanneurons | 8 | 0.391 | 0.368 (-6%) | 978 -> 1033 of 1601 | 276 -> 414 | +80% |
+| snemi | 6 | 0.532 | 0.523 (-2%) | 446 -> 468 of 526 | 115 -> 152 | +127% |
+
+The extra prompts do what they were meant to do on every source - 21 to 55 more objects matched -
+and mSA still falls on three of five, because the same prompts also add tracks that match nothing
+and the score-ordered merge keeps them. This is the recall / precision trade the earlier notes
+predicted for any candidate expansion, and it is exactly what a pre-propagation filter has to arbitrate:
+the C3 replay measures whether the learned candidate score can keep the recovered objects and drop
+the rest (the `union` supply is the recall-expansion policy of C4). The cost, +18-127% of the baseline,
+comes from the extra passes and from the slice-wise 2d pass itself; a budget on the added prompts is
+part of the same replay.
+
+### C0, test manifest (built 2026-09-03 08:20, not yet opened)
+
+`apg3d_manifest.py build --subset test` → `3d_v2/manifest_test_apg3d-v1.json`, checksum
+`33043f1ef079b10e6f6562297b3ff83c`, 56 deep crops, 8 per pure-test dataset (blastospim 143 objects,
+cartocell 511, cellseg_3d 699, mouse_embryo 576, nis3d 2991, plantseg 1199, pnas_arabidopsis 2213), all
+unseen in training. It is to be run once, at the end, for control, `points+boxes` and the C3/C4 winner.
+
+### C2 holdout check of the slice-wise hybrid (2026-09-03, 08:50)
+
+`hybrid-2d`, standalone encoding, plain predicted IoU, multicut beta 0.3 on the 18 holdout crops
+(`3d_v2/hybrid/holdout/hybrid-2d-standalone-plain-multicut-473a3b0d5e73-26a1003788ea`), 662 s in total:
+
+| dataset (crops) | mSA | merged / GT objects | genuine misses |
+|---|---:|---|---:|
+| celegans_atlas (2) | 0.086 | 113 / 384 | 239 |
+| cremi (1) | 0.159 | 113 / 297 | 57 |
+| cremi_seen (2) | 0.154 | 100 / 274 | 69 |
+| embedseg_platy_ish (2) | 0.204 | 86 / 129 | 30 |
+| embedseg_platy_nuclei (2) | 0.180 | 16 / 34 | 14 |
+| embedseg_skull (2) | 0.618 | 73 / 77 | 2 |
+| gonuclear (3) | 0.244 | 278 / 447 | 123 |
+| humanneurons (1) | 0.166 | 133 / 265 | 71 |
+| platynereis_nuclei (1) | 0.058 | 18 / 46 | 28 |
+| snemi (2) | 0.239 | 132 / 174 | 31 |
+| family macro (18) | 0.183 | 1062 / 2127 | 664 |
+
+The propagation baseline on the same crops (`c5_holdout_apg3d_defaults`) is the reference for the
+per-dataset comparison and is recorded below when its array completes. Under the generalization rule
+stated by the user today (a change must help on all datasets or on most with minor regressions), a mode
+that wins on one EM family and loses 40% elsewhere is not a candidate, whatever this comparison shows;
+the hybrid stays a diagnostic of where slice-wise recall exceeds propagation recall.
+
+### C5 holdout: propagation baseline, and the hybrid against it (2026-09-03, 08:50)
+
+`c5_holdout_apg3d_defaults` (18 crops, `3d_v2/runs/holdout/apg3d-defaults-70b90e407d4b-26a1003788ea`),
+3202 s in total, 604 propagation passes; the hybrid columns are the run recorded in the previous section:
+
+| dataset (crops) | baseline mSA | hybrid mSA | hybrid change | baseline merged / GT |
+|---|---:|---:|---:|---|
+| celegans_atlas (2) | 0.104 | 0.086 | −17% | 89 / 384 |
+| cremi (1) | 0.138 | 0.159 | +16% | 80 / 297 |
+| cremi_seen (2) | 0.262 | 0.154 | −41% | 99 / 274 |
+| embedseg_platy_ish (2) | 0.330 | 0.204 | −38% | 88 / 129 |
+| embedseg_platy_nuclei (2) | 0.456 | 0.180 | −60% | 27 / 34 |
+| embedseg_skull (2) | 0.675 | 0.618 | −8% | 73 / 77 |
+| gonuclear (3) | 0.390 | 0.244 | −37% | 311 / 447 |
+| humanneurons (1) | 0.320 | 0.166 | −48% | 141 / 265 |
+| platynereis_nuclei (1) | 0.241 | 0.058 | −76% | 24 / 46 |
+| snemi (2) | 0.510 | 0.239 | −53% | 149 / 174 |
+| family macro (18) | 0.322 | 0.183 | −43% | 1081 / 2127 |
+| unseen macro (9) | 0.292 | 0.179 | −39% | 770 / 1567 |
+
+The holdout baseline (family macro 0.3218) sits above the primary one (0.3048), as the holdout draws
+more of its crops from the easier nuclei sources. The hybrid's CREMI advantage shrinks to +16% on the single
+unseen CREMI holdout crop and turns into −41% on the two CREMI A/B crops, at a fifth of the runtime. This
+closes the hybrid as a mode: it does not even hold its one family out of sample. The seeded-object deficit
+that motivated it (C. elegans 89 of 384 objects merged, CREMI 80 of 297) remains the recall problem the
+propagation pipeline has to solve within itself.
+
+### C5 holdout: anchor refinement with points and boxes (2026-09-03, 08:57)
+
+`c5_holdout_apg3d_refine_points_boxes` (`3d_v2/runs/holdout/apg3d-refine-points-boxes-3826936b5a95-26a1003788ea`),
+3375 s against 3202 s for the baseline (+5.4%), same 604 propagation passes:
+
+| dataset (crops) | baseline | refined | change |
+|---|---:|---:|---:|
+| celegans_atlas (2) | 0.1036 | 0.1043 | +0.6% |
+| cremi (1) | 0.1377 | 0.1514 | +9.9% |
+| cremi_seen (2) | 0.2621 | 0.2777 | +5.9% |
+| embedseg_platy_ish (2) | 0.3305 | 0.3605 | +9.1% |
+| embedseg_platy_nuclei (2) | 0.4564 | 0.4636 | +1.6% |
+| embedseg_skull (2) | 0.6751 | 0.6739 | −0.2% |
+| gonuclear (3) | 0.3896 | 0.3898 | +0.1% |
+| humanneurons (1) | 0.3205 | 0.3343 | +4.3% |
+| platynereis_nuclei (1) | 0.2414 | 0.2117 | −12.3% |
+| snemi (2) | 0.5101 | 0.5067 | −0.7% |
+| family macro (18) | 0.3218 | 0.3230 | +0.4% |
+| unseen macro (9) | 0.2923 | 0.2973 | +1.7% |
+| dataset-balanced (18) | 0.3427 | 0.3474 | +1.4% |
+
+Refinement helps where the anchors are least reliable (EM neurites, the ISH channel, human neurons: +4% to
++10%), is neutral on the nuclei sources, and loses 12% on the single platynereis crop (46 objects, so one
+crop's noise is large). Together with the primary result (+0.8% family macro) this is a small but consistent
+improvement on the EM/ISH families and a wash elsewhere at +5% runtime; it stays what it was, an opt-in.
+Whether a filter-aware version (refine only the candidates the learned filter keeps) does better is a C3/C4
+question.
+
+### G4 design: what the 2d generalization result changes for 3d (2026-09-03, 09:35)
+
+The 2d G campaign found that a learned mask scorer on SAM2's mask tokens carries dataset identity, that
+generic statistics remove the transfer failure but carry no transferable gain over predicted IoU, and that
+a 64-unit MLP overfits dataset interactions even on generic inputs. For the 3d retry this fixes the reading
+protocol of C3/C4 before their numbers are looked at:
+
+1. The only acceptable evidence is source-level leave-one-dataset-out on the unseen sources (celegans,
+   gonuclear, humanneurons, cremi C, snemi; `screen_apg_3d_filter.py` `lodo` rows and `__unseen_macro__`),
+   not the in-domain OOF rows; the in-domain rows are reported but do not decide.
+2. Among the 18 C3 filters, the `lowres_v1` schema (19 generic anchor statistics, with or without the 20
+   ladder/component features) is the only one eligible; `token_v1` / `token_lowres_v1` rows are diagnostics
+   of how much identity the tokens carry in 3d, as in 2d.
+3. Width: prefer the smallest hidden size whose LODO gain matches the larger ones; if only H128 gains, treat
+   it as in-domain fitting. A linear filter should be added to the C3 grid before any confirmation run
+   (`train_apg_3d_filter.py` has no linear option yet; port `GroupwiseLinear` from the 2d trainer).
+4. The reference policy is the plain anchor filter (predicted IoU ≥ 0.5, the C1 control), and the plain
+   E2-style proposal-side changes are the 3d analogue to test first if no learned filter passes: the density
+   ladder and `max_overlap` (3d merge 0.15) and `min_size` (100) were never re-tuned on the 57-crop corpus.
+5. Acceptance for a 3d change follows the same rule as 2d: unseen-source LODO family macro up, no source
+   below −2%, and confirmed on the 18-crop holdout without re-fitting.
+
+### Experiments in flight (job ids)
+
+- C1 baseline and refinement on the new primary manifest: `benchmark_apg_3d.py`, arrays `15715858`
+  and `15715859` were cancelled after 13 crops because they resolved the 3d parameters from the 2d
+  table (finding 5); resubmitted as `c1_apg3d_defaults_v2` and `c1_apg3d_refine_points_boxes_v2`
+  with the volume defaults, one crop per task on 2g.20gb slices.
+- C2 slice-wise hybrid (`screen_apg_3d_hybrid.py`). Probes on three crops, hybrid-only (2d APG on
+  every slice, multicut linking) against the propagation baseline with the volume defaults:
+
+  | crop | baseline mSA | hybrid, plain scoring | hybrid, learned selector | hybrid seconds / baseline |
+  |---|---:|---:|---:|---:|
+  | gonuclear `4ea4ece3dbe1` (19 objects) | 0.133 | 0.019 | 0.013 | 29 / 68 |
+  | celegans `18f3659eee71` (72 objects) | 0.289 | 0.181 | 0.048 | 21 / 39 |
+  | cremi `28e7f518d8f1` (296 objects) | 0.099 (CREMI 0.990) | 0.107 (CREMI 1.267) | 0.106 (CREMI 1.246) | 68 / 427 |
+
+  Two findings. The learned 2d selector, fitted on five light-microscopy datasets, does not transfer
+  to these slices: on C. elegans it cuts the slice-wise result from 0.18 to 0.05, and on the volume's
+  own per-slice embeddings (the video model's preprocessing) it collapses even further (0.09 against
+  0.27 per-slice mSA on one GoNuclear slice). Plain predicted-IoU scoring is the hybrid's working
+  configuration. Second, hybrid-only loses to propagation on the nuclei volumes (small objects whose
+  slice masks do not stack into a 3d IoU of 0.5) but recovers far more objects on dense CREMI (95
+  matched against 54, mSA +7.5%) at a sixth of the cost, while fragmenting more (VI split 1.43 vs
+  0.64). The linking prior matters on dense EM: replaying the cached slices of the CREMI crop with
+  the multicut at beta 0.3 gives 0.128 mSA with 216 chains (296 objects), greedy IoU linking at 0.3
+  gives 0.128 with 354, while beta 0.7 or a 0.5 IoU threshold fragment the volume (0.056 / 0.069,
+  566 / 591 chains). The mode is therefore not a general replacement; on dense EM it is a candidate
+  in its own right (array `c2_hybrid_em` caches the slices of every EM crop, beta is swept on the
+  cache) and elsewhere its use is as a recall source: the `union-point` variant (density candidates
+  plus one prompt per hybrid chain, propagated) runs on the recall-limited datasets as array
+  `c2_union_point_recall`.
+- C3 track cache (`extract_apg_3d_tracks.py`), trainer (`train_apg_3d_filter.py`) and CPU replay
+  (`screen_apg_3d_filter.py`). Identity check on the GoNuclear crop `4ea4ece3dbe1`: the replay's
+  control policy (base ladder, predicted IoU >= 0.6, in-plane merge, anchor-score order) gives mSA
+  0.132850, 9 objects, 20 candidates and 12 passes, and the pipeline run with the volume defaults gives
+  0.1329, 9, 20 and 12 - the cache reproduces the pipeline. The extraction over the 57 primary crops
+  is array `c3_extract_primary` (three ladders, all candidates propagated once, about twice the
+  baseline's cost per crop). One caveat seen on the way: the flow density is computed with eight
+  threads and two runs of the same crop proposed 33 and 34 candidates, so a candidate count can move
+  by one between runs; scored candidates, passes and mSA were identical here.
+- `c5_holdout_apg3d_defaults` (15720688), `c5_holdout_apg3d_refine_points_boxes` (15720689) and the local
+  hybrid holdout run: complete and recorded above (08:50-08:57).
+- `c3_train_replay` (15716576) and `_v2` (15720967, 128 GB) were both OOM-killed in the aggregate step: the
+  per-candidate loop indexed the compressed `NpzFile` on every iteration, which decompresses the whole
+  feature array each time and kept one copy alive per candidate. `train_apg_3d_filter.aggregate` now reads
+  each crop's arrays once and stacks them (same output); resubmitted as `c3_train_replay_v3` (15721312) at 09:08. The track cache
+  is `3d_v2/cache/primary/103ee82e4d89/` (57 complete crops; `12c3c629b1ae` is the local smoke-test crop).
+- `c3_train_replay_v3` (15721312): aggregate (84,485 candidates, 21 s) and the 20 filter fits (done 09:22; LODO
+  track-IoU correlations 0.22-0.77 by source) are complete under `3d_v2/c3/{training,models}`; the CPU replay
+  (`screen_apg_3d_filter.py`, started 09:22) had printed no finished policy after 50 min at one busy core and
+  6 GB. It is single-threaded over ~hundreds of policies × 57 crops; if it has not written
+  `3d_v2/c3/screen_primary/summary.csv` by the next session, profile the replay (unpack each crop's tracks once,
+  cache the merge inputs, multiprocess over crops) before rerunning. Read it under the G4 protocol above.
+
+## Campaign of 2026-09-05: v4 geodesic first, object counts first, visual check before any screen
+
+Started 2026-09-05 11:25 after the 2d work was closed (see the closing section of `APG_2D_OPTIMIZATION.md`). What
+the 2d result changed for 3d, agreed with the user: (1) measure joint/v4 geodesic on the 3d manifests before
+anything else (it moved 2d by +10% with unchanged settings and no 3d number exists for it); (2) read object counts
+(matched at IoU 0.5, genuine misses, extra predictions) as the primary evidence, mSA second, and look at the
+best / worst crops in napari before reading any screen (mSA moved ±20% on 2d datasets for one-pixel boundary
+conventions, and a track ending one slice early is the 3d analogue); (3) close the learned lines (the C3 filter,
+whose replay produced one policy in 12 h before timing out, and the planned learned refinement gate); (4) keep the
+label-free recall work, re-planned on v4 and gated on object counts with false positives counted; (5) the
+efficiency items are the safe part. The 3d code path is unchanged by epochs 4 and 5: the first re-run crop
+(celegans `18f3659eee71`, v2 defaults) reproduces the recorded 0.2894.
+
+Runs: `benchmark_apg_3d.py run --save-outputs` (new option: each crop's segmentation and its anchors, scored and
+merged prompt indices under `<run dir>/outputs/`) for v2 and v4 × volume defaults and `points+boxes` × primary (57)
+and holdout (18), one crop per 2g.20gb task, trial `v2-e5` / `v4-e5`, arrays `s9_3d_*` (15751379-15751388). The
+3d run identity does not include the checkpoint, so the v4 runs live under their own campaign root
+`3d_v4geo/` (manifests linked from `3d_v2/`). Readers: `compare_apg3d_runs.py --subset <s>` (object counts and
+mSA per source, macros, v4 vs v2 and refinement deltas), `package_apg3d_cases.py --subset <s> --n 1` (per dataset
+the best / worst crop by the refinement's effect on v4 and by the checkpoint's effect, packaged as one HDF5 per crop
+under `3d_cases/<subset>/` with raw, ground truth, the four segmentations and the anchors), and
+`view_apg3d_cases.py <file.h5>` (napari: image, ground truth, one labels layer per run, anchor points as proposed /
+scored / merged; needs a napari environment, not `new-stack`).
+
+### Primary manifest (57 crops, 15:25): the checkpoint is the effect, the refinement changes no object count
+
+`compare_apg3d_runs.py --subset primary` (tables in `3d_cases/primary_comparison*.csv`); all four runs at epoch 5:
+
+| run | family macro mSA | unseen macro | matched / 13,793 | genuine misses | extra predictions |
+|---|---:|---:|---:|---:|---:|
+| v2 defaults | 0.3048 | 0.2974 | 3,485 | 2,071 | 645 |
+| v2 + points+boxes | 0.3074 | 0.3018 | 3,467 | 2,089 | 647 |
+| v4 defaults | 0.3267 (+7.2%) | 0.3266 (+9.8%) | 3,750 | 1,806 | 713 |
+| v4 + points+boxes | 0.3245 | 0.3261 | 3,747 | 1,809 | 736 |
+
+Per source, v4 with the defaults matches more objects than v2 on nine of ten (celegans 234 → 316, embedseg
+nuclei 449 → 546, humanneurons 978 → 1,009, embedseg ISH 316 → 341, gonuclear 511 → 526, snemi 446 → 455) and
+fewer on platynereis_nuclei (78 → 73, two crops); extra predictions rise by 68 (gonuclear +30, celegans +30). The
+refinement moves the matched count by −18 (v2) and −3 (v4) and every per-source mSA change is within the range
+the 2d visual check attributed to boundary conventions (v4: −1.9% family macro, six sources down, embedseg nuclei
+−5.5%). Runtime is not comparable between the checkpoints in this table (v4 ran on 1g.20gb, v2 on 2g.20gb slices).
+
+Cases for napari: `3d_cases/primary/` (31 crops, 198 MB; `cases.csv`, `README.md`, `view_apg3d_cases.py` beside
+them), per dataset the best and worst crop by the refinement's effect on v4 and by the checkpoint's effect, each
+file holding raw, ground truth, the four segmentations, and the proposed / scored / merged anchors of every run.
+
+### Holdout manifest (18 crops, 16:05): the same picture, without re-fitting anything
+
+`compare_apg3d_runs.py --subset holdout` (`3d_cases/holdout_comparison*.csv`):
+
+| run | family macro mSA | unseen macro | matched / 2,127 | genuine misses | extra predictions |
+|---|---:|---:|---:|---:|---:|
+| v2 defaults | 0.3219 | 0.2913 | 1,085 | 641 | 238 |
+| v2 + points+boxes | 0.3225 | 0.2962 | 1,091 | 635 | 235 |
+| v4 defaults | 0.3424 (+6.4%) | 0.3195 (+9.7%) | 1,162 | 564 | 244 |
+| v4 + points+boxes | 0.3387 | 0.3223 | 1,154 | 572 | 258 |
+
+v4 with the defaults matches 77 more objects (celegans +25, gonuclear +24, cremi A/B +17, embedseg ISH +10) and
+misses 77 fewer for six more extra predictions; humanneurons (−4) and the single platynereis crop (−5 of 46, mSA
+−20%) go the other way, as platynereis did on the primary manifest. The refinement changes the matched count by
++6 (v2) and −8 (v4). Cases: `3d_cases/holdout/` (17 crops). Combined with the primary manifest the v4 checkpoint
+matches 342 more objects out of 15,920 with 74 more extra predictions, and no setting change of either campaign
+comes near that; the object-level reading and the napari cases are what decide from here, not mSA.

@@ -1,0 +1,29 @@
+{
+  "name": "s-refine-boxes",
+  "params_2d": {
+    "candidate_threshold": 3.0,
+    "dt": 0.5,
+    "sigma": 0.5,
+    "min_candidate_size": 4,
+    "n_iter": 50,
+    "foreground_threshold": 0.7,
+    "score_threshold": 0.6,
+    "score_filter": "predicted_iou",
+    "max_overlap": 0.3,
+    "min_size": 50,
+    "multimasking": true,
+    "multimask_scorer": "predicted_iou",
+    "multimask_selection": "eager",
+    "refinement": "boxes",
+    "refinement_kwargs": {
+      "policy": "replace",
+      "multimasking": false,
+      "min_consistency": 0.7,
+      "max_foreign_overlap": 0.15,
+      "gate": "all",
+      "gate_threshold": 0.0,
+      "box_extension": 0
+    }
+  },
+  "params_3d": {}
+}
