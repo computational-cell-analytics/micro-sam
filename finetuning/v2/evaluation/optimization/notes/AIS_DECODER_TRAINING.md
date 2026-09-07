@@ -592,6 +592,15 @@ script by byte offset, so the resumed parse landed mid-statement. None of the `d
 `baseline` / `contact` field diagnostics were written. Rerun as 15777315. **Rule from now on: submit a frozen
 copy of every long-running driver**, `<camp>/jobs/frozen/<name>_<timestamp>.sh`, never the repo path.
 
+The same 16:53 edit claimed a second job six hours later: `ais_decoder_tuning` (15772853, running since 12:28)
+died at 19:03 with `break: only meaningful in a for, while or until loop` followed by
+`syntax error near unexpected token 'done'` in `launch_tuning_after_caches.sh`, and its last log line is the
+message of a branch it could not have reached - the signature of a shifted offset. Nothing was lost: it had
+already submitted the `baseline` / `contact` sweeps at 16:03, and all four rankings exist (fgcal and both at
+11:55 / 12:35, baseline and contact by hand at 18:12 / 18:57, section 4.7). Both files on disk pass `bash -n`
+and the frozen copies under `<camp>/jobs/frozen/` are byte-identical to them, so `tuning2` and `finalize_r2`
+are unaffected. **One edit to a driver can kill every job currently sleeping in it, hours apart.**
+
 ### 5.3 The chain (nothing depends on the session)
 
 The session runs in a 12 h interactive job that ends at 05:06 on 2026-09-08, before the trainings do, so every

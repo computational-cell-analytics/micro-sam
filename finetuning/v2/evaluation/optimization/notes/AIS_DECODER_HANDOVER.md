@@ -29,7 +29,7 @@ the tables the chain writes and finishes the write-up:
 | 15776838 / 15776839 `ais_eval_<variant>` | `afterany` the training: stage, cache v5 primary / training_extra / holdout and apg3d primary / holdout, then the `current-defaults`, `contact-ridge` and `contact-mask` screens | ~06:00, screens ~07:00 |
 | 15777359 `ais_decoder_tuning2` | `afterany` both evaluations: waits for the 2d caches, submits the two grid sweeps (1728 combinations) and the eight-configuration contact screen per new variant, then ranks all six sweeps into `<rep>/dec_<variant>_sweep_dev.csv` | ~06:05, rankings ~11:00 |
 | 15777505 `ais_decoder_finalize_r2` | `afterany` both evaluations: submits the `dec-top1` screens of the two new decoders `afterok` their prediction jobs, waits for every round-2 screen (up to 8 h), then writes the overview tables and the field diagnostics | ~06:05, tables ~11:00-13:00 |
-| 15772853 `ais_decoder_tuning` | the round-1 launcher; its rankings are already written by hand (4.7), so it is now redundant | 20:03 |
+| ~~15772853~~ | the round-1 launcher; FAILED at 19:03 on the same edited-script pitfall (notes 5.2), nothing lost - it had submitted its sweeps and all four rankings are written | - |
 
 **Round 1 is complete**: `<rep>/decoders_{defaults,tuned,final}_*`, `decoders_final_3d*`,
 `decoder_fields_{production,baseline,contact,fgcal,both}*` and all four `dec_<variant>_sweep_dev.csv`, written up
