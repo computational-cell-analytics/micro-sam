@@ -27,7 +27,16 @@ sigmoid activation, `flow_instance_segmentation(contact=..., contact_weight=...,
 configs `ais_contact_*.json`, `report_ais_decoders.py`), so no other change is needed. Unit tests:
 `python -m pytest -o addopts="" test/test_v2_label_transforms.py` (8 pass).
 
-## 2. Launch the two trainings (do this first; identical budget to round 1)
+## 2. Launch the two trainings (identical budget to round 1)
+
+**Done at 16:59 on 2026-09-07 (seven 3g slices were free, 98 A100 jobs pending):** `boundary` = job 15776831,
+`boundary_fgcal` = job 15776833 (grete:preemptible, 3g.40gb, 14 h; expected to finish ~06:00 on 2026-09-08 at
+1.03 s/it), evaluation drivers 15776838 / 15776839 (`afterany`), round-2 tuning launcher 15776840
+(WAIT_VARIANTS="boundary boundary_fgcal", VARIANTS = all six, polls up to ~12.8 h, then ranks every sweep). The
+smoke test of `boundary_fgcal` passed on the session slice (5 target channels, loss 2.04 at batch 2, 3.7 GiB).
+What remains for the successor: monitor (section 4), submit the `dec-top1` screens of the two new decoders once
+their 2d caches exist (section 3, second block), then the overview (section 5). The commands below document what
+was launched and serve as the fallback if a job has to be resubmitted.
 
 Identical settings to round 1 so the six decoders are comparable: 48000 iterations, batch 8, `--epoch-scale 4`
 (635 iterations per epoch), lr 5e-5, 12 loader workers, 16 CPUs, 64 G. Measured speeds: A100-40GB 0.467 s/it
