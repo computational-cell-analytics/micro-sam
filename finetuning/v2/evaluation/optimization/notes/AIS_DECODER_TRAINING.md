@@ -405,6 +405,92 @@ merge share of the four-channel decoders from 8 % to 13 %; the contact ridge is 
 (sweep rankings of baseline and contact, the 3D tables of all four and the unattended finalisation outputs are
 appended below when they land)
 
+### 4.5 Round-1 completions: the 3D table of all four, the field diagnostics, the mask mode (17:25)
+
+Written by `ais_decoder_finalize2` (15777315, four minutes once the screens were in; see 5.2 for why the first
+attempt died): `ais/reports/decoders_final_{dev,holdout,3d}*.csv` and `decoder_fields_{baseline,contact}*.csv`.
+
+**All four on the 3D crops** (apg3d primary + holdout, 75 crops, `current-defaults`; the balanced score mixes LM
+mSA with the negated CREMI error, so read the families, not the aggregate):
+
+| family | production | baseline | fgcal | contact | both |
+|---|---:|---:|---:|---:|---:|
+| celegans_atlas | 0.104 | 0.040 | 0.011 | 0.000 | 0.000 |
+| embedseg_platy_ish | 0.339 | 0.156 | 0.135 | 0.000 | 0.000 |
+| embedseg_platy_nuclei | 0.259 | 0.115 | 0.086 | 0.000 | 0.000 |
+| embedseg_skull | 0.118 | 0.238 | 0.078 | 0.000 | 0.000 |
+| gonuclear | 0.256 | 0.132 | 0.135 | 0.000 | 0.000 |
+| platynereis_nuclei | 0.068 | 0.052 | 0.006 | 0.000 | 0.000 |
+| cremi / cremi_seen (lower is better) | 0.99 / 0.59 | 1.87 / 1.23 | 2.24 / 2.15 | 2.19 / 2.05 | 2.09 / 1.89 |
+| snemi / humanneurons (lower is better) | 0.97 / 1.35 | 1.69 / 1.97 | 1.95 / 1.98 | 2.16 / 2.37 | 1.92 / 2.04 |
+
+The regression is the 2D-only fine-tune itself, not the loss changes: the unchanged-loss `baseline` already loses
+25-60 % of every LM family (embedseg_skull is the exception, 0.118 -> 0.238) and adds 0.6-1.0 to every CREMI
+error, before any loss change. Both five-channel decoders are exactly 0 on all six LM families because
+`boundary_magnitude_max=0.4` removes every instance of a field whose magnitude no longer dips at boundaries
+(section 4.0). Read as: a 2D-only decoder fine-tune cannot replace the production decoder for volumes, and the
+magnitude filter has to be re-decided for any fine-tuned decoder - not as a verdict on the two loss changes.
+
+**Field diagnostics of all four** (dev, per-dataset medians, `decoder_fields_<variant>_summary.csv`):
+
+- Background distance magnitude 0.83-0.86 (production, the label fill value) -> 0.03-0.08 for *all four*
+  fine-tuned decoders. `boundary_magnitude_max` loses its premise for every one of them, not only for fgcal.
+- dic_hepg2 is a production-decoder failure, not a loss effect: fg IoU 0.07 at an area ratio of 0.10 (it barely
+  predicts foreground there, hence mSA 0.003); every fine-tuned decoder reaches fg IoU 0.89-0.90 at ratio
+  1.03-1.08. This single dataset carries most of the +21 % dev gain over production.
+- The two datasets held out of training move the wrong way, which is where their losses come from: covid_if
+  fg IoU 0.92 -> 0.72-0.77 with the area ratio 1.05 -> 1.26-1.35 (over-coverage), deepseas fg IoU 0.46 ->
+  0.16-0.38 with the ratio 1.90 -> 0.53-1.06 (`both` the worst at 0.16 / 0.53, and it is the variant with the
+  -49 % deepseas loss).
+- The flow flip across a contact (cosine at +-1 px, lower is sharper) is sharpened by the fine-tune and again by
+  the contact channel: dynamicnuclearnet 0.71 -> 0.25 (baseline) -> 0.11 (contact), tissuenet 0.63 -> 0.39 ->
+  0.28, yeaz 0.77 -> 0.40 -> -0.18. The channel does to the field exactly what it was meant to do; the mSA it
+  buys is the question, not the mechanism.
+- fgcal against baseline moves the foreground in both directions rather than calibrating it: tissuenet
+  under-coverage 0.75 -> 0.79 (better), deepbacs over-coverage 1.03 -> 1.13 (worse), the rest within 0.02.
+
+**The mask mode**, added to the four-way defaults table: `contact` 0.3952 -> 0.3962 (dev) and 0.3691 -> 0.3706
+(holdout), `both` 0.4090 -> 0.4093 and 0.3819 -> 0.3823. Confirms 4.2 - the mask is inert because the head
+rarely exceeds 0.5.
+
+**The fifth channel of the two round-1 decoders**, rescored with the mode-independent recalls (per-dataset
+medians, threshold 0.5, `--contact-mode touching` = the target they were trained on):
+
+| dataset | target px | `contact` pred px / Dice / precision 2px / recall_touching / recall_bg | `both` pred px / Dice / precision / recall_touching / recall_bg |
+|---|---:|---|---|
+| yeaz | 7570 | 6967 / 0.69 / 0.84 / **0.76** / 0.15 | 5772 / 0.67 / 0.88 / 0.65 / 0.09 |
+| dynamicnuclearnet | 170 | 264 / 0.65 / 0.79 / **0.72** / 0.01 | 126 / 0.65 / 0.94 / 0.51 / 0.00 |
+| livecell | 11400 | 11954 / 0.60 / 0.77 / **0.63** / 0.07 | 8499 / 0.57 / 0.81 / 0.55 / 0.05 |
+| covid_if | 935 | 2000 / 0.36 / 0.35 / 0.59 / 0.03 | 1497 / 0.45 / 0.46 / 0.58 / 0.02 |
+| tissuenet | 7117 | 1281 / 0.30 / 0.93 / **0.19** / 0.00 | 950 / 0.26 / 0.93 / 0.16 / 0.00 |
+| neurips_cellseg | 1007 | 296 / 0.21 / 0.46 / **0.13** / 0.00 | 14 / 0.20 / 0.10 / 0.02 / 0.00 |
+| puma | 233 | 128 / 0.17 / 0.49 / 0.12 / 0.00 | 28 / 0.05 / 0.37 / 0.03 / 0.00 |
+| tnbc | 180 | 19 / 0.08 / 0.31 / 0.03 / 0.00 | 0 / 0.01 / 0.00 / 0.00 / 0.00 |
+| deepbacs | 132 | 30 / 0.02 / 0.07 / 0.02 / 0.00 | 4 / 0.00 / 0.00 / 0.00 / 0.00 |
+| dic_hepg2 | 3790 | 40 / 0.01 / 0.16 / 0.001 / 0.00 | 0 / 0.00 / 0.00 / 0.00 / 0.00 |
+
+Three things this settles for round 2:
+
+1. `recall_bg_boundary` is 0.00-0.15 everywhere, so both heads did learn the *touching* target specifically and
+   ignore the background-facing rim - the target definition took, the confidence did not.
+2. The head fires where merges are cheap (yeaz, dynamicnuclearnet, livecell: recall 0.63-0.76) and is nearly
+   silent exactly where the campaign lost mSA: tissuenet 0.19, neurips 0.13, deepbacs 0.02, dic_hepg2 0.001
+   (3790 target pixels per crop, 40 predicted). Those losses therefore cannot come from the ridge - they come
+   from the shared features the extra task changed, as section 4.1 concluded.
+3. The boundary-weighted foreground loss makes the head *less* confident, not more: every `both` recall is below
+   its `contact` counterpart (neurips 0.02 vs 0.13, puma 0.03 vs 0.12, tnbc and deepbacs to zero). The two loss
+   changes compete for the same decoder capacity.
+
+The round-2 target has a few percent of the pixels positive instead of under one, which is the structural
+version of the "class-weighted or focal contact loss" lever of section 4.4 point 3: if under-confidence was
+class imbalance, `boundary` fixes it, and its `recall_touching` on tissuenet / neurips / deepbacs / dic_hepg2
+is the number to look at.
+
+**Do not read the `fg_area_ratio` column of the summary CSVs**: it is a mean over datasets, and deepseas (12-91)
+and neurips (2.3-12) dominate it because their crops carry few or tiny ground-truth objects. The per-dataset
+column of `*_mechanisms.csv` is the readable one (baseline / fgcal / contact / both on deepbacs 1.19 / 1.25 /
+1.40 / 1.25, tissuenet 0.71 / 0.75 / 0.77 / 0.74, dic_hepg2 1.04 / 1.11 / 1.16 / 1.12).
+
 ## 5. Round 2: the proper boundary channel (2026-09-07)
 
 Round 1 leaves point 1.1 undecided in the user's reading: the contact-only fifth channel (touching boundaries,

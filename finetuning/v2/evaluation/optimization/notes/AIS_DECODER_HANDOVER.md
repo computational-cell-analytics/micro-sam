@@ -1,169 +1,121 @@
-# Hand-over: AIS decoder campaign, round 2 (full-boundary channel)
+# Hand-over: AIS decoder campaign, round 2 (full-boundary channel) - reading the results
 
-Written 2026-09-07 17:00 for the successor session. Everything below is committed on branch `ais-train-optim`.
-Read first: `AIS_DECODER_TRAINING.md` (decision log, sections 4.0-4.4 hold the results and conclusions of round 1)
-and the memory note `ais-decoder-campaign-state`. `<root>` = `/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization`,
+Written 2026-09-07 18:00 for the successor session, replacing the 17:00 version. Everything is committed on
+branch `ais-train-optim`. Read first: `AIS_DECODER_TRAINING.md` - sections 4.0-4.4 hold round 1, **4.5** the
+round-1 completions, **5.1-5.3** the round-2 launch and the chain. Memory note `ais-decoder-campaign-state`.
+`<root>` = `/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization`,
 `<camp>` = `<root>/ais_decoder_training`, `<opt>` = `finetuning/v2/evaluation/optimization`,
-`<dec>` = `finetuning/v2/generalist/ais_decoder`, python = `micromamba activate new-stack`.
+`<dec>` = `finetuning/v2/generalist/ais_decoder`, `<rep>` = `<root>/ais/reports`,
+python = `micromamba activate new-stack`.
 
-## 1. Task
+## 1. What is left to do
 
-Round 1 trained four decoders (baseline, contact, fgcal, both) and found that the contact-only fifth channel
-(touching boundaries, <1 % of the pixels, ill-defined) is a dataset-dependent trade and under-confident. The user
-wants round 2 with the **proper boundary loss**: the fifth channel holds the inner boundary of every object
-(to neighbours and to background alike), which is the classical target and coincides with the zero level set of
-the geodesic distance channels. Two new decoders, then the same evaluation and tuning as round 1, then one
-conclusive overview of all six decoders.
+**Nothing has to be submitted.** Round 2 is chained end to end (section 5.3 of the notes); the successor reads
+the tables the chain writes and finishes the write-up:
 
-| variant | fifth channel | foreground loss | status |
-|---|---|---|---|
-| `boundary` | inner boundary of every object, dilated by 1 (`contact_mode="all"`), Dice + BCE | Dice (unchanged) | to train |
-| `boundary_fgcal` | same | Dice + boundary-weighted BCE (`boundary_weight=4`, radius 2) | to train |
+1. Read the round-2 tables (section 3 below) and write them into **section 5.4** of `AIS_DECODER_TRAINING.md`.
+2. Decide point 1.1 (the fifth channel) with the boundary target on the evidence, and update section 4.4 point 3
+   if the verdict changes. The user's rule: only cross-dataset wins count - balanced mSA plus the gate
+   (>= 9 / 11 up, worst > -2 %, balanced >= +2 %) against the fine-tuned `baseline` on dev, confirmed on the
+   holdout. No per-dataset fits.
+3. Write the conclusive overview of all six decoders (**section 6**), update the memory note, commit.
 
-The code is in place and tested (commit of 2026-09-07 17:00): `micro_sam/v2/transforms/labels.py::object_boundaries`
-and the `contact_mode` argument of the label transforms; `<dec>/ais_decoder_lib.py::VARIANTS` has both entries;
-`build_loaders` passes the mode. Everything downstream treats the channel as "contact" (loss `contact=True`,
-sigmoid activation, `flow_instance_segmentation(contact=..., contact_weight=..., contact_mask_threshold=...)`,
-configs `ais_contact_*.json`, `report_ais_decoders.py`), so no other change is needed. Unit tests:
-`python -m pytest -o addopts="" test/test_v2_label_transforms.py` (8 pass).
-
-## 2. Launch the two trainings (identical budget to round 1)
-
-**Done at 16:59 on 2026-09-07 (seven 3g slices were free, 98 A100 jobs pending):** `boundary` = job 15776831,
-`boundary_fgcal` = job 15776833 (grete:preemptible, 3g.40gb, 14 h; expected to finish ~06:00 on 2026-09-08 at
-1.03 s/it), evaluation drivers 15776838 / 15776839 (`afterany`), round-2 tuning launcher 15776840
-(WAIT_VARIANTS="boundary boundary_fgcal", VARIANTS = all six, polls up to ~12.8 h, then ranks every sweep). The
-smoke test of `boundary_fgcal` passed on the session slice (5 target channels, loss 2.04 at batch 2, 3.7 GiB).
-What remains for the successor: monitor (section 4), submit the `dec-top1` screens of the two new decoders once
-their 2d caches exist (section 3, second block), then the overview (section 5). The commands below document what
-was launched and serve as the fallback if a job has to be resubmitted.
-
-Identical settings to round 1 so the six decoders are comparable: 48000 iterations, batch 8, `--epoch-scale 4`
-(635 iterations per epoch), lr 5e-5, 12 loader workers, 16 CPUs, 64 G. Measured speeds: A100-40GB 0.467 s/it
-(6.4 h), 3g.40gb slice 1.03 s/it (12.9 h; the 14 h limit leaves 1 h of margin).
-
-Pick the GPU pool by the queue at launch time (both commands are ready; `--dry` prints the sbatch script):
-
-```bash
-# 3g slices free?  (each node has 4; the second number is the allocated count)
-for n in ggpu158 ggpu192; do scontrol show node $n | grep -oE "gres/gpu:3g.40gb=[0-9]+" | tr '\n' ' '; echo "<- $n"; done
-# A100 queue depth on grete:shared
-squeue -p grete:shared -t PENDING -h -o "%b %r" | grep -c "A100:1"
-```
-At 16:52 seven 3g slices were free and 98 single-A100 jobs were pending (this morning the A100 waits were 4-23 min,
-so re-check). Rule: free 3g slices -> use them (guaranteed start, done in ~13 h); otherwise A100
-(`--partition grete:shared --gres A100:1 --time 12:00:00`), and if an A100 job has not started within an hour,
-cancel it and fall back to a 3g slice. Do not run both pools for the same variant (same checkpoint directory).
-
-```bash
-cd /mnt/vast-nhr/home/pape41/u12086/Work/my_projects/micro-sam
-PY=/mnt/vast-nhr/home/pape41/u12086/Work/software/micromamba/envs/envs/new-stack/bin/python
-$PY finetuning/v2/generalist/ais_decoder/submit_ais_decoder_training.py --variants boundary boundary_fgcal \
-    --iterations 48000 --batch-size 8 --epoch-scale 4 --partition grete:preemptible --gres 3g.40gb:1 --time 14:00:00
-```
-Then chain the evaluation drivers (`afterany`, so a time-out still evaluates the last `best.pt`), one per job id
-printed above:
-```bash
-R=/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization/ais_decoder_training
-DRV=/mnt/vast-nhr/home/pape41/u12086/Work/my_projects/micro-sam/finetuning/v2/generalist/ais_decoder/evaluate_ais_decoder.sh
-for pair in boundary:<JOBID_B> boundary_fgcal:<JOBID_BF>; do v=${pair%%:*}; j=${pair##*:}
-  sbatch --parsable --job-name=ais_eval_$v --dependency=afterany:$j -p grete:preemptible -G 1g.10gb:1 -c 2 --mem=16G \
-    -t 01:00:00 --constraint=inet -A nim00007 -o $R/logs/slurm/ais_eval_${v}_%j.out -e $R/logs/slurm/ais_eval_${v}_%j.err \
-    --wrap "set -eo pipefail; source ~/.bashrc; set -u; micromamba activate new-stack; export PYTHONUNBUFFERED=1; bash $DRV $v best"
-done
-```
-The driver stages `<camp>/staged/joint_sam2_hvit_t_multi_gpu/<variant>.pt` (v4 SAM2 state + trained decoder),
-caches the predictions of v5 primary / training_extra / holdout and apg3d primary / holdout, and runs the library
-defaults plus `contact-ridge` (weight 1) and `contact-mask` (0.5) on the caches (`afterok` on the caches).
-
-Sanity checks after the jobs start (the first iterations appear after ~2 min): `tr '\r' '\n' < <camp>/logs/slurm/ais_decoder_<v>_<job>.err | grep it/s | tail -1`;
-`<camp>/checkpoints/ais_decoder_<v>/{best,latest}.pt` appear after the first epoch (~11 min on 3g).
-A smoke test of the pipeline was run on the session slice before this hand-over (`--variant boundary_fgcal --smoke 5`).
-
-## 3. Then the tuning of the two new decoders (once their 2d caches exist)
-
-Same as round 1, unattended: the launcher waits for the caches, submits the grid sweeps (1728 combinations, CPU)
-and the eight contact-ridge / mask screens, then ranks every sweep.
-```bash
-WAIT_VARIANTS="boundary boundary_fgcal" VARIANTS="baseline contact fgcal both boundary boundary_fgcal" \
-  sbatch --parsable --job-name=ais_decoder_tuning2 -p grete:preemptible -G 1g.10gb:1 -c 2 --mem=16G -t 14:00:00 --constraint=inet \
-  -A nim00007 -o $R/logs/slurm/ais_decoder_tuning2_%j.out -e $R/logs/slurm/ais_decoder_tuning2_%j.err \
-  --wrap "set -o pipefail; source ~/.bashrc; micromamba activate new-stack; export PYTHONUNBUFFERED=1; export WAIT_VARIANTS VARIANTS; bash /mnt/vast-nhr/home/pape41/u12086/Work/my_projects/micro-sam/finetuning/v2/generalist/ais_decoder/launch_tuning_after_caches.sh 46000"
-```
-(`sbatch --export=ALL` is the default, so the two variables reach the script.) Also screen the shared tuned
-configuration of round 1 for both new decoders, so all six can be read at one setting:
-```bash
-cd <opt>; export MICRO_SAM2_JOINT_CHECKPOINT_ROOT=<root>/ais_decoder_training/staged MICRO_SAM2_JOINT_EXPORT_ROOT=<root>/model_exports
-J2D=$(cat $(ls -td <root>/jobs/*_dec_boundary_predict2d | head -1)/job_id.txt)   # same for boundary_fgcal
-$PY ais_campaign_tasks.py screen --name dec_boundary_top_screen --preset cpu --kind v5 --subsets primary training_extra holdout \
-    --no-defaults --configs configs/ais_dec_top1.json configs/ais_dec_top1_ridge1.json configs/ais_dec_top1_ridge2_mask0.3.json \
-    --extra "--joint-checkpoint boundary --ndim 2" --dependency afterok:$J2D
-```
-Important: the cached sweep scorer (`parameter_search.score_image_sparse_cached`) ignores the contact keywords, so
-ridge / mask settings are evaluated only through `screen` with config files, never through `sweep`.
-
-## 4. Jobs of round 1 still running at hand-over time (monitor, do not resubmit)
+## 2. State at hand-over
 
 | job | what | expected |
 |---|---|---|
-| 15772287 `ais_decoder_finalize` | waits for all round-1 screens, then writes `<root>/ais/reports/decoders_final_{dev,holdout,3d}*.csv` and `decoder_fields_<variant>.csv` for the four variants | ~18:00 (gives up ~18:10, wall limit 19:50) |
-| 15772853 `ais_decoder_tuning` | waits for the baseline / contact sweeps, then ranks all four sweeps into `<root>/ais/reports/dec_<variant>_sweep_dev.csv` | ~18:30 |
-| 15776127 / 15776128 (baseline), 15776228 / 15776229 (contact) | grid sweeps, 11 CPU tasks each | ~18:00 |
-| 15776088 (baseline), 15776115 (contact) | 3d screens | ~17:30 |
+| 15776831 `boundary`, 15776833 `boundary_fgcal` | the two trainings, 48000 iterations at 1.08 it/s on 3g.40gb slices (ggpu158 / ggpu192), started 17:16 | done 05:30-06:00, wall limit 07:16 |
+| 15776838 / 15776839 `ais_eval_<variant>` | `afterany` the training: stage, cache v5 primary / training_extra / holdout and apg3d primary / holdout, then the `current-defaults`, `contact-ridge` and `contact-mask` screens | ~06:00, screens ~07:00 |
+| 15777359 `ais_decoder_tuning2` | `afterany` both evaluations: waits for the 2d caches, submits the two grid sweeps (1728 combinations) and the eight-configuration contact screen per new variant, then ranks all six sweeps into `<rep>/dec_<variant>_sweep_dev.csv` | ~06:05, rankings ~11:00 |
+| 15777505 `ais_decoder_finalize_r2` | `afterany` both evaluations: submits the `dec-top1` screens of the two new decoders `afterok` their prediction jobs, waits for every round-2 screen (up to 8 h), then writes the overview tables and the field diagnostics | ~06:05, tables ~11:00-13:00 |
+| 15776127/28, 15776228/29 | the round-1 `baseline` / `contact` grid sweeps, 18 of 22 tasks left at 17:30, roughly serial at ~6 min | ~19:30 |
+| 15772853 `ais_decoder_tuning` | the round-1 launcher; ranks the `baseline` / `contact` sweeps if they finish before it gives up at 20:03 | 20:03 |
 
-`squeue -u $USER -h -o "%i %j %T %M %R" | sort -k2` shows them; task markers are `logs/<tag>.done` / `.failed` in the
-newest `<root>/jobs/<timestamp>_<name>/`. If the finalize job gave up before the 3d screens finished, rerun
-`bash <dec>/finalize_ais_decoder_reports.sh 0` (VARIANTS defaults to the four round-1 names) in a CPU job.
+Round 1 is otherwise complete: `<rep>/decoders_{defaults,tuned,final}_*`, `decoders_final_3d*`,
+`decoder_fields_{production,baseline,contact,fgcal,both}*`. If `dec_baseline_sweep_dev.csv` /
+`dec_contact_sweep_dev.csv` are missing, `tuning2` writes them (it ranks all six variants); to do it by hand:
 
-## 5. The conclusive overview (when everything is in)
-
-Reference for every comparison is the fine-tuned `baseline`; the production decoder is included as the second
-reference. Run from `<opt>` with `MICRO_SAM2_JOINT_CHECKPOINT_ROOT=<root>/ais_decoder_training/staged`:
 ```bash
-V4=<root>/v4_geodesic_checkpoints/joint_sam2_hvit_t_multi_gpu/best.pt; E=856a433c4b33348e1d85c4c13278f057
-ALL="baseline contact fgcal both boundary boundary_fgcal"
-# defaults, dev and holdout
-$PY report_ais_decoders.py --variants $ALL --production-checkpoint $V4 --baseline-variant baseline --configs current-defaults contact-ridge \
-    --subsets primary training_extra --ndim 2 --epoch $E --output <root>/ais/reports/decoders_all_defaults_dev
-$PY report_ais_decoders.py --variants $ALL --production-checkpoint $V4 --baseline-variant baseline --configs current-defaults contact-ridge \
-    --subsets holdout --ndim 2 --epoch $E --output <root>/ais/reports/decoders_all_defaults_holdout
-# shared tuned configuration (reference baseline at dec-top1), dev and holdout
-$PY report_ais_decoders.py --variants $ALL --production-checkpoint $V4 --baseline-variant baseline --baseline-config dec-top1 \
-    --configs current-defaults dec-top1 dec-fgcal-top1 dec-top1-ridge1 dec-top1-ridge2-mask0.3 --subsets primary training_extra --ndim 2 --epoch $E \
-    --output <root>/ais/reports/decoders_all_tuned_dev      # and --subsets holdout
-# contact / boundary ridge and mask settings of a five-channel decoder against its own defaults
-$PY report_ais_decoders.py --variants boundary --baseline-variant boundary --configs current-defaults contact-ridge-w0.5 contact-ridge \
-    contact-ridge-w2.0 contact-ridge-w4.0 contact-mask-t0.3 contact-mask contact-mask-t0.7 contact-ridge1-mask0.5 --subsets primary training_extra --ndim 2 --epoch $E
-# each decoder at its own sweep optimum (dev-tuned; read the model comparison on the holdout): <root>/ais/reports/dec_<variant>_sweep_dev.csv
-# 3d crops (regression instrument only; a 2d-only fine-tune regresses volumes, and the round-1 five-channel decoder collapsed under the filter there)
-$PY report_ais_decoders.py --variants $ALL --production-checkpoint $V4 --baseline-variant baseline --configs current-defaults contact-ridge \
-    --kind apg3d --subsets primary holdout --ndim 3 --epoch $E --output <root>/ais/reports/decoders_all_3d
-# field diagnostics (contact / boundary head Dice, precision, recall; flow cosines; fg area ratio)
-$PY diagnose_decoder_fields.py --joint-checkpoint boundary --subset primary training_extra --ndim 2 --output <root>/ais/reports/decoder_fields_boundary.csv
+cd <opt>; export MICRO_SAM2_JOINT_CHECKPOINT_ROOT=<root>/ais_decoder_training/staged
+for v in baseline contact; do $PY report_ais_sweep.py --grid configs/ais_grid_lm_v4.json \
+    --subset primary training_extra --joint-checkpoint $v --top 25 --output <rep>/dec_${v}_sweep_dev.csv; done
 ```
-Read-outs the user needs (see `AIS_DECODER_TRAINING.md` section 4.4 for the round-1 verdicts): balanced mSA and the
-generalization gate (>= 9 / 11 up, worst > -2 %, balanced >= +2 %) against baseline on dev, confirmed on holdout;
-the seeded-merge share and the unseeded / absorbed shares; `fg_area_ratio` and `matched_iou`; whether the boundary
-head is confident (recall at 0.5) where the contact head was not; and whether the losses on deepbacs / dic_hepg2 /
-covid_if / deepseas that the contact channel caused through the shared features disappear with the boundary target.
-Write the tables into section 4.5 of `AIS_DECODER_TRAINING.md`, update section 4.4 if the verdict on point 1.1
-changes, update the memory note, commit.
 
-## 6. Pitfalls met in round 1 (all fixed in the code, listed so they are not re-debugged)
+Check the chain with `squeue -u $USER -h -o "%i %j %T %M %R" | sort -k2`; task markers are `logs/<tag>.done` /
+`.failed` in the newest `<root>/jobs/<timestamp>_<name>/`; drivers log to `<camp>/logs/slurm/`.
 
-- Python 3.14 starts DataLoader workers through a fork server: 30-60 s per worker, every epoch for validation.
+## 3. The tables to read, and the read-outs the user needs
+
+Reference for every comparison is the fine-tuned `baseline`; the production decoder is the second reference.
+
+| file under `<rep>` | what |
+|---|---|
+| `decoders_all_defaults_{dev,holdout}{,_datasets,_mechanisms}.csv` | all six plus production under the library defaults, `contact-ridge` and `contact-mask` |
+| `decoders_all_tuned_{dev,holdout}*.csv` | all six at the shared tuned `dec-top1` (reference: baseline at `dec-top1`), with the ridge / mask variants |
+| `decoders_all_3d*.csv` | apg3d primary + holdout; regression instrument only (see 4.5: even the plain fine-tune loses 25-60 % per LM family, and the round-1 five-channel decoders are 0 because `boundary_magnitude_max` removes every instance) |
+| `decoders_{boundary,boundary_fgcal}_contact_dev*.csv` | the eight ridge / mask settings against the decoder's own defaults |
+| `dec_{boundary,boundary_fgcal}_sweep_dev.csv` | each new decoder at its own sweep optimum (dev-tuned; read the model comparison on the holdout) |
+| `decoder_fields_{boundary,boundary_fgcal}{,_summary}.csv` | field diagnostics, scored with `--contact-mode all` |
+
+Read-outs:
+
+1. **The gate.** Balanced mSA and the gate against `baseline` on dev, confirmed on the holdout, at the defaults
+   *and* at `dec-top1`. Round-1 numbers to beat: `contact` -4.7 % / -5.2 % (defaults), -4.2 % / -3.8 %
+   (`dec-top1`); `both` -1.3 % / -1.9 % and +1.3 % / +1.8 %; `fgcal` +0.6 % / +1.1 % and +2.4 % / +1.7 %.
+2. **Is the head confident now?** The round-1 contact head was precise but under-confident exactly on the
+   datasets whose merges motivated it. `recall_touching` of the round-1 `contact` decoder (per-dataset medians):
+   dynamicnuclearnet 0.72, yeaz 0.76, livecell 0.63, covid_if 0.59, tissuenet **0.19**, neurips **0.13**, puma
+   0.12, tnbc 0.03, deepbacs 0.015, dic_hepg2 **0.001**. The boundary head has to lift tissuenet, neurips,
+   deepbacs and dic_hepg2; `recall_bg_boundary` (0.00-0.15 for `contact`) shows whether it also learned the
+   background-facing rim, i.e. whether it learned the target at all.
+3. **Do the shared-feature losses disappear?** Round 1 lost -12 % deepbacs, -21 % covid_if, -26 % deepseas,
+   -38 % dic_hepg2 through the shared features, not through the ridge (the head never fired there). Read the
+   per-dataset columns and the mechanism shares: dic_hepg2 lost seeds (unseeded 43.9 -> 57.1 %), deepbacs split
+   its rods (1.7 -> 4.1 %). If the boundary target removes these, point 1.1 becomes a candidate again.
+4. **The merges it was for.** Seeded-merge share at the defaults and at `dec-top1`, with and without the ridge.
+   Round 1: baseline 8.1 % / 13.4 %, `contact` + ridge 4.5 % / 4.1 %, `both` + ridge 4.2 % / 4.0 %.
+5. **Extent.** `fg_area_ratio` and `matched_iou` per dataset - never the summary CSV's mean (deepseas 12-91 and
+   neurips 2.3-12 dominate it; see 4.5).
+6. **The ridge / mask setting** of a denser head: with a few percent of the pixels positive the mask mode at 0.5
+   may finally do something (it was inert in round 1 because the head rarely exceeded 0.5).
+
+## 4. If something went wrong
+
+- **A training timed out** (wall 07:16): `afterany` still fires, and the driver stages `best.pt` of the last
+  finished epoch, so the chain completes on a slightly shorter run. Note the epoch in the write-up.
+- **A job was preempted** (everything runs on `grete:preemptible`): resubmit the driver by hand, e.g.
+  `bash <dec>/evaluate_ais_decoder.sh boundary best`, or the frozen copies under `<camp>/jobs/frozen/`
+  (`finalize_round2_<ts>.sh`, `launch_tuning_<ts>.sh`, `finalize_<ts>.sh`).
+- **Reports come out empty**: check `--epoch 856a433c4b33348e1d85c4c13278f057` still matches
+  `implementation_checksum()`. It hashes `benchmark_ais_optimization.py`, `common.py`, `parameter_search.py`,
+  `micro_sam/v2/instance_segmentation.py` and `micro_sam/v2/postprocessing.py` - **do not touch those five while
+  the chain is in flight**, or the new runs get a different epoch and every filtered report goes blank.
+  `micro_sam/v2/transforms/labels.py` and the readers are not hashed, so the round-2 code changes did not move it.
+- **A screen or sweep task failed**: `<root>/jobs/<ts>_<name>/logs/<tag>.failed` holds the reason; rerun the one
+  command from `tasks.txt`.
+
+## 5. Pitfalls (met, fixed, listed so they are not re-debugged)
+
+- **Never submit a repo path for a long-running driver.** Bash re-reads a running script by byte offset, so
+  editing the file while a job sleeps in a wait loop breaks the parse - that is how the round-1 finalisation died
+  after waiting 7.4 h (notes 5.2). Copy it to `<camp>/jobs/frozen/<name>_<timestamp>.sh` and submit the copy.
+- **Our own array can block our own jobs.** An unschedulable job at the head of a partition blocks every
+  lower-priority job of the same user; the round-2 trainings pended 17 minutes behind our own sweep array with
+  seven 3g slices free (notes 5.1). Diagnosis: `squeue -u $USER -O "jobid,name,state,reason,priority"` and look
+  for `TopOfQueue`. Fix: `scontrol update jobid=<array> nice=100`, or `scontrol hold` / `release`.
+- **`sbatch --test-only` is worthless on `grete:preemptible`** - it ignores preemption and returned the same
+  10-hour-away estimate for every pool while jobs started immediately.
+- `diagnose_decoder_fields.py --contact-mode` must match the training target of the fifth channel (`touching`
+  for `contact` / `both`, `all` for `boundary` / `boundary_fgcal`), otherwise the head's precision is scored
+  against a target that calls its correct pixels negative.
+- The cached sweep scorer ignores the contact keywords, so ridge / mask settings are only ever evaluated through
+  `screen` with config files, never through `sweep`.
+- Python 3.14 starts DataLoader workers through a fork server (30-60 s each, every epoch);
   `train_ais_decoder.py` forces `fork`. Do not remove.
 - Files with fewer than three objects (yeaz frames) make torch_em's sampler raise after 500 attempts; the subset
-  wrappers redraw. torch_em splits `n_samples` over files for zarr / h5 lists, hence `RandomSubsetDataset`.
-- Trainer checkpoints pickle the datasets: import `ais_decoder_lib` before `torch.load` of a `best.pt`
-  (`stage_ais_decoder_checkpoint.py` does); the staged files are lean and load in seconds.
-- Always export `MICRO_SAM2_JOINT_CHECKPOINT_ROOT=<root>/ais_decoder_training/staged` and
-  `MICRO_SAM2_JOINT_EXPORT_ROOT=<root>/model_exports` before any benchmark command or submission (pinned into job.sh).
+  wrappers redraw. `RandomSubsetDataset` exists because torch_em splits `n_samples` over files.
+- Trainer checkpoints pickle the datasets: import `ais_decoder_lib` before `torch.load` of a `best.pt`.
+- Always export `MICRO_SAM2_JOINT_CHECKPOINT_ROOT=<camp>/staged` and
+  `MICRO_SAM2_JOINT_EXPORT_ROOT=<root>/model_exports` before any benchmark command.
 - The session cwd drifts after `cd`; use absolute paths. `.sh` files are git-ignored: `git add -f`.
-- The CPU preset takes 16 cores per task; ~2-4 tasks run at once, so 40 queued tasks take ~1.5 h. `scontrol hold`
-  the sweep arrays if screens must go first, `scontrol release` afterwards.
-- `boundary_magnitude_max=0.4` removes every instance of a decoder whose magnitude does not dip at boundaries
-  (the round-1 five-channel decoder in 3d); the fine-tuned decoders emit magnitude ~0 in the background, so the
-  filter's premise is gone for them anyway.
-- The session runs inside an interactive SLURM job on ggpu137 (1 CPU, 1g.20gb slice, 12 h); chain everything with
-  dependencies so nothing depends on the session staying alive.
+- The CPU preset takes 16 cores per task and roughly one task runs at a time, so a 22-task sweep needs ~2 h.
