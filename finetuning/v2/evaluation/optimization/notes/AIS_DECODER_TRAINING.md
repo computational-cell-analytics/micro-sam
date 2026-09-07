@@ -325,4 +325,36 @@ both counts with higher matched IoU (0.777 -> 0.784, 0.737 -> 0.740, 0.772 -> 0.
 never fires on dic_hepg2 or deepbacs, so their losses come from the shared features the extra task changed, not
 from the ridge.
 
+### 4.2 All four decoders under the library defaults (16:25; `ais/reports/decoders_defaults_{primary_training_extra,holdout}*.csv`)
+
+| decoder (configuration) | dev balanced | vs baseline | up / 11 | worst | holdout balanced | vs baseline | up / 5 | worst | seeded merges dev |
+|---|---:|---:|---|---|---:|---:|---|---|---:|
+| production | 0.3437 | -17.1 % | 2 | dic_hepg2 -98 % | 0.2437 | -37.4 % | 0 | dic_hepg2 -99 % | 13.3 % |
+| baseline | 0.4145 | - | - | - | 0.3894 | - | - | - | 8.1 % |
+| fgcal | 0.4170 | +0.6 % | 6 | dic_hepg2 -8.8 % | 0.3938 | +1.1 % | 4 | deepbacs -5.0 % | 8.3 % |
+| contact | 0.3952 | -4.7 % | 4 | dic_hepg2 -38 % | 0.3691 | -5.2 % | 2 | dic_hepg2 -40 % | 7.8 % |
+| contact + ridge 1 | 0.4004 | -3.4 % | 4 | deepseas -26 % | 0.3770 | -3.2 % | 2 | dic_hepg2 -23 % | 4.5 % |
+| both | 0.4090 | -1.3 % | 7 | deepseas -49 % | 0.3819 | -1.9 % | 3 | dic_hepg2 -24 % | 6.3 % |
+| both + ridge 1 | 0.4096 | -1.2 % | 7 | deepseas -49 % | 0.3819 | -1.9 % | 3 | dic_hepg2 -21 % | 4.2 % |
+
+contact vs baseline per dataset (dev, defaults / ridge): tissuenet +8.1 / +6.5 %, neurips +5.6 / +7.9 %, livecell
++1.3 / +4.2 %, yeaz +2.3 / +2.1 %, puma -0.7 / -1.8 %, tnbc -0.2 / -1.2 %, dnn -3.1 / -3.5 %, deepbacs -12.0 / -11.5 %,
+dic_hepg2 -38.1 / -8.5 %, covid_if -21.1 / -21.0 %, deepseas -25.6 / -25.9 %. Holdout: tissuenet +10.3 / +8.2 %,
+livecell +1.5 / +4.8 %, dnn -2.6 / -2.6 %, deepbacs -12.0 / -11.5 %, dic_hepg2 -40.4 / -22.6 %.
+
+Reading (all four, same data, budget and initialisation):
+- Point 4.1 (boundary-weighted foreground BCE): +0.6 % / +1.1 % balanced, 6 / 11 and 4 / 5 datasets up, a 5-9 % loss
+  on one dataset each time; foreground calibration and merge share unchanged against baseline. A marginal, non-
+  uniform effect; it does not pass the gate.
+- Point 1.1 (contact channel): a strong dataset-dependent trade, not a general gain: +6 to +8 % on tissuenet and
+  neurips, +1 to +5 % on livecell and yeaz, against -12 % on deepbacs, -21 % on covid_if, -26 % on deepseas and
+  -38 % on dic_hepg2 (-8.5 % once the ridge recovers the absorbed objects). The losses come through the shared
+  features (fewer seeds on dic_hepg2 and covid_if, split rods on deepbacs), not through the ridge; the head itself
+  never fires on those datasets. Stacked on fgcal (`both`) the trade is milder (-1.3 % / -1.9 %) with the same sign
+  pattern.
+- The dominant effect of the campaign is neither: the plain fine-tune on the tuning datasets' train splits lifts the
+  decoder from 0.344 to 0.415 (dev) and from 0.244 to 0.389 (holdout), removes 40 % of the merges and calibrates
+  the foreground area to ~1 on most datasets. covid_if and deepseas, the two datasets left out of training, lose
+  (-33 % and -33 % for baseline vs production), so part of this is in-domain specialisation.
+
 (to be filled when the trainings have finished)
