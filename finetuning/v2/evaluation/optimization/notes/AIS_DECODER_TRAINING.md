@@ -317,4 +317,12 @@ Reading:
    -16 % on deepbacs and -24 to -29 % on dic_hepg2, so the balanced score is 1-2 % below baseline. The contact-vs-
    baseline pair (pending) separates the channel from the fgcal loss it was stacked on.
 
+Mechanisms behind the both-vs-baseline differences (`ais/reports/decoders_isolating_dev_mechanisms.csv`, % of
+objects): dic_hepg2 loses seeds (unseeded 43.9 -> 57.1 %, absorbed 34.1 -> 44.3 %; merges unchanged), deepbacs
+splits its thin rods (1.7 -> 4.1 %) with a lower matched IoU (0.771 -> 0.744); livecell (merges 11.8 -> 9.2 %,
+unseeded 15.2 -> 13.4 %), tissuenet (3.2 -> 2.5 %, 23.9 -> 22.6 %) and neurips (13.2 -> 10.0 %, 17.2 -> 14.9 %) gain on
+both counts with higher matched IoU (0.777 -> 0.784, 0.737 -> 0.740, 0.772 -> 0.789). The contact head itself
+never fires on dic_hepg2 or deepbacs, so their losses come from the shared features the extra task changed, not
+from the ridge.
+
 (to be filled when the trainings have finished)
