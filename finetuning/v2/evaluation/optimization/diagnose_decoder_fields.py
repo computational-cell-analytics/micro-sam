@@ -95,7 +95,18 @@ def sample_row(prediction: np.ndarray, labels: np.ndarray, threshold: float) -> 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ais.common_arguments(parser)
+    # The manifest / checkpoint arguments of benchmark_ais_optimization.py, so `_manifests` and friends apply.
+    parser.add_argument("--kind", choices=ais.KINDS, default="v5")
+    parser.add_argument("--subset", nargs="+", default=["primary"])
+    parser.add_argument("--data-root", type=Path, default=Path("/mnt/vast-nhr/projects/cidas/cca/data"))
+    parser.add_argument("--output-root", type=Path,
+                        default=Path("/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization"))
+    parser.add_argument("--campaign-root", type=Path,
+                        default=Path("/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization/3d_v2"))
+    parser.add_argument("--model-type", default="hvit_t")
+    parser.add_argument("--joint-checkpoint", default="best")
+    parser.add_argument("--ndim", choices=["2", "3", "both"], default="2")
+    parser.add_argument("--datasets", nargs="*", default=None)
     parser.add_argument("--foreground-threshold", type=float, default=0.5)
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
