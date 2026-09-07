@@ -185,4 +185,33 @@ The background magnitude change matters for `boundary_magnitude_max`: the filter
 boundary runs through magnitude ~1; with ~0 in the background it no longer discriminates. Contact flips are
 sharper but not negative at +-1 px. Attribution (fine-tuning vs the boundary loss) waits for the baseline.
 
+3D crops (apg3d primary + holdout, 75 crops, `current-defaults`), fgcal vs production: every LM family loses
+(celegans_atlas 0.104 -> 0.011, embedseg_platy_ish 0.339 -> 0.135, embedseg_platy_nuclei 0.259 -> 0.086,
+embedseg_skull 0.118 -> 0.079, gonuclear 0.256 -> 0.136, platynereis_nuclei 0.068 -> 0.006) and the EM CREMI
+scores roughly double (cremi 0.99 -> 2.24, cremi_seen 0.59 -> 2.15, snemi 0.97 -> 1.95, humanneurons 1.35 ->
+1.97); the volume foreground balloons (area ratio celegans 1.28 -> 2.38, gonuclear 2.02 -> 2.68) and merges rise
+(celegans 33 -> 75 %). Expected for a 2D-only, LM-only decoder fine-tune (the 3D path of the decoder saw no data),
+and the reason these decoders cannot replace the production one for volumes or EM; the 3D crops serve as the
+regression instrument of the campaign only.
+
+`both` (fgcal + contact, checkpoint `25e2a32a...`, best epoch 73) against production, 2D (09:50):
+
+| set / configuration | production | fgcal defaults | both defaults | both contact-ridge | both contact-mask |
+|---|---:|---:|---:|---:|---:|
+| dev balanced (11) | 0.3437 | 0.4170 | 0.4090 | 0.4096 | 0.4093 |
+| holdout balanced (5) | 0.2437 | 0.3938 | 0.3819 | 0.3819 | 0.3823 |
+| dev merged + absorbed, object-weighted | 25.2 % | 17.5 % | 14.8 % | 12.6 % | 13.9 % |
+| livecell mSA / merged + absorbed | 0.277 / 36.9 % | 0.365 / 21.9 % | 0.382 / 19.2 % | 0.385 / 15.7 % | 0.384 / 17.8 % |
+| tissuenet mSA / merged + absorbed | 0.224 / 25.6 % | 0.263 / 13.7 % | 0.272 / 12.7 % | 0.268 / 11.9 % | 0.271 / 12.5 % |
+| neurips mSA / merged + absorbed | 0.226 / 28.0 % | 0.295 / 30.8 % | 0.317 / 22.4 % | 0.314 / 19.7 % | 0.318 / 21.2 % |
+| deepbacs mSA | 0.181 | 0.326 | 0.287 | 0.285 | 0.287 |
+| deepseas / covid_if mSA (unseen) | 0.134 / 0.740 | 0.099 / 0.474 | 0.046 / 0.462 | 0.046 / 0.460 | 0.046 / 0.462 |
+
+The five-channel model wins on the three touching-cell datasets (livecell, tissuenet, neurips) and loses on
+deepbacs and on the two unseen datasets, so its balanced score is 2 % below fgcal. The contact ridge at weight
+1.0 removes another 2-4 points of merges on livecell / tissuenet / neurips for +0.1-0.7 % mSA; the mask mode at
+0.5 changes little (the contact head is rarely above 0.5). Both post-processing settings are untuned. The
+isolating pairs (contact vs baseline, both vs fgcal with the same data) complete when the 3g jobs finish.
+Tables: `ais/reports/decoders_prelim_{primary_training_extra,holdout}*.csv`.
+
 (to be filled when the trainings have finished)
