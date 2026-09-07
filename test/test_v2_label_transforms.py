@@ -81,3 +81,21 @@ def test_contact_channel_follows_the_instance_channel_layout_and_3d_input():
     target = GeodesicHybridDistanceTransform(contact=True)(volume)
     assert target.shape == (5, 2, 40, 60)
     np.testing.assert_array_equal(target[4] > 0, touching_boundaries(volume))
+
+
+def test_object_boundaries_mode_covers_every_object_edge():
+    from micro_sam.v2.transforms.labels import object_boundaries
+
+    labels = _two_squares(gap=0)
+    labels[2:8, 52:58] = 3
+    full = object_boundaries(labels, dilation=0)
+    # Every object contributes its inner boundary, the isolated one included.
+    assert full[2, 52:58].all() and full[10, 10:30].all() and full[10:30, 29].all()
+    assert not full[15, 15:25].any()
+    contact = touching_boundaries(labels, dilation=0)
+    assert (contact & ~full).sum() <= contact.sum() // 2  # the contact line is (mostly) a subset of the boundaries
+    target = GeodesicHybridDistanceTransform(contact=True, contact_mode="all")(labels)
+    assert target.shape == (5, 40, 60)
+    np.testing.assert_array_equal(target[4] > 0, object_boundaries(labels))
+    with pytest.raises(ValueError, match="contact_mode"):
+        GeodesicHybridDistanceTransform(contact=True, contact_mode="edges")

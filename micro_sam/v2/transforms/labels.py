@@ -110,6 +110,27 @@ def touching_boundaries(labels: np.ndarray, radius: int = 1, dilation: int = 1) 
     return contact
 
 
+def object_boundaries(labels: np.ndarray, dilation: int = 1) -> np.ndarray:
+    """The inner boundaries of every object, to a neighbour and to the background alike.
+
+    The classical boundary target: ``find_boundaries(mode="inner")`` dilated by ``dilation`` pixels, so it is
+    defined identically on every object (a few percent of the pixels rather than the sub-percent contact class)
+    and coincides with the zero level set of the geodesic distance channels.
+
+    Args:
+        labels: The instance segmentation, 2d or 3d, any integer dtype.
+        dilation: The number of binary dilation passes applied to the boundary mask.
+
+    Returns:
+        The boolean boundary mask with the shape of ``labels``.
+    """
+    labels = np.asarray(labels).astype("int64")
+    boundary = find_boundaries(labels, mode="inner")
+    if dilation > 0 and boundary.any():
+        boundary = binary_dilation(boundary, iterations=dilation)
+    return boundary
+
+
 class DirectedPerObjectBoundaryDistanceTransform:
     """Per object directed distances with optional foreground, instance and contact channels.
 
@@ -125,6 +146,8 @@ class DirectedPerObjectBoundaryDistanceTransform:
         sampling: The voxel spacing for anisotropic data.
         contact: Whether to append the contact channel, the touching boundaries between objects.
         contact_dilation: The dilation of the contact lines in pixels, see :func:`touching_boundaries`.
+        contact_mode: What the contact channel holds: "touching" (the boundaries between touching objects,
+            :func:`touching_boundaries`) or "all" (the inner boundary of every object, :func:`object_boundaries`).
     """
     eps = 1e-7
 
@@ -137,7 +160,10 @@ class DirectedPerObjectBoundaryDistanceTransform:
         sampling: Optional[Tuple[float, ...]] = None,
         contact: bool = False,
         contact_dilation: int = 1,
+        contact_mode: str = "touching",
     ):
+        if contact_mode not in ("touching", "all"):
+            raise ValueError(f"Unknown contact_mode '{contact_mode}'; expected 'touching' or 'all'.")
         self.min_size = min_size
         self.distance_fill_value = 1
         self.foreground = foreground
@@ -146,6 +172,7 @@ class DirectedPerObjectBoundaryDistanceTransform:
         self.sampling = sampling
         self.contact = contact
         self.contact_dilation = contact_dilation
+        self.contact_mode = contact_mode
 
     def compute_normalized_directed_distances(self, labels, label_id, boundaries, bb, distances):
         """@private
@@ -226,7 +253,10 @@ class DirectedPerObjectBoundaryDistanceTransform:
 
         # Append the contact channel (touching boundaries) after the distances if specified.
         if self.contact:
-            contact = touching_boundaries(labels, radius=1, dilation=self.contact_dilation).astype("float32")
+            if self.contact_mode == "all":
+                contact = object_boundaries(labels, dilation=self.contact_dilation).astype("float32")
+            else:
+                contact = touching_boundaries(labels, radius=1, dilation=self.contact_dilation).astype("float32")
             distances = np.concatenate([distances, contact[None]], axis=0)
 
         # Add the foreground mask as first channel if specified.
