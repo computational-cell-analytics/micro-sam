@@ -52,6 +52,10 @@ VARIANTS: Dict[str, Dict] = {
     "contact": {"contact": True, "boundary_weight": None},
     "fgcal": {"contact": False, "boundary_weight": 4.0},
     "both": {"contact": True, "boundary_weight": 4.0},
+    # Second round (2026-09-07 evening): the fifth channel holds the full inner boundary of every object
+    # (contact_mode "all") instead of the touching boundaries only.
+    "boundary": {"contact": True, "contact_mode": "all", "boundary_weight": None},
+    "boundary_fgcal": {"contact": True, "contact_mode": "all", "boundary_weight": 4.0},
 }
 BOUNDARY_RADIUS = 2
 
@@ -421,7 +425,10 @@ def build_loaders(
     variant: str, data_root: str, batch_size: int, n_workers: int, val_workers: int, scale: float = 1.0,
 ):
     """The train and validation loaders of a variant plus the file manifest."""
-    label_transform = GeodesicHybridDistanceTransform(contact=VARIANTS[variant]["contact"])
+    settings = VARIANTS[variant]
+    label_transform = GeodesicHybridDistanceTransform(
+        contact=settings["contact"], contact_mode=settings.get("contact_mode", "touching"),
+    )
     train_leaves, val_leaves, manifest = build_datasets(data_root, label_transform, scale=scale)
     train_loader = _prepare_data_loader(ConcatDataset(*train_leaves), batch_size, shuffle=True, num_workers=n_workers)
     val_loader = _prepare_data_loader(

@@ -7,6 +7,7 @@
 # Outputs: <root>/ais/reports/decoders_final_{dev,holdout}{,_datasets,_mechanisms}.csv,
 #          <root>/ais/reports/decoders_final_3d*.csv, <root>/ais/reports/decoder_fields_<variant>*.csv
 set -o pipefail
+VARIANTS=${VARIANTS:-"baseline contact fgcal both"}  # override: VARIANTS="boundary boundary_fgcal" bash ...
 MAX_WAIT=${1:-32400}
 ROOT=/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization
 REPO=/mnt/vast-nhr/home/pape41/u12086/Work/my_projects/micro-sam
@@ -29,7 +30,7 @@ screens_done() {  # all tasks of the newest job dir of this name have a .done ma
 waited=0
 while true; do
     pending=""
-    for v in baseline contact fgcal both; do
+    for v in $VARIANTS; do
         for kind in screen2d screen3d; do
             screens_done "dec_${v}_${kind}" || pending="$pending dec_${v}_${kind}"
         done
@@ -42,16 +43,16 @@ done
 
 cd "$OPT"
 export MICRO_SAM2_JOINT_CHECKPOINT_ROOT=$ROOT/ais_decoder_training/staged
-$PY report_ais_decoders.py --variants baseline contact fgcal both --production-checkpoint "$V4" \
+$PY report_ais_decoders.py --variants $VARIANTS --production-checkpoint "$V4" \
     --configs current-defaults contact-ridge contact-mask --subsets primary training_extra --ndim 2 --epoch $EPOCH \
     --output "$ROOT/ais/reports/decoders_final_dev" 2>&1 | grep -v "Warning\|warnings.warn"
-$PY report_ais_decoders.py --variants baseline contact fgcal both --production-checkpoint "$V4" \
+$PY report_ais_decoders.py --variants $VARIANTS --production-checkpoint "$V4" \
     --configs current-defaults contact-ridge contact-mask --subsets holdout --ndim 2 --epoch $EPOCH \
     --output "$ROOT/ais/reports/decoders_final_holdout" 2>&1 | grep -v "Warning\|warnings.warn"
-$PY report_ais_decoders.py --variants baseline contact fgcal both --production-checkpoint "$V4" \
+$PY report_ais_decoders.py --variants $VARIANTS --production-checkpoint "$V4" \
     --configs current-defaults contact-ridge --kind apg3d --subsets primary holdout --ndim 3 --epoch $EPOCH \
     --output "$ROOT/ais/reports/decoders_final_3d" 2>&1 | grep -v "Warning\|warnings.warn"
-for v in baseline contact fgcal both; do
+for v in $VARIANTS; do
     [ -f "$ROOT/ais_decoder_training/staged/joint_sam2_hvit_t_multi_gpu/$v.pt" ] || continue
     $PY diagnose_decoder_fields.py --joint-checkpoint "$v" --subset primary training_extra --ndim 2 \
         --output "$ROOT/ais/reports/decoder_fields_$v.csv" 2>&1 | grep -v "Warning\|warnings.warn" | tail -14

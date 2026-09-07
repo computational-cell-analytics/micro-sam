@@ -5,6 +5,7 @@
 #
 #     bash launch_tuning_after_caches.sh [max_wait_seconds]
 set -o pipefail
+VARIANTS=${VARIANTS:-"baseline contact fgcal both"}  # override: VARIANTS="boundary boundary_fgcal" bash ...
 MAX_WAIT=${1:-32400}
 ROOT=/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization
 OPT=/mnt/vast-nhr/home/pape41/u12086/Work/my_projects/micro-sam/finetuning/v2/evaluation/optimization
@@ -33,7 +34,7 @@ wait_for() {  # wait_for <max seconds> <names...>
 cd "$OPT"
 declare -A launched
 while true; do
-    for v in baseline contact; do
+    for v in ${WAIT_VARIANTS:-baseline contact}; do
         [ -n "${launched[$v]}" ] && continue
         if tasks_done "dec_${v}_predict2d"; then
             echo "$(date +%H:%M) caches of $v ready, submitting sweeps"
@@ -41,7 +42,7 @@ while true; do
                 --grid configs/ais_grid_lm_v4.json --datasets $PRIMARY --num-shards 1 --extra "--joint-checkpoint $v"
             $PY ais_campaign_tasks.py sweep --name "dec_${v}_sweep_extra" --preset cpu --kind v5 --subsets training_extra \
                 --grid configs/ais_grid_lm_v4.json --datasets $EXTRA --num-shards 1 --extra "--joint-checkpoint $v"
-            if [ "$v" = "contact" ]; then
+            if [ "$v" = "contact" ] || [ "$v" = "boundary" ] || [ "$v" = "boundary_fgcal" ]; then
                 $PY ais_campaign_tasks.py screen --name "dec_${v}_contact_screen" --preset cpu --kind v5 \
                     --subsets primary training_extra holdout --no-defaults --configs $CONTACT_CONFIGS \
                     --extra "--joint-checkpoint $v --ndim 2"
@@ -49,15 +50,16 @@ while true; do
             launched[$v]=1
         fi
     done
-    [ -n "${launched[baseline]}" ] && [ -n "${launched[contact]}" ] && break
+    all_launched=1; for v in ${WAIT_VARIANTS:-baseline contact}; do [ -n "${launched[$v]}" ] || all_launched=0; done
+    [ "$all_launched" = 1 ] && break
     [ "$MAX_WAIT" -le 0 ] && { echo "$(date +%H:%M) gave up waiting for the caches"; break; }
     sleep 300; MAX_WAIT=$((MAX_WAIT - 300))
 done
 
 names=""
-for v in baseline contact fgcal both; do names="$names dec_${v}_sweep_primary dec_${v}_sweep_extra"; done
+for v in $VARIANTS; do names="$names dec_${v}_sweep_primary dec_${v}_sweep_extra"; done
 wait_for 14400 $names || true
-for v in baseline contact fgcal both; do
+for v in $VARIANTS; do
     tasks_done "dec_${v}_sweep_primary" && tasks_done "dec_${v}_sweep_extra" || { echo "sweeps of $v incomplete, skipping the ranking"; continue; }
     $PY report_ais_sweep.py --grid configs/ais_grid_lm_v4.json --subset primary training_extra --joint-checkpoint "$v" \
         --top 25 --output "$ROOT/ais/reports/dec_${v}_sweep_dev.csv" 2>&1 | grep -v "Warning\|warnings.warn" | tail -40
