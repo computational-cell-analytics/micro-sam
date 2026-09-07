@@ -29,12 +29,11 @@ the tables the chain writes and finishes the write-up:
 | 15776838 / 15776839 `ais_eval_<variant>` | `afterany` the training: stage, cache v5 primary / training_extra / holdout and apg3d primary / holdout, then the `current-defaults`, `contact-ridge` and `contact-mask` screens | ~06:00, screens ~07:00 |
 | 15777359 `ais_decoder_tuning2` | `afterany` both evaluations: waits for the 2d caches, submits the two grid sweeps (1728 combinations) and the eight-configuration contact screen per new variant, then ranks all six sweeps into `<rep>/dec_<variant>_sweep_dev.csv` | ~06:05, rankings ~11:00 |
 | 15777505 `ais_decoder_finalize_r2` | `afterany` both evaluations: submits the `dec-top1` screens of the two new decoders `afterok` their prediction jobs, waits for every round-2 screen (up to 8 h), then writes the overview tables and the field diagnostics | ~06:05, tables ~11:00-13:00 |
-| 15776127/28, 15776228/29 | the round-1 `baseline` / `contact` grid sweeps, 18 of 22 tasks left at 17:30, roughly serial at ~6 min | ~19:30 |
-| 15772853 `ais_decoder_tuning` | the round-1 launcher; ranks the `baseline` / `contact` sweeps if they finish before it gives up at 20:03 | 20:03 |
+| 15772853 `ais_decoder_tuning` | the round-1 launcher; its rankings are already written by hand (4.7), so it is now redundant | 20:03 |
 
-Round 1 is otherwise complete: `<rep>/decoders_{defaults,tuned,final}_*`, `decoders_final_3d*`,
-`decoder_fields_{production,baseline,contact,fgcal,both}*`. If `dec_baseline_sweep_dev.csv` /
-`dec_contact_sweep_dev.csv` are missing, `tuning2` writes them (it ranks all six variants); to do it by hand:
+**Round 1 is complete**: `<rep>/decoders_{defaults,tuned,final}_*`, `decoders_final_3d*`,
+`decoder_fields_{production,baseline,contact,fgcal,both}*` and all four `dec_<variant>_sweep_dev.csv`, written up
+in sections 4.1-4.7. The command that ranks a sweep, for the two new decoders should `tuning2` not get to it:
 
 ```bash
 cd <opt>; export MICRO_SAM2_JOINT_CHECKPOINT_ROOT=<root>/ais_decoder_training/staged
@@ -64,8 +63,10 @@ Read-outs:
    *and* at `dec-top1`. Round-1 numbers to beat: `contact` -4.7 % / -5.2 % (defaults), -4.2 % / -3.8 %
    (`dec-top1`); `both` -1.3 % / -1.9 % and +1.3 % / +1.8 %; `fgcal` +0.6 % / +1.1 % and +2.4 % / +1.7 %.
    Compare each decoder at its **own** sweep optimum too (4.7): baseline 0.4244 at `foreground_threshold` 0.4,
-   fgcal 0.4298 and both 0.4254 at 0.5, so fgcal's real advantage is +1.3 %, not +2.4 %. Check which threshold
-   the two boundary decoders want - it is the cleanest test of whether their foreground is calibrated.
+   fgcal 0.4298 and both 0.4254 at 0.5, contact 0.4083 at 0.6 - so fgcal is +1.3 %, both +0.2 % and contact
+   -3.8 % against baseline's own optimum. **Which threshold the two boundary decoders want is the cleanest test
+   of whether their foreground is calibrated**: 0.6 like `contact` means the extra task still inflates the
+   foreground, 0.4-0.5 means the full-boundary target does not.
 2. **Is the head confident now?** The round-1 contact head was precise but under-confident exactly on the
    datasets whose merges motivated it. `recall_touching` of the round-1 `contact` decoder (per-dataset medians):
    dynamicnuclearnet 0.72, yeaz 0.76, livecell 0.63, covid_if 0.59, tissuenet **0.19**, neurips **0.13**, puma
