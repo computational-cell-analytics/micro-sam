@@ -13,7 +13,8 @@ python = `micromamba activate new-stack`.
 **Nothing has to be submitted.** Round 2 is chained end to end (section 5.3 of the notes); the successor reads
 the tables the chain writes and finishes the write-up:
 
-1. Read the round-2 tables (section 3 below) and write them into **section 5.4** of `AIS_DECODER_TRAINING.md`.
+1. Read the round-2 tables (section 3 below) and write them into **section 5.5** of `AIS_DECODER_TRAINING.md` (5.4 already records what the ridge and
+   mask modes mean once the channel is a full boundary, and the signature to look for).
 2. Decide point 1.1 (the fifth channel) with the boundary target on the evidence, and update section 4.4 point 3
    if the verdict changes. The user's rule: only cross-dataset wins count - balanced mSA plus the gate
    (>= 9 / 11 up, worst > -2 %, balanced >= +2 %) against the fine-tuned `baseline` on dev, confirmed on the

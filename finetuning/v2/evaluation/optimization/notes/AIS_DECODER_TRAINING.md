@@ -561,3 +561,26 @@ step is chained with SLURM dependencies.
 `finalize_round2_reports.sh` is new (`finetuning/v2/generalist/ais_decoder/`); it replaces the manual "submit the
 `dec-top1` screens once the caches exist, then run the section 5 commands" step of the hand-over, so the
 successor only has to read the tables.
+
+### 5.4 What the two post-processing modes mean once the channel is a full boundary
+
+Both modes read the fifth channel unchanged (`micro_sam/v2/postprocessing.py`), but the target swap changes what
+they do, which is worth stating before the numbers arrive:
+
+- `contact_weight` adds `w * contact` to the watershed height map. With the touching target the ridge sits only
+  between two objects; with the full boundary it also runs along every object's rim to the background. The
+  watershed is masked to the foreground, so a rim ridge mostly sits at the mask border and should be close to
+  inert - except that the target is dilated by one pixel, so the ridge reaches one pixel *inside* the object and
+  can shave structures only a few pixels wide (deepbacs rods, dic_hepg2 filaments).
+- `contact_mask_threshold` excludes `contact > t` from the first seeded watershed and lets the instances claim
+  those pixels afterwards. With a full boundary this is no longer "keep the contact line free" but the classical
+  *erode, flood, dilate back* scheme: the first watershed runs on objects eroded by ~3 pixels. That should help
+  wherever objects touch, and it is the mode that was inert in round 1 only because the head rarely exceeded
+  0.5 - a confident boundary head makes it active for the first time. The risk is the same one: an object thinner
+  than twice the band loses its interior entirely and can end up unseeded.
+
+So the expected signature of the boundary channel, if it works, is: mask mode finally moving the score, the
+merge share falling on livecell / tissuenet / neurips, and a *new* kind of loss on the thin-object datasets -
+which the mechanism columns separate (`seeded_split` and `gt_with_0_seeds` rather than `seeded_merged`). Both
+modes are screened at 0.5 / 1 / 2 / 4 and 0.3 / 0.5 / 0.7 for each new decoder, so this is testable rather than
+argued.
