@@ -282,4 +282,39 @@ Holdout per dataset (fgcal top1 / both top1 + ridge): deepbacs 0.389 / 0.340, di
 contact ridge removes for both without changing mSA; the shared configuration trades livecell / tissuenet for deepbacs
 / dic_hepg2 (the 6 / 11 "up" of the sweep). The isolating pairs against baseline and contact are pending.
 
+`baseline` finished at 15:42 after 12.87 h on a 3g.40gb slice (48000 iterations, best epoch 75 of 76, peak 14.1 GiB);
+`contact` at 15:50 after 12.97 h. Their chains (staging, caches, default and contact screens), the finalisation job
+and the launcher's sweeps follow automatically; the shared tuned configuration `dec-top1` is screened for baseline
+(job dec_baseline_top_screen) and contact as well, so all four decoders can be read at the same tuned setting.
+
+### 4.1 The isolating comparison under the library defaults (16:05; contact pending)
+
+Reference = the fine-tuned `baseline` (same data, budget, initialisation; checkpoint under `staged/baseline.pt`):
+
+| decoder | dev balanced (11) | vs baseline | up / worst | holdout balanced (5) | vs baseline | up / worst | seeded merges dev / holdout |
+|---|---:|---:|---|---:|---:|---|---|
+| production | 0.3437 | -17.1 % | 2 / 11, dic_hepg2 -98 % | 0.2437 | -37.4 % | 0 / 5 | 13.3 % / 16.7 % |
+| baseline | 0.4145 | - | - | 0.3894 | - | - | 8.1 % / 8.8 % |
+| fgcal | 0.4170 | +0.6 % | 6 / 11, dic_hepg2 -8.8 % | 0.3938 | +1.1 % | 4 / 5, deepbacs -5.0 % | 8.3 % / 8.7 % |
+| both | 0.4090 | -1.3 % | 7 / 11, deepseas -49 % | 0.3819 | -1.9 % | 3 / 5, dic_hepg2 -24 % | 6.3 % / 7.0 % |
+| both + contact ridge 1 | 0.4096 | -1.2 % | 7 / 11 | 0.3819 | -1.9 % | 3 / 5 | 4.2 % / 4.8 % |
+
+Per dataset against baseline (dev): fgcal livecell 0.0 %, tissuenet +3.0 %, neurips +5.8 %, puma +4.4 %, yeaz +4.0 %,
+dnn +0.7 %, deepbacs -5.0 %, dic_hepg2 -8.8 %, tnbc -2.3 %, covid_if -4.5 %, deepseas +11 %; both livecell +4.6 %,
+tissuenet +6.6 %, neurips +13.7 %, yeaz +3.6 %, puma +2.8 %, tnbc +2.2 %, dnn +0.5 %, deepbacs -16.4 %, dic_hepg2
+-28.6 %, covid_if -6.9 %, deepseas -48.6 %. Holdout: fgcal deepbacs -5.0 %, dic_hepg2 +7.5 %, dnn +1.4 %, livecell
++0.4 %, tissuenet +5.0 %; both deepbacs -16.4 %, dic_hepg2 -23.7 %, dnn +1.7 %, livecell +5.3 %, tissuenet +10.6 %.
+
+Reading:
+1. Almost the entire gain over the production decoder (+21 % dev, +60 % holdout) is the decoder fine-tune on the
+   tuning datasets' train splits, with the unchanged loss. The fine-tuned baseline already cuts merges from 13 % to
+   8 % of the objects and moves the foreground area ratio to ~1 on most datasets (deepbacs 1.76 -> 1.19).
+2. The boundary-weighted foreground loss (point 4.1) adds +0.6 % / +1.1 % balanced, on 6 / 11 and 4 / 5 datasets,
+   with a -5 to -9 % loss on deepbacs or dic_hepg2; the foreground area ratio and the merge share are unchanged
+   against baseline (tissuenet under-coverage 0.71 -> 0.75). It fails the generalization gate.
+3. The contact channel (point 1.1, here on top of fgcal) is a strong, dataset-dependent lever: +5 to +14 % on the
+   touching-cell datasets (livecell, tissuenet, neurips) with the merge share down to 6 % (4 % with the ridge), but
+   -16 % on deepbacs and -24 to -29 % on dic_hepg2, so the balanced score is 1-2 % below baseline. The contact-vs-
+   baseline pair (pending) separates the channel from the fgcal loss it was stacked on.
+
 (to be filled when the trainings have finished)
