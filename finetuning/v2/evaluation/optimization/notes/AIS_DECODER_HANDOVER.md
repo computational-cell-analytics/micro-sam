@@ -1,6 +1,7 @@
 # Hand-over: AIS decoder campaign, round 2 (full-boundary channel) - reading the results
 
-Written 2026-09-07 18:00 for the successor session, replacing the 17:00 version. Everything is committed on
+Written 2026-09-07 18:00, state refreshed 21:35 when the session was stopped on purpose so a later one can
+watch the trainings land (they finish ~40 min after that session's 12 h job would have ended). Everything is committed on
 branch `ais-train-optim`. Read first: `AIS_DECODER_TRAINING.md` - sections 4.0-4.4 hold round 1, **4.5** the
 round-1 completions, **4.7** the sweep optima (which revise 4.4), **5.1-5.3** the round-2 launch and the chain. Memory note `ais-decoder-campaign-state`.
 `<root>` = `/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization`,
@@ -21,11 +22,25 @@ the tables the chain writes and finishes the write-up:
    holdout. No per-dataset fits.
 3. Write the conclusive overview of all six decoders (**section 6**), update the memory note, commit.
 
-## 2. State at hand-over
+## 2. State when the session was stopped (2026-09-07 21:35)
+
+**First command on resume** - if the trainings are gone from `squeue`, check how they ended before reading
+anything, because `afterany` runs the evaluation on whatever `best.pt` exists:
+
+```bash
+sacct -j 15776831,15776833,15776838,15776839,15777359,15777505 -X \
+      -o JobID,JobName%26,Start,Elapsed,State,ExitCode
+squeue -u $USER -h -o "%i %j %T %M %R" | sort -k2
+```
+`COMPLETED` after ~12.6 h = the full 48000 iterations. `TIMEOUT` or `PREEMPTED` = a short run; say so in the
+write-up and check `best.pt`'s epoch in `<camp>/logs/slurm/ais_decoder_<variant>_<job>.err`. A preempted job
+requeues from iteration 0 (`Requeue=1`) and cannot finish inside its window - that needs a decision, not a rerun.
+
+## 2b. The chain
 
 | job | what | expected |
 |---|---|---|
-| 15776831 `boundary`, 15776833 `boundary_fgcal` | the two trainings, 48000 iterations at 1.08 it/s on 3g.40gb slices (ggpu158 / ggpu192), started 17:16 | done 05:30-06:00, wall limit 07:16 |
+| 15776831 `boundary` (ggpu158), 15776833 `boundary_fgcal` (ggpu192) | the two trainings; at 21:29 they were at 15841 / 15673 of 48000 iterations, 1.05 it/s including validation | `boundary` ~05:45, `boundary_fgcal` ~05:49; SLURM wall limit 07:15:50 |
 | 15776838 / 15776839 `ais_eval_<variant>` | `afterany` the training: stage, cache v5 primary / training_extra / holdout and apg3d primary / holdout, then the `current-defaults`, `contact-ridge` and `contact-mask` screens | ~06:00, screens ~07:00 |
 | 15777359 `ais_decoder_tuning2` | `afterany` both evaluations: waits for the 2d caches, submits the two grid sweeps (1728 combinations) and the eight-configuration contact screen per new variant, then ranks all six sweeps into `<rep>/dec_<variant>_sweep_dev.csv` | ~06:05, rankings ~11:00 |
 | 15777505 `ais_decoder_finalize_r2` | `afterany` both evaluations: submits the `dec-top1` screens of the two new decoders `afterok` their prediction jobs, waits for every round-2 screen (up to 8 h), then writes the overview tables and the field diagnostics | ~06:05, tables ~11:00-13:00 |
