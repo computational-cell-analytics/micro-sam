@@ -145,4 +145,29 @@ contact 0.933, 0.799, 0.762, 0.764, 0.733, 0.724 (the fresh contact head dominat
 0.450, 0.434, 0.438, 0.428, 0.414, 0.410, 0.410, 0.405, 0.414, 0.402 (eleven epochs); both 1.149, 1.071, 1.017,
 1.041, 1.008, 0.983, 0.979, 0.965, 0.950. All four decrease; none has plateaued yet.
 
+`fgcal` finished at 09:19 after 6.43 h (48000 iterations, peak 14.1 GiB allocated / 21.2 GiB reserved on an
+A100-40GB; best epoch 64 of 76, validation loss 0.367); its evaluation chain (predict arrays 15772069 / 15772070,
+screens 15772071 / 15772072) started at 09:21.
+
+### 4.0 Preliminary: `fgcal` against the production decoder (09:35, before the fine-tuned baseline exists)
+
+`current-defaults`, epoch A5, checkpoint `dd52aee4...` vs production `5a729846...`:
+
+| set | production | fgcal | up | worst | merged + absorbed (object-weighted) | unseeded | fg area ratio (mean over datasets) |
+|---|---:|---:|---|---|---|---|---|
+| dev (11) | 0.3437 | 0.4170 (+21.3 %) | 9 / 11 | covid_if -35.9 %, deepseas -25.8 % | 25.2 % -> 17.5 % | 20.7 % -> 14.1 % | see below |
+| holdout (5) | 0.2437 | 0.3938 (+61.6 %) | 5 / 5 | tissuenet +19.0 % | 29.4 % -> 17.9 % | 20.4 % -> 14.5 % | |
+
+Per dataset (dev): livecell 0.277 -> 0.365, tissuenet 0.224 -> 0.263, dynamicnuclearnet 0.545 -> 0.831, deepbacs
+0.181 -> 0.326, dic_hepg2 0.003 -> 0.174, neurips 0.226 -> 0.295, yeaz 0.616 -> 0.819, puma 0.469 -> 0.536, tnbc
+0.368 -> 0.405, covid_if 0.740 -> 0.474, deepseas 0.134 -> 0.099. Merged + absorbed: livecell 36.9 -> 21.9 %,
+tissuenet 25.6 -> 13.7 %, deepbacs 23.2 -> 9.8 %, neurips 28.0 -> 30.8 %. Foreground area ratio at 0.5: deepbacs
+1.76 -> 1.25, livecell 1.11 -> 1.06, dynamicnuclearnet 0.92 -> 1.02, tissuenet 0.87 -> 0.75 (more under-coverage),
+covid_if 1.05 -> 1.30, puma / tnbc / yeaz ~1.0 in both.
+
+Reading: the two datasets that lose are exactly the two the fine-tuned decoders never saw (covid_if, deepseas),
+and dic_hepg2 / dynamicnuclearnet / yeaz (never in the joint training) gain the most, so this comparison mostly
+measures "12 h of decoder fine-tuning on the tuning datasets' train splits", not the boundary-weighted loss.
+The isolating comparison is against the fine-tuned `baseline` (same data, same budget), pending.
+
 (to be filled when the trainings have finished)
