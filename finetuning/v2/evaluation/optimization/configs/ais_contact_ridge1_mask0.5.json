@@ -1,0 +1,1 @@
+{"name": "contact-ridge1-mask0.5", "params_2d": {"contact_weight": 1.0, "contact_mask_threshold": 0.5}, "params_3d": {"contact_weight": 1.0, "contact_mask_threshold": 0.5}}
