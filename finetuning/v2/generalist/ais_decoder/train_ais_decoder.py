@@ -15,6 +15,7 @@ import sys
 import time
 
 import torch
+import torch.multiprocessing
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ais_decoder_lib as lib  # noqa: E402
@@ -101,6 +102,10 @@ def main():
     args = parse_args()
     if args.iterations is None and args.smoke is None:
         raise SystemExit("Pass --iterations or --smoke.")
+    # Python 3.14 starts worker processes through a fork server by default; every loader worker then re-imports
+    # the whole environment (30-60 s each, serialised) and the validation workers do so every epoch. Forking
+    # copies the parent instead; the workers never touch CUDA, so forking after the model was built is safe.
+    torch.multiprocessing.set_start_method("fork", force=True)
     torch.set_num_threads(2)
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     name = args.name or (f"smoke_{args.variant}" if args.smoke else f"ais_decoder_{args.variant}")

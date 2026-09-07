@@ -100,6 +100,15 @@ done within about 12 h: `baseline` and `contact` on the free `3g.40gb` slices (`
 ~0.4 s per iteration, ~6 h), `both` submitted last with `--dependency=after` on the other three. 48000
 iterations x 8 = 384k samples = 76 epochs of the 5080-sample epoch; the hardware only changes the wall time.
 
+First submission (jobs 15769310-13, 01:26): all four died with exit 139 within 3-11 min of training. Two
+causes, both fixed before the resubmission: (1) Python 3.14 starts DataLoader workers through a fork server,
+so every worker re-imported the environment (30-60 s each, serialised; the two 3g jobs spent nine minutes
+before their first iteration, and the non-persistent validation workers would have paid it every epoch) -
+`train_ais_decoder.py` now forces the fork start method; (2) a 512^2 zarr file with fewer than three objects
+makes torch_em's `MinInstanceSampler` reject the same crop 500 times and raise, which ended the run
+(`RandomSubsetDataset` now redraws another file, `FixedSubsetDataset` does the same for validation, and both
+wrap every dataset; torch_em's image-collection datasets already rotate images after 50 failed crops).
+
 ## 4. Results
 
 (to be filled)

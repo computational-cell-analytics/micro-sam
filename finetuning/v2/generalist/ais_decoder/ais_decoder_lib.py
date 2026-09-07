@@ -159,24 +159,67 @@ def build_model(variant: str, device, unetr_state: Optional[Dict[str, torch.Tens
 # data
 
 
+def _is_sampler_failure(error: Exception) -> bool:
+    """torch_em raises this when the min-instance sampler rejects every crop of a file (a 512^2 file with fewer
+    than three objects can never pass), which must not end the training."""
+    return "Could not sample a valid batch" in str(error)
+
+
 class RandomSubsetDataset(torch.utils.data.Dataset):
-    """A fixed number of random draws from a dataset.
+    """A fixed number of random draws from a dataset, redrawing when a file cannot satisfy the sampler.
 
     torch_em splits 'n_samples' uniformly over the files of a segmentation dataset, so a small sample count
-    over many files would only ever read the first files. This wrapper draws a random index per access
-    instead. It exposes 'datasets' so the normalization configuration recurses into the wrapped dataset.
+    over many files would only ever read the first files, and it retries the same file when the sampler
+    rejects its crops. This wrapper draws a random index per access and moves on to another file when the
+    sampler gives up. It exposes 'datasets' so the normalization configuration recurses into the wrapped dataset.
     """
 
-    def __init__(self, dataset, n_samples: int):
+    def __init__(self, dataset, n_samples: int, max_draws: int = 50):
         self.datasets = (dataset,)
         self.n_samples = int(n_samples)
+        self.max_draws = int(max_draws)
         self.ndim = getattr(dataset, "ndim", 2)
 
     def __len__(self):
         return self.n_samples
 
     def __getitem__(self, index):
-        return self.datasets[0][np.random.randint(len(self.datasets[0]))]
+        dataset = self.datasets[0]
+        last_error = None
+        for _ in range(self.max_draws):
+            try:
+                return dataset[np.random.randint(len(dataset))]
+            except RuntimeError as error:
+                if not _is_sampler_failure(error):
+                    raise
+                last_error = error
+        raise RuntimeError(f"No valid sample in {self.max_draws} random draws.") from last_error
+
+
+class FixedSubsetDataset(torch.utils.data.Dataset):
+    """The first 'n_samples' indices of a dataset, falling back to the following index when the sampler
+    rejects a file. Deterministic (validation), like `UniDataWrapper(max_samples=...)` but robust."""
+
+    def __init__(self, dataset, n_samples: int, max_draws: int = 50):
+        self.datasets = (dataset,)
+        self.n_samples = min(int(n_samples), len(dataset))
+        self.max_draws = int(max_draws)
+        self.ndim = getattr(dataset, "ndim", 2)
+
+    def __len__(self):
+        return self.n_samples
+
+    def __getitem__(self, index):
+        dataset = self.datasets[0]
+        last_error = None
+        for offset in range(self.max_draws):
+            try:
+                return dataset[(index + offset) % len(dataset)]
+            except RuntimeError as error:
+                if not _is_sampler_failure(error):
+                    raise
+                last_error = error
+        raise RuntimeError(f"No valid sample in {self.max_draws} consecutive files from index {index}.") from last_error
 
 
 def _sorted_pairs(raw_paths: Sequence[str], label_paths: Sequence[str]) -> Tuple[List[str], List[str]]:
@@ -205,7 +248,7 @@ def _common_kwargs(label_transform, sampler=None):
 
 
 def _image_dataset(raw_paths, label_paths, kwargs, raw_transform, n_samples):
-    """Image / label file pairs (tif, png, ...); torch_em draws a random file per sample when n_samples is set."""
+    """Image / label file pairs (tif, png, ...); the subset wrappers draw the files, so n_samples stays None."""
     return torch_em.default_segmentation_dataset(
         raw_paths=raw_paths, raw_key=None, label_paths=label_paths, label_key=None, is_seg_dataset=False,
         raw_transform=raw_transform, n_samples=n_samples, **kwargs,
@@ -223,13 +266,11 @@ def _container_dataset(paths, raw_key, label_key, kwargs, raw_transform, with_ch
     )
 
 
-def _wrap(dataset, n_samples: Optional[int], is_val: bool, randomise: bool):
-    """Training leaves draw 'n_samples' random samples per epoch; validation leaves read their first samples."""
-    if is_val:
-        return UniDataWrapper(dataset, source_ndim=2, max_samples=n_samples)
-    if randomise:
-        return UniDataWrapper(RandomSubsetDataset(dataset, n_samples), source_ndim=2)
-    return UniDataWrapper(dataset, source_ndim=2)
+def _wrap(dataset, n_samples: int, is_val: bool):
+    """Training leaves draw 'n_samples' random samples per epoch; validation leaves read their first samples.
+    Both skip files the sampler cannot satisfy instead of ending the run."""
+    subset = FixedSubsetDataset(dataset, n_samples) if is_val else RandomSubsetDataset(dataset, n_samples)
+    return UniDataWrapper(subset, source_ndim=2)
 
 
 def _train_count(name: str, scale: float) -> int:
@@ -263,12 +304,11 @@ def build_datasets(
         train_labels, val_labels = split_tail(labels)
         this_kwargs = kwargs if sampler_kwargs is None else _common_kwargs(label_transform, **sampler_kwargs)
         train_leaves.append(_wrap(
-            _image_dataset(train_raw, train_labels, this_kwargs, raw_transform, _train_count(count_name, scale)),
-            None, is_val=False, randomise=False,
+            _image_dataset(train_raw, train_labels, this_kwargs, raw_transform, None),
+            _train_count(count_name, scale), is_val=False,
         ))
         val_leaves.append(_wrap(
             _image_dataset(val_raw, val_labels, this_kwargs, raw_transform, None), _val_count(count_name), is_val=True,
-            randomise=False,
         ))
         record(name, train_raw, val_raw)
 
@@ -280,11 +320,11 @@ def build_datasets(
         train_paths, val_paths = split_tail(paths)
         train_leaves.append(_wrap(
             _container_dataset(train_paths, raw_key, label_key, kwargs, raw_transform, with_channels, patch_shape),
-            _train_count(count_name, scale), is_val=False, randomise=True,
+            _train_count(count_name, scale), is_val=False,
         ))
         val_leaves.append(_wrap(
             _container_dataset(val_paths, raw_key, label_key, kwargs, raw_transform, with_channels, patch_shape),
-            _val_count(count_name), is_val=True, randomise=False,
+            _val_count(count_name), is_val=True,
         ))
         record(name, train_paths, val_paths)
 
@@ -358,7 +398,7 @@ def build_datasets(
             )
             leaves = val_leaves if is_val else train_leaves
             count = _val_count(name) if is_val else _train_count(name, scale)
-            leaves.append(_wrap(dataset, count, is_val, randomise=True))
+            leaves.append(_wrap(dataset, count, is_val))
         record(name, train_raw, val_raw)
 
     # 8. PUMA nuclei (rgb h5).
