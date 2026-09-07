@@ -170,4 +170,19 @@ and dic_hepg2 / dynamicnuclearnet / yeaz (never in the joint training) gain the 
 measures "12 h of decoder fine-tuning on the tuning datasets' train splits", not the boundary-weighted loss.
 The isolating comparison is against the fine-tuned `baseline` (same data, same budget), pending.
 
+Field diagnostics (`diagnose_decoder_fields.py`, dev caches, per-dataset medians; `ais/reports/decoder_fields_{fgcal,production}.csv`):
+
+| quantity | production | fgcal |
+|---|---|---|
+| distance magnitude in the background | 0.83-0.86 on every dataset (the label fill value) | 0.03-0.05 |
+| magnitude at ground-truth contact pixels | 0.10-0.29 | 0.04-0.11 |
+| flow cosine across a contact, +-1 px | 0.63 (tissuenet), 0.71 (dnn), 0.77 (yeaz), 0.88 (livecell) | 0.44, 0.47, 0.37, 0.88 |
+| flow cosine across a contact, +-3 px | -0.58, -0.55, -0.52, -0.15 | -0.70, -0.72, -0.85, -0.34 |
+| fg IoU at 0.5 (median) | livecell 0.84, dnn 0.78, deepbacs 0.66, neurips 0.65, tissuenet 0.76, covid_if 0.92 | 0.88, 0.93, 0.78, 0.74, 0.74, 0.77 |
+| fg area ratio at 0.5 (median) | deepbacs 1.49, dic_hepg2 0.10, dnn 0.90, tissuenet 0.91, covid_if 1.05 | 1.13, 1.04, 1.01, 0.79, 1.28 |
+
+The background magnitude change matters for `boundary_magnitude_max`: the filter assumes a false region's
+boundary runs through magnitude ~1; with ~0 in the background it no longer discriminates. Contact flips are
+sharper but not negative at +-1 px. Attribution (fine-tuning vs the boundary loss) waits for the baseline.
+
 (to be filled when the trainings have finished)
