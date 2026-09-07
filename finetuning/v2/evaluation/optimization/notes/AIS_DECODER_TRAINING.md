@@ -402,8 +402,14 @@ merge share of the four-channel decoders from 8 % to 13 %; the contact ridge is 
    weight 0.75 (+1.3 to +3.1 % over the current defaults, 6-9 of 11 up, worst -5 to -8 %); the production defaults
    are no longer the right regime for such decoders, and `boundary_magnitude_max` loses its premise.
 
-(sweep rankings of baseline and contact, the 3D tables of all four and the unattended finalisation outputs are
-appended below when they land)
+**Revised by 4.7 (18:15), once baseline had its own sweep:** point 2's "+2.4 % at the tuned setting" is measured
+at `dec-top1`, which is fgcal's optimum and 1 % below baseline's own (baseline wants `foreground_threshold` 0.4,
+fgcal and both 0.5). At each decoder's own optimum the boundary-weighted foreground loss is worth **+1.3 %**, and
+its mechanism is the threshold calibration, not the merge share. Point 4's "the tuned optimum moves to density 50
+and sigma 0.5" holds for the loss-changed decoders only; baseline keeps the production density 10 / sigma 1.0 and
+only lengthens the travel.
+
+(the 3D tables of all four and the unattended finalisation outputs are in 4.5, the sweep rankings in 4.7)
 
 ### 4.5 Round-1 completions: the 3D table of all four, the field diagnostics, the mask mode (17:25)
 
@@ -490,6 +496,37 @@ is the number to look at.
 and neurips (2.3-12) dominate it because their crops carry few or tiny ground-truth objects. The per-dataset
 column of `*_mechanisms.csv` is the readable one (baseline / fgcal / contact / both on deepbacs 1.19 / 1.25 /
 1.40 / 1.25, tissuenet 0.71 / 0.75 / 0.77 / 0.74, dic_hepg2 1.04 / 1.11 / 1.16 / 1.12).
+
+### 4.7 Each decoder at its own sweep optimum, and the foreground threshold (18:15)
+
+The sweep rankings (`ais/reports/dec_<variant>_sweep_dev.csv`, 1728 combinations, cached scorer, reference =
+that decoder's library defaults) reproduce the screened full-pipeline runs to better than 0.05 %: baseline at
+threshold 0.5 / density 50 / sigma 0.5 scores 0.4202 in the sweep against 0.4200 screened, fgcal 0.4298 against
+0.4298, both 0.4254 against 0.4254. The sweep numbers below are therefore comparable to sections 4.2 / 4.3.
+
+| decoder | own optimum (dev balanced) | gain over its defaults | n_up | worst | fg threshold | density / sigma |
+|---|---:|---:|---|---|---:|---|
+| baseline | 0.4244 | +2.4 % | 9 / 11 | -9.1 % | **0.4** | 10 / 1.0 |
+| fgcal | 0.4298 | +3.1 % | 6 / 11 | -6.4 % | 0.5 | 50 / 0.5 |
+| both | 0.4254 | +4.0 % | 8 / 11 | -8.2 % | 0.5 | 50 / 0.5 |
+
+All three want the long travel (`n_iter` 800, `dt` 0.5), `foreground_weight` 0.75 and `min_size` 50; none passes
+the gate; `boundary_magnitude_max` is irrelevant everywhere (0.4, 0.6 and off are within 0.001).
+
+Two things this changes:
+
+1. **The boundary-weighted foreground loss does calibrate the foreground, and the shared configuration hid it in
+   the opposite direction.** Every one of baseline's top 20 rows uses `foreground_threshold` 0.4; at 0.5 it only
+   reaches 0.4202 (+1.4 %). fgcal and both peak at 0.5. So the plain decoder needs its threshold lowered by a
+   tenth to reach its best, the boundary-calibrated ones are optimal at the natural 0.5 - which is exactly what
+   point 4.1 claims and what the area-ratio column was too coarse to show. Section 4.3 compared all four at
+   `dec-top1` (threshold 0.5), i.e. at fgcal's optimum and 1 % below baseline's, so the +2.4 % it reports for
+   fgcal is really **+1.3 %** (0.4298 against baseline's own 0.4244). Point 4.1 is a real but smaller effect,
+   and its mechanism is the threshold, not the merge share.
+2. **The "tuned regime moved" conclusion (4.4 point 4) is a property of the loss-changed decoders.** baseline's
+   optimum keeps the production density (10) and sigma (1.0) and only lengthens the travel; fgcal and both move
+   to density 50 / sigma 0.5. So the shift to "few, converged seeds" comes with the changed foreground, not with
+   decoder fine-tuning as such.
 
 ## 5. Round 2: the proper boundary channel (2026-09-07)
 

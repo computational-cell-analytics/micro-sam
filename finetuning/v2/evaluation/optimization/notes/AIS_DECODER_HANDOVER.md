@@ -2,7 +2,7 @@
 
 Written 2026-09-07 18:00 for the successor session, replacing the 17:00 version. Everything is committed on
 branch `ais-train-optim`. Read first: `AIS_DECODER_TRAINING.md` - sections 4.0-4.4 hold round 1, **4.5** the
-round-1 completions, **5.1-5.3** the round-2 launch and the chain. Memory note `ais-decoder-campaign-state`.
+round-1 completions, **4.7** the sweep optima (which revise 4.4), **5.1-5.3** the round-2 launch and the chain. Memory note `ais-decoder-campaign-state`.
 `<root>` = `/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization`,
 `<camp>` = `<root>/ais_decoder_training`, `<opt>` = `finetuning/v2/evaluation/optimization`,
 `<dec>` = `finetuning/v2/generalist/ais_decoder`, `<rep>` = `<root>/ais/reports`,
@@ -63,6 +63,9 @@ Read-outs:
 1. **The gate.** Balanced mSA and the gate against `baseline` on dev, confirmed on the holdout, at the defaults
    *and* at `dec-top1`. Round-1 numbers to beat: `contact` -4.7 % / -5.2 % (defaults), -4.2 % / -3.8 %
    (`dec-top1`); `both` -1.3 % / -1.9 % and +1.3 % / +1.8 %; `fgcal` +0.6 % / +1.1 % and +2.4 % / +1.7 %.
+   Compare each decoder at its **own** sweep optimum too (4.7): baseline 0.4244 at `foreground_threshold` 0.4,
+   fgcal 0.4298 and both 0.4254 at 0.5, so fgcal's real advantage is +1.3 %, not +2.4 %. Check which threshold
+   the two boundary decoders want - it is the cleanest test of whether their foreground is calibrated.
 2. **Is the head confident now?** The round-1 contact head was precise but under-confident exactly on the
    datasets whose merges motivated it. `recall_touching` of the round-1 `contact` decoder (per-dataset medians):
    dynamicnuclearnet 0.72, yeaz 0.76, livecell 0.63, covid_if 0.59, tissuenet **0.19**, neurips **0.13**, puma
