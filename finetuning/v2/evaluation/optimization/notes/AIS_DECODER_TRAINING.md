@@ -248,4 +248,11 @@ different regime from the production defaults (travel 25, density 10, sigma 1.0)
 converges to sinks (magnitude ~0 in the background, sharper flips). Confirmation of the top-1 and the density-20
 variant on dev + holdout: `configs/ais_dec_fgcal_top{1,10}.json`, job dec_fgcal_top_screen.
 
+both sweep ranked (12:35, `ais/reports/dec_both_sweep_dev.csv`, contact terms not part of the cached sweep): best
+shared configuration 0.4254 (+4.0 % over its defaults 0.4090, 8 / 11 up, worst -8.2 %), the same regime as fgcal
+(travel 800, density 50, sigma 0.5, foreground weight 0.75, min_size 50). At the tuned shared setting fgcal stays
+1 % ahead of both on the development set (0.4298 vs 0.4254). Screens of this shared top configuration alone and
+with the contact terms (ridge 1; ridge 2 + mask 0.3) on dev + holdout for both: `configs/ais_dec_top1*.json`,
+job dec_both_top_screen.
+
 (to be filled when the trainings have finished)
