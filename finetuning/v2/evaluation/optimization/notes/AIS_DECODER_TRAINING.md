@@ -264,4 +264,22 @@ to 4.7 % on holdout) with no change in unseeded objects - but the recovered obje
 with these decoders the contact channel is not where the remaining mSA is (merges are down from 13 % to 6 % of the
 objects already by the fine-tuning).
 
+Tuned comparison of the two finished decoders (13:40, `ais/reports/dec_tuned_prelim_{primary_training_extra,holdout}*.csv`;
+`dec-top1` = travel 800, density 50, sigma 0.5, fw 0.75, min_size 50, filter 0.4, the shared optimum of both sweeps):
+
+| configuration | dev balanced (11) | holdout balanced (5) | holdout seeded merges |
+|---|---:|---:|---:|
+| production, defaults | 0.3437 | 0.2437 | 16.7 % |
+| fgcal, defaults | 0.4170 | 0.3938 | 8.7 % |
+| fgcal, dec-top1 | 0.4298 | 0.4094 | 10.9 % |
+| both, defaults | 0.4090 | 0.3819 | 7.0 % |
+| both, dec-top1 | 0.4254 | 0.4098 | 8.9 % |
+| both, dec-top1 + contact ridge 1 | 0.4271 | 0.4113 | 4.5 % |
+
+Holdout per dataset (fgcal top1 / both top1 + ridge): deepbacs 0.389 / 0.340, dic_hepg2 0.226 / 0.250, dynamicnuclearnet
+0.822 / 0.825, livecell 0.355 / 0.382, tissuenet 0.255 / 0.261. Reading: at tuned settings the two decoders are within
+0.5 % of each other on the holdout; the tuned regime (few, converged seeds) brings merges back for fgcal, which the
+contact ridge removes for both without changing mSA; the shared configuration trades livecell / tissuenet for deepbacs
+/ dic_hepg2 (the 6 / 11 "up" of the sweep). The isolating pairs against baseline and contact are pending.
+
 (to be filled when the trainings have finished)
