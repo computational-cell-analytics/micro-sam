@@ -139,4 +139,10 @@ decoder `5a729846...` is the second reference, epoch A5 runs):
   at contacts vs interior, foreground area ratio at threshold 0.5.
 - 4.5 Training curves: validation loss per variant (TensorBoard under `<root>/ais_decoder_training/logs/`).
 
+Training curves at 03:55 (validation loss per epoch of 635 iterations, loss = metric of each variant, so the
+values are not comparable across variants): baseline 0.180, 0.174, 0.166, 0.166, 0.162, 0.157 (six epochs);
+contact 0.933, 0.799, 0.762, 0.764, 0.733, 0.724 (the fresh contact head dominates the early loss); fgcal 0.493,
+0.450, 0.434, 0.438, 0.428, 0.414, 0.410, 0.410, 0.405, 0.414, 0.402 (eleven epochs); both 1.149, 1.071, 1.017,
+1.041, 1.008, 0.983, 0.979, 0.965, 0.950. All four decrease; none has plateaued yet.
+
 (to be filled when the trainings have finished)
