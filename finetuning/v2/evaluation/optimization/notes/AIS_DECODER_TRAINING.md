@@ -118,8 +118,25 @@ rejection rates of the container datasets: yeaz phase-contrast stack frames 9/29
 dynamicnuclearnet 0/120, tissuenet 0/60, puma 0/40, tnbc 0/34 - the sparse yeaz frames were the trigger.
 
 Second submission (02:47): `baseline` 15769606 and `contact` 15769607 on `3g.40gb` (started at once, both on
-ggpu158), `fgcal` 15769609 on `grete:shared` A100, `both` 15769611 after the three.
+ggpu158), `fgcal` 15769609 on `grete:shared` A100 (started 02:52 on ggpu114 after five minutes in the queue),
+`both` 15769611 after the three. Measured speed on a 3g.40gb slice: 1.08 iterations/s at batch 8, so 48000
+iterations take about 12.8 h (finish ~15:40). The evaluation is chained by SLURM: `ais_eval_<variant>` jobs
+15769618-15769621 run `finetuning/v2/generalist/ais_decoder/evaluate_ais_decoder.sh <variant> best` after their
+training succeeds (stage, predict v5 primary / training_extra / holdout and apg3d primary / holdout, then the
+`current-defaults` runs plus `contact-ridge` / `contact-mask` for the five-channel decoders on the caches).
 
 ## 4. Results
 
-(to be filled)
+Readout (`report_ais_decoders.py`, reference = the `baseline` decoder under the library defaults; the production
+decoder `5a729846...` is the second reference, epoch A5 runs):
+
+- 4.1 Development set (primary + training_extra, eleven datasets, `--ndim 2`): balanced mSA, gate verdict,
+  merged + absorbed share, `fg_area_ratio`, `matched_iou` per variant and configuration (`current-defaults`;
+  `contact-ridge` and `contact-mask` for the five-channel decoders).
+- 4.2 Holdout (five datasets).
+- 4.3 3D crops (apg3d primary / holdout): family macros with `current-defaults` (and `contact-ridge`).
+- 4.4 Field diagnostics (`diagnose_decoder_fields.py`): contact cosine at +-1 / +-3 px, contact Dice, magnitude
+  at contacts vs interior, foreground area ratio at threshold 0.5.
+- 4.5 Training curves: validation loss per variant (TensorBoard under `<root>/ais_decoder_training/logs/`).
+
+(to be filled when the trainings have finished)
