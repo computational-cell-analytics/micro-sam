@@ -93,9 +93,14 @@ for v in $NEW; do
         contact-mask-t0.7 contact-ridge1-mask0.5 --subsets primary training_extra --ndim 2 --epoch $EPOCH \
         --output "$REPORTS/decoders_${v}_contact_dev" 2>&1 | grep -v "Warning\|warnings.warn"
 done
-for v in $NEW; do
+# Field diagnostics. --contact-mode must match the training target of the fifth channel, otherwise the head's
+# precision is scored against a target that calls its correct pixels negative; `both` is rescored in the
+# touching mode so that the round-1 reference carries the new recall_touching / recall_bg_boundary columns.
+for pair in boundary:all boundary_fgcal:all both:touching; do
+    v=${pair%%:*}; mode=${pair##*:}
+    case " $NEW both " in *" $v "*) ;; *) continue ;; esac
     [ -f "$ROOT/ais_decoder_training/staged/joint_sam2_hvit_t_multi_gpu/$v.pt" ] || continue
     $PY diagnose_decoder_fields.py --joint-checkpoint "$v" --subset primary training_extra --ndim 2 \
-        --output "$REPORTS/decoder_fields_$v.csv" 2>&1 | grep -v "Warning\|warnings.warn" | tail -14
+        --contact-mode "$mode" --output "$REPORTS/decoder_fields_$v.csv" 2>&1 | grep -v "Warning\|warnings.warn" | tail -14
 done
 echo "$(date +%H:%M) round-2 finalisation done"

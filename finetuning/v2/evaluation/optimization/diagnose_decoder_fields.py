@@ -7,8 +7,14 @@ smooth field gives +1), the median distance magnitude at contacts and inside, th
 `area(fg > threshold) / area(gt)` and, for five channel predictions, the Dice of `contact > 0.5` with the
 ground-truth contact target. The proposal's "what would show that it worked" figures. CPU only, reader only.
 
+`--contact-mode` must match what the fifth channel was trained on ("touching" for the `contact` / `both`
+decoders, "all" for the `boundary` / `boundary_fgcal` decoders), otherwise its precision is scored against a
+target that calls the head's correct pixels negative. The recall on the touching lines and on the
+background-facing boundary lines is reported separately in both modes, so the two targets can be compared.
+
     export MICRO_SAM2_JOINT_CHECKPOINT_ROOT=<staged root>
     python diagnose_decoder_fields.py --joint-checkpoint contact --subset primary training_extra --output <csv>
+    python diagnose_decoder_fields.py --joint-checkpoint boundary --contact-mode all --output <csv>
 """
 
 import argparse
@@ -23,7 +29,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import benchmark_ais_optimization as ais  # noqa: E402
-from micro_sam.v2.transforms.labels import touching_boundaries  # noqa: E402
+from micro_sam.v2.transforms.labels import object_boundaries, touching_boundaries  # noqa: E402
 
 
 def _shift(array: np.ndarray, axis: int, step: int) -> np.ndarray:
@@ -53,7 +59,16 @@ def flow_cosines(directed: np.ndarray, where: np.ndarray, offset: int) -> np.nda
     return cosine[where]
 
 
-def sample_row(prediction: np.ndarray, labels: np.ndarray, threshold: float) -> Dict[str, float]:
+def _contact_target(labels: np.ndarray, mode: str, dilation: int) -> np.ndarray:
+    """The training target of the fifth channel: the touching lines only, or every object boundary."""
+    if mode == "all":
+        return object_boundaries(labels, dilation=dilation)
+    return touching_boundaries(labels, radius=1, dilation=dilation)
+
+
+def sample_row(
+    prediction: np.ndarray, labels: np.ndarray, threshold: float, contact_mode: str = "touching",
+) -> Dict[str, float]:
     ndim = labels.ndim
     foreground, directed = prediction[0], prediction[1:4][-ndim:]
     contact_gt = touching_boundaries(labels, radius=1, dilation=0)
@@ -82,14 +97,21 @@ def sample_row(prediction: np.ndarray, labels: np.ndarray, threshold: float) -> 
             row[f"cosine_interior_{offset}px"] = float(np.median(flow_cosines(directed, interior, offset)))
     if prediction.shape[0] > 4:
         contact_pred = prediction[4] > 0.5
-        target = touching_boundaries(labels, radius=1, dilation=1)
+        target = _contact_target(labels, contact_mode, 1)
         denominator = contact_pred.sum() + target.sum()
         row["contact_dice"] = float(2 * (contact_pred & target).sum() / denominator) if denominator else float("nan")
         row["contact_pred_pixels"] = int(contact_pred.sum())
-        # Share of the predicted contact mass that lies within two pixels of a true contact.
-        near = touching_boundaries(labels, radius=1, dilation=2)
+        row["contact_target_pixels"] = int(target.sum())
+        # Share of the predicted contact mass that lies within two pixels of the target.
+        near = _contact_target(labels, contact_mode, 2)
         row["contact_precision_2px"] = float((contact_pred & near).sum() / max(1, contact_pred.sum()))
         row["contact_recall"] = float((contact_pred & target).sum() / max(1, target.sum()))
+        # Mode independent, so that a touching-target and a full-boundary head can be read side by side:
+        # where the head fires on the lines between objects, and where it fires on the background-facing rim.
+        touching = touching_boundaries(labels, radius=1, dilation=1)
+        rim = object_boundaries(labels, dilation=1) & ~touching
+        row["recall_touching"] = float((contact_pred & touching).sum() / max(1, touching.sum()))
+        row["recall_bg_boundary"] = float((contact_pred & rim).sum() / max(1, rim.sum()))
     return row
 
 
@@ -108,6 +130,8 @@ def main():
     parser.add_argument("--ndim", choices=["2", "3", "both"], default="2")
     parser.add_argument("--datasets", nargs="*", default=None)
     parser.add_argument("--foreground-threshold", type=float, default=0.5)
+    parser.add_argument("--contact-mode", choices=["touching", "all"], default="touching",
+                        help="The training target of the fifth channel; 'all' for the boundary decoders.")
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
     checkpoint_id = ais._checkpoint_identity(args.model_type, args.joint_checkpoint)
@@ -124,7 +148,7 @@ def main():
             prediction, labels, valid, _ = cache.load(sample)
             if valid is not None:
                 labels = np.where(valid, labels, 0)
-            row = sample_row(prediction, labels.astype("int64"), args.foreground_threshold)
+            row = sample_row(prediction, labels.astype("int64"), args.foreground_threshold, args.contact_mode)
             row.update({
                 "sample_id": sample["sample_id"], "dataset": sample["dataset"], "subset": manifest.get("subset"),
             })
