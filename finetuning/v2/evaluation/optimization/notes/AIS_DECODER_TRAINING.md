@@ -255,4 +255,13 @@ shared configuration 0.4254 (+4.0 % over its defaults 0.4090, 8 / 11 up, worst -
 with the contact terms (ridge 1; ridge 2 + mask 0.3) on dev + holdout for both: `configs/ais_dec_top1*.json`,
 job dec_both_top_screen.
 
+Contact configurations on both (13:25, `ais/reports/dec_both_contact_{primary_training_extra,holdout}*.csv`,
+reference = both under the library defaults, other parameters at the defaults): ridge weights 0.5 / 1 / 2 / 4 give
++0.2 / +0.2 / +0.3 / +0.3 % balanced on dev (4-5 of 11 up, worst -1.5 %) and +0.2 / 0.0 / +0.1 / -0.3 % on holdout;
+mask thresholds 0.3 / 0.5 / 0.7 give 0.0 / +0.1 / 0.0 % (dev) and -0.0 / +0.1 / +0.1 % (holdout); ridge 1 + mask 0.5
++0.2 / 0.0 %. The ridge does what it is meant to - seeded merges fall from 6.3 % to 4.1 % of the objects on dev (7.0
+to 4.7 % on holdout) with no change in unseeded objects - but the recovered objects hardly move mSA at IoU 0.5, so
+with these decoders the contact channel is not where the remaining mSA is (merges are down from 13 % to 6 % of the
+objects already by the fine-tuning).
+
 (to be filled when the trainings have finished)
