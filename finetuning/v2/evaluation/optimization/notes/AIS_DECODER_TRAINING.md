@@ -357,4 +357,50 @@ Reading (all four, same data, budget and initialisation):
   the foreground area to ~1 on most datasets. covid_if and deepseas, the two datasets left out of training, lose
   (-33 % and -33 % for baseline vs production), so part of this is in-domain specialisation.
 
-(to be filled when the trainings have finished)
+### 4.3 All four decoders at the shared tuned configuration (16:30; `ais/reports/decoders_tuned_{primary_training_extra,holdout}*.csv`)
+
+`dec-top1` (travel 800, density 50, sigma 0.5, foreground weight 0.75, min_size 50, filter 0.4) is the optimum of both
+the fgcal and the both sweep; reference = baseline at dec-top1 (0.4200 dev, 0.4025 holdout; its own sweep pending).
+
+| decoder (configuration) | dev balanced | vs baseline | up / 11 | worst | holdout balanced | vs baseline | up / 5 | worst | seeded merges dev |
+|---|---:|---:|---|---|---:|---:|---|---|---:|
+| baseline (dec-top1) | 0.4200 | - | - | - | 0.4025 | - | - | - | 13.4 % |
+| fgcal (dec-top1) | 0.4298 | +2.4 % | 9 | dic_hepg2 -5.1 % | 0.4094 | +1.7 % | 4 | deepbacs -4.5 % | 10.6 % |
+| contact (dec-top1) | 0.4024 | -4.2 % | 5 | -26 % | 0.3872 | -3.8 % | 2 | deepbacs -18 % | 12.2 % |
+| contact (dec-top1 + ridge 1) | 0.4155 | -1.1 % | 6 | -27 % | 0.4044 | +0.5 % | 3 | deepbacs -14 % | 4.1 % |
+| both (dec-top1) | 0.4254 | +1.3 % | 8 | deepseas -47 % | 0.4098 | +1.8 % | 4 | deepbacs -16 % | 7.7 % |
+| both (dec-top1 + ridge 1) | 0.4271 | +1.7 % | 8 | deepseas -48 % | 0.4113 | +2.2 % | 4 | deepbacs -16 % | 4.0 % |
+
+Holdout per dataset at dec-top1 (baseline / fgcal / contact + ridge / both + ridge): deepbacs 0.407 / 0.389 / 0.351 /
+0.340, dic_hepg2 0.220 / 0.226 / 0.248 / 0.250, dynamicnuclearnet 0.804 / 0.822 / 0.784 / 0.825, livecell 0.341 /
+0.355 / 0.381 / 0.382, tissuenet 0.240 / 0.255 / 0.258 / 0.261. The tuned regime (few converged seeds) raises the
+merge share of the four-channel decoders from 8 % to 13 %; the contact ridge is the only thing that brings it to 4 %.
+
+### 4.4 Conclusions for the training recipe (2026-09-07, 16:35)
+
+1. In-domain data dominates. A decoder-only fine-tune with the unchanged loss on the tuning datasets' train
+   splits gains +21 % (dev) / +60 % (holdout) over the production decoder, halves the merge share and calibrates the
+   foreground area; every proposed loss change is a small correction on top of that. For the next big run the
+   composition of the training data (which of the evaluation datasets' train splits are included) matters far more
+   than the two loss changes.
+2. Point 4.1 (boundary-weighted foreground BCE): consistently small and positive. +0.6 / +1.1 % at the defaults,
+   +2.4 / +1.7 % at the tuned setting, 9 of 11 dev datasets up at the tuned setting, but a 5-9 % loss on one dataset
+   (dic_hepg2 or deepbacs) each time, so it misses the gate's worst-loss bound. It does not change the foreground
+   area ratio or the merge share against the fine-tuned baseline. Cheap and safe to include, not decisive.
+3. Point 1.1 (contact channel, plain Dice + BCE, ridge in the watershed): a dataset-dependent trade. +6 to +10 % on
+   tissuenet, +6 to +8 % on neurips, +1 to +5 % on livecell (the datasets whose merges motivated it), but -12 % on
+   deepbacs, -21 % on covid_if, -26 % on deepseas and -38 % on dic_hepg2 through the shared features (seeds lost,
+   rods split), with a head that never fires on those datasets. The ridge itself is effective and cheap (merges
+   6-13 % -> 4 % at any setting) and recovers half of the dic_hepg2 loss; stacked on fgcal (`both`) the trade
+   narrows to -1.3 % / -1.9 % at the defaults and +1.7 % / +2.2 % at the tuned setting. Under the generalization rule
+   the channel as trained here is not a win; the levers to try before including it in a big run are a class-
+   weighted or focal contact loss (the head is precise but under-confident: recall 0.16 on tissuenet, 0.02 on
+   neurips at 0.5) and a lower contact loss weight so that the shared features do not lose seeds on large or thin
+   cells. The 3D path of the five-channel decoder also drifted (section 4.0), which a joint 2D + 3D run avoids.
+4. Post-processing for fine-tuned decoders: their fields converge (magnitude ~0 in the background, sharper flips),
+   and the tuned optimum moves to long travel (800) with a high density threshold (50), sigma 0.5 and foreground
+   weight 0.75 (+1.3 to +3.1 % over the current defaults, 6-9 of 11 up, worst -5 to -8 %); the production defaults
+   are no longer the right regime for such decoders, and `boundary_magnitude_max` loses its premise.
+
+(sweep rankings of baseline and contact, the 3D tables of all four and the unattended finalisation outputs are
+appended below when they land)
