@@ -240,4 +240,12 @@ once their caches exist and then ranks every sweep into `ais/reports/dec_<varian
 (`report_ais_sweep.py`, reference = library defaults). Read the model comparison at tuned settings on the holdout,
 not on the development set the sweep tuned on.
 
+fgcal sweep ranked (11:55, `ais/reports/dec_fgcal_sweep_dev.csv`, 1728 combinations, reference = library defaults on
+the fgcal caches, dev balanced 0.4170): the best shared configuration reaches 0.4298 (+3.1 %, 6 / 11 up, worst
+-6.4 %, mean ratio to the per-dataset optimum 0.935); nothing passes the gate. The top rows all use travel 800
+(n_iter 800, dt 0.5), density 50 (or 20), sigma 0.5, foreground weight 0.75, min_size 50, filter 0.4 or off - a
+different regime from the production defaults (travel 25, density 10, sigma 1.0), consistent with a field that now
+converges to sinks (magnitude ~0 in the background, sharper flips). Confirmation of the top-1 and the density-20
+variant on dev + holdout: `configs/ais_dec_fgcal_top{1,10}.json`, job dec_fgcal_top_screen.
+
 (to be filled when the trainings have finished)
