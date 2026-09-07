@@ -221,4 +221,23 @@ five-channel decoder's magnitude inside the true objects of a volume is 0.86 (me
 57 instances (ground truth 72; production 57). A 3D-only effect of the 2D fine-tune, recorded, not pursued.
 Tables: `ais/reports/decoders_prelim_3d*.csv`.
 
+Contact head of `both` (`ais/reports/decoder_fields_both.csv`, medians, threshold 0.5): Dice against the true contact
+lines livecell 0.57 (precision within 2 px 0.81, recall 0.55), yeaz 0.67 (0.88 / 0.65), dynamicnuclearnet 0.65
+(0.94 / 0.51), covid_if 0.45, tissuenet 0.26 (precision 0.93 but recall 0.16), neurips 0.19 (recall 0.02),
+dic_hepg2 / deepbacs / tnbc / puma ~0 (dic_hepg2 has 2169 true contact pixels per crop and predicts none). The
+head is precise but under-confident on the datasets with the largest merge losses, which is why the mask mode at
+0.5 did nothing; a class-weighted or focal contact loss is the recipe change to consider for the big run. The
+contact training also sharpened the flow: the +-1 px contact cosine drops from 0.47 / 0.44 / 0.37 (fgcal, dnn /
+tissuenet / yeaz) to 0.11 / 0.32 / -0.03.
+
+### 4.6 Tuning launched in the meantime (10:53)
+
+Grid sweeps (`configs/ais_grid_lm_v4.json`, 1728 combinations) on the development caches of fgcal (jobs 15772848 /
+15772849) and both (15772850 / 15772851), contact-configuration screens for both (15772852: ridge 0.5 / 2 / 4, mask
+0.3 / 0.7, ridge 1 + mask 0.5, on dev and holdout), and a launcher (15772853,
+`finetuning/v2/generalist/ais_decoder/launch_tuning_after_caches.sh`) that submits the same for baseline and contact
+once their caches exist and then ranks every sweep into `ais/reports/dec_<variant>_sweep_dev.csv`
+(`report_ais_sweep.py`, reference = library defaults). Read the model comparison at tuned settings on the holdout,
+not on the development set the sweep tuned on.
+
 (to be filled when the trainings have finished)
