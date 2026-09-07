@@ -72,6 +72,7 @@ def build_common(model_type, n_epochs, n_iterations, batch_size, dataset_choice,
         peft_kwargs=peft_kwargs,  # None = full finetuning; set above to use LoRA / late finetuning
         initial_features=32,  # decoder bottleneck matches the hvit_t embed_dim
         distance_type="geodesic",  # regression target of the automatic branch
+        label_trafo_threads=int(os.environ.get("LABEL_TRAFO_THREADS", 1)),  # threads per worker in the label transform
         # The first 2D and the first 3D iteration then take a few minutes longer.
         compile=["encoder", "decoder", "loss"] if use_compile else None,
     )

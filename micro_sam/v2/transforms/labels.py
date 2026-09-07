@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Tuple
 
 import numpy as np
@@ -284,8 +285,10 @@ class DirectedPerObjectBoundaryDistanceTransform:
         instances: bool = False,
         apply_label: bool = True,
         sampling: Optional[Tuple[float, ...]] = None,
+        n_threads: int = 1,
     ):
         self.min_size = min_size
+        self.n_threads = n_threads
         self.distance_fill_value = 1
         self.foreground = foreground
         self.instances = instances
@@ -357,13 +360,21 @@ class DirectedPerObjectBoundaryDistanceTransform:
         # Compute how many distance channels we have.
         n_channels = 3
 
-        # Compute the per object distances.
+        # Compute the per object distances. Each object writes only into its own voxels and the distance
+        # solvers release the GIL, so the objects can be processed by a thread pool.
         distances = np.full(labels.shape + (n_channels,), self.distance_fill_value, dtype="float32")
-        for prop in props:
-            label_id = prop.label
-            distances = self.compute_normalized_directed_distances(
-                labels, label_id, boundaries, bounding_boxes[label_id], distances
+
+        def compute(prop):
+            self.compute_normalized_directed_distances(
+                labels, prop.label, boundaries, bounding_boxes[prop.label], distances
             )
+
+        if self.n_threads > 1:
+            with ThreadPoolExecutor(self.n_threads) as pool:
+                list(pool.map(compute, props))
+        else:
+            for prop in props:
+                compute(prop)
 
         # Bring the distance channel to the first dimension.
         to_channel_first = (ndim,) + tuple(range(ndim))

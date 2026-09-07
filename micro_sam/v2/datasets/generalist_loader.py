@@ -2951,7 +2951,7 @@ def _build_interactive_datasets(input_path, z_slices, dataset_choice):
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
 
 
-def _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type="geodesic"):
+def _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type="geodesic", label_trafo_threads=1):
     """Build train/val datasets for joint interactive + automatic SAM2 training.
 
     Labels have **5 channels**: ``[instance_ids, fg, d_x, d_y, d_z]``.
@@ -2970,6 +2970,8 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type="g
         distance_type: Which directed distance target the automatic branch regresses.
             ``"geodesic"`` uses :class:`_JointGeodesicLabelTransform`, ``"directed"`` uses
             :class:`_JointLabelTransform`.
+        label_trafo_threads: Threads per loader worker that process the objects of one patch in parallel
+            in the distance transform. Only pays off when the node has more cores than loader workers.
 
     Returns:
         Tuple of (train_ds, val_ds) as :class:`ConcatDataset` instances.
@@ -2979,7 +2981,10 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type="g
 
     patch_shape = (512, 512)
     # Both default to instances=True -> 5-channel output.
-    label_trafo = _JointGeodesicLabelTransform if distance_type == "geodesic" else _JointLabelTransform
+    label_trafo = partial(
+        _JointGeodesicLabelTransform if distance_type == "geodesic" else _JointLabelTransform,
+        n_threads=label_trafo_threads,
+    )
 
     kwargs = {
         "raw_transform": _identity,

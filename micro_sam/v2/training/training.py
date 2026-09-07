@@ -981,6 +981,7 @@ def train_joint_sam2(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
+    label_trafo_threads: int = 1,
     compile: Optional[List[str]] = None,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly with a shared image encoder (single GPU).
@@ -1039,6 +1040,8 @@ def train_joint_sam2(
         distance_type: Directed distance target for the automatic branch. "geodesic" uses the
             geodesic hybrid field around each object's center, "directed" the euclidean vector
             to the nearest boundary.
+        label_trafo_threads: Threads per loader worker that process the objects of one patch in parallel
+            in the distance transform. Only pays off when the node has more cores than loader workers.
         compile: The parts to compile with ``torch.compile``. "encoder" is the shared image encoder,
             "decoder" are the blocks of the UNETR decoder and "loss" are the Dice and focal kernels
             of the interactive loss. The default compiles nothing.
@@ -1053,7 +1056,9 @@ def train_joint_sam2(
 
     device = get_device(device)
 
-    train_ds, val_ds = _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type)
+    train_ds, val_ds = _build_joint_datasets(
+        input_path, z_slices, dataset_choice, distance_type, label_trafo_threads
+    )
     bpg = {2: batch_size_2d} if batch_size_2d != batch_size else None
     train_loader = _prepare_data_loader(
         train_ds, batch_size=batch_size, shuffle=True,
@@ -1174,6 +1179,7 @@ def _train_joint_rank(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
+    label_trafo_threads: int = 1,
     compile: Optional[List[str]] = None,
 ):
     """Single-rank torchrun worker for train_joint_sam2_multi_gpu."""
@@ -1192,7 +1198,9 @@ def _train_joint_rank(
 
     batch_size_per_group = {2: batch_size_2d} if batch_size_2d != batch_size else None
 
-    train_ds, val_ds = _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type)
+    train_ds, val_ds = _build_joint_datasets(
+        input_path, z_slices, dataset_choice, distance_type, label_trafo_threads
+    )
 
     train_sampler = DistributedUniBatchSampler(
         group_per_index=_build_group_map(train_ds),
@@ -1337,6 +1345,7 @@ def train_joint_sam2_multi_gpu(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
+    label_trafo_threads: int = 1,
     compile: Optional[List[str]] = None,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly across multiple GPUs with DDP.
@@ -1398,6 +1407,8 @@ def train_joint_sam2_multi_gpu(
         distance_type: Directed distance target for the automatic branch. "geodesic" uses the
             geodesic hybrid field around each object's center, "directed" the euclidean vector
             to the nearest boundary.
+        label_trafo_threads: Threads per loader worker that process the objects of one patch in parallel
+            in the distance transform. Only pays off when the node has more cores than loader workers.
         compile: The parts to compile with ``torch.compile``. "encoder" is the shared image encoder,
             "decoder" are the blocks of the UNETR decoder and "loss" are the Dice and focal kernels
             of the interactive loss. The default compiles nothing.
@@ -1458,5 +1469,6 @@ def train_joint_sam2_multi_gpu(
         automatic_metric_weight=automatic_metric_weight,
         initial_features=initial_features,
         distance_type=distance_type,
+        label_trafo_threads=label_trafo_threads,
         compile=compile,
     )

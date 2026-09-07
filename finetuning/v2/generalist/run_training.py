@@ -46,7 +46,7 @@ def write_batch_script(out_path, model_type, n_epochs, dataset_choice, save_root
 #SBATCH --ntasks-per-node=1
 #SBATCH -p {PARTITION}
 #SBATCH --gpus-per-node={GPU_TYPE}:4
-#SBATCH --cpus-per-task 32
+#SBATCH --cpus-per-task 96
 #SBATCH --mem 384G
 #SBATCH --qos=96h
 #SBATCH --constraint=inet
@@ -56,6 +56,8 @@ micromamba activate super
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export SAVE_ROOT={save_root}
+# 8 loader workers per GPU, each with 3 threads over the objects of a patch in the distance transform.
+export LABEL_TRAFO_THREADS=3
 # The torch.compile cache must be node-local. A cache on the shared filesystem blocks the compile on its file locks.
 export TORCHINDUCTOR_CACHE_DIR=/local/jobs/${{USER}}_${{SLURM_JOB_ID}}/inductor
 
