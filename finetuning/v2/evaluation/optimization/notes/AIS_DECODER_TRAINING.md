@@ -34,6 +34,12 @@ count raises), APG and evaluation mirrors read `[1:4]`, the harness gains `fg_ar
 `configs/ais_contact_ridge.json` (`contact_weight` 1.0) and `configs/ais_contact_mask.json`
 (`contact_mask_threshold` 0.5).
 
+Epoch A5 bit-identity (2026-09-07 02:55): the production decoder's `current-defaults` runs under A5 (jobs
+15769317 / 15769318, `--ndim 2` for the images) reproduce the A4 runs sample by sample on v5 primary (240),
+training_extra (157), holdout (233) and the apg3d primary (57) and holdout (18) crops (mSA, matched, predicted
+objects, merged / absorbed counts, fg and matched IoU all identical; balanced 0.2457 / 0.4253 / 0.2437). These
+A5 run directories are the production reference for the decoder comparison (`fg_area_ratio` included).
+
 ## 2. Data
 
 Train splits of nine of the eleven tuning datasets, built from torch_em path lists
@@ -107,7 +113,12 @@ before their first iteration, and the non-persistent validation workers would ha
 `train_ais_decoder.py` now forces the fork start method; (2) a 512^2 zarr file with fewer than three objects
 makes torch_em's `MinInstanceSampler` reject the same crop 500 times and raise, which ended the run
 (`RandomSubsetDataset` now redraws another file, `FixedSubsetDataset` does the same for validation, and both
-wrap every dataset; torch_em's image-collection datasets already rotate images after 50 failed crops).
+wrap every dataset; torch_em's image-collection datasets already rotate images after 50 failed crops). Measured
+rejection rates of the container datasets: yeaz phase-contrast stack frames 9/290, yeaz bright field 1/40,
+dynamicnuclearnet 0/120, tissuenet 0/60, puma 0/40, tnbc 0/34 - the sparse yeaz frames were the trigger.
+
+Second submission (02:47): `baseline` 15769606 and `contact` 15769607 on `3g.40gb` (started at once, both on
+ggpu158), `fgcal` 15769609 on `grete:shared` A100, `both` 15769611 after the three.
 
 ## 4. Results
 
