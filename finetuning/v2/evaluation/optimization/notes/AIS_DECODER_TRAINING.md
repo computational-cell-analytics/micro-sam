@@ -214,4 +214,11 @@ deepbacs and on the two unseen datasets, so its balanced score is 2 % below fgca
 isolating pairs (contact vs baseline, both vs fgcal with the same data) complete when the 3g jobs finish.
 Tables: `ais/reports/decoders_prelim_{primary_training_extra,holdout}*.csv`.
 
+`both` on the 3D crops scores exactly 0 on every LM family: the volumes get 180-350 seeds and a foreground
+(fg IoU 0.34, area ratio 2.7) but every instance is removed by `boundary_magnitude_max=0.4`, because the
+five-channel decoder's magnitude inside the true objects of a volume is 0.86 (median; fgcal 0.35, production
+0.27), i.e. its 3D distance field has drifted towards the fill value. Without the filter one celegans crop gives
+57 instances (ground truth 72; production 57). A 3D-only effect of the 2D fine-tune, recorded, not pursued.
+Tables: `ais/reports/decoders_prelim_3d*.csv`.
+
 (to be filled when the trainings have finished)
