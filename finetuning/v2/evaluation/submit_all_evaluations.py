@@ -75,8 +75,7 @@ METHOD_SUPPORT = {
     ("interactive", "microsam_vol"): {"ndim": (3,), "modality": ("lm",)},
 }
 
-# Methods whose packages do not live in the default environment. The names are per machine, so
-# --env overrides them and a missing one is reported before anything is submitted.
+# Use --env to override the method-specific environments.
 METHOD_ENV = {"cellpose": "cp3", "stardist": "sd"}
 DEFAULT_ENV = "super"
 
@@ -89,8 +88,10 @@ CPUS = 4
 TIME_LIMIT = "08:00:00"
 
 # A 2d job peaks at about 3 GiB, so the smallest slice covers it. A volume is tiled through the
-# encoder and the decoder and overruns that slice, so a 3d job takes the largest one instead.
-GPU_2D, GPU_3D = "1g.10gb:1", "3g.40gb:1"
+# encoder and the decoder and overruns that slice; the 20 GB slice holds it (the (8, 512, 512)
+# production crops peak around 6 GiB, the 32-slice campaign crops fit as well) and is far easier to
+# schedule than the 3g.40gb slices. Override --gpu for a larger backbone.
+GPU_2D, GPU_3D = "1g.10gb:1", "1g.20gb:1"
 MEMORY_2D, MEMORY_3D = "16G", "64G"
 
 EXPERIMENT_FOLDER = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/v2_joint_evaluation"

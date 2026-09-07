@@ -34,7 +34,6 @@ The optional JSON configuration has this shape:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import platform
@@ -54,7 +53,6 @@ from skimage.measure import label as connected_components
 from tqdm import tqdm
 
 from micro_sam.v2.normalization import normalize_raw
-from micro_sam.v2.multimask_selection import load_feature_scorer
 
 EVALUATION_ROOT = Path(__file__).resolve().parent.parent
 REPOSITORY_ROOT = EVALUATION_ROOT.parents[2]
@@ -102,7 +100,22 @@ SAMPLE_COUNTS_2D_HOLDOUT = {
     "dic_hepg2": 43,
 }
 HOLDOUT_REUSED_DATASETS = ("deepbacs",)
-MANIFEST_SUBSETS = ("primary", "holdout")
+# A 2d subset drawn from the validation splits of datasets outside the primary benchmark. It was the
+# training set of the (since refuted and removed) learned selectors and, together with the primary
+# datasets, forms the eleven-dataset development corpus of the 2026-09 structural campaign. Its datasets
+# stay outside the primary and holdout scores. Counts are what the validation pools hold, capped so that
+# no single dataset dominates the extra rows. The subset's 'role' string below is part of the manifest
+# identity and therefore frozen.
+TRAINING_EXTRA_DATASETS = ("yeaz", "neurips_cellseg", "puma", "tnbc", "covid_if", "deepseas")
+SAMPLE_COUNTS_2D_TRAINING_EXTRA = {
+    "yeaz": 40,
+    "neurips_cellseg": 40,
+    "puma": 40,
+    "tnbc": 20,
+    "covid_if": 5,
+    "deepseas": 40,
+}
+MANIFEST_SUBSETS = ("primary", "holdout", "training_extra")
 TARGETS_3D = (0.5,)
 # Match the 512 x 512 training field of view and use enough depth to contain representative 3d
 # structure. C. elegans keeps the deeper crop needed to contain its 11-13-slice nuclei; its source
@@ -120,6 +133,10 @@ CANDIDATE_GRID_3D = (4, 3, 3)
 # 30 is its entire held-out range: slices before 70 were used for training.
 CROP_SHAPE_3D_DEEP = (32, 512, 512)
 CROP_SHAPE_3D_DEEP_OVERRIDES = {"celegans_atlas": (32, 140, 512), "snemi": (30, 512, 512)}
+# Caution: the production evaluation scores SNEMI on the 8-slice center crop of the 30 held-out
+# slices, i.e. original slices 81:89, which this 30-slice tuning range contains. The deep manifest is
+# therefore a fixed regression instrument for the runs recorded against it, not a tuning set; the
+# leak-free 3d campaign manifests live in `apg3d_manifest.py`.
 VALIDATION_Z_RANGE_DEEP_OVERRIDES = {"snemi": (0, 30)}
 # The candidate grid is deliberately shared with the standard set, so the two variants differ only in
 # depth and in the annotation rule below. That is what makes a deep result attributable to depth.
@@ -135,14 +152,10 @@ VOLUME_DIAGNOSTICS = (
     "refined_candidates", "replaced_candidates", "gated_consistency", "gated_foreign",
     "refinement_negatives",
 )
+# Only a refinement run reports these; they read 0 for every other run.
 IMAGE_DIAGNOSTICS = (
-    "multimask_alternatives", "multimask_changed_from_iou",
-    "refinement_eligible_instances", "uncertainty_selected_instances",
-    "refined_instances", "replaced_instances", "gated_consistency", "gated_foreign",
-)
-IMAGE_TIMINGS = (
-    "multimask_feature_seconds", "multimask_scorer_seconds",
-    "multimask_transfer_seconds", "multimask_record_seconds",
+    "refinement_eligible_instances", "refined_instances", "replaced_instances", "gated_consistency",
+    "gated_foreign", "refinement_negatives", "dropped_negatives",
 )
 
 IMPLEMENTATION_FILES = (
@@ -150,7 +163,6 @@ IMPLEMENTATION_FILES = (
     Path(common.__file__),
     EVALUATION_ROOT / "parameter_search.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/automatic_prompt_generation.py",
-    Path(common.__file__).parents[3] / "micro_sam/v2/multimask_selection.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/instance_segmentation.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/postprocessing.py",
     Path(common.__file__).parents[3] / "micro_sam/v2/prompt_based_segmentation.py",
@@ -437,12 +449,17 @@ def _select_2d_samples(
     counts: Dict[str, int] = SAMPLE_COUNTS_2D,
     exclude_raw_paths: Optional[Dict[str, set]] = None,
     reuse_samples: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    datasets: Sequence[str] = DATASETS_2D,
+    allow_fewer: bool = False,
 ) -> List[Dict[str, Any]]:
     """Select the 2d samples, per dataset at even complexity quantiles.
 
     Args:
         data_root: The read-only dataset root.
         counts: Number of samples per dataset.
+        datasets: The datasets to select from; the benchmark datasets by default.
+        allow_fewer: Take every eligible image when a dataset holds fewer than requested, instead of
+            failing. For training-only subsets, where the count is a cap rather than a contract.
         exclude_raw_paths: Raw paths (relative to the data root) that must not be selected, per
             dataset. This is how the holdout subset stays image-disjoint from the primary one.
         reuse_samples: Samples to copy verbatim instead of selecting, per dataset. This is how an
@@ -454,7 +471,7 @@ def _select_2d_samples(
     exclude_raw_paths = exclude_raw_paths or {}
     reuse_samples = reuse_samples or {}
     samples = []
-    for dataset in DATASETS_2D:
+    for dataset in datasets:
         if dataset in reuse_samples:
             reused = [dict(sample) for sample in reuse_samples[dataset]]
             if len(reused) != counts[dataset]:
@@ -490,7 +507,15 @@ def _select_2d_samples(
                     selected.append(choice)
         else:
             _add_complexity(candidates)
-            selected = _select_nearest(candidates, _quantile_targets(counts[dataset]))
+            n_requested = counts[dataset]
+            if len(candidates) < n_requested:
+                if not allow_fewer:
+                    raise RuntimeError(
+                        f"'{dataset}' has only {len(candidates)} eligible validation images, "
+                        f"but {n_requested} were requested."
+                    )
+                n_requested = len(candidates)
+            selected = _select_nearest(candidates, _quantile_targets(n_requested))
         for sample in selected:
             sample["sample_id"] = _sample_identity(sample)
             samples.append(sample)
@@ -657,7 +682,11 @@ def _sample_counts_2d(subset: str) -> Dict[str, int]:
     """The expected per-dataset 2d sample counts of a manifest subset."""
     if subset not in MANIFEST_SUBSETS:
         raise ValueError(f"Unknown manifest subset '{subset}'; expected one of {list(MANIFEST_SUBSETS)}.")
-    return SAMPLE_COUNTS_2D_HOLDOUT if subset == "holdout" else SAMPLE_COUNTS_2D
+    if subset == "holdout":
+        return SAMPLE_COUNTS_2D_HOLDOUT
+    if subset == "training_extra":
+        return SAMPLE_COUNTS_2D_TRAINING_EXTRA
+    return SAMPLE_COUNTS_2D
 
 
 def _validate_manifest(manifest: Dict[str, Any], data_root: Path, variant: str, subset: str = "primary") -> None:
@@ -700,6 +729,14 @@ def _validate_manifest(manifest: Dict[str, Any], data_root: Path, variant: str, 
         if sample["object_count"] <= 0:
             raise RuntimeError(f"Manifest sample '{sample['sample_id']}' has empty ground truth.")
     sample_counts = _sample_counts_2d(subset)
+    if subset == "training_extra":
+        # Training-only rows: no volumes, the datasets are the extra ones rather than the benchmark's,
+        # and the counts are caps (a small validation pool contributes what it has).
+        expected = {(dataset, 2): sample_counts[dataset] for dataset in TRAINING_EXTRA_DATASETS}
+        short = {key: counts.get(key, 0) for key in expected if not 0 < counts.get(key, 0) <= expected[key]}
+        if set(counts) != set(expected) or short:
+            raise RuntimeError(f"Unexpected training_extra sample counts: got {dict(counts)}, caps {expected}.")
+        return
     expected = {(dataset, 2): sample_counts[dataset] for dataset in DATASETS_2D}
     expected.update({(dataset, 3): 1 for dataset in DATASETS_3D})
     if dict(counts) != expected:
@@ -770,6 +807,11 @@ def prepare_manifest(
         # The volumes are carried over verbatim: the holdout is a 2d instrument, but the schema and
         # its validator expect one volume per 3d dataset, and a copied volume keeps `--ndim 3` honest.
         samples = samples_2d + [dict(sample) for sample in primary["samples"] if sample["ndim"] == 3]
+    elif subset == "training_extra":
+        samples = _select_2d_samples(
+            data_root, counts=SAMPLE_COUNTS_2D_TRAINING_EXTRA, datasets=TRAINING_EXTRA_DATASETS, allow_fewer=True,
+        )
+        subset_policy = {"subset": "training_extra", "role": "selector-training-only"}
     else:
         samples = _select_2d_samples(data_root) + _select_3d_samples(data_root, variant)
 
@@ -912,9 +954,6 @@ def _summarize(samples: pd.DataFrame) -> pd.DataFrame:
             if diagnostic in group:
                 values = group[diagnostic].dropna()
                 row[diagnostic] = int(values.sum()) if len(values) else np.nan
-        for timing in IMAGE_TIMINGS:
-            if timing in group:
-                row[timing] = float(group[timing].fillna(0).sum())
         rows.append(row)
     summary = pd.DataFrame(rows)
     overall = {
@@ -935,9 +974,6 @@ def _summarize(samples: pd.DataFrame) -> pd.DataFrame:
         if diagnostic in summary:
             values = summary[diagnostic].dropna()
             overall[diagnostic] = int(values.sum()) if len(values) else np.nan
-    for timing in IMAGE_TIMINGS:
-        if timing in samples:
-            overall[timing] = float(samples[timing].fillna(0).sum())
     return pd.concat([summary, pd.DataFrame([overall])], ignore_index=True)
 
 
@@ -982,7 +1018,6 @@ def _sample_row(
     else:
         generation_stats = generation_stats or {}
         row.update({key: int(generation_stats.get(key, 0)) for key in IMAGE_DIAGNOSTICS})
-        row.update({key: float(generation_stats.get(key, 0.0)) for key in IMAGE_TIMINGS})
     return row
 
 
@@ -1028,8 +1063,6 @@ def _run_dimension(
     device: str,
     started: float,
     budget_seconds: float,
-    multimask_scorer_artifact: Optional[Path] = None,
-    refinement_gate_artifact: Optional[Path] = None,
 ) -> pd.DataFrame:
     completed_ids = set(completed["sample_id"]) if not completed.empty else set()
     pending = [sample for sample in samples if sample["ndim"] == ndim and sample["sample_id"] not in completed_ids]
@@ -1044,17 +1077,6 @@ def _run_dimension(
         model_type, ndim, device, joint_checkpoint=joint_checkpoint,
         joint_checksum=checkpoint_id, export_root=str(export_root),
     )
-    if ndim == 2 and (multimask_scorer_artifact is not None or refinement_gate_artifact is not None):
-        segmenter.set_multimask_models(
-            scorer=(
-                load_feature_scorer(multimask_scorer_artifact, device=device)
-                if multimask_scorer_artifact is not None else None
-            ),
-            refinement_gate=(
-                load_feature_scorer(refinement_gate_artifact, device=device)
-                if refinement_gate_artifact is not None else None
-            ),
-        )
     current_source = None
     normalized_source = None
     try:
@@ -1091,8 +1113,6 @@ def run_benchmark(
     device: str, time_budget_minutes: float, dimensions: Sequence[int] = (2, 3),
     trial_id: str = "trial-1", started: Optional[float] = None, crops_3d: str = "standard",
     subset: str = "primary",
-    multimask_scorer_artifact: Optional[Path] = None,
-    refinement_gate_artifact: Optional[Path] = None,
 ) -> Tuple[Path, pd.DataFrame, Dict[str, Any]]:
     started = time.perf_counter() if started is None else started
     checkpoint_path = get_joint_checkpoint(model_type, joint_checkpoint)
@@ -1103,14 +1123,6 @@ def run_benchmark(
         raise ValueError(f"Dimensions must be a non-empty subset of (2, 3), got {dimensions}.")
     if not trial_id:
         raise ValueError("The timing trial id must not be empty.")
-    artifact_paths = {
-        "multimask_scorer": multimask_scorer_artifact,
-        "refinement_gate": refinement_gate_artifact,
-    }
-    artifact_checksums = {
-        name: hashlib.sha256(Path(path).resolve(strict=True).read_bytes()).hexdigest()
-        for name, path in artifact_paths.items() if path is not None
-    }
     hardware = _hardware_identity(device)
     config_identity = {
         "params_2d": params_2d,
@@ -1119,7 +1131,9 @@ def run_benchmark(
         "trial_id": trial_id,
         "device": device,
         "hardware": hardware,
-        "model_artifacts": artifact_checksums,
+        # Frozen empty field: the learned artifacts it once recorded are gone, but keeping the key
+        # leaves the config checksums comparable with the runs the notes record.
+        "model_artifacts": {},
     }
     config_checksum = _content_checksum(config_identity)
     manifest_checksum = manifest["manifest_checksum"]
@@ -1164,10 +1178,7 @@ def run_benchmark(
         "torch": torch.__version__,
         "git_revision": _git_revision(),
         "time_budget_minutes": time_budget_minutes,
-        "model_artifacts": artifact_checksums,
-        "model_artifact_paths": {
-            name: str(Path(path).resolve()) for name, path in artifact_paths.items() if path is not None
-        },
+        "model_artifacts": {},
     }
     _atomic_write_json(metadata_path, metadata)
 
@@ -1177,7 +1188,7 @@ def run_benchmark(
             completed = _run_dimension(
                 ndim, manifest["samples"], completed, samples_path, data_root, model_type,
                 joint_checkpoint, checkpoint_id, export_root, params_by_dimension[ndim], device, started,
-                time_budget_minutes * 60, multimask_scorer_artifact, refinement_gate_artifact,
+                time_budget_minutes * 60,
             )
         expected_ids = {
             sample["sample_id"] for sample in manifest["samples"] if sample["ndim"] in dimensions
@@ -1209,14 +1220,6 @@ def main() -> None:
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--manifest", type=Path, default=None, help="Subset manifest; defaults below output-root.")
     parser.add_argument("--config", type=Path, default=None, help="One JSON APG configuration to evaluate.")
-    parser.add_argument(
-        "--multimask-scorer-artifact", type=Path, default=None,
-        help="Fitted feature scorer used by params_2d.multimask_scorer='microscopy'.",
-    )
-    parser.add_argument(
-        "--refinement-gate-artifact", type=Path, default=None,
-        help="Fitted utility scorer used by refinement_kwargs.gate='uncertainty'.",
-    )
     parser.add_argument(
         "--ndim", choices=("2", "3", "both"), default="both",
         help="Evaluate only images, only volumes, or both (default).",
@@ -1279,8 +1282,7 @@ def main() -> None:
         manifest, data_root, output_root, args.model_type, args.joint_checkpoint,
         config_name, params_2d, params_3d, args.device, args.time_budget_minutes,
         dimensions=dimensions, trial_id=args.trial_id, started=started, crops_3d=args.crops_3d,
-        subset=args.subset, multimask_scorer_artifact=args.multimask_scorer_artifact,
-        refinement_gate_artifact=args.refinement_gate_artifact,
+        subset=args.subset,
     )
     print(summary.to_string(index=False))
     print(f"Run directory: {run_dir}")
