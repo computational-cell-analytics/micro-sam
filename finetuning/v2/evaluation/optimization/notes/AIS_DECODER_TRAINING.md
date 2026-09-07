@@ -404,3 +404,74 @@ merge share of the four-channel decoders from 8 % to 13 %; the contact ridge is 
 
 (sweep rankings of baseline and contact, the 3D tables of all four and the unattended finalisation outputs are
 appended below when they land)
+
+## 5. Round 2: the proper boundary channel (2026-09-07)
+
+Round 1 leaves point 1.1 undecided in the user's reading: the contact-only fifth channel (touching boundaries,
+under 1 % of the pixels, ill-defined where three cells meet) is a dataset-dependent trade with an under-confident
+head. Round 2 replaces it with the **classical boundary target**: the fifth channel holds the inner boundary of
+every object, to neighbours and to background alike (`contact_mode="all"`, dilated by 1), which coincides with the
+zero level set of the three geodesic distance channels the decoder already predicts, so the extra task no longer
+asks for a quantity the other channels do not encode.
+
+| variant | fifth channel | foreground loss |
+|---|---|---|
+| `boundary` | inner boundary of every object, Dice + BCE | Dice (unchanged) |
+| `boundary_fgcal` | same | Dice + boundary-weighted BCE (`boundary_weight=4`, radius 2) |
+
+`boundary` vs `baseline` isolates the channel, `boundary_fgcal` vs `fgcal` isolates it on top of the calibrated
+foreground, and `boundary` vs `contact` isolates the target definition at a fixed loss. Everything downstream still
+treats the channel as "contact" (sigmoid activation, `flow_instance_segmentation(contact=, contact_weight=,
+contact_mask_threshold=)`, the `ais_contact_*.json` configs), so the round-1 readouts apply unchanged.
+
+### 5.1 Launch (17:16), and why the jobs first refused to start
+
+Submitted at 16:59 for `3g.40gb` slices with seven of the eight free, both jobs stayed `PENDING/WaitingInQueue`
+for 17 minutes although slices, CPUs and memory were free on ggpu158 and ggpu192, and `sbatch --test-only`
+claimed a start no earlier than 2026-09-08T03:13 for *every* pool (A100 on grete:shared, 3g, 2g, 1g on
+preemptible) and independently of `--time`, `-c` and `--mem`. Cause: our own `dec_baseline_sweep_primary` array
+sat at `TopOfQueue` on `grete:preemptible` with a marginally higher priority (103063 vs 103021), and an
+unschedulable job at the head of the queue blocks the partition in the main scheduling loop for every
+lower-priority job of the same user. `scontrol hold` on the four sweep arrays started both trainings within
+seconds. The durable fix (the arrays only feed the sweep ranking, so they are the cheapest thing to delay):
+
+```bash
+for j in 15776127 15776128 15776228 15776229; do scontrol update jobid=$j nice=100; done
+```
+
+which puts the sweeps below the rest of our chain (evaluation, finalisation, tuning launchers) while keeping them
+ahead of the other user's queued preemptible job. Note for the next campaign: `--test-only` is worthless on
+`grete:preemptible` because it ignores preemption - a sweep task started at 17:11 against a 03:14 estimate for
+the same request. The only thing worth checking when a job does not start is whether one of our own arrays is at
+the head of the queue.
+
+`boundary` = 15776831 (ggpu158), `boundary_fgcal` = 15776833 (ggpu192), both at 1.08 it/s for batch 8 (the
+round-1 3g speed), so 48000 iterations plus the per-epoch validation land at 06:10-06:20 on 2026-09-08 inside
+the 14 h limit (07:16). The first log lines confirm the target: `variant boundary: 5 output channels, loss
+settings {'contact': True, 'contact_mode': 'all', 'boundary_weight': None}`.
+
+### 5.2 The round-1 finalisation died on an edited script
+
+`ais_decoder_finalize` (15772287) waited 7.4 h for the last screens, printed "all screens done" at 17:11 and then
+aborted with `finalize_ais_decoder_reports.sh: line 44: syntax error near unexpected token 'done'`. The file is
+syntactically fine; it had been edited at 16:53 while the job slept in the wait loop, and bash re-reads a running
+script by byte offset, so the resumed parse landed mid-statement. None of the `decoders_final_*` tables or the
+`baseline` / `contact` field diagnostics were written. Rerun as 15777315. **Rule from now on: submit a frozen
+copy of every long-running driver**, `<camp>/jobs/frozen/<name>_<timestamp>.sh`, never the repo path.
+
+### 5.3 The chain (nothing depends on the session)
+
+The session runs in a 12 h interactive job that ends at 05:06 on 2026-09-08, before the trainings do, so every
+step is chained with SLURM dependencies.
+
+| job | what | starts |
+|---|---|---|
+| 15776831 / 15776833 | the two trainings | running since 17:16, done ~06:15 |
+| 15776838 / 15776839 `ais_eval_<variant>` | `afterany` the training: stage, cache v5 primary / training_extra / holdout and apg3d primary / holdout, then the `current-defaults`, `contact-ridge` and `contact-mask` screens | ~06:15 |
+| 15777359 `ais_decoder_tuning2` | `afterany` both evaluations (frozen `launch_tuning_after_caches.sh`): waits for the 2d caches, submits the two grid sweeps (1728 combinations) and the eight-configuration contact screen per variant, then ranks all six sweeps into `<root>/ais/reports/dec_<variant>_sweep_dev.csv` | ~06:20 |
+| 15777357 `ais_decoder_finalize_r2` | `afterany` both evaluations (frozen `finalize_round2_reports.sh`): submits the `dec-top1` screens of the two new decoders `afterok` their prediction jobs, waits for every round-2 screen, then writes `decoders_all_defaults_{dev,holdout}`, `decoders_all_tuned_{dev,holdout}`, `decoders_all_3d`, `decoders_<variant>_contact_dev` and the field diagnostics of both new decoders | ~06:20 |
+| 15777315 `ais_decoder_finalize2` | the round-1 finalisation, rerun from a frozen copy | queued |
+
+`finalize_round2_reports.sh` is new (`finetuning/v2/generalist/ais_decoder/`); it replaces the manual "submit the
+`dec-top1` screens once the caches exist, then run the section 5 commands" step of the hand-over, so the
+successor only has to read the tables.
