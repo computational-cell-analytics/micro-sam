@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import re
 import ast
 import csv
@@ -1590,9 +1591,8 @@ DATASET_SPACING: dict = {
 # The parameters `AutomaticPromptGenerator.generate` accepts, so a run can be described by one dict.
 GENERATE_PARAM_KEYS = (
     "candidate_threshold", "foreground_threshold", "n_iter", "dt", "sigma", "min_candidate_size",
-    "score_threshold", "score_filter", "max_overlap", "min_size", "max_size_factor", "refinement",
-    "refinement_kwargs", "multimasking", "multimask_scorer", "multimask_selection",
-    "n_objects_per_pass", "early_stop_patience", "propagation_waves", "batch_size", "n_threads",
+    "score_threshold", "max_overlap", "min_size", "max_size_factor", "refinement", "refinement_kwargs",
+    "multimasking", "n_objects_per_pass", "early_stop_patience", "propagation_waves", "batch_size", "n_threads",
 )
 
 
@@ -1626,6 +1626,35 @@ def resolve_params(overrides=None, ndim=2, model_type=None):
         params["candidate_threshold"] = overrides.get("candidate_threshold_3d", default_3d)
     params.pop("candidate_threshold_3d", None)
     return params
+
+
+def load_apg_overrides(path):
+    """Read one APG configuration file and return its name and raw 2d parameter overrides.
+
+    The file has the shape the optimization benchmark uses, ``{"name": ..., "params_2d": {...}}``
+    (``params_3d`` may be present and is ignored here). The overrides are returned unresolved, so
+    they can be layered over tuned parameters; `resolve_params` fills in the defaults.
+
+    Args:
+        path: The JSON configuration file.
+
+    Returns:
+        The configuration name and the 2d overrides, keyed as `generate` takes them.
+    """
+    import json
+
+    with open(path) as f:
+        config = json.load(f)
+    unknown_top_level = set(config) - {"name", "params_2d", "params_3d"}
+    if unknown_top_level:
+        raise ValueError(f"Unknown configuration fields in '{path}': {sorted(unknown_top_level)}.")
+    overrides = config.get("params_2d", {})
+    if not isinstance(overrides, dict):
+        raise TypeError(f"'params_2d' in '{path}' must be an object.")
+    unknown = set(overrides) - set(GENERATE_PARAM_KEYS)
+    if unknown:
+        raise ValueError(f"Unknown APG parameters in '{path}': {sorted(unknown)}.")
+    return str(config.get("name", Path(path).stem)), dict(overrides)
 
 
 def _alias_micro_sam2_modules():
