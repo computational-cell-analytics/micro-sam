@@ -804,3 +804,49 @@ settle this by itself because the cached scorer ignores the contact keywords, so
 `dec-top1` overstates it. Screens of the missing cells were submitted at 06:42: `dec-base-top1` for `baseline`
 (job dec_baseline_own_screen) and `dec-bnd-top1` / `dec-bnd-top1-ridge1` for `boundary`
 (dec_boundary_own_screen), i.e. each decoder at its own sweep optimum, with and without the ridge.
+
+**12. The corrected comparison: every decoder against `baseline` at ITS OWN optimum** (screens
+`dec_baseline_own_screen` / `dec_boundary_own_screen`, `ais/reports/decoders_own_optimum_*`). `baseline` at
+`dec-base-top1` scores **0.4244 dev / 0.4052 holdout**, against 0.4200 / 0.4025 at `dec-top1`. Recomputing every
+candidate's best configuration against that reference:
+
+| decoder (best configuration) | dev | vs baseline's own optimum | holdout | vs baseline's own optimum |
+|---|---:|---:|---:|---:|
+| `boundary` + ridge 1 @ `dec-top1` | 0.4340 | **+2.3 %** | 0.4085 | +0.8 % |
+| `boundary_fgcal` + ridge 1 @ `dec-top1` | 0.4311 | +1.6 % | 0.4082 | +0.7 % |
+| `fgcal` @ `dec-fgcal-top1` | 0.4298 | +1.3 % | 0.4094 | +1.0 % |
+| `both` + ridge 1 @ `dec-top1` | 0.4271 | +0.6 % | **0.4113** | **+1.5 %** |
+| `baseline` @ `dec-base-top1` | 0.4244 | - | 0.4052 | - |
+| `contact` + ridge 1 @ `dec-top1` | 0.4155 | -2.1 % | 0.4044 | -0.2 % |
+
+**This retracts the "10 of 11 datasets up" of point 3.** Against `baseline` at its own optimum, `boundary` +
+ridge 1 has **7 of 11 up on dev** and 3 of 5 on the holdout, with four datasets down: deepbacs -10.2 %,
+neurips -6.1 %, tissuenet -5.0 %, puma -0.3 % (up: deepseas +28.1 %, dic_hepg2 +26.5 %, tnbc +6.5 %, covid_if
++4.2 %, livecell +4.2 %, yeaz +3.3 %, dynamicnuclearnet +1.0 %). tissuenet alone swings 14 points
+(+9.1 % -> -5.0 %) purely from the reference, because `baseline` at threshold 0.4 / density 10 / sigma 1.0 is far
+better there than at `dec-top1`. The lesson of 4.7 therefore applies to round 2 in full: **a shared tuned
+configuration flatters whichever decoder it was tuned on**, and the only defensible reference is each decoder at
+its own optimum.
+
+What survives the correction: the target change is worth **+4.4 points** over round 1 (`contact` -2.1 % ->
+`boundary` +2.3 % on dev, both at their best configuration against the same reference), the head is confident
+(point 1), and the collateral damage on the unseen datasets is repaired (covid_if +4.2 %, deepseas +28.1 %).
+What does not: the dev gain is +2.3 % rather than +3.3 %, it does not confirm on the holdout (+0.8 %, where
+round-1 `both` reaches +1.5 %), and four datasets are down rather than one. Under the user's rule - only
+cross-dataset wins that hold on the holdout count - **the boundary channel is a real improvement over the
+contact channel but still not a win over the plain fine-tune**, and no configuration of any of the six decoders
+passes the gate.
+
+**13. `boundary`'s own sweep optimum is not its best configuration once the ridge exists.**
+`dec-bnd-top1` (threshold 0.5, density 10, sigma 1.0) scores 0.4273 / 0.4000 and with ridge 1 0.4269 / 0.4007,
+against 0.4340 / 0.4085 for `dec-top1` + ridge 1 (density 50, sigma 0.5). The ridge and the seed regime
+interact: the ridge pays off in the few-converged-seeds regime, and the sweep - which cannot evaluate the contact
+keywords at all - therefore optimises into the wrong basin. dic_hepg2 shows it starkly: -8.6 % at
+`dec-bnd-top1-ridge1` against +26.5 % at `dec-top1-ridge1`. **A ridge-blind sweep cannot tune a five-channel
+decoder**; the grid needs `contact_weight` as a dimension, which requires teaching the cached scorer the contact
+keywords.
+
+**14. `boundary_fgcal`'s ridge and mask** (`decoders_boundary_fgcal_contact_*`): the ridge is worth at most
++0.13 % (dev, w0.5) and the mask +0.24 % (dev, t0.5) / +0.28 % (holdout) against its own defaults - an order of
+magnitude less than for `boundary`, and higher ridge weights *hurt* (-0.35 % at w4). Its foreground is already
+calibrated, so the seeds it would gain from a ridge are largely there; consistent with point 6.
