@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 import numpy as np
 
 from scipy.ndimage import binary_dilation
+
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 
@@ -277,10 +278,9 @@ def _joint_em_cell_label_trafo(y, label_trafo, ignore_label=None):
 
 
 def object_boundaries(labels: np.ndarray) -> np.ndarray:
-    """Return a learnable-width mask of all object boundaries.
+    """Return a dilated mask of all object boundaries.
 
-    The inner boundary of every object is dilated once. Thus isolated objects as well as boundaries between
-    touching objects contribute to the target.
+    The transform dilates each inner boundary once. The target includes isolated objects and objects that touch.
     """
     boundary = find_boundaries(np.asarray(labels), mode="inner")
     if boundary.any():
@@ -289,18 +289,18 @@ def object_boundaries(labels: np.ndarray) -> np.ndarray:
 
 
 class DirectedPerObjectBoundaryDistanceTransform:
-    """Compute directed-distance targets, optionally with an additional boundary channel.
+    """Compute directed-distance targets with an optional boundary channel.
 
     The channel layout is ``[instance_ids?, foreground?, d_z, d_y, d_x, boundaries?]``.
 
     Args:
-        min_size: Objects smaller than this are removed before the transform.
-        foreground: Whether to prepend the binary foreground mask.
-        instances: Whether to prepend the instance IDs.
-        apply_label: Whether to relabel the input with connected components.
-        sampling: Voxel spacing for anisotropic data.
-        with_boundaries: Whether to append the full object-boundary mask.
-        n_threads: Number of threads to parallelize the per-object distance computation.
+        min_size: The minimum object size. The transform removes smaller objects.
+        foreground: The flag to prepend the binary foreground mask.
+        instances: The flag to prepend the instance IDs.
+        apply_label: The flag to relabel the input with connected components.
+        sampling: The voxel spacing for anisotropic data.
+        with_boundaries: The flag to append the full object-boundary mask.
+        n_threads: The number of threads for distance computation across objects.
     """
     eps = 1e-7
 
@@ -502,13 +502,12 @@ class GeodesicHybridDistanceTransform(DirectedPerObjectBoundaryDistanceTransform
 class _JointLabelTransform(DirectedPerObjectBoundaryDistanceTransform):
     """Distance transform for joint interactive + automatic training.
 
-    Identical to :class:`DirectedPerObjectBoundaryDistanceTransform` but
-    defaults to ``instances=True`` so the output has five channels by default:
-    ``[instance_ids, foreground_mask, d_z, d_y, d_x]``. It has six channels when
-    ``with_boundaries=True``.
+    This transform sets ``instances=True`` by default.
+    The output layout is ``[instance_ids, foreground_mask, d_z, d_y, d_x, boundaries?]``.
+    Set ``with_boundaries=True`` to append the sixth channel.
 
     The interactive branch uses channel 0 (cast to int64 as instance IDs)
-    and the automatic branch uses channels 1-4.
+    and the automatic branch uses channels 1 onward.
     """
 
     def __init__(self, instances: bool = True, **kwargs):
@@ -518,11 +517,8 @@ class _JointLabelTransform(DirectedPerObjectBoundaryDistanceTransform):
 class _JointGeodesicLabelTransform(GeodesicHybridDistanceTransform):
     """Geodesic hybrid distance transform for joint interactive + automatic training.
 
-    The :class:`GeodesicHybridDistanceTransform` counterpart of
-    :class:`_JointLabelTransform`: same output layout
-    ``[instance_ids, foreground_mask, d_z, d_y, d_x, boundaries?]``, but the directed distances come from
-    the geodesic field around each object's center instead of the euclidean vector to the
-    nearest boundary.
+    The output layout is ``[instance_ids, foreground_mask, d_z, d_y, d_x, boundaries?]``.
+    The directed distances come from the geodesic field around each object's center.
     """
 
     def __init__(self, instances: bool = True, **kwargs):

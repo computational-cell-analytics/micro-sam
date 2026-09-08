@@ -2755,7 +2755,7 @@ def get_dataloaders(
             - ``"em"``: Electron microscopy datasets only.
             - ``"hp"``: Histopathology datasets only.
             - ``"all"``: All datasets (default).
-        with_boundaries: Whether the automatic targets contain an additional full-boundary channel.
+        with_boundaries: The flag to append the full object-boundary channel to the automatic targets.
     """
     if dataset_choice not in ("lm", "em", "hp", "all"):
         raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', 'hp', or 'all'.")
@@ -2988,7 +2988,7 @@ def _build_joint_datasets(
         distance_type: Which directed distance target the automatic branch regresses.
             ``"geodesic"`` uses :class:`_JointGeodesicLabelTransform`, ``"directed"`` uses
             :class:`_JointLabelTransform`.
-        with_boundaries: Whether to append the full-boundary target for the automatic branch.
+        with_boundaries: The flag to append the full object-boundary target for the automatic branch.
         label_trafo_threads: Threads per loader worker that process the objects of one patch in parallel
             in the distance transform. Only pays off when the node has more cores than loader workers.
 
@@ -2999,7 +2999,7 @@ def _build_joint_datasets(
         raise ValueError(f"Invalid distance_type: {distance_type!r}. Expected 'geodesic' or 'directed'.")
 
     patch_shape = (512, 512)
-    # Both default to instances=True -> 5-channel output; with_boundaries adds the optional sixth channel.
+    # The boundary target adds a sixth channel after the instance IDs, foreground, and distances.
     label_trafo = partial(
         _JointGeodesicLabelTransform if distance_type == "geodesic" else _JointLabelTransform,
         with_boundaries=with_boundaries,

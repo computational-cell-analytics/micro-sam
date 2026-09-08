@@ -647,8 +647,8 @@ def train_automatic(
             the pretrained SAM2 weights to start from.
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
-        with_boundaries: Add a fifth decoder output supervised with the full object-boundary target.
-        boundary_dice_weight: Relative Dice weight for the boundary channel. One is Dice only, zero is BCE only.
+        with_boundaries: The flag to add a fifth decoder output for the full object-boundary target.
+        boundary_dice_weight: The Dice weight for the boundary channel. One selects Dice only. Zero selects BCE only.
     """
     import torch_em
 
@@ -660,8 +660,7 @@ def train_automatic(
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
     loss = DirectedDistanceLoss(
-        mask_distances_in_bg=True, with_boundaries=with_boundaries,
-        boundary_dice_weight=boundary_dice_weight,
+        mask_distances_in_bg=True, with_boundaries=with_boundaries, boundary_dice_weight=boundary_dice_weight,
     )
 
     trainer = torch_em.default_segmentation_trainer(
@@ -732,9 +731,7 @@ def _train_automatic_rank(
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
 
-    train_ds, val_ds = _build_automatic_datasets(
-        input_path, z_slices, dataset_choice, with_boundaries=with_boundaries,
-    )
+    train_ds, val_ds = _build_automatic_datasets(input_path, z_slices, dataset_choice, with_boundaries=with_boundaries)
 
     batch_size_per_group = {2: batch_size_2d} if batch_size_2d != batch_size else None
 
@@ -776,8 +773,7 @@ def _train_automatic_rank(
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
     loss = DirectedDistanceLoss(
-        mask_distances_in_bg=True, with_boundaries=with_boundaries,
-        boundary_dice_weight=boundary_dice_weight,
+        mask_distances_in_bg=True, with_boundaries=with_boundaries, boundary_dice_weight=boundary_dice_weight,
     )
 
     trainer = torch_em.default_segmentation_trainer(
@@ -866,8 +862,8 @@ def train_automatic_multi_gpu(
         peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
-        with_boundaries: Add a fifth decoder output supervised with the full object-boundary target.
-        boundary_dice_weight: Relative Dice weight for the boundary channel. One is Dice only, zero is BCE only.
+        with_boundaries: The flag to add a fifth decoder output for the full object-boundary target.
+        boundary_dice_weight: The Dice weight for the boundary channel. One selects Dice only. Zero selects BCE only.
     """
     if z_slices is None:
         z_slices = [8]
@@ -1064,8 +1060,8 @@ def train_joint_sam2(
         distance_type: Directed distance target for the automatic branch. "geodesic" uses the
             geodesic hybrid field around each object's center, "directed" the euclidean vector
             to the nearest boundary.
-        with_boundaries: Add a fifth automatic output supervised with the full object-boundary target.
-        boundary_dice_weight: Relative Dice weight for the boundary channel. One is Dice only, zero is BCE only.
+        with_boundaries: The flag to add a fifth automatic output for the full object-boundary target.
+        boundary_dice_weight: The Dice weight for the boundary channel. One selects Dice only. Zero selects BCE only.
         label_trafo_threads: Threads per loader worker that process the objects of one patch in parallel
             in the distance transform. Only pays off when the node has more cores than loader workers.
         compile: The parts to compile with ``torch.compile``. "encoder" is the shared image encoder,
@@ -1123,8 +1119,7 @@ def train_joint_sam2(
         compile_kernels="loss" in compile,
     )
     automatic_loss = DirectedDistanceLoss(
-        mask_distances_in_bg=True, with_boundaries=with_boundaries,
-        boundary_dice_weight=boundary_dice_weight,
+        mask_distances_in_bg=True, with_boundaries=with_boundaries, boundary_dice_weight=boundary_dice_weight,
     )
     convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
 
@@ -1296,8 +1291,7 @@ def _train_joint_rank(
         compile_kernels="loss" in compile,
     )
     automatic_loss = DirectedDistanceLoss(
-        mask_distances_in_bg=True, with_boundaries=with_boundaries,
-        boundary_dice_weight=boundary_dice_weight,
+        mask_distances_in_bg=True, with_boundaries=with_boundaries, boundary_dice_weight=boundary_dice_weight,
     )
     convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
 
@@ -1447,8 +1441,8 @@ def train_joint_sam2_multi_gpu(
         distance_type: Directed distance target for the automatic branch. "geodesic" uses the
             geodesic hybrid field around each object's center, "directed" the euclidean vector
             to the nearest boundary.
-        with_boundaries: Add a fifth automatic output supervised with the full object-boundary target.
-        boundary_dice_weight: Relative Dice weight for the boundary channel. One is Dice only, zero is BCE only.
+        with_boundaries: The flag to add a fifth automatic output for the full object-boundary target.
+        boundary_dice_weight: The Dice weight for the boundary channel. One selects Dice only. Zero selects BCE only.
         label_trafo_threads: Threads per loader worker that process the objects of one patch in parallel
             in the distance transform. Only pays off when the node has more cores than loader workers.
         compile: The parts to compile with ``torch.compile``. "encoder" is the shared image encoder,

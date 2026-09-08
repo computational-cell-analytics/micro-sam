@@ -21,15 +21,15 @@ def _masked_mse(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tens
 class DirectedDistanceLoss(nn.Module):
     """Loss for directed distance based instance segmentation.
 
-    Expects foreground and three directed-distance channels, plus an optional fifth boundary channel. The
-    boundary loss interpolates between Dice and binary cross entropy according to ``boundary_dice_weight``.
+    The inputs contain foreground, three directed distances, and an optional fifth boundary channel.
+    The boundary loss combines Dice and binary cross entropy (BCE) with ``boundary_dice_weight``.
 
     Args:
-        mask_distances_in_bg: Whether to mask distance predictions in the background.
-        foreground_loss: Loss for comparing foreground predictions and target.
-        with_boundaries: Whether input and target contain the fifth boundary channel.
-        boundary_dice_weight: Relative Dice weight in the boundary loss. One selects Dice only, zero selects
-            BCE only, and intermediate values compute their convex combination.
+        mask_distances_in_bg: The flag to exclude background voxels from the distance loss.
+        foreground_loss: The loss for foreground predictions and targets.
+        with_boundaries: The flag for a fifth boundary channel in the inputs and targets.
+        boundary_dice_weight: The Dice weight in the boundary loss. One selects Dice only.
+            Zero selects BCE only. Values between zero and one mix the two losses.
     """
     def __init__(
         self,
@@ -41,9 +41,7 @@ class DirectedDistanceLoss(nn.Module):
         super().__init__()
 
         if not 0.0 <= boundary_dice_weight <= 1.0:
-            raise ValueError(
-                f"boundary_dice_weight must be between zero and one, got {boundary_dice_weight}."
-            )
+            raise ValueError(f"boundary_dice_weight must be between zero and one, got {boundary_dice_weight}.")
 
         self.foreground_loss = foreground_loss
         self.mask_distances_in_bg = mask_distances_in_bg
@@ -59,7 +57,7 @@ class DirectedDistanceLoss(nn.Module):
 
     @property
     def n_channels(self) -> int:
-        """Number of prediction and target channels expected by the loss."""
+        """Return the number of prediction and target channels."""
         return 4 + int(self.with_boundaries)
 
     def forward(self, input_: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -101,21 +99,15 @@ class DirectedDistanceLoss(nn.Module):
             if self.boundary_dice_weight == 1.0:
                 boundary_loss = dice_loss
             else:
-                # The decoder returns sigmoid probabilities. CUDA autocast prohibits probability-based BCE,
-                # so disable autocast and compute in float32. Clamping prevents exact zero or one after a
-                # bfloat16 sigmoid from producing infinities.
+                # CUDA autocast prohibits BCE on probabilities.
                 with torch.autocast(device_type=boundary_input.device.type, enabled=False):
+                    # Clamp rounded sigmoid outputs to keep them away from zero and one.
                     probability = boundary_input.float().clamp(1e-6, 1.0 - 1e-6)
                     error = F.binary_cross_entropy(probability, boundary_target.float(), reduction="none")
                     # Normalize over valid voxels per sample, as for the distance terms.
                     boundary_valid = valid.float()
                     dims = tuple(range(1, error.ndim))
-                    bce_loss = (
-                        (error * boundary_valid).sum(dims) / boundary_valid.sum(dims).clamp_min(1.0)
-                    ).mean()
-                boundary_loss = (
-                    self.boundary_dice_weight * dice_loss
-                    + (1.0 - self.boundary_dice_weight) * bce_loss
-                )
+                    bce_loss = ((error * boundary_valid).sum(dims) / boundary_valid.sum(dims).clamp_min(1.0)).mean()
+                boundary_loss = self.boundary_dice_weight * dice_loss + (1.0 - self.boundary_dice_weight) * bce_loss
             overall_loss = overall_loss + boundary_loss
         return overall_loss

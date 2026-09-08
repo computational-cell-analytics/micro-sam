@@ -1,7 +1,8 @@
 import unittest.mock
 
-import numpy as np
 import pytest
+import numpy as np
+
 import torch
 import torch.nn.functional as F
 
@@ -10,11 +11,11 @@ from torch_em.loss import DiceLoss
 from micro_sam.v2.loss import DirectedDistanceLoss
 from micro_sam.v2.models.util import CustomActivation
 from micro_sam.v2.transforms.labels import (
-    FOREGROUND_IGNORE_VALUE,
-    _JointLabelTransform,
-    DirectedPerObjectBoundaryDistanceTransform,
-    GeodesicHybridDistanceTransform,
     object_boundaries,
+    _JointLabelTransform,
+    FOREGROUND_IGNORE_VALUE,
+    GeodesicHybridDistanceTransform,
+    DirectedPerObjectBoundaryDistanceTransform,
 )
 
 
@@ -38,15 +39,13 @@ def test_boundary_transform_is_optional_and_uses_all_object_boundaries():
     expected = object_boundaries(labels).astype("float32")
 
     plain = DirectedPerObjectBoundaryDistanceTransform(apply_label=False)(labels)
-    with_boundaries = DirectedPerObjectBoundaryDistanceTransform(
-        apply_label=False, with_boundaries=True,
-    )(labels)
+    with_boundaries = DirectedPerObjectBoundaryDistanceTransform(apply_label=False, with_boundaries=True)(labels)
 
     assert plain.shape == (4, *labels.shape)
     assert with_boundaries.shape == (5, *labels.shape)
     np.testing.assert_array_equal(with_boundaries[:4], plain)
     np.testing.assert_array_equal(with_boundaries[4], expected)
-    # Both isolated objects must contribute, unlike a touching-objects contact target.
+    # The target must include both isolated objects.
     assert with_boundaries[4, 3:12, 3:12].any()
     assert with_boundaries[4, 13:21, 14:22].any()
 
@@ -64,9 +63,7 @@ def test_joint_transform_appends_boundary_after_automatic_targets():
 def test_boundary_loss_interpolates_dice_and_bce(dice_weight):
     prediction, target = _loss_tensors()
     base = DirectedDistanceLoss()(prediction[:, :4], target[:, :4])
-    actual = DirectedDistanceLoss(
-        with_boundaries=True, boundary_dice_weight=dice_weight,
-    )(prediction, target)
+    actual = DirectedDistanceLoss(with_boundaries=True, boundary_dice_weight=dice_weight)(prediction, target)
 
     dice = DiceLoss()(prediction[:, 4:5], target[:, 4:5])
     bce = F.binary_cross_entropy(prediction[:, 4:5].float(), target[:, 4:5].float())
@@ -173,25 +170,21 @@ def test_custom_activation_supports_four_and_five_channels():
 
 
 def test_boundary_training_target_activation_and_backward():
-    target = GeodesicHybridDistanceTransform(
-        apply_label=False, with_boundaries=True,
-    )(_labels())
+    target = GeodesicHybridDistanceTransform(apply_label=False, with_boundaries=True)(_labels())
     target = torch.from_numpy(target)[None, :, None]
     logits = torch.randn_like(target, requires_grad=True)
     prediction = CustomActivation()(logits)
 
-    loss = DirectedDistanceLoss(
-        with_boundaries=True, boundary_dice_weight=0.5,
-    )(prediction, target)
+    loss = DirectedDistanceLoss(with_boundaries=True, boundary_dice_weight=0.5)(prediction, target)
     loss.backward()
 
     assert torch.isfinite(loss)
     assert logits.grad is not None
     assert logits.grad[:, 4].abs().sum() > 0
     assert prediction[:, 4].min() >= 0 and prediction[:, 4].max() <= 1
-    assert torch.isfinite(DirectedDistanceLoss(
-        with_boundaries=True, boundary_dice_weight=0.5,
-    )(prediction.bfloat16(), target))
+    assert torch.isfinite(
+        DirectedDistanceLoss(with_boundaries=True, boundary_dice_weight=0.5)(prediction.bfloat16(), target)
+    )
 
 
 @pytest.mark.parametrize("with_boundaries, expected_channels", [(False, 4), (True, 5)])
