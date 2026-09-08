@@ -640,3 +640,34 @@ merge share falling on livecell / tissuenet / neurips, and a *new* kind of loss 
 which the mechanism columns separate (`seeded_split` and `gt_with_0_seeds` rather than `seeded_merged`). Both
 modes are screened at 0.5 / 1 / 2 / 4 and 0.3 / 0.5 / 0.7 for each new decoder, so this is testable rather than
 argued.
+
+### 5.5 `SBATCH_EXPORT=none` silently reverted the round-2 tuning to round 1 (2026-09-08, 06:15)
+
+Both trainings finished cleanly on the first attempt - `boundary` COMPLETED in 12:48:29 (48000 iterations, best
+epoch 65 of 76, validation 0.786 at epoch 1 -> 0.576) and `boundary_fgcal` in 12:49 (best 0.804 from 1.076) -
+and the evaluation chain staged both checkpoints with five output channels and submitted the caches, screens and
+`dec-top1` screens as designed.
+
+`ais_decoder_tuning2` then did the wrong thing: at 06:13 it logged `caches of baseline ready, submitting sweeps`
+and re-submitted the four **round-1** sweep arrays plus the 24-task `dec_contact_contact_screen`, and never
+submitted anything for the two new decoders. Cause: **`SBATCH_EXPORT=none` is set in this environment**
+(`echo $SBATCH_EXPORT`), so `sbatch` does not propagate the submitting environment and the `WAIT_VARIANTS` /
+`VARIANTS` variables never reached the script, which fell back to its round-1 defaults. The note in the previous
+hand-over - "`sbatch --export=ALL` is the default, so the two variables reach the script" - is wrong on this
+system, so the original submission (15776840) carried the same latent bug; only the deliberate stop and restart
+of the session caught it, because the failure is silent and produces plausible-looking work.
+
+Recovery (06:15-06:17), all of it visible in `<root>/jobs/`:
+
+- cancelled the five redundant arrays (46 tasks) and `tuning2`, and moved their job directories to
+  `<root>/jobs/_superseded/` so that `tasks_done` sees the completed round-1 directories as the newest again
+  (it reads `ls -td | head -1`, so an empty newer directory shadows a finished one);
+- submitted by hand what the launcher should have: `dec_boundary_sweep_{primary,extra}` (15783735 / 15783736)
+  and `dec_boundary_contact_screen` (15783737) on the finished cache, and the same three for `boundary_fgcal`
+  (15783738 / 15783739 / 15783740) `afterok` its still-running `predict2d` array;
+- `ais_rank_round2` (15783741) ranks both new sweeps `afterany` the four arrays.
+
+Fix in the repository: `launch_tuning_after_caches.sh` now takes the variants as arguments
+(`--wait boundary boundary_fgcal --rank baseline contact ... boundary_fgcal`) and only falls back to the
+environment when run directly in a shell. **Rule: never pass campaign parameters to a SLURM job through the
+environment on this cluster** - put them in the command line or in the frozen script.
