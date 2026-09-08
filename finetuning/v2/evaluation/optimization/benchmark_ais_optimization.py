@@ -1,14 +1,15 @@
 """Benchmark AIS (decoder-based automatic instance segmentation) post-processing on cached predictions.
 
-The UniSAM2 decoder prediction of a sample, a (4, *spatial) array of foreground probability and three
-directed-distance channels, does not depend on any post-processing choice. This benchmark therefore
+The UniSAM2 decoder prediction of a sample is a (4, *spatial) array of foreground probability and three
+directed-distance channels, optionally followed by a fifth boundary channel. It does not depend on any
+post-processing choice. This benchmark therefore
 predicts every sample of a manifest once (`predict`, GPU), caches the prediction, and runs every
 post-processing configuration, diagnostic and parameter sweep on the cache (CPU). A configuration run
 still writes a canonical run directory in the layout of `benchmark_apg_optimization.py`, so
 `compare_apg_optimization.py` reads it unchanged.
 
 Manifests are reused from the APG campaigns: the 2d subset manifests (`--kind v5`: primary, holdout,
-training_extra; 240 / 233 / 157 images plus five standard volumes) and the deep 3d crop manifests
+training_extra and the sealed 180-image ood_extended set) and the deep 3d crop manifests
 (`--kind apg3d`: primary, holdout, test). Nothing is rebuilt and the data root is read-only.
 
 Usage examples:
@@ -94,6 +95,7 @@ SPARSE_KEYS = (
     "boundary_magnitude_max", "seed_floor", "contact_weight", "contact_mask_threshold",
 )
 DENSE_KEYS = ("beta", "density_threshold", "n_iter", "dt", "sigma")
+EXPLICIT_OFF = "off"
 # Metric columns of a sample row; means and standard deviations are reported per dataset.
 METRIC_COLUMNS = ("msa", "cremi", "vi_split", "vi_merge", "adapted_rand", "fg_iou", "fg_area_ratio", "matched_iou")
 # Count columns; sums are reported per dataset.
@@ -105,10 +107,15 @@ COUNT_COLUMNS = (
 )
 # The generalization gate of the 2026-09 screens (EXPERIMENTAL_SETUP.md, section 9).
 GATE = {"max_down": 2, "max_relative_loss": -0.02, "max_absolute_loss": -0.005, "min_balanced_gain": 0.02}
+SWEEP_CACHE_KEYS = {
+    "sparse": ("foreground_threshold", "sigma", "n_iter", "dt"),
+    "dense": ("density_threshold", "sigma", "n_iter", "dt"),
+}
 
 IMPLEMENTATION_FILES = (
     Path(__file__),
     Path(common.__file__),
+    EVALUATION_ROOT / "optimization/benchmark_apg_optimization.py",
     EVALUATION_ROOT / "parameter_search.py",
     REPOSITORY_ROOT / "micro_sam/v2/instance_segmentation.py",
     REPOSITORY_ROOT / "micro_sam/v2/postprocessing.py",
@@ -151,9 +158,30 @@ def resolve_postprocessing(
     unknown_sparse, unknown_dense = set(sparse) - set(SPARSE_KEYS), set(dense) - set(DENSE_KEYS)
     if unknown_sparse or unknown_dense:
         raise ValueError(f"Unknown AIS parameters: sparse={sorted(unknown_sparse)}, dense={sorted(unknown_dense)}.")
+
+    sparse_defaults = default_postprocessing(model_type, "sparse", ndim=ndim)
+    dense_defaults = default_postprocessing(model_type, "dense", ndim=ndim)
+
+    def normalize(values: Dict[str, Any], defaults: Dict[str, Any], mode: str) -> Dict[str, Any]:
+        normalized = dict(defaults)
+        for key, value in values.items():
+            # Every post-processing keyword uses None to request its model default. Preserve that
+            # convention in JSON too; otherwise a sweep row and the same row evaluated through
+            # `run` can silently execute different pipelines.
+            if value is None:
+                continue
+            if value == EXPLICIT_OFF:
+                if mode != "sparse" or key != "boundary_magnitude_max":
+                    raise ValueError(
+                        f"The explicit value '{EXPLICIT_OFF}' is only valid for boundary_magnitude_max."
+                    )
+                value = float("inf")
+            normalized[key] = value
+        return normalized
+
     return {
-        "sparse": {**default_postprocessing(model_type, "sparse", ndim=ndim), **sparse},
-        "dense": {**default_postprocessing(model_type, "dense", ndim=ndim), **dense},
+        "sparse": normalize(sparse, sparse_defaults, "sparse"),
+        "dense": normalize(dense, dense_defaults, "dense"),
     }
 
 
@@ -285,6 +313,19 @@ class PredictionCache:
             valid = np.ascontiguousarray(data["valid"], dtype=bool) if "valid" in data.files else None
         with open(record_path) as f:
             record = json.load(f)
+        if record.get("checkpoint_checksum") != self.checkpoint_id:
+            raise RuntimeError(f"Cached prediction '{array_path}' belongs to a different checkpoint.")
+        if record.get("sample_id") != sample["sample_id"]:
+            raise RuntimeError(f"Cached prediction '{array_path}' belongs to a different sample.")
+        if record.get("shape") != list(prediction.shape):
+            raise RuntimeError(f"Cached prediction '{array_path}' does not match its recorded shape.")
+        if prediction.shape[0] < 4 or prediction.shape[1:] != labels.shape:
+            raise RuntimeError(
+                f"Cached prediction / label shape mismatch for '{sample['sample_id']}': "
+                f"{prediction.shape} and {labels.shape}."
+            )
+        if valid is not None and valid.shape != labels.shape:
+            raise RuntimeError(f"Cached validity mask for '{sample['sample_id']}' has the wrong shape.")
         return prediction, labels, valid, record
 
     def store(
@@ -672,6 +713,7 @@ def score_sample(
         "dataset": sample["dataset"],
         "ndim": context["ndim"],
         "family": sample.get("family", sample["dataset"]),
+        "stratum": sample.get("stratum", ""),
         "seen_in_training": str(sample.get("seen_in_training", "")),
         "metric_mode": context["metric_mode"],
         "postprocessing_mode": context["postprocessing_mode"],
@@ -915,7 +957,9 @@ def gate_table(baseline: pd.Series, candidate: pd.Series, gate: Dict[str, float]
         "relative": dict(zip(datasets, relative.tolist())),
         "balanced_baseline": float(base.mean()), "balanced_candidate": float(cand.mean()),
         "balanced_gain": balanced_gain,
-        "worst_relative": float(np.nanmin(relative)) if len(relative) and np.isfinite(relative).any() else float("nan"),
+        "worst_relative": (
+            float(np.nanmin(relative)) if len(relative) and np.isfinite(relative).any() else float("nan")
+        ),
         "checks": checks, "passed": bool(all(checks.values())),
     }
 
@@ -1001,7 +1045,39 @@ def print_report(table: pd.DataFrame, details: pd.DataFrame) -> None:
 # parameter sweeps on the cache
 
 
-def grid_combinations(grid: Dict[str, List[Any]], mode: str) -> List[Dict[str, Any]]:
+def grid_combinations(grid: Dict[str, Any], mode: str) -> List[Dict[str, Any]]:
+    """Expand a Cartesian grid, explicit candidates, or a shared grid with named mechanism families."""
+    if set(grid) == {"shared", "families"}:
+        shared, families = grid["shared"], grid["families"]
+        if not isinstance(shared, dict) or not isinstance(families, dict) or not families:
+            raise TypeError("A family grid needs 'shared' and a non-empty 'families' parameter mapping.")
+        combinations = []
+        for family, overrides in families.items():
+            if not isinstance(family, str) or not family or not isinstance(overrides, dict):
+                raise TypeError("Every grid family needs a non-empty string name and a parameter mapping.")
+            overlap = set(shared) & set(overrides)
+            if overlap:
+                raise ValueError(f"Grid family '{family}' redefines shared parameters: {sorted(overlap)}.")
+            combinations.extend(
+                {"mechanism_family": family, **combo}
+                for combo in grid_combinations({**shared, **overrides}, mode)
+            )
+        return combinations
+
+    if set(grid) == {"combinations"}:
+        combinations = grid["combinations"]
+        if not isinstance(combinations, list) or not all(isinstance(combo, dict) for combo in combinations):
+            raise TypeError("An explicit grid needs a list of parameter dictionaries in 'combinations'.")
+        if not combinations:
+            raise ValueError("An explicit grid needs at least one parameter combination.")
+        allowed = SPARSE_KEYS if mode == "sparse" else DENSE_KEYS
+        unknown = set().union(*(set(combo) for combo in combinations)) - set(allowed)
+        if unknown:
+            raise ValueError(f"Unknown {mode} grid parameters: {sorted(unknown)}.")
+        unique = {json.dumps(combo, sort_keys=True): dict(combo) for combo in combinations}
+        combinations = list(unique.values())
+        return deduplicate_flow_travel(combinations) if mode == "sparse" else combinations
+
     keys = list(grid)
     allowed = SPARSE_KEYS if mode == "sparse" else DENSE_KEYS
     unknown = set(keys) - set(allowed)
@@ -1020,8 +1096,41 @@ def sweep_dir(
     return output_root / CAMPAIGN / "sweeps" / checkpoint_id / manifest_checksum / identity
 
 
+def shard_combinations(
+    combinations: Sequence[Dict[str, Any]], mode: str, shard_index: int, num_shards: int,
+) -> List[Dict[str, Any]]:
+    """Partition without splitting an expensive cached flow/oversegmentation group across shards."""
+    if num_shards < 1 or not 0 <= shard_index < num_shards:
+        raise ValueError(f"Invalid shard {shard_index} of {num_shards}.")
+    if num_shards == 1:
+        return list(combinations)
+    keys = SWEEP_CACHE_KEYS[mode]
+
+    def identity(combo: Dict[str, Any]) -> str:
+        return json.dumps([combo[key] for key in keys], separators=(",", ":"))
+
+    groups = {identity(combo): combo for combo in combinations}
+    if num_shards > len(groups):
+        raise ValueError(
+            f"Requested {num_shards} shards for only {len(groups)} distinct {mode} cache groups."
+        )
+    # Flow integration cost is approximately linear in n_iter. Greedy longest-first assignment avoids
+    # round-robin shards made entirely of the 1,600-step groups, which otherwise leave most processes on
+    # a packed CPU node idle while a small slow tail finishes.
+    loads = [0] * num_shards
+    group_counts = [0] * num_shards
+    assignment = {}
+    ordered = sorted(groups.items(), key=lambda item: (-int(item[1].get("n_iter", 1)), item[0]))
+    for key, combo in ordered:
+        shard = min(range(num_shards), key=lambda index: (loads[index], group_counts[index], index))
+        assignment[key] = shard
+        loads[shard] += int(combo.get("n_iter", 1))
+        group_counts[shard] += 1
+    return [combo for combo in combinations if assignment[identity(combo)] == shard_index]
+
+
 def sweep_dataset(
-    manifest: Dict[str, Any], cache: PredictionCache, dataset: str, mode: str, grid: Dict[str, List[Any]],
+    manifest: Dict[str, Any], cache: PredictionCache, dataset: str, mode: str, grid: Dict[str, Any],
     model_type: str, n_threads: int, shard_index: int, num_shards: int, out_dir: Path,
 ) -> Path:
     """Score every grid combination of one dataset on the cache; writes the `parameter_search` CSV layout."""
@@ -1031,10 +1140,17 @@ def sweep_dataset(
     contexts = [sample_context(sample, manifest["kind"], mode) for sample in samples]
     postproc_mode = contexts[0]["postprocessing_mode"]
     # The grid keys the sweep did not name stay at the library defaults, and the row records them.
-    defaults = default_postprocessing(model_type, postproc_mode, ndim=contexts[0]["ndim"])
-    combinations = [{**defaults, **combo} for combo in grid_combinations(grid, postproc_mode)]
-    if num_shards > 1:
-        combinations = combinations[shard_index::num_shards]
+    combinations = []
+    for candidate in grid_combinations(grid, postproc_mode):
+        candidate = dict(candidate)
+        family = candidate.pop("mechanism_family", None)
+        resolved = resolve_postprocessing(
+            {postproc_mode: candidate}, model_type, ndim=contexts[0]["ndim"],
+        )[postproc_mode]
+        if family is not None:
+            resolved["mechanism_family"] = family
+        combinations.append(resolved)
+    combinations = shard_combinations(combinations, postproc_mode, shard_index, num_shards)
     suffix = "" if num_shards <= 1 else f".shard{shard_index}of{num_shards}"
     out_path = out_dir / f"{dataset}{suffix}.csv"
     if out_path.exists():
@@ -1194,7 +1310,8 @@ def oracle_sample(
     }
     row = {
         "sample_id": sample["sample_id"], "dataset": sample["dataset"], "ndim": context["ndim"],
-        "family": sample.get("family", sample["dataset"]), "metric_mode": context["metric_mode"],
+        "family": sample.get("family", sample["dataset"]), "stratum": sample.get("stratum", ""),
+        "metric_mode": context["metric_mode"],
         "gt_objects": int(len(np.unique(labels)) - 1),
     }
     for name, segmentation in variants.items():

@@ -59,6 +59,19 @@ def test_resolve_postprocessing_fills_library_defaults():
         ais.resolve_postprocessing({"sparse": {}, "n_iter": 50}, "hvit_t")
 
 
+def test_resolve_postprocessing_null_uses_default_and_off_disables_filter():
+    defaults = ais.resolve_postprocessing({}, "hvit_t")["sparse"]
+    resolved = ais.resolve_postprocessing({"boundary_magnitude_max": None}, "hvit_t")["sparse"]
+    assert resolved["boundary_magnitude_max"] == defaults["boundary_magnitude_max"]
+    assert np.isinf(
+        ais.resolve_postprocessing({"boundary_magnitude_max": "off"}, "hvit_t")["sparse"][
+            "boundary_magnitude_max"
+        ]
+    )
+    with pytest.raises(ValueError, match="only valid for boundary_magnitude_max"):
+        ais.resolve_postprocessing({"seed_floor": "off"}, "hvit_t")
+
+
 def test_load_config_defaults_and_file(tmp_path):
     name, mode, params_2d, params_3d = ais.load_config(None, "hvit_t")
     assert (name, mode) == ("current-defaults", "auto")
@@ -79,6 +92,26 @@ def test_load_config_defaults_and_file(tmp_path):
     path.write_text(json.dumps({"name": "bad", "mode": "flow"}))
     with pytest.raises(ValueError, match="Unknown mode"):
         ais.load_config(path, "hvit_t")
+
+
+def test_prediction_cache_validates_checkpoint_sample_and_shapes(tmp_path):
+    cache = ais.PredictionCache(tmp_path, "checkpoint-a", "manifest-a")
+    sample = {"sample_id": "toy:0"}
+    prediction = np.zeros((4, 8, 9), dtype="float32")
+    labels = np.zeros((8, 9), dtype="uint32")
+    record = {
+        "checkpoint_checksum": "checkpoint-a", "sample_id": "toy:0", "shape": list(prediction.shape),
+    }
+    cache.store(sample, prediction, labels, None, record)
+    loaded, loaded_labels, valid, loaded_record = cache.load(sample)
+    assert np.array_equal(loaded, prediction) and np.array_equal(loaded_labels, labels)
+    assert valid is None and loaded_record == record
+
+    _, record_path = cache.paths(sample)
+    bad = dict(record, checkpoint_checksum="checkpoint-b")
+    record_path.write_text(json.dumps(bad))
+    with pytest.raises(RuntimeError, match="different checkpoint"):
+        cache.load(sample)
 
 
 def test_sparse_pipeline_matches_library(geodesic_prediction):
@@ -304,6 +337,49 @@ def test_grid_combinations_deduplicate_flow_travel():
     with pytest.raises(ValueError, match="Unknown sparse grid parameters"):
         ais.grid_combinations({"beta": [0.5]}, "sparse")
 
+    explicit = ais.grid_combinations({"combinations": [{"n_iter": 100}, {"n_iter": 100}, {"n_iter": 200}]}, "sparse")
+    assert explicit == [{"n_iter": 100}, {"n_iter": 200}]
+    with pytest.raises(ValueError, match="at least one"):
+        ais.grid_combinations({"combinations": []}, "sparse")
+    with pytest.raises(ValueError, match="Unknown sparse grid parameters"):
+        ais.grid_combinations({"combinations": [{"beta": 0.5}]}, "sparse")
+
+    families = ais.grid_combinations({
+        "shared": {"n_iter": [400], "dt": [0.5]},
+        "families": {"base": {}, "ridge": {"contact_weight": [0.5, 1.0]}},
+    }, "sparse")
+    assert len(families) == 3
+    assert [combo["mechanism_family"] for combo in families] == ["base", "ridge", "ridge"]
+    with pytest.raises(ValueError, match="redefines shared"):
+        ais.grid_combinations({
+            "shared": {"n_iter": [400]}, "families": {"bad": {"n_iter": [800]}},
+        }, "sparse")
+
+
+def test_sweep_shards_keep_expensive_cache_groups_together():
+    grid = {
+        "foreground_threshold": [0.4, 0.5], "sigma": [0.5], "n_iter": [400, 800], "dt": [0.5],
+        "density_threshold": [5.0, 10.0], "min_size": [25, 50], "foreground_weight": [0.5, 1.0],
+    }
+    combinations = [
+        ais.resolve_postprocessing({"sparse": combo}, "hvit_t")["sparse"]
+        for combo in ais.grid_combinations(grid, "sparse")
+    ]
+    shards = [ais.shard_combinations(combinations, "sparse", index, 3) for index in range(3)]
+    assert sum(map(len, shards)) == len(combinations)
+    assert {json.dumps(combo, sort_keys=True) for shard in shards for combo in shard} == {
+        json.dumps(combo, sort_keys=True) for combo in combinations
+    }
+    flow_keys = ais.SWEEP_CACHE_KEYS["sparse"]
+    groups = [{tuple(combo[key] for key in flow_keys) for combo in shard} for shard in shards]
+    assert all(not (first & second) for index, first in enumerate(groups) for second in groups[index + 1:])
+    work = [sum(group[2] for group in shard_groups) for shard_groups in groups]
+    assert max(work) - min(work) <= max(group[2] for shard_groups in groups for group in shard_groups)
+    with pytest.raises(ValueError, match="Invalid shard"):
+        ais.shard_combinations(combinations, "sparse", 3, 3)
+    with pytest.raises(ValueError, match="only 4 distinct"):
+        ais.shard_combinations(combinations, "sparse", 0, 5)
+
 
 def test_shared_configuration_ranks_by_mean_relative_optimum(tmp_path):
     grid = pd.DataFrame({"sigma": [0.5, 1.0, 2.0], "n_iter": [50, 50, 50]})
@@ -382,6 +458,117 @@ def test_rank_shared_flags_gate_against_the_reference():
         rs.rank_shared(tables, reference={"sigma": 2.0, "boundary_magnitude_max": None})
 
 
+def test_sweep_tables_union_keeps_mechanism_families(monkeypatch, tmp_path):
+    import report_ais_sweep as rs
+
+    def fake_load(grid_path, *_args, **_kwargs):
+        table = pd.DataFrame({"n_iter": [800], "n_images": [2], "msa_mean": [0.5], "msa_std": [0.1]})
+        if grid_path.stem == "ridge":
+            table["contact_weight"] = 1.0
+        return {"a": table, "b": table.copy()}
+
+    monkeypatch.setattr(rs, "load_sweep_tables", fake_load)
+    tables = rs.load_sweep_tables_many(
+        [Path("base.json"), Path("ridge.json")], ["primary"], tmp_path, tmp_path, tmp_path,
+        "hvit_t", "boundary",
+    )
+    assert set(tables["a"]["mechanism_family"]) == {"base", "ridge"}
+    assert set(tables["a"]["contact_weight"].astype(str)) == {"none", "1.0"}
+    ranked = rs.rank_shared(tables)
+    assert len(ranked) == 2 and set(ranked["mechanism_family"]) == {"base", "ridge"}
+
+
+def test_sweep_table_keeps_embedded_mechanism_family(monkeypatch, tmp_path):
+    import report_ais_sweep as rs
+
+    table = pd.DataFrame({
+        "n_iter": [800, 800], "mechanism_family": ["base", "ridge"],
+        "n_images": [2, 2], "msa_mean": [0.5, 0.6], "msa_std": [0.1, 0.1],
+    })
+    monkeypatch.setattr(rs, "load_sweep_tables", lambda *_args, **_kwargs: {"a": table})
+    tables = rs.load_sweep_tables_many(
+        [Path("boundary.json")], ["primary"], tmp_path, tmp_path, tmp_path, "hvit_t", "boundary",
+    )
+    assert set(tables["a"]["mechanism_family"]) == {"base", "ridge"}
+
+
+def test_sweep_plateau_selection_prefers_robust_cheaper_candidate():
+    import report_ais_sweep as rs
+
+    ranked = pd.DataFrame([
+        {"balanced": 0.6000, "min_relative_optimum": 0.96, "n_iter": 1600,
+         "contact_weight": 2.0, "contact_mask_threshold": 0.5, "foreground_threshold": 0.4},
+        {"balanced": 0.5995, "min_relative_optimum": 0.98, "n_iter": 800,
+         "contact_weight": "none", "contact_mask_threshold": "none", "foreground_threshold": 0.45},
+        {"balanced": 0.5900, "min_relative_optimum": 1.00, "n_iter": 400,
+         "contact_weight": "none", "contact_mask_threshold": "none", "foreground_threshold": 0.5},
+    ])
+    selected = rs.select_plateau(ranked, tolerance=0.001)
+    assert selected["foreground_threshold"] == 0.45
+    config = rs.selected_config(selected, "baseline-dice-optimum")
+    assert config["params_2d"]["sparse"] == {"foreground_threshold": 0.45, "n_iter": 800}
+    assert rs.select_plateau(ranked.drop(columns=["contact_weight"]), tolerance=0.001)[
+        "foreground_threshold"
+    ] == 0.45
+    selected["boundary_magnitude_max"] = np.inf
+    assert rs.selected_config(selected, "off")["params_2d"]["sparse"]["boundary_magnitude_max"] == "off"
+
+
+def test_polish_grid_refines_boundary_coordinates_and_edges():
+    import prepare_ais_reoptimization_polish as polish
+
+    ranking = pd.DataFrame([
+        {"mechanism_family": "ridge", "balanced": 0.50, "foreground_threshold": 0.4,
+         "foreground_weight": 0.75, "min_size": 50, "boundary_magnitude_max": 0.4,
+         "n_iter": 1200, "contact_weight": 1.0},
+        {"mechanism_family": "ridge", "balanced": 0.502, "foreground_threshold": 0.4,
+         "foreground_weight": 0.75, "min_size": 50, "boundary_magnitude_max": 0.4,
+         "n_iter": 1600, "contact_weight": 1.0},
+    ])
+    combinations = polish.polish_combinations(ranking, top_per_family=1)
+    assert any(combo.get("contact_weight") == 3.0 for combo in combinations)
+    assert any(combo.get("n_iter") == 2400 for combo in combinations)
+    assert any(combo.get("boundary_magnitude_max") == "off" for combo in combinations)
+
+
+def test_polish_grid_restores_numeric_optional_parameters_from_csv_strings():
+    import prepare_ais_reoptimization_polish as polish
+
+    ranking = pd.DataFrame([{
+        "mechanism_family": "combined", "balanced": 0.5, "foreground_threshold": 0.45,
+        "foreground_weight": 0.5, "min_size": 50, "boundary_magnitude_max": 0.4,
+        "density_threshold": 20.0, "n_iter": 1200, "sigma": 0.5, "dt": 0.5,
+        "contact_weight": "1.0", "contact_mask_threshold": "0.5",
+    }])
+    combinations = polish.polish_combinations(ranking, top_per_family=1)
+    assert combinations
+    assert all(
+        not isinstance(combo.get(key), str)
+        for combo in combinations
+        for key in ("contact_weight", "contact_mask_threshold")
+        if key in combo
+    )
+
+
+def test_polish_cli_reports_safe_shard_count(tmp_path, capsys):
+    import prepare_ais_reoptimization_polish as polish
+
+    ranking = pd.DataFrame([{
+        "mechanism_family": "base", "balanced": 0.5, "foreground_threshold": 0.4,
+        "foreground_weight": 0.75, "min_size": 50, "boundary_magnitude_max": 0.4,
+        "n_iter": 800, "sigma": 0.5, "dt": 0.5,
+    }])
+    ranking_path, output_path = tmp_path / "ranking.csv", tmp_path / "polish.json"
+    ranking.to_csv(ranking_path, index=False)
+    assert polish.main(["--ranking", str(ranking_path), "--output", str(output_path)]) == 0
+    output = capsys.readouterr().out
+    combinations = json.loads(output_path.read_text())["combinations"]
+    resolved = [ais.resolve_postprocessing({"sparse": combo}, "hvit_t")["sparse"] for combo in combinations]
+    expected = len({tuple(combo[key] for key in ais.SWEEP_CACHE_KEYS["sparse"]) for combo in resolved})
+    assert f"{expected} flow-cache groups" in output
+    assert f"no more than {expected} sweep shards" in output
+
+
 @pytest.fixture(scope="module")
 def contact_prediction(geodesic_prediction):
     """The fixture's field plus a fifth channel with the ground-truth contact lines."""
@@ -414,3 +601,48 @@ def test_sparse_pipeline_matches_library_with_a_contact_channel(contact_predicti
     diagnostics = ais.seed_diagnostics(intermediates, labels, expected)
     assert 0.5 < diagnostics["fg_area_ratio"] < 2.0
     assert "fg_area_ratio" in ais.METRIC_COLUMNS
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {},
+        {"contact_weight": 1.0},
+        {"contact_mask_threshold": 0.5},
+        {"contact_weight": 1.0, "contact_mask_threshold": 0.5},
+    ],
+)
+def test_cached_sparse_scorer_matches_library_with_boundary_channel(contact_prediction, overrides, monkeypatch):
+    import parameter_search
+    from micro_sam.v2.postprocessing import flow_instance_segmentation
+
+    prediction, labels = contact_prediction
+    params = ais.resolve_postprocessing(
+        {
+            "min_size": 20,
+            "n_iter": 200,
+            "density_threshold": 5.0,
+            "foreground_weight": 1.0,
+            **overrides,
+        },
+        "hvit_t",
+    )["sparse"]
+    expected = flow_instance_segmentation(
+        prediction[0], prediction[1:4], contact=prediction[4], model_type="hvit_t", n_threads=2, **params,
+    )
+    monkeypatch.setattr(
+        parameter_search,
+        "compute_metrics",
+        lambda segmentation, *_args, **_kwargs: {"segmentation": segmentation.copy()},
+    )
+    result = parameter_search.score_image_sparse_cached(prediction, labels, [params], n_threads=2)[0]
+    assert np.array_equal(result["segmentation"], expected)
+
+
+def test_cached_sparse_scorer_rejects_boundary_parameters_without_channel(geodesic_prediction):
+    import parameter_search
+
+    prediction, labels = geodesic_prediction
+    params = ais.resolve_postprocessing({"contact_weight": 1.0}, "hvit_t")["sparse"]
+    with pytest.raises(ValueError, match="need prediction channel 4"):
+        parameter_search.score_image_sparse_cached(prediction, labels, [params], n_threads=2)

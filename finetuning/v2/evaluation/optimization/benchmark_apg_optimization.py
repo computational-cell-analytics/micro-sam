@@ -40,6 +40,7 @@ import platform
 import subprocess
 import sys
 import time
+import warnings
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -115,7 +116,26 @@ SAMPLE_COUNTS_2D_TRAINING_EXTRA = {
     "covid_if": 5,
     "deepseas": 40,
 }
-MANIFEST_SUBSETS = ("primary", "holdout", "training_extra")
+# The sealed 2d-only confirmation set for the Dice-foreground AIS decoder comparison. These domains are
+# absent from the decoder fine-tuning manifest. The large heterogeneous datasets are sampled within
+# their acquisition/stain strata; the small official test sets are kept in full.
+OOD_EXTENDED_DATASETS = ("arvidsson", "bitdepth_nucseg", "cellbindb", "microbeseg", "vicar")
+SAMPLE_COUNTS_2D_OOD_EXTENDED = {
+    "arvidsson": 10,
+    "bitdepth_nucseg": 70,
+    "cellbindb": 48,
+    "microbeseg": 2,
+    "vicar": 50,
+}
+OOD_EXTENDED_STRATUM_COUNTS = {
+    "bitdepth_nucseg": {"20x": 9, "40x air": 19, "40x oil": 20, "63x oil": 22},
+    "cellbindb": {
+        "10×Genomics_DAPI": 8, "10×Genomics_HE": 8, "DAPI": 8,
+        "HE": 8, "mIF": 8, "ssDNA": 8,
+    },
+    "vicar": {"A2058": 10, "G361": 10, "HOB": 10, "PC3": 10, "PNT1A": 10},
+}
+MANIFEST_SUBSETS = ("primary", "holdout", "training_extra", "ood_extended")
 TARGETS_3D = (0.5,)
 # Match the 512 x 512 training field of view and use enough depth to contain representative 3d
 # structure. C. elegans keeps the deeper crop needed to contain its 11-13-slice nuclei; its source
@@ -412,16 +432,34 @@ def _center_crop_roi(shape: Sequence[int], crop_shape: Sequence[int]) -> Tuple[s
     return tuple(roi)
 
 
-def _scan_2d_dataset(dataset: str, data_root: Path) -> List[Dict[str, Any]]:
+def _scan_2d_dataset(
+    dataset: str, data_root: Path, split: str = "val", validate_raw: bool = False,
+    skip_read_errors: bool = False,
+) -> List[Dict[str, Any]]:
     raw_paths, label_paths, raw_key, label_key = get_data_paths(
-        dataset, str(data_root), download=False, split="val"
+        dataset, str(data_root), download=False, split=split
     )
     candidates = []
     pairs = sorted_path_pairs(raw_paths, label_paths)
     for raw_path, label_path in tqdm(pairs, desc=f"select-{dataset}", leave=False):
         raw_relative = _relative_data_path(raw_path, data_root)
         label_relative = _relative_data_path(label_path, data_root)
-        labels = read_2d(str(_source_path(label_relative, data_root)), label_key)
+        try:
+            labels = read_2d(str(_source_path(label_relative, data_root)), label_key)
+            if validate_raw:
+                # CellBinDB contains a handful of corrupt files. Validate both halves before a
+                # sealed sample can enter the manifest, rather than failing much later at inference.
+                raw = read_2d(str(_source_path(raw_relative, data_root)), raw_key)
+                if raw.shape[:2] != labels.shape[:2]:
+                    raise RuntimeError(f"raw shape {raw.shape} does not match labels {labels.shape}")
+        except Exception as error:
+            if not skip_read_errors:
+                raise
+            warnings.warn(
+                f"Skipping unreadable {dataset} pair '{raw_relative}': {type(error).__name__}: {error}",
+                stacklevel=2,
+            )
+            continue
         roi = _center_crop_roi(labels.shape[:2], CROP_SHAPE_2D)
         labels = connected_components(labels[roi]).astype("uint32")
         labels = drop_severed_objects(labels, GT_MIN_SIZE_2D.get(dataset, 0))
@@ -440,7 +478,7 @@ def _scan_2d_dataset(dataset: str, data_root: Path) -> List[Dict[str, Any]]:
             "foreground_fraction": foreground_fraction,
         })
     if not candidates:
-        raise RuntimeError(f"No non-empty validation images found for '{dataset}'.")
+        raise RuntimeError(f"No readable non-empty '{split}' images found for '{dataset}'.")
     return candidates
 
 
@@ -516,6 +554,74 @@ def _select_2d_samples(
                     )
                 n_requested = len(candidates)
             selected = _select_nearest(candidates, _quantile_targets(n_requested))
+        for sample in selected:
+            sample["sample_id"] = _sample_identity(sample)
+            samples.append(sample)
+    return samples
+
+
+def _ood_stratum(sample: Dict[str, Any]) -> Optional[str]:
+    """Return the acquisition stratum encoded in an OOD sample's path."""
+    parts = Path(sample["raw_path"]).parts
+    dataset = sample["dataset"]
+    offsets = {"bitdepth_nucseg": ("data", 1), "cellbindb": ("Other", 1), "vicar": ("labelled", 1)}
+    if dataset not in offsets:
+        return None
+    anchor, offset = offsets[dataset]
+    try:
+        return parts[parts.index(anchor) + offset]
+    except (ValueError, IndexError) as error:
+        raise RuntimeError(f"Cannot derive the OOD stratum from '{sample['raw_path']}'.") from error
+
+
+def _select_ood_extended_samples(data_root: Path) -> List[Dict[str, Any]]:
+    """Build the sealed AIS OOD sample list, stratifying heterogeneous sources deterministically."""
+    samples = []
+    for dataset in OOD_EXTENDED_DATASETS:
+        candidates = _scan_2d_dataset(
+            dataset, data_root, split="test", validate_raw=True, skip_read_errors=True,
+        )
+        for candidate in candidates:
+            stratum = _ood_stratum(candidate)
+            if stratum is not None:
+                candidate["stratum"] = stratum
+
+        stratum_counts = OOD_EXTENDED_STRATUM_COUNTS.get(dataset)
+        if stratum_counts is None:
+            requested = SAMPLE_COUNTS_2D_OOD_EXTENDED[dataset]
+            if len(candidates) != requested:
+                raise RuntimeError(
+                    f"The sealed '{dataset}' pool changed: expected {requested} non-empty images, "
+                    f"found {len(candidates)}. Refuse to silently change the manifest."
+                )
+            _add_complexity(candidates)
+            selected = sorted(
+                candidates, key=lambda entry: (entry.get("stratum", ""), entry["raw_path"]),
+            )
+        else:
+            selected = []
+            by_stratum = defaultdict(list)
+            for candidate in candidates:
+                by_stratum[candidate["stratum"]].append(candidate)
+            if set(by_stratum) != set(stratum_counts):
+                raise RuntimeError(
+                    f"The sealed '{dataset}' strata changed: expected {sorted(stratum_counts)}, "
+                    f"found {sorted(by_stratum)}."
+                )
+            for stratum, requested in stratum_counts.items():
+                group = by_stratum[stratum]
+                if len(group) < requested:
+                    raise RuntimeError(
+                        f"The sealed '{dataset}/{stratum}' pool has {len(group)} images, needs {requested}."
+                    )
+                _add_complexity(group)
+                selected.extend(_select_nearest(group, _quantile_targets(requested)))
+
+        if len(selected) != SAMPLE_COUNTS_2D_OOD_EXTENDED[dataset]:
+            raise RuntimeError(
+                f"Selected {len(selected)} '{dataset}' images, expected "
+                f"{SAMPLE_COUNTS_2D_OOD_EXTENDED[dataset]}."
+            )
         for sample in selected:
             sample["sample_id"] = _sample_identity(sample)
             samples.append(sample)
@@ -686,6 +792,8 @@ def _sample_counts_2d(subset: str) -> Dict[str, int]:
         return SAMPLE_COUNTS_2D_HOLDOUT
     if subset == "training_extra":
         return SAMPLE_COUNTS_2D_TRAINING_EXTRA
+    if subset == "ood_extended":
+        return SAMPLE_COUNTS_2D_OOD_EXTENDED
     return SAMPLE_COUNTS_2D
 
 
@@ -736,6 +844,37 @@ def _validate_manifest(manifest: Dict[str, Any], data_root: Path, variant: str, 
         short = {key: counts.get(key, 0) for key in expected if not 0 < counts.get(key, 0) <= expected[key]}
         if set(counts) != set(expected) or short:
             raise RuntimeError(f"Unexpected training_extra sample counts: got {dict(counts)}, caps {expected}.")
+        return
+    if subset == "ood_extended":
+        expected_policy = {
+            "subset": "ood_extended",
+            "role": "sealed-2d-confirmation-only",
+            "datasets": list(OOD_EXTENDED_DATASETS),
+            "stratum_counts": OOD_EXTENDED_STRATUM_COUNTS,
+            "source_split": "test",
+            "unreadable_source_policy": "validate raw and label; deterministically exclude unreadable pairs",
+        }
+        stored_policy = {key: policy.get(key) for key in expected_policy}
+        if json.loads(_json_bytes(stored_policy)) != json.loads(_json_bytes(expected_policy)):
+            raise RuntimeError(
+                f"The ood_extended selection policy changed: got {stored_policy}, expected {expected_policy}."
+            )
+        expected = {(dataset, 2): sample_counts[dataset] for dataset in OOD_EXTENDED_DATASETS}
+        if dict(counts) != expected:
+            raise RuntimeError(f"Unexpected ood_extended sample counts: got {dict(counts)}, expected {expected}.")
+        expected_strata = {
+            (dataset, stratum): count
+            for dataset, strata in OOD_EXTENDED_STRATUM_COUNTS.items()
+            for stratum, count in strata.items()
+        }
+        actual_strata = defaultdict(int)
+        for sample in samples:
+            if sample["dataset"] in OOD_EXTENDED_STRATUM_COUNTS:
+                actual_strata[(sample["dataset"], sample.get("stratum"))] += 1
+        if dict(actual_strata) != expected_strata:
+            raise RuntimeError(
+                f"Unexpected ood_extended strata: got {dict(actual_strata)}, expected {expected_strata}."
+            )
         return
     expected = {(dataset, 2): sample_counts[dataset] for dataset in DATASETS_2D}
     expected.update({(dataset, 3): 1 for dataset in DATASETS_3D})
@@ -812,6 +951,16 @@ def prepare_manifest(
             data_root, counts=SAMPLE_COUNTS_2D_TRAINING_EXTRA, datasets=TRAINING_EXTRA_DATASETS, allow_fewer=True,
         )
         subset_policy = {"subset": "training_extra", "role": "selector-training-only"}
+    elif subset == "ood_extended":
+        samples = _select_ood_extended_samples(data_root)
+        subset_policy = {
+            "subset": "ood_extended",
+            "role": "sealed-2d-confirmation-only",
+            "datasets": list(OOD_EXTENDED_DATASETS),
+            "stratum_counts": OOD_EXTENDED_STRATUM_COUNTS,
+            "source_split": "test",
+            "unreadable_source_policy": "validate raw and label; deterministically exclude unreadable pairs",
+        }
     else:
         samples = _select_2d_samples(data_root) + _select_3d_samples(data_root, variant)
 
@@ -821,7 +970,11 @@ def prepare_manifest(
         "selection_policy": {
             "2d_crop_shape": list(CROP_SHAPE_2D),
             "2d_sample_counts": sample_counts,
-            "2d_complexity_targets": "even quantile midpoints within each dataset and LIVECell cell type",
+            "2d_complexity_targets": (
+                "even quantile midpoints within each dataset and declared stratum; full small OOD test pools"
+                if subset == "ood_extended"
+                else "even quantile midpoints within each dataset and LIVECell cell type"
+            ),
             "3d_complexity_targets": list(TARGETS_3D),
             "complexity": "mean percentile rank of object count and foreground fraction",
             **subset_policy,
