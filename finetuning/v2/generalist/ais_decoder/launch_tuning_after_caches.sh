@@ -3,9 +3,27 @@
 # configuration screens for the five-channel 'contact' decoder); then, when every variant's sweeps are done,
 # rank each sweep (report_ais_sweep.py) into <root>/ais/reports/dec_<variant>_sweep_dev.csv.
 #
-#     bash launch_tuning_after_caches.sh [max_wait_seconds]
+#     bash launch_tuning_after_caches.sh [max_wait_seconds] [--wait V...] [--rank V...]
+#
+# WARNING: pass the variants as ARGUMENTS, never through the environment. `SBATCH_EXPORT=none` is set on this
+# system, so `sbatch` does NOT propagate the submitting environment and the `WAIT_VARIANTS` / `VARIANTS`
+# variables silently fall back to the round-1 defaults below - which is exactly what happened on 2026-09-08
+# (job 15777359 re-ran the four round-1 sweeps and never submitted the round-2 ones). The environment variables
+# are still honoured when the script is run directly in a shell.
 set -o pipefail
-VARIANTS=${VARIANTS:-"baseline contact fgcal both"}  # override: VARIANTS="boundary boundary_fgcal" bash ...
+WAIT_ARGS=""; RANK_ARGS=""; POSITIONAL=""; mode=""
+for a in "$@"; do
+    case "$a" in
+        --wait) mode=wait ;;
+        --rank) mode=rank ;;
+        *) case "$mode" in wait) WAIT_ARGS="$WAIT_ARGS $a" ;; rank) RANK_ARGS="$RANK_ARGS $a" ;;
+                           *) POSITIONAL="$POSITIONAL $a" ;; esac ;;
+    esac
+done
+set -- $POSITIONAL
+[ -n "$WAIT_ARGS" ] && WAIT_VARIANTS="$WAIT_ARGS"
+[ -n "$RANK_ARGS" ] && VARIANTS="$RANK_ARGS"
+VARIANTS=${VARIANTS:-"baseline contact fgcal both"}  # override: ... --rank boundary boundary_fgcal
 MAX_WAIT=${1:-32400}
 ROOT=/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/apg_optimization
 OPT=/mnt/vast-nhr/home/pape41/u12086/Work/my_projects/micro-sam/finetuning/v2/evaluation/optimization

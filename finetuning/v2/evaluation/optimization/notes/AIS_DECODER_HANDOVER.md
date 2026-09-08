@@ -14,8 +14,8 @@ python = `micromamba activate new-stack`.
 **Nothing has to be submitted.** Round 2 is chained end to end (section 5.3 of the notes); the successor reads
 the tables the chain writes and finishes the write-up:
 
-1. Read the round-2 tables (section 3 below) and write them into **section 5.5** of `AIS_DECODER_TRAINING.md` (5.4 already records what the ridge and
-   mask modes mean once the channel is a full boundary, and the signature to look for).
+1. Read the round-2 tables (section 3 below) and write them into **section 5.6** of `AIS_DECODER_TRAINING.md` (5.4 records what the ridge and mask modes
+   mean once the channel is a full boundary and the signature to look for; 5.5 the `SBATCH_EXPORT` incident).
 2. Decide point 1.1 (the fifth channel) with the boundary target on the evidence, and update section 4.4 point 3
    if the verdict changes. The user's rule: only cross-dataset wins count - balanced mSA plus the gate
    (>= 9 / 11 up, worst > -2 %, balanced >= +2 %) against the fine-tuned `baseline` on dev, confirmed on the
@@ -128,6 +128,11 @@ Read-outs:
 - `diagnose_decoder_fields.py --contact-mode` must match the training target of the fifth channel (`touching`
   for `contact` / `both`, `all` for `boundary` / `boundary_fgcal`), otherwise the head's precision is scored
   against a target that calls its correct pixels negative.
+- **`SBATCH_EXPORT=none` is set on this cluster**, so `sbatch` does not propagate the submitting environment:
+  campaign parameters passed as environment variables reach the job as empty and the script falls back to its
+  defaults, silently doing plausible but wrong work (notes 5.5). Pass them on the command line.
+- `tasks_done` uses `ls -td | head -1`, so an empty *newer* job directory of the same name shadows a finished
+  one. If a resubmission has to be cancelled, move its directory to `<root>/jobs/_superseded/`.
 - The cached sweep scorer ignores the contact keywords, so ridge / mask settings are only ever evaluated through
   `screen` with config files, never through `sweep`.
 - Python 3.14 starts DataLoader workers through a fork server (30-60 s each, every epoch);
