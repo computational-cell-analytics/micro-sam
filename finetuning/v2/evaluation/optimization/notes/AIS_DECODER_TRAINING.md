@@ -785,3 +785,22 @@ the watershed. The ridge adds 2 points of loss on top (-14.1 %); the loss itself
 failure of point 7 is a training-recipe question (deepbacs' thin rods need the foreground calibrated, and
 `boundary_fgcal` - which does calibrate it, 1.06 against 1.17 - scores *worse* there, -13.7 % against -7.7 % at
 the defaults), not a tuning question.
+
+**10. The threshold test of 4.7 point 1: the full boundary does not inflate the foreground.**
+`boundary`'s own sweep optimum (`dec_boundary_sweep_dev.csv`, 1728 combinations) is 0.4273 at
+`foreground_threshold` **0.5** (0.4 gives 0.4252, 0.6 gives 0.4246, 0.7 gives 0.4158), so the optimal threshold
+runs `baseline` 0.4 -> **`boundary` 0.5** -> `contact` 0.6. The touching target pushed foreground mass outward;
+the full boundary does so far more mildly, and the section 5.6 expectation of "0.5-0.6" lands at the benign end.
+The optimum also confirms 4.7 point 4: `boundary` keeps the *production* density (10) and sigma (1.0) and only
+lengthens the travel to 800, exactly like `baseline` and `contact`, whereas `fgcal` and `both` - the two that
+changed the *foreground* loss - move to density 50 / sigma 0.5. The regime shift belongs to the foreground loss,
+not to the fifth channel.
+
+**11. Restating the headline honestly.** The +3.3 % of point 3 is measured against `baseline` at `dec-top1`
+(0.4200), which is 1 % below baseline's own optimum (0.4244, 4.7) - the same overstatement that 4.7 caught for
+`fgcal`. Against baseline's own optimum, `boundary` + ridge 1 at `dec-top1` is **+2.3 %**. The sweep cannot
+settle this by itself because the cached scorer ignores the contact keywords, so `boundary`'s own optimum
+(0.4273, +0.7 % over baseline's own optimum) is a *ridge-free* number and understates the decoder as much as
+`dec-top1` overstates it. Screens of the missing cells were submitted at 06:42: `dec-base-top1` for `baseline`
+(job dec_baseline_own_screen) and `dec-bnd-top1` / `dec-bnd-top1-ridge1` for `boundary`
+(dec_boundary_own_screen), i.e. each decoder at its own sweep optimum, with and without the ridge.
