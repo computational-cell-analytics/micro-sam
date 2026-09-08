@@ -101,10 +101,12 @@ class DirectedDistanceLoss(nn.Module):
             if self.boundary_dice_weight == 1.0:
                 boundary_loss = dice_loss
             else:
-                # The decoder returns sigmoid probabilities. Compute BCE in float32 for stable mixed-precision
-                # training; clamping prevents exact zero or one after a bfloat16 sigmoid from producing infinities.
-                probability = boundary_input.float().clamp(1e-6, 1.0 - 1e-6)
-                bce_loss = F.binary_cross_entropy(probability, boundary_target.float())
+                # The decoder returns sigmoid probabilities. CUDA autocast prohibits probability-based BCE,
+                # so disable autocast and compute in float32. Clamping prevents exact zero or one after a
+                # bfloat16 sigmoid from producing infinities.
+                with torch.autocast(device_type=boundary_input.device.type, enabled=False):
+                    probability = boundary_input.float().clamp(1e-6, 1.0 - 1e-6)
+                    bce_loss = F.binary_cross_entropy(probability, boundary_target.float())
                 boundary_loss = (
                     self.boundary_dice_weight * dice_loss
                     + (1.0 - self.boundary_dice_weight) * bce_loss

@@ -73,6 +73,28 @@ def test_boundary_loss_interpolates_dice_and_bce(dice_weight):
     torch.testing.assert_close(actual, expected)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for autocast regression")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("dice_weight", [0.0, 0.5])
+def test_boundary_bce_under_cuda_autocast(dtype, dice_weight):
+    if dtype == torch.bfloat16 and not torch.cuda.is_bf16_supported():
+        pytest.skip("CUDA device does not support bfloat16")
+
+    prediction, target = _loss_tensors()
+    prediction = prediction.to(device="cuda", dtype=dtype).requires_grad_()
+    target = target.cuda()
+    loss_function = DirectedDistanceLoss(with_boundaries=True, boundary_dice_weight=dice_weight)
+
+    with torch.autocast(device_type="cuda", dtype=dtype):
+        loss = loss_function(prediction, target)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert prediction.grad is not None
+    assert torch.isfinite(prediction.grad).all()
+    assert prediction.grad[:, 4].abs().sum() > 0
+
+
 def test_boundary_loss_rejects_invalid_weight():
     with pytest.raises(ValueError, match="between zero and one"):
         DirectedDistanceLoss(with_boundaries=True, boundary_dice_weight=1.1)
