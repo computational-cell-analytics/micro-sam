@@ -834,7 +834,7 @@ def test_train_automatic_multi_gpu_preserves_peft_positional_slot():
 
     parameters = list(inspect.signature(train_automatic_multi_gpu).parameters)
 
-    assert parameters[-2:] == ["peft_kwargs", "initial_features"]
+    assert parameters[17:19] == ["peft_kwargs", "initial_features"]
 
 
 class _AttrArray(np.ndarray):
