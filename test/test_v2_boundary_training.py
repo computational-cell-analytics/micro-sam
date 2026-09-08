@@ -10,6 +10,7 @@ from torch_em.loss import DiceLoss
 from micro_sam.v2.loss import DirectedDistanceLoss
 from micro_sam.v2.models.util import CustomActivation
 from micro_sam.v2.transforms.labels import (
+    FOREGROUND_IGNORE_VALUE,
     _JointLabelTransform,
     DirectedPerObjectBoundaryDistanceTransform,
     GeodesicHybridDistanceTransform,
@@ -71,6 +72,65 @@ def test_boundary_loss_interpolates_dice_and_bce(dice_weight):
     bce = F.binary_cross_entropy(prediction[:, 4:5].float(), target[:, 4:5].float())
     expected = base + dice_weight * dice + (1.0 - dice_weight) * bce
     torch.testing.assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("dice_weight", [0.0, 0.5, 1.0])
+def test_boundary_loss_excludes_ignored_values_and_gradients(dice_weight):
+    prediction, target = _loss_tensors()
+    target[0, 0, :, :6] = FOREGROUND_IGNORE_VALUE
+    target[1, 0, :, :3] = FOREGROUND_IGNORE_VALUE
+    ignored = target[:, 0] == FOREGROUND_IGNORE_VALUE
+    changed_prediction, changed_target = prediction.clone(), target.clone()
+    changed_prediction[:, 4][ignored] = 0.9
+    changed_target[:, 4][ignored] = 1.0 - changed_target[:, 4][ignored]
+    loss_function = DirectedDistanceLoss(with_boundaries=True, boundary_dice_weight=dice_weight)
+
+    prediction.requires_grad_()
+    changed_prediction.requires_grad_()
+    loss = loss_function(prediction, target)
+    changed_loss = loss_function(changed_prediction, changed_target)
+    loss.backward()
+    changed_loss.backward()
+
+    torch.testing.assert_close(loss, changed_loss)
+    torch.testing.assert_close(prediction.grad, changed_prediction.grad)
+    assert torch.count_nonzero(prediction.grad[:, 4][ignored]) == 0
+    assert prediction.grad[:, 4][~ignored].abs().sum() > 0
+
+
+def test_boundary_bce_normalizes_each_sample_by_valid_voxel_count():
+    prediction, target = _loss_tensors()
+    target[:, 4] = 0.0
+    target[0, 0, :, :9] = FOREGROUND_IGNORE_VALUE
+    target[1, 0, :, :3] = FOREGROUND_IGNORE_VALUE
+    prediction[0, 4] = 0.2
+    prediction[1, 4] = 0.8
+    base = DirectedDistanceLoss()(prediction[:, :4], target[:, :4])
+    loss = DirectedDistanceLoss(with_boundaries=True, boundary_dice_weight=0.0)(prediction, target)
+
+    # Each sample has equal weight despite having different numbers of valid voxels.
+    expected_bce = -torch.log(torch.tensor([0.8, 0.2])).mean()
+    torch.testing.assert_close(loss - base, expected_bce)
+
+
+@pytest.mark.parametrize("dice_weight", [0.0, 0.5, 1.0])
+@pytest.mark.parametrize("fully_ignored_batch", [False, True])
+def test_boundary_loss_handles_fully_ignored_samples(dice_weight, fully_ignored_batch):
+    prediction, target = _loss_tensors()
+    target[0, 0] = FOREGROUND_IGNORE_VALUE
+    if fully_ignored_batch:
+        target[1, 0] = FOREGROUND_IGNORE_VALUE
+    prediction.requires_grad_()
+    loss = DirectedDistanceLoss(with_boundaries=True, boundary_dice_weight=dice_weight)(prediction, target)
+    loss.backward()
+
+    assert torch.isfinite(loss)
+    assert torch.isfinite(prediction.grad).all()
+    assert torch.count_nonzero(prediction.grad[0]) == 0
+    if fully_ignored_batch:
+        assert torch.count_nonzero(prediction.grad) == 0
+    else:
+        assert prediction.grad[1, 4].abs().sum() > 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required for autocast regression")

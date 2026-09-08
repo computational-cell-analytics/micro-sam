@@ -97,7 +97,7 @@ class DirectedDistanceLoss(nn.Module):
         overall_loss = fg_loss + zdist_loss + ydist_loss + xdist_loss
         if self.with_boundaries:
             boundary_input, boundary_target = input_[:, 4:5], target[:, 4:5]
-            dice_loss = self.boundary_loss(boundary_input, boundary_target)
+            dice_loss = self.boundary_loss(boundary_input * valid, boundary_target * valid)
             if self.boundary_dice_weight == 1.0:
                 boundary_loss = dice_loss
             else:
@@ -106,7 +106,13 @@ class DirectedDistanceLoss(nn.Module):
                 # bfloat16 sigmoid from producing infinities.
                 with torch.autocast(device_type=boundary_input.device.type, enabled=False):
                     probability = boundary_input.float().clamp(1e-6, 1.0 - 1e-6)
-                    bce_loss = F.binary_cross_entropy(probability, boundary_target.float())
+                    error = F.binary_cross_entropy(probability, boundary_target.float(), reduction="none")
+                    # Normalize over valid voxels per sample, as for the distance terms.
+                    boundary_valid = valid.float()
+                    dims = tuple(range(1, error.ndim))
+                    bce_loss = (
+                        (error * boundary_valid).sum(dims) / boundary_valid.sum(dims).clamp_min(1.0)
+                    ).mean()
                 boundary_loss = (
                     self.boundary_dice_weight * dice_loss
                     + (1.0 - self.boundary_dice_weight) * bce_loss
