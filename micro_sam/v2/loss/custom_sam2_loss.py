@@ -111,6 +111,9 @@ class CustomSAM2Loss(nn.Module):
         average_over_frames: Average the loss over frames instead of summing them. This
             puts 2D (1 frame) and 3D (many frames) batches on the same scale, so neither
             dominates when training on mixed 2D + 3D data. Summing is the SAM2 convention.
+        compile_kernels: Compile the Dice and the focal loss with ``torch.compile``. Both are chains
+            of elementwise ops over the (N, M, 1024, 1024) masks. The fused kernels read and write
+            less memory. The result does not change.
     """
 
     def __init__(
@@ -125,6 +128,7 @@ class CustomSAM2Loss(nn.Module):
         use_object_score_loss: bool = False,
         object_score_weight: float = 1.0,
         average_over_frames: bool = False,
+        compile_kernels: bool = False,
     ):
         super().__init__()
         self.dice_weight = dice_weight
@@ -143,6 +147,9 @@ class CustomSAM2Loss(nn.Module):
             "focal_gamma": focal_gamma, "use_object_score_loss": use_object_score_loss,
             "object_score_weight": object_score_weight, "average_over_frames": average_over_frames,
         }
+        # The number of objects varies per batch, so the kernels must be dynamic.
+        self.dice_loss = torch.compile(dice_loss, dynamic=True) if compile_kernels else dice_loss
+        self.focal_loss = torch.compile(focal_loss, dynamic=True) if compile_kernels else focal_loss
 
     def _loss_per_frame(self, outputs, targets, num_objects):
         """Accumulate the loss components over all correction steps for one frame."""
@@ -155,9 +162,11 @@ class CustomSAM2Loss(nn.Module):
         for src_masks, pred_ious, object_score_logits in zip(masks_list, ious_list, object_score_list):
             target = target_masks.expand_as(src_masks)  # (N, M, H, W)
 
-            dice = dice_loss(src_masks, target)  # (N, M)
+            dice = self.dice_loss(src_masks, target)  # (N, M)
             iou = iou_regression_loss(src_masks, target, pred_ious, self.iou_use_l1_loss)  # (N, M)
-            focal = focal_loss(src_masks, target, self.focal_alpha, self.focal_gamma) if self.use_focal_loss else None
+            focal = None
+            if self.use_focal_loss:
+                focal = self.focal_loss(src_masks, target, self.focal_alpha, self.focal_gamma)
 
             # Pick the best mask candidate per object by the active mask loss.
             select = dice if focal is None else self.dice_weight * dice + self.focal_weight * focal

@@ -28,13 +28,13 @@ from tqdm import tqdm
 import torch
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_3D_EM,
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_EM,
     GT_MIN_SIZE_2D, check_data_download, drop_severed_objects, load_data, n_samples,
     run_dataset_evaluation,
 )
 
 LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
-EM_DATASETS = set(DATASETS_3D_EM)
+EM_DATASETS = set(DATASETS_EM)
 METHODS = ["cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron"]
 
 SEGNEURON_ROOT = "/mnt/vast-nhr/home/archit/u12090/SegNeuron"
@@ -48,7 +48,9 @@ SAM_V1_MODEL_TYPE = "vit_b_lm"
 
 # Per-dataset z/xy anisotropy for CellPose do_3D mode (z_voxel / xy_voxel).
 DATASET_ANISOTROPY = {
-    "embedseg": 4.0,
+    "embedseg_mouse_skull": 4.0,
+    "embedseg_organoid": 6.0,
+    "embedseg_platy_nuclei": 5.0,
     "blastospim": 10.0,
     "mouse_embryo": 4.0,
     "cremi": 10.0,   # z=40nm, xy=4nm

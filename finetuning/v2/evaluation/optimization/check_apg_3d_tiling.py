@@ -10,12 +10,12 @@ Uses the model registry ingested from owncloud (`micro_sam.v2.util.FINETUNED_MOD
 'hvit_t_cells'), not the local joint training checkpoints.
 
 Usage:
-    python test_apg_3d_tiling.py -m hvit_t_cells
-    python test_apg_3d_tiling.py -d embedseg -m hvit_t_cells
-    python test_apg_3d_tiling.py -m hvit_s_cells --tile_shape 256 256 --halo 48 48
-    python test_apg_3d_tiling.py -m hvit_t_cells --z_block 64 --z_halo 8  # also block z
-    python test_apg_3d_tiling.py -m hvit_t_cells --devices cuda:0  # pin to one GPU
-    python test_apg_3d_tiling.py -m hvit_t_cells --execution process  # one OS process per device
+    python check_apg_3d_tiling.py -m hvit_t_cells
+    python check_apg_3d_tiling.py -d embedseg -m hvit_t_cells
+    python check_apg_3d_tiling.py -m hvit_s_cells --tile_shape 256 256 --halo 48 48
+    python check_apg_3d_tiling.py -m hvit_t_cells --z_block 64 --z_halo 8  # also block z
+    python check_apg_3d_tiling.py -m hvit_t_cells --devices cuda:0  # pin to one GPU
+    python check_apg_3d_tiling.py -m hvit_t_cells --execution process  # one OS process per device
 """
 
 import os

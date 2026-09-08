@@ -275,8 +275,10 @@ def sync_prompt_shape_current_color(layer_or_event):
 
 def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     """@private"""
-    viewer.layers["point_prompts"].data = []
-    viewer.layers["point_prompts"].refresh()
+    point_layer = viewer.layers["point_prompts"]
+    point_layer.selected_data = set(range(len(point_layer.data)))
+    point_layer.remove_selected()
+    point_layer.refresh()
     if "prompts" in viewer.layers:
         # Select all prompts and then remove them.
         # This is how it worked before napari 0.5.
@@ -292,10 +294,10 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
 
 def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=True) -> None:
     """@private"""
-    point_prompts = viewer.layers["point_prompts"].data
-    point_prompts = point_prompts[point_prompts[:, 0] != i]
-    viewer.layers["point_prompts"].data = point_prompts
-    viewer.layers["point_prompts"].refresh()
+    point_layer = viewer.layers["point_prompts"]
+    point_layer.selected_data = set(np.flatnonzero(point_layer.data[:, 0] == i))
+    point_layer.remove_selected()
+    point_layer.refresh()
     if "prompts" in viewer.layers:
         prompt_layer = viewer.layers["prompts"]
         prompt_layer.selected_data = {
