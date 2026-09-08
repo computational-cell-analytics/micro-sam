@@ -880,3 +880,38 @@ Ranking at each decoder's own **ridge-free** optimum: `fgcal` 0.4298 > `boundary
 0.4261 > `both` 0.4254 > `baseline` 0.4244 > `contact` 0.4083. So without the contact ridge the
 boundary-weighted foreground loss is the best single change, and the fifth channel only overtakes it once the
 ridge is available (point 12) - which the sweep cannot see (point 13).
+
+**16. The 3d crops: the boundary channel does not repair the volume path, and its LM failure is the foreground**
+(`ais/reports/decoders_all_3d*`, apg3d primary + holdout, 75 crops; regression instrument only - the decoders
+were fine-tuned on 2d LM data and the 3d path saw none). Per family under `current-defaults`:
+
+| family | production | baseline | fgcal | boundary | boundary_fgcal | contact | both |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| celegans_atlas | 0.104 | 0.040 | 0.011 | 0.000 | 0.000 | 0.000 | 0.000 |
+| embedseg_platy_ish | 0.339 | 0.156 | 0.135 | 0.000 | 0.002 | 0.000 | 0.000 |
+| embedseg_platy_nuclei | 0.259 | 0.115 | 0.086 | 0.000 | 0.000 | 0.000 | 0.000 |
+| embedseg_skull | 0.118 | 0.238 | 0.078 | 0.000 | 0.009 | 0.000 | 0.000 |
+| gonuclear | 0.256 | 0.132 | 0.135 | 0.000 | 0.004 | 0.000 | 0.000 |
+| platynereis_nuclei | 0.068 | 0.052 | 0.006 | 0.000 | 0.000 | 0.000 | 0.000 |
+| cremi / cremi_seen (lower better) | 0.99 / 0.59 | 1.87 / 1.23 | 2.24 / 2.15 | **1.86 / 1.42** | 1.97 / 2.04 | 2.19 / 2.05 | 2.09 / 1.89 |
+| snemi / humanneurons (lower better) | 0.97 / 1.35 | 1.69 / 1.97 | 1.95 / 1.98 | **1.87** / 2.03 | 2.02 / 2.16 | 2.16 / 2.37 | 1.92 / 2.04 |
+
+Every five-channel decoder scores exactly 0 on all six LM families, the boundary target included, so the
+better-posed channel does **not** repair the volume path. But the mechanism is not the one recorded for round 1
+in 4.0 (`boundary_magnitude_max` removing every instance): the mechanism columns show `boundary`'s 3d
+**foreground ballooning** - `fg_area_ratio` 6.63 on celegans_atlas and **8.45** on gonuclear, against 2.04 / 3.59
+for `baseline` and 1.28 / 2.02 for production - with 2.7 to 9.1 background seeds per ground-truth object and
+`matched_iou` undefined because nothing matches at IoU 0.5 at all. Objects are not missing for want of seeds
+(`gt_with_0_seeds` 0.29-0.39, no worse than baseline); the volume is simply flooded. `boundary` is the *worst*
+of the six on this measure, i.e. the extra 2d task makes the untrained 3d foreground worse the better it is
+learned in 2d.
+
+Two things worth carrying to a joint 2d + 3d run:
+
+- **`fgcal` is the only variant that improves the 3d foreground** (gonuclear `fg_area_ratio` 2.68 against
+  baseline's 3.59, celegans 2.38 against 2.04 - and it is the only loss change that keeps an LM score at
+  baseline level, gonuclear 0.135 against 0.132). The boundary-weighted foreground BCE generalises to the
+  dimension it never saw; the fifth channel does the opposite.
+- **On EM the boundary channel is harmless**: `boundary` matches `baseline` on cremi (1.86 against 1.87) and is
+  the best of the six on cremi_seen (1.42) and snemi (1.87), while `fgcal` is the worst on cremi (2.24). The
+  volume regression is specific to LM instance matching, not to volumes as such.
