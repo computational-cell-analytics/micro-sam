@@ -2,7 +2,7 @@
 
 Four controls pick what runs:
     --data              which datasets, by name or with --all_datasets
-    --modality          lm or em (or both)
+    --modality          lm, em or hp (or all)
     --segmentation_type automatic or interactive
     --segmentation_mode ais or apg, for micro-sam2
 
@@ -35,7 +35,8 @@ from typing import Optional
 from datetime import datetime
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D_LM, DATASETS_3D_EM, MODEL_TYPES,
+    DATA_ROOT, DATASETS_2D_LM, DATASETS_HP, DATASETS_3D_LM, DATASETS_EM, DATASETS_3D_EM, DATASETS_SUPPLEMENTARY,
+    MODEL_TYPES,
 )
 
 EVAL_ROOT = Path(__file__).resolve().parent
@@ -50,9 +51,10 @@ SCRIPTS = {
 # than whatever the environment holds when it starts.
 PINNED_ENV_VARS = ("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", "MICRO_SAM2_JOINT_EXPORT_ROOT")
 
-DATASETS_LM = tuple(DATASETS_2D + DATASETS_3D_LM)
-DATASETS_EM = tuple(DATASETS_3D_EM)
-DATASETS = tuple(sorted(set(DATASETS_LM + DATASETS_EM)))
+DATASETS_LM = tuple(DATASETS_2D_LM + DATASETS_3D_LM)
+DATASETS_EM = tuple(DATASETS_EM)
+DATASETS_HP = tuple(DATASETS_HP)
+DATASETS = tuple(sorted(set(DATASETS_LM + DATASETS_EM + DATASETS_HP)))
 DATASETS_3D = tuple(sorted(set(DATASETS_3D_LM + DATASETS_3D_EM)))
 
 SEGMENTATION_MODES = ("ais", "apg")
@@ -142,8 +144,10 @@ def warn_missing_envs(envs: set) -> None:
 
 
 def modality_of(dataset_name: str) -> str:
-    """The modality a dataset belongs to, 'lm' or 'em'."""
-    return "em" if dataset_name in DATASETS_EM else "lm"
+    """The modality a dataset belongs to: 'lm', 'em' or 'hp'."""
+    if dataset_name in DATASETS_EM:
+        return "em"
+    return "hp" if dataset_name in DATASETS_HP else "lm"
 
 
 def ndim_of(dataset_name: str) -> int:
@@ -158,6 +162,8 @@ def select_datasets(args: argparse.Namespace, method: Optional[str], mode: Optio
     the node, so a broad selection stays usable without listing exceptions by hand.
     """
     datasets = tuple(args.data) if args.data else DATASETS
+    if not args.supplementary and not args.data:
+        datasets = tuple(d for d in datasets if d not in DATASETS_SUPPLEMENTARY)
 
     if args.modality != "all":
         datasets = tuple(d for d in datasets if modality_of(d) == args.modality)
@@ -293,7 +299,11 @@ def main():
     parser.add_argument("-d", "--data", nargs="+", default=None, choices=DATASETS,
                         help="Datasets to evaluate. Required unless --all_datasets is set.")
     parser.add_argument("--all_datasets", action="store_true", help="Evaluate every dataset of the selection.")
-    parser.add_argument("--modality", default="all", choices=("lm", "em", "all"), help="Restrict to a modality.")
+    parser.add_argument(
+        "--supplementary", action="store_true",
+        help="Include the supplementary datasets, which --all_datasets leaves out by default.",
+    )
+    parser.add_argument("--modality", default="all", choices=("lm", "em", "hp", "all"), help="Restrict to a modality.")
     parser.add_argument("--ndim", type=int, default=None, choices=(2, 3), help="Restrict to a dimensionality.")
     parser.add_argument("--segmentation_type", required=True, choices=("automatic", "interactive"))
     parser.add_argument("--segmentation_mode", nargs="+", default=["ais"], choices=SEGMENTATION_MODES,

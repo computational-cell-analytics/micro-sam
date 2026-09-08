@@ -187,10 +187,19 @@ class JointSam2Trainer(Sam2Trainer):
             with forward_context():
                 try:
                     inter_loss, batch, outputs = self._interactive_step(x, y)
+                    skip = 0
                 except RuntimeError as e:
-                    if "no objects found" in str(e):
-                        continue
-                    raise
+                    if "no objects found" not in str(e):
+                        raise
+                    skip = 1
+            # Every rank has to skip the same iterations, or the ranks that go on wait forever in the
+            # gradient all-reduce for the one that skipped.
+            if dist.is_available() and dist.is_initialized():
+                skip_flag = torch.tensor(skip, device=self.device)
+                dist.all_reduce(skip_flag, op=dist.ReduceOp.MAX)
+                skip = int(skip_flag.item())
+            if skip:
+                continue
             self._sam2_backprop(inter_loss)
 
             log_imgs = (self._iteration % self.log_image_interval == 0)

@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Tuple
 
 import numpy as np
@@ -9,8 +10,13 @@ from bioimage_cpp.distance import distance_transform, geodesic_distance_field, v
 from bioimage_cpp.segmentation import label as connected_components, relabel_sequential
 
 
+# The integer dtypes that bioimage-cpp's connected-component labeling accepts.
 # Written into the foreground target channel, which otherwise holds 0 or 1, for voxels without ground truth.
 FOREGROUND_IGNORE_VALUE = -1
+
+SUPPORTED_LABEL_DTYPES = frozenset(
+    np.dtype(name) for name in ("bool", "uint8", "uint16", "uint32", "uint64", "int32", "int64")
+)
 
 
 def _instance_labels(labels):
@@ -23,6 +29,10 @@ def _instance_labels(labels):
     # bioimage-cpp reads raw bytes as native byte order; some EmbedSeg masks are big-endian.
     if not labels.dtype.isnative:
         labels = labels.byteswap().view(labels.dtype.newbyteorder())
+    # bioimage-cpp accepts only bool, uint8/16/32/64 and int32/64. Cast anything else: some datasets store
+    # integer ids as floats (MoNuSeg, MoNuSAC) and others as narrow integers (Omnipose masks are int8 or int16).
+    if labels.dtype not in SUPPORTED_LABEL_DTYPES:
+        labels = labels.astype("int64")
     return connected_components(labels).astype("int64")
 
 
@@ -33,6 +43,94 @@ def _axondeepseg_pre_label_transform(y):
     rather than just binary foreground (0/1).
     """
     return connected_components(y == 2).astype("uint32")
+
+
+def _astih_pre_label_transform(y, min_size=20):
+    """Extract axon instances from ASTIH semantic labels (0=background, 1=myelin, 2=axon).
+
+    Same encoding as AxonDeepSeg, so the axon class alone is taken: every myelinated fibre's
+    interior is fully ringed by its own sheath, which keeps neighbouring interiors disconnected.
+    Running connected components over the whole foreground instead would bridge touching sheaths.
+    Objects below *min_size* pixels are annotation specks and are dropped.
+    """
+    instances = connected_components(y == 2).astype("uint32")
+    ids, counts = np.unique(instances, return_counts=True)
+    drop = ids[(counts < min_size) & (ids > 0)]
+    if drop.size:
+        instances[np.isin(instances, drop)] = 0
+        instances = connected_components(instances > 0).astype("uint32")
+    return instances
+
+
+def _labels_to_uint32(labels):
+    """Widen labels so that an ignore label fits. torch_em recasts labels to their loaded dtype before
+    label_transform2, so this has to run as the pre_label_transform."""
+    return np.asarray(labels).astype("uint32")
+
+
+def _ignore_missing_raw_trafo(raw, labels, ignore_label, min_area=4096, transform=None):
+    """Mark labels as *ignore_label* where the raw holds a missing tile, then apply *transform*.
+
+    A missing tile is a connected region of exact zeros in a slice with at least *min_area* pixels.
+    The area threshold keeps dark tissue pixels, which never form such regions, out of the mask.
+    Runs as the joint 'transform', so it sees the raw and precedes label_transform2. The loaded label
+    dtype must hold *ignore_label*, see :func:`_labels_to_uint32`.
+    """
+    raw = np.asarray(raw)
+    labels = np.asarray(labels)
+    zero = np.all(raw == 0, axis=0) if raw.ndim == labels.ndim + 1 else raw == 0
+    missing = np.zeros_like(zero)
+    slices = zero if zero.ndim == 3 else zero[None]
+    out = missing if missing.ndim == 3 else missing[None]
+    for z in range(slices.shape[0]):
+        components = connected_components(slices[z])
+        if components.max() == 0:
+            continue
+        areas = np.bincount(components.ravel())
+        big = np.flatnonzero(areas >= min_area)
+        big = big[big > 0]
+        if big.size:
+            out[z] = np.isin(components, big)
+    if missing.any():
+        if labels.dtype.kind in "ui" and ignore_label > np.iinfo(labels.dtype).max:
+            labels = labels.astype("uint32")
+        else:
+            labels = labels.copy()
+        labels[missing] = ignore_label
+    if transform is not None:
+        raw, labels = transform(raw, labels)
+    return raw, labels
+
+
+def _ignore_unlabelled_blobs_trafo(raw, labels, ignore_label, min_area=20000, transform=None):
+    """Mark large connected unlabelled regions as *ignore_label*, then apply *transform*.
+
+    For volumes where somata or vessels were left out of the segmentation. Extracellular space
+    and membranes form thin unlabelled seams far below *min_area*, so they stay background.
+    """
+    labels = np.asarray(labels)
+    background = labels == 0
+    blobs = np.zeros_like(background)
+    slices = background if background.ndim == 3 else background[None]
+    out = blobs if blobs.ndim == 3 else blobs[None]
+    for z in range(slices.shape[0]):
+        components = connected_components(slices[z])
+        if components.max() == 0:
+            continue
+        areas = np.bincount(components.ravel())
+        big = np.flatnonzero(areas >= min_area)
+        big = big[big > 0]
+        if big.size:
+            out[z] = np.isin(components, big)
+    if blobs.any():
+        if labels.dtype.kind in "ui" and ignore_label > np.iinfo(labels.dtype).max:
+            labels = labels.astype("uint32")
+        else:
+            labels = labels.copy()
+        labels[blobs] = ignore_label
+    if transform is not None:
+        raw, labels = transform(raw, labels)
+    return raw, labels
 
 
 def _em_cell_label_trafo(y, label_trafo, ignore_label=None):
@@ -55,11 +153,17 @@ def _em_cell_label_trafo(y, label_trafo, ignore_label=None):
 
 
 def _plantseg_label_trafo(y, data, label_trafo):
-    # Let's reject the samples first.
+    """Map the PlantSeg unannotated regions to ignore and the background id to 0.
+
+    In root, label 1 is the background and label 0 the unannotated deeper tissue. In ovules (with the
+    'label_with_ignore' key), 0 is the background and -1 marks the unannotated regions.
+    """
     if data == "root":
+        ignore = y == 0
         y[y == 1] = 0
     elif data == "ovules":
-        y[y == -1] = 0
+        ignore = y == -1
+        y[ignore] = 0
     else:
         raise ValueError
 
@@ -67,8 +171,87 @@ def _plantseg_label_trafo(y, data, label_trafo):
         return y
 
     y = label_trafo(y)
-
+    fg_channel = 1 if getattr(label_trafo, "instances", False) else 0
+    y[fg_channel][ignore] = FOREGROUND_IGNORE_VALUE
     return y
+
+
+def _drop_oversized_label_trafo(y, max_fraction, label_trafo):
+    """Drop instances that cover more than `max_fraction` of the patch, then apply the usual transform.
+
+    Some datasets carry a single annotation artefact that covers a large region of tissue as though it were
+    one object. NIS3D has one such blob in three of its six volumes, 56x larger than its largest real nucleus,
+    so any instance above a few percent of a patch is certainly not a nucleus.
+    """
+    ids, counts = np.unique(y[y > 0], return_counts=True)
+    oversized = ids[counts > max_fraction * y.size]
+    if len(oversized) > 0:
+        y = y.copy()
+        y[np.isin(y, oversized)] = 0
+
+    if label_trafo is None:
+        return y
+
+    return label_trafo(y)
+
+
+def _decode_colour_cycled_labels(y, label_trafo=None):
+    """Recover instances from labels that reuse a small palette of ids across many objects.
+
+    NISNet3D stores its instance segmentation as a graph colouring: only 4-5 id values are cycled over
+    dozens of nuclei so that no two touching nuclei share one. Running connected components over the whole
+    array therefore fuses same-coloured neighbours, while running it within each id separately recovers the
+    true objects.
+    """
+    decoded = np.zeros(y.shape, dtype="int64")
+    offset = 0
+    for value in np.unique(y):
+        if value == 0:
+            continue
+        components = connected_components((y == value).astype("uint8"))
+        mask = components > 0
+        decoded[mask] = components[mask].astype("int64") + offset
+        offset = int(decoded.max())
+
+    if label_trafo is None:
+        return decoded
+
+    return label_trafo(decoded)
+
+
+def _merge_instance_channels(y, label_trafo=None):
+    """Merge a stack of disjoint instance maps into one, offsetting the ids of each channel.
+
+    mnDINO stores nuclei and micronuclei as two separate instance maps of the same image. They never
+    overlap, so they can be combined into a single target by shifting the second map's ids past the first.
+    """
+    merged = np.zeros(y.shape[1:], dtype="int64")
+    offset = 0
+    for channel in y:
+        mask = channel > 0
+        if not mask.any():
+            continue
+        merged[mask] = channel[mask].astype("int64") + offset
+        offset = int(merged.max())
+
+    if label_trafo is None:
+        return merged
+
+    return label_trafo(merged)
+
+
+def _background_id_label_trafo(y, background_id, label_trafo):
+    """Map a non-zero background id to 0 before applying the usual label transform.
+
+    Some datasets number the background as an ordinary instance rather than 0, so it would otherwise be
+    trained as one very large object. PlantSeg root uses id 1 and PNAS Arabidopsis does the same.
+    """
+    y[y == background_id] = 0
+
+    if label_trafo is None:
+        return y
+
+    return label_trafo(y)
 
 
 def _joint_em_cell_label_trafo(y, label_trafo, ignore_label=None):
@@ -78,9 +261,6 @@ def _joint_em_cell_label_trafo(y, label_trafo, ignore_label=None):
     ``[instance_ids, expected_fg, d_x, d_y, d_z]`` (5 channels) instead of
     dropping the instance channel. ``label_trafo`` must produce a 5-channel
     array (i.e. be a :class:`_JointLabelTransform` / ``instances=True``).
-
-    Voxels equal to ``ignore_label`` are marked with ``FOREGROUND_IGNORE_VALUE`` in the foreground channel
-    and removed from the instance channel, so neither branch trains on them.
     """
     ignore = None if ignore_label is None else np.asarray(y) == ignore_label
     y = label_trafo(y)  # (5, H, W) or (5, Z, H, W)
@@ -105,8 +285,10 @@ class DirectedPerObjectBoundaryDistanceTransform:
         instances: bool = False,
         apply_label: bool = True,
         sampling: Optional[Tuple[float, ...]] = None,
+        n_threads: int = 1,
     ):
         self.min_size = min_size
+        self.n_threads = n_threads
         self.distance_fill_value = 1
         self.foreground = foreground
         self.instances = instances
@@ -178,13 +360,21 @@ class DirectedPerObjectBoundaryDistanceTransform:
         # Compute how many distance channels we have.
         n_channels = 3
 
-        # Compute the per object distances.
+        # Compute the per object distances. Each object writes only into its own voxels and the distance
+        # solvers release the GIL, so the objects can be processed by a thread pool.
         distances = np.full(labels.shape + (n_channels,), self.distance_fill_value, dtype="float32")
-        for prop in props:
-            label_id = prop.label
-            distances = self.compute_normalized_directed_distances(
-                labels, label_id, boundaries, bounding_boxes[label_id], distances
+
+        def compute(prop):
+            self.compute_normalized_directed_distances(
+                labels, prop.label, boundaries, bounding_boxes[prop.label], distances
             )
+
+        if self.n_threads > 1:
+            with ThreadPoolExecutor(self.n_threads) as pool:
+                list(pool.map(compute, props))
+        else:
+            for prop in props:
+                compute(prop)
 
         # Bring the distance channel to the first dimension.
         to_channel_first = (ndim,) + tuple(range(ndim))

@@ -29,6 +29,8 @@ def build_common(model_type, n_epochs, n_iterations, batch_size, dataset_choice,
 
     is_multi_gpu = "RANK" in os.environ
     name = f"joint_sam2_{model_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
+    if os.environ.get("RUN_TAG"):
+        name = f"{name}_{os.environ['RUN_TAG']}"
 
     # Set 'peft_kwargs' to jointly finetune with a parameter efficient method instead of full
     # finetuning (the SAM2 image encoder is frozen and the method is applied on top of it). Examples:
@@ -47,7 +49,7 @@ def build_common(model_type, n_epochs, n_iterations, batch_size, dataset_choice,
         batch_size_2d=batch_size_2d,
         z_slices=z_slices,
         dataset_choice=dataset_choice,
-        n_workers=8,
+        n_workers=int(os.environ.get("N_WORKERS", 8)),  # loader workers per GPU
         n_epochs=n_epochs,
         n_iterations=n_iterations,
         lr=1e-5,  # single LR for all parameters
@@ -72,6 +74,7 @@ def build_common(model_type, n_epochs, n_iterations, batch_size, dataset_choice,
         peft_kwargs=peft_kwargs,  # None = full finetuning; set above to use LoRA / late finetuning
         initial_features=32,  # decoder bottleneck matches the hvit_t embed_dim
         distance_type="geodesic",  # regression target of the automatic branch
+        label_trafo_threads=int(os.environ.get("LABEL_TRAFO_THREADS", 1)),  # threads per worker in the label transform
         # The first 2D and the first 3D iteration then take a few minutes longer.
         compile=["encoder", "decoder", "loss"] if use_compile else None,
     )

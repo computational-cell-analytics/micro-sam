@@ -8,6 +8,7 @@ import torch
 import torchvision.transforms.functional as TF
 from torchvision.transforms import ColorJitter
 
+from torch_em.transform.generic import Compose
 from torch_em.transform.raw import RandomPercentileNormalization, RawTransform
 
 from .labels import _em_cell_label_trafo  # noqa
@@ -86,6 +87,63 @@ def _cellpose_raw_trafo(x):
     x = _prepare_cellpose_raw(x)
     x = normalize_raw(x, axis=(1, 2))
     return x
+
+
+def _prepare_select_channel(raw, channel):
+    """Keep one channel of a multi-channel image and triplicate it, without normalizing."""
+    plane = raw[channel] if raw.shape[0] <= 8 else raw[..., channel]
+    return np.stack([plane] * 3).astype("float32")
+
+
+def _prepare_enseg_green_channel(raw):
+    """enseg is stored RGB but only the green channel carries signal."""
+    return _prepare_select_channel(raw, 1)
+
+
+def _enseg_green_channel(raw):
+    return normalize_raw(_prepare_enseg_green_channel(raw), axis=(1, 2))
+
+
+def _prepare_xenium_cell_channels(raw):
+    """Xenium cell target: drop the DAPI channel (0) and keep the three morphology stains the cells were grown from."""
+    return np.asarray(raw[1:4], dtype="float32")
+
+
+def _xenium_cell_channels(raw):
+    return normalize_raw(_prepare_xenium_cell_channels(raw), axis=(1, 2))
+
+
+def _prepare_pan_multiplex_tissuenet_order(raw):
+    """Reorder pan_multiplex from (nuclei, membrane) to TissueNet's membrane, nucleus, zeros."""
+    nuclei, membrane = raw[0], raw[1]
+    return np.stack([membrane, nuclei, np.zeros_like(membrane)]).astype("float32")
+
+
+def _pan_multiplex_tissuenet_order(raw):
+    return normalize_raw(_prepare_pan_multiplex_tissuenet_order(raw), axis=(1, 2))
+
+
+def _prepare_cvz_cell_channels(raw):
+    """Reorder the CVZ cell composite from (membrane, membrane, DAPI) to membrane, DAPI, membrane."""
+    raw = to_rgb(raw)
+    return np.stack([raw[0], raw[2], raw[1]]).astype("float32")
+
+
+def _cvz_cell_channels(raw):
+    return normalize_raw(_prepare_cvz_cell_channels(raw), axis=(1, 2))
+
+
+def _minmax_normalize(raw):
+    """Scale every channel to [0, 1] by its minimum and maximum."""
+    raw = raw.astype("float32")
+    lo = raw.min(axis=(1, 2), keepdims=True)
+    hi = raw.max(axis=(1, 2), keepdims=True)
+    return (raw - lo) / (hi - lo + 1e-7)
+
+
+def _minmax_raw_trafo(raw):
+    """Min-max normalization for images whose background covers almost the whole percentile range (BBBC030)."""
+    return _minmax_normalize(_prepare_to_8bit(raw))
 
 
 def _resize_to_512(x, is_label=False):
@@ -411,6 +469,13 @@ def get_random_percentile_normalization(
     normalizer receives data in its original intensity range. An existing ``augmentation2`` is preserved.
     """
     augmentation2 = None
+    if isinstance(raw_transform, Compose):
+        # torch-em datasets such as ifnuclei and hela_cytonuc prepend a channel selection to the given transform.
+        *prepare, inner = raw_transform.transforms
+        base = get_random_percentile_normalization(inner, lower_percentile_bounds, distribution, distribution_kwargs)
+        steps = prepare + ([base.augmentation1] if base.augmentation1 is not None else [])
+        augmentation1 = Compose(*steps, is_multi_tensor=False)
+        return RawTransform(normalizer=base.normalizer, augmentation1=augmentation1, augmentation2=base.augmentation2)
     if isinstance(raw_transform, RawTransform):
         augmentation1, augmentation2 = raw_transform.augmentation1, raw_transform.augmentation2
         if isinstance(raw_transform.normalizer, RandomPercentileNormalization):
@@ -431,6 +496,18 @@ def get_random_percentile_normalization(
         augmentation1, axis = _prepare_cellpose_raw, (1, 2)
     elif raw_transform is _resize_raw_to_512:
         augmentation1, axis = _prepare_resize_raw_to_512, (1, 2)
+    elif raw_transform is _enseg_green_channel:
+        augmentation1, axis = _prepare_enseg_green_channel, (1, 2)
+    elif raw_transform is _xenium_cell_channels:
+        augmentation1, axis = _prepare_xenium_cell_channels, (1, 2)
+    elif raw_transform is _pan_multiplex_tissuenet_order:
+        augmentation1, axis = _prepare_pan_multiplex_tissuenet_order, (1, 2)
+    elif raw_transform is _cvz_cell_channels:
+        augmentation1, axis = _prepare_cvz_cell_channels, (1, 2)
+    elif raw_transform is _minmax_raw_trafo:
+        # BBBC030's background spans about 4 % of the intensity range, so any percentile normalization saturates
+        # the cells; this transform stays min-max and is not randomized.
+        return RawTransform(normalizer=_minmax_normalize, augmentation1=_prepare_to_8bit)
     elif raw_transform is _normalize_percentile:
         augmentation1, axis = None, None
     elif isinstance(raw_transform, partial) and raw_transform.func is _normalize_percentile:

@@ -4,14 +4,14 @@ import subprocess
 from datetime import datetime
 
 
-# Epochs per model: uniform 150, fits comfortably under the 96h qos for every model size.
-# Overrunning is harmless anyway: ReduceLROnPlateau doesn't depend on n_epochs, and
+# Epochs per model, from the measured one-epoch runs on 2 nodes x 4 H100 (2026-09-08): ~61-65 min per epoch incl.
+# validation for every model, so ~90 epochs fit the 96h qos. ReduceLROnPlateau doesn't depend on n_epochs, and
 # checkpoints are written every epoch, so hitting the wall clock only loses the final one.
 EPOCHS = {
-    "hvit_t": 180,  # currently at 77h for 150 epochs
-    "hvit_s": 150,
-    "hvit_b": 150,
-    "hvit_l": 150,
+    "hvit_t": 94,
+    "hvit_s": 92,
+    "hvit_b": 90,
+    "hvit_l": 90,
 }
 
 # GDR_LEVEL=LOC is mandatory with IB: GPUDirect RDMA fails on these nodes with IBV_WC_LOC_PROT_ERR.
@@ -35,18 +35,18 @@ GPU_TYPE = "H100"
 SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v5"
 
 
-def write_batch_script(out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry):
+def write_batch_script(out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry, tag):
     "Writing the multi-node sbatch script for one joint SAM2 training run (2 nodes x 4 H100 = 8 GPUs)."
     nccl_block = "\n".join(f"export {key}={value}" for key, value in NCCL_ENV[enable_ib].items())
 
     batch_script = rf"""#!/bin/bash
-#SBATCH --job-name=μSAM2_joint_{model_type}
+#SBATCH --job-name=μSAM2_joint_{model_type}{"_" + tag if tag else ""}
 #SBATCH -t 4-00:00:00
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH -p {PARTITION}
 #SBATCH --gpus-per-node={GPU_TYPE}:4
-#SBATCH --cpus-per-task 32
+#SBATCH --cpus-per-task 96
 #SBATCH --mem 384G
 #SBATCH --qos=96h
 #SBATCH --constraint=inet
@@ -56,6 +56,10 @@ micromamba activate super
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export SAVE_ROOT={save_root}
+# 8 loader workers per GPU, each with 3 threads over the objects of a patch in the distance transform.
+export LABEL_TRAFO_THREADS=3
+export N_WORKERS=16
+export RUN_TAG={tag}
 # The torch.compile cache must be node-local. A cache on the shared filesystem blocks the compile on its file locks.
 export TORCHINDUCTOR_CACHE_DIR=/local/jobs/${{USER}}_${{SLURM_JOB_ID}}/inductor
 
@@ -73,6 +77,8 @@ srun --cpu-bind=none bash -c "torchrun \
     --node_rank=\$SLURM_NODEID \
     {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {dataset_choice} --compile"
 """
+    if not tag:
+        batch_script = batch_script.replace("export RUN_TAG=\n", "")
     if reservation:
         batch_script = batch_script.replace(
             f"#SBATCH -p {PARTITION}\n", f"#SBATCH -p {PARTITION}\n#SBATCH --reservation={reservation}\n"
@@ -105,6 +111,7 @@ def submit_slurm(args):
     tmp_folder = "./gpu_jobs"
 
     models = list(EPOCHS.keys()) if args.model_type is None else [args.model_type]
+    save_root = os.path.join(os.path.dirname(SAVE_ROOT), args.tag) if args.tag else SAVE_ROOT
 
     for model_type in models:
         print(f"Submitting joint training for {model_type}")
@@ -113,10 +120,11 @@ def submit_slurm(args):
             model_type=model_type,
             n_epochs=EPOCHS[model_type],
             dataset_choice=args.dataset_choice,
-            save_root=os.path.abspath(args.save_root),
+            save_root=os.path.abspath(args.save_root or save_root),
             reservation=args.reservation,
             enable_ib=args.enable_ib == "yes",
             dry=args.dry,
+            tag=args.tag,
         )
 
 
@@ -142,7 +150,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "-r", "--reservation", type=str, default=None, help="Slurm reservation to submit under, if any."
     )
-    parser.add_argument("-s", "--save_root", type=str, default=SAVE_ROOT, help="Where to save checkpoints and logs.")
+    parser.add_argument(
+        "-s", "--save_root", type=str, default=None,
+        help="Where to save checkpoints and logs. Defaults to the shared v5 folder, or to its '<tag>' sibling.",
+    )
+    parser.add_argument("--tag", type=str, default=None, help="Run tag, e.g. 'v5a', added to the run and job names.")
     parser.add_argument(
         "--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB verbs instead of sockets."
     )

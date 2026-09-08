@@ -661,8 +661,23 @@ REGISTRY_EXPERIMENT_FOLDER = (
 
 # Every dataset requested for the registry sweep that has a validation split to tune on.
 REGISTRY_DATASETS = [
-    "livecell", "tissuenet", "dynamicnuclearnet", "deepbacs", "yeaz", "covid_if", "deepseas",
-    "neurips_cellseg", "embedseg", "gonuclear", "platynereis_nuclei", "cremi", "snemi", "humanneurons",
+    "livecell", "tissuenet", "dynamicnuclearnet", "deepbacs_label_free", "deepbacs_fluorescence", "yeaz",
+    "covid_if_cells", "covid_if_nuclei", "deepseas",
+    "neurips_cellseg_fluorescence", "neurips_cellseg_label_free", "gonuclear", "platynereis_nuclei", "cremi", "snemi",
+    "humanneurons",
+    # Histopathology, tuned on the pools of common.VAL_SPLITS (loader val splits, or train where none exists).
+    "cpm17", "glysac", "histo_miner", "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc", "monuseg",
+    "pannuke", "puma", "srsanet", "tnbc_celltype", "cytodark0", "deepliif", "pcns",
+    # Light microscopy 2d, tuned on the loader val splits. The sets above already cover livecell, tissuenet,
+    # dynamicnuclearnet, deepbacs, yeaz and neurips_cellseg (fluorescence and label-free).
+    "cvz_fluo_cell", "cvz_fluo_dapi", "omnipose_bact_fluor", "omnipose_bact_phase", "omnipose_worm",
+    "omnipose_worm_high_res", "dememseg", "flywing", "enseg", "pan_multiplex", "xenium_cells", "xenium_nuclei",
+    "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei", "tsakiroglou", "orgasegment", "organoidnet",
+    "bccd", "cell_acdc", "cellular", "cisd", "vicar", "microbeseg", "orgline", "organoid", "mcellseg", "toiam",
+    "bbbc030",
+    # Light microscopy 3d, tuned on the loader val splits (gonuclear is listed above).
+    "plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
+    "embedseg_mouse_skull", "embedseg_platy_ish", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "nucverse3d",
 ]
 
 PARTITION = "grete:preemptible"
@@ -702,7 +717,14 @@ def gpu_pool_label(gpu):
 # since its cost is 24 fixed propose() calls per sample, see shard_params_list). tissuenet (3118 val
 # images), deepseas (3169) and dynamicnuclearnet (1417) would otherwise take 26-77 hours per sweep;
 # capped to a still-plenty-large random subset instead. livecell (570) is left uncapped.
-REGISTRY_N_TUNING_SAMPLES = {"tissuenet": 300, "deepseas": 300, "dynamicnuclearnet": 300}
+# The three histopathology tile pools (pannuke fold 2: 2523, lizard_mitosis val: 1017, pcns train: 1084) are
+# capped the same way, as are the large light microscopy val pools.
+REGISTRY_N_TUNING_SAMPLES = {
+    "tissuenet": 300, "deepseas": 300, "dynamicnuclearnet": 300,
+    "pannuke": 300, "lizard_mitosis": 300, "pcns": 300,
+    "dememseg": 300, "flywing": 300, "orgline": 300, "cisd": 300, "toiam": 300,
+    "bmgd": 300, "pan_multiplex": 300,
+}
 
 # Extra shard counts for the 2d datasets whose (uncapped or capped) sample count still makes an
 # unsharded sweep too slow. APG's usable shard ceiling is 24 (one proposal group per shard, see
@@ -716,7 +738,20 @@ REGISTRY_2D_SHARDS = {
     ("deepseas", "ais"): 2, ("deepseas", "apg"): 24,
     ("dynamicnuclearnet", "ais"): 5, ("dynamicnuclearnet", "apg"): 24,
     ("livecell", "ais"): 14, ("livecell", "apg"): 24,
-    ("neurips_cellseg", "ais"): 2, ("neurips_cellseg", "apg"): 4,
+    ("neurips_cellseg_fluorescence", "ais"): 2, ("neurips_cellseg_fluorescence", "apg"): 4,
+    ("neurips_cellseg_label_free", "ais"): 2, ("neurips_cellseg_label_free", "apg"): 4,
+    ("pannuke", "ais"): 4, ("pannuke", "apg"): 24,
+    ("lizard_mitosis", "ais"): 4, ("lizard_mitosis", "apg"): 24,
+    ("pcns", "ais"): 4, ("pcns", "apg"): 24,
+    ("deepliif", "ais"): 2, ("deepliif", "apg"): 12,
+    ("histo_miner", "ais"): 2, ("histo_miner", "apg"): 12,
+    ("dememseg", "ais"): 4, ("dememseg", "apg"): 24,
+    ("flywing", "ais"): 4, ("flywing", "apg"): 24,
+    ("orgline", "ais"): 4, ("orgline", "apg"): 24,
+    ("cisd", "ais"): 4, ("cisd", "apg"): 24,
+    ("toiam", "ais"): 4, ("toiam", "apg"): 24,
+    ("bmgd", "ais"): 4, ("bmgd", "apg"): 24,
+    ("pan_multiplex", "ais"): 4, ("pan_multiplex", "apg"): 24,
 }
 
 

@@ -1,7 +1,16 @@
 """Wrapper for ensuring all inputs are in a 3d pyramid structure for training UniSAM2.
 """
 
+import numpy as np
 import torch
+
+
+def _leaves(ds):
+    """The leaf datasets below (possibly nested) torch-em ConcatDatasets."""
+    datasets = getattr(ds, "datasets", None)
+    if datasets is None:
+        return [ds]
+    return [leaf for child in datasets for leaf in _leaves(child)]
 
 
 class UniDataWrapper(torch.utils.data.Dataset):
@@ -10,6 +19,14 @@ class UniDataWrapper(torch.utils.data.Dataset):
         self.ndim = 3
         # Optional cap on the number of samples drawn (e.g. to shrink the validation set).
         self.max_samples = max_samples
+
+        # torch-em spreads 'n_samples' over the per-file datasets; when there are more files than samples the
+        # surplus files get length 0 and an index can never reach them. Then every sample draws a random file
+        # instead, so all files are seen over the epochs (the file datasets sample a random patch regardless
+        # of the index they are given).
+        self.leaves = _leaves(ds)
+        self.random_leaf = len(self.leaves) > 1 and any(len(leaf) == 0 for leaf in self.leaves)
+        self.max_resample = 10
 
         # Track the source dimensionality for batching (2D vs 3D grouping).
         if source_ndim is not None:
@@ -43,8 +60,22 @@ class UniDataWrapper(torch.utils.data.Dataset):
             raise ValueError(f"Unsupported ndim {t.ndim}")
         return t
 
+    def _draw(self, i):
+        if self.random_leaf:
+            return self.leaves[np.random.randint(len(self.leaves))][0]
+        return self.ds[i]
+
     def __getitem__(self, i):
-        raw, label = self.ds[i]
+        # A file whose labels never satisfy the sampler (e.g. an image with two cells under a three-instance
+        # sampler) raises once its attempts are used up. Draw from another file instead of failing the epoch.
+        for attempt in range(self.max_resample):
+            try:
+                raw, label = self._draw(i)
+                break
+            except RuntimeError as e:
+                if "Could not sample a valid batch" not in str(e) or attempt == self.max_resample - 1:
+                    raise
+                i = np.random.randint(len(self.ds))
         raw = self._to_czyx(raw).to(torch.float32)
         label = self._to_czyx(label).to(torch.float32)
 
@@ -52,7 +83,6 @@ class UniDataWrapper(torch.utils.data.Dataset):
         # Drills through nested ConcatDatasets to find the actual raw/label file path.
         if label.shape[0] >= 5 and label[0].max() == 0:
             import warnings
-            import numpy as np
 
             def _find_leaf(ds, idx):
                 offsets = getattr(ds, "ds_offsets", None)
