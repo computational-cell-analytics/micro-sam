@@ -47,7 +47,7 @@ def build_common(model_type, n_epochs, n_iterations, batch_size, dataset_choice,
         batch_size_2d=batch_size_2d,
         z_slices=z_slices,
         dataset_choice=dataset_choice,
-        n_workers=8,
+        n_workers=int(os.environ.get("N_WORKERS", 8)),  # loader workers per GPU
         n_epochs=n_epochs,
         n_iterations=n_iterations,
         lr=1e-5,  # single LR for all parameters

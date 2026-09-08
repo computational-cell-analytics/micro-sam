@@ -35,9 +35,10 @@ from ..transforms.labels import (
 # Each access is a random crop (see UniDataWrapper.max_samples), so this is N random samples.
 N_SAMPLES_VAL = 50
 
-# Crops the sampler may reject before a leaf gives up. Sparse image sets (the worm and CTC HSC frames, the
-# Tsakiroglou crops) reject up to 85 crops per accepted one, so torch-em's default of 500 fails now and then.
-MAX_SAMPLING_ATTEMPTS = 5000
+# Crops the sampler may reject before a file gives up. Sparse image sets (the worm and CTC HSC frames, the
+# Tsakiroglou crops) reject up to 85 crops per accepted one. A file that gives up is replaced by another draw in
+# UniDataWrapper, so the budget only bounds the time lost on a file whose labels never satisfy the sampler.
+MAX_SAMPLING_ATTEMPTS = 1000
 
 # Fixed seed for deterministic validation. The same value is used to seed the main process
 # (prompt sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch) in
@@ -959,7 +960,13 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
 
     # 40. OrgLine (organoid segmentation in brightfield images across six organs)
-    orgline_kwargs = {"path": os.path.join(input_path, "orgline"), "patch_shape": patch_shape, **kwargs}
+    # NOTE: 59 % of the training images hold one or two organoids, which the default three-instance sampler can
+    # never accept, so organoid images sample with a single-instance sampler (also OrganoID below).
+    organoid_sampler = MinInstanceSampler(min_num_instances=1, exclude_ids=[0])
+    orgline_kwargs = {
+        "path": os.path.join(input_path, "orgline"), "patch_shape": patch_shape, "sampler": organoid_sampler,
+        **{k: v for k, v in kwargs.items() if k != "sampler"},
+    }
     train_ds.append(
         UniDataWrapper(datasets.get_orgline_dataset(split="train", n_samples=500, **orgline_kwargs), source_ndim=2)
     )
@@ -970,7 +977,10 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     # 41. OrganoID (pancreatic organoid segmentation in brightfield culture wells)
     # NOTE: The 'original' (human) and 'mouse' subsets train on their official splits, their test splits are blind.
     # The 'gemcitabine' subset has no split and is left out.
-    organoid_kwargs = {"path": os.path.join(input_path, "organoid"), "patch_shape": patch_shape, **kwargs}
+    organoid_kwargs = {
+        "path": os.path.join(input_path, "organoid"), "patch_shape": patch_shape, "sampler": organoid_sampler,
+        **{k: v for k, v in kwargs.items() if k != "sampler"},
+    }
     for source, n_train in ORGANOID_SOURCES.items():
         for split, n_samples, ds_list in [("train", n_train, train_ds), ("val", n_train // 4, val_ds)]:
             ds_list.append(

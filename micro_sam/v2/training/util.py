@@ -245,6 +245,10 @@ def get_sam2_train_model(
             # Deterministic eval sampling, so the metric is comparable across epochs.
             "++model.rand_frames_to_correct_for_eval=False",
             "++model.rand_init_cond_frames_for_eval=False",
+            # SAM2's default eval sampling ('center') runs two OpenCV distance transforms on the 1024x1024 error
+            # masks of every object and correction click on the CPU, which made validation ~9x slower per batch
+            # than training. Sample the correction clicks uniformly from the error regions as in training.
+            "++model.pt_sampling_for_eval=uniform",
         ],
         apply_postprocessing=False,
     )
