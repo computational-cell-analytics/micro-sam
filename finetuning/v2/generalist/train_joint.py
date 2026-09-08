@@ -19,6 +19,11 @@ def main():
     parser.add_argument("--model_type", default="hvit_t", choices=["hvit_t", "hvit_s", "hvit_b", "hvit_l"])
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--dataset_choice", default="all", choices=["lm", "em", "hp", "all"])
+    parser.add_argument("--with_boundaries", action="store_true")
+    parser.add_argument(
+        "--boundary_dice_weight", type=float, default=1.0,
+        help="Relative Dice weight for the boundary channel; zero selects BCE only.",
+    )
     args = parser.parse_args()
 
     model_type = args.model_type
@@ -78,6 +83,8 @@ def main():
         peft_kwargs=peft_kwargs,  # None = full finetuning; set above to use LoRA / late finetuning
         initial_features=32,  # decoder bottleneck matches the hvit_t embed_dim
         distance_type="geodesic",  # regression target of the automatic branch
+        with_boundaries=args.with_boundaries,
+        boundary_dice_weight=args.boundary_dice_weight,
     )
 
     if is_multi_gpu:

@@ -887,6 +887,7 @@ def get_dataloaders(
     z_slices=None,
     dataset_choice="all",
     n_workers=32,
+    with_boundaries=False,
 ):
     """Get generalist dataloaders for training UniSAM2.
 
@@ -904,6 +905,7 @@ def get_dataloaders(
             - ``"em"``: Electron microscopy datasets only.
             - ``"hp"``: Histopathology datasets only.
             - ``"all"``: All datasets (default).
+        with_boundaries: Whether the automatic targets contain an additional full-boundary channel.
     """
     if dataset_choice not in ("lm", "em", "hp", "all"):
         raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', 'hp', or 'all'.")
@@ -911,6 +913,8 @@ def get_dataloaders(
     if label_trafo is None:
         from micro_sam.v2.transforms.labels import GeodesicHybridDistanceTransform
         label_trafo = GeodesicHybridDistanceTransform
+    if with_boundaries:
+        label_trafo = partial(label_trafo, with_boundaries=True)
 
     if z_slices is None:
         z_slices = [8]
@@ -1022,7 +1026,7 @@ def get_interactive_dataloaders(
     return train_loader, val_loader
 
 
-def _build_automatic_datasets(input_path, z_slices, dataset_choice):
+def _build_automatic_datasets(input_path, z_slices, dataset_choice, with_boundaries=False):
     """Build train/val ConcatDatasets for automatic UniSAM2 training.
 
     Separated from :func:`get_dataloaders` so that each DDP rank can
@@ -1036,6 +1040,8 @@ def _build_automatic_datasets(input_path, z_slices, dataset_choice):
 
     patch_shape = (512, 512)
     label_trafo = GeodesicHybridDistanceTransform
+    if with_boundaries:
+        label_trafo = partial(label_trafo, with_boundaries=True)
 
     kwargs = {
         "raw_transform": _identity,
@@ -1111,13 +1117,15 @@ def _build_interactive_datasets(input_path, z_slices, dataset_choice):
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
 
 
-def _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type="geodesic"):
+def _build_joint_datasets(
+    input_path, z_slices, dataset_choice, distance_type="geodesic", with_boundaries=False,
+):
     """Build train/val datasets for joint interactive + automatic SAM2 training.
 
-    Labels have **5 channels**: ``[instance_ids, fg, d_x, d_y, d_z]``.
+    Labels have ``[instance_ids, fg, d_z, d_y, d_x, boundaries?]`` channels.
 
     - Channel 0 (int64): instance IDs -> interactive branch via ``ConvertToSam2VideoBatch``.
-    - Channels 1-4 (float32): foreground + directed distances -> automatic branch via
+    - Channels 1 onward (float32): foreground + directed distances and optional boundary -> automatic branch via
       ``DirectedDistanceLoss``.
 
     Unlike building two separate datasets, this shares a single data pipeline so both
@@ -1130,6 +1138,7 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type="g
         distance_type: Which directed distance target the automatic branch regresses.
             ``"geodesic"`` uses :class:`_JointGeodesicLabelTransform`, ``"directed"`` uses
             :class:`_JointLabelTransform`.
+        with_boundaries: Whether to append the full-boundary target for the automatic branch.
 
     Returns:
         Tuple of (train_ds, val_ds) as :class:`ConcatDataset` instances.
@@ -1138,8 +1147,10 @@ def _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type="g
         raise ValueError(f"Invalid distance_type: {distance_type!r}. Expected 'geodesic' or 'directed'.")
 
     patch_shape = (512, 512)
-    # Both default to instances=True -> 5-channel output.
+    # Both default to instances=True; the partial adds the optional sixth channel.
     label_trafo = _JointGeodesicLabelTransform if distance_type == "geodesic" else _JointLabelTransform
+    if with_boundaries:
+        label_trafo = partial(label_trafo, with_boundaries=True)
 
     kwargs = {
         "raw_transform": _identity,

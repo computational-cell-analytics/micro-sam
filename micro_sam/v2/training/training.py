@@ -614,6 +614,8 @@ def train_automatic(
     peft_kwargs: Optional[Dict] = None,
     load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     initial_features: int = 32,
+    with_boundaries: bool = False,
+    boundary_dice_weight: float = 1.0,
 ) -> None:
     """Train UniSAM2 for automatic instance segmentation with directed distance targets.
 
@@ -642,16 +644,22 @@ def train_automatic(
             the pretrained SAM2 weights to start from.
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
+        with_boundaries: Add a fifth decoder output supervised with the full object-boundary target.
+        boundary_dice_weight: Relative Dice weight for the boundary channel. One is Dice only, zero is BCE only.
     """
     import torch_em
 
     device = get_device(device)
     model = _build_unisam2_model(
-        model_type, device, peft_kwargs=peft_kwargs, initial_features=initial_features
+        model_type, device, peft_kwargs=peft_kwargs, output_channels=4 + int(with_boundaries),
+        initial_features=initial_features,
     )
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
-    loss = DirectedDistanceLoss(mask_distances_in_bg=True)
+    loss = DirectedDistanceLoss(
+        mask_distances_in_bg=True, with_boundaries=with_boundaries,
+        boundary_dice_weight=boundary_dice_weight,
+    )
 
     trainer = torch_em.default_segmentation_trainer(
         name=name,
@@ -704,6 +712,8 @@ def _train_automatic_rank(
     n_workers: int,
     find_unused_parameters: bool,
     initial_features: int,
+    with_boundaries: bool,
+    boundary_dice_weight: float,
     peft_kwargs=None,
 ):
     """Single-rank torchrun worker for train_automatic_multi_gpu."""
@@ -719,7 +729,9 @@ def _train_automatic_rank(
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
 
-    train_ds, val_ds = _build_automatic_datasets(input_path, z_slices, dataset_choice)
+    train_ds, val_ds = _build_automatic_datasets(
+        input_path, z_slices, dataset_choice, with_boundaries=with_boundaries,
+    )
 
     batch_size_per_group = {2: batch_size_2d} if batch_size_2d != batch_size else None
 
@@ -754,12 +766,16 @@ def _train_automatic_rank(
     val_loader.shuffle = False
 
     model = _build_unisam2_model(
-        model_type, device, peft_kwargs=peft_kwargs, initial_features=initial_features
+        model_type, device, peft_kwargs=peft_kwargs, output_channels=4 + int(with_boundaries),
+        initial_features=initial_features,
     )
     ddp_model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
-    loss = DirectedDistanceLoss(mask_distances_in_bg=True)
+    loss = DirectedDistanceLoss(
+        mask_distances_in_bg=True, with_boundaries=with_boundaries,
+        boundary_dice_weight=boundary_dice_weight,
+    )
 
     trainer = torch_em.default_segmentation_trainer(
         name=name,
@@ -815,6 +831,8 @@ def train_automatic_multi_gpu(
     find_unused_parameters: bool = True,
     peft_kwargs: Optional[Dict] = None,
     initial_features: int = 32,
+    with_boundaries: bool = False,
+    boundary_dice_weight: float = 1.0,
 ) -> None:
     """Train UniSAM2 for automatic segmentation across multiple GPUs with DDP.
 
@@ -845,6 +863,8 @@ def train_automatic_multi_gpu(
         peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
+        with_boundaries: Add a fifth decoder output supervised with the full object-boundary target.
+        boundary_dice_weight: Relative Dice weight for the boundary channel. One is Dice only, zero is BCE only.
     """
     if z_slices is None:
         z_slices = [8]
@@ -880,6 +900,8 @@ def train_automatic_multi_gpu(
         n_workers=n_workers,
         find_unused_parameters=find_unused_parameters,
         initial_features=initial_features,
+        with_boundaries=with_boundaries,
+        boundary_dice_weight=boundary_dice_weight,
         peft_kwargs=peft_kwargs,
     )
 
@@ -925,6 +947,8 @@ def train_joint_sam2(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
+    with_boundaries: bool = False,
+    boundary_dice_weight: float = 1.0,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly with a shared image encoder (single GPU).
 
@@ -982,6 +1006,8 @@ def train_joint_sam2(
         distance_type: Directed distance target for the automatic branch. "geodesic" uses the
             geodesic hybrid field around each object's center, "directed" the euclidean vector
             to the nearest boundary.
+        with_boundaries: Add a fifth automatic output supervised with the full object-boundary target.
+        boundary_dice_weight: Relative Dice weight for the boundary channel. One is Dice only, zero is BCE only.
     """
     from micro_sam.v2.datasets.generalist_loader import _build_joint_datasets, _prepare_data_loader
     from micro_sam.v2.models.util import UniSAM2
@@ -993,7 +1019,9 @@ def train_joint_sam2(
 
     device = get_device(device)
 
-    train_ds, val_ds = _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type)
+    train_ds, val_ds = _build_joint_datasets(
+        input_path, z_slices, dataset_choice, distance_type, with_boundaries=with_boundaries,
+    )
     bpg = {2: batch_size_2d} if batch_size_2d != batch_size else None
     train_loader = _prepare_data_loader(
         train_ds, batch_size=batch_size, shuffle=True,
@@ -1018,14 +1046,18 @@ def train_joint_sam2(
         bidirectional=bidirectional,
     )
     unetr = UniSAM2(
-        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features, device=device
+        encoder=sam2_model.image_encoder, output_channels=4 + int(with_boundaries),
+        initial_features=initial_features, device=device,
     )
 
     interactive_loss = CustomSAM2Loss(
         use_focal_loss=use_focal_loss, focal_weight=focal_weight,
         use_object_score_loss=use_object_score_loss, average_over_frames=average_over_frames,
     )
-    automatic_loss = DirectedDistanceLoss(mask_distances_in_bg=True)
+    automatic_loss = DirectedDistanceLoss(
+        mask_distances_in_bg=True, with_boundaries=with_boundaries,
+        boundary_dice_weight=boundary_dice_weight,
+    )
     convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
 
     if scheduler_kwargs is None:
@@ -1107,6 +1139,8 @@ def _train_joint_rank(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
+    with_boundaries: bool = False,
+    boundary_dice_weight: float = 1.0,
 ):
     """Single-rank torchrun worker for train_joint_sam2_multi_gpu."""
     from torch_em.multi_gpu_training import DDP
@@ -1123,7 +1157,9 @@ def _train_joint_rank(
 
     batch_size_per_group = {2: batch_size_2d} if batch_size_2d != batch_size else None
 
-    train_ds, val_ds = _build_joint_datasets(input_path, z_slices, dataset_choice, distance_type)
+    train_ds, val_ds = _build_joint_datasets(
+        input_path, z_slices, dataset_choice, distance_type, with_boundaries=with_boundaries,
+    )
 
     train_sampler = DistributedUniBatchSampler(
         group_per_index=_build_group_map(train_ds),
@@ -1163,7 +1199,8 @@ def _train_joint_rank(
         bidirectional=bidirectional,
     )
     unetr = UniSAM2(
-        encoder=sam2_model.image_encoder, output_channels=4, initial_features=initial_features, device=device
+        encoder=sam2_model.image_encoder, output_channels=4 + int(with_boundaries),
+        initial_features=initial_features, device=device,
     )
 
     # Only DDP-wrap sam2_model. We sync the unetr decoder grads manually.
@@ -1173,7 +1210,10 @@ def _train_joint_rank(
         use_focal_loss=use_focal_loss, focal_weight=focal_weight,
         use_object_score_loss=use_object_score_loss, average_over_frames=average_over_frames,
     )
-    automatic_loss = DirectedDistanceLoss(mask_distances_in_bg=True)
+    automatic_loss = DirectedDistanceLoss(
+        mask_distances_in_bg=True, with_boundaries=with_boundaries,
+        boundary_dice_weight=boundary_dice_weight,
+    )
     convert_inputs = ConvertToSam2VideoBatch(max_num_objects=max_num_objects, largest_first=largest_first)
 
     if scheduler_kwargs is None:
@@ -1257,6 +1297,8 @@ def train_joint_sam2_multi_gpu(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
+    with_boundaries: bool = False,
+    boundary_dice_weight: float = 1.0,
 ) -> None:
     """Train SAM2Train and UniSAM2 jointly across multiple GPUs with DDP.
 
@@ -1317,6 +1359,8 @@ def train_joint_sam2_multi_gpu(
         distance_type: Directed distance target for the automatic branch. "geodesic" uses the
             geodesic hybrid field around each object's center, "directed" the euclidean vector
             to the nearest boundary.
+        with_boundaries: Add a fifth automatic output supervised with the full object-boundary target.
+        boundary_dice_weight: Relative Dice weight for the boundary channel. One is Dice only, zero is BCE only.
     """
     if z_slices is None:
         z_slices = [8]
@@ -1374,4 +1418,6 @@ def train_joint_sam2_multi_gpu(
         automatic_metric_weight=automatic_metric_weight,
         initial_features=initial_features,
         distance_type=distance_type,
+        with_boundaries=with_boundaries,
+        boundary_dice_weight=boundary_dice_weight,
     )
