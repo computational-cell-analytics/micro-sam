@@ -850,3 +850,33 @@ keywords.
 +0.13 % (dev, w0.5) and the mask +0.24 % (dev, t0.5) / +0.28 % (holdout) against its own defaults - an order of
 magnitude less than for `boundary`, and higher ridge weights *hurt* (-0.35 % at w4). Its foreground is already
 calibrated, so the seeds it would gain from a ridge are largely there; consistent with point 6.
+
+**15. All six sweep optima, and what each parameter tracks** (`dec_<variant>_sweep_dev.csv`, 1728 combinations
+each, cached scorer, reference = that decoder's own library defaults; `n_iter` 800, `dt` 0.5,
+`foreground_weight` 0.75 and `min_size` 50 everywhere):
+
+| decoder | own optimum (dev) | `foreground_threshold` | density / sigma | fifth channel | foreground loss |
+|---|---:|---:|---|---|---|
+| `baseline` | 0.4244 | **0.4** | 10 / 1.0 | - | Dice |
+| `contact` | 0.4083 | **0.6** | 10 / 1.0 | touching | Dice |
+| `boundary` | 0.4273 | **0.5** | 10 / 1.0 | full boundary | Dice |
+| `fgcal` | **0.4298** | 0.5 | **50 / 0.5** | - | Dice + boundary BCE |
+| `both` | 0.4254 | 0.5 | **50 / 0.5** | touching | Dice + boundary BCE |
+| `boundary_fgcal` | 0.4261 | 0.5 | **50 / 0.5** | full boundary | Dice + boundary BCE |
+
+The two parameters separate the two loss changes with no exceptions across six decoders:
+
+- **`density_threshold` / `sigma` track the foreground loss alone.** All three decoders trained with the
+  boundary-weighted foreground BCE want density 50 / sigma 0.5; all three without it want the production
+  density 10 / sigma 1.0. The fifth channel has no influence. This settles 4.7 point 4: the move to the
+  "few, converged seeds" regime is caused by the foreground loss, not by decoder fine-tuning and not by the
+  extra channel.
+- **`foreground_threshold` tracks the fifth channel's target.** No channel 0.4, touching boundaries 0.6, full
+  boundaries 0.5 - i.e. the auxiliary task pushes foreground probability mass outward in proportion to how
+  ill-posed it is, and the calibrated foreground loss pins the threshold at 0.5 whatever the channel does
+  (`fgcal`, `both` and `boundary_fgcal` all 0.5).
+
+Ranking at each decoder's own **ridge-free** optimum: `fgcal` 0.4298 > `boundary` 0.4273 > `boundary_fgcal`
+0.4261 > `both` 0.4254 > `baseline` 0.4244 > `contact` 0.4083. So without the contact ridge the
+boundary-weighted foreground loss is the best single change, and the fifth channel only overtakes it once the
+ridge is available (point 12) - which the sweep cannot see (point 13).
