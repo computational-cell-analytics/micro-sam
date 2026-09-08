@@ -980,3 +980,97 @@ the touching-boundary target under any circumstances.
   the wrong basin once the ridge exists (dic_hepg2 -8.6 % against +26.5 %).
 - **`SBATCH_EXPORT=none` on this cluster** silently reverts environment-passed campaign parameters to their
   defaults (5.5), and **editing a driver script kills every job sleeping in it**, hours apart (5.2).
+
+## 7. The sweep results, cleanly (2026-09-08, 08:40; dic_hepg2 excluded)
+
+**The exclusion.** dic_hepg2 is dropped from every figure in this section on the user's instruction: its absolute
+mSA is near the floor for every fine-tuned decoder (0.118-0.190 at the library defaults, against 0.25-0.84 for
+eight of the other ten datasets) while its spread across the six decoders is 0.072 - so a 0.07 absolute wobble
+becomes a +-40 % relative swing that dominates the balanced mean and the gate counts without representing
+segmentation quality. The remaining ten development datasets are livecell, tissuenet, dynamicnuclearnet,
+deepbacs, yeaz, neurips_cellseg, deepseas, puma, tnbc, covid_if; the holdout keeps four (livecell, tissuenet,
+dynamicnuclearnet, deepbacs). Files: `ais/reports/dec_<variant>_sweep_dev_no_dic.csv`,
+`decoders_all_tuned_{dev,holdout}_no_dic*`, `decoders_own_optimum_dev_no_dic*`.
+(deepseas has the same pathology - absolute mSA 0.046-0.112 with a 0.066 spread - and is kept here only because
+it was not part of the instruction; a successor may want to drop it on the same grounds.)
+
+### 7.1 The optimum of each decoder (1728 combinations, ten datasets)
+
+Every optimum uses `n_iter` 800, `dt` 0.5 and `min_size` 50 (`boundary_fgcal`: 25), and `boundary_magnitude_max`
+0.4 - which is irrelevant everywhere (0.4, 0.6 and off differ by less than 1e-3).
+
+| decoder | own optimum | vs `baseline`'s optimum | `foreground_threshold` | density / sigma | fg weight | up / 10 | worst | mean ratio to the per-dataset optimum |
+|---|---:|---:|---:|---|---:|---|---|---:|
+| `boundary` | **0.4502** | **+1.17 %** | 0.5 | 20 / 0.5 | 0.75 | 6 | -12.3 % | 0.944 |
+| `fgcal` | 0.4472 | +0.50 % | 0.5 | 10 / 1.0 | 0.75 | 7 | -5.0 % | 0.942 |
+| `boundary_fgcal` | 0.4454 | +0.09 % | 0.5 | 20 / 0.5 | 0.50 | 5 | -13.2 % | 0.931 |
+| `baseline` | 0.4450 | - | **0.4** | 10 / 1.0 | 0.75 | 8 | -9.1 % | 0.950 |
+| `both` | 0.4422 | -0.62 % | 0.5 | 20 / 0.5 | 0.50 | 6 | -9.8 % | 0.928 |
+| `contact` | 0.4309 | -3.17 % | **0.6** | 10 / 1.0 | 0.50 | 7 | -11.3 % | 0.934 |
+
+No combination of any decoder passes the gate. Note the reordering against the eleven-dataset table of 5.6
+point 15: `boundary` now leads the ridge-free comparison (+1.17 %) instead of `fgcal`, and `both` drops below
+`baseline`.
+
+### 7.2 What the sweep actually determines: read the plateau, not the top row
+
+Best balanced score per `foreground_threshold`, all other parameters free, as a loss in 1e-3 against each
+decoder's own best threshold:
+
+| decoder | 0.4 | 0.5 | 0.6 | 0.7 | argmax |
+|---|---:|---:|---:|---:|---:|
+| `baseline` | **0** | -5.3 | -19.5 | -37.0 | **0.4** |
+| `contact` | -13.2 | -3.7 | **0** | -5.0 | **0.6** |
+| `fgcal` | -3.3 | **0** | -6.6 | -22.8 | 0.5 |
+| `both` | -4.0 | **0** | -6.1 | -21.5 | 0.5 |
+| `boundary` | -1.8 | **0** | -3.3 | -13.1 | 0.5 |
+| `boundary_fgcal` | -0.1 | **0** | -7.4 | -28.4 | 0.5 |
+
+Same treatment for the seed regime, at each decoder's own best threshold:
+
+| decoder | best (d/sigma) | second | third | spread |
+|---|---|---|---|---:|
+| `baseline` | 10 / 1.0 | 50 / 0.5 (-2.4) | 20 / 0.5 (-2.8) | 2.8 |
+| `contact` | 10 / 1.0 | 20 / 0.5 (-1.4) | 50 / 0.5 (-3.7) | 3.7 |
+| `fgcal` | 10 / 1.0 | 20 / 0.5 (**-0.0**) | 50 / 0.5 (-1.4) | 1.4 |
+| `both` | 20 / 0.5 | 50 / 0.5 (-1.0) | 10 / 1.0 (-1.2) | 1.2 |
+| `boundary` | 20 / 0.5 | 10 / 1.0 (**-0.2**) | 10 / 0.5 (-1.2) | 1.2 |
+| `boundary_fgcal` | 20 / 0.5 | 10 / 1.0 (**-0.0**) | 50 / 0.5 (-0.6) | 0.6 |
+
+**This retracts 5.6 point 15's second claim.** The "clean 3-3 separation of the seed regime by the foreground
+loss, with no exceptions" was an artefact of dic_hepg2 plus reading a single top row: with dic_hepg2 removed the
+two regimes are *identical to four decimals* for `fgcal` and `boundary_fgcal` and 0.2e-3 apart for `boundary`.
+The seed regime is not determined by the loss - the sweep simply cannot distinguish density 10 / sigma 1.0 from
+density 20 / sigma 0.5 for these decoders, and any claim built on which of the two the top row happened to pick
+is noise.
+
+**The threshold claim survives, and it is the one real finding of the sweeps.** Its effects are 5 to 37e-3, an
+order of magnitude above the regime differences, and the two informative contrasts are unambiguous: `baseline`
+loses 19.5e-3 if forced to 0.6, and `contact` loses 13.2e-3 if forced to 0.4. So **the fifth channel shifts the
+optimal foreground threshold, in proportion to how ill-posed its target is**: no channel 0.4, full inner
+boundary 0.5, touching boundaries 0.6. (`boundary_fgcal` sits on a 0.4/0.5 plateau, the one soft case.)
+
+### 7.3 The screened comparison on the same ten datasets
+
+| comparison | dev | holdout |
+|---|---:|---:|
+| `baseline` at its own optimum | 0.4450 | - |
+| `baseline` at `dec-top1` | 0.4382 (-1.5 %) | 0.4480 |
+| `boundary` at its own optimum (`dec-bnd-top1`, ridge-free) | **0.4500 (+1.13 %)** | - |
+| `boundary` at its own optimum + ridge 1 | 0.4495 (+1.02 %) | - |
+| `boundary` at `dec-top1` + ridge 1 | 0.4497 (+1.05 %) | 0.4540 |
+| `fgcal` at `dec-fgcal-top1` | 0.4458 (+0.18 %) | **0.4551** |
+
+**This retracts 5.6 point 13.** "A ridge-blind sweep cannot tune a five-channel decoder" rested entirely on
+dic_hepg2: with it excluded, `boundary`'s own sweep optimum is its **best** configuration (0.4500), the ridge
+adds nothing there (0.4495 with it), and at `dec-top1` the ridge is worth +0.5 % rather than the +2 % the
+eleven-dataset table showed. The +26.5 % dic_hepg2 gain that made the ridge look essential was a swing on a
+0.15-mSA dataset. The contact ridge is a small, real improvement in the tuned regime - not the thing that makes
+the fifth channel work.
+
+**Net effect on the verdict of section 6.** On the ten datasets, at each decoder's own optimum against
+`baseline` at its own optimum: `boundary` **+1.2 %** dev, `fgcal` +0.5 %, `boundary_fgcal` +0.1 %, `both`
+-0.6 %, `contact` -3.2 %; on the four holdout datasets `fgcal` leads (+1.6 % against `boundary`'s +1.3 %,
+referenced to `baseline` at `dec-top1`). The direction of section 6 is unchanged - the full-boundary target is
+far better than the touching target, and no change passes the gate - but the boundary channel's dev advantage is
+**+1.2 %, not +2.3 %**, and `fgcal` remains the change that holds up best on unseen data.
