@@ -1,0 +1,494 @@
+{
+  "combinations": [
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.375,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.425,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.625,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.875,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 1.0,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 0,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 10,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 25,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 75,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 100,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": "off",
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.25,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.3,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.35,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.5,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.6,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1600,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.375,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.425,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.625,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.875,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 1.0,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 0,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 10,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 25,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 75,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 100,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": "off",
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.25,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.3,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.35,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.5,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.6,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.75,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.375,
+      "foreground_weight": 0.5,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.425,
+      "foreground_weight": 0.5,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 0,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 10,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 25,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 75,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.4,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 100,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": "off",
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.25,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.3,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.35,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.5,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    },
+    {
+      "boundary_magnitude_max": 0.6,
+      "density_threshold": 10.0,
+      "dt": 0.5,
+      "foreground_threshold": 0.4,
+      "foreground_weight": 0.5,
+      "min_size": 50,
+      "n_iter": 1200,
+      "sigma": 1.0
+    }
+  ]
+}

@@ -39,18 +39,26 @@ the refinement statistics columns, and the configuration files under `optimizati
   `set -u` fails on `/etc/bashrc`).
 - Presets (`submit_optimization_jobs.PRESETS`):
 
-  | preset     | GRES        | memory | time     | QOS  | CPUs |
-  |------------|-------------|--------|----------|------|------|
-  | `2d`       | `1g.10gb:1` | 16G    | 08:00:00 |      | 4    |
-  | `2d-short` | `1g.10gb:1` | 16G    | 02:00:00 | `2h` | 4    |
-  | `3d`       | `2g.20gb:1` | 32G    | 12:00:00 |      | 4    |
-  | `3d-large` | `2g.20gb:1` | 64G    | 12:00:00 |      | 4    |
-  | `cpu`      | `1g.10gb:1` | 64G    | 04:00:00 |      | 16   |
+  | preset     | partition          | GRES        | memory | time     | QOS  | CPUs |
+  |------------|--------------------|-------------|--------|----------|------|------|
+  | `2d`       | `grete:preemptible` | `1g.10gb:1` | 16G    | 08:00:00 |      | 4    |
+  | `2d-short` | `grete:preemptible` | `1g.10gb:1` | 16G    | 02:00:00 | `2h` | 4    |
+  | `3d`       | `grete:preemptible` | `2g.20gb:1` | 32G    | 12:00:00 |      | 4    |
+  | `3d-large` | `grete:preemptible` | `2g.20gb:1` | 64G    | 12:00:00 |      | 4    |
+  | `cpu-test` | `standard96s:test` | none        | 500G   | 00:59:00 |      | 192  |
+  | `cpu-shared` | `standard96s:shared` | none      | 16G    | 01:00:00 |      | 4    |
+  | `cpu`      | `grete:preemptible` | `1g.10gb:1` | 64G    | 04:00:00 |      | 16   |
+
+  `cpu-test` is the GPU-free, full-node preset for cached 2D sweeps. It packs 48 four-thread commands into
+  every 192-core allocation by default. `cpu-shared` is for individual cached screens. The legacy `cpu` preset
+  remains available for longer jobs that were already designed around the Grete partition.
 
 - The submitter writes `<root>/jobs/<timestamp>_<name>/` with `tasks.txt` (`tag<TAB>command`),
   `job.sh`, `logs/`, `submit.json` (argv, resources, git revision, dirty flag) and `job_id.txt`, and
   submits `job.sh` as one array (`--array=0-N%throttle`, default throttle 8, `--requeue`,
-  `--open-mode=append`). Every task leaves `logs/<tag>.done` or `logs/<tag>.failed`; dependent
+  `--open-mode=append`). `--tasks-per-job` packs several task-file commands into one array element; it
+  defaults to 48 for `cpu-test` and one otherwise. Every task retains its own stdout, stderr and
+  `logs/<tag>.done` or `logs/<tag>.failed` marker; dependent
   stages wait on those markers or on `--dependency afterok:<job id>`, never on an output file.
   `status <job dir>` reports state, exit code, restarts and marker per task; `--resume-from <job dir>`
   re-submits the unfinished tasks; `--local` runs the same tasks sequentially on the session GPU.
@@ -117,7 +125,7 @@ the refinement statistics columns, and the configuration files under `optimizati
 
 ## 5. 2D subsets (`optimization/benchmark_apg_optimization.py`)
 
-Manifest schema version 5; files `<root>/subset_manifest_v5{,_holdout,_training_extra,_deep3d}.json`
+Manifest schema version 5; files `<root>/subset_manifest_v5{,_holdout,_training_extra,_ood_extended,_deep3d}.json`
 (`_default_manifest_path`). Each manifest records its `manifest_checksum`, `selection_policy`,
 `schema_version` and `data_root`; `_validate_manifest` requires the exact schema version.
 
@@ -126,6 +134,7 @@ Manifest schema version 5; files `<root>/subset_manifest_v5{,_holdout,_training_
 | primary          | `SAMPLE_COUNTS_2D`                                 | livecell 80 (10 per each of 8 `LIVECELL_TYPES`), tissuenet 40, dynamicnuclearnet 40, deepbacs 30, dic_hepg2 50 = 240 images, plus one 12-slice volume each of celegans_atlas, embedseg, gonuclear, cremi, snemi (245 samples) | `0f8fb67b3650a71f9f44b53037e89546` |
 | holdout          | `SAMPLE_COUNTS_2D_HOLDOUT`, image-disjoint          | 80 / 40 / 40 / 30 / 43 = 233 images plus the same 5 volumes (238 samples); deepbacs is reused verbatim (`HOLDOUT_REUSED_DATASETS`) because all 30 validation images are primary | `bf8f3c28befe1fb06d62309dc302d1c4` |
 | training_extra   | `TRAINING_EXTRA_DATASETS`, `SAMPLE_COUNTS_2D_TRAINING_EXTRA` (caps) | yeaz 40, neurips_cellseg 40, deepseas 40, puma 26 (cap 40), covid_if 5, tnbc 6 (cap 20) = 157 images, no volumes | `cee6224d6a93cec5a54a5c522a0f7bf5` |
+| ood_extended     | sealed Dice-foreground decoder confirmation set; official test loaders, stratified where heterogeneous | Arvidsson 10, BitDepth NucSeg 70, CellBinDB 48, microbeSEG 2, VICAR 50 = 180 images, no volumes | `836f92a084b05f6fa5445f03355589d9` |
 | deep3d variant   | `--crops-3d deep`, `CROP_SHAPE_3D_DEEP = (32, 512, 512)` | the 240 primary images with 32-slice volumes; SNEMI 30 slices overlap the production slab, so this is a regression instrument, not a tuning set | `f611a7125383e850798d0b5bf696f6f7` |
 
 - The eleven-dataset development corpus of the 2026-09 campaigns is primary + training_extra

@@ -133,8 +133,9 @@ Read-outs:
   defaults, silently doing plausible but wrong work (notes 5.5). Pass them on the command line.
 - `tasks_done` uses `ls -td | head -1`, so an empty *newer* job directory of the same name shadows a finished
   one. If a resubmission has to be cancelled, move its directory to `<root>/jobs/_superseded/`.
-- The cached sweep scorer ignores the contact keywords, so ridge / mask settings are only ever evaluated through
-  `screen` with config files, never through `sweep`.
+- Historical sweep results before the Dice-foreground re-optimization ignored the contact keywords. The current cached
+  scorer mirrors the production ridge and mask paths; its implementation checksum keeps those corrected sweeps
+  separate from the invalid old cache.
 - Python 3.14 starts DataLoader workers through a fork server (30-60 s each, every epoch);
   `train_ais_decoder.py` forces `fork`. Do not remove.
 - Files with fewer than three objects (yeaz frames) make torch_em's sampler raise after 500 attempts; the subset
