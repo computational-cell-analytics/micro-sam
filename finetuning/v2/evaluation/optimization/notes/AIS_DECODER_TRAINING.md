@@ -687,10 +687,16 @@ touching lines (`recall_bg_boundary` 0.43-0.90 against 0.00-0.15 for `contact`) 
 within 2 px 0.68-0.98, Dice up to 0.87 on dynamicnuclearnet, 0.81 yeaz, 0.69 livecell). Exactly the four
 datasets whose merges motivated the channel and whose head was silent in round 1 now fire.
 
-Two exceptions: **`dic_hepg2` predicts zero contact pixels** against 8698 target pixels per crop - and it does so
-in `both`, `boundary` and `boundary_fgcal` alike (`contact`: 40 px). That is not class imbalance and survived the
-target change untouched; an open question. `deepseas` is near-silent (Dice 0.056), which is expected of binary
-masks that have no true object boundaries.
+Two exceptions, and the first one taught us something about the instrument. On **`dic_hepg2`** the head has no
+pixel above 0.5 on 33 of 50 crops (mean 13 predicted pixels against 8698 target pixels, per-crop maximum 0.41),
+so every threshold-0.5 column calls it dead - but its *soft* probability is 0.133 on the true boundary against
+0.0020 elsewhere, a 65-fold contrast, i.e. **well localised and merely under-confident** (deepbacs and livecell
+run 0.65-0.69 against 0.0003). The consequence is visible in the scores: `contact_weight` adds
+`w * contact` to the height map and therefore reads the soft map, so the ridge alone moves dic_hepg2 from
+-13.8 % to +16.3 % against baseline at `dec-top1` - a 30-point swing out of a head that "predicts nothing".
+`contact_mask_threshold` thresholds instead, and cannot use it. **Read the fifth channel's soft contrast, not
+only its Dice and recall at 0.5**; the threshold columns understate a well-localised head. `deepseas` is
+genuinely near-silent (Dice 0.056), as expected of binary masks with no true object boundaries.
 
 **2. Under the library defaults** (dev = 11 datasets, holdout = 5, reference = the fine-tuned `baseline`):
 
@@ -748,3 +754,34 @@ Still running at the time of writing: the 24-configuration contact screens of bo
 the 3d screens. The sweep will say which `foreground_threshold` the boundary decoders want, which is the test of
 4.7 point 1 (`boundary`'s median `fg_area_ratio` is above `baseline`'s on nine of eleven datasets, so 0.5-0.6 is
 the expectation).
+
+**8. The ridge and the mask separate cleanly** (`decoders_boundary_contact_{dev,holdout}*.csv`, `boundary`
+against its own defaults 0.4192 dev / 0.3838 holdout, all other parameters at the library defaults):
+
+| configuration | dev | vs defaults | up / 11 | worst | holdout | vs defaults | seeded merges dev | seeded splits dev |
+|---|---:|---:|---|---|---:|---:|---:|---:|
+| defaults | 0.4192 | - | - | - | 0.3838 | - | 7.8 % | 1.80 % |
+| ridge 0.5 | 0.4207 | +0.35 % | 4 | -1.0 % | **0.3874** | **+0.95 %** | 4.8 % | 2.03 % |
+| ridge 1 | 0.4209 | +0.41 % | 4 | -2.1 % | 0.3865 | +0.71 % | 4.5 % | 2.08 % |
+| ridge 2 | **0.4214** | **+0.51 %** | 4 | -3.1 % | 0.3857 | +0.51 % | 4.3 % | 2.17 % |
+| ridge 4 | 0.4212 | +0.48 % | 4 | -3.3 % | 0.3853 | +0.39 % | 4.3 % | 2.21 % |
+| mask 0.3 | 0.4201 | +0.21 % | **7** | **-0.5 %** | 0.3852 | +0.36 % | 5.5 % | 1.86 % |
+| mask 0.5 | 0.4201 | +0.20 % | 5 | -0.3 % | 0.3855 | +0.46 % | 6.1 % | 1.79 % |
+| mask 0.7 | 0.4198 | +0.13 % | 7 | -0.0 % | 0.3847 | +0.24 % | 7.0 % | 1.67 % |
+| ridge 1 + mask 0.5 | 0.4209 | +0.41 % | 4 | -2.1 % | 0.3865 | +0.71 % | 4.5 % | 2.10 % |
+
+This revises the prediction of 5.4 in one respect and confirms it in another. The mask mode *does* move the
+score now that the head is confident (+0.2 % dev, +0.36-0.46 % holdout, against 0.0-0.1 % in round 1), and it is
+by far the more **uniform** lever: 7 of 11 datasets up with a worst case of -0.5 %, against the ridge's 4 of 11
+and -1.0 to -3.3 %. But the shaving of thin objects is a **ridge** effect, not a mask effect: `seeded_split`
+rises monotonically with the ridge weight (1.80 % -> 2.21 %) and stays flat or falls under the mask
+(1.67-1.86 %) - exactly as the erode-*and-dilate-back* structure of the mask mode implies, which is the half of
+5.4's reasoning that was right. The ridge still wins on balanced mSA because it removes almost twice as many
+merges (7.8 % -> 4.3 % against 5.5-7.0 %) and because it can exploit an under-confident head (point 1).
+
+**9. No post-processing setting can rescue deepbacs.** `boundary` is already -11.7 % there at `dec-top1` with
+neither ridge nor mask, and its `fg_area_ratio` of 1.359 (baseline 1.185) is a property of the decoder, not of
+the watershed. The ridge adds 2 points of loss on top (-14.1 %); the loss itself is in the field. So the gate
+failure of point 7 is a training-recipe question (deepbacs' thin rods need the foreground calibrated, and
+`boundary_fgcal` - which does calibrate it, 1.06 against 1.17 - scores *worse* there, -13.7 % against -7.7 % at
+the defaults), not a tuning question.
