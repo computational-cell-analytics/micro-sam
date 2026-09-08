@@ -1074,3 +1074,98 @@ the fifth channel work.
 referenced to `baseline` at `dec-top1`). The direction of section 6 is unchanged - the full-boundary target is
 far better than the touching target, and no change passes the gate - but the boundary channel's dev advantage is
 **+1.2 %, not +2.3 %**, and `fgcal` remains the change that holds up best on unseen data.
+
+## 8. The sweep optima on the nine informative datasets, and what they mean mechanically (08:45)
+
+`deepseas` is dropped as well as `dic_hepg2`, on the same grounds (absolute mSA 0.046-0.112, spread 0.066, so
+its relative changes are floor noise). The nine remaining development datasets are livecell, tissuenet,
+dynamicnuclearnet, deepbacs, yeaz, neurips_cellseg, puma, tnbc, covid_if. Files:
+`ais/reports/dec_<variant>_sweep_dev_core9.csv`.
+
+### 8.1 The optima
+
+Every optimum uses `n_iter` 800, `dt` 0.5, `boundary_magnitude_max` 0.4 and `seed_floor` "none".
+
+| decoder | balanced | vs `baseline` | `foreground_threshold` | `density_threshold` | `sigma` | `foreground_weight` | `min_size` | up / 9 | worst |
+|---|---:|---:|---:|---:|---:|---:|---:|---|---|
+| `boundary` | **0.4893** | +0.81 % | 0.5 | 20 | 0.5 | 0.75 | 50 | 6 | **-2.1 %** |
+| `boundary_fgcal` | 0.4889 | +0.72 % | 0.5 | 20 | 0.5 | 0.50 | 25 | 5 | -6.6 % |
+| `both` | 0.4868 | +0.28 % | 0.5 | 20 | 0.5 | 0.50 | 50 | 6 | -5.9 % |
+| `fgcal` | 0.4865 | +0.23 % | 0.5 | 20 | 0.5 | 0.75 | 50 | 7 | -4.5 % |
+| `baseline` | 0.4854 | - | **0.4** | 10 | 1.0 | 0.75 | 50 | 8 | -4.7 % |
+| `contact` | 0.4722 | -2.72 % | **0.6** | 10 | 1.0 | 0.50 | 50 | 7 | -5.7 % |
+
+Removing the two floor-level datasets collapses the spread: the four "improved" decoders now sit **+0.2 % to
++0.8 %** above `baseline`, i.e. inside the band the sweep itself cannot resolve, and only `contact` is clearly
+worse (-2.7 %). The one figure that improves markedly is `boundary`'s worst dataset, -12.3 % on ten datasets ->
+**-2.1 %** on nine, because deepbacs is now its only real loss. Nothing passes the gate (`boundary` needs 7 of 9
+up and has 6, and +0.81 % against the +2 % bound).
+
+The two plateau checks of 7.2 are unchanged by the second exclusion: the `foreground_threshold` pattern holds
+with the same large margins (`baseline` loses 19.2e-3 if forced to 0.6, `contact` 15.3e-3 if forced to 0.4, all
+others prefer 0.5), and the seed regime remains unresolvable (the runner-up is within 0.1-1.3e-3 for the four
+decoders that pick density 20 / sigma 0.5).
+
+### 8.2 How the two maps are computed (`micro_sam/v2/postprocessing.py::flow_instance_segmentation`)
+
+Both maps are built from the same two predicted quantities: the foreground probability `p` and the three
+directed distance channels `d` (magnitude `|d|`, which dips to zero at object centres and at boundaries).
+
+**Seed map** - four steps, and every sweep parameter but two acts here:
+
+1. `fg = p > foreground_threshold` selects the pixels that take part.
+2. Each `fg` pixel is advected along `-d` for `n_iter` steps of length `dt`; pixels of one object flow to its
+   centre. The per-pixel count of arrivals is the convergence density.
+3. The density is Gaussian-smoothed with `sigma`.
+4. `seeds = connected components of (density > density_threshold)`.
+
+So `n_iter x dt` is the travel budget (400 px for every optimum here, against 25 px in the library defaults),
+`sigma` sets how far apart two convergence points may be and still merge into one seed, and
+`density_threshold` sets how many arrivals a seed must collect - together they trade missed objects against
+split ones.
+
+**Height map** - two parameters, one of them not in the grid:
+
+```
+h = foreground_weight * (1 - p)  +  (1 - foreground_weight) * (1 - |d| / max|d|)      [+ contact_weight * contact]
+```
+
+i.e. a convex mix of the foreground's complement (a sharp edge signal) and the inverted, max-normalised distance
+magnitude (a weak edge signal that also dips at object centres). `seed_floor` is "none" in every configuration
+here, so the height under the seeds is left as it is. The watershed then floods `h` from `seeds` within `fg`;
+`min_size` removes small instances and re-floods, and `boundary_magnitude_max` finally drops instances whose
+median boundary magnitude does not dip.
+
+### 8.3 Each setting's best configuration, in words
+
+All six use the same 400-px travel budget and the same `boundary_magnitude_max` 0.4.
+
+- **`baseline`** (4 channels, Dice foreground). *Seeds*: the widest foreground, `p > 0.4`, advected and smoothed
+  with the broad `sigma` 1.0, seeds where at least 10 arrivals land. *Height*: 0.75 foreground + 0.25 inverted
+  magnitude. The only decoder that needs its foreground threshold lowered below 0.5, and the only one whose
+  seeding stays in the library's broad-smoothing regime.
+- **`contact`** (5 channels, touching boundaries, Dice foreground). *Seeds*: the narrowest foreground, `p > 0.6`
+  - its foreground is inflated, so it must be cut back harder - otherwise identical to `baseline` (sigma 1.0,
+  density 10). *Height*: 0.5 foreground + 0.5 inverted magnitude, i.e. it leans more on the distance field than
+  `baseline` does.
+- **`boundary`** (5 channels, full inner boundary, Dice foreground). *Seeds*: `p > 0.5`, sharp smoothing
+  (`sigma` 0.5) and a doubled density threshold (20), i.e. fewer, tighter, better-converged seeds. *Height*:
+  0.75 foreground + 0.25 inverted magnitude, like `baseline`. The best of the six here.
+- **`fgcal`** (4 channels, boundary-weighted foreground BCE). *Seeds*: `p > 0.5` - the calibrated foreground is
+  correct at the natural threshold - with `sigma` 0.5 and density 20. *Height*: identical to `baseline`,
+  0.75 / 0.25. The most uniform of the six across datasets (7 of 9 up, worst -4.5 %).
+- **`both`** (touching + calibrated foreground). *Seeds*: as `fgcal`. *Height*: 0.5 / 0.5, like `contact`.
+- **`boundary_fgcal`** (full boundary + calibrated foreground). *Seeds*: as `fgcal`. *Height*: 0.5 / 0.5. The
+  only optimum that also halves `min_size` to 25.
+
+Two readings. The **height map** splits by the foreground loss and the channel type, not by score: every decoder
+whose loss touches the foreground twice (`contact`, `both`, `boundary_fgcal`) falls back to the 0.5/0.5 mix,
+while the three that predict a single clean foreground (`baseline`, `fgcal`, `boundary`) trust it at 0.75 - and
+those three are the three best. The **seed map** splits by the foreground threshold exactly as 7.2 describes,
+and otherwise only distinguishes `baseline`/`contact` (broad smoothing, density 10) from the four decoders that
+prefer sharp smoothing with a doubled threshold - a difference the plateau check shows to be within noise.
+
+**The contact ridge is not part of any of this**, because `contact_weight` is not a grid dimension: it adds
+`contact_weight * contact` to `h`, raising a barrier along the predicted boundary so that two fronts meet on it.
+Screened separately (5.6 point 8) it is worth +0.4 to +0.5 % for `boundary` and at most +0.13 % for
+`boundary_fgcal`, and it raises `seeded_split` monotonically with its weight.
