@@ -1165,7 +1165,39 @@ those three are the three best. The **seed map** splits by the foreground thresh
 and otherwise only distinguishes `baseline`/`contact` (broad smoothing, density 10) from the four decoders that
 prefer sharp smoothing with a doubled threshold - a difference the plateau check shows to be within noise.
 
-**The contact ridge is not part of any of this**, because `contact_weight` is not a grid dimension: it adds
-`contact_weight * contact` to `h`, raising a barrier along the predicted boundary so that two fronts meet on it.
-Screened separately (5.6 point 8) it is worth +0.4 to +0.5 % for `boundary` and at most +0.13 % for
-`boundary_fgcal`, and it raises `seeded_split` monotonically with its weight.
+### 8.4 Exactly how the boundary channel enters the height map
+
+`contact_weight` is not a grid dimension, so none of the optima above uses it; screened separately (5.6 point 8)
+it is worth +0.4 to +0.5 % for `boundary` and at most +0.13 % for `boundary_fgcal`. The construction is:
+
+```python
+h = watershed_heightmap(p, d, foreground_weight)     # convex mix of two [0,1] terms -> h in [0, 1]
+if contact is not None and contact_weight:           # None or 0 skips this entirely
+    h = h + contact_weight * np.clip(contact, 0, 1)  # additive, and NOT renormalised
+h = lower_height_under_seeds(h, seeds, seed_floor)   # "none" in every configuration here
+seg = watershed(h, markers=seeds, mask=fg_mask)
+```
+
+Three consequences that the bracketed `[+ contact_weight * contact]` of 8.2 hides:
+
+1. **The base map is bounded and the ridge is not.** `watershed_heightmap` normalises both of its terms to
+   [0, 1] and combines them with weights `w` and `1 - w`, so `h` lies in [0, 1]; the ridge is then added on top,
+   giving [0, 1 + `contact_weight`]. A weight of 1.0 is therefore as tall as the **entire dynamic range** of the
+   base map, not a small correction.
+2. **It reads the raw sigmoid probability, never a threshold** (channel 4 is sigmoid-activated in
+   `micro_sam/v2/models/util.py`, so the `clip` is only a safety net). Every pixel contributes in proportion to
+   its confidence, which is why the ridge extracts signal from an under-confident head (5.6 point 1).
+3. **Measured against the map it modifies** (livecell, `boundary`, `foreground_weight` 0.75, medians of 20
+   crops): the base map sits at 0.236 on the touching lines against 0.091 in the interiors, a natural contrast
+   of **+0.145**, while the contact probability is 0.623 against 0.055. So the ridge multiplies the barrier the
+   watershed must climb between two touching objects by **3.0x at weight 0.5, 4.9x at weight 1, 8.8x at 2 and
+   16.7x at 4**.
+
+That quantifies both measured behaviours at once: why the ridge removes merges so effectively (7.8 % -> 4.3 % of
+the objects) and why `seeded_split` rises monotonically with the weight - beyond about weight 2 the ridge no
+longer assists the boundary evidence in `h`, it overrides it, so any spurious boundary probability inside a thin
+object cuts it in two. The screened optimum being weight 0.5-1 on the holdout is consistent with that.
+
+`contact_mask_threshold` never touches the height map: it thresholds the contact map to shrink the watershed
+*mask*, floods the interiors first and then re-floods so the instances claim the excluded band - which is why it
+does not shave thin objects the way the ridge does (5.6 point 8).
