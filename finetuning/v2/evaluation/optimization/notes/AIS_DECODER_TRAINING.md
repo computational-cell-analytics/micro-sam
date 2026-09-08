@@ -671,3 +671,80 @@ Fix in the repository: `launch_tuning_after_caches.sh` now takes the variants as
 (`--wait boundary boundary_fgcal --rank baseline contact ... boundary_fgcal`) and only falls back to the
 environment when run directly in a shell. **Rule: never pass campaign parameters to a SLURM job through the
 environment on this cluster** - put them in the command line or in the frozen script.
+
+### 5.6 Results of the boundary channel (2026-09-08, 06:30; `ais/reports/decoders_r2_early_*`)
+
+Both trainings ran the full budget on the first attempt: `boundary` COMPLETED in 12:48:29 (best epoch 65 of 76,
+validation 0.786 at epoch 1 -> 0.576), `boundary_fgcal` in 12:49 (best 0.804 from 1.076). Checkpoints
+`66368b4c` and `0753918a`, staged with five output channels.
+
+**1. The head is confident now - the class-imbalance diagnosis of 4.4 point 3 was right.**
+`recall_touching` at threshold 0.5 (per-dataset medians, `decoder_fields_boundary_summary.csv`), round-1
+`contact` -> round-2 `boundary`: deepbacs 0.015 -> **0.505**, tnbc 0.032 -> **0.587**, puma 0.123 -> **0.566**,
+neurips 0.128 -> **0.460**, tissuenet 0.192 -> 0.347, livecell 0.634 -> 0.724, dynamicnuclearnet 0.720 -> 0.899,
+yeaz 0.757 -> 0.914, covid_if 0.591 -> 0.740. It learned the actual target rather than collapsing onto the
+touching lines (`recall_bg_boundary` 0.43-0.90 against 0.00-0.15 for `contact`) and stayed precise (precision
+within 2 px 0.68-0.98, Dice up to 0.87 on dynamicnuclearnet, 0.81 yeaz, 0.69 livecell). Exactly the four
+datasets whose merges motivated the channel and whose head was silent in round 1 now fire.
+
+Two exceptions: **`dic_hepg2` predicts zero contact pixels** against 8698 target pixels per crop - and it does so
+in `both`, `boundary` and `boundary_fgcal` alike (`contact`: 40 px). That is not class imbalance and survived the
+target change untouched; an open question. `deepseas` is near-silent (Dice 0.056), which is expected of binary
+masks that have no true object boundaries.
+
+**2. Under the library defaults** (dev = 11 datasets, holdout = 5, reference = the fine-tuned `baseline`):
+
+| decoder (configuration) | dev balanced | vs baseline | up / 11 | holdout balanced | vs baseline | up / 5 | seeded merges dev |
+|---|---:|---:|---|---:|---:|---|---:|
+| `boundary` + ridge 1 | **0.4209** | **+1.5 %** | 7 | 0.3865 | -0.7 % | 3 | 4.5 % |
+| `boundary` + mask 0.5 | 0.4201 | +1.3 % | 7 | 0.3855 | -1.0 % | 3 | 6.1 % |
+| `boundary` defaults | 0.4192 | +1.1 % | 7 | 0.3838 | -1.4 % | 3 | 7.8 % |
+| `fgcal` defaults | 0.4170 | +0.6 % | 6 | **0.3938** | **+1.1 %** | 4 | 8.3 % |
+| `baseline` defaults | 0.4145 | - | - | 0.3894 | - | - | 8.1 % |
+| `boundary_fgcal` defaults | 0.4124 | -0.5 % | 6 | 0.3746 | -3.8 % | 3 | 8.0 % |
+| `both` defaults | 0.4090 | -1.3 % | 7 | 0.3819 | -1.9 % | 3 | 6.3 % |
+| `contact` defaults | 0.3952 | -4.7 % | 4 | 0.3691 | -5.2 % | 2 | 7.8 % |
+
+**3. At the shared tuned configuration** (`dec-top1`, reference = `baseline` at `dec-top1` = 0.4200 dev / 0.4025
+holdout) the boundary channel gives **the best result of the whole campaign**:
+
+| decoder (configuration) | dev balanced | vs baseline | up / 11 | worst | holdout balanced | vs baseline | up / 5 |
+|---|---:|---:|---|---|---:|---:|---|
+| `boundary` + ridge 1 | **0.4340** | **+3.3 %** | **10** | deepbacs -14.1 % | 0.4085 | +1.5 % | 4 |
+| `boundary` + ridge 2 + mask 0.3 | 0.4325 | +3.0 % | 10 | -15.0 % | 0.4069 | +1.1 % | 4 |
+| `both` + ridge 1 | 0.4271 | +1.7 % | 8 | deepseas -48 % | **0.4113** | **+2.2 %** | 4 |
+| `boundary` (no ridge) | 0.4254 | +1.3 % | 7 | -13.8 % | 0.4022 | -0.1 % | 3 |
+| `contact` + ridge 1 | 0.4155 | -1.1 % | 6 | -26.5 % | 0.4044 | +0.5 % | 3 |
+
+**4. The round-1 collateral damage is repaired.** Per dataset at `dec-top1` + ridge 1 (dev), `contact` ->
+`boundary`: covid_if -19.2 % -> **+0.2 %**, deepseas -26.5 % -> **+20.0 %**, dic_hepg2 +14.5 % -> +16.3 %,
+dynamicnuclearnet -3.6 % -> +1.7 %, puma -1.3 % -> +2.1 %, tnbc +2.6 % -> +8.0 %, and the datasets the channel
+was for stay up (livecell +10.7 %, tissuenet +9.1 %, yeaz +3.7 %, neurips +3.4 %). **Exactly one dataset is
+down: deepbacs, -14.1 %** - and it is down by 13.7-16.4 % for `contact` and `both` too, so it is a property of
+carrying a fifth channel at all, not of the target definition.
+
+**5. deepbacs is the predicted thin-object failure** (5.4), and its mechanism is visible: `boundary` + ridge 1
+against `baseline` at `dec-top1` splits more (`seeded_split` 2.8 % against 1.6 % of the objects), matches worse
+(`matched_iou` 0.743 against 0.767) and above all over-covers (`fg_area_ratio` **1.36** against 1.19) - while
+actually *improving* the two counts the channel targets (merges 2.8 % against 3.6 %, objects without a seed
+5.2 % against 7.2 %). The rods are shaved and split, not merged.
+
+**6. Stacking the two loss changes still hurts**, as in round 1: `boundary_fgcal` is below `boundary` everywhere
+(-0.5 % against +1.1 % dev, -3.8 % against -1.4 % holdout at the defaults) and its head is a few points less
+confident (deepbacs 0.466 against 0.505, puma 0.486 against 0.566, tnbc 0.466 against 0.587). It does calibrate
+the foreground it was meant to (`fg_area_ratio` deepbacs 1.06 against 1.17, neurips 1.03 against 1.07, deepseas
+0.86 against 1.54) - but that did not buy mSA, and on deepbacs it made the score worse (-13.7 % against -7.7 %
+at the defaults), so the over-coverage is not what costs deepbacs its score.
+
+**7. Gate verdict.** `boundary` + ridge 1 on dev: 10 of 11 datasets up, balanced +3.3 % (both bounds met), worst
+-14.1 % against the -2 % bound - **it fails the gate on deepbacs alone**. On the holdout it is +1.5 % (4 of 5),
+where `both` + ridge 1 reaches +2.2 %. So the proper boundary target turns point 1.1 from a broad
+dataset-dependent trade (round 1: 4-6 datasets down, up to -38 %) into a broad gain with one identified,
+channel-generic failure. That is a qualitatively different object from round 1 and the first version of the
+fifth channel worth carrying further, but it is not yet a pass.
+
+Still running at the time of writing: the 24-configuration contact screens of both new decoders, the
+`dec-top1` screens of `boundary_fgcal`, the four grid sweeps and their ranking (`ais_rank_round2`, 15783741), and
+the 3d screens. The sweep will say which `foreground_threshold` the boundary decoders want, which is the test of
+4.7 point 1 (`boundary`'s median `fg_area_ratio` is above `baseline`'s on nine of eleven datasets, so 0.5-0.6 is
+the expectation).
