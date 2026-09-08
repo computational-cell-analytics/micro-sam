@@ -915,3 +915,68 @@ Two things worth carrying to a joint 2d + 3d run:
 - **On EM the boundary channel is harmless**: `boundary` matches `baseline` on cremi (1.86 against 1.87) and is
   the best of the six on cremi_seen (1.42) and snemi (1.87), while `fgcal` is the worst on cremi (2.24). The
   volume regression is specific to LM instance matching, not to volumes as such.
+
+## 6. Conclusive overview of the six decoders (2026-09-08, 07:20)
+
+Six decoders, identical data, budget (48000 iterations, batch 8) and initialisation (the v4 joint weights, the
+image encoder frozen), differing only in the loss. Every figure below is **each decoder at its own best
+configuration against `baseline` at its own best configuration** (0.4244 dev, 0.4052 holdout) - the reference
+that sections 4.7 and 5.6 point 12 show to be the only defensible one.
+
+| decoder | fifth channel | foreground loss | dev | holdout | verdict |
+|---|---|---|---:|---:|---|
+| `boundary` | inner boundary of every object | Dice | **+2.3 %** | +0.8 % | best on dev, does not confirm |
+| `boundary_fgcal` | same | Dice + boundary BCE | +1.6 % | +0.7 % | strictly below `boundary` |
+| `fgcal` | - | Dice + boundary BCE | +1.3 % | +1.0 % | small, consistent, safest worst case |
+| `both` | touching boundaries | Dice + boundary BCE | +0.6 % | **+1.5 %** | best on holdout, -48 % on deepseas |
+| `baseline` | - | Dice | - | - | the reference |
+| `contact` | touching boundaries | Dice | -2.1 % | -0.2 % | loses |
+| production (v4) | - | - | -19.0 % | -39.9 % | not comparable (no fine-tune) |
+
+**1. In-domain data still dominates everything** (4.4 point 1, unrevised). The plain fine-tune with the
+unchanged loss lifts the decoder from 0.3437 to 0.4244 on dev (+23 %) and from 0.2437 to 0.4052 on the holdout
+(+66 %); the best loss change on top of that is worth +2.3 %, an order of magnitude less. For the next big run
+the composition of the training data matters far more than either loss change.
+
+**2. Point 4.1 (boundary-weighted foreground BCE) - include it.** +1.3 % dev / +1.0 % holdout, the most
+*consistent* of the changes (it is the only candidate whose worst dataset stays within -5.1 %, against -10 to
+-48 % for every fifth-channel variant), and three independent mechanisms now explain it: it moves the optimal
+`foreground_threshold` from 0.4 to the natural 0.5 (5.6 point 15), it is the sole cause of the tuned regime's
+shift to density 50 / sigma 0.5 (5.6 point 15, six decoders with no exceptions), and it is **the only change
+that generalises to the dimension it never saw** - the only variant that improves the 3d foreground and keeps
+an LM volume score at baseline level (5.6 point 16). It still misses the gate's worst-loss bound, so it is not
+a "win" under the strict rule, but it is cheap, safe and mechanistically understood.
+
+**3. Point 1.1 (the fifth channel) - the target definition was the whole question, and the answer is "better,
+not yet good".** The touching target is unusable (-2.1 % dev, a head that never fires on four datasets, -21 to
+-38 % collateral); the full inner boundary turns that into +2.3 % dev with a confident head (recall 0.35-0.91
+against 0.001-0.76) and repairs the collateral damage on the two unseen datasets (covid_if -19.2 % -> +4.2 %,
+deepseas -26.5 % -> +28.1 %). What still blocks it:
+
+- it **does not confirm on the holdout** (+0.8 % against `both`'s +1.5 %) and has four datasets down on dev;
+- **deepbacs -10.2 %**, a thin-object failure no post-processing can reach (5.6 point 9): the rods are shaved
+  and split and the 2d foreground over-covers (1.36 against baseline's 1.19). Every five-channel decoder loses
+  10-16 % there;
+- it **floods the 3d LM foreground** (`fg_area_ratio` up to 8.4 against baseline's 3.6) and is the worst of the
+  six on that measure, i.e. the better the channel is learned in 2d the worse the untrained 3d foreground gets;
+- its gain **depends on the contact ridge**, which the tuning grid structurally cannot see (5.6 point 13), so
+  it cannot currently be tuned honestly alongside the other parameters.
+
+**Recommendation for the next big run**: include the boundary-weighted foreground loss; include the
+full-boundary fifth channel **only** together with (a) joint 2d + 3d training, without which its volume
+foreground is unusable, (b) `contact_weight` as a dimension of the tuning grid, and (c) a remedy for thin
+objects - `boundary_fgcal` is not it (it calibrates the foreground but scores *worse* on deepbacs). Do not use
+the touching-boundary target under any circumstances.
+
+**4. Method lessons that outlived the experiment.**
+
+- **Compare every decoder at its own optimum.** A shared tuned configuration flatters whichever decoder it was
+  tuned on: it inflated `fgcal` from +1.3 % to +2.4 % (4.7) and `boundary` from +2.3 % to +3.3 % with a
+  spurious "10 of 11 datasets up" (5.6 point 12), where tissuenet alone swung 14 points from the reference.
+- **Read the auxiliary head's soft contrast, not its recall at 0.5.** On dic_hepg2 the boundary head has no
+  pixel above 0.5 on 33 of 50 crops yet separates boundary from background 65-fold in probability, and the
+  ridge - which reads the soft map - extracts a 30-point mSA swing from it (5.6 point 1).
+- **A ridge-blind grid cannot tune a five-channel decoder** (5.6 point 13); `boundary`'s own sweep optimum is
+  the wrong basin once the ridge exists (dic_hepg2 -8.6 % against +26.5 %).
+- **`SBATCH_EXPORT=none` on this cluster** silently reverts environment-passed campaign parameters to their
+  defaults (5.5), and **editing a driver script kills every job sleeping in it**, hours apart (5.2).
