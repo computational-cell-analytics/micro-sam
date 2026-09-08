@@ -29,6 +29,8 @@ def build_common(model_type, n_epochs, n_iterations, batch_size, dataset_choice,
 
     is_multi_gpu = "RANK" in os.environ
     name = f"joint_sam2_{model_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
+    if os.environ.get("RUN_TAG"):
+        name = f"{name}_{os.environ['RUN_TAG']}"
 
     # Set 'peft_kwargs' to jointly finetune with a parameter efficient method instead of full
     # finetuning (the SAM2 image encoder is frozen and the method is applied on top of it). Examples:
