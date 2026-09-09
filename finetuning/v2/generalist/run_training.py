@@ -1,12 +1,11 @@
 import os
 import shutil
+import argparse
 import subprocess
 from datetime import datetime
 
 
-# Epochs per model, from the measured one-epoch runs on 2 nodes x 4 H100 (2026-09-08): ~61-65 min per epoch incl.
-# validation for every model, so ~90 epochs fit the 96h qos. ReduceLROnPlateau doesn't depend on n_epochs, and
-# checkpoints are written every epoch, so hitting the wall clock only loses the final one.
+# Epochs per model. One epoch takes 53 min for hvit_t and 57 min for hvit_l, so these fit the 96 h qos.
 EPOCHS = {
     "hvit_t": 94,
     "hvit_s": 92,
@@ -36,7 +35,7 @@ SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v5"
 
 
 def write_batch_script(out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry, tag):
-    "Writing the multi-node sbatch script for one joint SAM2 training run (2 nodes x 4 H100 = 8 GPUs)."
+    """Write the sbatch script for one joint SAM2 training run on 2 nodes x 4 H100, and submit it."""
     nccl_block = "\n".join(f"export {key}={value}" for key, value in NCCL_ENV[enable_ib].items())
 
     batch_script = rf"""#!/bin/bash
@@ -45,9 +44,11 @@ def write_batch_script(out_path, model_type, n_epochs, dataset_choice, save_root
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH -p {PARTITION}
+#SBATCH --exclude=ggpu241
 #SBATCH --gpus-per-node={GPU_TYPE}:4
-#SBATCH --cpus-per-task 96
-#SBATCH --mem 384G
+#SBATCH --cpus-per-task 192
+# 0 gives the job all memory of the node. Host memory grows over the epochs.
+#SBATCH --mem 0
 #SBATCH --qos=96h
 #SBATCH --constraint=inet
 
@@ -56,11 +57,15 @@ micromamba activate super
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export SAVE_ROOT={save_root}
-# 8 loader workers per GPU, each with 3 threads over the objects of a patch in the distance transform.
-export LABEL_TRAFO_THREADS=3
-export N_WORKERS=16
+# One malloc arena per loader worker. A per-thread arena never shrinks, and host memory then grows every epoch.
+export MALLOC_ARENA_MAX=2
+# A fixed trim threshold also stops glibc from moving the large distance transform arrays out of mmap.
+export MALLOC_TRIM_THRESHOLD_=134217728
+# 4 ranks x 8 workers x 6 threads = 192 threads, one per CPU. Fewer workers keep fewer copies of the file handles.
+export LABEL_TRAFO_THREADS=6
+export N_WORKERS=8
 export RUN_TAG={tag}
-# The torch.compile cache must be node-local. A cache on the shared filesystem blocks the compile on its file locks.
+# The compile cache must be node-local. A cache on the shared filesystem blocks on its file locks.
 export TORCHINDUCTOR_CACHE_DIR=/local/jobs/${{USER}}_${{SLURM_JOB_ID}}/inductor
 
 GPUS_PER_NODE=4
@@ -84,32 +89,25 @@ srun --cpu-bind=none bash -c "torchrun \
             f"#SBATCH -p {PARTITION}\n", f"#SBATCH -p {PARTITION}\n#SBATCH --reservation={reservation}\n"
         )
 
-    _op = out_path[:-3] + f"_{model_type}.sh"
-    with open(_op, "w") as f:
+    script_path = out_path[:-3] + f"_{model_type}.sh"
+    with open(script_path, "w") as f:
         f.write(batch_script)
 
-    cmd = ["sbatch", _op]
     if not dry:
-        subprocess.run(cmd)
+        subprocess.run(["sbatch", script_path])
 
 
 def get_batch_script_names(tmp_folder):
+    """Return a unique path for a new sbatch script in the given folder."""
     tmp_folder = os.path.expanduser(tmp_folder)
     os.makedirs(tmp_folder, exist_ok=True)
-
-    script_name = "joint-sam2-multi-node"
-
     dt = datetime.now().strftime("%Y_%m_%d_%H_%M_%S_%f")
-    tmp_name = script_name + dt
-    batch_script = os.path.join(tmp_folder, f"{tmp_name}.sh")
-
-    return batch_script
+    return os.path.join(tmp_folder, f"joint-sam2-multi-node{dt}.sh")
 
 
 def submit_slurm(args):
-    "Submit the joint SAM2 multi-node training jobs to slurm."
+    """Submit the joint SAM2 multi-node training jobs to slurm."""
     tmp_folder = "./gpu_jobs"
-
     models = list(EPOCHS.keys()) if args.model_type is None else [args.model_type]
     save_root = os.path.join(os.path.dirname(SAVE_ROOT), args.tag) if args.tag else SAVE_ROOT
 
@@ -128,39 +126,31 @@ def submit_slurm(args):
         )
 
 
-def main(args):
-    tmp_dir = "./gpu_jobs"
-    if os.path.exists(tmp_dir):
-        shutil.rmtree(tmp_dir)
-
-    submit_slurm(args)
-
-
-if __name__ == "__main__":
-    import argparse
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "-m", "--model_type", type=str, default=None, choices=list(EPOCHS.keys()),
-        help="The choice of model type. Submits all four models if not specified.",
+        help="The model type. Submits all four models if not given.",
     )
     parser.add_argument(
         "--dataset_choice", type=str, default="all", choices=["lm", "em", "hp", "all"],
-        help="The choice of datasets for joint training.",
+        help="The datasets for the joint training.",
     )
-    parser.add_argument(
-        "-r", "--reservation", type=str, default=None, help="Slurm reservation to submit under, if any."
-    )
+    parser.add_argument("-r", "--reservation", type=str, default=None, help="The slurm reservation to submit under.")
     parser.add_argument(
         "-s", "--save_root", type=str, default=None,
         help="Where to save checkpoints and logs. Defaults to the shared v5 folder, or to its '<tag>' sibling.",
     )
     parser.add_argument("--tag", type=str, default=None, help="Run tag, e.g. 'v5a', added to the run and job names.")
-    parser.add_argument(
-        "--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB verbs instead of sockets."
-    )
-    parser.add_argument(
-        "--dry", action="store_true", help="Whether to only write the sbatch scripts without submitting them."
-    )
+    parser.add_argument("--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB, not sockets.")
+    parser.add_argument("--dry", action="store_true", help="Write the sbatch scripts but do not submit them.")
     args = parser.parse_args()
 
-    main(args)
+    tmp_dir = "./gpu_jobs"
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)
+    submit_slurm(args)
+
+
+if __name__ == "__main__":
+    main()
