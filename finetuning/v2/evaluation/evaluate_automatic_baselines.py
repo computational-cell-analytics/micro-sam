@@ -7,6 +7,7 @@ Supported methods:
   microsam_ais: micro-sam v1 automatic instance segmentation
   microsam_apg: micro-sam v1 automatic prompt generation
   segneuron: SegNeuron (3d EM only)
+  focus3d: FOCUS-3D (3d LM only)
 
 micro-sam2 itself is evaluated by evaluate_automatic_segmentation.py, which also tunes it.
 
@@ -16,6 +17,7 @@ Usage examples:
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method cellsam
     python evaluate_automatic_baselines.py -d embedseg -e <exp> --method microsam_ais -m vit_b
     python evaluate_automatic_baselines.py -d cremi -e <exp> --method segneuron
+    python evaluate_automatic_baselines.py -d gonuclear -e <exp> --method focus3d -m nuclei
 """
 
 import os
@@ -28,17 +30,26 @@ from tqdm import tqdm
 import torch
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_EM,
+    CROP_SHAPE_3D, DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_EM,
     GT_MIN_SIZE_2D, check_data_download, drop_severed_objects, load_data, n_samples,
     run_dataset_evaluation,
 )
 
 LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
 EM_DATASETS = set(DATASETS_EM)
-METHODS = ["cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron"]
+METHODS = ["cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron", "focus3d"]
 
 SEGNEURON_ROOT = "/mnt/vast-nhr/home/archit/u12090/SegNeuron"
 SEGNEURON_CHECKPOINT = "/mnt/vast-nhr/projects/cidas/cca/models/segneuron/SegNeuronModel.ckpt"
+
+# FOCUS-3D ships a general, a nuclei and a membrane checkpoint; pick one with -m.
+FOCUS3D_DEFAULT_MODEL = "general"
+# The radius FOCUS-3D is calibrated on, i.e. the value that leaves the volume unscaled in xy.
+FOCUS3D_CELL_RADIUS = 15.0
+# Throughput knobs, measured worth nothing here: the patch loop is 86% GPU forward. The batch size
+# stays at the plugin value so a job fits the 20 GB slice, which batch 32 overruns at 20.1 GiB.
+FOCUS3D_BATCH_SIZE = 16
+FOCUS3D_NUM_WORKERS = 4
 
 STARDIST_2D_MODEL = "2D_versatile_fluo"
 STARDIST_3D_MODEL = "3D_demo"
@@ -103,6 +114,14 @@ def _load_segneuron(checkpoint_path, device):
     model.to(device)
     model.eval()
     return model
+
+
+def _load_focus3d(model_type, checkpoint, device, batch_size, num_workers):
+    from focus3d_baseline import Focus3DSegmenter
+    return Focus3DSegmenter(
+        model_type=model_type, checkpoint=checkpoint, device=device,
+        batch_size=batch_size, data_loader_num_workers=num_workers,
+    )
 
 
 def _load_microsam_v1(method, model_type, checkpoint, device):
@@ -190,6 +209,17 @@ def _segment_segneuron(volume, model, device, beta=0.25):
     return post_mc(combined, beta=beta).astype("uint32")
 
 
+def _segment_focus3d(volume, segmenter, dataset_name, cell_radius, z_ratio):
+    """Segment one volume with FOCUS-3D, which rescales it to its own scale first.
+
+    `z_ratio` is the z-to-xy spacing ratio CellPose gets as its anisotropy, `cell_radius` the xy
+    radius to rescale from. They are coupled: at a z_ratio of 1 the z axis is rescaled along with xy.
+    """
+    if z_ratio is None:
+        z_ratio = DATASET_ANISOTROPY.get(dataset_name, 1.0)
+    return segmenter(volume, z_ratio=z_ratio, cell_radius=cell_radius)
+
+
 def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
     from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation
     seg = automatic_instance_segmentation(
@@ -198,14 +228,14 @@ def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
     return seg.astype("uint32") if seg is not None else np.zeros(image_or_volume.shape, dtype="uint32")
 
 
-def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc):
+def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc, crop_shape=None):
     if os.path.exists(save_path):
         print(f"Results already stored at '{save_path}'.")
         return
 
     total = n_samples(dataset_name, data_root)
     all_gt, all_seg = [], []
-    samples = load_data(dataset_name, data_root, ndim)
+    samples = load_data(dataset_name, data_root, ndim, crop_shape=crop_shape)
     for image_or_volume, labels, valid_roi in tqdm(samples, total=total, desc=desc):
         if labels.max() == 0:  # Nothing to score without ground-truth.
             continue
@@ -278,6 +308,34 @@ def run_segneuron_evaluation(dataset_name, data_root, experiment_folder, device,
     )
 
 
+def run_focus3d_evaluation(
+    dataset_name, data_root, experiment_folder, model_type, checkpoint, device, cell_radius, z_ratio=None,
+    crop_shape=None, batch_size=FOCUS3D_BATCH_SIZE, num_workers=FOCUS3D_NUM_WORKERS,
+):
+    if dataset_name not in DATASETS_3D_LM:
+        warnings.warn(
+            f"FOCUS-3D is a 3d light microscopy method and does not support dataset '{dataset_name}'. Skipping.",
+            UserWarning, stacklevel=2,
+        )
+        return
+
+    segmenter = _load_focus3d(model_type, checkpoint, device, batch_size, num_workers)
+    if crop_shape is None:
+        # The harness default of 8 slices would leave most of the model's 32-deep window as padding.
+        crop_shape = (segmenter.patch_size[0],) + tuple(CROP_SHAPE_3D[1:])
+    print(f"FOCUS-3D patch size {segmenter.patch_size}, evaluated on the crop {crop_shape}.")
+
+    # The crop depth is in the name: a baseline scored on another crop is not comparable.
+    save_path = os.path.join(
+        experiment_folder, "results", f"{dataset_name}_focus3d_{model_type}_z{crop_shape[0]}.csv"
+    )
+    _run_evaluation(
+        lambda x: _segment_focus3d(x, segmenter, dataset_name, cell_radius, z_ratio),
+        dataset_name, data_root, ndim=3, save_path=save_path, desc=f"focus3d-{model_type}",
+        crop_shape=crop_shape,
+    )
+
+
 def run_microsam_v1_evaluation(dataset_name, data_root, experiment_folder, method, model_type, checkpoint, device):
     if dataset_name in EM_DATASETS:
         raise ValueError(f"micro-sam v1 automatic methods do not support EM datasets; got '{dataset_name}'.")
@@ -302,8 +360,19 @@ def main():
     )
     parser.add_argument(
         "-c", "--checkpoint", type=str, default=None,
-        help="Checkpoint path for the micro-sam v1 and segneuron methods."
+        help="Checkpoint path for the micro-sam v1, segneuron and focus3d methods."
     )
+    parser.add_argument(
+        "--crop_3d", type=int, nargs=3, default=None,
+        help="Override the 3d center crop. FOCUS-3D defaults to its own window depth."
+    )
+    parser.add_argument("--cell_radius", type=float, default=FOCUS3D_CELL_RADIUS, help="The xy radius to rescale from.")
+    parser.add_argument(
+        "--z_ratio", type=float, default=None,
+        help="The z-to-xy spacing ratio. Defaults to the anisotropy."
+    )
+    parser.add_argument("--batch_size", type=int, default=FOCUS3D_BATCH_SIZE, help="Patches per forward pass.")
+    parser.add_argument("--num_workers", type=int, default=FOCUS3D_NUM_WORKERS, help="Data loader workers.")
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
@@ -327,6 +396,15 @@ def main():
         run_microsam_v1_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder, method=args.method,
             model_type=args.model_type or SAM_V1_MODEL_TYPE, checkpoint=args.checkpoint, device=device,
+        )
+
+    elif args.method == "focus3d":
+        run_focus3d_evaluation(
+            args.dataset_name, args.input_path, args.experiment_folder,
+            model_type=args.model_type or FOCUS3D_DEFAULT_MODEL, checkpoint=args.checkpoint, device=device,
+            cell_radius=args.cell_radius, z_ratio=args.z_ratio,
+            crop_shape=tuple(args.crop_3d) if args.crop_3d else None,
+            batch_size=args.batch_size, num_workers=args.num_workers,
         )
 
     elif args.method == "segneuron":

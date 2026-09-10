@@ -58,7 +58,7 @@ DATASETS = tuple(sorted(set(DATASETS_LM + DATASETS_EM + DATASETS_HP)))
 DATASETS_3D = tuple(sorted(set(DATASETS_3D_LM + DATASETS_3D_EM)))
 
 SEGMENTATION_MODES = ("ais", "apg")
-AUTOMATIC_METHODS = ("cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron")
+AUTOMATIC_METHODS = ("cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron", "focus3d")
 INTERACTIVE_METHODS = ("nninteractive", "sam3", "sam", "sam2", "micro-sam", "microsam_vol")
 
 # Interactive 'sam2' is the pretrained backbone of the very engine micro-sam2 finetunes, so it runs
@@ -71,6 +71,7 @@ METHOD_SUPPORT = {
     ("automatic", "microsam_ais"): {"modality": ("lm",)},
     ("automatic", "microsam_apg"): {"modality": ("lm",)},
     ("automatic", "segneuron"): {"modality": ("em",), "ndim": (3,)},
+    ("automatic", "focus3d"): {"modality": ("lm",), "ndim": (3,)},
     ("interactive", "sam"): {"ndim": (2,)},
     ("interactive", "micro-sam"): {"ndim": (2,)},
     ("interactive", "nninteractive"): {"ndim": (3,)},
