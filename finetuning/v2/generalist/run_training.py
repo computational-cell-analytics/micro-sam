@@ -34,9 +34,15 @@ GPU_TYPE = "H100"
 SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v5"
 
 
-def write_batch_script(out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry, tag):
+def write_batch_script(
+    out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry, tag,
+    with_boundaries=False, boundary_dice_weight=1.0,
+):
     """Write the sbatch script for one joint SAM2 training run on 2 nodes x 4 H100, and submit it."""
     nccl_block = "\n".join(f"export {key}={value}" for key, value in NCCL_ENV[enable_ib].items())
+    if not 0.0 <= boundary_dice_weight <= 1.0:
+        raise ValueError("boundary_dice_weight must be between zero and one.")
+    boundary_args = f" --with_boundaries --boundary_dice_weight {boundary_dice_weight}" if with_boundaries else ""
 
     batch_script = rf"""#!/bin/bash
 #SBATCH --job-name=μSAM2_joint_{model_type}{"_" + tag if tag else ""}
@@ -80,7 +86,7 @@ srun --cpu-bind=none bash -c "torchrun \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     --node_rank=\$SLURM_NODEID \
-    {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {dataset_choice} --compile"
+    {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {dataset_choice} --compile{boundary_args}"
 """
     if not tag:
         batch_script = batch_script.replace("export RUN_TAG=\n", "")
@@ -123,6 +129,8 @@ def submit_slurm(args):
             enable_ib=args.enable_ib == "yes",
             dry=args.dry,
             tag=args.tag,
+            with_boundaries=args.with_boundaries,
+            boundary_dice_weight=args.boundary_dice_weight,
         )
 
 
@@ -143,8 +151,19 @@ def main():
     )
     parser.add_argument("--tag", type=str, default=None, help="Run tag, e.g. 'v5a', added to the run and job names.")
     parser.add_argument("--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB, not sockets.")
+    parser.add_argument(
+        "--with_boundaries", action="store_true",
+        help="Train with the additional object-boundary channel. Disabled by default.",
+    )
+    parser.add_argument(
+        "--boundary_dice_weight", type=float, default=1.0,
+        help="Boundary Dice weight between 0 and 1: 1 selects Dice only, 0 selects BCE only. "
+             "Used with --with_boundaries.",
+    )
     parser.add_argument("--dry", action="store_true", help="Write the sbatch scripts but do not submit them.")
     args = parser.parse_args()
+    if not 0.0 <= args.boundary_dice_weight <= 1.0:
+        parser.error("--boundary_dice_weight must be between zero and one.")
 
     tmp_dir = "./gpu_jobs"
     if os.path.exists(tmp_dir):

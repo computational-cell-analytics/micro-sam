@@ -3,6 +3,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from scipy.ndimage import binary_dilation
+
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 
@@ -275,7 +277,31 @@ def _joint_em_cell_label_trafo(y, label_trafo, ignore_label=None):
     return np.concatenate([instances[None], expected_fg[None], y[2:]], axis=0)
 
 
+def object_boundaries(labels: np.ndarray) -> np.ndarray:
+    """Return a dilated mask of all object boundaries.
+
+    The transform dilates each inner boundary once. The target includes isolated objects and objects that touch.
+    """
+    boundary = find_boundaries(np.asarray(labels), mode="inner")
+    if boundary.any():
+        boundary = binary_dilation(boundary, iterations=1)
+    return boundary
+
+
 class DirectedPerObjectBoundaryDistanceTransform:
+    """Compute directed-distance targets with an optional boundary channel.
+
+    The channel layout is ``[instance_ids?, foreground?, d_z, d_y, d_x, boundaries?]``.
+
+    Args:
+        min_size: The minimum object size. The transform removes smaller objects.
+        foreground: The flag to prepend the binary foreground mask.
+        instances: The flag to prepend the instance IDs.
+        apply_label: The flag to relabel the input with connected components.
+        sampling: The voxel spacing for anisotropic data.
+        with_boundaries: The flag to append the full object-boundary mask.
+        n_threads: The number of threads for distance computation across objects.
+    """
     eps = 1e-7
 
     def __init__(
@@ -285,6 +311,7 @@ class DirectedPerObjectBoundaryDistanceTransform:
         instances: bool = False,
         apply_label: bool = True,
         sampling: Optional[Tuple[float, ...]] = None,
+        with_boundaries: bool = False,
         n_threads: int = 1,
     ):
         self.min_size = min_size
@@ -294,6 +321,7 @@ class DirectedPerObjectBoundaryDistanceTransform:
         self.instances = instances
         self.apply_label = apply_label
         self.sampling = sampling
+        self.with_boundaries = with_boundaries
 
     def compute_normalized_directed_distances(self, labels, label_id, boundaries, bb, distances):
         """@private
@@ -379,6 +407,10 @@ class DirectedPerObjectBoundaryDistanceTransform:
         # Bring the distance channel to the first dimension.
         to_channel_first = (ndim,) + tuple(range(ndim))
         distances = distances.transpose(to_channel_first)
+
+        if self.with_boundaries:
+            boundaries = object_boundaries(labels).astype("float32")
+            distances = np.concatenate([distances, boundaries[None]], axis=0)
 
         # Add the foreground mask as first channel if specified.
         if self.foreground:
@@ -470,12 +502,12 @@ class GeodesicHybridDistanceTransform(DirectedPerObjectBoundaryDistanceTransform
 class _JointLabelTransform(DirectedPerObjectBoundaryDistanceTransform):
     """Distance transform for joint interactive + automatic training.
 
-    Identical to :class:`DirectedPerObjectBoundaryDistanceTransform` but
-    defaults to ``instances=True`` so the output always has 5 channels:
-    ``[instance_ids, foreground_mask, d_x, d_y, d_z]``.
+    This transform sets ``instances=True`` by default.
+    The output layout is ``[instance_ids, foreground_mask, d_z, d_y, d_x, boundaries?]``.
+    Set ``with_boundaries=True`` to append the sixth channel.
 
     The interactive branch uses channel 0 (cast to int64 as instance IDs)
-    and the automatic branch uses channels 1-4.
+    and the automatic branch uses channels 1 onward.
     """
 
     def __init__(self, instances: bool = True, **kwargs):
@@ -485,11 +517,8 @@ class _JointLabelTransform(DirectedPerObjectBoundaryDistanceTransform):
 class _JointGeodesicLabelTransform(GeodesicHybridDistanceTransform):
     """Geodesic hybrid distance transform for joint interactive + automatic training.
 
-    The :class:`GeodesicHybridDistanceTransform` counterpart of
-    :class:`_JointLabelTransform`: same 5-channel output
-    ``[instance_ids, foreground_mask, d_x, d_y, d_z]``, but the directed distances come from
-    the geodesic field around each object's center instead of the euclidean vector to the
-    nearest boundary.
+    The output layout is ``[instance_ids, foreground_mask, d_z, d_y, d_x, boundaries?]``.
+    The directed distances come from the geodesic field around each object's center.
     """
 
     def __init__(self, instances: bool = True, **kwargs):

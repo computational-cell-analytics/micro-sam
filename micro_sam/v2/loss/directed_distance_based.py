@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from torch_em.loss import DiceLoss
 
@@ -20,28 +21,48 @@ def _masked_mse(prediction: torch.Tensor, target: torch.Tensor, mask: torch.Tens
 class DirectedDistanceLoss(nn.Module):
     """Loss for directed distance based instance segmentation.
 
-    Expects input and targets with four channels: foreground and three distance channels.
-    Typically the distance channels are in three directions, i.e. z, y and x.
+    The inputs contain foreground, three directed distances, and an optional fifth boundary channel.
+    The boundary loss combines Dice and binary cross entropy (BCE) with ``boundary_dice_weight``.
 
     Args:
-        mask_distances_in_bg: whether to mask the loss for distance predictions in the background.
-        foreground_loss: the loss for comparing foreground predictions and target.
+        mask_distances_in_bg: The flag to exclude background voxels from the distance loss.
+        foreground_loss: The loss for foreground predictions and targets.
+        with_boundaries: The flag for a fifth boundary channel in the inputs and targets.
+        boundary_dice_weight: The Dice weight in the boundary loss. One selects Dice only.
+            Zero selects BCE only. Values between zero and one mix the two losses.
     """
     def __init__(
         self,
         mask_distances_in_bg: bool = True,
         foreground_loss: nn.Module = DiceLoss(),
+        with_boundaries: bool = False,
+        boundary_dice_weight: float = 1.0,
     ) -> None:
         super().__init__()
 
+        if not 0.0 <= boundary_dice_weight <= 1.0:
+            raise ValueError(f"boundary_dice_weight must be between zero and one, got {boundary_dice_weight}.")
+
         self.foreground_loss = foreground_loss
         self.mask_distances_in_bg = mask_distances_in_bg
+        self.with_boundaries = with_boundaries
+        self.boundary_dice_weight = boundary_dice_weight
+        self.boundary_loss = DiceLoss() if with_boundaries else None
 
-        self.init_kwargs = {"mask_distances_in_bg": mask_distances_in_bg}
+        self.init_kwargs = {
+            "mask_distances_in_bg": mask_distances_in_bg,
+            "with_boundaries": with_boundaries,
+            "boundary_dice_weight": boundary_dice_weight,
+        }
+
+    @property
+    def n_channels(self) -> int:
+        """Return the number of prediction and target channels."""
+        return 4 + int(self.with_boundaries)
 
     def forward(self, input_: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         assert input_.shape == target.shape, (input_.shape, target.shape)
-        assert input_.shape[1] == 4, input_.shape
+        assert input_.shape[1] == self.n_channels, (input_.shape, self.n_channels)
 
         # IMPORTANT: preserve the channels!
         # Otherwise the Dice Loss will do all kinds of shennanigans.
@@ -72,4 +93,21 @@ class DirectedDistanceLoss(nn.Module):
         xdist_loss = _masked_mse(input_[:, 3:4], target[:, 3:4], yx_mask)
 
         overall_loss = fg_loss + zdist_loss + ydist_loss + xdist_loss
+        if self.with_boundaries:
+            boundary_input, boundary_target = input_[:, 4:5], target[:, 4:5]
+            dice_loss = self.boundary_loss(boundary_input * valid, boundary_target * valid)
+            if self.boundary_dice_weight == 1.0:
+                boundary_loss = dice_loss
+            else:
+                # CUDA autocast prohibits BCE on probabilities.
+                with torch.autocast(device_type=boundary_input.device.type, enabled=False):
+                    # Clamp rounded sigmoid outputs to keep them away from zero and one.
+                    probability = boundary_input.float().clamp(1e-6, 1.0 - 1e-6)
+                    error = F.binary_cross_entropy(probability, boundary_target.float(), reduction="none")
+                    # Normalize over valid voxels per sample, as for the distance terms.
+                    boundary_valid = valid.float()
+                    dims = tuple(range(1, error.ndim))
+                    bce_loss = ((error * boundary_valid).sum(dims) / boundary_valid.sum(dims).clamp_min(1.0)).mean()
+                boundary_loss = self.boundary_dice_weight * dice_loss + (1.0 - self.boundary_dice_weight) * bce_loss
+            overall_loss = overall_loss + boundary_loss
         return overall_loss

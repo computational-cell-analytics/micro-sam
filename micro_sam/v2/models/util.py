@@ -10,11 +10,9 @@ from micro_sam.v2.util import get_sam2_model
 
 
 class CustomActivation(nn.Module):
-    """Applies 'Sigmoid' activation for channel 0 (i.e. foreground), and
-    'Tanh' for the remaining channels (i.e. distances).
-    """
+    """Apply sigmoid to foreground and optional auxiliary channels, and tanh to distances."""
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.cat([torch.sigmoid(x[:, :1]), torch.tanh(x[:, 1:])], dim=1)
+        return torch.cat([torch.sigmoid(x[:, :1]), torch.tanh(x[:, 1:4]), torch.sigmoid(x[:, 4:])], dim=1)
 
 
 class SAM2EncoderAdapter(nn.Module):
