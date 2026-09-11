@@ -8,15 +8,18 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from concurrent import futures
 from collections import defaultdict
+from importlib.util import find_spec
 from typing import Dict, List, Optional, Union, Tuple
 
 try:
     from trackastra.model import Trackastra
     from trackastra.tracking import graph_to_ctc, graph_to_napari_tracks
-except ImportError:
+    TRACKASTRA_IMPORT_ERROR = None
+except ImportError as e:
     Trackastra = None
     graph_to_ctc = None
     graph_to_napari_tracks = None
+    TRACKASTRA_IMPORT_ERROR = e
 
 import numpy as np
 import networkx as nx
@@ -485,6 +488,32 @@ def automatic_3d_segmentation(
         return segmentation
 
 
+def _require_trackastra():
+    """Raise if trackastra is unavailable, naming what actually went wrong.
+
+    Trackastra being absent and trackastra failing to import because one of its dependencies is
+    broken look the same here, but only the first is fixed by installing trackastra.
+
+    Raises:
+        RuntimeError: If trackastra could not be imported.
+    """
+    if Trackastra is not None:
+        return
+
+    # A broken dependency raises a plain ImportError, which does not say which package is missing.
+    if find_spec("trackastra") is None:
+        message = "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
+    else:
+        cause = str(TRACKASTRA_IMPORT_ERROR).strip().splitlines()
+        cause = cause[0] if cause else type(TRACKASTRA_IMPORT_ERROR).__name__
+        message = (
+            f"Automatic tracking requires trackastra, which is installed but fails to import: {cause}. "
+            "One of its dependencies is missing or incompatible, so reinstalling trackastra will not "
+            "fix this. See the traceback above for the failing import."
+        )
+    raise RuntimeError(message) from TRACKASTRA_IMPORT_ERROR
+
+
 def _filter_tracks(tracking_result, min_track_length):
     props = regionprops(tracking_result)
     discard_ids = []
@@ -661,10 +690,7 @@ def track_across_frames(
             with each dict encoding a lineage, where keys correspond to parent track ids.
             Each key either maps to a list with two child track ids (cell division) or to an empty list (no division).
     """
-    if Trackastra is None:
-        raise RuntimeError(
-            "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
-        )
+    _require_trackastra()
 
     _, pbar_init, pbar_update, pbar_close = util.handle_pbar(verbose, pbar_init=pbar_init, pbar_update=pbar_update)
 
@@ -729,10 +755,7 @@ def automatic_tracking_implementation(
             with each dict encoding a lineage, where keys correspond to parent track ids.
             Each key either maps to a list with two child track ids (cell division) or to an empty list (no division).
     """
-    if Trackastra is None:
-        raise RuntimeError(
-            "Automatic tracking requires trackastra. You can install it via 'pip install trackastra'."
-        )
+    _require_trackastra()
 
     segmentation, image_embeddings = _segment_slices(
         timeseries, predictor, segmentor, embedding_path, verbose,
