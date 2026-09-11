@@ -485,7 +485,7 @@ def _view_result(image_path, key, segmentation):
 @click.option(
     "--engine", default="ais", type=click.Choice(["amg", "ais", "apg"]),
     help="The segmentation engine: 'ais' post-processes the decoder prediction, 'amg' uses grid prompts "
-         "and no decoder, 'apg' prompts the interactive branch with the decoder's candidates (2D only)."
+         "and no decoder, 'apg' prompts the interactive branch with the decoder's candidates."
 )
 @click.option(
     "--mode", default="sparse", type=click.Choice(["sparse", "dense"]),
@@ -512,7 +512,7 @@ def inference_segmentation(
 ):
     """Run automatic instance segmentation.
 
-    Supports both 2D and 3D data. The 'apg' engine is 2D only.
+    Supports both 2D and 3D data with every engine.
 
     Additional postprocessing parameters (e.g. '--foreground_threshold' for sparse, '--beta' for dense
     or '--candidate_threshold' for apg) can be passed through to the segmentation and are forwarded
@@ -522,6 +522,7 @@ def inference_segmentation(
 
     from tqdm import tqdm
 
+    from .util import load_image_data
     from .v2.util import DEFAULT_MODEL
     from .v1.automatic_segmentation import _get_inputs_from_paths
     from .v2.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
@@ -533,17 +534,23 @@ def inference_segmentation(
     devices = _parse_devices(devices)
     generate_kwargs = _parse_extra(ctx.args)
 
-    predictor, segmenter = get_predictor_and_segmenter(
-        model_type=model_type, checkpoint=checkpoint_path, device=device,
-        segmentation_mode=engine, is_tiled=tile_shape is not None,
-    )
-
     input_paths = _get_inputs_from_paths(list(input_path), pattern)
     if len(input_paths) == 0:
         raise click.UsageError(
             "'micro_sam' could not find any image data. If you passed a folder, provide '--pattern' and quote it "
             "so the shell does not expand it, e.g. --pattern '*.tif'."
         )
+
+    # Only APG builds a different segmenter per dimensionality, and it is built before any input is read.
+    segmenter_ndim = ndim or 2
+    if engine == "apg" and ndim is None:
+        segmenter_ndim = load_image_data(input_paths[0], key=key).ndim
+
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=model_type, checkpoint=checkpoint_path, device=device,
+        segmentation_mode=engine, is_tiled=tile_shape is not None, ndim=segmenter_ndim,
+    )
+
     has_one_input = len(input_paths) == 1
     output_paths = _resolve_output_paths(input_paths, output_path)
 
