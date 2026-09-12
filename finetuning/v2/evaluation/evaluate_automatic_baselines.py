@@ -23,11 +23,14 @@ Usage examples:
 import os
 import warnings
 import argparse
+from itertools import islice
 
 import numpy as np
 from tqdm import tqdm
 
 import torch
+
+from elf.segmentation import features, multicut, watershed
 
 from common import (
     CROP_SHAPE_3D, DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_EM,
@@ -50,6 +53,9 @@ FOCUS3D_CELL_RADIUS = 15.0
 # stays at the plugin value so a job fits the 20 GB slice, which batch 32 overruns at 20.1 GiB.
 FOCUS3D_BATCH_SIZE = 16
 FOCUS3D_NUM_WORKERS = 4
+
+# The CellPose 4 generalists. The cyto/nuclei checkpoints need CellPose 3, in the 'cellpose3' environment.
+CELLPOSE_MODELS = ("cpsam", "cpsam_v2", "cpdino")
 
 STARDIST_2D_MODEL = "2D_versatile_fluo"
 STARDIST_3D_MODEL = "3D_demo"
@@ -102,7 +108,6 @@ def _load_stardist(ndim):
 def _load_segneuron(checkpoint_path, device):
     import sys
     sys.path.insert(0, os.path.join(SEGNEURON_ROOT, "Train_and_Inference"))
-    sys.path.insert(0, os.path.join(SEGNEURON_ROOT, "Postprocess"))
     from collections import OrderedDict
     import torch
     from model.Mnet import MNet
@@ -164,11 +169,38 @@ def _segment_cellsam(image):
     return seg.astype("uint32")
 
 
+def _segneuron_multicut(affs, beta):
+    """Reproduce SegNeuron's 'FRMC_post.post_mc' against the installed elf.
+
+    The installed elf takes the segmentation as the second argument of every rag-consuming function,
+    which SegNeuron's own calls predate, so it raises before producing anything.
+
+    Args:
+        affs: The affinity map, of shape (3, Z, Y, X).
+        beta: The multicut bias towards over- or under-segmentation.
+
+    Returns:
+        The instance segmentation.
+    """
+    affs = 1 - affs
+    boundary_input = np.maximum(affs[1], affs[2])
+    seeds = np.zeros_like(boundary_input, dtype="uint64")
+    offset = 0
+    for z in range(seeds.shape[0]):
+        wsz, max_id = watershed.distance_transform_watershed(boundary_input[z], threshold=0.25, sigma_seeds=2.0)
+        seeds[z] = wsz + offset
+        offset += max_id
+
+    rag = features.compute_rag(seeds)
+    offsets = [[-1, 0, 0], [0, -1, 0], [0, 0, -1]]
+    costs = features.compute_affinity_features(rag, seeds, affs, offsets)[:, 0]
+    edge_sizes = features.compute_boundary_mean_and_length(rag, seeds, boundary_input)[:, 1]
+    costs = multicut.transform_probabilities_to_costs(costs, edge_sizes=edge_sizes, beta=beta)
+    return features.project_node_labels_to_pixels(rag, seeds, multicut.multicut_kernighan_lin(rag, costs))
+
+
 def _segment_segneuron(volume, model, device, beta=0.25):
-    import sys
     import torch
-    sys.path.insert(0, os.path.join(SEGNEURON_ROOT, "Postprocess"))
-    from FRMC_post import post_mc
 
     raw = volume.astype("float32") / 255.0 if volume.max() > 1.0 else volume.astype("float32")  # SegNeuron expects /255
     Z, Y, X = raw.shape
@@ -206,7 +238,7 @@ def _segment_segneuron(volume, model, device, beta=0.25):
     bound = bound_acc[:, hz:hz + Z, hy:hy + Y, hx:hx + X] / count[:, hz:hz + Z, hy:hy + Y, hx:hx + X]
 
     combined = np.minimum(np.stack([bound[0]] * 3), affs)
-    return post_mc(combined, beta=beta).astype("uint32")
+    return _segneuron_multicut(combined, beta=beta).astype("uint32")
 
 
 def _segment_focus3d(volume, segmenter, dataset_name, cell_radius, z_ratio):
@@ -228,7 +260,9 @@ def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
     return seg.astype("uint32") if seg is not None else np.zeros(image_or_volume.shape, dtype="uint32")
 
 
-def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc, crop_shape=None):
+def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc, limit, crop_shape=None):
+    if limit is not None:  # Name the file after the truncation, so it cannot pass for the full evaluation.
+        save_path = f"{save_path[:-4]}_n{limit}.csv"
     if os.path.exists(save_path):
         print(f"Results already stored at '{save_path}'.")
         return
@@ -236,6 +270,9 @@ def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc, 
     total = n_samples(dataset_name, data_root)
     all_gt, all_seg = [], []
     samples = load_data(dataset_name, data_root, ndim, crop_shape=crop_shape)
+    if limit is not None:
+        total = min(total, limit)
+        samples = islice(samples, limit)
     for image_or_volume, labels, valid_roi in tqdm(samples, total=total, desc=desc):
         if labels.max() == 0:  # Nothing to score without ground-truth.
             continue
@@ -254,27 +291,27 @@ def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc, 
     print(results)
 
 
-def run_cellpose_evaluation(dataset_name, data_root, experiment_folder, model_type, device):
+def run_cellpose_evaluation(dataset_name, data_root, experiment_folder, model_type, device, limit):
     ndim = 3 if dataset_name in DATASETS_3D else 2
     model = _load_cellpose(model_type, device)
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_cellpose_{model_type}.csv")
     _run_evaluation(
         lambda x: _segment_cellpose(x, model, ndim, dataset_name),
-        dataset_name, data_root, ndim, save_path, desc=f"cellpose-{model_type}",
+        dataset_name, data_root, ndim, save_path, desc=f"cellpose-{model_type}", limit=limit,
     )
 
 
-def run_stardist_evaluation(dataset_name, data_root, experiment_folder):
+def run_stardist_evaluation(dataset_name, data_root, experiment_folder, limit):
     ndim = 3 if dataset_name in DATASETS_3D else 2
     model = _load_stardist(ndim)
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_stardist.csv")
     _run_evaluation(
         lambda x: _segment_stardist(x, model, ndim),
-        dataset_name, data_root, ndim, save_path, desc="stardist",
+        dataset_name, data_root, ndim, save_path, desc="stardist", limit=limit,
     )
 
 
-def run_cellsam_evaluation(dataset_name, data_root, experiment_folder):
+def run_cellsam_evaluation(dataset_name, data_root, experiment_folder, limit):
     if dataset_name in DATASETS_3D:
         warnings.warn(
             f"CellSAM is 2D-only and does not support 3D dataset '{dataset_name}'. Skipping.",
@@ -285,11 +322,11 @@ def run_cellsam_evaluation(dataset_name, data_root, experiment_folder):
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_cellsam.csv")
     _run_evaluation(
         lambda x: _segment_cellsam(x),
-        dataset_name, data_root, ndim=2, save_path=save_path, desc="cellsam",
+        dataset_name, data_root, ndim=2, save_path=save_path, desc="cellsam", limit=limit,
     )
 
 
-def run_segneuron_evaluation(dataset_name, data_root, experiment_folder, device, checkpoint_path=None):
+def run_segneuron_evaluation(dataset_name, data_root, experiment_folder, device, limit, checkpoint_path=None):
     if dataset_name not in EM_DATASETS:
         warnings.warn(
             f"SegNeuron is 3D EM-only and does not support dataset '{dataset_name}'. Skipping.",
@@ -304,13 +341,13 @@ def run_segneuron_evaluation(dataset_name, data_root, experiment_folder, device,
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_segneuron.csv")
     _run_evaluation(
         lambda x: _segment_segneuron(x, model, device),
-        dataset_name, data_root, ndim=3, save_path=save_path, desc="segneuron",
+        dataset_name, data_root, ndim=3, save_path=save_path, desc="segneuron", limit=limit,
     )
 
 
 def run_focus3d_evaluation(
-    dataset_name, data_root, experiment_folder, model_type, checkpoint, device, cell_radius, z_ratio=None,
-    crop_shape=None, batch_size=FOCUS3D_BATCH_SIZE, num_workers=FOCUS3D_NUM_WORKERS,
+    dataset_name, data_root, experiment_folder, model_type, checkpoint, device, cell_radius, limit,
+    z_ratio=None, crop_shape=None, batch_size=FOCUS3D_BATCH_SIZE, num_workers=FOCUS3D_NUM_WORKERS,
 ):
     if dataset_name not in DATASETS_3D_LM:
         warnings.warn(
@@ -331,12 +368,14 @@ def run_focus3d_evaluation(
     )
     _run_evaluation(
         lambda x: _segment_focus3d(x, segmenter, dataset_name, cell_radius, z_ratio),
-        dataset_name, data_root, ndim=3, save_path=save_path, desc=f"focus3d-{model_type}",
+        dataset_name, data_root, ndim=3, save_path=save_path, desc=f"focus3d-{model_type}", limit=limit,
         crop_shape=crop_shape,
     )
 
 
-def run_microsam_v1_evaluation(dataset_name, data_root, experiment_folder, method, model_type, checkpoint, device):
+def run_microsam_v1_evaluation(
+    dataset_name, data_root, experiment_folder, method, model_type, checkpoint, device, limit,
+):
     if dataset_name in EM_DATASETS:
         raise ValueError(f"micro-sam v1 automatic methods do not support EM datasets; got '{dataset_name}'.")
     ndim = 3 if dataset_name in DATASETS_3D else 2
@@ -344,7 +383,7 @@ def run_microsam_v1_evaluation(dataset_name, data_root, experiment_folder, metho
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_{method}_{model_type}.csv")
     _run_evaluation(
         lambda x: _segment_microsam_v1(x, predictor, segmenter, ndim),
-        dataset_name, data_root, ndim, save_path, desc=method,
+        dataset_name, data_root, ndim, save_path, desc=method, limit=limit,
     )
 
 
@@ -373,6 +412,7 @@ def main():
     )
     parser.add_argument("--batch_size", type=int, default=FOCUS3D_BATCH_SIZE, help="Patches per forward pass.")
     parser.add_argument("--num_workers", type=int, default=FOCUS3D_NUM_WORKERS, help="Data loader workers.")
+    parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
@@ -381,21 +421,23 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if args.method == "cellpose":
-        for model_type in ((args.model_type,) if args.model_type else ("cyto3", "cpsam")):
+        for model_type in ((args.model_type,) if args.model_type else CELLPOSE_MODELS):
             run_cellpose_evaluation(
                 args.dataset_name, args.input_path, args.experiment_folder, model_type=model_type, device=device,
+                limit=args.n_samples,
             )
 
     elif args.method == "stardist":
-        run_stardist_evaluation(args.dataset_name, args.input_path, args.experiment_folder)
+        run_stardist_evaluation(args.dataset_name, args.input_path, args.experiment_folder, limit=args.n_samples)
 
     elif args.method == "cellsam":
-        run_cellsam_evaluation(args.dataset_name, args.input_path, args.experiment_folder)
+        run_cellsam_evaluation(args.dataset_name, args.input_path, args.experiment_folder, limit=args.n_samples)
 
     elif args.method in ("microsam_ais", "microsam_apg"):
         run_microsam_v1_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder, method=args.method,
             model_type=args.model_type or SAM_V1_MODEL_TYPE, checkpoint=args.checkpoint, device=device,
+            limit=args.n_samples,
         )
 
     elif args.method == "focus3d":
@@ -404,13 +446,13 @@ def main():
             model_type=args.model_type or FOCUS3D_DEFAULT_MODEL, checkpoint=args.checkpoint, device=device,
             cell_radius=args.cell_radius, z_ratio=args.z_ratio,
             crop_shape=tuple(args.crop_3d) if args.crop_3d else None,
-            batch_size=args.batch_size, num_workers=args.num_workers,
+            batch_size=args.batch_size, num_workers=args.num_workers, limit=args.n_samples,
         )
 
     elif args.method == "segneuron":
         run_segneuron_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            device=device, checkpoint_path=args.checkpoint,
+            device=device, checkpoint_path=args.checkpoint, limit=args.n_samples,
         )
 
     else:
