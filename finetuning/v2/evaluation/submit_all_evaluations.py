@@ -58,7 +58,7 @@ DATASETS = tuple(sorted(set(DATASETS_LM + DATASETS_EM + DATASETS_HP)))
 DATASETS_3D = tuple(sorted(set(DATASETS_3D_LM + DATASETS_3D_EM)))
 
 SEGMENTATION_MODES = ("ais", "apg")
-AUTOMATIC_METHODS = ("cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron")
+AUTOMATIC_METHODS = ("cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron", "focus3d")
 INTERACTIVE_METHODS = ("nninteractive", "sam3", "sam", "sam2", "micro-sam", "microsam_vol")
 
 # Interactive 'sam2' is the pretrained backbone of the very engine micro-sam2 finetunes, so it runs
@@ -71,14 +71,20 @@ METHOD_SUPPORT = {
     ("automatic", "microsam_ais"): {"modality": ("lm",)},
     ("automatic", "microsam_apg"): {"modality": ("lm",)},
     ("automatic", "segneuron"): {"modality": ("em",), "ndim": (3,)},
+    ("automatic", "focus3d"): {"modality": ("lm",), "ndim": (3,)},
     ("interactive", "sam"): {"ndim": (2,)},
     ("interactive", "micro-sam"): {"ndim": (2,)},
     ("interactive", "nninteractive"): {"ndim": (3,)},
     ("interactive", "microsam_vol"): {"ndim": (3,), "modality": ("lm",)},
 }
 
-# Use --env to override the method-specific environments.
-METHOD_ENV = {"cellpose": "cp3", "stardist": "sd"}
+# Use --env to override the method-specific environments. StarDist runs in its own because it needs
+# TensorFlow, which does not belong next to torch in the main environment.
+METHOD_ENV = {"stardist": "stardist"}
+
+# cyto3 is a CellPose 3 checkpoint, which the CellPose 4 of the main environment cannot load.
+MODEL_ENV = {"cyto3": "cellpose3"}
+
 DEFAULT_ENV = "super"
 
 # Slurm resources per job. Only the grete partitions are available. 'grete:preemptible' is usually
@@ -109,9 +115,9 @@ def sanitize(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_")
 
 
-def resolve_env(args: argparse.Namespace, method: Optional[str]) -> str:
+def resolve_env(args: argparse.Namespace, method: Optional[str], model_type: Optional[str]) -> str:
     """The conda environment one job activates."""
-    return args.env or METHOD_ENV.get(method, DEFAULT_ENV)
+    return args.env or MODEL_ENV.get(model_type) or METHOD_ENV.get(method, DEFAULT_ENV)
 
 
 def available_envs() -> set:
@@ -246,7 +252,7 @@ def write_batch_script(
     """Write the Slurm script of one job and return its path."""
     tag = job_tag(args, datasets, model_type, method, mode, chunk_index)
     script_path = job_folder / f"{tag}.sh"
-    env = DEFAULT_ENV if uses_shared_engine(args, method) else resolve_env(args, method)
+    env = DEFAULT_ENV if uses_shared_engine(args, method) else resolve_env(args, method, model_type)
     qos_line = f"\n#SBATCH --qos={args.qos}" if args.qos is not None else ""
     is_3d = any(ndim_of(dataset) == 3 for dataset in datasets)
     gpu = args.gpu or (GPU_3D if is_3d else GPU_2D)
@@ -375,7 +381,10 @@ def main():
                     )
 
     print(f"Wrote {len(scripts)} Slurm scripts to '{job_folder}'.")
-    warn_missing_envs({resolve_env(args, method) for method in methods if not uses_shared_engine(args, method)})
+    warn_missing_envs({
+        resolve_env(args, method, model_type) for method in methods for model_type in model_types
+        if not uses_shared_engine(args, method)
+    })
     if args.dry:
         return
     for script in scripts:

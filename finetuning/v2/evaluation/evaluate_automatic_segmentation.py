@@ -20,6 +20,7 @@ import os
 import json
 import argparse
 import warnings
+from itertools import islice
 
 import pandas as pd
 from tqdm import tqdm
@@ -47,7 +48,7 @@ def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, sp
 
 
 def run_evaluation(
-    model, mode, dataset_name, data_root, experiment_folder, model_type, params, device,
+    model, mode, dataset_name, data_root, experiment_folder, model_type, params, device, limit,
     crop_shape=None, checkpoint_id=None, devices=None, tuned=None, result_tag=None, config_name=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
@@ -64,6 +65,8 @@ def run_evaluation(
         model_type: The SAM2 backbone, which names the result file.
         params: The parameters to segment with, or None for the library defaults.
         device: The torch device.
+        limit: Score only the first this many samples, for a smoke test. The result file is named
+            after it, so a truncated run cannot be mistaken for the full evaluation.
         crop_shape: The 3d center crop.
         checkpoint_id: The checksum of all model weights used by the mode.
         devices: The devices inference spreads over. All visible GPUs by default.
@@ -81,6 +84,8 @@ def run_evaluation(
     tag = "tuned" if tuned else "default"
     if result_tag:
         tag = f"{tag}_{result_tag}"
+    if limit is not None:
+        tag = f"{tag}_n{limit}"
     legacy_path = os.path.join(
         experiment_folder, "results", f"{dataset_name}_micro_sam2_{model_type}_{mode}_{tag}.csv"
     )
@@ -100,6 +105,9 @@ def run_evaluation(
     border_min_size = GT_MIN_SIZE_2D.get(dataset_name, 0) if ndim == 2 else 0
     total = n_samples(dataset_name, data_root)
     samples = load_data(dataset_name, data_root, ndim, crop_shape=crop_shape)
+    if limit is not None:
+        total = min(total, limit)
+        samples = islice(samples, limit)
 
     all_gt, all_seg, misses = [], [], []
     for raw, labels, valid_roi in tqdm(samples, total=total, desc=f"{mode}-{model_type}"):
@@ -148,6 +156,7 @@ def main():
              "Requires -c/--checkpoint for the decoder half too.",
     )
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate with the library defaults.")
+    parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
     parser.add_argument(
@@ -218,6 +227,7 @@ def main():
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,
         params, device, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
         devices=args.devices or None, tuned=tuned, result_tag=result_tag, config_name=config_name,
+        limit=args.n_samples,
     )
 
 
