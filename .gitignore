@@ -209,3 +209,6 @@ embeddings/
 
 # Trained classifier exports.
 *.joblib
+
+# Local JSON outputs, e.g. the data counter cache.
+*.json
