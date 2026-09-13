@@ -49,9 +49,9 @@ SEGNEURON_CHECKPOINT = "/mnt/vast-nhr/projects/cidas/cca/models/segneuron/SegNeu
 FOCUS3D_DEFAULT_MODEL = "general"
 # The radius FOCUS-3D is calibrated on, i.e. the value that leaves the volume unscaled in xy.
 FOCUS3D_CELL_RADIUS = 15.0
-# Throughput knobs, measured worth nothing here: the patch loop is 86% GPU forward. The batch size
-# stays at the plugin value so a job fits the 20 GB slice, which batch 32 overruns at 20.1 GiB.
-FOCUS3D_BATCH_SIZE = 16
+# Throughput knobs, measured worth nothing here: the patch loop is 86% GPU forward. Batch 8 peaks at
+# 6.8 GiB, so a job fits the 10 GB slice, where batch 16 needs 11.4 GiB and runs no faster.
+FOCUS3D_BATCH_SIZE = 8
 FOCUS3D_NUM_WORKERS = 4
 
 # The CellPose 4 generalists. The cyto/nuclei checkpoints need CellPose 3, in the 'cellpose3' environment.

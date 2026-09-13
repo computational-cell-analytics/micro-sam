@@ -1487,10 +1487,18 @@ UNISAM2_CHECKPOINT = os.path.join(_UNISAM2_ROOT, "checkpoints", "unisam2-both", 
 
 
 def get_joint_checkpoint(model_type: str, checkpoint: str = "best") -> str:
-    """Return the joint trainer checkpoint for a model type, e.g. 'hvit_b'."""
-    path = os.path.join(_joint_checkpoint_root(), f"joint_sam2_{model_type}_multi_gpu", f"{checkpoint}.pt")
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"There is no joint '{checkpoint}' checkpoint for '{model_type}' at '{path}'.")
+    """Return the joint trainer checkpoint for a model type, e.g. 'hvit_b'.
+
+    A training version tags its run directory, as in 'joint_sam2_hvit_t_multi_gpu_v5a', so the name
+    is matched by prefix. One root holds one run per model type.
+    """
+    root = _joint_checkpoint_root()
+    runs = sorted(glob(os.path.join(root, f"joint_sam2_{model_type}_multi_gpu*")))
+    if len(runs) > 1:
+        raise RuntimeError(f"'{root}' holds several runs for '{model_type}': {[os.path.basename(r) for r in runs]}.")
+    path = os.path.join(runs[0], f"{checkpoint}.pt") if runs else ""
+    if not path or not os.path.exists(path):
+        raise FileNotFoundError(f"There is no joint '{checkpoint}' checkpoint for '{model_type}' under '{root}'.")
     return path
 
 
