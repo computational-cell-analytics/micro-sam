@@ -5,6 +5,17 @@
 [![Image.sc forum][imagesc-img]][imagesc-url]
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.7919746-blue.svg)](https://doi.org/10.5281/zenodo.7919746)
 
+**μSAM2 beta version:**
+This is a beta version of μSAM2, which improves μSAM substantially and improves new features for
+3D segmentation, cell tracking, cell classification, and tissue/region segmentation.
+
+The model and software are still under development but should already work significantly better
+than μSAM1 for most use-cases. Please let us know if you use it and run into any issues or have
+other feedback on how to improve it.
+
+You can find details on how to install and use the μSAM2 beta version here:
+[μSAM2 beta documentation](https://docs.google.com/document/d/1B3Jtn6IP51zfnnyIX5_loVIh5YqEz6Jzy3MdJFWzyOI/edit?usp=sharing).
+
 # Segment Anything for Microscopy
 
 <a href="https://github.com/computational-cell-analytics/micro-sam"><img src="https://github.com/computational-cell-analytics/micro-sam/blob/main/doc/logo/logo_and_text.png" width="300" align="right">
