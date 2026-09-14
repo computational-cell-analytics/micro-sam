@@ -10,5 +10,6 @@ from .joint_sam2_trainer import JointSam2Trainer, JointSam2Logger  # noqa
 from .training import (  # noqa
     train_sam2, train_sam2_multi_gpu,
     train_automatic, train_automatic_multi_gpu,
+    train_semantic,
     train_joint_sam2, train_joint_sam2_multi_gpu,
 )
