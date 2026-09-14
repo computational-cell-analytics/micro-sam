@@ -38,6 +38,23 @@ def _instance_labels(labels):
     return connected_components(labels).astype("int64")
 
 
+def semantic_labels(labels):
+    """Convert an instance segmentation into a three class semantic map.
+
+    Args:
+        labels: The instance segmentation.
+
+    Returns:
+        The semantic map, with 0 for the background, 1 for the object boundary and 2 for the object interior.
+    """
+    instances = _instance_labels(labels)
+    semantic = np.zeros(instances.shape, dtype="int64")
+    semantic[instances > 0] = 2
+    # The inner boundary mode only marks pixels inside an object, so the boundary stays part of the foreground.
+    semantic[find_boundaries(instances, mode="inner")] = 1
+    return semantic
+
+
 def _axondeepseg_pre_label_transform(y):
     """Extract axon instances from AxonDeepSeg semantic labels via connected components.
 

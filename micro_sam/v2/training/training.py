@@ -16,6 +16,8 @@ from micro_sam.util import get_device, training_autocast_dtype
 from .util import get_sam2_train_model, ConvertToSam2VideoBatch
 from .joint_sam2_trainer import JointSam2Trainer, JointSam2Logger
 from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss
+from micro_sam.v2.loss.semantic_loss import CustomCombinedLoss
+from micro_sam.v1.training.semantic_sam_trainer import CustomDiceLoss
 from .sam2_trainer import Sam2Trainer, Sam2Logger, UniSAM2Trainer, UniSAM2Logger
 
 
@@ -956,6 +958,130 @@ def _configure_joint_speed(sam2_model, unetr, compile):
         for name, module in unetr.named_children():
             if name != "encoder":
                 module.compile(dynamic=False)
+
+
+def _build_semantic_sam2_model(model_type, device, num_classes, peft_kwargs=None, initial_features=32):
+    """Build a SemanticSAM2 model and optionally apply PEFT to its encoder.
+
+    Args:
+        model_type: The SAM2 encoder variant, for example, "hvit_t".
+        device: The device to build the model on.
+        num_classes: The number of semantic classes, the background class included.
+        peft_kwargs: The arguments for `PEFT_Sam2`, or None.
+        initial_features: Width of the convolutional decoder. The features per level are
+            'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
+
+    Returns:
+        The SemanticSAM2 model on the given device.
+    """
+    from micro_sam.v2.models.util import SemanticSAM2
+
+    if peft_kwargs:
+        from micro_sam.v2.util import get_sam2_model
+        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
+        from micro_sam.models.peft import serialize_peft_kwargs
+
+        sam2_model = get_sam2_model(model_type=model_type, input_type="images", device=device)
+        sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
+        model = SemanticSAM2(
+            encoder=sam2_model.image_encoder, num_classes=num_classes,
+            initial_features=initial_features, device=device,
+        )
+        model.peft_config = serialize_peft_kwargs(peft_kwargs)
+    else:
+        model = SemanticSAM2(
+            encoder=model_type, num_classes=num_classes, initial_features=initial_features, device=device
+        )
+    return model
+
+
+def train_semantic(
+    name: str,
+    model_type: str,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    num_classes: int = 3,
+    n_epochs: int = 100,
+    n_iterations: Optional[int] = None,
+    early_stopping: Optional[int] = None,
+    device: Optional[Union[str, torch.device]] = None,
+    lr: float = 1e-5,
+    save_root: Optional[Union[str, os.PathLike]] = None,
+    save_every_kth_epoch: Optional[int] = None,
+    overwrite_training: bool = True,
+    peft_kwargs: Optional[Dict] = None,
+    load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
+    initial_features: int = 32,
+    dice_weight: float = 0.5,
+) -> None:
+    """Train SemanticSAM2 for semantic segmentation on 2d and 3d data.
+
+    Trains the UNETR3D-based SemanticSAM2 model with
+    :class:`~micro_sam.v2.loss.semantic_loss.CustomCombinedLoss`, a weighted sum of a
+    multi-class dice loss and a cross entropy loss. The targets are class ids, one per voxel;
+    :func:`~micro_sam.v2.transforms.labels.semantic_labels` derives the three class layout of
+    background, object boundary and object interior from an instance segmentation.
+
+    Args:
+        name: Checkpoint / log folder name.
+        model_type: SAM2 encoder variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        train_loader: DataLoader yielding (x, y) tuples, with x of shape (B, 3, Z, Y, X) and the
+            class ids in y of shape (B, 1, Z, Y, X). 2d data carries a singleton z axis.
+        val_loader: Same format, used for validation.
+        num_classes: The number of semantic classes, the background class included.
+        n_epochs: Number of training epochs. Ignored if n_iterations is set.
+        n_iterations: If set, train for this many iterations instead of epochs.
+        early_stopping: Stop after this many epochs without improvement (None = off).
+        device: Training device. Auto-selects if None.
+        lr: Learning rate.
+        save_root: Root directory for checkpoints and logs.
+        save_every_kth_epoch: Save a separate checkpoint every k-th epoch.
+        overwrite_training: Overwrite an existing checkpoint at the same path.
+        peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder during decoder training.
+        load_from_checkpoint: Trainer checkpoint to resume from, restoring the model, optimizer,
+            scheduler, epoch and iteration.
+        initial_features: Width of the convolutional decoder. The features per level are
+            'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
+        dice_weight: The weight of the dice loss in the combined loss. One selects dice only.
+            Zero selects cross entropy only.
+    """
+    import torch_em
+
+    device = get_device(device)
+    model = _build_semantic_sam2_model(
+        model_type, device, num_classes=num_classes, peft_kwargs=peft_kwargs, initial_features=initial_features,
+    )
+
+    scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
+
+    trainer = torch_em.default_segmentation_trainer(
+        name=name,
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        learning_rate=lr,
+        loss=CustomCombinedLoss(num_classes=num_classes, dice_weight=dice_weight),
+        metric=CustomDiceLoss(num_classes=num_classes),
+        logger=UniSAM2Logger,
+        log_image_interval=50,
+        save_root=save_root,
+        compile_model=False,
+        scheduler_kwargs=scheduler_kwargs,
+        optimizer_kwargs={"weight_decay": 0.1},
+        # The hardware decides the precision. SAM2 trains in bfloat16 only.
+        mixed_precision=training_autocast_dtype(device) is not None,
+        mixed_precision_dtype="bfloat16",
+        device=device,
+        early_stopping=early_stopping,
+        trainer_class=UniSAM2Trainer,
+    )
+
+    fit_kwargs = {"epochs": n_epochs} if n_iterations is None else {"iterations": n_iterations}
+    fit_kwargs["overwrite_training"] = overwrite_training
+    fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
+    if save_every_kth_epoch is not None:
+        fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
+    trainer.fit(**fit_kwargs)
 
 
 def train_joint_sam2(
