@@ -17,7 +17,7 @@ from torch_em.transform import get_augmentations
 from torch_em.data import datasets, MinInstanceSampler, ConcatDataset
 
 from .wrapper import UniDataWrapper
-from .sampler import UniBatchSampler, _build_group_map
+from .sampler import UniBatchSampler, RejectBlankSlices, _build_group_map
 from ..transforms.raw import (
     _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile, _resize_raw_to_512, _resize_to_512,
     _enseg_green_channel, _xenium_cell_channels, _pan_multiplex_tissuenet_order, _cvz_cell_channels,
@@ -115,6 +115,22 @@ def _set_max_sampling_attempts(dataset, n_attempts):
         dataset.max_sampling_attempts = n_attempts
 
 
+def _reject_blank_slices(dataset):
+    """Wrap the sampler of every 3d torch-em leaf so a crop with a constant raw plane is rejected."""
+    if isinstance(dataset, (list, tuple)):
+        for ds in dataset:
+            _reject_blank_slices(ds)
+    elif isinstance(dataset, UniDataWrapper):
+        _reject_blank_slices(dataset.ds)
+    elif isinstance(dataset, torch.utils.data.Subset):
+        _reject_blank_slices(dataset.dataset)
+    elif getattr(dataset, "datasets", None) is not None:
+        for ds in dataset.datasets:
+            _reject_blank_slices(ds)
+    elif getattr(dataset, "ndim", 2) == 3 and getattr(dataset, "sampler", None) is not None:
+        dataset.sampler = RejectBlankSlices(dataset.sampler)
+
+
 def _configure_training_normalization(train_datasets, val_datasets):
     """Enable random percentile augmentation for training and deterministic 2nd/98th validation."""
     _set_percentile_normalization(
@@ -124,6 +140,7 @@ def _configure_training_normalization(train_datasets, val_datasets):
         val_datasets, lower_percentile_bounds=VALIDATION_LOWER_PERCENTILE_BOUNDS,
     )
     _set_max_sampling_attempts([train_datasets, val_datasets], MAX_SAMPLING_ATTEMPTS)
+    _reject_blank_slices([train_datasets, val_datasets])
 
 
 def _prepare_data_loader(dataset, batch_size, shuffle, batch_size_per_group=None, num_workers=32, deterministic=False):
