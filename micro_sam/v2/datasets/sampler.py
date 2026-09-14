@@ -1,6 +1,8 @@
 import random
 from typing import Dict, Iterator, List, Optional
 
+import numpy as np
+
 from torch.utils.data import Sampler
 
 from torch_em.data import ConcatDataset
@@ -197,3 +199,36 @@ def _build_group_map(concat_dataset: ConcatDataset) -> List:
             )
         group_per_index.extend([key] * len(ds))
     return group_per_index
+
+
+class RejectBlankSlices:
+    """Reject a volume crop that holds a constant raw plane, and defer to an inner sampler otherwise.
+
+    A dropped acquisition section reads as a constant plane. Its labels still carry objects, so an
+    instance sampler accepts the crop and the model is asked to segment a plane that holds no signal.
+    fafb, microns-minnie65 and axonem all carry such planes inside the volume, not at its edges.
+
+    Args:
+        sampler: The sampler that decides every crop this one does not reject.
+    """
+
+    def __init__(self, sampler):
+        self.sampler = sampler
+
+    def __call__(self, x, y) -> bool:
+        """Check the crop.
+
+        Args:
+            x: The raw data, as (z, y, x) or (channel, z, y, x).
+            y: The label data.
+
+        Returns:
+            Whether to accept this crop.
+        """
+        volume = np.asarray(x)
+        if volume.ndim == 4:
+            volume = volume[0]
+        planes = volume.reshape(volume.shape[0], -1)
+        if bool((planes.min(axis=1) == planes.max(axis=1)).any()):
+            return False
+        return self.sampler(x, y)

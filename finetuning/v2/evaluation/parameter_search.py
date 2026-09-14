@@ -16,6 +16,7 @@ Usage examples:
 """
 
 import os
+import json
 import time
 import argparse
 import warnings
@@ -121,7 +122,7 @@ CRITERION_ASCENDING = {"msa": False, "cremi": True}
 POSTPROC_THREADS = 4
 
 
-def tuning_config(dataset_name, mode, criterion=None, crop_shape=None):
+def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_override=None):
     """Build the sweep configuration for one dataset and mode.
 
     Dense-neuron EM datasets (`common.DATASETS_DENSE`) are tuned in dense (multicut) mode and ranked
@@ -135,6 +136,8 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None):
         mode: The segmentation mode, 'ais' or 'apg'.
         criterion: The metric the grid is ranked by. Defaults to the data-specific choice.
         crop_shape: The 3d center crop. Defaults to CROP_SHAPE_3D.
+        grid_override: Values replacing the swept values of the named grid axes. Only the named axes
+            change, every other axis keeps the values the mode's grid gives it.
 
     Returns:
         The configuration dict.
@@ -146,6 +149,13 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None):
         postproc_mode, grid = "apg", (APG_GRID_3D if is_3d else APG_GRID_2D)
     else:
         postproc_mode, grid = ("dense", EM_GRID) if is_dense else ("sparse", LM_GRID)
+
+    if grid_override:
+        # A typo would otherwise fail deep inside the sweep.
+        unknown = sorted(set(grid_override) - set(grid))
+        if unknown:
+            raise ValueError(f"{unknown} are not axes of the '{postproc_mode}' grid: {sorted(grid)}.")
+        grid = {**grid, **grid_override}
 
     return {
         "mode": postproc_mode,
@@ -503,7 +513,7 @@ def merge_shards(output_root, dataset_name, mode, model_type, num_shards, checkp
 def tune_parameters(
     model, mode, dataset_name, data_root, model_type, output_root, device,
     n_threads=POSTPROC_THREADS, n_tuning_samples=None, tuning_stride=1, crop_shape=None, criterion=None,
-    checkpoint_id=None, shard_index=0, num_shards=1,
+    checkpoint_id=None, shard_index=0, num_shards=1, grid_override=None,
 ):
     """Sweep the grid of a mode on the validation split and return the best parameter combination.
 
@@ -538,6 +548,7 @@ def tune_parameters(
         checkpoint_id: The checksum of all model weights used by the mode.
         shard_index: This job's slice of the grid, in [0, num_shards).
         num_shards: How many jobs split the grid. 1 means no sharding.
+        grid_override: Values replacing the swept values of the named grid axes, see `tuning_config`.
 
     Returns:
         The best parameter combination, or None when the dataset has nothing held out to tune on, or
@@ -547,7 +558,9 @@ def tune_parameters(
         print(f"'{dataset_name}' has no data held out from the evaluation, so the defaults are used.")
         return None
 
-    config = tuning_config(dataset_name, mode, criterion=criterion, crop_shape=crop_shape)
+    config = tuning_config(
+        dataset_name, mode, criterion=criterion, crop_shape=crop_shape, grid_override=grid_override
+    )
     output_dir = os.path.join(output_root, model_type, checkpoint_id) if checkpoint_id else os.path.join(
         output_root, model_type
     )
@@ -968,6 +981,11 @@ def main():
              "cell-type-grouped sort order instead of landing in the first few groups.",
     )
     parser.add_argument("--criterion", type=str, default=None, choices=sorted(CRITERION_ASCENDING))
+    parser.add_argument(
+        "--grid_override", type=str, default=None,
+        help="JSON object replacing the swept values of the named grid axes, e.g. a wider "
+             "foreground_threshold list. Only the named axes change, the rest keep their defaults.",
+    )
     parser.add_argument("--n_threads", type=int, default=POSTPROC_THREADS, help="Threads for the postprocessing.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
     parser.add_argument(
@@ -996,6 +1014,7 @@ def main():
         raise ValueError("-e/--experiment_folder is required unless --generate_registry_jobs is set.")
 
     datasets = args.dataset_name or sorted(VAL_SPLITS)
+    grid_override = json.loads(args.grid_override) if args.grid_override else None
 
     if args.merge_shards:
         for mode in args.mode:
@@ -1045,7 +1064,7 @@ def main():
                 models[model_key], mode, dataset_name, args.input_path, args.model_type, tuning_root, device,
                 n_threads=args.n_threads, n_tuning_samples=args.n_tuning_samples, tuning_stride=args.tuning_stride,
                 crop_shape=crop_shape, criterion=args.criterion, checkpoint_id=checkpoint_id,
-                shard_index=args.shard_index, num_shards=args.num_shards,
+                shard_index=args.shard_index, num_shards=args.num_shards, grid_override=grid_override,
             )
 
 
