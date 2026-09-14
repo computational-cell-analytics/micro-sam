@@ -69,12 +69,60 @@ LIVECELL_EXCLUDED_TEST_IMAGES = frozenset({
     "BV2_Phase_A4_2_00d00h00m_1.tif",
 })
 
+# Images the official LIVECell files list under both train and val, 17 Huh7 and 13 SKOV3. Dropped
+# from 'val' only, so a sweep does not tune on data the model trained on.
+LIVECELL_TRAIN_VAL_OVERLAP = frozenset({
+    "Huh7_Phase_A10_2_00d00h00m_3.tif",
+    "Huh7_Phase_A10_2_00d12h00m_1.tif",
+    "Huh7_Phase_A10_2_00d16h00m_3.tif",
+    "Huh7_Phase_A10_2_00d20h00m_1.tif",
+    "Huh7_Phase_A10_2_01d00h00m_1.tif",
+    "Huh7_Phase_A10_2_01d00h00m_2.tif",
+    "Huh7_Phase_A10_2_01d00h00m_4.tif",
+    "Huh7_Phase_A11_2_01d08h00m_4.tif",
+    "Huh7_Phase_A11_2_01d16h00m_1.tif",
+    "Huh7_Phase_A11_2_01d16h00m_2.tif",
+    "Huh7_Phase_A11_2_01d20h00m_2.tif",
+    "Huh7_Phase_A11_2_01d20h00m_3.tif",
+    "Huh7_Phase_A11_2_02d00h00m_2.tif",
+    "Huh7_Phase_A11_2_02d00h00m_4.tif",
+    "Huh7_Phase_A11_2_02d04h00m_2.tif",
+    "Huh7_Phase_A11_2_02d04h00m_3.tif",
+    "Huh7_Phase_A11_2_02d04h00m_4.tif",
+    "SKOV3_Phase_G4_1_00d20h00m_3.tif",
+    "SKOV3_Phase_G4_1_00d20h00m_4.tif",
+    "SKOV3_Phase_G4_1_01d00h00m_3.tif",
+    "SKOV3_Phase_G4_1_01d04h00m_3.tif",
+    "SKOV3_Phase_G4_1_01d08h00m_1.tif",
+    "SKOV3_Phase_G4_1_01d12h00m_4.tif",
+    "SKOV3_Phase_H4_1_00d00h00m_2.tif",
+    "SKOV3_Phase_H4_1_00d04h00m_1.tif",
+    "SKOV3_Phase_H4_1_00d04h00m_2.tif",
+    "SKOV3_Phase_H4_1_00d08h00m_2.tif",
+    "SKOV3_Phase_H4_1_00d08h00m_4.tif",
+    "SKOV3_Phase_H4_1_00d12h00m_1.tif",
+    "SKOV3_Phase_H4_1_00d16h00m_1.tif",
+})
 
-def drop_excluded_livecell(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
-    """Remove the incompletely annotated LIVECell test images from a path pair list."""
+
+def drop_excluded_livecell(raw_paths, label_paths, split=None) -> Tuple[List[str], List[str]]:
+    """Remove the LIVECell images that must not be scored from a path pair list.
+
+    Args:
+        raw_paths: The image paths.
+        label_paths: The label paths, in the same order.
+        split: The split the paths were read from. 'val' additionally drops the images the official
+            files also list under train, see LIVECELL_TRAIN_VAL_OVERLAP.
+
+    Returns:
+        The kept image and label paths.
+    """
+    excluded = set(LIVECELL_EXCLUDED_TEST_IMAGES)
+    if split == "val":
+        excluded |= LIVECELL_TRAIN_VAL_OVERLAP
     keep = [
         (raw, label) for raw, label in zip(raw_paths, label_paths)
-        if os.path.basename(raw) not in LIVECELL_EXCLUDED_TEST_IMAGES
+        if os.path.basename(raw) not in excluded
     ]
     if not keep:
         return [], []
@@ -705,7 +753,7 @@ def _get_2d_lm_data_paths(
 
     if dataset_name == "livecell":
         img, gt = _get_livecell_paths(input_folder=os.path.join(p, "livecell"), split=split)
-        img, gt = drop_excluded_livecell(img, gt)
+        img, gt = drop_excluded_livecell(img, gt, split=split)
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name in ("cvz_fluo_cell", "cvz_fluo_dapi"):

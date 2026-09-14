@@ -765,7 +765,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
     }
     train_ds.append(
-        UniDataWrapper(datasets.get_flywing_dataset(split="train", n_samples=300, **flywing_kwargs), source_ndim=2)
+        UniDataWrapper(datasets.get_flywing_dataset(split="train", n_samples=400, **flywing_kwargs), source_ndim=2)
     )
     val_ds.append(
         UniDataWrapper(datasets.get_flywing_dataset(split="val", n_samples=50, **flywing_kwargs), source_ndim=2)
