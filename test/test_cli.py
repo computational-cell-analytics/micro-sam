@@ -122,6 +122,17 @@ class TestCLI(unittest.TestCase):
         os.remove(out_path)
 
     @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
+    def test_parse_shape_turns_tiling_off(self):
+        from micro_sam._cli import _parse_shape
+
+        self.assertIsNone(_parse_shape(None))  # not given, i.e. decide automatically
+        self.assertEqual(_parse_shape("384,384"), (384, 384))
+        self.assertEqual(_parse_shape("4, 384, 384"), (4, 384, 384))
+        # 'none' / 'off' is the readable spelling of the all-zero 'run untiled' request.
+        for value in ("none", "None", " off "):
+            self.assertEqual(_parse_shape(value), (0, 0))
+        self.assertEqual(_parse_shape("none", ndim=3), (0, 0, 0))
+
     def test_automatic_segmentation(self):
         # Create 1 image as testdata.
         im_path = os.path.join(self.tmp_folder, "image.tif")

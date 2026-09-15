@@ -13,7 +13,7 @@ from . import util as vutil
 from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-from ..v2.util import DEFAULT_MODEL
+from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._titles import get_dock_title
 from ._annotator import _AnnotatorBase
 from ._batch import BatchAnnotatorTask, run_batch
@@ -454,9 +454,11 @@ def annotator_tracking(
         embedding_path: Filepath for saving the precomputed embeddings.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
-        tile_shape: Shape of tiles for tiled embedding prediction.
-            If `None` then the whole image is passed to Segment Anything.
+        tile_shape: Shape of tiles for tiled embedding prediction. If `None`, reuse the tiling of
+            already cached embeddings, else use the default tiling for images exceeding the in-plane
+            size threshold, and pass smaller images to Segment Anything without tiling.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
+            If `None`, use the default overlap whenever tiling is active.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
@@ -477,6 +479,12 @@ def annotator_tracking(
 
     # Initialize the predictor state.
     state = AnnotatorState()
+    state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
+
+    # The API / CLI computes embeddings before creating the widget, so apply the same size
+    # heuristic here. Reuse these resolved settings when syncing the widget below.
+    tile_shape, halo = resolve_default_tiling(state.image_shape, tile_shape, halo, embedding_path)
+
     state.initialize_predictor(
         image,
         model_type=model_type,
@@ -491,7 +499,6 @@ def annotator_tracking(
         precompute_autoseg_state=precompute_autoseg_state,
         use_cli=True,
     )
-    state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
 
     if viewer is None:
         viewer = napari.Viewer()
@@ -570,17 +577,20 @@ class TrackingBatchTask(BatchAnnotatorTask):
             kwargs = dict(predictor=state.predictor, decoder=state.decoder, prefer_decoder=False)
         else:
             kwargs = dict(prefer_decoder=True)
+        state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
+        # Resolve the tiling per timeseries, since the shapes can differ across the batch.
+        tile_shape, halo = resolve_default_tiling(state.image_shape, self.tile_shape, self.halo, embedding_path)
         state.initialize_predictor(
-            image, model_type=self.model_type, save_path=embedding_path, halo=self.halo,
-            tile_shape=self.tile_shape, ndim=3, checkpoint_path=self.checkpoint_path,
+            image, model_type=self.model_type, save_path=embedding_path, halo=halo,
+            tile_shape=tile_shape, ndim=3, checkpoint_path=self.checkpoint_path,
             decoder_path=self.decoder_path, device=self.device, batch_size=self.batch_size,
             precompute_autoseg_state=self.precompute_autoseg_state,
             use_cli=True, **kwargs,
         )
-        state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
+        return tile_shape, halo
 
     def start(self, viewer, entry, image, embedding_path, index):
-        self._init_predictor(image, embedding_path, reuse=False)
+        tile_shape, halo = self._init_predictor(image, embedding_path, reuse=False)
         viewer.add_image(image, name="image")
         AnnotatorState().image_scale = tuple(viewer.layers["image"].scale)
 
@@ -593,13 +603,14 @@ class TrackingBatchTask(BatchAnnotatorTask):
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
             save_path=embedding_path, checkpoint_path=self.checkpoint_path,
-            device=self.device, tile_shape=self.tile_shape, halo=self.halo,
+            device=self.device, tile_shape=tile_shape, halo=halo,
         )
         return annotator
 
     def advance(self, viewer, annotator, entry, image, embedding_path, index):
         viewer.layers["image"].data = image
-        self._init_predictor(image, embedding_path, reuse=True)
+        tile_shape, halo = self._init_predictor(image, embedding_path, reuse=True)
+        vutil._sync_tiling_widget(AnnotatorState().widgets["embeddings"], tile_shape, halo)
         AnnotatorState().image_scale = tuple(viewer.layers["image"].scale)
         annotator._update_image()
 
@@ -635,9 +646,11 @@ def batch_tracking_annotator(
         output_folder: The folder where the per-video tracking results are saved.
         model_type: The micro-sam2/SAM2 model to use (must start with 'hvit_').
         embedding_path: Folder where to save/load the per-video embeddings.
-        tile_shape: Shape of tiles for tiled embedding prediction.
-            If `None` then the whole image is passed to Segment Anything.
+        tile_shape: Shape of tiles for tiled embedding prediction. If `None`, reuse the tiling of
+            already cached embeddings, else use the default tiling for images exceeding the in-plane
+            size threshold, and pass smaller images to Segment Anything without tiling.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
+            If `None`, use the default overlap whenever tiling is active.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         decoder_path: Path to a custom decoder checkpoint from which to load the `micro-sam` decoder.
         device: The computational device to use for the SAM model.

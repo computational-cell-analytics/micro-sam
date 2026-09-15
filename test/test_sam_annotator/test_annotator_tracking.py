@@ -178,31 +178,42 @@ def test_auto_tracking_uses_sam2_widget():
     assert not hasattr(widgets, "AutoSegmentV1Widget")
 
 
-def test_auto_tracking_defaults_to_apg(qtbot):
+# Tracking always segments per frame in 2d, so APG stays on offer on every device. Only the order
+# changes: APG is the default on an accelerator, the (much cheaper) sparse mode the CPU default.
+@pytest.mark.parametrize("device, expected", [("cpu", "sparse"), ("cuda", "apg"), ("mps", "apg")])
+def test_auto_tracking_default_mode(qtbot, monkeypatch, device, expected):
+    from micro_sam.sam_annotator import _widgets
+    monkeypatch.setattr(_widgets.util, "get_device", lambda requested=None: requested or device)
+
     widget = AutoTrackWidget(viewer=None, with_decoder=True, volumetric=True)
     qtbot.addWidget(widget)
 
     choices = [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
-    assert choices == ["apg", "sparse", "dense"]
-    assert widget.mode == "apg"
-    assert widget.mode_dropdown.currentText() == "apg"
-    assert hasattr(widget, "candidate_threshold_param")
+    assert choices == (["sparse", "apg", "dense"] if device == "cpu" else ["apg", "sparse", "dense"])
+    assert widget.mode == expected
+    assert widget.mode_dropdown.currentText() == expected
+    assert hasattr(widget, "density_threshold_param" if expected == "sparse" else "candidate_threshold_param")
     # Tracking segments per frame in 2d, so the volumetric-only APG controls are not built.
     assert not hasattr(widget, "candidate_threshold_high_param")
     assert not hasattr(widget, "n_objects_per_pass_param")
 
-    widget.mode_dropdown.setCurrentText("sparse")
-    assert widget.mode == "sparse"
+    other = "apg" if expected == "sparse" else "sparse"
+    widget.mode_dropdown.setCurrentText(other)
+    assert widget.mode == other
 
 
-def test_auto_tracking_does_not_offer_amg(qtbot):
+@pytest.mark.parametrize("device", ["cpu", "cuda", "mps"])
+def test_auto_tracking_does_not_offer_amg(qtbot, monkeypatch, device):
     # AMG is gone from the annotator: without a decoder the modes stay the same and the run button
     # is disabled, rather than falling back to grid-based mask generation.
+    from micro_sam.sam_annotator import _widgets
+    monkeypatch.setattr(_widgets.util, "get_device", lambda requested=None: requested or device)
+
     widget = AutoTrackWidget(viewer=None, with_decoder=False, volumetric=True)
     qtbot.addWidget(widget)
 
     choices = [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
-    assert choices == ["apg", "sparse", "dense"]
+    assert sorted(choices) == ["apg", "dense", "sparse"]
     assert widget.run_button.isEnabled() is False
     assert not hasattr(widget, "_run_amg")
 
