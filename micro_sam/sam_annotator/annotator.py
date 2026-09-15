@@ -11,7 +11,7 @@ from .. import util
 from . import util as vutil
 from . import _widgets as widgets
 from ._state import AnnotatorState
-from ..v2.util import DEFAULT_MODEL, DEFAULT_TILE_SHAPE, DEFAULT_HALO, needs_default_tiling
+from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._titles import get_dock_title
 from ._annotator import _AnnotatorBase
 from .util import (
@@ -332,11 +332,11 @@ def annotator(
             The segmentation will be loaded as the 'committed_objects' layer.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
-        tile_shape: Shape of tiles for tiled embedding prediction.
-            If `None`, use the default tiling for images exceeding the in-plane size threshold,
-            and pass smaller images to Segment Anything without tiling.
+        tile_shape: Shape of tiles for tiled embedding prediction. If `None`, reuse the tiling of
+            already cached embeddings, else use the default tiling for images exceeding the in-plane
+            size threshold, and pass smaller images to Segment Anything without tiling.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
-            If omitted when tiling is selected automatically, use the default overlap.
+            If `None`, use the default overlap whenever tiling is active.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
@@ -371,10 +371,7 @@ def annotator(
 
     # The API / CLI computes embeddings before creating the widget, so apply the same
     # size heuristic here. Reuse these resolved settings when syncing the widget below.
-    if tile_shape is None and needs_default_tiling(state.image_shape):
-        tile_shape = DEFAULT_TILE_SHAPE
-        if halo is None:
-            halo = DEFAULT_HALO
+    tile_shape, halo = resolve_default_tiling(state.image_shape, tile_shape, halo, embedding_path)
 
     # Initialize the predictor state
     state.initialize_predictor(

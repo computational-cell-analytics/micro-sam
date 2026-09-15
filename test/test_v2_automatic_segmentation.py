@@ -2,6 +2,7 @@ from contextlib import nullcontext
 from pathlib import Path
 import types
 import inspect
+import warnings
 
 import numpy as np
 import torch
@@ -11,7 +12,7 @@ from micro_sam.v2.instance_segmentation import (
     _block_shape_and_halo, _set_image_predictor_from_backbone, _decode_3d_feature_batch,
     UniSAM2InstanceSegmentation, TiledUniSAM2InstanceSegmentation,
     TiledAutomaticMaskGenerationSegmenter, amg_3d_segmentation,
-    get_instance_segmentation_generator, get_decoder,
+    get_instance_segmentation_generator, get_decoder, retile_instance_segmentation_generator,
 )
 from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, default_postprocessing, run_multicut
 from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, ImageEmbeddings
@@ -700,6 +701,152 @@ def test_factory_amg_dispatch(monkeypatch):
     assert calls == {"model": model, "is_tiled": True}
     # No decoder and no mode also defaults to AMG.
     assert get_instance_segmentation_generator(model=model) is sentinel
+
+
+def test_retile_generator_swaps_the_tiling_variant():
+    from micro_sam.v2.instance_segmentation import retile_instance_segmentation_generator
+
+    decoder = object()
+    untiled = get_instance_segmentation_generator(decoder=decoder, segmentation_mode="ais")
+    assert isinstance(untiled, UniSAM2InstanceSegmentation)
+    assert not isinstance(untiled, TiledUniSAM2InstanceSegmentation)
+
+    # The same tiling is a no-op, the other one swaps in the matching class built from the same decoder.
+    assert retile_instance_segmentation_generator(untiled, is_tiled=False) is untiled
+    tiled = retile_instance_segmentation_generator(untiled, is_tiled=True)
+    assert isinstance(tiled, TiledUniSAM2InstanceSegmentation)
+
+    # The counterpart is cached, so swapping back and forth reuses the same two objects.
+    assert retile_instance_segmentation_generator(untiled, is_tiled=True) is tiled
+    assert retile_instance_segmentation_generator(tiled, is_tiled=False) is untiled
+
+    # A generator built by hand carries no config, so it is left alone rather than silently replaced.
+    handmade = UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cpu")
+    assert retile_instance_segmentation_generator(handmade, is_tiled=True) is handmade
+
+
+@pytest.mark.parametrize(
+    "shape, expect_tiled",
+    [((2048, 2048), True), ((769, 100), True), ((768, 768), False), ((256, 256), False)],
+)
+def test_inference_tiles_large_images_by_default(monkeypatch, shape, expect_tiled):
+    """The headless front-end applies the same size cutoff as the GUI, and swaps the segmenter."""
+    from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
+    from micro_sam.v2.util import DEFAULT_TILE_SHAPE, DEFAULT_HALO
+
+    calls = {}
+    untiled = get_instance_segmentation_generator(decoder=_FakeUNETR(img_size=8), segmentation_mode="ais")
+
+    def track(segmenter):
+        segmenter.initialize = lambda raw, ndim, **kwargs: calls.update(
+            tile_shape=kwargs.get("tile_shape"), halo=kwargs.get("halo"), used=segmenter,
+        )
+        segmenter.generate = lambda mode, **kwargs: np.ones(shape, dtype="uint32")
+        return segmenter
+
+    track(untiled)
+    track(retile_instance_segmentation_generator(untiled, is_tiled=True))
+
+    automatic_instance_segmentation(
+        predictor=types.SimpleNamespace(model=object()), segmenter=untiled,
+        input_path=np.zeros(shape, dtype="uint8"), ndim=2, verbose=False,
+    )
+
+    assert isinstance(calls["used"], TiledUniSAM2InstanceSegmentation) is expect_tiled
+    assert calls["tile_shape"] == (DEFAULT_TILE_SHAPE if expect_tiled else None)
+    assert calls["halo"] == (DEFAULT_HALO if expect_tiled else None)
+
+
+@pytest.mark.parametrize(
+    "shape, ndim, expect_array, expect_spatial, expect_tiled",
+    [
+        # A channels-first image must be read as an image, not as a 3-slice volume: before it was
+        # normalized the spatial shape came out as (3, 700) and the 2048-wide X axis was never seen.
+        ((3, 700, 2048), 2, (700, 2048, 3), (700, 2048), True),
+        ((3, 700, 700), 2, (700, 700, 3), (700, 700), False),
+        # RGB without an explicit ndim is an image, not a 2048-slice volume.
+        ((2048, 2048, 3), None, (2048, 2048, 3), (2048, 2048), True),
+        ((700, 700, 3), None, (700, 700, 3), (700, 700), False),
+        # 2- and 4-channel inputs are mapped to RGB, and singleton axes are squeezed out.
+        ((700, 2048, 2), None, (700, 2048, 3), (700, 2048), True),
+        ((1, 700, 2048), None, (700, 2048), (700, 2048), True),
+        # Plain images are untouched. (Volumes go through the 3d staging path, covered separately.)
+        ((2048, 2048), 2, (2048, 2048), (2048, 2048), True),
+        ((768, 768), 2, (768, 768), (768, 768), False),
+    ],
+)
+def test_inference_normalizes_the_channel_axis(shape, ndim, expect_array, expect_spatial, expect_tiled):
+    """The headless path reads the same array the GUI does, so tiling sees the real spatial axes."""
+    from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
+    from micro_sam.v2.util import DEFAULT_TILE_SHAPE
+
+    calls = {}
+    untiled = get_instance_segmentation_generator(decoder=_FakeUNETR(img_size=8), segmentation_mode="ais")
+    for segmenter in (untiled, retile_instance_segmentation_generator(untiled, is_tiled=True)):
+        segmenter.initialize = lambda raw, _s=segmenter, **kwargs: calls.update(
+            array=raw.shape, ndim=kwargs.get("ndim"), tile_shape=kwargs.get("tile_shape"),
+        )
+        segmenter.generate = lambda mode, **kwargs: np.ones((4, 4), dtype="uint32")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the 4-channel mapping warns, which is not what is tested here
+        automatic_instance_segmentation(
+            predictor=types.SimpleNamespace(model=object()), segmenter=untiled,
+            input_path=np.zeros(shape, dtype="uint8"), ndim=ndim, verbose=False,
+        )
+
+    assert calls["array"] == expect_array
+    assert calls["ndim"] == len(expect_spatial)
+    assert calls["tile_shape"] == (DEFAULT_TILE_SHAPE if expect_tiled else None)
+
+
+def test_headless_and_gui_read_the_same_array():
+    """Both front-ends share one normalizer, so they cannot disagree on the spatial axes."""
+    from micro_sam.util import prepare_annotation_image
+    from micro_sam.sam_annotator.util import prepare_annotation_image as gui_prepare
+
+    assert gui_prepare is prepare_annotation_image
+
+
+def test_inference_does_not_claim_tiling_a_handmade_segmenter_cannot_do():
+    """A segmenter built by hand cannot be swapped, so auto-tiling backs off instead of being dropped."""
+    from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
+
+    calls = {}
+    shape = (2048, 2048)
+    segmenter = UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cpu")
+    segmenter.initialize = lambda raw, ndim, **kwargs: calls.update(tile_shape=kwargs.get("tile_shape"))
+    segmenter.generate = lambda mode, **kwargs: np.ones(shape, dtype="uint32")
+
+    with pytest.warns(UserWarning, match="cannot be swapped"):
+        automatic_instance_segmentation(
+            predictor=types.SimpleNamespace(model=object()), segmenter=segmenter,
+            input_path=np.zeros(shape, dtype="uint8"), ndim=2, verbose=False,
+        )
+    # It must not be handed a tile shape whose in-plane entries it would ignore.
+    assert calls["tile_shape"] is None
+
+
+def test_inference_tiling_can_be_turned_off(monkeypatch):
+    """An all-zero tile shape runs a large image in one piece, overriding the size cutoff."""
+    from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
+
+    calls = {}
+    shape = (2048, 2048)
+    untiled = get_instance_segmentation_generator(decoder=_FakeUNETR(img_size=8), segmentation_mode="ais")
+    for segmenter in (untiled, retile_instance_segmentation_generator(untiled, is_tiled=True)):
+        segmenter.initialize = lambda raw, ndim, _s=segmenter, **kwargs: calls.update(
+            tile_shape=kwargs.get("tile_shape"), used=_s,
+        )
+        segmenter.generate = lambda mode, **kwargs: np.ones(shape, dtype="uint32")
+
+    automatic_instance_segmentation(
+        predictor=types.SimpleNamespace(model=object()), segmenter=untiled,
+        input_path=np.zeros(shape, dtype="uint8"), ndim=2, verbose=False,
+        tile_shape=(0, 0), halo=(0, 0),
+    )
+    assert calls["used"] is untiled
+    assert calls["tile_shape"] is None
 
 
 def test_factory_invalid_and_missing_args():

@@ -15,9 +15,9 @@ from qtpy.QtCore import QTimer
 from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-from ..v2.util import DEFAULT_MODEL
+from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._titles import get_dock_title
-from .util import _sync_embedding_widget
+from .util import _sync_embedding_widget, _sync_tiling_widget
 from .annotator import Annotator, detect_ndim
 from ._batch import BatchAnnotatorTask, run_batch
 
@@ -99,8 +99,11 @@ class SegmentationBatchTask(BatchAnnotatorTask):
             kwargs = dict(predictor=self.predictor, decoder=self.decoder, prefer_decoder=False)
         else:
             kwargs = dict(prefer_decoder=self.prefer_decoder)
+        state.image_shape = _get_input_shape(image, self.ndim)
+        # Resolve the tiling per image, since the shapes can differ across the batch.
+        tile_shape, halo = resolve_default_tiling(state.image_shape, self.tile_shape, self.halo, embedding_path)
         state.initialize_predictor(
-            image, model_type=self.model_type, save_path=embedding_path, halo=self.halo, tile_shape=self.tile_shape,
+            image, model_type=self.model_type, save_path=embedding_path, halo=halo, tile_shape=tile_shape,
             ndim=self.ndim,
             precompute_autoseg_state=self.precompute_autoseg_state,
             checkpoint_path=self.checkpoint_path, batch_size=self.batch_size,
@@ -108,14 +111,14 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         )
         # Capture the loaded model so subsequent items reuse it instead of reloading.
         self.predictor, self.decoder = state.predictor, state.decoder
-        state.image_shape = _get_input_shape(image, self.ndim)
         # Establish the scale for this image (matching the segmentation annotator) so the layers do not
         # inherit a stale 'image_scale' of a different dimensionality from a previous image / session.
         state.image_scale = tuple(viewer.layers["image"].scale)
+        return tile_shape, halo
 
     def start(self, viewer, entry, image, embedding_path, index):
         viewer.add_image(image, name="image")
-        self._init_predictor(viewer, image, embedding_path)
+        tile_shape, halo = self._init_predictor(viewer, image, embedding_path)
 
         annotator = Annotator(viewer, ndim=self.ndim, reset_state=False)
         annotator._update_image(segmentation_result=self._resolve_initial_result(entry, index))
@@ -126,7 +129,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
             save_path=self.embedding_path, checkpoint_path=self.checkpoint_path,
-            device=self.device, tile_shape=self.tile_shape, halo=self.halo,
+            device=self.device, tile_shape=tile_shape, halo=halo,
         )
         return annotator
 
@@ -135,7 +138,8 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         viewer.layers["committed_objects"].data = np.zeros_like(viewer.layers["committed_objects"].data)
         segmentation_result = self._resolve_initial_result(entry, index)
         viewer.layers["image"].data = image
-        self._init_predictor(viewer, image, embedding_path)
+        tile_shape, halo = self._init_predictor(viewer, image, embedding_path)
+        _sync_tiling_widget(AnnotatorState().widgets["embeddings"], tile_shape, halo)
         annotator._update_image(segmentation_result=segmentation_result)
 
     def has_unsaved_content(self, viewer):
@@ -177,9 +181,11 @@ def batch_annotator(
         initial_segmentations: Initial segmentations to be corrected.
             By default no initial segmentations are loaded.
             If given, the initial segmentations will be loaded into 'committed_objects'.
-        tile_shape: Shape of tiles for tiled embedding prediction.
-            If `None` then the whole image is passed to Segment Anything.
+        tile_shape: Shape of tiles for tiled embedding prediction. If `None`, reuse the tiling of
+            already cached embeddings, else use the default tiling for images exceeding the in-plane
+            size threshold, and pass smaller images to Segment Anything without tiling.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
+            If `None`, use the default overlap whenever tiling is active.
         viewer: The viewer to which the Segment Anything functionality should be added.
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.

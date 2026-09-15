@@ -60,6 +60,96 @@ def test_cli_annotator_default_tiling(
     viewer.close()
 
 
+def _run_annotator_cli(make_napari_viewer_proxy, monkeypatch, tool, image, options=()):
+    """Invoke one of the 'micro_sam annotator' commands and capture how it computed the embeddings.
+
+    Returns the kwargs passed to 'initialize_predictor' and the embedding widget the tool synced,
+    so a test can check that the tool computed the embeddings with the settings it displays.
+    """
+    from click.testing import CliRunner
+    from micro_sam._cli import cli
+    from micro_sam import util
+    from micro_sam.sam_annotator._state import AnnotatorState
+    from micro_sam.sam_annotator.annotator_tracking import AnnotatorTracking
+    from micro_sam.sam_annotator.object_classifier import ObjectClassifier
+    from micro_sam.sam_annotator.pixel_classifier import PixelClassifier
+    import napari
+
+    viewer = make_napari_viewer_proxy()
+    captured = {}
+    monkeypatch.setattr(util, "load_image_data", lambda *args, **kwargs: image)
+    monkeypatch.setattr(napari, "Viewer", lambda: viewer)
+    monkeypatch.setattr(napari, "run", lambda: None)
+    monkeypatch.setattr(
+        AnnotatorState, "initialize_predictor", lambda self, image, **kwargs: captured.update(kwargs),
+    )
+    for annotator_class in (Annotator, AnnotatorTracking, ObjectClassifier, PixelClassifier):
+        monkeypatch.setattr(annotator_class, "_update_image", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(cli, ["annotator", tool, "-i", "image.tif", *options])
+    assert result.exit_code == 0, result.output or repr(result.exception)
+    return captured, AnnotatorState().widgets["embeddings"], viewer
+
+
+# The tracking annotator is always 3d, the other tools take the dimensionality from the CLI.
+@pytest.mark.gui
+@pytest.mark.parametrize(
+    "tool, options",
+    [
+        ("segmentation", ["--ndim", "2"]),
+        ("pixel-classification", ["--ndim", "2"]),
+        ("object-classification", ["--ndim", "2"]),
+        ("tracking", []),
+    ],
+)
+def test_cli_default_tiling_is_the_same_for_all_tools(make_napari_viewer_proxy, monkeypatch, tool, options):
+    """Every annotator must compute the embeddings with the same default tiling for a large image."""
+    image = np.zeros((2, 2048, 2048) if tool == "tracking" else (2048, 2048), dtype="uint8")
+    captured, widget, viewer = _run_annotator_cli(make_napari_viewer_proxy, monkeypatch, tool, image, options)
+
+    assert captured["tile_shape"] == DEFAULT_TILE_SHAPE
+    assert captured["halo"] == DEFAULT_HALO
+    # The tool must also show the settings it used, so the GUI does not claim a different tiling.
+    assert widget.tiling == "yes"
+    assert (widget.tile_x, widget.tile_y) == DEFAULT_TILE_SHAPE
+    assert (widget.halo_x, widget.halo_y) == DEFAULT_HALO
+    viewer.close()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize(
+    "tool, options",
+    [
+        ("segmentation", ["--ndim", "2"]),
+        ("pixel-classification", ["--ndim", "2"]),
+        ("object-classification", ["--ndim", "2"]),
+    ],
+)
+def test_cli_reuses_cached_embeddings(make_napari_viewer_proxy, monkeypatch, tmp_path, tool, options):
+    """Passing an embedding path must reuse the cache instead of recomputing it with another tiling."""
+    from types import SimpleNamespace
+    from micro_sam.util import _open_embeddings, _write_embedding_signature
+
+    image = np.zeros((2048, 2048), dtype="uint8")
+    predictor = SimpleNamespace(model_type="hvit_t_cells", model_name="hvit_t_cells", _hash=None, device="cpu")
+
+    # Embeddings computed earlier (e.g. by another tool) with a tiling that is not the default.
+    embedding_path = str(tmp_path / "embeddings.zarr")
+    f = _open_embeddings(embedding_path, mode="a")
+    _write_embedding_signature(f, image, predictor, (420, 420), (64, 64), input_size=None, original_size=None)
+    getattr(f, "file", f).close()
+
+    captured, widget, viewer = _run_annotator_cli(
+        make_napari_viewer_proxy, monkeypatch, tool, image, [*options, "-e", embedding_path],
+    )
+    assert captured["save_path"] == embedding_path
+    assert captured["tile_shape"] == (420, 420)
+    assert captured["halo"] == (64, 64)
+    assert (widget.tile_x, widget.tile_y) == (420, 420)
+    assert (widget.halo_x, widget.halo_y) == (64, 64)
+    viewer.close()
+
+
 def test_progress_bar_initial_description(monkeypatch):
     """A progress description supplied at creation is visible before the backend reports a total."""
     from micro_sam.sam_annotator import _widgets

@@ -1520,6 +1520,54 @@ def get_instance_segmentation_generator(
     if segmentation_mode is None:
         segmentation_mode = DEFAULT_SEGMENTATION_MODE_WITH_DECODER if decoder is not None else "amg"
 
+    # Record what the generator was built from, so the tiled and non-tiled variants of the same
+    # engine can be swapped without reloading the weights (see `retile_instance_segmentation_generator`).
+    config = dict(
+        model=model, decoder=decoder, is_tiled=is_tiled, segmentation_mode=segmentation_mode,
+        device=device, inference_device=inference_device, ndim=ndim, **kwargs,
+    )
+    segmenter = _build_instance_segmentation_generator(
+        model, decoder, is_tiled, segmentation_mode, device, inference_device, ndim, **kwargs
+    )
+    try:
+        segmenter._generator_config = config
+    except AttributeError:  # A generator that takes no attributes simply cannot be swapped.
+        pass
+    return segmenter
+
+
+def retile_instance_segmentation_generator(segmenter: AutoSegBase, is_tiled: bool) -> AutoSegBase:
+    """Return the same generator, or the other tiling variant of it, rebuilt from its build config.
+
+    The tiled and non-tiled generators are different classes, so a front-end that decides on tiling
+    only once it has seen the image (see `micro_sam.v2.automatic_segmentation`) has to be able to
+    swap them. The swap reuses the already loaded model and decoder, so it costs nothing but the
+    wrapper, and the counterpart is cached on both objects so repeated swaps are free. A generator
+    built by hand (without a config) is returned unchanged.
+
+    Args:
+        segmenter: The automatic instance segmentation generator.
+        is_tiled: Whether the returned generator should be the tiled one.
+
+    Returns:
+        The generator matching `is_tiled`.
+    """
+    config = getattr(segmenter, "_generator_config", None)
+    if config is None or bool(config["is_tiled"]) == bool(is_tiled):
+        return segmenter
+
+    counterpart = getattr(segmenter, "_retiled_counterpart", None)
+    if counterpart is None:
+        counterpart = get_instance_segmentation_generator(**{**config, "is_tiled": is_tiled})
+        segmenter._retiled_counterpart = counterpart
+        counterpart._retiled_counterpart = segmenter
+    return counterpart
+
+
+def _build_instance_segmentation_generator(
+    model, decoder, is_tiled, segmentation_mode, device, inference_device, ndim, **kwargs
+):
+    """Build the generator for one engine and tiling; see `get_instance_segmentation_generator`."""
     if segmentation_mode.lower() == "amg":
         if model is None:
             raise ValueError("The 'amg' segmentation mode requires a SAM2 'model'.")
