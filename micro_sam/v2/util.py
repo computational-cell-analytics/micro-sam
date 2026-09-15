@@ -326,19 +326,19 @@ FINETUNED_MODELS = [
 DEFAULT_MODEL = "hvit_t_cells"
 
 FINETUNED_URLS = {
-    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/iqNv2cjhPMGOo9J/download",
-    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/VlXsFg16Qh2SsiA/download",
-    "hvit_s_cells": "https://owncloud.gwdg.de/index.php/s/pB9FrVSjK9UztCe/download",
-    "hvit_s_cells_decoder": "https://owncloud.gwdg.de/index.php/s/NpiBiWnzqRXYkdc/download",
-    "hvit_b_cells": "https://owncloud.gwdg.de/index.php/s/WPUYBdknWgdUnf3/download",
-    "hvit_b_cells_decoder": "https://owncloud.gwdg.de/index.php/s/QrOJJaolizanXIu/download",
-    "hvit_l_cells": "https://owncloud.gwdg.de/index.php/s/kxFOH9YwlWEoyjf/download",
-    "hvit_l_cells_decoder": "https://owncloud.gwdg.de/index.php/s/xvu7k43mYOoKFNH/download",
+    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/EfoAFD4lky7o5Id/download",  # v5a
+    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/gdllGHhLQOw0ieb/download",  # v5a
+    "hvit_s_cells": "https://owncloud.gwdg.de/index.php/s/pB9FrVSjK9UztCe/download",  # v3
+    "hvit_s_cells_decoder": "https://owncloud.gwdg.de/index.php/s/NpiBiWnzqRXYkdc/download",  # v3
+    "hvit_b_cells": "https://owncloud.gwdg.de/index.php/s/WPUYBdknWgdUnf3/download",  # v3
+    "hvit_b_cells_decoder": "https://owncloud.gwdg.de/index.php/s/QrOJJaolizanXIu/download",  # v3
+    "hvit_l_cells": "https://owncloud.gwdg.de/index.php/s/kxFOH9YwlWEoyjf/download",  # v3
+    "hvit_l_cells_decoder": "https://owncloud.gwdg.de/index.php/s/xvu7k43mYOoKFNH/download",  # v3
 }
 
 FINETUNED_HASHES = {
-    "hvit_t_cells": "xxh128:0d1873746eda30f2c1b1fd3edd9a82d0",
-    "hvit_t_cells_decoder": "xxh128:301163dbb748519da1e03057789f1ccf",
+    "hvit_t_cells": "xxh128:a10e96b931df580db06f6af99b45ad9f",
+    "hvit_t_cells_decoder": "xxh128:39217ba5f87d9ae83bc8e40b249c7116",
     "hvit_s_cells": "xxh128:a197591b47093c8ef53b0187e3811911",
     "hvit_s_cells_decoder": "xxh128:afe742f97f2b72de4c60f46691788c79",
     "hvit_b_cells": "xxh128:10142e4120285a8e9c2ee9eb5d4ef9d4",
