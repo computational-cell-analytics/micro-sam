@@ -681,7 +681,7 @@ REGISTRY_EXPERIMENT_FOLDER = (
 REGISTRY_DATASETS = [
     "livecell", "tissuenet", "dynamicnuclearnet", "deepbacs_label_free", "deepbacs_fluorescence", "yeaz",
     "covid_if_cells", "covid_if_nuclei", "deepseas",
-    "neurips_cellseg_fluorescence", "neurips_cellseg_label_free", "gonuclear", "platynereis_nuclei", "cremi", "snemi",
+    "neurips_cellseg_fluorescence", "neurips_cellseg_label_free", "gonuclear", "platynereis_cells", "cremi", "snemi",
     "humanneurons",
     # Histopathology, tuned on the pools of common.VAL_SPLITS (loader val splits, or train where none exists).
     "cpm17", "glysac", "histo_miner", "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc", "monuseg",

@@ -95,7 +95,7 @@ SAM_V1_MODEL_TYPE = "vit_b_lm"
 
 # CellViT++ ships a whole-slide pipeline that needs pathopatch, ray and openslide. The patch-level model and its
 # post-processor are imported from the checkout instead, which only adds einops to the environment.
-CELLVIT_ROOT = os.path.expanduser("~/cellvit-plus-plus")
+CELLVIT_ROOT = os.path.expanduser("~/CellViT-plus-plus")
 CELLVIT_CHECKPOINT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/cellvit"
 CELLVIT_CHECKPOINTS = {
     "sam_h_x40": "CellViT-SAM-H-x40.pth",

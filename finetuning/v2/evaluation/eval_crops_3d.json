@@ -752,6 +752,26 @@
      [24, 1536, 1536]
     ]
    }
+  },
+  "platynereis_cells": {
+   "crop_shape": [32, 512, 512],
+   "note": "The crops tile the test region of volume 9. The neuropil carries the ignore label and is not scored.",
+   "starts": {
+    "train_data_membrane_09.n5": [
+     [12, 128, 128],
+     [12, 128, 640],
+     [12, 640, 128],
+     [12, 640, 640],
+     [44, 128, 128],
+     [44, 128, 640],
+     [44, 640, 128],
+     [44, 640, 640],
+     [76, 128, 128],
+     [76, 128, 640],
+     [76, 640, 128],
+     [76, 640, 640]
+    ]
+   }
   }
  }
 }
