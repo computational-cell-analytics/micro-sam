@@ -50,8 +50,9 @@ tooltips = {
         "halo_z": "Number of overlapping slices between z-blocks for 3d automatic segmentation, used as context and discarded when stitching.",  # noqa
         # Settings for the SAM2 automatic segmentation modes.
         "mode": (
-            "Select the automatic segmentation mode: 'apg' (prompt-based, the default), "
-            "'sparse' (flow-based) or 'dense' (multicut-based). All of them need a model with a decoder."
+            "Select the automatic segmentation mode: 'apg' (prompt-based, default on CUDA/MPS), "
+            "'sparse' (flow-based AIS, default on CPU) or 'dense' (multicut-based). "
+            "All of them need a model with a decoder."
         ),
         "foreground_threshold": "Enter the threshold for binarizing the foreground probability map.",
         "density_threshold": "Enter the convergence-density threshold used for seed extraction.",

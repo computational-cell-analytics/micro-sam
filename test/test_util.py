@@ -190,7 +190,9 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(rgb.dtype, np.uint8)
         self.assertTrue(np.array_equal(rgb[..., 0], rgb[..., 1]))
         self.assertFalse(np.any(rgb[..., 2]))
-        self.assertTrue(np.array_equal(rgb, _to_image(image)))
+        self.assertTrue(np.array_equal(rgb[..., :2], normalize_raw(image, axis=(0, 1), output_dtype="uint8")))
+        # The legacy SAM1 conversion remains min-max; SAM2 follows percentile-normalized training.
+        self.assertFalse(np.array_equal(rgb, _to_image(image)))
 
     def test_normalization_invalidates_incompatible_embeddings(self):
         from types import SimpleNamespace
@@ -199,7 +201,7 @@ class TestUtil(unittest.TestCase):
         from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING
         from micro_sam.v2.util import _check_saved_embeddings, _normalization_bounds_digest
 
-        self.assertEqual(IMAGE_PREPROCESSING, "minmax_per_channel")
+        self.assertEqual(IMAGE_PREPROCESSING, "percentile_2_98_per_channel_uint8_v2")
         self.assertEqual(VIDEO_PREPROCESSING, "percentile_2_98_per_channel_torch_resize_v3")
 
         predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test", device="cpu")
@@ -225,7 +227,9 @@ class TestUtil(unittest.TestCase):
         # A complete cache is reused only under the policy it was written with.
         self.assertFalse(run(full_cache(IMAGE_PREPROCESSING), IMAGE_PREPROCESSING))
         self.assertFalse(run(full_cache(VIDEO_PREPROCESSING, norm_bounds), VIDEO_PREPROCESSING, norm_bounds))
-        # A 2d min-max cache is not reused for the 3d percentile policy and vice versa.
+        # Min-max embeddings from older versions must be recomputed, including partial caches.
+        self.assertTrue(run(full_cache("minmax_per_channel"), IMAGE_PREPROCESSING))
+        # Image and volume preprocessing policies remain distinct.
         self.assertTrue(run(full_cache(IMAGE_PREPROCESSING), VIDEO_PREPROCESSING, norm_bounds))
         self.assertTrue(run(full_cache(VIDEO_PREPROCESSING, norm_bounds), IMAGE_PREPROCESSING))
         # A missing tag is stale.
@@ -244,6 +248,7 @@ class TestUtil(unittest.TestCase):
 
         # Partial caches (no 'input_size') resume only when the tag matches the requested policy.
         self.assertTrue(run(PartialEmbeddings(), IMAGE_PREPROCESSING))
+        self.assertTrue(run(PartialEmbeddings("minmax_per_channel"), IMAGE_PREPROCESSING))
         self.assertTrue(run(PartialEmbeddings(VIDEO_PREPROCESSING), IMAGE_PREPROCESSING))
         self.assertFalse(run(PartialEmbeddings(IMAGE_PREPROCESSING), IMAGE_PREPROCESSING))
         self.assertFalse(

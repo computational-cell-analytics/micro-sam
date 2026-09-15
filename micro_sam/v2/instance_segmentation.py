@@ -696,6 +696,40 @@ def _convert_automatic_qlora_state(model, model_state):
     return converted_state
 
 
+# Older torch-em has no 'initial_features' in UNETR3D's signature, so '**kwargs' swallows it.
+CONFIGURABLE_DECODER_WIDTH_VERSION = "0.10.3"
+
+
+def _check_decoder_width(model, initial_features):
+    """Check that the decoder was built at the width the checkpoint was trained with.
+
+    Without this an outdated torch-em surfaces as size mismatches from `load_state_dict`, which do
+    not point at the dependency behind them.
+
+    Args:
+        model: The freshly built UniSAM2 model.
+        initial_features: The decoder width read off the checkpoint.
+
+    Raises:
+        RuntimeError: If the built decoder is not `initial_features` wide.
+    """
+    # A stub or a custom module may have no 'out_conv'; this is a diagnostic, so it is skipped there.
+    out_conv = getattr(model, "out_conv", None)
+    if out_conv is None:
+        return
+
+    built_features = out_conv.weight.shape[1]
+    if built_features == initial_features:
+        return
+
+    import torch_em
+    raise RuntimeError(
+        f"The UniSAM2 decoder was built {built_features} channels wide, but the checkpoint was trained "
+        f"{initial_features} wide. The installed torch-em ({torch_em.__version__}) ignores the decoder "
+        f"width micro-sam requests. Update it to {CONFIGURABLE_DECODER_WIDTH_VERSION} or later."
+    )
+
+
 def get_unisam2_model(
     checkpoint_path, device=None, encoder=_DEFAULT_MODEL, output_channels=4, peft_kwargs=None, encoder_model_type=None
 ):
@@ -751,6 +785,7 @@ def get_unisam2_model(
     initial_features = model_state["out_conv.weight"].shape[1]
 
     model = UniSAM2(encoder=encoder, output_channels=output_channels, initial_features=initial_features, device=device)
+    _check_decoder_width(model, initial_features)
     if peft_kwargs and is_qlora:
         model_state = _convert_automatic_qlora_state(model, model_state)
     model.load_state_dict(model_state)

@@ -1643,3 +1643,121 @@ def test_tiled_apg_generate_passes_spatial_shape_for_channel_last_image(monkeypa
 
     assert calls["shape"] == (8, 12)
     assert segmentation.shape == (8, 12)
+
+
+@pytest.mark.parametrize("n_prompts", [0, 5])
+def test_apg_proposal_progress_counts_completed_batches(monkeypatch, n_prompts):
+    segmenter = object.__new__(AutomaticPromptGenerator)
+    segmenter._is_initialized = True
+    segmenter._model_type = "hvit_t_cells"
+    segmenter._prediction = np.zeros((4, 16, 16), dtype="float32")
+    predictor = _RecordingPredictor((16, 16))
+    segmenter._predictor = predictor
+    prompts = None if n_prompts == 0 else {
+        "points": np.full((n_prompts, 1, 2), 6, dtype="float32"),
+        "point_labels": np.ones((n_prompts, 1), dtype="int32"),
+    }
+    monkeypatch.setattr(automatic_prompt_generation, "derive_point_prompts", lambda *a, **k: prompts)
+    stages, updates = [], []
+    proposals = segmenter.propose(
+        batch_size=2, pbar_init=lambda total, desc: stages.append((total, desc)),
+        pbar_update=lambda n: updates.append((n, len(predictor.calls))),
+    )
+    assert len(proposals) == n_prompts
+    assert stages[0] == (1, "APG: deriving prompts")
+    assert updates[0] == (1, 0)
+    if n_prompts:
+        assert stages[1] == (3, "APG: prompting batches")
+        assert updates[1:] == [(1, 1), (1, 2), (1, 3)]
+    else:
+        assert len(stages) == len(updates) == 1
+
+
+@pytest.mark.parametrize("execution", ["thread", "process"])
+def test_tiled_apg_progress_is_live_and_on_the_calling_thread(monkeypatch, execution):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    caller = threading.get_ident()
+    received = threading.Event()
+    stages, updates = [], []
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor())
+    segmenter.initialize(np.zeros((8, 8, 3), dtype="uint8"), tile_shape=(4, 4), halo=(1, 1))
+    segmenter._execution = execution
+
+    def dispatch(params, *args):
+        assert "pbar_init" not in params and "pbar_update" not in params
+        return lambda block, block_id: np.zeros((4, 4), dtype="uint32"), 2
+
+    monkeypatch.setattr(segmenter, f"_{execution}_dispatch", dispatch)
+
+    def stitch(*, segmentation_function, shape, **kwargs):
+        assert not torch.is_grad_enabled()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for block_id in range(4):
+                pool.submit(segmentation_function, np.zeros((4, 4, 3)), block_id).result()
+                # The callback must run while stitching is still active, not after it returns.
+                assert received.wait(timeout=5)
+        return np.zeros(shape, dtype="uint32")
+
+    monkeypatch.setattr(automatic_prompt_generation, "bp", types.SimpleNamespace(
+        segmentation=types.SimpleNamespace(stitch_segmentation=stitch),
+    ))
+
+    def update(n):
+        assert threading.get_ident() == caller
+        updates.append(n)
+        received.set()
+
+    result = segmenter.generate(pbar_init=lambda n, desc: stages.append((n, desc)), pbar_update=update)
+    assert result.shape == (8, 8)
+    assert stages == [(4, "APG: segmenting tiles")]
+    assert updates == [1, 1, 1, 1]
+
+
+def test_apg_parallel_progress_propagates_errors():
+    updates = []
+
+    def fail(update):
+        update(1)
+        raise RuntimeError("segmentation failed")
+
+    with pytest.raises(RuntimeError, match="segmentation failed"):
+        automatic_prompt_generation._run_with_progress(fail, updates.append)
+    assert updates == [1]
+
+
+def test_volume_apg_progress_reports_scoring_and_propagation(monkeypatch):
+    import threading
+
+    shape = (32, 32)
+    mask = _mask(shape, slice(4, 12), slice(4, 12))
+    predictor = _VolumePredictor([([mask, mask], [0.9, 0.8]), ([mask], [0.9])])
+    segmenter, _ = _volume_generator(monkeypatch, (3, *shape), predictor)
+    segmenter._model_type = "hvit_t_cells"
+    monkeypatch.setattr(automatic_prompt_generation, "derive_volume_prompts", lambda *a, **k: _two_anchor_prompts())
+    propagator = _RecordingPropagator()
+    propagator.predictor_devices = [(predictor, "cpu")]
+    segmenter._propagator = propagator
+    segmenter._scoring_predictor_pool = [predictor]
+    stages, counts = [], []
+    caller = threading.get_ident()
+
+    def initialize(total, description):
+        assert threading.get_ident() == caller
+        stages.append((total, description))
+        counts.append(0)
+
+    def update(n):
+        assert threading.get_ident() == caller
+        counts[-1] += n
+
+    result = segmenter.generate(
+        refinement=None, propagation_waves=1, pbar_init=initialize, pbar_update=update,
+    )
+    assert result.shape == (3, *shape)
+    assert [description for _, description in stages] == [
+        "APG: deriving volume prompts", "APG: scoring anchor slices",
+        "APG: propagation passes (wave 1/1)", "APG: merging volume masks",
+    ]
+    assert counts == [total for total, _ in stages] == [1, 2, 2, 1]

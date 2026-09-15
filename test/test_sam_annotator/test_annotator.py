@@ -5,9 +5,59 @@ import pytest
 import torch
 from skimage.data import binary_blobs
 
-from micro_sam.v2.util import DEFAULT_MODEL
+from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_SHAPE, DEFAULT_HALO
 from micro_sam.sam_annotator.annotator import annotator, detect_ndim, detect_ndim_from_viewer, Annotator
 from micro_sam._test_util import check_layer_initialization
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize(
+    "shape, ndim, options, expected_tile, expected_halo",
+    [
+        ((2048, 2048), 2, [], DEFAULT_TILE_SHAPE, DEFAULT_HALO),
+        ((2048, 2048, 3), 2, [], DEFAULT_TILE_SHAPE, DEFAULT_HALO),
+        ((3, 2048, 1024), 2, [], DEFAULT_TILE_SHAPE, DEFAULT_HALO),
+        ((768, 768), 2, [], None, None),
+        ((768, 769), 2, [], DEFAULT_TILE_SHAPE, DEFAULT_HALO),
+        ((4, 128, 2048), 3, [], DEFAULT_TILE_SHAPE, DEFAULT_HALO),
+        ((2048, 32, 32), 3, [], None, None),
+        ((2048, 2048), 2, ["--tile_shape", "420", "420", "--overlap", "64", "64"], (420, 420), (64, 64)),
+        ((2048, 2048), 2, ["--overlap", "64", "64"], DEFAULT_TILE_SHAPE, (64, 64)),
+    ],
+)
+def test_cli_annotator_default_tiling(
+    make_napari_viewer_proxy, monkeypatch, shape, ndim, options, expected_tile, expected_halo,
+):
+    """CLI startup must resolve tiling before computing embeddings and show the same settings."""
+    from click.testing import CliRunner
+    from micro_sam._cli import cli
+    from micro_sam import util
+    from micro_sam.sam_annotator._state import AnnotatorState
+    import napari
+
+    image = np.zeros(shape, dtype="uint8")
+    viewer = make_napari_viewer_proxy()
+    captured = {}
+    monkeypatch.setattr(util, "load_image_data", lambda *args, **kwargs: image)
+    monkeypatch.setattr(napari, "Viewer", lambda: viewer)
+    monkeypatch.setattr(napari, "run", lambda: None)
+    monkeypatch.setattr(
+        AnnotatorState, "initialize_predictor", lambda self, image, **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(Annotator, "_update_image", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(
+        cli, ["annotator", "segmentation", "-i", "image.tif", "--ndim", str(ndim), *options],
+    )
+    assert result.exit_code == 0, result.output or repr(result.exception)
+    assert captured["tile_shape"] == expected_tile
+    assert captured["halo"] == expected_halo
+    widget = AnnotatorState().widgets["embeddings"]
+    assert widget.tiling == ("no" if expected_tile is None else "yes")
+    if expected_tile is not None:
+        assert (widget.tile_x, widget.tile_y) == expected_tile
+        assert (widget.halo_x, widget.halo_y) == expected_halo
+    viewer.close()
 
 
 def test_progress_bar_initial_description(monkeypatch):
@@ -534,9 +584,13 @@ class TestAutoSegVolumeDispatch:
         )
 
         calls = {}
+        progress_events = []
 
         def fake_run_apg(state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
             calls.update(run_raw_shape=tuple(run_raw.shape), ndim=ndim, z=z)
+            for total, description in [(2, "Prompt batches"), (1, "Merge masks")]:
+                pbar_init(total, description)
+                pbar_update(total)
             return np.zeros(run_raw.shape if ndim == 3 else run_raw.shape[-2:], dtype="uint32")
 
         # Duck-typed stand-in so we exercise the '__call__' dispatch without instantiating a QWidget.
@@ -546,9 +600,10 @@ class TestAutoSegVolumeDispatch:
         )
 
         def fake_pbar():
-            signal = lambda: SimpleNamespace(emit=lambda *a, **k: None)  # noqa
+            signal = lambda name: SimpleNamespace(emit=lambda *args: progress_events.append((name, args)))  # noqa
             signals = SimpleNamespace(
-                pbar_total=signal(), pbar_description=signal(), pbar_update=signal(), pbar_stop=signal(),
+                pbar_total=signal("total"), pbar_description=signal("description"),
+                pbar_update=signal("update"), pbar_stop=signal("stop"), pbar_reset=signal("reset"),
             )
             return SimpleNamespace(), signals
 
@@ -568,6 +623,11 @@ class TestAutoSegVolumeDispatch:
         )
 
         AutoSegmentWidget.__call__(widget)
+        if calls:
+            assert [event for event in progress_events if event[0] != "description"] == [
+                ("reset", ()), ("total", (2,)), ("update", (2,)),
+                ("reset", ()), ("total", (1,)), ("update", (1,)), ("stop", ()),
+            ]
         return calls
 
     def test_apply_to_volume_off_runs_current_slice_only(self, monkeypatch):
@@ -688,8 +748,8 @@ class TestApgModeIsHiddenOnCpu:
         self._load_decoder("cpu")
         autoseg._reset_segmentation_mode(True)
 
-        assert self._choices(autoseg) == ["apg", "sparse", "dense"]
-        assert autoseg.mode == "apg"
+        assert self._choices(autoseg) == ["sparse", "apg", "dense"]
+        assert autoseg.mode == "sparse"
         viewer.close()
 
     def test_a_3d_annotator_drops_apg_on_the_cpu(self, make_napari_viewer_proxy):
@@ -914,13 +974,28 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch, z):
     ):
         setattr(widget, name, MethodType(getattr(AutoSegmentWidget, name), widget))
 
-    result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=z)
-    second_result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=z)
+    stages, updates = [], []
+
+    def pbar_init(total, description):
+        stages.append((total, description))
+
+    result = AutoSegmentWidget._run_apg(
+        widget, state, np.zeros((8, 8)), ndim=2, z=z,
+        pbar_init=pbar_init, pbar_update=updates.append,
+    )
+    second_result = AutoSegmentWidget._run_apg(
+        widget, state, np.zeros((8, 8)), ndim=2, z=z,
+        pbar_init=pbar_init, pbar_update=updates.append,
+    )
 
     assert calls == {"cache": 1, "factory": 1}
     assert prompt_generator.state["image_embeddings"] is image_embeddings
     assert prompt_generator.state.get("i") == z
     assert prompt_generator.propose_calls == 1
+    assert prompt_generator.propose_kwargs["pbar_init"] is pbar_init
+    assert prompt_generator.propose_kwargs["pbar_update"] == updates.append
+    assert stages == [(1, "APG: merging masks")] * 2
+    assert updates == [1, 1]
     assert prompt_generator.select_kwargs == {"score_threshold": 0.6}
     assert np.array_equal(result, second_result)
 
@@ -929,7 +1004,10 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch, z):
     widget._segmenter_key = None
     widget._proposals = None
     widget._proposals_key = None
-    third_result = AutoSegmentWidget._run_apg(widget, state, np.zeros((8, 8)), ndim=2, z=z)
+    third_result = AutoSegmentWidget._run_apg(
+        widget, state, np.zeros((8, 8)), ndim=2, z=z,
+        pbar_init=pbar_init, pbar_update=updates.append,
+    )
 
     assert calls == {"cache": 1, "factory": 2}
     assert prompt_generator.propose_calls == 2
@@ -993,16 +1071,29 @@ def test_tiled_apg_widget_initializes_from_the_raw_image(monkeypatch, z):
     )
     widget._release_segmenter = MethodType(AutoSegmentWidget._release_segmenter, widget)
 
+    def pbar_init(total, desc):
+        pass
+
+    def pbar_update(n):
+        pass
+
     raw = np.zeros((8, 8), dtype="uint8")
-    result = AutoSegmentWidget._run_apg(widget, state, raw, ndim=2, z=z)
-    second_result = AutoSegmentWidget._run_apg(widget, state, raw, ndim=2, z=z)
+    result = AutoSegmentWidget._run_apg(
+        widget, state, raw, ndim=2, z=z, pbar_init=pbar_init, pbar_update=pbar_update,
+    )
+    second_result = AutoSegmentWidget._run_apg(
+        widget, state, raw, ndim=2, z=z, pbar_init=pbar_init, pbar_update=pbar_update,
+    )
 
     assert calls == {"factory": 1, "initialize": 1, "generate": 2}
     assert prompt_generator.image is raw
     assert prompt_generator.initialize_kwargs == {
         "ndim": 2, "tile_shape": (4, 4), "halo": (1, 1), "verbose": False,
     }
-    assert prompt_generator.generate_kwargs == {"candidate_threshold": 1.5, "score_threshold": 0.6}
+    assert prompt_generator.generate_kwargs == {
+        "candidate_threshold": 1.5, "score_threshold": 0.6,
+        "pbar_init": pbar_init, "pbar_update": pbar_update,
+    }
     assert np.array_equal(result, second_result)
 
 
@@ -1016,25 +1107,29 @@ class TestAutoSegDefaultMode:
         assert has_registered_decoder(DEFAULT_MODEL) is True  # the Microscopy default has a decoder
         assert has_registered_decoder("hvit_t") is False  # a plain backbone does not
 
-    def test_autoseg_defaults_to_apg_for_decoder_model(self, make_napari_viewer_proxy):
-        # Regression: with the Microscopy default model (which has a decoder) the auto-seg widget must
-        # start in 'apg', not 'amg', even before embeddings are computed.
+    @pytest.mark.parametrize("device, expected", [("cpu", "sparse"), ("cuda", "apg"), ("mps", "apg")])
+    def test_autoseg_default_for_decoder_model(self, make_napari_viewer_proxy, monkeypatch, device, expected):
+        from micro_sam.sam_annotator import _widgets
+        monkeypatch.setattr(_widgets.util, "get_device", lambda requested=None: requested or device)
+        # Before embeddings are computed, choose the default for the available hardware.
         viewer = make_napari_viewer_proxy()
         widget = Annotator(viewer, ndim=2)
         autoseg = widget._widgets["autosegment"]
         assert autoseg.with_decoder is True
-        assert autoseg.mode == "apg"
-        assert autoseg.mode_dropdown.currentText() == "apg"
+        assert autoseg.mode == expected
+        assert autoseg.mode_dropdown.currentText() == expected
         choices = [autoseg.mode_dropdown.itemText(i) for i in range(autoseg.mode_dropdown.count())]
-        assert choices == ["apg", "sparse", "dense"]
-        # The settings panel built at startup is the APG one.
-        assert hasattr(autoseg, "candidate_threshold_param")
+        assert choices == (["sparse", "apg", "dense"] if device == "cpu" else ["apg", "sparse", "dense"])
+        parameter = "density_threshold_param" if expected == "sparse" else "candidate_threshold_param"
+        assert hasattr(autoseg, parameter)
         viewer.close()
 
-    def test_autoseg_is_disabled_without_a_decoder(self, make_napari_viewer_proxy):
+    def test_autoseg_is_disabled_without_a_decoder(self, make_napari_viewer_proxy, monkeypatch):
         # Every mode runs off the decoder predictions - AMG is not offered in the annotator - so a
         # model without a decoder disables the run button instead of falling back to another mode.
         from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+        from micro_sam.sam_annotator import _widgets
+        monkeypatch.setattr(_widgets.util, "get_device", lambda requested=None: requested or "cuda")
 
         viewer = make_napari_viewer_proxy()
         autoseg = AutoSegmentWidget(viewer, with_decoder=False, volumetric=False)
@@ -1240,3 +1335,81 @@ class TestAutoSegDefaultMode:
         assert autosegment._decoder_state is None
         assert autosegment._decoder_state_key is None
         assert autosegment._decoder_state_save_path is None
+
+
+@pytest.mark.parametrize("mode", ["apg", "sparse"])
+def test_tracking_progress_handles_apg_stages(monkeypatch, mode):
+    from types import SimpleNamespace
+    from micro_sam.sam_annotator import _widgets
+
+    bar = SimpleNamespace(n=0, total=0, closed=False)
+    descriptions = []
+
+    def signal(callback):
+        return SimpleNamespace(emit=callback)
+
+    def update(n):
+        bar.n += n
+        assert bar.n <= bar.total
+
+    signals = SimpleNamespace(
+        pbar_reset=signal(lambda: setattr(bar, "n", 0)),
+        pbar_total=signal(lambda n: setattr(bar, "total", n)),
+        pbar_update=signal(update),
+        pbar_description=signal(descriptions.append),
+        pbar_stop=signal(lambda: setattr(bar, "closed", True)),
+    )
+    monkeypatch.setattr(_widgets, "_create_pbar_for_threadworker", lambda: (bar, signals))
+    raw = np.zeros((2, 8, 8), dtype="uint8")
+    layer = SimpleNamespace(data=np.zeros_like(raw, dtype="uint32"), refresh=lambda: None)
+
+    def segment(state, frame, frame_id, pbar_init, pbar_update):
+        stages = [(3, "APG: prompting batches"), (1, "APG: merging masks")] if mode == "apg" else [(1, "Decoder")]
+        for total, description in stages:
+            pbar_init(total, description)
+            for _ in range(total):
+                pbar_update(1)
+        return np.zeros(frame.shape, dtype="uint32")
+
+    widget = SimpleNamespace(
+        mode=mode, _viewer=SimpleNamespace(layers={"auto_segmentation": layer}),
+        _n_inplane_tiles=lambda state, raw: 1, _run_frame_segmentation=segment,
+        _empty_tracking_warning=lambda: None,
+    )
+    _widgets.AutoTrackWidget._track_timeseries(widget, SimpleNamespace(), raw)
+    assert bar.closed
+    if mode == "apg":
+        assert "Frame 2/2 - APG: prompting batches" in descriptions
+        assert bar.n == bar.total == 1
+    else:
+        assert bar.n == bar.total == 2
+
+
+@pytest.mark.parametrize("accelerator", ["cuda", "mps"])
+def test_2d_autoseg_default_follows_loaded_device(qtbot, monkeypatch, accelerator):
+    from types import SimpleNamespace
+    from micro_sam.sam_annotator import _widgets
+    from micro_sam.sam_annotator._state import AnnotatorState
+
+    # An accelerator is available, but the user can explicitly load the model on CPU.
+    monkeypatch.setattr(_widgets.util, "get_device", lambda requested=None: requested or accelerator)
+    widget = _widgets.AutoSegmentWidget(viewer=None, with_decoder=True, volumetric=False)
+    qtbot.addWidget(widget)
+    assert widget.mode == "apg"
+
+    for device, expected in [("cpu", "sparse"), (accelerator, "apg"), ("cpu", "sparse")]:
+        AnnotatorState().decoder = SimpleNamespace(
+            parameters=lambda: iter([SimpleNamespace(device=torch.device(device))]),
+        )
+        widget._reset_segmentation_mode(True)
+        assert widget.mode == widget.mode_dropdown.currentText() == expected
+        assert widget.run_button.isEnabled()
+        assert "apg" in widget._mode_choices()
+
+        # Re-syncing the same device must preserve an explicit user choice.
+        widget.mode_dropdown.setCurrentText("apg" if device == "cpu" else "dense")
+        chosen = widget.mode
+        settings = widget.settings
+        widget._reset_segmentation_mode(True)
+        assert widget.mode == chosen
+        assert widget.settings is settings

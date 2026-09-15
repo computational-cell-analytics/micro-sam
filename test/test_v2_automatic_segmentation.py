@@ -936,3 +936,27 @@ def test_decoder_output_is_moved_to_cpu_before_the_float_cast():
 
     assert out is array
     assert calls == ["detach", "cpu", "float"]
+
+
+def test_decoder_width_mismatch_names_torch_em():
+    """An outdated torch-em builds a fixed-width decoder; say so instead of dumping size mismatches."""
+    from micro_sam.v2.instance_segmentation import CONFIGURABLE_DECODER_WIDTH_VERSION, _check_decoder_width
+
+    # Only 'out_conv.weight.shape[1]' is read, so a bare namespace stands in for the built model.
+    model = types.SimpleNamespace(out_conv=types.SimpleNamespace(weight=torch.zeros(4, 64, 1, 1, 1)))
+
+    _check_decoder_width(model, 64)  # Matching width: no error.
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _check_decoder_width(model, 32)
+    message = str(excinfo.value)
+    assert "torch-em" in message
+    assert CONFIGURABLE_DECODER_WIDTH_VERSION in message
+    assert "64" in message and "32" in message
+
+
+def test_decoder_width_check_skips_models_without_out_conv():
+    """The check is a diagnostic, so a module that has no 'out_conv' passes through it untouched."""
+    from micro_sam.v2.instance_segmentation import _check_decoder_width
+
+    _check_decoder_width(types.SimpleNamespace(), 32)
