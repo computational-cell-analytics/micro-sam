@@ -4,6 +4,7 @@ Supported methods:
   cellpose: CellPose generalist models (cpsam, cpsam_v2, cpdino, cpdino-vitb; cyto3 and nuclei from CellPose 3)
   stardist: StarDist pretrained (2D_versatile_fluo / 3D_demo)
   cellsam: CellSAM pipeline (2d only)
+  cellvit: CellViT++ nucleus segmentation (2d histopathology only)
   microsam_ais: micro-sam v1 automatic instance segmentation
   microsam_apg: micro-sam v1 automatic prompt generation
   segneuron: SegNeuron (3d EM only)
@@ -15,6 +16,7 @@ Usage examples:
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method cellpose -m cyto3
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method stardist
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method cellsam
+    python evaluate_automatic_baselines.py -d pannuke -e <exp> --method cellvit -m sam_h_x40
     python evaluate_automatic_baselines.py -d embedseg -e <exp> --method microsam_ais -m vit_b
     python evaluate_automatic_baselines.py -d cremi -e <exp> --method segneuron
     python evaluate_automatic_baselines.py -d gonuclear -e <exp> --method focus3d -m nuclei
@@ -37,7 +39,8 @@ from common import (
 
 LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
 EM_DATASETS = set(DATASETS_EM)
-METHODS = ["cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron", "focus3d"]
+HP_DATASETS = set(DATASETS_HP)
+METHODS = ["cellpose", "stardist", "cellsam", "cellvit", "microsam_ais", "microsam_apg", "segneuron", "focus3d"]
 
 SEGNEURON_ROOT = "/mnt/vast-nhr/home/archit/u12090/SegNeuron"
 SEGNEURON_CHECKPOINT = "/mnt/vast-nhr/projects/cidas/cca/models/segneuron/SegNeuronModel.ckpt"
@@ -89,6 +92,17 @@ STARDIST_3D_MODEL = "3D_demo"
 
 # micro-sam v1 model types
 SAM_V1_MODEL_TYPE = "vit_b_lm"
+
+# CellViT++ ships a whole-slide pipeline that needs pathopatch, ray and openslide. The patch-level model and its
+# post-processor are imported from the checkout instead, which only adds einops to the environment.
+CELLVIT_ROOT = os.path.expanduser("~/cellvit-plus-plus")
+CELLVIT_CHECKPOINT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/cellvit"
+CELLVIT_CHECKPOINTS = {
+    "sam_h_x40": "CellViT-SAM-H-x40.pth",
+    "sam_h_x20": "CellViT-SAM-H-x20.pth",
+    "vit256_x40": "CellViT-256-x40.pth",
+    "vit256_x20": "CellViT-256-x20.pth",
+}
 
 # The z/xy anisotropy of each dataset (z_voxel / xy_voxel). FOCUS-3D takes it as its z_ratio.
 DATASET_ANISOTROPY = {
@@ -156,6 +170,88 @@ def _load_focus3d(model_type, checkpoint, device, batch_size, num_workers):
     )
 
 
+def _stub_cupy():
+    """Satisfy the module-level cupy import of `cellvit.utils.tools`.
+
+    Only the GPU variants of its helpers use cupy, and the post-processing this runs calls the numpy ones.
+    """
+    import sys
+    import types
+    try:
+        import cupy  # noqa
+    except ImportError:
+        pass
+    else:
+        return
+
+    stubs = {name: types.ModuleType(name) for name in ("cupy", "cupyx", "cupyx.scipy", "cupyx.scipy.ndimage")}
+    stubs["cupy"].ndarray = np.ndarray
+    stubs["cupyx"].scipy = stubs["cupyx.scipy"]
+    stubs["cupyx.scipy"].ndimage = stubs["cupyx.scipy.ndimage"]
+    sys.modules.update(stubs)
+
+
+def _load_cellvit(model_type, checkpoint, magnification, device):
+    """Load a CellViT model and the post-processor that turns its branches into instances."""
+    import sys
+    if CELLVIT_ROOT not in sys.path:
+        sys.path.insert(0, CELLVIT_ROOT)
+    _stub_cupy()
+
+    from cellvit.models.cell_segmentation.cellvit import CellViT
+    from cellvit.models.cell_segmentation.cellvit_256 import CellViT256
+    from cellvit.models.cell_segmentation.cellvit_sam import CellViTSAM
+    from cellvit.models.cell_segmentation.postprocessing import DetectionCellPostProcessor
+    from cellvit.utils.tools import unflatten_dict
+
+    if checkpoint is None:
+        if model_type not in CELLVIT_CHECKPOINTS:
+            raise ValueError(
+                f"Unknown CellViT model type '{model_type}'; expected one of {sorted(CELLVIT_CHECKPOINTS)}."
+            )
+        checkpoint = os.path.join(CELLVIT_CHECKPOINT_ROOT, CELLVIT_CHECKPOINTS[model_type])
+
+    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    run_conf = unflatten_dict(state["config"], ".")
+    architecture, model_conf = state["arch"], run_conf["model"]
+    if architecture == "CellViTSAM":
+        model = CellViTSAM(
+            model_path=None,
+            num_nuclei_classes=run_conf["data"]["num_nuclei_classes"],
+            num_tissue_classes=run_conf["data"]["num_tissue_classes"],
+            vit_structure=model_conf["backbone"],
+            regression_loss=model_conf.get("regression_loss", False),
+        )
+    elif architecture == "CellViT256":
+        model = CellViT256(
+            model256_path=None,
+            num_nuclei_classes=run_conf["data"]["num_nuclei_classes"],
+            num_tissue_classes=run_conf["data"]["num_tissue_classes"],
+            regression_loss=model_conf.get("regression_loss", False),
+        )
+    elif architecture == "CellViT":
+        model = CellViT(
+            num_nuclei_classes=run_conf["data"]["num_nuclei_classes"],
+            num_tissue_classes=run_conf["data"]["num_tissue_classes"],
+            embed_dim=model_conf["embed_dim"],
+            input_channels=model_conf.get("input_channels", 3),
+            depth=model_conf["depth"],
+            num_heads=model_conf["num_heads"],
+            extract_layers=model_conf["extract_layers"],
+            regression_loss=model_conf.get("regression_loss", False),
+        )
+    else:
+        raise ValueError(f"Unsupported CellViT architecture '{architecture}' in '{checkpoint}'.")
+
+    model.load_state_dict(state["model_state_dict"])
+    model.eval()
+    model.to(device)
+    processor = DetectionCellPostProcessor(
+        nr_types=run_conf["data"]["num_nuclei_classes"], magnification=magnification
+    )
+    return model, processor, run_conf
+
+
 def _load_microsam_v1(method, model_type, checkpoint, device):
     from micro_sam.v1.automatic_segmentation import get_predictor_and_segmenter
     mode = {"microsam_ais": "ais", "microsam_apg": "apg"}[method]
@@ -215,6 +311,43 @@ def _segment_cellsam(image, dataset_name):
     if seg.ndim == 3:
         seg = seg[0]
 
+    return seg.astype("uint32")
+
+
+def _segment_cellvit(image, model, processor, run_conf, device):
+    """Segment one histopathology patch with CellViT.
+
+    CellViT reads the whole patch at once rather than in tiles of its training size: it was trained across
+    magnifications and its own whole-slide pipeline infers on patches four times that size, while tiling costs
+    every nucleus that a tile border cuts.
+    """
+    if image.ndim == 2:
+        image = np.stack([image] * 3, axis=-1)
+    image = image[..., :3]
+
+    # The encoder tokenizes the input and then adds a square slice of its positional embedding, so a non-square
+    # patch is padded up to a square, and that square to a multiple of the token size.
+    extent = max(image.shape[:2])
+    extent += -extent % model.patch_size
+    padding = [(0, extent - size) for size in image.shape[:2]]
+    padded = np.pad(image, padding + [(0, 0)], mode="reflect")
+
+    normalization = run_conf.get("transformations", {}).get("normalize", {})
+    mean = torch.tensor(normalization.get("mean", (0.5, 0.5, 0.5))).view(3, 1, 1)
+    std = torch.tensor(normalization.get("std", (0.5, 0.5, 0.5))).view(3, 1, 1)
+    inputs = torch.from_numpy(np.ascontiguousarray(padded)).float().permute(2, 0, 1) / 255.0
+    inputs = ((inputs - mean) / std)[None].to(device)
+
+    with torch.no_grad():
+        predictions = model(inputs)
+
+    # The post-processor expects channel-last probabilities, see CellViTInference.apply_softmax_reorder.
+    predictions["nuclei_binary_map"] = torch.softmax(predictions["nuclei_binary_map"], dim=1).permute(0, 2, 3, 1)
+    predictions["nuclei_type_map"] = torch.softmax(predictions["nuclei_type_map"], dim=1).permute(0, 2, 3, 1)
+    predictions["hv_map"] = predictions["hv_map"].permute(0, 2, 3, 1)
+
+    instances, _ = processor.post_process_batch(predictions)
+    seg = instances[0].numpy()[:image.shape[0], :image.shape[1]]
     return seg.astype("uint32")
 
 
@@ -309,7 +442,9 @@ def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
     return seg.astype("uint32") if seg is not None else np.zeros(image_or_volume.shape, dtype="uint32")
 
 
-def _run_evaluation(segment_fn, dataset_name, data_root, save_path, desc, limit, sample_index, crop_shape=None):
+def _run_evaluation(
+    segment_fn, dataset_name, data_root, save_path, desc, limit, sample_index, crop_shape=None, normalize=True,
+):
     if limit is not None:  # Name the file after the truncation, so it cannot pass for the full evaluation.
         save_path = f"{save_path[:-4]}_n{limit}.csv"
     if os.path.exists(save_path):
@@ -317,7 +452,7 @@ def _run_evaluation(segment_fn, dataset_name, data_root, save_path, desc, limit,
         return
     evaluate_samples(
         segment_fn, dataset_name, data_root, save_path, desc, limit=limit, crop_shape=crop_shape,
-        sample_index=sample_index,
+        sample_index=sample_index, normalize=normalize,
     )
 
 
@@ -360,6 +495,28 @@ def run_cellsam_evaluation(dataset_name, data_root, experiment_folder, limit, sa
     _run_evaluation(
         lambda x: _segment_cellsam(x, dataset_name),
         dataset_name, data_root, save_path, desc="cellsam", limit=limit, sample_index=sample_index,
+    )
+
+
+def run_cellvit_evaluation(
+    dataset_name, data_root, experiment_folder, model_type, checkpoint, device, limit, sample_index,
+):
+    if dataset_name not in HP_DATASETS:
+        warnings.warn(
+            f"CellViT is a histopathology nucleus model and does not support dataset '{dataset_name}'. Skipping.",
+            UserWarning, stacklevel=2,
+        )
+        return
+
+    # CellViT reads slides in their native stain, which the percentile stretch of the shared loader would rescale
+    # channel by channel, so this is the one baseline scored on the stored 8-bit RGB.
+    magnification = 20 if model_type.endswith("_x20") else 40
+    model, processor, run_conf = _load_cellvit(model_type, checkpoint, magnification, device)
+    save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_cellvit_{model_type}.csv")
+    _run_evaluation(
+        lambda x: _segment_cellvit(x, model, processor, run_conf, device),
+        dataset_name, data_root, save_path, desc=f"cellvit-{model_type}", limit=limit,
+        sample_index=sample_index, normalize=False,
     )
 
 
@@ -433,11 +590,11 @@ def main():
     parser.add_argument("--method", type=str, required=True, choices=METHODS)
     parser.add_argument(
         "-m", "--model_type", type=str, default=None,
-        help="Model type override, e.g. cyto3 for cellpose or vit_b for the micro-sam v1 methods."
+        help="Model type override, e.g. cyto3 for cellpose, sam_h_x40 for cellvit or vit_b for micro-sam v1."
     )
     parser.add_argument(
         "-c", "--checkpoint", type=str, default=None,
-        help="Checkpoint path for the micro-sam v1, segneuron and focus3d methods."
+        help="Checkpoint path for the cellvit, micro-sam v1, segneuron and focus3d methods."
     )
     parser.add_argument(
         "--crop_3d", type=int, nargs=3, default=None,
@@ -477,6 +634,13 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder, limit=args.n_samples,
             sample_index=args.sample_index,
         )
+
+    elif args.method == "cellvit":
+        for model_type in ((args.model_type,) if args.model_type else tuple(CELLVIT_CHECKPOINTS)):
+            run_cellvit_evaluation(
+                args.dataset_name, args.input_path, args.experiment_folder, model_type=model_type,
+                checkpoint=args.checkpoint, device=device, limit=args.n_samples, sample_index=args.sample_index,
+            )
 
     elif args.method in ("microsam_ais", "microsam_apg"):
         run_microsam_v1_evaluation(

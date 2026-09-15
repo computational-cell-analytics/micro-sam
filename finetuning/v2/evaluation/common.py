@@ -2100,7 +2100,7 @@ def sample_row_path(save_path: str, sample_index: int) -> str:
 
 def evaluate_samples(
     segment_fn, dataset_name, data_root, save_path, desc, limit=None, crop_shape=None, sample_index=None,
-    extra_columns=None,
+    extra_columns=None, normalize=True,
 ):
     """Segment and score the test samples of a dataset, and write the result CSV.
 
@@ -2118,6 +2118,7 @@ def evaluate_samples(
         crop_shape: The 3d center crop.
         sample_index: The index of the only sample to score.
         extra_columns: The columns to add to the result, such as the parameters of the run.
+        normalize: Percentile-normalize the image, 2d only. See `load_evaluation_sample_2d`.
 
     Returns:
         The results as a DataFrame, or None while the rows of other samples are missing.
@@ -2127,7 +2128,7 @@ def evaluate_samples(
 
     ndim = 3 if dataset_name in DATASETS_3D else 2
     total = n_samples(dataset_name, data_root)
-    samples = load_data(dataset_name, data_root, ndim, crop_shape=crop_shape)
+    samples = load_data(dataset_name, data_root, ndim, crop_shape=crop_shape, normalize=normalize)
     first = 0
     if sample_index is not None:
         if limit is not None:
@@ -2544,13 +2545,18 @@ def genuine_misses(gt, segmentation, iou_threshold=0.5, max_span=2):
     return len(unmatched_ids), int((~np.isin(unmatched_ids, thin)).sum())
 
 
-def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name):
+def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name, normalize=True):
     """Load one 2d sample the way the evaluation scores it.
 
     The parameter search and the evaluation both call this function, so both use the same data.
+
+    `normalize=False` returns the stored 8-bit values instead. The percentile stretch rescales every
+    channel on its own, which restains histopathology RGB, so a model trained on native slide colour
+    reads the image differently than it was trained to.
     """
     # Normalize before cropping, so that the percentiles cover the whole image.
-    image = ensure_8bit_range(select_channels(read_2d(raw_path, raw_key), dataset_name))
+    image = select_channels(read_2d(raw_path, raw_key), dataset_name)
+    image = ensure_8bit_range(image) if normalize else np.clip(image, 0, 255).astype("uint8")
     roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
     labels = read_2d(label_path, label_key)[roi]
     if dataset_name == "astih":
@@ -2572,7 +2578,9 @@ def load_evaluation_sample_3d(
     return raw, apply_min_size(labels, min_size, dataset_name), valid_roi
 
 
-def load_data(dataset_name, data_root, ndim, min_size=0, split="test", crop_shape=None, z_range=None):
+def load_data(
+    dataset_name, data_root, ndim, min_size=0, split="test", crop_shape=None, z_range=None, normalize=True
+):
     """Yield (image_or_volume, labels, valid_roi) triples for the given dataset.
 
     valid_roi is a boolean mask that is True where the data is annotated. It is None for every
@@ -2591,6 +2599,7 @@ def load_data(dataset_name, data_root, ndim, min_size=0, split="test", crop_shap
         crop_shape: The 3d center crop. Defaults to CROP_SHAPE_3D. The test volumes in EVAL_CROPS_3D use
             their fixed crops instead, with one sample per crop.
         z_range: Restrict a volume to a z-slab before cropping, see VAL_Z_RANGE.
+        normalize: Percentile-normalize the image, 2d only. See `load_evaluation_sample_2d`.
 
     Yields:
         One (image_or_volume, labels, valid_roi) triple per sample.
@@ -2605,7 +2614,9 @@ def load_data(dataset_name, data_root, ndim, min_size=0, split="test", crop_shap
                     z_range=sample_z_range, min_size=min_size, split=split, crop_start=crop_start,
                 )
         else:
-            image, gt = load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name)
+            image, gt = load_evaluation_sample_2d(
+                raw_path, label_path, raw_key, label_key, dataset_name, normalize=normalize
+            )
             yield image, gt, None
 
 

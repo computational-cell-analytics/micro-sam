@@ -22,6 +22,10 @@ Usage examples:
     # Two interactive baselines on the EM datasets.
     python submit_all_evaluations.py --all_datasets --modality em \\
         --segmentation_type interactive --method nninteractive sam2
+
+    # CellViT on the histopathology panel, one job group per checkpoint.
+    python submit_all_evaluations.py --all_datasets --modality hp --segmentation_type automatic \\
+        --method cellvit -m sam_h_x40 sam_h_x20 vit256_x40 vit256_x20
 """
 
 import os
@@ -57,7 +61,9 @@ DATASETS = tuple(sorted(set(DATASETS_LM + DATASETS_EM + DATASETS_HP)))
 DATASETS_3D = tuple(sorted(set(DATASETS_3D_LM + DATASETS_3D_EM)))
 
 SEGMENTATION_MODES = ("ais", "apg")
-AUTOMATIC_METHODS = ("cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron", "focus3d")
+AUTOMATIC_METHODS = (
+    "cellpose", "stardist", "cellsam", "cellvit", "microsam_ais", "microsam_apg", "segneuron", "focus3d"
+)
 INTERACTIVE_METHODS = ("nninteractive", "sam3", "sam", "sam2", "micro-sam", "microsam_vol")
 
 # Interactive 'sam2' is the pretrained backbone of the very engine micro-sam2 finetunes, so it runs
@@ -67,6 +73,7 @@ SHARED_ENGINE_METHODS = {"sam2"}
 # What each method can actually be run on. A method that is absent runs on everything.
 METHOD_SUPPORT = {
     ("automatic", "cellsam"): {"ndim": (2,)},
+    ("automatic", "cellvit"): {"modality": ("hp",), "ndim": (2,)},
     ("automatic", "microsam_ais"): {"modality": ("lm", "hp")},
     ("automatic", "microsam_apg"): {"modality": ("lm", "hp")},
     ("automatic", "segneuron"): {"modality": ("em",), "ndim": (3,)},
