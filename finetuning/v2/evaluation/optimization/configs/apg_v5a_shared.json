@@ -1,0 +1,32 @@
+{
+  "name": "apg-v5a-shared",
+  "params_2d": {
+    "foreground_threshold": 0.7,
+    "candidate_threshold": 2.25,
+    "n_iter": 50,
+    "sigma": 1.0,
+    "min_candidate_size": 1,
+    "score_threshold": 0.5,
+    "max_overlap": 0.3,
+    "min_size": 50,
+    "refinement": null
+  },
+  "params_3d": {
+    "candidate_threshold": [1.0, 5.0],
+    "sigma": 0.5,
+    "min_candidate_size": 1,
+    "score_threshold": 0.6,
+    "max_overlap": 0.15,
+    "min_size": 100,
+    "propagation_waves": 1
+  },
+  "params_dense": {
+    "candidate_threshold": [1.5, 10.0],
+    "sigma": 0.5,
+    "min_candidate_size": 4,
+    "score_threshold": 0.6,
+    "max_overlap": 0.5,
+    "min_size": 100,
+    "propagation_waves": 4
+  }
+}

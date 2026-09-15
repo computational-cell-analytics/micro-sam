@@ -1,10 +1,12 @@
 import os
-from pathlib import Path
 import re
 import ast
 import csv
+import json
 import warnings
 from glob import glob
+from pathlib import Path
+from itertools import islice
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import xxhash
@@ -342,6 +344,8 @@ def em_roi(dataset_name: str, label_path: str, split: str):
     if dataset_name == "synapseweb":
         region = os.path.basename(label_path).replace("synapseweb_hippocampus_", "").replace(".h5", "")
         return SYNAPSEWEB_CORE_ROIS[region]
+    if dataset_name == "platynereis_nuclei" and split == "test":
+        return PLATYNEREIS_NUCLEI_TEST_ROIS[int(re.search(r"nuclei_(\d+)\.h5$", label_path).group(1))]
     rois = EM_ROIS.get(dataset_name)
     return None if rois is None else rois[split]
 
@@ -353,6 +357,11 @@ def em_roi(dataset_name: str, label_path: str, split: str):
 # foreground count while staying clear of the slab the evaluation's own center crop reads. Chosen by
 # measuring per-slice foreground density on the actual data; see load_volume for the valid_roi masking.
 PLATYNEREIS_NUCLEI_VAL_SAMPLES = {1: (28, 44), 5: (2, 18), 8: (99, 115)}
+
+# The annotated block of each platynereis_nuclei volume, i.e. the bounding box of label != -1. Training reads the
+# same roi. The test split is scored inside it, but the tuning windows above count from the whole volume.
+PLATYNEREIS_NUCLEI_TEST_ROIS = {sample: np.s_[16:116, 32:407, 32:407] for sample in (1, 2, 3, 4, 6, 7, 9, 10, 11, 12)}
+PLATYNEREIS_NUCLEI_TEST_ROIS.update({5: np.s_[2:102, 25:325, 25:325], 8: np.s_[16:116, 32:532, 32:407]})
 
 
 def platynereis_nuclei_val_z_range(raw_path: str) -> Tuple[int, int]:
@@ -969,7 +978,8 @@ def _get_2d_lm_data_paths(
             path=os.path.join(p, "covid_if"), sample_range=sample_range, download=download,
         )
         if dataset_name == "covid_if_cells":
-            return sorted(paths), sorted(paths), "raw/serum_IgG/s0", "labels/cells/s0"
+            # Read the membrane marker and the nuclei. `select_channels` completes them to the TissueNet layout.
+            return sorted(paths), sorted(paths), ("raw/serum_IgG/s0", "raw/nuclei/s0"), "labels/cells/s0"
         return sorted(paths), sorted(paths), "raw/nuclei/s0", "labels/nuclei/s0"
 
     if dataset_name == "medussa":
@@ -1421,6 +1431,7 @@ def load_volume(
     ensure_instances: bool = True,
     z_range: Optional[Tuple[int, int]] = None,
     split: str = "test",
+    crop_start: Optional[Tuple[int, ...]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
     """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
 
@@ -1429,13 +1440,26 @@ def load_volume(
 
     'split' selects the test or the tuning region of the EM volumes, see EM_ROIS. 'z_range' restricts the
     volume to a z-slab before the center crop, which is how a dataset without splits holds tuning data out
-    of the evaluated slab. See VAL_Z_RANGE.
+    of the evaluated slab. See VAL_Z_RANGE. 'crop_start' places the crop at these stored array coordinates
+    instead of the center. See EVAL_CROPS_3D.
     """
     # Only the scored region is read: the dataset roi, the z-slab and the center crop are composed into one
     # window first, so the multi-gigavoxel connectome volumes are never loaded whole.
     raw_source = load_image(raw_path) if raw_key is None else open_file(raw_path, mode="r")[raw_key]
     label_source = load_image(label_path) if label_key is None else open_file(label_path, mode="r")[label_key]
-    window = _read_window(label_source.shape, em_roi(dataset_name, label_path, split), z_range, crop_shape)
+    roi = em_roi(dataset_name, label_path, split)
+    if crop_start is None:
+        window = _read_window(label_source.shape, roi, z_range, crop_shape)
+    else:
+        region = _read_window(label_source.shape, roi, z_range, label_source.shape)
+        if any(start < r.start or start >= r.stop for start, r in zip(crop_start, region)):
+            raise ValueError(
+                f"The pinned crop {crop_start} of '{dataset_name}' starts outside its test region. "
+                "Fix its start in eval_crops_3d.json."
+            )
+        window = tuple(
+            slice(start, min(start + size, r.stop)) for start, size, r in zip(crop_start, crop_shape, region)
+        )
     raw, labels = np.asarray(raw_source[window]), np.asarray(label_source[window])
 
     valid_roi = None
@@ -1636,29 +1660,36 @@ def resolve_params(overrides=None, ndim=2, model_type=None):
     return params
 
 
-def load_apg_overrides(path):
-    """Read one APG configuration file and return its name and raw 2d parameter overrides.
+def load_apg_overrides(path, dataset_name):
+    """Read one APG configuration file and return its name and the overrides for one dataset.
 
-    The file has the shape the optimization benchmark uses, ``{"name": ..., "params_2d": {...}}``
-    (``params_3d`` may be present and is ignored here). The overrides are returned unresolved, so
-    they can be layered over tuned parameters; `resolve_params` fills in the defaults.
+    The file has the format of the optimization benchmark: ``{"name": ..., "params_2d": {...},
+    "params_3d": {...}}``, with an optional ``params_dense``. Images use 'params_2d' and volumes use
+    'params_3d'. The dense-neuron EM volumes use 'params_dense' if the file has it. The function returns
+    the overrides unresolved, so that they can go on top of tuned parameters. `resolve_params` fills in
+    the defaults.
 
     Args:
         path: The JSON configuration file.
+        dataset_name: The dataset that the overrides are for. It selects the section.
 
     Returns:
-        The configuration name and the 2d overrides, keyed as `generate` takes them.
+        The configuration name and the overrides, keyed as `generate` takes them.
     """
     import json
 
     with open(path) as f:
         config = json.load(f)
-    unknown_top_level = set(config) - {"name", "params_2d", "params_3d"}
+    unknown_top_level = set(config) - {"name", "params_2d", "params_3d", "params_dense"}
     if unknown_top_level:
         raise ValueError(f"Unknown configuration fields in '{path}': {sorted(unknown_top_level)}.")
-    overrides = config.get("params_2d", {})
+    if dataset_name in DATASETS_DENSE and "params_dense" in config:
+        section = "params_dense"
+    else:
+        section = "params_3d" if dataset_name in DATASETS_3D else "params_2d"
+    overrides = config.get(section, {})
     if not isinstance(overrides, dict):
-        raise TypeError(f"'params_2d' in '{path}' must be an object.")
+        raise TypeError(f"'{section}' in '{path}' must be an object.")
     unknown = set(overrides) - set(GENERATE_PARAM_KEYS)
     if unknown:
         raise ValueError(f"Unknown APG parameters in '{path}': {sorted(unknown)}.")
@@ -1967,8 +1998,8 @@ def postprocess_unisam2(out, dataset_name, model_type, params=None):
 def run_dataset_evaluation(gt_paths, prediction_paths, dataset_name: str, save_path: str):
     """Score a dataset and write the results to 'save_path'.
 
-    Neuron segmentation in EM is ranked by the CREMI score, not by mSA, so those datasets report the
-    VI and adapted-Rand components instead.
+    The instance segmentations report the symmetric best Dice (SBD) next to mSA. Neuron segmentation in EM is
+    ranked by the CREMI score instead of mSA. Those datasets report the VI and adapted-Rand components instead.
 
     Args:
         gt_paths: The ground-truth label arrays, or the paths to them.
@@ -1979,10 +2010,21 @@ def run_dataset_evaluation(gt_paths, prediction_paths, dataset_name: str, save_p
     Returns:
         The results as a DataFrame.
     """
+    from bioimage_py.evaluation import symmetric_best_dice_score
     from micro_sam.v1.evaluation.evaluation import run_evaluation
 
     if dataset_name not in DATASETS_DENSE:
-        return run_evaluation(gt_paths=gt_paths, prediction_paths=prediction_paths, save_path=save_path)
+        results = run_evaluation(gt_paths=gt_paths, prediction_paths=prediction_paths, save_path=save_path)
+        # Read files like run_evaluation does: it relabels the ground truth, but not the predictions.
+        results["SBD"] = float(np.mean([
+            symmetric_best_dice_score(
+                seg if isinstance(seg, np.ndarray) else imageio.imread(seg),
+                gt if isinstance(gt, np.ndarray) else connected_components(imageio.imread(gt)),
+            )
+            for gt, seg in zip(gt_paths, prediction_paths)
+        ]))
+        results.to_csv(save_path, index=False)
+        return results
 
     import pandas as pd
     from elf.evaluation import cremi_score
@@ -2000,6 +2042,118 @@ def run_dataset_evaluation(gt_paths, prediction_paths, dataset_name: str, save_p
     results = pd.DataFrame(rows).mean().to_frame().T
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     results.to_csv(save_path, index=False)
+    return results
+
+
+def sample_row_path(save_path: str, sample_index: int) -> str:
+    """Return the path of the result row of one sample."""
+    return os.path.join(f"{save_path[:-4]}_samples", f"sample_{sample_index:04d}.csv")
+
+
+def evaluate_samples(
+    segment_fn, dataset_name, data_root, save_path, desc, limit=None, crop_shape=None, sample_index=None,
+    extra_columns=None,
+):
+    """Segment and score the test samples of a dataset, and write the result CSV.
+
+    With 'sample_index', the function scores only that sample and stores its row next to 'save_path'. A task that
+    finds the rows of all samples writes the dataset result, so the array tasks of one dataset need no merge step.
+    Every metric is a mean over the samples, so the mean of the rows equals the score of one run over all samples.
+
+    Args:
+        segment_fn: The function that maps one image or volume to its instance segmentation.
+        dataset_name: The dataset to score.
+        data_root: The root the data lives in.
+        save_path: The path of the result CSV.
+        desc: The label of the progress bar.
+        limit: The number of samples to score, counted from the first one.
+        crop_shape: The 3d center crop.
+        sample_index: The index of the only sample to score.
+        extra_columns: The columns to add to the result, such as the parameters of the run.
+
+    Returns:
+        The results as a DataFrame, or None while the rows of other samples are missing.
+    """
+    import pandas as pd
+    from tqdm import tqdm
+
+    ndim = 3 if dataset_name in DATASETS_3D else 2
+    total = n_samples(dataset_name, data_root)
+    samples = load_data(dataset_name, data_root, ndim, crop_shape=crop_shape)
+    first = 0
+    if sample_index is not None:
+        if limit is not None:
+            raise ValueError("Got both 'sample_index' and 'limit'. Pass only one of them.")
+        if os.path.exists(sample_row_path(save_path, sample_index)):
+            samples, total = [], 0
+        else:
+            samples, total, first = islice(samples, sample_index, sample_index + 1), 1, sample_index
+    elif limit is not None:
+        samples, total = islice(samples, limit), min(total, limit)
+
+    all_gt, all_seg, misses = [], [], []
+    for index, (raw, labels, valid_roi) in enumerate(tqdm(samples, total=total, desc=desc), start=first):
+        if labels.max() == 0:  # The sample has no ground truth to score.
+            if sample_index is not None:
+                row_path = sample_row_path(save_path, index)
+                os.makedirs(os.path.dirname(row_path), exist_ok=True)
+                pd.DataFrame({"skipped": [True]}).to_csv(f"{row_path}.{os.getpid()}.tmp", index=False)
+                os.replace(f"{row_path}.{os.getpid()}.tmp", row_path)
+            continue
+
+        seg = segment_fn(raw)
+        if valid_roi is not None:
+            seg[~valid_roi] = 0
+        if ndim == 2:
+            # The ground truth has no severed objects either, so predicting one is not a false positive.
+            seg = drop_severed_objects(seg, GT_MIN_SIZE_2D.get(dataset_name, 0))
+        else:
+            misses.append(genuine_misses(labels, seg))
+
+        if sample_index is not None:
+            row_path = sample_row_path(save_path, index)
+            os.makedirs(os.path.dirname(row_path), exist_ok=True)
+            # Rename a complete file into place, since the task that merges the rows can read it at any time.
+            tmp_path = f"{row_path}.{os.getpid()}.tmp"
+            row = run_dataset_evaluation([labels], [seg], dataset_name, tmp_path)
+            if misses:
+                row["unmatched"], row["genuine_misses"] = misses[0]
+            row.to_csv(tmp_path, index=False)
+            os.replace(tmp_path, row_path)
+        else:
+            all_gt.append(labels)
+            all_seg.append(seg)
+
+    if sample_index is None:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        results = run_dataset_evaluation(all_gt, all_seg, dataset_name, save_path)
+        if misses:
+            # The aggregate metric hides which objects went missing.
+            results["unmatched"] = sum(count[0] for count in misses)
+            results["genuine_misses"] = sum(count[1] for count in misses)
+    else:
+        row_paths = [sample_row_path(save_path, index) for index in range(n_samples(dataset_name, data_root))]
+        missing = [path for path in row_paths if not os.path.exists(path)]
+        if missing:
+            print(f"Scored sample {sample_index}. {len(missing)} of {len(row_paths)} rows are still missing.")
+            return None
+        frames = [pd.read_csv(path) for path in row_paths]
+        # Refuse rows with other metrics, since a metric must cover every sample of the mean.
+        if len({tuple(frame.columns) for frame in frames if "skipped" not in frame}) > 1:
+            raise RuntimeError(f"The sample rows of '{save_path}' hold different metrics. Re-score the older rows.")
+        rows = pd.concat(frames, ignore_index=True).drop(columns="skipped", errors="ignore")
+        counts = [column for column in ("unmatched", "genuine_misses") if column in rows]
+        results = rows.drop(columns=counts).mean().to_frame().T
+        for column in counts:
+            results[column] = int(rows[column].sum())
+
+    for column, value in (extra_columns or {}).items():
+        results[column] = value
+    # Tasks of one dataset can finish at the same time, so rename a complete file into place.
+    tmp_path = f"{save_path}.{os.getpid()}.tmp"
+    results.to_csv(tmp_path, index=False)
+    os.replace(tmp_path, save_path)
+    print(results)
     return results
 
 
@@ -2133,6 +2287,24 @@ def check_data_download(dataset_name: str, data_root: str, download: bool = True
 
 CROP_SHAPE_2D = (512, 512)
 CROP_SHAPE_3D = (8, 512, 512)
+
+# The fixed crops of the 3d test volumes, which replace the center crop: the crop shape and the crop starts per volume,
+# in stored array coordinates. eval_crops_3d.json also holds the rule that places the crops and a note per dataset.
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_crops_3d.json")) as f:
+    EVAL_CROPS_3D = {
+        name: (tuple(entry["crop_shape"]), {volume: tuple(map(tuple, v)) for volume, v in entry["starts"].items()})
+        for name, entry in json.load(f)["datasets"].items()
+    }
+
+
+def eval_crops_3d(dataset_name, raw_path, split, crop_shape):
+    """Return the (crop start, crop shape) pairs for one volume: its crops in EVAL_CROPS_3D or one center crop."""
+    if split != "test" or dataset_name not in EVAL_CROPS_3D:
+        return [(None, crop_shape or CROP_SHAPE_3D)]
+    if crop_shape is not None:
+        raise ValueError(f"'{dataset_name}' has fixed crops in EVAL_CROPS_3D. Do not pass a crop shape.")
+    shape, starts = EVAL_CROPS_3D[dataset_name]
+    return [(start, shape) for start in starts[os.path.basename(raw_path)]]
 
 
 def ensure_8bit_range(raw):
@@ -2342,11 +2514,12 @@ def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_
 
 def load_evaluation_sample_3d(
     raw_path, label_path, raw_key, label_key, dataset_name,
-    crop_shape=CROP_SHAPE_3D, z_range=None, min_size=0, split="test",
+    crop_shape=CROP_SHAPE_3D, z_range=None, min_size=0, split="test", crop_start=None,
 ):
     """Load one volumetric sample the way the evaluation scores it."""
     raw, labels, valid_roi = load_volume(
-        raw_path, label_path, raw_key, label_key, dataset_name, crop_shape, z_range=z_range, split=split
+        raw_path, label_path, raw_key, label_key, dataset_name, crop_shape, z_range=z_range, split=split,
+        crop_start=crop_start,
     )
     return raw, apply_min_size(labels, min_size, dataset_name), valid_roi
 
@@ -2367,7 +2540,8 @@ def load_data(dataset_name, data_root, ndim, min_size=0, split="test", crop_shap
         ndim: The number of spatial dimensions, 2 or 3.
         min_size: Drop ground-truth objects below this many pixels (3d only).
         split: The split to load, 'test' or the held-out 'val', see VAL_SPLITS.
-        crop_shape: The 3d center crop. Defaults to CROP_SHAPE_3D.
+        crop_shape: The 3d center crop. Defaults to CROP_SHAPE_3D. The test volumes in EVAL_CROPS_3D use
+            their fixed crops instead, with one sample per crop.
         z_range: Restrict a volume to a z-slab before cropping, see VAL_Z_RANGE.
 
     Yields:
@@ -2377,18 +2551,23 @@ def load_data(dataset_name, data_root, ndim, min_size=0, split="test", crop_shap
     for raw_path, label_path in sorted_path_pairs(raw_paths, label_paths):
         if ndim == 3:
             sample_z_range = val_z_range(dataset_name, raw_path, split) or z_range
-            yield load_evaluation_sample_3d(
-                raw_path, label_path, raw_key, label_key, dataset_name,
-                crop_shape=crop_shape or CROP_SHAPE_3D, z_range=sample_z_range, min_size=min_size, split=split,
-            )
+            for crop_start, sample_crop_shape in eval_crops_3d(dataset_name, raw_path, split, crop_shape):
+                yield load_evaluation_sample_3d(
+                    raw_path, label_path, raw_key, label_key, dataset_name, crop_shape=sample_crop_shape,
+                    z_range=sample_z_range, min_size=min_size, split=split, crop_start=crop_start,
+                )
         else:
             image, gt = load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name)
             yield image, gt, None
 
 
 def n_samples(dataset_name, data_root, split="test"):
-    """The number of samples of a split, for a progress bar over `load_data`."""
-    return len(get_data_paths(dataset_name, data_root, split=split)[0])
+    """Return the number of samples that `load_data` yields for a split."""
+    raw_paths = get_data_paths(dataset_name, data_root, split=split)[0]
+    if split == "test" and dataset_name in EVAL_CROPS_3D:
+        starts = EVAL_CROPS_3D[dataset_name][1]
+        return sum(len(starts[os.path.basename(path)]) for path in raw_paths)
+    return len(raw_paths)
 
 
 def has_val_split(dataset_name: str) -> bool:

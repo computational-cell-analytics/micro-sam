@@ -37,6 +37,8 @@ from elf.evaluation import mean_segmentation_accuracy
 
 from bioimage_cpp.segmentation import label as connected_components, watershed
 
+from bioimage_py.evaluation import symmetric_best_dice_score
+
 from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_density
 
 from common import (
@@ -166,14 +168,16 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None):
 def compute_metrics(seg, labels, metric_mode, border_min_size=0):
     """Compute the evaluation metrics for one segmentation.
 
-    Always reports mSA. For dense (EM neuron) mode it additionally reports the CREMI score and its
-    VI-split / VI-merge / adapted-Rand components, since neuron segmentation is ranked by CREMI
-    (lower is better) rather than mSA.
+    The function always reports mSA. Sparse mode also logs the symmetric best Dice (SBD), which no ranking uses.
+    Dense (EM neuron) mode also reports the CREMI score with its VI-split, VI-merge and adapted-Rand components.
+    Neuron segmentation is ranked by CREMI (lower is better) instead of mSA.
     """
     if seg.ndim == 2:
         # Symmetric with the ground truth, which `load_evaluation_sample_2d` filtered the same way.
         seg = drop_severed_objects(seg, border_min_size)
     metrics = {"msa": float(mean_segmentation_accuracy(seg, labels))}
+    if metric_mode == "sparse":
+        metrics["sbd"] = float(symmetric_best_dice_score(seg, labels))
     if metric_mode == "dense":
         from elf.evaluation import cremi_score
         vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, labels)
@@ -677,7 +681,7 @@ REGISTRY_DATASETS = [
     "bccd", "cell_acdc", "cellular", "cisd", "vicar", "microbeseg", "orgline", "organoid", "mcellseg", "toiam",
     "bbbc030",
     # Light microscopy 3d, tuned on the loader val splits (gonuclear is listed above).
-    "plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
+    "plantseg_root", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
     "embedseg_mouse_skull", "embedseg_platy_ish", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "nucverse3d",
 ]
 
@@ -689,8 +693,8 @@ ENV = "super"
 # the weights the submission chose rather than whatever the environment holds when it starts.
 JOINT_ENV_VARS = ("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", "MICRO_SAM2_JOINT_EXPORT_ROOT")
 CPUS = 4
-# A 2d shard measured 23 min on the median and 54 min at worst, so 90 min carries it. Asking for
-# more only keeps the task out of the backfill window while the longer 3d jobs hold a reservation.
+# A 2d task took 54 min at worst as a shard and 62 min unsharded, with the slow histopathology datasets
+# sharded (REGISTRY_2D_SHARDS). A longer limit only keeps the task out of the backfill window.
 TIME_LIMIT_2D = "01:30:00"
 TIME_LIMIT_3D = "04:00:00"
 MAX_CONCURRENT = 20
@@ -759,6 +763,9 @@ REGISTRY_2D_SHARDS = {
     ("toiam", "ais"): 4, ("toiam", "apg"): 24,
     ("bmgd", "ais"): 4, ("bmgd", "apg"): 24,
     ("pan_multiplex", "ais"): 4, ("pan_multiplex", "apg"): 24,
+    # Histopathology APG on v5a: dense nuclei make every proposal slow. Unsharded, lizard took 187 s per sample
+    # (3.6 h) and lynsec_ihc 125 s per sample. lynsec_he and monuseg took 93 and 89 min. Only APG was timed here.
+    ("lizard", "apg"): 12, ("lynsec_ihc", "apg"): 12, ("lynsec_he", "apg"): 4, ("monuseg", "apg"): 4,
 }
 
 

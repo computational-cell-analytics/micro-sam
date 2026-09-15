@@ -20,18 +20,15 @@ import os
 import json
 import argparse
 import warnings
-from itertools import islice
 
 import pandas as pd
-from tqdm import tqdm
 
 import torch
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, GT_MIN_SIZE_2D, MODEL_TYPES, MODES,
-    VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, genuine_misses,
-    has_val_split, load_apg_overrides, load_data, n_samples, postprocess_unisam2, predict_unisam2,
-    read_tuned_params, resolve_checkpoint_identity, run_dataset_evaluation,
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS, build_model,
+    check_data_download, evaluate_samples, has_val_split, load_apg_overrides, postprocess_unisam2, predict_unisam2,
+    read_tuned_params, resolve_checkpoint_identity,
 )
 
 
@@ -49,7 +46,7 @@ def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, sp
 
 def run_evaluation(
     model, mode, dataset_name, data_root, experiment_folder, model_type, params, device, limit,
-    crop_shape=None, checkpoint_id=None, devices=None, tuned=None, result_tag=None, config_name=None,
+    crop_shape=None, checkpoint_id=None, devices=None, tuned=None, result_tag=None, config_name=None, sample_index=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -75,9 +72,10 @@ def run_evaluation(
         result_tag: Optional tag appended to the result file name, so that a run with explicit
             parameter overrides does not collide with the plain evaluation.
         config_name: The name of the configuration the overrides came from, stored in the results.
+        sample_index: The index of the only sample to score, for one array task. See `common.evaluate_samples`.
 
     Returns:
-        The results as a DataFrame.
+        The results as a DataFrame, or None while the rows of other samples are missing.
     """
     if tuned is None:
         tuned = bool(params)
@@ -102,43 +100,16 @@ def run_evaluation(
 
     ndim = 3 if dataset_name in DATASETS_3D else 2
     spacing = DATASET_SPACING.get(dataset_name)
-    border_min_size = GT_MIN_SIZE_2D.get(dataset_name, 0) if ndim == 2 else 0
-    total = n_samples(dataset_name, data_root)
-    samples = load_data(dataset_name, data_root, ndim, crop_shape=crop_shape)
-    if limit is not None:
-        total = min(total, limit)
-        samples = islice(samples, limit)
-
-    all_gt, all_seg, misses = [], [], []
-    for raw, labels, valid_roi in tqdm(samples, total=total, desc=f"{mode}-{model_type}"):
-        if labels.max() == 0:  # Nothing to score without ground-truth.
-            continue
-        seg = segment(
-            model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing,
-            devices=devices,
-        )
-        if valid_roi is not None:
-            seg[~valid_roi] = 0
-        if ndim == 2:
-            # The ground truth has no severed objects either, so predicting one is not a false positive.
-            seg = drop_severed_objects(seg, border_min_size)
-        else:
-            misses.append(genuine_misses(labels, seg))
-        all_gt.append(labels)
-        all_seg.append(seg)
-
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    results = run_dataset_evaluation(all_gt, all_seg, dataset_name, save_path)
-    if misses:
-        # The aggregate metric hides which objects went missing.
-        results["unmatched"] = sum(count[0] for count in misses)
-        results["genuine_misses"] = sum(count[1] for count in misses)
-    results["parameters"] = json.dumps(params, sort_keys=True, default=str) if params else "default"
+    extra_columns = {"parameters": json.dumps(params, sort_keys=True, default=str) if params else "default"}
     if config_name is not None:
-        results["config_name"] = config_name
-    results.to_csv(save_path, index=False)
-    print(results)
-    return results
+        extra_columns["config_name"] = config_name
+    return evaluate_samples(
+        lambda raw: segment(
+            model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing, devices=devices,
+        ),
+        dataset_name, data_root, save_path, desc=f"{mode}-{model_type}", limit=limit, crop_shape=crop_shape,
+        sample_index=sample_index, extra_columns=extra_columns,
+    )
 
 
 def main():
@@ -157,6 +128,7 @@ def main():
     )
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate with the library defaults.")
     parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
+    parser.add_argument("--sample_index", type=int, default=None, help="Score only this sample, as one array task.")
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
     parser.add_argument(
@@ -166,8 +138,8 @@ def main():
     parser.add_argument("--devices", nargs="*", default=None, help="Inference devices. All visible GPUs by default.")
     parser.add_argument(
         "--apg_params", type=str, default=None,
-        help="APG only. A benchmark-style JSON configuration whose 'params_2d' are layered over the tuned "
-             "parameters (or the defaults with --skip_tuning).",
+        help="APG only. A JSON configuration in the benchmark format. Its section for the dataset ('params_2d', "
+        "'params_3d' or 'params_dense') overrides the tuned parameters, or the defaults with --skip_tuning.",
     )
     parser.add_argument(
         "--result_tag", type=str, default=None,
@@ -218,7 +190,7 @@ def main():
 
     config_name, result_tag = None, args.result_tag
     if args.apg_params is not None:
-        config_name, overrides = load_apg_overrides(args.apg_params)
+        config_name, overrides = load_apg_overrides(args.apg_params, args.dataset_name)
         params = {**(params or {}), **overrides}
         if result_tag is None:
             result_tag = config_name
@@ -227,7 +199,7 @@ def main():
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,
         params, device, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
         devices=args.devices or None, tuned=tuned, result_tag=result_tag, config_name=config_name,
-        limit=args.n_samples,
+        limit=args.n_samples, sample_index=args.sample_index,
     )
 
 
