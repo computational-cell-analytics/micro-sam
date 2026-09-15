@@ -11,6 +11,7 @@ from micro_sam._test_util import check_layer_initialization
 
 
 @pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 @pytest.mark.parametrize(
     "shape, ndim, options, expected_tile, expected_halo",
     [
@@ -93,6 +94,7 @@ def _run_annotator_cli(make_napari_viewer_proxy, monkeypatch, tool, image, optio
 
 # The tracking annotator is always 3d, the other tools take the dimensionality from the CLI.
 @pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 @pytest.mark.parametrize(
     "tool, options",
     [
@@ -117,6 +119,7 @@ def test_cli_default_tiling_is_the_same_for_all_tools(make_napari_viewer_proxy, 
 
 
 @pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 @pytest.mark.parametrize(
     "tool, options",
     [
