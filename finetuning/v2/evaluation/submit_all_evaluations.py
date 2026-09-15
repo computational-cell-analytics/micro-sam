@@ -26,7 +26,6 @@ Usage examples:
 
 import os
 import re
-import math
 import shlex
 import argparse
 import subprocess
@@ -36,7 +35,7 @@ from datetime import datetime
 
 from common import (
     DATA_ROOT, DATASETS_2D_LM, DATASETS_HP, DATASETS_3D_LM, DATASETS_EM, DATASETS_3D_EM, DATASETS_SUPPLEMENTARY,
-    MODEL_TYPES,
+    MODEL_TYPES, n_samples,
 )
 
 EVAL_ROOT = Path(__file__).resolve().parent
@@ -58,7 +57,7 @@ DATASETS = tuple(sorted(set(DATASETS_LM + DATASETS_EM + DATASETS_HP)))
 DATASETS_3D = tuple(sorted(set(DATASETS_3D_LM + DATASETS_3D_EM)))
 
 SEGMENTATION_MODES = ("ais", "apg")
-AUTOMATIC_METHODS = ("cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron")
+AUTOMATIC_METHODS = ("cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron", "focus3d")
 INTERACTIVE_METHODS = ("nninteractive", "sam3", "sam", "sam2", "micro-sam", "microsam_vol")
 
 # Interactive 'sam2' is the pretrained backbone of the very engine micro-sam2 finetunes, so it runs
@@ -68,17 +67,27 @@ SHARED_ENGINE_METHODS = {"sam2"}
 # What each method can actually be run on. A method that is absent runs on everything.
 METHOD_SUPPORT = {
     ("automatic", "cellsam"): {"ndim": (2,)},
-    ("automatic", "microsam_ais"): {"modality": ("lm",)},
-    ("automatic", "microsam_apg"): {"modality": ("lm",)},
+    ("automatic", "microsam_ais"): {"modality": ("lm", "hp")},
+    ("automatic", "microsam_apg"): {"modality": ("lm", "hp")},
     ("automatic", "segneuron"): {"modality": ("em",), "ndim": (3,)},
+    ("automatic", "focus3d"): {"modality": ("lm",), "ndim": (3,)},
     ("interactive", "sam"): {"ndim": (2,)},
     ("interactive", "micro-sam"): {"ndim": (2,)},
     ("interactive", "nninteractive"): {"ndim": (3,)},
     ("interactive", "microsam_vol"): {"ndim": (3,), "modality": ("lm",)},
 }
 
-# Use --env to override the method-specific environments.
-METHOD_ENV = {"cellpose": "cp3", "stardist": "sd"}
+# The data that one model of a method can run on, on top of METHOD_SUPPORT. The key is (method, model), since model
+# names repeat across methods. The CellPose 3 generalists are not histopathology models.
+MODEL_SUPPORT = {("cellpose", "cyto3"): {"modality": ("lm", "em")}, ("cellpose", "nuclei"): {"modality": ("lm", "em")}}
+
+# Use --env to override the method-specific environments. StarDist runs in its own because it needs
+# TensorFlow, which does not belong next to torch in the main environment.
+METHOD_ENV = {"stardist": "stardist"}
+
+# cyto3 and nuclei are CellPose 3 checkpoints, which the CellPose 4 of the main environment cannot load.
+MODEL_ENV = {("cellpose", "cyto3"): "cellpose3", ("cellpose", "nuclei"): "cellpose3"}
+
 DEFAULT_ENV = "super"
 
 # Slurm resources per job. Only the grete partitions are available. 'grete:preemptible' is usually
@@ -87,6 +96,7 @@ DEFAULT_ENV = "super"
 # 'grete-h100:shared' offers no MIG slice; override --gpu with '1' to use it.
 PARTITION = "grete:preemptible"
 CPUS = 4
+MAX_CONCURRENT = 20
 TIME_LIMIT = "08:00:00"
 
 # A 2d job peaks at about 3 GiB, so the smallest slice covers it. A volume is tiled through the
@@ -109,9 +119,9 @@ def sanitize(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_")
 
 
-def resolve_env(args: argparse.Namespace, method: Optional[str]) -> str:
+def resolve_env(args: argparse.Namespace, method: Optional[str], model_type: Optional[str]) -> str:
     """The conda environment one job activates."""
-    return args.env or METHOD_ENV.get(method, DEFAULT_ENV)
+    return args.env or MODEL_ENV.get((method, model_type)) or METHOD_ENV.get(method, DEFAULT_ENV)
 
 
 def available_envs() -> set:
@@ -185,9 +195,9 @@ def uses_shared_engine(args: argparse.Namespace, method: Optional[str]) -> bool:
 
 def build_command(
     args: argparse.Namespace, dataset_name: str, model_type: Optional[str],
-    method: Optional[str], mode: Optional[str],
+    method: Optional[str], mode: Optional[str], sample_index: Optional[int],
 ) -> list:
-    """The python command one dataset of one job runs."""
+    """Return the python command that one task runs for a dataset, or for one sample of it."""
     shared_engine = uses_shared_engine(args, method)
     script = SCRIPTS[(args.segmentation_type, "baseline" if (method and not shared_engine) else "micro_sam2")]
     command = [
@@ -213,6 +223,13 @@ def build_command(
                 command.append("--skip_tuning")
             if args.tuning_root is not None:
                 command.extend(["--tuning_root", args.tuning_root])
+            if args.apg_params is not None and mode == "apg":
+                command.extend(["--apg_params", args.apg_params])
+
+    if args.n_samples is not None:
+        command.extend(["--n_samples", str(args.n_samples)])
+    if sample_index is not None:
+        command.extend(["--sample_index", str(sample_index)])
 
     if args.segmentation_type == "interactive":
         command.extend(["-p", args.prompt_choice, "-iter", str(args.n_iterations)])
@@ -225,53 +242,53 @@ def build_command(
 
 
 def job_tag(
-    args: argparse.Namespace, datasets: tuple, model_type: Optional[str],
-    method: Optional[str], mode: Optional[str], chunk_index: int,
+    args: argparse.Namespace, dataset: str, model_type: Optional[str], method: Optional[str], mode: Optional[str],
+    sample_index: Optional[int],
 ) -> str:
-    """The name of one job, which also names its script and its logs."""
-    # A batched job spans several datasets, so it is named after its chunk instead.
-    name = datasets[0] if len(datasets) == 1 else f"chunk{chunk_index:02d}"
-    parts = [args.segmentation_type, name, method or f"micro_sam2_{mode or 'interactive'}"]
+    """The name of one array task, which also marks it in the logs."""
+    parts = [args.segmentation_type, dataset, method or f"micro_sam2_{mode or 'interactive'}"]
     if args.segmentation_type == "interactive":
         parts.append(args.prompt_choice)
     if model_type is not None:
         parts.append(model_type)
+    if sample_index is not None:
+        parts.append(f"sample{sample_index}")
     return "_".join(sanitize(part) for part in parts)
 
 
-def write_batch_script(
-    args: argparse.Namespace, job_folder: Path, datasets: tuple, model_type: Optional[str],
-    method: Optional[str], mode: Optional[str], chunk_index: int,
+def write_array_script(
+    args: argparse.Namespace, job_folder: Path, name: str, tasks: list, env: str, gpu: str, memory: str,
 ) -> Path:
-    """Write the Slurm script of one job and return its path."""
-    tag = job_tag(args, datasets, model_type, method, mode, chunk_index)
-    script_path = job_folder / f"{tag}.sh"
-    env = DEFAULT_ENV if uses_shared_engine(args, method) else resolve_env(args, method)
-    qos_line = f"\n#SBATCH --qos={args.qos}" if args.qos is not None else ""
-    is_3d = any(ndim_of(dataset) == 3 for dataset in datasets)
-    gpu = args.gpu or (GPU_3D if is_3d else GPU_2D)
-    memory = args.memory or (MEMORY_3D if is_3d else MEMORY_2D)
-    # The datasets of a chunk run sequentially, and one failure must not skip the rest.
-    commands = "\n".join(
-        " ".join(build_command(args, dataset, model_type, method, mode)) for dataset in datasets
-    )
+    """Write one Slurm job array over 'tasks', a list of (tag, command), and return its script.
 
+    Each task runs the line of the tasks file that SLURM_ARRAY_TASK_ID selects.
+    """
+    tasks_path = job_folder / f"tasks_{name}.txt"
+    with open(tasks_path, "w") as f:
+        for tag, command in tasks:
+            f.write(f"{tag}\t{command}\n")
+
+    script_path = job_folder / f"array_{name}.sh"
+    qos_line = f"\n#SBATCH --qos={args.qos}" if args.qos is not None else ""
     batch_script = f"""#!/bin/bash
 #SBATCH -c {CPUS}
 #SBATCH --mem {memory}
 #SBATCH -t {args.time_limit}
 #SBATCH -p {args.partition}
 #SBATCH -G {gpu}
-#SBATCH --job-name={tag}
+#SBATCH --job-name={name}
+#SBATCH --array=0-{len(tasks) - 1}%{MAX_CONCURRENT}
 #SBATCH --requeue{qos_line}
 #SBATCH --constraint=inet
-#SBATCH -o {job_folder}/logs/{tag}_%j.out
-#SBATCH -e {job_folder}/logs/{tag}_%j.err
+#SBATCH -o {job_folder}/logs/{name}_%A_%a.out
+#SBATCH -e {job_folder}/logs/{name}_%A_%a.err
 
 source ~/.bashrc
 micromamba activate {env}
 {env_exports()}
-{commands}
+line=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" {tasks_path})
+echo "Task $SLURM_ARRAY_TASK_ID: $(cut -f1 <<< "$line")"
+eval "$(cut -f2- <<< "$line")"
 """
 
     with open(script_path, "w") as f:
@@ -283,15 +300,6 @@ def submit_job(script: Path) -> None:
     """Hand one script to sbatch and print what it said."""
     result = subprocess.run(["sbatch", str(script)], capture_output=True, text=True)
     print(result.stdout.strip() if result.stdout else result.stderr.strip())
-
-
-def chunked(datasets: tuple, datasets_per_job: int) -> list:
-    """Split the datasets over jobs, striding rather than slicing.
-
-    A strided split spreads the few slow datasets over the jobs instead of landing them in one.
-    """
-    n_chunks = max(1, math.ceil(len(datasets) / datasets_per_job))
-    return [datasets[i::n_chunks] for i in range(n_chunks)]
 
 
 def main():
@@ -319,13 +327,20 @@ def main():
                         help="Name of the joint trainer checkpoint the micro-sam2 weights are taken from, "
                              "without the '.pt' suffix, e.g. 'best' or the name of a frozen copy.")
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate micro-sam2 with the library defaults.")
+    parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
+    parser.add_argument(
+        "--per_sample", action="store_true",
+        help="Automatic only. Submit one array task per sample. The task that finds all rows writes the result.",
+    )
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
+    parser.add_argument(
+        "--apg_params", type=str, default=None,
+        help="A JSON configuration of APG parameters, passed to every micro-sam2 APG task.",
+    )
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=("box", "point"))
     parser.add_argument("-iter", "--n_iterations", type=int, default=8, help="Iterative prompting rounds.")
     parser.add_argument("--min_size", type=int, default=0,
                         help="Drop ground-truth objects below this many pixels. The right value is dataset specific.")
-    parser.add_argument("--datasets_per_job", type=int, default=1,
-                        help="Datasets per Slurm job. Batching trades queue slots for walltime.")
     parser.add_argument("--partition", type=str, default=PARTITION, help="Slurm partition(s) to submit to.")
     parser.add_argument("--gpu", type=str, default=None,
                         help=f"Slurm GPU spec. Defaults to {GPU_2D} for 2d jobs and {GPU_3D} for 3d ones.")
@@ -345,6 +360,15 @@ def main():
         raise ValueError("Either -d/--data or --all_datasets must be given.")
     if args.checkpoint is not None and args.model_type is not None and len(args.model_type) > 1:
         raise ValueError("An explicit -c/--checkpoint cannot be shared by several model types.")
+    if args.n_samples is not None and args.segmentation_type != "automatic":
+        raise ValueError("--n_samples applies to automatic segmentation only.")
+    if args.per_sample and (args.segmentation_type != "automatic" or args.n_samples is not None):
+        raise ValueError("--per_sample needs '--segmentation_type automatic' and no --n_samples. Drop one of them.")
+    if args.apg_params is not None:
+        if args.method is not None or "apg" not in args.segmentation_mode:
+            raise ValueError("--apg_params applies to micro-sam2 with --segmentation_mode apg only.")
+        # Slurm picks the working directory of a queued task, so pass the file by its absolute path.
+        args.apg_params = os.path.abspath(args.apg_params)
 
     valid_methods = AUTOMATIC_METHODS if args.segmentation_type == "automatic" else INTERACTIVE_METHODS
     for method in args.method or ():
@@ -361,7 +385,8 @@ def main():
     job_folder = EVAL_ROOT / "gpu_jobs" / datetime.now().strftime("%Y%m%d_%H%M%S")
     (job_folder / "logs").mkdir(parents=True, exist_ok=True)
 
-    scripts = []
+    # An array activates one environment and requests one resource tier, so group the tasks by both.
+    groups = {}
     for method in methods:
         for mode in modes:
             datasets = select_datasets(args, method, mode)
@@ -369,13 +394,31 @@ def main():
                 print(f"Nothing to run for method={method}, mode={mode}: the selection is empty.")
                 continue
             for model_type in model_types:
-                for chunk_index, chunk in enumerate(chunked(datasets, args.datasets_per_job)):
-                    scripts.append(
-                        write_batch_script(args, job_folder, chunk, model_type, method, mode, chunk_index)
-                    )
+                env = DEFAULT_ENV if uses_shared_engine(args, method) else resolve_env(args, method, model_type)
+                allowed = MODEL_SUPPORT.get((method, model_type), {}).get("modality")
+                for dataset in datasets:
+                    if allowed is not None and modality_of(dataset) not in allowed:
+                        continue
+                    is_3d = ndim_of(dataset) == 3
+                    gpu = args.gpu or (GPU_3D if is_3d else GPU_2D)
+                    memory = args.memory or (MEMORY_3D if is_3d else MEMORY_2D)
+                    indices = range(n_samples(dataset, args.data_root)) if args.per_sample else [None]
+                    for index in indices:
+                        command = " ".join(build_command(args, dataset, model_type, method, mode, index))
+                        groups.setdefault((env, gpu, memory), []).append(
+                            (job_tag(args, dataset, model_type, method, mode, index), command)
+                        )
 
-    print(f"Wrote {len(scripts)} Slurm scripts to '{job_folder}'.")
-    warn_missing_envs({resolve_env(args, method) for method in methods if not uses_shared_engine(args, method)})
+    scripts = []
+    for (env, gpu, memory), tasks in groups.items():
+        name = sanitize(f"{args.segmentation_type}_{env}_{gpu}_{memory}")
+        scripts.append(write_array_script(args, job_folder, name, tasks, env, gpu, memory))
+    n_tasks = sum(len(tasks) for tasks in groups.values())
+    print(f"Wrote {len(scripts)} job array(s) with {n_tasks} task(s) to '{job_folder}'.")
+    warn_missing_envs({
+        resolve_env(args, method, model_type) for method in methods for model_type in model_types
+        if not uses_shared_engine(args, method)
+    })
     if args.dry:
         return
     for script in scripts:

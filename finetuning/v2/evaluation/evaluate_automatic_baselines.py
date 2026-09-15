@@ -1,12 +1,13 @@
 """Benchmark evaluation of the automatic segmentation baselines, i.e. everything but micro-sam2.
 
 Supported methods:
-  cellpose: CellPose generalist models (cyto3, cpsam)
+  cellpose: CellPose generalist models (cpsam, cpsam_v2, cpdino, cpdino-vitb; cyto3 and nuclei from CellPose 3)
   stardist: StarDist pretrained (2D_versatile_fluo / 3D_demo)
   cellsam: CellSAM pipeline (2d only)
   microsam_ais: micro-sam v1 automatic instance segmentation
   microsam_apg: micro-sam v1 automatic prompt generation
   segneuron: SegNeuron (3d EM only)
+  focus3d: FOCUS-3D (3d LM only)
 
 micro-sam2 itself is evaluated by evaluate_automatic_segmentation.py, which also tunes it.
 
@@ -16,6 +17,7 @@ Usage examples:
     python evaluate_automatic_baselines.py -d livecell -e <exp> --method cellsam
     python evaluate_automatic_baselines.py -d embedseg -e <exp> --method microsam_ais -m vit_b
     python evaluate_automatic_baselines.py -d cremi -e <exp> --method segneuron
+    python evaluate_automatic_baselines.py -d gonuclear -e <exp> --method focus3d -m nuclei
 """
 
 import os
@@ -23,30 +25,72 @@ import warnings
 import argparse
 
 import numpy as np
-from tqdm import tqdm
 
 import torch
 
+from elf.segmentation import features, multicut, watershed
+
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_EM,
-    GT_MIN_SIZE_2D, check_data_download, drop_severed_objects, load_data, n_samples,
-    run_dataset_evaluation,
+    CROP_SHAPE_3D, DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_EM, DATASETS_HP, EVAL_CROPS_3D,
+    check_data_download, evaluate_samples,
 )
 
 LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
 EM_DATASETS = set(DATASETS_EM)
-METHODS = ["cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron"]
+METHODS = ["cellpose", "stardist", "cellsam", "microsam_ais", "microsam_apg", "segneuron", "focus3d"]
 
 SEGNEURON_ROOT = "/mnt/vast-nhr/home/archit/u12090/SegNeuron"
 SEGNEURON_CHECKPOINT = "/mnt/vast-nhr/projects/cidas/cca/models/segneuron/SegNeuronModel.ckpt"
 
+# FOCUS-3D ships a general, a nuclei and a membrane checkpoint; pick one with -m.
+FOCUS3D_DEFAULT_MODEL = "general"
+# The radius FOCUS-3D is calibrated on, i.e. the value that leaves the volume unscaled in xy.
+FOCUS3D_CELL_RADIUS = 15.0
+# Throughput knobs, measured worth nothing here: the patch loop is 86% GPU forward. Batch 8 peaks at
+# 6.8 GiB, so a job fits the 10 GB slice, where batch 16 needs 11.4 GiB and runs no faster.
+FOCUS3D_BATCH_SIZE = 8
+FOCUS3D_NUM_WORKERS = 4
+
+# The CellPose 4 generalists. The cyto/nuclei checkpoints need CellPose 3, in the 'cellpose3' environment.
+CELLPOSE_MODELS = ("cpsam", "cpsam_v2", "cpdino")
+# The CellPose 3 generalists. Neither of them is a histopathology model.
+CELLPOSE3_MODELS = ("cyto3", "nuclei")
+# The IoU that links the masks of adjacent slices of a volume. It is the default of `cellpose.utils.stitch3D`.
+# The default of `eval` is 0, which leaves the slices unlinked.
+CELLPOSE_STITCH_THRESHOLD = 0.25
+
+# The channels of the whole-cell and the nuclear marker in the loaded channel-last image, for the baselines that
+# name their input channels. The other datasets are passed as loaded.
+MARKER_CHANNELS = {
+    "tissuenet": {"cell": 0, "nucleus": 1}, "cvz_fluo_cell": {"cell": 0, "nucleus": 1},
+    "covid_if_cells": {"cell": 0, "nucleus": 1}, "pan_multiplex": {"cell": 0, "nucleus": 1},
+}
+
+# The marker in a grayscale image, for CellSAM. CellSAM returns a nuclear segmentation if only its nuclear slot is
+# filled. The other grayscale datasets fill every slot.
+GRAYSCALE_MARKER = {
+    "dynamicnuclearnet": "nucleus", "covid_if_nuclei": "nucleus", "cvz_fluo_dapi": "nucleus",
+    "xenium_nuclei": "nucleus", "bitdepth_nucseg": "nucleus", "bmgd": "nucleus", "cellbindb": "nucleus",
+    "u20s": "nucleus", "tsakiroglou": "nucleus", "ifnuclei": "nucleus",
+}
+
+# The datasets that CellSAM reads as the mean of their channels. Their channels have no fixed role across images, or
+# they are stained brightfield images such as H&E, where the mean measured better than RGB. IHC stays RGB, since
+# its brown and blue carry the signal.
+CHANNEL_MEAN_DATASETS = {
+    "neurips_cellseg_fluorescence", "neurips_cellseg_label_free", "cpm17", "glysac", "histo_miner", "lizard",
+    "lizard_mitosis", "lynsec_he", "monuseg", "pannuke", "puma", "tnbc_celltype", "pcns", "bccd", "organoid",
+}
+
 STARDIST_2D_MODEL = "2D_versatile_fluo"
+# Histopathology uses the model trained on H&E, which reads the RGB image directly.
+STARDIST_2D_HP_MODEL = "2D_versatile_he"
 STARDIST_3D_MODEL = "3D_demo"
 
 # micro-sam v1 model types
 SAM_V1_MODEL_TYPE = "vit_b_lm"
 
-# Per-dataset z/xy anisotropy for CellPose do_3D mode (z_voxel / xy_voxel).
+# The z/xy anisotropy of each dataset (z_voxel / xy_voxel). FOCUS-3D takes it as its z_ratio.
 DATASET_ANISOTROPY = {
     "embedseg_mouse_skull": 4.0,
     "embedseg_organoid": 6.0,
@@ -81,17 +125,16 @@ def _load_cellpose(model_type, device):
     return models.CellposeModel(gpu=use_gpu, model_type=model_type)
 
 
-def _load_stardist(ndim):
+def _load_stardist(ndim, dataset_name):
     from stardist.models import StarDist2D, StarDist3D
     if ndim == 3:
         return StarDist3D.from_pretrained(STARDIST_3D_MODEL)
-    return StarDist2D.from_pretrained(STARDIST_2D_MODEL)
+    return StarDist2D.from_pretrained(STARDIST_2D_HP_MODEL if dataset_name in DATASETS_HP else STARDIST_2D_MODEL)
 
 
 def _load_segneuron(checkpoint_path, device):
     import sys
     sys.path.insert(0, os.path.join(SEGNEURON_ROOT, "Train_and_Inference"))
-    sys.path.insert(0, os.path.join(SEGNEURON_ROOT, "Postprocess"))
     from collections import OrderedDict
     import torch
     from model.Mnet import MNet
@@ -105,6 +148,14 @@ def _load_segneuron(checkpoint_path, device):
     return model
 
 
+def _load_focus3d(model_type, checkpoint, device, batch_size, num_workers):
+    from focus3d_baseline import Focus3DSegmenter
+    return Focus3DSegmenter(
+        model_type=model_type, checkpoint=checkpoint, device=device,
+        batch_size=batch_size, data_loader_num_workers=num_workers,
+    )
+
+
 def _load_microsam_v1(method, model_type, checkpoint, device):
     from micro_sam.v1.automatic_segmentation import get_predictor_and_segmenter
     mode = {"microsam_ais": "ais", "microsam_apg": "apg"}[method]
@@ -113,29 +164,51 @@ def _load_microsam_v1(method, model_type, checkpoint, device):
     )
 
 
-def _segment_cellpose(image_or_volume, model, ndim, dataset_name=None):
+def _segment_cellpose(image_or_volume, model, ndim, dataset_name):
+    markers = MARKER_CHANNELS.get(dataset_name)
+    if type(model).__name__ == "Cellpose":
+        # CellPose 3 names the channel to segment and the nuclear one, 1-based with 0 for grayscale.
+        channels = [markers["cell"] + 1, markers["nucleus"] + 1] if markers else [0, 0]
+        channel_kwargs = {"channels": channels}
+    else:
+        # CellPose 4 reads the channels in any order and ignores 'channels'.
+        channel_kwargs = {"channel_axis": -1} if markers else {}
+
     if ndim == 3:
-        anisotropy = DATASET_ANISOTROPY.get(dataset_name, None)
+        # CellPose 3 cannot estimate the diameter of a volume, so pass the mean diameter, its own fallback.
+        diameter = model.diam_mean if type(model).__name__ == "Cellpose" else None
         masks = model.eval(
-            image_or_volume, diameter=None, channels=[0, 0], do_3D=True, anisotropy=anisotropy, z_axis=0,
+            image_or_volume, diameter=diameter, stitch_threshold=CELLPOSE_STITCH_THRESHOLD, z_axis=0, **channel_kwargs,
         )[0]
     else:
-        masks = model.eval(image_or_volume, diameter=None, channels=[0, 0])[0]
+        masks = model.eval(image_or_volume, diameter=None, **channel_kwargs)[0]
     return masks.astype("uint32")
 
 
 def _segment_stardist(image_or_volume, model, ndim):
     from csbdeep.utils import normalize as csbdeep_normalize
-    if ndim == 2 and image_or_volume.ndim == 3:
+    if ndim == 2 and image_or_volume.ndim == 3 and model.config.n_channel_in == 1:
         image_or_volume = image_or_volume.mean(axis=-1)
     inp = csbdeep_normalize(image_or_volume, 1.0, 99.8)
     seg, _ = model.predict_instances(inp) if ndim == 3 else model.predict_instances(inp, scale=1)
     return seg.astype("uint32")
 
 
-def _segment_cellsam(image):
+def _segment_cellsam(image, dataset_name):
     from cellSAM import cellsam_pipeline
-    if image.ndim == 2:
+    markers = MARKER_CHANNELS.get(dataset_name)
+    if dataset_name in CHANNEL_MEAN_DATASETS and image.ndim == 3:
+        image = image.mean(axis=-1)
+    if markers:
+        # CellSAM reads three channels as (blank, nuclear, whole-cell).
+        blank = np.zeros_like(image[..., 0])
+        image = np.stack([blank, image[..., markers["nucleus"]], image[..., markers["cell"]]], axis=-1)
+    elif GRAYSCALE_MARKER.get(dataset_name) == "nucleus":
+        if image.ndim == 3:  # The grayscale image is stored as identical channels.
+            image = image.mean(axis=-1)
+        blank = np.zeros_like(image)
+        image = np.stack([blank, image, blank], axis=-1)
+    elif image.ndim == 2:
         image = np.stack([image] * 3, axis=-1)
 
     seg = cellsam_pipeline(image, use_wsi=False)
@@ -145,11 +218,38 @@ def _segment_cellsam(image):
     return seg.astype("uint32")
 
 
+def _segneuron_multicut(affs, beta):
+    """Reproduce SegNeuron's 'FRMC_post.post_mc' against the installed elf.
+
+    The installed elf takes the segmentation as the second argument of every rag-consuming function,
+    which SegNeuron's own calls predate, so it raises before producing anything.
+
+    Args:
+        affs: The affinity map, of shape (3, Z, Y, X).
+        beta: The multicut bias towards over- or under-segmentation.
+
+    Returns:
+        The instance segmentation.
+    """
+    affs = 1 - affs
+    boundary_input = np.maximum(affs[1], affs[2])
+    seeds = np.zeros_like(boundary_input, dtype="uint64")
+    offset = 0
+    for z in range(seeds.shape[0]):
+        wsz, max_id = watershed.distance_transform_watershed(boundary_input[z], threshold=0.25, sigma_seeds=2.0)
+        seeds[z] = wsz + offset
+        offset += max_id
+
+    rag = features.compute_rag(seeds)
+    offsets = [[-1, 0, 0], [0, -1, 0], [0, 0, -1]]
+    costs = features.compute_affinity_features(rag, seeds, affs, offsets)[:, 0]
+    edge_sizes = features.compute_boundary_mean_and_length(rag, seeds, boundary_input)[:, 1]
+    costs = multicut.transform_probabilities_to_costs(costs, edge_sizes=edge_sizes, beta=beta)
+    return features.project_node_labels_to_pixels(rag, seeds, multicut.multicut_kernighan_lin(rag, costs))
+
+
 def _segment_segneuron(volume, model, device, beta=0.25):
-    import sys
     import torch
-    sys.path.insert(0, os.path.join(SEGNEURON_ROOT, "Postprocess"))
-    from FRMC_post import post_mc
 
     raw = volume.astype("float32") / 255.0 if volume.max() > 1.0 else volume.astype("float32")  # SegNeuron expects /255
     Z, Y, X = raw.shape
@@ -187,7 +287,18 @@ def _segment_segneuron(volume, model, device, beta=0.25):
     bound = bound_acc[:, hz:hz + Z, hy:hy + Y, hx:hx + X] / count[:, hz:hz + Z, hy:hy + Y, hx:hx + X]
 
     combined = np.minimum(np.stack([bound[0]] * 3), affs)
-    return post_mc(combined, beta=beta).astype("uint32")
+    return _segneuron_multicut(combined, beta=beta).astype("uint32")
+
+
+def _segment_focus3d(volume, segmenter, dataset_name, cell_radius, z_ratio):
+    """Segment one volume with FOCUS-3D, which rescales it to its own scale first.
+
+    `z_ratio` is the z-to-xy spacing ratio. `cell_radius` is the xy radius that the rescaling starts from.
+    The two are coupled: at a z_ratio of 1, FOCUS-3D rescales the z axis together with xy.
+    """
+    if z_ratio is None:
+        z_ratio = DATASET_ANISOTROPY.get(dataset_name, 1.0)
+    return segmenter(volume, z_ratio=z_ratio, cell_radius=cell_radius)
 
 
 def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
@@ -198,53 +309,46 @@ def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
     return seg.astype("uint32") if seg is not None else np.zeros(image_or_volume.shape, dtype="uint32")
 
 
-def _run_evaluation(segment_fn, dataset_name, data_root, ndim, save_path, desc):
+def _run_evaluation(segment_fn, dataset_name, data_root, save_path, desc, limit, sample_index, crop_shape=None):
+    if limit is not None:  # Name the file after the truncation, so it cannot pass for the full evaluation.
+        save_path = f"{save_path[:-4]}_n{limit}.csv"
     if os.path.exists(save_path):
         print(f"Results already stored at '{save_path}'.")
         return
-
-    total = n_samples(dataset_name, data_root)
-    all_gt, all_seg = [], []
-    samples = load_data(dataset_name, data_root, ndim)
-    for image_or_volume, labels, valid_roi in tqdm(samples, total=total, desc=desc):
-        if labels.max() == 0:  # Nothing to score without ground-truth.
-            continue
-
-        seg = segment_fn(image_or_volume)
-        if valid_roi is not None:
-            seg[~valid_roi] = 0
-        if ndim == 2:
-            # The ground truth has no severed objects either, so predicting one is not a false positive.
-            seg = drop_severed_objects(seg, GT_MIN_SIZE_2D.get(dataset_name, 0))
-        all_gt.append(labels)
-        all_seg.append(seg)
-
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    results = run_dataset_evaluation(all_gt, all_seg, dataset_name, save_path)
-    print(results)
+    evaluate_samples(
+        segment_fn, dataset_name, data_root, save_path, desc, limit=limit, crop_shape=crop_shape,
+        sample_index=sample_index,
+    )
 
 
-def run_cellpose_evaluation(dataset_name, data_root, experiment_folder, model_type, device):
+def run_cellpose_evaluation(dataset_name, data_root, experiment_folder, model_type, device, limit, sample_index):
+    if model_type in CELLPOSE3_MODELS and dataset_name in DATASETS_HP:
+        warnings.warn(
+            f"{model_type} is not a histopathology model and does not run on '{dataset_name}'. Skipping.",
+            UserWarning, stacklevel=2,
+        )
+        return
+
     ndim = 3 if dataset_name in DATASETS_3D else 2
     model = _load_cellpose(model_type, device)
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_cellpose_{model_type}.csv")
     _run_evaluation(
         lambda x: _segment_cellpose(x, model, ndim, dataset_name),
-        dataset_name, data_root, ndim, save_path, desc=f"cellpose-{model_type}",
+        dataset_name, data_root, save_path, desc=f"cellpose-{model_type}", limit=limit, sample_index=sample_index,
     )
 
 
-def run_stardist_evaluation(dataset_name, data_root, experiment_folder):
+def run_stardist_evaluation(dataset_name, data_root, experiment_folder, limit, sample_index):
     ndim = 3 if dataset_name in DATASETS_3D else 2
-    model = _load_stardist(ndim)
+    model = _load_stardist(ndim, dataset_name)
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_stardist.csv")
     _run_evaluation(
         lambda x: _segment_stardist(x, model, ndim),
-        dataset_name, data_root, ndim, save_path, desc="stardist",
+        dataset_name, data_root, save_path, desc="stardist", limit=limit, sample_index=sample_index,
     )
 
 
-def run_cellsam_evaluation(dataset_name, data_root, experiment_folder):
+def run_cellsam_evaluation(dataset_name, data_root, experiment_folder, limit, sample_index):
     if dataset_name in DATASETS_3D:
         warnings.warn(
             f"CellSAM is 2D-only and does not support 3D dataset '{dataset_name}'. Skipping.",
@@ -254,12 +358,14 @@ def run_cellsam_evaluation(dataset_name, data_root, experiment_folder):
 
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_cellsam.csv")
     _run_evaluation(
-        lambda x: _segment_cellsam(x),
-        dataset_name, data_root, ndim=2, save_path=save_path, desc="cellsam",
+        lambda x: _segment_cellsam(x, dataset_name),
+        dataset_name, data_root, save_path, desc="cellsam", limit=limit, sample_index=sample_index,
     )
 
 
-def run_segneuron_evaluation(dataset_name, data_root, experiment_folder, device, checkpoint_path=None):
+def run_segneuron_evaluation(
+    dataset_name, data_root, experiment_folder, device, limit, sample_index, checkpoint_path=None,
+):
     if dataset_name not in EM_DATASETS:
         warnings.warn(
             f"SegNeuron is 3D EM-only and does not support dataset '{dataset_name}'. Skipping.",
@@ -274,11 +380,40 @@ def run_segneuron_evaluation(dataset_name, data_root, experiment_folder, device,
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_segneuron.csv")
     _run_evaluation(
         lambda x: _segment_segneuron(x, model, device),
-        dataset_name, data_root, ndim=3, save_path=save_path, desc="segneuron",
+        dataset_name, data_root, save_path, desc="segneuron", limit=limit, sample_index=sample_index,
     )
 
 
-def run_microsam_v1_evaluation(dataset_name, data_root, experiment_folder, method, model_type, checkpoint, device):
+def run_focus3d_evaluation(
+    dataset_name, data_root, experiment_folder, model_type, checkpoint, device, cell_radius, limit, sample_index,
+    z_ratio=None, crop_shape=None, batch_size=FOCUS3D_BATCH_SIZE, num_workers=FOCUS3D_NUM_WORKERS,
+):
+    if dataset_name not in DATASETS_3D_LM:
+        warnings.warn(
+            f"FOCUS-3D is a 3d light microscopy method and does not support dataset '{dataset_name}'. Skipping.",
+            UserWarning, stacklevel=2,
+        )
+        return
+
+    segmenter = _load_focus3d(model_type, checkpoint, device, batch_size, num_workers)
+    if crop_shape is None and dataset_name not in EVAL_CROPS_3D:
+        # The harness default of 8 slices would leave most of the model's 32-deep window as padding.
+        crop_shape = (segmenter.patch_size[0],) + tuple(CROP_SHAPE_3D[1:])
+    depth = crop_shape[0] if crop_shape else EVAL_CROPS_3D[dataset_name][0][0]
+    print(f"FOCUS-3D has the patch size {segmenter.patch_size} and runs on crops of depth {depth}.")
+
+    # The crop depth is in the name: a baseline scored on another crop is not comparable.
+    save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_focus3d_{model_type}_z{depth}.csv")
+    _run_evaluation(
+        lambda x: _segment_focus3d(x, segmenter, dataset_name, cell_radius, z_ratio),
+        dataset_name, data_root, save_path, desc=f"focus3d-{model_type}", limit=limit, sample_index=sample_index,
+        crop_shape=crop_shape,
+    )
+
+
+def run_microsam_v1_evaluation(
+    dataset_name, data_root, experiment_folder, method, model_type, checkpoint, device, limit, sample_index,
+):
     if dataset_name in EM_DATASETS:
         raise ValueError(f"micro-sam v1 automatic methods do not support EM datasets; got '{dataset_name}'.")
     ndim = 3 if dataset_name in DATASETS_3D else 2
@@ -286,7 +421,7 @@ def run_microsam_v1_evaluation(dataset_name, data_root, experiment_folder, metho
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_{method}_{model_type}.csv")
     _run_evaluation(
         lambda x: _segment_microsam_v1(x, predictor, segmenter, ndim),
-        dataset_name, data_root, ndim, save_path, desc=method,
+        dataset_name, data_root, save_path, desc=method, limit=limit, sample_index=sample_index,
     )
 
 
@@ -302,8 +437,21 @@ def main():
     )
     parser.add_argument(
         "-c", "--checkpoint", type=str, default=None,
-        help="Checkpoint path for the micro-sam v1 and segneuron methods."
+        help="Checkpoint path for the micro-sam v1, segneuron and focus3d methods."
     )
+    parser.add_argument(
+        "--crop_3d", type=int, nargs=3, default=None,
+        help="Override the 3d center crop. FOCUS-3D defaults to its own window depth."
+    )
+    parser.add_argument("--cell_radius", type=float, default=FOCUS3D_CELL_RADIUS, help="The xy radius to rescale from.")
+    parser.add_argument(
+        "--z_ratio", type=float, default=None,
+        help="The z-to-xy spacing ratio. Defaults to the anisotropy."
+    )
+    parser.add_argument("--batch_size", type=int, default=FOCUS3D_BATCH_SIZE, help="Patches per forward pass.")
+    parser.add_argument("--num_workers", type=int, default=FOCUS3D_NUM_WORKERS, help="Data loader workers.")
+    parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
+    parser.add_argument("--sample_index", type=int, default=None, help="Score only this sample, as one array task.")
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
@@ -312,27 +460,45 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     if args.method == "cellpose":
-        for model_type in ((args.model_type,) if args.model_type else ("cyto3", "cpsam")):
+        for model_type in ((args.model_type,) if args.model_type else CELLPOSE_MODELS):
             run_cellpose_evaluation(
                 args.dataset_name, args.input_path, args.experiment_folder, model_type=model_type, device=device,
+                limit=args.n_samples, sample_index=args.sample_index,
             )
 
     elif args.method == "stardist":
-        run_stardist_evaluation(args.dataset_name, args.input_path, args.experiment_folder)
+        run_stardist_evaluation(
+            args.dataset_name, args.input_path, args.experiment_folder, limit=args.n_samples,
+            sample_index=args.sample_index,
+        )
 
     elif args.method == "cellsam":
-        run_cellsam_evaluation(args.dataset_name, args.input_path, args.experiment_folder)
+        run_cellsam_evaluation(
+            args.dataset_name, args.input_path, args.experiment_folder, limit=args.n_samples,
+            sample_index=args.sample_index,
+        )
 
     elif args.method in ("microsam_ais", "microsam_apg"):
         run_microsam_v1_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder, method=args.method,
             model_type=args.model_type or SAM_V1_MODEL_TYPE, checkpoint=args.checkpoint, device=device,
+            limit=args.n_samples, sample_index=args.sample_index,
+        )
+
+    elif args.method == "focus3d":
+        run_focus3d_evaluation(
+            args.dataset_name, args.input_path, args.experiment_folder,
+            model_type=args.model_type or FOCUS3D_DEFAULT_MODEL, checkpoint=args.checkpoint, device=device,
+            cell_radius=args.cell_radius, z_ratio=args.z_ratio,
+            crop_shape=tuple(args.crop_3d) if args.crop_3d else None,
+            batch_size=args.batch_size, num_workers=args.num_workers, limit=args.n_samples,
+            sample_index=args.sample_index,
         )
 
     elif args.method == "segneuron":
         run_segneuron_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            device=device, checkpoint_path=args.checkpoint,
+            device=device, checkpoint_path=args.checkpoint, limit=args.n_samples, sample_index=args.sample_index,
         )
 
     else:

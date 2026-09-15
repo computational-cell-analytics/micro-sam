@@ -18,6 +18,7 @@ Usage examples:
 import os
 import json
 import time
+import shlex
 import argparse
 import warnings
 import itertools
@@ -36,6 +37,8 @@ import torch
 from elf.evaluation import mean_segmentation_accuracy
 
 from bioimage_cpp.segmentation import label as connected_components, watershed
+
+from bioimage_py.evaluation import symmetric_best_dice_score
 
 from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_density
 
@@ -175,14 +178,16 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_over
 def compute_metrics(seg, labels, metric_mode, border_min_size=0):
     """Compute the evaluation metrics for one segmentation.
 
-    Always reports mSA. For dense (EM neuron) mode it additionally reports the CREMI score and its
-    VI-split / VI-merge / adapted-Rand components, since neuron segmentation is ranked by CREMI
-    (lower is better) rather than mSA.
+    The function always reports mSA. Sparse mode also logs the symmetric best Dice (SBD), which no ranking uses.
+    Dense (EM neuron) mode also reports the CREMI score with its VI-split, VI-merge and adapted-Rand components.
+    Neuron segmentation is ranked by CREMI (lower is better) instead of mSA.
     """
     if seg.ndim == 2:
         # Symmetric with the ground truth, which `load_evaluation_sample_2d` filtered the same way.
         seg = drop_severed_objects(seg, border_min_size)
     metrics = {"msa": float(mean_segmentation_accuracy(seg, labels))}
+    if metric_mode == "sparse":
+        metrics["sbd"] = float(symmetric_best_dice_score(seg, labels))
     if metric_mode == "dense":
         from elf.evaluation import cremi_score
         vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, labels)
@@ -689,15 +694,21 @@ REGISTRY_DATASETS = [
     "bccd", "cell_acdc", "cellular", "cisd", "vicar", "microbeseg", "orgline", "organoid", "mcellseg", "toiam",
     "bbbc030",
     # Light microscopy 3d, tuned on the loader val splits (gonuclear is listed above).
-    "plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
+    "plantseg_root", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
     "embedseg_mouse_skull", "embedseg_platy_ish", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "nucverse3d",
 ]
 
 PARTITION = "grete:preemptible"
 # The micro-sam2 environment on grete; every array task activates it.
 ENV = "super"
+
+# Which joint training version a task sweeps. Pinned into the array script, so a queued task sweeps
+# the weights the submission chose rather than whatever the environment holds when it starts.
+JOINT_ENV_VARS = ("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", "MICRO_SAM2_JOINT_EXPORT_ROOT")
 CPUS = 4
-TIME_LIMIT_2D = "02:00:00"
+# A 2d task took 54 min at worst as a shard and 62 min unsharded, with the slow histopathology datasets
+# sharded (REGISTRY_2D_SHARDS). A longer limit only keeps the task out of the backfill window.
+TIME_LIMIT_2D = "01:30:00"
 TIME_LIMIT_3D = "04:00:00"
 MAX_CONCURRENT = 20
 N_ATTEMPTS = 3
@@ -765,6 +776,9 @@ REGISTRY_2D_SHARDS = {
     ("toiam", "ais"): 4, ("toiam", "apg"): 24,
     ("bmgd", "ais"): 4, ("bmgd", "apg"): 24,
     ("pan_multiplex", "ais"): 4, ("pan_multiplex", "apg"): 24,
+    # Histopathology APG on v5a: dense nuclei make every proposal slow. Unsharded, lizard took 187 s per sample
+    # (3.6 h) and lynsec_ihc 125 s per sample. lynsec_he and monuseg took 93 and 89 min. Only APG was timed here.
+    ("lizard", "apg"): 12, ("lynsec_ihc", "apg"): 12, ("lynsec_he", "apg"): 4, ("monuseg", "apg"): 4,
 }
 
 
@@ -797,18 +811,19 @@ def registry_gpu_tier(dataset_name, model_type):
     return gpu, MEM_3D, TIME_LIMIT_3D
 
 
-def registry_command(
-    experiment_folder, data_root, model_type, mode, dataset_name, shard_index, num_shards, merge=False,
+def tuning_command(
+    experiment_folder, data_root, model_type, mode, dataset_name, shard_index, num_shards, weights, merge=False,
 ):
-    """The parameter_search.py invocation for one (shard of a) registry tuning job, or its merge."""
-    decoder = os.path.join(MODELS_ROOT, f"{model_type}_cells_decoder")
+    """The parameter_search.py invocation for one (shard of a) tuning job, or its merge.
+
+    Args:
+        weights: The flags selecting the weights, from `registry_weights` or `joint_weights`.
+    """
     command = [
         "python", str(EVAL_ROOT / "parameter_search.py"),
         "-d", dataset_name, "-i", data_root, "-e", experiment_folder,
-        "-m", model_type, "--mode", mode, "-c", decoder,
+        "-m", model_type, "--mode", mode, *weights,
     ]
-    if mode == "apg":
-        command.extend(["--interactive_checkpoint", os.path.join(MODELS_ROOT, f"{model_type}_cells")])
     if dataset_name in REGISTRY_N_TUNING_SAMPLES:
         command.extend(["--n_tuning_samples", str(REGISTRY_N_TUNING_SAMPLES[dataset_name])])
     if dataset_name == "platynereis_nuclei":
@@ -823,6 +838,19 @@ def registry_command(
     return " ".join(command)
 
 
+def registry_weights(model_type, mode):
+    """The weight flags of the registry sweep: the released '{model_type}_cells' checkpoints."""
+    weights = ["-c", os.path.join(MODELS_ROOT, f"{model_type}_cells_decoder")]
+    if mode == "apg":
+        weights.extend(["--interactive_checkpoint", os.path.join(MODELS_ROOT, f"{model_type}_cells")])
+    return weights
+
+
+def joint_weights(joint_checkpoint):
+    """The weight flags of a joint sweep. The training version comes from JOINT_ENV_VARS."""
+    return ["--joint_checkpoint", joint_checkpoint]
+
+
 def registry_job_tasks(experiment_folder, data_root):
     """Every (tag, command) pair for the registry sweep, split into direct / shard / merge groups.
 
@@ -833,22 +861,56 @@ def registry_job_tasks(experiment_folder, data_root):
         for mode in MODES:
             for dataset_name in REGISTRY_DATASETS:
                 num_shards = registry_num_shards(dataset_name, mode)
-                gpu, _, _ = registry_gpu_tier(dataset_name, model_type)
+                tier = registry_gpu_tier(dataset_name, model_type)
                 base_tag = f"tune_{model_type}_cells_{mode}_{dataset_name}"
+                weights = registry_weights(model_type, mode)
                 if num_shards == 1:
-                    command = registry_command(experiment_folder, data_root, model_type, mode, dataset_name, 0, 1)
-                    groups.setdefault(("direct", gpu), []).append((base_tag, command))
+                    command = tuning_command(
+                        experiment_folder, data_root, model_type, mode, dataset_name, 0, 1, weights
+                    )
+                    groups.setdefault(("direct", *tier), []).append((base_tag, command))
                     continue
                 for shard_index in range(num_shards):
                     tag = f"{base_tag}_shard{shard_index}of{num_shards}"
-                    command = registry_command(
-                        experiment_folder, data_root, model_type, mode, dataset_name, shard_index, num_shards
+                    command = tuning_command(
+                        experiment_folder, data_root, model_type, mode, dataset_name, shard_index, num_shards, weights
                     )
-                    groups.setdefault(("shard", gpu), []).append((tag, command))
-                merge_command = registry_command(
-                    experiment_folder, data_root, model_type, mode, dataset_name, 0, num_shards, merge=True
+                    groups.setdefault(("shard", *tier), []).append((tag, command))
+                merge_command = tuning_command(
+                    experiment_folder, data_root, model_type, mode, dataset_name, 0, num_shards, weights, merge=True
                 )
-                groups.setdefault(("merge", gpu), []).append((f"{base_tag}_merge", merge_command))
+                groups.setdefault(("merge", *tier), []).append((f"{base_tag}_merge", merge_command))
+    return groups
+
+
+def joint_job_tasks(experiment_folder, data_root, model_type, mode, joint_checkpoint):
+    """Every (tag, command) pair of a joint-checkpoint sweep, split into direct / shard / merge groups.
+
+    Mirrors `registry_job_tasks` for one model type and one mode, over the registry datasets.
+
+    Returns:
+        A dict {(group, gpu): [(tag, command), ...]}, group in {'direct', 'shard', 'merge'}.
+    """
+    weights = joint_weights(joint_checkpoint)
+    groups = {}
+    for dataset_name in REGISTRY_DATASETS:
+        num_shards = registry_num_shards(dataset_name, mode)
+        tier = registry_gpu_tier(dataset_name, model_type)
+        base_tag = f"tune_{model_type}_joint_{mode}_{dataset_name}"
+        if num_shards == 1:
+            command = tuning_command(experiment_folder, data_root, model_type, mode, dataset_name, 0, 1, weights)
+            groups.setdefault(("direct", *tier), []).append((base_tag, command))
+            continue
+        for shard_index in range(num_shards):
+            tag = f"{base_tag}_shard{shard_index}of{num_shards}"
+            command = tuning_command(
+                experiment_folder, data_root, model_type, mode, dataset_name, shard_index, num_shards, weights
+            )
+            groups.setdefault(("shard", *tier), []).append((tag, command))
+        merge_command = tuning_command(
+            experiment_folder, data_root, model_type, mode, dataset_name, 0, num_shards, weights, merge=True
+        )
+        groups.setdefault(("merge", *tier), []).append((f"{base_tag}_merge", merge_command))
     return groups
 
 
@@ -859,6 +921,11 @@ def write_tasks_file(job_folder, name, tasks):
         for tag, command in tasks:
             f.write(f"{tag}\t{command}\n")
     return tasks_path
+
+
+def env_exports():
+    """Return 'export' lines pinning the joint training version, or an empty string if none is set."""
+    return "".join(f"export {name}={shlex.quote(os.environ[name])}\n" for name in JOINT_ENV_VARS if name in os.environ)
 
 
 def write_array_script(job_folder, name, tasks_path, n_tasks, gpu, memory, time_limit, dependency=None):
@@ -880,7 +947,7 @@ def write_array_script(job_folder, name, tasks_path, n_tasks, gpu, memory, time_
 
 source ~/.bashrc
 micromamba activate {ENV}
-
+{env_exports()}
 line=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" {tasks_path})
 tag=$(cut -f1 <<< "$line")
 command=$(cut -f2- <<< "$line")
@@ -913,29 +980,28 @@ def submit_job(script: Path, dependency=None) -> str:
     return job_id
 
 
-def generate_registry_jobs(experiment_folder, data_root, dry):
-    """Write (and, unless 'dry', submit) the job arrays of the full registry-checkpoint sweep."""
-    job_folder = EVAL_ROOT / "gpu_jobs" / f"cells_registry_tune_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    (job_folder / "logs").mkdir(parents=True, exist_ok=True)
+def submit_job_arrays(job_folder, groups, dry):
+    """Write one array script per (group, tier) and submit it, each merge after the shards it needs.
 
-    groups = registry_job_tasks(experiment_folder, data_root)
-
+    A tier is (gpu, memory, time_limit), so the 2d and the 3d tasks of one group do not share a
+    reservation: 2d tasks reserving the 3d memory starve the nodes long before the GPUs run out.
+    """
     direct_scripts, shard_scripts, merge_scripts = [], [], []
-    for (group, gpu), tasks in groups.items():
-        name = f"{group}_{gpu_pool_label(gpu)}"
+    for (group, *tier), tasks in groups.items():
+        gpu, memory, time_limit = tier
+        name = f"{group}_{gpu_pool_label(gpu)}_{memory}"
         tasks_path = write_tasks_file(job_folder, name, tasks)
-        memory, time_limit = (MEM_2D, TIME_LIMIT_2D) if group == "direct" else (MEM_3D, TIME_LIMIT_3D)
         script = write_array_script(job_folder, name, tasks_path, len(tasks), gpu, memory, time_limit)
         if group == "direct":
             direct_scripts.append(script)
         elif group == "shard":
-            shard_scripts.append((gpu, script))
+            shard_scripts.append((tuple(tier), script))
         else:
-            merge_scripts.append((gpu, script))
+            merge_scripts.append((tuple(tier), script))
 
-    n_direct = sum(len(t) for (g, _), t in groups.items() if g == "direct")
-    n_shard = sum(len(t) for (g, _), t in groups.items() if g == "shard")
-    n_merge = sum(len(t) for (g, _), t in groups.items() if g == "merge")
+    n_direct = sum(len(t) for (g, *_), t in groups.items() if g == "direct")
+    n_shard = sum(len(t) for (g, *_), t in groups.items() if g == "shard")
+    n_merge = sum(len(t) for (g, *_), t in groups.items() if g == "merge")
     print(
         f"Wrote {len(direct_scripts) + len(shard_scripts) + len(merge_scripts)} array script(s) to "
         f"'{job_folder}': {n_direct} direct task(s), {n_shard} shard task(s), {n_merge} merge task(s)."
@@ -946,9 +1012,31 @@ def generate_registry_jobs(experiment_folder, data_root, dry):
     for script in direct_scripts:
         submit_job(script)
 
-    shard_job_ids = {gpu: submit_job(script) for gpu, script in shard_scripts}
-    for gpu, script in merge_scripts:
-        submit_job(script, dependency=f"afterany:{shard_job_ids[gpu]}")
+    shard_job_ids = {tier: submit_job(script) for tier, script in shard_scripts}
+    for tier, script in merge_scripts:
+        submit_job(script, dependency=f"afterany:{shard_job_ids[tier]}")
+
+
+def generate_registry_jobs(experiment_folder, data_root, dry):
+    """Write (and, unless 'dry', submit) the job arrays of the full registry-checkpoint sweep."""
+    job_folder = EVAL_ROOT / "gpu_jobs" / f"cells_registry_tune_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    (job_folder / "logs").mkdir(parents=True, exist_ok=True)
+    submit_job_arrays(job_folder, registry_job_tasks(experiment_folder, data_root), dry)
+
+
+def generate_joint_jobs(experiment_folder, data_root, model_type, mode, joint_checkpoint, dry):
+    """Write (and, unless 'dry', submit) the job arrays of a joint-checkpoint sweep.
+
+    The training version comes from JOINT_ENV_VARS, which the array script pins at submission time.
+    """
+    missing = [name for name in JOINT_ENV_VARS if name not in os.environ]
+    if missing:
+        raise ValueError(f"Set {missing} to the training version to sweep, so the tasks do not read another one.")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    job_folder = EVAL_ROOT / "gpu_jobs" / f"joint_tune_{model_type}_{mode}_{stamp}"
+    (job_folder / "logs").mkdir(parents=True, exist_ok=True)
+    groups = joint_job_tasks(experiment_folder, data_root, model_type, mode, joint_checkpoint)
+    submit_job_arrays(job_folder, groups, dry)
 
 
 def main():
@@ -1002,12 +1090,26 @@ def main():
         help="Write (and submit) the Slurm job arrays for the full registry-checkpoint sweep, instead of tuning.",
     )
     parser.add_argument(
-        "--dry", action="store_true", help="With --generate_registry_jobs, only write the scripts; do not submit.",
+        "--generate_joint_jobs", action="store_true",
+        help="Write (and submit) the Slurm job arrays sweeping the joint checkpoint of JOINT_ENV_VARS.",
+    )
+    parser.add_argument(
+        "--dry", action="store_true", help="With either --generate_*_jobs, only write the scripts; do not submit.",
     )
     args = parser.parse_args()
 
     if args.generate_registry_jobs:
         generate_registry_jobs(args.experiment_folder or REGISTRY_EXPERIMENT_FOLDER, args.input_path, args.dry)
+        return
+
+    if args.generate_joint_jobs:
+        if args.experiment_folder is None:
+            parser.error("-e/--experiment_folder is required with --generate_joint_jobs.")
+        if len(args.mode) != 1:
+            parser.error("--generate_joint_jobs sweeps one mode at a time; pass a single --mode.")
+        generate_joint_jobs(
+            args.experiment_folder, args.input_path, args.model_type, args.mode[0], args.joint_checkpoint, args.dry
+        )
         return
 
     if args.experiment_folder is None:

@@ -55,7 +55,7 @@ the refinement statistics columns, and the configuration files under `optimizati
   re-submits the unfinished tasks; `--local` runs the same tasks sequentially on the session GPU.
   `MICRO_SAM2_JOINT_CHECKPOINT_ROOT` and `MICRO_SAM2_JOINT_EXPORT_ROOT` are pinned into `job.sh`
   (`PINNED_ENV_VARS`), so a job resolves the same checkpoints as the shell that submitted it.
-- Production evaluations go through `submit_all_evaluations.py` (one job per dataset and mode, 8 h,
+- Production evaluations go through `submit_all_evaluations.py` (job arrays, one task per dataset and mode, 8 h,
   `grete:preemptible`, `--constraint=inet`): 2D jobs `1g.10gb:1` / 16G, 3D jobs `1g.20gb:1` / 64G, both
   checkpoint variables pinned into the script; `--gpu`, `--memory`, `--env`, `--dry` override or inspect.
 - Always `--dry-run` first and read `job.sh`; `sbatch --test-only job.sh` checks the header.
@@ -185,7 +185,22 @@ Constants: `DEEP_DEPTH = 32` (`MIN_REALIZED_DEPTH = 24` slices of annotation mak
   (HDF5 per crop) and `view_apg3d_cases.py` (napari).
 - Per sample: `parameter_search.compute_metrics` gives `msa` (`elf.evaluation.mean_segmentation_accuracy`)
   and, for `metric_mode="dense"`, `cremi`, `vi_split`, `vi_merge`, `adapted_rand`. 2D segmentations pass
-  through `drop_severed_objects` first, symmetric with the ground-truth filtering.
+  through `drop_severed_objects` first, symmetric with the ground-truth filtering. Since 2026-09-14,
+  `compute_metrics` also logs `sbd` (symmetric best Dice) for `metric_mode="sparse"`. No ranking uses `sbd`.
+- Production evaluation (`evaluate_automatic_segmentation.py`, `evaluate_automatic_baselines.py` and the
+  interactive scripts) scores through `common.run_dataset_evaluation`. Every metric is a mean over the samples.
+  - Instance segmentation: mSA, SA50, SA75, precision, recall and F1 (`micro_sam.v1.evaluation.run_evaluation`),
+    and `SBD`, the symmetric best Dice (`bioimage_py.evaluation.symmetric_best_dice_score`, background
+    ignored). SBD exists since 2026-09-14. Older result files have no `SBD` column.
+  - Dense EM: `cremi`, `vi_split`, `vi_merge` and `adapted_rand`, without SBD.
+  - Volumes also report the sums `unmatched` and `genuine_misses`.
+  - 3D test volumes are scored on the pinned crops of `eval_crops_3d.json` (`common.EVAL_CROPS_3D`), with one
+    sample per crop. The crops are 32 deep and at most 512 in plane. They tile the annotated bounding box
+    without overlap and stay clear of tuning data. Near-empty crops are left out.
+  - platynereis_nuclei is read inside the annotated block that training uses as its roi
+    (`common.PLATYNEREIS_NUCLEI_TEST_ROIS`).
+  - `submit_all_evaluations.py --per_sample` runs one array task per sample. A task that finds the rows of all
+    samples writes the dataset result (`common.evaluate_samples`). It refuses rows whose metric columns differ.
 - 2D aggregation (`_summarize`): per-dataset mean and std, then the row `__dataset_balanced__` = the
   equal-weight mean of the per-dataset means. This is "balanced mSA".
 - 3D aggregation (`benchmark_apg_3d.summarize`): per-dataset mean with a 2000-sample bootstrap CI,
@@ -272,6 +287,14 @@ Epochs of the 2026-09 campaigns: `aeb1aca09a5fff43d2b8bb8bacff2b06` (campaign st
 `e1903b1b3c1e4e3610c71e1d0bd81f1d` (2026-09-06, harness-only: the `parameter_search.py` job template activates `new-stack`,
 results unaffected). Historical run directories
 stay valid records under their own epochs; the 3D aggregate reads them through `sibling_run_dirs`.
+
+Later epochs, recorded on 2026-09-15:
+
+- `6bfb3121744c127074739f6897a085c3` (commit `a5893c36`, 2026-09-13): job-array sweeps of a joint checkpoint.
+- `86fd931ef4019032002d04cab12df118` (2026-09-15, uncommitted): pinned 3D evaluation crops in `eval_crops_3d.json`,
+  per-sample evaluation, the platynereis_nuclei test rois, the `covid_if_cells` channel layout, and APG overrides
+  from a JSON configuration. `compute_metrics` also logs `sbd` for sparse datasets. The ranking stays on mSA or
+  CREMI, and the tuning splits are unchanged.
 
 ## 12. Output root layout
 
