@@ -7,16 +7,26 @@ Usage:
     python interactive_visualization.py -d beke_big --slice_norm  # each slice normalized by its own percentiles
     python interactive_visualization.py -d beke_small_crop  # the embryo of beke_small, upsampled 2x by SAM2
     python interactive_visualization.py -d beke_big_crop  # the embryo of beke_big, upsampled 2x by SAM2
+    python interactive_visualization.py -d beke_big_crop --iterative_prompting  # prompted from the ground truth
 """
 
 import os
 import argparse
 
+import h5py
 import zarr
 import tifffile
 import numpy as np
 
 import napari
+
+from elf.evaluation import mean_segmentation_accuracy
+
+from torch_em.util.segmentation import size_filter
+
+from bioimage_cpp.segmentation import label as connected_components
+
+from bioimage_py.evaluation import symmetric_best_dice_score
 
 from micro_sam.sam_annotator import Annotator
 from micro_sam.v2.normalization import normalize_raw
@@ -24,16 +34,23 @@ from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam.sam_annotator._titles import get_dock_title
 from micro_sam.sam_annotator.util import _sync_embedding_widget
 from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings
+from micro_sam.v2.evaluation.inference import run_interactive_segmentation_3d
 
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 EMBEDDING_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/interactive_visualization"
+ITERATIVE_PROMPTING_ROOT = os.path.join(EMBEDDING_ROOT, "iterative_prompting")
 DATASETS = ["beke_big", "beke_big_crop", "beke_small", "beke_small_crop", "liconn"]
+N_ITERATIONS = 8
+# Drops the specks of 'filtered_gt': its 19 cells have >= 105k voxels, every other object <= 4k.
+MIN_SIZE = 5000
 
 # The two beke volumes: big is fused t0 (208, 1024, 1024), small is 3.5hpf (79, 1024, 1024).
 BEKE_BIG_PATH = os.path.join(DATA_ROOT, "beke_data", "fused_t000000_R0000_C02_Dfinal.tif")
 # ZYX, the 512x512 region around the embryo, identical to the raw of 'embryo_fused_t0_crop.h5'.
 BEKE_BIG_ROI = (slice(0, 208), slice(215, 727), slice(253, 765))
+# The ground truth of beke_big_crop, where 'filtered_gt' drops the fragments of 'gt'.
+BEKE_BIG_GT_PATH = os.path.join(DATA_ROOT, "beke_data", "embryo_fused_t0_crop.h5")
 BEKE_SMALL_PATH = os.path.join(DATA_ROOT, "beke_data", "C2-Pdu_Composite_3.5hpf_HRas-mScarlet_H2B-GFP.tif")
 # ZYX, the 512x512 region around the embryo, identical to the raw of 'embryo_3.5hpf_crop.h5'.
 BEKE_SMALL_ROI = (slice(0, 79), slice(211, 723), slice(255, 767))
@@ -106,6 +123,43 @@ def run_annotator(volume, embedding_path, model_type):
     napari.run()
 
 
+def run_iterative_prompting(volume, name, model_type, prompt):
+    with h5py.File(BEKE_BIG_GT_PATH, "r") as f:
+        gt = f["filtered_gt"][:]
+    # The inference relabels and filters the ground truth like this, so the predicted ids match these.
+    labels = size_filter(seg=connected_components(gt).astype(gt.dtype), min_size=MIN_SIZE)
+
+    # Each slice is normalized on its own, as in training and in the interactive evaluation.
+    prediction_dir = run_interactive_segmentation_3d(
+        raw=np.stack([normalize_raw(z_slice, output_dtype="uint8") for z_slice in volume]),
+        labels=gt,
+        model_type=model_type,
+        checkpoint_path=None,
+        start_with_box_prompt=prompt == "box",
+        prediction_dir=os.path.join(ITERATIVE_PROMPTING_ROOT, f"{name}_{model_type}"),
+        prediction_fname=name,
+        n_iterations=N_ITERATIONS,
+        min_size=MIN_SIZE,
+    )
+    segmentations = [
+        tifffile.imread(os.path.join(prediction_dir, f"iteration{i}", f"{name}.tif")).astype(labels.dtype)
+        for i in range(N_ITERATIONS)
+    ]
+
+    for i, segmentation in enumerate(segmentations):
+        msa, sa = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
+        sbd = symmetric_best_dice_score(segmentation, labels)
+        print(f"Iteration {i}: mSA {msa:.4f}, SA50 {sa[0]:.4f}, SA75 {sa[5]:.4f}, SBD {sbd:.4f}")
+
+    output_path = os.path.join(ITERATIVE_PROMPTING_ROOT, f"{name}_{model_type}_{prompt}.h5")
+    with h5py.File(output_path, "w") as f:
+        f.create_dataset("raw", data=volume, compression="gzip")
+        f.create_dataset("gt", data=labels, compression="gzip")
+        for i, segmentation in enumerate(segmentations):
+            f.create_dataset(f"iterations/{i}", data=segmentation, compression="gzip")
+    print(f"Saved the raw data, ground truth and segmentations to {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-d", "--dataset", required=True, choices=DATASETS)
@@ -113,10 +167,17 @@ def main():
     parser.add_argument("--view", action="store_true", help="Only show the raw volume in napari.")
     parser.add_argument("--precompute", action="store_true", help="Only precompute the embeddings.")
     parser.add_argument("--slice_norm", action="store_true", help="Normalize each slice instead of the volume.")
+    parser.add_argument("--iterative_prompting", action="store_true", help="Prompt from the ground truth instead.")
+    parser.add_argument("-p", "--prompt", default="box", choices=["box", "point"], help="The first prompt per object.")
     args = parser.parse_args()
+    if args.iterative_prompting and args.dataset != "beke_big_crop":
+        parser.error("Only 'beke_big_crop' has ground truth for iterative prompting.")
 
     volume, name = load_volume(args.dataset)
     print(f"Loaded {name} with shape {volume.shape} and dtype {volume.dtype}")
+    if args.iterative_prompting:
+        run_iterative_prompting(volume, name, args.model_type, args.prompt)
+        return
     if args.slice_norm:
         volume = normalize_per_slice(volume)
         name = f"{name}_slice_norm"

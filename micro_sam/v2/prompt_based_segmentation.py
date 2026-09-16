@@ -528,9 +528,12 @@ def tiled_promptable_segmentation_2d(
 class PromptableSegmentation3D:
     """Promptable segmentation class for volumetric data.
     """
+    # On the class, so that an instance built without '__init__' still reads it.
+    release_stale_mask_memory = False
+
     def __init__(
         self, predictor, volume, volume_embeddings, device=None,
-        offload_state_to_cpu=None, max_cached_frames=None,
+        offload_state_to_cpu=None, max_cached_frames=None, release_stale_mask_memory=False,
     ):
         from micro_sam.v2.util import _get_device
         self.predictor = predictor
@@ -544,6 +547,8 @@ class PromptableSegmentation3D:
         self.offload_state_to_cpu = (not is_mps) if offload_state_to_cpu is None else offload_state_to_cpu
         # A pass walks every slice, so a feature cache shorter than the volume is never hit.
         self.max_cached_frames = max_cached_frames
+        # Saves device memory, but only for a caller that resets the tracking before prompting again.
+        self.release_stale_mask_memory = release_stale_mask_memory
 
         if self.volume.ndim != 3:
             raise AssertionError(f"The dimensionality of the volume must be 3, got '{self.volume.ndim}'")
@@ -979,7 +984,7 @@ class PromptableSegmentation3D:
         video_segments = {}
         consecutive_empty = 0
         for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(
-            self.inference_state, reverse=reverse,
+            self.inference_state, reverse=reverse, release_stale_mask_memory=self.release_stale_mask_memory,
         ):
             # Hard z-range bound: stop once propagation would leave the user-selected slice range.
             if z_range is not None and not (z_range[0] <= out_frame_idx <= z_range[1]):
