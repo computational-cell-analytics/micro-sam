@@ -98,11 +98,12 @@ def _load_rescaled(h5_path, key, factor, order=1):
     return out.astype("uint32" if order == 0 else "float32")
 
 
-def _remove_small_fragments(seg, min_size):
-    """Zero the connected pieces of each label that have fewer than min_size voxels."""
+def _remove_artifacts(seg, min_size):
+    """Zero the connected pieces of each label with fewer than min_size voxels or on a single z slice."""
     components = sk_label(seg, background=0, connectivity=seg.ndim)
     sizes = np.bincount(components.ravel())
-    seg[sizes[components] < min_size] = 0
+    n_slices = np.bincount(np.concatenate([np.unique(z_slice) for z_slice in components]), minlength=len(sizes))
+    seg[(sizes[components] < min_size) | (n_slices[components] == 1)] = 0
     return seg
 
 
@@ -565,7 +566,7 @@ def run_beke_big_crop():
     with h5py.File(h5_path, "r") as f:
         z_2d = f["raw"].shape[0] // 2
         raw_2d_full = f["raw"][z_2d][:].astype("float32")
-        seg = _remove_small_fragments(f[f"iterations/{BEKE_ITERATION}"][:], BEKE_MIN_FRAGMENT_SIZE)
+        seg = _remove_artifacts(f[f"iterations/{BEKE_ITERATION}"][:], BEKE_MIN_FRAGMENT_SIZE)
     seg_2d = seg[z_2d]
 
     # uint8 holds every id and renders much faster in 3d than uint32.
