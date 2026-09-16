@@ -190,7 +190,9 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(rgb.dtype, np.uint8)
         self.assertTrue(np.array_equal(rgb[..., 0], rgb[..., 1]))
         self.assertFalse(np.any(rgb[..., 2]))
-        self.assertTrue(np.array_equal(rgb, _to_image(image)))
+        self.assertTrue(np.array_equal(rgb[..., :2], normalize_raw(image, axis=(0, 1), output_dtype="uint8")))
+        # The legacy SAM1 conversion remains min-max; SAM2 follows percentile-normalized training.
+        self.assertFalse(np.array_equal(rgb, _to_image(image)))
 
     def test_normalization_invalidates_incompatible_embeddings(self):
         from types import SimpleNamespace
@@ -199,7 +201,7 @@ class TestUtil(unittest.TestCase):
         from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING
         from micro_sam.v2.util import _check_saved_embeddings, _normalization_bounds_digest
 
-        self.assertEqual(IMAGE_PREPROCESSING, "minmax_per_channel")
+        self.assertEqual(IMAGE_PREPROCESSING, "percentile_2_98_per_channel_uint8_v2")
         self.assertEqual(VIDEO_PREPROCESSING, "percentile_2_98_per_channel_torch_resize_v3")
 
         predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test", device="cpu")
@@ -225,7 +227,9 @@ class TestUtil(unittest.TestCase):
         # A complete cache is reused only under the policy it was written with.
         self.assertFalse(run(full_cache(IMAGE_PREPROCESSING), IMAGE_PREPROCESSING))
         self.assertFalse(run(full_cache(VIDEO_PREPROCESSING, norm_bounds), VIDEO_PREPROCESSING, norm_bounds))
-        # A 2d min-max cache is not reused for the 3d percentile policy and vice versa.
+        # Min-max embeddings from older versions must be recomputed, including partial caches.
+        self.assertTrue(run(full_cache("minmax_per_channel"), IMAGE_PREPROCESSING))
+        # Image and volume preprocessing policies remain distinct.
         self.assertTrue(run(full_cache(IMAGE_PREPROCESSING), VIDEO_PREPROCESSING, norm_bounds))
         self.assertTrue(run(full_cache(VIDEO_PREPROCESSING, norm_bounds), IMAGE_PREPROCESSING))
         # A missing tag is stale.
@@ -244,6 +248,7 @@ class TestUtil(unittest.TestCase):
 
         # Partial caches (no 'input_size') resume only when the tag matches the requested policy.
         self.assertTrue(run(PartialEmbeddings(), IMAGE_PREPROCESSING))
+        self.assertTrue(run(PartialEmbeddings("minmax_per_channel"), IMAGE_PREPROCESSING))
         self.assertTrue(run(PartialEmbeddings(VIDEO_PREPROCESSING), IMAGE_PREPROCESSING))
         self.assertFalse(run(PartialEmbeddings(IMAGE_PREPROCESSING), IMAGE_PREPROCESSING))
         self.assertFalse(
@@ -257,6 +262,149 @@ class TestUtil(unittest.TestCase):
         empty_cache = PartialEmbeddings(IMAGE_PREPROCESSING)
         del empty_cache["features"]
         self.assertFalse(run(empty_cache, IMAGE_PREPROCESSING))
+
+    def test_read_cached_tiling(self):
+        from types import SimpleNamespace
+
+        from micro_sam.util import read_cached_tiling, _write_embedding_signature, _open_embeddings
+
+        predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test", device="cpu")
+        raw = np.arange(100).reshape(10, 10)
+
+        # Nothing to read: no path, loaded embeddings, or a path that does not exist.
+        self.assertIsNone(read_cached_tiling(None))
+        self.assertIsNone(read_cached_tiling({"features": raw}))
+        self.assertIsNone(read_cached_tiling(os.path.join(self.tmp_folder, "missing.zarr")))
+
+        # An embeddings container without a completed signature does not advertise a tiling.
+        partial = os.path.join(self.tmp_folder, "partial.zarr")
+        f = _open_embeddings(partial, mode="a")
+        f.attrs["normalization"] = "test"
+        getattr(f, "file", f).close()
+        self.assertIsNone(read_cached_tiling(partial))
+
+        # Tiled and untiled caches both report what they were computed with.
+        tiled = os.path.join(self.tmp_folder, "tiled.zarr")
+        f = _open_embeddings(tiled, mode="a")
+        _write_embedding_signature(f, raw, predictor, (420, 420), (64, 64), input_size=None, original_size=None)
+        getattr(f, "file", f).close()
+        self.assertEqual(read_cached_tiling(tiled), ((420, 420), (64, 64)))
+
+        untiled = os.path.join(self.tmp_folder, "untiled.zarr")
+        f = _open_embeddings(untiled, mode="a")
+        _write_embedding_signature(f, raw, predictor, None, None, input_size=[10, 10], original_size=[10, 10])
+        getattr(f, "file", f).close()
+        self.assertEqual(read_cached_tiling(untiled), (None, None))
+
+    def test_resolve_default_tiling(self):
+        from types import SimpleNamespace
+
+        from micro_sam.util import _write_embedding_signature, _open_embeddings
+        from micro_sam.v2.util import resolve_default_tiling, DEFAULT_TILE_SHAPE, DEFAULT_HALO
+
+        large, small = (2048, 2048), (512, 512)
+
+        # Without a cache the in-plane size decides, and explicit settings always win.
+        self.assertEqual(resolve_default_tiling(large, None, None), (DEFAULT_TILE_SHAPE, DEFAULT_HALO))
+        self.assertEqual(resolve_default_tiling(small, None, None), (None, None))
+        self.assertEqual(resolve_default_tiling(large, (256, 256), (32, 32)), ((256, 256), (32, 32)))
+        self.assertEqual(resolve_default_tiling(large, None, (32, 32)), (DEFAULT_TILE_SHAPE, (32, 32)))
+        # Tiling without an overlap cuts objects at the tile borders, so it falls back to the default.
+        self.assertEqual(resolve_default_tiling(small, (256, 256), None), ((256, 256), DEFAULT_HALO))
+        # 3d only considers the in-plane axes.
+        self.assertEqual(resolve_default_tiling((2048, 64, 64), None, None), (None, None))
+        self.assertEqual(resolve_default_tiling((4, 2048, 64), None, None), (DEFAULT_TILE_SHAPE, DEFAULT_HALO))
+
+        predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test", device="cpu")
+        raw = np.arange(100).reshape(10, 10)
+
+        def write_cache(name, tile_shape, halo):
+            path = os.path.join(self.tmp_folder, name)
+            f = _open_embeddings(path, mode="a")
+            _write_embedding_signature(
+                f, raw, predictor, tile_shape, halo, input_size=None, original_size=None,
+            )
+            getattr(f, "file", f).close()
+            return path
+
+        # A cached tiling is reused, so an existing embedding path is not recomputed for nothing.
+        tiled = write_cache("cached_tiled.zarr", (420, 420), (64, 64))
+        self.assertEqual(resolve_default_tiling(large, None, None, tiled), ((420, 420), (64, 64)))
+        self.assertEqual(resolve_default_tiling(small, None, None, tiled), ((420, 420), (64, 64)))
+        # Explicit settings still win over the cache, per field.
+        self.assertEqual(resolve_default_tiling(large, (256, 256), None, tiled), ((256, 256), DEFAULT_HALO))
+        self.assertEqual(resolve_default_tiling(large, None, (32, 32), tiled), ((420, 420), (32, 32)))
+
+        # An untiled cache is kept for a small image, but not for one that needs tiling: running a
+        # large image untiled is exactly what the default guards against.
+        untiled = write_cache("cached_untiled.zarr", None, None)
+        self.assertEqual(resolve_default_tiling(small, None, None, untiled), (None, None))
+        self.assertEqual(resolve_default_tiling(large, None, None, untiled), (DEFAULT_TILE_SHAPE, DEFAULT_HALO))
+
+    def test_resolve_default_tiling_cutoff(self):
+        from micro_sam.v2.util import resolve_default_tiling, DEFAULT_TILING_THRESHOLD, DEFAULT_TILE_SHAPE
+
+        # Automatic tiling kicks in strictly above the cutoff, so exactly 768 still runs in one piece.
+        cutoff = DEFAULT_TILING_THRESHOLD
+        self.assertEqual(cutoff, 768)
+        self.assertIsNone(resolve_default_tiling((cutoff, cutoff), None, None)[0])
+        self.assertEqual(resolve_default_tiling((cutoff, cutoff + 1), None, None)[0], DEFAULT_TILE_SHAPE)
+        self.assertEqual(resolve_default_tiling((cutoff + 1, cutoff), None, None)[0], DEFAULT_TILE_SHAPE)
+        # For 3d only the in-plane axes count, never the leading z / t axis.
+        self.assertIsNone(resolve_default_tiling((4096, cutoff, cutoff), None, None)[0])
+        self.assertEqual(resolve_default_tiling((4, cutoff + 1, cutoff), None, None)[0], DEFAULT_TILE_SHAPE)
+
+    def test_resolve_default_tiling_turned_off(self):
+        from micro_sam.v2.util import resolve_default_tiling, tiling_is_turned_off
+
+        self.assertTrue(tiling_is_turned_off((0, 0)))
+        self.assertTrue(tiling_is_turned_off((0, 0, 0)))
+        self.assertFalse(tiling_is_turned_off(None))  # 'not set', which is not the same as 'off'
+        self.assertFalse(tiling_is_turned_off((512, 512)))
+        self.assertFalse(tiling_is_turned_off(()))
+
+        # An all-zero tile shape runs a large image in one piece, overriding the size cutoff.
+        large = (2048, 2048)
+        self.assertEqual(resolve_default_tiling(large, (0, 0), None), (None, None))
+        self.assertEqual(resolve_default_tiling(large, (0, 0), (0, 0)), (None, None))
+        self.assertEqual(resolve_default_tiling(large, (0, 0, 0), (0, 0, 0)), (None, None))
+        # An all-zero halo with a real tile shape is a tiled run without an overlap, not 'off'.
+        self.assertEqual(resolve_default_tiling(large, (256, 256), (0, 0)), ((256, 256), (0, 0)))
+        # Turning tiling off while asking for an overlap is contradictory.
+        with self.assertRaises(ValueError):
+            resolve_default_tiling(large, (0, 0), (64, 64))
+
+    def test_resolve_inference_tiling(self):
+        from micro_sam.v2.automatic_segmentation import _resolve_tiling
+        from micro_sam.v2.util import DEFAULT_TILE_SHAPE, DEFAULT_HALO, DEFAULT_TILE_Z, DEFAULT_HALO_Z
+
+        # 2d (and 3d AMG, which segments a volume slice by slice) stays in-plane.
+        self.assertEqual(
+            _resolve_tiling((2048, 2048), None, None, with_z_axis=False),
+            (DEFAULT_TILE_SHAPE, DEFAULT_HALO, True),
+        )
+        self.assertEqual(_resolve_tiling((512, 512), None, None, with_z_axis=False), (None, None, False))
+        self.assertEqual(_resolve_tiling((2048, 2048), (0, 0), (0, 0), with_z_axis=False), (None, None, False))
+
+        # Decoder-based inference on a volume takes the full (z, y, x); the z entry is the chunk the
+        # untiled path would have picked for itself.
+        n_slices = 32
+        self.assertEqual(
+            _resolve_tiling((n_slices, 2048, 2048), None, None, with_z_axis=True),
+            ((DEFAULT_TILE_Z, *DEFAULT_TILE_SHAPE), (DEFAULT_HALO_Z, *DEFAULT_HALO), True),
+        )
+        # A volume shorter than the default z chunk is one block, so it needs no z halo.
+        self.assertEqual(
+            _resolve_tiling((2, 2048, 2048), None, None, with_z_axis=True),
+            ((2, *DEFAULT_TILE_SHAPE), (0, *DEFAULT_HALO), True),
+        )
+        # Without in-plane tiling the z chunking keeps deciding for itself, i.e. stays None.
+        self.assertEqual(_resolve_tiling((n_slices, 512, 512), None, None, with_z_axis=True), (None, None, False))
+        # An explicit (z, y, x) is kept as given.
+        self.assertEqual(
+            _resolve_tiling((n_slices, 2048, 2048), (8, 256, 256), (2, 32, 32), with_z_axis=True),
+            ((8, 256, 256), (2, 32, 32), True),
+        )
 
     def test_apply_nms_tiled_border_masks(self):
         from micro_sam.util import apply_nms

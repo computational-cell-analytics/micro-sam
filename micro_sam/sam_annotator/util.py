@@ -31,97 +31,10 @@ SCRIBBLE_DRAW_MODES = ("add_path", "add_polyline", "add_line")
 #
 
 
-def _channels_to_rgb(image: np.ndarray) -> np.ndarray:
-    """Map a 2D image's trailing channel axis to exactly 3 channels.
-
-    A single channel is replicated, two channels are padded with a zero channel, three channels are
-    left as-is, and more than three channels are reduced to the first three (with a warning).
-    """
-    n_channels = image.shape[-1]
-    if n_channels == 3:
-        return image
-    if n_channels == 1:
-        return np.concatenate([image] * 3, axis=-1)
-    if n_channels == 2:
-        zero_channel = np.zeros(image.shape[:-1] + (1,), dtype=image.dtype)
-        return np.concatenate([image, zero_channel], axis=-1)
-    warnings.warn(f"You provided an input with {n_channels} channels. Only the first three will be used.")
-    return image[..., :3]
-
-
-def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> Tuple[np.ndarray, int, bool]:
-    """Normalize an image for annotation: squeeze singletons and map 2D channels to RGB.
-
-    Singleton axes (commonly exposed by formats like CZI) are squeezed out across all axes.
-    For a 2D image, the trailing channel axis is mapped to 3 channels: a 2-channel input is
-    padded with a zero channel and a 4-channel input is reduced to the first three (with a
-    warning). A 3D volume with a channel axis (3D+C) is not supported.
-
-    Args:
-        image: The input image data.
-        ndim: Optional override for the spatial dimensionality (2 or 3). With ``None`` (the default)
-            the dimensionality is auto-detected from the shape (a trailing axis of size 3 -> RGB 2D,
-            of size 2 or 4 -> channels mapped to RGB 2D, otherwise a 3D volume). With ``2`` a 3D array
-            is read as a 2D multi-channel image, taking the smallest axis as the channel axis (so a
-            channels-first ``(C, H, W)`` array also works) and mapping the channels to RGB. With ``3``
-            a 3D array is read as a ``(Z, H, W)`` volume.
-
-    Returns:
-        A tuple of the normalized image, its spatial dimensionality (2 or 3), and whether
-        it has a trailing RGB channel axis.
-
-    Raises:
-        ValueError: If the (overridden) dimensionality cannot be applied to the image shape, or the
-            squeezed image is neither a 2D image nor a grayscale 3D volume.
-    """
-    if ndim not in (None, 2, 3):
-        raise ValueError(f"Invalid ndim override: {ndim}. Expected None, 2 or 3.")
-
-    image = np.squeeze(image)
-
-    # Forced 2D: read a 3D array as a 2D multi-channel image. The channel axis is taken to be the
-    # smallest axis (so both channels-first (C, H, W) and channels-last (H, W, C) work); it is moved
-    # to the trailing position and mapped to 3 channels.
-    if ndim == 2:
-        if image.ndim == 2:
-            return image, 2, False
-        if image.ndim == 3:
-            channel_axis = int(np.argmin(image.shape))
-            image = np.moveaxis(image, channel_axis, -1)
-            return _channels_to_rgb(image), 2, True
-        raise ValueError(f"Cannot interpret shape {image.shape} as a 2D image.")
-
-    # Forced 3D: read a 3D array as a (Z, H, W) volume. A channel axis (4D, or 3D+C) is not supported.
-    if ndim == 3:
-        if image.ndim == 3:
-            return image, 3, False
-        raise ValueError(
-            f"Cannot interpret shape {image.shape} as a 3D volume (3D data with channels is not supported yet)."
-        )
-
-    # Auto-detect. A 4D array is either a 3D volume with a channel axis (Z, H, W, C) or a volumetric
-    # time series (T, Z, H, W). Neither is supported: the v2 3D path assumes a grayscale (Z, H, W)
-    # volume, so a channel axis would otherwise produce wrong-shaped masks.
-    if image.ndim == 4:
-        if image.shape[-1] in (2, 3, 4):
-            raise ValueError(
-                f"3D volumes with a channel axis are not supported yet, got shape {image.shape}."
-            )
-        raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data (3D+t is not supported).")
-
-    # 2D image with a 2- or 4-channel trailing axis: map it to 3 channels. A trailing axis of any
-    # other size is left alone, so a size-3 axis stays RGB and anything else is treated as a volume.
-    if image.ndim == 3 and image.shape[-1] in (2, 4):
-        image = _channels_to_rgb(image)
-
-    # Map the (possibly normalized) shape to a spatial dimensionality and rgb flag.
-    if image.ndim == 2:
-        return image, 2, False
-    elif image.ndim == 3:
-        if image.shape[-1] == 3:
-            return image, 2, True
-        return image, 3, False
-    raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data.")
+# The image normalization is shared with the headless entry points, so the GUI and the CLI read the
+# same array the same way. It lives in 'micro_sam.util', which does not import napari.
+_channels_to_rgb = util._channels_to_rgb
+prepare_annotation_image = util.prepare_annotation_image
 
 
 def set_prompt_label(layer, new_label, relabel_selected: bool = True):
@@ -1355,11 +1268,29 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         index = widget.device_dropdown.findText(device)
         widget.device_dropdown.setCurrentIndex(index)
 
+    # Keep tiling as it is when nothing is passed: the caller may not know the settings (e.g. an
+    # old classifier spec without them), and the widget has already applied its own defaults.
+    _sync_tiling_widget(widget, tile_shape, halo, disable_when_none=False)
+
+
+def _sync_tiling_widget(widget, tile_shape, halo, disable_when_none=True):
+    """Show the tiling settings the embeddings were actually computed with in the embedding widget.
+
+    Args:
+        widget: The embedding widget.
+        tile_shape: The in-plane tile shape, None if the embeddings are computed without tiling.
+        halo: The in-plane tile overlap, None if the embeddings are computed without tiling.
+        disable_when_none: Whether `tile_shape=None` switches the tiling dropdown off. This is what
+            the annotation tools want, so the widget never claims a tiling that was not used. Pass
+            False where None just means 'unknown, leave the widget alone'.
+    """
     if tile_shape is not None:
         widget.tile_x_param.setValue(tile_shape[0])
         widget.tile_y_param.setValue(tile_shape[1])
         # Enable tiling so the loaded tile shape is used and shown.
         widget.tiling_dropdown.setCurrentText("yes")
+    elif disable_when_none:
+        widget.tiling_dropdown.setCurrentText("no")
 
     if halo is not None:
         widget.halo_x_param.setValue(halo[0])

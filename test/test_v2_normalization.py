@@ -62,5 +62,39 @@ class TestNormalizePercentile(unittest.TestCase):
         self.assertEqual(result.stdout.strip().splitlines()[-1], "False")
 
 
+class TestImageNormalization(unittest.TestCase):
+    def test_image_preprocessing_matches_training(self):
+        from micro_sam.v2.normalization import to_image
+        from torch_em.transform.raw import normalize_percentile
+
+        rng = np.random.default_rng(188)
+        for n_channels in (1, 3):
+            with self.subTest(n_channels=n_channels):
+                raw = rng.normal(150, 20, (32, 48, n_channels)).astype("float32")
+                # Rare dark/bright pixels should not set the scale of the whole tissue image.
+                raw[0, 0] = 0
+                raw[-1, -1] = 1000
+                if n_channels == 1:
+                    raw = raw[..., 0]
+                # Training normalizes each channel at the 2nd and 98th percentiles, then clips.
+                rgb = np.repeat(raw[..., None], 3, axis=-1) if n_channels == 1 else raw
+                expected = np.clip(normalize_percentile(rgb.copy(), lower=2, upper=98, axis=(0, 1)), 0, 1)
+                actual = to_image(raw)
+                self.assertEqual(actual.dtype, np.uint8)
+                np.testing.assert_allclose(actual.astype("float32") / 255, expected, atol=1 / 255, rtol=0)
+
+    def test_image_preprocessing_preserves_constant_and_missing_channels(self):
+        from micro_sam.v2.normalization import to_image
+
+        image = np.stack([np.arange(64).reshape(8, 8), np.full((8, 8), 17)], axis=-1)
+        before = image.copy()
+        actual = to_image(image)
+        self.assertEqual(actual.shape, (8, 8, 3))
+        self.assertFalse(actual[..., 1:].any())
+        self.assertEqual(actual[..., 0].min(), 0)
+        self.assertEqual(actual[..., 0].max(), 255)
+        np.testing.assert_array_equal(image, before)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -81,8 +81,17 @@ def _model_options(f):
             "-d", "--device", default=None,
             help="The device for the predictor: 'cuda', 'cpu' or 'mps'. By default the best available is used."
         ),
-        click.option("--tile_shape", type=int, nargs=2, default=None, help="The tile shape for tiled prediction."),
-        click.option("--overlap", "halo", type=int, nargs=2, default=None, help="The tile overlap for tiling."),
+        click.option(
+            "--tile_shape", type=int, nargs=2, default=None,
+            help="The tile shape for tiled prediction. By default the tiling of already cached embeddings "
+            "is reused, else images larger than 768 pixels in-plane are tiled with the default tile shape. "
+            "Pass '0 0' to run untiled."
+        ),
+        click.option(
+            "--overlap", "halo", type=int, nargs=2, default=None,
+            help="The tile overlap for tiled prediction. By default the overlap of already cached "
+            "embeddings is reused, else the default overlap is used whenever tiling is active."
+        ),
     ]
     for option in reversed(options):
         f = option(f)
@@ -285,8 +294,17 @@ def annotator_object_classification(
     "-d", "--device", default=None,
     help="The device for the predictor: 'cuda', 'cpu' or 'mps'. By default the best available is used."
 )
-@click.option("--tile_shape", type=int, nargs=2, default=None, help="The tile shape for tiled prediction.")
-@click.option("--overlap", "halo", type=int, nargs=2, default=None, help="The tile overlap for tiled prediction.")
+@click.option(
+    "--tile_shape", type=int, nargs=2, default=None,
+    help="The tile shape for tiled prediction. By default the tiling of already cached embeddings "
+    "is reused, else images larger than 768 pixels in-plane are tiled with the default tile shape. "
+    "Pass '0 0' to run untiled."
+)
+@click.option(
+    "--overlap", "halo", type=int, nargs=2, default=None,
+    help="The tile overlap for tiled prediction. By default the overlap of already cached "
+    "embeddings is reused, else the default overlap is used whenever tiling is active."
+)
 @click.option(
     "--precompute_autoseg_state",
     "precompute_autoseg_state", is_flag=True, default=False,
@@ -364,10 +382,16 @@ def annotator_batch(
         )
 
 
-def _parse_shape(value):
-    """Parse a comma-separated shape like '384,384' into a tuple, or return None."""
+def _parse_shape(value, ndim=2):
+    """Parse a comma-separated shape like '384,384' into a tuple, or return None.
+
+    'none' (or 'off') is the readable spelling of the all-zero shape that turns tiling off, so a
+    large image can be run in one piece even though tiling is the default above the size cutoff.
+    """
     if value is None:
         return None
+    if str(value).strip().lower() in ("none", "off"):
+        return (0,) * ndim
     return tuple(int(x) for x in value.replace(" ", "").split(","))
 
 
@@ -472,11 +496,15 @@ def _view_result(image_path, key, segmentation):
 @click.option("-c", "--checkpoint", "checkpoint_path", default=None, help="Decoder checkpoint to load the model from.")
 @click.option(
     "--tile_shape", default=None,
-    help="The tile shape for tiled prediction, comma-separated, e.g. '384,384' (2D) or '4,384,384' (3D)."
+    help="The tile shape for tiled prediction, comma-separated, e.g. '384,384' (2D) or '4,384,384' (3D). "
+    "By default the tiling of already cached embeddings is reused, else images larger than 768 pixels "
+    "in-plane are tiled with the default tile shape. Pass 'none' (or '0,0') to run untiled."
 )
 @click.option(
     "--overlap", "halo", default=None,
-    help="The tile overlap for tiled prediction, comma-separated, e.g. '64,64' (2D) or '2,64,64' (3D)."
+    help="The tile overlap for tiled prediction, comma-separated, e.g. '64,64' (2D) or '2,64,64' (3D). "
+    "By default the overlap of already cached embeddings is reused, else the default overlap is used. "
+    "Pass 'none' together with '--tile_shape none' to run untiled."
 )
 @click.option(
     "-n", "--ndim", type=int, default=None,
@@ -546,6 +574,8 @@ def inference_segmentation(
     if engine == "apg" and ndim is None:
         segmenter_ndim = load_image_data(input_paths[0], key=key).ndim
 
+    # Only an initial guess: 'automatic_instance_segmentation' swaps in the tiling variant that
+    # matches the image it reads, rebuilding it from the already loaded model and decoder.
     predictor, segmenter = get_predictor_and_segmenter(
         model_type=model_type, checkpoint=checkpoint_path, device=device,
         segmentation_mode=engine, is_tiled=tile_shape is not None, ndim=segmenter_ndim,
@@ -603,9 +633,16 @@ def inference_segmentation(
 )
 @click.option("-c", "--checkpoint", "checkpoint_path", default=None, help="Decoder checkpoint to load the model from.")
 @click.option(
-    "--tile_shape", default=None, help="The tile shape for tiled prediction, comma-separated, e.g. '384,384'."
+    "--tile_shape", default=None,
+    help="The tile shape for tiled per-frame prediction, comma-separated, e.g. '384,384'. By default "
+    "frames larger than 768 pixels in-plane are tiled with the default tile shape. Pass 'none' (or "
+    "'0,0') to run untiled."
 )
-@click.option("--overlap", "halo", default=None, help="The tile overlap for tiled prediction, e.g. '64,64'.")
+@click.option(
+    "--overlap", "halo", default=None,
+    help="The tile overlap for tiled per-frame prediction, e.g. '64,64'. By default the default "
+    "overlap is used whenever tiling is active."
+)
 @click.option(
     "--mode", default="sparse", type=click.Choice(["sparse", "dense"]),
     help="The per-frame segmentation mode: 'sparse' (flow, LM data) or 'dense' (multicut, EM data)."

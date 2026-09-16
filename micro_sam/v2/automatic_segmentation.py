@@ -91,6 +91,59 @@ def get_predictor_and_segmenter(
     return predictor, segmenter
 
 
+def _resolve_tiling(spatial_shape, tile_shape, halo, with_z_axis, embedding_path=None):
+    """Resolve the tiling for the headless entry points, in the axes their segmenter expects.
+
+    Tiling is supported by every engine, so it is applied by default for images whose in-plane size
+    exceeds the cutoff - the model resizes whatever it is given to its encoder patch, so running a
+    large image in one piece shrinks the objects far below the scale the model was trained on. This
+    shares `micro_sam.v2.util.resolve_default_tiling` with the annotation tools, so the CLI, the
+    Python API and the GUI all tile the same image the same way, and all of them reuse the tiling of
+    already cached embeddings rather than recomputing them with different settings. Pass an all-zero
+    `tile_shape` and `halo` to run untiled regardless of the size.
+
+    Args:
+        spatial_shape: The image shape without any channel axis, (y, x) or (z, y, x).
+        tile_shape: The requested tile shape, in the axes described by `with_z_axis`.
+        halo: The requested tile overlap, matching `tile_shape`'s axes.
+        with_z_axis: Whether the segmenter takes the full (z, y, x) rather than just the in-plane
+            (y, x). True for decoder-based inference on a volume, which chunks z as well.
+        embedding_path: Optional filepath of the cached embeddings, whose tiling is reused.
+
+    Returns:
+        The resolved tile shape and halo, None if the run stays untiled. Plus whether the result
+        tiles in-plane, which decides the tiled or non-tiled segmenter.
+
+    Raises:
+        ValueError: If tiling is turned off with an all-zero tile shape but a real halo is given.
+    """
+    from .util import resolve_default_tiling, DEFAULT_TILE_Z, DEFAULT_HALO_Z
+
+    # Decide on the in-plane axes alone, then put the z entry back for the volumetric decoder.
+    in_plane_tile = None if tile_shape is None else tuple(tile_shape[-2:])
+    in_plane_halo = None if halo is None else tuple(halo[-2:])
+    in_plane_tile, in_plane_halo = resolve_default_tiling(
+        spatial_shape, in_plane_tile, in_plane_halo, embedding_path,
+    )
+    is_tiled = in_plane_tile is not None
+
+    if not with_z_axis:
+        return in_plane_tile, in_plane_halo, is_tiled
+
+    # Without in-plane tiling, keep passing None so z keeps chunking itself (see '_resolve_z_chunk').
+    if not is_tiled:
+        return None, None, False
+
+    if tile_shape is not None and len(tile_shape) == 3:  # The caller set the z chunk itself.
+        z_tile = int(tile_shape[0])
+        z_halo = 0 if (halo is None or len(halo) != 3) else int(halo[0])
+    else:  # The same z chunk the untiled 3d path picks for itself.
+        n_slices = spatial_shape[0]
+        z_tile = min(DEFAULT_TILE_Z, n_slices)
+        z_halo = DEFAULT_HALO_Z if z_tile < n_slices else 0
+    return (z_tile, *in_plane_tile), (z_halo, *in_plane_halo), True
+
+
 def automatic_instance_segmentation(
     predictor,
     segmenter,
@@ -126,12 +179,17 @@ def automatic_instance_segmentation(
         model_type: Retained for API compatibility; the loaded predictor determines the embedding model.
         checkpoint: Retained for API compatibility; the loaded predictor already contains its weights.
         key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
-        ndim: The number of spatial dimensions (2 or 3). By default inferred from the data.
+        ndim: The number of spatial dimensions (2 or 3). By default inferred from the data: a
+            trailing axis of size 2, 3 or 4 is read as channels, anything else as a volume. Pass 2
+            to read a 3d array as a multi-channel image (channels-first or channels-last).
         tile_shape: Shape of the tiles for tiled prediction, (y, x). For a 3d AIS or APG volume,
             always the full (z, y, x) instead - it is chunked along z regardless of tiling, so the z
             entry sets that chunk too (its own default when tile_shape is None). AMG segments a
-            volume slice by slice, so it stays (y, x) even for a 3d volume. By default runs untiled.
-        halo: Overlap of the tiles, matching `tile_shape`'s axes.
+            volume slice by slice, so it stays (y, x) even for a 3d volume. By default the tiling of
+            already cached embeddings is reused, else images exceeding the in-plane size threshold
+            are tiled with the default tile shape and smaller ones run untiled.
+        halo: Overlap of the tiles, matching `tile_shape`'s axes. By default the overlap of already
+            cached embeddings is reused, else the default overlap whenever tiling is active.
         mode: The AIS post-processing mode, 'sparse' (flow) or 'dense' (multicut). Ignored for AMG.
         device: The device to run inference on.
         verbose: Whether to print progress.
@@ -147,19 +205,59 @@ def automatic_instance_segmentation(
         The instance segmentation, uint32 array.
     """
     import shutil
+    import warnings
 
-    from ..util import load_image_data, make_temp_embedding_path
+    from ..util import load_image_data, make_temp_embedding_path, prepare_annotation_image
     from .util import precompute_image_embeddings
-    from .instance_segmentation import amg_3d_segmentation
+    from .instance_segmentation import amg_3d_segmentation, retile_instance_segmentation_generator
 
     raw = input_path if isinstance(input_path, np.ndarray) else load_image_data(input_path, key=key)
-    if ndim is None:
-        ndim = raw.ndim
+    # Normalize the input the same way the annotation tools do: squeeze singleton axes and move a
+    # channel axis to the trailing RGB position, so a channels-first (C, Y, X) array is read as an
+    # image rather than a volume. The spatial shape below is then the real (y, x) / (z, y, x), which
+    # is what the tiling decision and the segmenters need. 'ndim' disambiguates a 3d array; without
+    # it a trailing axis of size 2, 3 or 4 is taken as channels and anything else as a volume.
+    raw, ndim, is_rgb = prepare_annotation_image(raw, ndim=ndim)
+    spatial_shape = raw.shape[:-1] if is_rgb else raw.shape
 
     # Decoder-based segmenters use this staged path. APG prompts instead of post-processing.
+    # Both tiling variants of an engine share this, so it is safe to read before the swap below.
     is_decoder_based = getattr(segmenter, "_is_decoder_based", False)
+
+    # Tiling is decided from the image, which the caller has usually not read yet when it builds the
+    # segmenter, so swap in the tiling variant that matches. Only decoder-based inference on a volume
+    # takes the z axis too; AMG segments a volume slice by slice and stays in-plane.
+    requested_tile_shape = tile_shape
+    with_z_axis = ndim == 3 and is_decoder_based
+    tile_shape, halo, is_tiled = _resolve_tiling(
+        spatial_shape, tile_shape, halo, with_z_axis=with_z_axis, embedding_path=embedding_path,
+    )
+    swapped = retile_instance_segmentation_generator(segmenter, is_tiled=is_tiled)
+
+    # A generator built by hand (not through the factory) records no build config, so it cannot be
+    # swapped. Handing a non-tiled one the tiling we picked ourselves would silently drop it - the
+    # in-plane entries are ignored there - and quietly produce the untiled result the default exists
+    # to avoid. Run untiled instead, and say why, rather than claiming a tiling that never happens.
+    if is_tiled and requested_tile_shape is None and getattr(swapped, "_generator_config", None) is None:
+        warnings.warn(
+            f"The image is {spatial_shape}, which would be tiled by default, but this segmenter was "
+            "built by hand and cannot be swapped for its tiled variant, so the image is segmented in "
+            "one piece. Build it with 'get_predictor_and_segmenter' (or pass 'tile_shape' yourself) "
+            "to tile."
+        )
+        tile_shape, halo, is_tiled = None, None, False
+    segmenter = swapped
+
     precompute_embeddings = getattr(segmenter, "_precompute_embeddings_in_frontend", True)
     takes_mode = getattr(segmenter, "_has_postprocessing_mode", True)
+
+    # Tiled APG encodes every tile inside its own workers, so it has nowhere to read or write a
+    # shared cache. Say so rather than leaving the user to wonder why the path stays empty.
+    if embedding_path is not None and not precompute_embeddings:
+        warnings.warn(
+            f"Tiled APG computes its embeddings per tile, so they are not cached in '{embedding_path}'. "
+            "Use '--engine ais' (or run untiled) to cache and reuse embeddings."
+        )
 
     if is_decoder_based:
         # One selection for the whole staged workflow; without either the segmenter's intent stands.
@@ -270,8 +368,10 @@ def automatic_tracking(
         input_path: The input timeseries, a filepath (tif / container with `key`) or a (T, Y, X) array.
         output_path: Optional folder to save the tracking result in CTC format.
         key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
-        tile_shape: Shape of the tiles for tiled per-frame prediction. By default runs without tiling.
-        halo: Overlap of the tiles for tiled per-frame prediction.
+        tile_shape: Shape of the tiles for tiled per-frame prediction, (y, x). By default frames
+            exceeding the in-plane size threshold are tiled with the default tile shape.
+        halo: Overlap of the tiles for tiled per-frame prediction. By default the default overlap
+            is used whenever tiling is active.
         mode: The AIS post-processing mode, 'sparse' (flow) or 'dense' (multicut). Ignored for AMG.
         device: The device to run inference on.
         gap_closing: If given, close gaps in the tracks over this many frames.
@@ -287,10 +387,16 @@ def automatic_tracking(
 
     from ..util import load_image_data
     from ..v1.multi_dimensional_segmentation import track_across_frames
+    from .instance_segmentation import retile_instance_segmentation_generator
 
     timeseries = input_path if isinstance(input_path, np.ndarray) else load_image_data(input_path, key=key)
     if timeseries.ndim != 3:
         raise ValueError(f"Automatic tracking expects a (T, Y, X) timeseries, got shape {timeseries.shape}.")
+
+    # Every frame has the same shape, so resolve the tiling and swap the segmenter once here rather
+    # than per frame, then pass the resolved settings down.
+    tile_shape, halo, is_tiled = _resolve_tiling(timeseries.shape[1:], tile_shape, halo, with_z_axis=False)
+    segmenter = retile_instance_segmentation_generator(segmenter, is_tiled=is_tiled)
 
     # Segment every frame independently and relabel so ids do not overlap across frames.
     segmentation = np.zeros(timeseries.shape, dtype="uint32")

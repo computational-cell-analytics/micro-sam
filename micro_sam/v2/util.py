@@ -305,6 +305,81 @@ def needs_default_tiling(shape):
     return False
 
 
+def tiling_is_turned_off(value):
+    """Whether a tile shape or halo explicitly asks for no tiling, i.e. is all zeros.
+
+    Every micro-sam entry point tiles by default, so an all-zero tile shape (and halo) is how a
+    caller says "run this in one piece" - the CLI also spells it `--tile_shape none --overlap none`.
+
+    Args:
+        value: A tile shape or halo, which may be None.
+
+    Returns:
+        Whether it turns tiling off. False for None, which means 'not set'.
+    """
+    return value is not None and len(value) > 0 and all(int(entry) == 0 for entry in value)
+
+
+def resolve_default_tiling(shape, tile_shape, halo, embedding_path=None):
+    """Resolve the tiling settings for an entry point from the image shape and the embedding cache.
+
+    This is the single source of truth for the tiling defaults of all entry points: the annotation
+    tools (interactive segmentation, tracking, pixel and object classification, and their batch
+    variants) and the headless inference front-ends. The annotation tools compute their embeddings
+    before the GUI is built, so they have to resolve the same settings the embedding widget would
+    show for the image (see `EmbeddingWidget._apply_default_tiling_for_shape`).
+
+    Settings the caller passes always win. Otherwise the tiling of already cached embeddings is
+    adopted, so pointing a tool at an existing embedding path reuses it instead of recomputing it
+    just because the defaults have changed or another tool used different settings. Embeddings that
+    are cached without tiling are the exception: they are recomputed with the default tiling rather
+    than kept, since running untiled is what the default guards against.
+
+    Automatic tiling kicks in above the in-plane size cutoff (`DEFAULT_TILING_THRESHOLD`), the same
+    way for every entry point. Below it, and whenever the caller turns tiling off with an all-zero
+    tile shape, the image is passed to the model in one piece.
+
+    Args:
+        shape: The image shape without any channel axis. Either 2d (y, x) or 3d (z / t, y, x).
+        tile_shape: The requested in-plane tile shape. If None, the tile shape of the cached
+            embeddings is used, else the default tile shape for images exceeding the in-plane size
+            cutoff. All zeros turns tiling off.
+        halo: The requested in-plane tile overlap. If None, the overlap of the cached embeddings is
+            used, or the default overlap, since tiling without an overlap cuts objects at the tile
+            borders.
+        embedding_path: Optional filepath of the cached embeddings.
+
+    Returns:
+        The resolved tile shape, None if the embeddings are computed without tiling.
+        The resolved halo, None if the embeddings are computed without tiling.
+
+    Raises:
+        ValueError: If tiling is turned off with an all-zero tile shape but a real halo is given.
+    """
+    from micro_sam.util import read_cached_tiling
+
+    if tiling_is_turned_off(tile_shape):
+        if halo is not None and not tiling_is_turned_off(halo):
+            raise ValueError(
+                f"Tiling is turned off by an all-zero 'tile_shape', so the halo {tuple(halo)} cannot "
+                "be used. Set both to zero, or give a real tile shape."
+            )
+        return None, None
+
+    cached = read_cached_tiling(embedding_path) if tile_shape is None else None
+    if cached is not None and cached[0] is not None:
+        tile_shape = cached[0]
+        if halo is None:
+            halo = cached[1]
+    elif tile_shape is None and needs_default_tiling(shape):
+        tile_shape = DEFAULT_TILE_SHAPE
+
+    # An all-zero halo is kept as given: with a real tile shape it means 'tile without an overlap'.
+    if tile_shape is not None and halo is None:
+        halo = DEFAULT_HALO
+    return tile_shape, halo
+
+
 # Finetuned SAM2 models (the micro-sam "model download console" for SAM2). These are exported into
 # the two-file micro-sam layout - an interactive predictor checkpoint ('<name>') and a UniSAM2
 # decoder checkpoint ('<name>_decoder') - by 'scripts/model_export/export_sam2_cells_model.py'.

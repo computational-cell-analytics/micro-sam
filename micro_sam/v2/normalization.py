@@ -5,10 +5,10 @@ from typing import Optional, Tuple, Union
 import numpy as np
 
 # Persist the preprocessing (normalization + resize) policy in embedding caches so incompatible
-# features are not silently reused. The 2d image path uses per-channel min-max (via `to_image`); the
-# 3d / video path uses percentile normalization with the tensor resize used in training. The video
-# resize suffix invalidates embeddings created by the former skimage path, which did not match it.
-IMAGE_PREPROCESSING = "minmax_per_channel"
+# features are not silently reused. Both image and video paths use the per-channel percentile
+# normalization used in training. Images are quantized to uint8 for the image predictor; videos
+# stay float32 and use whole-volume percentile bounds.
+IMAGE_PREPROCESSING = "percentile_2_98_per_channel_uint8_v2"
 # v2 stores one shared positional encoding per volume / tile instead of one per slice. v3 computes
 # the percentiles once over the whole volume instead of once per slice or tile crop.
 VIDEO_PREPROCESSING = "percentile_2_98_per_channel_torch_resize_v3"
@@ -105,7 +105,10 @@ def normalize_raw(
 
 
 def to_image(image: np.ndarray) -> np.ndarray:
-    """Map a 2D or channel-last image to min-max-normalized, channel-last uint8 RGB.
+    """Map a 2D or channel-last image to percentile-normalized, channel-last uint8 RGB.
+
+    Match the training normalization: map each channel's 2nd and 98th percentiles to 0 and 255,
+    clipping intensities outside that range. This applies to both whole images and image tiles.
 
     Args:
         image: The input image. Either 2D or channel-last with up to three channels.
@@ -113,5 +116,5 @@ def to_image(image: np.ndarray) -> np.ndarray:
     Returns:
         The channel-last uint8 RGB image, with each channel normalized independently.
     """
-    from micro_sam.util import _to_image
-    return _to_image(image)
+    from micro_sam.util import _ensure_rgb
+    return normalize_raw(_ensure_rgb(image), axis=(0, 1), output_dtype="uint8")

@@ -19,7 +19,8 @@ from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from ._titles import PLUGIN_NAME
 from ._batch import BatchAnnotatorTask
-from .util import _sync_embedding_widget
+from ..v2.util import resolve_default_tiling
+from .util import _sync_embedding_widget, _sync_tiling_widget
 
 
 class ClassificationBatchTask(BatchAnnotatorTask):
@@ -69,17 +70,20 @@ class ClassificationBatchTask(BatchAnnotatorTask):
         state = AnnotatorState()
         # Reuse the already-loaded model on subsequent items so it is not re-downloaded/rebuilt.
         kwargs = {"predictor": state.predictor} if (reuse and state.predictor is not None) else {}
+        state.image_shape = image.shape if image.ndim == self.ndim else image.shape[:-1]
+        state.ndim = self.ndim
+        # Resolve the tiling per image, since the shapes can differ across the batch.
+        tile_shape, halo = resolve_default_tiling(state.image_shape, self.tile_shape, self.halo, embedding_path)
         state.initialize_predictor(
-            image, model_type=self.model_type, save_path=embedding_path, halo=self.halo,
-            tile_shape=self.tile_shape, precompute_autoseg_state=False, ndim=self.ndim,
+            image, model_type=self.model_type, save_path=embedding_path, halo=halo,
+            tile_shape=tile_shape, precompute_autoseg_state=False, ndim=self.ndim,
             checkpoint_path=self.checkpoint_path, device=self.device, batch_size=self.batch_size,
             skip_load=False, use_cli=True, **kwargs,
         )
-        state.image_shape = image.shape if image.ndim == self.ndim else image.shape[:-1]
-        state.ndim = self.ndim
+        return tile_shape, halo
 
     def start(self, viewer, entry, image, embedding_path, index):
-        self._init_predictor(viewer, image, embedding_path, reuse=False)
+        tile_shape, halo = self._init_predictor(viewer, image, embedding_path, reuse=False)
         viewer.add_image(image, name="image")
         self._set_layers(viewer, index)
 
@@ -92,7 +96,7 @@ class ClassificationBatchTask(BatchAnnotatorTask):
             widget=state.widgets["embeddings"],
             model_type=self.model_type if self.checkpoint_path is None else state.predictor.model_type,
             save_path=embedding_path, checkpoint_path=self.checkpoint_path,
-            device=self.device, tile_shape=self.tile_shape, halo=self.halo,
+            device=self.device, tile_shape=tile_shape, halo=halo,
         )
         return annotator
 
@@ -111,7 +115,8 @@ class ClassificationBatchTask(BatchAnnotatorTask):
     def advance(self, viewer, annotator, entry, image, embedding_path, index):
         viewer.layers["image"].data = image
         self._set_layers(viewer, index)
-        self._init_predictor(viewer, image, embedding_path, reuse=True)
+        tile_shape, halo = self._init_predictor(viewer, image, embedding_path, reuse=True)
+        _sync_tiling_widget(AnnotatorState().widgets["embeddings"], tile_shape, halo)
         annotator._update_image()
         # Drop the cached features/aux of the previous image.
         state = AnnotatorState()

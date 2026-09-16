@@ -561,6 +561,144 @@ def _get_embedding_signature(input_, predictor, tile_shape, halo, data_signature
     return signature
 
 
+def _channels_to_rgb(image: np.ndarray) -> np.ndarray:
+    """Map a 2D image's trailing channel axis to exactly 3 channels.
+
+    A single channel is replicated, two channels are padded with a zero channel, three channels are
+    left as-is, and more than three channels are reduced to the first three (with a warning).
+    """
+    n_channels = image.shape[-1]
+    if n_channels == 3:
+        return image
+    if n_channels == 1:
+        return np.concatenate([image] * 3, axis=-1)
+    if n_channels == 2:
+        zero_channel = np.zeros(image.shape[:-1] + (1,), dtype=image.dtype)
+        return np.concatenate([image, zero_channel], axis=-1)
+    warnings.warn(f"You provided an input with {n_channels} channels. Only the first three will be used.")
+    return image[..., :3]
+
+
+def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> Tuple[np.ndarray, int, bool]:
+    """Normalize an image for annotation: squeeze singletons and map 2D channels to RGB.
+
+    Singleton axes (commonly exposed by formats like CZI) are squeezed out across all axes.
+    For a 2D image, the trailing channel axis is mapped to 3 channels: a 2-channel input is
+    padded with a zero channel and a 4-channel input is reduced to the first three (with a
+    warning). A 3D volume with a channel axis (3D+C) is not supported.
+
+    Args:
+        image: The input image data.
+        ndim: Optional override for the spatial dimensionality (2 or 3). A single-slice ``(1, H, W)``
+            volume keeps its z axis when ``3`` is passed. With ``None`` (the default)
+            the dimensionality is auto-detected from the shape (a trailing axis of size 3 -> RGB 2D,
+            of size 2 or 4 -> channels mapped to RGB 2D, otherwise a 3D volume). With ``2`` a 3D array
+            is read as a 2D multi-channel image, taking the smallest axis as the channel axis (so a
+            channels-first ``(C, H, W)`` array also works) and mapping the channels to RGB. With ``3``
+            a 3D array is read as a ``(Z, H, W)`` volume.
+
+    Returns:
+        A tuple of the normalized image, its spatial dimensionality (2 or 3), and whether
+        it has a trailing RGB channel axis.
+
+    Raises:
+        ValueError: If the (overridden) dimensionality cannot be applied to the image shape, or the
+            squeezed image is neither a 2D image nor a grayscale 3D volume.
+    """
+    if ndim not in (None, 2, 3):
+        raise ValueError(f"Invalid ndim override: {ndim}. Expected None, 2 or 3.")
+
+    input_ndim = image.ndim
+    image = np.squeeze(image)
+
+    # Forced 2D: read a 3D array as a 2D multi-channel image. The channel axis is taken to be the
+    # smallest axis (so both channels-first (C, H, W) and channels-last (H, W, C) work); it is moved
+    # to the trailing position and mapped to 3 channels.
+    if ndim == 2:
+        if image.ndim == 2:
+            return image, 2, False
+        if image.ndim == 3:
+            channel_axis = int(np.argmin(image.shape))
+            image = np.moveaxis(image, channel_axis, -1)
+            return _channels_to_rgb(image), 2, True
+        raise ValueError(f"Cannot interpret shape {image.shape} as a 2D image.")
+
+    # Forced 3D: read a 3D array as a (Z, H, W) volume. A channel axis (4D, or 3D+C) is not supported.
+    if ndim == 3:
+        if image.ndim == 3:
+            return image, 3, False
+        # A single-slice volume squeezes down to one plane; put the z axis back rather than reject
+        # it. A genuinely 2d input still raises: asking for a volume and passing a plane is an error.
+        if image.ndim == 2 and input_ndim == 3:
+            return image[None], 3, False
+        raise ValueError(
+            f"Cannot interpret shape {image.shape} as a 3D volume (3D data with channels is not supported yet)."
+        )
+
+    # Auto-detect. A 4D array is either a 3D volume with a channel axis (Z, H, W, C) or a volumetric
+    # time series (T, Z, H, W). Neither is supported: the v2 3D path assumes a grayscale (Z, H, W)
+    # volume, so a channel axis would otherwise produce wrong-shaped masks.
+    if image.ndim == 4:
+        if image.shape[-1] in (2, 3, 4):
+            raise ValueError(
+                f"3D volumes with a channel axis are not supported yet, got shape {image.shape}."
+            )
+        raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data (3D+t is not supported).")
+
+    # 2D image with a 2- or 4-channel trailing axis: map it to 3 channels. A trailing axis of any
+    # other size is left alone, so a size-3 axis stays RGB and anything else is treated as a volume.
+    if image.ndim == 3 and image.shape[-1] in (2, 4):
+        image = _channels_to_rgb(image)
+
+    # Map the (possibly normalized) shape to a spatial dimensionality and rgb flag.
+    if image.ndim == 2:
+        return image, 2, False
+    elif image.ndim == 3:
+        if image.shape[-1] == 3:
+            return image, 2, True
+        return image, 3, False
+    raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data.")
+
+
+def read_cached_tiling(embedding_path: Optional[Union[str, os.PathLike]]) -> Optional[Tuple]:
+    """Read the tiling that cached embeddings were computed with.
+
+    The tiling is part of the embedding signature, so embeddings computed with a different tiling
+    than the one requested are discarded and recomputed. Reading it back lets the annotation tools
+    reuse an existing cache instead of recomputing it just because their default tiling differs from
+    the one it was computed with (see `micro_sam.v2.util.resolve_default_tiling`).
+
+    Args:
+        embedding_path: The filepath of the cached embeddings. May also be None or already loaded
+            embeddings, in which case there is nothing to read.
+
+    Returns:
+        The in-plane (tile_shape, halo) of the cached embeddings, where a tile shape of None means
+        they were computed without tiling. None if `embedding_path` holds no embeddings (yet).
+    """
+    if not isinstance(embedding_path, (str, os.PathLike)) or not os.path.exists(embedding_path):
+        return None
+
+    try:
+        f = _open_embeddings(embedding_path, mode="r")
+    except (OSError, RuntimeError):  # Not a readable container, e.g. an empty folder from a failed run.
+        return None
+
+    try:
+        # 'tile_shape' is only written once the embeddings are complete, so a partial cache (which
+        # will be recomputed anyway) does not advertise a tiling.
+        if "tile_shape" not in f.attrs:
+            return None
+        tile_shape, halo = f.attrs["tile_shape"], f.attrs.get("halo")
+    finally:
+        getattr(f, "file", f).close()
+
+    return (
+        None if tile_shape is None else tuple(tile_shape),
+        None if halo is None else tuple(halo),
+    )
+
+
 # Note: the input size and orginal size are different if embeddings are tiled or not.
 # That's why we do not include them in the main signature that is being checked
 # (_get_embedding_signature), but just add it for serialization here.

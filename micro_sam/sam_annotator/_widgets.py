@@ -3849,9 +3849,10 @@ class AutoSegmentWidget(_WidgetBase):
     in 2d, so z-tiling does not apply).
 
     All modes need a UniSAM2 decoder. Automatic prompt generation (APG) derives point prompts from
-    the decoder predictions and applies them to the interactive branch; it is the default. The sparse
-    and dense modes post-process the decoder predictions directly. Without a decoder there is no
-    automatic segmentation: the run button is disabled until a model that has one is loaded.
+    the decoder predictions and applies them to the interactive branch; it is the default on CUDA
+    and MPS. The sparse mode (AIS) is the CPU default. Sparse and dense modes post-process the
+    decoder predictions directly. Without a decoder there is no automatic segmentation: the run
+    button is disabled until a model that has one is loaded.
 
     Disk-backed caching of the state is opted into via the 'cache automatic segmentation state'
     checkbox in the embedding settings (read here through the embedding widget); when off, the state
@@ -3866,7 +3867,6 @@ class AutoSegmentWidget(_WidgetBase):
 
     _is_tracking = False
     MODES = ("apg", "sparse", "dense")
-    DEFAULT_MODE = "apg"
     # The (section, name) of the run button's tooltip; the tracking subclass has its own.
     _RUN_TOOLTIP = ("autosegment", "run_button")
 
@@ -3913,9 +3913,18 @@ class AutoSegmentWidget(_WidgetBase):
         Returns:
             The mode names, in dropdown order. The first is the default.
         """
-        if self._apg_is_available():
-            return self.MODES
-        return tuple(mode for mode in self.MODES if mode != "apg")
+        if not self._apg_is_available():
+            return tuple(mode for mode in self.MODES if mode != "apg")
+
+        # Tiled APG can take hours on CPU. Prefer the direct decoder post-processing there,
+        # while retaining APG as an explicit choice for 2d images. Before model loading, use
+        # the available hardware; afterwards the decoder's device is authoritative, including
+        # when the user explicitly chose CPU on a machine with an accelerator.
+        state = AnnotatorState()
+        device = util.get_device() if state.decoder is None else next(state.decoder.parameters()).device
+        if util.device_type(device) not in _APG_ACCELERATORS:
+            return ("sparse", *(mode for mode in self.MODES if mode != "sparse"))
+        return self.MODES
 
     def _default_mode(self):
         return self._available_modes()[0]
@@ -3972,8 +3981,8 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _reset_segmentation_mode(self, with_decoder):
         # If neither the decoder availability nor the offered modes changed there is nothing to
-        # rebuild. The mode list can change without the former: the device decides whether APG is
-        # offered for volumetric data and for tracking.
+        # rebuild. The device can change the offered modes (volumes/tracking) or their order
+        # (the CPU default is sparse, even for 2d), triggering a reset to the new default.
         modes = self._available_modes()
         if with_decoder == self.with_decoder and modes == self._mode_choices():
             return
@@ -4502,19 +4511,30 @@ class AutoSegmentWidget(_WidgetBase):
             self._segmenter_key = cache_key
 
         if is_tiled:
-            return self._segmenter.generate(**self._apg_kwargs(ndim))
+            return self._segmenter.generate(
+                **self._apg_kwargs(ndim), pbar_init=pbar_init, pbar_update=pbar_update,
+            )
 
         if ndim == 3:  # One pass: the volumetric stages are not separable the way the 2d ones are.
-            return self._segmenter.generate(**self._apg_kwargs(ndim))
+            return self._segmenter.generate(
+                **self._apg_kwargs(ndim), pbar_init=pbar_init, pbar_update=pbar_update,
+            )
 
         # 'propose' does the prompting and 'select' only merges, so re-running with a different
         # score / overlap / size replays the merge instead of prompting the model again.
         propose_kwargs = self._apg_propose_kwargs()
         proposals_key = (cache_key, tuple(sorted(propose_kwargs.items())))
         if self._proposals is None or self._proposals_key != proposals_key:
-            self._proposals = self._segmenter.propose(**propose_kwargs)
+            self._proposals = self._segmenter.propose(
+                **propose_kwargs, pbar_init=pbar_init, pbar_update=pbar_update,
+            )
             self._proposals_key = proposals_key
-        return self._segmenter.select(self._proposals, **self._apg_select_kwargs())
+        if pbar_init is not None:
+            pbar_init(1, "APG: merging masks")
+        segmentation = self._segmenter.select(self._proposals, **self._apg_select_kwargs())
+        if pbar_update is not None:
+            pbar_update(1)
+        return segmentation
 
     def __call__(self):
         state = AnnotatorState()
@@ -4547,9 +4567,9 @@ class AutoSegmentWidget(_WidgetBase):
             if apg_error is not None:
                 return _generate_message("error", apg_error)
 
-        # Show a progress bar in the napari activity dock (and the status-bar wheel) that advances
-        # with the actual work: per tile for tiled runs, per slice for 3d, and as a single step for a
-        # plain 2d image. This tool disables thread workers (see top of module), so the run is
+        # Show progress in the napari activity dock: decoder tiles/slices, then APG prompt batches,
+        # scoring slices or propagation passes. Each stage resets the count and total.
+        # This tool disables thread workers (see top of module), so the run is
         # synchronous. We drive the bar via callbacks the backends call between units and pump the Qt
         # event loop with 'processEvents' on each update so it repaints live. It is always closed in
         # the 'finally' block. Batched 3d inference forwards completed tile-slice increments from its
@@ -4557,6 +4577,7 @@ class AutoSegmentWidget(_WidgetBase):
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
         def pbar_init(total, description):
+            pbar_signals.pbar_reset.emit()
             pbar_signals.pbar_total.emit(total)
             pbar_signals.pbar_description.emit(description)
             QtWidgets.QApplication.processEvents()
@@ -4667,16 +4688,18 @@ class AutoTrackWidget(AutoSegmentWidget):
             pbar_signals.pbar_update.emit(update)
             QtWidgets.QApplication.processEvents()
 
-        # Swallow each frame's 'pbar_init' so it cannot reset the overall total. The per-tile (or
-        # per-step) 'pbar_update' calls drive the bar instead.
+        # Decoder modes share a total over all frames. APG has candidate-dependent stages,
+        # so reset for each stage and keep the frame number in its description.
         def frame_pbar_init(total, description):
-            pass
+            # APG reports several stages per frame, whose totals depend on its candidates.
+            if self.mode == "apg":
+                pbar_signals.pbar_reset.emit()
+                tracking_pbar_init(total, f"Frame {frame_id + 1}/{len(raw)} - {description}")
 
         n_tiles = self._n_inplane_tiles(state, raw)
         try:
-            # One determinate bar over the actual work: n_tiles x n_frames. The per-frame segmentation
-            # advances it per tile (tiled) or once per frame (untiled), so a tiled run no longer looks
-            # like it does only n_frames steps.
+            # Decoder modes advance per tile (or once per untiled frame). APG replaces this
+            # initial total as soon as its first stage starts.
             pbar_signals.pbar_total.emit(n_tiles * len(raw))
             QtWidgets.QApplication.processEvents()
             for frame_id, frame in enumerate(raw):
