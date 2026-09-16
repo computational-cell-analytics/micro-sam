@@ -6,6 +6,8 @@ import os
 import h5py
 import napari
 import numpy as np
+from scipy.ndimage import binary_fill_holes
+from skimage.morphology import closing, disk
 from skimage.measure import label as sk_label
 from skimage.transform import rescale as sk_rescale
 
@@ -63,6 +65,9 @@ BEKE_GAP = 25
 BEKE_BORDER_WIDTH = 2
 BEKE_ITERATION = 2
 BEKE_MIN_FRAGMENT_SIZE = 1000
+BEKE_N_SMALL_CELLS_2D = 2
+BEKE_CLOSING_RADIUS_2D = 3
+BEKE_SEED = 0
 EM_SHOW_3D = True
 EM_Z_2D = None
 EM_BORDER_WIDTH = 20
@@ -105,6 +110,30 @@ def _remove_artifacts(seg, min_size):
     n_slices = np.bincount(np.concatenate([np.unique(z_slice) for z_slice in components]), minlength=len(sizes))
     seg[(sizes[components] < min_size) | (n_slices[components] == 1)] = 0
     return seg
+
+
+def _pick_cells_2d(seg, gt, n_small, min_area, seed):
+    """Pick the largest cell and n_small random cells below the median area.
+
+    A label counts as a cell when most of its pixels lie in the ground-truth cell of the same id, which leaves
+    out the ids that summing overlapping objects creates.
+    """
+    ids, areas = np.unique(seg[seg > 0], return_counts=True)
+    is_cell = [
+        area >= min_area and np.bincount(gt[seg == cell_id]).argmax() == cell_id for cell_id, area in zip(ids, areas)
+    ]
+    ids, areas = ids[is_cell], areas[is_cell]
+    small = ids[areas < np.median(areas)]
+    rng = np.random.default_rng(seed)
+    return [int(ids[areas.argmax()])] + [int(cell_id) for cell_id in rng.choice(small, size=n_small, replace=False)]
+
+
+def _fill_cells_2d(seg, cell_ids, radius):
+    """Paint only these cells with their gaps closed and holes filled, the largest first so smaller ones stay on top."""
+    out = np.zeros_like(seg)
+    for cell_id in sorted(cell_ids, key=lambda cell_id: -(seg == cell_id).sum()):
+        out[binary_fill_holes(closing(seg == cell_id, disk(radius)))] = cell_id
+    return out
 
 
 def _vis_scale(name, ds_factor):
@@ -567,7 +596,10 @@ def run_beke_big_crop():
         z_2d = f["raw"].shape[0] // 2
         raw_2d_full = f["raw"][z_2d][:].astype("float32")
         seg = _remove_artifacts(f[f"iterations/{BEKE_ITERATION}"][:], BEKE_MIN_FRAGMENT_SIZE)
-    seg_2d = seg[z_2d]
+        gt_2d = f["gt"][z_2d][:]
+    cells_2d = _pick_cells_2d(seg[z_2d], gt_2d, BEKE_N_SMALL_CELLS_2D, BEKE_MIN_FRAGMENT_SIZE, BEKE_SEED)
+    print(f"Highlighting cells {cells_2d} on slice {z_2d}")
+    seg_2d = _fill_cells_2d(seg[z_2d], cells_2d, BEKE_CLOSING_RADIUS_2D)
 
     # uint8 holds every id and renders much faster in 3d than uint32.
     seg_ds = sk_rescale(
@@ -600,9 +632,10 @@ def run_beke_big_crop():
     viewer2d = napari.Viewer(title=f"{name} 2D iteration {BEKE_ITERATION} z={z_2d}")
     viewer2d.add_image(raw_2d_full, name="raw", scale=scale_2d, contrast_limits=clim_2d)
     fill_layer = viewer2d.add_labels(seg_2d, name=f"iteration {BEKE_ITERATION}", scale=scale_2d, opacity=0.5)
-    fill_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    color_dict_2d = _make_color_dict(cells_2d)
+    fill_layer.colormap = DirectLabelColormap(color_dict=color_dict_2d)
     border_layer = viewer2d.add_labels(seg_2d, name=f"iteration {BEKE_ITERATION} border", scale=scale_2d, opacity=1.0)
-    border_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    border_layer.colormap = DirectLabelColormap(color_dict=color_dict_2d)
     border_layer.contour = BEKE_BORDER_WIDTH
     viewer2d.dims.axis_labels = ("y", "x")
     viewer2d.axes.visible = True
