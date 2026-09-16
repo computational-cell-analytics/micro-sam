@@ -19,9 +19,9 @@ DATASET_H5 = {
     "cremi_padded": "/home/anwai/data/for_usam2/cremi_padded_automatic_best_full.h5",
     "liconn": "/home/anwai/data/for_usam2/liconn_automatic_best_full.h5",
     "microns": "/home/anwai/data/for_usam2/microns_automatic_best_full.h5",
-    "beke_big_crop": (
-        "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/interactive_visualization/iterative_prompting/"
-        "fused_t000000_R0000_C02_Dfinal_z0-208_y215-727_x253-765_hvit_t_cells_box.h5"
+    "beke_big_crop": os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "fused_t000000_R0000_C02_Dfinal_z0-208_y215-727_x253-765_hvit_t_cells_box.h5",
     ),
 }
 
