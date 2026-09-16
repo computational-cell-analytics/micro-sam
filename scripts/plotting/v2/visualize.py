@@ -25,6 +25,10 @@ DATASET_H5 = {
         os.path.dirname(os.path.abspath(__file__)),
         "fused_t000000_R0000_C02_Dfinal_z0-208_y215-727_x253-765_hvit_t_cells_box.h5",
     ),
+    "beke_big_crop_apg": os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "fused_t000000_R0000_C02_Dfinal_z0-208_y215-727_x253-765_hvit_t_cells_apg.h5",
+    ),
 }
 
 # Physical voxel sizes (ZYX)
@@ -36,11 +40,13 @@ DATASET_SCALE = {
     "liconn": (8.0, 8.0, 8.0),
     "microns": (12.95, 9.7, 9.7),
     "beke_big_crop": (2.5, 0.406, 0.406),  # z is the light-sheet step recorded for the 3.5hpf volume
+    "beke_big_crop_apg": (2.5, 0.406, 0.406),
 }
 
 DATASET_SCALE_UNIT = {
     "nis3d": "um", "ovules": "um",
-    "mitoem": "nm", "cremi_padded": "nm", "liconn": "nm", "microns": "nm", "beke_big_crop": "um",
+    "mitoem": "nm", "cremi_padded": "nm", "liconn": "nm", "microns": "nm",
+    "beke_big_crop": "um", "beke_big_crop_apg": "um",
 }
 
 # Uniform rescale factor applied to all spatial dims for visualization
@@ -52,6 +58,7 @@ DATASET_DS = {
     "liconn": 0.5,
     "microns": 0.25,
     "beke_big_crop": 0.5,
+    "beke_big_crop_apg": 0.5,
 }
 
 NIS3D_GAP = 100
@@ -64,9 +71,15 @@ EM_TOP_N = 25
 BEKE_GAP = 25
 BEKE_BORDER_WIDTH = 2
 BEKE_ITERATION = 2
+# The segmentation key and layer name of each beke h5.
+BEKE_SEGMENTATIONS = {
+    "beke_big_crop": (f"iterations/{BEKE_ITERATION}", f"iteration {BEKE_ITERATION}"),
+    "beke_big_crop_apg": ("segmentation", "apg"),
+}
 BEKE_MIN_FRAGMENT_SIZE = 1000
 BEKE_N_SMALL_CELLS_2D = 2
 BEKE_CLOSING_RADIUS_2D = 3
+BEKE_MIN_IOU_2D = 0.5
 BEKE_SEED = 0
 EM_SHOW_3D = True
 EM_Z_2D = None
@@ -112,20 +125,27 @@ def _remove_artifacts(seg, min_size):
     return seg
 
 
-def _pick_cells_2d(seg, gt, n_small, min_area, seed):
+def _pick_cells_2d(seg, gt, n_small, min_area, min_iou, seed):
     """Pick the largest cell and n_small random cells below the median area.
 
-    A label counts as a cell when most of its pixels lie in the ground-truth cell of the same id, which leaves
-    out the ids that summing overlapping objects creates.
+    A label counts as a cell when it matches a ground-truth cell on the slice with at least min_iou, which leaves
+    out fragments, merges and the ids that summing overlapping objects creates.
     """
-    ids, areas = np.unique(seg[seg > 0], return_counts=True)
-    is_cell = [
-        area >= min_area and np.bincount(gt[seg == cell_id]).argmax() == cell_id for cell_id, area in zip(ids, areas)
-    ]
-    ids, areas = ids[is_cell], areas[is_cell]
-    small = ids[areas < np.median(areas)]
+    cell_ids, areas = [], []
+    for cell_id, area in zip(*np.unique(seg[seg > 0], return_counts=True)):
+        mask = seg == cell_id
+        gt_ids, overlaps = np.unique(gt[mask & (gt > 0)], return_counts=True)
+        if area < min_area or len(gt_ids) == 0:
+            continue
+        best = overlaps.argmax()
+        if overlaps[best] / (area + (gt == gt_ids[best]).sum() - overlaps[best]) >= min_iou:
+            cell_ids.append(cell_id)
+            areas.append(area)
+    cell_ids, areas = np.array(cell_ids), np.array(areas)
+    small = cell_ids[areas < np.median(areas)]
     rng = np.random.default_rng(seed)
-    return [int(ids[areas.argmax()])] + [int(cell_id) for cell_id in rng.choice(small, size=n_small, replace=False)]
+    picked = rng.choice(small, size=min(n_small, len(small)), replace=False)
+    return [int(cell_ids[areas.argmax()])] + [int(cell_id) for cell_id in picked]
 
 
 def _fill_cells_2d(seg, cell_ids, radius):
@@ -579,10 +599,10 @@ def run_microns():
     napari.run()
 
 
-def run_beke_big_crop():
+def _run_beke(name):
     from napari.utils.colormaps.colormap import DirectLabelColormap
 
-    name = "beke_big_crop"
+    seg_key, seg_name = BEKE_SEGMENTATIONS[name]
     ds = DATASET_DS[name]
     h5_path = DATASET_H5[name]
     # z is downsampled less than XY by the anisotropy, down to keeping every slice.
@@ -595,16 +615,18 @@ def run_beke_big_crop():
     with h5py.File(h5_path, "r") as f:
         z_2d = f["raw"].shape[0] // 2
         raw_2d_full = f["raw"][z_2d][:].astype("float32")
-        seg = _remove_artifacts(f[f"iterations/{BEKE_ITERATION}"][:], BEKE_MIN_FRAGMENT_SIZE)
+        seg = _remove_artifacts(f[seg_key][:], BEKE_MIN_FRAGMENT_SIZE)
         gt_2d = f["gt"][z_2d][:]
-    cells_2d = _pick_cells_2d(seg[z_2d], gt_2d, BEKE_N_SMALL_CELLS_2D, BEKE_MIN_FRAGMENT_SIZE, BEKE_SEED)
+    cells_2d = _pick_cells_2d(
+        seg[z_2d], gt_2d, BEKE_N_SMALL_CELLS_2D, BEKE_MIN_FRAGMENT_SIZE, BEKE_MIN_IOU_2D, BEKE_SEED
+    )
     print(f"Highlighting cells {cells_2d} on slice {z_2d}")
     seg_2d = _fill_cells_2d(seg[z_2d], cells_2d, BEKE_CLOSING_RADIUS_2D)
 
-    # uint8 holds every id and renders much faster in 3d than uint32.
+    # A smaller dtype renders much faster in 3d than uint32.
     seg_ds = sk_rescale(
         seg.astype("float32"), factors, order=0, anti_aliasing=False, channel_axis=None
-    ).astype("uint8")
+    ).astype("uint8" if seg.max() < 256 else "uint16")
     color_dict = _make_color_dict(np.unique(seg_ds)[1:].tolist())
     n_z_ds, n_y_ds, n_x_ds = seg_ds.shape
 
@@ -614,9 +636,9 @@ def run_beke_big_crop():
     raw_vol = np.zeros((seg_start + n_z_ds, n_y_ds, n_x_ds), dtype=raw_2d.dtype)
     raw_vol[0] = raw_2d
 
-    viewer = napari.Viewer(title=f"{name} 3D iteration {BEKE_ITERATION} (ds={factors})")
+    viewer = napari.Viewer(title=f"{name} 3D {seg_name} (ds={factors})")
     viewer.add_image(raw_vol, name="raw", scale=scale, contrast_limits=clim)
-    layer = viewer.add_labels(_pad_z(seg_ds, seg_start, 0), name=f"iteration {BEKE_ITERATION}", scale=scale)
+    layer = viewer.add_labels(_pad_z(seg_ds, seg_start, 0), name=seg_name, scale=scale)
     layer.colormap = DirectLabelColormap(color_dict=color_dict)
     viewer.dims.ndisplay = 3
     viewer.dims.axis_labels = ("z", "y", "x")
@@ -629,12 +651,12 @@ def run_beke_big_crop():
     scale_2d = DATASET_SCALE[name][1:]
     clim_2d = (float(raw_2d_full.min()), float(raw_2d_full.max()) + 1e-6)
 
-    viewer2d = napari.Viewer(title=f"{name} 2D iteration {BEKE_ITERATION} z={z_2d}")
+    viewer2d = napari.Viewer(title=f"{name} 2D {seg_name} z={z_2d}")
     viewer2d.add_image(raw_2d_full, name="raw", scale=scale_2d, contrast_limits=clim_2d)
-    fill_layer = viewer2d.add_labels(seg_2d, name=f"iteration {BEKE_ITERATION}", scale=scale_2d, opacity=0.5)
+    fill_layer = viewer2d.add_labels(seg_2d, name=seg_name, scale=scale_2d, opacity=0.5)
     color_dict_2d = _make_color_dict(cells_2d)
     fill_layer.colormap = DirectLabelColormap(color_dict=color_dict_2d)
-    border_layer = viewer2d.add_labels(seg_2d, name=f"iteration {BEKE_ITERATION} border", scale=scale_2d, opacity=1.0)
+    border_layer = viewer2d.add_labels(seg_2d, name=f"{seg_name} border", scale=scale_2d, opacity=1.0)
     border_layer.colormap = DirectLabelColormap(color_dict=color_dict_2d)
     border_layer.contour = BEKE_BORDER_WIDTH
     viewer2d.dims.axis_labels = ("y", "x")
@@ -643,6 +665,14 @@ def run_beke_big_crop():
     viewer2d.scale_bar.visible = True
     viewer2d.scale_bar.unit = unit
     napari.run()
+
+
+def run_beke_big_crop():
+    _run_beke("beke_big_crop")
+
+
+def run_beke_big_crop_apg():
+    _run_beke("beke_big_crop_apg")
 
 
 def main():
@@ -654,7 +684,7 @@ def main():
     dispatch = {
         "nis3d": run_nis3d, "ovules": run_ovules, "mitoem": run_mitoem,
         "cremi_padded": run_cremi_padded, "liconn": run_liconn, "microns": run_microns,
-        "beke_big_crop": run_beke_big_crop,
+        "beke_big_crop": run_beke_big_crop, "beke_big_crop_apg": run_beke_big_crop_apg,
     }
     for ds in args.datasets:
         dispatch[ds]()

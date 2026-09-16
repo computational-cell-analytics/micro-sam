@@ -8,6 +8,7 @@ Usage:
     python interactive_visualization.py -d beke_small_crop  # the embryo of beke_small, upsampled 2x by SAM2
     python interactive_visualization.py -d beke_big_crop  # the embryo of beke_big, upsampled 2x by SAM2
     python interactive_visualization.py -d beke_big_crop --iterative_prompting  # prompted from the ground truth
+    python interactive_visualization.py -d beke_big_crop --apg  # automatic prompt generation, scored on the gt
 """
 
 import os
@@ -35,11 +36,13 @@ from micro_sam.sam_annotator._titles import get_dock_title
 from micro_sam.sam_annotator.util import _sync_embedding_widget
 from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings
 from micro_sam.v2.evaluation.inference import run_interactive_segmentation_3d
+from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 EMBEDDING_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/interactive_visualization"
 ITERATIVE_PROMPTING_ROOT = os.path.join(EMBEDDING_ROOT, "iterative_prompting")
+AUTOMATIC_ROOT = os.path.join(EMBEDDING_ROOT, "automatic")
 DATASETS = ["beke_big", "beke_big_crop", "beke_small", "beke_small_crop", "liconn"]
 N_ITERATIONS = 8
 # Drops the specks of 'filtered_gt': its 19 cells have >= 105k voxels, every other object <= 4k.
@@ -123,11 +126,21 @@ def run_annotator(volume, embedding_path, model_type):
     napari.run()
 
 
-def run_iterative_prompting(volume, name, model_type, prompt):
+def load_ground_truth():
     with h5py.File(BEKE_BIG_GT_PATH, "r") as f:
         gt = f["filtered_gt"][:]
-    # The inference relabels and filters the ground truth like this, so the predicted ids match these.
-    labels = size_filter(seg=connected_components(gt).astype(gt.dtype), min_size=MIN_SIZE)
+    # The interactive inference relabels and filters the ground truth like this, so its predicted ids match these.
+    return gt, size_filter(seg=connected_components(gt).astype(gt.dtype), min_size=MIN_SIZE)
+
+
+def evaluate(segmentation, labels):
+    msa, sa = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
+    sbd = symmetric_best_dice_score(segmentation, labels)
+    return f"mSA {msa:.4f}, SA50 {sa[0]:.4f}, SA75 {sa[5]:.4f}, SBD {sbd:.4f}"
+
+
+def run_iterative_prompting(volume, name, model_type, prompt):
+    gt, labels = load_ground_truth()
 
     # Each slice is normalized on its own, as in training and in the interactive evaluation.
     prediction_dir = run_interactive_segmentation_3d(
@@ -147,9 +160,7 @@ def run_iterative_prompting(volume, name, model_type, prompt):
     ]
 
     for i, segmentation in enumerate(segmentations):
-        msa, sa = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
-        sbd = symmetric_best_dice_score(segmentation, labels)
-        print(f"Iteration {i}: mSA {msa:.4f}, SA50 {sa[0]:.4f}, SA75 {sa[5]:.4f}, SBD {sbd:.4f}")
+        print(f"Iteration {i}: {evaluate(segmentation, labels)}")
 
     output_path = os.path.join(ITERATIVE_PROMPTING_ROOT, f"{name}_{model_type}_{prompt}.h5")
     with h5py.File(output_path, "w") as f:
@@ -158,6 +169,23 @@ def run_iterative_prompting(volume, name, model_type, prompt):
         for i, segmentation in enumerate(segmentations):
             f.create_dataset(f"iterations/{i}", data=segmentation, compression="gzip")
     print(f"Saved the raw data, ground truth and segmentations to {output_path}")
+
+
+def run_apg(volume, name, model_type, embedding_path):
+    _, labels = load_ground_truth()
+    predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, segmentation_mode="apg", ndim=3)
+    segmentation = automatic_instance_segmentation(
+        predictor, segmenter, input_path=volume, embedding_path=embedding_path, ndim=3
+    )
+    print(f"APG: {evaluate(segmentation, labels)}")
+
+    os.makedirs(AUTOMATIC_ROOT, exist_ok=True)
+    output_path = os.path.join(AUTOMATIC_ROOT, f"{name}_{model_type}_apg.h5")
+    with h5py.File(output_path, "w") as f:
+        f.create_dataset("raw", data=volume, compression="gzip")
+        f.create_dataset("gt", data=labels, compression="gzip")
+        f.create_dataset("segmentation", data=segmentation, compression="gzip")
+    print(f"Saved the raw data, ground truth and segmentation to {output_path}")
 
 
 def main():
@@ -169,14 +197,18 @@ def main():
     parser.add_argument("--slice_norm", action="store_true", help="Normalize each slice instead of the volume.")
     parser.add_argument("--iterative_prompting", action="store_true", help="Prompt from the ground truth instead.")
     parser.add_argument("-p", "--prompt", default="box", choices=["box", "point"], help="The first prompt per object.")
+    parser.add_argument("--apg", action="store_true", help="Segment automatically with APG instead.")
     args = parser.parse_args()
-    if args.iterative_prompting and args.dataset != "beke_big_crop":
-        parser.error("Only 'beke_big_crop' has ground truth for iterative prompting.")
+    if (args.iterative_prompting or args.apg) and args.dataset != "beke_big_crop":
+        parser.error("Only 'beke_big_crop' has ground truth for iterative prompting and APG.")
 
     volume, name = load_volume(args.dataset)
     print(f"Loaded {name} with shape {volume.shape} and dtype {volume.dtype}")
     if args.iterative_prompting:
         run_iterative_prompting(volume, name, args.model_type, args.prompt)
+        return
+    if args.apg:
+        run_apg(volume, name, args.model_type, os.path.join(EMBEDDING_ROOT, f"{name}_{args.model_type}.zarr"))
         return
     if args.slice_norm:
         volume = normalize_per_slice(volume)
