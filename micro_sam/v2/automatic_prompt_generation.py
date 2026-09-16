@@ -1159,6 +1159,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         return ReplicatedPromptableSegmentation3D(
             self._video_predictor, volume, image_embeddings, devices=self._inference_devices(None),
             offload_state_to_cpu=self._offload_to_cpu, max_cached_frames=self._max_cached_frames,
+            release_stale_mask_memory=True,
         )
 
     def _initialize_volume(

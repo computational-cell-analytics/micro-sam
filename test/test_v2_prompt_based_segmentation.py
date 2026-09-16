@@ -533,7 +533,7 @@ class TrackingPropagationPredictor:
         self.occupancy = occupancy
         self.frames_yielded = 0
 
-    def propagate_in_video(self, inference_state, reverse=False):
+    def propagate_in_video(self, inference_state, reverse=False, release_stale_mask_memory=False):
         for frame_idx, occupied in enumerate(self.occupancy):
             self.frames_yielded += 1
             logits = torch.full((1, 1, 4, 4), 1.0 if occupied else -1.0)

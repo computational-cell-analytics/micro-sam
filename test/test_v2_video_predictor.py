@@ -159,6 +159,40 @@ def test_mask_memory_release_keeps_the_window_for_a_direction_switch():
     assert outputs[7]["maskmem_features"] is None
 
 
+@pytest.mark.parametrize("release", [False, True])
+def test_propagation_releases_mask_memory_only_on_request(monkeypatch, release):
+    """A prompt added after the pass reads the memory behind its slice, so the pass keeps it by default."""
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    predictor.clear_non_cond_mem_around_input = False
+    predictor.num_maskmem = 3
+    predictor.memory_temporal_stride_for_eval = 1
+    monkeypatch.setattr(predictor, "propagate_in_video_preflight", lambda state: None)
+    monkeypatch.setattr(predictor, "_get_obj_num", lambda state: 1)
+    monkeypatch.setattr(predictor, "_get_orig_video_res_output", lambda state, masks: (masks, masks))
+    outputs = {}
+
+    def track_frame_batch(state, group, frame_idx, reverse):
+        outputs[frame_idx] = frame_output(frame_idx)
+        return torch.zeros(1, 1, 2, 2)
+
+    monkeypatch.setattr(predictor, "_track_frame_batch", track_frame_batch)
+    inference_state = {
+        "num_frames": 12,
+        "obj_ids": [1],
+        "device": "cpu",
+        "offload_state_to_cpu": False,
+        "output_dict_per_obj": {0: {"cond_frame_outputs": {0: frame_output(1.0)}, "non_cond_frame_outputs": outputs}},
+        "frames_tracked_per_obj": {0: {}},
+    }
+
+    list(predictor.propagate_in_video(inference_state, release_stale_mask_memory=release))
+
+    # Frame 5 is further than 'num_maskmem' behind the last frame, and outside the window beside the start.
+    assert (outputs[5]["maskmem_features"] is None) == release
+
+
 def test_state_kept_on_the_device_is_not_awaited(monkeypatch):
     events = run_single_frame_inference(
         monkeypatch, {"offload_state_to_cpu": False, "device": "cuda:0"}, autocasts=True

@@ -87,7 +87,7 @@ def build_propagator(model, raw, embedding_path, tile_shape, halo, device, cache
     )
     return TiledPromptableSegmentation3D(
         model, raw, embeddings, devices=device, offload_state_to_cpu=False,
-        max_cached_frames=int(raw.shape[0]) if cache_all_slices else None,
+        max_cached_frames=int(raw.shape[0]) if cache_all_slices else None, release_stale_mask_memory=True,
     )
 
 

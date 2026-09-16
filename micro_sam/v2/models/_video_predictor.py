@@ -483,6 +483,7 @@ class CustomVideoPredictor(SAM2VideoPredictor):
     @torch.inference_mode()
     def propagate_in_video(
         self, inference_state, start_frame_idx=None, max_frame_num_to_track=None, reverse=False,
+        release_stale_mask_memory=False,
     ):
         """Propagate the prompts through the volume, tracking a frame's objects in one forward pass.
 
@@ -496,6 +497,10 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         of a few microseconds' worth of work each. Batching them leaves every mask exactly as it was
         - the objects carry no non-overlap constraint, so none of them depends on its batch - while
         the launches per frame drop by the size of the group.
+
+        'release_stale_mask_memory' frees the memory of the frames behind the attention window. Only a
+        caller that resets the state after the pass may set it: a prompt added later reads the memory
+        of the frames behind its slice.
         """
         self.propagate_in_video_preflight(inference_state)
 
@@ -545,9 +550,10 @@ class CustomVideoPredictor(SAM2VideoPredictor):
                     pred_masks_per_obj[obj_idx] = pred_masks[index:index + 1]
                     inference_state["frames_tracked_per_obj"][obj_idx][frame_idx] = {"reverse": reverse}
 
-            self._release_stale_mask_memory(
-                inference_state, batch_size, frame_idx, reverse, start_frame_idx,
-            )
+            if release_stale_mask_memory:
+                self._release_stale_mask_memory(
+                    inference_state, batch_size, frame_idx, reverse, start_frame_idx,
+                )
             if len(pred_masks_per_obj) > 1:
                 all_pred_masks = torch.cat(pred_masks_per_obj, dim=0)
             else:

@@ -6,6 +6,9 @@ import os
 import h5py
 import napari
 import numpy as np
+from scipy.ndimage import binary_fill_holes
+from skimage.morphology import closing, disk
+from skimage.measure import label as sk_label
 from skimage.transform import rescale as sk_rescale
 
 
@@ -18,6 +21,14 @@ DATASET_H5 = {
     "cremi_padded": "/home/anwai/data/for_usam2/cremi_padded_automatic_best_full.h5",
     "liconn": "/home/anwai/data/for_usam2/liconn_automatic_best_full.h5",
     "microns": "/home/anwai/data/for_usam2/microns_automatic_best_full.h5",
+    "beke_big_crop": os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "fused_t000000_R0000_C02_Dfinal_z0-208_y215-727_x253-765_hvit_t_cells_box.h5",
+    ),
+    "beke_big_crop_apg": os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "fused_t000000_R0000_C02_Dfinal_z0-208_y215-727_x253-765_hvit_t_cells_apg.h5",
+    ),
 }
 
 # Physical voxel sizes (ZYX)
@@ -28,11 +39,14 @@ DATASET_SCALE = {
     "cremi_padded": (40.0, 4.0, 4.0),
     "liconn": (8.0, 8.0, 8.0),
     "microns": (12.95, 9.7, 9.7),
+    "beke_big_crop": (2.5, 0.406, 0.406),  # z is the light-sheet step recorded for the 3.5hpf volume
+    "beke_big_crop_apg": (2.5, 0.406, 0.406),
 }
 
 DATASET_SCALE_UNIT = {
     "nis3d": "um", "ovules": "um",
     "mitoem": "nm", "cremi_padded": "nm", "liconn": "nm", "microns": "nm",
+    "beke_big_crop": "um", "beke_big_crop_apg": "um",
 }
 
 # Uniform rescale factor applied to all spatial dims for visualization
@@ -43,6 +57,8 @@ DATASET_DS = {
     "cremi_padded": 0.25,
     "liconn": 0.5,
     "microns": 0.25,
+    "beke_big_crop": 0.5,
+    "beke_big_crop_apg": 0.5,
 }
 
 NIS3D_GAP = 100
@@ -52,6 +68,16 @@ CREMI_GAP = 50
 LICONN_Z_MAX = 312
 LICONN_GAP = 150
 EM_TOP_N = 25
+BEKE_GAP = 25
+BEKE_BORDER_WIDTH = 2
+BEKE_ITERATION = 2
+# The segmentation key and layer name of each beke h5.
+BEKE_SEGMENTATIONS = {
+    "beke_big_crop": (f"iterations/{BEKE_ITERATION}", f"iteration {BEKE_ITERATION}"),
+    "beke_big_crop_apg": ("segmentation", "apg"),
+}
+BEKE_MIN_FRAGMENT_SIZE = 1000
+BEKE_CLOSING_RADIUS_2D = 3
 EM_SHOW_3D = True
 EM_Z_2D = None
 EM_BORDER_WIDTH = 20
@@ -85,6 +111,23 @@ def _load_rescaled(h5_path, key, factor, order=1):
     out = sk_rescale(arr.astype("float32"), effective, order=order,
                      anti_aliasing=(order > 0), channel_axis=None)
     return out.astype("uint32" if order == 0 else "float32")
+
+
+def _remove_artifacts(seg, min_size):
+    """Zero the connected pieces of each label with fewer than min_size voxels or on a single z slice."""
+    components = sk_label(seg, background=0, connectivity=seg.ndim)
+    sizes = np.bincount(components.ravel())
+    n_slices = np.bincount(np.concatenate([np.unique(z_slice) for z_slice in components]), minlength=len(sizes))
+    seg[(sizes[components] < min_size) | (n_slices[components] == 1)] = 0
+    return seg
+
+
+def _fill_cells_2d(seg, cell_ids, radius):
+    """Paint only these cells with their gaps closed and holes filled, the largest first so smaller ones stay on top."""
+    out = np.zeros_like(seg)
+    for cell_id in sorted(cell_ids, key=lambda cell_id: -(seg == cell_id).sum()):
+        out[binary_fill_holes(closing(seg == cell_id, disk(radius)))] = cell_id
+    return out
 
 
 def _vis_scale(name, ds_factor):
@@ -530,6 +573,80 @@ def run_microns():
     napari.run()
 
 
+def _run_beke(name):
+    from napari.utils.colormaps.colormap import DirectLabelColormap
+
+    seg_key, seg_name = BEKE_SEGMENTATIONS[name]
+    ds = DATASET_DS[name]
+    h5_path = DATASET_H5[name]
+    # z is downsampled less than XY by the anisotropy, down to keeping every slice.
+    z_spacing, y_spacing, _ = DATASET_SCALE[name]
+    factors = (min(1.0, ds * z_spacing / y_spacing), ds, ds)
+    scale = tuple(spacing / factor for spacing, factor in zip(DATASET_SCALE[name], factors))
+    unit = DATASET_SCALE_UNIT[name]
+
+    print(f"Loading {name} ...")
+    with h5py.File(h5_path, "r") as f:
+        z_2d = f["raw"].shape[0] // 2
+        raw_2d_full = f["raw"][z_2d][:].astype("float32")
+        seg = _remove_artifacts(f[seg_key][:], BEKE_MIN_FRAGMENT_SIZE)
+    # Every cell on the slice, without the slivers that the 3d fragment filter keeps.
+    cell_ids, areas = np.unique(seg[z_2d][seg[z_2d] > 0], return_counts=True)
+    cells_2d = [int(cell_id) for cell_id in cell_ids[areas >= BEKE_MIN_FRAGMENT_SIZE]]
+    seg_2d = _fill_cells_2d(seg[z_2d], cells_2d, BEKE_CLOSING_RADIUS_2D)
+
+    # A smaller dtype renders much faster in 3d than uint32.
+    seg_ds = sk_rescale(
+        seg.astype("float32"), factors, order=0, anti_aliasing=False, channel_axis=None
+    ).astype("uint8" if seg.max() < 256 else "uint16")
+    color_dict = _make_color_dict(np.unique(seg_ds)[1:].tolist())
+    n_z_ds, n_y_ds, n_x_ds = seg_ds.shape
+
+    raw_2d = sk_rescale(raw_2d_full, ds, order=1, anti_aliasing=True, channel_axis=None)[:n_y_ds, :n_x_ds]
+    clim = (float(raw_2d.min()), float(raw_2d.max()) + 1e-6)
+    seg_start = BEKE_GAP + 1
+    raw_vol = np.zeros((seg_start + n_z_ds, n_y_ds, n_x_ds), dtype=raw_2d.dtype)
+    raw_vol[0] = raw_2d
+
+    viewer = napari.Viewer(title=f"{name} 3D {seg_name} (ds={factors})")
+    viewer.add_image(raw_vol, name="raw", scale=scale, contrast_limits=clim)
+    layer = viewer.add_labels(_pad_z(seg_ds, seg_start, 0), name=seg_name, scale=scale)
+    layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    viewer.dims.ndisplay = 3
+    viewer.dims.axis_labels = ("z", "y", "x")
+    viewer.axes.visible = True
+    _set_axes_label_offset(viewer)
+    viewer.scale_bar.visible = True
+    viewer.scale_bar.unit = unit
+    napari.run()
+
+    scale_2d = DATASET_SCALE[name][1:]
+    clim_2d = (float(raw_2d_full.min()), float(raw_2d_full.max()) + 1e-6)
+
+    viewer2d = napari.Viewer(title=f"{name} 2D {seg_name} z={z_2d}")
+    viewer2d.add_image(raw_2d_full, name="raw", scale=scale_2d, contrast_limits=clim_2d)
+    fill_layer = viewer2d.add_labels(seg_2d, name=seg_name, scale=scale_2d, opacity=0.5)
+    color_dict_2d = _make_color_dict(cells_2d)
+    fill_layer.colormap = DirectLabelColormap(color_dict=color_dict_2d)
+    border_layer = viewer2d.add_labels(seg_2d, name=f"{seg_name} border", scale=scale_2d, opacity=1.0)
+    border_layer.colormap = DirectLabelColormap(color_dict=color_dict_2d)
+    border_layer.contour = BEKE_BORDER_WIDTH
+    viewer2d.dims.axis_labels = ("y", "x")
+    viewer2d.axes.visible = True
+    _set_axes_label_offset(viewer2d)
+    viewer2d.scale_bar.visible = True
+    viewer2d.scale_bar.unit = unit
+    napari.run()
+
+
+def run_beke_big_crop():
+    _run_beke("beke_big_crop")
+
+
+def run_beke_big_crop_apg():
+    _run_beke("beke_big_crop_apg")
+
+
 def main():
     choices = list(DATASET_H5)
     parser = argparse.ArgumentParser(description="Napari visualization for UniSAM2 predictions.")
@@ -539,6 +656,7 @@ def main():
     dispatch = {
         "nis3d": run_nis3d, "ovules": run_ovules, "mitoem": run_mitoem,
         "cremi_padded": run_cremi_padded, "liconn": run_liconn, "microns": run_microns,
+        "beke_big_crop": run_beke_big_crop, "beke_big_crop_apg": run_beke_big_crop_apg,
     }
     for ds in args.datasets:
         dispatch[ds]()
