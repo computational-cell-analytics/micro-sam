@@ -33,7 +33,7 @@ DATASET_SCALE = {
     "cremi_padded": (40.0, 4.0, 4.0),
     "liconn": (8.0, 8.0, 8.0),
     "microns": (12.95, 9.7, 9.7),
-    "beke_big_crop": (0.812, 0.406, 0.406),  # z estimated from the cell extents, the TIFF has no z spacing
+    "beke_big_crop": (2.5, 0.406, 0.406),  # z is the light-sheet step recorded for the 3.5hpf volume
 }
 
 DATASET_SCALE_UNIT = {
@@ -49,7 +49,7 @@ DATASET_DS = {
     "cremi_padded": 0.25,
     "liconn": 0.5,
     "microns": 0.25,
-    "beke_big_crop": 0.25,
+    "beke_big_crop": 0.5,
 }
 
 NIS3D_GAP = 100
@@ -555,7 +555,7 @@ def run_beke_big_crop():
     name = "beke_big_crop"
     ds = DATASET_DS[name]
     h5_path = DATASET_H5[name]
-    # z is downsampled less, by the anisotropy, so the displayed voxels are isotropic.
+    # z is downsampled less than XY by the anisotropy, down to keeping every slice.
     z_spacing, y_spacing, _ = DATASET_SCALE[name]
     factors = (min(1.0, ds * z_spacing / y_spacing), ds, ds)
     scale = tuple(spacing / factor for spacing, factor in zip(DATASET_SCALE[name], factors))
