@@ -77,10 +77,7 @@ BEKE_SEGMENTATIONS = {
     "beke_big_crop_apg": ("segmentation", "apg"),
 }
 BEKE_MIN_FRAGMENT_SIZE = 1000
-BEKE_N_SMALL_CELLS_2D = 2
 BEKE_CLOSING_RADIUS_2D = 3
-BEKE_MIN_IOU_2D = 0.5
-BEKE_SEED = 0
 EM_SHOW_3D = True
 EM_Z_2D = None
 EM_BORDER_WIDTH = 20
@@ -123,29 +120,6 @@ def _remove_artifacts(seg, min_size):
     n_slices = np.bincount(np.concatenate([np.unique(z_slice) for z_slice in components]), minlength=len(sizes))
     seg[(sizes[components] < min_size) | (n_slices[components] == 1)] = 0
     return seg
-
-
-def _pick_cells_2d(seg, gt, n_small, min_area, min_iou, seed):
-    """Pick the largest cell and n_small random cells below the median area.
-
-    A label counts as a cell when it matches a ground-truth cell on the slice with at least min_iou, which leaves
-    out fragments, merges and the ids that summing overlapping objects creates.
-    """
-    cell_ids, areas = [], []
-    for cell_id, area in zip(*np.unique(seg[seg > 0], return_counts=True)):
-        mask = seg == cell_id
-        gt_ids, overlaps = np.unique(gt[mask & (gt > 0)], return_counts=True)
-        if area < min_area or len(gt_ids) == 0:
-            continue
-        best = overlaps.argmax()
-        if overlaps[best] / (area + (gt == gt_ids[best]).sum() - overlaps[best]) >= min_iou:
-            cell_ids.append(cell_id)
-            areas.append(area)
-    cell_ids, areas = np.array(cell_ids), np.array(areas)
-    small = cell_ids[areas < np.median(areas)]
-    rng = np.random.default_rng(seed)
-    picked = rng.choice(small, size=min(n_small, len(small)), replace=False)
-    return [int(cell_ids[areas.argmax()])] + [int(cell_id) for cell_id in picked]
 
 
 def _fill_cells_2d(seg, cell_ids, radius):
@@ -616,11 +590,9 @@ def _run_beke(name):
         z_2d = f["raw"].shape[0] // 2
         raw_2d_full = f["raw"][z_2d][:].astype("float32")
         seg = _remove_artifacts(f[seg_key][:], BEKE_MIN_FRAGMENT_SIZE)
-        gt_2d = f["gt"][z_2d][:]
-    cells_2d = _pick_cells_2d(
-        seg[z_2d], gt_2d, BEKE_N_SMALL_CELLS_2D, BEKE_MIN_FRAGMENT_SIZE, BEKE_MIN_IOU_2D, BEKE_SEED
-    )
-    print(f"Highlighting cells {cells_2d} on slice {z_2d}")
+    # Every cell on the slice, without the slivers that the 3d fragment filter keeps.
+    cell_ids, areas = np.unique(seg[z_2d][seg[z_2d] > 0], return_counts=True)
+    cells_2d = [int(cell_id) for cell_id in cell_ids[areas >= BEKE_MIN_FRAGMENT_SIZE]]
     seg_2d = _fill_cells_2d(seg[z_2d], cells_2d, BEKE_CLOSING_RADIUS_2D)
 
     # A smaller dtype renders much faster in 3d than uint32.
