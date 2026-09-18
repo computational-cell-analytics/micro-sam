@@ -722,12 +722,13 @@ def precompute_state(
         devices: The device or devices to compute the embeddings and the decoder-based (AIS)
             automatic-segmentation state on. By default all visible CUDA devices are used. Only
             supported for SAM2 ('hvit_*') models.
-        tile_shape: The in-plane tile shape. By default the tiling of already cached embeddings is
-            reused, else images larger than the in-plane size cutoff are tiled with the default tile
-            shape - the same tiling the annotation tools and the automatic segmentation choose, so
-            they reuse these embeddings. Pass all zeros to compute the embeddings untiled.
-        halo: The in-plane tile overlap. By default the overlap of already cached embeddings, or the
-            default overlap whenever tiling is active.
+        tile_shape: The in-plane tile shape. By default, the function uses the tiling of cached
+            embeddings. Without them, it tiles an image that is larger than the in-plane size cutoff
+            with the default tile shape. The annotation tools and the automatic segmentation use the
+            same tiling, so they can reuse these embeddings. Pass all zeros to compute the embeddings
+            without tiles.
+        halo: The in-plane tile overlap. By default, the overlap of cached embeddings, or the default
+            overlap for tiled embeddings.
     """
     from .v2.util import resolve_default_tiling
 
@@ -784,8 +785,7 @@ def precompute_state(
             current_ndim = file_ndim
 
         save_path = str(Path(out_path).with_suffix(".zarr"))
-        # Tile like the annotation tools and the automatic segmentation, which would otherwise
-        # recompute embeddings of another tiling instead of reusing them.
+        # Use the tiling of the annotation tools, so that they can reuse these embeddings.
         spatial_shape = image_data.shape[:file_ndim]
         file_tile_shape, file_halo = resolve_default_tiling(spatial_shape, tile_shape, halo, save_path)
         if is_sam2 and file_ndim == 3 and file_tile_shape is not None:

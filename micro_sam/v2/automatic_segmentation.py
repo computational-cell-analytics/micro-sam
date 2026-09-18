@@ -168,15 +168,15 @@ def automatic_instance_segmentation(
     """Run automatic instance segmentation for a single input and save the result.
 
     Args:
-        predictor: The SAM2 predictor (see `get_predictor_and_segmenter`), used to precompute the
-            image embeddings for the decoder-based engines.
+        predictor: The SAM2 predictor (see `get_predictor_and_segmenter`). The decoder-based engines
+            use it to precompute the image embeddings.
         segmenter: The automatic instance segmentation generator (see `get_predictor_and_segmenter`).
         input_path: The input image, either a filepath (e.g. tif or a container with `key`) or an array.
         output_path: Optional path to save the segmentation as a tif file.
-        embedding_path: Optional path to cache the image embeddings. When given, embeddings are
-            persisted and reused. The decoder-based engines always precompute embeddings first;
-            without this path they are kept in memory (untiled 2d) or in an ephemeral cache. Tiled
-            APG without this path encodes each of its tiles / blocks itself.
+        embedding_path: The optional path to cache the image embeddings. The function saves the
+            embeddings there, and it uses them again in a later call. The decoder-based engines always
+            precompute the embeddings. Without this path, they keep the embeddings in memory (untiled
+            2d) or in an ephemeral cache. Without this path, tiled APG encodes each tile / block itself.
         model_type: Retained for API compatibility; the loaded predictor determines the embedding model.
         checkpoint: Retained for API compatibility; the loaded predictor already contains its weights.
         key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
@@ -258,9 +258,8 @@ def automatic_instance_segmentation(
         requested_devices = devices if devices is not None else device
         inference_devices = segmenter._inference_devices(requested_devices)
 
-        # The encoder and the decoder are staged: 3d encodes its z-halo once and the peaks do not add up,
-        # and every run decodes from embeddings, so the result does not depend on whether they are
-        # cached and matches the annotation tools (a joint encoder-decoder pass would pad border tiles).
+        # 3d stages the encoder and the decoder, so the z-halo is encoded once and the peaks do not add up.
+        # Every run decodes from embeddings, so that the result is the same as in the annotation tools.
         image_embeddings = None
         temp_embedding_path = None
         try:
@@ -301,7 +300,7 @@ def automatic_instance_segmentation(
                     num_write_workers=num_write_workers,
                 )
             else:
-                # The blocks are tiled in-plane like the embeddings, so each reads its tile's embeddings.
+                # The blocks use the tiling of the embeddings, so each block reads its tile.
                 segmenter.initialize(
                     raw, ndim=ndim, tile_shape=tile_shape, halo=halo, verbose=verbose,
                     image_embeddings=image_embeddings,

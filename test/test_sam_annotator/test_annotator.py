@@ -778,7 +778,7 @@ class TestApgAvailability:
         assert _apg_error(self._state(device), volumetric=True, is_tracking=True) is None
 
     def test_volumetric_data_is_refused_on_the_cpu(self):
-        """For the whole widget: a single slice of a volume is refused too, not just the whole volume."""
+        """The widget refuses a single slice of a volume too, not only the whole volume."""
         from micro_sam.sam_annotator._widgets import _apg_error
 
         error = _apg_error(self._state("cpu"), volumetric=True)
@@ -795,7 +795,7 @@ class TestApgAvailability:
 
     @pytest.mark.parametrize("device", ["cuda", "mps"])
     def test_tiled_embeddings_are_accepted_for_a_volume_on_an_accelerator(self, device):
-        """A tiled volume is segmented block by block by the tiled APG generator."""
+        """The tiled APG generator segments a tiled volume block by block."""
         from micro_sam.sam_annotator._widgets import _apg_error
 
         # Tiled embeddings have no top-level 'input_size'.
@@ -1175,7 +1175,7 @@ def test_tiled_apg_widget_hands_the_raw_image_and_embeddings_to_the_generator(mo
 
     assert calls == {"factory": 1, "initialize": 1, "generate": 2}
     assert prompt_generator.image is raw
-    # The blocks read the embeddings instead of encoding, a slice of a volume by its index.
+    # The blocks read the embeddings, and a slice of a volume passes its index.
     assert prompt_generator.initialize_kwargs == {
         "ndim": 2, "tile_shape": (4, 4), "halo": (1, 1), "verbose": False,
         "image_embeddings": image_embeddings, "i": z,
@@ -1189,13 +1189,16 @@ def test_tiled_apg_widget_hands_the_raw_image_and_embeddings_to_the_generator(mo
 
 @pytest.mark.parametrize("tile_z, halo_z, expected_z", [(4, 2, (4, 2)), (32, 2, (10, 0))])
 def test_tiled_apg_widget_blocks_a_volume_in_z(monkeypatch, tile_z, halo_z, expected_z):
-    """A tiled volume is segmented in (z, y, x) blocks: the widget's z tiling in front of the in-plane
-    tiling of the embeddings, with no z halo once a single z block spans the volume."""
+    """The widget segments a tiled volume in (z, y, x) blocks.
+
+    The z tiling of the widget comes before the in-plane tiling of the embeddings. A single z block
+    that spans the volume has no z halo.
+    """
     from types import MethodType, SimpleNamespace
 
     import micro_sam.precompute_state as precompute_state
-    import micro_sam.v2.instance_segmentation as instance_segmentation
     from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+    import micro_sam.v2.instance_segmentation as instance_segmentation
 
     class TiledPromptGenerator:
         def initialize(self, image, **kwargs):
@@ -1346,7 +1349,7 @@ class TestAutoSegDefaultMode:
         autoseg = widget._widgets["autosegment"]
         autoseg.mode_dropdown.setCurrentText("apg")
 
-        # A volume run uses the 3d defaults, the same the automatic segmentation CLI and API use.
+        # A volume run uses the 3d defaults, like the automatic segmentation CLI and API.
         autoseg.apply_to_volume_checkbox.setChecked(True)
         defaults_3d = default_prompt_generation(DEFAULT_MODEL, is_volume=True)
         kwargs = autoseg._apg_kwargs(ndim=3)

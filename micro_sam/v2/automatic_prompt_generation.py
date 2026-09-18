@@ -43,8 +43,8 @@ import torch
 
 from sam2.utils.amg import calculate_stability_score
 
-from bioimage_cpp.segmentation import label
 from bioimage_cpp.utils import Blocking
+from bioimage_cpp.segmentation import label
 
 # Only the tiled stitching in 'TiledAutomaticPromptGenerator.generate' uses this, so a missing
 # 'bioimage_py' must not stop this module - and with it the annotator, which reads the parameter
@@ -2324,11 +2324,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
 
 def _check_tiled_embeddings(image_embeddings: dict, shape: tuple, tile_shape: tuple, halo: tuple, i) -> None:
-    """Check that precomputed tiled embeddings can stand in for the per-block encoder passes.
+    """Check that the blocks can read their embeddings from the precomputed tiled embeddings.
 
-    The blocks and the embedding tiles are laid out by the same blocking, so they cover the same
-    in-plane crops only if the embeddings were computed for this input with the same in-plane
-    tiling. A volume block additionally selects its slices, and a slice of a volume its one slice.
+    The blocks and the embedding tiles use the same blocking. Thus a block covers the in-plane crop
+    of one embedding tile only if the embeddings have the same in-plane tiling and the same input.
 
     Args:
         image_embeddings: The precomputed tiled embeddings (see `precompute_image_embeddings`).
@@ -2350,8 +2349,8 @@ def _check_tiled_embeddings(image_embeddings: dict, shape: tuple, tile_shape: tu
     )
     if in_plane_tiling != embedding_tiling:
         raise ValueError(
-            f"The in-plane tiling {in_plane_tiling} (tile shape, halo) does not match the tiling "
-            f"{embedding_tiling} of the embeddings, so the blocks cannot reuse them."
+            f"The in-plane tiling {in_plane_tiling} (tile shape, halo) is not the tiling {embedding_tiling} of "
+            "the embeddings. Compute the embeddings with the same tiling."
         )
 
     embedded_shape = tuple(int(s) for s in features.attrs["shape"])
@@ -2364,19 +2363,17 @@ def _check_tiled_embeddings(image_embeddings: dict, shape: tuple, tile_shape: tu
     if not valid:
         slice_info = "" if i is None else f" (slice {i})"
         raise ValueError(
-            f"The embeddings of shape {embedded_shape} do not belong to the input of shape {tuple(shape)}"
-            f"{slice_info}."
+            f"The embeddings of shape {embedded_shape} are not for the input of shape {tuple(shape)}"
+            f"{slice_info}. Compute the embeddings for this input."
         )
 
 
 def _block_embeddings(image_embeddings: dict, shape: tuple, tile_shape: tuple, halo: tuple, block_id: int, i):
-    """Read the precomputed embeddings of one block from the embedding tile it lies in.
+    """Read the precomputed embeddings of one block from the embedding tile that contains it.
 
-    The in-plane layout of the blocks and of the embedding tiles is the same (see
-    `_check_tiled_embeddings`), so a block's in-plane crop is one embedding tile (tile + halo) and a
-    volume block only selects that tile's slices. The selected slices are read into memory, so that
-    the block's generator gets the same kind of embeddings it would have computed itself, and they
-    can be handed to a worker process.
+    The in-plane crop of a block is one embedding tile with its halo, see `_check_tiled_embeddings`.
+    A volume block selects the slices of the block from that tile. This function reads the slices
+    into memory, so that a worker process can receive them.
 
     Args:
         image_embeddings: The precomputed tiled embeddings, checked by `_check_tiled_embeddings`.
@@ -2502,8 +2499,7 @@ class TiledAutomaticPromptGenerator:
     # Read by `automatic_instance_segmentation` to decide whether to pass the AIS 'mode' argument.
     _has_postprocessing_mode = False
     _is_decoder_based = True
-    # Every block is encoded in `generate`, so the front end only computes the embeddings when it
-    # caches them; the blocks then read them instead (see `initialize`).
+    # The front end computes the embeddings only when it caches them.
     _precompute_embeddings_in_frontend = False
 
     def __init__(
@@ -2663,8 +2659,8 @@ class TiledAutomaticPromptGenerator:
 
         Unlike `AutomaticPromptGenerator`, nothing is encoded here: each tile/block is encoded from
         scratch inside `generate`, since every tile/block needs its own encoder pass over its halo.
-        With precomputed tiled `image_embeddings` of the same in-plane tiling, every tile/block reads
-        its embeddings from them instead, and no encoder pass runs at all.
+        If you give precomputed tiled `image_embeddings`, every tile/block reads its embeddings from
+        them, and the encoder does not run.
 
         Args:
             image: The input image, shape (Y, X) or (Y, X, C), or the input volume, shape (Z, Y, X).
@@ -2679,10 +2675,10 @@ class TiledAutomaticPromptGenerator:
             offload_to_cpu: Volumes only, forwarded to every tile/block's own
                 `AutomaticPromptGenerator.initialize`.
             cache_all_slices: Volumes only, forwarded the same way.
-            image_embeddings: Optional precomputed tiled embeddings of the input, or with `i` of the
-                volume the input is a slice of (see `micro_sam.v2.util.precompute_image_embeddings`).
-                Their in-plane tile shape and halo have to be the ones of `tile_shape` and `halo`.
-            i: The index of the input slice in the volume `image_embeddings` were computed for.
+            image_embeddings: The optional precomputed tiled embeddings of the input. With `i`, the
+                embeddings of the volume that contains the input slice. Their in-plane tile shape
+                and halo must be the ones of `tile_shape` and `halo`.
+            i: The index of the input slice in the volume of `image_embeddings`.
         """
         if ndim not in (2, 3):
             raise ValueError(f"Tiled prompt generation supports 2d and 3d inputs, got ndim={ndim}.")
@@ -2739,9 +2735,8 @@ class TiledAutomaticPromptGenerator:
         params = dict(params)
         protected_margin = tuple(self._halo)
         # Computed once over the whole image/volume so every tile/block shares one normalization
-        # instead of each estimating its own percentiles from its own, smaller, biased crop. Only
-        # the encoder uses it, which does not run when the blocks read precomputed embeddings.
-        encodes = self._ndim == 3 and self._image_embeddings is None
+        # instead of each estimating its own percentiles from its own, smaller, biased crop.
+        encodes = self._ndim == 3 and self._image_embeddings is None  # Only the encoder uses the bounds.
         normalization_bounds = _volume_normalization_bounds(self._image) if encodes else None
 
         if self._execution == "process":

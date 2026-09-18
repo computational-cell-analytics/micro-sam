@@ -519,8 +519,11 @@ def test_precompute_3d_embeddings_requires_full_3d_tile_shape():
 def test_tiled_apg_reads_its_blocks_from_cached_embeddings_only(
     monkeypatch, shape, ndim, tile_shape, halo, embedding_path,
 ):
-    """Without an embedding path the blocks encode themselves; with one, the embeddings are cached there
-    with the tiling of the blocks, and the blocks read them (the same as the annotator does)."""
+    """Without an embedding path, the blocks encode themselves.
+
+    With an embedding path, the front end caches the embeddings with the tiling of the blocks, and the
+    blocks read them, as in the annotator.
+    """
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
 
     class TiledAPG:
@@ -775,8 +778,8 @@ def precompute_calls(monkeypatch):
 def test_inference_tiles_large_images_by_default(precompute_calls, shape, expect_tiled):
     """The headless front-end applies the same size cutoff as the GUI, and swaps the segmenter.
 
-    It decodes from precomputed embeddings like the GUI, also without an embedding path: kept in
-    memory for an untiled image, in an ephemeral store for a tiled one.
+    It decodes from precomputed embeddings like the GUI, also without an embedding path. It keeps
+    them in memory for an untiled image, and in an ephemeral store for a tiled image.
     """
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
     from micro_sam.v2.util import DEFAULT_TILE_SHAPE, DEFAULT_HALO

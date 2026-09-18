@@ -169,8 +169,8 @@ if __name__ == "__main__":
 def test_precompute_embeddings_forwards_the_tiling(monkeypatch):
     from click.testing import CliRunner
 
-    import micro_sam.precompute_state as precompute_state
     from micro_sam._cli import cli
+    import micro_sam.precompute_state as precompute_state
 
     calls = []
     monkeypatch.setattr(precompute_state, "precompute_state", lambda *args, **kwargs: calls.append(kwargs))

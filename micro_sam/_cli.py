@@ -867,14 +867,14 @@ def inference_object_classification(
 )
 @click.option(
     "--tile_shape", default=None,
-    help="The in-plane tile shape, comma-separated, e.g. '384,384'. By default the tiling of already cached "
-    "embeddings is reused, else images larger than 768 pixels in-plane are tiled with the default tile shape, "
-    "as the annotation tools and 'inference segmentation' do. Pass 'none' (or '0,0') to compute them untiled."
+    help="The in-plane tile shape, comma-separated, e.g. '384,384'. By default, the tool uses the tiling of cached "
+    "embeddings. Without them, it tiles images that are larger than 768 pixels in-plane, as the annotation tools "
+    "and 'inference segmentation' do. Pass 'none' (or '0,0') to compute the embeddings without tiles."
 )
 @click.option(
     "--overlap", "halo", default=None,
-    help="The in-plane tile overlap, comma-separated, e.g. '64,64'. By default the overlap of already cached "
-    "embeddings is reused, else the default overlap is used. Pass 'none' together with '--tile_shape none'."
+    help="The in-plane tile overlap, comma-separated, e.g. '64,64'. By default, the tool uses the overlap of "
+    "cached embeddings, or else the default overlap. Pass 'none' together with '--tile_shape none'."
 )
 def precompute_embeddings(
     input_path, embedding_path, pattern, key, model_type, checkpoint_path, ndim,

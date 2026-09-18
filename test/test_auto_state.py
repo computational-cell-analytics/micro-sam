@@ -401,8 +401,7 @@ def test_save_load_autoseg_state_dispatch(tmp_path):
 
 
 @pytest.mark.parametrize("model_type, shape, ndim, tile_shape, halo, expected", [
-    # Above the in-plane size cutoff the annotation tools and the automatic segmentation tile by
-    # default, so the precomputed embeddings must be tiled the same way for them to be reused.
+    # The annotation tools reuse the embeddings only if they have the same tiling.
     ("hvit_t", (16, 800), 2, None, None, ((512, 512), (128, 128))),
     ("hvit_t", (3, 16, 800), 3, None, None, ((3, 512, 512), (0, 128, 128))),  # SAM2 takes every axis
     ("vit_b", (3, 16, 800), 3, None, None, ((512, 512), (128, 128))),  # SAM1 only the in-plane ones
@@ -413,8 +412,8 @@ def test_save_load_autoseg_state_dispatch(tmp_path):
 def test_precompute_state_tiles_like_the_annotation_tools(
     tmp_path, monkeypatch, model_type, shape, ndim, tile_shape, halo, expected,
 ):
-    import micro_sam.precompute_state as ps
     from micro_sam import util
+    import micro_sam.precompute_state as ps
 
     calls = []
 

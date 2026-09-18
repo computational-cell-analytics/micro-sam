@@ -1649,7 +1649,9 @@ def _fake_tiled_embeddings(shape, tile_shape, halo, video):
     """Tiled embeddings in the layout of `precompute_image_embeddings`, for a volume of `shape` (z, y, x) if
     `video`, else for an image of `shape` (y, x). Every stored slice holds 100 * tile_id + z."""
     import zarr
+
     from bioimage_cpp.utils import Blocking
+
     from micro_sam.util import _create_dataset_without_data
     from micro_sam.v2.batched_inference import _create_feature_dataset, _create_feature_levels
 
@@ -1680,9 +1682,7 @@ def _fake_tiled_embeddings(shape, tile_shape, halo, video):
             )
             dataset[:] = value(0)
             high_res = root.require_group("high_res_feats").require_group(name)
-            _create_dataset_without_data(
-                high_res, "0", shape=(1, 2, 4, 4), dtype="float32", chunks=(1, 2, 4, 4),
-            )[:] = 0
+            _create_dataset_without_data(high_res, "0", shape=(1, 2, 4, 4), dtype="float32", chunks=(1, 2, 4, 4))[:] = 0
         dataset.attrs["input_size"] = 8
         dataset.attrs["original_size"] = [int(e - b) for b, e in zip(outer.begin, outer.end)]
 
@@ -1739,14 +1739,14 @@ def test_tiled_apg_blocks_of_a_volume_read_their_tile_slices_from_the_embeddings
         block_embeddings = kwargs["image_embeddings"]
         assert kwargs["i"] is None
         assert kwargs["normalization_bounds"] is None  # nothing is encoded, so nothing is normalized
-        # One tile, and one stored slice per block slice: the tile id and slice come from the values.
+        # The stored values give the tile id and the slice of each block slice.
         values = np.asarray(block_embeddings["features"])[:, 0, 0, 0, 0].astype(int)
         tile_id, z_start = values[0] // 100, values[0] % 100
         np.testing.assert_array_equal(values, 100 * tile_id + np.arange(z_start, z_start + block.shape[0]))
         for level in block_embeddings["fpn"]:
             np.testing.assert_array_equal(np.asarray(level)[:, 0, 0, 0, 0].astype(int), values)
         assert int(np.asarray(block_embeddings["pos_enc"][0]).flat[0]) == 100 * tile_id
-        # The block is exactly the tile's crop of those slices, which is what the tile was encoded from.
+        # The block must be the crop of the tile that the encoder saw.
         crop = _tile_crop(shape[1:], in_plane_tile, in_plane_halo, tile_id)
         np.testing.assert_array_equal(block, volume[(slice(z_start, z_start + block.shape[0]), *crop)])
         assert list(block_embeddings["original_size"]) == list(block.shape[1:])
@@ -1800,8 +1800,8 @@ def test_tiled_apg_without_embeddings_encodes_every_block():
 @pytest.mark.parametrize("tile_shape, halo, image_shape, i, match", [
     ((4, 8), (2, 2), (8, 12), None, "in-plane tiling"),  # another tile shape than the embeddings
     ((8, 8), (1, 1), (8, 12), None, "in-plane tiling"),  # another halo
-    ((8, 8), (2, 2), (8, 16), None, "do not belong"),  # another image
-    ((8, 8), (2, 2), (8, 12), 3, "do not belong"),  # a slice index the volume does not have
+    ((8, 8), (2, 2), (8, 16), None, "are not for the input"),  # another image
+    ((8, 8), (2, 2), (8, 12), 3, "are not for the input"),  # a slice index the volume does not have
 ])
 def test_tiled_apg_rejects_embeddings_it_cannot_reuse(tile_shape, halo, image_shape, i, match):
     embeddings = _fake_tiled_embeddings((3, 8, 12), (8, 8), (2, 2), video=True)
@@ -1815,7 +1815,7 @@ def test_tiled_apg_rejects_embeddings_it_cannot_reuse(tile_shape, halo, image_sh
 def test_tiled_apg_rejects_image_embeddings_for_a_volume():
     embeddings = _fake_tiled_embeddings((8, 12), (8, 8), (2, 2), video=False)
     segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor())
-    with pytest.raises(ValueError, match="do not belong"):
+    with pytest.raises(ValueError, match="are not for the input"):
         segmenter.initialize(
             np.zeros((3, 8, 12)), ndim=3, tile_shape=(4, 8, 8), halo=(1, 2, 2), image_embeddings=embeddings,
         )
