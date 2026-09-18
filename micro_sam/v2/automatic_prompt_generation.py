@@ -44,6 +44,7 @@ import torch
 from sam2.utils.amg import calculate_stability_score
 
 from bioimage_cpp.segmentation import label
+from bioimage_cpp.utils import Blocking
 
 # Only the tiled stitching in 'TiledAutomaticPromptGenerator.generate' uses this, so a missing
 # 'bioimage_py' must not stop this module - and with it the annotator, which reads the parameter
@@ -63,7 +64,7 @@ from .prompt_based_segmentation import (
 )
 from .util import (
     DEFAULT_MODEL, autocast, configure_image_predictor, encode_image, get_sam2_image_predictor,
-    precompute_image_embeddings, set_precomputed,
+    precompute_image_embeddings, set_precomputed, _load_list_datasets,
 )
 from .instance_segmentation import (
     UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices, _set_image_predictor_from_3d_embeddings,
@@ -2322,6 +2323,99 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         )
 
 
+def _check_tiled_embeddings(image_embeddings: dict, shape: tuple, tile_shape: tuple, halo: tuple, i) -> None:
+    """Check that precomputed tiled embeddings can stand in for the per-block encoder passes.
+
+    The blocks and the embedding tiles are laid out by the same blocking, so they cover the same
+    in-plane crops only if the embeddings were computed for this input with the same in-plane
+    tiling. A volume block additionally selects its slices, and a slice of a volume its one slice.
+
+    Args:
+        image_embeddings: The precomputed tiled embeddings (see `precompute_image_embeddings`).
+        shape: The spatial shape of the input, (y, x) or (z, y, x).
+        tile_shape: The block shape of the tiled generator, matching `shape`'s axes.
+        halo: The block halo of the tiled generator, matching `shape`'s axes.
+        i: The index of the slice the input is in the embedded volume, or None.
+
+    Raises:
+        ValueError: If the embeddings do not match the input or its tiling.
+    """
+    features = image_embeddings["features"]
+    if image_embeddings.get("input_size") is not None or "tile_shape" not in features.attrs:
+        raise ValueError("Tiled prompt generation can only reuse tiled embeddings.")
+
+    in_plane_tiling = (tuple(tile_shape[-2:]), tuple(halo[-2:]))
+    embedding_tiling = (
+        tuple(int(t) for t in features.attrs["tile_shape"]), tuple(int(h) for h in features.attrs["halo"]),
+    )
+    if in_plane_tiling != embedding_tiling:
+        raise ValueError(
+            f"The in-plane tiling {in_plane_tiling} (tile shape, halo) does not match the tiling "
+            f"{embedding_tiling} of the embeddings, so the blocks cannot reuse them."
+        )
+
+    embedded_shape = tuple(int(s) for s in features.attrs["shape"])
+    is_video = "fpn" in image_embeddings
+    if len(shape) == 3 or i is not None:
+        expected_shape = tuple(shape) if len(shape) == 3 else (embedded_shape[0], *shape)
+        valid = is_video and embedded_shape == expected_shape and (i is None or 0 <= i < embedded_shape[0])
+    else:
+        valid = not is_video and embedded_shape == tuple(shape)
+    if not valid:
+        slice_info = "" if i is None else f" (slice {i})"
+        raise ValueError(
+            f"The embeddings of shape {embedded_shape} do not belong to the input of shape {tuple(shape)}"
+            f"{slice_info}."
+        )
+
+
+def _block_embeddings(image_embeddings: dict, shape: tuple, tile_shape: tuple, halo: tuple, block_id: int, i):
+    """Read the precomputed embeddings of one block from the embedding tile it lies in.
+
+    The in-plane layout of the blocks and of the embedding tiles is the same (see
+    `_check_tiled_embeddings`), so a block's in-plane crop is one embedding tile (tile + halo) and a
+    volume block only selects that tile's slices. The selected slices are read into memory, so that
+    the block's generator gets the same kind of embeddings it would have computed itself, and they
+    can be handed to a worker process.
+
+    Args:
+        image_embeddings: The precomputed tiled embeddings, checked by `_check_tiled_embeddings`.
+        shape: The spatial shape of the input, (y, x) or (z, y, x).
+        tile_shape: The block shape of the tiled generator, matching `shape`'s axes.
+        halo: The block halo of the tiled generator, matching `shape`'s axes.
+        block_id: The id of the block, as `bioimage_py.segmentation.stitch_segmentation` passes it.
+        i: The index of the slice the input is in the embedded volume, or None.
+
+    Returns:
+        The block's embeddings, and the slice index to initialize its generator with.
+    """
+    blocking = Blocking([0] * len(shape), list(shape), list(tile_shape))
+    block = blocking.get_block_with_halo(block_id, list(halo))
+    tiling = Blocking([0, 0], list(shape[-2:]), list(tile_shape[-2:]))
+    tile_id = tiling.coordinates_to_block_id(list(block.inner_block.begin)[-2:])
+    tile = tiling.get_block_with_halo(tile_id, list(halo[-2:])).outer_block
+    if (list(tile.begin), list(tile.end)) != (list(block.outer_block.begin)[-2:], list(block.outer_block.end)[-2:]):
+        raise RuntimeError(f"Block {block_id} does not cover the same in-plane crop as the embedding tile {tile_id}.")
+
+    name = str(tile_id)
+    features = image_embeddings["features"][name]
+    sizes = {"input_size": features.attrs["input_size"], "original_size": features.attrs["original_size"]}
+    if "fpn" not in image_embeddings:  # A 2d image.
+        high_res_feats = _load_list_datasets(image_embeddings["high_res_feats"], name, lazy_loading=False)
+        return {"features": features[:], "high_res_feats": high_res_feats, **sizes}, None
+
+    # A volume block reads its slices, a slice of a volume only that one.
+    z = slice(block.outer_block.begin[0], block.outer_block.end[0]) if len(shape) == 3 else slice(i, i + 1)
+    fpn = _load_list_datasets(image_embeddings["fpn"], name, lazy_loading=True)
+    embeddings = {
+        "features": features[z],
+        "fpn": [level[z] for level in fpn],
+        "pos_enc": _load_list_datasets(image_embeddings["pos_enc"], name, lazy_loading=False),
+        **sizes,
+    }
+    return embeddings, (None if len(shape) == 3 else 0)
+
+
 def _process_worker(model_builder: Callable[[str], tuple], device: str, task_queue) -> None:
     """One persistent OS process per device for `TiledAutomaticPromptGenerator(execution='process')`.
 
@@ -2344,6 +2438,7 @@ def _process_worker(model_builder: Callable[[str], tuple], device: str, task_que
             generator.initialize(
                 task["block"], ndim=task["ndim"], normalization_bounds=task["normalization_bounds"],
                 offload_to_cpu=task["offload_to_cpu"], cache_all_slices=task["cache_all_slices"],
+                **task["embedding_kwargs"],
             )
             generator._pruning_protected_margin = task["protected_margin"]
             result_queue.put(("ok", generator.generate(**task["params"])))
@@ -2407,6 +2502,8 @@ class TiledAutomaticPromptGenerator:
     # Read by `automatic_instance_segmentation` to decide whether to pass the AIS 'mode' argument.
     _has_postprocessing_mode = False
     _is_decoder_based = True
+    # Every block is encoded in `generate`, so the front end only computes the embeddings when it
+    # caches them; the blocks then read them instead (see `initialize`).
     _precompute_embeddings_in_frontend = False
 
     def __init__(
@@ -2455,6 +2552,8 @@ class TiledAutomaticPromptGenerator:
         self._verbose = False
         self._offload_to_cpu = None
         self._cache_all_slices = False
+        self._image_embeddings = None
+        self._i = None
 
     def _inference_devices(self, devices: Devices) -> Devices:
         """Resolve the inference devices and discard a pool that uses different devices."""
@@ -2557,11 +2656,15 @@ class TiledAutomaticPromptGenerator:
         verbose: bool = False,
         offload_to_cpu: Optional[bool] = None,
         cache_all_slices: bool = False,
+        image_embeddings: Optional[dict] = None,
+        i: Optional[int] = None,
     ) -> None:
         """Store the input and the tile/block geometry; the actual segmentation happens in `generate`.
 
         Unlike `AutomaticPromptGenerator`, nothing is encoded here: each tile/block is encoded from
         scratch inside `generate`, since every tile/block needs its own encoder pass over its halo.
+        With precomputed tiled `image_embeddings` of the same in-plane tiling, every tile/block reads
+        its embeddings from them instead, and no encoder pass runs at all.
 
         Args:
             image: The input image, shape (Y, X) or (Y, X, C), or the input volume, shape (Z, Y, X).
@@ -2576,6 +2679,10 @@ class TiledAutomaticPromptGenerator:
             offload_to_cpu: Volumes only, forwarded to every tile/block's own
                 `AutomaticPromptGenerator.initialize`.
             cache_all_slices: Volumes only, forwarded the same way.
+            image_embeddings: Optional precomputed tiled embeddings of the input, or with `i` of the
+                volume the input is a slice of (see `micro_sam.v2.util.precompute_image_embeddings`).
+                Their in-plane tile shape and halo have to be the ones of `tile_shape` and `halo`.
+            i: The index of the input slice in the volume `image_embeddings` were computed for.
         """
         if ndim not in (2, 3):
             raise ValueError(f"Tiled prompt generation supports 2d and 3d inputs, got ndim={ndim}.")
@@ -2586,13 +2693,19 @@ class TiledAutomaticPromptGenerator:
                 f"'tile_shape' and 'halo' must have {ndim} entries for a {ndim}d input, one per spatial "
                 "axis - always (z, y, x) for a volume, never in-plane only."
             )
+        tile_shape = tuple(int(t) for t in tile_shape)
+        halo = tuple(int(h) for h in halo)
+        if image_embeddings is not None:
+            _check_tiled_embeddings(image_embeddings, image.shape[:ndim], tile_shape, halo, i)
         self._image = image
         self._ndim = ndim
-        self._tile_shape = tuple(int(t) for t in tile_shape)
-        self._halo = tuple(int(h) for h in halo)
+        self._tile_shape = tile_shape
+        self._halo = halo
         self._verbose = verbose
         self._offload_to_cpu = offload_to_cpu
         self._cache_all_slices = cache_all_slices
+        self._image_embeddings = image_embeddings
+        self._i = None if image_embeddings is None else i
 
     @torch.no_grad()
     def generate(self, *, pbar_init=None, pbar_update=None, **params) -> np.ndarray:
@@ -2626,8 +2739,10 @@ class TiledAutomaticPromptGenerator:
         params = dict(params)
         protected_margin = tuple(self._halo)
         # Computed once over the whole image/volume so every tile/block shares one normalization
-        # instead of each estimating its own percentiles from its own, smaller, biased crop.
-        normalization_bounds = _volume_normalization_bounds(self._image) if self._ndim == 3 else None
+        # instead of each estimating its own percentiles from its own, smaller, biased crop. Only
+        # the encoder uses it, which does not run when the blocks read precomputed embeddings.
+        encodes = self._ndim == 3 and self._image_embeddings is None
+        normalization_bounds = _volume_normalization_bounds(self._image) if encodes else None
 
         if self._execution == "process":
             segment_block, num_workers = self._process_dispatch(params, normalization_bounds, protected_margin)
@@ -2660,6 +2775,15 @@ class TiledAutomaticPromptGenerator:
         output = _run_with_progress(stitch, pbar_update)
         return np.asarray(output).astype("uint32")
 
+    def _block_embedding_kwargs(self, block_id: int) -> dict:
+        """The precomputed embeddings to initialize a block's generator with, if there are any."""
+        if self._image_embeddings is None:
+            return {}
+        embeddings, i = _block_embeddings(
+            self._image_embeddings, self._image.shape[:self._ndim], self._tile_shape, self._halo, block_id, self._i,
+        )
+        return {"image_embeddings": embeddings, "i": i}
+
     def _thread_dispatch(self, params: dict, normalization_bounds, protected_margin: tuple):
         """Build the `segment_block` closure for `execution='thread'` (the default)."""
         if self._pool is None:
@@ -2670,6 +2794,7 @@ class TiledAutomaticPromptGenerator:
 
         def segment_block(block: np.ndarray, block_id: int) -> np.ndarray:
             block = np.asarray(block)
+            embedding_kwargs = self._block_embedding_kwargs(block_id)
             generator = available.get()
             # None (a worker alone on its device) skips the stream context entirely, keeping the
             # default stream - torch.cuda.stream(None) resolves the current device even when there
@@ -2681,7 +2806,7 @@ class TiledAutomaticPromptGenerator:
                     generator.initialize(
                         block, ndim=self._ndim, verbose=self._verbose,
                         offload_to_cpu=self._offload_to_cpu, cache_all_slices=self._cache_all_slices,
-                        normalization_bounds=normalization_bounds,
+                        normalization_bounds=normalization_bounds, **embedding_kwargs,
                     )
                     generator._pruning_protected_margin = protected_margin
                     result = generator.generate(**params)
@@ -2721,7 +2846,7 @@ class TiledAutomaticPromptGenerator:
                     "block": block, "ndim": self._ndim, "protected_margin": protected_margin,
                     "params": params, "normalization_bounds": normalization_bounds,
                     "offload_to_cpu": self._offload_to_cpu, "cache_all_slices": self._cache_all_slices,
-                    "result_queue": result_queue,
+                    "embedding_kwargs": self._block_embedding_kwargs(block_id), "result_queue": result_queue,
                 })
                 try:
                     status, payload = result_queue.get(timeout=self._process_timeout)
@@ -2739,11 +2864,14 @@ class TiledAutomaticPromptGenerator:
         return segment_block, len(self._processes)
 
     def get_state(self) -> dict:
-        """Return the input and the tile/block geometry, so `set_state` can restore them."""
-        return {"image": self._image, "ndim": self._ndim, "tile_shape": self._tile_shape, "halo": self._halo}
+        """Return the input, the tile/block geometry and the embeddings, so `set_state` can restore them."""
+        return {
+            "image": self._image, "ndim": self._ndim, "tile_shape": self._tile_shape, "halo": self._halo,
+            "image_embeddings": self._image_embeddings, "i": self._i,
+        }
 
     def set_state(self, state: dict) -> None:
-        """Restore the input and the tile/block geometry `initialize` stored.
+        """Restore the input, the tile/block geometry and the embeddings `initialize` stored.
 
         Args:
             state: The state, as returned by `get_state`.
@@ -2754,10 +2882,14 @@ class TiledAutomaticPromptGenerator:
         self._ndim = state.get("ndim", 2)
         self._tile_shape = state.get("tile_shape")
         self._halo = state.get("halo")
+        self._image_embeddings = state.get("image_embeddings")
+        self._i = state.get("i")
 
     def clear_state(self) -> None:
-        """Clear the stored input and tile/block geometry. The device pool stays alive."""
+        """Clear the stored input, tile/block geometry and embeddings. The device pool stays alive."""
         self._image = None
         self._ndim = None
         self._tile_shape = None
         self._halo = None
+        self._image_embeddings = None
+        self._i = None

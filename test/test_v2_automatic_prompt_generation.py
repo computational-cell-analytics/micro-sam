@@ -1645,6 +1645,182 @@ def test_tiled_apg_generate_passes_spatial_shape_for_channel_last_image(monkeypa
     assert segmentation.shape == (8, 12)
 
 
+def _fake_tiled_embeddings(shape, tile_shape, halo, video):
+    """Tiled embeddings in the layout of `precompute_image_embeddings`, for a volume of `shape` (z, y, x) if
+    `video`, else for an image of `shape` (y, x). Every stored slice holds 100 * tile_id + z."""
+    import zarr
+    from bioimage_cpp.utils import Blocking
+    from micro_sam.util import _create_dataset_without_data
+    from micro_sam.v2.batched_inference import _create_feature_dataset, _create_feature_levels
+
+    root = zarr.group()
+    features = root.require_group("features")
+    features.attrs.update(shape=list(shape), tile_shape=list(tile_shape), halo=list(halo))
+    tiling = Blocking([0, 0], list(shape[-2:]), list(tile_shape))
+    for tile_id in range(tiling.number_of_blocks):
+        name = str(tile_id)
+        outer = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
+
+        def value(z):
+            return np.full((1, 2, 2, 2), 100 * tile_id + z, dtype="float32")
+
+        if video:
+            n_slices = shape[0]
+            dataset = _create_feature_dataset(features, name, n_slices, value(0))
+            levels = _create_feature_levels(root.require_group("fpn").require_group(name), n_slices, [value(0)] * 2)
+            for z in range(n_slices):
+                dataset[z] = value(z)
+                for level in levels:
+                    level[z] = value(z)
+            pos_enc = _create_feature_levels(root.require_group("pos_enc").require_group(name), 1, [value(0)])
+            pos_enc[0][0] = value(0)
+        else:
+            dataset = _create_dataset_without_data(
+                features, name, shape=(1, 2, 2, 2), dtype="float32", chunks=(1, 2, 2, 2),
+            )
+            dataset[:] = value(0)
+            high_res = root.require_group("high_res_feats").require_group(name)
+            _create_dataset_without_data(
+                high_res, "0", shape=(1, 2, 4, 4), dtype="float32", chunks=(1, 2, 4, 4),
+            )[:] = 0
+        dataset.attrs["input_size"] = 8
+        dataset.attrs["original_size"] = [int(e - b) for b, e in zip(outer.begin, outer.end)]
+
+    embeddings = {"features": features, "input_size": None, "original_size": None}
+    for key in ("fpn", "pos_enc", "high_res_feats"):
+        if key in root:
+            embeddings[key] = root[key]
+    return embeddings
+
+
+def _run_tiled_apg_with_embeddings(image, ndim, tile_shape, halo, image_embeddings, i=None):
+    """Run the tiled generator with the real stitching and a stand-in worker; return what each block got."""
+    calls = []
+
+    class RecordingGenerator:
+        _pruning_protected_margin = None
+
+        def initialize(self, block, **kwargs):
+            calls.append((np.asarray(block), kwargs))
+
+        def generate(self, **params):
+            return np.zeros(calls[-1][0].shape[:ndim], dtype="uint32")
+
+        def clear_state(self):
+            pass
+
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor())
+    segmenter._pool = [RecordingGenerator()]
+    segmenter.initialize(image, ndim=ndim, tile_shape=tile_shape, halo=halo, image_embeddings=image_embeddings, i=i)
+    segmenter.generate()
+    return calls
+
+
+def _tile_crop(shape, tile_shape, halo, tile_id):
+    from bioimage_cpp.utils import Blocking
+
+    outer = Blocking([0, 0], list(shape), list(tile_shape)).get_block_with_halo(tile_id, list(halo)).outer_block
+    return tuple(slice(b, e) for b, e in zip(outer.begin, outer.end))
+
+
+@pytest.mark.skipif(
+    automatic_prompt_generation.bp is None, reason="Tiled stitching requires the optional 'bioimage_py'."
+)
+def test_tiled_apg_blocks_of_a_volume_read_their_tile_slices_from_the_embeddings():
+    shape, in_plane_tile, in_plane_halo = (6, 8, 12), (8, 8), (2, 2)
+    volume = np.arange(np.prod(shape), dtype="float32").reshape(shape)
+    embeddings = _fake_tiled_embeddings(shape, in_plane_tile, in_plane_halo, video=True)
+
+    calls = _run_tiled_apg_with_embeddings(volume, 3, (4, *in_plane_tile), (1, *in_plane_halo), embeddings)
+
+    assert len(calls) == 4  # 2 z blocks x 2 in-plane tiles
+    blocks = set()
+    for block, kwargs in calls:
+        block_embeddings = kwargs["image_embeddings"]
+        assert kwargs["i"] is None
+        assert kwargs["normalization_bounds"] is None  # nothing is encoded, so nothing is normalized
+        # One tile, and one stored slice per block slice: the tile id and slice come from the values.
+        values = np.asarray(block_embeddings["features"])[:, 0, 0, 0, 0].astype(int)
+        tile_id, z_start = values[0] // 100, values[0] % 100
+        np.testing.assert_array_equal(values, 100 * tile_id + np.arange(z_start, z_start + block.shape[0]))
+        for level in block_embeddings["fpn"]:
+            np.testing.assert_array_equal(np.asarray(level)[:, 0, 0, 0, 0].astype(int), values)
+        assert int(np.asarray(block_embeddings["pos_enc"][0]).flat[0]) == 100 * tile_id
+        # The block is exactly the tile's crop of those slices, which is what the tile was encoded from.
+        crop = _tile_crop(shape[1:], in_plane_tile, in_plane_halo, tile_id)
+        np.testing.assert_array_equal(block, volume[(slice(z_start, z_start + block.shape[0]), *crop)])
+        assert list(block_embeddings["original_size"]) == list(block.shape[1:])
+        blocks.add((tile_id, z_start))
+    assert blocks == {(0, 0), (1, 0), (0, 3), (1, 3)}
+
+
+@pytest.mark.skipif(
+    automatic_prompt_generation.bp is None, reason="Tiled stitching requires the optional 'bioimage_py'."
+)
+def test_tiled_apg_blocks_of_a_volume_slice_read_that_slice_from_the_embeddings():
+    shape, tile_shape, halo = (3, 8, 12), (8, 8), (2, 2)
+    volume = np.arange(np.prod(shape), dtype="float32").reshape(shape)
+    embeddings = _fake_tiled_embeddings(shape, tile_shape, halo, video=True)
+
+    calls = _run_tiled_apg_with_embeddings(volume[1], 2, tile_shape, halo, embeddings, i=1)
+
+    assert len(calls) == 2
+    for block, kwargs in calls:
+        assert kwargs["i"] == 0  # the block's embeddings hold only the one slice
+        values = np.asarray(kwargs["image_embeddings"]["features"])[:, 0, 0, 0, 0].astype(int)
+        assert len(values) == 1 and values[0] % 100 == 1
+        crop = _tile_crop(shape[1:], tile_shape, halo, values[0] // 100)
+        np.testing.assert_array_equal(block, volume[1][crop])
+
+
+@pytest.mark.skipif(
+    automatic_prompt_generation.bp is None, reason="Tiled stitching requires the optional 'bioimage_py'."
+)
+def test_tiled_apg_blocks_of_an_image_read_their_tile_from_the_embeddings():
+    shape, tile_shape, halo = (8, 12), (8, 8), (2, 2)
+    image = np.arange(np.prod(shape), dtype="float32").reshape(shape)
+    embeddings = _fake_tiled_embeddings(shape, tile_shape, halo, video=False)
+
+    calls = _run_tiled_apg_with_embeddings(image, 2, tile_shape, halo, embeddings)
+
+    assert len(calls) == 2
+    for block, kwargs in calls:
+        block_embeddings = kwargs["image_embeddings"]
+        assert kwargs["i"] is None and "high_res_feats" in block_embeddings
+        tile_id = int(np.asarray(block_embeddings["features"]).flat[0]) // 100
+        np.testing.assert_array_equal(block, image[_tile_crop(shape, tile_shape, halo, tile_id)])
+
+
+def test_tiled_apg_without_embeddings_encodes_every_block():
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor())
+    segmenter.initialize(np.zeros((8, 12)), ndim=2, tile_shape=(8, 8), halo=(2, 2))
+    assert segmenter._block_embedding_kwargs(0) == {}
+
+
+@pytest.mark.parametrize("tile_shape, halo, image_shape, i, match", [
+    ((4, 8), (2, 2), (8, 12), None, "in-plane tiling"),  # another tile shape than the embeddings
+    ((8, 8), (1, 1), (8, 12), None, "in-plane tiling"),  # another halo
+    ((8, 8), (2, 2), (8, 16), None, "do not belong"),  # another image
+    ((8, 8), (2, 2), (8, 12), 3, "do not belong"),  # a slice index the volume does not have
+])
+def test_tiled_apg_rejects_embeddings_it_cannot_reuse(tile_shape, halo, image_shape, i, match):
+    embeddings = _fake_tiled_embeddings((3, 8, 12), (8, 8), (2, 2), video=True)
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor())
+    with pytest.raises(ValueError, match=match):
+        segmenter.initialize(
+            np.zeros(image_shape), ndim=2, tile_shape=tile_shape, halo=halo, image_embeddings=embeddings, i=i,
+        )
+
+
+def test_tiled_apg_rejects_image_embeddings_for_a_volume():
+    embeddings = _fake_tiled_embeddings((8, 12), (8, 8), (2, 2), video=False)
+    segmenter = TiledAutomaticPromptGenerator(torch.nn.Identity(), _fake_apg_predictor())
+    with pytest.raises(ValueError, match="do not belong"):
+        segmenter.initialize(
+            np.zeros((3, 8, 12)), ndim=3, tile_shape=(4, 8, 8), halo=(1, 2, 2), image_embeddings=embeddings,
+        )
+
+
 @pytest.mark.parametrize("n_prompts", [0, 5])
 def test_apg_proposal_progress_counts_completed_batches(monkeypatch, n_prompts):
     segmenter = object.__new__(AutomaticPromptGenerator)

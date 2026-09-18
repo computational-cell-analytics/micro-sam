@@ -3809,17 +3809,17 @@ def _apg_runs_on_this_device(state):
     return util.device_type(next(state.decoder.parameters()).device) in _APG_ACCELERATORS
 
 
-def _apg_error(state, volumetric, ndim, is_tracking=False):
+def _apg_error(state, volumetric, is_tracking=False):
     """Why APG cannot run in the annotator for this data, if it cannot.
 
     The device rule is per data kind, not per run: volumetric data and a timeseries go through the
     video predictor, so APG is unavailable for the whole widget on the CPU - a single slice or frame
-    of them included. A plain 2d image prompts the image predictor and runs anywhere.
+    of them included. A plain 2d image prompts the image predictor and runs anywhere. Tiling is no
+    restriction: a tiled volume is segmented block by block (see `TiledAutomaticPromptGenerator`).
 
     Args:
-        state: The annotator state, holding the loaded decoder and the image embeddings.
+        state: The annotator state, holding the loaded decoder.
         volumetric: Whether the widget's data is volumetric (a volume or a timeseries).
-        ndim: The dimensionality of the run, 2 for a single slice / frame and 3 for a whole volume.
         is_tracking: Whether this is the automatic tracking widget.
 
     Returns:
@@ -3831,14 +3831,6 @@ def _apg_error(state, volumetric, ndim, is_tracking=False):
             f"APG is not available for {data_kind} on the CPU, since it prompts the video predictor "
             "for every candidate. Use the 'sparse' or 'dense' mode instead."
         )
-
-    image_embeddings = state.image_embeddings
-    if ndim == 3 and image_embeddings is not None and image_embeddings.get("input_size") is None:
-        return (
-            "APG cannot segment a full volume with tiled embeddings. Disable in-plane tiling or run APG "
-            "on the current slice."
-        )
-
     return None
 
 
@@ -3958,6 +3950,8 @@ class AutoSegmentWidget(_WidgetBase):
                 title="Apply to Volume",
                 tooltip=get_tooltip("autosegment", "apply_to_volume"),
             )
+            # Connected after the checkbox updates 'apply_to_volume', which the handler reads.
+            self.apply_to_volume_checkbox.stateChanged.connect(self._on_apply_to_volume_changed)
             top_row.addWidget(self.apply_to_volume_checkbox)
 
         self.layout().addLayout(top_row)
@@ -4136,6 +4130,45 @@ class AutoSegmentWidget(_WidgetBase):
             sigma=defaults["sigma"],
         )
 
+    # The APG parameters whose defaults differ between an image (or a slice) and a volume, as the
+    # widget attribute and the key in `default_prompt_generation`.
+    _APG_DIMENSION_PARAMS = (
+        ("candidate_threshold", "candidate_threshold"), ("min_candidate_size", "min_candidate_size"),
+        ("score_threshold", "score_threshold"), ("max_overlap", "max_overlap"),
+        ("min_object_size", "min_size"), ("sigma", "sigma"),
+    )
+
+    def _apg_default_values(self, is_volume):
+        """The defaults of the APG parameters that depend on the dimensionality of the run.
+
+        Args:
+            is_volume: Whether the run segments a whole volume rather than an image or a slice.
+
+        Returns:
+            The default values, keyed by the widget attribute.
+        """
+        from micro_sam.v2.automatic_prompt_generation import default_prompt_generation
+        from micro_sam.v2.util import DEFAULT_MODEL
+        model_type = getattr(self, "model_type", None) or DEFAULT_MODEL
+        defaults = default_prompt_generation(model_type, is_volume=is_volume)
+        values = {attribute: defaults[key] for attribute, key in self._APG_DIMENSION_PARAMS}
+        if is_volume:  # A volume has a (low, high) pair of candidate thresholds.
+            values["candidate_threshold"], values["candidate_threshold_high"] = defaults["candidate_threshold"]
+        return values
+
+    def _on_apply_to_volume_changed(self, state=None):
+        # A slice run and a volume run have their own APG parameters, each starting from its own
+        # defaults and keeping its own edits, so the panel switches to those of the next run.
+        if self.mode != "apg" or len(self._apg_values) < 2:
+            return
+        is_volume = self._run_ndim() == 3
+        previous = self._apg_values[not is_volume]
+        for attribute in previous:
+            previous[attribute] = getattr(self, attribute)
+        for attribute, value in self._apg_values[is_volume].items():
+            getattr(self, f"{attribute}_param").setValue(value)  # also updates the attribute
+        self.candidate_threshold_high_row.setVisible(is_volume)
+
     def _apg_settings(self, settings):
         from micro_sam.v2.automatic_prompt_generation import (
             DEFAULT_PROMPT_GENERATION, DEFAULT_REFINEMENT, default_prompt_generation,
@@ -4144,7 +4177,15 @@ class AutoSegmentWidget(_WidgetBase):
         model_type = getattr(self, "model_type", None) or DEFAULT_MODEL
         defaults = default_prompt_generation(model_type, is_volume=False)
 
-        self.candidate_threshold = defaults["candidate_threshold"]
+        # The values of a slice run (False) and, for a volume, of a whole-volume run (True). The panel
+        # shows those of the next run, see '_on_apply_to_volume_changed'.
+        self._apg_values = {False: self._apg_default_values(is_volume=False)}
+        if self.volumetric and not self._is_tracking:
+            self._apg_values[True] = self._apg_default_values(is_volume=True)
+        is_volume = self._run_ndim() == 3
+        values = self._apg_values[is_volume]
+
+        self.candidate_threshold = values["candidate_threshold"]
         self.candidate_threshold_param, layout = self._add_float_param(
             "candidate_threshold", self.candidate_threshold, min_val=0.0, max_val=100.0, step=0.1,
             tooltip=get_tooltip("autosegment", "candidate_threshold"),
@@ -4152,13 +4193,17 @@ class AutoSegmentWidget(_WidgetBase):
         settings.layout().addLayout(layout)
 
         if self.volumetric and not self._is_tracking:
-            volume_defaults = default_prompt_generation(model_type, is_volume=True)
-            self.candidate_threshold_high = volume_defaults["candidate_threshold"][1]
+            # Only a volume run uses the second threshold, so the row is shown only for one.
+            self.candidate_threshold_high = self._apg_values[True]["candidate_threshold_high"]
             self.candidate_threshold_high_param, layout = self._add_float_param(
                 "candidate_threshold_high", self.candidate_threshold_high, min_val=0.0, max_val=100.0, step=0.1,
                 tooltip=get_tooltip("autosegment", "candidate_threshold_high"),
             )
-            settings.layout().addLayout(layout)
+            layout.setContentsMargins(0, 0, 0, 0)
+            self.candidate_threshold_high_row = QtWidgets.QWidget()
+            self.candidate_threshold_high_row.setLayout(layout)
+            self.candidate_threshold_high_row.setVisible(is_volume)
+            settings.layout().addWidget(self.candidate_threshold_high_row)
 
         self.foreground_threshold = defaults["foreground_threshold"]
         self.foreground_threshold_param, layout = self._add_float_param(
@@ -4167,28 +4212,28 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addLayout(layout)
 
-        self.min_candidate_size = defaults["min_candidate_size"]
+        self.min_candidate_size = values["min_candidate_size"]
         self.min_candidate_size_param, layout = self._add_int_param(
             "min_candidate_size", self.min_candidate_size, min_val=0, max_val=int(1e4),
             tooltip=get_tooltip("autosegment", "min_candidate_size"),
         )
         settings.layout().addLayout(layout)
 
-        self.score_threshold = defaults["score_threshold"]
+        self.score_threshold = values["score_threshold"]
         self.score_threshold_param, layout = self._add_float_param(
             "score_threshold", self.score_threshold, min_val=0.0, max_val=1.0, step=0.05,
             tooltip=get_tooltip("autosegment", "score_threshold"),
         )
         settings.layout().addLayout(layout)
 
-        self.max_overlap = defaults["max_overlap"]
+        self.max_overlap = values["max_overlap"]
         self.max_overlap_param, layout = self._add_float_param(
             "max_overlap", self.max_overlap, min_val=0.0, max_val=1.0, step=0.05,
             tooltip=get_tooltip("autosegment", "max_overlap"),
         )
         settings.layout().addLayout(layout)
 
-        self.min_object_size = defaults["min_size"]
+        self.min_object_size = values["min_object_size"]
         self.min_object_size_param, layout = self._add_int_param(
             "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4),
             tooltip=get_tooltip("autosegment", "min_object_size"),
@@ -4238,7 +4283,7 @@ class AutoSegmentWidget(_WidgetBase):
             settings.layout().addLayout(layout)
 
         self._add_flow_integration_params(
-            settings, n_iter=defaults["n_iter"], dt=DEFAULT_PROMPT_GENERATION["dt"], sigma=defaults["sigma"],
+            settings, n_iter=defaults["n_iter"], dt=DEFAULT_PROMPT_GENERATION["dt"], sigma=values["sigma"],
         )
 
     def _postproc_kwargs(self):
@@ -4482,8 +4527,11 @@ class AutoSegmentWidget(_WidgetBase):
                 device=device, inference_device=state.inference_devices, ndim=ndim,
             )
             if is_tiled:
+                # The blocks are tiled in-plane like the embeddings, so each reads its tile's
+                # embeddings instead of running the encoder again.
                 self._segmenter.initialize(
                     run_raw, ndim=ndim, tile_shape=decoder_tile_shape, halo=decoder_halo, verbose=False,
+                    image_embeddings=image_embeddings, i=z,
                 )
             else:
                 decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
@@ -4563,7 +4611,7 @@ class AutoSegmentWidget(_WidgetBase):
             run_raw, ndim = raw, 2
 
         if self.mode == "apg":
-            apg_error = _apg_error(state, self.volumetric, ndim, is_tracking=self._is_tracking)
+            apg_error = _apg_error(state, self.volumetric, is_tracking=self._is_tracking)
             if apg_error is not None:
                 return _generate_message("error", apg_error)
 
@@ -4745,7 +4793,7 @@ class AutoTrackWidget(AutoSegmentWidget):
         # single frame just as much as for the whole timeseries. Checked before the single-frame
         # delegation below so both paths are covered.
         if self.mode == "apg":
-            apg_error = _apg_error(state, self.volumetric, ndim=2, is_tracking=True)
+            apg_error = _apg_error(state, self.volumetric, is_tracking=True)
             if apg_error is not None:
                 return _generate_message("error", apg_error)
 
