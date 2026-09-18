@@ -164,3 +164,23 @@ class TestCLI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_precompute_embeddings_forwards_the_tiling(monkeypatch):
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli
+    import micro_sam.precompute_state as precompute_state
+
+    calls = []
+    monkeypatch.setattr(precompute_state, "precompute_state", lambda *args, **kwargs: calls.append(kwargs))
+
+    runner = CliRunner()
+    for options, expected in [
+        ([], (None, None)),  # resolved per image, like the other tools
+        (["--tile_shape", "256,256", "--overlap", "32,32"], ((256, 256), (32, 32))),
+        (["--tile_shape", "none", "--overlap", "none"], ((0, 0), (0, 0))),
+    ]:
+        result = runner.invoke(cli, ["precompute-embeddings", "-i", "image.tif", "-e", "embeddings.zarr", *options])
+        assert result.exit_code == 0, result.output
+        assert (calls[-1]["tile_shape"], calls[-1]["halo"]) == expected

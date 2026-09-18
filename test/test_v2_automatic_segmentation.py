@@ -511,13 +511,19 @@ def test_precompute_3d_embeddings_requires_full_3d_tile_shape():
         )
 
 
+@pytest.mark.parametrize("embedding_path", [None, "embeddings.zarr"])
 @pytest.mark.parametrize(
     "shape,ndim,tile_shape,halo",
     [((8, 8), 2, (4, 4), (1, 1)), ((2, 8, 8), 3, (1, 4, 4), (0, 1, 1))],
 )
-def test_tiled_apg_uses_decoder_frontend_without_precomputed_embeddings(
-    monkeypatch, shape, ndim, tile_shape, halo,
+def test_tiled_apg_reads_its_blocks_from_cached_embeddings_only(
+    monkeypatch, shape, ndim, tile_shape, halo, embedding_path,
 ):
+    """Without an embedding path, the blocks encode themselves.
+
+    With an embedding path, the front end caches the embeddings with the tiling of the blocks, and the
+    blocks read them, as in the annotator.
+    """
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
 
     class TiledAPG:
@@ -528,31 +534,54 @@ def test_tiled_apg_uses_decoder_frontend_without_precomputed_embeddings(
         def _inference_devices(self, devices):
             return devices
 
-        def initialize(self, image, ndim, tile_shape, halo, verbose):
+        def initialize(self, image, ndim, tile_shape, halo, verbose, image_embeddings):
             self.image = image
-            self.initialize_args = ndim, tile_shape, halo, verbose
+            self.initialize_args = ndim, tile_shape, halo, verbose, image_embeddings
 
         def generate(self, **kwargs):
             self.generate_kwargs = kwargs
             return np.ones(shape, dtype="uint32")
 
-    def fail(*args, **kwargs):
-        pytest.fail("Tiled APG must not use whole-image embeddings or slice-wise AMG.")
+    class Embeddings(dict):
+        closed = False
 
-    monkeypatch.setattr("micro_sam.v2.util.precompute_image_embeddings", fail)
+        def close(self):
+            self.closed = True
+
+    embeddings = Embeddings()
+    precompute_calls = []
+
+    def precompute(predictor, raw, **kwargs):
+        precompute_calls.append(kwargs)
+        return embeddings
+
+    def fail(*args, **kwargs):
+        pytest.fail("Tiled APG must not run slice-wise AMG.")
+
+    monkeypatch.setattr("micro_sam.v2.util.precompute_image_embeddings", precompute)
     monkeypatch.setattr("micro_sam.v2.instance_segmentation.amg_3d_segmentation", fail)
 
     raw = np.zeros(shape, dtype="uint8")
     segmenter = TiledAPG()
     result = automatic_instance_segmentation(
-        predictor=object(), segmenter=segmenter, input_path=raw, embedding_path="unused.zarr",
+        predictor=object(), segmenter=segmenter, input_path=raw, embedding_path=embedding_path,
         ndim=ndim, tile_shape=tile_shape, halo=halo, devices="cpu", verbose=False,
     )
 
     assert segmenter.image is raw
-    assert segmenter.initialize_args == (ndim, tile_shape, halo, False)
     assert segmenter.generate_kwargs == {}
     assert result.shape == shape
+    if embedding_path is None:
+        assert precompute_calls == []
+        assert segmenter.initialize_args == (ndim, tile_shape, halo, False, None)
+    else:
+        assert len(precompute_calls) == 1
+        call = precompute_calls[0]
+        assert (call["save_path"], call["ndim"], call["tile_shape"], call["halo"]) == (
+            embedding_path, ndim, tile_shape, halo,
+        )
+        assert segmenter.initialize_args == (ndim, tile_shape, halo, False, embeddings)
+        assert embeddings.closed
 
 
 def test_automatic_3d_ais_removes_temp_store_on_error(monkeypatch):
@@ -725,12 +754,33 @@ def test_retile_generator_swaps_the_tiling_variant():
     assert retile_instance_segmentation_generator(handmade, is_tiled=True) is handmade
 
 
+@pytest.fixture
+def precompute_calls(monkeypatch):
+    """Stands in for the encoder, which the decoder-based front-end always runs first."""
+    calls = []
+
+    class Embeddings(dict):
+        def close(self):
+            pass
+
+    def precompute(predictor, raw, **kwargs):
+        calls.append(kwargs)
+        return Embeddings(features=raw)
+
+    monkeypatch.setattr("micro_sam.v2.util.precompute_image_embeddings", precompute)
+    return calls
+
+
 @pytest.mark.parametrize(
     "shape, expect_tiled",
     [((2048, 2048), True), ((769, 100), True), ((768, 768), False), ((256, 256), False)],
 )
-def test_inference_tiles_large_images_by_default(monkeypatch, shape, expect_tiled):
-    """The headless front-end applies the same size cutoff as the GUI, and swaps the segmenter."""
+def test_inference_tiles_large_images_by_default(precompute_calls, shape, expect_tiled):
+    """The headless front-end applies the same size cutoff as the GUI, and swaps the segmenter.
+
+    It decodes from precomputed embeddings like the GUI, also without an embedding path. It keeps
+    them in memory for an untiled image, and in an ephemeral store for a tiled image.
+    """
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
     from micro_sam.v2.util import DEFAULT_TILE_SHAPE, DEFAULT_HALO
 
@@ -740,6 +790,7 @@ def test_inference_tiles_large_images_by_default(monkeypatch, shape, expect_tile
     def track(segmenter):
         segmenter.initialize = lambda raw, ndim, **kwargs: calls.update(
             tile_shape=kwargs.get("tile_shape"), halo=kwargs.get("halo"), used=segmenter,
+            image_embeddings=kwargs.get("image_embeddings"),
         )
         segmenter.generate = lambda mode, **kwargs: np.ones(shape, dtype="uint32")
         return segmenter
@@ -755,6 +806,13 @@ def test_inference_tiles_large_images_by_default(monkeypatch, shape, expect_tile
     assert isinstance(calls["used"], TiledUniSAM2InstanceSegmentation) is expect_tiled
     assert calls["tile_shape"] == (DEFAULT_TILE_SHAPE if expect_tiled else None)
     assert calls["halo"] == (DEFAULT_HALO if expect_tiled else None)
+
+    assert len(precompute_calls) == 1
+    precompute = precompute_calls[0]
+    assert precompute["tile_shape"] == calls["tile_shape"] and precompute["halo"] == calls["halo"]
+    assert (precompute["save_path"] is not None) is expect_tiled  # an untiled image stays in memory
+    assert precompute["lazy_loading"] is expect_tiled
+    assert calls["image_embeddings"]["features"].shape == shape
 
 
 @pytest.mark.parametrize(
@@ -775,7 +833,9 @@ def test_inference_tiles_large_images_by_default(monkeypatch, shape, expect_tile
         ((768, 768), 2, (768, 768), (768, 768), False),
     ],
 )
-def test_inference_normalizes_the_channel_axis(shape, ndim, expect_array, expect_spatial, expect_tiled):
+def test_inference_normalizes_the_channel_axis(
+    precompute_calls, shape, ndim, expect_array, expect_spatial, expect_tiled,
+):
     """The headless path reads the same array the GUI does, so tiling sees the real spatial axes."""
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
     from micro_sam.v2.util import DEFAULT_TILE_SHAPE
@@ -808,7 +868,7 @@ def test_headless_and_gui_read_the_same_array():
     assert gui_prepare is prepare_annotation_image
 
 
-def test_inference_does_not_claim_tiling_a_handmade_segmenter_cannot_do():
+def test_inference_does_not_claim_tiling_a_handmade_segmenter_cannot_do(precompute_calls):
     """A segmenter built by hand cannot be swapped, so auto-tiling backs off instead of being dropped."""
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
 
@@ -827,7 +887,7 @@ def test_inference_does_not_claim_tiling_a_handmade_segmenter_cannot_do():
     assert calls["tile_shape"] is None
 
 
-def test_inference_tiling_can_be_turned_off(monkeypatch):
+def test_inference_tiling_can_be_turned_off(precompute_calls):
     """An all-zero tile shape runs a large image in one piece, overriding the size cutoff."""
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
 

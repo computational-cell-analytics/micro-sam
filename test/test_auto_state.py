@@ -398,3 +398,33 @@ def test_save_load_autoseg_state_dispatch(tmp_path):
 
     with pytest.raises(ValueError, match="Invalid automatic-segmentation state mode"):
         _load_autoseg_state("bogus", save_path, "state")
+
+
+@pytest.mark.parametrize("model_type, shape, ndim, tile_shape, halo, expected", [
+    # The annotation tools reuse the embeddings only if they have the same tiling.
+    ("hvit_t", (16, 800), 2, None, None, ((512, 512), (128, 128))),
+    ("hvit_t", (3, 16, 800), 3, None, None, ((3, 512, 512), (0, 128, 128))),  # SAM2 takes every axis
+    ("vit_b", (3, 16, 800), 3, None, None, ((512, 512), (128, 128))),  # SAM1 only the in-plane ones
+    ("hvit_t", (16, 16), 2, None, None, (None, None)),  # below the cutoff
+    ("hvit_t", (16, 800), 2, (0, 0), (0, 0), (None, None)),  # tiling turned off
+    ("hvit_t", (16, 800), 2, (256, 256), None, ((256, 256), (128, 128))),  # the default overlap
+])
+def test_precompute_state_tiles_like_the_annotation_tools(
+    tmp_path, monkeypatch, model_type, shape, ndim, tile_shape, halo, expected,
+):
+    from micro_sam import util
+    import micro_sam.precompute_state as ps
+
+    calls = []
+
+    def compute_embeddings(predictor, input_, save_path, ndim, verbose, tile_shape, halo):
+        calls.append((tile_shape, halo))
+
+    monkeypatch.setattr(util, "_get_sam_model", lambda **kwargs: (object(), None))
+    monkeypatch.setattr(util, "get_embedding_function", lambda model_type: compute_embeddings)
+
+    ps.precompute_state(
+        np.zeros(shape, dtype="uint8"), str(tmp_path / "embeddings.zarr"), model_type=model_type, ndim=ndim,
+        tile_shape=tile_shape, halo=halo,
+    )
+    assert calls == [expected]

@@ -767,23 +767,21 @@ class TestApgAvailability:
     def test_a_plain_2d_image_runs_anywhere(self, device):
         from micro_sam.sam_annotator._widgets import _apg_error
 
-        assert _apg_error(self._state(device), volumetric=False, ndim=2) is None
+        assert _apg_error(self._state(device), volumetric=False) is None
 
     @pytest.mark.parametrize("device", ["cuda", "cuda:1", "mps"])
-    @pytest.mark.parametrize("ndim", [2, 3])
-    def test_accelerators_run_volumetric_apg(self, device, ndim):
+    def test_accelerators_run_volumetric_apg(self, device):
         from micro_sam.sam_annotator._widgets import _apg_error
 
         # An indexed device ('cuda:1') must be recognized just like the bare one.
-        assert _apg_error(self._state(device), volumetric=True, ndim=ndim) is None
-        assert _apg_error(self._state(device), volumetric=True, ndim=2, is_tracking=True) is None
+        assert _apg_error(self._state(device), volumetric=True) is None
+        assert _apg_error(self._state(device), volumetric=True, is_tracking=True) is None
 
-    @pytest.mark.parametrize("ndim", [2, 3])
-    def test_volumetric_data_is_refused_on_the_cpu(self, ndim):
-        """Not just the whole-volume run: a single slice of a volume is refused too."""
+    def test_volumetric_data_is_refused_on_the_cpu(self):
+        """The widget refuses a single slice of a volume too, not only the whole volume."""
         from micro_sam.sam_annotator._widgets import _apg_error
 
-        error = _apg_error(self._state("cpu"), volumetric=True, ndim=ndim)
+        error = _apg_error(self._state("cpu"), volumetric=True)
         assert error is not None
         assert "CPU" in error and "volumetric data" in error
         assert "'sparse' or 'dense'" in error  # it says what to use instead
@@ -791,27 +789,24 @@ class TestApgAvailability:
     def test_tracking_is_refused_on_the_cpu(self):
         from micro_sam.sam_annotator._widgets import _apg_error
 
-        error = _apg_error(self._state("cpu"), volumetric=True, ndim=2, is_tracking=True)
+        error = _apg_error(self._state("cpu"), volumetric=True, is_tracking=True)
         assert error is not None
         assert "CPU" in error and "tracking" in error
 
-    def test_tiled_embeddings_are_refused_for_a_volume_on_an_accelerator(self):
+    @pytest.mark.parametrize("device", ["cuda", "mps"])
+    def test_tiled_embeddings_are_accepted_for_a_volume_on_an_accelerator(self, device):
+        """The tiled APG generator segments a tiled volume block by block."""
         from micro_sam.sam_annotator._widgets import _apg_error
 
-        # Tiled embeddings have no top-level 'input_size'. Only the whole-volume run is affected;
-        # a single slice of a tiled volume is fine.
-        tiled = self._state("cuda", embeddings={"input_size": None})
-        error = _apg_error(tiled, volumetric=True, ndim=3)
-        assert error is not None and "tiled embeddings" in error
-        assert _apg_error(self._state("cuda", embeddings={"input_size": None}), volumetric=True, ndim=2) is None
+        # Tiled embeddings have no top-level 'input_size'.
+        tiled = self._state(device, embeddings={"input_size": None})
+        assert _apg_error(tiled, volumetric=True) is None
 
-    def test_the_device_check_comes_first(self):
-        """Both wrong at once reports the device, which is the one the user cannot work around by
-        changing a setting in the widget."""
+    def test_tiled_embeddings_are_refused_for_a_volume_on_the_cpu(self):
         from micro_sam.sam_annotator._widgets import _apg_error
 
-        error = _apg_error(self._state("cpu", embeddings={"input_size": None}), volumetric=True, ndim=3)
-        assert "CPU" in error
+        error = _apg_error(self._state("cpu", embeddings={"input_size": None}), volumetric=True)
+        assert error is not None and "CPU" in error
 
 
 @pytest.mark.gui
@@ -1108,7 +1103,7 @@ def test_apg_widget_reuses_the_decoder_state(monkeypatch, z):
 
 
 @pytest.mark.parametrize("z", [None, 3])
-def test_tiled_apg_widget_initializes_from_the_raw_image(monkeypatch, z):
+def test_tiled_apg_widget_hands_the_raw_image_and_embeddings_to_the_generator(monkeypatch, z):
     from types import MethodType, SimpleNamespace
 
     import micro_sam.precompute_state as precompute_state
@@ -1180,14 +1175,78 @@ def test_tiled_apg_widget_initializes_from_the_raw_image(monkeypatch, z):
 
     assert calls == {"factory": 1, "initialize": 1, "generate": 2}
     assert prompt_generator.image is raw
+    # The blocks read the embeddings, and a slice of a volume passes its index.
     assert prompt_generator.initialize_kwargs == {
         "ndim": 2, "tile_shape": (4, 4), "halo": (1, 1), "verbose": False,
+        "image_embeddings": image_embeddings, "i": z,
     }
     assert prompt_generator.generate_kwargs == {
         "candidate_threshold": 1.5, "score_threshold": 0.6,
         "pbar_init": pbar_init, "pbar_update": pbar_update,
     }
     assert np.array_equal(result, second_result)
+
+
+@pytest.mark.parametrize("tile_z, halo_z, expected_z", [(4, 2, (4, 2)), (32, 2, (10, 0))])
+def test_tiled_apg_widget_blocks_a_volume_in_z(monkeypatch, tile_z, halo_z, expected_z):
+    """The widget segments a tiled volume in (z, y, x) blocks.
+
+    The z tiling of the widget comes before the in-plane tiling of the embeddings. A single z block
+    that spans the volume has no z halo.
+    """
+    from types import MethodType, SimpleNamespace
+
+    import micro_sam.precompute_state as precompute_state
+    from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+    import micro_sam.v2.instance_segmentation as instance_segmentation
+
+    class TiledPromptGenerator:
+        def initialize(self, image, **kwargs):
+            self.image = image
+            self.initialize_kwargs = kwargs
+
+        def generate(self, **kwargs):
+            self.generate_kwargs = kwargs
+            return np.ones(self.image.shape, dtype="uint32")
+
+    prompt_generator = TiledPromptGenerator()
+
+    def fake_factory(**kwargs):
+        assert kwargs["is_tiled"] is True and kwargs["ndim"] == 3
+        return prompt_generator
+
+    def fail_cache(*args, **kwargs):
+        pytest.fail("Tiled APG must not use the whole-volume decoder state.")
+
+    monkeypatch.setattr(precompute_state, "cache_autoseg_state", fail_cache)
+    monkeypatch.setattr(instance_segmentation, "get_instance_segmentation_generator", fake_factory)
+
+    features = SimpleNamespace(attrs={"tile_shape": (4, 4), "halo": (1, 1)})
+    state = SimpleNamespace(
+        predictor=SimpleNamespace(model=object(), model_type="hvit_t_cells"),
+        decoder=SimpleNamespace(parameters=lambda: iter([SimpleNamespace(device="mps")])),
+        image_embeddings={"features": features, "input_size": None}, inference_devices=None,
+        data_signature="volume", widgets={}, embedding_path=None,
+    )
+    widget = SimpleNamespace(
+        _segmenter=None, _segmenter_key=None, _proposals=None, _proposals_key=None,
+        tile_z=tile_z, halo_z=halo_z,
+        _state_save_path=lambda state: None,
+        _apg_kwargs=lambda ndim: {"candidate_threshold": (1.5, 2.0), "n_objects_per_pass": 16},
+    )
+    widget._release_segmenter = MethodType(AutoSegmentWidget._release_segmenter, widget)
+    widget._z_tiling = MethodType(AutoSegmentWidget._z_tiling, widget)
+
+    raw = np.zeros((10, 8, 8), dtype="uint8")
+    result = AutoSegmentWidget._run_apg(widget, state, raw, ndim=3, z=None)
+
+    assert prompt_generator.image is raw
+    assert prompt_generator.initialize_kwargs == {
+        "ndim": 3, "tile_shape": (expected_z[0], 4, 4), "halo": (expected_z[1], 1, 1), "verbose": False,
+        "image_embeddings": state.image_embeddings, "i": None,
+    }
+    assert prompt_generator.generate_kwargs["n_objects_per_pass"] == 16
+    assert result.shape == raw.shape
 
 
 @pytest.mark.gui
@@ -1290,16 +1349,50 @@ class TestAutoSegDefaultMode:
         autoseg = widget._widgets["autosegment"]
         autoseg.mode_dropdown.setCurrentText("apg")
 
-        defaults_2d = default_prompt_generation(DEFAULT_MODEL, is_volume=False)
+        # A volume run uses the 3d defaults, like the automatic segmentation CLI and API.
+        autoseg.apply_to_volume_checkbox.setChecked(True)
         defaults_3d = default_prompt_generation(DEFAULT_MODEL, is_volume=True)
         kwargs = autoseg._apg_kwargs(ndim=3)
-        expected_candidate_threshold = (defaults_2d["candidate_threshold"], defaults_3d["candidate_threshold"][1])
-        assert kwargs["candidate_threshold"] == expected_candidate_threshold
+        for key in ("candidate_threshold", "min_candidate_size", "score_threshold", "max_overlap", "min_size", "sigma"):
+            assert kwargs[key] == pytest.approx(defaults_3d[key]), key
         assert kwargs["n_objects_per_pass"] == DEFAULT_PROMPT_GENERATION["n_objects_per_pass"]
         assert kwargs["early_stop_patience"] == DEFAULT_PROMPT_GENERATION["early_stop_patience"]
 
         autoseg.early_stop_patience_param.setValue(3)
         assert autoseg._apg_kwargs(ndim=3)["early_stop_patience"] == 3
+        viewer.close()
+
+    def test_apply_to_volume_switches_between_slice_and_volume_apg_parameters(self, make_napari_viewer_proxy):
+        """A slice run and a volume run start from their own defaults and keep their own edits."""
+        from micro_sam.v2.automatic_prompt_generation import default_prompt_generation
+
+        viewer = make_napari_viewer_proxy()
+        autoseg = Annotator(viewer, ndim=3)._widgets["autosegment"]
+        autoseg.mode_dropdown.setCurrentText("apg")
+        defaults_2d = default_prompt_generation(DEFAULT_MODEL, is_volume=False)
+        defaults_3d = default_prompt_generation(DEFAULT_MODEL, is_volume=True)
+
+        def shown():
+            return (
+                autoseg.candidate_threshold_param.value(), autoseg.min_object_size_param.value(),
+                autoseg.sigma_param.value(), autoseg.candidate_threshold_high_row.isVisibleTo(autoseg),
+            )
+
+        slice_defaults = (defaults_2d["candidate_threshold"], defaults_2d["min_size"], defaults_2d["sigma"], False)
+        volume_defaults = (defaults_3d["candidate_threshold"][0], defaults_3d["min_size"], defaults_3d["sigma"], True)
+        assert shown() == pytest.approx(slice_defaults)
+
+        autoseg.apply_to_volume_checkbox.setChecked(True)
+        assert shown() == pytest.approx(volume_defaults)
+        autoseg.min_object_size_param.setValue(77)
+
+        autoseg.apply_to_volume_checkbox.setChecked(False)
+        assert shown() == pytest.approx(slice_defaults)
+        assert autoseg._apg_kwargs(ndim=2)["min_size"] == defaults_2d["min_size"]
+
+        autoseg.apply_to_volume_checkbox.setChecked(True)  # the volume edit is still there
+        assert shown() == pytest.approx((volume_defaults[0], 77, volume_defaults[2], True))
+        assert autoseg._apg_kwargs(ndim=3)["min_size"] == 77
         viewer.close()
 
     def test_apg_kwargs_split_matches_propose_and_select(self, make_napari_viewer_proxy):

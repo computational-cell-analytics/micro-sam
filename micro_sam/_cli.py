@@ -865,9 +865,20 @@ def inference_object_classification(
     "--devices", default=None,
     help="Comma-separated devices for inference, e.g. 'cuda:0,cuda:1'. By default all visible GPUs are used."
 )
+@click.option(
+    "--tile_shape", default=None,
+    help="The in-plane tile shape, comma-separated, e.g. '384,384'. By default, the tool uses the tiling of cached "
+    "embeddings. Without them, it tiles images that are larger than 768 pixels in-plane, as the annotation tools "
+    "and 'inference segmentation' do. Pass 'none' (or '0,0') to compute the embeddings without tiles."
+)
+@click.option(
+    "--overlap", "halo", default=None,
+    help="The in-plane tile overlap, comma-separated, e.g. '64,64'. By default, the tool uses the overlap of "
+    "cached embeddings, or else the default overlap. Pass 'none' together with '--tile_shape none'."
+)
 def precompute_embeddings(
     input_path, embedding_path, pattern, key, model_type, checkpoint_path, ndim,
-    precompute_autoseg_state, prefer_decoder, batch_size, devices,
+    precompute_autoseg_state, prefer_decoder, batch_size, devices, tile_shape, halo,
 ):
     """Precompute image embeddings (and optionally the automatic-segmentation state)."""
     from .precompute_state import precompute_state
@@ -880,6 +891,7 @@ def precompute_embeddings(
         precompute_autoseg_state=precompute_autoseg_state,
         prefer_decoder=prefer_decoder,
         batch_size=_parse_batch_size(batch_size), devices=_parse_devices(devices),
+        tile_shape=_parse_shape(tile_shape), halo=_parse_shape(halo),
     )
 
 

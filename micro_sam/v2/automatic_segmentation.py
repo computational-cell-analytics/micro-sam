@@ -168,14 +168,15 @@ def automatic_instance_segmentation(
     """Run automatic instance segmentation for a single input and save the result.
 
     Args:
-        predictor: The SAM2 predictor (see `get_predictor_and_segmenter`), used to precompute image
-            embeddings for 3d AIS or when `embedding_path` is given.
+        predictor: The SAM2 predictor (see `get_predictor_and_segmenter`). The decoder-based engines
+            use it to precompute the image embeddings.
         segmenter: The automatic instance segmentation generator (see `get_predictor_and_segmenter`).
         input_path: The input image, either a filepath (e.g. tif or a container with `key`) or an array.
         output_path: Optional path to save the segmentation as a tif file.
-        embedding_path: Optional path to cache the image embeddings. When given, embeddings are
-            persisted and reused. Decoder-based 3d inference always precomputes embeddings first;
-            without this path it uses an ephemeral cache.
+        embedding_path: The optional path to cache the image embeddings. The function saves the
+            embeddings there, and it uses them again in a later call. The decoder-based engines always
+            precompute the embeddings. Without this path, they keep the embeddings in memory (untiled
+            2d) or in an ephemeral cache. Without this path, tiled APG encodes each tile / block itself.
         model_type: Retained for API compatibility; the loaded predictor determines the embedding model.
         checkpoint: Retained for API compatibility; the loaded predictor already contains its weights.
         key: The key for opening `input_path` with `elf.io.open_file` (container files or image stacks).
@@ -248,16 +249,9 @@ def automatic_instance_segmentation(
         tile_shape, halo, is_tiled = None, None, False
     segmenter = swapped
 
+    # Tiled APG encodes every block itself, unless there are cached embeddings to read them from.
     precompute_embeddings = getattr(segmenter, "_precompute_embeddings_in_frontend", True)
     takes_mode = getattr(segmenter, "_has_postprocessing_mode", True)
-
-    # Tiled APG encodes every tile inside its own workers, so it has nowhere to read or write a
-    # shared cache. Say so rather than leaving the user to wonder why the path stays empty.
-    if embedding_path is not None and not precompute_embeddings:
-        warnings.warn(
-            f"Tiled APG computes its embeddings per tile, so they are not cached in '{embedding_path}'. "
-            "Use '--engine ais' (or run untiled) to cache and reuse embeddings."
-        )
 
     if is_decoder_based:
         # One selection for the whole staged workflow; without either the segmenter's intent stands.
@@ -265,10 +259,11 @@ def automatic_instance_segmentation(
         inference_devices = segmenter._inference_devices(requested_devices)
 
         # 3d stages the encoder and the decoder, so the z-halo is encoded once and the peaks do not add up.
+        # Every run decodes from embeddings, so that the result is the same as in the annotation tools.
         image_embeddings = None
         temp_embedding_path = None
         try:
-            if precompute_embeddings and (embedding_path is not None or ndim == 3):
+            if embedding_path is not None or precompute_embeddings:
                 # The tool streams volumes and tiled images from the zarr. Only small 2d stays in memory.
                 is_streamed = ndim == 3 or tile_shape is not None
                 # Owned here, so a multi-input loop does not pile up one store per input.
@@ -305,8 +300,10 @@ def automatic_instance_segmentation(
                     num_write_workers=num_write_workers,
                 )
             else:
+                # The blocks use the tiling of the embeddings, so each block reads its tile.
                 segmenter.initialize(
                     raw, ndim=ndim, tile_shape=tile_shape, halo=halo, verbose=verbose,
+                    image_embeddings=image_embeddings,
                 )
             if takes_mode:
                 segmentation = segmenter.generate(mode=mode, **generate_kwargs)
