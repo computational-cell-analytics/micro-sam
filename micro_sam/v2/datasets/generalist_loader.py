@@ -20,6 +20,7 @@ from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, RejectBlankSlices, _build_group_map
 from ..transforms.raw import (
     _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile, _resize_raw_to_512, _resize_to_512,
+    _prepare_identity,
     _enseg_green_channel, _xenium_cell_channels, _pan_multiplex_tissuenet_order, _cvz_cell_channels,
     _minmax_raw_trafo,
     get_random_percentile_normalization,
@@ -28,6 +29,7 @@ from ..transforms.labels import (
     _em_cell_label_trafo, _joint_em_cell_label_trafo, _background_id_label_trafo,
     _plantseg_label_trafo, _astih_pre_label_transform, _instance_labels,
     _ignore_missing_raw_trafo, _ignore_unlabelled_blobs_trafo, _labels_to_uint32, _drop_oversized_label_trafo,
+    _compact_label_ids,
     _JointLabelTransform, _JointGeodesicLabelTransform,
 )
 
@@ -70,6 +72,10 @@ def _ensure_native_byte_order(y):
     return y.byteswap().view(y.dtype.newbyteorder()) if not y.dtype.isnative else y
 
 
+def _compact_native_label_ids(y, keep=()):
+    return _compact_label_ids(_ensure_native_byte_order(y), keep=keep)
+
+
 def _set_percentile_normalization(dataset, lower_percentile_bounds):
     """Replace fixed normalization in all torch-em leaves of a dataset tree."""
     if isinstance(dataset, (list, tuple)):
@@ -93,6 +99,13 @@ def _set_percentile_normalization(dataset, lower_percentile_bounds):
 
     if not hasattr(dataset, "raw_transform"):
         raise TypeError(f"Cannot configure raw normalization for dataset of type {type(dataset).__name__}.")
+
+    if dataset.raw_transform is _prepare_identity:
+        # The missing-tile transform tests the stored intensities and normalizes the raw itself afterwards.
+        normalizer = get_random_percentile_normalization(_identity, lower_percentile_bounds).normalizer
+        transform = dataset.transform
+        dataset.transform = partial(transform.func, *transform.args, **{**transform.keywords, "normalizer": normalizer})
+        return
 
     dataset.raw_transform = get_random_percentile_normalization(
         dataset.raw_transform, lower_percentile_bounds=lower_percentile_bounds
@@ -644,7 +657,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     ((bmgd_train, bmgd_val, _),) = _train_val_test_split(bmgd_paths)
     bmgd_kwargs = {
         "patch_shape": (345, 382), "with_channels": False, "ndim": 2,
-        **{**kwargs, "transform": partial(_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+        **{**kwargs, "transform": _with_flips(_random_resize_and_pad_trafo, patch_shape)},
     }
     for paths, ds_list, n_samples in [(bmgd_train, train_ds, 300), (bmgd_val, val_ds, 50)]:
         ds_list.append(
@@ -663,7 +676,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     acdc_movies = [cell_acdc_movie(p) for p in acdc_raw]
     cell_acdc_kwargs = {
         "patch_shape": (1, 200, 200), "raw_key": None, "label_key": None, "is_seg_dataset": True, "ndim": 2,
-        **{**kwargs, "transform": partial(_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+        **{**kwargs, "transform": _with_flips(_random_resize_and_pad_trafo, patch_shape)},
     }
     for keep, n_samples, ds_list in [
         ([m not in CELL_ACDC_VAL_MOVIES and m not in CELL_ACDC_TEST_MOVIES for m in acdc_movies], 200, train_ds),
@@ -684,7 +697,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     # 80 / 10 / 10 at random (seed 42); the test tiles are blind.
     cellbindb_kwargs = {
         "patch_shape": (256, 256), "is_seg_dataset": False, "ndim": 2,
-        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+        **{**kwargs, "transform": _with_flips(_pannuke_random_resize_and_pad_trafo, patch_shape)},
     }
     for stain in CELLBINDB_STAINS:
         cellbindb_raw, cellbindb_labels = datasets.cellbindb.get_cellbindb_paths(
@@ -754,7 +767,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "path": os.path.join(input_path, "dememseg"), "patch_shape": (200, 200),
         **{
             **kwargs,
-            "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape),
+            "transform": _with_flips(_pannuke_random_resize_and_pad_trafo, patch_shape),
             "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
         },
     }
@@ -779,7 +792,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     # NOTE: The train and val splits are native 128x128 tiles, so they are randomly upscaled and padded.
     flywing_kwargs = {
         "path": os.path.join(input_path, "flywing"), "patch_shape": (128, 128),
-        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+        **{**kwargs, "transform": _with_flips(_pannuke_random_resize_and_pad_trafo, patch_shape)},
     }
     train_ds.append(
         UniDataWrapper(datasets.get_flywing_dataset(split="train", n_samples=400, **flywing_kwargs), source_ndim=2)
@@ -966,7 +979,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     # NOTE: Native images are 320x320, so they are randomly upscaled and padded to the patch shape.
     microbeseg_kwargs = {
         "path": os.path.join(input_path, "microbeseg"), "patch_shape": (320, 320),
-        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+        **{**kwargs, "transform": _with_flips(_pannuke_random_resize_and_pad_trafo, patch_shape)},
     }
     train_ds.append(
         UniDataWrapper(datasets.get_microbeseg_dataset(split="train", n_samples=150, **microbeseg_kwargs),
@@ -1277,7 +1290,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         "patch_shape": None, "raw_key": None, "label_key": None, "is_seg_dataset": False, "ndim": 2,
         "raw_transform": _to_8bit,
         **{k: v for k, v in kwargs.items() if k != "raw_transform"},
-        "transform": partial(_random_resize_and_pad_trafo, patch_shape=patch_shape),
+        "transform": _with_flips(_random_resize_and_pad_trafo, patch_shape),
     }
     for raws, labs, n_samples, ds_list in [(ts_train_r, ts_train_l, 100, train_ds), (ts_val_r, ts_val_l, 25, val_ds)]:
         ds_list.append(
@@ -1328,6 +1341,9 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
     """
     if _em_label_trafo is None:
         _em_label_trafo = _em_cell_label_trafo
+
+    # Connectomics ids exceed 2^24 and would merge in the float32 flip augmentation.
+    kwargs = {**kwargs, "label_transform": partial(_compact_label_ids, keep=(PLATY_IGNORE_LABEL,))}
 
     train_ds, val_ds = [], []
     n_z = len(z_slices)
@@ -1401,7 +1417,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
 
     base_sampler = MinInstanceSampler(min_num_instances=1, exclude_ids=[0])
     base_kwargs = {k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]}
-    base_kwargs["label_transform"] = _ensure_native_byte_order
+    base_kwargs["label_transform"] = partial(_compact_native_label_ids, keep=(PLATY_IGNORE_LABEL,))
 
     for z in z_slices:
         em_label_trafo_fn = (
@@ -1617,7 +1633,9 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
                 if label_trafo is not None else kwargs.get("label_transform2")
             ),
-            # Some slices hold missing tiles (exact-zero raw) that still carry labels; they become ignore.
+            # Some slices hold missing tiles (exact-zero raw) that still carry labels; they become ignore. The test
+            # needs the stored intensities, so the raw is only prepared here and normalized inside the transform.
+            "raw_transform": _prepare_identity,
             "transform": partial(
                 _ignore_missing_raw_trafo, ignore_label=MISSING_RAW_IGNORE_LABEL, transform=get_augmentations(ndim=3)
             ),
@@ -1626,7 +1644,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
             "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
             **{
                 k: v for k, v in kwargs.items()
-                if k not in ["label_transform2", "sampler", "transform", "pre_label_transform"]
+                if k not in ["raw_transform", "label_transform2", "sampler", "transform", "pre_label_transform"]
             },
         }
         for label_paths, ds_list, n_samples in [(axonem_train, train_ds, 500), (axonem_val, val_ds, 50)]:
@@ -1890,6 +1908,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
                 if label_trafo is not None else kwargs.get("label_transform2")
             ),
+            "raw_transform": _prepare_identity,  # the missing-tile test needs the stored intensities
             "transform": partial(
                 _ignore_missing_raw_trafo, ignore_label=MISSING_RAW_IGNORE_LABEL,
                 transform=partial(
@@ -1898,7 +1917,10 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 ),
             ),
             "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0, MISSING_RAW_IGNORE_LABEL]),
-            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler", "transform"]},
+            **{
+                k: v for k, v in kwargs.items()
+                if k not in ["raw_transform", "label_transform2", "sampler", "transform"]
+            },
         }
         # Of the 640 cached sections, z < 448 train, 448 <= z < 512 validate and z >= 512 stay blind.
         for roi, ds_list, n_samples in [(np.s_[:448, :, :], train_ds, 500), (np.s_[448:512, :, :], val_ds, 50)]:
@@ -2334,6 +2356,16 @@ def _compute_label_rois(label_paths, label_key, min_ids=1):
     return rois
 
 
+def _resize_pad_then_flip(raw, labels, resize, patch_shape, flip):
+    raw, labels = resize(raw, labels, patch_shape)
+    return flip(raw, labels)
+
+
+def _with_flips(resize, patch_shape):
+    """Compose a resize-and-pad transform with the default 2d flips, which an explicit 'transform' replaces."""
+    return partial(_resize_pad_then_flip, resize=resize, patch_shape=patch_shape, flip=get_augmentations(ndim=2))
+
+
 def _pannuke_random_resize_and_pad_trafo(raw, labels, patch_shape):
     """Randomly upscale a PanNuke 256x256 tile (steps of 64) and zero-pad the rest to patch_shape.
 
@@ -2479,7 +2511,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     lizard_mitosis_kwargs = {
         "path": os.path.join(input_path, "lizard_mitosis"), "patch_shape": (1, 256, 256), "subset": "mitosis",
         "label_choice": "instances", "download": True,
-        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+        **{**kwargs, "transform": _with_flips(_pannuke_random_resize_and_pad_trafo, patch_shape)},
     }
     for split, ds_list, n_samples in [("train", train_ds, 500), ("val", val_ds, 50)]:
         ds_list.append(
@@ -2523,7 +2555,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     # the resize+pad up to 512x512 instead.
     pannuke_kwargs = {
         "path": os.path.join(input_path, "pannuke"), "patch_shape": (1, 256, 256), "download": True, "ndim": 2,
-        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+        **{**kwargs, "transform": _with_flips(_pannuke_random_resize_and_pad_trafo, patch_shape)},
     }
     train_ds.append(
         UniDataWrapper(
@@ -2605,7 +2637,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     # The 35-image test split (fold 3) is kept blind.
     srsanet_kwargs = {
         "path": os.path.join(input_path, "srsanet"), "patch_shape": (256, 256),
-        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+        **{**kwargs, "transform": _with_flips(_pannuke_random_resize_and_pad_trafo, patch_shape)},
     }
     train_ds.append(
         UniDataWrapper(datasets.get_srsanet_dataset(split="train", n_samples=200, **srsanet_kwargs), source_ndim=2)
@@ -2663,7 +2695,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     histo_miner_kwargs = {
         "path": os.path.join(input_path, "histo_miner"), "patch_shape": (256, 256), "download": True,
         "task": "nuclei", "label_choice": "instances",
-        **{**kwargs, "transform": partial(_pannuke_random_resize_and_pad_trafo, patch_shape=patch_shape)},
+        **{**kwargs, "transform": _with_flips(_pannuke_random_resize_and_pad_trafo, patch_shape)},
     }
     train_ds.append(
         UniDataWrapper(
