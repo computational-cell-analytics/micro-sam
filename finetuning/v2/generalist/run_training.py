@@ -57,6 +57,8 @@ def write_batch_script(
 #SBATCH --mem 0
 #SBATCH --qos=96h
 #SBATCH --constraint=inet
+# A requeued job restarts from epoch 0 and overwrites the checkpoints; a failed job must be resumed by hand.
+#SBATCH --no-requeue
 
 source ~/.bashrc
 micromamba activate super
