@@ -25,6 +25,7 @@ from torch_em.util.segmentation import size_filter
 
 from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 from micro_sam.v2.normalization import normalize_raw
+from micro_sam.v2.models.util import joint_unetr_state
 from micro_sam.v2.datasets.generalist_loader import (
     ASTIH_SUBSETS, AXONEM_TEST_VOLUMES, AXONEM_VAL_VOLUMES, FAFB_TEST_BOXES, FAFB_VAL_BOXES, FIB25_TEST_SAMPLE,
     LICONN_ROI, MALECNS_TEST_BOXES, MALECNS_VAL_BOXES, TUMOR_SPHEROID_TEST_SLICES, TUMOR_SPHEROID_VAL_SLICES,
@@ -1729,7 +1730,7 @@ def export_joint_checkpoint(
     """Split a joint checkpoint into an interactive and an automatic weight file.
 
     The joint trainer bundles the SAM2 weights ('model_state'), the UniSAM2 decoder weights
-    ('unetr_state') and pickled trainer state in a single file. That file cannot be loaded by
+    ('decoder_state', 'unetr_state' before v6) and pickled trainer state in a single file. That file cannot be loaded by
     `sam2.build_sam`, which reads `torch.load(...)['model']` with `weights_only=True`. Both
     exported files are plain tensor dicts, mirroring `scripts/model_export/export_sam2_cells_model.py`.
 
@@ -1757,13 +1758,12 @@ def export_joint_checkpoint(
         return interactive_path, decoder_path
 
     state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    missing = [key for key in ("model_state", "unetr_state") if key not in state]
-    if missing:
-        raise RuntimeError(f"'{checkpoint_path}' is not a joint checkpoint, it is missing {missing}.")
+    if "model_state" not in state or not ("decoder_state" in state or "unetr_state" in state):
+        raise RuntimeError(f"'{checkpoint_path}' is not a joint checkpoint.")
 
     os.makedirs(export_root, exist_ok=True)
     _save_atomic({"model": _strip_ddp_prefix(state["model_state"]), "model_type": model_type}, interactive_path)
-    _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
+    _save_atomic(_strip_ddp_prefix(joint_unetr_state(state)), decoder_path)
     print(f"Exported '{checkpoint_path}' to '{interactive_path}' and '{decoder_path}'.")
     return interactive_path, decoder_path
 
@@ -1895,7 +1895,7 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t", encoder_model_
     """Load a UniSAM2 model for automatic segmentation.
 
     Handles the standalone UniSAM2 checkpoints ('model_state'), the joint checkpoints
-    ('unetr_state', with the SAM2 encoder wrapped in an adapter) and exported decoder weights.
+    ('decoder_state' next to 'model_state', 'unetr_state' before v6) and exported decoder weights.
 
     Args:
         checkpoint_path: The filepath to the checkpoint.
@@ -2031,7 +2031,7 @@ def build_ais_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
     directory layout (e.g. a checkpoint from an ad hoc experiment).
 
     Args:
-        joint_checkpoint_path: Absolute path to a joint checkpoint (has 'model_state', 'unetr_state').
+        joint_checkpoint_path: Absolute path to a joint checkpoint (has 'model_state' and 'decoder_state').
         model_type: The SAM2 backbone, e.g. 'hvit_t'.
         device: The torch device.
         ndim: The number of spatial dimensions, 2 or 3.
@@ -2049,7 +2049,7 @@ def build_ais_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
 
     if not os.path.exists(decoder_path):
         state = torch.load(joint_checkpoint_path, map_location="cpu", weights_only=False)
-        _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
+        _save_atomic(_strip_ddp_prefix(joint_unetr_state(state)), decoder_path)
 
     return build_model(mode="ais", model_type=model_type, device=device, ndim=ndim, checkpoint_path=decoder_path)
 
@@ -2063,7 +2063,7 @@ def build_apg_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
     one-off checkpoint that lives outside that directory layout.
 
     Args:
-        joint_checkpoint_path: Absolute path to a joint checkpoint (has 'model_state', 'unetr_state').
+        joint_checkpoint_path: Absolute path to a joint checkpoint (has 'model_state' and 'decoder_state').
         model_type: The SAM2 backbone, e.g. 'hvit_t'.
         device: The torch device.
         ndim: The number of spatial dimensions, 2 or 3.
@@ -2086,7 +2086,7 @@ def build_apg_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
     if not (os.path.exists(interactive_path) and os.path.exists(decoder_path)):
         state = torch.load(joint_checkpoint_path, map_location="cpu", weights_only=False)
         _save_atomic({"model": _strip_ddp_prefix(state["model_state"]), "model_type": model_type}, interactive_path)
-        _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
+        _save_atomic(_strip_ddp_prefix(joint_unetr_state(state)), decoder_path)
 
     model = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=interactive_path,
