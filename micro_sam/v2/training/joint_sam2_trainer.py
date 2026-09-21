@@ -110,7 +110,9 @@ class JointSam2Trainer(Sam2Trainer):
 
     def load_checkpoint(self, checkpoint="best"):
         save_dict = super().load_checkpoint(checkpoint)
-        if save_dict is not None and "decoder_state" in save_dict:
+        if save_dict is not None:
+            # A checkpoint from before v6 holds 'unetr_state' and would otherwise resume with a random decoder.
+            assert "decoder_state" in save_dict, f"Not a v6 joint checkpoint, it holds {sorted(save_dict)}."
             missing, unexpected = self.unetr.load_state_dict(save_dict["decoder_state"], strict=False)
             assert not unexpected and all(key.startswith("encoder.") for key in missing), (missing, unexpected)
             self.unetr.to(self.device)
