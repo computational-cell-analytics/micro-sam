@@ -107,6 +107,78 @@ LIVECELL_TRAIN_VAL_OVERLAP = frozenset({
 })
 
 
+# Test images with a verified copy in the training data (byte-identical, or the same field re-imaged with a
+# normalized cross-correlation above 0.95), dropped from the scored test split. Found by the 2026-09-21 data audit,
+# see experiments/micro_sam2/experiments/data_audit_2026_09_21/contaminated_test_images.csv.
+EXCLUDED_TEST_IMAGES = {
+    # Our random split of a dataset that ships repeated crops: 3 identical, 10 consecutive re-imaged fields.
+    "bmgd": frozenset({
+        "bmgd_1200pa_img (45).h5",
+        "bmgd_1200pa_img (48).h5",
+        "bmgd_1200pa_img (70).h5",
+        "bmgd_1800pa_img2.0 (147).h5",
+        "bmgd_1800pa_img2.0 (15).h5",
+        "bmgd_1800pa_img2.0 (20).h5",
+        "bmgd_1800pa_img2.0 (49).h5",
+        "bmgd_1800pa_img2.0 (58).h5",
+        "bmgd_250pa_img287.h5",
+        "bmgd_250pa_img294.h5",
+        "bmgd_250pa_img440.h5",
+        "bmgd_250pa_img488.h5",
+        "bmgd_250pa_img490.h5",
+    }),
+    # Time points within 0.95 correlation of a training frame of the same field of view.
+    "yeaz": frozenset({
+        "cdc20F2BF_20_crop_1_im.tif",
+        "cdc20F9BF_20_crop_1_im.tif",
+        "clnF2BF_5_crop_1_im.tif",
+        "clnF5BF_10_crop_1_im.tif",
+        "ddF3BF_10_crop_1_im.tif",
+        "wtF10BF_10_crop_2_im.tif",
+        "wtF14BF_10_crop_1_im.tif",
+    }),
+    # BBBC022 U2OS fields that DSB stage 1 also holds, re-encoded to 8 bit under hashed names, and trains on.
+    "u20s": frozenset({
+        "IXMtest_D10_s2_w1BB72A093-72AB-476C-9513-2FF43BFB2134.tif",
+        "IXMtest_G10_s3_w1C1257E17-1DBA-4619-B06E-D6DBB8A53088.tif",
+        "IXMtest_G16_s6_w1C3F175E2-0AF5-401C-AC5C-8E128A237B22.tif",
+        "IXMtest_N07_s5_w1D30ED7AB-503E-479D-B5BC-B66472568DE2.tif",
+        "IXMtest_O18_s7_w19C30A212-58D3-4030-AA4F-B0C4482F1F8A.tif",
+    }),
+    # The one StarDist test image that is a BBBC022 field of the u20s training split.
+    "dsb": frozenset({
+        "5f9d29d6388c700f35a3c29fa1b1ce0c1cba6667d05fdb70bd1e89004dcf71ed.tif",
+    }),
+    # Official test frames of the 'ftsN' experiment that repeat training frames, three identical and two adjacent.
+    "omnipose_bact_phase": frozenset({
+        "ftsN_ensemble_30.tif",
+        "ftsN_ensemble_36.tif",
+        "murA_ensemble_0.tif",
+        "murA_ensemble_2.tif",
+        "murA_ensemble_4.tif",
+    }),
+    # Official brain organoid test images that are identical to training images under other organoid numbers.
+    "orgline": frozenset({
+        "org01_wt2D_d05_LabB.tif.h5",
+        "org02_wt2D_d05_LabB.tif.h5",
+        "org03_wt2D_d05_LabB.tif.h5",
+    }),
+    # Our random split; two consecutive G361 acquisitions are identical.
+    "vicar": frozenset({
+        "00010_G361_img.tif",
+    }),
+}
+
+
+def drop_excluded_test_images(dataset_name, raw_paths, label_paths) -> Tuple[List[str], List[str]]:
+    """Remove the test images of a dataset that have a copy in the training data, see EXCLUDED_TEST_IMAGES."""
+    excluded = EXCLUDED_TEST_IMAGES.get(dataset_name)
+    if not excluded:
+        return raw_paths, label_paths
+    keep = [os.path.basename(raw) not in excluded for raw in raw_paths]
+    return [p for p, k in zip(raw_paths, keep) if k], [p for p, k in zip(label_paths, keep) if k]
+
+
 def drop_excluded_livecell(raw_paths, label_paths, split=None) -> Tuple[List[str], List[str]]:
     """Remove the LIVECell images that must not be scored from a path pair list.
 
@@ -171,20 +243,21 @@ DATASETS_2D_LM_NUCLEUS_ID = [
     "dsb", "cvz_fluo_dapi", "dynamicnuclearnet", "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei",
     "tsakiroglou",
 ]
-DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY = ["xenium_nuclei"]
-DATASETS_2D_LM_NUCLEUS_OOD = [
-    "cardioblast_nuclei", "hela_cytonuc", "covid_if_nuclei", "arvidsson", "mndino", "micro_bench",
-]
+# mnDINO images are BBBC022 U2OS fields: 30 of its 64 test images are byte-identical to u20s training images and
+# 3 more to DSB training images, so it is not out of domain.
+DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY = ["xenium_nuclei", "mndino"]
+DATASETS_2D_LM_NUCLEUS_OOD = ["cardioblast_nuclei", "hela_cytonuc", "covid_if_nuclei", "arvidsson", "micro_bench"]
 # sPATCH DAPI shares tissue sections with the sPATCH H&E training data, so it is a held-out platform evaluation
 # rather than an independent OOD collection until the patient overlap is resolved.
 DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM = ["spatch_dapi"]
 DATASETS_2D_LM_LABEL_FREE_ID = [
-    "livecell", "deepbacs_label_free", "omnipose_bact_phase", "yeaz", "neurips_cellseg_label_free", "cell_acdc",
-    "cellular", "vicar", "microbeseg",
+    "livecell", "deepbacs_label_free", "omnipose_bact_phase", "neurips_cellseg_label_free", "cell_acdc", "cellular",
+    "vicar", "microbeseg",
 ]
+# yeaz is split per image, so every test image is a time point of a field of view that also trains.
 DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY = [
     "orgasegment", "organoidnet", "omnipose_worm", "omnipose_worm_high_res", "bccd", "cisd", "orgline", "organoid",
-    "mcellseg", "toiam", "bbbc030",
+    "mcellseg", "toiam", "bbbc030", "yeaz",
 ]
 DATASETS_2D_LM_LABEL_FREE_OOD = [
     "cellapp", "deepseas", "dic_hepg2", "yeastsam", "bac_mother", "ecoli_microcolony_lineage", "bbbc010",
@@ -800,6 +873,11 @@ def _get_2d_lm_data_paths(
             img, gt = lm.omnipose.get_omnipose_paths(
                 path=os.path.join(p, "omnipose"), split="test", data_choice=choice, download=download,
             )
+            if choice == "bact_fluor":
+                # The 'wiggins' test folder holds the same 39 images as its train folder, image and mask alike.
+                keep = [os.sep + "wiggins" + os.sep not in path for path in img]
+                img = [path for path, k in zip(img, keep) if k]
+                gt = [path for path, k in zip(gt, keep) if k]
         else:
             img, gt = _loader_val_part(*lm.omnipose.get_omnipose_paths(
                 path=os.path.join(p, "omnipose"), split="train", data_choice=choice, download=download,
@@ -1467,7 +1545,12 @@ def get_data_paths(
         split = VAL_SPLITS[dataset_name] or "test"
 
     if dataset_name in DATASETS_2D:
-        return _get_2d_data_paths(dataset_name, data_root, download=download, split=split)
+        raw_paths, label_paths, raw_key, label_key = _get_2d_data_paths(
+            dataset_name, data_root, download=download, split=split
+        )
+        if split == "test" and not is_val:
+            raw_paths, label_paths = drop_excluded_test_images(dataset_name, raw_paths, label_paths)
+        return raw_paths, label_paths, raw_key, label_key
     if dataset_name in DATASETS_3D_LM:
         return _get_3d_lm_data_paths(dataset_name, data_root, download=download, split=split)
     return _get_3d_em_data_paths(dataset_name, data_root, download=download, is_val=is_val)
