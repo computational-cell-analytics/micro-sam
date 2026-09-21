@@ -1377,8 +1377,8 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
 
     emneuron_path = os.path.join(input_path, "emneuron")
     all_train_raw, all_train_lbl = get_emneuron_paths(emneuron_path, "train")
-    # The AxonEM and FIB-25 folders copy the complete public releases, including the volumes the direct axonem and
-    # fib25 loaders hold out for testing, so they train through those loaders only.
+    # The AxonEM, CREMI and FIB-25 folders copy the public releases at full depth, including the sections and
+    # volumes the direct loaders hold out for validation and testing, so they train through those loaders only.
     keep = [not any(f"{os.sep}{folder}{os.sep}" in p for folder in EMNEURON_EXCLUDED_FOLDERS) for p in all_train_raw]
     all_train_raw = [p for p, k in zip(all_train_raw, keep) if k]
     all_train_lbl = [p for p, k in zip(all_train_lbl, keep) if k]
@@ -2115,9 +2115,11 @@ MALECNS_TRAIN_BOXES = [
 MALECNS_VAL_BOXES = [(40960, 41984, 50176, 51200, 95000, 96024)]  # VNC
 MALECNS_TEST_BOXES = [(49152, 50176, 51200, 52224, 55000, 56024)]  # neck connective
 
+# EMNeuron's CREMI folder holds samples A (all 125 sections), B (sections 25-124) and C at 8 nm, its FIB-25 folder
+# tstvol-520-1 and validation_sample, verified by cross-correlation against the cached source volumes.
+EMNEURON_EXCLUDED_FOLDERS = ("AxonEM[H]-atum", "AxonEM[M]-sstem", "CREMI-sstem", "Fib-25-fib")
 # training_sample2 and validation_sample train in full, tstvol-520-1 is the blind in-domain test set. All three are
 # at 8 nm; the training sample is only a smaller cube (250^3), not a coarser one.
-EMNEURON_EXCLUDED_FOLDERS = ("AxonEM[H]-atum", "AxonEM[M]-sstem", "Fib-25-fib")
 FIB25_TRAIN_SAMPLES = ("training_sample2", "validation_sample")
 FIB25_TEST_SAMPLE = "tstvol-520-1"
 
