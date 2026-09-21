@@ -187,7 +187,7 @@ DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY = [
     "mcellseg", "toiam", "bbbc030",
 ]
 DATASETS_2D_LM_LABEL_FREE_OOD = [
-    "cellapp", "deepseas", "dic_hepg2", "yeastsam", "bac_mother", "ecoli_microcolony_lineage",
+    "cellapp", "deepseas", "dic_hepg2", "yeastsam", "bac_mother", "ecoli_microcolony_lineage", "bbbc010",
 ]
 # Reserve: kept resolvable, not part of any panel until its labels are checked.
 DATASETS_2D_LM_LABEL_FREE_RESERVE = ["yeastcellseg"]
@@ -233,7 +233,9 @@ DATASETS_3D_LM_NUCLEUS_ID = [
     "embedseg_mouse_skull", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear", "nucverse3d",
 ]
 DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY = ["embedseg_platy_ish"]
-DATASETS_3D_LM_NUCLEUS_OOD = ["parhyale_regen", "mouse_embryo", "blastospim", "morphonet_celegans"]
+DATASETS_3D_LM_NUCLEUS_OOD = [
+    "parhyale_regen", "mouse_embryo", "blastospim", "morphonet_celegans", "bbbc032", "bbbc033", "bbbc050",
+]
 DATASETS_3D_LM = (
     DATASETS_3D_LM_CELL_ID + DATASETS_3D_LM_CELL_OOD + DATASETS_3D_LM_NUCLEUS_ID + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY
     + DATASETS_3D_LM_NUCLEUS_OOD
@@ -290,20 +292,23 @@ VAL_SPLITS.update({
     "covid_if_cells": "val", "covid_if_nuclei": "val", "medussa": "train", "cardioblast_nuclei": "train",
     "hela_cytonuc": "val", "arvidsson": "val", "mndino": "val", "cellapp": "train", "deepseas": "train",
     "dic_hepg2": "val", "bac_mother": "val", "plantseg_ovules": "val", "cshaper": "train", "mouse_embryo": "train",
-    "blastospim": "val",
+    "blastospim": "val", "bbbc010": "val", "bbbc050": "train",
     "wing_disc": None, "embedseg_mouse_skull": None, "embedseg_platy_ish": None, "nis3d": None,
-    "platynereis_nuclei": None, "humanneurons": None,
+    "platynereis_nuclei": None, "humanneurons": None, "bbbc032": None, "bbbc033": None,
 })
 
 # Volumes whose tuning data is a z-slab of the test volume, as (file name, z-slab), following the loader; the
 # evaluation scores the rest of the volume, see val_z_range. nucverse3d holds separate tuning volumes for its liver
-# collections and a slab for drosophila_glia, see _get_3d_lm_data_paths.
+# collections and a slab for drosophila_glia, see _get_3d_lm_data_paths. bbbc032 and bbbc033 are each a single
+# sparsely-instanced volume, so the tuning slab sits at the start and the rest of the volume is scored.
 LM_VAL_Z_SLABS = {
     "wing_disc": {f"{name}.h5": WING_DISC_VAL_Z for name in WING_DISC_TEST_VOLUMES},
     "embedseg_mouse_skull": {"X2_right.tif": EMBEDSEG_VAL_Z["Mouse-Skull-Nuclei-CBG"]},
     "embedseg_platy_ish": {"X02_test.tif": EMBEDSEG_VAL_Z["Platynereis-ISH-Nuclei-CBG"]},
     "nis3d": {"data.tif": NIS3D_VAL_Z},
     "nucverse3d": {NUCVERSE_GLIA_VAL_VOLUME: NUCVERSE_GLIA_VAL_Z},
+    "bbbc032": {"BMP4blastocystC3.tif": slice(0, 20)},
+    "bbbc033": {"BBBC033.h5": slice(0, 6)},
 }
 
 # EM: None means the tuning data is a different region (EM_ROIS) or different files (see _get_3d_em_data_paths) of
@@ -1120,6 +1125,13 @@ def _get_2d_lm_data_paths(
         img, gt = _sorted_pairs(img, gt)
         return img[::10], gt[::10], None, None
 
+    if dataset_name == "bbbc010":
+        # Out of domain: C. elegans worm instances, brightfield channel; the loader's own 65/15/20 split.
+        img, gt = lm.bbbc010.get_bbbc010_paths(
+            path=os.path.join(p, "bbbc010"), split=split, channel=1, download=download,
+        )
+        return sorted(img), sorted(gt), "raw", "labels"
+
     raise ValueError(f"Unknown 2D light microscopy dataset: {dataset_name!r}")
 
 
@@ -1264,6 +1276,24 @@ def _get_3d_lm_data_paths(
         volumes = BLASTOSPIM_VAL_VOLUMES if split == "val" else BLASTOSPIM_TEST_VOLUMES
         paths = [path for path in paths if os.path.basename(path).split("_image_")[0] in volumes]
         return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "bbbc032":
+        # Out of domain: single sparsely-instanced volume (56 nuclei), tuning uses a z-slab, see LM_VAL_Z_SLABS.
+        img, gt = lm.bbbc032.get_bbbc032_paths(path=os.path.join(p, "bbbc032"), channel=3, download=download)
+        return img, gt, None, None
+
+    if dataset_name == "bbbc033":
+        # Out of domain: single densely-instanced volume (15 nuclei), tuning uses a z-slab, see LM_VAL_Z_SLABS.
+        path, raw_key = lm.bbbc033.get_bbbc033_paths(path=os.path.join(p, "bbbc033"), download=download)
+        return [path], [path], raw_key, "labels"
+
+    if dataset_name == "bbbc050":
+        # Out of domain: the official test split (4 held-out embryos) is scored, the train split tunes.
+        img, gt = lm.bbbc050.get_bbbc050_paths(
+            path=os.path.join(p, "bbbc050"), split="test" if split == "test" else "train",
+            label_type="QCANet", download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
 
     raise ValueError(f"Unknown 3D LM dataset: {dataset_name!r}")
 
@@ -1665,6 +1695,8 @@ DATASET_SPACING: dict = {
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
     "densecell": (5, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels
     "nisb": (2.2, 1, 1),  # synthetic: 20 nm sections, 9 nm pixels
+    "bbbc032": (5, 1, 1),  # spinning disk confocal: z=0.5µm, xy=0.101µm
+    "bbbc050": (2.5, 1, 1),  # CV1000 (test split): z=2.0µm, xy=0.8µm
 }
 
 
