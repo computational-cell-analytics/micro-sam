@@ -14,7 +14,7 @@ CHOSEN_PARAMETERS = {
 
 def build_common(
     model_type, n_epochs, n_iterations, batch_size, dataset_choice, use_compile=False,
-    with_boundaries=False, boundary_dice_weight=1.0, **overrides,
+    with_boundaries=True, boundary_dice_weight=0.5, **overrides,
 ):
     """Build the keyword arguments that the single-GPU and the multi-GPU entry points share.
 
@@ -28,7 +28,7 @@ def build_common(
     max_num_objects = int(os.environ.get("MAX_NUM_OBJECTS", max_num_objects))
     z_slices = [z_slice]
     data_path = "/mnt/vast-nhr/projects/cidas/cca/data"
-    save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v5")
+    save_root = os.environ.get("SAVE_ROOT", "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v6")
 
     is_multi_gpu = "RANK" in os.environ
     name = f"joint_sam2_{model_type}_{'multi' if is_multi_gpu else 'single'}_gpu"
@@ -118,9 +118,12 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--dataset_choice", default="all", choices=["lm", "em", "hp", "all"])
     parser.add_argument("--compile", action="store_true", help="Compile the encoder, the decoder and the loss.")
-    parser.add_argument("--with_boundaries", action="store_true")
     parser.add_argument(
-        "--boundary_dice_weight", type=float, default=1.0,
+        "--with_boundaries", action=argparse.BooleanOptionalAction, default=True,
+        help="Train with the additional object-boundary channel. Pass --no-with_boundaries to disable it.",
+    )
+    parser.add_argument(
+        "--boundary_dice_weight", type=float, default=0.5,
         help="Relative Dice weight for the boundary channel; zero selects BCE only.",
     )
     args = parser.parse_args()

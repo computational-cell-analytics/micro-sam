@@ -31,12 +31,12 @@ NCCL_ENV = {
 SCRIPT = "/mnt/vast-kisski/home/archit/u28048/micro-sam/finetuning/v2/generalist/train_joint.py"
 PARTITION = "kisski-h100"
 GPU_TYPE = "H100"
-SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v5"
+SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v6"
 
 
 def write_batch_script(
     out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry, tag,
-    with_boundaries=False, boundary_dice_weight=1.0,
+    with_boundaries=True, boundary_dice_weight=0.5,
 ):
     """Write the sbatch script for one joint SAM2 training run on 2 nodes x 4 H100, and submit it."""
     nccl_block = "\n".join(f"export {key}={value}" for key, value in NCCL_ENV[enable_ib].items())
@@ -147,18 +147,19 @@ def main():
     parser.add_argument("-r", "--reservation", type=str, default=None, help="The slurm reservation to submit under.")
     parser.add_argument(
         "-s", "--save_root", type=str, default=None,
-        help="Where to save checkpoints and logs. Defaults to the shared v5 folder, or to its '<tag>' sibling.",
+        help="Where to save checkpoints and logs. Defaults to the shared v6 folder, or to its '<tag>' sibling.",
     )
-    parser.add_argument("--tag", type=str, default=None, help="Run tag, e.g. 'v5a', added to the run and job names.")
+    parser.add_argument("--tag", type=str, default=None, help="Run tag, e.g. 'v6', added to the run and job names.")
     parser.add_argument("--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB, not sockets.")
     parser.add_argument(
-        "--with_boundaries", action="store_true",
-        help="Train with the additional object-boundary channel. Disabled by default.",
+        "--with_boundaries", action=argparse.BooleanOptionalAction, default=True,
+        help="Train with the additional object-boundary channel (the v5b / v6 style). "
+             "Pass --no-with_boundaries for the four-channel v5a style.",
     )
     parser.add_argument(
-        "--boundary_dice_weight", type=float, default=1.0,
+        "--boundary_dice_weight", type=float, default=0.5,
         help="Boundary Dice weight between 0 and 1: 1 selects Dice only, 0 selects BCE only. "
-             "Used with --with_boundaries.",
+             "Used with --with_boundaries; 0.5 is what v5b trained with.",
     )
     parser.add_argument("--dry", action="store_true", help="Write the sbatch scripts but do not submit them.")
     args = parser.parse_args()
