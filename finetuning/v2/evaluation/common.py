@@ -163,6 +163,10 @@ EXCLUDED_TEST_IMAGES = {
         "org02_wt2D_d05_LabB.tif.h5",
         "org03_wt2D_d05_LabB.tif.h5",
     }),
+    # The authors' split holds three acquisitions of one Vectra pancreas region; the M2 one trains.
+    "pan_multiplex": frozenset({
+        "820f9ed19222 Pancreas_PANEL7-10_CD40L,_CD40,_PD1,_PDL1,CD8,CK_[49017,8252]_component_data.tif_image.h5",
+    }),
     # Our random split; two consecutive G361 acquisitions are identical.
     "vicar": frozenset({
         "00010_G361_img.tif",
