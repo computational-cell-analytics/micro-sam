@@ -36,13 +36,13 @@ SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v6"
 
 def write_batch_script(
     out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry, tag,
-    with_boundaries=True, boundary_dice_weight=0.5,
+    boundary_dice_weight=0.5,
 ):
     """Write the sbatch script for one joint SAM2 training run on 2 nodes x 4 H100, and submit it."""
     nccl_block = "\n".join(f"export {key}={value}" for key, value in NCCL_ENV[enable_ib].items())
     if not 0.0 <= boundary_dice_weight <= 1.0:
         raise ValueError("boundary_dice_weight must be between zero and one.")
-    boundary_args = f" --with_boundaries --boundary_dice_weight {boundary_dice_weight}" if with_boundaries else ""
+    boundary_args = f" --boundary_dice_weight {boundary_dice_weight}"
 
     batch_script = rf"""#!/bin/bash
 #SBATCH --job-name=μSAM2_joint_{model_type}{"_" + tag if tag else ""}
@@ -131,7 +131,6 @@ def submit_slurm(args):
             enable_ib=args.enable_ib == "yes",
             dry=args.dry,
             tag=args.tag,
-            with_boundaries=args.with_boundaries,
             boundary_dice_weight=args.boundary_dice_weight,
         )
 
@@ -154,14 +153,9 @@ def main():
     parser.add_argument("--tag", type=str, default=None, help="Run tag, e.g. 'v6', added to the run and job names.")
     parser.add_argument("--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB, not sockets.")
     parser.add_argument(
-        "--with_boundaries", action=argparse.BooleanOptionalAction, default=True,
-        help="Train with the additional object-boundary channel (the v5b / v6 style). "
-             "Pass --no-with_boundaries for the four-channel v5a style.",
-    )
-    parser.add_argument(
         "--boundary_dice_weight", type=float, default=0.5,
-        help="Boundary Dice weight between 0 and 1: 1 selects Dice only, 0 selects BCE only. "
-             "Used with --with_boundaries; 0.5 is what v5b trained with.",
+        help="Boundary Dice weight between 0 and 1: 1 selects Dice only, 0 selects BCE only; 0.5 is what v5b "
+             "trained with.",
     )
     parser.add_argument("--dry", action="store_true", help="Write the sbatch scripts but do not submit them.")
     args = parser.parse_args()

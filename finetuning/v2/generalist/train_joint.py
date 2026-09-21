@@ -13,8 +13,8 @@ CHOSEN_PARAMETERS = {
 
 
 def build_common(
-    model_type, n_epochs, n_iterations, batch_size, dataset_choice, use_compile=False,
-    with_boundaries=True, boundary_dice_weight=0.5, **overrides,
+    model_type, n_epochs, n_iterations, batch_size, dataset_choice, use_compile=False, boundary_dice_weight=0.5,
+    **overrides,
 ):
     """Build the keyword arguments that the single-GPU and the multi-GPU entry points share.
 
@@ -77,8 +77,9 @@ def build_common(
         peft_kwargs=peft_kwargs,  # None = full finetuning; set above to use LoRA / late finetuning
         initial_features=32,  # decoder bottleneck matches the hvit_t embed_dim
         distance_type="geodesic",  # regression target of the automatic branch
-        with_boundaries=with_boundaries,
+        with_boundaries=True,  # the object-boundary channel of the automatic branch (v5b, v6)
         boundary_dice_weight=boundary_dice_weight,
+        save_every_kth_epoch=5,  # keeps fallback checkpoints next to best.pt and latest.pt
         label_trafo_threads=int(os.environ.get("LABEL_TRAFO_THREADS", 1)),  # threads per worker in the label transform
         # The first 2D and the first 3D iteration then take a few minutes longer.
         compile=["encoder", "decoder", "loss"] if use_compile else None,
@@ -119,10 +120,6 @@ def main():
     parser.add_argument("--dataset_choice", default="all", choices=["lm", "em", "hp", "all"])
     parser.add_argument("--compile", action="store_true", help="Compile the encoder, the decoder and the loss.")
     parser.add_argument(
-        "--with_boundaries", action=argparse.BooleanOptionalAction, default=True,
-        help="Train with the additional object-boundary channel. Pass --no-with_boundaries to disable it.",
-    )
-    parser.add_argument(
         "--boundary_dice_weight", type=float, default=0.5,
         help="Relative Dice weight for the boundary channel; zero selects BCE only.",
     )
@@ -130,7 +127,7 @@ def main():
 
     common = build_common(
         args.model_type, args.n_epochs, args.n_iterations, args.batch_size, args.dataset_choice,
-        use_compile=args.compile, with_boundaries=args.with_boundaries, boundary_dice_weight=args.boundary_dice_weight,
+        use_compile=args.compile, boundary_dice_weight=args.boundary_dice_weight,
     )
     run_training(common)
     report_peak_memory(common)
