@@ -14,6 +14,7 @@ from elf.io import open_file
 
 import torch_em
 from torch_em.transform import get_augmentations
+from torch_em.transform.generic import Compose
 from torch_em.data import datasets, MinInstanceSampler, ConcatDataset
 
 from . import cochleanet_data
@@ -21,7 +22,7 @@ from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, RejectBlankSlices, _build_group_map
 from ..transforms.raw import (
     _identity, _cellpose_raw_trafo, _to_8bit, _normalize_percentile, _resize_raw_to_512, _resize_to_512,
-    _prepare_identity,
+    _prepare_identity, _drop_alpha_channel,
     _enseg_green_channel, _xenium_cell_channels, _pan_multiplex_tissuenet_order, _cvz_cell_channels,
     _minmax_raw_trafo,
     get_random_percentile_normalization,
@@ -2734,13 +2735,17 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
 
     # 9. NuInsSeg (nucleus segmentation in H&E histopathology images from 31 human and mouse organs)
     # NOTE: No native split. Split the image/label paths so train and val get independent dataset instances.
+    # 'human_liver_31.png' is the one RGBA image of the collection; its constant alpha channel is dropped.
     nuinsseg_raw_paths, nuinsseg_label_paths = datasets.nuinsseg.get_nuinsseg_paths(
         path=os.path.join(input_path, "nuinsseg")
     )
     nuinsseg_train_raw, nuinsseg_val_raw, nuinsseg_train_labels, nuinsseg_val_labels = train_test_split(
         nuinsseg_raw_paths, nuinsseg_label_paths, test_size=0.2, random_state=42,
     )
-    nuinsseg_kwargs = {"patch_shape": patch_shape, "is_seg_dataset": False, "ndim": 2, "with_channels": True, **kwargs}
+    nuinsseg_kwargs = {
+        "patch_shape": patch_shape, "is_seg_dataset": False, "ndim": 2, "with_channels": True, **kwargs,
+        "raw_transform": Compose(_drop_alpha_channel, kwargs["raw_transform"], is_multi_tensor=False),
+    }
     train_ds.append(
         UniDataWrapper(
             torch_em.default_segmentation_dataset(
