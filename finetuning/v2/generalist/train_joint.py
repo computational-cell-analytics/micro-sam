@@ -5,9 +5,9 @@ import torch
 
 
 CHOSEN_PARAMETERS = {
-    "hvit_t": (12, 12, 5),
-    "hvit_s": (12, 12, 5),
-    "hvit_b": (8, 10, 6),
+    "hvit_t": (12, 14, 5),
+    "hvit_s": (12, 14, 5),
+    "hvit_b": (10, 10, 6),
     "hvit_l": (8, 8, 5),
 }
 

@@ -7,8 +7,8 @@ from datetime import datetime
 
 # Epochs per model. One epoch takes 53 min for hvit_t and 57 min for hvit_l, so these fit the 96 h qos.
 EPOCHS = {
-    "hvit_t": 94,
-    "hvit_s": 92,
+    "hvit_t": 96,
+    "hvit_s": 94,
     "hvit_b": 90,
     "hvit_l": 90,
 }
