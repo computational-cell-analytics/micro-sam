@@ -16,6 +16,7 @@ import torch_em
 from torch_em.transform import get_augmentations
 from torch_em.data import datasets, MinInstanceSampler, ConcatDataset
 
+from . import cochleanet_data
 from .wrapper import UniDataWrapper
 from .sampler import UniBatchSampler, RejectBlankSlices, _build_group_map
 from ..transforms.raw import (
@@ -1325,7 +1326,79 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
             )
         )
 
+    # 58. CochleaNet SGN (3D soma segmentation of spiral ganglion neurons, PV stain, light-sheet mouse cochlea)
+    # NOTE: Internal data with official train and val folders. The blocks are 256 px in plane and are resized up. The
+    # module leaves out the empty blocks and the 'resized' ones, which were interpolated and are only partly labelled.
+    cochleanet_root = os.path.join(input_path, "cochleanet_data")
+    for z in z_slices:
+        sgn_kwargs = {
+            "patch_shape": (z, 256, 256),
+            "raw_transform": _resize_raw_to_512,
+            "label_transform2": (
+                partial(_resize_then_em_label_trafo, em_trafo_fn=label_trafo(instances=True))
+                if label_trafo is not None else kwargs.get("label_transform2")
+            ),
+            "sampler": MinInstanceSampler(min_num_instances=4, exclude_ids=[0]),
+            "n_samples": max(1, 300 // n_z),
+            **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2", "sampler"]},
+        }
+        for split, ds_list in [("train", train_ds), ("val", val_ds)]:
+            ds_list.append(
+                UniDataWrapper(
+                    cochleanet_data.get_cochleanet_dataset(cochleanet_root, name="sgn", split=split, **sgn_kwargs),
+                    source_ndim=3, group_key=(3, z),
+                )
+            )
+
+    # 59. CochleaNet IHC (3D cell segmentation of inner hair cells, Vglut3 stain, light-sheet mouse cochlea)
+    # NOTE: Internal data with official train and val folders. The hair cells form one row, so a block is 1-7 %
+    # labelled, holds few cells per crop and gets a lower sampler minimum than the SGN blocks. The blocks come in
+    # three in-plane sizes and get one leaf each: 256 and 392 are resized up, 512 is native. The module reorients the
+    # 512x512x256 blocks so that their short axis is z and leaves out the 'G-LR' crops, which label a few hair cells
+    # next to unlabelled rows of cells.
+    for z in z_slices:
+        for split, ds_list in [("train", train_ds), ("val", val_ds)]:
+            paths = cochleanet_data.get_cochleanet_paths(cochleanet_root, name="ihc", split=split)
+            groups = {}
+            for path in paths:
+                groups.setdefault(_ihc_patch_size(_in_plane_size(path)), []).append(path)
+            for size, group_paths in sorted(groups.items()):
+                resize = size < 512
+                ihc_kwargs = {
+                    "patch_shape": (z, size, size),
+                    "raw_key": "raw",
+                    "label_key": "labels",
+                    "is_seg_dataset": True,
+                    "raw_transform": _resize_raw_to_512 if resize else kwargs["raw_transform"],
+                    "label_transform2": (
+                        (partial(_resize_then_em_label_trafo, em_trafo_fn=label_trafo(instances=True)) if resize
+                         else label_trafo())
+                        if label_trafo is not None else kwargs.get("label_transform2")
+                    ),
+                    "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
+                    "n_samples": max(1, (200 // n_z) * len(group_paths) // len(paths)),
+                    **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2", "sampler"]},
+                }
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=group_paths, label_paths=group_paths, **ihc_kwargs
+                        ), source_ndim=3, group_key=(3, z),
+                    )
+                )
+
     return train_ds, val_ds
+
+
+def _in_plane_size(path):
+    """The smaller in-plane extent of an h5 volume stored as (z, y, x)."""
+    with open_file(path, "r") as f:
+        return min(f["raw"].shape[1:])
+
+
+def _ihc_patch_size(size):
+    """The in-plane patch size of a CochleaNet IHC block: 512 native, otherwise the largest of 256 and 392 it holds."""
+    return 512 if size >= 512 else 392 if size >= 392 else 256
 
 
 def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em_label_trafo=None):
@@ -2099,6 +2172,48 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
+    # 23. SynapseNet compartments (compartment segmentation in electron tomograms of three synapse types)
+    # NOTE: Internal data, 11 tomograms of 440-495 px in plane. One tomogram per type is the blind test set, the
+    # other eight train on their first 80 % of sections and validate on the rest. Patches are drawn at 440 px and
+    # resized to 512 like the small EMNeuron volumes; a patch holds one to four compartments, so the sampler asks
+    # for one. Ids of a few voxels are annotation specks, which the minimum size drops. The unlabelled voxels are
+    # membranes, gaps and a few unannotated processes, so id 0 is the ignore label and not the background.
+    synapsenet_paths = [
+        p for p in synapsenet_tomograms(os.path.join(input_path, "synapsenet_compartments_data"))
+        if os.path.basename(p) not in SYNAPSENET_TEST_TOMOGRAMS
+    ]
+    for z in z_slices:
+        synapsenet_kwargs = {
+            "patch_shape": (z, 440, 440),
+            "raw_key": "raw",
+            "label_key": "labels/compartments",
+            "is_seg_dataset": True,
+            "ndim": 3,
+            "raw_transform": _resize_raw_to_512,
+            "label_transform2": (
+                partial(
+                    _resize_then_em_label_trafo,
+                    em_trafo_fn=partial(
+                        _em_label_trafo, label_trafo=label_trafo(instances=True, min_size=200), ignore_label=0
+                    ),
+                )
+                if label_trafo is not None else kwargs.get("label_transform2")
+            ),
+            "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
+            **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2", "sampler"]},
+        }
+        for split, ds_list, n_samples in [("train", train_ds, 100), ("val", val_ds, 20)]:
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=synapsenet_paths, label_paths=synapsenet_paths,
+                        rois=[synapsenet_roi(p, split) for p in synapsenet_paths],
+                        n_samples=max(1, n_samples // n_z), **synapsenet_kwargs,
+                    ),
+                    source_ndim=3, group_key=(3, z),
+                )
+            )
+
     return train_ds, val_ds
 
 
@@ -2184,6 +2299,30 @@ LICONN_ROI = (slice(64, 640), slice(0, 4608), slice(None))
 
 # The voxel-labelled core of the XPRESS volume; z 308-328 of it is the blind test slab.
 XPRESS_CORE = (slice(128, 328), slice(128, 328), slice(128, 328))
+
+# SynapseNet compartments: one tomogram per synapse type (MF, PS, SC) is the blind test set, the other eight train
+# on their first 80 % of sections and validate on the rest.
+SYNAPSENET_TEST_TOMOGRAMS = (
+    "36859_J1_66K_TS_CA3_MF_19_rec_2Kb1dawbp_crop.h5", "36859_J2_66K_TS_R04_PS11_rec_2Kb1dawbp_crop.h5",
+    "36859_H2_SP_11_rec_2Kb1dawbp_crop.h5",
+)
+SYNAPSENET_TRAIN_FRACTION = 0.8
+
+
+def synapsenet_tomograms(path):
+    """The SynapseNet compartment tomograms, h5 files with 'raw' and 'labels/compartments'."""
+    paths = sorted(glob(os.path.join(path, "v3", "*", "*.h5")))
+    assert paths, f"Did not find any tomograms in '{path}'."
+    return paths
+
+
+def synapsenet_roi(path, split):
+    """The z-slab of a training tomogram that trains ('train') or validates ('val'), as a (z, y, x) roi."""
+    with open_file(path, "r") as f:
+        n_sections = f["raw"].shape[0]
+    cut = int(SYNAPSENET_TRAIN_FRACTION * n_sections)
+    return (slice(0, cut) if split == "train" else slice(cut, None), slice(None), slice(None))
+
 
 # PanNuke fold_2 holds 2523 tiles; the first 80 % train, the last 20 % validate. fold_3 is blind.
 PANNUKE_FOLD2_TRAIN_TILES = slice(0, 2018)

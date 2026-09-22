@@ -38,8 +38,8 @@ from micro_sam.v2.datasets.generalist_loader import (
     NUCVERSE_GLIA_VAL_Z, NUCVERSE_VAL_VOLUMES, ORGANOID_SOURCES, PANNUKE_FOLD2_VAL_TILES, PHMAMM_TEST_TIMEPOINTS,
     PHMAMM_VAL_TIMEPOINTS,
     PNAS_TEST_PLANTS, PNAS_VAL_PLANTS, TOIAM_TEST_MOVIES, TOIAM_VAL_MOVIES, WING_DISC_TEST_VOLUMES, WING_DISC_VAL_Z,
-    XENIUM_TEST_SAMPLES, XENIUM_VAL_SAMPLES, cell_acdc_movie, cvz_group, dsb_fluorescence_training_paths,
-    _train_val_test_split,
+    XENIUM_TEST_SAMPLES, XENIUM_VAL_SAMPLES, SYNAPSENET_TEST_TOMOGRAMS, cell_acdc_movie, cvz_group,
+    dsb_fluorescence_training_paths, synapsenet_roi, synapsenet_tomograms, _train_val_test_split,
 )
 
 
@@ -330,7 +330,7 @@ DATASETS_3D_EM_NEURITE_SUPPLEMENTARY = [
 ]
 DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb", "nisb"]
 # Cell segmentation: Platynereis volume 9 and the DenseCell val volume are blind; the tumor spheroid slices are 2d.
-DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell"]
+DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell", "synapsenet_compartments"]
 
 DATASETS_3D_EM = (
     ["platynereis_nuclei"] + DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY
@@ -395,7 +395,7 @@ VAL_SPLITS.update({
     name: None for name in (
         "cremi", "snemi", "axonem", "fafb", "hemibrain", "manc", "malecns", "wafer4", "minnie65",
         "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress", "nisb", "platynereis_cells",
-        "densecell",
+        "densecell", "synapsenet_compartments",
         "astih", "tumor_spheroid",
     )
 })
@@ -467,6 +467,9 @@ def em_roi(dataset_name: str, label_path: str, split: str):
     """The (z, y, x) roi of one volume for the 'test' or 'val' region, or None to read it whole."""
     if dataset_name in LABEL_CENTERED_VOLUMES:
         return _label_bbox_roi(dataset_name, label_path)
+    if dataset_name == "synapsenet_compartments":
+        # The test tomograms are read whole; the training tomograms validate on their last 20 % of sections.
+        return None if split == "test" else synapsenet_roi(label_path, "val")
     if dataset_name == "axonem":
         # Only a central block of each volume is annotated; its bounding box is cached next to the labels.
         import json
@@ -1506,6 +1509,12 @@ def _get_3d_em_data_paths(
         em.densecell._add_cell_instances(path)
         return [path], [path], "raw", em.densecell.CELL_INSTANCE_KEY
 
+    if dataset_name == "synapsenet_compartments":
+        # One tomogram per synapse type is the blind test set, see SYNAPSENET_TEST_TOMOGRAMS; the others validate.
+        paths = synapsenet_tomograms(os.path.join(p, "synapsenet_compartments_data"))
+        paths = [path for path in paths if (os.path.basename(path) in SYNAPSENET_TEST_TOMOGRAMS) != is_val]
+        return paths, paths, "raw", "labels/compartments"
+
     if dataset_name == "isbi2012":
         path = em.isbi2012.get_isbi_paths(path=os.path.join(p, "isbi2012"), download=download)
         return [path], [path], "raw", "labels/gt_segmentation"
@@ -1781,6 +1790,7 @@ DATASET_SPACING: dict = {
     "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
     "densecell": (5, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels
+    "synapsenet_compartments": (1, 1, 1),  # electron tomography, isotropic
     "nisb": (2.2, 1, 1),  # synthetic: 20 nm sections, 9 nm pixels
     "bbbc032": (5, 1, 1),  # spinning disk confocal: z=0.5µm, xy=0.101µm
     "bbbc050": (2.5, 1, 1),  # CV1000 (test split): z=2.0µm, xy=0.8µm
