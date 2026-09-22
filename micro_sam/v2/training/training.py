@@ -1,6 +1,8 @@
 import os
 import re
+import sys
 import time
+import traceback
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Union
 
@@ -421,10 +423,24 @@ def _train_sam2_rank(
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
     fit_kwargs["overwrite_training"] = overwrite_training
     fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
+    _fit_and_shut_down(trainer, fit_kwargs)
+
+
+def _fit_and_shut_down(trainer, fit_kwargs):
+    """Run the training and tear the process group down only after a clean finish.
+
+    A rank that fails mid-collective must not destroy its communicator: the other ranks are still waiting in that
+    collective, the destroy blocks on them, and the traceback never prints before the NCCL timeout an hour later.
+    Instead the traceback is flushed and the process exits at once, so torchrun terminates the other ranks.
+    """
     try:
         trainer.fit(**fit_kwargs)
-    finally:
-        dist.destroy_process_group()
+    except BaseException:
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
+    dist.destroy_process_group()
 
 
 def train_sam2_multi_gpu(
@@ -808,10 +824,7 @@ def _train_automatic_rank(
     fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
-    try:
-        trainer.fit(**fit_kwargs)
-    finally:
-        dist.destroy_process_group()
+    _fit_and_shut_down(trainer, fit_kwargs)
 
 
 def train_automatic_multi_gpu(
@@ -1462,10 +1475,7 @@ def _train_joint_rank(
     fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
-    try:
-        trainer.fit(**fit_kwargs)
-    finally:
-        dist.destroy_process_group()
+    _fit_and_shut_down(trainer, fit_kwargs)
 
 
 def train_joint_sam2_multi_gpu(
