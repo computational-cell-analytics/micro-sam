@@ -12,7 +12,26 @@ from micro_sam.v2.util import get_sam2_model
 class CustomActivation(nn.Module):
     """Apply sigmoid to foreground and optional auxiliary channels, and tanh to distances."""
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # In bfloat16 the sigmoid saturates to exactly one from a logit of 6.5, which zeroes the loss gradient.
+        x = x.float()
         return torch.cat([torch.sigmoid(x[:, :1]), torch.tanh(x[:, 1:4]), torch.sigmoid(x[:, 4:])], dim=1)
+
+
+def joint_unetr_state(state):
+    """The UniSAM2 state of a joint checkpoint.
+
+    The joint trainer saves the SAM2 weights as 'model_state' and the decoder as 'decoder_state'; the encoder of the
+    UniSAM2 is the SAM2 image encoder, stored under the adapter's 'encoder.inner.' prefix. Joint checkpoints from
+    before v6 hold the whole UniSAM2 state as 'unetr_state'.
+    """
+    if "unetr_state" in state:
+        return state["unetr_state"]
+    prefix = "image_encoder."
+    encoder = {
+        "encoder.inner." + key[len(prefix):]: value
+        for key, value in state["model_state"].items() if key.startswith(prefix)
+    }
+    return {**encoder, **state["decoder_state"]}
 
 
 class SAM2EncoderAdapter(nn.Module):

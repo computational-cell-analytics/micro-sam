@@ -104,16 +104,39 @@ class JointSam2Trainer(Sam2Trainer):
         self.automatic_metric_weight = automatic_metric_weight
 
     def save_checkpoint(self, name, current_metric, best_metric, **extra_save_dict):
-        super().save_checkpoint(
-            name, current_metric, best_metric, unetr_state=self.unetr.state_dict(), **extra_save_dict,
-        )
+        # The encoder of the UniSAM2 is the SAM2 image encoder, which 'model_state' already holds.
+        decoder_state = {k: v for k, v in self.unetr.state_dict().items() if not k.startswith("encoder.")}
+        super().save_checkpoint(name, current_metric, best_metric, decoder_state=decoder_state, **extra_save_dict)
 
     def load_checkpoint(self, checkpoint="best"):
         save_dict = super().load_checkpoint(checkpoint)
-        if save_dict is not None and "unetr_state" in save_dict:
-            self.unetr.load_state_dict(save_dict["unetr_state"])
+        if save_dict is not None:
+            # A checkpoint from before v6 holds 'unetr_state' and would otherwise resume with a random decoder.
+            assert "decoder_state" in save_dict, f"Not a v6 joint checkpoint, it holds {sorted(save_dict)}."
+            missing, unexpected = self.unetr.load_state_dict(save_dict["decoder_state"], strict=False)
+            assert not unexpected and all(key.startswith("encoder.") for key in missing), (missing, unexpected)
             self.unetr.to(self.device)
         return save_dict
+
+    def _skip_batch_without_objects(self, y):
+        """Whether any rank holds a batch without instances, which cannot be prompted.
+
+        Decided before the forward pass: its collectives would otherwise pair with the skip flag of a rank
+        that found no objects, and every rank has to skip the same iterations.
+        """
+        skip = torch.tensor(int(not bool((y[:, 0] > 0).any())), device=self.device)
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(skip, op=dist.ReduceOp.MAX)
+        return bool(skip.item())
+
+    def _sync_decoder_buffers(self):
+        """Average the BatchNorm statistics of the decoder, which no DDP wrapper keeps in step across ranks."""
+        if not (dist.is_available() and dist.is_initialized()):
+            return
+        for name, buffer in self.unetr.named_buffers():
+            if name.startswith("encoder") or not buffer.is_floating_point():
+                continue
+            dist.all_reduce(buffer, op=dist.ReduceOp.AVG)
 
     def _interactive_step(self, x, y):
         # Slice channel 0 (instance IDs) from the 5-channel joint label tensor.
@@ -182,24 +205,12 @@ class JointSam2Trainer(Sam2Trainer):
 
         for x, y in self.train_loader:
             input_check_done = self._check_input_normalization(x, input_check_done)
+            if self._skip_batch_without_objects(y):
+                continue
 
             self.optimizer.zero_grad()
             with forward_context():
-                try:
-                    inter_loss, batch, outputs = self._interactive_step(x, y)
-                    skip = 0
-                except RuntimeError as e:
-                    if "no objects found" not in str(e):
-                        raise
-                    skip = 1
-            # Every rank has to skip the same iterations, or the ranks that go on wait forever in the
-            # gradient all-reduce for the one that skipped.
-            if dist.is_available() and dist.is_initialized():
-                skip_flag = torch.tensor(skip, device=self.device)
-                dist.all_reduce(skip_flag, op=dist.ReduceOp.MAX)
-                skip = int(skip_flag.item())
-            if skip:
-                continue
+                inter_loss, batch, outputs = self._interactive_step(x, y)
             self._sam2_backprop(inter_loss)
 
             log_imgs = (self._iteration % self.log_image_interval == 0)
@@ -246,11 +257,14 @@ class JointSam2Trainer(Sam2Trainer):
         # Pick one validation sample to log via reservoir sampling, seeded per epoch.
         log_rng = random.Random(VALIDATION_SEED + self._epoch)
 
+        self._sync_decoder_buffers()
         # Pin the RNGs so the sampled prompts are identical every epoch.
         with _pinned_validation_rng(self.model):
             with torch.no_grad():
                 for i, (x, y) in enumerate(self.val_loader):
                     input_check_done = self._check_input_normalization(x, input_check_done)
+                    if self._skip_batch_without_objects(y):
+                        continue
                     with forward_context():
                         inter_loss, batch, outputs = self._interactive_step(x, y)
                         inter_metric = self.metric(outputs, batch.masks)

@@ -667,7 +667,7 @@ def derive_point_prompts(
     Args:
         foreground: Foreground probability map, shape (Y, X).
         directed_distances: Distance channels stacked along axis 0. A leading z-channel is dropped, so
-            `prediction[1:]` can be passed regardless of dimensionality.
+            `prediction[1:4]` can be passed regardless of dimensionality.
         model_type: The SAM2 backbone the predictions came from, e.g. 'hvit_t'. Selects the default
             for any of the tunable parameters below left as None, see `default_prompt_generation`.
         candidate_threshold: Density threshold for proposing candidates. Lower proposes more. The density
@@ -1370,7 +1370,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             if pbar_init is not None:
                 pbar_init(1, "APG: deriving volume prompts")
             prompts = derive_volume_prompts(
-                self._prediction[0], self._prediction[1:], model_type=self._model_type,
+                self._prediction[0], self._prediction[1:4], model_type=self._model_type,
                 candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
                 n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing,
                 min_candidate_size=min_candidate_size, n_threads=n_threads,
@@ -1484,7 +1484,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if pbar_init is not None:
             pbar_init(1, "APG: deriving prompts")
         prompts = derive_point_prompts(
-            self._prediction[0], self._prediction[1:], model_type=self._model_type,
+            self._prediction[0], self._prediction[1:4], model_type=self._model_type,
             candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
             n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size, n_threads=n_threads,
         )

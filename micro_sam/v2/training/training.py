@@ -1,8 +1,12 @@
 import os
 import re
+import sys
 import time
+import traceback
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Union
+
+import numpy as np
 
 import torch
 import torch._dynamo
@@ -419,10 +423,24 @@ def _train_sam2_rank(
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
     fit_kwargs["overwrite_training"] = overwrite_training
     fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
+    _fit_and_shut_down(trainer, fit_kwargs)
+
+
+def _fit_and_shut_down(trainer, fit_kwargs):
+    """Run the training and tear the process group down only after a clean finish.
+
+    A rank that fails mid-collective must not destroy its communicator: the other ranks are still waiting in that
+    collective, the destroy blocks on them, and the traceback never prints before the NCCL timeout an hour later.
+    Instead the traceback is flushed and the process exits at once, so torchrun terminates the other ranks.
+    """
     try:
         trainer.fit(**fit_kwargs)
-    finally:
-        dist.destroy_process_group()
+    except BaseException:
+        traceback.print_exc()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
+    dist.destroy_process_group()
 
 
 def train_sam2_multi_gpu(
@@ -806,10 +824,7 @@ def _train_automatic_rank(
     fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
-    try:
-        trainer.fit(**fit_kwargs)
-    finally:
-        dist.destroy_process_group()
+    _fit_and_shut_down(trainer, fit_kwargs)
 
 
 def train_automatic_multi_gpu(
@@ -935,7 +950,8 @@ def _compile_threads_per_rank():
     """
     n_cpus = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count()
     local_ranks = int(os.environ.get("LOCAL_WORLD_SIZE", "1"))
-    return max(1, n_cpus // local_ranks)
+    # The workers keep their memory for the whole run; 16 compile the few shapes of a run within minutes.
+    return max(1, min(16, n_cpus // local_ranks))
 
 
 def _configure_joint_speed(sam2_model, unetr, compile):
@@ -1357,11 +1373,12 @@ def _train_joint_rank(
         with_boundaries=with_boundaries, label_trafo_threads=label_trafo_threads,
     )
 
+    # The trailing partial batch would have its own shape and recompile the encoder on one rank.
     train_sampler = DistributedUniBatchSampler(
         group_per_index=_build_group_map(train_ds),
         batch_size=batch_size,
         batch_size_per_group=batch_size_per_group,
-        shuffle=True, rank=rank, world_size=world_size,
+        shuffle=True, drop_last=True, rank=rank, world_size=world_size,
     )
     val_sampler = DistributedUniBatchSampler(
         group_per_index=_build_group_map(val_ds),
@@ -1394,6 +1411,8 @@ def _train_joint_rank(
         num_init_cond_frames_for_train=num_init_cond_frames,
         bidirectional=bidirectional,
     )
+    # SAM2Train seeds its prompt sampling with 42 on every rank; give each rank its own stream.
+    sam2_model.rng = np.random.default_rng(42 + rank)
     unetr = UniSAM2(
         encoder=sam2_model.image_encoder, output_channels=4 + int(with_boundaries),
         initial_features=initial_features, device=device,
@@ -1456,10 +1475,7 @@ def _train_joint_rank(
     fit_kwargs["load_from_checkpoint"] = load_from_checkpoint
     if save_every_kth_epoch is not None:
         fit_kwargs["save_every_kth_epoch"] = save_every_kth_epoch
-    try:
-        trainer.fit(**fit_kwargs)
-    finally:
-        dist.destroy_process_group()
+    _fit_and_shut_down(trainer, fit_kwargs)
 
 
 def train_joint_sam2_multi_gpu(
