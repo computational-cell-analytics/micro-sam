@@ -585,7 +585,7 @@ def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> T
     Singleton axes (commonly exposed by formats like CZI) are squeezed out across all axes.
     For a 2D image, the trailing channel axis is mapped to 3 channels: a 2-channel input is
     padded with a zero channel and a 4-channel input is reduced to the first three (with a
-    warning). A 3D volume with a channel axis (3D+C) is not supported.
+    warning). A 3D volume with a channel axis (3D+C) gets the same mapping on a trailing channel axis.
 
     Args:
         image: The input image data.
@@ -595,7 +595,9 @@ def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> T
             of size 2 or 4 -> channels mapped to RGB 2D, otherwise a 3D volume). With ``2`` a 3D array
             is read as a 2D multi-channel image, taking the smallest axis as the channel axis (so a
             channels-first ``(C, H, W)`` array also works) and mapping the channels to RGB. With ``3``
-            a 3D array is read as a ``(Z, H, W)`` volume.
+            a 3D array is read as a ``(Z, H, W)`` volume, and a 4D array as a volume with a channel
+            axis of size 2 to 4 at position 3, 1 or 0 (checked in that order), moved to the trailing
+            position. A 4D array with a trailing axis of size 2 to 4 is auto-detected as such a volume.
 
     Returns:
         A tuple of the normalized image, its spatial dimensionality (2 or 3), and whether
@@ -623,7 +625,7 @@ def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> T
             return _channels_to_rgb(image), 2, True
         raise ValueError(f"Cannot interpret shape {image.shape} as a 2D image.")
 
-    # Forced 3D: read a 3D array as a (Z, H, W) volume. A channel axis (4D, or 3D+C) is not supported.
+    # Forced 3D: read a 3D array as a (Z, H, W) volume, and a 4D array as a volume with a channel axis.
     if ndim == 3:
         if image.ndim == 3:
             return image, 3, False
@@ -631,19 +633,23 @@ def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> T
         # it. A genuinely 2d input still raises: asking for a volume and passing a plane is an error.
         if image.ndim == 2 and input_ndim == 3:
             return image[None], 3, False
-        raise ValueError(
-            f"Cannot interpret shape {image.shape} as a 3D volume (3D data with channels is not supported yet)."
-        )
+        if image.ndim == 4:
+            # Channels-last (Z, H, W, C), channels-second (Z, C, H, W) or channels-first (C, Z, H, W).
+            channel_axis = next((axis for axis in (3, 1, 0) if image.shape[axis] in (2, 3, 4)), None)
+            if channel_axis is not None:
+                image = np.moveaxis(image, channel_axis, -1)
+                return _channels_to_rgb(image), 3, True
+        raise ValueError(f"Cannot interpret shape {image.shape} as a 3D volume.")
 
-    # Auto-detect. A 4D array is either a 3D volume with a channel axis (Z, H, W, C) or a volumetric
-    # time series (T, Z, H, W). Neither is supported: the v2 3D path assumes a grayscale (Z, H, W)
-    # volume, so a channel axis would otherwise produce wrong-shaped masks.
+    # Auto-detect. A 4D array with a trailing axis of size 2, 3 or 4 is a volume with channels
+    # (Z, H, W, C). Any other 4D array may be a volumetric time series (T, Z, H, W), which is not supported.
     if image.ndim == 4:
         if image.shape[-1] in (2, 3, 4):
-            raise ValueError(
-                f"3D volumes with a channel axis are not supported yet, got shape {image.shape}."
-            )
-        raise ValueError(f"Invalid image shape: {image.shape}. Expected 2D or 3D image data (3D+t is not supported).")
+            return _channels_to_rgb(image), 3, True
+        raise ValueError(
+            f"Invalid image shape: {image.shape}. Expected 2D or 3D image data (3D+t is not supported). "
+            "Pass ndim=3 for a volume with a non-trailing channel axis."
+        )
 
     # 2D image with a 2- or 4-channel trailing axis: map it to 3 channels. A trailing axis of any
     # other size is left alone, so a size-3 axis stays RGB and anything else is treated as a volume.

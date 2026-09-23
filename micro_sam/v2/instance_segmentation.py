@@ -592,7 +592,7 @@ def amg_3d_segmentation(
     per-slice AMG is run with the tiled segmenter.
 
     Args:
-        volume: The input volume, shape (Z, Y, X).
+        volume: The input volume, shape (Z, Y, X), or (Z, Y, X, C) with a trailing channel axis.
         segmenter: The automatic mask generation segmenter. Use a
             `TiledAutomaticMaskGenerationSegmenter` together with `tile_shape` and `halo`.
         with_background: Whether the segmentation has background. By default 'True'.
@@ -615,8 +615,8 @@ def amg_3d_segmentation(
     Returns:
         The 3d instance segmentation, uint32 array of shape (Z, Y, X).
     """
-    if volume.ndim != 3:
-        raise ValueError(f"Expected a 3d volume of shape (Z, Y, X), got shape {volume.shape}.")
+    if volume.ndim not in (3, 4):
+        raise ValueError(f"Expected a 3d volume of shape (Z, Y, X) or (Z, Y, X, C), got shape {volume.shape}.")
 
     init_kwargs = {}
     if tile_shape is not None and halo is not None:
@@ -638,7 +638,7 @@ def amg_3d_segmentation(
         from micro_sam.precompute_state import _cache_amg_slice, _embedding_signature
         state_signature = _embedding_signature(state_save_path)
 
-    segmentation = np.zeros(volume.shape, dtype="uint32")
+    segmentation = np.zeros(volume.shape[:3], dtype="uint32")
     offset = 0
     for i in range(volume.shape[0]):
         if state_save_path is not None:

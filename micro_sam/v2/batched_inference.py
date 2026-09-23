@@ -955,7 +955,7 @@ def _compute_3d(
     finally:
         _release_model_replicas(model_devices)
 
-    original_size = tuple(int(value) for value in input_.shape[-2:])
+    original_size = tuple(int(value) for value in input_.shape[1:3])
     if save_path is None:
         features = torch.cat(feature_values).numpy()
         n_levels = len(fpn_values[0])
@@ -1043,13 +1043,13 @@ def _compute_tiled_3d(
     _clear_group(pos_enc_group)
     _clear_group(fpn_group)
 
-    tiling = Blocking([0, 0], list(input_.shape[1:]), list(tile_shape))
+    tiling = Blocking([0, 0], list(input_.shape[1:3]), list(tile_shape))
     n_tiles = tiling.number_of_blocks
     n_slices = int(input_.shape[0])
     image_size = int(predictor.image_size)
     jobs = [(tile_id, z) for tile_id in range(n_tiles) for z in range(n_slices)]
 
-    features.attrs["shape"] = list(input_.shape)
+    features.attrs["shape"] = list(input_.shape[:3])
     features.attrs["tile_shape"] = list(tile_shape)
     features.attrs["halo"] = list(halo)
     features.attrs["complete"] = False
