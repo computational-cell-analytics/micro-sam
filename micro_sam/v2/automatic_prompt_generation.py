@@ -1173,8 +1173,10 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 "Volumetric prompt generation prompts the SAM2 video predictor, so it has to be "
                 "constructed with one instead of an image predictor."
             )
-        if volume.ndim != 3:
-            raise ValueError(f"Volumetric prompt generation expects a (Z, Y, X) volume, got shape {volume.shape}.")
+        if volume.ndim not in (3, 4):
+            raise ValueError(
+                f"Volumetric prompt generation expects a (Z, Y, X) or (Z, Y, X, C) volume, got shape {volume.shape}."
+            )
 
         owns_image_embeddings = image_embeddings is None
         if image_embeddings is None:
@@ -2121,7 +2123,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             for object_id, candidate in enumerate(batch, start=1):
                 self._condition_pass(candidate, object_id, propagator)
             video_segments = propagator.propagate_prompts(early_stop_patience=early_stop_patience)
-            return _volume_records(video_segments, batch, self._volume.shape), len(video_segments)
+            return _volume_records(video_segments, batch, self._volume.shape[:3]), len(video_segments)
 
         claims: Dict[Any, np.ndarray] = {}
         records, anchors = [], set()
@@ -2179,7 +2181,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
 
     def _claim_shape(self, key) -> tuple:
         """The shape of that region's claim volume, which the record bounding boxes index into."""
-        return tuple(int(side) for side in self._volume.shape)
+        return tuple(int(side) for side in self._volume.shape[:3])
 
     def _candidate_waves(self, candidates: List[dict], propagation_waves: int) -> List[List[dict]]:
         """The candidates in descending merge score, cut into the rounds they are propagated in.
@@ -2250,7 +2252,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         z_margin, y_margin, x_margin = margin
         frame = candidate["frame"]
         y_box, x_box = candidate["mask_box"]
-        depth, height, width = self._volume.shape
+        depth, height, width = self._volume.shape[:3]
         return (
             frame < z_margin or frame >= depth - z_margin
             or y_box.start < y_margin or y_box.stop > height - y_margin

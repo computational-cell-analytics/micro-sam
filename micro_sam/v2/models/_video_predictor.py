@@ -64,7 +64,7 @@ def _prepare_frame(raw, image_size, bounds=None):
 
 
 def _volume_geometry(volume):
-    """The frame count and the effective square size of a (Z, Y, X) volume.
+    """The frame count and the effective square size of a (Z, Y, X) or (Z, Y, X, C) volume.
 
     That is all the inference state needs from its frames: the per-frame features come from the
     precomputed embeddings, never from the volume itself. Only the shape is read, so a lazy input
@@ -72,9 +72,9 @@ def _volume_geometry(volume):
     factor, matching how a frame would be resized and padded.
     """
     shape = tuple(volume.shape)
-    if len(shape) != 3:
-        raise ValueError(f"Expected a 3D volume of shape (Z, Y, X), got an array of shape {shape}.")
-    num_frames, height, width = (int(s) for s in shape)
+    if len(shape) not in (3, 4):
+        raise ValueError(f"Expected a 3D volume of shape (Z, Y, X) or (Z, Y, X, C), got an array of shape {shape}.")
+    num_frames, height, width = (int(s) for s in shape[:3])
     return num_frames, max(height, width)
 
 
