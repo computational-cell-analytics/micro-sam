@@ -550,8 +550,8 @@ class PromptableSegmentation3D:
         # Saves device memory, but only for a caller that resets the tracking before prompting again.
         self.release_stale_mask_memory = release_stale_mask_memory
 
-        if self.volume.ndim != 3:
-            raise AssertionError(f"The dimensionality of the volume must be 3, got '{self.volume.ndim}'")
+        if self.volume.ndim not in (3, 4):
+            raise AssertionError(f"The volume must be (Z, Y, X) or (Z, Y, X, C), got shape {self.volume.shape}")
 
         self.init_predictor()
 
@@ -620,7 +620,7 @@ class PromptableSegmentation3D:
                 kwargs["points"] = np.array(operation.points[:, ::-1], dtype="float32")
                 kwargs["labels"] = np.array(operation.point_labels, dtype="int32")
             if operation.box is not None:
-                kwargs["box"] = np.array([_process_box(operation.box, self.volume.shape[-2:])])
+                kwargs["box"] = np.array([_process_box(operation.box, self.volume.shape[1:3])])
             if not kwargs:
                 return
 
@@ -1090,7 +1090,7 @@ class PromptableSegmentation3D:
         """
         predictor = self.predictor
         device = self.inference_state["device"]
-        orig_hw = tuple(int(s) for s in self.volume.shape[-2:])
+        orig_hw = tuple(int(s) for s in self.volume.shape[1:3])
         image_size = predictor.image_size
         scale = float(image_size) / max(orig_hw)  # Resize-longest, into the model frame.
 
@@ -1189,7 +1189,7 @@ class PromptableSegmentation3D:
                 seg = (mask_logits.squeeze() > 0.0).cpu().numpy()
 
                 # Crop back to the original slice shape (the video predictor pads non-square frames).
-                seg = _crop_to_original_shape(seg, self.volume.shape[-2:]).astype("uint32")
+                seg = _crop_to_original_shape(seg, self.volume.shape[1:3]).astype("uint32")
 
         finally:
             # Clear this object's prompts and their bookkeeping, so the next round starts fresh.
@@ -1205,7 +1205,7 @@ class PromptableSegmentation3D:
 
         # Indexed by slice id, so the frames early stopping skipped stay background rather than
         # shifting the rest out of alignment.
-        shape = self.volume.shape[-2:]
+        shape = self.volume.shape[1:3]
         segmentation = np.zeros((self.volume.shape[0],) + tuple(shape), dtype="uint64")
         for slice_idx, instances in video_segments.items():
             per_slice_seg = segmentation[slice_idx]

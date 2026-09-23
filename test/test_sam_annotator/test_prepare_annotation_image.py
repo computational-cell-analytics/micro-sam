@@ -48,13 +48,17 @@ def test_auto_four_channel_drops_with_warning():
     assert data.shape == (32, 48, 3) and ndim == 2 and rgb is True
 
 
-# 3D + channels (3D+C) is intentionally not supported and must raise, as is anything > 3 spatial dims.
+# A trailing channel axis of size 2 to 4 on a 4D array is auto-detected as a volume with channels.
+@pytest.mark.parametrize("n_channels", [2, 3, 4])
+def test_auto_volume_with_channels(n_channels):
+    data, ndim, rgb = prepare_annotation_image(_make((10, 256, 256, n_channels)))
+    assert data.shape == (10, 256, 256, 3) and ndim == 3 and rgb is True
+
+
+# A volumetric time series and anything with more than 4 dims must raise.
 @pytest.mark.parametrize(
     "shape",
     [
-        (10, 256, 256, 2),       # 3D + 2 channels
-        (10, 256, 256, 3),       # 3D + 3 channels
-        (10, 256, 256, 4),       # 3D + 4 channels
         (5, 10, 256, 256),       # 4D with large trailing axis (volumetric time series)
         (2, 3, 10, 256, 256),    # 5D
     ],
@@ -129,10 +133,16 @@ def test_forced_3d_on_2d_raises():
         prepare_annotation_image(_make((256, 256)), ndim=3)
 
 
-def test_forced_3d_on_4d_raises():
-    # 3D + channels is intentionally blocked: forcing '3d' on a 4D array raises.
+# Forced 3d on a 4D array: the channel axis is found in channels-last, -second or -first position.
+@pytest.mark.parametrize("shape", [(10, 256, 256, 3), (10, 3, 256, 256), (3, 10, 256, 256), (10, 2, 256, 256)])
+def test_forced_3d_volume_with_channels(shape):
+    data, ndim, rgb = prepare_annotation_image(_make(shape), ndim=3)
+    assert data.shape == (10, 256, 256, 3) and ndim == 3 and rgb is True
+
+
+def test_forced_3d_on_4d_without_channel_axis_raises():
     with pytest.raises(ValueError, match="3D volume"):
-        prepare_annotation_image(_make((10, 256, 256, 3)), ndim=3)
+        prepare_annotation_image(_make((5, 10, 256, 256)), ndim=3)
 
 
 @pytest.mark.parametrize("bad", [0, 1, 4, "2d"])
