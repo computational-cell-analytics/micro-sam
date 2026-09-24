@@ -29,8 +29,9 @@ the refinement statistics columns, and the configuration files under `optimizati
 
 ## 2. Environment and cluster
 
-- Environment: `micromamba activate super`. The launchers `submit_all_evaluations.py`, `parameter_search.py`,
-  and `submit_optimization_jobs.py` activate it by default.
+- Environment: `micromamba activate new-stack`. Both submitters (`submit_all_evaluations.py`,
+  `parameter_search.py`) activate it by default since 2026-09-06; the earlier default `super` does not exist
+  on grete.
 - Partition `grete:preemptible` (2-day limit). GRES pools: `1g.10gb:1` (plentiful), `1g.20gb:1`
   (8 slices), `2g.20gb:1` (16 slices), `3g.40gb:1` (8). `grete:interactive` allows two jobs per user
   for 12 h. Every job needs `--constraint=inet`. Account `nim00007`; QOS `2h` and `normal` only.
@@ -38,24 +39,32 @@ the refinement statistics columns, and the configuration files under `optimizati
   `set -u` fails on `/etc/bashrc`).
 - Presets (`submit_optimization_jobs.PRESETS`):
 
-  | preset     | GRES        | memory | time     | QOS  | CPUs |
-  |------------|-------------|--------|----------|------|------|
-  | `2d`       | `1g.10gb:1` | 16G    | 08:00:00 |      | 4    |
-  | `2d-short` | `1g.10gb:1` | 16G    | 02:00:00 | `2h` | 4    |
-  | `3d`       | `2g.20gb:1` | 32G    | 12:00:00 |      | 4    |
-  | `3d-large` | `2g.20gb:1` | 64G    | 12:00:00 |      | 4    |
-  | `cpu`      | `1g.10gb:1` | 64G    | 04:00:00 |      | 16   |
+  | preset     | partition          | GRES        | memory | time     | QOS  | CPUs |
+  |------------|--------------------|-------------|--------|----------|------|------|
+  | `2d`       | `grete:preemptible` | `1g.10gb:1` | 16G    | 08:00:00 |      | 4    |
+  | `2d-short` | `grete:preemptible` | `1g.10gb:1` | 16G    | 02:00:00 | `2h` | 4    |
+  | `3d`       | `grete:preemptible` | `2g.20gb:1` | 32G    | 12:00:00 |      | 4    |
+  | `3d-large` | `grete:preemptible` | `2g.20gb:1` | 64G    | 12:00:00 |      | 4    |
+  | `cpu-test` | `standard96s:test` | none        | 500G   | 00:59:00 |      | 192  |
+  | `cpu-shared` | `standard96s:shared` | none      | 16G    | 01:00:00 |      | 4    |
+  | `cpu`      | `grete:preemptible` | `1g.10gb:1` | 64G    | 04:00:00 |      | 16   |
+
+  `cpu-test` is the GPU-free, full-node preset for cached 2D sweeps. It packs 48 four-thread commands into
+  every 192-core allocation by default. `cpu-shared` is for individual cached screens. The legacy `cpu` preset
+  remains available for longer jobs that were already designed around the Grete partition.
 
 - The submitter writes `<root>/jobs/<timestamp>_<name>/` with `tasks.txt` (`tag<TAB>command`),
   `job.sh`, `logs/`, `submit.json` (argv, resources, git revision, dirty flag) and `job_id.txt`, and
   submits `job.sh` as one array (`--array=0-N%throttle`, default throttle 8, `--requeue`,
-  `--open-mode=append`). Every task leaves `logs/<tag>.done` or `logs/<tag>.failed`; dependent
+  `--open-mode=append`). `--tasks-per-job` packs several task-file commands into one array element; it
+  defaults to 48 for `cpu-test` and one otherwise. Every task retains its own stdout, stderr and
+  `logs/<tag>.done` or `logs/<tag>.failed` marker; dependent
   stages wait on those markers or on `--dependency afterok:<job id>`, never on an output file.
   `status <job dir>` reports state, exit code, restarts and marker per task; `--resume-from <job dir>`
   re-submits the unfinished tasks; `--local` runs the same tasks sequentially on the session GPU.
   `MICRO_SAM2_JOINT_CHECKPOINT_ROOT` and `MICRO_SAM2_JOINT_EXPORT_ROOT` are pinned into `job.sh`
   (`PINNED_ENV_VARS`), so a job resolves the same checkpoints as the shell that submitted it.
-- Production evaluations go through `submit_all_evaluations.py` (job arrays, one task per dataset and mode, 8 h,
+- Production evaluations go through `submit_all_evaluations.py` (one job per dataset and mode, 8 h,
   `grete:preemptible`, `--constraint=inet`): 2D jobs `1g.10gb:1` / 16G, 3D jobs `1g.20gb:1` / 64G, both
   checkpoint variables pinned into the script; `--gpu`, `--memory`, `--env`, `--dry` override or inspect.
 - Always `--dry-run` first and read `job.sh`; `sbatch --test-only job.sh` checks the header.
@@ -116,7 +125,7 @@ the refinement statistics columns, and the configuration files under `optimizati
 
 ## 5. 2D subsets (`optimization/benchmark_apg_optimization.py`)
 
-Manifest schema version 5; files `<root>/subset_manifest_v5{,_holdout,_training_extra,_deep3d}.json`
+Manifest schema version 5; files `<root>/subset_manifest_v5{,_holdout,_training_extra,_ood_extended,_deep3d}.json`
 (`_default_manifest_path`). Each manifest records its `manifest_checksum`, `selection_policy`,
 `schema_version` and `data_root`; `_validate_manifest` requires the exact schema version.
 
@@ -125,6 +134,7 @@ Manifest schema version 5; files `<root>/subset_manifest_v5{,_holdout,_training_
 | primary          | `SAMPLE_COUNTS_2D`                                 | livecell 80 (10 per each of 8 `LIVECELL_TYPES`), tissuenet 40, dynamicnuclearnet 40, deepbacs 30, dic_hepg2 50 = 240 images, plus one 12-slice volume each of celegans_atlas, embedseg, gonuclear, cremi, snemi (245 samples) | `0f8fb67b3650a71f9f44b53037e89546` |
 | holdout          | `SAMPLE_COUNTS_2D_HOLDOUT`, image-disjoint          | 80 / 40 / 40 / 30 / 43 = 233 images plus the same 5 volumes (238 samples); deepbacs is reused verbatim (`HOLDOUT_REUSED_DATASETS`) because all 30 validation images are primary | `bf8f3c28befe1fb06d62309dc302d1c4` |
 | training_extra   | `TRAINING_EXTRA_DATASETS`, `SAMPLE_COUNTS_2D_TRAINING_EXTRA` (caps) | yeaz 40, neurips_cellseg 40, deepseas 40, puma 26 (cap 40), covid_if 5, tnbc 6 (cap 20) = 157 images, no volumes | `cee6224d6a93cec5a54a5c522a0f7bf5` |
+| ood_extended     | sealed Dice-foreground decoder confirmation set; official test loaders, stratified where heterogeneous | Arvidsson 10, BitDepth NucSeg 70, CellBinDB 48, microbeSEG 2, VICAR 50 = 180 images, no volumes | `836f92a084b05f6fa5445f03355589d9` |
 | deep3d variant   | `--crops-3d deep`, `CROP_SHAPE_3D_DEEP = (32, 512, 512)` | the 240 primary images with 32-slice volumes; SNEMI 30 slices overlap the production slab, so this is a regression instrument, not a tuning set | `f611a7125383e850798d0b5bf696f6f7` |
 
 - The eleven-dataset development corpus of the 2026-09 campaigns is primary + training_extra
@@ -185,22 +195,7 @@ Constants: `DEEP_DEPTH = 32` (`MIN_REALIZED_DEPTH = 24` slices of annotation mak
   (HDF5 per crop) and `view_apg3d_cases.py` (napari).
 - Per sample: `parameter_search.compute_metrics` gives `msa` (`elf.evaluation.mean_segmentation_accuracy`)
   and, for `metric_mode="dense"`, `cremi`, `vi_split`, `vi_merge`, `adapted_rand`. 2D segmentations pass
-  through `drop_severed_objects` first, symmetric with the ground-truth filtering. Since 2026-09-14,
-  `compute_metrics` also logs `sbd` (symmetric best Dice) for `metric_mode="sparse"`. No ranking uses `sbd`.
-- Production evaluation (`evaluate_automatic_segmentation.py`, `evaluate_automatic_baselines.py` and the
-  interactive scripts) scores through `common.run_dataset_evaluation`. Every metric is a mean over the samples.
-  - Instance segmentation: mSA, SA50, SA75, precision, recall and F1 (`micro_sam.v1.evaluation.run_evaluation`),
-    and `SBD`, the symmetric best Dice (`bioimage_py.evaluation.symmetric_best_dice_score`, background
-    ignored). SBD exists since 2026-09-14. Older result files have no `SBD` column.
-  - Dense EM: `cremi`, `vi_split`, `vi_merge` and `adapted_rand`, without SBD.
-  - Volumes also report the sums `unmatched` and `genuine_misses`.
-  - 3D test volumes are scored on the pinned crops of `eval_crops_3d.json` (`common.EVAL_CROPS_3D`), with one
-    sample per crop. The crops are 32 deep and at most 512 in plane. They tile the annotated bounding box
-    without overlap and stay clear of tuning data. Near-empty crops are left out.
-  - platynereis_nuclei is read inside the annotated block that training uses as its roi
-    (`common.PLATYNEREIS_NUCLEI_TEST_ROIS`).
-  - `submit_all_evaluations.py --per_sample` runs one array task per sample. A task that finds the rows of all
-    samples writes the dataset result (`common.evaluate_samples`). It refuses rows whose metric columns differ.
+  through `drop_severed_objects` first, symmetric with the ground-truth filtering.
 - 2D aggregation (`_summarize`): per-dataset mean and std, then the row `__dataset_balanced__` = the
   equal-weight mean of the per-dataset means. This is "balanced mSA".
 - 3D aggregation (`benchmark_apg_3d.summarize`): per-dataset mean with a 2000-sample bootstrap CI,
@@ -288,14 +283,6 @@ Epochs of the 2026-09 campaigns: `aeb1aca09a5fff43d2b8bb8bacff2b06` (campaign st
 results unaffected). Historical run directories
 stay valid records under their own epochs; the 3D aggregate reads them through `sibling_run_dirs`.
 
-Later epochs, recorded on 2026-09-15:
-
-- `6bfb3121744c127074739f6897a085c3` (commit `a5893c36`, 2026-09-13): job-array sweeps of a joint checkpoint.
-- `86fd931ef4019032002d04cab12df118` (2026-09-15, uncommitted): pinned 3D evaluation crops in `eval_crops_3d.json`,
-  per-sample evaluation, the platynereis_nuclei test rois, the `covid_if_cells` channel layout, and APG overrides
-  from a JSON configuration. `compute_metrics` also logs `sbd` for sparse datasets. The ranking stays on mSA or
-  CREMI, and the tuning splits are unchanged.
-
 ## 12. Output root layout
 
 ```
@@ -338,6 +325,20 @@ Historical trees written only by code that lives on `apg-optim-fable` (data, rea
 6. Judge every candidate under the generalization rule: development on primary + training_extra,
    confirmation on holdout, one production run on the 23 (2D) or the test manifest (3D) at the very
    end, with the twelve strictly unseen 2D datasets as the out-of-domain check.
+
+Status (2026-09-06): implemented as `optimization/benchmark_ais_optimization.py` (`predict` caches the
+decoder predictions per manifest sample under `<root>/ais/predictions/`, `run` / `screen` / `sweep` /
+`oracle` / `report` work on the cache), task builder `optimization/ais_campaign_tasks.py`, configurations
+`optimization/configs/ais_*.json`, decision log `notes/AIS_V4_OPTIMIZATION.md`. The AIS implementation
+checksum covers five files (the benchmark, `common.py`, `parameter_search.py`,
+`micro_sam/v2/{instance_segmentation, postprocessing}.py`). AIS epochs: `f57b117edfda5420d9df761b1db4db2d`
+(frozen Phase 0 harness) → `5700c6e0f471b360013551a442b1e53d` (harness only: refined loss decomposition
+columns) → `a65e2eb08c23538f11544860736961a3` (epoch A1, 2026-09-06: opt-in `boundary_magnitude_max`
+filter in `micro_sam/v2/postprocessing.py`, default off; the cached sweep scorer applies it) →
+`576a85c8ffd4314627812fd30a3c1223` (epoch A2, 2026-09-06: the optimized `hvit_t` defaults with volume overrides, the fast filter
+and dimension-aware `default_postprocessing`) → `e9d02380e340edfaccd30bf5cbf1bf03` (epoch A3, 2026-09-07: volume defaults
+reverted to the registry smoothing and size floor plus the filter after the 3D test manifest). Decision log
+and results: `notes/AIS_V4_OPTIMIZATION.md`.
 
 ## 14. Baseline results of the cleaned harness (2026-09-06)
 
@@ -415,3 +416,26 @@ AIS v4 is mixed (−2.0 % on average: dsb +9.0 %, gonuclear +9.4 %, livecell +1.
 deepbacs −30.1 %) and worsens humanneurons. APG beats AIS on every dataset except dynamicnuclearnet, as
 under v2. Note that deepbacs APG gained +28.5 % on its validation subset (section 14.1 vs the v2 control)
 but is flat on the test split.
+
+### 14.4 AIS with the optimized `hvit_t` defaults (2026-09-07, epoch A3 `e9d02380e340edfaccd30bf5cbf1bf03`)
+
+The AIS optimization campaign (`notes/AIS_V4_OPTIMIZATION.md`) promoted new `hvit_t` post-processing
+defaults into `micro_sam/v2/postprocessing.py`: images `sigma 1.0, min_size 50, boundary_magnitude_max 0.4`
+(the new instance filter that drops instances without a distance-magnitude dip along their boundary), volumes
+`min_size 100, sigma 0.5` (the registry values) with the same filter; everything else unchanged, the dense
+multicut untouched. The old values remain reachable as `optimization/configs/ais_control_v4_old_defaults.json`.
+
+Development / confirmation (cached predictions, `<root>/ais/`): 2D eleven-dataset development corpus balanced
+mSA 0.3357 → 0.3437 (+2.4 %, 9 up, worst −0.8 %), 2D holdout 0.2337 → 0.2437 (+4.3 %, 5 / 5 up), 3D LM crops
+primary 0.1765 → 0.1847 (+4.7 %), holdout 0.1998 → 0.2193 (+9.7 %), 3D test manifest (opened once) 0.1083 →
+0.1120 (+3.4 %, 6 / 6 up). `compare_apg_optimization.py --target quality` on the five primary datasets: macro
++3.9 % (primary) / +4.3 % (holdout), every dataset up, runtime within +2.9 % per dataset; the +5 % macro bar of
+that gate is not reached, the generalization gate of section 9 is.
+
+Production 2D test splits (`experiments/v4_geodesic_ais_optimization/results/`, tags `old-defaults` vs
+`a2-defaults`, `report_ais_production.py`): 21 of 23 datasets up, balanced 0.2735 → 0.2864 (+4.7 %); the twelve
+strictly unseen datasets 0.2104 → 0.2191 (+4.2 %, 10 up). Regressions: microbeseg 0.1420 → 0.1258 (−11.4 %,
+attributed by ablation to `sigma 1.0` alone) and arvidsson −0.8 %. Reference rows for the datasets of 14.3:
+livecell 0.2660, deepbacs 0.2319, dsb 0.4862, dynamicnuclearnet 0.5509 (AIS old: 0.2575 / 0.2056 / 0.4631 /
+0.5083). 3D LM production (tag `a3-defaults`): 9 of 10 datasets up, none down, balanced 0.1455 → 0.1507
+(+3.6 %; embedseg 0.4310, gonuclear 0.2873, plantseg 0.1469); the dense EM rows of 14.3 are unchanged.

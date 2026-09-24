@@ -16,7 +16,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from micro_sam.v2.transforms.raw import VideoAugment
-from micro_sam.v2.loss.directed_distance_based import _masked_mse, DirectedDistanceLoss
+from micro_sam.v2.loss.directed_distance_based import _masked_mse, boundary_band, DirectedDistanceLoss
 
 
 def _free_port():
@@ -638,3 +638,63 @@ def test_the_trainer_trains_in_bfloat16_without_a_scaler_on_ampere(monkeypatch):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDirectedDistanceLossVariants(unittest.TestCase):
+    """The contact and boundary-weighted terms extend the loss without touching its default behaviour."""
+
+    def _batch(self, n_channels=4):
+        torch.manual_seed(0)
+        prediction = torch.rand(2, n_channels, 1, 32, 32)
+        target = torch.zeros(2, n_channels, 1, 32, 32)
+        target[:, 0, :, 8:24, 8:24] = 1.0
+        target[:, 1:4] = 1.0
+        target[:, 2:4, :, 8:24, 8:24] = 0.3
+        if n_channels == 5:
+            target[:, 4, :, 8:24, 15:17] = 1.0
+        return prediction, target
+
+    def test_default_loss_is_unchanged(self):
+        from torch_em.loss import DiceLoss
+
+        prediction, target = self._batch()
+        fg_mask, z_mask = target[:, 0:1], torch.zeros_like(target[:, 0:1])
+        expected = (
+            DiceLoss()(prediction[:, 0:1], target[:, 0:1])
+            + _masked_mse(prediction[:, 1:2], target[:, 1:2], z_mask)
+            + _masked_mse(prediction[:, 2:3], target[:, 2:3], fg_mask)
+            + _masked_mse(prediction[:, 3:4], target[:, 3:4], fg_mask)
+        )
+        loss = DirectedDistanceLoss()
+        self.assertEqual(loss.n_channels, 4)
+        self.assertTrue(torch.equal(loss(prediction, target), expected))
+
+    def test_boundary_weight_adds_a_cross_entropy_term_in_a_band(self):
+        prediction, target = self._batch()
+        band = boundary_band(target[:, 0:1], radius=2)
+        # A 16 x 16 square: a two pixel ring inside (112 px) and outside (144 px) of its edge, per sample.
+        self.assertEqual(int(band.sum()), 2 * 256)
+        self.assertTrue(band[0, 0, 0, 16, 16] == 0 and band[0, 0, 0, 8, 16] == 1 and band[0, 0, 0, 6, 16] == 1)
+        plain = DirectedDistanceLoss()(prediction, target)
+        weighted = DirectedDistanceLoss(boundary_weight=4.0)(prediction, target)
+        self.assertGreater(weighted.item(), plain.item())
+        # bfloat16 predictions must not produce an infinite log.
+        self.assertTrue(torch.isfinite(DirectedDistanceLoss(boundary_weight=4.0)(prediction.bfloat16(), target)))
+
+    def test_contact_channel_is_trained_and_required(self):
+        prediction, target = self._batch(n_channels=5)
+        loss = DirectedDistanceLoss(contact=True)
+        self.assertEqual(loss.n_channels, 5)
+        value = loss(prediction, target)
+        self.assertTrue(torch.isfinite(value))
+        without_contact = DirectedDistanceLoss()(prediction[:, :4], target[:, :4])
+        self.assertGreater(value.item(), without_contact.item())
+        # A perfect contact prediction adds (almost) nothing.
+        perfect = prediction.clone()
+        perfect[:, 4] = target[:, 4]
+        self.assertAlmostEqual(loss(perfect, target).item(), without_contact.item(), places=3)
+        with self.assertRaises(AssertionError):
+            DirectedDistanceLoss()(prediction, target)
+        with self.assertRaises(AssertionError):
+            loss(prediction[:, :4], target[:, :4])
+        self.assertEqual(loss.init_kwargs["contact"], True)

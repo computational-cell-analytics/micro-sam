@@ -38,9 +38,9 @@ from elf.evaluation import mean_segmentation_accuracy
 
 from bioimage_cpp.segmentation import label as connected_components, watershed
 
-from bioimage_py.evaluation import symmetric_best_dice_score
-
-from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_density
+from micro_sam.v2.postprocessing import (
+    drop_instances_without_boundary_dip, lower_height_under_seeds, watershed_heightmap, _compute_flow_density,
+)
 
 from common import (
     DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
@@ -254,10 +254,18 @@ def score_image_sparse_cached(
     (None where a combo failed), aligned with params_list.
     """
     foreground = prediction[0]
-    directed = prediction[1:]
+    directed = prediction[1:4]
+    contact = prediction[4] if prediction.shape[0] > 4 else None
     ndim = foreground.ndim
     if directed.shape[0] > ndim:
         directed = directed[-ndim:]
+    if contact is not None and contact.shape != foreground.shape:
+        raise ValueError(f"The contact map {contact.shape} must have the shape of the foreground {foreground.shape}.")
+    if contact is None and any(
+        params.get("contact_weight") is not None or params.get("contact_mask_threshold") is not None
+        for params in params_list
+    ):
+        raise ValueError("'contact_weight' and 'contact_mask_threshold' need prediction channel 4.")
 
     # The convergence densities and the height maps are built up front, so the scoring below only reads them.
     fg_mask_cache, density_cache, hmap_cache = {}, {}, {}
@@ -272,18 +280,34 @@ def score_image_sparse_cached(
                 n_threads=n_threads,
             )
         fw = params["foreground_weight"]
-        if fw not in hmap_cache:
-            hmap_cache[fw] = watershed_heightmap(foreground, directed, fw)
+        contact_weight = params.get("contact_weight")
+        hmap_key = (fw, contact_weight)
+        if hmap_key not in hmap_cache:
+            hmap = watershed_heightmap(foreground, directed, fw)
+            if contact is not None and contact_weight is not None and contact_weight != 0:
+                hmap = np.ascontiguousarray(
+                    hmap + np.float32(contact_weight) * np.clip(contact, 0, 1), dtype="float32",
+                )
+            hmap_cache[hmap_key] = hmap
 
     # The base watershed does not depend on min_size, so all min_size values of a combo reuse it.
     base_cache, base_lock = {}, threading.Lock()
 
-    def base_segmentation(key, fg_mask, density, density_threshold, hmap):
+    def base_segmentation(key, fg_mask, density, density_threshold, hmap, seed_floor, contact_mask_threshold):
         with base_lock:
             cached = base_cache.get(key)
         if cached is None:
             seeds = connected_components(density > density_threshold)
-            cached = watershed(hmap, markers=seeds, mask=fg_mask)
+            hmap = lower_height_under_seeds(hmap, seeds, seed_floor)
+            if contact is not None and contact_mask_threshold is not None:
+                open_mask = fg_mask & ~(contact > contact_mask_threshold)
+                first = watershed(
+                    hmap, markers=np.where(open_mask, seeds, 0).astype(seeds.dtype), mask=open_mask,
+                )
+                segmentation = watershed(hmap, markers=first, mask=fg_mask)
+            else:
+                segmentation = watershed(hmap, markers=seeds, mask=fg_mask)
+            cached = (segmentation, hmap)
             with base_lock:
                 base_cache[key] = cached
         return cached
@@ -291,11 +315,19 @@ def score_image_sparse_cached(
     def score(params):
         ft, sigma, n_iter, dt = (params[k] for k in FLOW_DENSITY_KEYS)
         fw, density_threshold = params["foreground_weight"], params["density_threshold"]
+        contact_weight = params.get("contact_weight")
+        contact_mask_threshold = params.get("contact_mask_threshold")
+        seed_floor = params.get("seed_floor", "none")
         fg_mask = fg_mask_cache[ft]
-        hmap = hmap_cache[fw]
         try:
-            key = (ft, sigma, n_iter, dt, density_threshold, fw)
-            seg = base_segmentation(key, fg_mask, density_cache[(ft, sigma, n_iter, dt)], density_threshold, hmap)
+            key = (
+                ft, sigma, n_iter, dt, density_threshold, fw, seed_floor,
+                contact_weight, contact_mask_threshold,
+            )
+            seg, hmap = base_segmentation(
+                key, fg_mask, density_cache[(ft, sigma, n_iter, dt)], density_threshold,
+                hmap_cache[(fw, contact_weight)], seed_floor, contact_mask_threshold,
+            )
             min_size = params["min_size"]
             if min_size > 0:
                 seg = seg.copy()
@@ -303,6 +335,9 @@ def score_image_sparse_cached(
                 discard = ids[(sizes < min_size) & (ids > 0)]
                 seg[np.isin(seg, discard)] = 0
                 seg = watershed(hmap, markers=seg, mask=fg_mask)
+            max_median = params.get("boundary_magnitude_max")
+            if max_median is not None and np.isfinite(max_median):
+                seg = drop_instances_without_boundary_dip(seg, directed, max_median)
             return compute_metrics(seg.astype("uint32"), labels, "sparse", border_min_size)
         except Exception as e:
             warnings.warn(f"Sparse postprocessing failed for {params}: {e}")
@@ -700,11 +735,7 @@ REGISTRY_DATASETS = [
 
 PARTITION = "grete:preemptible"
 # The micro-sam2 environment on grete; every array task activates it.
-ENV = "super"
-
-# Which joint training version a task sweeps. Pinned into the array script, so a queued task sweeps
-# the weights the submission chose rather than whatever the environment holds when it starts.
-JOINT_ENV_VARS = ("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", "MICRO_SAM2_JOINT_EXPORT_ROOT")
+ENV = "new-stack"
 CPUS = 4
 # A 2d task took 54 min at worst as a shard and 62 min unsharded, with the slow histopathology datasets
 # sharded (REGISTRY_2D_SHARDS). A longer limit only keeps the task out of the backfill window.
@@ -947,7 +978,7 @@ def write_array_script(job_folder, name, tasks_path, n_tasks, gpu, memory, time_
 
 source ~/.bashrc
 micromamba activate {ENV}
-{env_exports()}
+
 line=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" {tasks_path})
 tag=$(cut -f1 <<< "$line")
 command=$(cut -f2- <<< "$line")

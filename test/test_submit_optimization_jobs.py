@@ -1,5 +1,5 @@
 import sys
-import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -51,13 +51,28 @@ def test_job_script_header_and_activation_order(tmp_path):
     assert all(i < first_command for i, line in enumerate(lines) if line.startswith("#SBATCH"))
     order = [
         lines.index("set -eo pipefail"), lines.index("source ~/.bashrc"), lines.index("set -u"),
-        lines.index("micromamba activate super"), lines.index(f"cd {soj.REPOSITORY_ROOT}"),
+        lines.index("micromamba activate new-stack"), lines.index(f"cd {soj.REPOSITORY_ROOT}"),
         lines.index("export PYTHONUNBUFFERED=1"),
     ]
     assert order == sorted(order)
     assert "set -euo" not in script
     assert "${SLURM_RESTART_COUNT:-0}" in script
     assert "$SLURM_RESTART_COUNT " not in script and "$SLURM_RESTART_COUNT\"" not in script
+
+
+def test_cpu_test_preset_does_not_request_a_gpu(tmp_path):
+    resources = soj.PRESETS["cpu-test"]
+    script = soj.render_job_script("cpu", tmp_path, 100, resources, tasks_per_job=48)
+    assert "#SBATCH -p standard96s:test" in script
+    assert "#SBATCH -t 00:59:00" in script
+    assert "#SBATCH -c 192" in script and "#SBATCH --mem=500G" in script
+    assert "#SBATCH --array=0-2%8" in script
+    assert not any(line.startswith("#SBATCH -G") for line in script.splitlines())
+    assert "first_task=$((SLURM_ARRAY_TASK_ID * 48))" in script
+    assert 'for pid in "${pids[@]}"' in script
+    assert subprocess.run(["bash", "-n"], input=script, text=True, check=False).returncode == 0
+    with pytest.raises(ValueError, match="positive"):
+        soj.render_job_script("bad", tmp_path, 2, resources, tasks_per_job=0)
 
 
 def test_preset_overrides_and_optional_lines(tmp_path):
@@ -126,6 +141,28 @@ def test_status_maps_sacct_rows_to_tags(tmp_path, monkeypatch, capsys):
     assert soj._expand_array_ids("15465049") == []
 
 
+def test_status_maps_packed_array_rows_to_all_child_tasks(tmp_path, monkeypatch, capsys):
+    tasks = _tasks_file(tmp_path, [(name, "echo") for name in ("a", "b", "c", "d")])
+    jobs_root = tmp_path / "jobs"
+    soj.main([
+        "submit", "--name", "packed", "--preset", "cpu-test", "--tasks-file", str(tasks),
+        "--tasks-per-job", "2", "--dry-run", "--jobs-root", str(jobs_root),
+    ])
+    job_dir = _only_job_dir(jobs_root)
+    (job_dir / "job_id.txt").write_text("15465049\n")
+    rows = [
+        {"JobID": "15465049_0", "State": "COMPLETED", "ExitCode": "0:0", "Elapsed": "00:10:00", "Restarts": "0",
+         "NodeList": "c0201"},
+        {"JobID": "15465049_1", "State": "FAILED", "ExitCode": "1:0", "Elapsed": "00:10:00", "Restarts": "0",
+         "NodeList": "c0202"},
+    ]
+    monkeypatch.setattr(soj, "_sacct_rows", lambda job_id: rows)
+    assert soj.status(job_dir) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert sum("COMPLETED" in line for line in lines) == 2
+    assert sum("FAILED" in line for line in lines) == 2
+
+
 def test_benchmark_builder(tmp_path):
     config = tmp_path / "apg_my_config.json"
     config.write_text("{}")
@@ -134,10 +171,7 @@ def test_benchmark_builder(tmp_path):
     assert len(tags) == len(set(tags)) == 4
     for _, command in tasks:
         assert "--trial-id" in command and "--ndim 2" in command and "--subset holdout" in command
-    arguments = [shlex.split(command) for _, command in tasks]
-    assert any(
-        args[args.index("--config") + 1] == str(config.resolve()) for args in arguments if "--config" in args
-    )
+    assert any(f"--config {config.resolve()}" in command for _, command in tasks)
     assert any("my_config" in tag for tag in tags)
     serial = campaign.benchmark_tasks([config], ["trial-1"], serialize=True, bracket=True)
     assert len(serial) == 1

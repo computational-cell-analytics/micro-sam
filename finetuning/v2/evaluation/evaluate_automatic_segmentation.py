@@ -26,27 +26,51 @@ import pandas as pd
 import torch
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS, build_model,
-    check_data_download, evaluate_samples, has_val_split, load_apg_overrides, postprocess_unisam2, predict_unisam2,
-    read_tuned_params, resolve_checkpoint_identity,
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, GT_MIN_SIZE_2D, MODEL_TYPES, MODES,
+    VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, genuine_misses,
+    has_val_split, load_apg_overrides, load_data, n_samples, postprocess_unisam2, predict_unisam2,
+    read_tuned_params, resolve_checkpoint_identity, run_dataset_evaluation,
 )
 
 
 def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, spacing=None, devices=None):
-    """Segment one sample with the tuned parameters of a mode."""
+    """Segment one sample with the tuned parameters of a mode.
+
+    For 'ais' the parameters may be the nested form ``{"sparse": {...}, "dense": {...}}`` of an AIS
+    benchmark configuration (see `load_ais_params`); the dataset's pipeline picks its own dict.
+    """
     if mode == "apg":
         model.clear_state()
         model.initialize(raw, ndim=ndim, **(VOLUME_SPEED_OPTIONS if ndim == 3 else {}))
         volume_params = {"spacing": spacing} if ndim == 3 else {}
         return model.generate(**{**volume_params, **params}).astype("uint32")
 
+    if set(params) & {"sparse", "dense"}:
+        params = params["dense" if dataset_name in DATASETS_DENSE else "sparse"]
     prediction = predict_unisam2(model, raw, ndim=ndim, device=device, devices=devices)
     return postprocess_unisam2(prediction, dataset_name, model_type=model_type, params=params)
 
 
+def load_ais_params(path, model_type, ndim):
+    """Read an AIS benchmark configuration and resolve its parameters for images or volumes.
+
+    The file has the shape `benchmark_ais_optimization.py` uses (``{"name", "mode", "params_2d",
+    "params_3d"}``); the result is ``{"sparse": {...}, "dense": {...}}`` with every post-processing
+    keyword resolved against the library defaults, so the evaluation runs exactly the benchmarked
+    configuration.
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "optimization"))
+    from benchmark_ais_optimization import load_config
+
+    name, _, params_2d, params_3d = load_config(Path(path), model_type)
+    return name, (params_3d if ndim == 3 else params_2d)
+
+
 def run_evaluation(
-    model, mode, dataset_name, data_root, experiment_folder, model_type, params, device, limit,
-    crop_shape=None, checkpoint_id=None, devices=None, tuned=None, result_tag=None, config_name=None, sample_index=None,
+    model, mode, dataset_name, data_root, experiment_folder, model_type, params, device,
+    crop_shape=None, checkpoint_id=None, devices=None, tuned=None, result_tag=None, config_name=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -72,7 +96,6 @@ def run_evaluation(
         result_tag: Optional tag appended to the result file name, so that a run with explicit
             parameter overrides does not collide with the plain evaluation.
         config_name: The name of the configuration the overrides came from, stored in the results.
-        sample_index: The index of the only sample to score, for one array task. See `common.evaluate_samples`.
 
     Returns:
         The results as a DataFrame, or None while the rows of other samples are missing.
@@ -82,8 +105,6 @@ def run_evaluation(
     tag = "tuned" if tuned else "default"
     if result_tag:
         tag = f"{tag}_{result_tag}"
-    if limit is not None:
-        tag = f"{tag}_n{limit}"
     legacy_path = os.path.join(
         experiment_folder, "results", f"{dataset_name}_micro_sam2_{model_type}_{mode}_{tag}.csv"
     )
@@ -100,16 +121,40 @@ def run_evaluation(
 
     ndim = 3 if dataset_name in DATASETS_3D else 2
     spacing = DATASET_SPACING.get(dataset_name)
-    extra_columns = {"parameters": json.dumps(params, sort_keys=True, default=str) if params else "default"}
+    border_min_size = GT_MIN_SIZE_2D.get(dataset_name, 0) if ndim == 2 else 0
+    total = n_samples(dataset_name, data_root)
+    samples = load_data(dataset_name, data_root, ndim, crop_shape=crop_shape)
+
+    all_gt, all_seg, misses = [], [], []
+    for raw, labels, valid_roi in tqdm(samples, total=total, desc=f"{mode}-{model_type}"):
+        if labels.max() == 0:  # Nothing to score without ground-truth.
+            continue
+        seg = segment(
+            model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing,
+            devices=devices,
+        )
+        if valid_roi is not None:
+            seg[~valid_roi] = 0
+        if ndim == 2:
+            # The ground truth has no severed objects either, so predicting one is not a false positive.
+            seg = drop_severed_objects(seg, border_min_size)
+        else:
+            misses.append(genuine_misses(labels, seg))
+        all_gt.append(labels)
+        all_seg.append(seg)
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    results = run_dataset_evaluation(all_gt, all_seg, dataset_name, save_path)
+    if misses:
+        # The aggregate metric hides which objects went missing.
+        results["unmatched"] = sum(count[0] for count in misses)
+        results["genuine_misses"] = sum(count[1] for count in misses)
+    results["parameters"] = json.dumps(params, sort_keys=True, default=str) if params else "default"
     if config_name is not None:
-        extra_columns["config_name"] = config_name
-    return evaluate_samples(
-        lambda raw: segment(
-            model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing, devices=devices,
-        ),
-        dataset_name, data_root, save_path, desc=f"{mode}-{model_type}", limit=limit, crop_shape=crop_shape,
-        sample_index=sample_index, extra_columns=extra_columns,
-    )
+        results["config_name"] = config_name
+    results.to_csv(save_path, index=False)
+    print(results)
+    return results
 
 
 def main():
@@ -138,18 +183,25 @@ def main():
     parser.add_argument("--devices", nargs="*", default=None, help="Inference devices. All visible GPUs by default.")
     parser.add_argument(
         "--apg_params", type=str, default=None,
-        help="APG only. A JSON configuration in the benchmark format. Its section for the dataset ('params_2d', "
-        "'params_3d' or 'params_dense') overrides the tuned parameters, or the defaults with --skip_tuning.",
+        help="APG only. A benchmark-style JSON configuration whose 'params_2d' are layered over the tuned "
+             "parameters (or the defaults with --skip_tuning).",
+    )
+    parser.add_argument(
+        "--ais_params", type=str, default=None,
+        help="AIS only. An AIS benchmark configuration ('params_2d' / 'params_3d', flat or "
+             "{'sparse', 'dense'}) whose resolved post-processing parameters replace the tuned ones.",
     )
     parser.add_argument(
         "--result_tag", type=str, default=None,
-        help="Tag appended to the result file name. Defaults to the --apg_params configuration name.",
+        help="Tag appended to the result file name. Defaults to the --apg_params / --ais_params configuration name.",
     )
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
     if args.apg_params is not None and args.mode != "apg":
         parser.error("--apg_params applies to --mode apg only.")
+    if args.ais_params is not None and args.mode != "ais":
+        parser.error("--ais_params applies to --mode ais only.")
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -190,8 +242,14 @@ def main():
 
     config_name, result_tag = None, args.result_tag
     if args.apg_params is not None:
-        config_name, overrides = load_apg_overrides(args.apg_params, args.dataset_name)
+        config_name, overrides = load_apg_overrides(args.apg_params)
         params = {**(params or {}), **overrides}
+        if result_tag is None:
+            result_tag = config_name
+    if args.ais_params is not None:
+        # The configuration is complete (every keyword resolved), so it replaces rather than layers.
+        config_name, params = load_ais_params(args.ais_params, args.model_type, ndim)
+        tuned = False
         if result_tag is None:
             result_tag = config_name
 
@@ -199,7 +257,6 @@ def main():
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,
         params, device, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
         devices=args.devices or None, tuned=tuned, result_tag=result_tag, config_name=config_name,
-        limit=args.n_samples, sample_index=args.sample_index,
     )
 
 

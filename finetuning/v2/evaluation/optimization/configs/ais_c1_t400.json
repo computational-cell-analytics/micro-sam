@@ -1,0 +1,11 @@
+{
+  "name": "c1-t400",
+  "mode": "auto",
+  "params_2d": {
+    "sigma": 1.0,
+    "min_size": 50,
+    "boundary_magnitude_max": 0.4,
+    "n_iter": 800,
+    "dt": 0.5
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "f2-floor-ring",
+  "mode": "auto",
+  "params_2d": {
+    "seed_floor": "ring"
+  }
+}

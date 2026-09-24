@@ -1,0 +1,12 @@
+{
+  "foreground_threshold": [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6],
+  "density_threshold": [5.0, 10.0, 20.0, 50.0],
+  "min_size": [25, 50],
+  "sigma": [0.5, 1.0],
+  "n_iter": [400, 800, 1200, 1600],
+  "dt": [0.5],
+  "foreground_weight": [0.5, 0.75, 1.0],
+  "boundary_magnitude_max": [0.4],
+  "seed_floor": ["none"],
+  "contact_mask_threshold": [0.3, 0.5, 0.7]
+}
