@@ -201,6 +201,7 @@ clf-test-data
 *.pdf
 *.h5
 .codex
+*.npy
 
 # Related to i2k workshop folders.
 data/
