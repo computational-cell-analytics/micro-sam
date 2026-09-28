@@ -9,7 +9,7 @@ from torch_em.data.datasets.histopathology.lynsec import get_lynsec_paths
 from torch_em.data.datasets.electron_microscopy.cremi import get_cremi_paths
 from torch_em.data.datasets.light_microscopy.livecell import get_livecell_paths
 from torch_em.data.datasets.light_microscopy.gonuclear import get_gonuclear_paths
-from torch_em.data.datasets.electron_microscopy.platynereis import get_platynereis_paths
+from torch_em.data.datasets.electron_microscopy.platynereis import prepare_platynereis_cell_data
 
 
 DATASETS_2D = ["cells_2d", "nuclei_2d", "histopatho"]
@@ -71,10 +71,13 @@ def _get_cremi_data_paths(path, download):
 
 
 def _get_platynereis_cells_data_paths(path, download):
-    paths = get_platynereis_paths(
-        path=os.path.join(path, "platynereis"), sample_ids=[2], name="cells", download=download
-    )
-    return paths, paths
+    root = os.path.join(path, "platynereis")
+    data_path = os.path.join(root, "membrane", "train_data_membrane_02.n5")
+    # The torch-em functions check for all nine volumes, so we only call them if the volume that we use is missing.
+    # They download the data and add the corrected cell labels.
+    if not os.path.exists(data_path):
+        prepare_platynereis_cell_data(root, sample_ids=[2], download=download)
+    return [data_path], [data_path]
 
 
 def _get_paths_getters(path):
