@@ -11,6 +11,68 @@ on:
   workflow_dispatch:  # can manually trigger CI from GitHub actions tab
 
 jobs:
+  test-headless:
+    name: headless base installation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install base package
+        run: python -m pip install .
+
+      - name: Check dependency consistency
+        run: python -m pip check
+
+      - name: Verify headless inference imports
+        run: |
+          python - <<'PY'
+          from importlib.metadata import distributions
+
+          from micro_sam.prompt_based_segmentation import (
+              segment_from_mask,
+              segment_from_points,
+          )
+          from micro_sam.util import (
+              get_sam_model,
+              precompute_image_embeddings,
+              set_precomputed,
+          )
+
+          installed = {
+              distribution.metadata["Name"].lower().replace("_", "-")
+              for distribution in distributions()
+          }
+          forbidden = {
+              "bioimageio-core",
+              "magicgui",
+              "napari",
+              "pyqt5",
+              "pyqt6",
+              "pyside6",
+              "python-elf",
+              "superqt",
+              "torch-em",
+              "trackastra",
+          }
+          unexpected = sorted(installed & forbidden)
+          assert not unexpected, f"Optional packages installed: {unexpected}"
+          assert all(callable(function) for function in (
+              get_sam_model,
+              precompute_image_embeddings,
+              segment_from_mask,
+              segment_from_points,
+              set_precomputed,
+          ))
+          PY
+
   test-pip:
     name: pip-install ubuntu-latest ${{ matrix.python-version }}
     runs-on: ubuntu-latest
