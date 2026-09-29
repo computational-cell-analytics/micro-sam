@@ -36,11 +36,11 @@ jobs:
           python - <<'PY'
           from importlib.metadata import distributions
 
-          from micro_sam.prompt_based_segmentation import (
+          from micro_sam.v1.prompt_based_segmentation import (
               segment_from_mask,
               segment_from_points,
           )
-          from micro_sam.util import (
+          from micro_sam.v1.util import (
               get_sam_model,
               precompute_image_embeddings,
               set_precomputed,

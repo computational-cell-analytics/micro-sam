@@ -30,7 +30,6 @@ def test_application_dependencies_are_optional() -> None:
         "python-elf",
         "scikit-learn",
         "superqt",
-        "timm",
         "torch-em",
         "trackastra",
         "xarray",
@@ -70,11 +69,11 @@ def test_inference_imports_without_optional_application_packages() -> None:
 
         builtins.__import__ = headless_import
 
-        from micro_sam.prompt_based_segmentation import (
+        from micro_sam.v1.prompt_based_segmentation import (
             segment_from_mask,
             segment_from_points,
         )
-        from micro_sam.util import (
+        from micro_sam.v1.util import (
             get_sam_model,
             precompute_image_embeddings,
             set_precomputed,
