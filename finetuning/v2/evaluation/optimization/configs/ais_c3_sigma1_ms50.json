@@ -1,0 +1,8 @@
+{
+  "name": "c3-sigma1-ms50",
+  "mode": "auto",
+  "params_2d": {
+    "sigma": 1.0,
+    "min_size": 50
+  }
+}

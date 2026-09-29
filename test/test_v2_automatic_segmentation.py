@@ -1145,25 +1145,188 @@ def test_decoder_output_is_moved_to_cpu_before_the_float_cast():
     assert calls == ["detach", "cpu", "float"]
 
 
-def test_decoder_width_mismatch_names_torch_em():
-    """An outdated torch-em builds a fixed-width decoder; say so instead of dumping size mismatches."""
-    from micro_sam.v2.instance_segmentation import CONFIGURABLE_DECODER_WIDTH_VERSION, _check_decoder_width
+def _geodesic_field_with_false_region():
+    """Two real objects in the geodesic hybrid field plus a false foreground blob carrying the background fill."""
+    from micro_sam.v2.transforms.labels import GeodesicHybridDistanceTransform
 
-    # Only 'out_conv.weight.shape[1]' is read, so a bare namespace stands in for the built model.
-    model = types.SimpleNamespace(out_conv=types.SimpleNamespace(weight=torch.zeros(4, 64, 1, 1, 1)))
-
-    _check_decoder_width(model, 64)  # Matching width: no error.
-
-    with pytest.raises(RuntimeError) as excinfo:
-        _check_decoder_width(model, 32)
-    message = str(excinfo.value)
-    assert "torch-em" in message
-    assert CONFIGURABLE_DECODER_WIDTH_VERSION in message
-    assert "64" in message and "32" in message
+    labels = np.zeros((96, 128), dtype="uint32")
+    yy, xx = np.indices(labels.shape)
+    labels[((yy - 30) / 18) ** 2 + ((xx - 32) / 16) ** 2 <= 1] = 1
+    labels[((yy - 60) / 16) ** 2 + ((xx - 90) / 20) ** 2 <= 1] = 2
+    target = GeodesicHybridDistanceTransform(foreground=True)(labels).astype("float32")
+    false_blob = ((yy - 22) / 9) ** 2 + ((xx - 100) / 12) ** 2 <= 1
+    target[0][false_blob] = 1.0  # confident foreground ...
+    target[1:, false_blob] = 1.0  # ... with the fill value the decoder emits in the background
+    return target, labels, false_blob
 
 
-def test_decoder_width_check_skips_models_without_out_conv():
-    """The check is a diagnostic, so a module that has no 'out_conv' passes through it untouched."""
-    from micro_sam.v2.instance_segmentation import _check_decoder_width
+def test_drop_instances_without_boundary_dip_removes_false_regions_only():
+    from micro_sam.v2.postprocessing import drop_instances_without_boundary_dip, flow_instance_segmentation
 
-    _check_decoder_width(types.SimpleNamespace(), 32)
+    prediction, labels, false_blob = _geodesic_field_with_false_region()
+    params = dict(model_type="hvit_t", min_size=20, n_iter=200, dt=0.5, density_threshold=5.0, n_threads=1)
+    # The hvit_t default filter is on, so the unfiltered reference disables it explicitly.
+    unfiltered = flow_instance_segmentation(
+        prediction[0], prediction[1:], boundary_magnitude_max=float("inf"), **params
+    )
+    assert len(np.unique(unfiltered)) - 1 == 3, "expected two objects and the false region"
+    filtered = drop_instances_without_boundary_dip(unfiltered, prediction[1:][-2:], max_median=0.5)
+    assert len(np.unique(filtered)) - 1 == 2
+    assert (filtered[false_blob] == 0).all()
+    for index in (1, 2):
+        kept = np.unique(filtered[labels == index])
+        assert len(kept[kept != 0]) == 1
+    # Through the keyword, and through the hvit_t default (0.4), which drops the same false region here.
+    via_keyword = flow_instance_segmentation(prediction[0], prediction[1:], boundary_magnitude_max=0.5, **params)
+    assert np.array_equal(via_keyword, filtered)
+    via_default = flow_instance_segmentation(prediction[0], prediction[1:], **params)
+    assert np.array_equal(via_default, filtered)
+
+
+def test_default_postprocessing_per_backbone_and_dimension():
+    from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, default_postprocessing
+
+    # The optimized hvit_t defaults: images get the filter, wider smoothing and a ground-truth-like size
+    # floor; volumes keep the registry smoothing and size floor and add the filter. The other backbones keep
+    # the registry values.
+    images = default_postprocessing("hvit_t", "sparse", ndim=2)
+    volumes = default_postprocessing("hvit_t", "sparse", ndim=3)
+    assert images["boundary_magnitude_max"] == 0.4 and images["sigma"] == 1.0 and images["min_size"] == 50
+    assert volumes["boundary_magnitude_max"] == 0.4 and volumes["sigma"] == 0.5 and volumes["min_size"] == 100
+    assert {k: v for k, v in volumes.items() if k not in ("min_size", "sigma")} == {
+        k: v for k, v in images.items() if k not in ("min_size", "sigma")
+    }
+    for backbone in ("hvit_s", "hvit_b", "hvit_l"):
+        assert default_postprocessing(backbone, "sparse")["boundary_magnitude_max"] is None
+        assert default_postprocessing(backbone, "sparse", ndim=3) == default_postprocessing(backbone, "sparse")
+    assert "sparse_volume" in DEFAULT_POSTPROCESSING["hvit_t"]
+    # A finetuned model built on the backbone resolves to the backbone's table.
+    assert default_postprocessing("hvit_t_cells", "sparse") == images
+    # The returned dict is a copy: mutating it must not change the table.
+    images["sigma"] = 99.0
+    assert default_postprocessing("hvit_t", "sparse")["sigma"] == 1.0
+
+
+def test_lower_height_under_seeds_modes():
+    from micro_sam.v2.postprocessing import lower_height_under_seeds
+    from bioimage_cpp.segmentation import watershed
+
+    # Two touching squares; a single-pixel seed on a height spike at each centre. With the monotone flooding
+    # the seed on the higher spike floods last and loses its square; a floor restores both.
+    hmap = np.full((20, 40), 0.3, dtype="float32")
+    hmap[:, 19:21] = 0.45  # the contact ridge
+    seeds = np.zeros((20, 40), dtype="uint64")
+    seeds[10, 10], seeds[10, 30] = 1, 2
+    hmap[10, 10], hmap[10, 30] = 0.5, 0.6
+    mask = np.ones((20, 40), dtype=bool)
+    broken = watershed(hmap, markers=seeds, mask=mask)
+    assert (broken == 2).sum() <= 1, "the test needs the monotone-flooding failure to be present"
+    for mode in ("zero", "ring"):
+        lowered = lower_height_under_seeds(hmap, seeds, mode)
+        assert lowered.dtype == np.float32 and lowered.flags["C_CONTIGUOUS"]
+        fixed = watershed(lowered, markers=seeds, mask=mask)
+        assert abs(int((fixed == 1).sum()) - int((fixed == 2).sum())) <= 40
+    assert lower_height_under_seeds(hmap, seeds, "zero")[10, 10] == 0.0
+    ring = lower_height_under_seeds(hmap, seeds, "ring")
+    assert ring[10, 10] == pytest.approx(0.3) and ring[10, 30] == pytest.approx(0.3)
+    assert ring[5, 5] == pytest.approx(0.3) and ring[10, 19] == pytest.approx(0.45)
+    assert lower_height_under_seeds(hmap, seeds, "none") is hmap
+    with pytest.raises(ValueError, match="Unknown seed floor"):
+        lower_height_under_seeds(hmap, seeds, "deep")
+
+
+def test_seed_floor_default_is_off_everywhere():
+    from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, default_postprocessing
+
+    for backbone in DEFAULT_POSTPROCESSING:
+        for ndim in (2, 3):
+            assert default_postprocessing(backbone, "sparse", ndim=ndim)["seed_floor"] == "none"
+
+
+def _touching_ellipses(shape, centers, radii):
+    """Ellipses with consecutive ids; later ones do not overwrite earlier ones."""
+    labels = np.zeros(shape, dtype="uint32")
+    grid = np.indices(shape)
+    for index, (center, radius) in enumerate(zip(centers, radii), start=1):
+        distance = sum(((g - c) / r) ** 2 for g, c, r in zip(grid, center, radius))
+        labels[(distance <= 1) & (labels == 0)] = index
+    return labels
+
+
+def _best_iou(labels, segmentation, label_id):
+    mask = labels == label_id
+    ious = [
+        (mask & (segmentation == seg_id)).sum() / (mask | (segmentation == seg_id)).sum()
+        for seg_id in np.unique(segmentation) if seg_id != 0
+    ]
+    return max(ious) if ious else 0.0
+
+
+@pytest.fixture(scope="module")
+def big_small_contact_prediction():
+    """A large and a small ellipse touching each other, with the contact line as a fifth channel.
+
+    With a flat height map (foreground weight 1) the fronts of the two seeds meet halfway between the seeds,
+    so the small object's basin falls below the size floor and the big instance swallows it. The contact
+    channel puts the split back onto the true contact line.
+    """
+    from micro_sam.v2.transforms.labels import GeodesicHybridDistanceTransform
+
+    labels = _touching_ellipses((128, 160), [(64, 50), (64, 104)], [(40, 40), (16, 16)])
+    prediction = GeodesicHybridDistanceTransform(contact=True)(labels).astype("float32")
+    return prediction, labels
+
+
+def test_flow_segmentation_contact_ridge_and_mask_split_touching_objects(big_small_contact_prediction):
+    from micro_sam.v2.postprocessing import flow_instance_segmentation
+
+    prediction, labels = big_small_contact_prediction
+    foreground, distances, contact = prediction[0], prediction[1:4], prediction[4]
+    common = dict(model_type="hvit_t", foreground_weight=1.0, boundary_magnitude_max=float("inf"))
+
+    merged = flow_instance_segmentation(foreground, distances, **common)
+    assert len(np.unique(merged)) - 1 == 1
+    assert _best_iou(labels, merged, 2) < 0.2
+
+    # An unused contact map changes nothing.
+    assert np.array_equal(flow_instance_segmentation(foreground, distances, contact=contact, **common), merged)
+
+    ridge = flow_instance_segmentation(foreground, distances, contact=contact, contact_weight=1.0, **common)
+    masked = flow_instance_segmentation(foreground, distances, contact=contact, contact_mask_threshold=0.5, **common)
+    for segmentation in (ridge, masked):
+        assert len(np.unique(segmentation)) - 1 == 2
+        assert _best_iou(labels, segmentation, 1) > 0.95 and _best_iou(labels, segmentation, 2) > 0.9
+        # Every foreground pixel is assigned, also the excluded contact pixels of the mask mode.
+        assert np.array_equal(segmentation > 0, foreground > 0.5)
+
+
+def test_flow_segmentation_rejects_wrong_channel_counts_and_orphan_contact_keywords(big_small_contact_prediction):
+    from micro_sam.v2.postprocessing import flow_instance_segmentation
+
+    prediction, _ = big_small_contact_prediction
+    foreground, distances, contact = prediction[0], prediction[1:4], prediction[4]
+    # Three channels for a 2d prediction drop the z channel; the 2d channels alone work as well.
+    reference = flow_instance_segmentation(foreground, distances, model_type="hvit_t")
+    assert np.array_equal(flow_instance_segmentation(foreground, distances[1:], model_type="hvit_t"), reference)
+    with pytest.raises(ValueError, match="distance channels"):
+        flow_instance_segmentation(foreground, prediction[1:], model_type="hvit_t")
+    with pytest.raises(ValueError, match="contact"):
+        flow_instance_segmentation(foreground, distances, model_type="hvit_t", contact_weight=1.0)
+    with pytest.raises(ValueError, match="contact"):
+        flow_instance_segmentation(foreground, distances, model_type="hvit_t", contact_mask_threshold=0.5)
+    with pytest.raises(ValueError, match="shape"):
+        flow_instance_segmentation(foreground, distances, model_type="hvit_t", contact=contact[:-1], contact_weight=1.0)
+
+
+def test_segment_from_predictions_forwards_the_contact_channel(big_small_contact_prediction):
+    from micro_sam.v2.instance_segmentation import _segment_from_predictions
+
+    prediction, labels = big_small_contact_prediction
+    common = dict(model_type="hvit_t", foreground_weight=1.0, boundary_magnitude_max=float("inf"))
+    four = _segment_from_predictions(prediction[:4], mode="sparse", **common)
+    five = _segment_from_predictions(prediction, mode="sparse", **common)
+    assert np.array_equal(four, five)
+    ridge = _segment_from_predictions(prediction, mode="sparse", contact_weight=1.0, **common)
+    assert len(np.unique(ridge)) - 1 == 2 and _best_iou(labels, ridge, 2) > 0.9
+    with pytest.raises(ValueError, match="contact"):
+        _segment_from_predictions(prediction[:4], mode="sparse", contact_weight=1.0, **common)

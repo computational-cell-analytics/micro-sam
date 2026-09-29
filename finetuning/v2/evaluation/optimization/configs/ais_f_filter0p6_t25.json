@@ -1,0 +1,7 @@
+{
+  "name": "f-filter0p6-t25",
+  "mode": "auto",
+  "params_2d": {
+    "boundary_magnitude_max": 0.6
+  }
+}

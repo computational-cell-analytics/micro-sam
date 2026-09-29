@@ -1,0 +1,40 @@
+{
+  "foreground_threshold": [
+    0.4,
+    0.5,
+    0.6,
+    0.7
+  ],
+  "density_threshold": [
+    5.0,
+    10.0,
+    20.0,
+    50.0
+  ],
+  "min_size": [
+    25,
+    50,
+    100
+  ],
+  "sigma": [
+    0.5,
+    1.0
+  ],
+  "n_iter": [
+    50,
+    800
+  ],
+  "dt": [
+    0.5
+  ],
+  "foreground_weight": [
+    0.25,
+    0.5,
+    0.75
+  ],
+  "boundary_magnitude_max": [
+    null,
+    0.4,
+    0.6
+  ]
+}

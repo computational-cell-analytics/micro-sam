@@ -1,0 +1,14 @@
+{
+  "name": "c1v-ms200",
+  "mode": "auto",
+  "params_2d": {
+    "sigma": 1.0,
+    "min_size": 50,
+    "boundary_magnitude_max": 0.4
+  },
+  "params_3d": {
+    "sigma": 1.0,
+    "min_size": 200,
+    "boundary_magnitude_max": 0.4
+  }
+}

@@ -53,8 +53,6 @@ def load_run(checkpoint: str, config: str, subset: str) -> tuple:
     other implementation checksums, the current implementation winning when a crop was run under both.
     """
     from benchmark_apg_3d import load_volume_config, run_dir, sibling_run_dirs
-    from common import checkpoint_checksum, get_joint_checkpoint
-    from optimization.apg3d_manifest import load_manifest
 
     campaign_root, checkpoint_root = CHECKPOINTS[checkpoint]
     if checkpoint_root is not None:
@@ -62,11 +60,7 @@ def load_run(checkpoint: str, config: str, subset: str) -> tuple:
     else:
         os.environ.pop("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", None)
     config_name, params_3d = load_volume_config(CONFIGS[config])
-    manifest = load_manifest(subset, campaign_root)
-    checkpoint_id = checkpoint_checksum(get_joint_checkpoint("hvit_t", "best"))
-    path = run_dir(
-        campaign_root, subset, config_name, params_3d, checkpoint_id, manifest["manifest_checksum"], "trial-1",
-    )
+    path = run_dir(campaign_root, subset, config_name, params_3d)
     rows: Dict[str, dict] = {}
     for sibling in sibling_run_dirs(path):
         for crop in sorted((sibling / "crops").glob("*.json")):

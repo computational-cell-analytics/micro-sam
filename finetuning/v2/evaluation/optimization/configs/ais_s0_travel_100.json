@@ -1,0 +1,8 @@
+{
+  "name": "s0-travel-100",
+  "mode": "auto",
+  "params_2d": {
+    "n_iter": 200,
+    "dt": 0.5
+  }
+}

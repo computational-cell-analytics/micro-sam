@@ -23,49 +23,71 @@ from .util import DEFAULT_MODEL
 # Per (model_type, mode) defaults from the registry parameter search: the best-average-rank
 # combination across every dataset that shares that mode's grid, computed separately for each of the
 # 4 registry backbones.
+# 'boundary_magnitude_max' is the instance filter of `flow_instance_segmentation`; None keeps it off.
+# 'seed_floor' lowers the height map under the seeds before the watershed ('none', 'zero' or 'ring').
+# 'sparse_volume' holds the keys whose default differs for a volume (a size floor counts voxels, not
+# pixels); it is layered over 'sparse' by `default_postprocessing(..., ndim=3)`.
+#
+# The hvit_t entry is the result of the 2026-09 AIS optimization on the joint/v4 geodesic checkpoint
+# (finetuning/v2/evaluation/optimization/notes/AIS_V4_OPTIMIZATION.md). Images: against the registry values
+# (min_size 100, sigma 0.5, no filter) the wider density smoothing, the ground-truth-like size floor and the
+# boundary filter gain +2.4 % balanced mSA on eleven 2d development datasets (9 up, worst -0.8 %) and
+# +4.3 % on the 2d holdout. Volumes keep the registry values and add the filter only (+4.7 % / +9.7 % on
+# the 3d tuning crops, +3.4 % on the seven test-only 3d datasets, none down); the stronger volume settings
+# that won on the tuning crops did not carry over to the test datasets.
 DEFAULT_POSTPROCESSING = {
     "hvit_t": {
         "sparse": {
-            "foreground_threshold": 0.5, "density_threshold": 10.0, "min_size": 100,
-            "sigma": 0.5, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5,
+            "foreground_threshold": 0.5, "density_threshold": 10.0, "min_size": 50,
+            "sigma": 1.0, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5, "boundary_magnitude_max": 0.4,
+            "seed_floor": "none",
         },
+        "sparse_volume": {"min_size": 100, "sigma": 0.5},
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_s": {
         "sparse": {
             "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
-            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.75,
+            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.75, "boundary_magnitude_max": None,
+            "seed_floor": "none",
         },
+        "sparse_volume": {},
         "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 25, "dt": 0.5},
     },
     "hvit_b": {
         "sparse": {
             "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
-            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.65,
+            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.65, "boundary_magnitude_max": None,
+            "seed_floor": "none",
         },
+        "sparse_volume": {},
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_l": {
         "sparse": {
             "foreground_threshold": 0.4, "density_threshold": 10.0, "min_size": 50,
-            "sigma": 0.5, "n_iter": 50, "dt": 0.25, "foreground_weight": 0.65,
+            "sigma": 0.5, "n_iter": 50, "dt": 0.25, "foreground_weight": 0.65, "boundary_magnitude_max": None,
+            "seed_floor": "none",
         },
+        "sparse_volume": {},
         "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 1.0, "n_iter": 50, "dt": 0.5},
     },
 }
 
 
-def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse") -> dict:
-    """The default postprocessing parameters for one model type and mode.
+def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse", ndim: int = 2) -> dict:
+    """The default postprocessing parameters for one model type, mode and dimensionality.
 
     Args:
         model_type: The SAM2 backbone, e.g. 'hvit_t', or a finetuned model built on one, e.g.
             'hvit_t_cells' (only the backbone prefix is used to look up the table). Must be one of the
             4 registry backbones.
         mode: 'sparse' (`flow_instance_segmentation`) or 'dense' (`run_multicut`).
+        ndim: The number of spatial dimensions of the data, 2 or 3. A volume takes the
+            '<mode>_volume' overrides of the table on top of the mode's defaults.
 
     Returns:
-        The default parameter dict for that model type and mode.
+        The default parameter dict for that model type, mode and dimensionality.
     """
     backbone = model_type[:6]
     if backbone not in DEFAULT_POSTPROCESSING:
@@ -73,7 +95,11 @@ def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse"
             f"No default postprocessing parameters for model type '{model_type}'. "
             f"Choose one built on a backbone in {sorted(DEFAULT_POSTPROCESSING)}."
         )
-    return DEFAULT_POSTPROCESSING[backbone][mode]
+    table = DEFAULT_POSTPROCESSING[backbone]
+    defaults = dict(table[mode])
+    if ndim == 3:
+        defaults.update(table.get(f"{mode}_volume", {}))
+    return defaults
 
 
 def _compute_flow_density(
@@ -135,6 +161,97 @@ def watershed_heightmap(
     return np.ascontiguousarray(hmap, dtype="float32")
 
 
+def lower_height_under_seeds(heightmap: np.ndarray, seeds: np.ndarray, mode: str) -> np.ndarray:
+    """Lower the height map under the seeds so that a seed's own height does not hold its front back.
+
+    The watershed floods monotonically: a front never drops below the height it started from. Every proper
+    seed sits on a peak of the inverted-magnitude height map (the predicted magnitude dips at the object's
+    centre), so a seed whose centre dip is deeper than the contact dip to its neighbour loses the object to
+    the neighbour's front. 'zero' sets the height under every seed to zero; 'ring' sets it to the minimum
+    height of a ring of 2-3 pixels around the seed, so that a seed inherits the level of its own basin
+    and a seed on a high plateau (a spurious one) keeps a high floor.
+
+    Args:
+        heightmap: The watershed height map, shape (*spatial).
+        seeds: The seed components, integer labels, same shape.
+        mode: 'none' (return the height map unchanged), 'zero' or 'ring'.
+
+    Returns:
+        The height map with the seeds lowered, float32 and C-contiguous.
+    """
+    if mode == "none":
+        return heightmap
+    out = np.array(heightmap, dtype="float32", copy=True)
+    if mode == "zero":
+        out[seeds != 0] = 0.0
+        return np.ascontiguousarray(out)
+    if mode != "ring":
+        raise ValueError(f"Unknown seed floor '{mode}'; expected 'none', 'zero' or 'ring'.")
+    from scipy.ndimage import grey_dilation, minimum as labelled_minimum
+
+    inner = grey_dilation(seeds, size=(3,) * seeds.ndim)
+    outer = grey_dilation(seeds, size=(7,) * seeds.ndim)
+    ring = np.where((outer != 0) & (inner == 0), outer, 0)
+    ids = np.unique(ring)
+    ids = ids[ids != 0]
+    if len(ids) == 0:
+        return np.ascontiguousarray(out)
+    floors = np.zeros(int(seeds.max()) + 1, dtype="float32")
+    floors[ids] = labelled_minimum(heightmap, labels=ring, index=ids)
+    core = inner != 0
+    out[core] = np.minimum(out[core], floors[inner[core]])
+    return np.ascontiguousarray(out)
+
+
+def drop_instances_without_boundary_dip(
+    segmentation: np.ndarray, directed_distances: np.ndarray, max_median: float
+) -> np.ndarray:
+    """Drop the instances whose boundary shows no dip of the distance magnitude.
+
+    The magnitude of the directed distances falls to (almost) zero along the boundary of every object
+    the decoder recognised, because the distance to the object's boundary is what it predicts. A false
+    foreground region carries no such structure: its boundary runs through the decoder's background
+    output (magnitude about one) or through the interior of a field that belongs to something else. An
+    instance whose median boundary magnitude exceeds 'max_median' is therefore removed. The rule is
+    label-free and scale-free, and a real object passes it at any size.
+
+    Args:
+        segmentation: The instance segmentation, shape (*spatial).
+        directed_distances: Distance channels stacked along axis 0, shape (ndim, *spatial).
+        max_median: Instances whose median boundary magnitude exceeds this value are dropped.
+
+    Returns:
+        The filtered segmentation, same dtype and shape.
+    """
+    # The inner boundary: instance pixels with an axis neighbour of another label (or background).
+    boundary = np.zeros(segmentation.shape, dtype=bool)
+    for axis in range(segmentation.ndim):
+        lower = [slice(None)] * segmentation.ndim
+        upper = [slice(None)] * segmentation.ndim
+        lower[axis], upper[axis] = slice(None, -1), slice(1, None)
+        differs = segmentation[tuple(lower)] != segmentation[tuple(upper)]
+        boundary[tuple(lower)] |= differs
+        boundary[tuple(upper)] |= differs
+    boundary &= segmentation != 0
+    if not boundary.any():
+        return segmentation
+    labels = segmentation[boundary]
+    values = np.linalg.norm(directed_distances[(slice(None),) + np.nonzero(boundary)], axis=0)
+    # One sort over the boundary pixels gives every instance's median (the mean of the two middle values
+    # for an even count, like `scipy.ndimage.median`).
+    order = np.lexsort((values, labels))
+    labels, values = labels[order], values[order]
+    starts = np.flatnonzero(np.r_[True, labels[1:] != labels[:-1]])
+    counts = np.diff(np.r_[starts, len(labels)])
+    upper_middle = values[starts + counts // 2]
+    lower_middle = values[starts + (counts - 1) // 2]
+    medians = 0.5 * (upper_middle + lower_middle)
+    drop = labels[starts][medians > max_median]
+    if drop.size == 0:
+        return segmentation
+    return np.where(np.isin(segmentation, drop), 0, segmentation).astype(segmentation.dtype)
+
+
 def flow_instance_segmentation(
     foreground: np.ndarray,
     directed_distances: np.ndarray,
@@ -148,6 +265,11 @@ def flow_instance_segmentation(
     min_size: Optional[int] = None,
     foreground_weight: Optional[float] = None,
     n_threads: int = 8,
+    boundary_magnitude_max: Optional[float] = None,
+    seed_floor: Optional[str] = None,
+    contact: Optional[np.ndarray] = None,
+    contact_weight: Optional[float] = None,
+    contact_mask_threshold: Optional[float] = None,
 ) -> np.ndarray:
     """Instance segmentation from directed-distance predictions via flow following.
 
@@ -156,8 +278,9 @@ def flow_instance_segmentation(
     watershed. Works for both 2D and 3D inputs.
 
     If 3 distance channels are supplied for a 2D foreground map the leading
-    z-channel is automatically dropped, so you can always pass ``out[1:]``
-    regardless of dimensionality.
+    z-channel is automatically dropped, so you can always pass the three distance
+    channels ``out[1:4]`` regardless of dimensionality. Any other channel count raises,
+    so that an auxiliary channel appended to the prediction is never read as a distance.
 
     Args:
         foreground: Foreground probability map, shape (Y, X) or (Z, Y, X).
@@ -175,13 +298,29 @@ def flow_instance_segmentation(
         foreground_weight: Weight of the foreground term in the watershed heightmap, see
             `watershed_heightmap`.
         n_threads: Number of threads for the flow computation.
+        boundary_magnitude_max: Drop instances whose median boundary magnitude exceeds this value, see
+            `drop_instances_without_boundary_dip`. None takes the per-model default, which may itself be
+            None (no filtering); pass ``float("inf")`` to disable a default filter explicitly.
+        seed_floor: How the height map is lowered under the seeds before the watershed, see
+            `lower_height_under_seeds`. None takes the per-model default.
+        contact: The predicted contact (touching boundary) probability, same shape as the foreground, from a
+            decoder with a fifth output channel. Only used through the two keywords below.
+        contact_weight: Adds ``contact_weight * contact`` to the watershed height map, so that the fronts of
+            two touching objects meet on the predicted contact line. None or 0 leaves the height map unchanged.
+        contact_mask_threshold: Excludes the pixels with ``contact > threshold`` from the first seeded watershed
+            and assigns them afterwards by flooding from the resulting instances, so that no instance grows
+            across a contact line. None disables the exclusion.
 
     Returns:
         Instance segmentation, uint32 array, same spatial shape as foreground.
     """
-    defaults = default_postprocessing(model_type, "sparse")
+    defaults = default_postprocessing(model_type, "sparse", ndim=foreground.ndim)
     if foreground_threshold is None:
         foreground_threshold = defaults["foreground_threshold"]
+    if boundary_magnitude_max is None:
+        boundary_magnitude_max = defaults.get("boundary_magnitude_max")
+    if seed_floor is None:
+        seed_floor = defaults.get("seed_floor", "none")
     if n_iter is None:
         n_iter = defaults["n_iter"]
     if dt is None:
@@ -196,11 +335,17 @@ def flow_instance_segmentation(
         foreground_weight = defaults["foreground_weight"]
 
     ndim = foreground.ndim
-    if directed_distances.shape[0] > ndim:
-        directed_distances = directed_distances[-ndim:]
-    assert directed_distances.shape[0] == ndim, (
-        f"Expected {ndim} distance channels, got {directed_distances.shape[0]}."
-    )
+    if directed_distances.shape[0] == 3 and ndim == 2:
+        directed_distances = directed_distances[1:]  # Drop the (pseudo) z channel of a 2d prediction.
+    if directed_distances.shape[0] != ndim:
+        raise ValueError(
+            f"Expected {ndim} distance channels (or 3 for 2d input), got {directed_distances.shape[0]}. Pass the "
+            "three distance channels 'prediction[1:4]'; an auxiliary channel goes into 'contact'."
+        )
+    if contact is None and (contact_weight is not None or contact_mask_threshold is not None):
+        raise ValueError("'contact_weight' and 'contact_mask_threshold' need the predicted contact map 'contact'.")
+    if contact is not None and contact.shape != foreground.shape:
+        raise ValueError(f"The contact map {contact.shape} must have the shape of the foreground {foreground.shape}.")
 
     fg_mask = foreground > foreground_threshold
 
@@ -210,13 +355,27 @@ def flow_instance_segmentation(
 
     seeds = label(density > density_threshold)
     hmap = watershed_heightmap(foreground, directed_distances, foreground_weight)
-    seg = watershed(hmap, markers=seeds, mask=fg_mask)
+    if contact is not None and contact_weight is not None and contact_weight != 0:
+        # The contact line becomes a ridge, so the fronts of two touching objects meet on it.
+        hmap = np.ascontiguousarray(hmap + np.float32(contact_weight) * np.clip(contact, 0, 1), dtype="float32")
+    hmap = lower_height_under_seeds(hmap, seeds, seed_floor)
+    if contact is not None and contact_mask_threshold is not None:
+        # Flood everything but the contact pixels first, then let the instances claim the contact pixels.
+        open_mask = fg_mask & ~(contact > contact_mask_threshold)
+        first = watershed(hmap, markers=np.where(open_mask, seeds, 0).astype(seeds.dtype), mask=open_mask)
+        seg = watershed(hmap, markers=first, mask=fg_mask)
+    else:
+        seg = watershed(hmap, markers=seeds, mask=fg_mask)
 
     if min_size > 0:
         ids, sizes = np.unique(seg, return_counts=True)
         discard = ids[(sizes < min_size) & (ids > 0)]
         seg[np.isin(seg, discard)] = 0
         seg = watershed(hmap, markers=seg, mask=fg_mask)
+
+    # After the size filter, so that a dropped region is not refilled by its neighbours.
+    if boundary_magnitude_max is not None and np.isfinite(boundary_magnitude_max):
+        seg = drop_instances_without_boundary_dip(seg, directed_distances, boundary_magnitude_max)
 
     return seg.astype("uint32")
 

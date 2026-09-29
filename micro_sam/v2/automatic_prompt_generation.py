@@ -43,7 +43,6 @@ import torch
 
 from sam2.utils.amg import calculate_stability_score
 
-from bioimage_cpp.utils import Blocking
 from bioimage_cpp.segmentation import label
 
 # Only the tiled stitching in 'TiledAutomaticPromptGenerator.generate' uses this, so a missing
@@ -1288,8 +1287,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
         n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
         verbose: bool = False,
-        pbar_init: Optional[Callable] = None,
-        pbar_update: Optional[Callable] = None,
     ) -> np.ndarray:
         """Derive prompts from the stored predictions, apply them and merge the masks.
 
@@ -1340,8 +1337,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             batch_size: Number of prompts per forward pass.
             n_threads: Number of threads for the flow integration the candidates come from.
             verbose: Whether to show progress over the propagation passes of a volume.
-            pbar_init: Initialize an external progress stage with its total and description.
-            pbar_update: Advance the external progress bar after completed work.
 
         Returns:
             The instance segmentation, uint32 array with the spatial shape of the prediction.
@@ -1367,16 +1362,12 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             components = resolved = None
             if refinement is not None:
                 components, resolved = _parse_refinement(refinement, refinement_kwargs, is_volume=True)
-            if pbar_init is not None:
-                pbar_init(1, "APG: deriving volume prompts")
             prompts = derive_volume_prompts(
-                self._prediction[0], self._prediction[1:], model_type=self._model_type,
+                self._prediction[0], self._prediction[1:4], model_type=self._model_type,
                 candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
                 n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing,
                 min_candidate_size=min_candidate_size, n_threads=n_threads,
             )
-            if pbar_update is not None:
-                pbar_update(1)
             if prompts is None:
                 self._last_generation_stats = {
                     "proposed_candidates": 0,
@@ -1398,7 +1389,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                     prompts, multimasking=multimasking, batch_size=batch_size,
                     score_threshold=score_threshold, max_overlap=max_overlap,
                     components=components, refinement_kwargs=resolved,
-                    pbar_init=pbar_init, pbar_update=pbar_update,
                 )
             else:
                 with autocast(self._predictor.device):
@@ -1406,7 +1396,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                         prompts, multimasking=multimasking, batch_size=batch_size,
                         score_threshold=score_threshold, max_overlap=max_overlap,
                         components=components, refinement_kwargs=resolved,
-                        pbar_init=pbar_init, pbar_update=pbar_update,
                     )
             self._last_generation_stats["scored_candidates"] = len(candidates)
             records = self._propagate_candidates(
@@ -1416,21 +1405,16 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             )
             # Tiled records arrive grouped by tile and need their halo overlaps resolved, which
             # '_merge' does polymorphically; an untiled volume merges them flat.
-            if pbar_init is not None:
-                pbar_init(1, "APG: merging volume masks")
             segmentation, _ = self._merge(
                 records, shape, score_threshold=score_threshold, max_overlap=max_overlap,
                 min_size=min_size, max_size_factor=max_size_factor,
             )
-            if pbar_update is not None:
-                pbar_update(1)
             return segmentation
 
         proposals = self.propose(
             candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
             n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size,
             multimasking=multimasking, batch_size=batch_size, n_threads=n_threads,
-            pbar_init=pbar_init, pbar_update=pbar_update,
         )
         return self.select(
             proposals, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
@@ -1449,8 +1433,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
         batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
         n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
-        pbar_init: Optional[Callable] = None,
-        pbar_update: Optional[Callable] = None,
     ) -> list:
         """Derive the prompts and turn them into scored mask proposals, without selecting any of them.
 
@@ -1469,8 +1451,6 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             multimasking: Whether to predict several masks per point and keep the best scoring one.
             batch_size: Number of prompts per forward pass.
             n_threads: Number of threads for the flow integration the candidates come from.
-            pbar_init: Initialize each progress stage with its total and description.
-            pbar_update: Advance progress after deriving prompts and each prediction batch.
 
         Returns:
             The proposals, to be passed to `select`. Their layout is an implementation detail of the
@@ -1481,10 +1461,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         if self._prediction.ndim == 4:
             raise ValueError("Proposals can only be reused for an image, because a volume gates its propagation.")
 
-        if pbar_init is not None:
-            pbar_init(1, "APG: deriving prompts")
         prompts = derive_point_prompts(
-            self._prediction[0], self._prediction[1:], model_type=self._model_type,
+            self._prediction[0], self._prediction[1:4], model_type=self._model_type,
             candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
             n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size, n_threads=n_threads,
         )
@@ -1492,11 +1470,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             pbar_update(1)
         if prompts is None:
             return []
-        if pbar_init is not None:
-            pbar_init((len(prompts["points"]) + batch_size - 1) // batch_size, "APG: prompting batches")
-        return self._apply(
-            prompts, multimasking=multimasking, batch_size=batch_size, pbar_update=pbar_update,
-        )
+        return self._apply(prompts, multimasking=multimasking, batch_size=batch_size)
 
     def select(
         self,
@@ -1563,11 +1537,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
     def _set_region(self, key) -> None:
         """Point the predictor at the region. Its image is already set for a single one."""
 
-    def _apply(self, prompts: dict, multimasking: bool, batch_size: int, pbar_update=None) -> list:
+    def _apply(self, prompts: dict, multimasking: bool, batch_size: int) -> list:
         """Turn the prompts into mask proposals."""
-        return self._apply_prompts(
-            self._predictor, prompts, multimasking=multimasking, batch_size=batch_size, pbar_update=pbar_update,
-        )
+        return self._apply_prompts(self._predictor, prompts, multimasking=multimasking, batch_size=batch_size)
 
     def _merge(
         self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
@@ -1808,9 +1780,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         combined = (scores.float() * stability.float()).cpu().numpy()
         return [(mask, float(score)) for mask, score in zip(masks, combined)]
 
-    def _apply_prompts(
-        self, predictor, prompts, multimasking: bool, batch_size: int, pbar_update=None,
-    ) -> List[Dict[str, Any]]:
+    def _apply_prompts(self, predictor, prompts, multimasking: bool, batch_size: int) -> List[Dict[str, Any]]:
         """Prompt the interactive branch in batches, returning records for the merge.
 
         Takes the predictor rather than reading `self._predictor`, so the volumetric scoring can hand
@@ -1862,14 +1832,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                     # The prompt as (x, y); the refinement groups the first round's prompts by it.
                     "point": (float(batch_points[offset, 0, 0]), float(batch_points[offset, 0, 1])),
                 })
-            if pbar_update is not None:
-                pbar_update(1)
         return records
 
     def _score_candidates(
         self, prompts: dict, multimasking: bool, batch_size: int, score_threshold: float,
         max_overlap: float, components: Optional[tuple] = None, refinement_kwargs: Optional[dict] = None,
-        pbar_init=None, pbar_update=None,
     ) -> List[dict]:
         """Prompt every candidate in 2d on its anchor slice, and keep the strong, non-duplicate ones.
 
@@ -1940,8 +1907,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 "frame": int(frame), "segmentation": segmentation, "records": records,
                 "matches": matches, "points": points[indices][:, 0, :],
             }
-            with autocast(predictor.device):
-                refined = self._refine_anchors(context, components, refinement_kwargs, batch_size)
+            refined = self._refine_anchors(context, components, refinement_kwargs, batch_size)
             return [
                 finish(candidate, records[record_index])
                 for candidate, record_index in zip(refined, matches.values())

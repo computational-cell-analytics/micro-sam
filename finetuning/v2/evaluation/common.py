@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import re
 import ast
 import csv
@@ -1708,36 +1709,29 @@ def resolve_params(overrides=None, ndim=2, model_type=None):
     return params
 
 
-def load_apg_overrides(path, dataset_name):
-    """Read one APG configuration file and return its name and the overrides for one dataset.
+def load_apg_overrides(path):
+    """Read one APG configuration file and return its name and raw 2d parameter overrides.
 
-    The file has the format of the optimization benchmark: ``{"name": ..., "params_2d": {...},
-    "params_3d": {...}}``, with an optional ``params_dense``. Images use 'params_2d' and volumes use
-    'params_3d'. The dense-neuron EM volumes use 'params_dense' if the file has it. The function returns
-    the overrides unresolved, so that they can go on top of tuned parameters. `resolve_params` fills in
-    the defaults.
+    The file has the shape the optimization benchmark uses, ``{"name": ..., "params_2d": {...}}``
+    (``params_3d`` may be present and is ignored here). The overrides are returned unresolved, so
+    they can be layered over tuned parameters; `resolve_params` fills in the defaults.
 
     Args:
         path: The JSON configuration file.
-        dataset_name: The dataset that the overrides are for. It selects the section.
 
     Returns:
-        The configuration name and the overrides, keyed as `generate` takes them.
+        The configuration name and the 2d overrides, keyed as `generate` takes them.
     """
     import json
 
     with open(path) as f:
         config = json.load(f)
-    unknown_top_level = set(config) - {"name", "params_2d", "params_3d", "params_dense"}
+    unknown_top_level = set(config) - {"name", "params_2d", "params_3d"}
     if unknown_top_level:
         raise ValueError(f"Unknown configuration fields in '{path}': {sorted(unknown_top_level)}.")
-    if dataset_name in DATASETS_DENSE and "params_dense" in config:
-        section = "params_dense"
-    else:
-        section = "params_3d" if dataset_name in DATASETS_3D else "params_2d"
-    overrides = config.get(section, {})
+    overrides = config.get("params_2d", {})
     if not isinstance(overrides, dict):
-        raise TypeError(f"'{section}' in '{path}' must be an object.")
+        raise TypeError(f"'params_2d' in '{path}' must be an object.")
     unknown = set(overrides) - set(GENERATE_PARAM_KEYS)
     if unknown:
         raise ValueError(f"Unknown APG parameters in '{path}': {sorted(unknown)}.")
@@ -2023,7 +2017,7 @@ def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None):
 
 
 def postprocess_unisam2(out, dataset_name, model_type, params=None):
-    """Turn a (4, *spatial) prediction into an instance segmentation.
+    """Turn a (4, *spatial) prediction (or (5, *spatial) with a contact channel) into an instance segmentation.
 
     EM datasets use the dense (multicut) mode, all others the sparse (flow) mode. 'params' overrides
     the postprocessing defaults, e.g. with the best combination found by grid_search_automatic_cells.
@@ -2039,7 +2033,8 @@ def postprocess_unisam2(out, dataset_name, model_type, params=None):
         seg = run_multicut(boundary_map, distances, model_type=model_type, **params)
     else:
         spacing = DATASET_SPACING.get(dataset_name, None)
-        seg = flow_instance_segmentation(fg, out[1:], model_type=model_type, spacing=spacing, **params)
+        contact = {"contact": out[4]} if out.shape[0] > 4 else {}
+        seg = flow_instance_segmentation(fg, out[1:4], model_type=model_type, spacing=spacing, **contact, **params)
     return seg.astype("uint32")
 
 
