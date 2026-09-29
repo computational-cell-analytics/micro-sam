@@ -39,8 +39,8 @@ DATASET_SCALE = {
     "cremi_padded": (40.0, 4.0, 4.0),
     "liconn": (8.0, 8.0, 8.0),
     "microns": (12.95, 9.7, 9.7),
-    "beke_big_crop": (2.5, 0.406, 0.406),  # z is the light-sheet step recorded for the 3.5hpf volume
-    "beke_big_crop_apg": (2.5, 0.406, 0.406),
+    "beke_big_crop": (0.812, 0.406, 0.406),  # z estimated from the cell extents, the TIFF has no z spacing
+    "beke_big_crop_apg": (0.812, 0.406, 0.406),
 }
 
 DATASET_SCALE_UNIT = {
@@ -57,8 +57,8 @@ DATASET_DS = {
     "cremi_padded": 0.25,
     "liconn": 0.5,
     "microns": 0.25,
-    "beke_big_crop": 0.5,
-    "beke_big_crop_apg": 0.5,
+    "beke_big_crop": 0.25,
+    "beke_big_crop_apg": 0.25,
 }
 
 NIS3D_GAP = 100
@@ -68,7 +68,7 @@ CREMI_GAP = 50
 LICONN_Z_MAX = 312
 LICONN_GAP = 150
 EM_TOP_N = 25
-BEKE_GAP = 25
+BEKE_GAP = 50
 BEKE_BORDER_WIDTH = 2
 BEKE_ITERATION = 2
 # The segmentation key and layer name of each beke h5.
@@ -579,7 +579,7 @@ def _run_beke(name):
     seg_key, seg_name = BEKE_SEGMENTATIONS[name]
     ds = DATASET_DS[name]
     h5_path = DATASET_H5[name]
-    # z is downsampled less than XY by the anisotropy, down to keeping every slice.
+    # z is downsampled less, by the anisotropy, so the displayed voxels are isotropic.
     z_spacing, y_spacing, _ = DATASET_SCALE[name]
     factors = (min(1.0, ds * z_spacing / y_spacing), ds, ds)
     scale = tuple(spacing / factor for spacing, factor in zip(DATASET_SCALE[name], factors))
