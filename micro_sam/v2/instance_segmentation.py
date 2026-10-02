@@ -730,9 +730,7 @@ def _check_decoder_width(model, initial_features):
     )
 
 
-def get_unisam2_model(
-    checkpoint_path, device=None, encoder=_DEFAULT_MODEL, output_channels=4, peft_kwargs=None, encoder_model_type=None
-):
+def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, peft_kwargs=None, encoder_model_type=None):
     """Load a UniSAM2 model for automatic segmentation from a checkpoint.
 
     Args:
@@ -741,23 +739,24 @@ def get_unisam2_model(
         encoder: The SAM2 encoder to build the decoder on. Either the backbone name to build from
             scratch, e.g. 'hvit_t', or a prebuilt SAM2 image-encoder module to reuse (which avoids
             rebuilding / downloading the base backbone). Its weights are (re)defined by the checkpoint.
-        output_channels: The number of output channels (foreground + directed distances).
         peft_kwargs: The arguments for `PEFT_Sam2`. The function uses the saved arguments by default.
         encoder_model_type: The SAM2 model type for a prebuilt PEFT encoder. You must set this argument for modules.
 
     Returns:
         The UniSAM2 model in eval mode.
     """
-    from micro_sam.v2.models.util import UniSAM2
+    from micro_sam.v2.models.util import UniSAM2, joint_unetr_state
 
     # Captured before 'encoder' is reassigned to the built PEFT module below.
     resolved_model_type = encoder if isinstance(encoder, str) else encoder_model_type
 
     device = "cpu" if device is None else device
     state = torch.load(checkpoint_path, weights_only=False, map_location=device)
-    # A joint checkpoint holds both; 'unetr_state' is the decoder, 'model_state' the interactive model.
-    if isinstance(state, dict):
-        model_state = state.get("unetr_state", state.get("model_state", state))
+    # A joint checkpoint holds the interactive model and the decoder, see joint_unetr_state.
+    if isinstance(state, dict) and ("decoder_state" in state or "unetr_state" in state):
+        model_state = joint_unetr_state(state)
+    elif isinstance(state, dict):
+        model_state = state.get("model_state", state)
     else:
         model_state = state
 
@@ -781,8 +780,9 @@ def get_unisam2_model(
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         encoder = sam2_model.image_encoder
 
-    # The decoder width is not recorded in the checkpoint, so read it off 'out_conv'.
-    initial_features = model_state["out_conv.weight"].shape[1]
+    # Neither the decoder width nor the channel count (4, or 5 with the boundary channel) is recorded in the
+    # checkpoint, so read both off 'out_conv'.
+    output_channels, initial_features = model_state["out_conv.weight"].shape[:2]
 
     model = UniSAM2(encoder=encoder, output_channels=output_channels, initial_features=initial_features, device=device)
     _check_decoder_width(model, initial_features)
@@ -1015,8 +1015,9 @@ def _segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kw
     """Convert UniSAM2 predictions into an instance segmentation.
 
     Args:
-        prediction: The UniSAM2 predictions, shape (4, *spatial). Channel 0 is the foreground
-            probability and channels 1-3 are the directed distances.
+        prediction: The UniSAM2 predictions, shape (4 or 5, *spatial). Channel 0 is the foreground
+            probability, channels 1-3 are the directed distances and channel 4, if present, the object boundary,
+            which the segmentation does not use.
         mode: The segmentation mode. 'sparse' uses flow-based segmentation (LM data, 2d and 3d),
             'dense' uses multicut-based segmentation (EM data, 2d and 3d).
         kwargs: Additional parameters forwarded to the postprocessing function
@@ -1039,7 +1040,7 @@ def _segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kw
         else:
             seg = run_multicut(boundary_map, distances, **kwargs)
     else:
-        seg = flow_instance_segmentation(foreground, prediction[1:], **kwargs)
+        seg = flow_instance_segmentation(foreground, prediction[1:4], **kwargs)
     return seg.astype("uint32")
 
 

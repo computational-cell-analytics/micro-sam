@@ -5,13 +5,15 @@ import subprocess
 from datetime import datetime
 
 
-# Epochs per model. One epoch takes 53 min for hvit_t and 57 min for hvit_l, so these fit the 96 h qos.
 EPOCHS = {
-    "hvit_t": 94,
-    "hvit_s": 92,
-    "hvit_b": 90,
-    "hvit_l": 90,
+    "hvit_t": 75,
+    "hvit_s": 73,
+    "hvit_b": 82,
+    "hvit_l": 79,
 }
+DATASET_CHOICE = "all"
+BOUNDARY_DICE_WEIGHT = 0.5
+ENABLE_IB = True
 
 # GDR_LEVEL=LOC is mandatory with IB: GPUDirect RDMA fails on these nodes with IBV_WC_LOC_PROT_ERR.
 NCCL_ENV = {
@@ -31,18 +33,12 @@ NCCL_ENV = {
 SCRIPT = "/mnt/vast-kisski/home/archit/u28048/micro-sam/finetuning/v2/generalist/train_joint.py"
 PARTITION = "kisski-h100"
 GPU_TYPE = "H100"
-SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v5"
+SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v6"
 
 
-def write_batch_script(
-    out_path, model_type, n_epochs, dataset_choice, save_root, reservation, enable_ib, dry, tag,
-    with_boundaries=False, boundary_dice_weight=1.0,
-):
+def write_batch_script(out_path, model_type, n_epochs, save_root, reservation, dry, tag):
     """Write the sbatch script for one joint SAM2 training run on 2 nodes x 4 H100, and submit it."""
-    nccl_block = "\n".join(f"export {key}={value}" for key, value in NCCL_ENV[enable_ib].items())
-    if not 0.0 <= boundary_dice_weight <= 1.0:
-        raise ValueError("boundary_dice_weight must be between zero and one.")
-    boundary_args = f" --with_boundaries --boundary_dice_weight {boundary_dice_weight}" if with_boundaries else ""
+    nccl_block = "\n".join(f"export {key}={value}" for key, value in NCCL_ENV[ENABLE_IB].items())
 
     batch_script = rf"""#!/bin/bash
 #SBATCH --job-name=μSAM2_joint_{model_type}{"_" + tag if tag else ""}
@@ -57,20 +53,26 @@ def write_batch_script(
 #SBATCH --mem 0
 #SBATCH --qos=96h
 #SBATCH --constraint=inet
+# A requeued job restarts from epoch 0 and overwrites the checkpoints; a failed job must be resumed by hand.
+#SBATCH --no-requeue
 
 source ~/.bashrc
 micromamba activate super
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 export SAVE_ROOT={save_root}
 # One malloc arena per loader worker. A per-thread arena never shrinks, and host memory then grows every epoch.
+
 export MALLOC_ARENA_MAX=2
 # A fixed trim threshold also stops glibc from moving the large distance transform arrays out of mmap.
 export MALLOC_TRIM_THRESHOLD_=134217728
 # 4 ranks x 8 workers x 6 threads = 192 threads, one per CPU. Fewer workers keep fewer copies of the file handles.
+
 export LABEL_TRAFO_THREADS=6
 export N_WORKERS=8
 export RUN_TAG={tag}
+
 # The compile cache must be node-local. A cache on the shared filesystem blocks on its file locks.
 export TORCHINDUCTOR_CACHE_DIR=/local/jobs/${{USER}}_${{SLURM_JOB_ID}}/inductor
 
@@ -86,7 +88,8 @@ srun --cpu-bind=none bash -c "torchrun \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     --node_rank=\$SLURM_NODEID \
-    {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {dataset_choice} --compile{boundary_args}"
+    {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {DATASET_CHOICE} --compile \
+    --boundary_dice_weight {BOUNDARY_DICE_WEIGHT}"
 """
     if not tag:
         batch_script = batch_script.replace("export RUN_TAG=\n", "")
@@ -123,14 +126,10 @@ def submit_slurm(args):
             out_path=get_batch_script_names(tmp_folder),
             model_type=model_type,
             n_epochs=EPOCHS[model_type],
-            dataset_choice=args.dataset_choice,
             save_root=os.path.abspath(args.save_root or save_root),
             reservation=args.reservation,
-            enable_ib=args.enable_ib == "yes",
             dry=args.dry,
             tag=args.tag,
-            with_boundaries=args.with_boundaries,
-            boundary_dice_weight=args.boundary_dice_weight,
         )
 
 
@@ -140,30 +139,14 @@ def main():
         "-m", "--model_type", type=str, default=None, choices=list(EPOCHS.keys()),
         help="The model type. Submits all four models if not given.",
     )
-    parser.add_argument(
-        "--dataset_choice", type=str, default="all", choices=["lm", "em", "hp", "all"],
-        help="The datasets for the joint training.",
-    )
     parser.add_argument("-r", "--reservation", type=str, default=None, help="The slurm reservation to submit under.")
     parser.add_argument(
         "-s", "--save_root", type=str, default=None,
-        help="Where to save checkpoints and logs. Defaults to the shared v5 folder, or to its '<tag>' sibling.",
+        help="Where to save checkpoints and logs. Defaults to the shared v6 folder, or to its '<tag>' sibling.",
     )
-    parser.add_argument("--tag", type=str, default=None, help="Run tag, e.g. 'v5a', added to the run and job names.")
-    parser.add_argument("--enable_ib", type=str, default="yes", choices=["yes", "no"], help="Use IB, not sockets.")
-    parser.add_argument(
-        "--with_boundaries", action="store_true",
-        help="Train with the additional object-boundary channel. Disabled by default.",
-    )
-    parser.add_argument(
-        "--boundary_dice_weight", type=float, default=1.0,
-        help="Boundary Dice weight between 0 and 1: 1 selects Dice only, 0 selects BCE only. "
-             "Used with --with_boundaries.",
-    )
+    parser.add_argument("--tag", type=str, default=None, help="Run tag, e.g. 'v6', added to the run and job names.")
     parser.add_argument("--dry", action="store_true", help="Write the sbatch scripts but do not submit them.")
     args = parser.parse_args()
-    if not 0.0 <= args.boundary_dice_weight <= 1.0:
-        parser.error("--boundary_dice_weight must be between zero and one.")
 
     tmp_dir = "./gpu_jobs"
     if os.path.exists(tmp_dir):

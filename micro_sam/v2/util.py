@@ -400,26 +400,27 @@ FINETUNED_MODELS = [
 # truth for the default. The GUI derives its synthetic 'vit_<size><suffix>' selector string from it.
 DEFAULT_MODEL = "hvit_t_cells"
 
+# All models below in the model registry for "_cells" are v6.
 FINETUNED_URLS = {
-    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/EfoAFD4lky7o5Id/download",  # v5a
-    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/gdllGHhLQOw0ieb/download",  # v5a
-    "hvit_s_cells": "https://owncloud.gwdg.de/index.php/s/pB9FrVSjK9UztCe/download",  # v3
-    "hvit_s_cells_decoder": "https://owncloud.gwdg.de/index.php/s/NpiBiWnzqRXYkdc/download",  # v3
-    "hvit_b_cells": "https://owncloud.gwdg.de/index.php/s/WPUYBdknWgdUnf3/download",  # v3
-    "hvit_b_cells_decoder": "https://owncloud.gwdg.de/index.php/s/QrOJJaolizanXIu/download",  # v3
-    "hvit_l_cells": "https://owncloud.gwdg.de/index.php/s/kxFOH9YwlWEoyjf/download",  # v3
-    "hvit_l_cells_decoder": "https://owncloud.gwdg.de/index.php/s/xvu7k43mYOoKFNH/download",  # v3
+    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/XZuc5IqxQ1AlWaN/download",
+    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/KEtW0dobX2az0GO/download",
+    "hvit_s_cells": "https://owncloud.gwdg.de/index.php/s/oFWEPBQQqOwxq07/download",
+    "hvit_s_cells_decoder": "https://owncloud.gwdg.de/index.php/s/Zweh3Ew1eO9Loen/download",
+    "hvit_b_cells": "https://owncloud.gwdg.de/index.php/s/IgyXnqw3YuGXP3L/download",
+    "hvit_b_cells_decoder": "https://owncloud.gwdg.de/index.php/s/Eo3ntD2pCdv89xg/download",
+    "hvit_l_cells": "https://owncloud.gwdg.de/index.php/s/MBLqZEMuaC94toI/download",
+    "hvit_l_cells_decoder": "https://owncloud.gwdg.de/index.php/s/Y0exLXtfdIZV96Z/download",
 }
 
 FINETUNED_HASHES = {
-    "hvit_t_cells": "xxh128:a10e96b931df580db06f6af99b45ad9f",
-    "hvit_t_cells_decoder": "xxh128:39217ba5f87d9ae83bc8e40b249c7116",
-    "hvit_s_cells": "xxh128:a197591b47093c8ef53b0187e3811911",
-    "hvit_s_cells_decoder": "xxh128:afe742f97f2b72de4c60f46691788c79",
-    "hvit_b_cells": "xxh128:10142e4120285a8e9c2ee9eb5d4ef9d4",
-    "hvit_b_cells_decoder": "xxh128:7987038c4bfd2e8552a59e19b551c169",
-    "hvit_l_cells": "xxh128:d0f7a067f07357524978d2215f379523",
-    "hvit_l_cells_decoder": "xxh128:f16b41ccaf285297227ddc8acc240cb6",
+    "hvit_t_cells": "xxh128:64f0142a7a1996ab3017f2f47a21926c",
+    "hvit_t_cells_decoder": "xxh128:a469c3d0a5b65804c7858fc46f3f83ec",
+    "hvit_s_cells": "xxh128:bf42e744511ed46c35e21935a5b03e49",
+    "hvit_s_cells_decoder": "xxh128:ed69d386eb2bd4141279bb4b459eb903",
+    "hvit_b_cells": "xxh128:7854c938a67af3bd46339e821b38f5b0",
+    "hvit_b_cells_decoder": "xxh128:0e2fec5d1054a6208a32826ad057d941",
+    "hvit_l_cells": "xxh128:3ca5cba0d9622b228615d6aaa1de5d08",
+    "hvit_l_cells_decoder": "xxh128:859083bcabcf885168cb6c0f0273d372",
 }
 
 

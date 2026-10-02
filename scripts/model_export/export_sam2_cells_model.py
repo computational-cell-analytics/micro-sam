@@ -2,7 +2,7 @@
 
 The joint multi-GPU trainer (`micro_sam.v2.training.joint_sam2_trainer`) stores a single
 torch_em checkpoint that bundles the interactive SAM2 weights (under 'model_state'), the
-automatic UniSAM2 decoder weights (under 'unetr_state') and a lot of non-tensor trainer state
+automatic UniSAM2 decoder weights (under 'decoder_state', 'unetr_state' before v6) and a lot of non-tensor trainer state
 (optimizer, datasets, ...). That checkpoint cannot be loaded directly because:
 
 - `sam2.build_sam._load_checkpoint` reads `torch.load(...)["model"]` with `weights_only=True`,
@@ -24,6 +24,8 @@ from collections import OrderedDict
 
 import torch
 import xxhash
+
+from micro_sam.v2.models.util import joint_unetr_state
 
 
 def _strip_ddp_prefix(state_dict):
@@ -55,13 +57,11 @@ def export_joint_model(checkpoint_path, output_folder, name, base_model_type):
         A dict mapping each registry key to (filepath, xxh128 hash).
     """
     state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    if "model_state" not in state or "unetr_state" not in state:
-        raise RuntimeError(
-            f"Expected a joint checkpoint with 'model_state' and 'unetr_state', got keys: {list(state.keys())}"
-        )
+    if "model_state" not in state or not ("decoder_state" in state or "unetr_state" in state):
+        raise RuntimeError(f"Expected a joint checkpoint with 'model_state' and 'decoder_state', got {list(state)}")
 
     model_state = _strip_ddp_prefix(state["model_state"])
-    unetr_state = _strip_ddp_prefix(state["unetr_state"])
+    unetr_state = _strip_ddp_prefix(joint_unetr_state(state))
 
     os.makedirs(output_folder, exist_ok=True)
     encoder_path = os.path.join(output_folder, f"{name}.pt")

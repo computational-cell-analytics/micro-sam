@@ -81,19 +81,36 @@ def _astih_pre_label_transform(y, min_size=20):
     return instances
 
 
+def _compact_label_ids(labels, keep=()):
+    """Relabel the instances to 1..n, keeping the ids in ``keep`` as they are.
+
+    The flip augmentation casts labels to float32 and back, which merges ids above 2^24: connectomics volumes
+    number their neurons far beyond that. Runs as the label_transform, after the sampler and before the flips.
+    """
+    labels = np.asarray(labels)
+    ids = np.unique(labels)
+    lut = np.zeros(len(ids), dtype="int64")
+    instances = (ids != 0) & ~np.isin(ids, keep)
+    lut[instances] = np.arange(1, int(instances.sum()) + 1)
+    for value in keep:
+        lut[ids == value] = value
+    return lut[np.searchsorted(ids, labels)]
+
+
 def _labels_to_uint32(labels):
     """Widen labels so that an ignore label fits. torch_em recasts labels to their loaded dtype before
     label_transform2, so this has to run as the pre_label_transform."""
     return np.asarray(labels).astype("uint32")
 
 
-def _ignore_missing_raw_trafo(raw, labels, ignore_label, min_area=4096, transform=None):
-    """Mark labels as *ignore_label* where the raw holds a missing tile, then apply *transform*.
+def _ignore_missing_raw_trafo(raw, labels, ignore_label, normalizer=None, min_area=4096, transform=None):
+    """Mark labels as *ignore_label* where the raw holds a missing tile, normalize the raw, then apply *transform*.
 
-    A missing tile is a connected region of exact zeros in a slice with at least *min_area* pixels.
-    The area threshold keeps dark tissue pixels, which never form such regions, out of the mask.
-    Runs as the joint 'transform', so it sees the raw and precedes label_transform2. The loaded label
-    dtype must hold *ignore_label*, see :func:`_labels_to_uint32`.
+    A missing tile is a connected region of exact zeros in a slice with at least *min_area* pixels. The test needs
+    the stored intensities, since a percentile normalization clips dark tissue to zero as well, so the leaf's
+    raw_transform must leave the normalization to *normalizer*, which runs here after the test. Runs as the joint
+    'transform', so it sees the raw and precedes label_transform2. The loaded label dtype must hold *ignore_label*,
+    see :func:`_labels_to_uint32`.
     """
     raw = np.asarray(raw)
     labels = np.asarray(labels)
@@ -116,6 +133,8 @@ def _ignore_missing_raw_trafo(raw, labels, ignore_label, min_area=4096, transfor
         else:
             labels = labels.copy()
         labels[missing] = ignore_label
+    if normalizer is not None:
+        raw = normalizer(raw)
     if transform is not None:
         raw, labels = transform(raw, labels)
     return raw, labels
@@ -435,7 +454,7 @@ class DirectedPerObjectBoundaryDistanceTransform:
             distances = np.concatenate([binary_labels[None], distances], axis=0)
 
         if self.instances:
-            distances = np.concatenate([labels[None], distances], axis=0)
+            distances = np.concatenate([labels[None].astype("float32"), distances], axis=0)
 
         if is_2d:
             assert distances.ndim == 4
