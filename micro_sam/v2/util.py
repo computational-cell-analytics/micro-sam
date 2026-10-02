@@ -400,15 +400,16 @@ FINETUNED_MODELS = [
 # truth for the default. The GUI derives its synthetic 'vit_<size><suffix>' selector string from it.
 DEFAULT_MODEL = "hvit_t_cells"
 
+# All models below in the model registry for "_cells" are v6.
 FINETUNED_URLS = {
-    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/XZuc5IqxQ1AlWaN/download",  # v6
-    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/KEtW0dobX2az0GO/download",  # v6
-    "hvit_s_cells": "https://owncloud.gwdg.de/index.php/s/oFWEPBQQqOwxq07/download",  # v6
-    "hvit_s_cells_decoder": "https://owncloud.gwdg.de/index.php/s/Zweh3Ew1eO9Loen/download",  # v6
-    "hvit_b_cells": "https://owncloud.gwdg.de/index.php/s/WPUYBdknWgdUnf3/download",  # v3
-    "hvit_b_cells_decoder": "https://owncloud.gwdg.de/index.php/s/QrOJJaolizanXIu/download",  # v3
-    "hvit_l_cells": "https://owncloud.gwdg.de/index.php/s/MBLqZEMuaC94toI/download",  # v6
-    "hvit_l_cells_decoder": "https://owncloud.gwdg.de/index.php/s/Y0exLXtfdIZV96Z/download",  # v6
+    "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/XZuc5IqxQ1AlWaN/download",
+    "hvit_t_cells_decoder": "https://owncloud.gwdg.de/index.php/s/KEtW0dobX2az0GO/download",
+    "hvit_s_cells": "https://owncloud.gwdg.de/index.php/s/oFWEPBQQqOwxq07/download",
+    "hvit_s_cells_decoder": "https://owncloud.gwdg.de/index.php/s/Zweh3Ew1eO9Loen/download",
+    "hvit_b_cells": "https://owncloud.gwdg.de/index.php/s/IgyXnqw3YuGXP3L/download",
+    "hvit_b_cells_decoder": "https://owncloud.gwdg.de/index.php/s/Eo3ntD2pCdv89xg/download",
+    "hvit_l_cells": "https://owncloud.gwdg.de/index.php/s/MBLqZEMuaC94toI/download",
+    "hvit_l_cells_decoder": "https://owncloud.gwdg.de/index.php/s/Y0exLXtfdIZV96Z/download",
 }
 
 FINETUNED_HASHES = {
@@ -416,8 +417,8 @@ FINETUNED_HASHES = {
     "hvit_t_cells_decoder": "xxh128:a469c3d0a5b65804c7858fc46f3f83ec",
     "hvit_s_cells": "xxh128:bf42e744511ed46c35e21935a5b03e49",
     "hvit_s_cells_decoder": "xxh128:ed69d386eb2bd4141279bb4b459eb903",
-    "hvit_b_cells": "xxh128:10142e4120285a8e9c2ee9eb5d4ef9d4",
-    "hvit_b_cells_decoder": "xxh128:7987038c4bfd2e8552a59e19b551c169",
+    "hvit_b_cells": "xxh128:7854c938a67af3bd46339e821b38f5b0",
+    "hvit_b_cells_decoder": "xxh128:0e2fec5d1054a6208a32826ad057d941",
     "hvit_l_cells": "xxh128:3ca5cba0d9622b228615d6aaa1de5d08",
     "hvit_l_cells_decoder": "xxh128:859083bcabcf885168cb6c0f0273d372",
 }
