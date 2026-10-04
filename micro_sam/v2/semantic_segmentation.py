@@ -6,7 +6,7 @@ background, object boundary and object interior from an instance segmentation.
 """
 
 import os
-from typing import Optional, Tuple, Union
+from typing import Callable, Optional, Tuple, Union
 
 import numpy as np
 
@@ -32,6 +32,7 @@ def get_semantic_model(
     Args:
         model_type: The SAM2 encoder variant the model was trained with.
         num_classes: The number of semantic classes, the background class included.
+            One selects a binary model with a single foreground channel.
         checkpoint_path: The 'best.pt' or 'latest.pt' file of a training run. The model keeps the pretrained
             SAM2 encoder and an untrained decoder if this is None.
         device: The device to load the model on. Auto-selects if None.
@@ -57,6 +58,7 @@ def semantic_segmentation(
     tile_shape: Optional[Tuple[int, ...]] = None,
     halo: Optional[Tuple[int, ...]] = None,
     verbose: bool = True,
+    normalize: Optional[Callable[[np.ndarray], np.ndarray]] = None,
 ) -> np.ndarray:
     """Run semantic segmentation on an image or a volume.
 
@@ -70,9 +72,11 @@ def semantic_segmentation(
         tile_shape: The inner shape of a prediction tile. Uses the micro-sam tiling defaults if None.
         halo: The halo added to every side of a tile. Uses the micro-sam tiling defaults if None.
         verbose: Whether to show a progress bar.
+        normalize: A function that maps the whole input to float values in [0, 1], with the shape of the input.
+            It replaces the default percentile normalization. The input is normalized once, before the tiling.
 
     Returns:
-        The class ids, with the shape of the raw data.
+        The class ids, with the shape of the raw data. A binary model returns the foreground mask.
     """
     if raw.ndim not in (2, 3):
         raise ValueError(f"The raw data has {raw.ndim} dimensions. Expected an image (Y, X) or a volume (Z, Y, X).")
@@ -84,7 +88,12 @@ def semantic_segmentation(
         halo = (DEFAULT_HALO_Z,) + DEFAULT_HALO if is_3d else DEFAULT_HALO
 
     # 2d normalizes over the image and 3d over every z slice, which is what the training transforms do.
-    normalized = normalize_raw(raw, axis=(1, 2) if is_3d else (0, 1))
+    if normalize is None:
+        normalized = normalize_raw(raw, axis=(1, 2) if is_3d else (0, 1))
+    else:
+        normalized = normalize(raw)
+        if normalized.shape != raw.shape:
+            raise ValueError(f"The normalization changed the shape from {raw.shape} to {normalized.shape}.")
 
     device = next(model.parameters()).device
     dtype = autocast_dtype(device)
@@ -113,4 +122,7 @@ def semantic_segmentation(
         disable_tqdm=not verbose,
         tqdm_desc="Run semantic segmentation",
     )
+    # A single output channel holds the foreground logits of a binary model.
+    if logits.shape[0] == 1:
+        return (logits[0] > 0).astype("uint8")
     return np.argmax(logits, axis=0).astype("uint8")

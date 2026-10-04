@@ -976,7 +976,71 @@ def _configure_joint_speed(sam2_model, unetr, compile):
                 module.compile(dynamic=False)
 
 
-def _build_semantic_sam2_model(model_type, device, num_classes, peft_kwargs=None, initial_features=32):
+def _configure_semantic_speed(model, compile):
+    """Apply the backend speed settings of the joint training functions to a SemanticSAM2 model.
+
+    Args:
+        model: The SemanticSAM2 model.
+        compile: The parts to compile, a subset of "encoder" and "decoder".
+    """
+    torch.backends.cudnn.benchmark = True
+    torch.set_float32_matmul_precision("high")
+    if not compile:
+        return
+    # See '_configure_joint_speed': one specialization per decoder block width, and one worker per core.
+    torch._dynamo.config.cache_size_limit = max(torch._dynamo.config.cache_size_limit, 64)
+    torch._inductor.config.compile_threads = _compile_threads_per_rank()
+    if "encoder" in compile:
+        # The in-place compile keeps the module and its state_dict keys.
+        model.encoder.inner.compile(dynamic=False)
+    if "decoder" in compile:
+        for name, module in model.named_children():
+            if name != "encoder":
+                module.compile(dynamic=False)
+
+
+def _init_semantic_decoder(model, model_type):
+    """Initialize the decoder of a SemanticSAM2 model from the UniSAM2 decoder of a finetuned model.
+
+    Copies every decoder weight, but not the output head, whose number of channels differs, and not the encoder.
+
+    Args:
+        model: The SemanticSAM2 model.
+        model_type: A finetuned model with a registered decoder, for example, "hvit_l_cells".
+    """
+    from micro_sam.v2.models.util import joint_unetr_state
+    from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
+
+    if model_type not in FINETUNED_MODELS or not has_registered_decoder(model_type):
+        raise ValueError(f"'{model_type}' has no registered decoder to initialize the semantic decoder from.")
+
+    _, _, decoder_path = _download_finetuned_sam2_model(model_type)
+    state = torch.load(decoder_path, map_location="cpu", weights_only=False)
+    if isinstance(state, dict) and ("decoder_state" in state or "unetr_state" in state):
+        state = joint_unetr_state(state)
+    elif isinstance(state, dict):
+        state = state.get("model_state", state)
+
+    head_prefixes = ("encoder.", "out_conv.")
+    decoder_state = {k: v for k, v in state.items() if not k.startswith(head_prefixes)}
+
+    model_state = model.state_dict()
+    mismatched = [k for k, v in decoder_state.items() if k in model_state and model_state[k].shape != v.shape]
+    if mismatched:
+        raise ValueError(
+            f"The decoder of '{model_type}' does not match the model, for example at '{mismatched[0]}'. "
+            "Check that 'initial_features' matches the decoder width."
+        )
+
+    missing, unexpected = model.load_state_dict(decoder_state, strict=False)
+    missing = [k for k in missing if not k.startswith(head_prefixes)]
+    if missing or unexpected:
+        raise RuntimeError(f"Could not initialize the decoder. Missing keys: {missing}, unexpected keys: {unexpected}.")
+
+
+def _build_semantic_sam2_model(
+    model_type, device, num_classes, peft_kwargs=None, initial_features=32, init_decoder=False,
+):
     """Build a SemanticSAM2 model and optionally apply PEFT to its encoder.
 
     Args:
@@ -986,6 +1050,8 @@ def _build_semantic_sam2_model(model_type, device, num_classes, peft_kwargs=None
         peft_kwargs: The arguments for `PEFT_Sam2`, or None.
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
+        init_decoder: Whether to initialize the decoder from the registered UniSAM2 decoder of a
+            finetuned model, for example, "hvit_l_cells". The output head stays freshly initialized.
 
     Returns:
         The SemanticSAM2 model on the given device.
@@ -1008,6 +1074,9 @@ def _build_semantic_sam2_model(model_type, device, num_classes, peft_kwargs=None
         model = SemanticSAM2(
             encoder=model_type, num_classes=num_classes, initial_features=initial_features, device=device
         )
+
+    if init_decoder:
+        _init_semantic_decoder(model, model_type)
     return model
 
 
@@ -1029,6 +1098,9 @@ def train_semantic(
     load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     initial_features: int = 32,
     dice_weight: float = 0.5,
+    init_decoder: bool = False,
+    mixed_precision: Optional[bool] = None,
+    compile: Optional[List[str]] = None,
 ) -> None:
     """Train SemanticSAM2 for semantic segmentation on 2d and 3d data.
 
@@ -1038,6 +1110,10 @@ def train_semantic(
     :func:`~micro_sam.v2.transforms.labels.semantic_labels` derives the three class layout of
     background, object boundary and object interior from an instance segmentation.
 
+    With 'num_classes=1' the model predicts a single foreground channel instead, trained with a
+    weighted sum of a dice loss and a binary cross entropy loss on the sigmoid of the logits.
+    The targets are then binary foreground masks.
+
     Args:
         name: Checkpoint / log folder name.
         model_type: SAM2 encoder variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
@@ -1045,6 +1121,7 @@ def train_semantic(
             class ids in y of shape (B, 1, Z, Y, X). 2d data carries a singleton z axis.
         val_loader: Same format, used for validation.
         num_classes: The number of semantic classes, the background class included.
+            One selects binary foreground segmentation with the dice and binary cross entropy loss.
         n_epochs: Number of training epochs. Ignored if n_iterations is set.
         n_iterations: If set, train for this many iterations instead of epochs.
         early_stopping: Stop after this many epochs without improvement (None = off).
@@ -1060,13 +1137,35 @@ def train_semantic(
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
         dice_weight: The weight of the dice loss in the combined loss. One selects dice only.
             Zero selects cross entropy only.
+        init_decoder: Whether to initialize the decoder from the registered UniSAM2 decoder of a
+            finetuned model, for example, "hvit_l_cells". The output head stays freshly initialized.
+        mixed_precision: Whether to train with bfloat16 mixed precision. The weights and the optimizer state
+            stay in float32. The hardware decides if None.
+        compile: The parts to compile with ``torch.compile``, a subset of "encoder" and "decoder".
+            Set 'TORCHINDUCTOR_CACHE_DIR' to a node-local folder: a cache on a shared filesystem blocks on its locks.
     """
     import torch_em
 
     device = get_device(device)
     model = _build_semantic_sam2_model(
-        model_type, device, num_classes=num_classes, peft_kwargs=peft_kwargs, initial_features=initial_features,
+        model_type, device, num_classes=num_classes, peft_kwargs=peft_kwargs,
+        initial_features=initial_features, init_decoder=init_decoder,
     )
+    compile = _check_compile(compile)
+    if "loss" in compile:
+        raise ValueError("The semantic training compiles the 'encoder' and the 'decoder' only.")
+    _configure_semantic_speed(model, compile)
+
+    if num_classes == 1:
+        from torch_em.loss.dice import BCEDiceLossWithLogits, DiceLossWithLogits
+
+        if not 0.0 <= dice_weight <= 1.0:
+            raise ValueError(f"The dice weight is '{dice_weight}'. It must lie between zero and one.")
+        loss = BCEDiceLossWithLogits(alpha=dice_weight, beta=1.0 - dice_weight)
+        metric = DiceLossWithLogits()
+    else:
+        loss = CustomCombinedLoss(num_classes=num_classes, dice_weight=dice_weight)
+        metric = CustomDiceLoss(num_classes=num_classes)
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
 
@@ -1076,16 +1175,16 @@ def train_semantic(
         train_loader=train_loader,
         val_loader=val_loader,
         learning_rate=lr,
-        loss=CustomCombinedLoss(num_classes=num_classes, dice_weight=dice_weight),
-        metric=CustomDiceLoss(num_classes=num_classes),
+        loss=loss,
+        metric=metric,
         logger=UniSAM2Logger,
         log_image_interval=50,
         save_root=save_root,
         compile_model=False,
         scheduler_kwargs=scheduler_kwargs,
         optimizer_kwargs={"weight_decay": 0.1},
-        # The hardware decides the precision. SAM2 trains in bfloat16 only.
-        mixed_precision=training_autocast_dtype(device) is not None,
+        # The hardware decides the precision by default. SAM2 trains in bfloat16 only.
+        mixed_precision=(training_autocast_dtype(device) is not None) if mixed_precision is None else mixed_precision,
         mixed_precision_dtype="bfloat16",
         device=device,
         early_stopping=early_stopping,
