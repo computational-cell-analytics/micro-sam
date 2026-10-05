@@ -12,15 +12,13 @@ on:
 
 jobs:
   test-pip:
-    name: pip-install ubuntu-latest ${{ matrix.python-version }} ${{ matrix.suite }}
+    name: pip-install ubuntu-latest ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.12"]
-        # 'v1': the SAM1 tests (marked with 'pytest.mark.v1'), 'v2': the SAM2 and annotator tests.
-        suite: [v1, v2]
 
     steps:
       - name: Checkout
@@ -52,9 +50,18 @@ jobs:
       # MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT skips that single assertion (see the test).
       # Set it via GITHUB_ENV so it is exported to the headless-gui step's environment.
       - name: Configure test environment
+        id: configure
         run: echo "MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT=1" >> "$GITHUB_ENV"
 
-      - name: Run non-gui tests
+      # The non-gui tests run in two parts: the SAM1 tests (marked with 'pytest.mark.v1') and the
+      # SAM2 and annotator tests. The v2 part also runs when the v1 part fails.
+      - name: Run v1 non-gui tests
         uses: aganders3/headless-gui@v2
         with:
-          run: pytest -m "${{ matrix.suite == 'v1' && 'v1 and not gui' || 'not v1 and not gui' }}"
+          run: pytest -m "v1 and not gui"
+
+      - name: Run v2 non-gui tests
+        if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+        uses: aganders3/headless-gui@v2
+        with:
+          run: pytest -m "not v1 and not gui"
