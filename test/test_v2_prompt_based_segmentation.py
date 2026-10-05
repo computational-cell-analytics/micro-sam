@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 import torch
 from bioimage_cpp.utils import Blocking
+from scipy.ndimage import gaussian_filter
 
 from micro_sam.v2.prompt_based_segmentation import (
     PromptableSegmentation3D,
@@ -506,9 +507,11 @@ def test_video_predictor_correction_flags_and_propagation():
     assert predictor.clear_non_cond_mem_around_input is True
     assert callable(getattr(predictor, "_clear_obj_non_cond_mem_around_input", None))
 
-    volume = np.zeros((5, 128, 128), dtype="float32")
+    # A blurred disk with noise: the 'cells' models do not segment a perfectly flat disk on a zero background.
     yy, xx = np.mgrid[0:128, 0:128]
-    volume[:, ((yy - 64) ** 2 + (xx - 64) ** 2) < 22 ** 2] = 220.0
+    disk = gaussian_filter((((yy - 64) ** 2 + (xx - 64) ** 2) < 22 ** 2).astype("float32"), sigma=2)
+    rng = np.random.default_rng(0)
+    volume = np.stack([disk * 200 + 20 + rng.normal(0, 10, disk.shape) for _ in range(5)]).astype("float32")
 
     embeddings = precompute_image_embeddings(predictor, volume, ndim=3, verbose=False)
     segmenter = PromptableSegmentation3D(predictor, volume, embeddings, device="cpu")

@@ -12,7 +12,7 @@ on:
 
 jobs:
   test:
-    name: ${{ matrix.os }} ${{ matrix.python-version }}
+    name: ${{ matrix.os }} ${{ matrix.python-version }} ${{ matrix.suite }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -20,6 +20,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.12"]
+        # 'v1': the SAM1 tests (vit_t / vit_t_lm), marked with 'pytest.mark.v1'.
+        # 'v2': everything else, i.e. the SAM2 tests (hvit_t / hvit_t_cells) and the annotator.
+        suite: [v1, v2]
 
     steps:
       - name: Checkout
@@ -48,12 +51,13 @@ jobs:
         uses: aganders3/headless-gui@v2
         with:
           shell: bash -l {0}
-          run: pytest
+          run: pytest -m "${{ matrix.suite == 'v1' && 'v1' || 'not v1' }}"
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           file: ./coverage.xml
+          flags: ${{ matrix.suite }}
           verbose: false
           fail_ci_if_error: false

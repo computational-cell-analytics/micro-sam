@@ -28,6 +28,7 @@ class TestUtil(unittest.TestCase):
         rmtree(self.tmp_folder)
 
     # Check that the URLs for all models are valid.
+    @pytest.mark.v1
     def test_model_registry(self):
         from micro_sam.v1.util import models
 
@@ -46,6 +47,7 @@ class TestUtil(unittest.TestCase):
             url_exists = check_url(registry.get_url(name))
             self.assertTrue(url_exists)
 
+    @pytest.mark.v1
     def test_get_sam_model(self):
         from micro_sam.v1.util import get_sam_model
 
@@ -448,6 +450,7 @@ class TestUtil(unittest.TestCase):
         predictor.input_size = None
         predictor.original_size = None
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings(self):
         from micro_sam.v1.util import precompute_image_embeddings
 
@@ -474,6 +477,7 @@ class TestUtil(unittest.TestCase):
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path)
         self._check_predictor_initialization(predictor, embeddings)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_3d(self):
         from micro_sam.v1.util import precompute_image_embeddings
 
@@ -504,6 +508,7 @@ class TestUtil(unittest.TestCase):
         for i in range(input_.shape[0]):
             self._check_predictor_initialization(predictor, embeddings, i=i)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_tiled(self):
         from micro_sam.v1.util import precompute_image_embeddings
 
@@ -535,6 +540,7 @@ class TestUtil(unittest.TestCase):
         for tile_id in range(4):
             self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_tiled_3d(self):
         from micro_sam.v1.util import precompute_image_embeddings
 
@@ -573,6 +579,7 @@ class TestUtil(unittest.TestCase):
             for tile_id in range(4):
                 self._check_predictor_initialization(predictor, embeddings, i=i, tile_id=tile_id)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_automatic_batch_size(self):
         # The automatic batch size ('None', the default of the entry points that dispatch across the
         # model families) has no per-device lookup for SAM1, so it runs a single tile / slice.

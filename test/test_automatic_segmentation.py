@@ -1,5 +1,6 @@
 import unittest
 
+import pytest
 import numpy as np
 import torch
 from scipy.ndimage import shift
@@ -7,6 +8,8 @@ from skimage.draw import disk
 from skimage.measure import label as connected_components
 
 import micro_sam.util as util
+
+pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 
 try:
     from trackastra.model import Trackastra  # noqa

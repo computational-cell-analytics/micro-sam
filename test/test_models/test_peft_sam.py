@@ -1,8 +1,11 @@
 import unittest
 
+import pytest
 import torch
 
 from micro_sam.v1.util import get_sam_model
+
+pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 
 
 class TestPEFTSam(unittest.TestCase):

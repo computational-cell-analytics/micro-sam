@@ -6,6 +6,7 @@ from shutil import rmtree
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 import numpy as np
 import imageio.v3 as imageio
 
@@ -16,6 +17,8 @@ import torch
 
 import micro_sam.util as util
 from micro_sam.sample_data import fetch_hela_2d_example_data, synthetic_data
+
+pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 
 spec_minor = int(bioimageio.spec.__version__.split(".")[1])
 

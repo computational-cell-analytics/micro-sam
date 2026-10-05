@@ -1,6 +1,9 @@
 import unittest
 
+import pytest
 import torch
+
+pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 
 
 class TestSimpleSAM3DWrapper(unittest.TestCase):

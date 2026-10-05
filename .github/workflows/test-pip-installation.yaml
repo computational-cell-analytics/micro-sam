@@ -12,13 +12,15 @@ on:
 
 jobs:
   test-pip:
-    name: pip-install ubuntu-latest ${{ matrix.python-version }}
+    name: pip-install ubuntu-latest ${{ matrix.python-version }} ${{ matrix.suite }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.12"]
+        # 'v1': the SAM1 tests (marked with 'pytest.mark.v1'), 'v2': the SAM2 and annotator tests.
+        suite: [v1, v2]
 
     steps:
       - name: Checkout
@@ -55,4 +57,4 @@ jobs:
       - name: Run non-gui tests
         uses: aganders3/headless-gui@v2
         with:
-          run: pytest -m "not gui"
+          run: pytest -m "${{ matrix.suite == 'v1' && 'v1 and not gui' || 'not v1 and not gui' }}"

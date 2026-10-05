@@ -45,6 +45,7 @@ class TestCLI(unittest.TestCase):
         ]:
             self._test_help(*cmd)
 
+    @pytest.mark.v1
     def test_v1_help(self):
         self._test_help("v1")
         for cmd in ["train", "automatic_segmentation", "evaluate", "benchmark_sam"]:
@@ -83,6 +84,7 @@ class TestCLI(unittest.TestCase):
         for i in range(n_images):
             self.assertTrue(os.path.exists(os.path.join(emb_path3, f"image-{i}.zarr")))
 
+    @pytest.mark.v1
     @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
     def test_v1_automatic_segmentation(self):
         # Create 1 image as testdata.

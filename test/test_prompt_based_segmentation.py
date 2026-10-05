@@ -1,11 +1,14 @@
 import os
 import unittest
 
+import pytest
 import micro_sam.util as util
 from micro_sam.v1.util import get_sam_model, precompute_image_embeddings, set_precomputed
 import numpy as np
 
 from skimage.draw import disk
+
+pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 
 # A standalone mask prompt (no box, no points) is an unreliable refinement prompt: its output
 # is sensitive to the torch build and can collapse to the whole image. It passes with the
