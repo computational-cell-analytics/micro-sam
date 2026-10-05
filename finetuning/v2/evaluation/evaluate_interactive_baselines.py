@@ -5,7 +5,7 @@ Supported methods:
   sam: Pretrained SAM v1 interactive segmentation (2d only)
   sam3: SAM3 interactive segmentation (2d and 3d)
   micro-sam: micro-sam v1 finetuned interactive, slice-wise (vit_b_lm for LM, vit_b_em_organelles for EM)
-  microsam_vol: micro-sam v1 finetuned interactive, volumetric projection (3d LM only)
+  microsam_vol: SAM v1 or micro-sam v1 with iterative prompts and volumetric projection, as the 3d annotator (3d only)
 
 The SAM2 engine itself, pretrained or jointly finetuned, is evaluated by
 evaluate_interactive_segmentation.py, which those two share.
@@ -16,6 +16,7 @@ Usage examples:
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method sam3
     python evaluate_interactive_baselines.py -d livecell -e <exp> --method micro-sam
     python evaluate_interactive_baselines.py -d embedseg -e <exp> --method microsam_vol -m vit_b_lm -p box
+    python evaluate_interactive_baselines.py -d cremi -e <exp> --method microsam_vol -p point --correction box
 """
 
 import os
@@ -23,9 +24,11 @@ import sys
 import shutil
 import argparse
 from itertools import islice
+from multiprocessing import get_context
+from functools import lru_cache, partial
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
-import pandas as pd
 import imageio.v3 as imageio
 from tqdm import tqdm
 from scipy.ndimage import distance_transform_edt, find_objects
@@ -216,8 +219,7 @@ def run_sam_v1_evaluation(
 
     if ndim == 3:
         raise ValueError(
-            "micro-sam v1 3D interactive evaluation must use the volumetric implementation. "
-            "Run finetuning/v2/evaluation/evaluate_micro_sam_volumetric.py instead."
+            "The slice-wise micro-sam v1 evaluation is 2d only. Use '--method microsam_vol' for a volume."
         )
 
     if name_tag == "micro-sam" and dataset_name in EM_DATASETS:
@@ -336,73 +338,75 @@ def run_sam3_evaluation(
         print(f"Iteration {it:02d}: {results}")
 
 
+@lru_cache(maxsize=1)
+def _load_sam_v1_once(model_type, checkpoint, device):
+    """Load the SAM v1 predictor once per worker process."""
+    return _load_sam_v1(model_type, checkpoint, device)
+
+
+def _segment_volume(raw, labels, model_type, checkpoint, device, options):
+    """Segment one volume with iterative prompts, in a worker process."""
+    from micro_sam.v1.evaluation.multi_dimensional_segmentation import evaluate_interactive_volume_segmentation
+    predictor = _load_sam_v1_once(model_type, checkpoint, device)
+    return evaluate_interactive_volume_segmentation(predictor, raw, labels, **options)
+
+
 def run_microsam_volumetric_evaluation(
-    dataset_name, data_root, experiment_folder, model_type=None, checkpoint=None,
-    prompt_choice="box", full_grid_search=False, store_segmentation=True, min_size=0, limit=None,
+    dataset_name, data_root, experiment_folder, device, model_type=None, checkpoint=None, start_with_box=True,
+    n_iterations=8, min_size=0, start_slice="center", correction="box_and_points", use_masks=False, projection="mask",
+    iou_threshold=0.8, box_extension=0.025, seed=None, n_workers=4, limit=None,
 ):
-    """Evaluate micro-sam v1 with its volumetric projection instead of slice-wise prompting.
+    """Evaluate SAM v1 or micro-sam v1 with iterative prompts and volumetric projection, as in the 3d annotator.
 
-    The prompt of an object is placed on one slice and projected through the volume, which is the
-    mode the micro-sam v1 annotator offers for 3d data.
+    See `evaluate_interactive_volume_segmentation` for the prompts and the corrections. Each worker process
+    segments one volume at a time on the same GPU.
     """
-    from micro_sam.v1.evaluation.multi_dimensional_segmentation import (
-        run_multi_dimensional_segmentation_grid_search
-    )
-
     if dataset_name not in DATASETS_3D:
-        raise ValueError(f"The volumetric micro-sam v1 evaluation is 3d only; got '{dataset_name}'.")
-    if dataset_name in EM_DATASETS:
-        raise ValueError(f"Volumetric micro-sam v1 only supports LM datasets; got '{dataset_name}'.")
-
+        raise ValueError(f"The volumetric micro-sam v1 evaluation is 3d only. '{dataset_name}' is 2d.")
     if model_type is None:
-        model_type = MICROSAM_V1_LM_MODEL
+        model_type = MICROSAM_V1_EM_MODEL if dataset_name in EM_DATASETS else MICROSAM_V1_LM_MODEL
 
-    interactive_seg_mode = "points" if prompt_choice == "point" else "box"
-    # The projection settings the annotator defaults to. A full sweep is opt-in, since it re-runs
-    # the projection for every combination.
-    grid_search_values = None if full_grid_search else {
-        "iou_threshold": [0.8], "projection": ["mask"], "box_extension": [0.025],
-    }
-
-    samples, n = _load_samples(dataset_name, data_root, 3, min_size, limit)
-    rows = []
-    it = tqdm(samples, total=n, desc="microsam_vol")
-    for sample_id, (raw, labels, _) in enumerate(it):
-        sample_name = f"sample_{sample_id:05d}"
-        result_dir = os.path.join(
-            experiment_folder, "results", f"{dataset_name}_microsam_vol_{model_type}_{prompt_choice}", sample_name,
-        )
-        embedding_path = os.path.join(
-            experiment_folder, "embeddings", f"{dataset_name}_microsam_vol_{model_type}", sample_name,
-        )
-
-        best_params_path = run_multi_dimensional_segmentation_grid_search(
-            volume=raw,
-            ground_truth=labels,
-            model_type=model_type,
-            checkpoint_path=checkpoint,
-            embedding_path=embedding_path,
-            result_dir=result_dir,
-            interactive_seg_mode=interactive_seg_mode,
-            grid_search_values=grid_search_values,
-            min_size=min_size,
-            store_segmentation=store_segmentation,
-            verbose=False,
-        )
-
-        best_params = pd.read_csv(best_params_path)
-        best_params.insert(0, "sample_id", sample_id)
-        rows.append(best_params)
-
-    if not rows:
+    # The name holds every setting that changes the numbers.
+    prompt = "box" if start_with_box else "point"
+    prompt += f"_{start_slice}{seed if start_slice == 'random' else ''}_{correction}"
+    prompt += f"{'_with_masks' if use_masks else ''}_{projection}_iou{iou_threshold:g}_ext{box_extension:g}"
+    results_dir = os.path.join(experiment_folder, "results")
+    save_paths = [
+        os.path.join(results_dir, interactive_result_name(
+            dataset_name, "microsam_vol", model_type, prompt, it, ndim=3, min_size=min_size,
+        ))
+        for it in range(n_iterations)
+    ]
+    if all(os.path.exists(p) for p in save_paths):
+        print(f"Results already stored at '{results_dir}'.")
         return
 
-    summary_path = os.path.join(
-        experiment_folder, "results", f"{dataset_name}_microsam_vol_{model_type}_{prompt_choice}.csv",
+    # Skip the volumes without objects: there is nothing to prompt, and nothing to score.
+    samples = [s for s in _load_samples(dataset_name, data_root, 3, min_size, limit)[0] if s[1].max() > 0]
+    options = dict(
+        start_prompt="box" if start_with_box else "points", start_slice=start_slice, n_iterations=n_iterations,
+        correction=correction, use_previous_mask=use_masks, projection=projection, iou_threshold=iou_threshold,
+        box_extension=box_extension, seed=seed,
     )
-    os.makedirs(os.path.dirname(summary_path), exist_ok=True)
-    pd.concat(rows, ignore_index=True).to_csv(summary_path, index=False)
-    print(f"Stored the summary at '{summary_path}'.")
+    segment = partial(_segment_volume, model_type=model_type, checkpoint=checkpoint, device=device, options=options)
+    # CUDA cannot run in a forked process, so the workers start with 'spawn'.
+    with ProcessPoolExecutor(n_workers, mp_context=get_context("spawn")) as pool:
+        segs_per_volume = list(tqdm(
+            pool.map(segment, *zip(*[(raw, labels) for raw, labels, _ in samples])),
+            total=len(samples), desc="microsam_vol",
+        ))
+
+    all_gt = [labels for _, labels, _ in samples]
+    all_seg_per_iter = [
+        [seg if roi is None else np.where(roi, seg, 0) for seg, (_, _, roi) in zip(segs, samples)]
+        for segs in zip(*segs_per_volume)
+    ]
+    os.makedirs(results_dir, exist_ok=True)
+    for it, save_path in enumerate(save_paths):
+        if os.path.exists(save_path):
+            continue
+        results = run_dataset_evaluation(all_gt, all_seg_per_iter[it], dataset_name, save_path)
+        print(f"Iteration {it:02d}: {results}")
 
 
 def main():
@@ -426,9 +430,21 @@ def main():
     )
     parser.add_argument(
         "--use_masks", action="store_true",
-        help="Feed the previous logits masks back as mask prompts. SAM v1 is not trained with them."
+        help="Feed the previous masks back as mask prompts. SAM v1 is not trained with them."
     )
-    parser.add_argument("--full_grid_search", action="store_true", help="Sweep the projection of microsam_vol.")
+    parser.add_argument(
+        "--start_slice", default="center", choices=("begin", "center", "end", "random"),
+        help="microsam_vol only. The slice of an object that gets the first prompt."
+    )
+    parser.add_argument(
+        "--correction", default="box_and_points", choices=("box", "points", "box_and_points"),
+        help="microsam_vol only. The prompt on the worst slice of each iteration."
+    )
+    parser.add_argument("--projection", default="mask", help="microsam_vol only. The projection from slice to slice.")
+    parser.add_argument("--iou_threshold", type=float, default=0.8, help="microsam_vol only. Stop the projection.")
+    parser.add_argument("--box_extension", type=float, default=0.025, help="microsam_vol only. Extend the box.")
+    parser.add_argument("--seed", type=int, default=None, help="microsam_vol only. The seed of a random start slice.")
+    parser.add_argument("--n_workers", type=int, default=4, help="microsam_vol only. The volumes segmented at once.")
     parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     args = parser.parse_args()
 
@@ -471,9 +487,12 @@ def main():
 
     elif args.method == "microsam_vol":
         run_microsam_volumetric_evaluation(
-            args.dataset_name, args.input_path, args.experiment_folder,
-            model_type=args.model_type, checkpoint=args.checkpoint, prompt_choice=args.prompt_choice,
-            full_grid_search=args.full_grid_search, min_size=args.min_size, limit=args.n_samples,
+            args.dataset_name, args.input_path, args.experiment_folder, device=device,
+            model_type=args.model_type, checkpoint=args.checkpoint, start_with_box=start_with_box,
+            n_iterations=args.n_iterations, min_size=args.min_size, start_slice=args.start_slice,
+            correction=args.correction, use_masks=args.use_masks, projection=args.projection,
+            iou_threshold=args.iou_threshold, box_extension=args.box_extension, seed=args.seed,
+            n_workers=args.n_workers, limit=args.n_samples,
         )
 
     else:

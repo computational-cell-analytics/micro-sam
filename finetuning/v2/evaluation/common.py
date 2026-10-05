@@ -338,7 +338,10 @@ DATASETS_3D_EM = (
 )
 DATASETS_EM = DATASETS_2D_EM + DATASETS_3D_EM
 
-DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
+# Datasets for the micro-sam v1 interactive sweeps only, which no micro-sam2 evaluation selects.
+DATASETS_3D_SWEEP_ONLY = ["lucchi"]
+
+DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM + DATASETS_3D_SWEEP_ONLY
 
 # The neurite datasets need the dense (multicut) pipeline and are ranked by the CREMI score. The EM cell datasets and
 # platynereis_nuclei segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
@@ -1514,6 +1517,11 @@ def _get_3d_em_data_paths(
         paths = synapsenet_tomograms(os.path.join(p, "synapsenet_compartments_data"))
         paths = [path for path in paths if (os.path.basename(path) in SYNAPSENET_TEST_TOMOGRAMS) != is_val]
         return paths, paths, "raw", "labels/compartments"
+
+    if dataset_name == "lucchi":
+        # Mitochondria, for the micro-sam v1 sweeps. 'load_volume' turns the binary labels into instances.
+        path = em.lucchi.get_lucchi_paths(path=os.path.join(p, "lucchi"), split="test", download=download)
+        return [path], [path], "raw", "labels"
 
     if dataset_name == "isbi2012":
         path = em.isbi2012.get_isbi_paths(path=os.path.join(p, "isbi2012"), download=download)

@@ -81,12 +81,15 @@ METHOD_SUPPORT = {
     ("interactive", "sam"): {"ndim": (2,)},
     ("interactive", "micro-sam"): {"ndim": (2,)},
     ("interactive", "nninteractive"): {"ndim": (3,)},
-    ("interactive", "microsam_vol"): {"ndim": (3,), "modality": ("lm",)},
+    ("interactive", "microsam_vol"): {"ndim": (3,)},
 }
 
 # The data that one model of a method can run on, on top of METHOD_SUPPORT. The key is (method, model), since model
 # names repeat across methods. The CellPose 3 generalists are not histopathology models.
-MODEL_SUPPORT = {("cellpose", "cyto3"): {"modality": ("lm", "em")}, ("cellpose", "nuclei"): {"modality": ("lm", "em")}}
+MODEL_SUPPORT = {
+    ("cellpose", "cyto3"): {"modality": ("lm", "em")}, ("cellpose", "nuclei"): {"modality": ("lm", "em")},
+    ("microsam_vol", "vit_b_lm"): {"modality": ("lm",)}, ("microsam_vol", "vit_b_em_organelles"): {"modality": ("em",)},
+}
 
 # Use --env to override the method-specific environments. StarDist runs in its own because it needs
 # TensorFlow, which does not belong next to torch in the main environment.
@@ -244,6 +247,11 @@ def build_command(
             command.extend(["--min_size", str(args.min_size)])
         if shared_engine and model_type is None:
             command.extend(["-m", "hvit_t"])
+        if method == "microsam_vol":
+            command.extend(["--start_slice", args.start_slice, "--correction", args.correction])
+            command.extend(["--n_workers", str(args.n_workers), "--seed", str(args.seed)])
+            if args.use_masks:
+                command.append("--use_masks")
 
     return command
 
@@ -346,6 +354,11 @@ def main():
     )
     parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=("box", "point"))
     parser.add_argument("-iter", "--n_iterations", type=int, default=8, help="Iterative prompting rounds.")
+    parser.add_argument("--start_slice", default="center", help="microsam_vol only. The slice of the first prompt.")
+    parser.add_argument("--correction", default="box_and_points", help="microsam_vol only. The correction prompt.")
+    parser.add_argument("--use_masks", action="store_true", help="microsam_vol only. Feed the previous masks back.")
+    parser.add_argument("--n_workers", type=int, default=4, help="microsam_vol only. The volumes segmented at once.")
+    parser.add_argument("--seed", type=int, default=0, help="microsam_vol only. The seed of a random start slice.")
     parser.add_argument("--min_size", type=int, default=0,
                         help="Drop ground-truth objects below this many pixels. The right value is dataset specific.")
     parser.add_argument("--partition", type=str, default=PARTITION, help="Slurm partition(s) to submit to.")

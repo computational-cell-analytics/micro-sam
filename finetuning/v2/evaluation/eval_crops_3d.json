@@ -772,6 +772,32 @@
      [76, 640, 640]
     ]
    }
+  },
+  "lucchi": {
+   "crop_shape": [32, 512, 512],
+   "note": "The annotation covers x 49-1024 of the whole test volume. The tiles at the volume edge are capped. The crops leave out the last 5 slices and 2 crops with 1 mitochondrion each, the other crops hold 2-15.",
+   "starts": {
+    "lucchi_test.h5": [
+     [0, 0, 49],
+     [0, 0, 561],
+     [0, 512, 49],
+     [0, 512, 561],
+     [32, 0, 49],
+     [32, 0, 561],
+     [32, 512, 49],
+     [32, 512, 561],
+     [64, 0, 49],
+     [64, 0, 561],
+     [64, 512, 49],
+     [64, 512, 561],
+     [96, 0, 49],
+     [96, 0, 561],
+     [96, 512, 49],
+     [96, 512, 561],
+     [128, 0, 49],
+     [128, 0, 561]
+    ]
+   }
   }
  }
 }
