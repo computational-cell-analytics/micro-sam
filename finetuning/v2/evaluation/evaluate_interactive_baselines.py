@@ -22,11 +22,13 @@ import os
 import sys
 import shutil
 import argparse
+from itertools import islice
 
 import numpy as np
 import pandas as pd
 import imageio.v3 as imageio
 from tqdm import tqdm
+from scipy.ndimage import distance_transform_edt, find_objects
 from skimage.measure import label as connected_components
 
 import torch
@@ -49,13 +51,29 @@ MICROSAM_V1_EM_MODEL = "vit_b_em_organelles"
 EM_DATASETS = set(DATASETS_EM)
 
 
+def _load_samples(dataset_name, data_root, ndim, min_size=0, limit=None):
+    """Return the test samples and their count, cut to the first 'limit' samples for a check."""
+    samples, total = load_data(dataset_name, data_root, ndim, min_size), n_samples(dataset_name, data_root)
+    if limit is not None:
+        samples, total = islice(samples, limit), min(total, limit)
+    return samples, total
+
+
 def _get_largest_region_center(mask):
+    """Return the most interior point of the largest connected region of a mask, or None if it is empty.
+
+    The centroid is not used, since it can lie outside the region. False foreground often forms a
+    shell around the object, and the centroid of such a shell is a point on the true object.
+    """
     labeled = connected_components(mask)
-    counts = np.bincount(labeled.ravel())[1:] if labeled.max() > 0 else np.array([])
-    if len(counts) == 0:
+    if labeled.max() == 0:
         return None
-    region = labeled == (counts.argmax() + 1)
-    return [int(np.round(c.mean())) for c in np.where(region)]
+    region_id = np.bincount(labeled.ravel())[1:].argmax() + 1
+    bbox = find_objects(labeled)[region_id - 1]
+    region = np.pad(labeled[bbox] == region_id, 1)
+    distances = distance_transform_edt(region)
+    point = np.unravel_index(distances.argmax(), distances.shape)
+    return [int(c) - 1 + sl.start for c, sl in zip(point, bbox)]
 
 
 def _get_correction_points(gt_mask, pred_mask):
@@ -105,7 +123,7 @@ def _segment_nninteractive_iterative(volume, labels, session, start_with_box, n_
             ]
             session.add_bbox_interaction(bbox, include_interaction=True)
         else:
-            center = (z, int(np.round(yx_coords[0].mean())), int(np.round(yx_coords[1].mean())))
+            center = (z, *_get_largest_region_center(gt_mask_2d))
             session.add_point_interaction(center, include_interaction=True)
 
         pred_mask = buffer > 0.5
@@ -126,7 +144,7 @@ def _segment_nninteractive_iterative(volume, labels, session, start_with_box, n_
 
 def run_nninteractive_evaluation(
     dataset_name, data_root, experiment_folder, device,
-    checkpoint_path=None, start_with_box=True, n_iterations=8,
+    checkpoint_path=None, start_with_box=True, n_iterations=8, limit=None,
 ):
     if dataset_name not in DATASETS_3D:
         raise ValueError(f"nnInteractive is 3D-only; got '{dataset_name}'.")
@@ -144,11 +162,11 @@ def run_nninteractive_evaluation(
         return
 
     session = _load_nninteractive(checkpoint_path, device)
-    n = n_samples(dataset_name, data_root)
+    samples, n = _load_samples(dataset_name, data_root, 3, limit=limit)
     all_gt = []
     all_seg_per_iter = [[] for _ in range(n_iterations)]
 
-    for raw, labels, valid_roi in tqdm(load_data(dataset_name, data_root, ndim=3), total=n, desc="nninteractive"):
+    for raw, labels, valid_roi in tqdm(samples, total=n, desc="nninteractive"):
         segs = _segment_nninteractive_iterative(raw, labels, session, start_with_box, n_iterations)
         all_gt.append(labels)
         for it, seg in enumerate(segs):
@@ -169,11 +187,11 @@ def _load_sam_v1(model_type, checkpoint, device):
     return get_sam_model(model_type=model_type, checkpoint_path=checkpoint, device=device)
 
 
-def _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
+def _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0, limit=None):
     """Write the cropped images and labels the SAM v1 2d inference reads, and return their paths."""
     image_paths, gt_paths = [], []
-    n = n_samples(dataset_name, data_root)
-    it = tqdm(load_data(dataset_name, data_root, 2, min_size), total=n, desc="save-crops")
+    samples, n = _load_samples(dataset_name, data_root, 2, min_size, limit)
+    it = tqdm(samples, total=n, desc="save-crops")
     for sample_id, (raw, labels, _) in enumerate(it):
         if labels.max() == 0:  # Inference skips these, so they must not be scored either.
             continue
@@ -191,7 +209,7 @@ def _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
 def run_sam_v1_evaluation(
     dataset_name, data_root, experiment_folder, device,
     model_type="vit_b_lm", checkpoint=None, start_with_box=True, n_iterations=8, ndim=None, name_tag="micro-sam",
-    use_masks=False, min_size=0,
+    use_masks=False, min_size=0, limit=None,
 ):
     if ndim is None:
         ndim = 3 if dataset_name in DATASETS_3D else 2
@@ -233,7 +251,7 @@ def run_sam_v1_evaluation(
     prediction_dir = os.path.join(work_dir, "predictions")
     os.makedirs(input_dir, exist_ok=True)
     os.makedirs(gt_dir, exist_ok=True)
-    image_paths, gt_paths = _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size)
+    image_paths, gt_paths = _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size, limit)
 
     run_inference_with_iterative_prompting(
         predictor=predictor,
@@ -260,7 +278,7 @@ def run_sam_v1_evaluation(
 
 def run_sam3_evaluation(
     dataset_name, data_root, experiment_folder,
-    start_with_box=True, n_iterations=8, ndim=None,
+    start_with_box=True, n_iterations=8, ndim=None, limit=None,
 ):
     if ndim is None:
         ndim = 3 if dataset_name in DATASETS_3D else 2
@@ -289,11 +307,11 @@ def run_sam3_evaluation(
         predictor = build_sam3_video_predictor()
         model, processor = None, None
 
-    n = n_samples(dataset_name, data_root)
+    samples, n = _load_samples(dataset_name, data_root, ndim, limit=limit)
     all_gt = []
     all_seg_per_iter = [[] for _ in range(n_iterations)]
 
-    for raw, labels, valid_roi in tqdm(load_data(dataset_name, data_root, ndim), total=n, desc=f"sam3-{ndim}d"):
+    for raw, labels, valid_roi in tqdm(samples, total=n, desc=f"sam3-{ndim}d"):
         if ndim == 2:
             segs = run_interactive_segmentation_2d_sam3(
                 image=raw, gt=labels, model=model, processor=processor,
@@ -320,7 +338,7 @@ def run_sam3_evaluation(
 
 def run_microsam_volumetric_evaluation(
     dataset_name, data_root, experiment_folder, model_type=None, checkpoint=None,
-    prompt_choice="box", full_grid_search=False, store_segmentation=True, min_size=0,
+    prompt_choice="box", full_grid_search=False, store_segmentation=True, min_size=0, limit=None,
 ):
     """Evaluate micro-sam v1 with its volumetric projection instead of slice-wise prompting.
 
@@ -346,9 +364,9 @@ def run_microsam_volumetric_evaluation(
         "iou_threshold": [0.8], "projection": ["mask"], "box_extension": [0.025],
     }
 
-    n = n_samples(dataset_name, data_root)
+    samples, n = _load_samples(dataset_name, data_root, 3, min_size, limit)
     rows = []
-    it = tqdm(load_data(dataset_name, data_root, 3, min_size), total=n, desc="microsam_vol")
+    it = tqdm(samples, total=n, desc="microsam_vol")
     for sample_id, (raw, labels, _) in enumerate(it):
         sample_name = f"sample_{sample_id:05d}"
         result_dir = os.path.join(
@@ -411,6 +429,7 @@ def main():
         help="Feed the previous logits masks back as mask prompts. SAM v1 is not trained with them."
     )
     parser.add_argument("--full_grid_search", action="store_true", help="Sweep the projection of microsam_vol.")
+    parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     args = parser.parse_args()
 
     check_data_download(args.dataset_name, args.input_path)
@@ -423,13 +442,13 @@ def main():
         run_nninteractive_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, checkpoint_path=args.checkpoint,
-            start_with_box=start_with_box, n_iterations=args.n_iterations,
+            start_with_box=start_with_box, n_iterations=args.n_iterations, limit=args.n_samples,
         )
 
     elif args.method == "sam3":
         run_sam3_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim,
+            start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, limit=args.n_samples,
         )
 
     elif args.method == "sam":
@@ -437,7 +456,7 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=args.model_type or SAM_V1_MODEL_TYPE, checkpoint=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, name_tag="sam",
-            use_masks=args.use_masks, min_size=args.min_size,
+            use_masks=args.use_masks, min_size=args.min_size, limit=args.n_samples,
         )
 
     elif args.method == "micro-sam":
@@ -447,14 +466,14 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, model_type=model_type, checkpoint=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, name_tag="micro-sam",
-            use_masks=args.use_masks, min_size=args.min_size,
+            use_masks=args.use_masks, min_size=args.min_size, limit=args.n_samples,
         )
 
     elif args.method == "microsam_vol":
         run_microsam_volumetric_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
             model_type=args.model_type, checkpoint=args.checkpoint, prompt_choice=args.prompt_choice,
-            full_grid_search=args.full_grid_search, min_size=args.min_size,
+            full_grid_search=args.full_grid_search, min_size=args.min_size, limit=args.n_samples,
         )
 
     else:

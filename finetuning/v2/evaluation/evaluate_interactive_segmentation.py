@@ -24,6 +24,7 @@ import os
 import shutil
 import argparse
 import warnings
+from itertools import islice
 
 import numpy as np
 import imageio.v3 as imageio
@@ -35,7 +36,7 @@ from micro_sam.v2.normalization import normalize_raw
 from micro_sam.v2.evaluation.inference import run_interactive_segmentation_2d, run_interactive_segmentation_3d
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, MODEL_TYPES, CROP_SHAPE_3D, CHECKPOINT_PATHS,
+    DATA_ROOT, DATASETS_2D, DATASETS_3D, MODEL_TYPES, CHECKPOINT_PATHS,
     check_data_download, checkpoint_checksum, export_joint_checkpoint, get_joint_checkpoint,
     interactive_result_name, interactive_run_tag, load_data, n_samples, run_dataset_evaluation,
 )
@@ -89,14 +90,16 @@ def to_uint8(raw):
     return normalize_raw(raw, output_dtype="uint8")
 
 
-def write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
+def write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0, limit=None):
     """Write the cropped images and labels the 2d inference reads, and return their paths.
 
     The inference works off files so that a preempted job resumes per image rather than per dataset.
     """
     image_paths, gt_paths = [], []
-    total = n_samples(dataset_name, data_root)
-    samples = tqdm(load_data(dataset_name, data_root, 2, min_size), total=total, desc="save-crops")
+    samples, total = load_data(dataset_name, data_root, 2, min_size), n_samples(dataset_name, data_root)
+    if limit is not None:
+        samples, total = islice(samples, limit), min(total, limit)
+    samples = tqdm(samples, total=total, desc="save-crops")
     for sample_id, (raw, labels, _) in enumerate(samples):
         if labels.max() == 0:  # Inference skips these, so they must not be scored either.
             continue
@@ -112,7 +115,7 @@ def write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0):
 
 def run_interactive_evaluation_2d(
     dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag, legacy_tag,
-    start_with_box=True, n_iterations=8, use_masks=True, mask_threshold=0.0, min_size=0, shard=None,
+    start_with_box=True, n_iterations=8, use_masks=True, mask_threshold=0.0, min_size=0, shard=None, limit=None,
 ):
     """Run iterative prompting on the 2d test split and write one result CSV per iteration.
 
@@ -152,7 +155,7 @@ def run_interactive_evaluation_2d(
     gt_dir = os.path.join(prediction_root, "inputs", "labels")
     os.makedirs(input_dir, exist_ok=True)
     os.makedirs(gt_dir, exist_ok=True)
-    image_paths, gt_paths = write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size)
+    image_paths, gt_paths = write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size, limit)
 
     predict_image_paths, predict_gt_paths = image_paths, gt_paths
     if shard is not None:
@@ -194,7 +197,7 @@ def run_interactive_evaluation_2d(
 
 def run_interactive_evaluation_3d(
     dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag, legacy_tag,
-    start_with_box=True, n_iterations=8, min_size=0, crop_shape=CROP_SHAPE_3D,
+    start_with_box=True, n_iterations=8, min_size=0, crop_shape=None, limit=None,
 ):
     """Run iterative prompting on the 3d test split and write one result CSV per iteration.
 
@@ -228,6 +231,8 @@ def run_interactive_evaluation_3d(
     )
     total = n_samples(dataset_name, data_root)
     samples = load_data(dataset_name, data_root, 3, min_size=min_size, crop_shape=crop_shape)
+    if limit is not None:
+        samples, total = islice(samples, limit), min(total, limit)
 
     all_gt, all_valid_rois = [], []
     pred_paths_per_iter = [[] for _ in range(n_iterations)]
@@ -293,13 +298,14 @@ def main():
         "--use_masks", action=argparse.BooleanOptionalAction, default=True,
         help="Feed the previous logits masks back as mask prompts. 2d only, on by default."
     )
-    parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
+    parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d center crop (Z Y X).")
     parser.add_argument(
         "--shard_index", type=int, default=None,
         help="This shard's index (0-based), for splitting a 2d dataset's images across parallel jobs. "
              "Requires --n_shards. A later unsharded call over the same dataset does the scoring.",
     )
     parser.add_argument("--n_shards", type=int, default=None, help="Total number of shards. Requires --shard_index.")
+    parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     args = parser.parse_args()
 
     if (args.shard_index is None) != (args.n_shards is None):
@@ -322,6 +328,7 @@ def main():
             checkpoint, tag, legacy_tag,
             start_with_box=(args.prompt_choice == "box"), n_iterations=args.n_iterations,
             use_masks=args.use_masks, mask_threshold=args.mask_threshold, min_size=args.min_size, shard=shard,
+            limit=args.n_samples,
         )
     else:
         if args.shard_index is not None:
@@ -330,7 +337,8 @@ def main():
             args.dataset_name, args.input_path, args.experiment_folder, device, args.model_type,
             checkpoint, tag, legacy_tag,
             start_with_box=(args.prompt_choice == "box"), n_iterations=args.n_iterations,
-            min_size=args.min_size, crop_shape=tuple(args.crop_3d) if args.crop_3d else CROP_SHAPE_3D,
+            min_size=args.min_size, crop_shape=tuple(args.crop_3d) if args.crop_3d else None,
+            limit=args.n_samples,
         )
 
 

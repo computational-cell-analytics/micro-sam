@@ -125,10 +125,15 @@ def _run_interactive_segmentation_2d_per_image(
     use_masks: bool = False,
     batch_size: int = 32,
     mask_threshold: float = 0.0,
+    seed: int = 0,
 ) -> None:
     """Functionality for interactive segmentation per 2d image.
     """
     device = _get_device(device)
+
+    # The prompt generators sample from the global numpy RNG. Seeding it per image makes the clicks,
+    # and with them the results, independent of the image order, the sharding and any resumption.
+    np.random.seed(seed)
 
     # Let's define the iterative prompt generator.
     prompt_generator = IterativePromptGenerator()
@@ -255,12 +260,13 @@ def run_interactive_segmentation_2d(
     use_masks: bool = True,
     ensure_8bit: bool = True,
     mask_threshold: float = 0.0,
+    seed: int = 0,
 ):
     """Functionality for interactive segmentation in 2d images using iterative prompting.
 
     `use_masks` defaults to True because SAM2 is trained with the previous mask logits alongside every
     correction click, see 'SAM2Train._iter_correct_pt_sampling'. Without them the predictions degrade
-    with each iteration.
+    with each iteration. `seed` seeds the prompt sampling of every image.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -326,6 +332,7 @@ def run_interactive_segmentation_2d(
             use_masks=use_masks,
             batch_size=batch_size,
             mask_threshold=mask_threshold,
+            seed=seed,
         )
 
     return prediction_dir
@@ -367,6 +374,7 @@ def run_interactive_segmentation_3d(
     batch_size: int = 16,
     n_iterations: int = 8,
     run_connected_components: bool = True,
+    seed: int = 0,
 ) -> str:
     """Run interactive segmentation on 3d inputs using Segment Anything 2.
 
@@ -387,6 +395,7 @@ def run_interactive_segmentation_3d(
         batch_size: The batch size to compute prompts.
         n_iterations: The number of iterations for iterative prompting.
         run_connected_components: Whether to ensure individual instances and filter out small objects.
+        seed: The seed of the prompt sampling of the volume.
 
     Returns:
         The folder where segmentations are stored.
@@ -443,9 +452,15 @@ def run_interactive_segmentation_3d(
     )
     inference_state = predictor.init_state(volume=raw, volume_embeddings=volume_embeddings)
 
+    # The prompt generators sample from the global numpy RNG. Seeding it per volume makes the clicks,
+    # and with them the results, reproducible.
+    np.random.seed(seed)
+
     gt_ids = list(np.unique(labels))[1:]  # Ignoring the background label
     # An empty volume has nothing to prompt, so all iterations stay empty.
     segmentation = [np.zeros(labels.shape, dtype="uint64") for _ in range(n_iterations)]
+    # The area of the object that holds each label, per iteration, to resolve overlaps.
+    areas = [np.full(int(max(gt_ids, default=0)) + 1, np.inf) for _ in range(n_iterations)]
     for gt_id in tqdm(gt_ids, desc="Segmenting per object in the volume"):
         _per_iter_segmentation = _run_interactive_segmentation_3d_per_object(
             gt_ids=gt_id,
@@ -461,8 +476,15 @@ def run_interactive_segmentation_3d(
             n_iterations=n_iterations,
         )
 
-        for _iter in range(n_iterations):  # Merge the incoming segmentation per object.
-            segmentation[_iter] += _per_iter_segmentation[_iter]
+        # Merge the incoming object. Where objects overlap, the smaller one is kept, as in the 2d
+        # evaluation (see 'mask_data_to_segmentation'). Adding the labels would turn an overlap into the
+        # sum of both ids, i.e. into a third object.
+        for _iter in range(n_iterations):
+            mask = _per_iter_segmentation[_iter] > 0
+            area = mask.sum()
+            existing = segmentation[_iter][mask]
+            segmentation[_iter][mask] = np.where(areas[_iter][existing] > area, gt_id, existing)
+            areas[_iter][gt_id] = area
 
     for i, prediction_path in enumerate(prediction_paths):
         os.makedirs(Path(prediction_path).parent, exist_ok=True)
