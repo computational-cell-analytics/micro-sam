@@ -2,7 +2,7 @@ import os
 import shutil
 import warnings
 from pathlib import Path
-from typing import Union, Optional, List
+from typing import Union, Optional, List, Tuple
 
 import numpy as np
 import imageio.v3 as imageio
@@ -244,6 +244,14 @@ def _run_interactive_segmentation_2d_per_image(
         _save_segmentation(masks=torch.from_numpy(masks), prediction_path=prediction_paths[iteration])
 
 
+def get_prediction_dir_2d(
+    prediction_dir: Union[os.PathLike, str], start_with_box_prompt: bool, use_masks: bool
+) -> str:
+    """Return the folder that `run_interactive_segmentation_2d` writes its 'iterationNN' folders to."""
+    box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
+    return os.path.join(prediction_dir, box_or_pt, "with_masks" if use_masks else "without_masks")
+
+
 def run_interactive_segmentation_2d(
     image_paths: List[Union[os.PathLike, str]],
     gt_paths: List[Union[os.PathLike, str]],
@@ -272,13 +280,9 @@ def run_interactive_segmentation_2d(
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
 
     # create all prediction folders for all intermediate iterations'
-    prediction_dir = os.path.join(prediction_dir, "start_with_box" if start_with_box_prompt else "start_with_point")
-
+    prediction_dir = get_prediction_dir_2d(prediction_dir, start_with_box_prompt, use_masks)
     if use_masks:
         print("The iterative prompting will make use of logits masks from previous iterations.")
-        prediction_dir = os.path.join(prediction_dir, "with_masks")
-    else:
-        prediction_dir = os.path.join(prediction_dir, "without_masks")
 
     for i in range(n_iterations):
         os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
@@ -359,6 +363,16 @@ def _convert_volumes_to_frames(raw, frames_dir):
     return image_dir
 
 
+def get_prediction_paths_3d(
+    prediction_dir: Union[os.PathLike, str], prediction_fname: str, start_with_box_prompt: bool, n_iterations: int,
+) -> Tuple[str, List[str]]:
+    """Return the folder and the per-iteration files that `run_interactive_segmentation_3d` writes."""
+    box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
+    prediction_dir = os.path.join(prediction_dir, "interactive_segmentation_3d", box_or_pt, "without_masks")
+    fname = Path(prediction_fname).with_suffix(".tif")
+    return prediction_dir, [os.path.join(prediction_dir, f"iteration{i}", fname) for i in range(n_iterations)]
+
+
 def run_interactive_segmentation_3d(
     raw: np.ndarray,
     labels: np.ndarray,
@@ -400,14 +414,9 @@ def run_interactive_segmentation_3d(
     Returns:
         The folder where segmentations are stored.
     """
-    box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
-    prediction_dir = os.path.join(prediction_dir, "interactive_segmentation_3d", box_or_pt, "without_masks")
-
-    prediction_paths = [
-        os.path.join(
-            prediction_dir, f"iteration{i}", Path(prediction_fname).with_suffix(".tif")
-        ) for i in range(n_iterations)
-    ]
+    prediction_dir, prediction_paths = get_prediction_paths_3d(
+        prediction_dir, prediction_fname, start_with_box_prompt, n_iterations
+    )
     if all([os.path.exists(_path) for _path in prediction_paths]):
         cached = imageio.imread(prediction_paths[0])
         if cached.shape == labels.shape:
@@ -486,9 +495,13 @@ def run_interactive_segmentation_3d(
             segmentation[_iter][mask] = np.where(areas[_iter][existing] > area, gt_id, existing)
             areas[_iter][gt_id] = area
 
+    # Each file is written under a temporary name and then renamed, so a job killed during the write
+    # leaves no truncated file that a rerun would accept as complete.
     for i, prediction_path in enumerate(prediction_paths):
         os.makedirs(Path(prediction_path).parent, exist_ok=True)
-        imageio.imwrite(os.path.join(prediction_path), segmentation[i], compression="zlib")
+        partial_path = Path(prediction_path).with_suffix(".partial.tif")
+        imageio.imwrite(partial_path, segmentation[i], compression="zlib")
+        os.replace(partial_path, prediction_path)
 
     return prediction_dir
 

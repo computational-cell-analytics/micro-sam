@@ -109,12 +109,20 @@ CPUS = 4
 MAX_CONCURRENT = 20
 TIME_LIMIT = "08:00:00"
 
-# A 2d job peaks at about 3 GiB, so the smallest slice covers it. A volume is tiled through the
-# encoder and the decoder and overruns that slice; the 20 GB slice holds it (the (8, 512, 512)
-# production crops peak around 6 GiB, the 32-slice campaign crops fit as well) and is far easier to
-# schedule than the 3g.40gb slices. Override --gpu for a larger backbone.
-GPU_2D, GPU_3D = "1g.10gb:1", "1g.20gb:1"
-MEMORY_2D, MEMORY_3D = "16G", "64G"
+# A 2d job peaks at about 3 GiB, so the smallest slice covers it. The 3d interactive evaluation of
+# hvit_t and hvit_l fits that slice too, and peaks at about 6 GB of host memory. A larger memory request
+# leaves slices of a node unusable. There is no 1g.20gb profile here; override --gpu with '2g.20gb:1'
+# for an automatic 3d job that needs more.
+GPU_2D, GPU_3D = "1g.10gb:1", "1g.10gb:1"
+MEMORY_2D, MEMORY_3D = "16G", "16G"
+
+# The interactive evaluation of these 2d datasets takes about an hour per configuration on a 1g.10gb
+# slice, so their images are split over this many shards. A 3d dataset is split into one shard per
+# sample. A scoring task per dataset runs after the shards, see 'interactive_shards'.
+INTERACTIVE_SHARDS_2D = {"livecell": 8, "panoptils": 8, "tissuenet": 8, "pannuke": 8}
+
+# The interactive methods whose scripts can shard a dataset.
+SHARDABLE_INTERACTIVE_METHODS = (None, "sam2", "nninteractive")
 
 EXPERIMENT_FOLDER = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/v2_joint_evaluation"
 
@@ -122,6 +130,15 @@ EXPERIMENT_FOLDER = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/exp
 def env_exports() -> str:
     """Return 'export' lines pinning the run configuration, or an empty string if none is set."""
     return "".join(f"export {name}={shlex.quote(os.environ[name])}\n" for name in PINNED_ENV_VARS if name in os.environ)
+
+
+def env_prefix() -> list:
+    """Return an 'env' prefix pinning the run configuration in a task command, or an empty list if none is set.
+
+    The pooled workers run the task lines without the array script, so the lines carry the configuration too.
+    """
+    assignments = [f"{name}={shlex.quote(os.environ[name])}" for name in PINNED_ENV_VARS if name in os.environ]
+    return ["env"] + assignments if assignments else []
 
 
 def sanitize(name: str) -> str:
@@ -203,14 +220,33 @@ def uses_shared_engine(args: argparse.Namespace, method: Optional[str]) -> bool:
     return args.segmentation_type == "interactive" and method in SHARED_ENGINE_METHODS
 
 
+def interactive_shards(args: argparse.Namespace, dataset_name: str, method: Optional[str]) -> Optional[int]:
+    """The number of shards an interactive dataset is split into, or None if it runs as one task.
+
+    A sharded dataset runs as one task per shard and one scoring task, which must run after all shards.
+    """
+    if args.segmentation_type != "interactive" or args.n_samples is not None:
+        return None
+    if method not in SHARDABLE_INTERACTIVE_METHODS:
+        return None
+    if ndim_of(dataset_name) == 3:
+        count = n_samples(dataset_name, args.data_root)
+        return count if count > 1 else None
+    return INTERACTIVE_SHARDS_2D.get(dataset_name)
+
+
 def build_command(
     args: argparse.Namespace, dataset_name: str, model_type: Optional[str],
     method: Optional[str], mode: Optional[str], sample_index: Optional[int],
+    shard: Optional[tuple] = None, score_only: bool = False,
 ) -> list:
-    """Return the python command that one task runs for a dataset, or for one sample of it."""
+    """Return the python command that one task runs for a dataset, for one sample or shard of it, or for its scoring.
+
+    'shard' is (shard_index, n_shards).
+    """
     shared_engine = uses_shared_engine(args, method)
     script = SCRIPTS[(args.segmentation_type, "baseline" if (method and not shared_engine) else "micro_sam2")]
-    command = [
+    command = env_prefix() + [
         "python", str(script),
         "-d", dataset_name,
         "-i", args.data_root,
@@ -240,6 +276,10 @@ def build_command(
         command.extend(["--n_samples", str(args.n_samples)])
     if sample_index is not None:
         command.extend(["--sample_index", str(sample_index)])
+    if shard is not None:
+        command.extend(["--n_shards", str(shard[1]), "--shard_index", str(shard[0])])
+    if score_only:
+        command.append("--score_only")
 
     if args.segmentation_type == "interactive":
         command.extend(["-p", args.prompt_choice, "-iter", str(args.n_iterations)])
@@ -258,7 +298,7 @@ def build_command(
 
 def job_tag(
     args: argparse.Namespace, dataset: str, model_type: Optional[str], method: Optional[str], mode: Optional[str],
-    sample_index: Optional[int],
+    sample_index: Optional[int], shard: Optional[tuple] = None, score_only: bool = False,
 ) -> str:
     """The name of one array task, which also marks it in the logs."""
     parts = [args.segmentation_type, dataset, method or f"micro_sam2_{mode or 'interactive'}"]
@@ -268,6 +308,10 @@ def job_tag(
         parts.append(model_type)
     if sample_index is not None:
         parts.append(f"sample{sample_index}")
+    if shard is not None:
+        parts.append(f"shard{shard[0]}of{shard[1]}")
+    if score_only:
+        parts.append("score")
     return "_".join(sanitize(part) for part in parts)
 
 
@@ -311,10 +355,17 @@ eval "$(cut -f2- <<< "$line")"
     return script_path
 
 
-def submit_job(script: Path) -> None:
-    """Hand one script to sbatch and print what it said."""
-    result = subprocess.run(["sbatch", str(script)], capture_output=True, text=True)
+def submit_job(script: Path, after: Optional[list] = None) -> Optional[str]:
+    """Hand one script to sbatch, print what it said, and return the job id.
+
+    'after' holds the job ids this job waits for, whatever their outcome.
+    """
+    command = ["sbatch", "--parsable"]
+    if after:
+        command.append(f"--dependency=afterany:{':'.join(after)}")
+    result = subprocess.run(command + [str(script)], capture_output=True, text=True)
     print(result.stdout.strip() if result.stdout else result.stderr.strip())
+    return result.stdout.strip().split(";")[0] if result.returncode == 0 else None
 
 
 def main():
@@ -380,8 +431,6 @@ def main():
         raise ValueError("Either -d/--data or --all_datasets must be given.")
     if args.checkpoint is not None and args.model_type is not None and len(args.model_type) > 1:
         raise ValueError("An explicit -c/--checkpoint cannot be shared by several model types.")
-    if args.n_samples is not None and args.segmentation_type != "automatic":
-        raise ValueError("--n_samples applies to automatic segmentation only.")
     if args.per_sample and (args.segmentation_type != "automatic" or args.n_samples is not None):
         raise ValueError("--per_sample needs '--segmentation_type automatic' and no --n_samples. Drop one of them.")
     if args.apg_params is not None:
@@ -405,7 +454,8 @@ def main():
     job_folder = EVAL_ROOT / "gpu_jobs" / datetime.now().strftime("%Y%m%d_%H%M%S")
     (job_folder / "logs").mkdir(parents=True, exist_ok=True)
 
-    # An array activates one environment and requests one resource tier, so group the tasks by both.
+    # An array activates one environment and requests one resource tier, so group the tasks by both. The
+    # scoring tasks of sharded datasets form groups of their own, which run after all other groups.
     groups = {}
     for method in methods:
         for mode in modes:
@@ -422,27 +472,48 @@ def main():
                     is_3d = ndim_of(dataset) == 3
                     gpu = args.gpu or (GPU_3D if is_3d else GPU_2D)
                     memory = args.memory or (MEMORY_3D if is_3d else MEMORY_2D)
+                    n_shards = interactive_shards(args, dataset, method)
+                    if n_shards is not None:
+                        for shard_index in range(n_shards):
+                            shard = (shard_index, n_shards)
+                            command = " ".join(build_command(args, dataset, model_type, method, mode, None, shard))
+                            groups.setdefault((env, gpu, memory, False), []).append(
+                                (job_tag(args, dataset, model_type, method, mode, None, shard), command)
+                            )
+                        command = " ".join(
+                            build_command(args, dataset, model_type, method, mode, None, score_only=True)
+                        )
+                        groups.setdefault((env, gpu, memory, True), []).append(
+                            (job_tag(args, dataset, model_type, method, mode, None, score_only=True), command)
+                        )
+                        continue
                     indices = range(n_samples(dataset, args.data_root)) if args.per_sample else [None]
                     for index in indices:
                         command = " ".join(build_command(args, dataset, model_type, method, mode, index))
-                        groups.setdefault((env, gpu, memory), []).append(
+                        groups.setdefault((env, gpu, memory, False), []).append(
                             (job_tag(args, dataset, model_type, method, mode, index), command)
                         )
 
-    scripts = []
-    for (env, gpu, memory), tasks in groups.items():
-        name = sanitize(f"{args.segmentation_type}_{env}_{gpu}_{memory}")
-        scripts.append(write_array_script(args, job_folder, name, tasks, env, gpu, memory))
-    n_tasks = sum(len(tasks) for tasks in groups.values())
-    print(f"Wrote {len(scripts)} job array(s) with {n_tasks} task(s) to '{job_folder}'.")
+    scripts, score_scripts = [], []
+    for (env, gpu, memory, scoring), tasks in groups.items():
+        name = sanitize(f"{args.segmentation_type}_{env}_{gpu}_{memory}{'_score' if scoring else ''}")
+        script = write_array_script(args, job_folder, name, tasks, env, gpu, memory)
+        (score_scripts if scoring else scripts).append(script)
+    n_tasks = sum(len(tasks) for (*_, scoring), tasks in groups.items() if not scoring)
+    n_score_tasks = sum(len(tasks) for (*_, scoring), tasks in groups.items() if scoring)
+    print(
+        f"Wrote {len(scripts) + len(score_scripts)} job array(s) with {n_tasks} task(s) and "
+        f"{n_score_tasks} scoring task(s) to '{job_folder}'."
+    )
     warn_missing_envs({
         resolve_env(args, method, model_type) for method in methods for model_type in model_types
         if not uses_shared_engine(args, method)
     })
     if args.dry:
         return
-    for script in scripts:
-        submit_job(script)
+    job_ids = [submit_job(script) for script in scripts]
+    for script in score_scripts:
+        submit_job(script, after=[job_id for job_id in job_ids if job_id is not None])
 
 
 if __name__ == "__main__":

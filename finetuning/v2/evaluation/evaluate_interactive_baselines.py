@@ -21,6 +21,7 @@ Usage examples:
 
 import os
 import sys
+import uuid
 import shutil
 import argparse
 from itertools import islice
@@ -145,10 +146,32 @@ def _segment_nninteractive_iterative(volume, labels, session, start_with_box, n_
     return seg_per_iter
 
 
+def _nninteractive_prediction_paths(prediction_root, sample_id, n_iterations):
+    """The per-iteration prediction files of one sample."""
+    sample_dir = os.path.join(prediction_root, f"sample_{sample_id:05d}")
+    return [os.path.join(sample_dir, f"iteration{it:02d}.tif") for it in range(n_iterations)]
+
+
+def _write_nninteractive_predictions(segs, paths):
+    """Write the predictions of one sample. Each file is renamed into place, so no partial file is left."""
+    os.makedirs(os.path.dirname(paths[0]), exist_ok=True)
+    for seg, path in zip(segs, paths):
+        partial_path = f"{path[:-4]}.{uuid.uuid4().hex}.partial.tif"
+        imageio.imwrite(partial_path, seg, compression="zlib")
+        os.replace(partial_path, path)
+
+
 def run_nninteractive_evaluation(
     dataset_name, data_root, experiment_folder, device,
-    checkpoint_path=None, start_with_box=True, n_iterations=8, limit=None,
+    checkpoint_path=None, start_with_box=True, n_iterations=8, shard=None, score_only=False, limit=None,
 ):
+    """Run nnInteractive with iterative prompting on the 3d test split and write one result CSV per iteration.
+
+    The predictions are cached per sample, so a preempted job resumes per sample. With 'shard' set to
+    (shard_index, n_shards), only the samples with 'sample_id % n_shards == shard_index' are predicted
+    and the function returns before scoring. A later unsharded call scores from the cache. With
+    'score_only' it fails if a sample is missing rather than predict it.
+    """
     if dataset_name not in DATASETS_3D:
         raise ValueError(f"nnInteractive is 3D-only; got '{dataset_name}'.")
     if checkpoint_path is None:
@@ -164,24 +187,52 @@ def run_nninteractive_evaluation(
         print(f"Results already stored at '{results_dir}'.")
         return
 
-    session = _load_nninteractive(checkpoint_path, device)
-    samples, n = _load_samples(dataset_name, data_root, 3, limit=limit)
-    all_gt = []
-    all_seg_per_iter = [[] for _ in range(n_iterations)]
+    prediction_root = os.path.join(experiment_folder, "predictions", "nninteractive", dataset_name, prompt_str)
+    total = n_samples(dataset_name, data_root)
+    if limit is not None:
+        total = min(total, limit)
+    sample_ids = range(total) if shard is None else range(shard[0], total, shard[1])
+    samples = load_data(dataset_name, data_root, 3, sample_ids=set(sample_ids))
 
-    for raw, labels, valid_roi in tqdm(samples, total=n, desc="nninteractive"):
-        segs = _segment_nninteractive_iterative(raw, labels, session, start_with_box, n_iterations)
+    # The model is loaded on the first sample that needs it, so that scoring from the cache loads no model.
+    session = None
+    all_gt, all_valid_rois, missing = [], [], []
+    pred_paths_per_iter = [[] for _ in range(n_iterations)]
+    samples = tqdm(samples, total=len(sample_ids), desc="nninteractive")
+    for sample_id, (raw, labels, valid_roi) in zip(sample_ids, samples):
+        paths = _nninteractive_prediction_paths(prediction_root, sample_id, n_iterations)
+        if not all(os.path.exists(path) for path in paths):
+            if score_only:
+                missing.append(sample_id)
+                continue
+            if session is None:
+                session = _load_nninteractive(checkpoint_path, device)
+            segs = _segment_nninteractive_iterative(raw, labels, session, start_with_box, n_iterations)
+            _write_nninteractive_predictions(segs, paths)
         all_gt.append(labels)
-        for it, seg in enumerate(segs):
-            if valid_roi is not None:
-                seg[~valid_roi] = 0
-            all_seg_per_iter[it].append(seg)
+        all_valid_rois.append(valid_roi)
+        for it, path in enumerate(paths):
+            pred_paths_per_iter[it].append(path)
+
+    if shard is not None:
+        print(f"Shard {shard[0]}/{shard[1]} finished predicting {len(sample_ids)} sample(s).")
+        return
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} sample(s) of '{dataset_name}' have no predictions yet: {missing}. Run their shards first."
+        )
 
     os.makedirs(results_dir, exist_ok=True)
     for it, save_path in enumerate(save_paths):
         if os.path.exists(save_path):
             continue
-        results = run_dataset_evaluation(all_gt, all_seg_per_iter[it], dataset_name, save_path)
+        predictions = []
+        for path, valid_roi in zip(pred_paths_per_iter[it], all_valid_rois):
+            prediction = imageio.imread(path)
+            if valid_roi is not None:
+                prediction[~valid_roi] = 0
+            predictions.append(prediction)
+        results = run_dataset_evaluation(all_gt, predictions, dataset_name, save_path)
         print(f"Iteration {it:02d}: {results}")
 
 
@@ -446,19 +497,37 @@ def main():
     parser.add_argument("--seed", type=int, default=None, help="microsam_vol only. The seed of a random start slice.")
     parser.add_argument("--n_workers", type=int, default=4, help="microsam_vol only. The volumes segmented at once.")
     parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
+    parser.add_argument(
+        "--shard_index", type=int, default=None,
+        help="This shard's index (0-based), for splitting a dataset's volumes across parallel jobs. nninteractive "
+             "only. Requires --n_shards. A later unsharded call over the same dataset does the scoring.",
+    )
+    parser.add_argument("--n_shards", type=int, default=None, help="Total number of shards. Requires --shard_index.")
+    parser.add_argument(
+        "--score_only", action="store_true",
+        help="Score the predictions of finished shards, and fail rather than predict if one is missing.",
+    )
     args = parser.parse_args()
+
+    if (args.shard_index is None) != (args.n_shards is None):
+        raise ValueError("--shard_index and --n_shards must be given together.")
+    if args.score_only and args.shard_index is not None:
+        raise ValueError("--score_only scores the whole dataset, so it cannot be combined with a shard.")
+    if (args.shard_index is not None or args.score_only) and args.method != "nninteractive":
+        raise ValueError("--shard_index, --n_shards and --score_only are supported for nninteractive only.")
 
     check_data_download(args.dataset_name, args.input_path)
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     start_with_box = (args.prompt_choice == "box")
+    shard = None if args.shard_index is None else (args.shard_index, args.n_shards)
 
     if args.method == "nninteractive":
         run_nninteractive_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            device=device, checkpoint_path=args.checkpoint,
-            start_with_box=start_with_box, n_iterations=args.n_iterations, limit=args.n_samples,
+            device=device, checkpoint_path=args.checkpoint, start_with_box=start_with_box,
+            n_iterations=args.n_iterations, shard=shard, score_only=args.score_only, limit=args.n_samples,
         )
 
     elif args.method == "sam3":

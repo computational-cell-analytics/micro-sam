@@ -2716,7 +2716,8 @@ def load_evaluation_sample_3d(
 
 
 def load_data(
-    dataset_name, data_root, ndim, min_size=0, split="test", crop_shape=None, z_range=None, normalize=True
+    dataset_name, data_root, ndim, min_size=0, split="test", crop_shape=None, z_range=None, normalize=True,
+    sample_ids=None,
 ):
     """Yield (image_or_volume, labels, valid_roi) triples for the given dataset.
 
@@ -2737,20 +2738,29 @@ def load_data(
             their fixed crops instead, with one sample per crop.
         z_range: Restrict a volume to a z-slab before cropping, see VAL_Z_RANGE.
         normalize: Percentile-normalize the image, 2d only. See `load_evaluation_sample_2d`.
+        sample_ids: Load and yield only the samples at these positions of the full sequence. The other
+            samples are skipped without being read.
 
     Yields:
         One (image_or_volume, labels, valid_roi) triple per sample.
     """
     raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root, split=split)
+    sample_id = -1
     for raw_path, label_path in sorted_path_pairs(raw_paths, label_paths):
         if ndim == 3:
             sample_z_range = val_z_range(dataset_name, raw_path, split) or z_range
             for crop_start, sample_crop_shape in eval_crops_3d(dataset_name, raw_path, split, crop_shape):
+                sample_id += 1
+                if sample_ids is not None and sample_id not in sample_ids:
+                    continue
                 yield load_evaluation_sample_3d(
                     raw_path, label_path, raw_key, label_key, dataset_name, crop_shape=sample_crop_shape,
                     z_range=sample_z_range, min_size=min_size, split=split, crop_start=crop_start,
                 )
         else:
+            sample_id += 1
+            if sample_ids is not None and sample_id not in sample_ids:
+                continue
             image, gt = load_evaluation_sample_2d(
                 raw_path, label_path, raw_key, label_key, dataset_name, normalize=normalize
             )

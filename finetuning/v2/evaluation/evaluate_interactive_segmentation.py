@@ -21,6 +21,7 @@ Usage examples:
 """
 
 import os
+import uuid
 import shutil
 import argparse
 import warnings
@@ -33,7 +34,9 @@ from tqdm import tqdm
 import torch
 
 from micro_sam.v2.normalization import normalize_raw
-from micro_sam.v2.evaluation.inference import run_interactive_segmentation_2d, run_interactive_segmentation_3d
+from micro_sam.v2.evaluation.inference import (
+    get_prediction_dir_2d, get_prediction_paths_3d, run_interactive_segmentation_2d, run_interactive_segmentation_3d,
+)
 
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, MODEL_TYPES, CHECKPOINT_PATHS,
@@ -90,10 +93,18 @@ def to_uint8(raw):
     return normalize_raw(raw, output_dtype="uint8")
 
 
+def write_atomic(path, data):
+    """Write a tif under a unique temporary name, then rename it, so no reader sees a partial file."""
+    partial_path = f"{path[:-4]}.{uuid.uuid4().hex}.partial.tif"
+    imageio.imwrite(partial_path, data, compression="zlib")
+    os.replace(partial_path, path)
+
+
 def write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0, limit=None):
     """Write the cropped images and labels the 2d inference reads, and return their paths.
 
     The inference works off files so that a preempted job resumes per image rather than per dataset.
+    The shards of a dataset share these files, so existing ones are kept and new ones written atomically.
     """
     image_paths, gt_paths = [], []
     samples, total = load_data(dataset_name, data_root, 2, min_size), n_samples(dataset_name, data_root)
@@ -106,8 +117,10 @@ def write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0, limi
 
         image_path = os.path.join(input_dir, f"{sample_id:05d}.tif")
         gt_path = os.path.join(gt_dir, f"{sample_id:05d}.tif")
-        imageio.imwrite(image_path, to_uint8(raw), compression="zlib")
-        imageio.imwrite(gt_path, labels.astype("uint32"), compression="zlib")
+        if not os.path.exists(image_path):
+            write_atomic(image_path, to_uint8(raw))
+        if not os.path.exists(gt_path):
+            write_atomic(gt_path, labels.astype("uint32"))
         image_paths.append(image_path)
         gt_paths.append(gt_path)
     return image_paths, gt_paths
@@ -115,14 +128,17 @@ def write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0, limi
 
 def run_interactive_evaluation_2d(
     dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag, legacy_tag,
-    start_with_box=True, n_iterations=8, use_masks=True, mask_threshold=0.0, min_size=0, shard=None, limit=None,
+    start_with_box=True, n_iterations=8, use_masks=True, mask_threshold=0.0, min_size=0, shard=None,
+    score_only=False, limit=None,
 ):
     """Run iterative prompting on the 2d test split and write one result CSV per iteration.
 
     With 'shard' set to (shard_index, n_shards), only that stride of the images is predicted, and
     the function returns before scoring: 'run_interactive_segmentation_2d' skips any image whose
     prediction files already exist (see its module), so a later unsharded call (shard=None) over the
-    same dataset does the scoring once every shard's images are done, without repeating them.
+    same dataset does the scoring once every shard's images are done, without repeating them. With
+    'score_only' that call never predicts: it fails if a shard has not finished, so that a scoring task
+    which starts too early cannot repeat the work of a shard that is still running.
     """
     prompt = "box" if start_with_box else "point"
     results_dir = os.path.join(experiment_folder, "results")
@@ -163,21 +179,36 @@ def run_interactive_evaluation_2d(
         predict_image_paths = image_paths[shard_index::n_shards]
         predict_gt_paths = gt_paths[shard_index::n_shards]
 
-    prediction_dir = run_interactive_segmentation_2d(
-        image_paths=predict_image_paths,
-        gt_paths=predict_gt_paths,
-        image_key=None,
-        gt_key=None,
-        prediction_dir=prediction_root,
-        model_type=model_type,
-        checkpoint_path=checkpoint_path,
-        start_with_box_prompt=start_with_box,
-        device=device,
-        n_iterations=n_iterations,
-        use_masks=use_masks,
-        ensure_8bit=False,
-        mask_threshold=mask_threshold,
-    )
+    if score_only:
+        prediction_dir = get_prediction_dir_2d(prediction_root, start_with_box, use_masks)
+        missing = [
+            path for path in image_paths
+            if not all(
+                os.path.exists(os.path.join(prediction_dir, f"iteration{iteration:02d}", os.path.basename(path)))
+                for iteration in range(n_iterations)
+            )
+        ]
+        if missing:
+            raise RuntimeError(
+                f"{len(missing)} of {len(image_paths)} image(s) of '{dataset_name}' have no predictions yet. "
+                "Run their shards first."
+            )
+    else:
+        prediction_dir = run_interactive_segmentation_2d(
+            image_paths=predict_image_paths,
+            gt_paths=predict_gt_paths,
+            image_key=None,
+            gt_key=None,
+            prediction_dir=prediction_root,
+            model_type=model_type,
+            checkpoint_path=checkpoint_path,
+            start_with_box_prompt=start_with_box,
+            device=device,
+            n_iterations=n_iterations,
+            use_masks=use_masks,
+            ensure_8bit=False,
+            mask_threshold=mask_threshold,
+        )
 
     if shard is not None:
         print(f"Shard {shard[0]}/{shard[1]} finished predicting {len(predict_image_paths)} image(s).")
@@ -197,12 +228,17 @@ def run_interactive_evaluation_2d(
 
 def run_interactive_evaluation_3d(
     dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag, legacy_tag,
-    start_with_box=True, n_iterations=8, min_size=0, crop_shape=None, limit=None,
+    start_with_box=True, n_iterations=8, min_size=0, crop_shape=None, shard=None, score_only=False, limit=None,
 ):
     """Run iterative prompting on the 3d test split and write one result CSV per iteration.
 
     The prompts of a volume are placed on the middle slice of each object and propagated through the
     video predictor, so a correction click acts on the whole object rather than on one slice.
+
+    With 'shard' set to (shard_index, n_shards), only the samples with 'sample_id % n_shards ==
+    shard_index' are loaded and predicted, and the function returns before scoring. The predictions are
+    cached per sample, so a later unsharded call scores without predicting again. With 'score_only' that
+    call never predicts: it fails if a sample is missing, see `run_interactive_evaluation_2d`.
     """
     prompt = "box" if start_with_box else "point"
     results_dir = os.path.join(experiment_folder, "results")
@@ -230,33 +266,53 @@ def run_interactive_evaluation_3d(
         dataset_name if not min_size else f"{dataset_name}_min{min_size}",
     )
     total = n_samples(dataset_name, data_root)
-    samples = load_data(dataset_name, data_root, 3, min_size=min_size, crop_shape=crop_shape)
     if limit is not None:
-        samples, total = islice(samples, limit), min(total, limit)
+        total = min(total, limit)
+    sample_ids = range(total) if shard is None else range(shard[0], total, shard[1])
+    samples = load_data(
+        dataset_name, data_root, 3, min_size=min_size, crop_shape=crop_shape, sample_ids=set(sample_ids)
+    )
 
-    all_gt, all_valid_rois = [], []
+    all_gt, all_valid_rois, missing = [], [], []
     pred_paths_per_iter = [[] for _ in range(n_iterations)]
-    for sample_id, (raw, labels, valid_roi) in enumerate(tqdm(samples, total=total, desc=f"{tag}-3d")):
+    samples = tqdm(samples, total=len(sample_ids), desc=f"{tag}-3d")
+    for sample_id, (raw, labels, valid_roi) in zip(sample_ids, samples):
         if labels.max() == 0:  # Nothing to prompt, and nothing to score.
             continue
 
-        sample_prediction_dir = run_interactive_segmentation_3d(
-            raw=np.stack([to_uint8(frame) for frame in raw]),
-            labels=labels,
-            model_type=model_type,
-            checkpoint_path=checkpoint_path,
-            start_with_box_prompt=start_with_box,
-            prediction_dir=os.path.join(prediction_root, f"sample_{sample_id:05d}"),
-            prediction_fname=f"{sample_id:05d}.tif",
-            device=device,
-            n_iterations=n_iterations,
-        )
+        sample_prediction_dir = os.path.join(prediction_root, f"sample_{sample_id:05d}")
+        prediction_fname = f"{sample_id:05d}.tif"
+        prediction_paths = get_prediction_paths_3d(
+            sample_prediction_dir, prediction_fname, start_with_box, n_iterations
+        )[1]
+        if score_only:
+            if not all(os.path.exists(path) for path in prediction_paths):
+                missing.append(sample_id)
+                continue
+        else:
+            run_interactive_segmentation_3d(
+                raw=np.stack([to_uint8(frame) for frame in raw]),
+                labels=labels,
+                model_type=model_type,
+                checkpoint_path=checkpoint_path,
+                start_with_box_prompt=start_with_box,
+                prediction_dir=sample_prediction_dir,
+                prediction_fname=prediction_fname,
+                device=device,
+                n_iterations=n_iterations,
+            )
         all_gt.append(labels)
         all_valid_rois.append(valid_roi)
-        for iteration in range(n_iterations):
-            pred_paths_per_iter[iteration].append(
-                os.path.join(sample_prediction_dir, f"iteration{iteration}", f"{sample_id:05d}.tif")
-            )
+        for iteration, path in enumerate(prediction_paths):
+            pred_paths_per_iter[iteration].append(path)
+
+    if shard is not None:
+        print(f"Shard {shard[0]}/{shard[1]} finished predicting {len(sample_ids)} sample(s).")
+        return
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} sample(s) of '{dataset_name}' have no predictions yet: {missing}. Run their shards first."
+        )
 
     os.makedirs(results_dir, exist_ok=True)
     for iteration, save_path in enumerate(save_paths):
@@ -301,15 +357,21 @@ def main():
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d center crop (Z Y X).")
     parser.add_argument(
         "--shard_index", type=int, default=None,
-        help="This shard's index (0-based), for splitting a 2d dataset's images across parallel jobs. "
+        help="This shard's index (0-based), for splitting a dataset's images or volumes across parallel jobs. "
              "Requires --n_shards. A later unsharded call over the same dataset does the scoring.",
     )
     parser.add_argument("--n_shards", type=int, default=None, help="Total number of shards. Requires --shard_index.")
+    parser.add_argument(
+        "--score_only", action="store_true",
+        help="Score the predictions of finished shards, and fail rather than predict if one is missing.",
+    )
     parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     args = parser.parse_args()
 
     if (args.shard_index is None) != (args.n_shards is None):
         raise ValueError("--shard_index and --n_shards must be given together.")
+    if args.score_only and args.shard_index is not None:
+        raise ValueError("--score_only scores the whole dataset, so it cannot be combined with a shard.")
 
     check_data_download(args.dataset_name, args.input_path)
 
@@ -321,24 +383,22 @@ def main():
         args.weights, args.model_type, args.joint_checkpoint, args.checkpoint
     )
 
+    shard = None if args.shard_index is None else (args.shard_index, args.n_shards)
     if ndim == 2:
-        shard = None if args.shard_index is None else (args.shard_index, args.n_shards)
         run_interactive_evaluation_2d(
             args.dataset_name, args.input_path, args.experiment_folder, device, args.model_type,
             checkpoint, tag, legacy_tag,
             start_with_box=(args.prompt_choice == "box"), n_iterations=args.n_iterations,
             use_masks=args.use_masks, mask_threshold=args.mask_threshold, min_size=args.min_size, shard=shard,
-            limit=args.n_samples,
+            score_only=args.score_only, limit=args.n_samples,
         )
     else:
-        if args.shard_index is not None:
-            raise ValueError("Sharding is only supported for 2d datasets.")
         run_interactive_evaluation_3d(
             args.dataset_name, args.input_path, args.experiment_folder, device, args.model_type,
             checkpoint, tag, legacy_tag,
             start_with_box=(args.prompt_choice == "box"), n_iterations=args.n_iterations,
             min_size=args.min_size, crop_shape=tuple(args.crop_3d) if args.crop_3d else None,
-            limit=args.n_samples,
+            shard=shard, score_only=args.score_only, limit=args.n_samples,
         )
 
 
