@@ -20,37 +20,39 @@ from bioimage_cpp.segmentation import label, watershed
 
 from .util import DEFAULT_MODEL
 
-# Per (model_type, mode) defaults from the registry parameter search: the best-average-rank
-# combination across every dataset that shares that mode's grid, computed separately for each of the
-# 4 registry backbones.
+# Per (model_type, mode) defaults from the 2026-10 v6 joint parameter search: the best-average-rank
+# combination across every dataset that shares that mode's grid (sparse: ~70 datasets ranked by mSA,
+# dense: the 3 neuron-EM datasets ranked by the CREMI score), computed separately per backbone. The
+# characteristic change against the earlier registry tables is dt 1.0: the v6 flow fields reward
+# letting pixels travel further (livecell's per-dataset sweep even chose n_iter 200 with dt 1.0).
 DEFAULT_POSTPROCESSING = {
     "hvit_t": {
         "sparse": {
-            "foreground_threshold": 0.5, "density_threshold": 10.0, "min_size": 100,
-            "sigma": 0.5, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.5,
+            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
+            "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.75,
         },
-        "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_s": {
         "sparse": {
-            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
-            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.75,
+            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 50,
+            "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.75,
         },
-        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 25, "dt": 0.5},
+        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_b": {
         "sparse": {
-            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
-            "sigma": 0.25, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.65,
+            "foreground_threshold": 0.4, "density_threshold": 20.0, "min_size": 100,
+            "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.5,
         },
-        "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_l": {
         "sparse": {
-            "foreground_threshold": 0.4, "density_threshold": 10.0, "min_size": 50,
-            "sigma": 0.5, "n_iter": 50, "dt": 0.25, "foreground_weight": 0.65,
+            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 50,
+            "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.65,
         },
-        "dense": {"beta": 0.5, "density_threshold": 5.0, "sigma": 1.0, "n_iter": 50, "dt": 0.5},
+        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 25, "dt": 0.5},
     },
 }
 
@@ -148,6 +150,9 @@ def flow_instance_segmentation(
     min_size: Optional[int] = None,
     foreground_weight: Optional[float] = None,
     n_threads: int = 8,
+    boundary: Optional[np.ndarray] = None,
+    boundary_weight: Optional[float] = None,
+    boundary_mask_threshold: Optional[float] = None,
 ) -> np.ndarray:
     """Instance segmentation from directed-distance predictions via flow following.
 
@@ -156,8 +161,9 @@ def flow_instance_segmentation(
     watershed. Works for both 2D and 3D inputs.
 
     If 3 distance channels are supplied for a 2D foreground map the leading
-    z-channel is automatically dropped, so you can always pass ``out[1:]``
-    regardless of dimensionality.
+    z-channel is automatically dropped, so you can always pass the three distance
+    channels ``out[1:4]`` regardless of dimensionality. Any other channel count raises,
+    so that an auxiliary channel appended to the prediction is never read as a distance.
 
     Args:
         foreground: Foreground probability map, shape (Y, X) or (Z, Y, X).
@@ -175,6 +181,13 @@ def flow_instance_segmentation(
         foreground_weight: Weight of the foreground term in the watershed heightmap, see
             `watershed_heightmap`.
         n_threads: Number of threads for the flow computation.
+        boundary: The predicted object-boundary probability (channel 4 of the UniSAM2 prediction), same shape as
+            the foreground. Only used through the two keywords below.
+        boundary_weight: Adds ``boundary_weight * boundary`` to the watershed height map, so that the fronts of
+            two touching objects meet on the predicted boundary. None or 0 leaves the height map unchanged.
+        boundary_mask_threshold: Excludes the pixels with ``boundary > threshold`` from the first seeded watershed
+            and assigns them afterwards by flooding from the resulting instances, so that no instance grows
+            across a predicted boundary. None disables the exclusion.
 
     Returns:
         Instance segmentation, uint32 array, same spatial shape as foreground.
@@ -196,11 +209,17 @@ def flow_instance_segmentation(
         foreground_weight = defaults["foreground_weight"]
 
     ndim = foreground.ndim
-    if directed_distances.shape[0] > ndim:
-        directed_distances = directed_distances[-ndim:]
-    assert directed_distances.shape[0] == ndim, (
-        f"Expected {ndim} distance channels, got {directed_distances.shape[0]}."
-    )
+    if directed_distances.shape[0] == 3 and ndim == 2:
+        directed_distances = directed_distances[1:]  # Drop the (pseudo) z channel of a 2d prediction.
+    if directed_distances.shape[0] != ndim:
+        raise ValueError(
+            f"Expected {ndim} distance channels (or 3 for 2d input), got {directed_distances.shape[0]}. Pass the "
+            "three distance channels 'prediction[1:4]'; the boundary channel goes into 'boundary'."
+        )
+    if boundary is None and (boundary_weight is not None or boundary_mask_threshold is not None):
+        raise ValueError("'boundary_weight' and 'boundary_mask_threshold' need the predicted boundary map.")
+    if boundary is not None and boundary.shape != foreground.shape:
+        raise ValueError(f"The boundary map {boundary.shape} must have the shape of the foreground {foreground.shape}.")
 
     fg_mask = foreground > foreground_threshold
 
@@ -210,7 +229,16 @@ def flow_instance_segmentation(
 
     seeds = label(density > density_threshold)
     hmap = watershed_heightmap(foreground, directed_distances, foreground_weight)
-    seg = watershed(hmap, markers=seeds, mask=fg_mask)
+    if boundary is not None and boundary_weight is not None and boundary_weight != 0:
+        # The predicted boundary becomes a ridge, so the fronts of two touching objects meet on it.
+        hmap = np.ascontiguousarray(hmap + np.float32(boundary_weight) * np.clip(boundary, 0, 1), dtype="float32")
+    if boundary is not None and boundary_mask_threshold is not None:
+        # Flood everything but the boundary pixels first, then let the instances claim the boundary pixels.
+        open_mask = fg_mask & ~(boundary > boundary_mask_threshold)
+        first = watershed(hmap, markers=np.where(open_mask, seeds, 0).astype(seeds.dtype), mask=open_mask)
+        seg = watershed(hmap, markers=first, mask=fg_mask)
+    else:
+        seg = watershed(hmap, markers=seeds, mask=fg_mask)
 
     if min_size > 0:
         ids, sizes = np.unique(seg, return_counts=True)

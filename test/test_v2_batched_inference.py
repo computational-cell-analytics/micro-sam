@@ -68,7 +68,7 @@ class FakeUNETR(torch.nn.Module):
             mode="trilinear",
             align_corners=False,
         )
-        return prediction.repeat(1, 4, 1, 1, 1) * self.scale
+        return prediction.repeat(1, 5, 1, 1, 1) * self.scale
 
 
 class FakeVideoBackbone(torch.nn.Module):
@@ -554,7 +554,7 @@ class TestBatchedDecoder(unittest.TestCase):
             pbar_update=progress.append,
         )
 
-        self.assertEqual(output.shape, (4, 8, 8, 8))
+        self.assertEqual(output.shape, (5, 8, 8, 8))
         self.assertEqual(model.batch_sizes, [2, 2])
         self.assertEqual(sum(progress), 8)
 
@@ -584,7 +584,7 @@ class TestBatchedDecoder(unittest.TestCase):
             pbar_update=progress.append,
         )
 
-        self.assertEqual(output.shape, (4, 4, 8, 8))
+        self.assertEqual(output.shape, (5, 4, 8, 8))
         self.assertTrue(np.allclose(output[:, :, :4, :4], 1))
         self.assertTrue(np.allclose(output[:, :, :4, 4:], 2))
         self.assertTrue(np.allclose(output[:, :, 4:, :4], 3))
@@ -720,7 +720,7 @@ class TestZBlockValidation(unittest.TestCase):
     def test_tiled_slice_decoder_accepts_valid_index(self):
         model = FakeUNETR()
         output = _decode_tiled_3d_slice(model, self._tiled_embeddings(), index=3, batch_size=1)
-        self.assertEqual(output.shape, (4, 4, 4))
+        self.assertEqual(output.shape, (5, 4, 4))
 
 
 class TestTileDeviceAffinity(unittest.TestCase):

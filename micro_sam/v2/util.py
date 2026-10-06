@@ -400,6 +400,10 @@ FINETUNED_MODELS = [
 # truth for the default. The GUI derives its synthetic 'vit_<size><suffix>' selector string from it.
 DEFAULT_MODEL = "hvit_t_cells"
 
+# The UniSAM2 decoder prediction for automatic segmentation: foreground probability, the three directed
+# distances and the object boundary, in this order. Inference supports only this layout.
+UNISAM2_OUTPUT_CHANNELS = 5
+
 # All models below in the model registry for "_cells" are v6.
 FINETUNED_URLS = {
     "hvit_t_cells": "https://owncloud.gwdg.de/index.php/s/XZuc5IqxQ1AlWaN/download",

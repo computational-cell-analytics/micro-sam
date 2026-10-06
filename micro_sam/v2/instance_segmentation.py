@@ -37,7 +37,7 @@ from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
 from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
 from micro_sam.v2.util import (
     autocast, precompute_image_embeddings, set_precomputed, to_float32, _load_list_datasets,
-    _DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, Devices,
+    _DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, Devices, UNISAM2_OUTPUT_CHANNELS,
 )
 
 DEFAULT_SEGMENTATION_MODE_WITH_DECODER = "ais"
@@ -780,9 +780,13 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, peft
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         encoder = sam2_model.image_encoder
 
-    # Neither the decoder width nor the channel count (4, or 5 with the boundary channel) is recorded in the
-    # checkpoint, so read both off 'out_conv'.
+    # Neither the decoder width nor the channel count is recorded in the checkpoint, so read both off 'out_conv'.
     output_channels, initial_features = model_state["out_conv.weight"].shape[:2]
+    if output_channels != UNISAM2_OUTPUT_CHANNELS:
+        raise ValueError(
+            f"The decoder predicts {output_channels} channels, but only decoders with {UNISAM2_OUTPUT_CHANNELS} "
+            "output channels (foreground, three directed distances, boundary) are supported."
+        )
 
     model = UniSAM2(encoder=encoder, output_channels=output_channels, initial_features=initial_features, device=device)
     _check_decoder_width(model, initial_features)
@@ -1015,9 +1019,9 @@ def _segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kw
     """Convert UniSAM2 predictions into an instance segmentation.
 
     Args:
-        prediction: The UniSAM2 predictions, shape (4 or 5, *spatial). Channel 0 is the foreground
-            probability, channels 1-3 are the directed distances and channel 4, if present, the object boundary,
-            which the segmentation does not use.
+        prediction: The UniSAM2 predictions, shape (5, *spatial). Channel 0 is the foreground probability,
+            channels 1-3 are the directed distances and channel 4 is the object boundary, which the sparse mode
+            forwards as 'boundary'.
         mode: The segmentation mode. 'sparse' uses flow-based segmentation (LM data, 2d and 3d),
             'dense' uses multicut-based segmentation (EM data, 2d and 3d).
         kwargs: Additional parameters forwarded to the postprocessing function
@@ -1026,6 +1030,11 @@ def _segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kw
     Returns:
         The instance segmentation, uint32 array with the spatial shape of the prediction.
     """
+    if prediction.shape[0] != UNISAM2_OUTPUT_CHANNELS:
+        raise ValueError(
+            f"Expected a UniSAM2 prediction with {UNISAM2_OUTPUT_CHANNELS} channels (foreground, three directed "
+            f"distances, boundary), got {prediction.shape[0]}."
+        )
     foreground = prediction[0]
     if mode == "dense":
         boundary_map = foreground.max() - foreground
@@ -1040,7 +1049,7 @@ def _segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kw
         else:
             seg = run_multicut(boundary_map, distances, **kwargs)
     else:
-        seg = flow_instance_segmentation(foreground, prediction[1:4], **kwargs)
+        seg = flow_instance_segmentation(foreground, prediction[1:4], boundary=prediction[4], **kwargs)
     return seg.astype("uint32")
 
 
@@ -1128,10 +1137,10 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
 
         if is_3d:
             input_ = raw[np.newaxis].astype("float32")
-            output = np.zeros((4, *raw.shape), dtype="float32")
+            output = np.zeros((UNISAM2_OUTPUT_CHANNELS, *raw.shape), dtype="float32")
         else:
             input_ = raw[np.newaxis, np.newaxis].astype("float32")
-            output = np.zeros((4, 1, *raw.shape), dtype="float32")
+            output = np.zeros((UNISAM2_OUTPUT_CHANNELS, 1, *raw.shape), dtype="float32")
 
         img_size = getattr(getattr(self._model, "encoder", None), "img_size", 1024)
         resize_model = ResizeLongestSideWrapper(self._model, img_size)
@@ -1180,7 +1189,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         """Run only the UniSAM2 decoder on precomputed 2d image embeddings (no encoder pass).
 
         Reuses resize-longest 2d embeddings produced by `precompute_image_embeddings`. Returns the
-        predictions stacked along the channel axis, shape (4, Y, X).
+        predictions stacked along the channel axis, shape (5, Y, X).
         """
         features = np.asarray(image_embeddings["features"])
         # A slice of 3d embeddings keeps a singleton batch axis: (1, 1, C, h, w) rather than (1, C, h, w).
@@ -1308,7 +1317,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
     def get_state(self) -> dict:
         """Return the cached decoder predictions so they can be serialized and later restored.
 
-        The state holds the (4, *spatial) foreground + directed-distance predictions. Restore it
+        The state holds the (5, *spatial) foreground, directed-distance and boundary predictions. Restore it
         with `set_state` to skip the expensive decoder inference in `initialize`. It is independent
         of the post-processing parameters (those are applied in `generate`), so it is always reusable.
         """

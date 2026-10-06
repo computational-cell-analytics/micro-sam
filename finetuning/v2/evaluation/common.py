@@ -2122,13 +2122,17 @@ def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None):
 
 
 def postprocess_unisam2(out, dataset_name, model_type, params=None):
-    """Turn a (4, *spatial) prediction into an instance segmentation.
+    """Turn a (5, *spatial) prediction into an instance segmentation.
 
     EM datasets use the dense (multicut) mode, all others the sparse (flow) mode. 'params' overrides
     the postprocessing defaults, e.g. with the best combination found by grid_search_automatic_cells.
-    Without 'params', 'model_type' selects the per-model library default.
+    Without 'params', 'model_type' selects the per-model library default. The boundary channel 4 is
+    forwarded to the sparse mode as 'boundary'.
     """
+    from micro_sam.v2.util import UNISAM2_OUTPUT_CHANNELS
     from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
+    if out.shape[0] != UNISAM2_OUTPUT_CHANNELS:
+        raise ValueError(f"Expected a {UNISAM2_OUTPUT_CHANNELS}-channel UniSAM2 prediction, got {out.shape[0]}.")
     params = {} if params is None else params
     fg = out[0]
     if dataset_name in DATASETS_DENSE:
@@ -2138,9 +2142,9 @@ def postprocess_unisam2(out, dataset_name, model_type, params=None):
         seg = run_multicut(boundary_map, distances, model_type=model_type, **params)
     else:
         spacing = DATASET_SPACING.get(dataset_name, None)
-        if out.shape[0] > 4:
-            params = {"boundary": out[4], **params}
-        seg = flow_instance_segmentation(fg, out[1:4], model_type=model_type, spacing=spacing, **params)
+        seg = flow_instance_segmentation(
+            fg, out[1:4], boundary=out[4], model_type=model_type, spacing=spacing, **params
+        )
     return seg.astype("uint32")
 
 
@@ -2349,6 +2353,10 @@ def read_tuned_params(
     params = {}
     for key, value in rows[0].items():
         if key.endswith(("_mean", "_std")) or key == "n_images":
+            continue
+        # An empty cell is a swept None (e.g. APG's 'no refinement'), which must not come back as ''.
+        if value == "":
+            params[key] = None
             continue
         try:
             params[key] = ast.literal_eval(value)

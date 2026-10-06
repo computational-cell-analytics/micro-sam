@@ -16,7 +16,7 @@ import numpy as np
 
 import torch
 
-from .util import Devices, autocast, recommend_batch_size, to_float32
+from .util import UNISAM2_OUTPUT_CHANNELS, Devices, autocast, recommend_batch_size, to_float32
 from micro_sam.util import _create_dataset_without_data
 from .normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, compute_percentile_bounds, to_image
 
@@ -1346,7 +1346,7 @@ def _decode_volume_embeddings(
         num_write_workers: The number of threads used to write decoded blocks.
 
     Returns:
-        The decoder predictions, shape (4, Z, Y, X): foreground and the three distance channels.
+        The decoder predictions, shape (5, Z, Y, X): foreground, the three distances and the boundary.
 
     Raises:
         ValueError: If the features are not 3d, if `z_block` is not positive or `z_halo` is negative.
@@ -1362,7 +1362,7 @@ def _decode_volume_embeddings(
     z_block, z_halo = _resolve_z_blocking(z_block, z_halo)
 
     original_size = tuple(int(value) for value in np.asarray(image_embeddings["original_size"]).reshape(-1)[:2])
-    output = np.zeros((4, n_slices, *original_size), dtype="float32")
+    output = np.zeros((UNISAM2_OUTPUT_CHANNELS, n_slices, *original_size), dtype="float32")
     jobs = []
     for z0 in range(0, n_slices, z_block):
         z1 = min(z0 + z_block, n_slices)
@@ -1428,10 +1428,10 @@ def _decode_tiled_2d_embeddings(
         num_write_workers: The number of threads used to stitch decoded tiles into the output.
 
     Returns:
-        The stitched decoder predictions, shape (4, Y, X): foreground and the three distance channels.
+        The stitched decoder predictions, shape (5, Y, X): foreground, the three distances and the boundary.
     """
     features, shape, halo, tiling = _tiled_metadata(image_embeddings, is_3d=False)
-    output = np.zeros((4, *shape), dtype="float32")
+    output = np.zeros((UNISAM2_OUTPUT_CHANNELS, *shape), dtype="float32")
     jobs = []
     for tile_id in range(tiling.number_of_blocks):
         tile_features = features[str(tile_id)]
@@ -1512,7 +1512,7 @@ def _decode_tiled_3d_embeddings(
         num_write_workers: The number of threads used to stitch decoded blocks into the output.
 
     Returns:
-        The stitched decoder predictions, shape (4, Z, Y, X): foreground and the three distance channels.
+        The stitched decoder predictions, shape (5, Z, Y, X): foreground, the three distances and the boundary.
 
     Raises:
         ValueError: If `z_block` is not positive or `z_halo` is negative.
@@ -1521,7 +1521,7 @@ def _decode_tiled_3d_embeddings(
     n_slices = shape[0]
     z_block, z_halo = _resolve_z_blocking(z_block, z_halo)
     jobs = _tiled_3d_jobs(features, tiling, n_slices, z_block, z_halo)
-    output = np.zeros((4, *shape), dtype="float32")
+    output = np.zeros((UNISAM2_OUTPUT_CHANNELS, *shape), dtype="float32")
 
     if pbar_init is not None:
         pbar_init(tiling.number_of_blocks * n_slices, "Automatic segmentation (tiles)")
@@ -1576,7 +1576,7 @@ def _decode_tiled_3d_slice(
         num_write_workers: The number of threads used to stitch decoded tiles into the output.
 
     Returns:
-        The stitched decoder predictions for the slice, shape (4, Y, X).
+        The stitched decoder predictions for the slice, shape (5, Y, X).
 
     Raises:
         ValueError: If `index` is outside the volume.
@@ -1588,7 +1588,7 @@ def _decode_tiled_3d_slice(
     if not 0 <= index < n_slices:
         raise ValueError(f"The slice index must be in [0, {n_slices}), got {index}.")
 
-    output = np.zeros((4, *shape[1:]), dtype="float32")
+    output = np.zeros((UNISAM2_OUTPUT_CHANNELS, *shape[1:]), dtype="float32")
     jobs = []
     for tile_id in range(tiling.number_of_blocks):
         tile_features = features[str(tile_id)]
