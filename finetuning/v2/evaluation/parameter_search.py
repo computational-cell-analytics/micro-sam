@@ -7,8 +7,7 @@ That is the layout `common.read_tuned_params` reads, so `evaluate_automatic_segm
 has to load the result instead of repeating the sweep for every evaluation job.
 
 Dense-neuron EM datasets (`common.DATASETS_DENSE`) are tuned in dense (multicut) mode and ranked by
-the CREMI score, all others (including the sparse, blob-shaped platynereis_nuclei) in sparse (flow)
-mode and ranked by mSA.
+the CREMI score, all others in sparse (flow) mode and ranked by mSA.
 
 Usage examples:
     python parameter_search.py -m hvit_b -e <exp> --mode ais
@@ -129,10 +128,10 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_over
     """Build the sweep configuration for one dataset and mode.
 
     Dense-neuron EM datasets (`common.DATASETS_DENSE`) are tuned in dense (multicut) mode and ranked
-    by the CREMI score, all others (including the sparse, blob-shaped platynereis_nuclei) in sparse
-    (flow) mode and ranked by mSA. With mode='apg' the postprocessing is replaced by the prompt
-    generation, which is swept over its own grid; the ranking metric follows the data either way, so
-    an APG result is directly comparable with the AIS result of the same dataset.
+    by the CREMI score, all others in sparse (flow) mode and ranked by mSA. With mode='apg' the
+    postprocessing is replaced by the prompt generation, which is swept over its own grid; the ranking
+    metric follows the data either way, so an APG result is directly comparable with the AIS result of
+    the same dataset.
 
     Args:
         dataset_name: The dataset to tune on.
@@ -785,8 +784,8 @@ REGISTRY_2D_SHARDS = {
 def registry_num_shards(dataset_name, mode):
     """How many array tasks split one (model_type, mode, dataset) grid of the registry sweep.
 
-    The sparse (flow) grid used by AIS on the sparse 3d datasets (embedseg, gonuclear,
-    platynereis_nuclei, see DATASETS_DENSE) is far larger than every other grid (roughly 10800 combos
+    The sparse (flow) grid used by AIS on the sparse 3d datasets (embedseg, gonuclear, see
+    DATASETS_DENSE) is far larger than every other grid (roughly 10800 combos
     after flow-travel dedup vs. 72 for dense EM and <=384 for APG), so it gets split the most; every
     3d dataset still gets split. 2d datasets stay a single job except the ones in REGISTRY_2D_SHARDS,
     whose validation-sample count (even after REGISTRY_N_TUNING_SAMPLES capping) is large enough that
@@ -795,10 +794,6 @@ def registry_num_shards(dataset_name, mode):
     if dataset_name not in DATASETS_3D:
         return REGISTRY_2D_SHARDS.get((dataset_name, mode), 1)
     if mode == "ais":
-        # platynereis_nuclei only sweeps 3 (of 12) samples, see PLATYNEREIS_NUCLEI_VAL_SAMPLES, so its
-        # workload is a fraction of the other sparse 3d datasets and needs far fewer shards.
-        if dataset_name == "platynereis_nuclei":
-            return 6
         return 12 if dataset_name not in DATASETS_DENSE else 4
     return 4
 
@@ -826,9 +821,6 @@ def tuning_command(
     ]
     if dataset_name in REGISTRY_N_TUNING_SAMPLES:
         command.extend(["--n_tuning_samples", str(REGISTRY_N_TUNING_SAMPLES[dataset_name])])
-    if dataset_name == "platynereis_nuclei":
-        # Matches the 16-slice z-window PLATYNEREIS_NUCLEI_VAL_SAMPLES picked per sample.
-        command.extend(["--crop_3d", "16", "512", "512"])
     if num_shards > 1:
         command.extend(["--num_shards", str(num_shards)])
         if merge:

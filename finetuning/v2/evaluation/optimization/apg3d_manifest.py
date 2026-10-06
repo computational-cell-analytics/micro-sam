@@ -36,7 +36,7 @@ EVALUATION_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(EVALUATION_ROOT))
 
 import common  # noqa
-from common import DATASET_SPACING, PLATYNEREIS_NUCLEI_VAL_SAMPLES, get_data_paths  # noqa
+from common import DATASET_SPACING, get_data_paths  # noqa
 from optimization.benchmark_apg_optimization import (  # noqa
     DEFAULT_DATA_ROOT, DEFAULT_OUTPUT_ROOT, _add_complexity, _array_shape, _atomic_write_json, _content_checksum,
     _object_statistics, _quantile_targets, _read_array, _relative_data_path, _roi_from_json, _roi_to_json,
@@ -131,20 +131,9 @@ def _humanneurons(data_root: Path) -> List[Tuple[str, str]]:
     return _same(sorted(glob(str(data_root / "humanneurons" / "*.h5"))))
 
 
-def _platynereis_nuclei(data_root: Path) -> List[Tuple[str, str]]:
-    paths, _, _, _ = get_data_paths("platynereis_nuclei", str(data_root), split="val")
-    return _same(paths)
-
-
 def _snemi_legal_z(shape: Tuple[int, ...]) -> List[Tuple[int, int]]:
     # Original slices 70:81 and 89:100: what is held out from training and from the evaluated slab.
     return [(70, SNEMI_TEST_SLAB[0]), (SNEMI_TEST_SLAB[1], int(shape[0]))]
-
-
-def _platynereis_legal_z(raw_path: str) -> Callable[[Tuple[int, ...]], List[Tuple[int, int]]]:
-    def legal(shape: Tuple[int, ...]) -> List[Tuple[int, int]]:
-        return [common.platynereis_nuclei_val_z_range(raw_path)]
-    return legal
 
 
 def _basename_is(*names: str) -> Callable[[str], bool]:
@@ -201,11 +190,6 @@ def tuning_source_specs() -> List[SourceSpec]:
             "humanneurons", "humanneurons", _humanneurons, "raw", "labels",
             lambda shape: [common.VAL_Z_RANGE["humanneurons"]], lambda shape: (16, 512, 512),
             lambda path: False, seen_in_training=False, metric_mode="dense", target=8,
-        ),
-        SourceSpec(
-            "platynereis_nuclei", "platynereis_nuclei", _platynereis_nuclei, "volumes/raw",
-            "volumes/labels/nucleus_instance_labels", None, lambda shape: _deep_xy(shape, depth=16),
-            _basename_contains("nuclei_08"), seen_in_training="maybe", mask_invalid_labels=True, target=4,
         ),
     ]
 
@@ -272,7 +256,7 @@ def _scan_source(spec: SourceSpec, raw_path: str, label_path: str, data_root: Pa
     if len(shape) != 3:
         raise RuntimeError(f"Expected a 3d label volume for '{spec.dataset}', got {shape} at '{label_path}'.")
     crop = spec.crop_shape(shape)
-    legal_z = spec.legal_z(shape) if spec.legal_z is not None else [_platynereis_legal_z(raw_path)(shape)[0]]
+    legal_z = spec.legal_z(shape)
     candidates = []
     for z_start, z_stop in legal_z:
         z_stop = min(z_stop, shape[0])

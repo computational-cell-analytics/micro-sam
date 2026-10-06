@@ -1,5 +1,4 @@
 import os
-import re
 import ast
 import csv
 import json
@@ -333,8 +332,8 @@ DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb", "nisb"]
 DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell", "synapsenet_compartments"]
 
 DATASETS_3D_EM = (
-    ["platynereis_nuclei"] + DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY
-    + DATASETS_3D_EM_NEURITE_OOD + DATASETS_3D_EM_CELL_ID
+    DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_OOD
+    + DATASETS_3D_EM_CELL_ID
 )
 DATASETS_EM = DATASETS_2D_EM + DATASETS_3D_EM
 
@@ -343,8 +342,8 @@ DATASETS_3D_SWEEP_ONLY = ["lucchi"]
 
 DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM + DATASETS_3D_SWEEP_ONLY
 
-# The neurite datasets need the dense (multicut) pipeline and are ranked by the CREMI score. The EM cell datasets and
-# platynereis_nuclei segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
+# The neurite datasets need the dense (multicut) pipeline and are ranked by the CREMI score. The EM cell datasets
+# segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
 DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_OOD
 
 # Everything outside the main in-domain and OOD panels: supplementary, held-out platform and reserve sets.
@@ -375,7 +374,7 @@ VAL_SPLITS.update({
     "dic_hepg2": "val", "bac_mother": "val", "plantseg_ovules": "val", "cshaper": "train", "mouse_embryo": "train",
     "blastospim": "val", "bbbc010": "val", "bbbc050": "train",
     "wing_disc": None, "embedseg_mouse_skull": None, "embedseg_platy_ish": None, "nis3d": None,
-    "platynereis_nuclei": None, "humanneurons": None, "bbbc032": None, "bbbc033": None,
+    "humanneurons": None, "bbbc032": None, "bbbc033": None,
 })
 
 # Volumes whose tuning data is a z-slab of the test volume, as (file name, z-slab), following the loader; the
@@ -481,38 +480,14 @@ def em_roi(dataset_name: str, label_path: str, split: str):
     if dataset_name == "synapseweb":
         region = os.path.basename(label_path).replace("synapseweb_hippocampus_", "").replace(".h5", "")
         return SYNAPSEWEB_CORE_ROIS[region]
-    if dataset_name == "platynereis_nuclei" and split == "test":
-        return PLATYNEREIS_NUCLEI_TEST_ROIS[int(re.search(r"nuclei_(\d+)\.h5$", label_path).group(1))]
     rois = EM_ROIS.get(dataset_name)
     return None if rois is None else rois[split]
-
-
-# platynereis_nuclei has 12 volumes, all of which the evaluation reads in full (crop centered on each
-# volume's own depth), so tuning cannot afford to sweep every volume: instead of an equal z-slab like
-# VAL_Z_RANGE, tuning uses only these 3 sample ids (of 12), the ones with the most annotated (valid_roi,
-# i.e. label != -1) foreground voxels, each restricted to its own 16-slice z-window that maximizes that
-# foreground count while staying clear of the slab the evaluation's own center crop reads. Chosen by
-# measuring per-slice foreground density on the actual data; see load_volume for the valid_roi masking.
-PLATYNEREIS_NUCLEI_VAL_SAMPLES = {1: (28, 44), 5: (2, 18), 8: (99, 115)}
-
-# The annotated block of each platynereis_nuclei volume, i.e. the bounding box of label != -1. Training reads the
-# same roi. The test split is scored inside it, but the tuning windows above count from the whole volume.
-PLATYNEREIS_NUCLEI_TEST_ROIS = {sample: np.s_[16:116, 32:407, 32:407] for sample in (1, 2, 3, 4, 6, 7, 9, 10, 11, 12)}
-PLATYNEREIS_NUCLEI_TEST_ROIS.update({5: np.s_[2:102, 25:325, 25:325], 8: np.s_[16:116, 32:532, 32:407]})
-
-
-def platynereis_nuclei_val_z_range(raw_path: str) -> Tuple[int, int]:
-    """The z-window PLATYNEREIS_NUCLEI_VAL_SAMPLES picked for one 'train_data_nuclei_%02i.h5' path."""
-    sample_id = int(re.search(r"nuclei_(\d+)\.h5$", raw_path).group(1))
-    return PLATYNEREIS_NUCLEI_VAL_SAMPLES[sample_id]
 
 
 def val_z_range(dataset_name: str, raw_path: str, split: str) -> Optional[Tuple[int, Optional[int]]]:
     """The z-range of a volume that holds both tuning and test data: the tuning slab for 'val', its complement
     for 'test', so the scored region never overlaps the validation region. None where the two are separate files.
     """
-    if dataset_name == "platynereis_nuclei":
-        return platynereis_nuclei_val_z_range(raw_path) if split == "val" else None
     slab = LM_VAL_Z_SLABS.get(dataset_name, {}).get(os.path.basename(raw_path))
     if slab is None:
         return None
@@ -1394,14 +1369,6 @@ def _get_3d_em_data_paths(
     p = data_root
     em = datasets.electron_microscopy
 
-    if dataset_name == "platynereis_nuclei":
-        # The val split restricts to the 3 richest sample ids, see PLATYNEREIS_NUCLEI_VAL_SAMPLES.
-        sample_ids = sorted(PLATYNEREIS_NUCLEI_VAL_SAMPLES) if is_val else None
-        paths = datasets.platynereis.get_platynereis_paths(
-            path=os.path.join(p, "platynereis"), sample_ids=sample_ids, name="nuclei", download=download,
-        )
-        return paths, paths, "volumes/raw", "volumes/labels/nucleus_instance_labels"
-
     if dataset_name == "platynereis_cells":
         # Volume 9 is the blind test set, volumes 7 and 8 validate; the neuropil carries the ignore label.
         sample_ids = [7, 8] if is_val else [9]
@@ -1561,9 +1528,8 @@ def get_data_paths(
                 f"There is no data held out from the evaluation for '{dataset_name}', so it cannot be "
                 f"tuned on a validation split. Datasets that can: {sorted(VAL_SPLITS)}."
             )
-        # None means the loader has no split of its own; the holdout is the z-slab in VAL_Z_RANGE
-        # (or, for platynereis_nuclei, the sample_ids in PLATYNEREIS_NUCLEI_VAL_SAMPLES), which
-        # load_volume / _get_3d_em_data_paths apply on top of the very same volumes.
+        # None means the loader has no split of its own; the holdout is the z-slab in VAL_Z_RANGE, which
+        # load_volume applies on top of the very same volumes.
         split = VAL_SPLITS[dataset_name] or "test"
 
     if dataset_name in DATASETS_2D:
@@ -1619,7 +1585,7 @@ def load_volume(
     """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
 
     valid_roi is a boolean mask that is True where the data is annotated. It is None except for the datasets
-    that are annotated only in part (platynereis_nuclei, platynereis_cells, synapseweb).
+    that are annotated only in part (platynereis_cells, synapseweb, plantseg_root, plantseg_ovules).
 
     'split' selects the test or the tuning region of the EM volumes, see EM_ROIS. 'z_range' restricts the
     volume to a z-slab before the center crop, which is how a dataset without splits holds tuning data out
@@ -1646,11 +1612,7 @@ def load_volume(
     raw, labels = np.asarray(raw_source[window]), np.asarray(label_source[window])
 
     valid_roi = None
-    if dataset_name == "platynereis_nuclei":
-        labels = labels.astype("int64")
-        valid_roi = labels != -1
-        labels[labels == -1] = 0
-    elif dataset_name == "platynereis_cells":
+    if dataset_name == "platynereis_cells":
         # The neuropil is not resolved into cells and carries the ignore label; it is excluded from scoring.
         ignore = labels == datasets.electron_microscopy.platynereis.CELL_IGNORE_LABEL
         valid_roi = ~ignore
@@ -2176,7 +2138,9 @@ def postprocess_unisam2(out, dataset_name, model_type, params=None):
         seg = run_multicut(boundary_map, distances, model_type=model_type, **params)
     else:
         spacing = DATASET_SPACING.get(dataset_name, None)
-        seg = flow_instance_segmentation(fg, out[1:], model_type=model_type, spacing=spacing, **params)
+        if out.shape[0] > 4:
+            params = {"boundary": out[4], **params}
+        seg = flow_instance_segmentation(fg, out[1:4], model_type=model_type, spacing=spacing, **params)
     return seg.astype("uint32")
 
 
@@ -2721,8 +2685,8 @@ def load_data(
 ):
     """Yield (image_or_volume, labels, valid_roi) triples for the given dataset.
 
-    valid_roi is a boolean mask that is True where the data is annotated. It is None for every
-    dataset except platynereis_nuclei, which is annotated only in part.
+    valid_roi is a boolean mask that is True where the data is annotated. It is None except for the datasets
+    that are annotated only in part, see load_volume.
 
     The filtering happens here, in the single source of the labels used for both prompting and
     scoring. If only the prompting copy were filtered, the dropped objects would stay in the scored
