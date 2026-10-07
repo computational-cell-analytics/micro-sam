@@ -7,8 +7,7 @@ That is the layout `common.read_tuned_params` reads, so `evaluate_automatic_segm
 has to load the result instead of repeating the sweep for every evaluation job.
 
 Dense-neuron EM datasets (`common.DATASETS_DENSE`) are tuned in dense (multicut) mode and ranked by
-the CREMI score, all others (including the sparse, blob-shaped platynereis_nuclei) in sparse (flow)
-mode and ranked by mSA.
+the CREMI score, all others in sparse (flow) mode and ranked by mSA.
 
 Usage examples:
     python parameter_search.py -m hvit_b -e <exp> --mode ais
@@ -129,10 +128,10 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_over
     """Build the sweep configuration for one dataset and mode.
 
     Dense-neuron EM datasets (`common.DATASETS_DENSE`) are tuned in dense (multicut) mode and ranked
-    by the CREMI score, all others (including the sparse, blob-shaped platynereis_nuclei) in sparse
-    (flow) mode and ranked by mSA. With mode='apg' the postprocessing is replaced by the prompt
-    generation, which is swept over its own grid; the ranking metric follows the data either way, so
-    an APG result is directly comparable with the AIS result of the same dataset.
+    by the CREMI score, all others in sparse (flow) mode and ranked by mSA. With mode='apg' the
+    postprocessing is replaced by the prompt generation, which is swept over its own grid; the ranking
+    metric follows the data either way, so an APG result is directly comparable with the AIS result of
+    the same dataset.
 
     Args:
         dataset_name: The dataset to tune on.
@@ -254,7 +253,7 @@ def score_image_sparse_cached(
     (None where a combo failed), aligned with params_list.
     """
     foreground = prediction[0]
-    directed = prediction[1:]
+    directed = prediction[1:4]
     ndim = foreground.ndim
     if directed.shape[0] > ndim:
         directed = directed[-ndim:]
@@ -706,9 +705,10 @@ ENV = "super"
 # the weights the submission chose rather than whatever the environment holds when it starts.
 JOINT_ENV_VARS = ("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", "MICRO_SAM2_JOINT_EXPORT_ROOT")
 CPUS = 4
-# A 2d task took 54 min at worst as a shard and 62 min unsharded, with the slow histopathology datasets
-# sharded (REGISTRY_2D_SHARDS). A longer limit only keeps the task out of the backfill window.
-TIME_LIMIT_2D = "01:30:00"
+# The v5a-era sizing (54 min worst shard, 62 min unsharded) no longer holds: the v6 sweeps run their
+# 2d tasks 2-3x slower on the MIG slices (livecell shards and several unsharded datasets overran a
+# 1:30 budget on 2026-09-29), so the limit carries that margin now.
+TIME_LIMIT_2D = "03:00:00"
 TIME_LIMIT_3D = "04:00:00"
 MAX_CONCURRENT = 20
 N_ATTEMPTS = 3
@@ -759,7 +759,7 @@ REGISTRY_N_TUNING_SAMPLES = {
 # 14 shards keeps each one comfortably under the 4h budget even at that measured, not estimated, rate.
 REGISTRY_2D_SHARDS = {
     ("tissuenet", "ais"): 4, ("tissuenet", "apg"): 24,
-    ("deepseas", "ais"): 2, ("deepseas", "apg"): 24,
+    ("deepseas", "ais"): 4, ("deepseas", "apg"): 24,
     ("dynamicnuclearnet", "ais"): 5, ("dynamicnuclearnet", "apg"): 24,
     ("livecell", "ais"): 14, ("livecell", "apg"): 24,
     ("neurips_cellseg_fluorescence", "ais"): 2, ("neurips_cellseg_fluorescence", "apg"): 4,
@@ -775,7 +775,13 @@ REGISTRY_2D_SHARDS = {
     ("cisd", "ais"): 4, ("cisd", "apg"): 24,
     ("toiam", "ais"): 4, ("toiam", "apg"): 24,
     ("bmgd", "ais"): 4, ("bmgd", "apg"): 24,
-    ("pan_multiplex", "ais"): 4, ("pan_multiplex", "apg"): 24,
+    ("pan_multiplex", "ais"): 12, ("pan_multiplex", "apg"): 24,
+    # Histopathology AIS on v6: dense nuclei make the flow grid slow per sample, so the small (32-46
+    # image) val pools still overran the unsharded 1:30 budget on the MIG slices (yeaz too; hvit_l on a
+    # full H100 only lost lizard and lynsec_ihc). 4 shards keep each task well under it.
+    ("yeaz", "ais"): 4, ("cpm17", "ais"): 4, ("glysac", "ais"): 4, ("lizard", "ais"): 4,
+    ("lynsec_he", "ais"): 4, ("lynsec_ihc", "ais"): 4, ("monuseg", "ais"): 4,
+    ("organoidnet", "ais"): 4, ("bccd", "ais"): 4, ("vicar", "ais"): 4,
     # Histopathology APG on v5a: dense nuclei make every proposal slow. Unsharded, lizard took 187 s per sample
     # (3.6 h) and lynsec_ihc 125 s per sample. lynsec_he and monuseg took 93 and 89 min. Only APG was timed here.
     ("lizard", "apg"): 12, ("lynsec_ihc", "apg"): 12, ("lynsec_he", "apg"): 4, ("monuseg", "apg"): 4,
@@ -785,8 +791,8 @@ REGISTRY_2D_SHARDS = {
 def registry_num_shards(dataset_name, mode):
     """How many array tasks split one (model_type, mode, dataset) grid of the registry sweep.
 
-    The sparse (flow) grid used by AIS on the sparse 3d datasets (embedseg, gonuclear,
-    platynereis_nuclei, see DATASETS_DENSE) is far larger than every other grid (roughly 10800 combos
+    The sparse (flow) grid used by AIS on the sparse 3d datasets (embedseg, gonuclear, see
+    DATASETS_DENSE) is far larger than every other grid (roughly 10800 combos
     after flow-travel dedup vs. 72 for dense EM and <=384 for APG), so it gets split the most; every
     3d dataset still gets split. 2d datasets stay a single job except the ones in REGISTRY_2D_SHARDS,
     whose validation-sample count (even after REGISTRY_N_TUNING_SAMPLES capping) is large enough that
@@ -795,10 +801,6 @@ def registry_num_shards(dataset_name, mode):
     if dataset_name not in DATASETS_3D:
         return REGISTRY_2D_SHARDS.get((dataset_name, mode), 1)
     if mode == "ais":
-        # platynereis_nuclei only sweeps 3 (of 12) samples, see PLATYNEREIS_NUCLEI_VAL_SAMPLES, so its
-        # workload is a fraction of the other sparse 3d datasets and needs far fewer shards.
-        if dataset_name == "platynereis_nuclei":
-            return 6
         return 12 if dataset_name not in DATASETS_DENSE else 4
     return 4
 
@@ -826,9 +828,6 @@ def tuning_command(
     ]
     if dataset_name in REGISTRY_N_TUNING_SAMPLES:
         command.extend(["--n_tuning_samples", str(REGISTRY_N_TUNING_SAMPLES[dataset_name])])
-    if dataset_name == "platynereis_nuclei":
-        # Matches the 16-slice z-window PLATYNEREIS_NUCLEI_VAL_SAMPLES picked per sample.
-        command.extend(["--crop_3d", "16", "512", "512"])
     if num_shards > 1:
         command.extend(["--num_shards", str(num_shards)])
         if merge:
@@ -883,17 +882,18 @@ def registry_job_tasks(experiment_folder, data_root):
     return groups
 
 
-def joint_job_tasks(experiment_folder, data_root, model_type, mode, joint_checkpoint):
+def joint_job_tasks(experiment_folder, data_root, model_type, mode, joint_checkpoint, datasets=None):
     """Every (tag, command) pair of a joint-checkpoint sweep, split into direct / shard / merge groups.
 
-    Mirrors `registry_job_tasks` for one model type and one mode, over the registry datasets.
+    Mirrors `registry_job_tasks` for one model type and one mode, over the registry datasets, or over
+    'datasets' for a partial (re)submission, e.g. repairing timed-out tasks with a new shard count.
 
     Returns:
         A dict {(group, gpu): [(tag, command), ...]}, group in {'direct', 'shard', 'merge'}.
     """
     weights = joint_weights(joint_checkpoint)
     groups = {}
-    for dataset_name in REGISTRY_DATASETS:
+    for dataset_name in (datasets or REGISTRY_DATASETS):
         num_shards = registry_num_shards(dataset_name, mode)
         tier = registry_gpu_tier(dataset_name, model_type)
         base_tag = f"tune_{model_type}_joint_{mode}_{dataset_name}"
@@ -928,19 +928,22 @@ def env_exports():
     return "".join(f"export {name}={shlex.quote(os.environ[name])}\n" for name in JOINT_ENV_VARS if name in os.environ)
 
 
-def write_array_script(job_folder, name, tasks_path, n_tasks, gpu, memory, time_limit, dependency=None):
+def write_array_script(
+    job_folder, name, tasks_path, n_tasks, gpu, memory, time_limit, dependency=None, partition=None, reservation=None,
+):
     """Write one Slurm array script that dispatches each task line by SLURM_ARRAY_TASK_ID."""
     script_path = job_folder / f"array_{name}.sh"
     dep_line = f"\n#SBATCH --dependency={dependency}" if dependency else ""
+    reservation_line = f"\n#SBATCH --reservation={reservation}" if reservation else ""
     script = f"""#!/bin/bash
 #SBATCH -c {CPUS}
 #SBATCH --mem {memory}
 #SBATCH -t {time_limit}
-#SBATCH -p {PARTITION}
+#SBATCH -p {partition or PARTITION}
 #SBATCH -G {gpu}
 #SBATCH --job-name={name}
 #SBATCH --array=0-{n_tasks - 1}%{MAX_CONCURRENT}
-#SBATCH --requeue{dep_line}
+#SBATCH --requeue{dep_line}{reservation_line}
 #SBATCH --constraint=inet
 #SBATCH -o {job_folder}/logs/{name}_%A_%a.out
 #SBATCH -e {job_folder}/logs/{name}_%A_%a.err
@@ -980,18 +983,29 @@ def submit_job(script: Path, dependency=None) -> str:
     return job_id
 
 
-def submit_job_arrays(job_folder, groups, dry):
+def submit_job_arrays(job_folder, groups, dry, partition=None, gpu_override=None, reservation=None):
     """Write one array script per (group, tier) and submit it, each merge after the shards it needs.
 
     A tier is (gpu, memory, time_limit), so the 2d and the 3d tasks of one group do not share a
     reservation: 2d tasks reserving the 3d memory starve the nodes long before the GPUs run out.
+    'partition', 'gpu_override' and 'reservation' redirect a whole submission to another pool, e.g. a
+    full-GPU partition, where the MIG specs of `registry_gpu_tier` do not exist.
     """
+    if gpu_override is not None:
+        merged = {}
+        for (group, _, memory, time_limit), tasks in groups.items():
+            merged.setdefault((group, gpu_override, memory, time_limit), []).extend(tasks)
+        groups = merged
+
     direct_scripts, shard_scripts, merge_scripts = [], [], []
     for (group, *tier), tasks in groups.items():
         gpu, memory, time_limit = tier
         name = f"{group}_{gpu_pool_label(gpu)}_{memory}"
         tasks_path = write_tasks_file(job_folder, name, tasks)
-        script = write_array_script(job_folder, name, tasks_path, len(tasks), gpu, memory, time_limit)
+        script = write_array_script(
+            job_folder, name, tasks_path, len(tasks), gpu, memory, time_limit,
+            partition=partition, reservation=reservation,
+        )
         if group == "direct":
             direct_scripts.append(script)
         elif group == "shard":
@@ -1024,7 +1038,10 @@ def generate_registry_jobs(experiment_folder, data_root, dry):
     submit_job_arrays(job_folder, registry_job_tasks(experiment_folder, data_root), dry)
 
 
-def generate_joint_jobs(experiment_folder, data_root, model_type, mode, joint_checkpoint, dry):
+def generate_joint_jobs(
+    experiment_folder, data_root, model_type, mode, joint_checkpoint, dry,
+    partition=None, gpu_override=None, reservation=None, datasets=None,
+):
     """Write (and, unless 'dry', submit) the job arrays of a joint-checkpoint sweep.
 
     The training version comes from JOINT_ENV_VARS, which the array script pins at submission time.
@@ -1035,8 +1052,8 @@ def generate_joint_jobs(experiment_folder, data_root, model_type, mode, joint_ch
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     job_folder = EVAL_ROOT / "gpu_jobs" / f"joint_tune_{model_type}_{mode}_{stamp}"
     (job_folder / "logs").mkdir(parents=True, exist_ok=True)
-    groups = joint_job_tasks(experiment_folder, data_root, model_type, mode, joint_checkpoint)
-    submit_job_arrays(job_folder, groups, dry)
+    groups = joint_job_tasks(experiment_folder, data_root, model_type, mode, joint_checkpoint, datasets=datasets)
+    submit_job_arrays(job_folder, groups, dry, partition=partition, gpu_override=gpu_override, reservation=reservation)
 
 
 def main():
@@ -1096,6 +1113,13 @@ def main():
     parser.add_argument(
         "--dry", action="store_true", help="With either --generate_*_jobs, only write the scripts; do not submit.",
     )
+    parser.add_argument("--partition", type=str, default=None,
+                        help=f"With --generate_joint_jobs: the Slurm partition instead of {PARTITION}.")
+    parser.add_argument("--gpu", type=str, default=None,
+                        help="With --generate_joint_jobs: one GPU spec for every task, e.g. 'H100:1' or 'A100:1', "
+                             "replacing the MIG routing (which only exists on the preemptible pool).")
+    parser.add_argument("--reservation", type=str, default=None,
+                        help="With --generate_joint_jobs: submit into this Slurm reservation.")
     args = parser.parse_args()
 
     if args.generate_registry_jobs:
@@ -1108,7 +1132,8 @@ def main():
         if len(args.mode) != 1:
             parser.error("--generate_joint_jobs sweeps one mode at a time; pass a single --mode.")
         generate_joint_jobs(
-            args.experiment_folder, args.input_path, args.model_type, args.mode[0], args.joint_checkpoint, args.dry
+            args.experiment_folder, args.input_path, args.model_type, args.mode[0], args.joint_checkpoint, args.dry,
+            partition=args.partition, gpu_override=args.gpu, reservation=args.reservation, datasets=args.dataset_name,
         )
         return
 

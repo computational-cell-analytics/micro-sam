@@ -28,6 +28,7 @@ class TestUtil(unittest.TestCase):
         rmtree(self.tmp_folder)
 
     # Check that the URLs for all models are valid.
+    @pytest.mark.v1
     def test_model_registry(self):
         from micro_sam.v1.util import models
 
@@ -46,6 +47,7 @@ class TestUtil(unittest.TestCase):
             url_exists = check_url(registry.get_url(name))
             self.assertTrue(url_exists)
 
+    @pytest.mark.v1
     def test_get_sam_model(self):
         from micro_sam.v1.util import get_sam_model
 
@@ -431,6 +433,35 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(segmentation.shape, (4, 7))
         self.assertEqual(segmentation.max(), 2)
 
+    def test_mask_data_to_segmentation_leftovers(self):
+        from micro_sam.util import mask_data_to_segmentation
+
+        def to_mask_data(*masks):
+            return [{"segmentation": mask, "area": int(mask.sum())} for mask in masks]
+
+        shape = (16, 16)
+        # A bar crossing the mask merged before it is cut into a left (24 px) and a right (20 px) piece.
+        first = np.zeros(shape, dtype=bool)
+        first[:, 6:10] = True
+        bar = np.zeros(shape, dtype=bool)
+        bar[6:10, :15] = True
+        segmentation = mask_data_to_segmentation(to_mask_data(first, bar), shape=shape)
+        self.assertEqual(segmentation.max(), 3)  # each piece becomes an object of its own
+        segmentation = mask_data_to_segmentation(to_mask_data(first, bar), shape=shape, keep_largest_component=True)
+        self.assertEqual(segmentation.max(), 2)
+        self.assertTrue(segmentation[6:10, :6].all() and not segmentation[6:10, 10:].any())
+
+        # A near duplicate of a larger mask, which only pokes out of it by a one pixel sliver.
+        large = np.zeros(shape, dtype=bool)
+        large[2:12, 2:12] = True
+        duplicate = np.zeros(shape, dtype=bool)
+        duplicate[1:9, 3:11] = True
+        segmentation = mask_data_to_segmentation(to_mask_data(large, duplicate), shape=shape)
+        self.assertEqual(segmentation.max(), 2)  # the sliver becomes an object
+        segmentation = mask_data_to_segmentation(to_mask_data(large, duplicate), shape=shape, max_overlap=0.2)
+        self.assertEqual(segmentation.max(), 1)
+        self.assertEqual(int((segmentation == 1).sum()), int(large.sum()))
+
     def _check_predictor_initialization(self, predictor, embeddings, i=None, tile_id=None):
         # We need to do a full reset of the predictor; the orginal_size and input_size
         # are not being reset.
@@ -448,6 +479,7 @@ class TestUtil(unittest.TestCase):
         predictor.input_size = None
         predictor.original_size = None
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings(self):
         from micro_sam.v1.util import precompute_image_embeddings
 
@@ -474,6 +506,7 @@ class TestUtil(unittest.TestCase):
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path)
         self._check_predictor_initialization(predictor, embeddings)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_3d(self):
         from micro_sam.v1.util import precompute_image_embeddings
 
@@ -504,6 +537,7 @@ class TestUtil(unittest.TestCase):
         for i in range(input_.shape[0]):
             self._check_predictor_initialization(predictor, embeddings, i=i)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_tiled(self):
         from micro_sam.v1.util import precompute_image_embeddings
 
@@ -535,6 +569,7 @@ class TestUtil(unittest.TestCase):
         for tile_id in range(4):
             self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_tiled_3d(self):
         from micro_sam.v1.util import precompute_image_embeddings
 
@@ -573,6 +608,7 @@ class TestUtil(unittest.TestCase):
             for tile_id in range(4):
                 self._check_predictor_initialization(predictor, embeddings, i=i, tile_id=tile_id)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_automatic_batch_size(self):
         # The automatic batch size ('None', the default of the entry points that dispatch across the
         # model families) has no per-device lookup for SAM1, so it runs a single tile / slice.

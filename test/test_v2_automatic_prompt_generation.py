@@ -343,6 +343,25 @@ def test_merge_by_score_truncates_to_the_unclaimed_pixels():
     assert int((segmentation == 2).sum()) == int(low.sum()) - 4
 
 
+def test_merge_by_score_keeps_the_largest_component_of_a_truncated_mask():
+    shape = (16, 16)
+    high = np.zeros(shape, dtype=bool)
+    high[4:12, 4:8] = True
+    low = np.zeros(shape, dtype=bool)
+    low[6:10, :] = True  # crosses the better-scoring mask, which cuts it into a left and a right piece
+    records = [
+        {"segmentation": low, "predicted_iou": 0.5, "stability_score": 0.5},
+        {"segmentation": high, "predicted_iou": 0.9, "stability_score": 0.9},
+    ]
+
+    segmentation = merge_by_score(records, shape, max_overlap=0.3, min_size=1)
+    assert int((segmentation == 2).sum()) == 48  # both pieces, detached from each other
+
+    segmentation = merge_by_score(records, shape, max_overlap=0.3, min_size=1, keep_largest_component=True)
+    assert int((segmentation == 1).sum()) == int(high.sum())
+    assert np.array_equal(segmentation == 2, low & (np.arange(16) >= 8)[None])  # only the larger right piece
+
+
 def test_merge_by_score_reports_why_each_record_was_dropped():
     shape = (16, 16)
     high = np.zeros(shape, dtype=bool)

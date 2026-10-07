@@ -635,69 +635,6 @@
     ]
    }
   },
-  "platynereis_nuclei": {
-   "crop_shape": [32, 512, 512],
-   "note": "The crops lie inside PLATYNEREIS_NUCLEI_TEST_ROIS and avoid PLATYNEREIS_NUCLEI_VAL_SAMPLES.",
-   "starts": {
-    "train_data_nuclei_01.h5": [
-     [48, 32, 32],
-     [80, 32, 32]
-    ],
-    "train_data_nuclei_02.h5": [
-     [18, 32, 32],
-     [50, 32, 32],
-     [82, 32, 32]
-    ],
-    "train_data_nuclei_03.h5": [
-     [18, 32, 32],
-     [50, 32, 32],
-     [82, 32, 32]
-    ],
-    "train_data_nuclei_04.h5": [
-     [18, 32, 32],
-     [50, 32, 32],
-     [82, 32, 32]
-    ],
-    "train_data_nuclei_05.h5": [
-     [28, 25, 25],
-     [60, 25, 25]
-    ],
-    "train_data_nuclei_06.h5": [
-     [18, 32, 32],
-     [50, 32, 32],
-     [82, 32, 32]
-    ],
-    "train_data_nuclei_07.h5": [
-     [18, 32, 32],
-     [50, 32, 32],
-     [82, 32, 32]
-    ],
-    "train_data_nuclei_08.h5": [
-     [25, 32, 32],
-     [57, 32, 32]
-    ],
-    "train_data_nuclei_09.h5": [
-     [18, 32, 32],
-     [50, 32, 32],
-     [82, 32, 32]
-    ],
-    "train_data_nuclei_10.h5": [
-     [18, 32, 32],
-     [50, 32, 32],
-     [82, 32, 32]
-    ],
-    "train_data_nuclei_11.h5": [
-     [18, 32, 32],
-     [50, 32, 32],
-     [82, 32, 32]
-    ],
-    "train_data_nuclei_12.h5": [
-     [18, 32, 32],
-     [50, 32, 32],
-     [82, 32, 32]
-    ]
-   }
-  },
   "cremi": {
    "crop_shape": [32, 512, 512],
    "starts": {
@@ -770,6 +707,32 @@
      [76, 128, 640],
      [76, 640, 128],
      [76, 640, 640]
+    ]
+   }
+  },
+  "lucchi": {
+   "crop_shape": [32, 512, 512],
+   "note": "The annotation covers x 49-1024 of the whole test volume. The tiles at the volume edge are capped. The crops leave out the last 5 slices and 2 crops with 1 mitochondrion each, the other crops hold 2-15.",
+   "starts": {
+    "lucchi_test.h5": [
+     [0, 0, 49],
+     [0, 0, 561],
+     [0, 512, 49],
+     [0, 512, 561],
+     [32, 0, 49],
+     [32, 0, 561],
+     [32, 512, 49],
+     [32, 512, 561],
+     [64, 0, 49],
+     [64, 0, 561],
+     [64, 512, 49],
+     [64, 512, 561],
+     [96, 0, 49],
+     [96, 0, 561],
+     [96, 512, 49],
+     [96, 512, 561],
+     [128, 0, 49],
+     [128, 0, 561]
     ]
    }
   }

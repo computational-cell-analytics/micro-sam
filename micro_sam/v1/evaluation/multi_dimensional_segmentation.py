@@ -10,6 +10,8 @@ from tqdm import tqdm
 
 import torch
 
+from bioimage_cpp.distance import distance_transform
+
 from elf.evaluation import mean_segmentation_accuracy, dice_score
 
 from ... import util
@@ -17,6 +19,9 @@ from ..inference import batched_inference
 from ...prompt_generators import PointAndBoxPromptGenerator
 from ..util import get_sam_model, precompute_image_embeddings
 from ..multi_dimensional_segmentation import segment_mask_in_volume
+from ..prompt_based_segmentation import (
+    segment_from_box, segment_from_box_and_points, segment_from_mask, segment_from_points
+)
 from ..evaluation.instance_segmentation import _get_range_of_search_values, evaluate_instance_segmentation_grid_search
 
 
@@ -375,3 +380,169 @@ def run_multi_dimensional_segmentation_grid_search(
     )
     print("The best grid-search parameters have been computed and stored at:", best_params_path)
     return best_params_path
+
+
+PROMPT_CHOICES = ("box", "points", "box_and_points")
+START_SLICE_CHOICES = ("begin", "center", "end", "random")
+
+
+def _deepest_point(mask):
+    """Return the pixel of a 2d mask that is farthest from its boundary, as (y, x)."""
+    distances = distance_transform(np.pad(mask, 1))[1:-1, 1:-1]
+    return np.array(np.unravel_index(np.argmax(distances), mask.shape))
+
+
+def _new_anchor():
+    """Return the empty prompts of a slice. The prompts accumulate over the iterations."""
+    return {"box": None, "points": [], "labels": [], "mask": None}
+
+
+def _add_prompts(anchor, gt, pred, kind):
+    """Add one interaction on a slice to the prompts of the slice.
+
+    The box is the ground-truth box. The points are a positive click in the largest missed region
+    and a negative click in the largest false region.
+    """
+    ys, xs = np.where(gt)
+    box = np.array([ys.min(), xs.min(), ys.max() + 1, xs.max() + 1])
+    use_box, use_points = kind in ("box", "box_and_points"), kind in ("points", "box_and_points")
+    if use_box and np.array_equal(anchor["box"], box):
+        use_box, use_points = False, True  # The same box again adds nothing, so click instead.
+
+    if use_box:
+        anchor["box"] = box
+    if use_points:
+        # Always click positive: the annotator reads a single negative click as a stop.
+        missed, false = gt & ~pred, pred & ~gt
+        anchor["points"].append(_deepest_point(missed if missed.any() else gt))
+        anchor["labels"].append(1)
+        if false.any():
+            anchor["points"].append(_deepest_point(false))
+            anchor["labels"].append(0)
+    anchor["mask"] = None
+
+
+def _segment_anchor(predictor, image_embeddings, z, anchor, previous):
+    """Segment one prompted slice from its prompts, and from the previous mask if you pass one."""
+    box = anchor["box"]
+    points = np.array(anchor["points"]) if anchor["points"] else None
+    labels = np.array(anchor["labels"]) if anchor["labels"] else None
+    kwargs = {"image_embeddings": image_embeddings, "i": z}
+
+    if previous is not None and previous.any():
+        # Unlike the other functions, 'segment_from_mask' takes the points in (x, y) order.
+        mask = segment_from_mask(
+            predictor, previous, use_box=False, box=box, labels=labels,
+            points=None if points is None else points[:, ::-1], **kwargs,
+        )
+    elif box is not None and points is not None:
+        mask = segment_from_box_and_points(predictor, box, points, labels, **kwargs)
+    elif box is not None:
+        mask = segment_from_box(predictor, box, **kwargs)
+    else:
+        mask = segment_from_points(predictor, points, labels, **kwargs)
+    return mask.squeeze().astype(bool)
+
+
+def evaluate_interactive_volume_segmentation(
+    predictor,
+    volume: np.ndarray,
+    ground_truth: np.ndarray,
+    image_embeddings: Optional[util.ImageEmbeddings] = None,
+    start_prompt: str = "box",
+    start_slice: str = "center",
+    n_iterations: int = 8,
+    correction: str = "box_and_points",
+    use_previous_mask: bool = False,
+    projection: Union[str, dict] = "mask",
+    iou_threshold: float = 0.8,
+    box_extension: float = 0.025,
+    seed: Optional[int] = None,
+    verbose: bool = False,
+) -> List[np.ndarray]:
+    """Segment every object of a volume with iterative prompts, as a user of the 3d annotator does.
+
+    The function prompts each object on one slice and projects the result through the volume.
+    Each later iteration corrects the slice with the largest error. Then the function segments the object
+    again from all prompts so far. A leak beyond the object gets a stop slice instead of a prompt.
+
+    Args:
+        predictor: The segment anything predictor.
+        volume: The input volume, with the shape (Z, Y, X).
+        ground_truth: The instance labels of the volume. The function derives the prompts from them.
+        image_embeddings: The precomputed embeddings of the volume. The function computes them if you do not pass them.
+        start_prompt: The first prompt of an object: 'box', 'points' (a positive click) or 'box_and_points'.
+        start_slice: The slice of the object that gets the first prompt: 'begin', 'center', 'end' or 'random'.
+        n_iterations: The number of iterations, which includes the first prompt.
+        correction: The prompt on the worst slice: 'box', 'points' (a positive and a negative click) or
+            'box_and_points'. If the slice already has the ground-truth box, 'box' adds clicks instead.
+        use_previous_mask: Whether to pass the previous prediction of a prompted slice as a mask prompt.
+        projection: The projection from slice to slice, see `segment_mask_in_volume`.
+        iou_threshold: The IoU between neighbouring slices below which the projection stops.
+        box_extension: The extension of the projected box, see `segment_mask_in_volume`.
+        seed: The seed for the 'random' start slice.
+        verbose: Whether to show the progress.
+
+    Returns:
+        The instance segmentation after each iteration.
+    """
+    if start_prompt not in PROMPT_CHOICES or correction not in PROMPT_CHOICES:
+        raise ValueError(f"The prompts '{start_prompt}' and '{correction}' must be one of {PROMPT_CHOICES}.")
+    if start_slice not in START_SLICE_CHOICES:
+        raise ValueError(f"The start slice '{start_slice}' must be one of {START_SLICE_CHOICES}.")
+
+    if image_embeddings is None:
+        image_embeddings = precompute_image_embeddings(predictor, volume, ndim=3, verbose=verbose)
+    rng = np.random.default_rng(seed)
+    z_index = np.arange(volume.shape[0])
+
+    segmentations = [np.zeros(ground_truth.shape, dtype="uint32") for _ in range(n_iterations)]
+    for label_id in tqdm(np.unique(ground_truth)[1:], desc="Segment objects", disable=not verbose):
+        gt = ground_truth == label_id
+        z_values = np.where(gt.any(axis=(1, 2)))[0]
+        if start_slice == "random":
+            z = int(rng.choice(z_values))
+        else:
+            z = int(z_values[{"begin": 0, "center": len(z_values) // 2, "end": -1}[start_slice]])
+
+        anchors, stops, pred = {}, {"lower": None, "upper": None}, None
+        _add_prompts(anchors.setdefault(z, _new_anchor()), gt[z], np.zeros_like(gt[z]), start_prompt)
+
+        for segmentation in segmentations:
+            if pred is not None:
+                # A stop works only beyond the outermost prompts, so skip the empty slices between them.
+                errors = (gt != pred).sum(axis=(1, 2))
+                errors[~gt.any(axis=(1, 2)) & (z_index > min(anchors)) & (z_index < max(anchors))] = 0
+                z = int(np.argmax(errors))
+                if errors[z] == 0:
+                    segmentation[pred] = label_id
+                    continue
+
+                if gt[z].any():
+                    _add_prompts(anchors.setdefault(z, _new_anchor()), gt[z], pred[z], correction)
+                else:
+                    stops["lower" if z < min(anchors) else "upper"] = z
+                # A new prompt beyond a stop removes the stop.
+                if stops["lower"] is not None and stops["lower"] > min(anchors):
+                    stops["lower"] = None
+                if stops["upper"] is not None and stops["upper"] < max(anchors):
+                    stops["upper"] = None
+
+            # Prompts that did not change give the same mask, so only the changed slices run SAM again.
+            seg = np.zeros(gt.shape, dtype="uint32")
+            for z, anchor in anchors.items():
+                if anchor["mask"] is None or (use_previous_mask and pred is not None):
+                    previous = pred[z] if use_previous_mask and pred is not None else None
+                    anchor["mask"] = _segment_anchor(predictor, image_embeddings, z, anchor, previous)
+                seg[z] = anchor["mask"]
+
+            slices = np.array(sorted(set(anchors) | {s for s in stops.values() if s is not None}))
+            seg, _ = segment_mask_in_volume(
+                seg, predictor, image_embeddings, slices,
+                stop_lower=stops["lower"] is not None, stop_upper=stops["upper"] is not None,
+                iou_threshold=iou_threshold, projection=projection, box_extension=box_extension,
+            )
+            pred = seg == 1
+            segmentation[pred] = label_id
+
+    return segmentations

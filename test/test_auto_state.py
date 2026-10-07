@@ -128,7 +128,7 @@ def test_tiled_amg_get_set_state_roundtrip():
 
 
 def test_ais_get_set_state_roundtrip():
-    prediction = np.random.RandomState(0).rand(4, 16, 16).astype("float32")
+    prediction = np.random.RandomState(0).rand(5, 16, 16).astype("float32")
     segmenter = UniSAM2InstanceSegmentation(model=None)
     segmenter._prediction = prediction
     segmenter._is_initialized = True
@@ -157,7 +157,7 @@ def test_amg_serialization_and_param_match(tmp_path):
 
 
 def test_ais_serialization_and_staleness_guard(tmp_path):
-    prediction = np.arange(4 * 4 * 4, dtype="float32").reshape(4, 4, 4)
+    prediction = np.arange(5 * 4 * 4, dtype="float32").reshape(5, 4, 4)
     segmenter = UniSAM2InstanceSegmentation(model=None)
     segmenter._prediction = prediction
     segmenter._is_initialized = True
@@ -176,7 +176,7 @@ def test_ais_serialization_and_staleness_guard(tmp_path):
 
 
 def test_save_existing_ais_state(tmp_path):
-    prediction = np.arange(4 * 8 * 8, dtype="float32").reshape(4, 8, 8)
+    prediction = np.arange(5 * 8 * 8, dtype="float32").reshape(5, 8, 8)
     save_path = str(tmp_path / "embeddings.zarr")
 
     save_ais_state({"prediction": prediction}, save_path, state_index=3, model_type="hvit_t_cells")
@@ -209,7 +209,7 @@ def test_amg_embedding_signature_roundtrip(tmp_path):
 
 def test_ais_embedding_signature_roundtrip(tmp_path):
     segmenter = UniSAM2InstanceSegmentation(model=None)
-    segmenter._prediction = np.zeros((4, 4, 4), dtype="float32")
+    segmenter._prediction = np.zeros((5, 4, 4), dtype="float32")
     segmenter._is_initialized = True
     save_path = str(tmp_path / "embeddings.zarr")
     key = _autoseg_state_key(None)
@@ -223,7 +223,7 @@ def test_states_share_embedding_zarr_and_record_metadata(tmp_path):
     save_path = str(tmp_path / "embeddings.zarr")
     amg = _make_amg_segmenter([], (16, 16))
     ais = UniSAM2InstanceSegmentation(model=None)
-    ais._prediction = np.zeros((4, 16, 16), dtype="float32")
+    ais._prediction = np.zeros((5, 16, 16), dtype="float32")
     ais._is_initialized = True
 
     _save_amg_state_v2(amg, save_path, "state-0")
@@ -259,7 +259,7 @@ def test_state_stored_inside_embedding_zarr_representations(tmp_path):
     _save_amg_state_v2(_make_amg_segmenter([_rle_mask(m)], (16, 16)), save_path, "state")
 
     ais = UniSAM2InstanceSegmentation(model=None)
-    ais._prediction = np.zeros((4, 16, 16), dtype="float32")
+    ais._prediction = np.zeros((5, 16, 16), dtype="float32")
     ais._is_initialized = True
     _save_ais_state_v2(ais, save_path, "state", "hvit_t_cells")
 
@@ -273,14 +273,14 @@ def test_state_stored_inside_embedding_zarr_representations(tmp_path):
     assert amg_ds.dtype == np.uint8 and len(amg_ds.shape) == 1  # a pickle bitstream, not decoded arrays
 
     ais_ds = root["ais"]["state"]["prediction"]
-    assert ais_ds.dtype == np.float32 and tuple(ais_ds.shape) == (4, 16, 16)  # an individual array
+    assert ais_ds.dtype == np.float32 and tuple(ais_ds.shape) == (5, 16, 16)  # an individual array
     assert ais_ds.chunks[0] == 1  # per-channel chunks so a read does not inflate one big chunk
 
 
 def test_cache_autoseg_state_ais_is_on_demand(tmp_path, monkeypatch):
     """The lazy contract via the mode dispatcher: a matching cached AIS state is loaded on demand (no
     decoder rerun), and a stale one is recomputed. Mirrors how image embeddings are reused when cached."""
-    prediction = np.arange(4 * 8 * 8, dtype="float32").reshape(4, 8, 8)
+    prediction = np.arange(5 * 8 * 8, dtype="float32").reshape(5, 8, 8)
     seed = UniSAM2InstanceSegmentation(model=None)
     seed._prediction = prediction
     seed._is_initialized = True
@@ -294,7 +294,7 @@ def test_cache_autoseg_state_ais_is_on_demand(tmp_path, monkeypatch):
 
     def fake_initialize(self, *args, **kwargs):
         initialize_calls.append(True)
-        self._prediction = np.zeros((4, 8, 8), dtype="float32")
+        self._prediction = np.zeros((5, 8, 8), dtype="float32")
         self._is_initialized = True
 
     monkeypatch.setattr(UniSAM2InstanceSegmentation, "initialize", fake_initialize)
@@ -386,14 +386,14 @@ def test_save_load_autoseg_state_dispatch(tmp_path):
     _save_autoseg_state("amg", _make_amg_segmenter([_rle_mask(m)], (16, 16)), save_path, "state")
 
     ais = UniSAM2InstanceSegmentation(model=None)
-    ais._prediction = np.zeros((4, 16, 16), dtype="float32")
+    ais._prediction = np.zeros((5, 16, 16), dtype="float32")
     ais._is_initialized = True
     _save_autoseg_state("ais", ais, save_path, "state", model_type="hvit_t_cells")
 
     amg_loaded = _load_autoseg_state("amg", save_path, "state")
     ais_loaded = _load_autoseg_state("ais", save_path, "state")
     assert len(amg_loaded["masks"]) == 1  # AMG masks came back
-    assert tuple(ais_loaded["prediction"].shape) == (4, 16, 16)  # AIS array came back
+    assert tuple(ais_loaded["prediction"].shape) == (5, 16, 16)  # AIS array came back
     assert _load_autoseg_state("amg", save_path, "state-99") is None  # missing key -> None
 
     with pytest.raises(ValueError, match="Invalid automatic-segmentation state mode"):

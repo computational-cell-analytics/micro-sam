@@ -95,6 +95,11 @@ def _prepare_select_channel(raw, channel):
     return np.stack([plane] * 3).astype("float32")
 
 
+def _drop_alpha_channel(raw):
+    """Drop the alpha channel of a channel-first RGBA image (NuInsSeg stores one png that way)."""
+    return raw[:3] if raw.ndim == 3 and raw.shape[0] == 4 else raw
+
+
 def _prepare_enseg_green_channel(raw):
     """enseg is stored RGB but only the green channel carries signal."""
     return _prepare_select_channel(raw, 1)

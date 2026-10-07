@@ -4,11 +4,14 @@ from functools import partial
 from glob import glob
 from shutil import rmtree
 
+import pytest
 import imageio.v3 as imageio
 
 from micro_sam.sample_data import synthetic_data
 from micro_sam.util import VIT_T_SUPPORT, SamPredictor
 from micro_sam.v1.util import get_sam_model
+
+pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 
 
 class TestDataset(unittest.TestCase):

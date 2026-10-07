@@ -8,7 +8,6 @@ import pytest
 from qtpy import QtWidgets
 from skimage.data import binary_blobs
 
-import micro_sam.util as util
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator import batch_annotator, image_folder_annotator
 from micro_sam.sam_annotator._batch import _maximize_dock_vertically
@@ -134,7 +133,7 @@ def test_batch_lazy_embeddings(make_napari_viewer_proxy):
     """The segmentation batch computes embeddings lazily per item (saved to a per-item zarr) and
     reuses the loaded model across items, rather than precomputing everything up front.
     """
-    model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"
+    model_type = "hvit_t"
     n_images = 3
 
     with tempfile.TemporaryDirectory() as tmpdir:

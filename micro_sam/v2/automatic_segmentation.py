@@ -163,6 +163,7 @@ def automatic_instance_segmentation(
     devices: Devices = None,
     num_prefetch_workers: int = 4,
     num_write_workers: int = 2,
+    norm_bounds: Optional[Tuple[np.ndarray, np.ndarray]] = None,
     **generate_kwargs,
 ) -> np.ndarray:
     """Run automatic instance segmentation for a single input and save the result.
@@ -200,6 +201,11 @@ def automatic_instance_segmentation(
         devices: Inference device or devices. None uses all visible GPUs when the model is on CUDA.
         num_prefetch_workers: Number of input reading and preprocessing threads.
         num_write_workers: Number of output writing threads.
+        norm_bounds: Volumes only, for the decoder-based engines. Precomputed (lower, upper) percentile
+            bounds that normalize the input of the embeddings (see
+            `batched_inference._volume_normalization_bounds`), computed from the input when not given.
+            Pass the bounds of the whole volume when the input is only one block of it, so that a
+            block of mostly background is not stretched to its own bounds.
         generate_kwargs: Additional post-processing parameters forwarded to the segmenter's `generate`.
 
     Returns:
@@ -286,6 +292,7 @@ def automatic_instance_segmentation(
                     devices=inference_devices,
                     num_prefetch_workers=num_prefetch_workers,
                     num_write_workers=num_write_workers,
+                    norm_bounds=norm_bounds if ndim == 3 else None,
                 )
             if precompute_embeddings:
                 segmenter.initialize(

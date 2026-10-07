@@ -218,8 +218,9 @@ def batched_inference(
         predictor.get_image_embedding()
     else:
         input_ = image if i is None else image[i]
+        # The input is always one 2d image. Deducing the dimensionality would read an RGB image as a volume.
         image_embeddings = precompute_image_embeddings(
-            predictor, input_, embedding_path, verbose=verbose_embeddings
+            predictor, input_, embedding_path, ndim=2, verbose=verbose_embeddings
         )
         set_precomputed(predictor, image_embeddings)
 

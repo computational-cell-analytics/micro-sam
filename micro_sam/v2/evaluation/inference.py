@@ -2,7 +2,7 @@ import os
 import shutil
 import warnings
 from pathlib import Path
-from typing import Union, Optional, List
+from typing import Union, Optional, List, Tuple
 
 import numpy as np
 import imageio.v3 as imageio
@@ -18,7 +18,7 @@ from torch_em.util.segmentation import size_filter
 from bioimage_cpp.segmentation import label as connected_components
 
 from micro_sam.v2.normalization import to_image
-from micro_sam.prompt_generators import IterativePromptGenerator
+from micro_sam.prompt_generators import CenterIterativePromptGenerator, IterativePromptGenerator
 from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
 from micro_sam.v2.util import (
     _get_device, configure_image_predictor, encode_image, get_sam2_image_predictor, get_sam2_model,
@@ -125,13 +125,21 @@ def _run_interactive_segmentation_2d_per_image(
     use_masks: bool = False,
     batch_size: int = 32,
     mask_threshold: float = 0.0,
+    seed: int = 0,
+    click_protocol: str = "random",
 ) -> None:
     """Functionality for interactive segmentation per 2d image.
     """
+    if click_protocol not in ("random", "center"):
+        raise ValueError(f"Invalid click protocol '{click_protocol}', choose 'random' or 'center'.")
     device = _get_device(device)
 
+    # The prompt generators sample from the global numpy RNG. Seeding it per image makes the clicks,
+    # and with them the results, independent of the image order, the sharding and any resumption.
+    np.random.seed(seed)
+
     # Let's define the iterative prompt generator.
-    prompt_generator = IterativePromptGenerator()
+    prompt_generator = CenterIterativePromptGenerator() if click_protocol == "center" else IterativePromptGenerator()
 
     # Preparing prompts for the first iteration: use multimasking only if we have a single positive prompt without box
     if start_with_box_prompt:
@@ -141,7 +149,7 @@ def _run_interactive_segmentation_2d_per_image(
     else:
         use_boxes, use_points = False, True
         n_positive = 1
-        multimasking = True
+        multimasking = click_protocol == "random"
 
     # Expects RGB-style images.
     encode_image(predictor, image.astype("uint8"))  # uint8 is what SAM2 expects as input.
@@ -239,6 +247,14 @@ def _run_interactive_segmentation_2d_per_image(
         _save_segmentation(masks=torch.from_numpy(masks), prediction_path=prediction_paths[iteration])
 
 
+def get_prediction_dir_2d(
+    prediction_dir: Union[os.PathLike, str], start_with_box_prompt: bool, use_masks: bool
+) -> str:
+    """Return the folder that `run_interactive_segmentation_2d` writes its 'iterationNN' folders to."""
+    box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
+    return os.path.join(prediction_dir, box_or_pt, "with_masks" if use_masks else "without_masks")
+
+
 def run_interactive_segmentation_2d(
     image_paths: List[Union[os.PathLike, str]],
     gt_paths: List[Union[os.PathLike, str]],
@@ -255,24 +271,26 @@ def run_interactive_segmentation_2d(
     use_masks: bool = True,
     ensure_8bit: bool = True,
     mask_threshold: float = 0.0,
+    seed: int = 0,
+    click_protocol: str = "random",
 ):
     """Functionality for interactive segmentation in 2d images using iterative prompting.
 
     `use_masks` defaults to True because SAM2 is trained with the previous mask logits alongside every
     correction click, see 'SAM2Train._iter_correct_pt_sampling'. Without them the predictions degrade
-    with each iteration.
+    with each iteration. `seed` seeds the prompt sampling of every image.
+
+    `click_protocol` chooses the correction clicks: 'random' samples them at random positions in the
+    error regions and picks the best of 3 masks for a first point prompt. 'center' places them at the
+    centers of the largest error regions and predicts a single mask for a first point prompt.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
 
     # create all prediction folders for all intermediate iterations'
-    prediction_dir = os.path.join(prediction_dir, "start_with_box" if start_with_box_prompt else "start_with_point")
-
+    prediction_dir = get_prediction_dir_2d(prediction_dir, start_with_box_prompt, use_masks)
     if use_masks:
         print("The iterative prompting will make use of logits masks from previous iterations.")
-        prediction_dir = os.path.join(prediction_dir, "with_masks")
-    else:
-        prediction_dir = os.path.join(prediction_dir, "without_masks")
 
     for i in range(n_iterations):
         os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
@@ -326,6 +344,8 @@ def run_interactive_segmentation_2d(
             use_masks=use_masks,
             batch_size=batch_size,
             mask_threshold=mask_threshold,
+            seed=seed,
+            click_protocol=click_protocol,
         )
 
     return prediction_dir
@@ -352,6 +372,16 @@ def _convert_volumes_to_frames(raw, frames_dir):
     return image_dir
 
 
+def get_prediction_paths_3d(
+    prediction_dir: Union[os.PathLike, str], prediction_fname: str, start_with_box_prompt: bool, n_iterations: int,
+) -> Tuple[str, List[str]]:
+    """Return the folder and the per-iteration files that `run_interactive_segmentation_3d` writes."""
+    box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
+    prediction_dir = os.path.join(prediction_dir, "interactive_segmentation_3d", box_or_pt, "without_masks")
+    fname = Path(prediction_fname).with_suffix(".tif")
+    return prediction_dir, [os.path.join(prediction_dir, f"iteration{i}", fname) for i in range(n_iterations)]
+
+
 def run_interactive_segmentation_3d(
     raw: np.ndarray,
     labels: np.ndarray,
@@ -367,6 +397,8 @@ def run_interactive_segmentation_3d(
     batch_size: int = 16,
     n_iterations: int = 8,
     run_connected_components: bool = True,
+    seed: int = 0,
+    correction_margin: float = 0.0,
 ) -> str:
     """Run interactive segmentation on 3d inputs using Segment Anything 2.
 
@@ -387,18 +419,16 @@ def run_interactive_segmentation_3d(
         batch_size: The batch size to compute prompts.
         n_iterations: The number of iterations for iterative prompting.
         run_connected_components: Whether to ensure individual instances and filter out small objects.
+        seed: The seed of the prompt sampling of the volume.
+        correction_margin: The fraction of each object's z-extent at either end that is excluded when the slice
+            for the next correction click is chosen. 0 chooses among all slices of the object.
 
     Returns:
         The folder where segmentations are stored.
     """
-    box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
-    prediction_dir = os.path.join(prediction_dir, "interactive_segmentation_3d", box_or_pt, "without_masks")
-
-    prediction_paths = [
-        os.path.join(
-            prediction_dir, f"iteration{i}", Path(prediction_fname).with_suffix(".tif")
-        ) for i in range(n_iterations)
-    ]
+    prediction_dir, prediction_paths = get_prediction_paths_3d(
+        prediction_dir, prediction_fname, start_with_box_prompt, n_iterations
+    )
     if all([os.path.exists(_path) for _path in prediction_paths]):
         cached = imageio.imread(prediction_paths[0])
         if cached.shape == labels.shape:
@@ -443,9 +473,15 @@ def run_interactive_segmentation_3d(
     )
     inference_state = predictor.init_state(volume=raw, volume_embeddings=volume_embeddings)
 
+    # The prompt generators sample from the global numpy RNG. Seeding it per volume makes the clicks,
+    # and with them the results, reproducible.
+    np.random.seed(seed)
+
     gt_ids = list(np.unique(labels))[1:]  # Ignoring the background label
     # An empty volume has nothing to prompt, so all iterations stay empty.
     segmentation = [np.zeros(labels.shape, dtype="uint64") for _ in range(n_iterations)]
+    # The area of the object that holds each label, per iteration, to resolve overlaps.
+    areas = [np.full(int(max(gt_ids, default=0)) + 1, np.inf) for _ in range(n_iterations)]
     for gt_id in tqdm(gt_ids, desc="Segmenting per object in the volume"):
         _per_iter_segmentation = _run_interactive_segmentation_3d_per_object(
             gt_ids=gt_id,
@@ -459,14 +495,26 @@ def run_interactive_segmentation_3d(
             dilation=dilation,
             batch_size=batch_size,
             n_iterations=n_iterations,
+            correction_margin=correction_margin,
         )
 
-        for _iter in range(n_iterations):  # Merge the incoming segmentation per object.
-            segmentation[_iter] += _per_iter_segmentation[_iter]
+        # Merge the incoming object. Where objects overlap, the smaller one is kept, as in the 2d
+        # evaluation (see 'mask_data_to_segmentation'). Adding the labels would turn an overlap into the
+        # sum of both ids, i.e. into a third object.
+        for _iter in range(n_iterations):
+            mask = _per_iter_segmentation[_iter] > 0
+            area = mask.sum()
+            existing = segmentation[_iter][mask]
+            segmentation[_iter][mask] = np.where(areas[_iter][existing] > area, gt_id, existing)
+            areas[_iter][gt_id] = area
 
+    # Each file is written under a temporary name and then renamed, so a job killed during the write
+    # leaves no truncated file that a rerun would accept as complete.
     for i, prediction_path in enumerate(prediction_paths):
         os.makedirs(Path(prediction_path).parent, exist_ok=True)
-        imageio.imwrite(os.path.join(prediction_path), segmentation[i], compression="zlib")
+        partial_path = Path(prediction_path).with_suffix(".partial.tif")
+        imageio.imwrite(partial_path, segmentation[i], compression="zlib")
+        os.replace(partial_path, prediction_path)
 
     return prediction_dir
 
@@ -484,6 +532,7 @@ def _run_interactive_segmentation_3d_per_object(
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
+    correction_margin: float = 0.0,
 ):
     """Functionality for interactive segmentation using iterative prompting.
     """
@@ -509,6 +558,7 @@ def _run_interactive_segmentation_3d_per_object(
         predictor=predictor,
         batch_size=batch_size,
         n_iterations=n_iterations,
+        correction_margin=correction_margin,
     )
 
     assert len(gt_ids) == len(preds_per_object), "The number of label ids must match the number of objects segmented."
@@ -565,7 +615,7 @@ def _extract_prompts_per_object(
 
 @torch.no_grad()
 def _get_iteratively_prompted_segmentation_per_image_dir(
-    inference_state, labels, id_to_prompts, predictor, batch_size=32, n_iterations=8,
+    inference_state, labels, id_to_prompts, predictor, batch_size=32, n_iterations=8, correction_margin=0.0,
 ):
     """Functionality for inference of 3d interactive segmentation.
     """
@@ -639,6 +689,14 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
                 # always has FN pixels (or overlap) to sample a positive point from.
                 gt_3d = (labels == _obj_id)
                 obj_z_slices = np.where(gt_3d.any(axis=(1, 2)))[0]
+                if correction_margin > 0:
+                    # A correction on an end slice of the object turns its small cross-section into a
+                    # conditioning frame, which degrades the other slices of the object.
+                    margin = correction_margin * (obj_z_slices.max() - obj_z_slices.min())
+                    inner = obj_z_slices[
+                        (obj_z_slices >= obj_z_slices.min() + margin) & (obj_z_slices <= obj_z_slices.max() - margin)
+                    ]
+                    obj_z_slices = inner if len(inner) else obj_z_slices
                 errors_per_slice = np.array([
                     np.sum(gt_3d[z] != (segmentation[z] > 0)) for z in obj_z_slices
                 ])

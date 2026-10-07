@@ -1,5 +1,4 @@
 import os
-import re
 import ast
 import csv
 import json
@@ -25,6 +24,7 @@ from torch_em.util.segmentation import size_filter
 
 from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 from micro_sam.v2.normalization import normalize_raw
+from micro_sam.v2.models.util import joint_unetr_state
 from micro_sam.v2.datasets.generalist_loader import (
     ASTIH_SUBSETS, AXONEM_TEST_VOLUMES, AXONEM_VAL_VOLUMES, FAFB_TEST_BOXES, FAFB_VAL_BOXES, FIB25_TEST_SAMPLE,
     LICONN_ROI, MALECNS_TEST_BOXES, MALECNS_VAL_BOXES, TUMOR_SPHEROID_TEST_SLICES, TUMOR_SPHEROID_VAL_SLICES,
@@ -37,8 +37,8 @@ from micro_sam.v2.datasets.generalist_loader import (
     NUCVERSE_GLIA_VAL_Z, NUCVERSE_VAL_VOLUMES, ORGANOID_SOURCES, PANNUKE_FOLD2_VAL_TILES, PHMAMM_TEST_TIMEPOINTS,
     PHMAMM_VAL_TIMEPOINTS,
     PNAS_TEST_PLANTS, PNAS_VAL_PLANTS, TOIAM_TEST_MOVIES, TOIAM_VAL_MOVIES, WING_DISC_TEST_VOLUMES, WING_DISC_VAL_Z,
-    XENIUM_TEST_SAMPLES, XENIUM_VAL_SAMPLES, cell_acdc_movie, cvz_group, dsb_fluorescence_training_paths,
-    _train_val_test_split,
+    XENIUM_TEST_SAMPLES, XENIUM_VAL_SAMPLES, SYNAPSENET_TEST_TOMOGRAMS, cell_acdc_movie, cvz_group,
+    dsb_fluorescence_training_paths, synapsenet_roi, synapsenet_tomograms, _train_val_test_split,
 )
 
 
@@ -60,6 +60,12 @@ CHECKPOINT_PATHS = {
 MODEL_TYPES = list(CHECKPOINT_PATHS)
 
 MODES = ("ais", "apg")
+
+# The correction clicks of 2d iterative prompting. 'random' samples them at random positions in the error
+# regions (IterativePromptGenerator) and picks the best of 3 masks for a first point prompt. 'center' places
+# them at the centers of the largest error regions (CenterIterativePromptGenerator) and predicts a single mask
+# for a first point prompt.
+CLICK_PROTOCOLS = ("random", "center")
 
 # The 2d patch shape the models were trained on, see 'generalist_loader'.
 TRAINING_PATCH_SHAPE = (512, 512)
@@ -105,6 +111,82 @@ LIVECELL_TRAIN_VAL_OVERLAP = frozenset({
     "SKOV3_Phase_H4_1_00d12h00m_1.tif",
     "SKOV3_Phase_H4_1_00d16h00m_1.tif",
 })
+
+
+# Test images with a verified copy in the training data (byte-identical, or the same field re-imaged with a
+# normalized cross-correlation above 0.95), dropped from the scored test split. Found by the 2026-09-21 data audit,
+# see experiments/micro_sam2/experiments/data_audit_2026_09_21/contaminated_test_images.csv.
+EXCLUDED_TEST_IMAGES = {
+    # Our random split of a dataset that ships repeated crops: 3 identical, 10 consecutive re-imaged fields.
+    "bmgd": frozenset({
+        "bmgd_1200pa_img (45).h5",
+        "bmgd_1200pa_img (48).h5",
+        "bmgd_1200pa_img (70).h5",
+        "bmgd_1800pa_img2.0 (147).h5",
+        "bmgd_1800pa_img2.0 (15).h5",
+        "bmgd_1800pa_img2.0 (20).h5",
+        "bmgd_1800pa_img2.0 (49).h5",
+        "bmgd_1800pa_img2.0 (58).h5",
+        "bmgd_250pa_img287.h5",
+        "bmgd_250pa_img294.h5",
+        "bmgd_250pa_img440.h5",
+        "bmgd_250pa_img488.h5",
+        "bmgd_250pa_img490.h5",
+    }),
+    # Time points within 0.95 correlation of a training frame of the same field of view.
+    "yeaz": frozenset({
+        "cdc20F2BF_20_crop_1_im.tif",
+        "cdc20F9BF_20_crop_1_im.tif",
+        "clnF2BF_5_crop_1_im.tif",
+        "clnF5BF_10_crop_1_im.tif",
+        "ddF3BF_10_crop_1_im.tif",
+        "wtF10BF_10_crop_2_im.tif",
+        "wtF14BF_10_crop_1_im.tif",
+    }),
+    # BBBC022 U2OS fields that DSB stage 1 also holds, re-encoded to 8 bit under hashed names, and trains on.
+    "u20s": frozenset({
+        "IXMtest_D10_s2_w1BB72A093-72AB-476C-9513-2FF43BFB2134.tif",
+        "IXMtest_G10_s3_w1C1257E17-1DBA-4619-B06E-D6DBB8A53088.tif",
+        "IXMtest_G16_s6_w1C3F175E2-0AF5-401C-AC5C-8E128A237B22.tif",
+        "IXMtest_N07_s5_w1D30ED7AB-503E-479D-B5BC-B66472568DE2.tif",
+        "IXMtest_O18_s7_w19C30A212-58D3-4030-AA4F-B0C4482F1F8A.tif",
+    }),
+    # The one StarDist test image that is a BBBC022 field of the u20s training split.
+    "dsb": frozenset({
+        "5f9d29d6388c700f35a3c29fa1b1ce0c1cba6667d05fdb70bd1e89004dcf71ed.tif",
+    }),
+    # Official test frames of the 'ftsN' experiment that repeat training frames, three identical and two adjacent.
+    "omnipose_bact_phase": frozenset({
+        "ftsN_ensemble_30.tif",
+        "ftsN_ensemble_36.tif",
+        "murA_ensemble_0.tif",
+        "murA_ensemble_2.tif",
+        "murA_ensemble_4.tif",
+    }),
+    # Official brain organoid test images that are identical to training images under other organoid numbers.
+    "orgline": frozenset({
+        "org01_wt2D_d05_LabB.tif.h5",
+        "org02_wt2D_d05_LabB.tif.h5",
+        "org03_wt2D_d05_LabB.tif.h5",
+    }),
+    # The authors' split holds three acquisitions of one Vectra pancreas region; the M2 one trains.
+    "pan_multiplex": frozenset({
+        "820f9ed19222 Pancreas_PANEL7-10_CD40L,_CD40,_PD1,_PDL1,CD8,CK_[49017,8252]_component_data.tif_image.h5",
+    }),
+    # Our random split; two consecutive G361 acquisitions are identical.
+    "vicar": frozenset({
+        "00010_G361_img.tif",
+    }),
+}
+
+
+def drop_excluded_test_images(dataset_name, raw_paths, label_paths) -> Tuple[List[str], List[str]]:
+    """Remove the test images of a dataset that have a copy in the training data, see EXCLUDED_TEST_IMAGES."""
+    excluded = EXCLUDED_TEST_IMAGES.get(dataset_name)
+    if not excluded:
+        return raw_paths, label_paths
+    keep = [os.path.basename(raw) not in excluded for raw in raw_paths]
+    return [p for p, k in zip(raw_paths, keep) if k], [p for p, k in zip(label_paths, keep) if k]
 
 
 def drop_excluded_livecell(raw_paths, label_paths, split=None) -> Tuple[List[str], List[str]]:
@@ -171,23 +253,24 @@ DATASETS_2D_LM_NUCLEUS_ID = [
     "dsb", "cvz_fluo_dapi", "dynamicnuclearnet", "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei",
     "tsakiroglou",
 ]
-DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY = ["xenium_nuclei"]
-DATASETS_2D_LM_NUCLEUS_OOD = [
-    "cardioblast_nuclei", "hela_cytonuc", "covid_if_nuclei", "arvidsson", "mndino", "micro_bench",
-]
+# mnDINO images are BBBC022 U2OS fields: 30 of its 64 test images are byte-identical to u20s training images and
+# 3 more to DSB training images, so it is not out of domain.
+DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY = ["xenium_nuclei", "mndino"]
+DATASETS_2D_LM_NUCLEUS_OOD = ["cardioblast_nuclei", "hela_cytonuc", "covid_if_nuclei", "arvidsson", "micro_bench"]
 # sPATCH DAPI shares tissue sections with the sPATCH H&E training data, so it is a held-out platform evaluation
 # rather than an independent OOD collection until the patient overlap is resolved.
 DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM = ["spatch_dapi"]
 DATASETS_2D_LM_LABEL_FREE_ID = [
-    "livecell", "deepbacs_label_free", "omnipose_bact_phase", "yeaz", "neurips_cellseg_label_free", "cell_acdc",
-    "cellular", "vicar", "microbeseg",
+    "livecell", "deepbacs_label_free", "omnipose_bact_phase", "neurips_cellseg_label_free", "cell_acdc", "cellular",
+    "vicar", "microbeseg",
 ]
+# yeaz is split per image, so every test image is a time point of a field of view that also trains.
 DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY = [
     "orgasegment", "organoidnet", "omnipose_worm", "omnipose_worm_high_res", "bccd", "cisd", "orgline", "organoid",
-    "mcellseg", "toiam", "bbbc030",
+    "mcellseg", "toiam", "bbbc030", "yeaz",
 ]
 DATASETS_2D_LM_LABEL_FREE_OOD = [
-    "cellapp", "deepseas", "dic_hepg2", "yeastsam", "bac_mother", "ecoli_microcolony_lineage",
+    "cellapp", "deepseas", "dic_hepg2", "yeastsam", "bac_mother", "ecoli_microcolony_lineage", "bbbc010",
 ]
 # Reserve: kept resolvable, not part of any panel until its labels are checked.
 DATASETS_2D_LM_LABEL_FREE_RESERVE = ["yeastcellseg"]
@@ -233,7 +316,9 @@ DATASETS_3D_LM_NUCLEUS_ID = [
     "embedseg_mouse_skull", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear", "nucverse3d",
 ]
 DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY = ["embedseg_platy_ish"]
-DATASETS_3D_LM_NUCLEUS_OOD = ["parhyale_regen", "mouse_embryo", "blastospim", "morphonet_celegans"]
+DATASETS_3D_LM_NUCLEUS_OOD = [
+    "parhyale_regen", "mouse_embryo", "blastospim", "morphonet_celegans", "bbbc032", "bbbc033", "bbbc050",
+]
 DATASETS_3D_LM = (
     DATASETS_3D_LM_CELL_ID + DATASETS_3D_LM_CELL_OOD + DATASETS_3D_LM_NUCLEUS_ID + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY
     + DATASETS_3D_LM_NUCLEUS_OOD
@@ -250,18 +335,21 @@ DATASETS_3D_EM_NEURITE_SUPPLEMENTARY = [
 ]
 DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb", "nisb"]
 # Cell segmentation: Platynereis volume 9 and the DenseCell val volume are blind; the tumor spheroid slices are 2d.
-DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell"]
+DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell", "synapsenet_compartments"]
 
 DATASETS_3D_EM = (
-    ["platynereis_nuclei"] + DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY
-    + DATASETS_3D_EM_NEURITE_OOD + DATASETS_3D_EM_CELL_ID
+    DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_OOD
+    + DATASETS_3D_EM_CELL_ID
 )
 DATASETS_EM = DATASETS_2D_EM + DATASETS_3D_EM
 
-DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
+# Datasets for the micro-sam v1 interactive sweeps only, which no micro-sam2 evaluation selects.
+DATASETS_3D_SWEEP_ONLY = ["lucchi"]
 
-# The neurite datasets need the dense (multicut) pipeline and are ranked by the CREMI score. The EM cell datasets and
-# platynereis_nuclei segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
+DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM + DATASETS_3D_SWEEP_ONLY
+
+# The neurite datasets need the dense (multicut) pipeline and are ranked by the CREMI score. The EM cell datasets
+# segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
 DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_OOD
 
 # Everything outside the main in-domain and OOD panels: supplementary, held-out platform and reserve sets.
@@ -290,20 +378,23 @@ VAL_SPLITS.update({
     "covid_if_cells": "val", "covid_if_nuclei": "val", "medussa": "train", "cardioblast_nuclei": "train",
     "hela_cytonuc": "val", "arvidsson": "val", "mndino": "val", "cellapp": "train", "deepseas": "train",
     "dic_hepg2": "val", "bac_mother": "val", "plantseg_ovules": "val", "cshaper": "train", "mouse_embryo": "train",
-    "blastospim": "val",
+    "blastospim": "val", "bbbc010": "val", "bbbc050": "train",
     "wing_disc": None, "embedseg_mouse_skull": None, "embedseg_platy_ish": None, "nis3d": None,
-    "platynereis_nuclei": None, "humanneurons": None,
+    "humanneurons": None, "bbbc032": None, "bbbc033": None,
 })
 
 # Volumes whose tuning data is a z-slab of the test volume, as (file name, z-slab), following the loader; the
 # evaluation scores the rest of the volume, see val_z_range. nucverse3d holds separate tuning volumes for its liver
-# collections and a slab for drosophila_glia, see _get_3d_lm_data_paths.
+# collections and a slab for drosophila_glia, see _get_3d_lm_data_paths. bbbc032 and bbbc033 are each a single
+# sparsely-instanced volume, so the tuning slab sits at the start and the rest of the volume is scored.
 LM_VAL_Z_SLABS = {
     "wing_disc": {f"{name}.h5": WING_DISC_VAL_Z for name in WING_DISC_TEST_VOLUMES},
     "embedseg_mouse_skull": {"X2_right.tif": EMBEDSEG_VAL_Z["Mouse-Skull-Nuclei-CBG"]},
     "embedseg_platy_ish": {"X02_test.tif": EMBEDSEG_VAL_Z["Platynereis-ISH-Nuclei-CBG"]},
     "nis3d": {"data.tif": NIS3D_VAL_Z},
     "nucverse3d": {NUCVERSE_GLIA_VAL_VOLUME: NUCVERSE_GLIA_VAL_Z},
+    "bbbc032": {"BMP4blastocystC3.tif": slice(0, 20)},
+    "bbbc033": {"BBBC033.h5": slice(0, 6)},
 }
 
 # EM: None means the tuning data is a different region (EM_ROIS) or different files (see _get_3d_em_data_paths) of
@@ -312,7 +403,7 @@ VAL_SPLITS.update({
     name: None for name in (
         "cremi", "snemi", "axonem", "fafb", "hemibrain", "manc", "malecns", "wafer4", "minnie65",
         "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress", "nisb", "platynereis_cells",
-        "densecell",
+        "densecell", "synapsenet_compartments",
         "astih", "tumor_spheroid",
     )
 })
@@ -384,6 +475,9 @@ def em_roi(dataset_name: str, label_path: str, split: str):
     """The (z, y, x) roi of one volume for the 'test' or 'val' region, or None to read it whole."""
     if dataset_name in LABEL_CENTERED_VOLUMES:
         return _label_bbox_roi(dataset_name, label_path)
+    if dataset_name == "synapsenet_compartments":
+        # The test tomograms are read whole; the training tomograms validate on their last 20 % of sections.
+        return None if split == "test" else synapsenet_roi(label_path, "val")
     if dataset_name == "axonem":
         # Only a central block of each volume is annotated; its bounding box is cached next to the labels.
         import json
@@ -392,38 +486,14 @@ def em_roi(dataset_name: str, label_path: str, split: str):
     if dataset_name == "synapseweb":
         region = os.path.basename(label_path).replace("synapseweb_hippocampus_", "").replace(".h5", "")
         return SYNAPSEWEB_CORE_ROIS[region]
-    if dataset_name == "platynereis_nuclei" and split == "test":
-        return PLATYNEREIS_NUCLEI_TEST_ROIS[int(re.search(r"nuclei_(\d+)\.h5$", label_path).group(1))]
     rois = EM_ROIS.get(dataset_name)
     return None if rois is None else rois[split]
-
-
-# platynereis_nuclei has 12 volumes, all of which the evaluation reads in full (crop centered on each
-# volume's own depth), so tuning cannot afford to sweep every volume: instead of an equal z-slab like
-# VAL_Z_RANGE, tuning uses only these 3 sample ids (of 12), the ones with the most annotated (valid_roi,
-# i.e. label != -1) foreground voxels, each restricted to its own 16-slice z-window that maximizes that
-# foreground count while staying clear of the slab the evaluation's own center crop reads. Chosen by
-# measuring per-slice foreground density on the actual data; see load_volume for the valid_roi masking.
-PLATYNEREIS_NUCLEI_VAL_SAMPLES = {1: (28, 44), 5: (2, 18), 8: (99, 115)}
-
-# The annotated block of each platynereis_nuclei volume, i.e. the bounding box of label != -1. Training reads the
-# same roi. The test split is scored inside it, but the tuning windows above count from the whole volume.
-PLATYNEREIS_NUCLEI_TEST_ROIS = {sample: np.s_[16:116, 32:407, 32:407] for sample in (1, 2, 3, 4, 6, 7, 9, 10, 11, 12)}
-PLATYNEREIS_NUCLEI_TEST_ROIS.update({5: np.s_[2:102, 25:325, 25:325], 8: np.s_[16:116, 32:532, 32:407]})
-
-
-def platynereis_nuclei_val_z_range(raw_path: str) -> Tuple[int, int]:
-    """The z-window PLATYNEREIS_NUCLEI_VAL_SAMPLES picked for one 'train_data_nuclei_%02i.h5' path."""
-    sample_id = int(re.search(r"nuclei_(\d+)\.h5$", raw_path).group(1))
-    return PLATYNEREIS_NUCLEI_VAL_SAMPLES[sample_id]
 
 
 def val_z_range(dataset_name: str, raw_path: str, split: str) -> Optional[Tuple[int, Optional[int]]]:
     """The z-range of a volume that holds both tuning and test data: the tuning slab for 'val', its complement
     for 'test', so the scored region never overlaps the validation region. None where the two are separate files.
     """
-    if dataset_name == "platynereis_nuclei":
-        return platynereis_nuclei_val_z_range(raw_path) if split == "val" else None
     slab = LM_VAL_Z_SLABS.get(dataset_name, {}).get(os.path.basename(raw_path))
     if slab is None:
         return None
@@ -795,6 +865,11 @@ def _get_2d_lm_data_paths(
             img, gt = lm.omnipose.get_omnipose_paths(
                 path=os.path.join(p, "omnipose"), split="test", data_choice=choice, download=download,
             )
+            if choice == "bact_fluor":
+                # The 'wiggins' test folder holds the same 39 images as its train folder, image and mask alike.
+                keep = [os.sep + "wiggins" + os.sep not in path for path in img]
+                img = [path for path, k in zip(img, keep) if k]
+                gt = [path for path, k in zip(gt, keep) if k]
         else:
             img, gt = _loader_val_part(*lm.omnipose.get_omnipose_paths(
                 path=os.path.join(p, "omnipose"), split="train", data_choice=choice, download=download,
@@ -1120,6 +1195,13 @@ def _get_2d_lm_data_paths(
         img, gt = _sorted_pairs(img, gt)
         return img[::10], gt[::10], None, None
 
+    if dataset_name == "bbbc010":
+        # Out of domain: C. elegans worm instances, brightfield channel; the loader's own 65/15/20 split.
+        img, gt = lm.bbbc010.get_bbbc010_paths(
+            path=os.path.join(p, "bbbc010"), split=split, channel=1, download=download,
+        )
+        return sorted(img), sorted(gt), "raw", "labels"
+
     raise ValueError(f"Unknown 2D light microscopy dataset: {dataset_name!r}")
 
 
@@ -1265,6 +1347,24 @@ def _get_3d_lm_data_paths(
         paths = [path for path in paths if os.path.basename(path).split("_image_")[0] in volumes]
         return sorted(paths), sorted(paths), "raw", "labels"
 
+    if dataset_name == "bbbc032":
+        # Out of domain: single sparsely-instanced volume (56 nuclei), tuning uses a z-slab, see LM_VAL_Z_SLABS.
+        img, gt = lm.bbbc032.get_bbbc032_paths(path=os.path.join(p, "bbbc032"), channel=3, download=download)
+        return img, gt, None, None
+
+    if dataset_name == "bbbc033":
+        # Out of domain: single densely-instanced volume (15 nuclei), tuning uses a z-slab, see LM_VAL_Z_SLABS.
+        path, raw_key = lm.bbbc033.get_bbbc033_paths(path=os.path.join(p, "bbbc033"), download=download)
+        return [path], [path], raw_key, "labels"
+
+    if dataset_name == "bbbc050":
+        # Out of domain: the official test split (4 held-out embryos) is scored, the train split tunes.
+        img, gt = lm.bbbc050.get_bbbc050_paths(
+            path=os.path.join(p, "bbbc050"), split="test" if split == "test" else "train",
+            label_type="QCANet", download=download,
+        )
+        return (*_sorted_pairs(img, gt), None, None)
+
     raise ValueError(f"Unknown 3D LM dataset: {dataset_name!r}")
 
 
@@ -1274,14 +1374,6 @@ def _get_3d_em_data_paths(
     """The 3d EM datasets. 'is_val' selects the tuning files where they differ from the test files."""
     p = data_root
     em = datasets.electron_microscopy
-
-    if dataset_name == "platynereis_nuclei":
-        # The val split restricts to the 3 richest sample ids, see PLATYNEREIS_NUCLEI_VAL_SAMPLES.
-        sample_ids = sorted(PLATYNEREIS_NUCLEI_VAL_SAMPLES) if is_val else None
-        paths = datasets.platynereis.get_platynereis_paths(
-            path=os.path.join(p, "platynereis"), sample_ids=sample_ids, name="nuclei", download=download,
-        )
-        return paths, paths, "volumes/raw", "volumes/labels/nucleus_instance_labels"
 
     if dataset_name == "platynereis_cells":
         # Volume 9 is the blind test set, volumes 7 and 8 validate; the neuropil carries the ignore label.
@@ -1393,6 +1485,17 @@ def _get_3d_em_data_paths(
         em.densecell._add_cell_instances(path)
         return [path], [path], "raw", em.densecell.CELL_INSTANCE_KEY
 
+    if dataset_name == "synapsenet_compartments":
+        # One tomogram per synapse type is the blind test set, see SYNAPSENET_TEST_TOMOGRAMS; the others validate.
+        paths = synapsenet_tomograms(os.path.join(p, "synapsenet_compartments_data"))
+        paths = [path for path in paths if (os.path.basename(path) in SYNAPSENET_TEST_TOMOGRAMS) != is_val]
+        return paths, paths, "raw", "labels/compartments"
+
+    if dataset_name == "lucchi":
+        # Mitochondria, for the micro-sam v1 sweeps. 'load_volume' turns the binary labels into instances.
+        path = em.lucchi.get_lucchi_paths(path=os.path.join(p, "lucchi"), split="test", download=download)
+        return [path], [path], "raw", "labels"
+
     if dataset_name == "isbi2012":
         path = em.isbi2012.get_isbi_paths(path=os.path.join(p, "isbi2012"), download=download)
         return [path], [path], "raw", "labels/gt_segmentation"
@@ -1431,13 +1534,17 @@ def get_data_paths(
                 f"There is no data held out from the evaluation for '{dataset_name}', so it cannot be "
                 f"tuned on a validation split. Datasets that can: {sorted(VAL_SPLITS)}."
             )
-        # None means the loader has no split of its own; the holdout is the z-slab in VAL_Z_RANGE
-        # (or, for platynereis_nuclei, the sample_ids in PLATYNEREIS_NUCLEI_VAL_SAMPLES), which
-        # load_volume / _get_3d_em_data_paths apply on top of the very same volumes.
+        # None means the loader has no split of its own; the holdout is the z-slab in VAL_Z_RANGE, which
+        # load_volume applies on top of the very same volumes.
         split = VAL_SPLITS[dataset_name] or "test"
 
     if dataset_name in DATASETS_2D:
-        return _get_2d_data_paths(dataset_name, data_root, download=download, split=split)
+        raw_paths, label_paths, raw_key, label_key = _get_2d_data_paths(
+            dataset_name, data_root, download=download, split=split
+        )
+        if split == "test" and not is_val:
+            raw_paths, label_paths = drop_excluded_test_images(dataset_name, raw_paths, label_paths)
+        return raw_paths, label_paths, raw_key, label_key
     if dataset_name in DATASETS_3D_LM:
         return _get_3d_lm_data_paths(dataset_name, data_root, download=download, split=split)
     return _get_3d_em_data_paths(dataset_name, data_root, download=download, is_val=is_val)
@@ -1484,7 +1591,7 @@ def load_volume(
     """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
 
     valid_roi is a boolean mask that is True where the data is annotated. It is None except for the datasets
-    that are annotated only in part (platynereis_nuclei, platynereis_cells, synapseweb).
+    that are annotated only in part (platynereis_cells, synapseweb, plantseg_root, plantseg_ovules).
 
     'split' selects the test or the tuning region of the EM volumes, see EM_ROIS. 'z_range' restricts the
     volume to a z-slab before the center crop, which is how a dataset without splits holds tuning data out
@@ -1511,11 +1618,7 @@ def load_volume(
     raw, labels = np.asarray(raw_source[window]), np.asarray(label_source[window])
 
     valid_roi = None
-    if dataset_name == "platynereis_nuclei":
-        labels = labels.astype("int64")
-        valid_roi = labels != -1
-        labels[labels == -1] = 0
-    elif dataset_name == "platynereis_cells":
+    if dataset_name == "platynereis_cells":
         # The neuropil is not resolved into cells and carries the ignore label; it is excluded from scoring.
         ignore = labels == datasets.electron_microscopy.platynereis.CELL_IGNORE_LABEL
         valid_roi = ~ignore
@@ -1612,7 +1715,7 @@ def export_joint_checkpoint(
     """Split a joint checkpoint into an interactive and an automatic weight file.
 
     The joint trainer bundles the SAM2 weights ('model_state'), the UniSAM2 decoder weights
-    ('unetr_state') and pickled trainer state in a single file. That file cannot be loaded by
+    ('decoder_state', 'unetr_state' before v6) and pickled trainer state in a single file. That file cannot be loaded by
     `sam2.build_sam`, which reads `torch.load(...)['model']` with `weights_only=True`. Both
     exported files are plain tensor dicts, mirroring `scripts/model_export/export_sam2_cells_model.py`.
 
@@ -1640,13 +1743,12 @@ def export_joint_checkpoint(
         return interactive_path, decoder_path
 
     state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    missing = [key for key in ("model_state", "unetr_state") if key not in state]
-    if missing:
-        raise RuntimeError(f"'{checkpoint_path}' is not a joint checkpoint, it is missing {missing}.")
+    if "model_state" not in state or not ("decoder_state" in state or "unetr_state" in state):
+        raise RuntimeError(f"'{checkpoint_path}' is not a joint checkpoint.")
 
     os.makedirs(export_root, exist_ok=True)
     _save_atomic({"model": _strip_ddp_prefix(state["model_state"]), "model_type": model_type}, interactive_path)
-    _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
+    _save_atomic(_strip_ddp_prefix(joint_unetr_state(state)), decoder_path)
     print(f"Exported '{checkpoint_path}' to '{interactive_path}' and '{decoder_path}'.")
     return interactive_path, decoder_path
 
@@ -1664,7 +1766,10 @@ DATASET_SPACING: dict = {
     "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
     "densecell": (5, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels
+    "synapsenet_compartments": (1, 1, 1),  # electron tomography, isotropic
     "nisb": (2.2, 1, 1),  # synthetic: 20 nm sections, 9 nm pixels
+    "bbbc032": (5, 1, 1),  # spinning disk confocal: z=0.5µm, xy=0.101µm
+    "bbbc050": (2.5, 1, 1),  # CV1000 (test split): z=2.0µm, xy=0.8µm
 }
 
 
@@ -1776,7 +1881,7 @@ def load_unisam2_model(checkpoint_path, device, encoder="hvit_t", encoder_model_
     """Load a UniSAM2 model for automatic segmentation.
 
     Handles the standalone UniSAM2 checkpoints ('model_state'), the joint checkpoints
-    ('unetr_state', with the SAM2 encoder wrapped in an adapter) and exported decoder weights.
+    ('decoder_state' next to 'model_state', 'unetr_state' before v6) and exported decoder weights.
 
     Args:
         checkpoint_path: The filepath to the checkpoint.
@@ -1912,7 +2017,7 @@ def build_ais_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
     directory layout (e.g. a checkpoint from an ad hoc experiment).
 
     Args:
-        joint_checkpoint_path: Absolute path to a joint checkpoint (has 'model_state', 'unetr_state').
+        joint_checkpoint_path: Absolute path to a joint checkpoint (has 'model_state' and 'decoder_state').
         model_type: The SAM2 backbone, e.g. 'hvit_t'.
         device: The torch device.
         ndim: The number of spatial dimensions, 2 or 3.
@@ -1930,7 +2035,7 @@ def build_ais_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
 
     if not os.path.exists(decoder_path):
         state = torch.load(joint_checkpoint_path, map_location="cpu", weights_only=False)
-        _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
+        _save_atomic(_strip_ddp_prefix(joint_unetr_state(state)), decoder_path)
 
     return build_model(mode="ais", model_type=model_type, device=device, ndim=ndim, checkpoint_path=decoder_path)
 
@@ -1944,7 +2049,7 @@ def build_apg_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
     one-off checkpoint that lives outside that directory layout.
 
     Args:
-        joint_checkpoint_path: Absolute path to a joint checkpoint (has 'model_state', 'unetr_state').
+        joint_checkpoint_path: Absolute path to a joint checkpoint (has 'model_state' and 'decoder_state').
         model_type: The SAM2 backbone, e.g. 'hvit_t'.
         device: The torch device.
         ndim: The number of spatial dimensions, 2 or 3.
@@ -1967,7 +2072,7 @@ def build_apg_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
     if not (os.path.exists(interactive_path) and os.path.exists(decoder_path)):
         state = torch.load(joint_checkpoint_path, map_location="cpu", weights_only=False)
         _save_atomic({"model": _strip_ddp_prefix(state["model_state"]), "model_type": model_type}, interactive_path)
-        _save_atomic(_strip_ddp_prefix(state["unetr_state"]), decoder_path)
+        _save_atomic(_strip_ddp_prefix(joint_unetr_state(state)), decoder_path)
 
     model = get_sam2_model(
         model_type=model_type, device=device, checkpoint_path=interactive_path,
@@ -2023,13 +2128,17 @@ def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None):
 
 
 def postprocess_unisam2(out, dataset_name, model_type, params=None):
-    """Turn a (4, *spatial) prediction into an instance segmentation.
+    """Turn a (5, *spatial) prediction into an instance segmentation.
 
     EM datasets use the dense (multicut) mode, all others the sparse (flow) mode. 'params' overrides
     the postprocessing defaults, e.g. with the best combination found by grid_search_automatic_cells.
-    Without 'params', 'model_type' selects the per-model library default.
+    Without 'params', 'model_type' selects the per-model library default. The boundary channel 4 is
+    forwarded to the sparse mode as 'boundary'.
     """
+    from micro_sam.v2.util import UNISAM2_OUTPUT_CHANNELS
     from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
+    if out.shape[0] != UNISAM2_OUTPUT_CHANNELS:
+        raise ValueError(f"Expected a {UNISAM2_OUTPUT_CHANNELS}-channel UniSAM2 prediction, got {out.shape[0]}.")
     params = {} if params is None else params
     fg = out[0]
     if dataset_name in DATASETS_DENSE:
@@ -2039,7 +2148,9 @@ def postprocess_unisam2(out, dataset_name, model_type, params=None):
         seg = run_multicut(boundary_map, distances, model_type=model_type, **params)
     else:
         spacing = DATASET_SPACING.get(dataset_name, None)
-        seg = flow_instance_segmentation(fg, out[1:], model_type=model_type, spacing=spacing, **params)
+        seg = flow_instance_segmentation(
+            fg, out[1:4], boundary=out[4], model_type=model_type, spacing=spacing, **params
+        )
     return seg.astype("uint32")
 
 
@@ -2249,6 +2360,10 @@ def read_tuned_params(
     for key, value in rows[0].items():
         if key.endswith(("_mean", "_std")) or key == "n_images":
             continue
+        # An empty cell is a swept None (e.g. APG's 'no refinement'), which must not come back as ''.
+        if value == "":
+            params[key] = None
+            continue
         try:
             params[key] = ast.literal_eval(value)
         except (ValueError, SyntaxError):
@@ -2394,7 +2509,7 @@ def sorted_path_pairs(raw_paths, label_paths):
 
 def interactive_result_name(
     dataset_name, method, model_type, prompt, iteration,
-    ndim=2, use_masks=True, mask_threshold=0.0, min_size=0,
+    ndim=2, use_masks=True, mask_threshold=0.0, min_size=0, click_protocol="random",
 ):
     """Build the name of the result CSV for one iteration of an interactive run.
 
@@ -2402,11 +2517,11 @@ def interactive_result_name(
     another.
     """
     dim_suffix = "" if ndim == 2 else "_3d"
-    tag = interactive_run_tag(ndim, use_masks, mask_threshold, min_size)
+    tag = interactive_run_tag(ndim, use_masks, mask_threshold, min_size, click_protocol)
     return f"{dataset_name}_{method}_{model_type}{dim_suffix}_{prompt}{tag}_iter{iteration:02d}.csv"
 
 
-def interactive_run_tag(ndim=2, use_masks=True, mask_threshold=0.0, min_size=0):
+def interactive_run_tag(ndim=2, use_masks=True, mask_threshold=0.0, min_size=0, click_protocol="random"):
     """Build the settings suffix for an interactive run's result names and prediction directory.
 
     Both use one tag, so a run can never read back the cached predictions of another run.
@@ -2417,6 +2532,9 @@ def interactive_run_tag(ndim=2, use_masks=True, mask_threshold=0.0, min_size=0):
         tag += f"_t{mask_threshold:g}"
     if min_size:
         tag += f"_min{min_size}"
+    # Only the 2d path chooses the click protocol, see 'CLICK_PROTOCOLS'.
+    if ndim == 2 and click_protocol != "random":
+        tag += f"_{click_protocol}"
     return tag
 
 
@@ -2579,12 +2697,13 @@ def load_evaluation_sample_3d(
 
 
 def load_data(
-    dataset_name, data_root, ndim, min_size=0, split="test", crop_shape=None, z_range=None, normalize=True
+    dataset_name, data_root, ndim, min_size=0, split="test", crop_shape=None, z_range=None, normalize=True,
+    sample_ids=None,
 ):
     """Yield (image_or_volume, labels, valid_roi) triples for the given dataset.
 
-    valid_roi is a boolean mask that is True where the data is annotated. It is None for every
-    dataset except platynereis_nuclei, which is annotated only in part.
+    valid_roi is a boolean mask that is True where the data is annotated. It is None except for the datasets
+    that are annotated only in part, see load_volume.
 
     The filtering happens here, in the single source of the labels used for both prompting and
     scoring. If only the prompting copy were filtered, the dropped objects would stay in the scored
@@ -2600,20 +2719,29 @@ def load_data(
             their fixed crops instead, with one sample per crop.
         z_range: Restrict a volume to a z-slab before cropping, see VAL_Z_RANGE.
         normalize: Percentile-normalize the image, 2d only. See `load_evaluation_sample_2d`.
+        sample_ids: Load and yield only the samples at these positions of the full sequence. The other
+            samples are skipped without being read.
 
     Yields:
         One (image_or_volume, labels, valid_roi) triple per sample.
     """
     raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root, split=split)
+    sample_id = -1
     for raw_path, label_path in sorted_path_pairs(raw_paths, label_paths):
         if ndim == 3:
             sample_z_range = val_z_range(dataset_name, raw_path, split) or z_range
             for crop_start, sample_crop_shape in eval_crops_3d(dataset_name, raw_path, split, crop_shape):
+                sample_id += 1
+                if sample_ids is not None and sample_id not in sample_ids:
+                    continue
                 yield load_evaluation_sample_3d(
                     raw_path, label_path, raw_key, label_key, dataset_name, crop_shape=sample_crop_shape,
                     z_range=sample_z_range, min_size=min_size, split=split, crop_start=crop_start,
                 )
         else:
+            sample_id += 1
+            if sample_ids is not None and sample_id not in sample_ids:
+                continue
             image, gt = load_evaluation_sample_2d(
                 raw_path, label_path, raw_key, label_key, dataset_name, normalize=normalize
             )

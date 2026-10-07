@@ -41,14 +41,25 @@ jobs:
         run: python -m pip install -r requirements-dev.txt
 
       - name: Install micro-sam
+        id: install
         shell: bash -l {0}
         run: pip install --no-deps -e .
 
-      - name: Run tests
+      # The tests run in two parts: the SAM1 tests (vit_t / vit_t_lm), marked with 'pytest.mark.v1',
+      # and everything else, i.e. the SAM2 tests (hvit_t / hvit_t_cells) and the annotator.
+      # The v2 part also runs when the v1 part fails, and appends to the v1 coverage.
+      - name: Run v1 tests
         uses: aganders3/headless-gui@v2
         with:
           shell: bash -l {0}
-          run: pytest
+          run: pytest -m "v1"
+
+      - name: Run v2 tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: aganders3/headless-gui@v2
+        with:
+          shell: bash -l {0}
+          run: pytest -m "not v1" --cov-append
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3

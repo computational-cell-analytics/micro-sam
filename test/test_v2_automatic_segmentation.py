@@ -245,7 +245,7 @@ class _FakeUNETR:
         self.call_z.append(z)
         h, w = x.shape[-2:]
         self.call_hw.append((h, w))
-        return torch.zeros((1, 4, z, h, w), dtype=self.output_dtype)
+        return torch.zeros((1, 5, z, h, w), dtype=self.output_dtype)
 
 
 def test_decoder_3d_stub_returns_per_slice_features_in_order():
@@ -255,7 +255,7 @@ def test_decoder_3d_stub_returns_per_slice_features_in_order():
     feats = np.arange(z * c * h * w, dtype="float32").reshape(z, c, h, w)
     model = _FakeUNETR(img_size=8)
     out = _run_decoder_3d(model, {"features": feats, "original_size": (8, 8)})
-    assert out.shape == (4, z, 8, 8)
+    assert out.shape == (5, z, 8, 8)
     assert model.call_z == [z]  # single pass
     assert len(model.seen) == z
     for i, feat in enumerate(model.seen):
@@ -270,7 +270,7 @@ def test_decoder_3d_squeezes_5d_features():
     feats5 = np.arange(z * 1 * c * h * w, dtype="float32").reshape(z, 1, c, h, w)
     model = _FakeUNETR(img_size=8)
     out = _run_decoder_3d(model, {"features": feats5, "original_size": (8, 8)})
-    assert out.shape == (4, z, 8, 8)
+    assert out.shape == (5, z, 8, 8)
     for i, feat in enumerate(model.seen):
         assert tuple(feat.shape) == (1, c, h, w)
         assert np.allclose(feat[0].cpu().numpy(), feats5[i, 0])
@@ -284,7 +284,7 @@ def test_decoder_2d_squeezes_5d_features():
     feats5 = np.arange(1 * 1 * c * h * w, dtype="float32").reshape(1, 1, c, h, w)
     model = _FakeUNETR(img_size=8)
     out = _run_decoder_2d(model, {"features": feats5, "original_size": (8, 8)})
-    assert out.shape == (4, 8, 8)
+    assert out.shape == (5, 8, 8)
     assert len(model.seen) == 1
     assert tuple(model.seen[0].shape) == (1, c, h, w)
     assert np.allclose(model.seen[0][0].cpu().numpy(), feats5[0, 0])
@@ -295,7 +295,7 @@ def test_decoder_2d_uses_original_non_square_shape():
     model = _FakeUNETR(img_size=8)
     out = _run_decoder_2d(model, {"features": features, "original_size": (4, 8)})
 
-    assert out.shape == (4, 4, 8)
+    assert out.shape == (5, 4, 8)
     assert model.call_hw == [(4, 8)]
 
 
@@ -368,7 +368,7 @@ def test_full_inference_uses_decoder_autocast(monkeypatch):
         devices="cpu",
     )
 
-    assert output.shape == (4, 8, 8)
+    assert output.shape == (5, 8, 8)
     assert autocast_devices == [torch.device("cpu")]
 
 
@@ -400,7 +400,7 @@ def test_full_inference_normalizes_each_volume_slice_independently(monkeypatch):
     )
 
     expected = np.concatenate([normalize_raw(crop, axis=(-2, -1))] * 3, axis=0)
-    assert output.shape == (4, 2, 2, 2)
+    assert output.shape == (5, 2, 2, 2)
     assert np.allclose(preprocessed["crop"], expected)
     assert np.allclose(preprocessed["crop"].min(axis=(-2, -1)), 0.0)
     assert np.allclose(preprocessed["crop"].max(axis=(-2, -1)), 1.0)
@@ -408,7 +408,7 @@ def test_full_inference_normalizes_each_volume_slice_independently(monkeypatch):
 
 def _stage_3d_ais(
     monkeypatch, embedding_path, initialize=None, calls=None, segmenter=None, device=None, devices=None,
-    tile_shape=None, halo=None,
+    tile_shape=None, halo=None, norm_bounds=None,
 ):
     """Drive `automatic_instance_segmentation` for 3d AIS with fakes, capturing the temp-store calls."""
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
@@ -439,7 +439,7 @@ def _stage_3d_ais(
     result = automatic_instance_segmentation(
         predictor=types.SimpleNamespace(model=embedding_model),
         segmenter=segmenter, input_path=raw, ndim=3, embedding_path=embedding_path, verbose=False,
-        device=device, devices=devices, tile_shape=tile_shape, halo=halo,
+        device=device, devices=devices, tile_shape=tile_shape, halo=halo, norm_bounds=norm_bounds,
     )
     return calls, embeddings, embedding_model, raw, temp_path, result
 
@@ -478,6 +478,18 @@ def test_automatic_3d_ais_keeps_full_3d_tile_shape(monkeypatch):
     assert calls["precompute"][2]["halo"] == halo
     assert calls["initialize"][1]["tile_shape"] == tile_shape
     assert calls["initialize"][1]["halo"] == halo
+
+
+def test_automatic_3d_ais_forwards_norm_bounds(monkeypatch):
+    # The bounds of a larger volume reach the embeddings, so that a block is not normalized by its own bounds.
+    norm_bounds = (np.array([100.0]), np.array([900.0]))
+    calls, _, _, _, _, _ = _stage_3d_ais(monkeypatch, embedding_path=None, norm_bounds=norm_bounds)
+    assert calls["precompute"][2]["norm_bounds"] is norm_bounds
+
+
+def test_automatic_3d_ais_computes_its_own_norm_bounds_by_default(monkeypatch):
+    calls, _, _, _, _, _ = _stage_3d_ais(monkeypatch, embedding_path=None)
+    assert calls["precompute"][2]["norm_bounds"] is None
 
 
 def test_precompute_3d_embeddings_uses_in_plane_tiles_internally(monkeypatch):
@@ -644,7 +656,7 @@ def test_decoder_3d_zchunks_deep_volume():
     feats = np.zeros((z, c, h, w), dtype="float32")
     model = _FakeUNETR(img_size=8)
     out = _run_decoder_3d(model, {"features": feats, "original_size": (8, 8)})
-    assert out.shape == (4, z, 8, 8)
+    assert out.shape == (5, z, 8, 8)
     assert len(model.call_z) > 1  # chunked along z, not a single whole-stack pass
     # Every decoder call stays within one z block plus the halo on each side.
     assert max(model.call_z) <= DEFAULT_TILE_Z + 2 * DEFAULT_HALO_Z
@@ -982,7 +994,7 @@ def test_get_decoder_preserves_the_peft_encoder_architecture(tmp_path, monkeypat
     monkeypatch.setattr(peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=model))
 
     checkpoint = tmp_path / "decoder.pt"
-    model_state = {"out_conv.weight": torch.zeros(4, 64, 1, 1, 1)}
+    model_state = {"out_conv.weight": torch.zeros(5, 64, 1, 1, 1)}
     torch.save(
         {"model_state": model_state, "peft_kwargs": {"rank": 2, "peft_module": "LoRASurgery"}}, checkpoint
     )
@@ -1021,8 +1033,8 @@ def test_get_unisam2_model_converts_automatic_qlora_state(tmp_path, monkeypatch)
                 "encoder.inner.frozen_weight.quant_state.bitsandbytes__nf4": torch.tensor([8]),
                 "encoder.inner.adapter_weight": torch.tensor([3.0]),
                 "decoder_weight": torch.tensor([4.0]),
-                "out_conv.weight": torch.zeros(4, 64, 1, 1, 1),
-                "out_conv.bias": torch.zeros(4),
+                "out_conv.weight": torch.zeros(5, 64, 1, 1, 1),
+                "out_conv.bias": torch.zeros(5),
             },
             "peft_kwargs": {"rank": 2, "peft_module": "LoRASurgery", "quantize": True},
         },
@@ -1066,7 +1078,7 @@ class _FakeFeatsGroup:
 
 def test_tiled_decoder_2d_stitches_all_tiles():
     # A (8, 8) image tiled into four (4, 4) tiles (no halo): the tiled AIS decoder must decode each
-    # tile through the class (_run_decoder_2d) and stitch them into a (4, 8, 8) prediction.
+    # tile through the class (_run_decoder_2d) and stitch them into a (5, 8, 8) prediction.
     c, h, w = 2, 2, 2
     tile_shape, shape = (4, 4), (8, 8)
     tiles = {
@@ -1078,7 +1090,7 @@ def test_tiled_decoder_2d_stitches_all_tiles():
     model = _FakeUNETR(img_size=8)
     segmenter = TiledUniSAM2InstanceSegmentation(model, device="cpu")
     out = segmenter._run_decoder_tiled_2d({"features": feats_group})
-    assert out.shape == (4, *shape)
+    assert out.shape == (5, *shape)
     assert len(model.call_z) == 4  # one decoder pass per tile
 
 
@@ -1092,7 +1104,7 @@ def test_configured_device_is_used_when_no_devices_are_given(devices, expected, 
 
     def fake_decode(model, image_embeddings, **kwargs):
         forwarded["devices"] = kwargs["devices"]
-        return np.zeros((4, 1, 8, 8), dtype="float32")
+        return np.zeros((5, 1, 8, 8), dtype="float32")
 
     monkeypatch.setattr(batched_inference, "_decode_volume_embeddings", fake_decode)
     segmenter = UniSAM2InstanceSegmentation(_FakeUNETR(img_size=8), device="cuda:1")
@@ -1136,7 +1148,7 @@ def test_decoder_output_is_moved_to_cpu_before_the_float_cast():
     # Casting on the device would hold an fp32 copy of the whole output next to the fp16 one,
     # cancelling out the memory that fp16 inference saves.
     calls = []
-    array = np.zeros((1, 4, 1, 8, 8), dtype="float32")
+    array = np.zeros((1, 5, 1, 8, 8), dtype="float32")
     model = _RecordingModel(_RecordingOutput(array, calls))
 
     out = _decode_3d_feature_batch(model, torch.zeros((1, 1, 2, 4, 4)), (8, 8), "cpu")
@@ -1150,7 +1162,7 @@ def test_decoder_width_mismatch_names_torch_em():
     from micro_sam.v2.instance_segmentation import CONFIGURABLE_DECODER_WIDTH_VERSION, _check_decoder_width
 
     # Only 'out_conv.weight.shape[1]' is read, so a bare namespace stands in for the built model.
-    model = types.SimpleNamespace(out_conv=types.SimpleNamespace(weight=torch.zeros(4, 64, 1, 1, 1)))
+    model = types.SimpleNamespace(out_conv=types.SimpleNamespace(weight=torch.zeros(5, 64, 1, 1, 1)))
 
     _check_decoder_width(model, 64)  # Matching width: no error.
 

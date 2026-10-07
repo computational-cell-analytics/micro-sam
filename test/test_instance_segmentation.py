@@ -12,6 +12,8 @@ from elf.evaluation.matching import matching
 from skimage.draw import disk
 from skimage.measure import label
 
+pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
+
 
 class TestInstanceSegmentation(unittest.TestCase):
     model_type = "vit_t" if util.VIT_T_SUPPORT else "vit_b"

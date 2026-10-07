@@ -32,7 +32,7 @@ import elf.parallel as parallel_impl
 from elf.io import open_file
 
 from bioimage_cpp.distance import distance_transform
-from bioimage_cpp.segmentation import relabel_sequential
+from bioimage_cpp.segmentation import label, relabel_sequential
 
 from .__version__ import __version__
 
@@ -1305,6 +1305,15 @@ def _batched_tiled_mask_nms(masks, boxes, global_boxes, scores, nms_thresh, inte
     return torch.tensor(keep)
 
 
+def _largest_component(mask: np.ndarray) -> np.ndarray:
+    """The largest connected component of a binary mask, with the connectivity 'label_masks' relabels with."""
+    components = label(mask, connectivity=1)
+    sizes = np.bincount(components.ravel().astype("int64"))[1:]
+    if len(sizes) < 2:
+        return mask
+    return components == (sizes.argmax() + 1)
+
+
 def mask_data_to_segmentation(
     masks: List[Dict[str, Any]],
     shape: Optional[Tuple[int, int]] = None,
@@ -1313,6 +1322,8 @@ def mask_data_to_segmentation(
     label_masks: bool = True,
     with_background: bool = False,
     merge_exclusively: bool = True,
+    keep_largest_component: bool = False,
+    max_overlap: Optional[float] = None,
 ) -> np.ndarray:
     """Convert the output of the automatic mask generation to an instance segmentation.
 
@@ -1328,6 +1339,13 @@ def mask_data_to_segmentation(
             By default, set to 'True'.
         with_background: Whether to remove the largest object, which often covers the background for AMG.
         merge_exclusively: Whether to exclude previous merged masks from merging.
+        keep_largest_component: Whether to paint only the largest connected component of the pixels a
+            mask can still claim. Otherwise the pieces that the masks merged before it cut off become
+            objects of their own once 'label_masks' runs: the slivers and rings that duplicate masks
+            of one object leave behind. Only meaningful together with 'merge_exclusively'.
+        max_overlap: Skip a mask when more than this fraction of it is already claimed, after
+            'keep_largest_component'. Such a mask is a duplicate of the ones merged before it, which
+            the NMS let through, and only its leftovers would be painted. None (the default) keeps it.
 
     Returns:
         The instance segmentation.
@@ -1353,15 +1371,18 @@ def mask_data_to_segmentation(
             bb = np.s_[bb[1]:bb[1] + bb[3], bb[0]:bb[0] + bb[2]]
             global_bb = mask_data["global_bbox"]
             global_bb = np.s_[global_bb[1]:global_bb[1] + global_bb[3], global_bb[0]:global_bb[0] + global_bb[2]]
-            if merge_exclusively:
-                this_mask = np.logical_and(this_mask[bb], segmentation[global_bb] == 0)
-            else:
-                this_mask = this_mask[bb]
-            segmentation[global_bb][this_mask] = this_seg_id
+            # A view, so painting below writes straight into the output.
+            target = segmentation[global_bb]
+            this_mask = this_mask[bb]
         else:
-            if merge_exclusively:
-                this_mask = np.logical_and(this_mask, segmentation == 0)
-            segmentation[this_mask] = this_seg_id
+            target = segmentation
+        if merge_exclusively:
+            this_mask = np.logical_and(this_mask, target == 0)
+        if keep_largest_component:
+            this_mask = _largest_component(this_mask)
+        if max_overlap is not None and this_mask.sum() < (1 - max_overlap) * area:
+            continue
+        target[this_mask] = this_seg_id
         seg_id = this_seg_id + 1
 
     block_shape = (512, 512)
@@ -1392,6 +1413,8 @@ def apply_nms(
     nms_thresh: float = 0.9,
     max_size: Optional[int] = None,
     intersection_over_min: bool = False,
+    keep_largest_component: bool = False,
+    max_overlap: Optional[float] = None,
 ) -> np.ndarray:
     """Apply non-maximum suppression to mask predictions from a segment anything model.
 
@@ -1405,6 +1428,10 @@ def apply_nms(
         max_size: The maximum mask size to keep in the output.
         intersection_over_min: Whether to perform intersection over the minimum overlap shape
             or to perform intersection over union.
+        keep_largest_component: Whether to merge only the largest connected component of what each
+            mask can still claim, see `mask_data_to_segmentation`.
+        max_overlap: Skip a mask in the merge when more than this fraction of it is already claimed,
+            see `mask_data_to_segmentation`.
 
     Returns:
         The segmentation obtained from merging the masks left after NMS.
@@ -1486,7 +1513,10 @@ def apply_nms(
     if shape is None:
         shape = predictions[0]["segmentation"].shape
     if mask_data:
-        segmentation = mask_data_to_segmentation(mask_data, shape=shape, min_object_size=min_size)
+        segmentation = mask_data_to_segmentation(
+            mask_data, shape=shape, min_object_size=min_size,
+            keep_largest_component=keep_largest_component, max_overlap=max_overlap,
+        )
     else:  # In case all objects have been filtered out due to size filtering.
         segmentation = np.zeros(shape, dtype="uint32")
 
