@@ -5,7 +5,7 @@ from typing import Callable, Dict, List, Optional, Union
 import torch
 
 from micro_sam.util import get_device
-from micro_sam.v2.util import CFG_PATHS, _get_checkpoint
+from micro_sam.v2.util import CFG_PATHS, FINETUNED_MODELS, _get_checkpoint, _download_finetuned_sam2_model
 
 
 @functools.lru_cache(maxsize=1)
@@ -207,7 +207,10 @@ def get_sam2_train_model(
 
     device = get_device(device)
     if checkpoint_path is None:
-        checkpoint_path = _get_checkpoint(model_type=model_type)
+        if model_type in FINETUNED_MODELS:
+            checkpoint_path, _, _ = _download_finetuned_sam2_model(model_type)
+        else:
+            checkpoint_path = _get_checkpoint(model_type=model_type)
 
     model_cfg = CFG_PATHS[model_type[:6]]
 

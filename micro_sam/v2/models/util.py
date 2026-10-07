@@ -78,6 +78,10 @@ class UniSAM2(UNETR3D):
             use_strip_pooling=True,
             **kwargs
         )
+        self.init_kwargs = {
+            "encoder": encoder, "output_channels": output_channels, "img_size": img_size,
+            **{key: value for key, value in kwargs.items() if key != "encoder_checkpoint"},
+        }
         self.to(device)
 
 
@@ -111,4 +115,8 @@ class SemanticSAM2(UNETR3D):
             use_strip_pooling=True,
             **kwargs
         )
+        self.init_kwargs = {
+            "encoder": encoder, "num_classes": num_classes, "img_size": img_size,
+            **{key: value for key, value in kwargs.items() if key != "encoder_checkpoint"},
+        }
         self.to(device)

@@ -15,6 +15,7 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader
 
 from micro_sam.v2.transforms.raw import VideoAugment
+from micro_sam.v2.util import has_registered_decoder
 from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Loss
 from micro_sam.util import get_device, training_autocast_dtype
 from .util import get_sam2_train_model, ConvertToSam2VideoBatch
@@ -589,6 +590,8 @@ def train_sam2_multi_gpu(
 def _build_unisam2_model(model_type, device, peft_kwargs=None, output_channels=4, initial_features=32):
     """Build a UniSAM2 model and optionally apply PEFT to its encoder.
 
+    Registered models initialize both the encoder and decoder from their pretrained weights.
+
     Args:
         model_type: The SAM2 encoder variant, for example, "hvit_t".
         device: The device to build the model on.
@@ -618,6 +621,8 @@ def _build_unisam2_model(model_type, device, peft_kwargs=None, output_channels=4
         model = UniSAM2(
             encoder=model_type, output_channels=output_channels, initial_features=initial_features, device=device
         )
+    if has_registered_decoder(model_type):
+        _init_sam2_decoder(model, model_type)
     return model
 
 
@@ -999,14 +1004,13 @@ def _configure_semantic_speed(model, compile):
                 module.compile(dynamic=False)
 
 
-def _init_semantic_decoder(model, model_type):
-    """Initialize the decoder of a SemanticSAM2 model from the UniSAM2 decoder of a finetuned model.
-
-    Copies every decoder weight, but not the output head, whose number of channels differs, and not the encoder.
+def _init_sam2_decoder(model, model_type, skip_output_head=False):
+    """Initialize the decoder from the registered UniSAM2 weights.
 
     Args:
-        model: The SemanticSAM2 model.
+        model: The UniSAM2 or SemanticSAM2 model.
         model_type: A finetuned model with a registered decoder, for example, "hvit_l_cells".
+        skip_output_head: Whether to keep the output head for semantic segmentation.
     """
     from micro_sam.v2.models.util import joint_unetr_state
     from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
@@ -1021,15 +1025,16 @@ def _init_semantic_decoder(model, model_type):
     elif isinstance(state, dict):
         state = state.get("model_state", state)
 
-    head_prefixes = ("encoder.", "out_conv.")
+    head_prefixes = ("encoder.", "out_conv.") if skip_output_head else ("encoder.",)
     decoder_state = {k: v for k, v in state.items() if not k.startswith(head_prefixes)}
 
     model_state = model.state_dict()
     mismatched = [k for k, v in decoder_state.items() if k in model_state and model_state[k].shape != v.shape]
     if mismatched:
+        settings = "'initial_features'" if skip_output_head else "'initial_features' and 'with_boundaries'"
         raise ValueError(
             f"The decoder of '{model_type}' does not match the model, for example at '{mismatched[0]}'. "
-            "Check that 'initial_features' matches the decoder width."
+            f"Match {settings} to the registered decoder."
         )
 
     missing, unexpected = model.load_state_dict(decoder_state, strict=False)
@@ -1076,7 +1081,7 @@ def _build_semantic_sam2_model(
         )
 
     if init_decoder:
-        _init_semantic_decoder(model, model_type)
+        _init_sam2_decoder(model, model_type, skip_output_head=True)
     return model
 
 
@@ -1351,6 +1356,8 @@ def train_joint_sam2(
         initial_features=initial_features, device=device,
         perform_range_checks=False,  # The trainer checks the input range once.
     )
+    if has_registered_decoder(model_type):
+        _init_sam2_decoder(unetr, model_type)
     compile = _check_compile(compile)
     _configure_joint_speed(sam2_model, unetr, compile)
 
@@ -1517,6 +1524,8 @@ def _train_joint_rank(
         initial_features=initial_features, device=device,
         perform_range_checks=False,  # The trainer checks the input range once.
     )
+    if has_registered_decoder(model_type):
+        _init_sam2_decoder(unetr, model_type)
     compile = _check_compile(compile)
     _configure_joint_speed(sam2_model, unetr, compile)
 
