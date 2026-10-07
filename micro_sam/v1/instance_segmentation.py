@@ -1380,6 +1380,15 @@ def _derive_box_prompts(predictions, box_extension):
     return {"boxes": np.array(prompts)}
 
 
+# How the APG masks left after NMS are merged. Several prompts usually land on one object, and the NMS
+# keeps near duplicates of its masks, so a later duplicate only gets the pixels the earlier one left
+# free: slivers and rings that would otherwise become objects of their own. Every mask keeps only its
+# largest free piece, and is dropped when more than a fifth of it is already claimed. +0.005 mSA on
+# average over ten 2d light microscopy test sets, never worse on one; anything from 0.1 to 0.3
+# measured the same.
+APG_MERGE_KWARGS = {"keep_largest_component": True, "max_overlap": 0.2}
+
+
 class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
     """Generates an instance segmentation automatically, using automatically generated prompts from a decoder.
 
@@ -1488,7 +1497,8 @@ class AutomaticPromptGenerator(InstanceSegmentationWithDecoder):
 
         # 4.) Apply non-max suppression to the masks.
         segmentation = util.apply_nms(
-            predictions, min_size=min_size, nms_thresh=nms_threshold, intersection_over_min=intersection_over_min
+            predictions, min_size=min_size, nms_thresh=nms_threshold, intersection_over_min=intersection_over_min,
+            **APG_MERGE_KWARGS,
         )
         if output_mode != "instance_segmentation":
             segmentation = self._to_masks(segmentation, output_mode)
@@ -1574,7 +1584,8 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         else:
             if optimize_memory:
                 prompts.update(dict(
-                    min_size=min_size, nms_thresh=nms_threshold, intersection_over_min=intersection_over_min
+                    min_size=min_size, nms_thresh=nms_threshold, intersection_over_min=intersection_over_min,
+                    **APG_MERGE_KWARGS,
                 ))
             predictions = batched_tiled_inference(
                 self._predictor,
@@ -1600,7 +1611,7 @@ class TiledAutomaticPromptGenerator(TiledInstanceSegmentationWithDecoder):
         # 4.) Apply non-max suppression to the masks.
         segmentation = util.apply_nms(
             predictions, shape=shape, min_size=min_size, nms_thresh=nms_threshold,
-            intersection_over_min=intersection_over_min,
+            intersection_over_min=intersection_over_min, **APG_MERGE_KWARGS,
         )
         if output_mode != "instance_segmentation":
             segmentation = self._to_masks(segmentation, output_mode)

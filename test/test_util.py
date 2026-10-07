@@ -433,6 +433,35 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(segmentation.shape, (4, 7))
         self.assertEqual(segmentation.max(), 2)
 
+    def test_mask_data_to_segmentation_leftovers(self):
+        from micro_sam.util import mask_data_to_segmentation
+
+        def to_mask_data(*masks):
+            return [{"segmentation": mask, "area": int(mask.sum())} for mask in masks]
+
+        shape = (16, 16)
+        # A bar crossing the mask merged before it is cut into a left (24 px) and a right (20 px) piece.
+        first = np.zeros(shape, dtype=bool)
+        first[:, 6:10] = True
+        bar = np.zeros(shape, dtype=bool)
+        bar[6:10, :15] = True
+        segmentation = mask_data_to_segmentation(to_mask_data(first, bar), shape=shape)
+        self.assertEqual(segmentation.max(), 3)  # each piece becomes an object of its own
+        segmentation = mask_data_to_segmentation(to_mask_data(first, bar), shape=shape, keep_largest_component=True)
+        self.assertEqual(segmentation.max(), 2)
+        self.assertTrue(segmentation[6:10, :6].all() and not segmentation[6:10, 10:].any())
+
+        # A near duplicate of a larger mask, which only pokes out of it by a one pixel sliver.
+        large = np.zeros(shape, dtype=bool)
+        large[2:12, 2:12] = True
+        duplicate = np.zeros(shape, dtype=bool)
+        duplicate[1:9, 3:11] = True
+        segmentation = mask_data_to_segmentation(to_mask_data(large, duplicate), shape=shape)
+        self.assertEqual(segmentation.max(), 2)  # the sliver becomes an object
+        segmentation = mask_data_to_segmentation(to_mask_data(large, duplicate), shape=shape, max_overlap=0.2)
+        self.assertEqual(segmentation.max(), 1)
+        self.assertEqual(int((segmentation == 1).sum()), int(large.sum()))
+
     def _check_predictor_initialization(self, predictor, embeddings, i=None, tile_id=None):
         # We need to do a full reset of the predictor; the orginal_size and input_size
         # are not being reset.
