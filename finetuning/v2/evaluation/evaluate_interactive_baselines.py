@@ -38,7 +38,7 @@ from skimage.measure import label as connected_components
 import torch
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_EM,
+    CLICK_PROTOCOLS, DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_EM,
     check_data_download, interactive_result_name, interactive_run_tag, load_data, n_samples,
     run_dataset_evaluation,
 )
@@ -241,8 +241,18 @@ def _load_sam_v1(model_type, checkpoint, device):
     return get_sam_model(model_type=model_type, checkpoint_path=checkpoint, device=device)
 
 
+def _write_atomic(path, data):
+    """Write a tif under a unique temporary name, then rename it, so no reader sees a partial file."""
+    partial_path = f"{path[:-4]}.{uuid.uuid4().hex}.partial.tif"
+    imageio.imwrite(partial_path, data, compression="zlib")
+    os.replace(partial_path, path)
+
+
 def _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0, limit=None):
-    """Write the cropped images and labels the SAM v1 2d inference reads, and return their paths."""
+    """Write the cropped images and labels the SAM v1 2d inference reads, and return their paths.
+
+    The shards of a dataset share these files, so existing ones are kept and new ones written atomically.
+    """
     image_paths, gt_paths = [], []
     samples, n = _load_samples(dataset_name, data_root, 2, min_size, limit)
     it = tqdm(samples, total=n, desc="save-crops")
@@ -252,9 +262,10 @@ def _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0, lim
 
         image_path = os.path.join(input_dir, f"{sample_id:05d}.tif")
         gt_path = os.path.join(gt_dir, f"{sample_id:05d}.tif")
-        raw = np.clip(np.round(raw), 0, 255).astype("uint8")
-        imageio.imwrite(image_path, raw, compression="zlib")
-        imageio.imwrite(gt_path, labels.astype("uint32"), compression="zlib")
+        if not os.path.exists(image_path):
+            _write_atomic(image_path, np.clip(np.round(raw), 0, 255).astype("uint8"))
+        if not os.path.exists(gt_path):
+            _write_atomic(gt_path, labels.astype("uint32"))
         image_paths.append(image_path)
         gt_paths.append(gt_path)
     return image_paths, gt_paths
@@ -263,8 +274,15 @@ def _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0, lim
 def run_sam_v1_evaluation(
     dataset_name, data_root, experiment_folder, device,
     model_type="vit_b_lm", checkpoint=None, start_with_box=True, n_iterations=8, ndim=None, name_tag="micro-sam",
-    use_masks=False, min_size=0, limit=None,
+    use_masks=False, min_size=0, limit=None, click_protocol="random", shard=None, score_only=False,
 ):
+    """Run the slice-wise SAM v1 iterative prompting on the 2d test split and write one result CSV per iteration.
+
+    With 'shard' set to (shard_index, n_shards), only that stride of the images is predicted and the
+    function returns before scoring. The predictions are cached per image, so a later unsharded call
+    scores without predicting again. With 'score_only' that call fails if an image is missing rather
+    than predict it.
+    """
     if ndim is None:
         ndim = 3 if dataset_name in DATASETS_3D else 2
 
@@ -277,21 +295,18 @@ def run_sam_v1_evaluation(
         raise ValueError(f"micro-sam interactive does not support EM datasets (LM model only); got '{dataset_name}'.")
 
     prompt_str = "box" if start_with_box else "point"
-    run_tag = interactive_run_tag(ndim=2, use_masks=use_masks, min_size=min_size)
+    run_tag = interactive_run_tag(ndim=2, use_masks=use_masks, min_size=min_size, click_protocol=click_protocol)
     results_dir = os.path.join(experiment_folder, "results")
     save_paths = [
         os.path.join(results_dir, interactive_result_name(
             dataset_name, name_tag, model_type, prompt_str, it,
-            ndim=2, use_masks=use_masks, min_size=min_size,
+            ndim=2, use_masks=use_masks, min_size=min_size, click_protocol=click_protocol,
         ))
         for it in range(n_iterations)
     ]
     if all(os.path.exists(p) for p in save_paths):
         print(f"Results already stored at '{results_dir}'.")
         return
-
-    predictor = _load_sam_v1(model_type, checkpoint, device)
-    from micro_sam.v1.evaluation.inference import run_inference_with_iterative_prompting
 
     # Inputs, embeddings and predictions outlive the process so a preempted or timed-out job resumes
     # per image. '/tmp' is a small RAM-backed tmpfs on the compute nodes, so it is avoided here.
@@ -306,16 +321,39 @@ def run_sam_v1_evaluation(
     os.makedirs(gt_dir, exist_ok=True)
     image_paths, gt_paths = _write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size, limit)
 
-    run_inference_with_iterative_prompting(
-        predictor=predictor,
-        image_paths=image_paths,
-        gt_paths=gt_paths,
-        embedding_dir=embedding_dir,
-        prediction_dir=prediction_dir,
-        start_with_box_prompt=start_with_box,
-        n_iterations=n_iterations,
-        use_masks=use_masks,
-    )
+    if score_only:
+        missing = [
+            path for path in image_paths
+            if not all(
+                os.path.exists(os.path.join(prediction_dir, f"iteration{it:02d}", os.path.basename(path)))
+                for it in range(n_iterations)
+            )
+        ]
+        if missing:
+            raise RuntimeError(
+                f"{len(missing)} of {len(image_paths)} image(s) of '{dataset_name}' have no predictions yet. "
+                "Run their shards first."
+            )
+    else:
+        from micro_sam.v1.evaluation.inference import run_inference_with_iterative_prompting
+        predict_image_paths, predict_gt_paths = image_paths, gt_paths
+        if shard is not None:
+            predict_image_paths, predict_gt_paths = image_paths[shard[0]::shard[1]], gt_paths[shard[0]::shard[1]]
+        run_inference_with_iterative_prompting(
+            predictor=_load_sam_v1(model_type, checkpoint, device),
+            image_paths=predict_image_paths,
+            gt_paths=predict_gt_paths,
+            embedding_dir=embedding_dir,
+            prediction_dir=prediction_dir,
+            start_with_box_prompt=start_with_box,
+            n_iterations=n_iterations,
+            use_masks=use_masks,
+            click_protocol=click_protocol,
+        )
+
+    if shard is not None:
+        print(f"Shard {shard[0]}/{shard[1]} finished predicting {len(predict_image_paths)} image(s).")
+        return
 
     os.makedirs(results_dir, exist_ok=True)
     for it, save_path in enumerate(save_paths):
@@ -405,12 +443,15 @@ def _segment_volume(raw, labels, model_type, checkpoint, device, options):
 def run_microsam_volumetric_evaluation(
     dataset_name, data_root, experiment_folder, device, model_type=None, checkpoint=None, start_with_box=True,
     n_iterations=8, min_size=0, start_slice="center", correction="box_and_points", use_masks=False, projection="mask",
-    iou_threshold=0.8, box_extension=0.025, seed=None, n_workers=4, limit=None,
+    iou_threshold=0.8, box_extension=0.025, seed=None, n_workers=4, shard=None, score_only=False, limit=None,
 ):
     """Evaluate SAM v1 or micro-sam v1 with iterative prompts and volumetric projection, as in the 3d annotator.
 
     See `evaluate_interactive_volume_segmentation` for the prompts and the corrections. Each worker process
-    segments one volume at a time on the same GPU.
+    segments one volume at a time on the same GPU. The predictions are cached per volume, so a preempted job
+    resumes per volume. With 'shard' set to (shard_index, n_shards), only the volumes with
+    'sample_id % n_shards == shard_index' are predicted and the function returns before scoring. With
+    'score_only' it fails if a volume is missing rather than predict it.
     """
     if dataset_name not in DATASETS_3D:
         raise ValueError(f"The volumetric micro-sam v1 evaluation is 3d only. '{dataset_name}' is 2d.")
@@ -432,31 +473,62 @@ def run_microsam_volumetric_evaluation(
         print(f"Results already stored at '{results_dir}'.")
         return
 
+    prediction_root = os.path.join(
+        experiment_folder, "predictions", f"microsam_vol_{model_type}", dataset_name,
+        f"{prompt}{interactive_run_tag(ndim=3, min_size=min_size)}",
+    )
+    total = n_samples(dataset_name, data_root)
+    if limit is not None:
+        total = min(total, limit)
+    sample_ids = range(total) if shard is None else range(shard[0], total, shard[1])
+    loaded = load_data(dataset_name, data_root, 3, min_size=min_size, sample_ids=set(sample_ids))
+
     # Skip the volumes without objects: there is nothing to prompt, and nothing to score.
-    samples = [s for s in _load_samples(dataset_name, data_root, 3, min_size, limit)[0] if s[1].max() > 0]
+    samples, todo, missing = [], [], []
+    for sample_id, (raw, labels, valid_roi) in zip(sample_ids, loaded):
+        if labels.max() == 0:
+            continue
+        paths = _nninteractive_prediction_paths(prediction_root, sample_id, n_iterations)
+        if not all(os.path.exists(path) for path in paths):
+            if score_only:
+                missing.append(sample_id)
+                continue
+            todo.append((raw, labels, paths))
+        samples.append((labels, valid_roi, paths))
+
     options = dict(
         start_prompt="box" if start_with_box else "points", start_slice=start_slice, n_iterations=n_iterations,
         correction=correction, use_previous_mask=use_masks, projection=projection, iou_threshold=iou_threshold,
         box_extension=box_extension, seed=seed,
     )
     segment = partial(_segment_volume, model_type=model_type, checkpoint=checkpoint, device=device, options=options)
-    # CUDA cannot run in a forked process, so the workers start with 'spawn'.
-    with ProcessPoolExecutor(n_workers, mp_context=get_context("spawn")) as pool:
-        segs_per_volume = list(tqdm(
-            pool.map(segment, *zip(*[(raw, labels) for raw, labels, _ in samples])),
-            total=len(samples), desc="microsam_vol",
-        ))
+    if todo:
+        # CUDA cannot run in a forked process, so the workers start with 'spawn'.
+        with ProcessPoolExecutor(min(n_workers, len(todo)), mp_context=get_context("spawn")) as pool:
+            segs_per_volume = pool.map(segment, *zip(*[(raw, labels) for raw, labels, _ in todo]))
+            for segs, (_, _, paths) in tqdm(zip(segs_per_volume, todo), total=len(todo), desc="microsam_vol"):
+                _write_nninteractive_predictions(segs, paths)
 
-    all_gt = [labels for _, labels, _ in samples]
-    all_seg_per_iter = [
-        [seg if roi is None else np.where(roi, seg, 0) for seg, (_, _, roi) in zip(segs, samples)]
-        for segs in zip(*segs_per_volume)
-    ]
+    if shard is not None:
+        print(f"Shard {shard[0]}/{shard[1]} finished predicting {len(sample_ids)} sample(s).")
+        return
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} sample(s) of '{dataset_name}' have no predictions yet: {missing}. Run their shards first."
+        )
+
+    all_gt = [labels for labels, _, _ in samples]
     os.makedirs(results_dir, exist_ok=True)
     for it, save_path in enumerate(save_paths):
         if os.path.exists(save_path):
             continue
-        results = run_dataset_evaluation(all_gt, all_seg_per_iter[it], dataset_name, save_path)
+        predictions = []
+        for _, valid_roi, paths in samples:
+            prediction = imageio.imread(paths[it])
+            if valid_roi is not None:
+                prediction[~valid_roi] = 0
+            predictions.append(prediction)
+        results = run_dataset_evaluation(all_gt, predictions, dataset_name, save_path)
         print(f"Iteration {it:02d}: {results}")
 
 
@@ -496,11 +568,16 @@ def main():
     parser.add_argument("--box_extension", type=float, default=0.025, help="microsam_vol only. Extend the box.")
     parser.add_argument("--seed", type=int, default=None, help="microsam_vol only. The seed of a random start slice.")
     parser.add_argument("--n_workers", type=int, default=4, help="microsam_vol only. The volumes segmented at once.")
+    parser.add_argument(
+        "--click_protocol", type=str, default="random", choices=CLICK_PROTOCOLS,
+        help="sam and micro-sam only. The correction clicks: 'random' positions in the error regions, or the "
+             "'center' of the largest error regions with a single mask for the first point, see 'CLICK_PROTOCOLS'.",
+    )
     parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     parser.add_argument(
         "--shard_index", type=int, default=None,
-        help="This shard's index (0-based), for splitting a dataset's volumes across parallel jobs. nninteractive "
-             "only. Requires --n_shards. A later unsharded call over the same dataset does the scoring.",
+        help="This shard's index (0-based), for splitting a dataset's images or volumes across parallel jobs. "
+             "Requires --n_shards. A later unsharded call over the same dataset does the scoring.",
     )
     parser.add_argument("--n_shards", type=int, default=None, help="Total number of shards. Requires --shard_index.")
     parser.add_argument(
@@ -513,8 +590,10 @@ def main():
         raise ValueError("--shard_index and --n_shards must be given together.")
     if args.score_only and args.shard_index is not None:
         raise ValueError("--score_only scores the whole dataset, so it cannot be combined with a shard.")
-    if (args.shard_index is not None or args.score_only) and args.method != "nninteractive":
-        raise ValueError("--shard_index, --n_shards and --score_only are supported for nninteractive only.")
+    if (args.shard_index is not None or args.score_only) and args.method == "sam3":
+        raise ValueError("--shard_index, --n_shards and --score_only are not supported for sam3.")
+    if args.click_protocol != "random" and args.method not in ("sam", "micro-sam"):
+        raise ValueError("--click_protocol is supported for sam and micro-sam only.")
 
     check_data_download(args.dataset_name, args.input_path)
 
@@ -542,6 +621,7 @@ def main():
             device=device, model_type=args.model_type or SAM_V1_MODEL_TYPE, checkpoint=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, name_tag="sam",
             use_masks=args.use_masks, min_size=args.min_size, limit=args.n_samples,
+            click_protocol=args.click_protocol, shard=shard, score_only=args.score_only,
         )
 
     elif args.method == "micro-sam":
@@ -552,6 +632,7 @@ def main():
             device=device, model_type=model_type, checkpoint=args.checkpoint,
             start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, name_tag="micro-sam",
             use_masks=args.use_masks, min_size=args.min_size, limit=args.n_samples,
+            click_protocol=args.click_protocol, shard=shard, score_only=args.score_only,
         )
 
     elif args.method == "microsam_vol":
@@ -561,7 +642,7 @@ def main():
             n_iterations=args.n_iterations, min_size=args.min_size, start_slice=args.start_slice,
             correction=args.correction, use_masks=args.use_masks, projection=args.projection,
             iou_threshold=args.iou_threshold, box_extension=args.box_extension, seed=args.seed,
-            n_workers=args.n_workers, limit=args.n_samples,
+            n_workers=args.n_workers, shard=shard, score_only=args.score_only, limit=args.n_samples,
         )
 
     else:

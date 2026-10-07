@@ -18,7 +18,7 @@ from torch_em.util.segmentation import size_filter
 from bioimage_cpp.segmentation import label as connected_components
 
 from micro_sam.v2.normalization import to_image
-from micro_sam.prompt_generators import IterativePromptGenerator
+from micro_sam.prompt_generators import CenterIterativePromptGenerator, IterativePromptGenerator
 from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
 from micro_sam.v2.util import (
     _get_device, configure_image_predictor, encode_image, get_sam2_image_predictor, get_sam2_model,
@@ -126,9 +126,12 @@ def _run_interactive_segmentation_2d_per_image(
     batch_size: int = 32,
     mask_threshold: float = 0.0,
     seed: int = 0,
+    click_protocol: str = "random",
 ) -> None:
     """Functionality for interactive segmentation per 2d image.
     """
+    if click_protocol not in ("random", "center"):
+        raise ValueError(f"Invalid click protocol '{click_protocol}', choose 'random' or 'center'.")
     device = _get_device(device)
 
     # The prompt generators sample from the global numpy RNG. Seeding it per image makes the clicks,
@@ -136,7 +139,7 @@ def _run_interactive_segmentation_2d_per_image(
     np.random.seed(seed)
 
     # Let's define the iterative prompt generator.
-    prompt_generator = IterativePromptGenerator()
+    prompt_generator = CenterIterativePromptGenerator() if click_protocol == "center" else IterativePromptGenerator()
 
     # Preparing prompts for the first iteration: use multimasking only if we have a single positive prompt without box
     if start_with_box_prompt:
@@ -146,7 +149,7 @@ def _run_interactive_segmentation_2d_per_image(
     else:
         use_boxes, use_points = False, True
         n_positive = 1
-        multimasking = True
+        multimasking = click_protocol == "random"
 
     # Expects RGB-style images.
     encode_image(predictor, image.astype("uint8"))  # uint8 is what SAM2 expects as input.
@@ -269,12 +272,17 @@ def run_interactive_segmentation_2d(
     ensure_8bit: bool = True,
     mask_threshold: float = 0.0,
     seed: int = 0,
+    click_protocol: str = "random",
 ):
     """Functionality for interactive segmentation in 2d images using iterative prompting.
 
     `use_masks` defaults to True because SAM2 is trained with the previous mask logits alongside every
     correction click, see 'SAM2Train._iter_correct_pt_sampling'. Without them the predictions degrade
     with each iteration. `seed` seeds the prompt sampling of every image.
+
+    `click_protocol` chooses the correction clicks: 'random' samples them at random positions in the
+    error regions and picks the best of 3 masks for a first point prompt. 'center' places them at the
+    centers of the largest error regions and predicts a single mask for a first point prompt.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -337,6 +345,7 @@ def run_interactive_segmentation_2d(
             batch_size=batch_size,
             mask_threshold=mask_threshold,
             seed=seed,
+            click_protocol=click_protocol,
         )
 
     return prediction_dir
@@ -389,6 +398,7 @@ def run_interactive_segmentation_3d(
     n_iterations: int = 8,
     run_connected_components: bool = True,
     seed: int = 0,
+    correction_margin: float = 0.0,
 ) -> str:
     """Run interactive segmentation on 3d inputs using Segment Anything 2.
 
@@ -410,6 +420,8 @@ def run_interactive_segmentation_3d(
         n_iterations: The number of iterations for iterative prompting.
         run_connected_components: Whether to ensure individual instances and filter out small objects.
         seed: The seed of the prompt sampling of the volume.
+        correction_margin: The fraction of each object's z-extent at either end that is excluded when the slice
+            for the next correction click is chosen. 0 chooses among all slices of the object.
 
     Returns:
         The folder where segmentations are stored.
@@ -483,6 +495,7 @@ def run_interactive_segmentation_3d(
             dilation=dilation,
             batch_size=batch_size,
             n_iterations=n_iterations,
+            correction_margin=correction_margin,
         )
 
         # Merge the incoming object. Where objects overlap, the smaller one is kept, as in the 2d
@@ -519,6 +532,7 @@ def _run_interactive_segmentation_3d_per_object(
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
+    correction_margin: float = 0.0,
 ):
     """Functionality for interactive segmentation using iterative prompting.
     """
@@ -544,6 +558,7 @@ def _run_interactive_segmentation_3d_per_object(
         predictor=predictor,
         batch_size=batch_size,
         n_iterations=n_iterations,
+        correction_margin=correction_margin,
     )
 
     assert len(gt_ids) == len(preds_per_object), "The number of label ids must match the number of objects segmented."
@@ -600,7 +615,7 @@ def _extract_prompts_per_object(
 
 @torch.no_grad()
 def _get_iteratively_prompted_segmentation_per_image_dir(
-    inference_state, labels, id_to_prompts, predictor, batch_size=32, n_iterations=8,
+    inference_state, labels, id_to_prompts, predictor, batch_size=32, n_iterations=8, correction_margin=0.0,
 ):
     """Functionality for inference of 3d interactive segmentation.
     """
@@ -674,6 +689,14 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
                 # always has FN pixels (or overlap) to sample a positive point from.
                 gt_3d = (labels == _obj_id)
                 obj_z_slices = np.where(gt_3d.any(axis=(1, 2)))[0]
+                if correction_margin > 0:
+                    # A correction on an end slice of the object turns its small cross-section into a
+                    # conditioning frame, which degrades the other slices of the object.
+                    margin = correction_margin * (obj_z_slices.max() - obj_z_slices.min())
+                    inner = obj_z_slices[
+                        (obj_z_slices >= obj_z_slices.min() + margin) & (obj_z_slices <= obj_z_slices.max() - margin)
+                    ]
+                    obj_z_slices = inner if len(inner) else obj_z_slices
                 errors_per_slice = np.array([
                     np.sum(gt_3d[z] != (segmentation[z] > 0)) for z in obj_z_slices
                 ])

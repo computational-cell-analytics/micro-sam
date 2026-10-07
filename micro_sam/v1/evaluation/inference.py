@@ -19,7 +19,7 @@ from ... import util as util
 from . import instance_segmentation
 from ..inference import batched_inference
 from ..util import get_sam_model, precompute_image_embeddings
-from ...prompt_generators import PointAndBoxPromptGenerator, IterativePromptGenerator
+from ...prompt_generators import CenterIterativePromptGenerator, PointAndBoxPromptGenerator, IterativePromptGenerator
 from ..instance_segmentation import (
     get_predictor_and_decoder,
     AutomaticMaskGenerator, InstanceSegmentationWithDecoder,
@@ -384,11 +384,14 @@ def _run_inference_with_iterative_prompting_for_image(
     embedding_path,
     n_iterations,
     prediction_paths,
-    use_masks=False
+    use_masks=False,
+    click_protocol="random",
 ) -> None:
+    if click_protocol not in ("random", "center"):
+        raise ValueError(f"Invalid click protocol '{click_protocol}', choose 'random' or 'center'.")
     verbose_embeddings = False
 
-    prompt_generator = IterativePromptGenerator()
+    prompt_generator = CenterIterativePromptGenerator() if click_protocol == "center" else IterativePromptGenerator()
 
     gt_ids = np.unique(gt)[1:]
 
@@ -400,7 +403,7 @@ def _run_inference_with_iterative_prompting_for_image(
     else:
         use_boxes, use_points = False, True
         n_positives = 1
-        multimasking = True
+        multimasking = click_protocol == "random"
 
     points, point_labels, boxes = _get_batched_prompts(
         gt, gt_ids,
@@ -470,7 +473,8 @@ def run_inference_with_iterative_prompting(
     dilation: int = 5,
     batch_size: int = 32,
     n_iterations: int = 8,
-    use_masks: bool = False
+    use_masks: bool = False,
+    click_protocol: str = "random",
 ) -> None:
     """Run Segment Anything inference for multiple images using prompts iteratively
     derived from model outputs and ground-truth.
@@ -487,6 +491,9 @@ def run_inference_with_iterative_prompting(
         batch_size: The batch size used for batched predictions.
         n_iterations: The number of iterations for iterative prompting.
         use_masks: Whether to make use of logits from previous prompt-based segmentation.
+        click_protocol: The correction clicks. 'random' samples them at random positions in the error regions
+            and picks the best of 3 masks for a first point prompt. 'center' places them at the centers of the
+            largest error regions and predicts a single mask for a first point prompt.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -524,7 +531,8 @@ def run_inference_with_iterative_prompting(
         _run_inference_with_iterative_prompting_for_image(
             predictor, image, gt, start_with_box_prompt=start_with_box_prompt,
             dilation=dilation, batch_size=batch_size, embedding_path=embedding_path,
-            n_iterations=n_iterations, prediction_paths=prediction_paths, use_masks=use_masks
+            n_iterations=n_iterations, prediction_paths=prediction_paths, use_masks=use_masks,
+            click_protocol=click_protocol,
         )
 
 

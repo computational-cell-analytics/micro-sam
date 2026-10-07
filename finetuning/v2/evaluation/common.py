@@ -61,6 +61,12 @@ MODEL_TYPES = list(CHECKPOINT_PATHS)
 
 MODES = ("ais", "apg")
 
+# The correction clicks of 2d iterative prompting. 'random' samples them at random positions in the error
+# regions (IterativePromptGenerator) and picks the best of 3 masks for a first point prompt. 'center' places
+# them at the centers of the largest error regions (CenterIterativePromptGenerator) and predicts a single mask
+# for a first point prompt.
+CLICK_PROTOCOLS = ("random", "center")
+
 # The 2d patch shape the models were trained on, see 'generalist_loader'.
 TRAINING_PATCH_SHAPE = (512, 512)
 
@@ -2503,7 +2509,7 @@ def sorted_path_pairs(raw_paths, label_paths):
 
 def interactive_result_name(
     dataset_name, method, model_type, prompt, iteration,
-    ndim=2, use_masks=True, mask_threshold=0.0, min_size=0,
+    ndim=2, use_masks=True, mask_threshold=0.0, min_size=0, click_protocol="random",
 ):
     """Build the name of the result CSV for one iteration of an interactive run.
 
@@ -2511,11 +2517,11 @@ def interactive_result_name(
     another.
     """
     dim_suffix = "" if ndim == 2 else "_3d"
-    tag = interactive_run_tag(ndim, use_masks, mask_threshold, min_size)
+    tag = interactive_run_tag(ndim, use_masks, mask_threshold, min_size, click_protocol)
     return f"{dataset_name}_{method}_{model_type}{dim_suffix}_{prompt}{tag}_iter{iteration:02d}.csv"
 
 
-def interactive_run_tag(ndim=2, use_masks=True, mask_threshold=0.0, min_size=0):
+def interactive_run_tag(ndim=2, use_masks=True, mask_threshold=0.0, min_size=0, click_protocol="random"):
     """Build the settings suffix for an interactive run's result names and prediction directory.
 
     Both use one tag, so a run can never read back the cached predictions of another run.
@@ -2526,6 +2532,9 @@ def interactive_run_tag(ndim=2, use_masks=True, mask_threshold=0.0, min_size=0):
         tag += f"_t{mask_threshold:g}"
     if min_size:
         tag += f"_min{min_size}"
+    # Only the 2d path chooses the click protocol, see 'CLICK_PROTOCOLS'.
+    if ndim == 2 and click_protocol != "random":
+        tag += f"_{click_protocol}"
     return tag
 
 

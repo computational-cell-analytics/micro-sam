@@ -39,7 +39,7 @@ from micro_sam.v2.evaluation.inference import (
 )
 
 from common import (
-    DATA_ROOT, DATASETS_2D, DATASETS_3D, MODEL_TYPES, CHECKPOINT_PATHS,
+    CLICK_PROTOCOLS, DATA_ROOT, DATASETS_2D, DATASETS_3D, MODEL_TYPES, CHECKPOINT_PATHS,
     check_data_download, checkpoint_checksum, export_joint_checkpoint, get_joint_checkpoint,
     interactive_result_name, interactive_run_tag, load_data, n_samples, run_dataset_evaluation,
 )
@@ -129,7 +129,7 @@ def write_2d_inputs(dataset_name, data_root, input_dir, gt_dir, min_size=0, limi
 def run_interactive_evaluation_2d(
     dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag, legacy_tag,
     start_with_box=True, n_iterations=8, use_masks=True, mask_threshold=0.0, min_size=0, shard=None,
-    score_only=False, limit=None,
+    score_only=False, limit=None, click_protocol="random",
 ):
     """Run iterative prompting on the 2d test split and write one result CSV per iteration.
 
@@ -146,6 +146,7 @@ def run_interactive_evaluation_2d(
         os.path.join(results_dir, interactive_result_name(
             dataset_name, tag, model_type, prompt, iteration,
             ndim=2, use_masks=use_masks, mask_threshold=mask_threshold, min_size=min_size,
+            click_protocol=click_protocol,
         ))
         for iteration in range(n_iterations)
     ]
@@ -153,6 +154,7 @@ def run_interactive_evaluation_2d(
         os.path.join(results_dir, interactive_result_name(
             dataset_name, legacy_tag, model_type, prompt, iteration,
             ndim=2, use_masks=use_masks, mask_threshold=mask_threshold, min_size=min_size,
+            click_protocol=click_protocol,
         ))
         for iteration in range(n_iterations)
     ]
@@ -165,7 +167,7 @@ def run_interactive_evaluation_2d(
     # RAM-backed tmpfs on the compute nodes, so it is avoided here.
     prediction_root = os.path.join(
         experiment_folder, "predictions", f"{tag}_{model_type}", dataset_name,
-        f"{prompt}{interactive_run_tag(2, use_masks, mask_threshold, min_size)}",
+        f"{prompt}{interactive_run_tag(2, use_masks, mask_threshold, min_size, click_protocol)}",
     )
     input_dir = os.path.join(prediction_root, "inputs", "images")
     gt_dir = os.path.join(prediction_root, "inputs", "labels")
@@ -208,6 +210,7 @@ def run_interactive_evaluation_2d(
             use_masks=use_masks,
             ensure_8bit=False,
             mask_threshold=mask_threshold,
+            click_protocol=click_protocol,
         )
 
     if shard is not None:
@@ -229,6 +232,7 @@ def run_interactive_evaluation_2d(
 def run_interactive_evaluation_3d(
     dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag, legacy_tag,
     start_with_box=True, n_iterations=8, min_size=0, crop_shape=None, shard=None, score_only=False, limit=None,
+    correction_margin=0.0,
 ):
     """Run iterative prompting on the 3d test split and write one result CSV per iteration.
 
@@ -300,6 +304,7 @@ def run_interactive_evaluation_3d(
                 prediction_fname=prediction_fname,
                 device=device,
                 n_iterations=n_iterations,
+                correction_margin=correction_margin,
             )
         all_gt.append(labels)
         all_valid_rois.append(valid_roi)
@@ -354,7 +359,16 @@ def main():
         "--use_masks", action=argparse.BooleanOptionalAction, default=True,
         help="Feed the previous logits masks back as mask prompts. 2d only, on by default."
     )
+    parser.add_argument(
+        "--click_protocol", type=str, default="random", choices=CLICK_PROTOCOLS,
+        help="2d only. The correction clicks: 'random' positions in the error regions, or the 'center' of the "
+             "largest error regions with a single mask for the first point, see 'CLICK_PROTOCOLS'.",
+    )
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d center crop (Z Y X).")
+    parser.add_argument(
+        "--correction_margin", type=float, default=0.0,
+        help="3d only. The fraction of each object's z-extent at either end excluded from the correction slices.",
+    )
     parser.add_argument(
         "--shard_index", type=int, default=None,
         help="This shard's index (0-based), for splitting a dataset's images or volumes across parallel jobs. "
@@ -373,12 +387,15 @@ def main():
     if args.score_only and args.shard_index is not None:
         raise ValueError("--score_only scores the whole dataset, so it cannot be combined with a shard.")
 
+    ndim = args.ndim or (3 if args.dataset_name in DATASETS_3D else 2)
+    if ndim == 3 and args.click_protocol != "random":
+        raise ValueError("--click_protocol applies to 2d only.")
+
     check_data_download(args.dataset_name, args.input_path)
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    ndim = args.ndim or (3 if args.dataset_name in DATASETS_3D else 2)
     checkpoint, tag, legacy_tag = resolve_weights(
         args.weights, args.model_type, args.joint_checkpoint, args.checkpoint
     )
@@ -390,7 +407,7 @@ def main():
             checkpoint, tag, legacy_tag,
             start_with_box=(args.prompt_choice == "box"), n_iterations=args.n_iterations,
             use_masks=args.use_masks, mask_threshold=args.mask_threshold, min_size=args.min_size, shard=shard,
-            score_only=args.score_only, limit=args.n_samples,
+            score_only=args.score_only, limit=args.n_samples, click_protocol=args.click_protocol,
         )
     else:
         run_interactive_evaluation_3d(
@@ -398,7 +415,7 @@ def main():
             checkpoint, tag, legacy_tag,
             start_with_box=(args.prompt_choice == "box"), n_iterations=args.n_iterations,
             min_size=args.min_size, crop_shape=tuple(args.crop_3d) if args.crop_3d else None,
-            shard=shard, score_only=args.score_only, limit=args.n_samples,
+            shard=shard, score_only=args.score_only, limit=args.n_samples, correction_margin=args.correction_margin,
         )
 
 
