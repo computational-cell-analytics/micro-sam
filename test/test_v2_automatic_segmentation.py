@@ -408,7 +408,7 @@ def test_full_inference_normalizes_each_volume_slice_independently(monkeypatch):
 
 def _stage_3d_ais(
     monkeypatch, embedding_path, initialize=None, calls=None, segmenter=None, device=None, devices=None,
-    tile_shape=None, halo=None,
+    tile_shape=None, halo=None, norm_bounds=None,
 ):
     """Drive `automatic_instance_segmentation` for 3d AIS with fakes, capturing the temp-store calls."""
     from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
@@ -439,7 +439,7 @@ def _stage_3d_ais(
     result = automatic_instance_segmentation(
         predictor=types.SimpleNamespace(model=embedding_model),
         segmenter=segmenter, input_path=raw, ndim=3, embedding_path=embedding_path, verbose=False,
-        device=device, devices=devices, tile_shape=tile_shape, halo=halo,
+        device=device, devices=devices, tile_shape=tile_shape, halo=halo, norm_bounds=norm_bounds,
     )
     return calls, embeddings, embedding_model, raw, temp_path, result
 
@@ -478,6 +478,18 @@ def test_automatic_3d_ais_keeps_full_3d_tile_shape(monkeypatch):
     assert calls["precompute"][2]["halo"] == halo
     assert calls["initialize"][1]["tile_shape"] == tile_shape
     assert calls["initialize"][1]["halo"] == halo
+
+
+def test_automatic_3d_ais_forwards_norm_bounds(monkeypatch):
+    # The bounds of a larger volume reach the embeddings, so that a block is not normalized by its own bounds.
+    norm_bounds = (np.array([100.0]), np.array([900.0]))
+    calls, _, _, _, _, _ = _stage_3d_ais(monkeypatch, embedding_path=None, norm_bounds=norm_bounds)
+    assert calls["precompute"][2]["norm_bounds"] is norm_bounds
+
+
+def test_automatic_3d_ais_computes_its_own_norm_bounds_by_default(monkeypatch):
+    calls, _, _, _, _, _ = _stage_3d_ais(monkeypatch, embedding_path=None)
+    assert calls["precompute"][2]["norm_bounds"] is None
 
 
 def test_precompute_3d_embeddings_uses_in_plane_tiles_internally(monkeypatch):
