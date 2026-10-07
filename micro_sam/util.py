@@ -1308,7 +1308,7 @@ def _batched_tiled_mask_nms(masks, boxes, global_boxes, scores, nms_thresh, inte
 def _largest_component(mask: np.ndarray) -> np.ndarray:
     """The largest connected component of a binary mask, with the connectivity 'label_masks' relabels with."""
     components = label(mask, connectivity=1)
-    sizes = np.bincount(components.ravel())[1:]
+    sizes = np.bincount(components.ravel().astype("int64"))[1:]
     if len(sizes) < 2:
         return mask
     return components == (sizes.argmax() + 1)

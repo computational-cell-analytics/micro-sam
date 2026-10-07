@@ -122,7 +122,7 @@ def _ignore_missing_raw_trafo(raw, labels, ignore_label, normalizer=None, min_ar
         components = connected_components(slices[z])
         if components.max() == 0:
             continue
-        areas = np.bincount(components.ravel())
+        areas = np.bincount(components.ravel().astype("int64"))
         big = np.flatnonzero(areas >= min_area)
         big = big[big > 0]
         if big.size:
@@ -155,7 +155,7 @@ def _ignore_unlabelled_blobs_trafo(raw, labels, ignore_label, min_area=20000, tr
         components = connected_components(slices[z])
         if components.max() == 0:
             continue
-        areas = np.bincount(components.ravel())
+        areas = np.bincount(components.ravel().astype("int64"))
         big = np.flatnonzero(areas >= min_area)
         big = big[big > 0]
         if big.size:

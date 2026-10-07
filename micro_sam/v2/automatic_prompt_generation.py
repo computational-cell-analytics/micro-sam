@@ -845,7 +845,7 @@ def _record_mask(record: Dict[str, Any]) -> np.ndarray:
 def _largest_component(mask: np.ndarray) -> np.ndarray:
     """The largest connected component of a binary mask, with diagonal neighbours connected."""
     components = label(mask, connectivity=mask.ndim)
-    sizes = np.bincount(components.ravel())[1:]
+    sizes = np.bincount(components.ravel().astype("int64"))[1:]
     if len(sizes) < 2:
         return mask
     return components == (sizes.argmax() + 1)
