@@ -26,7 +26,7 @@ Compute:
 
 | File | Status | Purpose |
 |------|--------|---------|
-| `explore_huisken_data.py` | committed, **with uncommitted changes** (section 1b) | Huisken data: the high-res ExM volume (block AIS/APG, slab-parallel AIS and stitching) and the small ExM AVI and membrane volumes (`-d`/`--sweep`) |
+| `explore_huisken_data.py` | committed, **with uncommitted changes** (section 1b) | Huisken data: the high-res ExM volume (block AIS/APG, slab-parallel AIS and stitching), the small ExM AVI and membrane volumes (`-d`/`--sweep`), and the early Beke embryos (`--embryo`) |
 | `explore_beghin_data.py` | committed (`03fc6ca6`), **with uncommitted changes** | Beghin `nus_organoids` (with GT), the CellposeSAM comparison and the MCF7 spheroid DAPI stacks |
 | `explore_gruen_data.py` | committed (renamed from `explore_lisa_data.py`) | Gruen data; no new work done yet |
 | `submit_huisken_slabs.sh`, `submit_huisken_full.sh` | gitignored (`*.sh`) | SLURM submit scripts for the Huisken slabs |
@@ -44,8 +44,8 @@ Library change, committed: `micro_sam/v2/automatic_segmentation.py::automatic_in
 
 ## 1. Huisken high-res ExM volume: done
 
-- Raw data: `cca/data/huisken_data/Pdu_2dpf_ExM/` (`hires_volume.h5` and the `.raw`). The data moved into this
-  subfolder; the paths in the script are updated (uncommitted).
+- Raw data: `cca/data/huisken_data/exm_lsm/high_res/tile/` (`S000_..._P04871.h5`, formerly `hires_volume.h5`, and
+  the `.raw`). The data folder layout is in `cca/data/huisken_data/README.md`.
 - Best setting: AIS on the volume downsampled 2× in zyx, with `min_size 500`. The min size removes the few-pixel
   fragments attached to every nucleus.
 - The whole volume was segmented over z 0–2435 (in ds2 coordinates):
@@ -64,9 +64,9 @@ Library change, committed: `micro_sam/v2/automatic_segmentation.py::automatic_in
 ## 1b. Huisken small volumes (ExM AVI and LSM membrane): done, results with the user
 
 Two smaller volumes, both run with `explore_huisken_data.py` (`SMALL_DATA_PATHS`, `SMALL_SETTINGS`):
-- `exm`: `Pdu_2dpf_ExM/Pdu_6dpf_ExM_downsampled_nuclei-sytox-green.avi`, nuclei, very low resolution. It's read
+- `exm`: `exm_lsm/low_res/whole/Pdu_6dpf_ExM_downsampled_nuclei-sytox-green.avi`, nuclei, very low resolution. It's read
   with cv2, channel 0 of every frame.
-- `membrane`: `Pdu_2dpf_membrane/fused_t000050_R0001_C02_Dfinal_cropped.tif`, shape (83, 509, 542), thin membranes.
+- `membrane`: `classic_lsm/membrane/fused_t000050_R0001_C02_Dfinal_cropped.tif` (the new Beke data), shape (83, 509, 542), thin membranes.
   The TIF has no voxel size; the z anisotropy is estimated at about 4–5×.
 
 Usage (from this folder):
@@ -234,7 +234,8 @@ All CellposeSAM scores (`cpsam`, default settings):
    `explore_beghin_data.py` (`LARGE_SIZE`, `SMALL_MIN_SIZE`, `SMALL_MAX_CV`, `NEAR_*`, `FRAGMENT_MIN_ENCLOSED`) based on
    it.
 4. Gruen data: nothing done yet. A data path rename was offered but not answered.
-5. The "new Beke data" was never found. The old Beke evaluation is in `scripts/plotting/v2/interactive_visualization.py`
-   and `visualize.py`, with its data in `cca/data/beke_data`.
+5. The new Beke data is the membrane volume of section 1b. The old Beke evaluation (annotator, iterative prompting,
+   APG and the figure) moved from `scripts/plotting/v2/` into `explore_huisken_data.py --embryo`, with its data and
+   predictions in `cca/data/huisken_data/classic_lsm/early_embryo`.
 6. Possible CellposeSAM follow-ups, if a fairer comparison is wanted: pass `anisotropy` to `3d` for the colon organoid
    and TM00099, or apply the spheroid cleanup to its ZeroG result.
