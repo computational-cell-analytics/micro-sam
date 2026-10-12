@@ -7,8 +7,10 @@ Usage:
     python explore_beghin_data.py  # AIS on every volume
     python explore_beghin_data.py --best -o beghin_best_segmentations  # AIS with the best settings of each volume
     python explore_beghin_data.py -e ais apg -n ZeroG_breast_cancer_spheroid  # AIS and APG on one volume
+    python explore_beghin_data.py --clean -n HCT116_cells_monolayer  # the spheroid cleanup, stored as 'ais_clean'
     python explore_beghin_data.py --view -n TM00099_cell  # the raw data, ground truth and segmentations in napari
     python explore_beghin_data.py --spheroids  # AIS on the DAPI channel of the MCF7 spheroid stacks, no ground truth
+    python explore_beghin_data.py --cellpose -o beghin_best_segmentations  # CellposeSAM ('cpsam') on every volume
 """
 
 import os
@@ -62,18 +64,20 @@ NAMES = ("HCT116_cells_monolayer", "Human_colon_organoid", "TM00099_cell", "Zero
 # post-processing, 'min_size' is in voxels of the original grid and 'norm_lower' / 'norm_upper' replace the 2nd / 98th
 # percentile bounds of the normalization, or 'norm_percentiles' sets other percentiles. 'background_sigma' subtracts the
 # background, a gaussian of this sigma in xy, before the normalization. 'tile_shape' and 'halo' (z, y, x) set the
-# tiling instead of the default. 'engine' overrides the engine of the command line for '--best'.
+# tiling instead of the default. 'clean' replaces the minimum size by 'clean_spheroid_segmentation'. 'engine' overrides
+# the engine of the command line for '--best'.
 DEFAULT_SETTINGS = {
     "scale": (1, 1, 1), "anisotropy": 1, "min_size": None, "norm_lower": None, "norm_upper": None,
-    "norm_percentiles": None, "background_sigma": None, "tile_shape": None, "halo": None,
+    "norm_percentiles": None, "background_sigma": None, "tile_shape": None, "halo": None, "clean": False,
 }
 BEST_SETTINGS = {
     # The nuclei are segmented at 2x, every one is found already at 1x (mSA 0.648 -> 0.704).
     "HCT116_cells_monolayer": {"scale": (1, 2, 2), "min_size": 500},
     # 0.390 -> 0.493.
     "Human_colon_organoid": {"scale": (2, 2, 2), "anisotropy": 4, "min_size": 500},
-    # Removes the bright speckles in the frame around the spheroid, 254 of the 362 objects (0.129 -> 0.393).
-    "ZeroG_breast_cancer_spheroid": {"min_size": 2000},
+    # Removes the bright speckles in the frame around the spheroid. A min_size of 2000 removed them, 254 of the 362
+    # objects (mSA 0.129 -> 0.389, F1 0.843), the spheroid cleanup also keeps small nuclei (mSA 0.417, F1 0.886).
+    "ZeroG_breast_cancer_spheroid": {"clean": True},
     # The nuclei take 0.2% of the volume and sit in the dim body of cell clusters, which the model segments as one
     # object. Subtracting the background removes the cluster bodies, and the 99th - 99.99th percentile keeps only the
     # brightest 1% of the voxels visible. On a crop of 77 nuclei: default AIS mSA 0.038, this mSA 0.210 (F1 0.730).
@@ -150,18 +154,27 @@ def segment(raw, engine, settings=DEFAULT_SETTINGS):
     return segmentation, time.time() - start
 
 
-def run(names, engines, best, output_folder):
+def run(names, engines, best, output_folder, clean=False):
+    """Segment and score the volumes. 'engines' overrides the engine of the best settings, 'clean' applies
+    'clean_spheroid_segmentation' like the 'clean' setting, but stores the result as '<engine>_clean'."""
     os.makedirs(output_folder, exist_ok=True)
     results = []
     for name in names:
         raw, labels = load_data(name)
-        settings = BEST_SETTINGS[name] if best else DEFAULT_SETTINGS
+        settings = {**DEFAULT_SETTINGS, **(BEST_SETTINGS[name] if best else {})}
+        if clean or settings["clean"]:
+            settings.update({"min_size": None, "clean": True})
         output_path = os.path.join(output_folder, f"{name}_{MODEL_TYPE}.h5")
-        for engine in ([settings.get("engine", engines[0])] if best else engines):
+        for engine in (engines or [settings.get("engine", "ais")]):
             segmentation, runtime = segment(raw, engine, settings)
+            if settings["clean"]:
+                start = time.time()
+                segmentation = clean_spheroid_segmentation(segmentation, raw)
+                runtime += time.time() - start
+            dataset = f"{engine}_clean" if clean else engine
             scores = evaluate(segmentation, labels)
-            results.append({"name": name, "engine": engine, "time [s]": runtime, **scores})
-            print(f"{name} {engine.upper()}: " + ", ".join(
+            results.append({"name": name, "engine": dataset, "time [s]": runtime, **scores})
+            print(f"{name} {dataset.upper()}: " + ", ".join(
                 f"{key} {value:.3f}" if isinstance(value, float) else f"{key} {value}" for key, value in scores.items()
             ) + f", {runtime:.1f} s", flush=True)
 
@@ -169,11 +182,11 @@ def run(names, engines, best, output_folder):
                 for key, data in (("raw", raw), ("gt", labels)):
                     if key not in f:
                         f.create_dataset(key, data=data, compression="gzip")
-                if engine in f:
-                    del f[engine]
-                f.create_dataset(engine, data=segmentation, compression="gzip")
-                f[engine].attrs.update({key: value for key, value in scores.items()})
-                f[engine].attrs["settings"] = str({**DEFAULT_SETTINGS, **settings})
+                if dataset in f:
+                    del f[dataset]
+                f.create_dataset(dataset, data=segmentation, compression="gzip")
+                f[dataset].attrs.update(scores)
+                f[dataset].attrs["settings"] = str({**settings, "engine": engine})
 
     print("\n" + "\t".join(results[0].keys()))
     for result in results:
@@ -270,6 +283,52 @@ def run_spheroids(output_folder):
                 f.create_dataset("ais_clean", data=cleaned, compression="gzip")
 
 
+# The CellposeSAM modes: '3d' predicts the flows on the yx, zx and zy planes and follows their average in 3D,
+# '2d_stitch' segments every z plane in 2D and stitches the masks of neighboring planes with IoU >=
+# CELLPOSE_STITCH_THRESHOLD.
+CELLPOSE_MODES = ("3d", "2d_stitch")
+CELLPOSE_STITCH_THRESHOLD = 0.5
+
+
+def run_cellpose(names, output_folder):
+    """Segment and score the volumes with CellposeSAM in both modes, with the default settings of 'cpsam'. The results
+    are stored as 'cpsam_<mode>' next to the micro-sam2 segmentations."""
+    from cellpose import models
+
+    model = models.CellposeModel(gpu=True, pretrained_model="cpsam")
+    os.makedirs(output_folder, exist_ok=True)
+    results = []
+    for name in names:
+        raw, labels = load_data(name)
+        for mode in CELLPOSE_MODES:
+            start = time.time()
+            segmentation = model.eval(
+                raw, z_axis=0, do_3D=mode == "3d",
+                stitch_threshold=CELLPOSE_STITCH_THRESHOLD if mode == "2d_stitch" else 0.0,
+            )[0].astype("uint32")
+            runtime = time.time() - start
+            scores = evaluate(segmentation, labels)
+            results.append({"name": name, "mode": mode, "time [s]": runtime, **scores})
+            print(f"{name} cpsam {mode}: " + ", ".join(
+                f"{key} {value:.3f}" if isinstance(value, float) else f"{key} {value}" for key, value in scores.items()
+            ) + f", {runtime:.1f} s", flush=True)
+
+            dataset = f"cpsam_{mode}"
+            with h5py.File(os.path.join(output_folder, f"{name}_{MODEL_TYPE}.h5"), "a") as f:
+                for key, data in (("raw", raw), ("gt", labels)):
+                    if key not in f:
+                        f.create_dataset(key, data=data, compression="gzip")
+                if dataset in f:
+                    del f[dataset]
+                f.create_dataset(dataset, data=segmentation, compression="gzip")
+                f[dataset].attrs.update(scores)
+                f[dataset].attrs["time"] = runtime
+
+    print("\n" + "\t".join(results[0].keys()))
+    for result in results:
+        print("\t".join(f"{value:.3f}" if isinstance(value, float) else str(value) for value in result.values()))
+
+
 def view(name, output_folder):
     import napari
 
@@ -285,19 +344,28 @@ def view(name, output_folder):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--names", nargs="+", choices=NAMES, default=list(NAMES))
-    parser.add_argument("-e", "--engines", nargs="+", choices=ENGINES, default=["ais"])
+    parser.add_argument(
+        "-e", "--engines", nargs="+", choices=ENGINES, default=None,
+        help="The engines, by default AIS, or the engine of the best settings with '--best'.",
+    )
     parser.add_argument("--best", action="store_true", help="Use the best AIS settings of each volume.")
+    parser.add_argument(
+        "--clean", action="store_true", help="Clean up with 'clean_spheroid_segmentation' instead of the min_size.",
+    )
     parser.add_argument("-o", "--output_folder", default=OUTPUT_ROOT, help="The folder for the h5 files.")
     parser.add_argument("--spheroids", action="store_true", help="Segment the DAPI channel of the spheroid stacks.")
+    parser.add_argument("--cellpose", action="store_true", help="Segment the volumes with CellposeSAM in both modes.")
     parser.add_argument("--view", action="store_true", help="Show the first volume and its segmentations in napari.")
     args = parser.parse_args()
 
-    if args.spheroids:
+    if args.cellpose:
+        run_cellpose(args.names, args.output_folder)
+    elif args.spheroids:
         run_spheroids(os.path.join(args.output_folder, "spheroids"))
     elif args.view:
         view(args.names[0], args.output_folder)
     else:
-        run(args.names, args.engines, args.best, args.output_folder)
+        run(args.names, args.engines, args.best, args.output_folder, args.clean)
 
 
 if __name__ == "__main__":

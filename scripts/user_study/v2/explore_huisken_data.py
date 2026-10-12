@@ -14,25 +14,44 @@ Usage:
 The whole volume in parallel z-slabs, one GPU and < 64 GB RAM each (see 'submit_huisken_slabs.sh'):
     python explore_huisken_data.py --downsample 2 --min_size 500 --slab 0  # AIS on slab 0, see '--n_slabs'
     python explore_huisken_data.py --downsample 2 --min_size 500 --stitch  # merges the slabs across their overlap
+
+The two smaller volumes of the huisken data, with every setting of SMALL_SETTINGS (see there):
+- 'exm': the expansion microscopy nuclei (sytox green) of a 6 dpf Platynereis, shared as a downsampled MJPEG video
+  (765, 565, 1405) uint8 (ZYX). The nuclei are only ~10-15 px across, the bright ones saturate at 255 and the
+  compression adds block artifacts, while the nuclei on the right side of the specimen are dim.
+- 'membrane': the fused light-sheet stack of the membranes of a 2 dpf Platynereis, (83, 509, 542) uint16 (ZYX),
+  without spacing metadata. The specimen is ~430 px wide in xy and ~80 slices deep, so z is ~4-5x coarser than xy.
+
+    python explore_huisken_data.py --sweep exm  # all settings on the crops of the exm volume
+    python explore_huisken_data.py --sweep membrane  # all settings on the whole (small) membrane volume
+    python explore_huisken_data.py -d exm -s clahe_x2  # one setting on the whole volume
+    python explore_huisken_data.py --view -d exm --crop dense  # the raw crop and its segmentations in napari
 """
 
 import os
 import time
 import shutil
 import argparse
+import tempfile
 from concurrent import futures
 
+import cv2
 import h5py
+import tifffile
 import numpy as np
 from scipy import ndimage
+from skimage.exposure import equalize_adapthist
+from skimage.filters import sato
 from skimage.measure import block_reduce
+from skimage.segmentation import find_boundaries
 
 from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 from micro_sam.v2.batched_inference import NORMALIZATION_SAMPLE_SLICES, _volume_normalization_bounds
 
 
-DATA_PATH = "/mnt/vast-nhr/projects/cidas/cca/data/huisken_data/hires_volume.h5"
-RAW_PATH = "/mnt/vast-nhr/projects/cidas/cca/data/huisken_data/S000_t000000_V000_R0009_X000_Y000_C01_I0_D0_P04871.raw"
+DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data/huisken_data"
+DATA_PATH = os.path.join(DATA_ROOT, "Pdu_2dpf_ExM", "hires_volume.h5")
+RAW_PATH = os.path.join(DATA_ROOT, "Pdu_2dpf_ExM", "S000_t000000_V000_R0009_X000_Y000_C01_I0_D0_P04871.raw")
 RAW_SHAPE = (4871, 2048, 2048)
 OUTPUT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/huisken_data"
 MODEL_TYPE = "hvit_l_cells"
@@ -61,6 +80,131 @@ STITCH_IOU = 0.5
 MIN_CONTRAST = 1.1
 # The width of the background ring, in voxels of the 2x downsampled grid.
 RING_WIDTH = 6
+# The two smaller volumes, see the module docstring.
+SMALL_DATA_PATHS = {
+    "exm": os.path.join(DATA_ROOT, "Pdu_2dpf_ExM", "Pdu_6dpf_ExM_downsampled_nuclei-sytox-green.avi"),
+    "membrane": os.path.join(DATA_ROOT, "Pdu_2dpf_membrane", "fused_t000050_R0001_C02_Dfinal_cropped.tif"),
+}
+# The embeddings are written to the tmp folder of the job and removed after each segmentation.
+EMBEDDING_ROOT = os.environ.get("TMPDIR", tempfile.gettempdir())
+# The ZYX crops of the exm sweep: the dense, saturated nuclei on the left and the dim nuclei on the right.
+EXM_CROPS = {
+    "dense": (slice(350, 414), slice(100, 420), slice(40, 420)),
+    "dim": (slice(350, 414), slice(200, 460), slice(1000, 1260)),
+    # The center of the dense crop, 1/8 of its volume: APG propagates every object through z on its own, which takes
+    # > 2h on the whole dense crop.
+    "dense_small": (slice(366, 398), slice(180, 340), slice(135, 325)),
+}
+# The intensity steps run on the whole volume, so that a crop is prepared like the whole volume: 'clahe' equalizes the
+# contrast locally per z-slice with this clip limit, which lifts the dim nuclei next to the saturated ones, 'gamma'
+# lifts them globally and 'smooth' is the sigma of a gaussian against the compression blocks. 'norm_percentiles' are
+# the normalization bounds, also from the whole volume (the library default of the 2nd / 98th percentile of the input
+# would differ per crop: the exm upper bound is 255 in the dense crop, 54 in the dim crop and 188 in the volume).
+# Then 'scale' resamples the input (z, y, x) linearly and the labels back. 'anisotropy' is the z spacing over the xy
+# spacing after the scaling, for the AIS flow post-processing. 'min_size' is in voxels of the original grid.
+# 'merge_fragments' merges the objects below this size (original grid) into the object that has at least
+# FRAGMENT_MIN_ENCLOSED of their border, the fragments that weak second seeds leave inside the nuclei.
+# 'invert' flips the intensities, so that the cells are bright and the membranes dark. 'tile_shape' and 'halo' (y, x)
+# tile every slice: each tile with its halo is resized to the 1024 px of the model input, which magnifies the thin
+# membranes (the library tiles only slices above 768 px). 'ndim' 2 segments every z-slice on its own, without the
+# scaling of z, and normalizes it with the bounds of the volume before the library's own percentiles of the slice.
+# 'min_border_intensity' removes the objects whose border is darker than this on average, in raw intensities: the
+# membrane cells are bounded by bright membranes (> 5000), the noise objects in the dark interior and the background
+# around the specimen are not (~600). Any threshold between 1000 and 3000 removes the same objects.
+# 'min_mean_intensity' removes the objects darker than this on average, in raw intensities: in the whole exm volume
+# AIS segments the black (0) background, e.g. the empty slices above the specimen, into 582 objects of mean < 5, while
+# the dim nuclei of the dim crop are at >= 8. The contrast filter of the hires volume misses them, the background ring
+# is black too.
+# 'ridge' sharpens the blurred membranes: it blends the volume with this weight of a Sato ridge filter (bright ridges,
+# sigmas RIDGE_SIGMAS) per z-slice, before the CLAHE.
+SMALL_DEFAULT_SETTINGS = {
+    "ridge": None, "clahe": None, "gamma": None, "smooth": None, "invert": False, "norm_percentiles": (2, 98),
+    "scale": (1, 1, 1), "anisotropy": 1, "tile_shape": None, "halo": None, "ndim": 3, "min_size": None,
+    "merge_fragments": None, "min_border_intensity": None, "min_mean_intensity": None,
+}
+FRAGMENT_MIN_ENCLOSED = 0.6
+# A smaller volume with more z-slices than this is segmented in z-slabs of the original grid, overlapping by twice the
+# halo, and stitched like the slabs of the hires volume: the whole exm volume at 2x takes > 256 GB in one piece. Every
+# slab is saved, so that a preempted job resumes from the next one.
+SMALL_SLAB_SIZE = 128
+SMALL_SLAB_HALO = 16
+RIDGE_SIGMAS = (1, 2)
+SMALL_SETTINGS = {
+    # The nuclei are ~10-15 px across. 50% of the voxels are 0 and 1% saturate, the 95th / 98th / 99th percentiles
+    # are 71 / 188 / 248, the nuclei on the right side are at ~30-130.
+    "exm": {
+        "raw": {},
+        "x2": {"scale": (2, 2, 2)},
+        "x2_p99.9": {"scale": (2, 2, 2), "norm_percentiles": (2, 99.9)},
+        "x2_p95": {"scale": (2, 2, 2), "norm_percentiles": (2, 95)},
+        "gamma_x2": {"gamma": 0.5, "smooth": 0.7, "scale": (2, 2, 2)},
+        "clahe_x2": {"clahe": 0.02, "smooth": 0.7, "scale": (2, 2, 2)},
+        "clahe_x2_p99.9": {"clahe": 0.02, "smooth": 0.7, "scale": (2, 2, 2), "norm_percentiles": (2, 99.9)},
+        "clahe_x3": {"clahe": 0.02, "smooth": 0.7, "scale": (3, 3, 3)},
+        # The 2x AIS results are the cleanest, but half of their objects are fragments < 50 voxels, while the nuclei
+        # have ~500 - 1700. 3x splits the nuclei into more fragments, 1x merges neighbours, CLAHE and gamma add objects
+        # in the background haze.
+        "x2_min100": {"scale": (2, 2, 2), "min_size": 100},
+        "x2_p99.9_min100": {"scale": (2, 2, 2), "norm_percentiles": (2, 99.9), "min_size": 100},
+        # min100 leaves 10 of the 922 objects of the dense crop as fragments inside a nucleus, this merges them.
+        "x2_min100_merge": {"scale": (2, 2, 2), "min_size": 100, "merge_fragments": 400},
+        "x2_min100_merge_bright": {"scale": (2, 2, 2), "min_size": 100, "merge_fragments": 400,
+                                   "min_mean_intensity": 5},
+    },
+    # The background is at ~200-1000, the bright membranes on top at 10k-65k, the dim ones below at a few 1000.
+    "membrane": {
+        "raw": {"anisotropy": 4},
+        "z4": {"scale": (4, 1, 1)},
+        "z4_p1-99.9": {"scale": (4, 1, 1), "norm_percentiles": (1, 99.9)},
+        "z4_p5-99.5": {"scale": (4, 1, 1), "norm_percentiles": (5, 99.5)},
+        "z4_p10-95": {"scale": (4, 1, 1), "norm_percentiles": (10, 95)},
+        "gamma_z4": {"gamma": 0.5, "scale": (4, 1, 1)},
+        "clahe_z4": {"clahe": 0.01, "scale": (4, 1, 1)},
+        "clahe_z4_x2": {"clahe": 0.01, "scale": (8, 2, 2)},
+        # Upsampling z is needed to separate the cells, the 10th - 95th percentile merges the dim cells and 8 x 2 x 2
+        # segments the noise in the dark interior. A third of the z4 objects are fragments < 200 voxels.
+        "z4_min200": {"scale": (4, 1, 1), "min_size": 200},
+        "z4_p1-99.9_min200": {"scale": (4, 1, 1), "norm_percentiles": (1, 99.9), "min_size": 200},
+        # The membranes are only ~1-2 px thin, the cells ~15-25 px wide. Tiles of 256 + 2 * 64 px magnify them 2.7x,
+        # tiles of 128 + 2 * 32 px 5.3x, upsampling 2x in xy with tiles of 256 magnifies them 5.3x with more context.
+        "z4_t256": {"scale": (4, 1, 1), "tile_shape": (256, 256), "halo": (64, 64)},
+        "z4_p1-99.9_t256": {"scale": (4, 1, 1), "norm_percentiles": (1, 99.9), "tile_shape": (256, 256),
+                            "halo": (64, 64)},
+        "z4_t128": {"scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32)},
+        "z4_x2_t256": {"scale": (4, 2, 2), "anisotropy": 2, "tile_shape": (256, 256), "halo": (64, 64)},
+        "inv_z4": {"invert": True, "scale": (4, 1, 1)},
+        "inv_z4_t256": {"invert": True, "scale": (4, 1, 1), "tile_shape": (256, 256), "halo": (64, 64)},
+        "2d": {"ndim": 2},
+        "2d_t256": {"ndim": 2, "tile_shape": (256, 256), "halo": (64, 64)},
+        "2d_t128": {"ndim": 2, "tile_shape": (128, 128), "halo": (32, 32)},
+        # Tiling traces the small cells, t128 and x2_t256 best. x2_t256 splits them into more fragments (1518 of its
+        # 2748 objects are < 200 voxels, 275 of 1101 for t128). Both segment noise in the dark interior and around the
+        # specimen, and the tiled runs cut a few cells along the tile borders, which the larger halo should reduce.
+        "z4_t128_clean": {"scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32), "min_size": 200,
+                          "min_border_intensity": 1500},
+        "z4_t128_h64_clean": {"scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (64, 64), "min_size": 200,
+                              "min_border_intensity": 1500},
+        "z4_x2_t256_clean": {"scale": (4, 2, 2), "anisotropy": 2, "tile_shape": (256, 256), "halo": (64, 64),
+                             "min_size": 200, "min_border_intensity": 1500},
+        # t128_clean leaves the dimmer tissue (e.g. the left side) unsegmented, next to the bright top epithelium.
+        # Lifting the dim membranes: locally (CLAHE), globally (gamma) or by saturating the bright ones (p1-95).
+        "clahe_z4_t128_clean": {"clahe": 0.02, "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32),
+                                "min_size": 200, "min_border_intensity": 1500},
+        "gamma_z4_t128_clean": {"gamma": 0.5, "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32),
+                                "min_size": 200, "min_border_intensity": 1500},
+        "z4_p1-95_t128_clean": {"norm_percentiles": (1, 95), "scale": (4, 1, 1), "tile_shape": (128, 128),
+                                "halo": (32, 32), "min_size": 200, "min_border_intensity": 1500},
+        # Neither of them segments the blurred tissue, not even in 2d. Of the deblurring tested in 2d (unsharp mask,
+        # Richardson-Lucy, difference of gaussians, ridge filter), only the ridge filter recovers it: 490 objects on
+        # z 15, 41 and 60 against 220 with CLAHE alone, and the sharp tissue gains cells too.
+        "ridge_clahe_z4_t128_clean": {"ridge": 0.5, "clahe": 0.02, "scale": (4, 1, 1), "tile_shape": (128, 128),
+                                      "halo": (32, 32), "min_size": 200, "min_border_intensity": 1500},
+        "ridge0.7_clahe_z4_t128_clean": {"ridge": 0.7, "clahe": 0.02, "scale": (4, 1, 1), "tile_shape": (128, 128),
+                                         "halo": (32, 32), "min_size": 200, "min_border_intensity": 1500},
+        "ridge_z4_t128_clean": {"ridge": 0.5, "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32),
+                                "min_size": 200, "min_border_intensity": 1500},
+    },
+}
 
 
 def get_roi(start, shape):
@@ -328,8 +472,14 @@ def stitch_slabs(downsample, min_size, z_range=None, slab_size=SLAB_SIZE, iou_th
     print(f"Read {len(slabs)} slabs and matched {len(matches)} objects across their overlaps in "
           f"{time.time() - begin:.1f} s", flush=True)
 
-    # Union-find over the matches, then consecutive ids.
-    parent = np.arange(offset + 1, dtype="int64")
+    segmentation, n_objects = merge_matched_ids(segmentation, matches, offset)
+    print(f"Stitched {n_objects} objects in {time.time() - begin:.1f} s", flush=True)
+    return segmentation
+
+
+def merge_matched_ids(segmentation, matches, max_id):
+    """Give the matched (lower id, upper id) pairs one id by union-find, then make the ids consecutive, in place."""
+    parent = np.arange(max_id + 1, dtype="int64")
 
     def find(node):
         while parent[node] != node:
@@ -339,17 +489,16 @@ def stitch_slabs(downsample, min_size, z_range=None, slab_size=SLAB_SIZE, iou_th
 
     for lower_id, upper_id in matches:
         parent[find(upper_id)] = find(lower_id)
-    roots = np.array([find(node) for node in range(offset + 1)])
-    present = np.zeros(offset + 1, dtype=bool)
-    for z in range(0, shape[0], 64):
+    roots = np.array([find(node) for node in range(max_id + 1)])
+    present = np.zeros(max_id + 1, dtype=bool)
+    for z in range(0, segmentation.shape[0], 64):
         present[np.unique(segmentation[z:z + 64])] = True
     roots[~present] = 0
     _, lut = np.unique(roots, return_inverse=True)
     lut = lut.astype("uint32")
-    for z in range(0, shape[0], 64):
+    for z in range(0, segmentation.shape[0], 64):
         segmentation[z:z + 64] = lut[segmentation[z:z + 64]]
-    print(f"Stitched {int(lut.max())} objects in {time.time() - begin:.1f} s", flush=True)
-    return segmentation
+    return segmentation, int(lut.max())
 
 
 def run_stitch(downsample, min_size, preview_factor, z_range=None, slab_size=SLAB_SIZE):
@@ -389,6 +538,259 @@ def view(roi, downsample):
     napari.run()
 
 
+def load_small_data(dataset):
+    path = SMALL_DATA_PATHS[dataset]
+    if dataset == "membrane":
+        return tifffile.imread(path)
+    # The video stores the gray values in all three color channels.
+    capture, frames = cv2.VideoCapture(path), []
+    while True:
+        ok, frame = capture.read()
+        if not ok:
+            break
+        frames.append(frame[..., 0])
+    capture.release()
+    return np.stack(frames)
+
+
+def enhance(raw, settings):
+    """The intensity steps of the settings on the whole volume, and its normalization bounds."""
+    volume = raw.astype("float32")
+    if settings["clahe"] is not None or settings["gamma"] is not None or settings["ridge"] is not None:
+        lower, upper = np.percentile(volume, (0.1, 99.9))
+        volume = np.clip((volume - lower) / (upper - lower), 0, 1)
+    if settings["ridge"] is not None:
+        ridges = np.stack([sato(z, sigmas=RIDGE_SIGMAS, black_ridges=False) for z in volume])
+        lower, upper = np.percentile(ridges, (0.1, 99.9))
+        ridges = np.clip((ridges - lower) / (upper - lower), 0, 1)
+        volume = (1 - settings["ridge"]) * volume + settings["ridge"] * ridges
+        lower, upper = np.percentile(volume, (0.1, 99.9))
+        volume = np.clip((volume - lower) / (upper - lower), 0, 1).astype("float32")
+    if settings["clahe"] is not None:
+        volume = np.stack([equalize_adapthist(z, clip_limit=settings["clahe"]) for z in volume]).astype("float32")
+    if settings["gamma"] is not None:
+        volume = volume ** settings["gamma"]
+    if settings["smooth"] is not None:
+        volume = ndimage.gaussian_filter(volume, settings["smooth"])
+    if settings["invert"]:
+        volume = volume.max() - volume
+    lower, upper = np.percentile(volume, settings["norm_percentiles"])
+    return volume, (np.array([lower], dtype="float32"), np.array([upper], dtype="float32"))
+
+
+def merge_enclosed_fragments(segmentation, max_size, min_enclosed=FRAGMENT_MIN_ENCLOSED):
+    """Merge the objects below 'max_size' into the object that covers at least 'min_enclosed' of their border."""
+    sizes = np.bincount(segmentation.ravel())
+    lut = np.arange(len(sizes), dtype=segmentation.dtype)
+    bboxes = ndimage.find_objects(segmentation)
+    n_merged = 0
+    for object_id in np.argsort(sizes):
+        if object_id == 0 or sizes[object_id] == 0 or sizes[object_id] >= max_size:
+            continue
+        bbox = tuple(slice(max(axis.start - 1, 0), axis.stop + 1) for axis in bboxes[object_id - 1])
+        labels = lut[segmentation[bbox]]
+        mask = labels == lut[object_id]
+        border = labels[ndimage.binary_dilation(mask) & ~mask]
+        if border.size == 0:
+            continue
+        neighbours, counts = np.unique(border[border != 0], return_counts=True)
+        if len(neighbours) and counts.max() >= min_enclosed * border.size:
+            lut[lut == lut[object_id]] = neighbours[counts.argmax()]
+            n_merged += 1
+    print(f"Merged {n_merged} fragments below {max_size} voxels into their enclosing objects", flush=True)
+    return lut[segmentation]
+
+
+def remove_dark_border_objects(segmentation, raw, min_intensity):
+    """Remove the objects whose border (their outermost voxels) is darker than 'min_intensity' on average."""
+    border = find_boundaries(segmentation, mode="inner")
+    n_ids = int(segmentation.max()) + 1
+    sums = np.bincount(segmentation[border], weights=raw[border].astype("float64"), minlength=n_ids)
+    counts = np.bincount(segmentation[border], minlength=n_ids)
+    means = sums / np.maximum(counts, 1)
+    removed = np.nonzero((means < min_intensity) & (counts > 0))[0]
+    removed = removed[removed != 0]
+    lut = np.arange(n_ids, dtype=segmentation.dtype)
+    lut[removed] = 0
+    print(f"Removed {len(removed)} objects with a border darker than {min_intensity}", flush=True)
+    return lut[segmentation]
+
+
+def remove_dark_objects(segmentation, raw, min_intensity):
+    """Remove the objects whose mean raw intensity is below 'min_intensity'."""
+    n_ids = int(segmentation.max()) + 1
+    sizes = np.bincount(segmentation.ravel(), minlength=n_ids)
+    means = np.bincount(segmentation.ravel(), weights=raw.ravel().astype("float64"), minlength=n_ids)
+    means /= np.maximum(sizes, 1)
+    removed = np.nonzero((means < min_intensity) & (sizes > 0))[0]
+    removed = removed[removed != 0]
+    lut = np.arange(n_ids, dtype=segmentation.dtype)
+    lut[removed] = 0
+    print(f"Removed {len(removed)} objects with a mean intensity below {min_intensity}", flush=True)
+    return lut[segmentation]
+
+
+def segment_slices(volume, engine, settings, norm_bounds):
+    """Segment every z-slice on its own in 2d, with object ids that are unique across the slices."""
+    lower, upper = norm_bounds[0][0], norm_bounds[1][0]
+    volume = np.clip((volume - lower) / (upper - lower), 0, 1).astype("float32")
+    predictor, segmenter = get_predictor_and_segmenter(model_type=MODEL_TYPE, segmentation_mode=engine, ndim=2)
+    segmentation, offset = np.zeros(volume.shape, dtype="uint32"), 0
+    for z, image in enumerate(volume):
+        embedding_dir = tempfile.mkdtemp(dir=EMBEDDING_ROOT)
+        try:
+            labels = automatic_instance_segmentation(
+                predictor, segmenter, input_path=image, embedding_path=os.path.join(embedding_dir, "embeddings.zarr"),
+                ndim=2, batch_size=None, verbose=False, tile_shape=settings["tile_shape"], halo=settings["halo"],
+            ).astype("uint32")
+        finally:
+            shutil.rmtree(embedding_dir, ignore_errors=True)
+        segmentation[z] = np.where(labels > 0, labels + offset, 0)
+        offset = max(offset, int(segmentation[z].max()))
+    return segmentation
+
+
+def segment_small(volume, engine, settings, norm_bounds):
+    start = time.time()
+    if settings["ndim"] == 2:
+        segmentation = segment_slices(volume, engine, settings, norm_bounds)
+        return segmentation, len(np.unique(segmentation)) - 1, time.time() - start
+    scale = tuple(settings["scale"])
+    shape = volume.shape
+    if scale != (1, 1, 1):
+        volume = ndimage.zoom(volume, scale, order=1)
+    predictor, segmenter = get_predictor_and_segmenter(model_type=MODEL_TYPE, segmentation_mode=engine, ndim=3)
+    generate_kwargs = {}
+    if engine == "ais":
+        if settings["min_size"] is not None:
+            generate_kwargs["min_size"] = int(settings["min_size"] * np.prod(scale))
+        if settings["anisotropy"] > 1:
+            generate_kwargs["spacing"] = (float(settings["anisotropy"]), 1.0, 1.0)
+
+    embedding_dir = tempfile.mkdtemp(dir=EMBEDDING_ROOT)
+    try:
+        # 'batch_size=None' picks the batch size per device.
+        segmentation = automatic_instance_segmentation(
+            predictor, segmenter, input_path=volume, embedding_path=os.path.join(embedding_dir, "embeddings.zarr"),
+            ndim=3, batch_size=None, verbose=False, norm_bounds=norm_bounds, tile_shape=settings["tile_shape"],
+            halo=settings["halo"], **generate_kwargs,
+        )
+    finally:
+        shutil.rmtree(embedding_dir, ignore_errors=True)
+    if segmentation.shape != shape:
+        # Nearest neighbour sampling at the voxel centers of the original grid.
+        coords = [
+            ((np.arange(size) + 0.5) * scaled / size).astype(int) for size, scaled in zip(shape, segmentation.shape)
+        ]
+        segmentation = segmentation[np.ix_(*coords)]
+    segmentation = segmentation.astype("uint32")
+    if settings["merge_fragments"] is not None:
+        segmentation = merge_enclosed_fragments(segmentation, settings["merge_fragments"])
+    n_objects = len(np.unique(segmentation)) - 1
+    return segmentation, n_objects, time.time() - start
+
+
+def save_small(path, raw, key, segmentation, attrs):
+    with h5py.File(path, "a") as f:
+        if "raw" not in f:
+            f.create_dataset("raw", data=raw, compression="gzip")
+        if key in f:
+            del f[key]
+        dataset = f.create_dataset(key, data=segmentation, compression="gzip")
+        dataset.attrs.update(attrs)
+
+
+def segment_small_slabs(volume, engine, settings, norm_bounds, slab_dir):
+    """Segment the volume in z-slabs with 'segment_small', save every slab to 'slab_dir' and stitch them."""
+    os.makedirs(slab_dir, exist_ok=True)
+    start_time = time.time()
+    slabs = get_slabs((0, volume.shape[0]), SMALL_SLAB_SIZE, SMALL_SLAB_HALO)
+    segmentation = np.zeros(volume.shape, dtype="uint32")
+    offset, matches, previous = 0, [], None
+    for index, (start, stop, core_start, core_stop) in enumerate(slabs):
+        slab_path = os.path.join(slab_dir, f"slab_{index:03d}.h5")
+        if not os.path.exists(slab_path):
+            slab, n_objects, runtime = segment_small(volume[start:stop], engine, settings, norm_bounds)
+            # Written under a temporary name first, so that a slab cut off by preemption is not taken as done.
+            with h5py.File(slab_path + ".tmp", "w") as f:
+                f.create_dataset("segmentation", data=slab, compression="lzf")
+            os.replace(slab_path + ".tmp", slab_path)
+            print(f"Slab {index + 1} / {len(slabs)}: slices {start}-{stop}, {n_objects} objects in {runtime:.1f} s",
+                  flush=True)
+        with h5py.File(slab_path, "r") as f:
+            slab = f["segmentation"][:]
+        slab[slab != 0] += np.uint32(offset)
+        if previous is not None:
+            previous_slab, previous_start, previous_stop = previous
+            matches += match_overlap(previous_slab[start - previous_start:], slab[:previous_stop - start])
+        segmentation[core_start:core_stop] = slab[core_start - start:core_stop - start]
+        offset = max(offset, int(slab.max()))
+        previous = (slab, start, stop)
+    segmentation, n_objects = merge_matched_ids(segmentation, matches, offset)
+    print(f"Stitched {len(slabs)} slabs into {n_objects} objects", flush=True)
+    return segmentation, n_objects, time.time() - start_time
+
+
+def get_small_path(dataset, roi=None, tag=None):
+    suffix = "" if roi is None else "_" + "_".join(f"{axis}{r.start}-{r.stop}" for axis, r in zip("zyx", roi))
+    suffix += "" if tag is None else f"_{tag}"
+    return os.path.join(OUTPUT_ROOT, f"{dataset}{suffix}_{MODEL_TYPE}.h5")
+
+
+def run_small(dataset, names, engines, sweep, crops=None, tag=None):
+    """Segment the volume with the settings, or for the exm sweep its crops (all or 'crops').
+
+    The results go to a file per volume or crop, with 'tag' in its name if given (for jobs that run in parallel).
+    """
+    data = load_small_data(dataset)
+    print(f"{dataset}: {data.shape} {data.dtype}, range [{data.min()}, {data.max()}]", flush=True)
+    os.makedirs(OUTPUT_ROOT, exist_ok=True)
+    # The exm sweep runs on crops, the membrane volume is small enough to sweep as a whole.
+    if sweep and dataset == "exm":
+        rois = {name: roi for name, roi in EXM_CROPS.items() if crops is None or name in crops}
+    else:
+        rois = {"full": None}
+    for name in names:
+        settings = {**SMALL_DEFAULT_SETTINGS, **SMALL_SETTINGS[dataset][name]}
+        volume, norm_bounds = enhance(data, settings)
+        print(f"{name}: normalization bounds {norm_bounds[0][0]:.3f} - {norm_bounds[1][0]:.3f}", flush=True)
+        for crop_name, roi in rois.items():
+            path = get_small_path(dataset, roi, tag)
+            raw = data if roi is None else data[roi]
+            for engine in engines:
+                input_volume = volume if roi is None else volume[roi]
+                if input_volume.shape[0] > SMALL_SLAB_SIZE:
+                    slab_dir = os.path.join(OUTPUT_ROOT, f"{dataset}_slabs{SMALL_SLAB_SIZE}_{engine}_{name}")
+                    segmentation, n_objects, runtime = segment_small_slabs(
+                        input_volume, engine, settings, norm_bounds, slab_dir
+                    )
+                else:
+                    segmentation, n_objects, runtime = segment_small(input_volume, engine, settings, norm_bounds)
+                if settings["min_border_intensity"] is not None:
+                    segmentation = remove_dark_border_objects(segmentation, raw, settings["min_border_intensity"])
+                    n_objects = len(np.unique(segmentation)) - 1
+                if settings["min_mean_intensity"] is not None:
+                    segmentation = remove_dark_objects(segmentation, raw, settings["min_mean_intensity"])
+                    n_objects = len(np.unique(segmentation)) - 1
+                print(f"{dataset} {crop_name} {name} {engine}: {n_objects} objects in {runtime:.1f} s", flush=True)
+                attrs = {"settings": str(SMALL_SETTINGS[dataset][name]), "n_objects": n_objects, "runtime": runtime}
+                save_small(path, raw, f"{engine}_{name}", segmentation, attrs)
+            print(f"Saved to {path}", flush=True)
+
+
+def view_small(dataset, crop, tag=None):
+    import napari
+
+    path = get_small_path(dataset, None if crop is None else EXM_CROPS[crop], tag)
+    viewer = napari.Viewer(title=os.path.basename(path))
+    with h5py.File(path, "r") as f:
+        viewer.add_image(f["raw"][:], name="raw")
+        for key in sorted(f):
+            if key != "raw":
+                viewer.add_labels(f[key][:], name=key)
+    napari.run()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--engines", nargs="+", choices=ENGINES, default=list(ENGINES))
@@ -406,10 +808,25 @@ def main():
     parser.add_argument("--n_slabs", action="store_true", help="Print the number of slabs and exit.")
     parser.add_argument("--cache_embeddings", action="store_true", help="Keep the slab embeddings on vast.")
     parser.add_argument("--view", action="store_true", help="Show the block and its segmentations in napari.")
+    parser.add_argument("-d", "--dataset", choices=tuple(SMALL_DATA_PATHS),
+                        help="Segment one of the smaller volumes with the settings '-s' instead of the block.")
+    parser.add_argument("-s", "--settings", nargs="+", help="The names of the SMALL_SETTINGS, by default all.")
+    parser.add_argument("--sweep", choices=tuple(SMALL_DATA_PATHS),
+                        help="Run every setting on one of the smaller volumes, on the crops for 'exm'.")
+    parser.add_argument("--crop", nargs="+", choices=tuple(EXM_CROPS),
+                        help="The exm crops to sweep, or the one to view.")
+    parser.add_argument("--tag", help="A tag for the name of the output file of the smaller volumes.")
     args = parser.parse_args()
 
     roi = get_roi(args.start, args.shape)
-    if args.n_slabs:
+    if args.sweep is not None or args.dataset is not None:
+        dataset = args.sweep or args.dataset
+        if args.view:
+            view_small(dataset, None if args.crop is None else args.crop[0], args.tag)
+        else:
+            names = args.settings or list(SMALL_SETTINGS[dataset])
+            run_small(dataset, names, args.engines, args.sweep is not None, args.crop, args.tag)
+    elif args.n_slabs:
         print(len(get_slabs(get_z_range(args.downsample, args.z_range), args.slab_size)))
     elif args.slab is not None:
         run_slab(args.slab, args.downsample, args.min_size, args.z_range, args.slab_size, args.cache_embeddings)
