@@ -19,7 +19,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from micro_sam.v2.models._video_predictor import _build_sam2_video_predictor
 from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, to_image
 from micro_sam.util import (
-    get_device, get_cache_directory, microsam_cachedir, _open_embeddings,
+    get_device, get_model_cache_directory, _open_embeddings,
     _configure_mps_memory, device_type, make_temp_embedding_path, BF16_MIN_CAPABILITY,
 )
 
@@ -439,7 +439,7 @@ def models():
         The pooch registry for the finetuned SAM2 models.
     """
     registry = pooch.create(
-        path=os.path.join(microsam_cachedir(), "models"),
+        path=get_model_cache_directory(),
         base_url="",
         registry=FINETUNED_HASHES,
         urls=FINETUNED_URLS,
@@ -483,7 +483,7 @@ def _download_finetuned_sam2_model(model_type, progress_bar_factory=None):
     model_registry = models()
 
     progress_bar = True
-    if not os.path.exists(os.path.join(get_cache_directory(), model_type)) and progress_bar_factory is not None:
+    if not os.path.exists(get_model_cache_directory() / model_type) and progress_bar_factory is not None:
         progress_bar = progress_bar_factory(model_type)
 
     checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)
@@ -516,19 +516,10 @@ def _get_device(device=None):
 
 
 def _get_checkpoint(model_type=_DEFAULT_MODEL):
-    save_directory = os.path.expanduser(pooch.os_cache("micro_sam/v2/models"))
-
-    fname = f"{model_type}_sam2.1"
-    pooch.retrieve(
-        url=URLS[model_type],
-        known_hash=HASHES[model_type],
-        fname=fname,
-        path=save_directory,
-        progressbar=True
+    return pooch.retrieve(
+        url=URLS[model_type], known_hash=HASHES[model_type], fname=model_type, path=get_model_cache_directory(),
+        progressbar=True,
     )
-
-    checkpoint_path = os.path.join(save_directory, fname)
-    return checkpoint_path
 
 
 def _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type):

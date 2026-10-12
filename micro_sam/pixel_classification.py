@@ -43,7 +43,7 @@ def get_anyup_upsampler(checkpoint_path: Optional[Union[str, os.PathLike]] = Non
 
     AnyUp is an optional dependency. The weights are resolved from `checkpoint_path`, then the
     `MICROSAM_ANYUP_CHECKPOINT` environment variable, and finally the released paper checkpoint
-    (downloaded and cached by torch hub).
+    (downloaded to the 'anyup' folder of the micro-sam model cache).
 
     Args:
         checkpoint_path: Optional path to a local AnyUp state_dict.
@@ -65,7 +65,8 @@ def get_anyup_upsampler(checkpoint_path: Optional[Union[str, os.PathLike]] = Non
     if checkpoint_path is not None:
         state_dict = torch.load(checkpoint_path, map_location=device)
     else:
-        state_dict = torch.hub.load_state_dict_from_url(ANYUP_URL, map_location=device)
+        model_dir = util.get_model_cache_directory("anyup")
+        state_dict = torch.hub.load_state_dict_from_url(ANYUP_URL, model_dir=model_dir, map_location=device)
 
     model = AnyUp().to(device)
     model.load_state_dict(state_dict)

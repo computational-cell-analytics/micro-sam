@@ -74,16 +74,16 @@ It's possible that you have an older version of `torch-em` installed. Similar er
 
 
 ### 8. My system does not have a internet connection. Where should I put the model checkpoints for the `micro-sam` models?
-We recommend transferring the model checkpoints to the system-level cache directory (you can find yours by running the following in terminal: `python -c "from micro_sam import util; print(util.microsam_cachedir())`). Once you have identified the cache directory, you need to create an additional `models` directory inside the `micro-sam` cache directory (if not present already) and move the model checkpoints there. At last, you **must** rename the transferred checkpoints as per the respective [key values](https://github.com/computational-cell-analytics/micro-sam/blob/main/micro_sam/util.py#L87) in the url dictionaries located in the `micro_sam.util.models` function (below mentioned is an example for Linux users).
+We recommend transferring the model checkpoints to the `micro-sam` model cache directory (you can find yours by running the following in terminal: `python -c "from micro_sam import util; print(util.get_model_cache_directory())"`). Once you have identified the model cache directory, you need to create it (if not present already) and move the model checkpoints there. At last, you **must** rename the transferred checkpoints as per the respective [key values](https://github.com/computational-cell-analytics/micro-sam/blob/main/micro_sam/util.py#L87) in the url dictionaries located in the `micro_sam.util.models` function (below mentioned is an example for Linux users).
 
 ```bash
 # Download and transfer the model checkpoints for 'vit_b_lm' and `vit_b_lm_decoder`.
-# Next, verify the cache directory.
-> python -c "from micro_sam import util; print(util.microsam_cachedir())"
-/home/anwai/.cache/micro_sam
+# Next, verify the model cache directory.
+> python -c "from micro_sam import util; print(util.get_model_cache_directory())"
+/home/anwai/.cache/micro_sam/models
 
-# Create 'models' folder in the cache directory
-> mkdir /home/anwai/.cache/micro_sam/models
+# Create the model cache directory
+> mkdir -p /home/anwai/.cache/micro_sam/models
 
 # Move the checkpoints to the models directory and rename them
 # The following steps transfer and rename the checkpoints to the desired filenames.
