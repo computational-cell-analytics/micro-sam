@@ -41,6 +41,9 @@ contributions:
     - id: micro_sam.annotator_tracking
       python_name: micro_sam.sam_annotator.annotator_tracking:AnnotatorTracking
       title: Start the tracking annotator
+    - id: micro_sam.annotator_timeseries
+      python_name: micro_sam.sam_annotator.annotator_timeseries:AnnotatorTimeSeries
+      title: Start the time series segmentation annotator
     - id: micro_sam.image_series_annotator
       python_name: micro_sam.sam_annotator.image_series_annotator:ImageSeriesAnnotator
       title: Run the annotator for multiple images in a folder
@@ -84,6 +87,8 @@ contributions:
       display_name: Annotator 3d
     - command: micro_sam.annotator_tracking
       display_name: Annotator Tracking
+    - command: micro_sam.annotator_timeseries
+      display_name: Annotator Time Series
     - command: micro_sam.image_series_annotator
       display_name: Image Series Annotator
     - command: micro_sam.object_classifier
