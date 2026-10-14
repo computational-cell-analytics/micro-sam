@@ -213,3 +213,6 @@ embeddings/
 
 # Local JSON outputs, e.g. the data counter cache.
 *.json
+
+# Local handoff notes.
+HANDOFF*.md
