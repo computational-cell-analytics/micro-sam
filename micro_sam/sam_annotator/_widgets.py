@@ -568,7 +568,9 @@ def _get_auto_segmentation_options(state, object_ids):
         segmentation_options["box_nms_thresh"] = widget.box_nms_thresh
 
     segmentation_options["min_object_size"] = widget.min_object_size
-    if widget.volumetric:
+    if widget.timeseries:
+        segmentation_options["apply_to_all_frames"] = bool(widget.apply_to_volume)
+    elif widget.volumetric:
         segmentation_options["apply_to_volume"] = widget.apply_to_volume
         segmentation_options["gap_closing"] = widget.gap_closing
         segmentation_options["min_extent"] = widget.min_extent
@@ -1039,11 +1041,15 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
 
 @magic_factory(call_button="Segment Slice [S]")
 def segment_slice(viewer: "napari.viewer.Viewer") -> None:
-    """Segment object for to the current prompts.
+    """Segment an object for the current slice's prompts.
 
     Args:
         viewer: The napari viewer.
     """
+    return _segment_slice(viewer)
+
+
+def _segment_slice(viewer, unique_ids=False):
     if _validate_embeddings(viewer):
         return None
     if _validate_layers(viewer):
@@ -1074,6 +1080,9 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
         return
 
+    if unique_ids:
+        seg = seg.astype(viewer.layers["current_object"].data.dtype, copy=True)
+        seg[seg != 0] += int(viewer.layers["current_object"].data.max())
     viewer.layers["current_object"].data[z] = seg
     viewer.layers["current_object"].refresh()
 
@@ -1162,8 +1171,9 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, ndim=None):
         super().__init__(parent=parent)
+        self._ndim = ndim
 
         # Create a nested layout for the sections.
         # Section 1: Image and Model.
@@ -1177,26 +1187,9 @@ class EmbeddingWidget(_WidgetBase):
 
         # Section 3: The button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
-        self.run_button.clicked.connect(self._initialize_image)
         self.run_button.clicked.connect(self.__call__)
         self.run_button.setToolTip(get_tooltip("embedding", "run_button"))
         self.layout().addWidget(self.run_button)
-
-    def _initialize_image(self):
-        state = AnnotatorState()
-        layer = self.image_selection.get_value()
-
-        # This is encountered when there is no image layer available / selected.
-        # In this case, we need not specify other image-level parameters to the state. Hence, we skip them.
-        # NOTE: On code-level, this happens as the first step when "Compute Embedding" click is triggered.
-        if layer is None:
-            return
-
-        image_shape = layer.data.shape
-        image_scale = tuple(layer.scale)
-        state.image_shape = image_shape
-        state.image_scale = image_scale
-        state.image_name = layer.name
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
@@ -1408,17 +1401,26 @@ class EmbeddingWidget(_WidgetBase):
             return _generate_message(val_results["message_type"], val_results["message"])
 
     def __call__(self, skip_validate=False):
+        state = AnnotatorState()
+        # Keep existing results when validation fails or the user cancels.
+        state.skip_recomputing_embeddings = True
         self._validate_model_type_and_custom_weights()
+
+        image = self.image_selection.get_value()
+        if image is None:
+            return _generate_message("error", "No image has been selected.")
+        ndim = image.data.ndim - int(image.rgb)
+        if self._ndim is not None and ndim != self._ndim:
+            return _generate_message(
+                "error", f"This annotator requires {self._ndim} dimensions (excluding RGB channels). "
+                f"The selected image has shape {image.data.shape}."
+            )
 
         # Validate user inputs.
         if not skip_validate and self._validate_inputs():
             return
 
-        # Get the image.
-        image = self.image_selection.get_value()
-
         # Update the image embeddings:
-        state = AnnotatorState()
         if self._validate_existing_embeddings(state):
             # Whether embeddings already exist to control existing objects in layers.
             state.skip_recomputing_embeddings = True
@@ -1438,6 +1440,7 @@ class EmbeddingWidget(_WidgetBase):
 
         # Set layer scale
         state.image_scale = tuple(image.scale)
+        state.image_name = image.name
 
         # Process tile_shape and halo, set other data.
         tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
@@ -1734,6 +1737,8 @@ def _instance_segmentation_impl(min_object_size, i=None, pbar_init=None, pbar_up
 
 
 class AutoSegmentWidget(_WidgetBase):
+    timeseries = False
+
     def __init__(self, viewer, with_decoder, volumetric, parent=None):
         super().__init__(parent)
 
@@ -1792,7 +1797,7 @@ class AutoSegmentWidget(_WidgetBase):
         settings.layout().addLayout(layout)
 
         # Add extra settings for volumetric segmentation: gap_closing and min_extent.
-        if self.volumetric:
+        if self.volumetric and not self.timeseries:
             self.gap_closing = 2
             self.gap_closing_param, layout = self._add_int_param(
                 "gap_closing", self.gap_closing, min_val=0, max_val=10,
@@ -1824,6 +1829,30 @@ class AutoSegmentWidget(_WidgetBase):
         self.boundary_distance_thresh_param, layout = self._add_float_param(
             "boundary_distance_thresh", self.boundary_distance_thresh,
             tooltip=get_tooltip("autosegment", "boundary_distance_thresh")
+        )
+        settings.layout().addLayout(layout)
+
+        # Create the UI element for distance prediction smoothing.
+        self.distance_smoothing = 1.6
+        self.distance_smoothing_param, layout = self._add_float_param(
+            "distance_smoothing", self.distance_smoothing, max_val=10.0, step=0.1,
+            tooltip=get_tooltip("autosegment", "distance_smoothing")
+        )
+        settings.layout().addLayout(layout)
+
+        # Create the UI element for foreground prediction smoothing.
+        self.foreground_smoothing = 1.0
+        self.foreground_smoothing_param, layout = self._add_float_param(
+            "foreground_smoothing", self.foreground_smoothing, max_val=10.0, step=0.1,
+            tooltip=get_tooltip("autosegment", "foreground_smoothing")
+        )
+        settings.layout().addLayout(layout)
+
+        # Create the UI element for the foreground threshold.
+        self.foreground_threshold = 0.5
+        self.foreground_threshold_param, layout = self._add_float_param(
+            "foreground_threshold", self.foreground_threshold,
+            tooltip=get_tooltip("autosegment", "foreground_threshold")
         )
         settings.layout().addLayout(layout)
 
@@ -1993,6 +2022,9 @@ class AutoSegmentWidget(_WidgetBase):
             kwargs = {
                 "center_distance_threshold": self.center_distance_thresh,
                 "boundary_distance_threshold": self.boundary_distance_thresh,
+                "distance_smoothing": self.distance_smoothing,
+                "foreground_smoothing": self.foreground_smoothing,
+                "foreground_threshold": self.foreground_threshold,
                 "min_size": self.min_object_size,
             }
         else:
@@ -2004,7 +2036,8 @@ class AutoSegmentWidget(_WidgetBase):
         if self.volumetric and self.apply_to_volume:
             worker = self._run_segmentation_3d(kwargs)
         elif self.volumetric and not self.apply_to_volume:
-            i = int(self._viewer.dims.point[0])
+            layer = self._viewer.layers["auto_segmentation"]
+            i = int(round(layer.world_to_data(self._viewer.dims.point)[0]))
             worker = self._run_segmentation_2d(kwargs, i=i)
         else:
             worker = self._run_segmentation_2d(kwargs)

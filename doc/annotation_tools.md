@@ -1,6 +1,6 @@
 # Annotation Tools
 
-`micro_sam` provides applications for fast interactive 2d segmentation, 3d segmentation and tracking.
+`micro_sam` provides applications for fast interactive 2d segmentation, 3d segmentation, time series segmentation and tracking.
 See an example for interactive cell segmentation in phase-contrast microscopy (left), interactive segmentation
 of mitochondria in volume EM (middle) and interactive tracking of cells (right).
 
@@ -83,6 +83,32 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 You can only segment one object at a time using the interactive segmentation functionality with this tool.
 
 Check out [the video tutorial](https://youtu.be/nqpyNQSyu74) for an in-depth explanation on how to use this tool.
+
+
+## Annotator Time Series
+
+Use this mode to segment 2D time series stored as a single image stack. It accepts grayscale data
+in `(T, Y, X)` order and RGB(A) data in `(T, Y, X, C)` order.
+
+1. Open your TIFF stack in napari and select **Plugins → Segment Anything for Microscopy → Annotator Time Series**.
+2. Select the stack under **Image Layer**, choose the model, and click **Compute Embeddings**.
+3. Click **Automatic Segmentation**. **Apply to All Frames** is enabled by default; disable it to segment
+   only the frame selected by the time slider. The usual automatic segmentation settings apply to every frame.
+4. To correct individual objects, add point or shape prompts in the current frame and click **Segment Frame** (`S`).
+5. Select `auto_segmentation` or `current_object` in the commit menu and click **Commit** (`C`) to keep the results
+   in `committed_objects`. Save that label layer with napari's **File → Save Selected Layer(s)** to export the stack.
+
+Frames are segmented independently. Object IDs are unique across automatically segmented frames and do not
+represent tracks. For persistent cell identities or divisions, use [Annotator Tracking](#annotator-tracking).
+The time series mode does not apply the volume merging, gap closing, or minimum slice extent settings of the 3D mode.
+It supports CPU and GPU processing, cached embeddings, and both decoder-based segmentation and automatic mask generation.
+Time plus volumetric data `(T, Z, Y, X)` requires selecting a 2D plane or projection first.
+
+You can also start it from Python with `micro_sam.sam_annotator.annotator_timeseries(image)` or from the command line:
+
+```bash
+micro_sam.annotator_timeseries -i /path/to/time_series.tif
+```
 
 
 ## Annotator Tracking

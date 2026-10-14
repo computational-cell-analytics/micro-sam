@@ -174,12 +174,11 @@ class AnnotatorState(metaclass=Singleton):
                     save_path=save_path
                 )
             else:
-                n_slices = image_data.shape[0] if image_data.ndim == 3 else image_data.shape[1]
+                n_slices = image_data.shape[0]
                 for i in tqdm(range(n_slices), desc="Precompute amg state"):
-                    slice_ = np.s_[i] if image_data.ndim == 3 else np.s_[:, i]
                     cache_state(
                         predictor=self.predictor,
-                        raw=image_data[slice_],
+                        raw=image_data[i],
                         image_embeddings=self.image_embeddings,
                         save_path=save_path, i=i, verbose=False,
                     )
