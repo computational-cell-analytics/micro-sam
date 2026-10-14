@@ -37,7 +37,9 @@ The two early embryos of Beke (classic_lsm/early_embryo, see EMBRYO_NAMES), with
     python explore_huisken_data.py --embryo 3.5hpf_crop  # the embryo of 3.5hpf, upsampled 2x by SAM2
     python explore_huisken_data.py --embryo t0_crop --iterative_prompting  # prompted from the ground truth
     python explore_huisken_data.py --embryo t0_crop --apg  # automatic prompt generation, scored on the ground truth
+    python explore_huisken_data.py --embryo t0_crop --ais --apg -m hvit_l_cells  # AIS and APG with another model
     python explore_huisken_data.py --embryo t0_crop --figure box  # the figure of the box prompting, iteration 2
+    python explore_huisken_data.py --embryo 3.5hpf --cellpose 3d 2d_stitch  # CellposeSAM, scored on the crop
 """
 
 import os
@@ -239,6 +241,16 @@ EMBRYO_N_ITERATIONS = 8
 EMBRYO_MIN_SIZE = 5000
 # ZYX in um. The tif has no z spacing, it is estimated from the cell extents.
 EMBRYO_SCALE = (0.812, 0.406, 0.406)
+# The crop of each full embryo volume and its ROI, so that a segmentation of the full volume is scored on the crop.
+EMBRYO_CROPS = {
+    "t0": ("t0_crop", np.s_[0:208, 215:727, 253:765]),
+    "3.5hpf": ("3.5hpf_crop", np.s_[0:79, 211:723, 255:767]),
+}
+# The CellposeSAM modes, as in explore_beghin_data.py: '3d' predicts the flows on the yx, zx and zy planes and follows
+# their average in 3D, '2d_stitch' segments every z plane in 2D and stitches the masks of neighboring planes with
+# IoU >= CELLPOSE_STITCH_THRESHOLD.
+CELLPOSE_MODES = ("3d", "2d_stitch")
+CELLPOSE_STITCH_THRESHOLD = 0.5
 # The figure: the prediction tif suffix and the layer name of each choice of '--figure'.
 EMBRYO_FIGURES = {
     "box": (f"prediction_microsam2_{EMBRYO_MODEL_TYPE}_box_iteration2", "iteration 2"),
@@ -951,14 +963,39 @@ def run_embryo_iterative_prompting(raw, name, model_type, prompt):
         save_embryo_prediction(name, f"prediction_microsam2_{model_type}_{prompt}_iteration{i}", segmentation)
 
 
-def run_embryo_apg(raw, name, model_type, embedding_path):
+def run_embryo_automatic(raw, name, model_type, embedding_path, mode):
     _, labels = load_embryo_ground_truth(name)
-    predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, segmentation_mode="apg", ndim=3)
+    predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, segmentation_mode=mode, ndim=3)
     segmentation = automatic_instance_segmentation(
         predictor, segmenter, input_path=raw, embedding_path=embedding_path, ndim=3
     )
-    print(f"APG: {evaluate_embryo(segmentation, labels)}")
-    save_embryo_prediction(name, f"prediction_microsam2_{model_type}_apg", segmentation)
+    print(f"{mode.upper()}: {evaluate_embryo(segmentation, labels)}")
+    save_embryo_prediction(name, f"prediction_microsam2_{model_type}_{mode}", segmentation)
+
+
+def run_embryo_cellpose(raw, volume, modes):
+    """Segment the embryo with CellposeSAM ('cpsam', default settings) and score it on the ground truth of the crop.
+
+    A full volume is segmented as a whole and cropped afterwards. The results are saved next to the crop as
+    'prediction_cpsam_<mode>', with the suffix '_full' for the full volume.
+    """
+    from cellpose import models
+
+    crop_volume, roi = EMBRYO_CROPS.get(volume, (volume, None))
+    crop_name = EMBRYO_NAMES[crop_volume]
+    _, labels = load_embryo_ground_truth(crop_name)
+    model = models.CellposeModel(gpu=True, pretrained_model="cpsam")
+    for mode in modes:
+        stitch_threshold = CELLPOSE_STITCH_THRESHOLD if mode == "2d_stitch" else 0.0
+        start = time.time()
+        segmentation = model.eval(raw, z_axis=0, do_3D=mode == "3d", stitch_threshold=stitch_threshold)[0]
+        runtime = time.time() - start
+        if roi is not None:
+            segmentation = segmentation[roi]
+        n_objects = len(np.unique(segmentation)) - 1
+        print(f"cpsam {mode}: {n_objects} objects, {evaluate_embryo(segmentation, labels)}, {runtime:.1f} s")
+        assert segmentation.max() <= np.iinfo("uint16").max
+        save_embryo_prediction(crop_name, f"prediction_cpsam_{mode}" + ("" if roi is None else "_full"), segmentation)
 
 
 def remove_artifacts(segmentation, min_size):
@@ -1060,15 +1097,18 @@ def view_embryo_figure(raw, name, figure):
 
 
 def run_embryo(args, parser):
-    if (args.iterative_prompting or args.apg or args.figure) and args.embryo != EMBRYO_GT_VOLUME:
-        parser.error(f"Only '{EMBRYO_GT_VOLUME}' has ground truth for iterative prompting, APG and the figure.")
+    if (args.iterative_prompting or args.ais or args.apg or args.figure) and args.embryo != EMBRYO_GT_VOLUME:
+        parser.error(f"Only '{EMBRYO_GT_VOLUME}' has ground truth for iterative prompting, AIS, APG and the figure.")
     raw, name = load_embryo(args.embryo)
     print(f"Loaded {name} with shape {raw.shape} and dtype {raw.dtype}")
-    embedding_path = os.path.join(EMBRYO_OUTPUT_ROOT, f"{name}_{args.model_type}.zarr")
-    if args.iterative_prompting:
+    embedding_path = os.path.join(args.embedding_root, f"{name}_{args.model_type}.zarr")
+    if args.cellpose:
+        run_embryo_cellpose(raw, args.embryo, args.cellpose)
+    elif args.iterative_prompting:
         run_embryo_iterative_prompting(raw, name, args.model_type, args.prompt)
-    elif args.apg:
-        run_embryo_apg(raw, name, args.model_type, embedding_path)
+    elif args.ais or args.apg:
+        for mode in [mode for mode, flag in (("ais", args.ais), ("apg", args.apg)) if flag]:
+            run_embryo_automatic(raw, name, args.model_type, embedding_path, mode)
     elif args.figure:
         view_embryo_figure(raw, name, args.figure)
     elif args.view:
@@ -1076,7 +1116,7 @@ def run_embryo(args, parser):
     else:
         if args.slice_norm:
             raw = normalize_per_slice(raw)
-            embedding_path = os.path.join(EMBRYO_OUTPUT_ROOT, f"{name}_slice_norm_{args.model_type}.zarr")
+            embedding_path = os.path.join(args.embedding_root, f"{name}_slice_norm_{args.model_type}.zarr")
         if args.precompute:
             precompute_embryo_embeddings(raw, embedding_path, args.model_type)
         else:
@@ -1110,12 +1150,15 @@ def main():
     parser.add_argument("--tag", help="A tag for the name of the output file of the smaller volumes.")
     parser.add_argument("--embryo", choices=tuple(EMBRYO_NAMES), help="Open this early embryo in the annotator.")
     parser.add_argument("-m", "--model_type", default=EMBRYO_MODEL_TYPE, help="The model for the early embryos.")
+    parser.add_argument("--embedding_root", default=EMBRYO_OUTPUT_ROOT, help="The folder of the embryo embeddings.")
     parser.add_argument("--precompute", action="store_true", help="Only precompute the embeddings of the embryo.")
     parser.add_argument("--slice_norm", action="store_true", help="Normalize each embryo slice instead of the volume.")
     parser.add_argument("--iterative_prompting", action="store_true", help="Prompt the embryo from the ground truth.")
     parser.add_argument("-p", "--prompt", default="box", choices=["box", "point"], help="The first prompt per object.")
+    parser.add_argument("--ais", action="store_true", help="Segment the embryo automatically with AIS.")
     parser.add_argument("--apg", action="store_true", help="Segment the embryo automatically with APG.")
     parser.add_argument("--figure", choices=tuple(EMBRYO_FIGURES), help="Show the figure of this embryo prediction.")
+    parser.add_argument("--cellpose", nargs="+", choices=CELLPOSE_MODES, help="Segment the embryo with CellposeSAM.")
     args = parser.parse_args()
 
     roi = get_roi(args.start, args.shape)
