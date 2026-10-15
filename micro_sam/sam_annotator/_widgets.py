@@ -96,6 +96,10 @@ class CheckableComboBox(QtWidgets.QComboBox):
         self.setModel(self._model)
         self.view().pressed.connect(self._toggle)
         self._keep_open = False
+        # The closed box only shows a short summary, so the long item names must not widen the panel.
+        self.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(12)
+        self.view().setMinimumWidth(self.view().sizeHintForColumn(0) + 40)
 
     def _toggle(self, index):
         item = self._model.itemFromIndex(index)

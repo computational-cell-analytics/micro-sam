@@ -732,13 +732,12 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         classical_features.setToolTip(classical_tooltip)
         size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
         classical_features.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
-        classical_label = Label(value="classical features:")
-        classical_label.native.setToolTip(classical_tooltip)
-        classical_row = Container(layout="horizontal", widgets=[classical_label], labels=False)
+        classical_features.setVisible(False)
+        classical_row = Container(layout="horizontal", widgets=[use_classical], labels=False)
         classical_row.native.layout().addWidget(classical_features)
         classical_row.native.layout().setContentsMargins(0, 0, 0, 0)
-        classical_row.visible = False
-        use_classical.changed.connect(lambda checked: setattr(classical_row, "visible", checked))
+        classical_row.native.layout().addStretch(1)
+        use_classical.changed.connect(lambda checked: classical_features.setVisible(checked))
         use_classical.changed.connect(self._invalidate_features)
         classical_features.selection_changed.connect(self._invalidate_features)
 
@@ -823,7 +822,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         export_button.clicked.connect(lambda: self._save_rf(export_dir.value))
 
         rows = [
-            checkbox_row, top_features_row, use_classical, classical_row, random_seed_row,
+            checkbox_row, top_features_row, classical_row, random_seed_row,
             load_path, load_button, export_dir, export_button,
         ]
         return Container(widgets=rows, labels=False)
