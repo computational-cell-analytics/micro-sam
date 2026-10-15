@@ -484,12 +484,17 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             image = self._viewer.layers["image"].data
         return image, upsampler, True
 
-    def accumulate_batch_features(self):
-        """Add the current image's labeled features to the running batch training set.
+    def _feature_settings(self):
+        # The settings that change the feature values. Training data from other settings is not mixed in.
+        return {"use_anyup": bool(self._get_use_anyup())}
 
-        Uses the per-tool feature and label hooks so it works for both classifiers. No-op when the
-        features cannot be computed or when the current image has no annotations.
+    def store_batch_training_data(self, index):
+        """Store the current image's labeled features as the batch training data of item `index`.
+
+        Replaces any earlier entry of this item, so a revisited image contributes its latest
+        annotations exactly once. Removes the entry when the image has no annotations.
         """
+        state = AnnotatorState()
         features, aux = self._compute_features()
         if features is None:
             return
@@ -498,14 +503,46 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             return
         valid = labels != 0
         if valid.sum() == 0:
+            state.batch_training_data.pop(index, None)
             return
-        state = AnnotatorState()
-        new_features, new_labels = features[valid], labels[valid]
-        if state.previous_features is None:
-            state.previous_features, state.previous_labels = new_features, new_labels
-        else:
-            state.previous_features = np.concatenate([state.previous_features, new_features], axis=0)
-            state.previous_labels = np.concatenate([state.previous_labels, new_labels], axis=0)
+        state.batch_training_data[index] = (features[valid], labels[valid], self._feature_settings())
+
+    def batch_training_set(self, exclude_index=None):
+        """Return the concatenated batch training data of all items except `exclude_index`.
+
+        Returns (None, None) when there is no such data. Skips items whose features were computed with
+        other feature settings, and warns about them.
+        """
+        data = AnnotatorState().batch_training_data
+        if not data:
+            return None, None
+        settings = self._feature_settings()
+        entries = [(idx, v) for idx, v in sorted(data.items()) if idx != exclude_index]
+        skipped = [idx for idx, v in entries if v[2] != settings]
+        if skipped:
+            show_warning(
+                f"Skipping the annotations of the images {skipped} for training, because their features were "
+                f"computed with other settings ({[data[idx][2] for idx in skipped]}, current: {settings})."
+            )
+        entries = [v for idx, v in entries if idx not in skipped]
+        if not entries:
+            return None, None
+        return np.concatenate([v[0] for v in entries], axis=0), np.concatenate([v[1] for v in entries], axis=0)
+
+    def _training_settings(self):
+        return {
+            **self._feature_settings(),
+            "n_components": self._get_n_components(), "random_state": self._get_random_state(),
+        }
+
+    def is_prediction_stale(self):
+        """Whether the annotations or the training settings changed since the last training run."""
+        if self._trained_annotations is None:
+            return True
+        annotations, settings = self._trained_annotations
+        return settings != self._training_settings() or not np.array_equal(
+            annotations, self._viewer.layers["annotations"].data
+        )
 
     #
     # Layers.
@@ -580,6 +617,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
 
         # The features depend on the image, so they have to be recomputed for a new image.
         self._invalidate_features()
+        self._trained_annotations = None
 
         # Before we reset the layers, we ensure all expected layers exist at the correct ndim.
         self._require_layers()
@@ -636,8 +674,9 @@ class _ClassifierBase(QtWidgets.QScrollArea):
 
         # Get the current label ids.
         ids = np.unique(self._viewer.layers["annotations"].data)[1:]
-        if state.previous_labels is not None:
-            ids = np.union1d(ids, np.unique(state.previous_labels))
+        for idx, (_, labels, _) in (state.batch_training_data or {}).items():
+            if idx != state.batch_index:
+                ids = np.union1d(ids, np.unique(labels))
 
         # Add new rows.
         for lbl in ids:
@@ -839,6 +878,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         """
         super().__init__()
         self._viewer = viewer
+        self._trained_annotations = None
         self._annotator_widget = QtWidgets.QWidget()
         self._annotator_widget.setLayout(QtWidgets.QVBoxLayout())
 
@@ -913,7 +953,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         if labels is None:
             return None
 
-        previous_features, previous_labels = state.previous_features, state.previous_labels
+        # The batch data of the other images; the current image always contributes its live annotations.
+        previous_features, previous_labels = self.batch_training_set(exclude_index=state.batch_index)
         if (labels == 0).all() and (previous_labels is None):
             return widgets._generate_message("error", "You have not provided any annotations.")
 
@@ -921,6 +962,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         random_state = self._get_random_state()
         rf = self._train(features, labels, previous_features, previous_labels, n_components, random_state)
         self._set_rf(rf)
+        self._trained_annotations = (self._viewer.layers["annotations"].data.copy(), self._training_settings())
 
         self._predict_and_show(rf, features, aux, apply_to_volume=apply_to_volume)
 
