@@ -39,7 +39,7 @@ The two early embryos of Beke (classic_lsm/early_embryo, see EMBRYO_NAMES), with
     python explore_huisken_data.py --embryo t0_crop --apg  # automatic prompt generation, scored on the ground truth
     python explore_huisken_data.py --embryo t0_crop --ais --apg -m hvit_l_cells  # AIS and APG with another model
     python explore_huisken_data.py --embryo t0_crop --figure box  # the figure of the box prompting, iteration 2
-    python explore_huisken_data.py --embryo 3.5hpf --cellpose 3d 2d_stitch  # CellposeSAM, scored on the crop
+    python explore_huisken_data.py --embryo 3.5hpf --cellpose 3d 2d_stitch  # cellposeSAM, scored on the crop
 """
 
 import os
@@ -246,7 +246,7 @@ EMBRYO_CROPS = {
     "t0": ("t0_crop", np.s_[0:208, 215:727, 253:765]),
     "3.5hpf": ("3.5hpf_crop", np.s_[0:79, 211:723, 255:767]),
 }
-# The CellposeSAM modes, as in explore_beghin_data.py: '3d' predicts the flows on the yx, zx and zy planes and follows
+# The cellposeSAM modes, as in explore_beghin_data.py: '3d' predicts the flows on the yx, zx and zy planes and follows
 # their average in 3D, '2d_stitch' segments every z plane in 2D and stitches the masks of neighboring planes with
 # IoU >= CELLPOSE_STITCH_THRESHOLD.
 CELLPOSE_MODES = ("3d", "2d_stitch")
@@ -974,10 +974,10 @@ def run_embryo_automatic(raw, name, model_type, embedding_path, mode):
 
 
 def run_embryo_cellpose(raw, volume, modes):
-    """Segment the embryo with CellposeSAM ('cpsam', default settings) and score it on the ground truth of the crop.
+    """Segment the embryo with cellposeSAM (default settings) and score it on the ground truth of the crop.
 
     A full volume is segmented as a whole and cropped afterwards. The results are saved next to the crop as
-    'prediction_cpsam_<mode>', with the suffix '_full' for the full volume.
+    'prediction_cellposeSAM_<mode>', with the suffix '_full' for the full volume.
     """
     from cellpose import models
 
@@ -993,9 +993,10 @@ def run_embryo_cellpose(raw, volume, modes):
         if roi is not None:
             segmentation = segmentation[roi]
         n_objects = len(np.unique(segmentation)) - 1
-        print(f"cpsam {mode}: {n_objects} objects, {evaluate_embryo(segmentation, labels)}, {runtime:.1f} s")
+        print(f"cellposeSAM {mode}: {n_objects} objects, {evaluate_embryo(segmentation, labels)}, {runtime:.1f} s")
         assert segmentation.max() <= np.iinfo("uint16").max
-        save_embryo_prediction(crop_name, f"prediction_cpsam_{mode}" + ("" if roi is None else "_full"), segmentation)
+        suffix = f"prediction_cellposeSAM_{mode}" + ("" if roi is None else "_full")
+        save_embryo_prediction(crop_name, suffix, segmentation)
 
 
 def remove_artifacts(segmentation, min_size):
@@ -1158,7 +1159,7 @@ def main():
     parser.add_argument("--ais", action="store_true", help="Segment the embryo automatically with AIS.")
     parser.add_argument("--apg", action="store_true", help="Segment the embryo automatically with APG.")
     parser.add_argument("--figure", choices=tuple(EMBRYO_FIGURES), help="Show the figure of this embryo prediction.")
-    parser.add_argument("--cellpose", nargs="+", choices=CELLPOSE_MODES, help="Segment the embryo with CellposeSAM.")
+    parser.add_argument("--cellpose", nargs="+", choices=CELLPOSE_MODES, help="Segment the embryo with cellposeSAM.")
     args = parser.parse_args()
 
     roi = get_roi(args.start, args.shape)
