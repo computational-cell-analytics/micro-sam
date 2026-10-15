@@ -21,6 +21,7 @@ from bioimage_cpp.utils import Blocking
 
 from . import util
 from .v1.util import precompute_image_embeddings
+from .classical_features import compute_classical_pixel_features
 
 # Default in-plane grid size (longest side) for the per-pixel feature grid.
 # Non-tiled images use 'grid_size'. Tiled images use the larger 'max_grid_size', since tiling
@@ -221,6 +222,7 @@ def compute_pixel_features(
     image: Optional[np.ndarray] = None,
     upsampler=None,
     verbose: bool = True,
+    classical_features: Optional[Sequence[str]] = None,
 ) -> Tuple[np.ndarray, Tuple[int, ...]]:
     """Compute per-pixel features from SAM embeddings for pixel classification.
 
@@ -233,10 +235,12 @@ def compute_pixel_features(
         image_shape: The spatial shape of the image, (H, W) for 2d or (Z, H, W) for 3d.
         grid_size: In-plane grid size (longest side) for non-tiled images.
         max_grid_size: In-plane grid size (longest side) for tiled images.
-        image: The original image, required when `upsampler` is given (AnyUp uses it as guidance).
+        image: The original image, required when `upsampler` or `classical_features` is given.
         upsampler: An optional AnyUp model (see `get_anyup_upsampler`). When given, the embedding
             is upsampled with AnyUp using the image instead of plain interpolation.
         verbose: Whether to print a progressbar for the computation.
+        classical_features: The classical filter features to append to the embedding features, a subset
+            of `classical_features.PIXEL_FEATURES`. By default no classical features are used.
 
     Returns:
         The per-pixel features, of shape (N, C) flattened over the grid in row-major order.
@@ -244,6 +248,8 @@ def compute_pixel_features(
     """
     if upsampler is not None and image is None:
         raise ValueError("An 'image' is required when an AnyUp 'upsampler' is given.")
+    if classical_features is not None and image is None:
+        raise ValueError("An 'image' is required when 'classical_features' are given.")
 
     is_tiled = image_embeddings["input_size"] is None
     is_3d = len(image_shape) == 3
@@ -299,7 +305,11 @@ def compute_pixel_features(
     if anyup_pbar is not None:
         anyup_pbar.close()
 
-    return feature_image.reshape(-1, feature_image.shape[-1]), grid_shape
+    features = feature_image.reshape(-1, feature_image.shape[-1])
+    if classical_features is not None:
+        classical = compute_classical_pixel_features(image, grid_shape, classical_features)
+        features = np.concatenate([features, classical], axis=1)
+    return features, grid_shape
 
 
 def accumulate_pixel_labels(annotation: np.ndarray, grid_shape: Tuple[int, ...]) -> np.ndarray:
@@ -435,6 +445,8 @@ def run_training_with_pixel_classifier(
     n_components: Optional[int] = None,
     random_state: Optional[int] = 0,
     upsampler=None,
+    classical_features: Optional[Sequence[str]] = None,
+    model_type: Optional[str] = None,
     **rf_kwargs,
 ):
     """Train a pixel classifier on a series of images and (sparse) annotations.
@@ -461,6 +473,10 @@ def run_training_with_pixel_classifier(
             to leave it unseeded, in which case predictions vary slightly between runs.
         upsampler: An optional AnyUp model (see `get_anyup_upsampler`) to upsample the embeddings
             with the image as guidance instead of plain interpolation.
+        classical_features: The classical filter features to append to the embedding features, a subset
+            of `classical_features.PIXEL_FEATURES`. By default no classical features are used.
+        model_type: The model family of `predictor`, used to pick the matching embedding function
+            (SAM1 / SAM2 / VFM). If not given, the SAM1 embedding function is used.
         rf_kwargs: Additional keyword arguments for the `RandomForestClassifier`.
 
     Returns:
@@ -471,6 +487,8 @@ def run_training_with_pixel_classifier(
             f"Expect the same number of images and annotations, got {len(images)}, {len(annotations)}."
         )
 
+    compute_embeddings = util.get_embedding_function(model_type) if model_type is not None \
+        else precompute_image_embeddings
     all_features, all_labels = [], []
     for image, annotation in tqdm(
         zip(images, annotations), total=len(images), desc="Compute features for pixel classifier training"
@@ -482,10 +500,11 @@ def run_training_with_pixel_classifier(
 
         this_ndim = ndim if ndim is not None else (image.ndim - 1 if image.shape[-1] == 3 else image.ndim)
         image_shape = image.shape[:this_ndim]
-        embeddings = precompute_image_embeddings(predictor, image, verbose=False, ndim=this_ndim)
+        embeddings = compute_embeddings(predictor, image, verbose=False, ndim=this_ndim)
+        use_image = upsampler is not None or classical_features is not None
         features, grid_shape = compute_pixel_features(
-            embeddings, image_shape, image=image if upsampler is not None else None,
-            upsampler=upsampler, verbose=False,
+            embeddings, image_shape, image=image if use_image else None,
+            upsampler=upsampler, verbose=False, classical_features=classical_features,
         )
         labels = accumulate_pixel_labels(annotation, grid_shape)
 
@@ -521,6 +540,7 @@ def run_prediction_with_pixel_classifier(
     ndim: Optional[int] = None,
     upsampler=None,
     model_type: Optional[str] = None,
+    classical_features: Optional[Sequence[str]] = None,
 ) -> List[np.ndarray]:
     """Run prediction with a pretrained pixel classifier on a series of images.
 
@@ -535,6 +555,8 @@ def run_prediction_with_pixel_classifier(
             the classifier was trained with.
         model_type: The model family of `predictor`, used to pick the matching embedding function
             (SAM1 / SAM2 / VFM). If not given, the SAM1 embedding function is used.
+        classical_features: The classical filter features to append to the embedding features.
+            Use the same features that the classifier was trained with.
 
     Returns:
         The pixel level predictions.
@@ -551,9 +573,10 @@ def run_prediction_with_pixel_classifier(
         this_ndim = ndim if ndim is not None else (image.ndim - 1 if image.shape[-1] == 3 else image.ndim)
         image_shape = image.shape[:this_ndim]
         embeddings = compute_embeddings(predictor, image, verbose=False, ndim=this_ndim)
+        use_image = upsampler is not None or classical_features is not None
         features, grid_shape = compute_pixel_features(
-            embeddings, image_shape, image=image if upsampler is not None else None,
-            upsampler=upsampler, verbose=False,
+            embeddings, image_shape, image=image if use_image else None,
+            upsampler=upsampler, verbose=False, classical_features=classical_features,
         )
         prediction = rf.predict(features)
         predictions.append(project_prediction_to_image(prediction, grid_shape, image_shape))

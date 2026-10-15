@@ -17,6 +17,7 @@ from bioimage_cpp.utils import Blocking, take_dict
 
 from . import util
 from .v1.util import precompute_image_embeddings
+from .classical_features import compute_classical_object_features
 
 
 def _anyup_object_resize(embeds_chw, image_region, target_hw, upsampler):
@@ -161,6 +162,7 @@ def compute_object_features(
     verbose: bool = True,
     image: Optional[np.ndarray] = None,
     upsampler=None,
+    classical_features: Optional[Sequence[str]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Compute object features based on SAM embeddings.
 
@@ -169,9 +171,11 @@ def compute_object_features(
         segmentation: The segmentation for which to compute the features.
         resize_embedding_shape: Shape for intermediate resizing of the embeddings.
         verbose: Whether to print a progressbar for the computation.
-        image: The original image, required when `upsampler` is given (AnyUp uses it as guidance).
+        image: The original image, required when `upsampler` or `classical_features` is given.
         upsampler: An optional AnyUp model (see `pixel_classification.get_anyup_upsampler`). When
             given, the embedding is upsampled with AnyUp using the image instead of plain interpolation.
+        classical_features: The classical object features to append to the embedding features, a subset
+            of `classical_features.OBJECT_FEATURES`. By default no classical features are used.
 
     Returns:
         The segmentation ids.
@@ -179,7 +183,22 @@ def compute_object_features(
     """
     if upsampler is not None and image is None:
         raise ValueError("An 'image' is required when an AnyUp 'upsampler' is given.")
+    if classical_features is not None and image is None:
+        raise ValueError("An 'image' is required when 'classical_features' are given.")
 
+    seg_ids, features = _compute_embedding_object_features(
+        image_embeddings, segmentation, resize_embedding_shape, verbose,
+        image=image if upsampler is not None else None, upsampler=upsampler,
+    )
+    if classical_features is not None:
+        classical = compute_classical_object_features(image, segmentation, seg_ids, classical_features)
+        features = np.concatenate([features, classical], axis=1)
+    return seg_ids, features
+
+
+def _compute_embedding_object_features(
+    image_embeddings, segmentation, resize_embedding_shape, verbose, image=None, upsampler=None
+):
     is_tiled = image_embeddings["input_size"] is None
     is_3d = segmentation.ndim == 3
 
@@ -317,6 +336,7 @@ def run_prediction_with_object_classifier(
     ndim: Optional[int] = None,
     upsampler=None,
     model_type: Optional[str] = None,
+    classical_features: Optional[Sequence[str]] = None,
 ) -> List[np.ndarray]:
     """Run prediction with a pretrained object classifier on a series of images.
 
@@ -332,6 +352,9 @@ def run_prediction_with_object_classifier(
         upsampler: An optional AnyUp model (see `pixel_classification.get_anyup_upsampler`) to
             upsample the embeddings with the image as guidance instead of plain interpolation.
             Use the same setting that the classifier was trained with.
+        model_type: The model family of `predictor`, used to pick the matching embedding function.
+        classical_features: The classical object features to append to the embedding features.
+            Use the same features that the classifier was trained with.
 
     Returns:
         The predictions.
@@ -351,9 +374,10 @@ def run_prediction_with_object_classifier(
         if isinstance(segmentation, (str, os.PathLike)):
             segmentation = util.load_image_data(segmentation, key=segmentation_key)
         embeddings = compute_embeddings(predictor, image, verbose=False, ndim=ndim)
+        use_image = upsampler is not None or classical_features is not None
         seg_ids, features = compute_object_features(
-            embeddings, segmentation, verbose=False, image=image if upsampler is not None else None,
-            upsampler=upsampler,
+            embeddings, segmentation, verbose=False, image=image if use_image else None,
+            upsampler=upsampler, classical_features=classical_features,
         )
         prediction = rf.predict(features)
         if project_prediction:

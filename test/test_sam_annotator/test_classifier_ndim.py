@@ -55,3 +55,29 @@ def test_classifier_recreates_label_layers_for_3d(make_napari_viewer_proxy, clas
         assert len(layer.scale) == 3
 
     viewer.close()
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+@pytest.mark.parametrize("classifier_cls", [PixelClassifier, ObjectClassifier])
+def test_classifier_classical_features_option(make_napari_viewer_proxy, classifier_cls):
+    viewer = make_napari_viewer_proxy()
+    annotator = classifier_cls(viewer)
+    state = AnnotatorState()
+    choices = list(classifier_cls.classical_feature_choices)
+
+    # Off by default, which switches the classical features off in the backend.
+    assert annotator._get_classical_features() is None
+
+    # Restoring a spec enables the option with the stored selection and clears the cached features.
+    setattr(state, annotator.features_attr, np.zeros((1, 1)))
+    annotator._set_options(False, None, False, "fixed", choices[:2])
+    assert annotator._get_classical_features() == choices[:2]
+    assert getattr(state, annotator.features_attr) is None
+
+    # An empty selection is treated as switched off.
+    annotator._set_options(False, None, False, "fixed", [])
+    assert annotator._get_classical_features() is None
+    annotator._set_options(False, None, False, "fixed", None)
+    assert annotator._get_classical_features() is None
+    viewer.close()

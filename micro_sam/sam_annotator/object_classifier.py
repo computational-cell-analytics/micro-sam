@@ -26,11 +26,12 @@ from ._titles import get_dock_title
 from ._annotator import _ClassifierBase
 from .util import _sync_embedding_widget
 from ._batch_classification import ClassificationBatchTask
+from ..classical_features import OBJECT_FEATURES
 from ..object_classification import compute_object_features, project_prediction_to_segmentation
 
 # Object features are the object area plus the per-channel mean of the 256-channel SAM/SAM2 image
 # embedding, i.e. 257 features. PCA can reduce to at most this many components.
-OBJECT_FEATURES = 257
+N_OBJECT_FEATURES = 257
 INTERNAL_LABEL_LAYER_NAMES = {"annotations", "prediction"}
 
 
@@ -91,8 +92,9 @@ class ObjectClassifier(_ClassifierBase):
     features_attr = "object_features"
     aux_attr = "seg_ids"
     label_widget_title = "Object label names:"
-    max_components = OBJECT_FEATURES
+    max_components = N_OBJECT_FEATURES
     tool_key = "object"
+    classical_feature_choices = OBJECT_FEATURES
     supports_apply_to_volume = False  # object classification always runs over the full image/volume
 
     def _get_selected_segmentation_layer(self):
@@ -112,11 +114,12 @@ class ObjectClassifier(_ClassifierBase):
             segmentation_layer = self._get_selected_segmentation_layer()
             if segmentation_layer is None:
                 return None, None
-            image, upsampler, ok = self._resolve_anyup()
+            image, upsampler, classical_features, ok = self._resolve_feature_inputs()
             if not ok:
                 return None, None
             seg_ids, features = compute_object_features(
                 state.image_embeddings, segmentation_layer.data, image=image, upsampler=upsampler,
+                classical_features=classical_features,
             )
             state.seg_ids, state.object_features = seg_ids, features
         return state.object_features, state.seg_ids
