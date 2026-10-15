@@ -1,6 +1,8 @@
-"""Automatic instance segmentation with AIS and APG and 'hvit_l_cells' on a block of the huisken_data volume.
+"""Segmentation with micro-sam2 of the Huisken lab data, see 'huisken_data/README.md' for the layout.
 
-The volume is a light-sheet stack of nuclei (4871, 2048, 2048) uint16 (ZYX). 'hires_volume.h5' holds it as 'raw',
+The high-res ExM tile (exm_lsm/high_res) is segmented automatically with AIS and APG and 'hvit_l_cells'.
+
+The volume is a light-sheet stack of nuclei (4871, 2048, 2048) uint16 (ZYX). 'S000_..._P04871.h5' holds it as 'raw',
 identical to the headerless 'S000_..._P04871.raw'. The default block lies in the densest nuclei of the specimen.
 
 Usage:
@@ -19,13 +21,25 @@ The two smaller volumes of the huisken data, with every setting of SMALL_SETTING
 - 'exm': the expansion microscopy nuclei (sytox green) of a 6 dpf Platynereis, shared as a downsampled MJPEG video
   (765, 565, 1405) uint8 (ZYX). The nuclei are only ~10-15 px across, the bright ones saturate at 255 and the
   compression adds block artifacts, while the nuclei on the right side of the specimen are dim.
-- 'membrane': the fused light-sheet stack of the membranes of a 2 dpf Platynereis, (83, 509, 542) uint16 (ZYX),
+- 'membrane': the fused light-sheet stack (Beke) of the membranes of a 2 dpf Platynereis, (83, 509, 542) uint16,
   without spacing metadata. The specimen is ~430 px wide in xy and ~80 slices deep, so z is ~4-5x coarser than xy.
 
     python explore_huisken_data.py --sweep exm  # all settings on the crops of the exm volume
     python explore_huisken_data.py --sweep membrane  # all settings on the whole (small) membrane volume
     python explore_huisken_data.py -d exm -s clahe_x2  # one setting on the whole volume
     python explore_huisken_data.py --view -d exm --crop dense  # the raw crop and its segmentations in napari
+
+The two early embryos of Beke (classic_lsm/early_embryo, see EMBRYO_NAMES), with 'hvit_t_cells':
+    python explore_huisken_data.py --embryo t0 --view  # the raw volume (and its ground truth) in napari
+    python explore_huisken_data.py --embryo t0 --precompute  # the embeddings, over all visible GPUs
+    python explore_huisken_data.py --embryo t0  # the annotator
+    python explore_huisken_data.py --embryo t0 --slice_norm  # each slice normalized by its own percentiles
+    python explore_huisken_data.py --embryo 3.5hpf_crop  # the embryo of 3.5hpf, upsampled 2x by SAM2
+    python explore_huisken_data.py --embryo t0_crop --iterative_prompting  # prompted from the ground truth
+    python explore_huisken_data.py --embryo t0_crop --apg  # automatic prompt generation, scored on the ground truth
+    python explore_huisken_data.py --embryo t0_crop --ais --apg -m hvit_l_cells  # AIS and APG with another model
+    python explore_huisken_data.py --embryo t0_crop --figure box  # the figure of the box prompting, iteration 2
+    python explore_huisken_data.py --embryo 3.5hpf --cellpose 3d 2d_stitch  # cellposeSAM, scored on the crop
 """
 
 import os
@@ -50,8 +64,9 @@ from micro_sam.v2.batched_inference import NORMALIZATION_SAMPLE_SLICES, _volume_
 
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data/huisken_data"
-DATA_PATH = os.path.join(DATA_ROOT, "Pdu_2dpf_ExM", "hires_volume.h5")
-RAW_PATH = os.path.join(DATA_ROOT, "Pdu_2dpf_ExM", "S000_t000000_V000_R0009_X000_Y000_C01_I0_D0_P04871.raw")
+TILE_NAME = "S000_t000000_V000_R0009_X000_Y000_C01_I0_D0_P04871"
+DATA_PATH = os.path.join(DATA_ROOT, "exm_lsm", "high_res", "tile", f"{TILE_NAME}.h5")
+RAW_PATH = os.path.join(DATA_ROOT, "exm_lsm", "high_res", "tile", f"{TILE_NAME}.raw")
 RAW_SHAPE = (4871, 2048, 2048)
 OUTPUT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/huisken_data"
 MODEL_TYPE = "hvit_l_cells"
@@ -82,8 +97,8 @@ MIN_CONTRAST = 1.1
 RING_WIDTH = 6
 # The two smaller volumes, see the module docstring.
 SMALL_DATA_PATHS = {
-    "exm": os.path.join(DATA_ROOT, "Pdu_2dpf_ExM", "Pdu_6dpf_ExM_downsampled_nuclei-sytox-green.avi"),
-    "membrane": os.path.join(DATA_ROOT, "Pdu_2dpf_membrane", "fused_t000050_R0001_C02_Dfinal_cropped.tif"),
+    "exm": os.path.join(DATA_ROOT, "exm_lsm", "low_res", "whole", "Pdu_6dpf_ExM_downsampled_nuclei-sytox-green.avi"),
+    "membrane": os.path.join(DATA_ROOT, "classic_lsm", "membrane", "fused_t000050_R0001_C02_Dfinal_cropped.tif"),
 }
 # The embeddings are written to the tmp folder of the job and removed after each segmentation.
 EMBEDDING_ROOT = os.environ.get("TMPDIR", tempfile.gettempdir())
@@ -205,6 +220,55 @@ SMALL_SETTINGS = {
                                 "min_size": 200, "min_border_intensity": 1500},
     },
 }
+
+
+# The two early embryos of Beke, classic light-sheet stacks of the membranes, (Z, 1024, 1024) uint16 (ZYX). 't0' is
+# fused t0 (208 slices) and '3.5hpf' the 3.5 hpf composite (79 slices). Each '_crop' is the 512x512 region around the
+# embryo, which contains all of the ground truth, as a tif next to the volume.
+EMBRYO_ROOT = os.path.join(DATA_ROOT, "classic_lsm", "early_embryo")
+EMBRYO_NAMES = {
+    "t0": "fused_t000000_R0000_C02_Dfinal",
+    "t0_crop": "fused_t000000_R0000_C02_Dfinal_z0-208_y215-727_x253-765",
+    "3.5hpf": "C2-Pdu_Composite_3.5hpf_HRas-mScarlet_H2B-GFP",
+    "3.5hpf_crop": "C2-Pdu_Composite_3.5hpf_HRas-mScarlet_H2B-GFP_z0-79_y211-723_x255-767",
+}
+# Only 't0_crop' is evaluated: iterative prompting and APG are scored on its ground truth without the fragments.
+EMBRYO_GT_VOLUME = "t0_crop"
+EMBRYO_MODEL_TYPE = "hvit_t_cells"
+EMBRYO_OUTPUT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/interactive_visualization"
+EMBRYO_N_ITERATIONS = 8
+# Drops the specks of the filtered ground truth: its 19 cells have >= 105k voxels, every other object <= 4k.
+EMBRYO_MIN_SIZE = 5000
+# ZYX in um. The tif has no z spacing, it is estimated from the cell extents.
+EMBRYO_SCALE = (0.812, 0.406, 0.406)
+# The crop of each full embryo volume and its ROI, so that a segmentation of the full volume is scored on the crop.
+EMBRYO_CROPS = {
+    "t0": ("t0_crop", np.s_[0:208, 215:727, 253:765]),
+    "3.5hpf": ("3.5hpf_crop", np.s_[0:79, 211:723, 255:767]),
+}
+# The cellposeSAM modes, as in explore_beghin_data.py: '3d' predicts the flows on the yx, zx and zy planes and follows
+# their average in 3D, '2d_stitch' segments every z plane in 2D and stitches the masks of neighboring planes with
+# IoU >= CELLPOSE_STITCH_THRESHOLD.
+CELLPOSE_MODES = ("3d", "2d_stitch")
+CELLPOSE_STITCH_THRESHOLD = 0.5
+# The figure: the prediction tif suffix and the layer name of each choice of '--figure'.
+EMBRYO_FIGURES = {
+    "box": (f"prediction_microsam2_{EMBRYO_MODEL_TYPE}_box_iteration2", "iteration 2"),
+    "apg": (f"prediction_microsam2_{EMBRYO_MODEL_TYPE}_apg", "apg"),
+}
+FIGURE_DOWNSAMPLE = 0.25
+FIGURE_GAP = 50
+FIGURE_BORDER_WIDTH = 2
+FIGURE_MIN_FRAGMENT_SIZE = 1000
+FIGURE_CLOSING_RADIUS_2D = 3
+AXES_LABEL_OFFSET = 0.25
+PALETTE = [
+    (1.00, 0.10, 0.10), (0.10, 0.60, 1.00), (0.10, 0.85, 0.10), (1.00, 0.85, 0.00), (0.70, 0.10, 1.00),
+    (0.00, 0.90, 0.90), (1.00, 0.45, 0.00), (1.00, 0.10, 0.85), (0.45, 1.00, 0.10), (0.00, 0.30, 0.90),
+    (1.00, 0.65, 0.75), (0.55, 0.35, 0.10), (0.00, 0.90, 0.50), (0.80, 0.00, 0.30), (0.85, 1.00, 0.10),
+    (0.10, 0.10, 0.70), (1.00, 0.55, 0.55), (0.10, 0.70, 0.50), (0.90, 0.70, 0.00), (0.50, 0.00, 0.50),
+    (0.00, 0.70, 0.30), (1.00, 0.70, 0.20), (0.30, 0.00, 0.70), (0.00, 1.00, 0.75), (0.75, 0.20, 0.00),
+]
 
 
 def get_roi(start, shape):
@@ -791,6 +855,275 @@ def view_small(dataset, crop, tag=None):
     napari.run()
 
 
+def load_embryo(volume):
+    name = EMBRYO_NAMES[volume]
+    return tifffile.imread(os.path.join(EMBRYO_ROOT, f"{name}.tif")), name
+
+
+def get_embryo_prediction_path(name, suffix):
+    return os.path.join(EMBRYO_ROOT, f"{name}_{suffix}.tif")
+
+
+def normalize_per_slice(volume):
+    from micro_sam.v2.normalization import normalize_raw
+
+    # Every slice keeps >= 2% of its pixels at 0 and 1, so the volume bounds of the embeddings become (0, 1).
+    return np.stack([normalize_raw(z_slice) for z_slice in volume])
+
+
+def view_embryo(raw, name):
+    import napari
+
+    viewer = napari.Viewer(title=name)
+    viewer.add_image(raw, name="raw")
+    if os.path.exists(get_embryo_prediction_path(name, "groundtruth")):
+        viewer.add_labels(tifffile.imread(get_embryo_prediction_path(name, "groundtruth")), name="groundtruth")
+    napari.run()
+
+
+def precompute_embryo_embeddings(raw, embedding_path, model_type):
+    from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings
+
+    predictor = get_sam2_model(model_type=model_type, input_type="videos")
+    # 'devices=None' spreads the slices over every visible GPU.
+    embeddings = precompute_image_embeddings(predictor, raw, save_path=embedding_path, ndim=3, lazy_loading=True)
+    embeddings.close()
+
+
+def run_embryo_annotator(raw, embedding_path, model_type):
+    import napari
+    from micro_sam.sam_annotator import Annotator
+    from micro_sam.sam_annotator._state import AnnotatorState
+    from micro_sam.sam_annotator._titles import get_dock_title
+    from micro_sam.sam_annotator.util import _sync_embedding_widget
+
+    # 'annotator' tiles slices above 768 pixels, so build the tool here to segment over the full XY.
+    state = AnnotatorState()
+    state.image_shape = raw.shape
+    state.initialize_predictor(
+        raw, model_type=model_type, ndim=3, save_path=embedding_path, batch_size=None, skip_load=False, use_cli=True
+    )
+
+    viewer = napari.Viewer()
+    viewer.add_image(raw, name="image")
+    annotator = Annotator(viewer, ndim=3, reset_state=False)
+    annotator._update_image()
+    viewer.window.add_dock_widget(annotator, name=get_dock_title("segmentation"))
+    _sync_embedding_widget(
+        widget=state.widgets["embeddings"], model_type=model_type, save_path=embedding_path,
+        checkpoint_path=None, device=None, tile_shape=None, halo=None,
+    )
+    napari.run()
+
+
+def load_embryo_ground_truth(name):
+    from bioimage_cpp.segmentation import label as connected_components
+    from torch_em.util.segmentation import size_filter
+
+    gt = tifffile.imread(get_embryo_prediction_path(name, "groundtruth_filtered"))
+    # The interactive inference relabels and filters the ground truth like this, so its predicted ids match these.
+    return gt, size_filter(seg=connected_components(gt).astype(gt.dtype), min_size=EMBRYO_MIN_SIZE)
+
+
+def evaluate_embryo(segmentation, labels):
+    from bioimage_py.evaluation import symmetric_best_dice_score
+    from elf.evaluation import mean_segmentation_accuracy
+
+    msa, sa = mean_segmentation_accuracy(segmentation, labels, return_accuracies=True)
+    sbd = symmetric_best_dice_score(segmentation, labels)
+    return f"mSA {msa:.4f}, SA50 {sa[0]:.4f}, SA75 {sa[5]:.4f}, SBD {sbd:.4f}"
+
+
+def save_embryo_prediction(name, suffix, segmentation):
+    path = get_embryo_prediction_path(name, suffix)
+    tifffile.imwrite(path, segmentation.astype("uint16"), compression="zlib")
+    print(f"Saved {path}")
+
+
+def run_embryo_iterative_prompting(raw, name, model_type, prompt):
+    from micro_sam.v2.evaluation.inference import run_interactive_segmentation_3d
+    from micro_sam.v2.normalization import normalize_raw
+
+    gt, labels = load_embryo_ground_truth(name)
+    # Each slice is normalized on its own, as in training and in the interactive evaluation.
+    prediction_dir = run_interactive_segmentation_3d(
+        raw=np.stack([normalize_raw(z_slice, output_dtype="uint8") for z_slice in raw]),
+        labels=gt,
+        model_type=model_type,
+        checkpoint_path=None,
+        start_with_box_prompt=prompt == "box",
+        prediction_dir=os.path.join(EMBRYO_OUTPUT_ROOT, "iterative_prompting", f"{name}_{model_type}"),
+        prediction_fname=name,
+        n_iterations=EMBRYO_N_ITERATIONS,
+        min_size=EMBRYO_MIN_SIZE,
+    )
+    for i in range(EMBRYO_N_ITERATIONS):
+        segmentation = tifffile.imread(os.path.join(prediction_dir, f"iteration{i}", f"{name}.tif"))
+        print(f"Iteration {i}: {evaluate_embryo(segmentation.astype(labels.dtype), labels)}")
+        save_embryo_prediction(name, f"prediction_microsam2_{model_type}_{prompt}_iteration{i}", segmentation)
+
+
+def run_embryo_automatic(raw, name, model_type, embedding_path, mode):
+    _, labels = load_embryo_ground_truth(name)
+    predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, segmentation_mode=mode, ndim=3)
+    segmentation = automatic_instance_segmentation(
+        predictor, segmenter, input_path=raw, embedding_path=embedding_path, ndim=3
+    )
+    print(f"{mode.upper()}: {evaluate_embryo(segmentation, labels)}")
+    save_embryo_prediction(name, f"prediction_microsam2_{model_type}_{mode}", segmentation)
+
+
+def run_embryo_cellpose(raw, volume, modes):
+    """Segment the embryo with cellposeSAM (default settings) and score it on the ground truth of the crop.
+
+    A full volume is segmented as a whole and cropped afterwards. The results are saved next to the crop as
+    'prediction_cellposeSAM_<mode>', with the suffix '_full' for the full volume.
+    """
+    from cellpose import models
+
+    crop_volume, roi = EMBRYO_CROPS.get(volume, (volume, None))
+    crop_name = EMBRYO_NAMES[crop_volume]
+    _, labels = load_embryo_ground_truth(crop_name)
+    model = models.CellposeModel(gpu=True, pretrained_model="cpsam")
+    for mode in modes:
+        stitch_threshold = CELLPOSE_STITCH_THRESHOLD if mode == "2d_stitch" else 0.0
+        start = time.time()
+        segmentation = model.eval(raw, z_axis=0, do_3D=mode == "3d", stitch_threshold=stitch_threshold)[0]
+        runtime = time.time() - start
+        if roi is not None:
+            segmentation = segmentation[roi]
+        n_objects = len(np.unique(segmentation)) - 1
+        print(f"cellposeSAM {mode}: {n_objects} objects, {evaluate_embryo(segmentation, labels)}, {runtime:.1f} s")
+        assert segmentation.max() <= np.iinfo("uint16").max
+        suffix = f"prediction_cellposeSAM_{mode}" + ("" if roi is None else "_full")
+        save_embryo_prediction(crop_name, suffix, segmentation)
+
+
+def remove_artifacts(segmentation, min_size):
+    """Zero the connected pieces of each label with fewer than min_size voxels or on a single z slice."""
+    from skimage.measure import label
+
+    components = label(segmentation, background=0, connectivity=segmentation.ndim)
+    sizes = np.bincount(components.ravel())
+    n_slices = np.bincount(np.concatenate([np.unique(z_slice) for z_slice in components]), minlength=len(sizes))
+    segmentation[(sizes[components] < min_size) | (n_slices[components] == 1)] = 0
+    return segmentation
+
+
+def fill_cells_2d(segmentation, cell_ids, radius):
+    """Paint only these cells with their gaps closed and holes filled, the largest first so smaller ones stay on top."""
+    from skimage.morphology import closing, disk
+
+    out = np.zeros_like(segmentation)
+    for cell_id in sorted(cell_ids, key=lambda cell_id: -(segmentation == cell_id).sum()):
+        out[ndimage.binary_fill_holes(closing(segmentation == cell_id, disk(radius)))] = cell_id
+    return out
+
+
+def make_color_dict(label_ids):
+    colors = {0: np.zeros(4, dtype="float32"), None: np.zeros(4, dtype="float32")}
+    for i, label_id in enumerate(label_ids):
+        colors[label_id] = np.array([*PALETTE[i % len(PALETTE)], 1.0], dtype="float32")
+    return colors
+
+
+def set_axes_label_offset(viewer):
+    try:
+        axes_vispy = viewer.window._qt_viewer.canvas._overlay_to_visual[viewer.axes][0]
+        axes_vispy.node._text_offsets = AXES_LABEL_OFFSET * np.array([1, 1, 1])
+        axes_vispy._on_data_change()
+    except Exception:
+        pass
+
+
+def show_scaled(viewer, axis_labels):
+    import napari
+
+    viewer.dims.axis_labels = axis_labels
+    viewer.axes.visible = True
+    set_axes_label_offset(viewer)
+    viewer.scale_bar.visible = True
+    viewer.scale_bar.unit = "um"
+    napari.run()
+
+
+def view_embryo_figure(raw, name, figure):
+    """The figure: the segmentation in 3d above the raw middle slice, then the cells of that slice in 2d."""
+    import napari
+    from napari.utils.colormaps.colormap import DirectLabelColormap
+    from skimage.transform import rescale
+
+    suffix, layer_name = EMBRYO_FIGURES[figure]
+    segmentation = remove_artifacts(tifffile.imread(get_embryo_prediction_path(name, suffix)), FIGURE_MIN_FRAGMENT_SIZE)
+    z_2d = raw.shape[0] // 2
+    raw_2d_full = raw[z_2d].astype("float32")
+    # Every cell on the slice, without the slivers that the 3d fragment filter keeps.
+    cell_ids, areas = np.unique(segmentation[z_2d][segmentation[z_2d] > 0], return_counts=True)
+    cells_2d = [int(cell_id) for cell_id in cell_ids[areas >= FIGURE_MIN_FRAGMENT_SIZE]]
+    segmentation_2d = fill_cells_2d(segmentation[z_2d], cells_2d, FIGURE_CLOSING_RADIUS_2D)
+
+    # z is downsampled less, by the anisotropy, so the displayed voxels are isotropic.
+    z_spacing, y_spacing, _ = EMBRYO_SCALE
+    factors = (min(1.0, FIGURE_DOWNSAMPLE * z_spacing / y_spacing), FIGURE_DOWNSAMPLE, FIGURE_DOWNSAMPLE)
+    scale = tuple(spacing / factor for spacing, factor in zip(EMBRYO_SCALE, factors))
+    # A smaller dtype renders much faster in 3d than uint32.
+    segmentation_ds = rescale(
+        segmentation.astype("float32"), factors, order=0, anti_aliasing=False, channel_axis=None
+    ).astype("uint8" if segmentation.max() < 256 else "uint16")
+    n_z, n_y, n_x = segmentation_ds.shape
+    raw_2d = rescale(raw_2d_full, FIGURE_DOWNSAMPLE, order=1, anti_aliasing=True, channel_axis=None)[:n_y, :n_x]
+    seg_start = FIGURE_GAP + 1
+    raw_volume = np.zeros((seg_start + n_z, n_y, n_x), dtype=raw_2d.dtype)
+    raw_volume[0] = raw_2d
+
+    viewer = napari.Viewer(title=f"{name} 3D {layer_name} (ds={factors})")
+    contrast_limits = (float(raw_2d.min()), float(raw_2d.max()) + 1e-6)
+    viewer.add_image(raw_volume, name="raw", scale=scale, contrast_limits=contrast_limits)
+    layer = viewer.add_labels(np.pad(segmentation_ds, [(seg_start, 0), (0, 0), (0, 0)]), name=layer_name, scale=scale)
+    layer.colormap = DirectLabelColormap(color_dict=make_color_dict(np.unique(segmentation_ds)[1:].tolist()))
+    viewer.dims.ndisplay = 3
+    show_scaled(viewer, ("z", "y", "x"))
+
+    scale_2d = EMBRYO_SCALE[1:]
+    contrast_limits = (float(raw_2d_full.min()), float(raw_2d_full.max()) + 1e-6)
+    color_dict = make_color_dict(cells_2d)
+    viewer = napari.Viewer(title=f"{name} 2D {layer_name} z={z_2d}")
+    viewer.add_image(raw_2d_full, name="raw", scale=scale_2d, contrast_limits=contrast_limits)
+    fill_layer = viewer.add_labels(segmentation_2d, name=layer_name, scale=scale_2d, opacity=0.5)
+    fill_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    border_layer = viewer.add_labels(segmentation_2d, name=f"{layer_name} border", scale=scale_2d, opacity=1.0)
+    border_layer.colormap = DirectLabelColormap(color_dict=color_dict)
+    border_layer.contour = FIGURE_BORDER_WIDTH
+    show_scaled(viewer, ("y", "x"))
+
+
+def run_embryo(args, parser):
+    if (args.iterative_prompting or args.ais or args.apg or args.figure) and args.embryo != EMBRYO_GT_VOLUME:
+        parser.error(f"Only '{EMBRYO_GT_VOLUME}' has ground truth for iterative prompting, AIS, APG and the figure.")
+    raw, name = load_embryo(args.embryo)
+    print(f"Loaded {name} with shape {raw.shape} and dtype {raw.dtype}")
+    embedding_path = os.path.join(args.embedding_root, f"{name}_{args.model_type}.zarr")
+    if args.cellpose:
+        run_embryo_cellpose(raw, args.embryo, args.cellpose)
+    elif args.iterative_prompting:
+        run_embryo_iterative_prompting(raw, name, args.model_type, args.prompt)
+    elif args.ais or args.apg:
+        for mode in [mode for mode, flag in (("ais", args.ais), ("apg", args.apg)) if flag]:
+            run_embryo_automatic(raw, name, args.model_type, embedding_path, mode)
+    elif args.figure:
+        view_embryo_figure(raw, name, args.figure)
+    elif args.view:
+        view_embryo(raw, name)
+    else:
+        if args.slice_norm:
+            raw = normalize_per_slice(raw)
+            embedding_path = os.path.join(args.embedding_root, f"{name}_slice_norm_{args.model_type}.zarr")
+        if args.precompute:
+            precompute_embryo_embeddings(raw, embedding_path, args.model_type)
+        else:
+            run_embryo_annotator(raw, embedding_path, args.model_type)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--engines", nargs="+", choices=ENGINES, default=list(ENGINES))
@@ -816,10 +1149,23 @@ def main():
     parser.add_argument("--crop", nargs="+", choices=tuple(EXM_CROPS),
                         help="The exm crops to sweep, or the one to view.")
     parser.add_argument("--tag", help="A tag for the name of the output file of the smaller volumes.")
+    parser.add_argument("--embryo", choices=tuple(EMBRYO_NAMES), help="Open this early embryo in the annotator.")
+    parser.add_argument("-m", "--model_type", default=EMBRYO_MODEL_TYPE, help="The model for the early embryos.")
+    parser.add_argument("--embedding_root", default=EMBRYO_OUTPUT_ROOT, help="The folder of the embryo embeddings.")
+    parser.add_argument("--precompute", action="store_true", help="Only precompute the embeddings of the embryo.")
+    parser.add_argument("--slice_norm", action="store_true", help="Normalize each embryo slice instead of the volume.")
+    parser.add_argument("--iterative_prompting", action="store_true", help="Prompt the embryo from the ground truth.")
+    parser.add_argument("-p", "--prompt", default="box", choices=["box", "point"], help="The first prompt per object.")
+    parser.add_argument("--ais", action="store_true", help="Segment the embryo automatically with AIS.")
+    parser.add_argument("--apg", action="store_true", help="Segment the embryo automatically with APG.")
+    parser.add_argument("--figure", choices=tuple(EMBRYO_FIGURES), help="Show the figure of this embryo prediction.")
+    parser.add_argument("--cellpose", nargs="+", choices=CELLPOSE_MODES, help="Segment the embryo with cellposeSAM.")
     args = parser.parse_args()
 
     roi = get_roi(args.start, args.shape)
-    if args.sweep is not None or args.dataset is not None:
+    if args.embryo is not None:
+        run_embryo(args, parser)
+    elif args.sweep is not None or args.dataset is not None:
         dataset = args.sweep or args.dataset
         if args.view:
             view_small(dataset, None if args.crop is None else args.crop[0], args.tag)

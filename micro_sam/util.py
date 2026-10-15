@@ -102,14 +102,36 @@ class AutoSegBase(ABC):
         """Clear the cached state."""
 
 
-def get_cache_directory() -> None:
-    """Get micro-sam cache directory location.
+def get_cache_directory() -> Path:
+    """Get the micro-sam cache directory location.
 
+    This is the top level cache directory for micro-sam models, sample data and temporary embeddings.
     Users can set the MICROSAM_CACHEDIR environment variable for a custom cache directory.
+    The function reads the variable on every call, so updates take effect immediately.
+
+    Returns:
+        The cache directory.
     """
-    default_cache_directory = os.path.expanduser(pooch.os_cache("micro_sam"))
-    cache_directory = Path(os.environ.get("MICROSAM_CACHEDIR", default_cache_directory))
-    return cache_directory
+    cache_directory = os.environ.get("MICROSAM_CACHEDIR") or pooch.os_cache("micro_sam")
+    return Path(os.path.expanduser(cache_directory))
+
+
+def get_model_cache_directory(name: Optional[str] = None) -> Path:
+    """Get the directory where micro-sam stores downloaded model weights.
+
+    All model downloads go to the 'models' folder of the micro-sam cache directory, so that each
+    model is stored only once. The SAM, micro-sam, SAM2 and micro-sam2 checkpoints are files
+    directly in this folder. The weights of third-party models (e.g. 'anyup', 'dino/v2', 'dino/v3',
+    'uni', 'sam3', 'trackastra') go to a subfolder.
+
+    Args:
+        name: The optional subfolder for a third-party model.
+
+    Returns:
+        The model cache directory.
+    """
+    model_directory = get_cache_directory() / "models"
+    return model_directory if name is None else model_directory / name
 
 
 def make_temp_embedding_path() -> str:
@@ -131,18 +153,6 @@ def make_temp_embedding_path() -> str:
 #
 # Functionality for model download and export
 #
-
-
-def microsam_cachedir() -> None:
-    """Return the micro-sam cache directory.
-
-    Returns the top level cache directory for micro-sam models and sample data.
-
-    Every time this function is called, we check for any user updates made to
-    the MICROSAM_CACHEDIR os environment variable since the last time.
-    """
-    cache_directory = os.environ.get("MICROSAM_CACHEDIR") or pooch.os_cache("micro_sam")
-    return cache_directory
 
 
 def _get_default_device():

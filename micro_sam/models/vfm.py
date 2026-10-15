@@ -44,24 +44,25 @@ from .. import util
 # 'backend' selects how the model is loaded: 'torch_hub' (DINOv2, auto-download) builds 'repo'/'entrypoint'
 # via torch.hub; 'hf' (DINOv3, gated) loads the HuggingFace 'repo' via transformers.AutoModel; 'timm'
 # (UNI/UNI2-h, gated) loads the HuggingFace 'repo' via timm.create_model; 'sam3' loads the SAM3 image
-# encoder via the sam3 package. A 'mean'/'std' entry overrides the default ImageNet normalization, and an
-# 'img_size' entry overrides the default longest-side input size (used for SAM3's native 1008 resolution).
+# encoder via the sam3 package. 'cache_folder' is the model's folder in the micro-sam model cache. A
+# 'mean'/'std' entry overrides the default ImageNet normalization, and an 'img_size' entry overrides the
+# default longest-side input size (used for SAM3's native 1008 resolution).
 VFM_MODELS: Dict[str, Dict] = {
     # DINOv2 (patch size 14); weights auto-download via torch.hub, no authentication.
-    "vit_s_dinov2": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vits14", "patch_size": 14, "embed_dim": 384},  # noqa
-    "vit_b_dinov2": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitb14", "patch_size": 14, "embed_dim": 768},  # noqa
-    "vit_l_dinov2": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitl14", "patch_size": 14, "embed_dim": 1024},  # noqa
-    "vit_g_dinov2": {"backend": "torch_hub", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitg14", "patch_size": 14, "embed_dim": 1536},  # noqa
+    "vit_s_dinov2": {"backend": "torch_hub", "cache_folder": "dino/v2", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vits14", "patch_size": 14, "embed_dim": 384},  # noqa
+    "vit_b_dinov2": {"backend": "torch_hub", "cache_folder": "dino/v2", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitb14", "patch_size": 14, "embed_dim": 768},  # noqa
+    "vit_l_dinov2": {"backend": "torch_hub", "cache_folder": "dino/v2", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitl14", "patch_size": 14, "embed_dim": 1024},  # noqa
+    "vit_g_dinov2": {"backend": "torch_hub", "cache_folder": "dino/v2", "repo": "facebookresearch/dinov2", "entrypoint": "dinov2_vitg14", "patch_size": 14, "embed_dim": 1536},  # noqa
     # DINOv3 (patch size 16); loaded from HuggingFace via transformers. Gated: user provides HF access.
-    "vit_s_dinov3": {"backend": "hf", "repo": "facebook/dinov3-vits16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 384},  # noqa
-    "vit_b_dinov3": {"backend": "hf", "repo": "facebook/dinov3-vitb16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 768},  # noqa
-    "vit_l_dinov3": {"backend": "hf", "repo": "facebook/dinov3-vitl16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 1024},  # noqa
+    "vit_s_dinov3": {"backend": "hf", "cache_folder": "dino/v3", "repo": "facebook/dinov3-vits16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 384},  # noqa
+    "vit_b_dinov3": {"backend": "hf", "cache_folder": "dino/v3", "repo": "facebook/dinov3-vitb16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 768},  # noqa
+    "vit_l_dinov3": {"backend": "hf", "cache_folder": "dino/v3", "repo": "facebook/dinov3-vitl16-pretrain-lvd1689m", "patch_size": 16, "embed_dim": 1024},  # noqa
     # UNI / UNI2-h (MahmoodLab histopathology); loaded from HuggingFace via timm. Gated: user provides HF access.
-    "vit_uni": {"backend": "timm", "repo": "hf-hub:MahmoodLab/uni", "patch_size": 16, "embed_dim": 1024, "timm_variant": "uni"},  # noqa
-    "vit_univ2": {"backend": "timm", "repo": "hf-hub:MahmoodLab/UNI2-h", "patch_size": 14, "embed_dim": 1536, "timm_variant": "uni2_h"},  # noqa
+    "vit_uni": {"backend": "timm", "cache_folder": "uni", "repo": "hf-hub:MahmoodLab/uni", "patch_size": 16, "embed_dim": 1024, "timm_variant": "uni"},  # noqa
+    "vit_univ2": {"backend": "timm", "cache_folder": "uni", "repo": "hf-hub:MahmoodLab/UNI2-h", "patch_size": 14, "embed_dim": 1536, "timm_variant": "uni2_h"},  # noqa
     # SAM3 image encoder (Perception Encoder ViT trunk, patch size 14); the checkpoint auto-downloads from
     # HuggingFace (facebook/sam3). Normalized to mean/std 0.5 at its native 1008 resolution.
-    "vit_sam3": {"backend": "sam3", "patch_size": 14, "embed_dim": 1024, "img_size": 1008, "mean": (0.5, 0.5, 0.5), "std": (0.5, 0.5, 0.5)},  # noqa
+    "vit_sam3": {"backend": "sam3", "cache_folder": "sam3", "patch_size": 14, "embed_dim": 1024, "img_size": 1008, "mean": (0.5, 0.5, 0.5), "std": (0.5, 0.5, 0.5)},  # noqa
 }
 
 # Map each model to a human-readable size label for the GUI dropdowns.
@@ -237,9 +238,9 @@ def get_vfm_model(
         os.environ.setdefault("XFORMERS_DISABLED", "1")
 
     if spec["backend"] == "torch_hub":  # DINOv2: code + weights auto-download, no authentication.
-        model = torch.hub.load(spec["repo"], spec["entrypoint"])
+        model = _load_torch_hub_model(spec)
     elif spec["backend"] == "hf":  # DINOv3: HuggingFace via transformers, user's own HF access.
-        model = _load_hf_model(spec["repo"], checkpoint_path)
+        model = _load_hf_model(spec["repo"], spec["cache_folder"], checkpoint_path)
     elif spec["backend"] == "sam3":  # SAM3: the image-model ViT trunk via the sam3 package.
         model = _load_sam3_model(checkpoint_path)
     else:  # 'timm': UNI / UNI2-h from HuggingFace via timm, user's own HF access.
@@ -249,6 +250,31 @@ def get_vfm_model(
     encoder.model_type = model_type
     encoder.model_name = model_type
     return encoder
+
+
+def _load_torch_hub_model(spec: Dict):
+    """Load a DINOv2 model via torch.hub, with the code and the weights in the micro-sam model cache.
+
+    torch.hub only supports a global download directory, so the function sets it for the load and
+    restores it afterwards.
+    """
+    hub_dir = torch.hub.get_dir()
+    torch.hub.set_dir(str(util.get_model_cache_directory(spec["cache_folder"])))
+    try:
+        return torch.hub.load(spec["repo"], spec["entrypoint"])
+    finally:
+        torch.hub.set_dir(hub_dir)
+
+
+def _download_sam3_checkpoint():
+    """Download the SAM3 checkpoint from HuggingFace (facebook/sam3) to the micro-sam model cache.
+
+    The 'sam3' download helper always uses the default HuggingFace cache, so the function downloads the
+    checkpoint directly. The ViT trunk only needs the checkpoint, not the HuggingFace config.
+    """
+    from huggingface_hub import hf_hub_download
+    cache_dir = util.get_model_cache_directory("sam3")
+    return hf_hub_download(repo_id="facebook/sam3", filename="sam3.pt", cache_dir=cache_dir)
 
 
 def _load_timm_model(spec: Dict):
@@ -274,7 +300,7 @@ def _load_timm_model(spec: Dict):
         })
 
     try:
-        return timm.create_model(spec["repo"], **kwargs)
+        return timm.create_model(spec["repo"], cache_dir=util.get_model_cache_directory(spec["cache_folder"]), **kwargs)
     except Exception as e:
         repo = spec["repo"].split("hf-hub:")[-1]
         raise RuntimeError(
@@ -376,7 +402,7 @@ def _load_sam3_model(checkpoint_path=None):
     """
     _ensure_sam3_importable()
     try:
-        from sam3.model_builder import _create_vit_backbone, download_ckpt_from_hf
+        from sam3.model_builder import _create_vit_backbone
     except ImportError as e:
         raise ImportError(
             "Loading the SAM3 encoder requires the 'sam3' package. Install segment anything 3 from "
@@ -386,7 +412,7 @@ def _load_sam3_model(checkpoint_path=None):
     _install_sam3_cpu_fp32_mlp()
     trunk = _create_vit_backbone()
     try:
-        source = str(checkpoint_path) if checkpoint_path else download_ckpt_from_hf(version="sam3")
+        source = str(checkpoint_path) if checkpoint_path else _download_sam3_checkpoint()
     except Exception as e:
         raise RuntimeError(
             "Could not fetch the SAM3 checkpoint. See the chained error above for the exact reason. The "
@@ -403,7 +429,7 @@ def _load_sam3_model(checkpoint_path=None):
     return trunk
 
 
-def _load_hf_model(repo: str, checkpoint_path=None):
+def _load_hf_model(repo: str, cache_folder: str, checkpoint_path=None):
     """Load a gated DINOv3 model from HuggingFace via transformers, with the user's own HF access.
 
     `transformers` resolves the HuggingFace token from the environment (`HF_TOKEN`) or the
@@ -419,7 +445,7 @@ def _load_hf_model(repo: str, checkpoint_path=None):
 
     source = str(checkpoint_path) if checkpoint_path else repo
     try:
-        return AutoModel.from_pretrained(source)
+        return AutoModel.from_pretrained(source, cache_dir=util.get_model_cache_directory(cache_folder))
     except Exception as e:
         # The chained error (e) carries the exact reason: license not requested, access still pending
         # the repo authors' review, missing/invalid token, etc. We point the user at it rather than

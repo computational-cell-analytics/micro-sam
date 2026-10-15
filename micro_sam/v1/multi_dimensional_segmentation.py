@@ -621,7 +621,8 @@ def _filter_lineages(lineages, tracking_result):
 
 def _tracking_impl(timeseries, segmentation, mode, min_time_extent, tracking_model="general_2d", output_folder=None):
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = Trackastra.from_pretrained(tracking_model, device=device)
+    download_dir = util.get_model_cache_directory("trackastra")
+    model = Trackastra.from_pretrained(tracking_model, device=device, download_dir=download_dir)
     result = model.track(timeseries, segmentation, mode=mode)
     try:
         lineage_graph, _ = result

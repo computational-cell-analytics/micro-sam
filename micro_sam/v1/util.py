@@ -20,7 +20,7 @@ from ..util import (  # noqa
     ImageEmbeddings, SamPredictor, sam_model_registry, VIT_T_SUPPORT,
     _DEFAULT_MODEL, _MODEL_TYPES,
     get_device, _available_devices, _to_image, _load_checkpoint, _compute_hash,
-    _CustomUnpickler, get_cache_directory, microsam_cachedir,
+    _CustomUnpickler, get_cache_directory, get_model_cache_directory,
     _create_dataset_with_data, _create_dataset_without_data, _open_embeddings,
     _compute_data_signature, _get_embedding_signature, _write_embedding_signature,
     handle_pbar,
@@ -114,7 +114,7 @@ def models():
     urls = {**encoder_urls, **decoder_urls}
 
     models = pooch.create(
-        path=os.path.join(microsam_cachedir(), "models"),
+        path=get_model_cache_directory(),
         base_url="",
         registry=registry,
         urls=urls,
@@ -128,7 +128,7 @@ def _download_sam_model(model_type, progress_bar_factory=None):
     progress_bar = True
     # Check if we have to download the model.
     # If we do and have a progress bar factory, then we over-write the progress bar.
-    if not os.path.exists(os.path.join(get_cache_directory(), model_type)) and progress_bar_factory is not None:
+    if not os.path.exists(get_model_cache_directory() / model_type) and progress_bar_factory is not None:
         progress_bar = progress_bar_factory(model_type)
 
     checkpoint_path = model_registry.fetch(model_type, progressbar=progress_bar)
