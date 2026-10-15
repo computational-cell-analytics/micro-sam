@@ -120,7 +120,7 @@ tooltips = {
     },
     "classification": {
         "settings": "Optional classifier settings: PCA feature reduction, AnyUp upsampling, classical features, the random seed, and loading or exporting a trained classifier.",  # noqa
-        "forward_classifier_state": "Carry the classifier across images in the batch. The tool stacks the annotated features from earlier images with the current image. It trains a fresh random forest on the combined set. Then it applies the forest to the next image automatically, even without new annotations. Uncheck to classify each image on its own.",  # noqa
+        "forward_classifier_state": "Carry the classifier across images in the batch. The tool stacks the latest annotated features of all other visited images with the current image. It trains a fresh random forest on the combined set. Then it applies the forest to each image you go to, even without new annotations. Uncheck to classify each image on its own.",  # noqa
         "segmentation": "Select the segmentation (labels) layer whose objects will be classified.",
         "train_button": "Train the random forest on all current annotations and predict on the image. Shortcut: Shift + T.",  # noqa
         "clear_button": "Clear the annotation scribbles and the prediction (whole volume, or the current slice for 3d data when 'Apply to Volume' is unchecked). Shortcut: C.",  # noqa

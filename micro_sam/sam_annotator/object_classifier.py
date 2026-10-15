@@ -302,11 +302,18 @@ class ObjectClassificationBatchTask(ClassificationBatchTask):
     def __init__(self, *, segmentations, **kwargs):
         super().__init__(**kwargs)
         self.segmentations = segmentations
+        self.visited_segmentations = {}
+
+    def on_leave_item(self, viewer, entry, index):
+        # Keep the segmentation, which may be edited or produced in-tool, for going back to this item.
+        self.visited_segmentations[index] = viewer.layers["segmentation"].data.copy()
+        super().on_leave_item(viewer, entry, index)
 
     def _set_layers(self, viewer, index):
         # Load (or carry over) the per-item segmentation. When none is provided, start from an empty
         # segmentation the user can fill in-tool (the 'produce' path).
         seg = None if self.segmentations is None else self.segmentations[index]
+        seg = self.visited_segmentations.get(index, seg)
         if seg is not None and not isinstance(seg, np.ndarray):
             seg = imageio.imread(seg)
         if "segmentation" in viewer.layers:

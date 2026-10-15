@@ -90,9 +90,10 @@ class AnnotatorState(metaclass=Singleton):
     object_rf: Optional[Any] = None
     # TODO use proper class
     segmentation_selection: Optional[Any] = None
-    # For batch_object_classifier
-    previous_features: Optional[np.ndarray] = None
-    previous_labels: Optional[np.ndarray] = None
+    # For the batch classifiers: per-item training data {index: (features, labels, feature_settings)}
+    # and the index of the item currently shown.
+    batch_training_data: Optional[Dict[int, Tuple[np.ndarray, np.ndarray, Dict[str, Any]]]] = None
+    batch_index: Optional[int] = None
 
     # Extra options for pixel classification.
     pixel_features: Optional[np.ndarray] = None
@@ -420,4 +421,6 @@ class AnnotatorState(metaclass=Singleton):
         self.is_sam2 = None
         self.is_vfm = None
         self.anyup_upsampler = None
+        self.batch_training_data = None
+        self.batch_index = None
         # Note: we don't clear the widgets here, because they are fixed for a viewer session.

@@ -1,7 +1,7 @@
 """Shared navigation harness for the batch annotator.
 
 Hosts any per-task annotator (segmentation, tracking, classification) and drives
-forward navigation, the skip-already-done check and per-item loading/saving
+the navigation, the skip-already-done check and per-item loading/saving
 through a small task-adapter interface (`BatchAnnotatorTask`). The harness is
 task-agnostic; everything task-specific lives in the concrete adapter.
 """
@@ -14,7 +14,7 @@ import napari
 from magicgui.widgets import Container, PushButton
 
 from qtpy import QtWidgets
-from qtpy.QtCore import Qt, QTimer
+from qtpy.QtCore import QEvent, QObject, Qt, QTimer
 
 from . import _widgets as widgets
 from ._state import AnnotatorState
@@ -59,6 +59,19 @@ def _embed_navigation(viewer, annotator, nav_container):
     # Pin to the top of the annotator panel so it stays visible (the task annotators are tall and
     # the navigation would otherwise sit below the fold at the bottom of the scroll area).
     inner.layout().insertWidget(0, group)
+
+
+class _CloseFilter(QObject):
+    """Call `callback` when the watched window receives a close event, before napari tears it down."""
+
+    def __init__(self, callback, parent):
+        super().__init__(parent)
+        self._callback = callback
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.Close:
+            self._callback()
+        return False
 
 
 def _maximize_dock_vertically(annotator):
@@ -110,6 +123,9 @@ class BatchAnnotatorTask:
     #: Whether the batch inputs are in-memory arrays (True) or file paths (False). Set by the harness.
     have_inputs_as_arrays = False
 
+    #: Whether the task supports going back to the previous item.
+    supports_previous = False
+
     def result_filename(self, entry, index: int) -> str:
         """Return the filename (relative to `output_folder`) of this item's saved result.
 
@@ -143,6 +159,9 @@ class BatchAnnotatorTask:
 
     def on_leave_item(self, viewer, entry, index: int) -> None:
         """Hook called when navigating away from an item (e.g. classifier feature/RF accumulation)."""
+
+    def on_close(self, viewer, entry, index: int) -> None:
+        """Hook called when the viewer is closed while showing an item."""
 
     #: Message shown when the user advances without producing anything for the current item.
     empty_item_message = "Nothing is annotated yet. Do you wish to continue to the next image?"
@@ -185,7 +204,12 @@ def run_batch(
     task.have_inputs_as_arrays = have_inputs_as_arrays
     n_images = len(images)
 
+    # Items visited in this session are never skipped, so the user can go back and forth between them.
+    visited = set()
+
     def _is_done(index):
+        if index in visited:
+            return False
         path = os.path.join(output_folder, task.result_filename(images[index], index))
         return os.path.exists(path)
 
@@ -214,6 +238,7 @@ def run_batch(
     if viewer is None:
         viewer = napari.Viewer()
 
+    visited.add(current_index)
     image = _load_pixels(current_index)
     annotator = task.start(viewer, images[current_index], image, embedding_paths[current_index], current_index)
 
@@ -227,9 +252,12 @@ def run_batch(
     def _go_to(index):
         nonlocal current_index
         current_index = index
+        visited.add(index)
         image = _load_pixels(index)
         print("Loading image:", images[index] if not have_inputs_as_arrays else f"at index {index}")
         task.advance(viewer, annotator, images[index], image, embedding_paths[index], index)
+        if prev_button is not None:
+            prev_button.enabled = index > 0
 
     def _save_current():
         task.on_leave_item(viewer, images[current_index], current_index)
@@ -254,6 +282,12 @@ def run_batch(
             return
         _go_to(index)
 
+    def _do_previous(*args):
+        if current_index == 0:
+            return
+        _save_current()
+        _go_to(current_index - 1)
+
     # Embed the navigation controls in the docked annotator, so they travel with the batch
     # annotator instead of as a separate floating dock widget. The action is also tracked in the
     # shared state, so it can be triggered programmatically (e.g. in tests) just like the annotator's
@@ -264,6 +298,12 @@ def run_batch(
     state.widgets["batch_next"] = _do_next
 
     nav_buttons = [next_button]
+    prev_button = None
+    if task.supports_previous:
+        prev_button = PushButton(text="Previous Image [Shift + N]", enabled=current_index > 0)
+        prev_button.clicked.connect(lambda: _do_previous())
+        state.widgets["batch_previous"] = _do_previous
+        nav_buttons.insert(0, prev_button)
     # Task-specific controls placed next to Next (e.g. the classifiers' 'Keep Classifier').
     nav_buttons.extend(task.nav_extra_widgets())
 
@@ -271,9 +311,22 @@ def run_batch(
     nav_container.native.layout().setContentsMargins(0, 0, 0, 0)
     _embed_navigation(viewer, annotator, nav_container)
 
+    def _on_close():
+        task.on_close(viewer, images[current_index], current_index)
+
+    # The docked annotator's top-level widget is the napari main window. As the filter's parent it
+    # keeps the filter alive. 'on_close' can run more than once, e.g. if the user cancels the closing.
+    main_window = annotator.window()
+    main_window.installEventFilter(_CloseFilter(_on_close, parent=main_window))
+
     @viewer.bind_key("n", overwrite=True)
     def _next_image(viewer):
         _do_next()
+
+    if task.supports_previous:
+        @viewer.bind_key("Shift-N", overwrite=True)
+        def _previous_image(viewer):
+            _do_previous()
 
     if return_viewer:
         return viewer
