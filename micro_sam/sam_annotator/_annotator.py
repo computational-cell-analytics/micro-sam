@@ -6,9 +6,10 @@ from joblib import dump, hash as joblib_hash, load
 import numpy as np
 
 import napari
+from napari.utils.colormaps import DirectLabelColormap, label_colormap
 from napari.utils.notifications import show_info, show_warning
 
-from qtpy import QtWidgets
+from qtpy import QtCore, QtGui, QtWidgets
 from magicgui.widgets import CheckBox, ComboBox, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox, Widget
 
 from . import util as vutil
@@ -571,7 +572,9 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             if name in self._viewer.layers and self._viewer.layers[name].data.ndim != len(shape):
                 del self._viewer.layers[name]
 
+        created = False
         if "annotations" not in self._viewer.layers:
+            created = True
             if layer_choices and "annotations" in layer_choices:
                 widgets._validation_window_for_missing_layer("annotations")
             annotation_layer = self._viewer.add_labels(data=dummy_data, name="annotations")
@@ -587,11 +590,17 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             annotation_layer.selected_label = 1
 
         if "prediction" not in self._viewer.layers:
+            created = True
             if layer_choices and "prediction" in layer_choices:
                 widgets._validation_window_for_missing_layer("prediction")
             self._viewer.add_labels(data=dummy_data, name="prediction")
             if image_scale is not None:
                 self._viewer.layers["prediction"].scale = image_scale
+
+        # A new layer has napari's default colors and no connection to the class widget yet.
+        if created and self._class_group is not None:
+            self._connect_annotations_layer()
+            self._apply_class_colors()
 
         # Move 'annotations' to the top of the layer stack so scribbles are always visible above the
         # prediction, and make it the active layer so the controls (incl. the label id) show it and
@@ -634,70 +643,184 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             self._viewer.layers["prediction"].scale = scale
 
     #
-    # Label-name widget.
+    # Class widget.
     #
 
     def _create_label_widget(self):
-        self._label_form = QtWidgets.QFormLayout()
-        scroll_area = QtWidgets.QScrollArea()
-        inner = QtWidgets.QWidget()
-        inner.setLayout(self._label_form)
-        scroll_area.setWidget(inner)
-        scroll_area.setWidgetResizable(True)
+        # One row per class: id, a radio button that selects the class for painting, a color swatch,
+        # a button that removes the class and an optional name.
+        self._class_rows = {}  # class id -> (row widget, color swatch, name field)
+        self._class_group = QtWidgets.QButtonGroup()
+        self._class_group.idClicked.connect(self._select_class)
+        # The rows have no scroll area of their own. The dock scrolls, so all classes stay visible.
+        self._class_layout = QtWidgets.QVBoxLayout()
+        self._class_layout.setContentsMargins(0, 0, 0, 0)
+        self._class_layout.setSpacing(0)
+
+        add_button = QtWidgets.QPushButton("Add Class")
+        add_button.setToolTip(get_tooltip("classification", "add_class"))
+        add_button.clicked.connect(lambda: self._select_class(max(self._classes, default=0) + 1))
 
         layout = QtWidgets.QVBoxLayout()
         header = QtWidgets.QLabel(self.label_widget_title)
         header.setToolTip(get_tooltip("classification", "label_names"))
         layout.addWidget(header)
-        layout.addWidget(scroll_area)
+        layout.addLayout(self._class_layout)
+        layout.addWidget(add_button)
         return layout
 
-    def _make_label_role_widget(self, lbl):
-        # Build the left-hand widget for a label row: a color swatch matching the annotation layer
-        # color for this id, followed by the exact id ("ID <n>"). The id is stored as the object name
-        # so it can be read back reliably when removing vanished rows.
-        container = QtWidgets.QWidget()
-        container.setObjectName(str(int(lbl)))
-        row_layout = QtWidgets.QHBoxLayout(container)
+    def _add_class_row(self, class_id):
+        if class_id not in self._classes:
+            # 'label_colormap(49)' is the default colormap of napari labels layers, so a new class keeps its color.
+            color = QtGui.QColor.fromRgbF(*(float(c) for c in label_colormap(49).map(class_id)[:3])).name()
+            self._classes[class_id] = {"name": "", "color": color}
+
+        row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(4)
 
-        swatch = QtWidgets.QLabel()
-        swatch.setFixedSize(14, 14)
-        color = self._viewer.layers["annotations"].get_color(int(lbl))
-        r, g, b = (int(round(255 * c)) for c in color[:3])
-        swatch.setStyleSheet(f"background-color: rgb({r}, {g}, {b}); border: 1px solid #888;")
-
-        row_layout.addWidget(swatch)
-        row_layout.addWidget(QtWidgets.QLabel(f"ID {int(lbl)}"))
+        # Fixed sizes keep the columns aligned. The first row is made before napari applies its
+        # stylesheet, which changes the font and the button size hints of the later rows.
+        id_label = QtWidgets.QLabel(str(class_id))
+        id_label.setFixedWidth(24)
+        id_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        radio = QtWidgets.QRadioButton()
+        radio.setFixedSize(20, 20)
+        radio.setToolTip(get_tooltip("classification", "class_select"))
+        self._class_group.addButton(radio, class_id)
+        swatch = QtWidgets.QPushButton()
+        swatch.setFixedSize(28, 18)
+        swatch.setToolTip(get_tooltip("classification", "class_color"))
+        swatch.setStyleSheet(f"background-color: {self._classes[class_id]['color']}; border: 1px solid #888;")
+        swatch.clicked.connect(lambda: self._pick_class_color(class_id))
+        # The frame and the red hover color mark the button as a remove action.
+        # The palette colors fit both napari themes.
+        remove = QtWidgets.QToolButton()
+        remove.setText("×")
+        remove.setFixedSize(20, 18)
+        remove.setCursor(QtCore.Qt.PointingHandCursor)
+        remove.setStyleSheet(
+            "QToolButton { padding: 0px; font-size: 14px; font-weight: bold;"
+            " border: 1px solid palette(mid); border-radius: 3px; background-color: palette(button); }"
+            "QToolButton:hover { background-color: #c0392b; border-color: #c0392b; color: white; }"
+            "QToolButton:pressed { background-color: #962d22; }"
+        )
+        remove.setToolTip(get_tooltip("classification", "class_remove"))
+        remove.clicked.connect(lambda: self._remove_class(class_id))
+        name = QtWidgets.QLineEdit(self._classes[class_id]["name"])
+        name.setMaximumWidth(180)
+        name.setToolTip(get_tooltip("classification", "label_name_row"))
+        name.textChanged.connect(lambda text: self._classes[class_id].__setitem__("name", text))
+        for widget in (id_label, radio, swatch, remove, name):
+            row_layout.addWidget(widget)
         row_layout.addStretch(1)
-        return container
 
-    def _refresh_label_widget(self):
+        # The rows stay sorted by class id.
+        position = sum(other < class_id for other in self._class_rows)
+        self._class_layout.insertWidget(position, row)
+        self._class_rows[class_id] = (row, swatch, name)
+
+    def _ensure_classes(self, class_ids):
+        new_ids = [int(i) for i in class_ids if int(i) != 0 and int(i) not in self._class_rows]
+        for class_id in new_ids:
+            self._add_class_row(class_id)
+        if new_ids:
+            self._apply_class_colors()
+
+    def _apply_class_colors(self):
+        # An id without a class is white. Each id that the layers can show gets a class row, so this is rare.
+        color_dict = {None: "white", 0: "transparent", **{i: c["color"] for i, c in self._classes.items()}}
+        for name in ("annotations", "prediction"):
+            if name in self._viewer.layers:
+                self._viewer.layers[name].colormap = DirectLabelColormap(color_dict=color_dict)
+
+    def _connect_annotations_layer(self):
+        # '_require_layers' recreates the layer when the image dimensionality changes, so connect to the current layer.
+        layer = self._viewer.layers["annotations"]
+        if layer is self._connected_annotations:
+            return
+        layer.events.selected_label.connect(self._on_selected_label)
+        layer.events.data.connect(self._refresh_label_widget)
+        self._connected_annotations = layer
+
+    def _select_class(self, class_id):
+        layer = self._viewer.layers["annotations"]
+        layer.selected_label = class_id
+        layer.mode = "paint"
+        self._viewer.layers.selection.active = layer
+        self._on_selected_label()
+
+    def _on_selected_label(self, event=None):
+        # A label id selected in the napari layer controls selects its class here, or creates it.
+        class_id = int(self._viewer.layers["annotations"].selected_label)
+        if class_id == 0:
+            return
+        self._ensure_classes([class_id])
+        self._class_group.button(class_id).setChecked(True)
+
+    def _pick_class_color(self, class_id):
+        color = QtWidgets.QColorDialog.getColor(QtGui.QColor(self._classes[class_id]["color"]), self)
+        if color.isValid():
+            self._set_class_color(class_id, color.name())
+
+    def _set_class_color(self, class_id, color):
+        self._classes[class_id]["color"] = color
+        self._class_rows[class_id][1].setStyleSheet(f"background-color: {color}; border: 1px solid #888;")
+        self._apply_class_colors()
+
+    def _set_class_name(self, class_id, name):
+        self._class_rows[class_id][2].setText(name)
+
+    def _remove_class(self, class_id, confirm=True):
+        # Removes the class and its annotations in the current image. This does not change the training data
+        # of the other images, so a class that is annotated there cannot be removed here.
         state = AnnotatorState()
+        other_images = [
+            idx for idx, (_, labels, _) in (state.batch_training_data or {}).items()
+            if idx != state.batch_index and np.any(labels == class_id)
+        ]
+        if other_images:
+            return widgets._generate_message(
+                "error", f"Class {class_id} is annotated in the images {other_images}. Remove it there first."
+            )
 
-        # Get the current label ids.
-        ids = np.unique(self._viewer.layers["annotations"].data)[1:]
+        layer = self._viewer.layers["annotations"]
+        annotated = layer.data == class_id
+        if annotated.any():
+            if confirm and widgets._generate_message(
+                "info", f"Remove class {class_id} and its annotations in this image?"
+            ):
+                return
+            data = layer.data
+            data[annotated] = 0
+            layer.data = data
+
+        row = self._class_rows.pop(class_id)[0]
+        self._class_group.removeButton(self._class_group.button(class_id))
+        # Take the row out of the layout now: 'deleteLater' deletes the row only in the next event loop.
+        self._class_layout.removeWidget(row)
+        row.deleteLater()
+        del self._classes[class_id]
+
+        # Paint with the remaining class with the lowest id. If no class remains, '_on_selected_label' creates class 1.
+        if layer.selected_label == class_id:
+            layer.selected_label = min(self._classes, default=1)
+        self._on_selected_label()
+        self._apply_class_colors()
+
+    def _refresh_label_widget(self, event=None):
+        # Add a class row for each id in the annotations, the training data of the other images and the
+        # selected label. Rows are removed only with their 'x' button.
+        state = AnnotatorState()
+        self._connect_annotations_layer()
+        layer = self._viewer.layers["annotations"]
+        ids = [np.unique(layer.data), [layer.selected_label]]
         for idx, (_, labels, _) in (state.batch_training_data or {}).items():
             if idx != state.batch_index:
-                ids = np.union1d(ids, np.unique(labels))
-
-        # Add new rows.
-        for lbl in ids:
-            if lbl in self._label_names:
-                continue
-            line = QtWidgets.QLineEdit(self._label_names.get(lbl, ""))
-            line.setToolTip(get_tooltip("classification", "label_name_row"))
-            self._label_names[lbl] = ""
-            self._label_form.addRow(self._make_label_role_widget(lbl), line)
-            line.textChanged.connect(lambda txt, lbl=lbl: self._label_names.__setitem__(lbl, txt))
-
-        # Remove rows whose label vanished. 'removeRow' deletes the row's widgets itself.
-        for row in reversed(range(self._label_form.rowCount())):
-            lbl_id = int(self._label_form.itemAt(row, QtWidgets.QFormLayout.LabelRole).widget().objectName())
-            if lbl_id not in ids:
-                self._label_form.removeRow(row)
-                self._label_names.pop(lbl_id, None)
+                ids.append(np.unique(labels))
+        self._ensure_classes(np.unique(np.concatenate(ids)))
+        self._on_selected_label()
 
     #
     # Settings and train widgets.
@@ -919,6 +1042,11 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         self._annotator_widget = QtWidgets.QWidget()
         self._annotator_widget.setLayout(QtWidgets.QVBoxLayout())
 
+        # The classes of the class widget: class id -> {"name": str, "color": hex color}.
+        self._classes = {}
+        self._class_group = None
+        self._connected_annotations = None
+
         # Add the layers for annotations and prediction. Initialize with a dummy shape, which is reset
         # to the correct shape once an image is set.
         self._shape = (256, 256)
@@ -926,7 +1054,6 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         self._require_layers()
 
         # Create all the widgets and add them to the layout.
-        self._label_names = {}  # The names for the labels.
         self._create_widgets()
 
         for widget_name, widget in self._widgets.items():
@@ -1058,6 +1185,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         else:
             rf, spec = obj, {}
         self._set_rf(rf)
+        # A loaded classifier can contain classes that have no annotations in this session.
+        self._ensure_classes(rf.classes_)
         if spec:
             self._restore_from_spec(spec)
 
@@ -1091,8 +1220,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
 
     def _gather_class_names(self, rf):
         # User-provided class names keyed by class id, for the classes the classifier knows. None if none.
-        names = self._label_names or {}
-        class_names = {int(k): v for k, v in names.items() if v and int(k) in rf.classes_}
+        class_names = {i: c["name"] for i, c in self._classes.items() if c["name"] and i in rf.classes_}
         return class_names or None
 
     def _classifier_spec(self, rf):
@@ -1163,11 +1291,10 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             spec.get("upsampling") == "anyup", spec.get("random_seed"), spec.get("classical_features"),
         )
 
-        # Class names, restored into the label widget.
-        class_names = spec.get("class_names") or {}
-        if class_names:
-            self._label_names.update({int(k): v for k, v in class_names.items()})
-            self._refresh_label_widget()
+        # Class names, restored into the class widget.
+        for class_id, name in (spec.get("class_names") or {}).items():
+            self._ensure_classes([int(class_id)])
+            self._set_class_name(int(class_id), name)
 
         # Warn if the current embeddings were computed with a different model than the classifier expects.
         stored_model = spec.get("model_type")
