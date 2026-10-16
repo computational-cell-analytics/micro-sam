@@ -88,7 +88,7 @@ def test_remove_class(annotator, monkeypatch):
     data[:4, :4], data[4:8, 4:8] = 1, 2
     layer.data = data
 
-    # Removing a class removes its row and its annotations, and selects the next class.
+    # Removing a class removes its row and its annotations, and selects the remaining class with the lowest id.
     annotator._remove_class(2, confirm=False)
     assert _row_ids(annotator) == [1]
     assert not (layer.data == 2).any() and (layer.data == 1).sum() == 16
@@ -117,7 +117,7 @@ def test_class_names(annotator):
     rf = SimpleNamespace(classes_=np.array([1, 2]))
     assert annotator._gather_class_names(rf) == {2: "tumor"}
 
-    # Names stored with a classifier are restored, also for classes without a row.
+    # Names stored with a classifier are restored, including the names of classes without a row.
     annotator._restore_from_spec({"class_names": {"3": "stroma"}})
     assert annotator._classes[3]["name"] == "stroma"
     assert annotator._class_rows[3][2].text() == "stroma"

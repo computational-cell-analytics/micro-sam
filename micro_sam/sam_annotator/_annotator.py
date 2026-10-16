@@ -648,11 +648,11 @@ class _ClassifierBase(QtWidgets.QScrollArea):
 
     def _create_label_widget(self):
         # One row per class: id, a radio button that selects the class for painting, a color swatch,
-        # an optional name and a button that removes the class.
+        # a button that removes the class and an optional name.
         self._class_rows = {}  # class id -> (row widget, color swatch, name field)
         self._class_group = QtWidgets.QButtonGroup()
         self._class_group.idClicked.connect(self._select_class)
-        # The rows are not in a scroll area of their own: the dock scrolls, so all classes stay visible.
+        # The rows have no scroll area of their own. The dock scrolls, so all classes stay visible.
         self._class_layout = QtWidgets.QVBoxLayout()
         self._class_layout.setContentsMargins(0, 0, 0, 0)
         self._class_layout.setSpacing(0)
@@ -671,7 +671,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
 
     def _add_class_row(self, class_id):
         if class_id not in self._classes:
-            # napari's default label colormap, so a new class keeps the color it is painted with.
+            # 'label_colormap(49)' is the default colormap of napari labels layers, so a new class keeps its color.
             color = QtGui.QColor.fromRgbF(*(float(c) for c in label_colormap(49).map(class_id)[:3])).name()
             self._classes[class_id] = {"name": "", "color": color}
 
@@ -694,7 +694,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         swatch.setToolTip(get_tooltip("classification", "class_color"))
         swatch.setStyleSheet(f"background-color: {self._classes[class_id]['color']}; border: 1px solid #888;")
         swatch.clicked.connect(lambda: self._pick_class_color(class_id))
-        # A framed button that turns red on hover, so it reads as a 'remove' action in both napari themes.
+        # The frame and the red hover color mark the button as a remove action.
+        # The palette colors fit both napari themes.
         remove = QtWidgets.QToolButton()
         remove.setText("×")
         remove.setFixedSize(20, 18)
@@ -735,7 +736,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
                 self._viewer.layers[name].colormap = DirectLabelColormap(color_dict=color_dict)
 
     def _connect_annotations_layer(self):
-        # The layer is recreated when the image dimensionality changes, so connect to the current one.
+        # '_require_layers' recreates the layer when the image dimensionality changes, so connect to the current layer.
         layer = self._viewer.layers["annotations"]
         if layer is self._connected_annotations:
             return
@@ -772,8 +773,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         self._class_rows[class_id][2].setText(name)
 
     def _remove_class(self, class_id, confirm=True):
-        # Removes the class and its annotations in the current image. The training data of the other
-        # images is not changed, so a class that is annotated there cannot be removed here.
+        # Removes the class and its annotations in the current image. This does not change the training data
+        # of the other images, so a class that is annotated there cannot be removed here.
         state = AnnotatorState()
         other_images = [
             idx for idx, (_, labels, _) in (state.batch_training_data or {}).items()
@@ -797,12 +798,12 @@ class _ClassifierBase(QtWidgets.QScrollArea):
 
         row = self._class_rows.pop(class_id)[0]
         self._class_group.removeButton(self._class_group.button(class_id))
-        # Take the row out of the layout now: 'deleteLater' deletes it only in the next event loop.
+        # Take the row out of the layout now: 'deleteLater' deletes the row only in the next event loop.
         self._class_layout.removeWidget(row)
         row.deleteLater()
         del self._classes[class_id]
 
-        # Paint with the next remaining class. Without one, class 1 is created again.
+        # Paint with the remaining class with the lowest id. If no class remains, '_on_selected_label' creates class 1.
         if layer.selected_label == class_id:
             layer.selected_label = min(self._classes, default=1)
         self._on_selected_label()
@@ -1184,7 +1185,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         else:
             rf, spec = obj, {}
         self._set_rf(rf)
-        # The classifier can know classes that this session has no annotations of.
+        # A loaded classifier can contain classes that have no annotations in this session.
         self._ensure_classes(rf.classes_)
         if spec:
             self._restore_from_spec(spec)
