@@ -404,9 +404,11 @@ VAL_SPLITS.update({
         "cremi", "snemi", "axonem", "fafb", "hemibrain", "manc", "malecns", "wafer4", "minnie65",
         "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress", "nisb", "platynereis_cells",
         "densecell", "synapsenet_compartments",
-        "astih", "tumor_spheroid",
     )
 })
+# The 2d EM resolvers return their tuning images for any split other than 'test', and a None split resolves to
+# 'test', so they need 'val' here.
+VAL_SPLITS.update({name: "val" for name in DATASETS_2D_EM})
 
 # Histopathology tuning splits. The 'val' splits are the loader's validation data, 'train' is used where a
 # dataset has no val split (cpm17, monuseg, glysac); both are disjoint from the scored test split. pannuke
