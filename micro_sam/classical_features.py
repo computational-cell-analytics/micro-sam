@@ -193,7 +193,7 @@ def compute_classical_object_features(
         if "size" in features:
             columns["size"] = table.set_index("label")["size"]
         if shape_features:
-            props = regionprops(segmentation, table, num_workers=cpu_count()).set_index("label")
+            props = regionprops(segmentation, table, num_workers=cpu_count(), verbose=False).set_index("label")
             major, minor = props["axis_major_length"], props["axis_minor_length"]
             eccentricity = np.sqrt(1.0 - (minor / major.where(major > 0)) ** 2).fillna(0.0)
             shape_columns = {
