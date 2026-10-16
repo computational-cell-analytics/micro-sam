@@ -295,7 +295,10 @@ DATASETS_HP = DATASETS_2D_HP_ID + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_2D_HP_
 
 # Electron microscopy. The 2d sets are ASTIH (myelinated axons, neurite category) and the tumor spheroid slices
 # (cell category); their splits and the 3d regions below come from the generalist loader constants.
-DATASETS_2D_EM = ["astih", "tumor_spheroid"]
+# The organelle panel scores mitochondria in datasets the generalist never trains on: the 100 TEM images of the
+# CEM-Mito-Benchmark (EMPIAR-10982) and the DeepContact SEM / TEM images, one dataset per DeepContact source.
+DATASETS_2D_EM_ORGANELLE = ["mitolab_tem", "deepcontact_cell", "deepcontact_sem", "deepcontact_tem"]
+DATASETS_2D_EM = ["astih", "tumor_spheroid"] + DATASETS_2D_EM_ORGANELLE
 
 DATASETS_2D = DATASETS_2D_LM + DATASETS_HP + DATASETS_2D_EM
 
@@ -337,16 +340,23 @@ DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb", "nisb"]
 # Cell segmentation: Platynereis volume 9 and the DenseCell val volume are blind; the tumor spheroid slices are 2d.
 DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell", "synapsenet_compartments"]
 
+# Mitochondria: the 6 volumes of the CEM-Mito-Benchmark (EMPIAR-10982) and the densely annotated ASEM volumes.
+# mitolab_lucchi_pp is the Lucchi training volume (byte-identical raw) with the Lucchi++ labels. lucchi is the Lucchi
+# test volume, a different volume, kept supplementary until it is decided whether it trains or evaluates.
+MITOLAB_VOLUMES = ("c_elegans", "fly_brain", "glycolytic_muscle", "hela_cell", "lucchi_pp", "salivary_gland")
+DATASETS_3D_EM_ORGANELLE = [f"mitolab_{name}" for name in MITOLAB_VOLUMES] + ["asem_mito"]
+DATASETS_3D_EM_ORGANELLE_SUPPLEMENTARY = ["lucchi"]
+
 DATASETS_3D_EM = (
     DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_OOD
-    + DATASETS_3D_EM_CELL_ID
+    + DATASETS_3D_EM_CELL_ID + DATASETS_3D_EM_ORGANELLE + DATASETS_3D_EM_ORGANELLE_SUPPLEMENTARY
 )
 DATASETS_EM = DATASETS_2D_EM + DATASETS_3D_EM
+DATASETS_EM_ORGANELLE = (
+    DATASETS_2D_EM_ORGANELLE + DATASETS_3D_EM_ORGANELLE + DATASETS_3D_EM_ORGANELLE_SUPPLEMENTARY
+)
 
-# Datasets for the micro-sam v1 interactive sweeps only, which no micro-sam2 evaluation selects.
-DATASETS_3D_SWEEP_ONLY = ["lucchi"]
-
-DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM + DATASETS_3D_SWEEP_ONLY
+DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
 # The neurite datasets need the dense (multicut) pipeline and are ranked by the CREMI score. The EM cell datasets
 # segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
@@ -357,7 +367,7 @@ DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTAR
 DATASETS_SUPPLEMENTARY = (
     DATASETS_2D_LM_CELL_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM
     + DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY + DATASETS_2D_LM_LABEL_FREE_RESERVE + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY
-    + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_2D_HP_SUPPLEMENTARY
+    + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_3D_EM_ORGANELLE_SUPPLEMENTARY
 )
 
 # The split to tune on, or None where the loader has no splits and VAL_Z_RANGE holds out a z-slab.
@@ -397,13 +407,14 @@ LM_VAL_Z_SLABS = {
     "bbbc033": {"BBBC033.h5": slice(0, 6)},
 }
 
-# EM: None means the tuning data is a different region (EM_ROIS) or different files (see _get_3d_em_data_paths) of
-# the same dataset, both disjoint from the blind test region. fib25 has no validation data and is not listed.
+# EM: None means the tuning data is a different region (EM_ROIS, EM_VOLUME_ROIS) or different files (see
+# _get_3d_em_data_paths) of the same dataset, both disjoint from the blind test region. fib25 has no validation data
+# and is not listed.
 VAL_SPLITS.update({
     name: None for name in (
         "cremi", "snemi", "axonem", "fafb", "hemibrain", "manc", "malecns", "wafer4", "minnie65",
         "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress", "nisb", "platynereis_cells",
-        "densecell", "synapsenet_compartments",
+        "densecell", "synapsenet_compartments", *DATASETS_3D_EM_ORGANELLE, *DATASETS_3D_EM_ORGANELLE_SUPPLEMENTARY,
     )
 })
 # The 2d EM resolvers return their tuning images for any split other than 'test', and a None split resolves to
@@ -442,6 +453,49 @@ EM_ROIS = {
     # Volume 9 (test) and volumes 7-8 (val) are read inside the bounding boxes of their labelled cells.
     "platynereis_cells": {"test": np.s_[10:110, 128:1152, 128:1152], "val": np.s_[:, :, :]},
     "densecell": {"test": np.s_[:, :, :], "val": np.s_[35:, :, :]},
+    # The CEM-Mito-Benchmark volumes are annotated throughout (salivary_gland from z 76). The tuning slab is the
+    # start of the annotated stack, about a fifth of it, and the rest is scored.
+    "mitolab_c_elegans": {"test": np.s_[48:, :, :], "val": np.s_[:48, :, :]},
+    "mitolab_fly_brain": {"test": np.s_[48:, :, :], "val": np.s_[:48, :, :]},
+    "mitolab_glycolytic_muscle": {"test": np.s_[48:, :, :], "val": np.s_[:48, :, :]},
+    "mitolab_hela_cell": {"test": np.s_[48:, :, :], "val": np.s_[:48, :, :]},
+    "mitolab_lucchi_pp": {"test": np.s_[33:, :, :], "val": np.s_[:33, :, :]},
+    "mitolab_salivary_gland": {"test": np.s_[250:, :, :], "val": np.s_[:250, :, :]},
+}
+
+# The CEM-Mito-Benchmark volumes in the torch-em benchmark numbering (7 is the 2d TEM benchmark).
+MITOLAB_BENCHMARK_IDS = {name: i for i, name in enumerate(MITOLAB_VOLUMES, start=1)}
+MITOLAB_TEM_BENCHMARK_ID = 7
+
+# The ASEM mitochondria volumes the evaluation scores, as zarr crops (raw + semantic labels) in <data>/asem/mito_crops,
+# named after their box in raw voxels of s3://asem-project/datasets/<id>/<id>.zarr. 46, 58, 64 and 2E are annotated
+# densely in their crop. 61 is annotated densely only inside its hold-out block, which is the crop. 3A is left out,
+# since a single mitochondrion is labeled in it. 64 is cell_6, the micro-sam v1 EM organelle test volume.
+ASEM_MITO_CROPS = {
+    "46": (640, 896, 0, 1024, 1112, 2136),
+    "58": (152, 408, 0, 1000, 1480, 2504),
+    "61": (0, 700, 190, 730, 2630, 3380),
+    "64": (400, 641, 326, 802, 2212, 2740),
+    "2E": (1015, 1215, 316, 516, 294, 494),
+}
+
+
+def asem_crop_name(volume_id):
+    """The file name of one ASEM mito crop in <data>/asem/mito_crops."""
+    z0, z1, y0, y1, x0, x1 = ASEM_MITO_CROPS[volume_id]
+    return f"{volume_id}_z{z0}-{z1}_y{y0}-{y1}_x{x0}-{x1}.zarr"
+
+
+# The test and tuning regions of datasets with several volumes, per volume file name. The tuning slab is the start of
+# the annotated stack of each volume, about a fifth of it, and the rest is scored.
+EM_VOLUME_ROIS = {
+    "asem_mito": {
+        asem_crop_name("46"): {"test": np.s_[48:, :, :], "val": np.s_[:48, :, :]},
+        asem_crop_name("58"): {"test": np.s_[48:, :, :], "val": np.s_[:48, :, :]},
+        asem_crop_name("61"): {"test": np.s_[140:, :, :], "val": np.s_[:140, :, :]},
+        asem_crop_name("64"): {"test": np.s_[70:, :, :], "val": np.s_[:70, :, :]},
+        asem_crop_name("2E"): {"test": np.s_[40:, :, :], "val": np.s_[:40, :, :]},
+    },
 }
 
 # SynapseWeb is annotated in an irregular core of each volume; these are the bounding boxes of the dense cores.
@@ -488,6 +542,8 @@ def em_roi(dataset_name: str, label_path: str, split: str):
     if dataset_name == "synapseweb":
         region = os.path.basename(label_path).replace("synapseweb_hippocampus_", "").replace(".h5", "")
         return SYNAPSEWEB_CORE_ROIS[region]
+    if dataset_name in EM_VOLUME_ROIS:
+        return EM_VOLUME_ROIS[dataset_name][os.path.basename(label_path)][split]
     rois = EM_ROIS.get(dataset_name)
     return None if rois is None else rois[split]
 
@@ -663,6 +719,123 @@ def _held_out_part(raw_paths, label_paths, split):
     return (val_r, val_l) if split == "val" else (test_r, test_l)
 
 
+DEEPCONTACT_MITO_NAMES = ("Mito", "mito", "Mitochondria", "mitochondria")
+DEEPCONTACT_CROP_SHAPE = (1024, 1024)
+
+
+def _densest_window(polygons, image_shape, window_shape, stride=64):
+    """The window that fully holds the most polygons (then intersects the most), as a tuple of slices."""
+    boxes = np.array([[p[:, 1].min(), p[:, 0].min(), p[:, 1].max(), p[:, 0].max()] for p in polygons])
+    window_shape = [min(w, s) for w, s in zip(window_shape, image_shape)]
+    starts = [
+        sorted(set(range(0, s - w + 1, stride)) | {s - w}) for s, w in zip(image_shape, window_shape)
+    ]
+    best, best_score = (0, 0), (-1, -1)
+    for y in starts[0]:
+        for x in starts[1]:
+            y1, x1 = y + window_shape[0], x + window_shape[1]
+            inside = (boxes[:, 0] >= y) & (boxes[:, 1] >= x) & (boxes[:, 2] < y1) & (boxes[:, 3] < x1)
+            touching = (boxes[:, 2] >= y) & (boxes[:, 3] >= x) & (boxes[:, 0] < y1) & (boxes[:, 1] < x1)
+            score = (int(inside.sum()), int(touching.sum()))
+            if score > best_score:
+                best, best_score = (y, x), score
+    return tuple(slice(start, start + w) for start, w in zip(best, window_shape))
+
+
+def _deepcontact_eval_crops(data_root: str, source: str) -> List[str]:
+    """The DeepContact images of one source with mito annotation, as cached crops with instance labels.
+
+    The torch-em loader rasterizes all polygons of a class into one binary mask, so the instances are rebuilt here
+    from the LabelMe polygons, one id per polygon. Each crop is the window of DEEPCONTACT_CROP_SHAPE (the whole image
+    where smaller) that fully holds the most polygons: a center crop of these 1-4k px images often misses the
+    cytoplasm. Images without a mito polygon are left out, although mitochondria are visible in them. Each cached
+    file holds 'raw' and 'labels' and the crop origin in its attributes.
+    """
+    import h5py
+    from skimage.draw import polygon
+
+    root = os.path.join(data_root, "deepcontact_redownload")
+    extract_dir = os.path.join(root, f"{source}_raw")
+    cache_dir = os.path.join(EVAL_CACHE_ROOT, "deepcontact", source)
+    os.makedirs(cache_dir, exist_ok=True)
+    paths = []
+    for json_path in sorted(glob(os.path.join(extract_dir, "**", "*.json"), recursive=True)):
+        name = os.path.splitext(os.path.relpath(json_path, extract_dir))[0].replace(os.sep, "_")
+        out_path = os.path.join(cache_dir, f"{name}.h5")
+        if os.path.exists(out_path):
+            paths.append(out_path)
+            continue
+        with open(json_path) as f:
+            shapes = json.load(f)["shapes"]
+        polygons = [np.array(s["points"]) for s in shapes if s.get("label") in DEEPCONTACT_MITO_NAMES]
+        if not polygons:
+            continue
+        # The raw image as the torch-em preprocessing stores it, first channel of RGB images.
+        with h5py.File(os.path.join(root, "processed", source, f"{name}.h5"), "r") as f:
+            raw = f["raw"][:]
+        labels = np.zeros(raw.shape, dtype="uint32")
+        for object_id, points in enumerate(polygons, start=1):
+            rr, cc = polygon(points[:, 1], points[:, 0], shape=raw.shape)
+            labels[rr, cc] = object_id
+        roi = _densest_window(polygons, raw.shape, DEEPCONTACT_CROP_SHAPE)
+        tmp_path = f"{out_path}.{os.getpid()}.tmp"
+        with h5py.File(tmp_path, "w") as f:
+            f.create_dataset("raw", data=raw[roi], compression="gzip")
+            f.create_dataset("labels", data=labels[roi], compression="gzip")
+            f.attrs["crop_origin_yx"] = [roi[0].start, roi[1].start]
+            f.attrs["source"] = json_path
+        os.replace(tmp_path, out_path)
+        paths.append(out_path)
+    return paths
+
+
+def _asem_mito_crop(data_root: str, volume_id: str, download: bool) -> str:
+    """The path of one ASEM mito crop (see ASEM_MITO_CROPS), streamed from s3://asem-project if it is missing."""
+    path = os.path.join(data_root, "asem", "mito_crops", asem_crop_name(volume_id))
+    if os.path.exists(path):
+        return path
+    if not download:
+        raise FileNotFoundError(f"'{path}' does not exist. Pass download=True to stream it from s3://asem-project.")
+
+    import fsspec
+    import s3fs
+    import zarr
+    from zarr.codecs import BloscCodec
+
+    fs = s3fs.S3FileSystem(anon=True)
+    remote = f"asem-project/datasets/{volume_id}/{volume_id}.zarr/volumes"
+
+    def open_remote(key):
+        array = zarr.open_array(fsspec.get_mapper(f"s3://{remote}/{key}", anon=True), mode="r", zarr_format=2)
+        return array, json.loads(fs.cat(f"{remote}/{key}/.zattrs"))
+
+    raw, raw_attrs = open_remote("raw")
+    labels, label_attrs = open_remote("labels/mito")
+    resolution = np.array(raw_attrs["resolution"])
+    # The labels can be a crop of the raw volume, placed by their offset in nm.
+    oz, oy, ox = (np.array(label_attrs["offset"]) - np.array(raw_attrs["offset"])) // resolution
+    z0, z1, y0, y1, x0, x1 = ASEM_MITO_CROPS[volume_id]
+    data = {
+        "raw": np.asarray(raw[z0:z1, y0:y1, x0:x1]),
+        "labels": np.asarray(labels[z0 - oz:z1 - oz, y0 - oy:y1 - oy, x0 - ox:x1 - ox]),
+    }
+    assert data["raw"].shape == data["labels"].shape, {key: value.shape for key, value in data.items()}
+
+    tmp_path = f"{path}.{os.getpid()}.tmp"
+    group = zarr.open_group(tmp_path, mode="w")
+    for key, shuffle in (("raw", "shuffle"), ("labels", "bitshuffle")):
+        array = group.create_array(
+            key, shape=data[key].shape, chunks=(64, 256, 256), dtype=data[key].dtype,
+            compressors=BloscCodec(cname="zstd", clevel=6, shuffle=shuffle),
+        )
+        array[:] = data[key]
+    group.attrs["source"] = f"s3://{remote}/(raw, labels/mito)"
+    group.attrs["crop_zyx_raw_voxels"] = list(ASEM_MITO_CROPS[volume_id])
+    group.attrs["resolution_nm"] = resolution.tolist()
+    os.replace(tmp_path, path)
+    return path
+
+
 # Channels the 2d light microscopy models see, as indices into the stored channel-last image. A single index gives
 # a grayscale image. Datasets not listed are fed as stored; a two-channel image gets a zero third channel, which is
 # the TissueNet layout pan_multiplex trains with.
@@ -822,6 +995,23 @@ def _get_2d_data_paths(
         names = TUMOR_SPHEROID_TEST_SLICES if split == "test" else TUMOR_SPHEROID_VAL_SLICES
         paths = [path for path in paths if os.path.basename(path) in names]
         return paths, paths, raw_key, label_key
+
+    if dataset_name == "mitolab_tem":
+        # The 100 images of the TEM benchmark; a random 10 % (seed 42) tunes, the rest is scored.
+        image_dir, mask_dir, _, _, _ = datasets.electron_microscopy.cem.get_benchmark_paths(
+            os.path.join(p, "mitolab"), dataset_id=MITOLAB_TEM_BENCHMARK_ID, download=download,
+        )
+        raw_paths, label_paths = _sorted_pairs(
+            sorted(glob(os.path.join(image_dir, "*.tiff"))), sorted(glob(os.path.join(mask_dir, "*.tiff")))
+        )
+        raw_paths, label_paths = _loader_val_part(raw_paths, label_paths, split)
+        return raw_paths, label_paths, None, None
+
+    if dataset_name.startswith("deepcontact_"):
+        # The images with mito annotation of one source; a random 10 % (seed 42) tunes, the rest is scored.
+        paths = _deepcontact_eval_crops(p, dataset_name.replace("deepcontact_", ""))
+        paths = _loader_val_part(paths, paths, split)[0]
+        return sorted(paths), sorted(paths), "raw", "labels"
 
     return _get_2d_lm_data_paths(dataset_name, p, download, split)
 
@@ -1494,9 +1684,26 @@ def _get_3d_em_data_paths(
         return paths, paths, "raw", "labels/compartments"
 
     if dataset_name == "lucchi":
-        # Mitochondria, for the micro-sam v1 sweeps. 'load_volume' turns the binary labels into instances.
-        path = em.lucchi.get_lucchi_paths(path=os.path.join(p, "lucchi"), split="test", download=download)
+        # Mitochondria. The test volume is scored, the training volume tunes; 'load_volume' turns the binary labels
+        # into instances. The training volume is the raw of mitolab_lucchi_pp.
+        path = em.lucchi.get_lucchi_paths(
+            path=os.path.join(p, "lucchi"), split="train" if is_val else "test", download=download,
+        )
         return [path], [path], "raw", "labels"
+
+    if dataset_name.startswith("mitolab_"):
+        # One volume of the CEM-Mito-Benchmark, scored and tuned in the regions of EM_ROIS.
+        raw_path, label_path, _, _, _ = em.cem.get_benchmark_paths(
+            os.path.join(p, "mitolab"), dataset_id=MITOLAB_BENCHMARK_IDS[dataset_name.replace("mitolab_", "")],
+            download=download,
+        )
+        return [raw_path], [label_path], None, None
+
+    if dataset_name == "asem_mito":
+        # The densely annotated ASEM crops, scored and tuned in the regions of EM_VOLUME_ROIS. Semantic labels,
+        # which 'load_volume' turns into instances.
+        paths = [_asem_mito_crop(p, volume_id, download) for volume_id in ASEM_MITO_CROPS]
+        return paths, paths, "raw", "labels"
 
     if dataset_name == "isbi2012":
         path = em.isbi2012.get_isbi_paths(path=os.path.join(p, "isbi2012"), download=download)
@@ -2454,6 +2661,15 @@ def check_data_download(dataset_name: str, data_root: str, download: bool = True
 CROP_SHAPE_2D = (512, 512)
 CROP_SHAPE_3D = (8, 512, 512)
 
+# The 2d datasets scored on the whole stored image instead of the center crop: the TEM benchmark images (most of
+# them 1024 x 1024, whose center crop drops half of the mitochondria) and the DeepContact crops, which are cut to
+# their densest window already, see _deepcontact_eval_crops.
+FULL_IMAGE_2D = frozenset(DATASETS_2D_EM_ORGANELLE)
+
+# Ground-truth size floor of 3d datasets whose instances come from semantic labels: the connected components of
+# a semantic mask include specks of a few voxels that are no objects.
+GT_MIN_SIZE_3D = {"asem_mito": 100}
+
 # The fixed crops of the 3d test volumes, which replace the center crop: the crop shape and the crop starts per volume,
 # in stored array coordinates. eval_crops_3d.json also holds the rule that places the crops and a note per dataset.
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_crops_3d.json")) as f:
@@ -2677,7 +2893,10 @@ def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_
     # Normalize before cropping, so that the percentiles cover the whole image.
     image = select_channels(read_2d(raw_path, raw_key), dataset_name)
     image = ensure_8bit_range(image) if normalize else np.clip(image, 0, 255).astype("uint8")
-    roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
+    if dataset_name in FULL_IMAGE_2D:
+        roi = tuple(slice(None) for _ in image.shape[:2])
+    else:
+        roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
     labels = read_2d(label_path, label_key)[roi]
     if dataset_name == "astih":
         # Semantic labels (1 myelin, 2 axon); the instances are the axon class, as in training.
@@ -2695,6 +2914,7 @@ def load_evaluation_sample_3d(
         raw_path, label_path, raw_key, label_key, dataset_name, crop_shape, z_range=z_range, split=split,
         crop_start=crop_start,
     )
+    min_size = max(min_size, GT_MIN_SIZE_3D.get(dataset_name, 0))
     return raw, apply_min_size(labels, min_size, dataset_name), valid_roi
 
 

@@ -735,6 +735,185 @@
      [128, 0, 561]
     ]
    }
+  },
+  "mitolab_c_elegans": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The test region is z 48-256 of the 256^3 volume.",
+   "starts": {
+    "c_elegans_em.tif": [
+     [48, 0, 0],
+     [80, 0, 0],
+     [112, 0, 0],
+     [144, 0, 0],
+     [176, 0, 0],
+     [208, 0, 0],
+     [240, 0, 0]
+    ]
+   }
+  },
+  "mitolab_fly_brain": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The test region is z 48-256 of the 256^3 volume.",
+   "starts": {
+    "fly_brain_em.tif": [
+     [48, 0, 0],
+     [80, 0, 0],
+     [112, 0, 0],
+     [144, 0, 0],
+     [176, 0, 0],
+     [208, 0, 0],
+     [240, 0, 0]
+    ]
+   }
+  },
+  "mitolab_glycolytic_muscle": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The test region is z 48-302. The last 253 px in x are thinner than a tile.",
+   "starts": {
+    "glycolytic_muscle_em.tif": [
+     [48, 0, 0],
+     [80, 0, 0],
+     [112, 0, 0],
+     [144, 0, 0],
+     [176, 0, 0],
+     [208, 0, 0],
+     [240, 0, 0],
+     [272, 0, 0]
+    ]
+   }
+  },
+  "mitolab_hela_cell": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The test region is z 48-256 of the 256^3 volume.",
+   "starts": {
+    "hela_cell_em.tif": [
+     [48, 0, 0],
+     [80, 0, 0],
+     [112, 0, 0],
+     [144, 0, 0],
+     [176, 0, 0],
+     [208, 0, 0],
+     [240, 0, 0]
+    ]
+   }
+  },
+  "mitolab_lucchi_pp": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The test region is z 33-165. One tile without a mitochondrion is left out.",
+   "starts": {
+    "lucchi_pp_em.tif": [
+     [33, 0, 0],
+     [33, 0, 512],
+     [33, 512, 0],
+     [33, 512, 512],
+     [65, 0, 0],
+     [65, 0, 512],
+     [65, 512, 0],
+     [65, 512, 512],
+     [97, 0, 0],
+     [97, 0, 512],
+     [97, 512, 0],
+     [97, 512, 512],
+     [129, 0, 0],
+     [129, 0, 512],
+     [129, 512, 512]
+    ]
+   }
+  },
+  "mitolab_salivary_gland": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The test region is z 250-1260. 16 of its 128 tiles are kept, holding 20-66 mitochondria.",
+   "starts": {
+    "salivary_gland_em.tif": [
+     [314, 526, 43],
+     [378, 14, 43],
+     [378, 526, 43],
+     [410, 14, 43],
+     [442, 14, 43],
+     [474, 14, 43],
+     [474, 14, 555],
+     [538, 14, 555],
+     [826, 14, 43],
+     [826, 14, 555],
+     [826, 526, 43],
+     [858, 14, 43],
+     [922, 14, 43],
+     [1146, 14, 555],
+     [1178, 14, 555],
+     [1210, 14, 555]
+    ]
+   }
+  },
+  "asem_mito": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The 5 nm mitochondria are large, so a crop holds 1-11 of them. 46 and 58 keep 16 of their 28 tiles, 61 keeps 13 of 14.",
+   "starts": {
+    "2E_z1015-1215_y316-516_x294-494.zarr": [
+     [40, 0, 0],
+     [72, 0, 0],
+     [104, 0, 0],
+     [136, 0, 0],
+     [168, 0, 0]
+    ],
+    "46_z640-896_y0-1024_x1112-2136.zarr": [
+     [48, 55, 77],
+     [48, 55, 589],
+     [48, 567, 77],
+     [80, 55, 77],
+     [80, 55, 589],
+     [80, 567, 77],
+     [112, 55, 77],
+     [112, 55, 589],
+     [144, 55, 77],
+     [144, 55, 589],
+     [176, 55, 77],
+     [176, 55, 589],
+     [208, 55, 77],
+     [208, 55, 589],
+     [240, 55, 77],
+     [240, 55, 589]
+    ],
+    "58_z152-408_y0-1000_x1480-2504.zarr": [
+     [48, 60, 0],
+     [48, 60, 512],
+     [48, 572, 0],
+     [48, 572, 512],
+     [80, 60, 0],
+     [80, 60, 512],
+     [112, 60, 0],
+     [112, 60, 512],
+     [144, 60, 0],
+     [144, 60, 512],
+     [144, 572, 512],
+     [176, 60, 0],
+     [176, 60, 512],
+     [176, 572, 0],
+     [208, 60, 0],
+     [240, 60, 0]
+    ],
+    "61_z0-700_y190-730_x2630-3380.zarr": [
+     [140, 0, 0],
+     [172, 0, 0],
+     [204, 0, 0],
+     [236, 0, 0],
+     [268, 0, 0],
+     [300, 0, 0],
+     [332, 0, 0],
+     [364, 0, 0],
+     [396, 0, 0],
+     [428, 0, 0],
+     [460, 0, 0],
+     [492, 0, 0],
+     [524, 0, 0]
+    ],
+    "64_z400-641_y326-802_x2212-2740.zarr": [
+     [70, 0, 46],
+     [102, 0, 46],
+     [134, 0, 46],
+     [166, 0, 46],
+     [198, 0, 46]
+    ]
+   }
   }
  }
 }
