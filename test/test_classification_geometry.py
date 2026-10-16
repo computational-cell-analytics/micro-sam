@@ -50,3 +50,22 @@ def test_object_features_exclude_padding():
     assert seg_ids.tolist() == [1]
     # Feature layout is [area, per-channel mean], so the embedding means follow the area column.
     assert np.allclose(features[0, 1:], 1.0), f"padded region leaked into the object features: {features[0, 1:]}"
+
+
+def test_object_features_match_skimage_interpolation():
+    # The embedding resize must keep the pixel-center alignment of 'skimage.transform.resize'. The objects
+    # are away from the 2 px edge, where torch repeats the edge pixel and skimage mirrors it.
+    from skimage.transform import resize
+
+    shape = (64, 64)
+    features = np.random.default_rng(0).normal(size=(1, N_CHANNELS, EMBEDDING_SIZE, EMBEDDING_SIZE))
+    embeddings = {**_padded_embeddings(), "features": features.astype("float32"), "original_size": shape}
+    segmentation = np.zeros(shape, dtype="uint32")
+    segmentation[8:20, 8:20] = 1
+    segmentation[30:40, 40:56] = 2
+
+    _, object_features = compute_object_features(embeddings, segmentation, verbose=False)
+
+    upsampled = resize(features[0].transpose(1, 2, 0), shape + (N_CHANNELS,), preserve_range=True)
+    expected = [upsampled[segmentation == seg_id].mean(axis=0) for seg_id in (1, 2)]
+    assert np.allclose(object_features[:, 1:], expected, atol=1e-5)
