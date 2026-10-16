@@ -661,6 +661,7 @@ def test_sam2_volume_propagation_merges_3d_scribbles_points_and_boxes(monkeypatc
         batched=True,
         early_stop_patience=0,
         z_range=None,
+        _last_volume_run=None,
     )
     signals = SimpleNamespace(
         pbar_total=_Signal(),

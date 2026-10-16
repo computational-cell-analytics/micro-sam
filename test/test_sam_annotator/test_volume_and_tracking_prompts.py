@@ -88,7 +88,9 @@ def run_volume_segmentation(monkeypatch, point_layer, prompt_layer, batched, sha
         is_sam2=True, image_shape=shape,
         image_embeddings={"input_size": (1024, 1024)}, interactive_segmenter=segmenter,
     )
-    widget = SimpleNamespace(_viewer=viewer, batched=batched, early_stop_patience=0, z_range=None)
+    widget = SimpleNamespace(
+        _viewer=viewer, batched=batched, early_stop_patience=0, z_range=None, _last_volume_run=None
+    )
     messages = []
     monkeypatch.setattr(_widgets, "AnnotatorState", lambda: state)
     monkeypatch.setattr(_widgets, "_create_pbar_for_threadworker", lambda: (None, make_signals()))
@@ -251,6 +253,43 @@ def test_a_lone_negative_without_a_shape_stays_a_stop(monkeypatch):
     segmenter, _ = run_volume_segmentation(monkeypatch, point_layer, empty_shape_layer(), batched=True)
 
     assert prompt_objects(segmenter) == [([1], [1])]
+
+
+def test_stop_annotations_bound_the_volume_propagation(monkeypatch):
+    """A stop below and above the prompted slices ends the object there, excluding the stop slice."""
+    point_layer = Points(
+        data=np.array([[1.0, 5.0, 5.0], [3.0, 10.0, 12.0], [4.0, 10.0, 12.0], [6.0, 5.0, 5.0]]),
+        properties={"label": np.array(["negative", "positive", "positive", "negative"])},
+    )
+
+    segmenter, _ = run_volume_segmentation(
+        monkeypatch, point_layer, empty_shape_layer(), batched=False, shape=(8, 32, 32)
+    )
+
+    assert [labels for _, labels in prompt_objects(segmenter)] == [[1], [1]]
+    assert segmenter.predict_calls[0]["z_range"] == (2, 5)
+
+
+def test_a_stop_between_prompted_slices_is_ignored(monkeypatch):
+    point_layer = Points(
+        data=np.array([[2.0, 10.0, 12.0], [4.0, 5.0, 5.0], [6.0, 10.0, 12.0]]),
+        properties={"label": np.array(["positive", "negative", "positive"])},
+    )
+
+    segmenter, messages = run_volume_segmentation(
+        monkeypatch, point_layer, empty_shape_layer(), batched=False, shape=(8, 32, 32)
+    )
+
+    assert segmenter.predict_calls[0]["z_range"] is None
+    assert any("[4]" in message for message in messages)
+
+
+def test_bound_z_range_by_stops_keeps_the_user_range():
+    from micro_sam.sam_annotator._widgets import _bound_z_range_by_stops
+
+    assert _bound_z_range_by_stops({3}, [], 8, (1, 6)) == ((1, 6), [])
+    assert _bound_z_range_by_stops({3}, [5], 8, None) == ((0, 4), [])
+    assert _bound_z_range_by_stops({3}, [0, 1, 5, 7], 8, (2, 6)) == ((2, 4), [])
 
 
 class RecordingPredictor:
@@ -548,3 +587,64 @@ def test_tracking_rejects_a_negative_only_prompt_set(monkeypatch):
 
     assert segmenter.predict_calls == []
     assert any("cannot track an object" in msg for msg in messages)
+
+
+def run_volume_segmentation_twice(monkeypatch, first_points, second_points, second_z_range=None):
+    from micro_sam.sam_annotator import _widgets
+
+    shape = (8, 32, 32)
+    segmenter = Segmenter(shape)
+    state = SimpleNamespace(
+        is_sam2=True, image_shape=shape,
+        image_embeddings={"input_size": (1024, 1024)}, interactive_segmenter=segmenter,
+    )
+    current_object = CurrentObject(shape)
+    viewer = SimpleNamespace(layers={"current_object": current_object, "prompts": empty_shape_layer()})
+    widget = SimpleNamespace(_viewer=viewer, batched=False, early_stop_patience=0, z_range=None, _last_volume_run=None)
+    monkeypatch.setattr(_widgets, "AnnotatorState", lambda: state)
+    monkeypatch.setattr(_widgets, "_create_pbar_for_threadworker", lambda: (None, make_signals()))
+    monkeypatch.setattr(_widgets, "show_info", lambda msg: None)
+
+    for points, z_range in ((first_points, None), (second_points, second_z_range)):
+        viewer.layers["point_prompts"] = Points(
+            data=np.array(points), properties={"label": np.array(["positive"] * len(points))},
+        )
+        widget.z_range = z_range
+        _widgets.UnifiedSegmentWidget._run_volumetric_segmentation(widget)
+    return segmenter, current_object
+
+
+def test_repressing_without_changes_reuses_the_last_volume_result(monkeypatch):
+    segmenter, current_object = run_volume_segmentation_twice(
+        monkeypatch, [[3.0, 10.0, 12.0]], [[3.0, 10.0, 12.0]]
+    )
+
+    assert len(segmenter.predict_calls) == 1
+    assert current_object.data.all()
+
+
+def test_repressing_after_a_change_propagates_again(monkeypatch):
+    segmenter, _ = run_volume_segmentation_twice(
+        monkeypatch, [[3.0, 10.0, 12.0]], [[3.0, 10.0, 12.0], [5.0, 10.0, 12.0]]
+    )
+    assert len(segmenter.predict_calls) == 2
+
+    segmenter, _ = run_volume_segmentation_twice(
+        monkeypatch, [[3.0, 10.0, 12.0]], [[3.0, 10.0, 12.0]], second_z_range=(1, 6)
+    )
+    assert len(segmenter.predict_calls) == 2
+
+
+def test_pressing_segment_during_a_run_is_ignored(monkeypatch):
+    from micro_sam.sam_annotator import _widgets
+
+    calls, messages = [], []
+    widget = SimpleNamespace(
+        is_running=True, apply_to_volume=True, tracking=False,
+        _run_volumetric_segmentation=lambda: calls.append("volume"),
+    )
+    monkeypatch.setattr(_widgets, "show_info", messages.append)
+
+    _widgets.UnifiedSegmentWidget.__call__(widget)
+
+    assert calls == [] and len(messages) == 1

@@ -1421,6 +1421,40 @@ def _batched_disabled_when_tiled(state, batched):
     return batched
 
 
+def _bound_z_range_by_stops(prompted_slices, stop_slices, n_slices, z_range=None):
+    """Bound the propagation range by the stop annotations (a lone negative point) of a volume.
+
+    A stop below all prompted slices ends the object below, a stop above all prompted slices ends it
+    above. The stop slice itself stays empty. A stop between prompted slices is ignored.
+
+    Args:
+        prompted_slices: The slices carrying a segmentation prompt.
+        stop_slices: The slices carrying a stop annotation.
+        n_slices: The number of slices in the volume.
+        z_range: The inclusive (z_min, z_max) range selected by the user, or None for the full volume.
+
+    Returns:
+        The inclusive (z_min, z_max) propagation range, or None for the full volume.
+        The stop slices that were ignored.
+    """
+    if not stop_slices or not prompted_slices:
+        return z_range, []
+
+    z_first, z_last = min(prompted_slices), max(prompted_slices)
+    lower = [z for z in stop_slices if z < z_first]
+    upper = [z for z in stop_slices if z > z_last]
+    ignored = sorted(z for z in stop_slices if z_first <= z <= z_last)
+    if not lower and not upper:
+        return z_range, ignored
+
+    z_min, z_max = (0, n_slices - 1) if z_range is None else z_range
+    if lower:
+        z_min = max(z_min, max(lower) + 1)
+    if upper:
+        z_max = min(z_max, min(upper) - 1)
+    return (z_min, z_max), ignored
+
+
 def _plan_volume_prompts(merged_prompts, shape_prompts, is_batched):
     """Plan every prompt push of a volume segmentation round, in the order they must be pushed.
 
@@ -2772,6 +2806,11 @@ class UnifiedSegmentWidget(_WidgetBase):
         # Initialize volume mode state
         self.apply_to_volume = False
 
+        # The progress bar pumps the Qt event loop, so a key press during a run would start a nested one.
+        self.is_running = False
+        # The key and result of the last volume propagation, so a re-press without changes reuses it.
+        self._last_volume_run = None
+
         # Create the widget UI
         self._create_widget()
 
@@ -2921,23 +2960,35 @@ class UnifiedSegmentWidget(_WidgetBase):
         Args:
             viewer: Optional napari viewer (for keybinding compatibility).
         """
+        if self.is_running:
+            show_info("The segmentation is still running. Wait until it finishes.")
+            return None
+
         # Validation
         if _validate_embeddings(self._viewer):
             return None
         if _validate_layers(self._viewer):
             return None
 
-        # Route to appropriate implementation
-        if self.apply_to_volume:
-            if self.tracking:
-                return self._run_tracking()
+        self.is_running = True
+        try:
+            # Route to appropriate implementation
+            if self.apply_to_volume:
+                if self.tracking:
+                    return self._run_tracking()
+                else:
+                    return self._run_volumetric_segmentation()
             else:
-                return self._run_volumetric_segmentation()
-        else:
-            if self.tracking:
-                return self._run_frame_segmentation()
-            else:
-                return self._run_slice_segmentation()
+                if self.tracking:
+                    return self._run_frame_segmentation()
+                else:
+                    return self._run_slice_segmentation()
+        finally:
+            self.is_running = False
+
+    def reset_last_volume_run(self):
+        """Forget the last volume propagation, so the next run propagates again."""
+        self._last_volume_run = None
 
     def _run_slice_segmentation(self):
         """Execute per-slice segmentation.
@@ -3160,11 +3211,13 @@ class UnifiedSegmentWidget(_WidgetBase):
                 # needed to detect prompts that changed since the last run.
                 shape_yx = state.image_shape[-2:]
                 point_slices = np.unique(np.concatenate([z_values_points, z_values_scribbles])).astype("int")
-                merged_prompts, shape_prompts = {}, {}
+                merged_prompts, shape_prompts, stop_slices = {}, {}, []
                 for curr_z in np.unique(np.concatenate([point_slices, z_values_boxes])).astype("int"):
                     prompts = vutil.collect_frame_prompts(point_prompts, box_prompts, shape_yx, i=curr_z)
                     # A slice whose only prompt is a single negative point is a 'stop' annotation.
-                    if not prompts.is_stop and len(prompts.points):
+                    if prompts.is_stop:
+                        stop_slices.append(int(curr_z))
+                    elif len(prompts.points):
                         merged_prompts[int(curr_z)] = (prompts.points, prompts.labels)
                     rect_boxes, poly_masks = prompts.split_shapes()
                     if rect_boxes or poly_masks:
@@ -3191,25 +3244,44 @@ class UnifiedSegmentWidget(_WidgetBase):
                 # Plan the whole round before touching the state: the object each prompt is routed to
                 # depends on the prompt set as a whole, and the sync below needs that routing.
                 plan = _plan_volume_prompts(merged_prompts, shape_prompts, is_batched)
+                signatures = _volume_prompt_signatures(plan)
+
+                # A patience of 0 disables early stopping (propagate through the whole volume).
+                early_stop_patience = self.early_stop_patience if self.early_stop_patience > 0 else None
+                prompted_slices = set(merged_prompts) | set(shape_prompts)
+                z_range, ignored_stops = _bound_z_range_by_stops(
+                    prompted_slices, stop_slices, shape[0], self.z_range
+                )
+                if ignored_stops:
+                    show_info(
+                        f"Ignoring the stop annotation (single negative point) in slice(s) {ignored_stops}: "
+                        "a stop must lie below or above all prompted slices."
+                    )
+
+                # Propagating the same prompts again costs a full pass and drifts from the first result.
+                run_key = (
+                    id(state.interactive_segmenter), is_batched, frozenset(signatures), z_range, early_stop_patience
+                )
+                if self._last_volume_run is not None and self._last_volume_run[0] == run_key:
+                    pbar_signals.pbar_stop.emit()
+                    return self._last_volume_run[1].copy()
 
                 # Rebuild the persistent state when a prompt was deleted, moved, relabelled or routed
                 # to a different object since the last run. A round that only adds prompts and leaves
                 # the existing routing intact keeps the state, so only the new prompts are pushed.
-                state.interactive_segmenter.sync_prompt_state(_volume_prompt_signatures(plan))
+                state.interactive_segmenter.sync_prompt_state(signatures)
                 _push_volume_prompts(state.interactive_segmenter, plan)
 
                 # Propagate the prompts throughout the volume and combine the propagated segmentations.
-                # Report each slice propagation step.
-                # A patience of 0 disables early stopping (propagate through the whole volume).
-                early_stop_patience = self.early_stop_patience if self.early_stop_patience > 0 else None
                 # Tiled segmenters count one step per slice in each tile activated above.
-                n_propagation_steps = state.interactive_segmenter.get_progress_total(self.z_range)
+                n_propagation_steps = state.interactive_segmenter.get_progress_total(z_range)
                 pbar_signals.pbar_total.emit(n_propagation_steps)
                 pbar_signals.pbar_description.emit("Propagate in volume")
                 seg = state.interactive_segmenter.predict(
                     update_progress=emit_progress,
-                    early_stop_patience=early_stop_patience, z_range=self.z_range,
+                    early_stop_patience=early_stop_patience, z_range=z_range,
                 )
+                self._last_volume_run = (run_key, seg.copy())
 
             else:
                 # Step 1: Segment all slices with prompts.
@@ -3667,6 +3739,12 @@ class InteractiveSegmentationWidget(_WidgetBase):
 
     def clear(self, viewer=None):
         """Clear the current annotations."""
+        if self._segment_widget is not None:
+            if self._segment_widget.is_running:
+                show_info("The segmentation is still running. Wait until it finishes.")
+                return
+            self._segment_widget.reset_last_volume_run()
+
         if self._ndim == 2 or self.apply_to_volume:
             vutil.clear_annotations(self._viewer)
         else:
@@ -3764,6 +3842,10 @@ class InteractiveTrackingWidget(_WidgetBase):
 
     def clear(self, viewer=None):
         """Clear the annotations: the current frame, or all frames in 'Apply to All Frames' mode."""
+        if self._segment_widget.is_running:
+            show_info("The segmentation is still running. Wait until it finishes.")
+            return
+
         if self.apply_to_volume:
             _reset_tracking_state(self._viewer)
             vutil.clear_annotations(self._viewer)
