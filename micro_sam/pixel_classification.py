@@ -266,14 +266,14 @@ def compute_pixel_features(
             ).number_of_blocks
         else:
             n_blocks = 1
-        anyup_pbar = tqdm(total=n_blocks * depth, desc="Upsampling with AnyUp", disable=not verbose)
+        anyup_pbar = util._progress_bar(total=n_blocks * depth, desc="Upsampling with AnyUp", disable=not verbose)
         pbar_update = anyup_pbar.update
     slice_disable = (not verbose) or (upsampler is not None)
 
     if is_3d:
         image_hw = (image_shape[1], image_shape[2])
         planes = []
-        for z in tqdm(range(depth), total=depth, disable=slice_disable, desc="Compute pixel features"):
+        for z in util._progress_bar(range(depth), total=depth, disable=slice_disable, desc="Compute pixel features"):
             if is_tiled:
                 plane, grid = _compute_tiled_feature_image(
                     features, image_hw, max_grid_size, z=z, image=image, upsampler=upsampler, pbar_update=pbar_update

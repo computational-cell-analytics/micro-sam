@@ -344,7 +344,7 @@ def _stitch_segmentation(masks, tile_ids, tiling, halo, output_shape, verbose=Fa
     assert len(masks) == len(tile_ids), f"{len(masks)}, {len(tile_ids)}"
     segmentation = np.zeros(output_shape, dtype="uint32")
 
-    for tile_id, this_seg in tqdm(zip(tile_ids, masks), desc="Stitch tiles", disable=not verbose):
+    for tile_id, this_seg in util._progress_bar(zip(tile_ids, masks), desc="Stitch tiles", disable=not verbose):
         tile = tiling.getBlockWithHalo(tile_id, list(halo)).outerBlock
         bb = tuple(slice(begin, end) for begin, end in zip(tile.begin, tile.end))
         if tile_id == 0:

@@ -14,11 +14,6 @@ from segment_anything.predictor import SamPredictor
 
 import torch
 
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
-
 from . import util
 from .util import AutoSegBase
 
@@ -769,7 +764,7 @@ def precompute_state(
         output_paths = [os.path.join(output_path, os.path.basename(f)) for f in input_files]
 
     predictor, current_ndim = None, None
-    for input_file, out_path in tqdm(
+    for input_file, out_path in util._progress_bar(
         zip(input_files, output_paths), total=len(input_files), desc="Precompute embeddings", disable=single
     ):
         image_data = input_file if isinstance(input_file, np.ndarray) else util.load_image_data(input_file, key)

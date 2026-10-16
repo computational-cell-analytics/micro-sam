@@ -30,11 +30,6 @@ from segment_anything.predictor import SamPredictor
 
 import torch
 
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
-
 import elf.segmentation as seg_utils
 import elf.tracking.tracking_utils as track_utils
 from elf.tracking.motile_tracking import recolor_segmentation
@@ -408,7 +403,7 @@ def _segment_slices(
     offset = 0
     segmentation = np.zeros(data.shape, dtype="uint32")
 
-    for i in tqdm(range(segmentation.shape[0]), desc="Segment slices", disable=not verbose):
+    for i in util._progress_bar(range(segmentation.shape[0]), desc="Segment slices", disable=not verbose):
         segmentor.initialize(data[i], image_embeddings=image_embeddings, verbose=False, i=i)
         seg = segmentor.generate(**kwargs)
 
