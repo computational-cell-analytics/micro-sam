@@ -31,11 +31,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
-
 from bioimage_cpp.utils import Blocking
 
 from .. import util
@@ -468,7 +463,7 @@ def _handle_pbar(verbose, pbar_init, pbar_update):
 
     def init(total, description):
         nonlocal pbar
-        pbar = tqdm(total=total, desc=description, disable=not verbose)
+        pbar = util._progress_bar(total=total, desc=description, disable=not verbose)
 
     def update(n):
         if pbar is not None:
