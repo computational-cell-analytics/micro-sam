@@ -418,6 +418,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
     label_widget_title = "Label names:"
     max_components = 256  # PCA upper bound (256 pixel channels, 257 object features)
     tool_key = None  # "pixel" | "object", selects the tool-specific tooltips
+    classical_feature_choices = ()  # the classical features this tool supports
     supports_apply_to_volume = True  # if False the tool always runs over the full image/volume
 
     #
@@ -472,17 +473,20 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             state.anyup_upsampler = get_anyup_upsampler(device=device)
         return state.anyup_upsampler
 
-    def _resolve_anyup(self):
-        # Returns (image, upsampler, ok). image/upsampler are None unless AnyUp is enabled.
-        image, upsampler = None, None
+    def _resolve_feature_inputs(self):
+        # Returns (image, upsampler, classical_features, ok). The image is only needed for AnyUp or
+        # the classical features, and is None otherwise.
+        upsampler = None
         if self._get_use_anyup():
             try:
                 upsampler = self._get_cached_upsampler()
             except ImportError as e:
                 widgets._generate_message("error", str(e))
-                return None, None, False
-            image = self._viewer.layers["image"].data
-        return image, upsampler, True
+                return None, None, None, False
+        classical_features = self._get_classical_features()
+        use_image = upsampler is not None or classical_features is not None
+        image = self._viewer.layers["image"].data if use_image else None
+        return image, upsampler, classical_features, True
 
     def _feature_settings(self):
         # The settings that change the feature values. Training data from other settings is not mixed in.
@@ -756,6 +760,26 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         checkbox_row.native.layout().setContentsMargins(0, 0, 0, 0)
         checkbox_row.native.layout().addStretch(1)
 
+        # Optional classical features, appended to the embedding features. Checking it reveals a
+        # dropdown to select the features. Both change the features, so they clear the cached ones.
+        use_classical = CheckBox(value=False, text="Add classical features")
+        use_classical.native.setToolTip(get_tooltip("classification", f"use_classical_features_{self.tool_key}"))
+        classical_tooltip = get_tooltip("classification", f"classical_features_{self.tool_key}")
+        classical_features = widgets.CheckableComboBox(
+            self.classical_feature_choices, labels=[name.replace("_", " ") for name in self.classical_feature_choices],
+        )
+        classical_features.setToolTip(classical_tooltip)
+        size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
+        classical_features.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
+        classical_features.setVisible(False)
+        classical_row = Container(layout="horizontal", widgets=[use_classical], labels=False)
+        classical_row.native.layout().addWidget(classical_features)
+        classical_row.native.layout().setContentsMargins(0, 0, 0, 0)
+        classical_row.native.layout().addStretch(1)
+        use_classical.changed.connect(lambda checked: classical_features.setVisible(checked))
+        use_classical.changed.connect(self._invalidate_features)
+        classical_features.selection_changed.connect(self._invalidate_features)
+
         top_features_tooltip = get_tooltip("classification", f"top_features_{self.tool_key}")
         top_features = SpinBox(value=10, min=1, max=self.max_components, step=1)
         top_features.native.setToolTip(top_features_tooltip)
@@ -778,7 +802,6 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         random_seed_tooltip = get_tooltip("classification", "random_seed")
         random_seed.native.setToolTip(random_seed_tooltip)
         # Let the dropdown expand to fill the row width (no trailing stretch), matching the path widgets.
-        size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
         random_seed.native.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
         random_seed_label = Label(value="random seed:")
         random_seed_label.native.setToolTip(random_seed_tooltip)
@@ -793,20 +816,31 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         def get_use_anyup():
             return bool(use_anyup.value)
 
+        def get_classical_features():
+            # None switches the classical features off, also when the checkbox is on but nothing is selected.
+            selected = classical_features.selected()
+            return selected if use_classical.value and selected else None
+
         def get_random_state():
             return 0 if random_seed.value == "fixed" else None
 
-        def set_options(use_top_features_val, n_top_features, use_anyup_val, random_seed_val=None):
+        def set_options(
+            use_top_features_val, n_top_features, use_anyup_val, random_seed_val=None, classical_features_val=None
+        ):
             # Restore the option controls from a loaded classifier's spec.
             use_top_features.value = bool(use_top_features_val)
             if n_top_features:
                 top_features.value = int(n_top_features)
             use_anyup.value = bool(use_anyup_val)
+            use_classical.value = classical_features_val is not None
+            if classical_features_val is not None:
+                classical_features.set_selected(classical_features_val)
             if random_seed_val is not None:
                 random_seed.value = random_seed_val
 
         self._get_n_components = get_n_components
         self._get_use_anyup = get_use_anyup
+        self._get_classical_features = get_classical_features
         self._get_random_state = get_random_state
         self._set_options = set_options
 
@@ -826,7 +860,10 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         export_button.native.setToolTip(get_tooltip("classification", "export_button"))
         export_button.clicked.connect(lambda: self._save_rf(export_dir.value))
 
-        rows = [checkbox_row, top_features_row, random_seed_row, load_path, load_button, export_dir, export_button]
+        rows = [
+            checkbox_row, top_features_row, classical_row, random_seed_row,
+            load_path, load_button, export_dir, export_button,
+        ]
         return Container(widgets=rows, labels=False)
 
     def _create_widgets(self):
@@ -957,6 +994,10 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         previous_features, previous_labels = self.batch_training_set(exclude_index=state.batch_index)
         if (labels == 0).all() and (previous_labels is None):
             return widgets._generate_message("error", "You have not provided any annotations.")
+        if previous_features is not None and previous_features.shape[1] != features.shape[1]:
+            return widgets._generate_message(
+                "error", "The features of the previous images do not match the current feature settings."
+            )
 
         n_components = self._get_n_components()
         random_state = self._get_random_state()
@@ -1061,6 +1102,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         tiling_on = getattr(ew, "tiling", "no") == "yes"
         n_components = self._get_n_components()
         use_anyup = bool(self._get_use_anyup())
+        classical_features = self._get_classical_features()
         random_seed = "random" if self._get_random_state() is None else "fixed"
         # The GUI sets 'ew.model_type' only after it computes embeddings. Use the predictor's
         # model_type (always set) instead, so a CLI-launched session still records the model.
@@ -1077,6 +1119,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             "use_top_features": n_components > 0,
             "n_top_features": n_components if n_components > 0 else None,
             "upsampling": "anyup" if use_anyup else "interpolation",
+            "classical_features": classical_features,
             "random_seed": random_seed,
             "ndim": getattr(self, "_ndim", None),
             "class_ids": [int(c) for c in rf.classes_],
@@ -1114,10 +1157,10 @@ class _ClassifierBase(QtWidgets.QScrollArea):
                 device=None, tile_shape=spec.get("tile_shape"), halo=spec.get("halo"),
             )
 
-        # Top-feature selection, AnyUp/interpolation upsampling and the random-seed mode.
+        # Top-feature selection, AnyUp/interpolation upsampling, the random-seed mode and the classical features.
         self._set_options(
             spec.get("use_top_features", False), spec.get("n_top_features"),
-            spec.get("upsampling") == "anyup", spec.get("random_seed"),
+            spec.get("upsampling") == "anyup", spec.get("random_seed"), spec.get("classical_features"),
         )
 
         # Class names, restored into the label widget.

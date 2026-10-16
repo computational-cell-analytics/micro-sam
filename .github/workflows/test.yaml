@@ -10,6 +10,11 @@ on:
   pull_request:  # run CI on commits to any open PR
   workflow_dispatch:  # can manually trigger CI from GitHub actions tab
 
+# Cancel older runs of this workflow on the same PR; other runs get their own group and always run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: ${{ matrix.os }} ${{ matrix.python-version }}

@@ -119,7 +119,7 @@ tooltips = {
         "commit_button": "Commit the current segmentation to the committed-objects layer. Shortcut: C.",
     },
     "classification": {
-        "settings": "Optional classifier settings: PCA feature reduction, AnyUp upsampling, the random seed, and loading or exporting a trained classifier.",  # noqa
+        "settings": "Optional classifier settings: PCA feature reduction, AnyUp upsampling, classical features, the random seed, and loading or exporting a trained classifier.",  # noqa
         "forward_classifier_state": "Carry the classifier across images in the batch. The tool stacks the latest annotated features of all other visited images with the current image. It trains a fresh random forest on the combined set. Then it applies the forest to each image you go to, even without new annotations. Uncheck to classify each image on its own.",  # noqa
         "segmentation": "Select the segmentation (labels) layer whose objects will be classified.",
         "train_button": "Train the random forest on all current annotations and predict on the image. Shortcut: Shift + T.",  # noqa
@@ -129,6 +129,10 @@ tooltips = {
         "use_top_features_object": "Reduce the object features to their most informative components via PCA before training. When unchecked, all features are used and no PCA is applied.",  # noqa
         "top_features_pixel": "Number of top PCA components to reduce the embedding to, between 1 and 256 (the SAM/SAM2 image embedding has 256 channels for all model sizes).",  # noqa
         "top_features_object": "Number of top PCA components to reduce the object features to, between 1 and 257 (object area plus the 256 per-channel embedding means).",  # noqa
+        "use_classical_features_pixel": "Add classical filter features (as in ilastik) to the SAM/SAM2 embedding features. They are computed at several scales on the image resized to the feature grid, which can help for intensity- and texture-driven classes.",  # noqa
+        "use_classical_features_object": "Add classical object features (size, intensity statistics and shape descriptors) to the SAM/SAM2 embedding features. They are computed on the full-resolution image and segmentation.",  # noqa
+        "classical_features_pixel": "Select the classical filters to add. Each filter is computed per image channel at the scales 0.5, 1, 2 and 4 (in pixels of the feature grid).",  # noqa
+        "classical_features_object": "Select the classical object features to add. The intensity statistics are computed per image channel.",  # noqa
         "use_anyup": "Use AnyUp to upsample the embedding with the original image as guidance, for sharper features near object boundaries. When unchecked, plain interpolation is used.",  # noqa
         "random_seed": "'fixed' trains with a fixed random seed so the prediction is reproducible across runs. 'random' leaves the random forest unseeded, so results change slightly each time you train.",  # noqa
         "load_path": "Path to a stored classifier (.joblib) to load and apply to the current image.",

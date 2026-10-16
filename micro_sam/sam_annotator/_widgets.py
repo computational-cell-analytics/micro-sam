@@ -21,6 +21,7 @@ from napari.utils.notifications import show_info
 
 from qtpy import QtWidgets
 from qtpy.QtCore import QObject, Signal, Qt
+from qtpy.QtGui import QStandardItem, QStandardItemModel
 
 from magicgui import magic_factory
 from magicgui.widgets import ComboBox, Container, create_widget
@@ -69,6 +70,81 @@ def _make_collapsible(widget, title, tooltip=None):
     collapsible.addWidget(widget)
     parent_widget.layout().addWidget(collapsible)
     return parent_widget
+
+
+class CheckableComboBox(QtWidgets.QComboBox):
+    """A dropdown with a checkbox per item, to select several items at once.
+
+    Args:
+        items: The item names.
+        labels: Optional display text per item. By default the item names are shown.
+        parent: The parent widget.
+    """
+    selection_changed = Signal()
+
+    def __init__(self, items, labels=None, parent=None):
+        super().__init__(parent)
+        self._items = list(items)
+        labels = self._items if labels is None else list(labels)
+        self._model = QStandardItemModel(self)
+        for label in labels:
+            item = QStandardItem(label)
+            # The click handler toggles the state, so the item itself is not user-checkable.
+            item.setFlags(Qt.ItemIsEnabled)
+            item.setData(Qt.Checked, Qt.CheckStateRole)
+            self._model.appendRow(item)
+        self.setModel(self._model)
+        self.view().pressed.connect(self._toggle)
+        self._keep_open = False
+        # The closed box only shows a short summary, so the long item names must not widen the panel.
+        self.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(12)
+        self.view().setMinimumWidth(self.view().sizeHintForColumn(0) + 40)
+
+    def _toggle(self, index):
+        item = self._model.itemFromIndex(index)
+        checked = item.data(Qt.CheckStateRole) == Qt.Checked
+        item.setData(Qt.Unchecked if checked else Qt.Checked, Qt.CheckStateRole)
+        self._keep_open = True
+        self.update()
+        self.selection_changed.emit()
+
+    def hidePopup(self):
+        # Keep the popup open while the user toggles items.
+        if self._keep_open:
+            self._keep_open = False
+            return
+        super().hidePopup()
+
+    def selected(self):
+        """Return the names of the checked items."""
+        return [
+            name for row, name in enumerate(self._items)
+            if self._model.item(row).data(Qt.CheckStateRole) == Qt.Checked
+        ]
+
+    def set_selected(self, names):
+        """Check exactly the items in `names`."""
+        for row, name in enumerate(self._items):
+            self._model.item(row).setData(Qt.Checked if name in names else Qt.Unchecked, Qt.CheckStateRole)
+        self.update()
+        self.selection_changed.emit()
+
+    def paintEvent(self, event):
+        # Show a summary of the selection instead of the current item.
+        n_selected = len(self.selected())
+        if n_selected == len(self._items):
+            text = "all features"
+        elif n_selected == 0:
+            text = "no features"
+        else:
+            text = f"{n_selected} of {len(self._items)} features"
+        painter = QtWidgets.QStylePainter(self)
+        option = QtWidgets.QStyleOptionComboBox()
+        self.initStyleOption(option)
+        option.currentText = text
+        painter.drawComplexControl(QtWidgets.QStyle.CC_ComboBox, option)
+        painter.drawControl(QtWidgets.QStyle.CE_ComboBoxLabel, option)
 
 
 # Base class for a widget with convenience functionality for adding parameters.

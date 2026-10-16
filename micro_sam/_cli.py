@@ -699,7 +699,7 @@ def _classifier_model_spec(rf_path):
 
 
 def _classifier_predictor(rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device):
-    """Build the predictor and optional upsampler for classifier inference, defaulting to the training config."""
+    """Build the predictor, upsampler and classical features for classifier inference from the training config."""
     from .util import _get_sam_model
 
     spec = _classifier_model_spec(rf_path)
@@ -724,7 +724,7 @@ def _classifier_predictor(rf_path, model_type, checkpoint_path, tile_shape, halo
         from .pixel_classification import get_anyup_upsampler
         upsampler = get_anyup_upsampler(device=device)
 
-    return predictor, upsampler, model_type, tile_shape, halo
+    return predictor, upsampler, spec.get("classical_features"), model_type, tile_shape, halo
 
 
 def _classifier_common_options(f):
@@ -773,7 +773,7 @@ def inference_pixel_classification(
     from .pixel_classification import run_prediction_with_pixel_classifier
 
     tile_shape, halo = _parse_shape(tile_shape), _parse_shape(halo)
-    predictor, upsampler, model_type, tile_shape, halo = _classifier_predictor(
+    predictor, upsampler, classical_features, model_type, tile_shape, halo = _classifier_predictor(
         rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
     )
 
@@ -784,7 +784,7 @@ def inference_pixel_classification(
 
     predictions = run_prediction_with_pixel_classifier(
         images=input_paths, predictor=predictor, rf_path=rf_path, image_key=key, ndim=ndim,
-        upsampler=upsampler, model_type=model_type,
+        upsampler=upsampler, model_type=model_type, classical_features=classical_features,
     )
     for prediction, output_fpath in zip(predictions, output_paths):
         imageio.imwrite(output_fpath, prediction, compression="zlib")
@@ -811,7 +811,7 @@ def inference_object_classification(
     from .object_classification import run_prediction_with_object_classifier
 
     tile_shape, halo = _parse_shape(tile_shape), _parse_shape(halo)
-    predictor, upsampler, model_type, tile_shape, halo = _classifier_predictor(
+    predictor, upsampler, classical_features, model_type, tile_shape, halo = _classifier_predictor(
         rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
     )
 
@@ -828,6 +828,7 @@ def inference_object_classification(
     predictions = run_prediction_with_object_classifier(
         images=input_paths, segmentations=segmentation_paths, predictor=predictor, rf_path=rf_path,
         image_key=key, segmentation_key=segmentation_key, ndim=ndim, upsampler=upsampler, model_type=model_type,
+        classical_features=classical_features,
     )
     for prediction, output_fpath in zip(predictions, output_paths):
         imageio.imwrite(output_fpath, prediction, compression="zlib")

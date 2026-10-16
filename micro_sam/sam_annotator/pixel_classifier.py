@@ -16,6 +16,7 @@ from ._titles import get_dock_title
 from ._annotator import _ClassifierBase
 from .util import _sync_embedding_widget
 from ._batch_classification import ClassificationBatchTask
+from ..classical_features import PIXEL_FEATURES
 from ..pixel_classification import (
     accumulate_pixel_labels, compute_pixel_features, project_prediction_to_image, train_pixel_classifier,
 )
@@ -34,6 +35,7 @@ class PixelClassifier(_ClassifierBase):
     label_widget_title = "Pixel label names:"
     max_components = EMBEDDING_CHANNELS
     tool_key = "pixel"
+    classical_feature_choices = PIXEL_FEATURES
 
     def _compute_features(self):
         # Returns (features, grid_shape) for the current image, computing and caching them if needed.
@@ -41,11 +43,12 @@ class PixelClassifier(_ClassifierBase):
         if state.pixel_features is None:
             if widgets._validate_embeddings(self._viewer):
                 return None, None
-            image, upsampler, ok = self._resolve_anyup()
+            image, upsampler, classical_features, ok = self._resolve_feature_inputs()
             if not ok:
                 return None, None
             features, grid_shape = compute_pixel_features(
                 state.image_embeddings, state.image_shape, image=image, upsampler=upsampler,
+                classical_features=classical_features,
             )
             state.pixel_features, state.pixel_grid_shape = features, grid_shape
         return state.pixel_features, state.pixel_grid_shape
