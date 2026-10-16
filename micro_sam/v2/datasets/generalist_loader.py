@@ -35,6 +35,10 @@ from ..transforms.labels import (
     _JointLabelTransform, _JointGeodesicLabelTransform,
 )
 
+# The training domains. 'all' is LM + EM + HP; the mito and nucleus EM generalist ('em_organelles') is a separate
+# domain and is not part of 'all'.
+DATASET_CHOICES = ("lm", "em", "hp", "em_organelles", "all")
+
 # Cap on validation samples drawn per dataset, to keep the per-epoch validation pass cheap.
 # Each access is a random crop (see UniDataWrapper.max_samples), so this is N random samples.
 N_SAMPLES_VAL = 50
@@ -2924,6 +2928,151 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     return train_ds, val_ds
 
 
+# The datasets of the mito and nucleus EM generalist ('em_organelles'). Each name enables one block in
+# _get_em_organelles_datasets.
+EM_ORGANELLES_DATASETS = ("mitolab", "cmito", "densecell_mito")
+
+# Objects below this size (in pixels / voxels of the training patch) are dropped from the organelle targets.
+EM_ORGANELLES_MIN_SIZE = 25
+EM_ORGANELLES_MIN_SIZE_3D = 50
+
+# Cmito: one cached 128 x 1024 x 1024 box per C. elegans stage (written by torch-em's cmito loader, l3 by voxel index
+# because of the l3 bounding box conversion in cmito.py), with the z / xy anisotropy of the stage. The exact boxes are
+# recorded in mito_nuc_figures/mito_only/cmito/info.json. The last 16 slices of each box validate.
+CMITO_BOXES = {
+    "l1": ("l1_ceb79c8268d7.zarr", 50 / 5.12),
+    "l2": ("l2_2ea67de84d7e.zarr", 30 / 8),
+    "l3": ("l3_voxels_13ca91605fde.zarr", 50 / 6.144),
+    "adult": ("adult_dba9f64835ae.zarr", 30 / 16),
+    "dauer": ("dauer_eee06de11b55.zarr", 50 / 8),
+}
+CMITO_TRAIN_ROI = np.s_[:112, :, :]
+CMITO_VAL_ROI = np.s_[112:, :, :]
+
+# DenseCell mitochondria use the same split as the DenseCell cell instances in the EM generalist: the train volume
+# trains on z < 35 and validates on z >= 35.
+DENSECELL_TRAIN_ROI = np.s_[:35, :, :]
+DENSECELL_VAL_ROI = np.s_[35:, :, :]
+
+# CEM-MitoLab groups (source folders) that never train. Candidates, to add once their source dataset is assigned to
+# evaluation: Wei2020_MitoEM-H, Wei2020_MitoEM-R (MitoEM), UroCell, kasthuri2011, CREMI, the OpenOrganelle cells
+# (jrc_hela-2_openorganelle, jrc_hela-3_openorganelle, jrc_jurkat-1_openorganelle, jrc_macrophage-2_openorganelle),
+# perez2014 and Guay2020_patient1 (likely the DenseCell source).
+MITOLAB_EXCLUDED_GROUPS = ()
+
+# Fraction of the CEM-MitoLab groups that validate. The split is by group, so the tiles of one source volume never
+# land in both splits.
+MITOLAB_VAL_FRACTION = 0.1
+
+
+def mitolab_group(path, root):
+    """The CEM-MitoLab group (source folder) of an image path: '<root>/<group>/images/<name>.tiff'."""
+    return os.path.relpath(path, root).split(os.sep)[0]
+
+
+def mitolab_split_paths(path, split):
+    """The non-empty CEM-MitoLab images and masks of the 'train' or 'val' groups, without the excluded groups."""
+    root = datasets.cem.get_mitolab_data(path, download=False)
+    raw_paths, label_paths = datasets.cem.get_mitolab_paths(path, split=None, download=False)
+    groups = sorted({mitolab_group(p, root) for p in raw_paths} - set(MITOLAB_EXCLUDED_GROUPS))
+    train_groups, val_groups = train_test_split(groups, test_size=MITOLAB_VAL_FRACTION, random_state=42)
+    keep = set(train_groups if split == "train" else val_groups)
+    pairs = [(r, lab) for r, lab in zip(raw_paths, label_paths) if mitolab_group(r, root) in keep]
+    return [r for r, _ in pairs], [lab for _, lab in pairs]
+
+
+def _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
+    """Get the mitochondria and nucleus EM datasets for the organelle generalist.
+
+    Mitochondria and nuclei are trained class-agnostic: a dataset with both classes merges them into one instance
+    label map. Organelles are not dense cells, so the targets come from the plain label transform (no outer boundary
+    erosion as in the EM cell datasets). The distance transform relabels every extracted patch with connected
+    components (``apply_label=True``): semantic labels become instances, and the disconnected pieces of one id inside
+    a patch become separate instances. Objects that touch, such as thin bridges across sections, stay merged.
+
+    Returns:
+        Tuple of (train_ds, val_ds) lists of UniDataWrapper instances.
+    """
+    train_ds, val_ds = [], []
+    n_z = len(z_slices)
+
+    def organelle_label_trafo(min_size=EM_ORGANELLES_MIN_SIZE, sampling=None):
+        if label_trafo is None:
+            return kwargs.get("label_transform2")
+        return label_trafo(min_size=min_size, sampling=sampling)
+
+    # 1. CEM-MitoLab (2D mitochondria instance segmentation in EM tiles from about 600 source volumes and images)
+    # NOTE: The tiles are 63-512 px, so the whole tile is drawn and randomly upscaled and padded to the patch shape.
+    # Only the non-empty tiles are used, split by source group (see mitolab_split_paths).
+    if "mitolab" in EM_ORGANELLES_DATASETS:
+        mitolab_kwargs = {
+            "patch_shape": None, "raw_key": None, "label_key": None, "is_seg_dataset": False, "ndim": 2,
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+            "label_transform2": organelle_label_trafo(),
+            "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
+            "transform": _with_flips(_random_resize_and_pad_trafo, patch_shape),
+        }
+        for split, ds_list in [("train", train_ds), ("val", val_ds)]:
+            raws, labs = mitolab_split_paths(os.path.join(input_path, "mitolab"), split)
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=raws, label_paths=labs, n_samples=len(raws) if split == "train" else 50,
+                        **mitolab_kwargs,
+                    ), source_ndim=2,
+                )
+            )
+
+    # 2. Cmito (3D dense mitochondria instances in whole-animal C. elegans ssTEM, five developmental stages)
+    # NOTE: Reads the cached boxes directly (see CMITO_BOXES); each stage is one dataset with its own anisotropy.
+    if "cmito" in EM_ORGANELLES_DATASETS:
+        for z in z_slices:
+            for stage, (file_name, z_scale) in CMITO_BOXES.items():
+                cmito_path = os.path.join(input_path, "cmito", file_name)
+                cmito_kwargs = {
+                    "raw_paths": cmito_path, "raw_key": "raw", "label_paths": cmito_path, "label_key": "labels",
+                    "patch_shape": (z, *patch_shape), "ndim": 3,
+                    **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                    "label_transform2": organelle_label_trafo(EM_ORGANELLES_MIN_SIZE_3D, sampling=(z_scale, 1, 1)),
+                    "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
+                }
+                for roi, ds_list, n_samples in [(CMITO_TRAIN_ROI, train_ds, 100), (CMITO_VAL_ROI, val_ds, 10)]:
+                    ds_list.append(
+                        UniDataWrapper(
+                            torch_em.default_segmentation_dataset(
+                                rois=roi, n_samples=max(1, n_samples // n_z), **cmito_kwargs
+                            ),
+                            source_ndim=3, group_key=(3, z),
+                        )
+                    )
+
+    # 3. DenseCell mitochondria (3D, class 2 of the semantic map in SBF-SEM of human platelets, 10x10x50 nm)
+    # NOTE: The mitochondria are small and sparse (13-36 per volume), so one object per patch is enough.
+    if "densecell_mito" in EM_ORGANELLES_DATASETS:
+        for z in z_slices:
+            densecell_kwargs = {
+                "path": os.path.join(input_path, "densecell"),
+                "patch_shape": (z, *patch_shape),
+                "label_choice": "mitochondrion",
+                "download": True,
+                "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": organelle_label_trafo(EM_ORGANELLES_MIN_SIZE_3D, sampling=(5, 1, 1)),
+                "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
+            }
+            for roi, ds_list, n_samples in [(DENSECELL_TRAIN_ROI, train_ds, 200), (DENSECELL_VAL_ROI, val_ds, 40)]:
+                ds_list.append(
+                    UniDataWrapper(
+                        datasets.get_densecell_dataset(
+                            split="train", rois=roi, n_samples=max(1, n_samples // n_z), **densecell_kwargs
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    return train_ds, val_ds
+
+
 def get_dataloaders(
     input_path,
     label_trafo=None,
@@ -2949,11 +3098,12 @@ def get_dataloaders(
             - ``"lm"``: Light microscopy datasets only (2D + 3D LM).
             - ``"em"``: Electron microscopy datasets only.
             - ``"hp"``: Histopathology datasets only.
-            - ``"all"``: All datasets (default).
+            - ``"em_organelles"``: Mitochondria and nucleus EM datasets only (not part of ``"all"``).
+            - ``"all"``: LM, EM and HP datasets (default).
         with_boundaries: The flag to append the full object-boundary channel to the automatic targets.
     """
-    if dataset_choice not in ("lm", "em", "hp", "all"):
-        raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', 'hp', or 'all'.")
+    if dataset_choice not in DATASET_CHOICES:
+        raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected one of {DATASET_CHOICES}.")
 
     if label_trafo is None:
         from micro_sam.v2.transforms.labels import GeodesicHybridDistanceTransform
@@ -2992,6 +3142,11 @@ def get_dataloaders(
         hp_train, hp_val = _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
         train_ds.extend(hp_train)
         val_ds.extend(hp_val)
+
+    if dataset_choice == "em_organelles":
+        org_train, org_val = _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(org_train)
+        val_ds.extend(org_val)
 
     _configure_training_normalization(train_ds, val_ds)
 
@@ -3039,14 +3194,14 @@ def get_interactive_dataloaders(
         z_slices: List of z-slice counts for 3D data (e.g. [8]).
             Defaults to [8].
         dataset_choice: Which dataset domain to include - ``"lm"``, ``"em"``,
-            ``"hp"``, or ``"all"`` (default).
+            ``"hp"``, ``"em_organelles"``, or ``"all"`` (default).
         n_workers: Number of DataLoader worker processes.
 
     Returns:
         Tuple of (train_loader, val_loader).
     """
-    if dataset_choice not in ("lm", "em", "hp", "all"):
-        raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected 'lm', 'em', 'hp', or 'all'.")
+    if dataset_choice not in DATASET_CHOICES:
+        raise ValueError(f"Invalid dataset_choice: {dataset_choice!r}. Expected one of {DATASET_CHOICES}.")
 
     if z_slices is None:
         z_slices = [8]
@@ -3112,6 +3267,11 @@ def _build_automatic_datasets(input_path, z_slices, dataset_choice, with_boundar
         train_ds.extend(hp_train)
         val_ds.extend(hp_val)
 
+    if dataset_choice == "em_organelles":
+        org_train, org_val = _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(org_train)
+        val_ds.extend(org_val)
+
     _configure_training_normalization(train_ds, val_ds)
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
 
@@ -3152,6 +3312,11 @@ def _build_interactive_datasets(input_path, z_slices, dataset_choice):
         train_ds.extend(hp_train)
         val_ds.extend(hp_val)
 
+    if dataset_choice == "em_organelles":
+        org_train, org_val = _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
+        train_ds.extend(org_train)
+        val_ds.extend(org_val)
+
     _configure_training_normalization(train_ds, val_ds)
 
     # Cap each validation dataset to N_SAMPLES_VAL random samples so the per-epoch
@@ -3179,7 +3344,7 @@ def _build_joint_datasets(
     Args:
         input_path: Root path to the generalist training data.
         z_slices: Z-slice counts for 3D groups.
-        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, or ``"all"``.
+        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, ``"em_organelles"``, or ``"all"``.
         distance_type: Which directed distance target the automatic branch regresses.
             ``"geodesic"`` uses :class:`_JointGeodesicLabelTransform`, ``"directed"`` uses
             :class:`_JointLabelTransform`.
@@ -3227,6 +3392,11 @@ def _build_joint_datasets(
         hp_train, hp_val = _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
         train_ds.extend(hp_train)
         val_ds.extend(hp_val)
+
+    if dataset_choice == "em_organelles":
+        org_train, org_val = _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(org_train)
+        val_ds.extend(org_val)
 
     _configure_training_normalization(train_ds, val_ds)
 

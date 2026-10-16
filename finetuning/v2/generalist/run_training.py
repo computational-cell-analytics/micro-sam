@@ -11,7 +11,7 @@ EPOCHS = {
     "hvit_b": 82,
     "hvit_l": 79,
 }
-DATASET_CHOICE = "all"
+DATASET_CHOICES = ("lm", "em", "hp", "em_organelles", "all")
 BOUNDARY_DICE_WEIGHT = 0.5
 ENABLE_IB = True
 
@@ -36,7 +36,7 @@ GPU_TYPE = "H100"
 SAVE_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/joint/v6"
 
 
-def write_batch_script(out_path, model_type, n_epochs, save_root, reservation, dry, tag):
+def write_batch_script(out_path, model_type, n_epochs, save_root, reservation, dry, tag, dataset_choice):
     """Write the sbatch script for one joint SAM2 training run on 2 nodes x 4 H100, and submit it."""
     nccl_block = "\n".join(f"export {key}={value}" for key, value in NCCL_ENV[ENABLE_IB].items())
 
@@ -88,7 +88,7 @@ srun --cpu-bind=none bash -c "torchrun \
     --rdzv_backend=c10d \
     --rdzv_endpoint=$MASTER_ADDR:$MASTER_PORT \
     --node_rank=\$SLURM_NODEID \
-    {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {DATASET_CHOICE} --compile \
+    {SCRIPT} --model_type {model_type} --n_epochs {n_epochs} --dataset_choice {dataset_choice} --compile \
     --boundary_dice_weight {BOUNDARY_DICE_WEIGHT}"
 """
     if not tag:
@@ -118,7 +118,9 @@ def submit_slurm(args):
     """Submit the joint SAM2 multi-node training jobs to slurm."""
     tmp_folder = "./gpu_jobs"
     models = list(EPOCHS.keys()) if args.model_type is None else [args.model_type]
-    save_root = os.path.join(os.path.dirname(SAVE_ROOT), args.tag) if args.tag else SAVE_ROOT
+    # A single-domain run gets its own tag, and with it its own save root, so it never overwrites the v6 run.
+    tag = args.tag or (None if args.dataset_choice == "all" else args.dataset_choice)
+    save_root = os.path.join(os.path.dirname(SAVE_ROOT), tag) if tag else SAVE_ROOT
 
     for model_type in models:
         print(f"Submitting joint training for {model_type}")
@@ -129,7 +131,8 @@ def submit_slurm(args):
             save_root=os.path.abspath(args.save_root or save_root),
             reservation=args.reservation,
             dry=args.dry,
-            tag=args.tag,
+            tag=tag,
+            dataset_choice=args.dataset_choice,
         )
 
 
@@ -145,6 +148,10 @@ def main():
         help="Where to save checkpoints and logs. Defaults to the shared v6 folder, or to its '<tag>' sibling.",
     )
     parser.add_argument("--tag", type=str, default=None, help="Run tag, e.g. 'v6', added to the run and job names.")
+    parser.add_argument(
+        "--dataset_choice", type=str, default="all", choices=DATASET_CHOICES,
+        help="The training domain. A domain other than 'all' defaults the tag (and the save root) to its name.",
+    )
     parser.add_argument("--dry", action="store_true", help="Write the sbatch scripts but do not submit them.")
     args = parser.parse_args()
 
