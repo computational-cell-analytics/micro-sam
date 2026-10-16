@@ -565,7 +565,7 @@ def for_asem(save_dir, choice):
         batch_size=1,
         ndim=2,
         organelles=choice,
-        volume_ids="cell_6",
+        volume_ids="64",
         sampler=MinForegroundSampler(min_fraction=0.01),
         raw_transform=identity,
         num_workers=16,
