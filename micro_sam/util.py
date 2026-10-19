@@ -46,10 +46,11 @@ except ImportError:
     from segment_anything import sam_model_registry, SamPredictor  # noqa
     VIT_T_SUPPORT = False
 
+from tqdm import tqdm as _std_tqdm
 try:
     from napari.utils import progress as tqdm
 except ImportError:
-    from tqdm import tqdm
+    tqdm = _std_tqdm
 
 # This is the default model used in micro_sam
 # Currently it is set to vit_b_lm
@@ -723,6 +724,14 @@ def _write_embedding_signature(f, input_, predictor, tile_shape, halo, input_siz
     signature.update({"input_size": input_size, "original_size": original_size})
     for key, val in signature.items():
         f.attrs[key] = val
+
+
+def _progress_bar(*args, disable=False, **kwargs):
+    # A disabled napari progress bar is never removed from napari's activity dock: its 'close' returns
+    # early when the bar is disabled. So we use a plain tqdm progress bar when the bar is disabled.
+    if disable:
+        return _std_tqdm(*args, disable=True, **kwargs)
+    return tqdm(*args, **kwargs)
 
 
 # Helper function for optional external progress bars.

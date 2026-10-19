@@ -207,7 +207,7 @@ def _compute_embedding_object_features(
         embeddings = image_embeddings["features"].squeeze()
         # AnyUp is the slow part, so show a progress bar (which also drives napari's activity dots)
         # for the single upsampling call.
-        anyup_pbar = tqdm(
+        anyup_pbar = util._progress_bar(
             total=1, desc="Upsampling with AnyUp", disable=(not verbose) or (upsampler is None)
         )
         result = _compute_object_features_impl(
@@ -239,7 +239,7 @@ def _compute_embedding_object_features(
 
     # With AnyUp, label the bar accordingly since the upsampling is the slow part.
     desc = "Upsampling with AnyUp" if upsampler is not None else "Compute object features"
-    for seg, embeds, image_region in tqdm(
+    for seg, embeds, image_region in util._progress_bar(
         seg_embed_generator(), total=n_gen, disable=not verbose, desc=desc
     ):
         # Compute this seg ids and features.
