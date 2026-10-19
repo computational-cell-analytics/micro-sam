@@ -1,8 +1,8 @@
 """Helpers to read the janelia-cosem-datasets (OpenOrganelle / CellMap) S3 bucket for the nucleus overview figures."""
 import time
 
-import numpy as np
 import requests
+import numpy as np
 
 
 BUCKET_URL = "https://janelia-cosem-datasets.s3.amazonaws.com/"

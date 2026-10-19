@@ -1,14 +1,15 @@
 """Overview figures for Mito-ANFs (mouse cochlea SBEM, webKnossos): one labeled subvolume per sample.
 
-The labels are very sparse (only mitos of traced auditory nerve fibers), so each box is the 1024 x 1024 x 128
-window (native 12 x 12 x 50 nm) with the most labeled voxels in the 32-32-4 mag of the segmentation layer.
+The labels are very sparse (only mitos of traced auditory nerve fibers). Thus, each box is the window with the most
+labeled voxels in the 32-32-4 mag of the segmentation layer. The box size is 1024 x 1024 x 128 voxels (native
+12 x 12 x 50 nm).
 The boxes are cached with `get_mito_anf_data`, so they can be passed to `get_mito_anf_dataset` directly.
 """
 import os
 
+import zarr
 import fsspec
 import numpy as np
-import zarr
 
 from torch_em.data.datasets.electron_microscopy import mito_anf
 

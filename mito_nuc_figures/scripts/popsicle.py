@@ -1,11 +1,12 @@
 import os
 
-import numpy as np
 import zarr
+import numpy as np
 from scipy.ndimage import gaussian_filter
 
-from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
 from torch_em.data.datasets.electron_microscopy.popsicle import YEAST_CLASSES, YEAST_RUNS
+
+from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
 
 
 DATASET = "popsicle"
@@ -33,8 +34,10 @@ OBSERVATIONS = (
 
 
 class SmoothedRaw:
-    """Lazy view of a noisy tomogram that averages 2 * HALF_WINDOW + 1 slices around the requested
-    plane and applies a gaussian filter, to make the structures visible in the overview figures."""
+    """Lazy view of a noisy tomogram that averages 2 * HALF_WINDOW + 1 slices around the requested plane.
+
+    It also applies a gaussian filter, to make the structures visible in the overview figures.
+    """
 
     def __init__(self, data):
         self.data = data

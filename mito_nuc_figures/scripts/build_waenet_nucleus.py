@@ -1,26 +1,26 @@
 """Write the WAE-Net nucleus training data for the nucleus EM generalist.
 
-- Dataset 1 (FIB-SEM of pancreatic carcinoid cells, all nuclei labeled): the 323 slices stacked in numeric file order
-  into one volume, nuclei as 3D connected components. The last VAL_FRACTION of z validates.
-- Dataset 3 (unregistered serial ssTEM sections of one interphase cell): one 2D image per section, nuclei as 2D
-  connected components, labels on the black rotation padding removed. A contiguous block of sections validates,
-  since neighbouring sections are near-duplicates.
+- Dataset 1 (FIB-SEM of pancreatic carcinoid cells, all nuclei labeled): the 323 slices, stacked in numeric file
+  order into one volume. The nuclei are 3D connected components. The last VAL_FRACTION of z validates.
+- Dataset 3 (unregistered serial ssTEM sections of one interphase cell): one 2D image per section. The nuclei are 2D
+  connected components, and the labels on the black rotation padding are removed. A contiguous block of sections
+  validates, since neighbouring sections are near-duplicates.
 - Datasets 4-7 (single TEM images of Jurkat, primary T, J558L B and expanded T cells): only the central cell is
-  labeled. Its mask is the union of the 'cytoplasm' and 'nucleus' labels (the 'background' label covers everything
-  else, including the neighbour cells, whose nuclei are not labeled). The loss is restricted to the central cell mask
-  dilated by CELL_BAND pixels: all other pixels (neighbour cells, distant resin, burned-in scale bars) get
+  labeled. Its mask is the union of the 'cytoplasm' and 'nucleus' labels. The 'background' label covers everything
+  else, including the neighbour cells, whose nuclei are not labeled. The loss is restricted to the central cell mask
+  dilated by CELL_BAND pixels. All other pixels (neighbour cells, distant resin, burned-in scale bars) get
   IGNORE_LABEL. Images without a nucleus label and the images in DROPPED_IMAGES are not used. Images that are not
   512 x 512 (6 in dataset 6) are cropped around the central cell or padded with IGNORE_LABEL to 512 x 512. The last
   VAL_FRACTION of the images of each dataset (by file number) validates, since consecutive images can be serial
   sections of one cell.
 
-The 2D datasets are written as stacks of 512 x 512 images, one h5 file per split, under a temporary name that is moved
-in place when complete.
+The 2D datasets are written as stacks of 512 x 512 images, one h5 file per split. Each file has a temporary name that
+is moved in place when complete.
 """
-import argparse
-import json
 import os
 import re
+import json
+import argparse
 
 import h5py
 import numpy as np

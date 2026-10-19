@@ -1,7 +1,7 @@
 """Build the overview (README.md table and index.html gallery) from all per-dataset info.json files."""
+import os
 import html
 import json
-import os
 from glob import glob
 
 from figure_utils import DATASET_GROUPS, FIGURE_ROOT

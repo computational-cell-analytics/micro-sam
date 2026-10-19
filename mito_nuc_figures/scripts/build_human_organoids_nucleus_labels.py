@@ -5,20 +5,20 @@ The nucleus labels are manual semantic masks (int8, -128 background, 127 nucleus
 2. The labels on the black alignment padding are removed, so that nuclei are only labeled on valid raw. The padding is
    a connected region of the padding value of the volume (-128 or -108) above PADDING_MIN_AREA pixels of a slice.
 3. The nuclei are separated into instances by 3D connected components.
-4. Components below MIN_NUCLEUS_SIZE voxels are label fragments (speckle clouds and scribbles), not nuclei, and get
-   IGNORE_LABEL, as does the entotic cell of F107_A1, whose nucleus is not labeled.
+4. Components below MIN_NUCLEUS_SIZE voxels are label fragments (speckle clouds and scribbles), not nuclei.
+   They get IGNORE_LABEL. The entotic cell of F107_A1 also gets IGNORE_LABEL, because its nucleus is not labeled.
 
 The labels are written to one zarr store per volume, under a temporary name that is moved in place when complete.
 """
-import argparse
-import json
 import os
+import json
 import shutil
+import argparse
 
 import cc3d
 import h5py
-import numpy as np
 import zarr
+import numpy as np
 from scipy import ndimage
 from skimage.morphology import disk
 
@@ -51,8 +51,11 @@ def close_and_fill(mask):
 def label_slabwise(mask):
     """3D connected components (6-connectivity) into uint32, labeled in z-slabs that are merged across their borders.
 
-    scipy's label holds an extra 8-byte array of the volume and cc3d's output for the whole volume is uint64, both too
-    large for the memory of the job for the largest volume; per slab, cc3d labels into uint32.
+    For the largest volume, the job memory cannot hold either alternative:
+    - scipy's label holds an extra 8-byte array of the volume.
+    - The cc3d output for the whole volume is uint64.
+
+    Per slab, cc3d labels into uint32.
     """
     instances = np.zeros(mask.shape, dtype="uint32")
     offset = 0

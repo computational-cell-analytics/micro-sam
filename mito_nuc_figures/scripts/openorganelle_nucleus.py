@@ -1,13 +1,13 @@
-import argparse
-import json
 import os
+import json
+import argparse
 import subprocess
 
-import numpy as np
 import zarr
+import numpy as np
 
-from cosem_utils import LazyView, count_ids, get_levels, group_path, index_map, open_remote
 from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
+from cosem_utils import LazyView, count_ids, get_levels, group_path, index_map, open_remote
 
 
 DATASET = "openorganelle_nucleus"

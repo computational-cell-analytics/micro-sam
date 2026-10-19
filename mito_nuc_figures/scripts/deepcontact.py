@@ -3,8 +3,8 @@
 The zips in DATA_ROOT/deepcontact are broken (0 bytes and a 504 error page), and the folder is not writable.
 The data was downloaded again with the torch-em loader into DATA_ROOT/deepcontact_redownload.
 """
-import json
 import os
+import json
 from glob import glob
 
 import h5py

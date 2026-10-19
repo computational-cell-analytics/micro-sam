@@ -1,22 +1,28 @@
 """Overview figures for the ASEM mitochondria labels (FIB-SEM cells, s3://asem-project).
 
-The torch-em loader cannot download anymore: quilt3 is not installed in the env, and the bucket no longer has
-the `datasets/cell_<i>/cell_<i>.zarr` layout the loader expects (cells are now stored under ids like `46/46.zarr`).
-This script streams the mito label crops directly from the public bucket with s3fs and caches them as zarr v3
-stores (raw + labels) under `<DATA_ROOT>/asem/mito_crops/`, without touching the loader's `cell_<i>` layout.
+The torch-em loader cannot download the data anymore:
+- quilt3 is not installed in the env.
+- The bucket no longer has the `datasets/cell_<i>/cell_<i>.zarr` layout that the loader expects.
+  The cells are now stored under ids like `46/46.zarr`.
+
+This script streams the mito label crops directly from the public bucket with s3fs.
+It caches them as zarr v3 stores (raw + labels) under `<DATA_ROOT>/asem/mito_crops/`.
+It does not touch the `cell_<i>` layout of the loader.
 
 Volumes with mito labels in the current bucket:
-- 46, 58, 61 (5 nm, chemical fixation): labels have the full raw shape, annotated in large regions;
-  we cache one 256 x 1024 x 1024 crop at the densest labeled window (likely cell_1 / cell_2 / cell_3).
-- 64 (5 nm), 3A and 2E (4 nm, HPFS): labels are small crops with an nm offset into the raw volume
-  (likely cell_6, cell_13a and cell_13, the loader's 'inconsistent' volumes); we cache the full label crop.
+- 46, 58, 61 (5 nm, chemical fixation): the labels have the full raw shape and cover large regions.
+  We cache one 256 x 1024 x 1024 crop at the densest labeled window (likely cell_1 / cell_2 / cell_3).
+- 64 (5 nm), 3A and 2E (4 nm, HPFS): the labels are small crops with an nm offset into the raw volume.
+  They are likely cell_6, cell_13a and cell_13, the 'inconsistent' volumes of the loader.
+  We cache the full label crop.
 """
-import json
 import os
+import json
 
+import s3fs
 import fsspec
 import numpy as np
-import s3fs
+
 import zarr
 from zarr.codecs import BloscCodec
 

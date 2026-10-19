@@ -1,41 +1,46 @@
 """Write the derived nucleus data of the new torch-em datasets for the nucleus EM generalist.
 
-- cardiomyocyte_tem: the 9 TEM micrographs with a nucleus mask, downscaled CARDIOMYOCYTE_SCALE times (nuclei are
-  900-1600 px wide at full resolution), holes filled, specks below MIN_OBJECT_SIZE dropped.
+- cardiomyocyte_tem: the 9 TEM micrographs with a nucleus mask. They are downscaled CARDIOMYOCYTE_SCALE times, because
+  nuclei are 900-1600 px wide at full resolution. The holes are filled and specks below MIN_OBJECT_SIZE are dropped.
 - perez: the nucleus task tiles (train 500 px, resized to 512 px; test 1000 px), holes filled.
-- vem_nuclei: the 2D array tomography images, each downscaled by a power of two so that nuclei are about
-  VEM_TARGET_DIAMETER px wide, and the two 3D FIB-SEM volumes, downscaled VEM_3D_SCALE times. Nuclei touching the image
-  border are removed from most 2D label images (not from VEM_EDGE_NUCLEI_INCLUDED), so the unlabeled pixels in a border
-  band of the largest nucleus diameter carry IGNORE_LABEL. Image id_9 is truncated in the archive and left out.
-- u2os_fibsem: the 44 nuclear envelope slices of one U2-OS cell (evaluation), filled into nucleus masks. The crops cut
-  the nucleus, so its part in a crop is the convex hull of the envelope arc and the right border it spans (the last
-  column with data, before the constant padding of some slices).
-- etchacell: the HeLa SBF-SEM ROIs (evaluation, 10 x 10 x 50 nm) with nuclear envelope consensus labels, filled into
-  nucleus masks (per slice after closing small gaps, and in 3D, which also fills the cap slices where the envelope is
-  cut tangentially), downscaled ETCHACELL_SCALE times in xy so that a nucleus fits a 512 px field of view.
-- aive: the nucleus of the three AIVE FIB-SEM overview volumes with a nucleus label (6.5 x 6.5 x 10 nm): the nucleus
-  class with the 'chromatin' class folded in (it marks the nucleoli, which lie inside the nucleus), holes filled,
-  downscaled AIVE_SCALE times (z, y, x) to 30 x 26 x 26 nm, since a nucleus is about 3000 px long at full resolution.
-- cerebellum_fibsem: the mouse cerebellum FIB-SEM volume (10 nm isotropic) with its nucleus instances, downscaled
-  CEREBELLUM_SCALE times (nuclei are up to 600 px wide at full resolution). The labels below CEREBELLUM_MIN_NUCLEUS_SIZE
-  voxels (three pieces of one dark object inside a myelinated axon at the end of the volume, not a nucleus by eye) get
-  the ignore label.
-- macrophage_a431: the SBF-SEM volumes with the nucleus class (quick semantic MIB annotations), downscaled
-  MACROPHAGE_SCALE times in xy (one nucleus of about 1300 px per volume). The voxel size is not stored; the nucleus
-  extents suggest sections about 10 times thicker than the pixel size, so z / xy is about 2.5 after downscaling.
+- vem_nuclei: the 2D array tomography images and the two 3D FIB-SEM volumes. Each 2D image is downscaled by a power of
+  two, so that nuclei are about VEM_TARGET_DIAMETER px wide. The 3D volumes are downscaled VEM_3D_SCALE times.
+  Most 2D label images (all except VEM_EDGE_NUCLEI_INCLUDED) do not contain the nuclei that touch the image border.
+  Thus, the unlabeled pixels in a border band of the largest nucleus diameter carry IGNORE_LABEL.
+  Image id_9 is truncated in the archive and left out.
+- u2os_fibsem: the 44 nuclear envelope slices of one U2-OS cell (evaluation), filled into nucleus masks.
+  The crops cut the nucleus. Thus, the nucleus part in a crop is the convex hull of the envelope arc and the right
+  border that the arc spans. The right border is the last column with data, before the constant padding of some slices.
+- etchacell: the HeLa SBF-SEM ROIs (evaluation, 10 x 10 x 50 nm) with nuclear envelope consensus labels.
+  The labels are filled into nucleus masks, per slice after closing small gaps, and in 3D. The 3D fill also fills the
+  cap slices, where the cut through the envelope is tangential. The ROIs are downscaled ETCHACELL_SCALE times in xy,
+  so that a nucleus fits a 512 px field of view.
+- aive: the nucleus of the three AIVE FIB-SEM overview volumes with a nucleus label (6.5 x 6.5 x 10 nm).
+  The 'chromatin' class marks the nucleoli inside the nucleus, so it is folded into the nucleus class. The holes are
+  filled. A nucleus is about 3000 px long at full resolution. Thus, the volumes are downscaled AIVE_SCALE times
+  (z, y, x) to 30 x 26 x 26 nm.
+- cerebellum_fibsem: the mouse cerebellum FIB-SEM volume (10 nm isotropic) with its nucleus instances. It is
+  downscaled CEREBELLUM_SCALE times, because nuclei are up to 600 px wide at full resolution. The labels below
+  CEREBELLUM_MIN_NUCLEUS_SIZE voxels get the ignore label. They are three pieces of one dark object inside a myelinated
+  axon at the end of the volume, not a nucleus by eye.
+- macrophage_a431: the SBF-SEM volumes with the nucleus class (quick semantic MIB annotations). They are downscaled
+  MACROPHAGE_SCALE times in xy. Each volume has one nucleus of about 1300 px. The voxel size is not stored.
+  The nucleus extents suggest sections about 10 times thicker than the pixel size. Thus, z / xy is about 2.5 after
+  downscaling.
 
 Every file is written under a temporary name and moved in place when complete.
 """
-import argparse
+import os
 import glob
 import json
-import os
+import argparse
 
 import h5py
-import imageio.v3 as imageio
-import numpy as np
 import tifffile
+import numpy as np
 from scipy import ndimage
+import imageio.v3 as imageio
+
 from skimage.measure import label
 from skimage.morphology import convex_hull_image, disk
 from skimage.transform import downscale_local_mean, resize
@@ -118,8 +123,10 @@ def build_cardiomyocyte(out_root):
     infos = {}
     for image_path in sorted(glob.glob(os.path.join(src, "images", "*.tif"))):
         name = os.path.basename(image_path)[:-4]
-        masks = [p for p in glob.glob(os.path.join(src, "Nucleus_Masks", "*.tif"))
-                 if os.path.basename(p) in (f"{name}_nucleus.tif", f"KO_{name}_nucleus.tif")]
+        masks = [
+            p for p in glob.glob(os.path.join(src, "Nucleus_Masks", "*.tif"))
+            if os.path.basename(p) in (f"{name}_nucleus.tif", f"KO_{name}_nucleus.tif")
+        ]
         if not masks:
             continue
         raw = to_uint8(tifffile.imread(image_path))
@@ -205,10 +212,12 @@ def fill_envelope(envelope):
     """The nucleus part of a crop that cuts the nucleus, from the envelope arc, or None if it is not reliable.
 
     The crops cut the nucleus, so the envelope is an arc (often dashed) with the nucleus on its right. A nucleus is
-    convex, so its part in the crop is the convex hull of the arc and the stretch of the right border that the arc spans
-    in y. The arc is the envelope pieces (after closing small gaps) of at least U2OS_MIN_PIECE_FRACTION of the
-    envelope, extended by the smaller pieces within U2OS_MAX_PIECE_GAP px of it (the ends of a dashed arc). Stray
-    fragments farther away are dropped, since they would pull the hull across the cytoplasm.
+    convex. Thus, its part in the crop is the convex hull of the arc and the right border stretch that the arc spans in
+    y. The arc has these parts:
+    - the envelope pieces (after closing small gaps) of at least U2OS_MIN_PIECE_FRACTION of the envelope.
+    - the smaller pieces within U2OS_MAX_PIECE_GAP px of them, which are the ends of a dashed arc.
+
+    Stray fragments farther away are dropped, since they would pull the hull across the cytoplasm.
     """
     if envelope.sum() < U2OS_MIN_ENVELOPE_PIXELS:
         return None

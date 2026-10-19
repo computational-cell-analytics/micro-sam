@@ -1,15 +1,15 @@
 """Precompute the mitochondria instance labels that the mitochondria EM generalist cannot derive per patch.
 
-Human organoids: the mitochondria labels are manual semantic masks (int8, -128 background, 127 mitochondria), so
-touching mitochondria form one connected component. Each connected component is split by a neck watershed: a seeded
-watershed on the distance transform over-segments it, neighbouring segments merge unless the distance saddle on their
-shared boundary is at most NECK_RATIO of the smaller of their peaks (a neck between two mitochondria, not the waist of
-one), and pieces below MIN_PIECE voxels are absorbed by the neighbour they share most boundary with. The watershed runs
-per component in its bounding box, which gives the same result as running it on the whole volume, with little memory.
+Human organoids: the labels are manual semantic masks, so touching mitochondria form one connected component.
+A neck watershed splits each connected component:
 
-The labels are written to <data>/human_organoids_mito/<volume>_mito_labels.zarr (see HUMAN_ORGANOIDS_MITO_ROOT in the
-generalist loader), under a temporary name that is moved in place when complete. The largest volume (F107_A3) needs
-about 200 GB of memory, so run this on a large-memory node, e.g.:
+- A seeded watershed on the distance transform over-segments the component.
+- Two touching segments merge, unless the distance on their boundary is at most NECK_RATIO of the smaller peak.
+- A piece below MIN_PIECE voxels joins the neighbour that shares the most boundary with it.
+
+The watershed runs per component in its bounding box, which keeps the memory low.
+The labels go to <data>/human_organoids_mito/<volume>_mito_labels.zarr (see HUMAN_ORGANOIDS_MITO_ROOT).
+The largest volume needs about 200 GB of memory, so run this script on a large-memory node:
 
     sbatch -p jupyter -c 32 --mem 700G --wrap "python preprocess_mito_dataset.py"
 """
@@ -21,9 +21,10 @@ from concurrent.futures import ProcessPoolExecutor
 
 import cc3d
 import h5py
-import numpy as np
 import zarr
+import numpy as np
 from scipy import ndimage
+
 from skimage.measure import label
 from skimage.morphology import h_maxima
 from skimage.segmentation import watershed

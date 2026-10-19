@@ -1,18 +1,19 @@
 """Overview figures for MitoSegEM (EMPIAR-12535): one representative subvolume per tissue.
 
 The torch-em loader downloads every full raw slice (33-217 MB each) and crops it afterwards.
-This script fetches only the TIFF strips that overlap the bounding box with HTTP range requests
-and writes the same zarr store as `get_mito_segem_data` (same file name, arrays, chunks and attrs),
-so `get_mito_segem_dataset(path, ..., bounding_boxes=[box], tissue=tissue)` reuses the cache.
+This script fetches only the TIFF strips that overlap the bounding box, with HTTP range requests.
+It writes the same zarr store as `get_mito_segem_data` (same file name, arrays, chunks and attrs).
+Thus, `get_mito_segem_dataset(path, ..., bounding_boxes=[box], tissue=tissue)` reuses the cache.
 """
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import fsspec
+import tifffile
 import imagecodecs
 import numpy as np
-import tifffile
+
 import zarr
 from zarr.codecs import BloscCodec
 

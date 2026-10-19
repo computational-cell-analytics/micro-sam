@@ -35,8 +35,8 @@ class DenoisedView:
 class DilatedView:
     """Lazy wrapper that grey-dilates each 2D section of a thin (membrane) label volume before striding. Display only.
 
-    The dilation keeps the label values (the larger value wins where classes touch), so that membranes that are
-    1-2 voxels thick stay visible after the figure helper subsamples the slices.
+    The dilation keeps the label values. The larger value wins where classes touch. Thus, membranes that are 1-2 voxels
+    thick stay visible after the figure helper subsamples the slices.
     """
 
     def __init__(self, volume, size=3):

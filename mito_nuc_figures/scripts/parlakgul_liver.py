@@ -1,18 +1,20 @@
 """Overview figures for the Parlakgul liver FIB-SEM mitochondria labels (EMPIAR-10791).
 
-The torch-em loader only resolves the EMPIAR file names of sample 6461. For 6464, 9430 and 1857 the raw
-folder, the raw file pattern and the segmentation zip names in PARLAKGUL_SAMPLES do not match EMPIAR, and the
-segmentation slices are not zero-padded consistently, so sorting the zip members by name does not give z order.
-This script streams one central subvolume per sample with the correct file names and caches it as zarr v3 in
-the same layout and file naming as `get_parlakgul_liver_data` (in a separate folder, because the dataset folder
-is read-only for this user), so the loader can use the cached boxes when pointed to that folder.
+The torch-em loader only resolves the EMPIAR file names of sample 6461. For 6464, 9430 and 1857 it has two problems:
+- The raw folder, the raw file pattern and the segmentation zip names in PARLAKGUL_SAMPLES do not match EMPIAR.
+- The segmentation slices are not zero-padded consistently. Thus, sorting the zip members by name does not give
+  z order.
+
+This script streams one central subvolume per sample with the correct file names. It caches the subvolume as zarr v3
+in the same layout and file naming as `get_parlakgul_liver_data`. The cache is in a separate folder, because the
+dataset folder is read-only for this user. The loader can use the cached boxes when pointed to that folder.
 """
 import io
 import os
 import re
+import zlib
 import struct
 import zipfile
-import zlib
 
 import numpy as np
 

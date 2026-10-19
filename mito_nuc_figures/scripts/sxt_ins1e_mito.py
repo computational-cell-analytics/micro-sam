@@ -1,15 +1,16 @@
-import csv
 import os
-import tempfile
+import csv
 import zipfile
+import tempfile
 
+import zarr
 import fsspec
 import mrcfile
 import numpy as np
-import zarr
+
+from torch_em.data.datasets.electron_microscopy import sxt_ins1e_mito
 
 from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
-from torch_em.data.datasets.electron_microscopy import sxt_ins1e_mito
 
 
 DATASET = "sxt_ins1e_mito"

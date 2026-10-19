@@ -1,18 +1,18 @@
 """Render the 3D volume EM datasets added to torch-em on 2026-10-18 into mito/TBD and nuc/TBD.
 
-Each figure shows a few xy slices with the most labeled pixels and one zx slice per volume, raw next to the label
-overlay (instances in tab20 colors, semantic masks as one filled color), with the layout of render_mito_overview.py.
-The figures of the datasets the user has decided on were moved into the category folders, so they are not listed any
-more; CATEGORIES sends the decided figures that are still listed to their folder.
+Each figure shows a few xy slices with the most labeled pixels and one zx slice per volume. Each panel pair shows the
+raw next to the label overlay (instances in tab20 colors, semantic masks as one filled color). The layout is the one
+of render_mito_overview.py. The figures of the decided datasets were moved into the category folders, so they are not
+listed any more. CATEGORIES sends the decided figures that are still listed to their folder.
 The data is read slice by slice, so no volume is loaded whole.
 """
-import argparse
 import os
+import argparse
 from glob import glob
 
 import h5py
-import numpy as np
 import zarr
+import numpy as np
 
 from render_mito_overview import REPO, save_grid, text_figure
 
@@ -22,8 +22,10 @@ N_CANDIDATES = 24
 
 
 def h5_volume(path, raw_key, label_key, value=None, title=None, zx=True):
-    return {"path": path, "raw_key": raw_key, "label_key": label_key, "value": value,
-            "title": title or os.path.basename(path), "zx": zx}
+    return {
+        "path": path, "raw_key": raw_key, "label_key": label_key, "value": value,
+        "title": title or os.path.basename(path), "zx": zx,
+    }
 
 
 def zarr_volumes(pattern, value=None):
@@ -39,18 +41,24 @@ CATEGORIES = {("mito", "parlakgul_fasting_liver"): "training"}
 
 # Per figure: the model folder, the dataset name, the volumes and the title lines.
 FIGURES = [
-    ("mito", "hela_metaphase", h5_volumes(os.path.join(DATA_ROOT, "hela_metaphase", "*.h5"), "raw",
-                                          "labels/organelles", value=1),
-     "HeLa Metaphase (EMPIAR-10994): SBF-SEM of two metaphase HeLa cells (control, REEP3/4 kd), 30 nm sections. "
-     "Mito = class 1 of the semantic MIB map: small (10-20 px wide), many mitos unlabeled; no nucleus (metaphase)."),
-    ("mito", "parlakgul_fasting_liver",
-     zarr_volumes(os.path.join(DATA_ROOT, "parlakgul_fasting_liver", "*_mito_*.zarr")),
-     "Parlakgul fasting liver (EMPIAR-12017): FIB-SEM mouse liver, 8 nm, mito instance segmentation (32-bit) of the "
-     "authors; one 64 x 1024 x 1024 box per sample (new samples, not our Parlakgul evaluation boxes)."),
-    ("nuc", "parlakgul_fasting_liver",
-     zarr_volumes(os.path.join(DATA_ROOT, "parlakgul_fasting_liver", "*_nuclear_membrane_*.zarr")),
-     "Parlakgul fasting liver (EMPIAR-12017): FIB-SEM mouse liver, 8 nm, NUCLEAR MEMBRANE binary masks "
-     "(not filled nuclei)."),
+    (
+        "mito", "hela_metaphase",
+        h5_volumes(os.path.join(DATA_ROOT, "hela_metaphase", "*.h5"), "raw", "labels/organelles", value=1),
+        "HeLa Metaphase (EMPIAR-10994): SBF-SEM of two metaphase HeLa cells (control, REEP3/4 kd), 30 nm sections. "
+        "Mito = class 1 of the semantic MIB map: small (10-20 px wide), many mitos unlabeled; no nucleus (metaphase).",
+    ),
+    (
+        "mito", "parlakgul_fasting_liver",
+        zarr_volumes(os.path.join(DATA_ROOT, "parlakgul_fasting_liver", "*_mito_*.zarr")),
+        "Parlakgul fasting liver (EMPIAR-12017): FIB-SEM mouse liver, 8 nm, mito instance segmentation (32-bit) of "
+        "the authors; one 64 x 1024 x 1024 box per sample (new samples, not our Parlakgul evaluation boxes).",
+    ),
+    (
+        "nuc", "parlakgul_fasting_liver",
+        zarr_volumes(os.path.join(DATA_ROOT, "parlakgul_fasting_liver", "*_nuclear_membrane_*.zarr")),
+        "Parlakgul fasting liver (EMPIAR-12017): FIB-SEM mouse liver, 8 nm, NUCLEAR MEMBRANE binary masks "
+        "(not filled nuclei).",
+    ),
 ]
 
 

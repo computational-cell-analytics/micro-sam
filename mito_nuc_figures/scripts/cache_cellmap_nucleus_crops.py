@@ -1,24 +1,25 @@
 """Cache the CellMap nucleus crops for the nucleus EM generalist.
 
-Only the large tissue crops (32-64 nm, many complete nuclei) are used. The small high-resolution crops are skipped:
-most of them hold one nucleus cut by the crop borders, and 15 lie fully inside a nucleus. jrc_mus-liver-zon-2 crop357
-is held out for the in-domain evaluation: it does not overlap any other crop (crop358 and crop367 overlap each other,
-so neither of them can be held out on its own).
+Only the large tissue crops (32-64 nm, many complete nuclei) are used. The script skips the small high-resolution
+crops. Most of them hold one nucleus cut by the crop borders, and 15 lie fully inside a nucleus.
+
+The in-domain evaluation uses crop357 of jrc_mus-liver-zon-2, because it does not overlap any other crop. The crops
+crop358 and crop367 overlap each other. Thus, neither of them can be held out on its own.
 
 Each crop is written to one zarr store with 'raw' (uint8) and 'labels' (the nucleus instance ids, uint32) at the
-label scale, under a temporary name that is moved in place when complete.
+label scale. The store has a temporary name that is moved in place when complete.
 """
-import argparse
-import json
 import os
+import json
 import shutil
 import zipfile
+import argparse
 
-import numpy as np
 import zarr
+import numpy as np
 
-from cellmap import ZIP_PATH, ZIP_ROOT, get_levels, load_crop, read_json
 from figure_utils import DATA_ROOT
+from cellmap import ZIP_PATH, ZIP_ROOT, get_levels, load_crop, read_json
 
 
 TRAIN_CROPS = {

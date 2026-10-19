@@ -4,22 +4,24 @@ Datasets: microsam_em_nuclei, vem_nuclei, etchacell, cefa_hela (multi-nuclei lab
 deepict_pombe. The figures go to mito_nuc_figures/nuc/TBD/<dataset>.png, and for the datasets with mitochondria also
 to mito_nuc_figures/mito/TBD/<dataset>.png. They show raw data with the labels as the loaders provide them.
 """
-import argparse
-import glob
 import os
+import glob
+import argparse
 
 import h5py
-import numpy as np
-import scipy.io
-import tifffile
 import zarr
-import matplotlib
+import tifffile
+import numpy as np
 
+import scipy.io
+from scipy import ndimage
+
+from skimage.measure import label
+from skimage.segmentation import find_boundaries
+
+import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa
-from scipy import ndimage  # noqa
-from skimage.measure import label  # noqa
-from skimage.segmentation import find_boundaries  # noqa
 
 from render_nucleus_overview import draw_pair, normalize  # noqa
 
@@ -196,23 +198,35 @@ def figure_chlamydomonas_cryoet():
     path = glob.glob(os.path.join(DATA_ROOT, "chlamydomonas_cryoet", "*.zarr"))[0]
     group = zarr.open_group(path, mode="r")
     run = os.path.basename(path)[:-5]
-    note = ("chlamydomonas_cryoet (CryoET Data Portal 10301), run {run}: cryo-ET, 7.84 A voxels, 512 x 1024 x 1024\n"
-            "{what} masks are automatic Ais / Pom predictions (not proofread); cryo-ET is out of scope")
-    save_grid(cryoet_pairs(group, ["nucleoplasm"], [256]), out_path("nuc", "chlamydomonas_cryoet"),
-              note.format(run=run, what="NUCLEOPLASM (a tiny fragment in this run)"))
-    save_grid(cryoet_pairs(group, ["mitochondrion"], [200, 300]), out_path("mito", "chlamydomonas_cryoet"),
-              note.format(run=run, what="mitochondrion"))
+    note = (
+        "chlamydomonas_cryoet (CryoET Data Portal 10301), run {run}: cryo-ET, 7.84 A voxels, 512 x 1024 x 1024\n"
+        "{what} masks are automatic Ais / Pom predictions (not proofread); cryo-ET is out of scope"
+    )
+    save_grid(
+        cryoet_pairs(group, ["nucleoplasm"], [256]), out_path("nuc", "chlamydomonas_cryoet"),
+        note.format(run=run, what="NUCLEOPLASM (a tiny fragment in this run)"),
+    )
+    save_grid(
+        cryoet_pairs(group, ["mitochondrion"], [200, 300]), out_path("mito", "chlamydomonas_cryoet"),
+        note.format(run=run, what="mitochondrion"),
+    )
 
 
 def figure_deepict_pombe():
     group = zarr.open_group(os.path.join(DATA_ROOT, "deepict_pombe", "TS_045.zarr"), mode="r")
-    note = ("deepict_pombe (CryoET Data Portal 10000), run TS_045: cryo-ET of S. pombe, 13.48 A voxels, 500 x 928 x "
-            "960\nexpert-verified {what} masks; TS_045 is byte-identical to the pombe_nucleus_mito / popsicle copy "
-            "(already discarded as cryo-ET); cryo-ET is out of scope")
-    save_grid(cryoet_pairs(group, ["nucleus", "nuclear_envelope"], [250]), out_path("nuc", "deepict_pombe"),
-              note.format(what="nucleus and NUCLEAR ENVELOPE"))
-    save_grid(cryoet_pairs(group, ["mitochondrion"], [150, 350]), out_path("mito", "deepict_pombe"),
-              note.format(what="mitochondrion"))
+    note = (
+        "deepict_pombe (CryoET Data Portal 10000), run TS_045: cryo-ET of S. pombe, 13.48 A voxels, 500 x 928 x "
+        "960\nexpert-verified {what} masks; TS_045 is byte-identical to the pombe_nucleus_mito / popsicle copy "
+        "(already discarded as cryo-ET); cryo-ET is out of scope"
+    )
+    save_grid(
+        cryoet_pairs(group, ["nucleus", "nuclear_envelope"], [250]), out_path("nuc", "deepict_pombe"),
+        note.format(what="nucleus and NUCLEAR ENVELOPE"),
+    )
+    save_grid(
+        cryoet_pairs(group, ["mitochondrion"], [150, 350]), out_path("mito", "deepict_pombe"),
+        note.format(what="mitochondrion"),
+    )
 
 
 FIGURES = {

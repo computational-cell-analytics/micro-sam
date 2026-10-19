@@ -1,15 +1,15 @@
 """Overview figures for the MitoNet-predicted mouse kidney (jrc_mus-kidney, 16 nm): a few representative boxes.
 
-The boxes are 128 x 1024 x 1024 voxels, each inside one z-row of the 512^3 label chunks and spanning 2 x 2 chunks
-in yx (4 label chunks to decode per box). They sit at the 2 x 2 chunk groups with the largest compressed label
-size (a proxy for mito density) at three different depths of the volume.
+The boxes are 128 x 1024 x 1024 voxels. Each box is inside one z-row of the 512^3 label chunks and spans 2 x 2
+chunks in yx. Thus, 4 label chunks are decoded per box. The boxes sit at the 2 x 2 chunk groups with the largest
+compressed label size at three different depths of the volume. The compressed label size is a proxy for mito density.
 They are cached with `get_mitonet_predicted_kidney_data`, so they can be passed to the dataset function directly.
 """
 import os
 
+import zarr
 import fsspec
 import numpy as np
-import zarr
 
 from torch_em.data.datasets.electron_microscopy import mitonet_predicted_kidney as kidney
 

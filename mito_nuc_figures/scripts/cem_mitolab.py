@@ -3,13 +3,13 @@
 The data has one folder per source dataset ("group"). The 20 largest groups get one contact sheet each.
 All other groups are covered by one contact sheet per imaging method, with each image from a different group.
 """
-import json
 import os
 import re
+import json
 
-import imageio.v3 as imageio
 import numpy as np
 import pandas as pd
+import imageio.v3 as imageio
 
 from figure_utils import DATA_ROOT, get_output_dir, save_image_grid, write_info
 

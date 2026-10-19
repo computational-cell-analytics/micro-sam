@@ -1,28 +1,32 @@
 """Build the OpenOrganelle nucleus training volumes for the nucleus EM generalist.
 
 The torch-em openorganelle_nucleus loader caches only a single 128^3 crop for several volumes that hold hundreds to
-thousands of nuclei. This script downloads the full matched raw and label arrays of these volumes from the
-janelia-cosem-datasets S3 bucket (at the loader label level, 64 nm for jrc_choroid-plexus-2), turns the binary labels
-of the single-cell volumes into instances by connected components, and writes one zarr store per volume ('raw' and
-'labels', uint32 instances) to <data>/openorganelle_nucleus_full, under a temporary name that is moved in place when
-complete. The volumes that the loader already caches as full instance arrays are used from its cache. index.json
-lists all training and validation volumes (paths relative to the data root), and a figure per new volume checks the
-raw / label alignment.
+thousands of nuclei. For these volumes, this script does these steps:
+- It downloads the full matched raw and label arrays from the janelia-cosem-datasets S3 bucket.
+  It uses the loader label level (64 nm for jrc_choroid-plexus-2).
+- It turns the binary labels of the single-cell volumes into instances by connected components.
+- It writes one zarr store per volume ('raw' and 'labels', uint32 instances) to <data>/openorganelle_nucleus_full.
+  The store has a temporary name that is moved in place when complete.
+
+The volumes that the loader already caches as full instance arrays come from its cache. The file index.json lists all
+training and validation volumes (paths relative to the data root). A figure per new volume checks the raw / label
+alignment.
 """
-import argparse
-import json
 import os
-import shutil
+import json
 import time
+import shutil
+import argparse
 
-import numpy as np
 import zarr
-import matplotlib
+import numpy as np
+from scipy import ndimage
+from skimage.segmentation import find_boundaries
 
+import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa
-from scipy import ndimage  # noqa
-from skimage.segmentation import find_boundaries  # noqa
+
 from torch_em.data.datasets.electron_microscopy.openorganelle_nucleus import (  # noqa
     BUCKET_URL, DATASETS, _multiscale_levels, _open_remote_zarr,
 )

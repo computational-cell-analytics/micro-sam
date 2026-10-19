@@ -1,11 +1,11 @@
-import gzip
 import os
+import gzip
 import struct
 import subprocess
 
-import numpy as np
-import requests
 import zarr
+import requests
+import numpy as np
 
 from cosem_utils import BUCKET_URL, count_ids, get_json, get_levels, group_path
 from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info

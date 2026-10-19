@@ -1,13 +1,14 @@
 import os
 
+import zarr
 import mrcfile
 import numpy as np
-import zarr
 from scipy import ndimage
+
+from torch_em.data.datasets.electron_microscopy import surface_morphometrics as sm
 
 from denoised_view import DenoisedView
 from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
-from torch_em.data.datasets.electron_microscopy import surface_morphometrics as sm
 
 
 DATASET = "surface_morphometrics"

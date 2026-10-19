@@ -1,31 +1,32 @@
 """Overview figures of the mitochondria model data, as the training and evaluation pipelines see it.
 
 One PNG per dataset in mito_nuc_figures/mito/{training,in_domain_evaluation,ood_evaluation,discarded}:
-- training: patches drawn from the actual em_mito training and validation datasets (_build_joint_datasets), the middle
-  slice of each patch with the instance target as overlay and the ignored pixels shaded.
+- training: patches drawn from the actual em_mito training and validation datasets (_build_joint_datasets).
+  The figure shows the middle slice of each patch, with the instance target as overlay and the ignored pixels shaded.
 - in_domain_evaluation / ood_evaluation: samples as the evaluation loads them (load_data of
-  finetuning/v2/evaluation/common.py), test samples and the tuning sample, with the ground truth as overlay.
+  finetuning/v2/evaluation/common.py). They are the test samples and the tuning sample, with the ground truth as
+  overlay.
 - discarded: representative slices of the source data with their labels, titled with the discard reason.
 
 The layout and colors follow render_nucleus_overview.py: (raw, overlay) panel pairs, tab20 instance colors, ignored
 pixels in dark grey.
 """
-import argparse
-import json
 import os
 import sys
+import json
+import argparse
 import textwrap
 from glob import glob
 
 import h5py
-import numpy as np
 import zarr
-import matplotlib
+import numpy as np
+from scipy import ndimage
+from skimage.measure import label as connected_components
 
+import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa
-from scipy import ndimage  # noqa
-from skimage.measure import label as connected_components  # noqa
 
 REPO = "/mnt/vast-kisski/home/archit/u28048/micro-sam"
 sys.path.insert(0, os.path.join(REPO, "finetuning", "v2", "evaluation"))

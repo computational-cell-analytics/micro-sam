@@ -3,8 +3,9 @@ import os
 import h5py
 import numpy as np
 
-from figure_utils import DATA_ROOT, get_output_dir, save_image_grid, save_volume_figure, write_info
 from torch_em.data.datasets.electron_microscopy import hela_mito
+
+from figure_utils import DATA_ROOT, get_output_dir, save_image_grid, save_volume_figure, write_info
 
 
 DATASET = "hela_mito"

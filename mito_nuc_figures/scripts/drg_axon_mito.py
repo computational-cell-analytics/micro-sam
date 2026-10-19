@@ -1,13 +1,14 @@
-import json
 import os
+import json
 
-import numpy as np
-import requests
 import zarr
+import requests
+import numpy as np
+
+from torch_em.data.datasets.electron_microscopy import drg_axon_mito as drg
 
 from denoised_view import DenoisedView, DilatedView
 from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
-from torch_em.data.datasets.electron_microscopy import drg_axon_mito as drg
 
 
 DATASET = "drg_axon_mito"

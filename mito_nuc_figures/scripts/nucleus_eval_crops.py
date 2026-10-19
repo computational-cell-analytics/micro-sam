@@ -1,20 +1,25 @@
 """Place the fixed evaluation crops of the EM nucleus panel and add them to eval_crops_3d.json.
 
-The crops follow the rule of the file: 32 x 512 x 512 tiles, capped by the test region, tile the test region (the
-annotation covers it) without overlap. Tiles thinner than 16 slices or 256 px in plane, tiles with a constant raw
-plane and tiles whose labels span fewer than 16 slices (the evaluation trims a crop to its labeled slices) are
-dropped, tiles with fewer than 20% of the median object count of the dataset are left out, and at most 16
-tiles per volume are kept, the ones with the most objects. Objects are the connected components of at least the
-ground-truth size floor, as the evaluation counts them. Tiles are read one at a time, so no volume is loaded whole.
+The crops follow the rule of the file. They are 32 x 512 x 512 tiles, capped by the test region, that tile the test
+region without overlap. The annotation covers the test region. The script drops these tiles:
+- tiles thinner than 16 slices or 256 px in plane.
+- tiles with a constant raw plane.
+- tiles whose labels span fewer than 16 slices, because the evaluation trims a crop to its labeled slices.
+- tiles with fewer than 20% of the median object count of the dataset.
+
+Of the remaining tiles, the script keeps at most 16 per volume, the ones with the most objects. Objects are the
+connected components of at least the ground-truth size floor, as the evaluation counts them. Tiles are read one at a
+time, so no volume is loaded whole.
 """
-import argparse
-import json
 import os
 import sys
+import json
+import argparse
 
 import numpy as np
-from elf.io import open_file
 from skimage.measure import label as connected_components
+
+from elf.io import open_file
 
 EVALUATION_ROOT = "/mnt/vast-kisski/home/archit/u28048/micro-sam/finetuning/v2/evaluation"
 sys.path.insert(0, EVALUATION_ROOT)

@@ -1,26 +1,27 @@
 """Overview figures of the nucleus EM generalist data, as the pipeline sees it, split by decision.
 
 - training: samples drawn from the em_nucleus training and validation datasets of the generalist loader
-  (_build_joint_datasets with z_slices=[8]): raw (middle z) and the instance target with the ignored pixels shaded.
+  (_build_joint_datasets with z_slices=[8]). Each sample shows the raw (middle z) and the instance target with the
+  ignored pixels shaded.
 - in_domain_evaluation / ood_evaluation: slices of the evaluation volumes with their ground truth instances.
 - discarded: representative slices of the source data with the reason for the discard.
 
 The figures are written to mito_nuc_figures/nuc/<category>/<dataset>.png.
 """
-import argparse
+import os
 import glob
 import json
-import os
+import argparse
 from types import SimpleNamespace
 
 import h5py
-import numpy as np
 import zarr
-import matplotlib
+import numpy as np
+from scipy import ndimage
 
+import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa
-from scipy import ndimage  # noqa
 
 from figure_utils import DATA_ROOT  # noqa
 

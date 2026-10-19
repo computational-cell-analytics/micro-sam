@@ -11,8 +11,7 @@ SCRIPTS = {
     "em_mito": os.path.join(SCRIPT_DIR, "train_em_mito.py"),
     "em_nucleus": os.path.join(SCRIPT_DIR, "train_em_nucleus.py"),
 }
-# Estimated epochs (t / s / b / l, 2 x 4 H100, compile, from the v6 step times): em_mito ~37 / 38 / 31 / 33 min,
-# em_nucleus ~32 / 32.5 / 27 / 28 min. The epochs keep a margin to the 96h walltime, more for t and s.
+# The epochs keep a margin to the 96h walltime; one epoch takes about 30-38 min on 2 x 4 H100.
 EPOCHS = {
     "em_mito": {"hvit_t": 140, "hvit_s": 140, "hvit_b": 150, "hvit_l": 150},
     "em_nucleus": {"hvit_t": 160, "hvit_s": 160, "hvit_b": 190, "hvit_l": 190},

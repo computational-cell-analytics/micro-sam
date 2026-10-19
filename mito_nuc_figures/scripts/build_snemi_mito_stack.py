@@ -1,18 +1,18 @@
 """Stack the SNEMI Mito slices into one volume for 3D training.
 
-The 100 slices of the SNEMI Mito dataset are consecutive sections of the SNEMI3D volume (6 x 6 x 30 nm), split into
-contiguous ranges: train 0-49, valid 50-69, test 70-99. They are stacked into one h5 file with 'raw' and binary
-'labels' (the masks are stored as 0 / 255), so that 3D patches can be drawn from the train and valid ranges. The test
+The 100 slices of the SNEMI Mito dataset are consecutive sections of the SNEMI3D volume (6 x 6 x 30 nm). They are
+split into contiguous ranges: train 0-49, valid 50-69, test 70-99. They are stacked into one h5 file with 'raw' and
+binary 'labels' (the masks are stored as 0 / 255). Thus, 3D patches can come from the train and valid ranges. The test
 range stays untouched by training, which reads the train and valid ranges only. Nine label slices are stored as RGBA
-PNGs (gray values in every color channel), so the first channel is used.
+PNGs (gray values in every color channel), so the script uses the first channel.
 """
-import argparse
 import os
+import argparse
 from glob import glob
 
 import h5py
-import imageio.v3 as imageio
 import numpy as np
+import imageio.v3 as imageio
 
 from figure_utils import DATA_ROOT
 

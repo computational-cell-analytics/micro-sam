@@ -70,7 +70,7 @@ def build_common(model_type, n_epochs, n_iterations, batch_size, use_compile=Fal
         with_boundaries=True,  # the object-boundary channel of the automatic branch
         boundary_dice_weight=boundary_dice_weight,
         save_every_kth_epoch=5,  # keeps fallback checkpoints next to best.pt and latest.pt
-        # LR x 0.9 after 20 epochs without improvement: a nucleus epoch is about half as long as a cell generalist one.
+        # A nucleus epoch is about half as long as a cell generalist epoch, so the patience is longer.
         scheduler_kwargs={"mode": "min", "factor": 0.9, "patience": 20},
         label_trafo_threads=int(os.environ.get("LABEL_TRAFO_THREADS", 1)),  # threads per worker in the label transform
         compile=["encoder", "decoder", "loss"] if use_compile else None,

@@ -3,8 +3,8 @@
 One central tissue box per sample is fetched with the torch-em loader (bounding-box streaming), which caches it as
 <data>/parlakgul_fasting_liver/<sample>_mito_<hash>.zarr. The task index of a slurm array selects the box.
 """
-import argparse
 import os
+import argparse
 
 from torch_em.data.datasets.electron_microscopy import parlakgul_fasting_liver
 

@@ -1,25 +1,29 @@
 """Write the human organoids mitochondria instance labels for the mitochondria EM generalist.
 
-The mitochondria labels are manual semantic masks (int8, -128 background, 127 mitochondria), so touching mitochondria
-form one connected component. Each connected component is split by a neck watershed: a seeded watershed on the
-distance transform over-segments it, neighbouring segments merge unless the distance saddle on their shared boundary is
-at most NECK_RATIO of the smaller of their peaks (a neck between two mitochondria, not the waist of one), and pieces
-below MIN_PIECE voxels are absorbed by the neighbour they share most boundary with. The watershed runs per component in
-its bounding box, which gives the same result as running it on the whole volume, with little memory.
+The mitochondria labels are manual semantic masks (int8, -128 background, 127 mitochondria).
+Thus, touching mitochondria form one connected component. A neck watershed splits each connected component:
+- A seeded watershed on the distance transform over-segments the component.
+- Neighbouring segments merge, unless the distance saddle on their shared boundary is at most NECK_RATIO of the smaller
+  of their peaks. Such a saddle is a neck between two mitochondria, not the waist of one.
+- A piece below MIN_PIECE voxels goes to the neighbour that shares the most boundary with it.
+
+The watershed runs per component in its bounding box. This gives the same result as one run on the whole volume, with
+little memory.
 
 The labels are written to one zarr store per volume, under a temporary name that is moved in place when complete.
 """
-import argparse
-import json
 import os
+import json
 import shutil
+import argparse
 from concurrent.futures import ProcessPoolExecutor
 
 import cc3d
 import h5py
-import numpy as np
 import zarr
+import numpy as np
 from scipy import ndimage
+
 from skimage.measure import label
 from skimage.morphology import h_maxima
 from skimage.segmentation import watershed

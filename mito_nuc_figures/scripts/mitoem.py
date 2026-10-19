@@ -1,8 +1,8 @@
 """Overview figures for MitoEM (rat and human cortex, ATUM-SEM, instance mito labels for train and val)."""
 import os
 
-import numpy as np
 import z5py
+import numpy as np
 
 from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
 

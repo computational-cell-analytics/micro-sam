@@ -2,14 +2,14 @@
 
 The 20 manually annotated slices (50 nm) label cells and nuclei. A few large cells per slice carry a cell label but no
 nucleus label, although their dark, mottled content looks like nucleoplasm. It is unclear whether their nucleus is
-missing from the annotation or not in the section, so these cells get IGNORE_LABEL and the loss ignores them. The
+missing from the annotation or not in the section. Thus, these cells get IGNORE_LABEL and the loss ignores them. The
 nuclei keep their ids. The labels are stored as uint32, so that the ignore label survives torch-em's cast of the labels
 back to their stored dtype.
 """
-import argparse
+import os
 import glob
 import json
-import os
+import argparse
 
 import h5py
 import numpy as np

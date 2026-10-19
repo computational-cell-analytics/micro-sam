@@ -3,15 +3,15 @@
 The figures go to mito_nuc_figures/mito/TBD (mitochondria labels) and mito_nuc_figures/nuc/TBD (nucleus, nuclear
 envelope and nucleolus labels). Large micrographs are shown as a downsampled overview plus a full-resolution crop.
 """
-import argparse
-import glob
 import os
+import glob
+import argparse
 
 import h5py
-import imageio.v3 as iio
-import numpy as np
-import tifffile
 import zarr
+import tifffile
+import numpy as np
+import imageio.v3 as iio
 from skimage.measure import label
 
 from render_mito_overview import save_grid, text_figure
@@ -154,8 +154,11 @@ def perez(overlap_note):
                     mask_path = image_path.replace(f"{os.sep}images{os.sep}", f"{os.sep}masks{os.sep}")
                     labels = instances(read(mask_path) > 0)
                     raw = read(image_path)
-                    pairs.append((raw, labels, None, f"{organelle} {split}/{os.path.basename(image_path)}: "
-                                                     f"{raw.shape}, {len(np.unique(labels)) - 1} objects"))
+                    pairs.append((
+                        raw, labels, None,
+                        f"{organelle} {split}/{os.path.basename(image_path)}: "
+                        f"{raw.shape}, {len(np.unique(labels)) - 1} objects",
+                    ))
         what = "mitochondria" if model == "mito" else "nuclei and nucleoli"
         save_grid(pairs, out_path(model, "perez"), (
             f"TBD / perez ({what})\n"
@@ -186,8 +189,11 @@ def u2os_fibsem():
         for image_path in images[::max(1, len(images) // 4)][:4]:
             labels = instances(tifffile.imread(image_path.replace("images_tif", "labels_tif")))
             raw = read(image_path)
-            pairs.append((raw, labels, None, f"{os.path.basename(image_path)}: {raw.shape}, "
-                                             f"{len(np.unique(labels)) - 1} objects"))
+            pairs.append((
+                raw, labels, None,
+                f"{os.path.basename(image_path)}: {raw.shape}, "
+                f"{len(np.unique(labels)) - 1} objects",
+            ))
         save_grid(pairs, out_path(model, "u2os_fibsem"), (
             f"TBD / u2os_fibsem ({what})\n"
             "FIB-SEM of one U2-OS cell (EMPIAR-11746), DeepMIB training data: single annotated 2D slices "

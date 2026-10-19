@@ -1,16 +1,17 @@
 """Overview figures for Cmito (whole-animal C. elegans mito instance masks): one subvolume per stage.
 
-Boxes are 128 z-slices x 1024 x 1024 voxels at the native mask resolution, placed at the 1024 x 1024 window
+Boxes are 128 z-slices x 1024 x 1024 voxels at the native mask resolution. Each box is at the 1024 x 1024 window
 with the highest mito fraction in a coarse mask level (sampled on 6 z-slices).
 
-l1, l2, adult and dauer are cached with `get_cmito_data(path, stage, bounding_box)`, so the recorded nm boxes
-reuse the cache. l3 is fetched by voxel index: its mask reports 8 nm but lies on the raw mip3 grid (6.144 nm),
-so the loader's nm -> voxel conversion misaligns raw and mask for every box that does not start at 0.
+The l1, l2, adult and dauer stages are cached with `get_cmito_data(path, stage, bounding_box)`, so the recorded nm
+boxes reuse the cache. The l3 stage is fetched by voxel index. Its mask reports 8 nm but lies on the raw mip3 grid
+(6.144 nm). Thus, the nm -> voxel conversion of the loader misaligns raw and mask for every box that does not start
+at 0.
 """
 import os
 
-import numpy as np
 import zarr
+import numpy as np
 from cloudvolume import CloudVolume
 
 from torch_em.data.datasets.electron_microscopy import cmito

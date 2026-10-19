@@ -2,14 +2,15 @@ import io
 import os
 from glob import glob
 
-import numpy as np
+import zarr
 import requests
 import tifffile
-import zarr
+import numpy as np
 from PIL import Image
 
-from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
 from torch_em.data.datasets.electron_microscopy import human_liver_em
+
+from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
 
 
 DATASET = "human_liver_em"

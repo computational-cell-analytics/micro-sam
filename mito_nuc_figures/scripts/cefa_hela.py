@@ -1,12 +1,12 @@
 import os
-import struct
 import time
+import struct
 from glob import glob
 
 import h5py
-import numpy as np
 import requests
 import scipy.io
+import numpy as np
 
 from figure_utils import DATA_ROOT, get_output_dir, save_image_grid, save_volume_figure, write_info
 
@@ -17,9 +17,8 @@ EMPIAR_URL = "https://ftp.ebi.ac.uk/empiar/world_availability/10094/data/Microgr
 DM4_NAME = "Prefix_3VBSED_roi_00_slice_{:04d}.dm4"
 N_SAMPLES = 12
 N_MATCHED = 4
-# Estimated by normalized cross-correlation of the GT background class (4) against the 8x downsampled full
-# EMPIAR slice 150, for GT slices 124-163 (all gave y=5016-5096, x=5512-5600).
-# The loader assumes the center (3096, 3096).
+# Matched by cross-correlation of the GT background class with the 8x downsampled EMPIAR slice 150 (GT slices 124-163).
+# The loader assumes the center (3096, 3096) instead.
 MATCHED_ORIGIN = (5050, 5580)
 NOTES = "SBF-SEM HeLa (EMPIAR-10094), 10x10x50 nm, manual semantic labels of one central cell (2000x2000 ROI)"
 ISSUES = (

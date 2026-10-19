@@ -1,10 +1,11 @@
 """Render the nucleus evaluation figures as the evaluation loads them (load_data of finetuning/v2/evaluation/common.py).
 
-The fixed evaluation crops of eval_crops_3d.json are what is scored, so these figures replace the ones that read the
-nucleus volumes directly before the nucleus panel was registered. The rendering is the one of render_mito_overview.py.
+The evaluation scores the fixed evaluation crops of eval_crops_3d.json. Thus, these figures replace the earlier ones,
+which read the nucleus volumes directly before the nucleus panel was registered.
+The rendering is the one of render_mito_overview.py.
 """
-import argparse
 import os
+import argparse
 
 import render_mito_overview as overview
 

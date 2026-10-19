@@ -1,27 +1,30 @@
 """Check every slice of the BetaSeg nucleus boxes for unlabeled nuclei.
 
-Only the nucleus of the central target cell is labeled in each volume. A random forest pixel classifier, trained per
-volume on the labeled nucleus (positive) and the rest of the target cell (negative), predicts nucleus texture in every
-z-slice of the box around the labeled nucleus. Predicted nucleus voxels away from the labeled nucleus are grouped into
-3D connected components, and components above a minimum size are reported as candidate unlabeled nuclei, together
-with the margin at which they would enter the box.
+Only the nucleus of the central target cell is labeled in each volume. The check has these steps:
+- A random forest pixel classifier trains per volume on the labeled nucleus (positive).
+  The rest of the target cell is the negative class.
+- The classifier predicts nucleus texture in every z-slice of the box around the labeled nucleus.
+- The predicted nucleus voxels away from the labeled nucleus form 3D connected components.
+- The script reports the components above a minimum size as candidate unlabeled nuclei.
+  It also reports the margin at which they would enter the box.
 """
-import argparse
+import os
 import glob
 import json
-import os
+import argparse
 
 import h5py
 import numpy as np
-import matplotlib
+from scipy import ndimage
+from sklearn.ensemble import RandomForestClassifier
 
+from skimage.segmentation import find_boundaries
+from skimage.feature import multiscale_basic_features
+from skimage.measure import block_reduce, label, regionprops
+
+import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa
-from scipy import ndimage  # noqa
-from skimage.feature import multiscale_basic_features  # noqa
-from skimage.measure import block_reduce, label, regionprops  # noqa
-from skimage.segmentation import find_boundaries  # noqa
-from sklearn.ensemble import RandomForestClassifier  # noqa
 
 from betaseg_nucleus_boxes import nucleus_box  # noqa
 from figure_utils import DATA_ROOT, get_output_dir, normalize  # noqa

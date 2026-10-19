@@ -3,13 +3,13 @@
 The nucleus mask PNG of every n-th slice (about 0.85 MB each) is reduced to the nucleus fraction per block of
 BLOCK x BLOCK pixels. The maps of all sampled slices are saved to one npz file, together with the sampled z indices.
 """
-import argparse
 import io
 import os
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 
-import numpy as np
 import requests
+import numpy as np
 from PIL import Image
 
 from figure_utils import get_output_dir

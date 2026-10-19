@@ -296,55 +296,30 @@ DATASETS_2D_HP_SUPPLEMENTARY = [
 DATASETS_2D_HP_OOD = ["cytodark0", "deepliif", "khoshdeli", "panoptils", "pcns"]
 DATASETS_HP = DATASETS_2D_HP_ID + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_2D_HP_OOD
 
-# Electron microscopy. The 2d sets are ASTIH (myelinated axons, neurite category) and the tumor spheroid slices
-# (cell category); their splits and the 3d regions below come from the generalist loader constants.
-# The mitochondria panel scores mitochondria: the 100 TEM images of the CEM-Mito-Benchmark (EMPIAR-10982), the
-# hand-labeled Cmito dauer patches (200 unrelated 512 x 512 patches at 2 nm, stored as one stack, see CMITO_MANUAL)
-# and the TNBC-Mito TEM images, which
-# the generalist never trains on, and the ProbTEM test images (in-domain: the generalist trains on the ProbTEM train
-# images).
+# 2D EM: ASTIH (neurites), the tumor spheroid slices (cells) and the mitochondria and nucleus panels.
 DATASETS_2D_EM_MITO = [
     "mitolab_tem", "cmito_dauer_manual", "probtem", "tnbc_mito", "elmi_mito",
     "lewy_mito", "perez_mito", "cardiomyocyte_tem_mito",
 ]
-# Cardiomyocyte TEM mitochondria (9 TEM micrographs of 3.5k-13k px of isolated cardiomyocytes at 3500x, binary masks,
-# pixel size not stored): an out-of-domain set. The mitochondria are 80-190 px across, so the evaluation reads cached
-# tiles (_cardiomyocyte_tem_eval_tiles): each image is downscaled by CARDIOMYOCYTE_TEM_SCALE and the
-# CARDIOMYOCYTE_TEM_N_TILES non-overlapping tiles of CROP_SHAPE_2D x 2 with the most mitochondria are kept. NOTE: Packed
-# mitochondria touch, so connected components merge some of them (blobs over 5x the median size hold 5-10% of the
-# mitochondria area in most images, 44% in 914.1_nucC and 18% in 914.22_nucE). One seeded image tunes.
+# Cardiomyocyte TEM (out-of-domain): the images are downscaled and cut into the densest tiles.
+# Touching mitochondria merge, mostly in 914.1_nucC and 914.22_nucE.
 CARDIOMYOCYTE_TEM_SCALE = 2
 CARDIOMYOCYTE_TEM_N_TILES = 4
-# Perez mitochondria (SBF-SEM of the mouse suprachiasmatic nucleus, Perez et al. 2014, binary masks): an out-of-domain
-# set, scored on the 40 test tiles. The 50 train tiles are byte-identical to the MitoLab group perez2014, which is
-# excluded from training, so a seeded 10 of them tune. NOTE: The tiles are partly annotated (some visible
-# mitochondria are not labeled), so automatic scores count those as false positives.
+# Perez (out-of-domain): the 40 test tiles are scored; the train tiles equal the excluded MitoLab group.
+# The tiles are partly annotated.
 PEREZ_MITO_N_TUNING = 10
-# ELMI Mito (5 TEM images of about 2000 x 2000, manual mitochondria instances shared as MitoNet fine-tuning data): an
-# out-of-domain set. NOTE: The annotation is sparse, only 3-6 mitochondria are labeled per image and most visible
-# mitochondria are not, so automatic segmentation scores count correct unlabeled detections as false positives; the
-# set suits interactive evaluation (prompted from the labeled objects) better. The last image tunes, the other four are
-# scored.
+# ELMI Mito (out-of-domain): only 3-6 mitochondria per image are labeled.
 ELMI_MITO_TUNING_IMAGES = ("ELMI_05.tif",)
-# Lewy Mito (TEM of post-mortem human brain, BioImage Archive S-BIAD3729, very high resolution): small crops (20-400 px)
-# cut around single mitochondria with manual binary masks, so neighbouring mitochondria are often not labeled. Only
-# the downloaded groups LEWY_MITO_GROUPS are used. The crops of a seeded tenth of the source folders tune, a seeded
-# LEWY_MITO_N_TEST crops of at least LEWY_MITO_MIN_SIDE px from the other folders are scored.
+# Lewy Mito (out-of-domain): crops around single mitochondria; neighbours are often not labeled.
 LEWY_MITO_GROUPS = ("SN-PD", "HC-SN")
 LEWY_MITO_N_TEST = 300
 LEWY_MITO_N_TUNING = 30
 LEWY_MITO_MIN_SIDE = 128
-# TNBC-Mito (TEM of breast cancer xenografts and Drp1-deficient muscle cells; pixel size undocumented, scale bars burned
-# in, semantic masks): the test images of the three cohorts that have a test split are scored, without the
-# low-magnification images whose labels visibly miss mitochondria; a seeded 10 of their tra_val images tune.
+# TNBC-Mito (out-of-domain): the low-magnification images miss labels, so they are left out.
 TNBC_MITO_COHORTS = ("DRP1-KO", "HCI-010", "PIM001-P")
 TNBC_MITO_EXCLUDED_TEST_IMAGES = ("R20_72_G01_2913_03.tif", "R20_72_G01_2913_05.tif", "wt_10Kx_2.tif")
-# U2OS FIB-SEM nuclei (22 crops of 1235 x 530 px of a FIB-SEM stack of U2OS cells, two slices each, manual nuclear
-# envelope labels of the MIB DeepMIB training set): an out-of-domain set of the nucleus panel. The crop cuts the nucleus
-# at the image border, so the envelope is an open arc; the nucleus is the convex hull of the arc and the border
-# segment between its ends (build_new_nucleus_data.py in mito_nuc_figures/scripts, checked by eye); one slice where
-# only a thin cap of the nucleus is in the crop is left out, so 43 slices remain. The slices of
-# U2OS_FIBSEM_NUCLEUS_TUNING_CROPS (non-adjacent in z) tune, the other slices are scored whole.
+# U2OS FIB-SEM nuclei (out-of-domain): the nucleus is the convex hull of the envelope arc and the border.
+# The tuning crops are not adjacent in z.
 U2OS_FIBSEM_NUCLEUS_ROOT = "u2os_fibsem_nucleus"
 U2OS_FIBSEM_NUCLEUS_TUNING_CROPS = ("05", "11", "17")
 DATASETS_2D_EM_NUCLEUS = ["u2os_fibsem_nucleus"]
@@ -391,16 +366,10 @@ DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb", "nisb"]
 # Cell segmentation: Platynereis volume 9 and the DenseCell val volume are blind; the tumor spheroid slices are 2d.
 DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell", "synapsenet_compartments"]
 
-# Mitochondria: the volumes of the CEM-Mito-Benchmark (EMPIAR-10982) and the ASEM evaluation volumes (in-domain: the
-# generalist trains on the other ASEM volumes).
-# MITOLAB_VOLUMES lists all 6 benchmark volumes in the torch-em numbering. lucchi_pp is not evaluated: its raw is
-# byte-identical to the Lucchi train volume, which the mitochondria generalist trains on. lucchi is the Lucchi test
-# volume. kasthuri is the Kasthuri test volume, its train volume tunes (the generalist never trains on it).
+# The CEM-Mito-Benchmark volumes; lucchi_pp equals the Lucchi train volume, so it is not scored.
 MITOLAB_VOLUMES = ("c_elegans", "fly_brain", "glycolytic_muscle", "hela_cell", "lucchi_pp", "salivary_gland")
 MITOLAB_EVALUATED_VOLUMES = tuple(name for name in MITOLAB_VOLUMES if name != "lucchi_pp")
-# The Cmito volumes in <data>/cmito, as cached by torch-em's cmito loader: one 128 x 1024 x 1024 box per stage and the
-# full dauer worm. Their ground truth is Cmito model output (semi-automated, per-animal CNNs), not hand labels; the
-# hand-labeled dauer patches are the 2d set cmito_dauer_manual.
+# The Cmito volumes; their labels are Cmito model output, not hand labels.
 CMITO_VOLUMES = {
     "cmito_l1": "l1_ceb79c8268d7.zarr",
     "cmito_l2": "l2_2ea67de84d7e.zarr",
@@ -408,78 +377,42 @@ CMITO_VOLUMES = {
     "cmito_adult": "adult_dba9f64835ae.zarr",
     "cmito_dauer": "dauer_056f5d679440.zarr",
 }
-# The MitoSegEM boxes (EMPIAR-12535) in <data>/mito_segem, as cached by torch-em's mito_segem loader: one
-# 64 x 1024 x 1024 box (z, y, x in the full volume) per tissue of noisy SBF-SEM with 50 nm sections. The masks are
-# network predictions with a manual, path-based instance assignment (so their shapes are model output); the intestine
-# box looks ~80-90% exhaustive. Only the intestine box is evaluated: the testis and brainstem boxes are training data
-# of the mitochondria generalist (MITO_SEGEM_TRAIN_BOXES of the generalist loader).
+# The testis and brainstem boxes of MitoSegEM train, so only the intestine box is scored.
 MITO_SEGEM_BOXES = {
     "mito_segem_intestine": ("intestine", (468, 532, 2304, 3328, 2816, 3840)),
 }
-# MitoEM (human and rat cortex, 8 x 8 x 30 nm, manually proofread instances): the mitochondria generalist trains on the
-# train volumes and is scored on the val volumes; the test volumes have no labels. micro-sam v1 evaluated on the same
-# val volumes (it tuned on their first 5 slices).
+# The MitoEM val volumes are scored; the test volumes have no labels.
 MITOEM_SAMPLES = {"mitoem_human": "human", "mitoem_rat": "rat"}
-# MitoEM v2 (expert-verified instances): the mitochondria generalist trains on the official train volumes and is scored
-# on the test volumes; the official val volumes tune. jurkat tunes on the end of its train volume (z >= 230), which
-# the generalist holds out of training, since its val volume has labels that do not match the raw data. pyra is left
-# out: its crops are regions of MitoEM-H. mossy is read from the identical MitoVerse copies (<data>/mitoverse/data/
-# han24), whose bouton mask marks the annotated region: it is scored only inside the mask.
+# The MitoEM v2 test volumes are scored; jurkat tunes on the end of its train volume.
+# mossy is scored only inside the bouton mask of its MitoVerse copies.
 MITOEMV2_DATASETS = {
     f"mitoemv2_{name}": name for name in ("beta", "jurkat", "macro", "podo", "sperm", "stem", "mossy")
 }
 # The MitoVerse han24 volumes of the MitoEM v2 mossy samples: test01 -> neg1, test02 -> pos1, val (train03) -> pos2.
 MITOEMV2_MOSSY_VOLUMES = {"test": ["neg1", "pos1"], "val": ["pos2"]}
-# The MitoNet-Predicted-Kidney boxes (jrc_mus-kidney, 16 nm isotropic, (z, y, x) in voxels): the ground truth is
-# MitoNet output (automatic instance predictions, not hand labels). They do not overlap the MitoEM v2 podo crops of
-# the same volume, which train (checked by template matching against every box). The mitochondria generalist trains on
-# crops of the same volume (MitoEM v2 podo, CellMap jrc_mus-kidney), so this is an in-domain set.
+# MitoNet-Predicted-Kidney (in-domain): MitoNet output in boxes that no training crop overlaps.
 MITONET_KIDNEY_BOXES = [
     (2240, 2368, 2560, 3584, 3584, 4608), (4800, 4928, 2048, 3072, 4096, 5120), (10432, 10560, 1024, 2048, 512, 1536),
 ]
-# The human liver boxes (EMPIAR-13356, human periportal liver SBF-SEM, 8 x 8 x ~55 nm), as (x_min, x_max, y_min, y_max,
-# z_min, z_max) in voxels, cached by torch-em's human_liver_em loader in <data>/human_liver_em_boxes. The ground
-# truth is the authors' automated deep-learning segmentation (semantic), which only covers part of each slice: the
-# boxes lie in the annotated region and were chosen for many mitochondria and no dominant object (the mask also covers
-# a few giant, megamitochondria-like objects). Three boxes are scored and a separate box tunes.
+# Human liver (out-of-domain): automatic labels; the boxes lie in the annotated region.
 HUMAN_LIVER_EM_BOXES = {
     "test": [
         (10752, 11776, 6656, 7680, 440, 472), (11264, 12288, 1024, 2048, 240, 272), (2048, 3072, 11776, 12800, 40, 72),
     ],
     "val": [(9216, 10240, 6656, 7680, 540, 556)],
 }
-# parlakgul_liver_eval: the manually annotated evaluation crops of the Parlakgul liver FIB-SEM (EMPIAR-10791, 8 nm
-# isotropic, 3 crops of 25 x 150 x 150 per liver sample, manual mitochondria instances), an out-of-domain set: the
-# generalist does not train on Parlakgul and its MitoLab tiles are excluded from training. The first two crops of each
-# sample are scored whole (one 32 x 512 x 512 fixed crop per volume, capped to the crop) and the third crop tunes. Only
-# the manual 'labels' are read: the authors' model predictions ('prediction', which the torch-em loader swaps between
-# 1857 crops 2 and 3) are not used. They replace the model-label boxes of the authors' automated segmentation.
+# Parlakgul liver (out-of-domain): the manual crops; the third crop of each sample tunes.
 PARLAKGUL_LIVER_EVAL_SAMPLES = ("6461", "6464", "9430", "1857")
 PARLAKGUL_LIVER_EVAL_TUNING_CROP = "003"
-# cerebellum_fibsem_mito: the mitochondria of the Cerebellum FIB-SEM volume (mouse cerebellum, 10 nm, 530 x 1010 x
-# 1014, about 370 instances labeled by students and not necessarily proofread), an out-of-domain set. The first fifth
-# of z tunes, the rest is scored.
+# Cerebellum FIB-SEM mitochondria (out-of-domain): the first fifth of z tunes.
 CEREBELLUM_FIBSEM_PATH = os.path.join("cerebellum_fibsem", "cerebellum_fibsem.h5")
-# macrophage_a431_mito: the mitochondria of a contiguous block (z 848-975) of the Macrophage / A431 'fib_control'
-# FIB-SEM volume (EMPIAR-13420, 6 x 6 x 12 nm, quick semantic MIB annotations, not necessarily dense), an out-of-domain
-# set. The first fifth of the block tunes, the rest is scored.
+# Macrophage / A431 mitochondria (out-of-domain): the first fifth of the block tunes.
 MACROPHAGE_A431_MITO_PATH = os.path.join("macrophage_a431", "fib_control_z848-976.h5")
-# mito_anf: the two cached MitoANF boxes (SBEM of the mouse cochlea, 12 x 12 x 50 nm, 128 x 1024 x 1024), an
-# out-of-domain set. NOTE: Only the mitochondria of traced auditory nerve fibers are labeled (about half of the visible
-# ones) and there are no fiber masks, so automatic scores count the unlabeled mitochondria as false positives. Per box
-# the first fifth of z tunes, the rest is scored.
+# MitoANF (out-of-domain): only the mitochondria of traced nerve fibers are labeled.
 MITO_ANF_BOXES = ("M1_9cb2de6a1d1f.zarr", "M2_908d64f28407.zarr")
-# donglai_wei_mito: INTERNAL data from Donglai Wei's lab (not public), a 750 x 4096 x 4096 volume of MICrONS phase 1
-# (mouse visual cortex, ssEM; 8 x 8 x 40 nm as the lab's MICrONS phase 1 MitoVerse volumes, the files carry no voxel
-# size) with mitochondria instance labels in separate raw and label files, an out-of-domain set. The labels cover all
-# slices and the whole field of view and are dense in the evaluation crops (checked by eye). Blank (zero) raw strips
-# at the section edges carry labels and are excluded from scoring. The first fifth of z tunes in a 512 x 512 window
-# without blank raw, the rest is scored.
+# INTERNAL data from Donglai Wei's lab (not public), out-of-domain; blank raw strips are not scored.
 DONGLAI_WEI_MITO_ROOT = os.path.join("donglai_wei_mito", "micron1")
-# densecell_mito is the mitochondrion class of the DenseCell volumes, which the mitochondria generalist trains on
-# (train volume, z < 35): an in-domain set, scored on the blind val volume. hemibrain_mito is the automated FlyEM
-# mitochondria detection (made at 16 nm, upsampled to 8 nm: blocky outlines, some large mitochondria only partly
-# covered) in the cached 1024^3 hemibrain box; the v6 generalist trains on the neurons of the same box (z < 700).
+# densecell_mito and hemibrain_mito are in-domain sets of the generalists.
 DATASETS_3D_EM_MITO = (
     [f"mitolab_{name}" for name in MITOLAB_EVALUATED_VOLUMES] + ["asem_mito"] + list(CMITO_VOLUMES)
     + ["densecell_mito", "hemibrain_mito", "lucchi", "snemi_mito", "kasthuri"] + list(MITO_SEGEM_BOXES)
@@ -488,23 +421,10 @@ DATASETS_3D_EM_MITO = (
 )
 DATASETS_3D_EM_MITO_SUPPLEMENTARY = []
 
-# Nuclei (the panel of the nucleus EM generalist, 'em_nucleus'). The in-domain sets are held-out parts of its training
-# datasets, scored on data it never trains on and tuned on the data its training validates on. cellmap_nucleus: the
-# jrc_mus-liver-zon-2 crop357 (32 nm, manual instances; it overlaps no other crop) is scored, the validation crop
-# tunes. fafb_nuclei and microns_nuclei: the official test blocks are scored, the val blocks tune (automatic FlyWire /
-# minnie65 segmentations, near-exhaustive). platynereis_nuclei: volume 03 (dense brain region, manual instances) is
-# scored and volume 12 tunes, both inside their annotated box (the valid ROI, as in training). The out-of-domain set
-# human_liver_em_nucleus: three boxes of the human liver SBF-SEM (EMPIAR-13356), 4x downsampled to about
-# 32 x 32 x 55 nm, are scored and a fourth box tunes. Its ground truth is the authors' automated segmentation, which
-# labels hepatocyte nuclei only in part of the volume: the boxes lie in the labeled region and every nucleus visible in
-# them is labeled (checked by eye).
+# The nucleus panel: the in-domain sets are held-out parts of the training datasets.
 CELLMAP_NUCLEUS_TEST_CROPS = ("jrc_mus-liver-zon-2_crop357",)
 HUMAN_LIVER_EM_NUCLEUS_BOXES = {"test": ["test_a", "test_b", "test_c"], "val": ["tune"]}
-# etchacell_nucleus: the nuclei of the Etch-a-Cell ROIs (EMPIAR-10478, SBF-SEM of HeLa cells, 10 x 10 x 50 nm, 4x
-# downsampled in-plane to 40 x 40 x 50 nm, 18 ROIs with one nucleus each), an out-of-domain set. The citizen-science
-# nuclear envelope labels are filled into a nucleus per slice and in 3D (build_new_nucleus_data.py in
-# mito_nuc_figures/scripts). The ROIs of ETCHACELL_NUCLEUS_TUNING_ROIS tune, the others are scored. The raw data is a
-# different acquisition than the HeLa SBF-SEM of CEFA HeLa (EMPIAR-10094).
+# Etch-a-Cell nuclei (out-of-domain): the envelope labels are filled into nuclei.
 ETCHACELL_NUCLEUS_ROOT = "etchacell_nucleus"
 ETCHACELL_NUCLEUS_TUNING_ROIS = ("ROI_1584-6996-1", "ROI_1608-912-1", "ROI_3588-3972-1")
 DATASETS_3D_EM_NUCLEUS_ID = ["cellmap_nucleus", "fafb_nuclei", "microns_nuclei", "platynereis_nuclei"]
@@ -662,12 +582,7 @@ EM_ROIS = {
 MITOLAB_BENCHMARK_IDS = {name: i for i, name in enumerate(MITOLAB_VOLUMES, start=1)}
 MITOLAB_TEM_BENCHMARK_ID = 7
 
-# The ASEM mitochondria volumes the evaluation scores, as zarr crops (raw + semantic labels) in <data>/asem/mito_crops,
-# named after their box in raw voxels of s3://asem-project/datasets/<id>/<id>.zarr. 46, 58, 64 and 2E are annotated
-# densely in their crop. 61 is annotated densely only inside its hold-out block, which is the crop. 3A is left out,
-# since a single mitochondrion is labeled in it. 64 is cell_6, the micro-sam v1 EM organelle test volume. The
-# mitochondria generalist trains on 46, 58 and 2E, so only 64 and the 61 hold-out block are scored
-# (ASEM_MITO_EVAL_VOLUMES).
+# The ASEM crops; the generalist trains on 46, 58 and 2E, so only 61 and 64 are scored.
 ASEM_MITO_CROPS = {
     "46": (640, 896, 0, 1024, 1112, 2136),
     "58": (152, 408, 0, 1000, 1480, 2504),
@@ -923,9 +838,7 @@ def _held_out_part(raw_paths, label_paths, split):
     return (val_r, val_l) if split == "val" else (test_r, test_l)
 
 
-# The hand-labeled Cmito test block of the dauer (gs://gnd-dauer1/mito_label/220114_test, 2 x 2 x 50 nm): 200 unrelated
-# 512 x 512 patches stacked along z (neighbouring patches do not correlate), with semantic mitochondria labels (255).
-# 140 patches carry labels; the others are blank, padded or not annotated and are left out.
+# The hand-labeled Cmito dauer patches; 140 of the 200 patches carry labels.
 CMITO_MANUAL = "precomputed://https://storage.googleapis.com/gnd-dauer1/mito_label/220114_test"
 CMITO_MANUAL_BOX = (32, 544, 32, 544, 0, 200)  # x, y, z: the extent of the labels
 
@@ -1207,9 +1120,7 @@ def _get_2d_data_paths(
         return sorted(paths), sorted(paths), "raw", "labels"
 
     if dataset_name == "probtem":
-        # The 6 ProbTEM test images are scored; the 3 train images the mitochondria generalist holds out (the same
-        # seeded split as its training loader) tune. Read from the complete copy in <data>/probtem_full. Semantic
-        # labels.
+        # The 6 test images are scored; the 3 training validation images tune.
         root = os.path.join(p, "probtem_full", "processed")
         if split == "test":
             paths = sorted(glob(os.path.join(root, "test", "*.h5")))

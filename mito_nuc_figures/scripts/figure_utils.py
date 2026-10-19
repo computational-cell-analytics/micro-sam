@@ -1,18 +1,19 @@
 """Shared helpers to render raw EM data with mitochondria / nucleus label overlays.
 
 Every dataset script in this folder uses these helpers, so that all figures share one layout:
-one row for the raw data, plus one row per label class, and one column per selected slice.
-For 3D volumes an extra column shows an orthogonal (ZX) view through the volume center.
+- one row for the raw data and one row per label class.
+- one column per selected slice.
+- for 3D volumes, an extra column with an orthogonal (ZX) view through the volume center.
 """
-import json
 import os
+import json
 
 import numpy as np
-import matplotlib
+from skimage.segmentation import find_boundaries
 
+import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa
-from skimage.segmentation import find_boundaries  # noqa
 
 
 FIGURE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -246,8 +247,10 @@ def save_image_grid(samples, out_path, dataset_name, group_name, notes=None, nco
 def write_info(dataset_name, info):
     """Write the dataset summary used to build the overview table.
 
-    Expected keys: classes (list), modality, dimensionality ("2d" or "3d"), label_quality, n_volumes,
-    volumes (list of dicts with name, shape, voxel_size and any extra fields), data_path, notes, issues.
+    Expected keys:
+    - classes (list), modality, dimensionality ("2d" or "3d"), label_quality, n_volumes.
+    - volumes (list of dicts with name, shape, voxel_size and any extra fields).
+    - data_path, notes, issues.
     """
     out_path = os.path.join(get_output_dir(dataset_name), "info.json")
     with open(out_path, "w") as f:

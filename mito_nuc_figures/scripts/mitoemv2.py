@@ -1,14 +1,14 @@
 """Overview figures for MitoEM v2 (8 vEM datasets with expert-verified mitochondria instance labels).
 
-The volumes are read lazily from the nnU-Net style NIfTI files of the zenodo release, so that the full
-n5 conversion of the torch-em loader (which loads every volume into memory) is not needed for the figures.
+The volumes are read lazily from the nnU-Net style NIfTI files of the zenodo release. Thus, the figures do not need
+the full n5 conversion of the torch-em loader, which loads every volume into memory.
 NIfTI stores (x, y, z); the wrapper below exposes (z, y, x) like the n5 files written by the loader.
 """
-import json
 import os
+import json
 
-import nibabel as nib
 import numpy as np
+import nibabel as nib
 
 from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
 

@@ -1,17 +1,18 @@
 """Download a contiguous block of slices of the Macrophage / A431 'fib_control' volume with all organelle labels.
 
-The full volume has 2888 slices of 1054 x 5408 pixels (6 x 6 x 12 nm) and EMPIAR delivers about 0.5 MB/s per
-stream, so only a block of slices is downloaded: the block around z = 911, where the sampled slices hold the most
-mitochondria labels. It is written to <data>/macrophage_a431/fib_control_z<start>-<stop>.h5 with 'raw' and the
-binary 'labels/<organelle>' of the torch-em loader, under a temporary name that is moved in place when complete.
+The full volume has 2888 slices of 1054 x 5408 pixels (6 x 6 x 12 nm). EMPIAR delivers about 0.5 MB/s per stream.
+Thus, the script downloads only a block of slices around z = 911, where the sampled slices hold the most mitochondria
+labels. The output file is <data>/macrophage_a431/fib_control_z<start>-<stop>.h5. It holds 'raw' and the binary
+'labels/<organelle>' of the torch-em loader. It has a temporary name that is moved in place when complete.
 """
-import argparse
 import os
 import time
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 
 import h5py
 import numpy as np
+
 from torch_em.data.datasets.electron_microscopy import macrophage_a431
 
 from figure_utils import DATA_ROOT

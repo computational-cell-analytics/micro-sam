@@ -1,10 +1,11 @@
 import os
 
-import numpy as np
 import tifffile
+import numpy as np
+
+from torch_em.data.datasets.electron_microscopy import tnbc_mito
 
 from figure_utils import DATA_ROOT, get_output_dir, save_image_grid, write_info
-from torch_em.data.datasets.electron_microscopy import tnbc_mito
 
 
 DATASET = "tnbc_mito"

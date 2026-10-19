@@ -1,11 +1,12 @@
 import os
 
-import numpy as np
 import zarr
+import numpy as np
+
+from torch_em.data.datasets.electron_microscopy import npc1_mito
 
 from denoised_view import DenoisedView
 from figure_utils import DATA_ROOT, get_output_dir, save_volume_figure, write_info
-from torch_em.data.datasets.electron_microscopy import npc1_mito
 
 
 DATASET = "npc1_mito"

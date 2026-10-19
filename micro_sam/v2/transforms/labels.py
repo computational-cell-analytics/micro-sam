@@ -135,8 +135,8 @@ def _ignore_missing_raw_trafo(
     """Mark labels as *ignore_label* where the raw holds a missing tile, normalize the raw, then apply *transform*.
 
     A missing tile is a connected region of exact zeros in a slice with at least *min_area* pixels. With
-    *any_constant*, it is a connected region of any one constant value, for volumes that fill missing data with a
-    value other than zero (e.g. 128 or saturated 254). The test needs the stored intensities, since a percentile
+    *any_constant*, it is a connected region of any one constant value. Some volumes fill missing data with such a
+    value, for example 128 or a saturated 254. The test needs the stored intensities, since a percentile
     normalization clips dark tissue to zero as well, so the leaf's raw_transform must leave the normalization to
     *normalizer*, which runs here after the test. Runs as the joint 'transform', so it sees the raw and precedes
     label_transform2. The loaded label dtype must hold *ignore_label*, see :func:`_labels_to_uint32`.

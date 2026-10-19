@@ -2947,13 +2947,7 @@ EM_MITO_DATASETS = (
 EM_MITO_MIN_SIZE = 25
 EM_MITO_MIN_SIZE_3D = 50
 
-# The training samples per epoch of the mitochondria datasets (per source; summed over the z groups). A 3D sample is one
-# patch and one iteration: 200 x sqrt(training voxels / 250M), clipped to [200, 600], so larger sources get more but
-# sublinearly. A 2D sample is one patch: 2800 patches are 200 iterations at the 2D batch of hvit_t (14). The tiny
-# sources get about 7 passes per epoch instead, as the small 3D sources: VNC and U2OS (about 64 and 180 patches of
-# 512 x 512), haberl18 (20 x 256 x 256, 2 patches) and DenseCell (35 x 800 x 800, 7 patches). CellMap gets more than
-# the cap for its 115 crops of many cell types and tissues. CEM-MitoLab draws every training tile once per epoch. The
-# brain PFIB-SEM noisy stack repeats the reference stack, so the two share one budget.
+# Training samples per epoch and source: 3D 200 x sqrt(voxels / 250M) in [200, 600], tiny sources ~7 passes.
 EM_MITO_TRAIN_SAMPLES = {
     "densecell_mito": 50, "lucchi": 200, "microns_pinky_mito": 240, "mitoem_human": 600, "mitoem_rat": 600,
     "mitoemv2_beta": 515, "mitoemv2_jurkat": 200, "mitoemv2_macro": 207, "mitoemv2_podo": 207, "mitoemv2_sperm": 254,
@@ -2963,15 +2957,12 @@ EM_MITO_TRAIN_SAMPLES = {
     "brain_pfibsem_noisy": 50, "snemi_mito": 200, "u2os_fibsem_mito": 1260, "hela_stard3_mito": 446,
     "parlakgul_fasting_liver_mito": 205, "aive_mito": 600, "mito_segem": 200,
 }
-# The CEM-MitoLab validation images per group: one group holds 720 of the 1264 validation tiles otherwise.
+# One CEM-MitoLab group holds 720 of the 1264 validation tiles, so each group is capped.
 MITOLAB_VAL_IMAGES_PER_GROUP = 50
 
-# The sampler counts the connected components of a patch above the min size, without the background (0) and ignore
-# labels. A patch needs EM_MITO_MIN_INSTANCES of them; CEM-MitoLab and CellMap need one, since many MitoLab tiles hold
-# fewer than three mitochondria (a tile that fails is never drawn) and most 200^3 CellMap crops hold 0-1 per patch.
+# The mitochondria that a patch needs; CEM-MitoLab and CellMap need one.
 EM_MITO_MIN_INSTANCES = 3
-# The volumes (by file name) where fewer than half of 40 random patches held three mitochondria, with the minimum that
-# at least half of them reach (1 if none). The measurement used 14-slice patches.
+# These volumes hold fewer mitochondria per patch, so they need fewer (measured on 40 random patches).
 EM_MITO_SPARSE_VOLUMES = {
     "me2-macro_train01.n5": 1, "me2-jurkat_train01.n5": 2, "pos0.zarr": 2, "fib1-1-0-3.h5": 2,
     "x_0.h5": 2, "x_7.h5": 2, "x_9.h5": 2, "x_13.h5": 2, "x_17.h5": 2,
@@ -2979,69 +2970,50 @@ EM_MITO_SPARSE_VOLUMES = {
     "aive_dataset1.h5": 1, "aive_dataset2.h5": 1, "aive_dataset3.h5": 1,
 }
 
-# The validation regions of the 3D datasets hold at least 14 slices, the deepest patch of the training configs (z = 14
-# for hvit_t and hvit_s); torch-em zero-pads shallower regions in z, which would put blank planes into the patches.
+# The 3D validation regions hold at least 14 slices, because torch-em pads shallower regions with blank planes.
 
-# DenseCell mitochondria use the same split as the DenseCell cell instances in the EM generalist: the train volume
-# trains on z < 35 and validates on z >= 35.
 DENSECELL_TRAIN_ROI = np.s_[:35, :, :]
 DENSECELL_VAL_ROI = np.s_[35:, :, :]
 
-# Lucchi: the train volume trains on z < 140 and validates on z >= 140, the test volume is the evaluation volume.
-# The CEM-Mito-Benchmark 'lucchi_pp' is the Lucchi train volume, so it is not evaluated.
+# The CEM-Mito-Benchmark volume 'lucchi_pp' is the Lucchi train volume.
 LUCCHI_TRAIN_ROI = np.s_[:140, :, :]
 LUCCHI_VAL_ROI = np.s_[140:, :, :]
 
-# MICrONS pinky: only the stitched volume vol19-vol34 is densely annotated for mitochondria; the '_realigned' copy is
-# the same annotation re-registered, and the other pinky volumes label the mitochondria of a few cells only.
+# Only this stitched volume is densely annotated for mitochondria.
 MICRONS_PINKY_MITO_FILE = "pinky_stitched_vol19-vol34.h5"
 MICRONS_PINKY_MITO_TRAIN_ROI = np.s_[:86, :, :]
 MICRONS_PINKY_MITO_VAL_ROI = np.s_[86:, :, :]
 
-# MitoEM: only the train volumes of both samples train (z < 360) and validate (z >= 360). The val volumes are the
-# evaluation volumes, and the test volumes have no labels.
+# The MitoEM val volumes are evaluation volumes, so only the train volumes train and validate.
 MITOEM_SAMPLES = ("human", "rat")
 MITOEM_TRAIN_ROI = np.s_[:360, :, :]
 MITOEM_VAL_ROI = np.s_[360:, :, :]
 
-# MitoEM v2: the official train volumes train and the official val volumes validate (the converted n5 copies in
-# <data>/mitoemv2/n5_data); the test volumes are the evaluation volumes. The value is the z / xy anisotropy. pyra is
-# left out: its crops are regions of MitoEM-H, which trains and evaluates above. The jurkat val volume
-# (me2-jurkat_train02) has labels that do not match its raw data, so jurkat validates on the last slices of its train
-# volume instead (MITOEMV2_JURKAT_*_ROI).
+# The z / xy anisotropy per MitoEM v2 dataset; pyra repeats MitoEM-H, so it is left out.
 MITOEMV2_DATASETS = {"beta": 1, "jurkat": 1, "macro": 1, "podo": 1, "sperm": 1, "stem": 30 / 8}
+# The labels of the jurkat val volume do not match its raw, so jurkat validates on the end of its train volume.
 MITOEMV2_JURKAT_TRAIN_ROI = np.s_[:230, :, :]
 MITOEMV2_JURKAT_VAL_ROI = np.s_[230:, :, :]
 
-# MitoEM v2 mossy: only the mitochondria inside the mossy fiber boutons are annotated. The bouton mask comes with the
-# MitoVerse copies of these volumes (<data>/mitoverse/data/han24), whose labels are identical to the MitoEM v2 ones:
-# the MitoEM v2 samples are mapped to the MitoVerse volumes below. Outside the boutons the loss is ignored.
+# The MitoVerse copies of the mossy volumes have the bouton masks; outside the boutons the loss is ignored.
 MITOEMV2_MOSSY_TRAIN_VOLUMES = {"me2-mossy_train01": "neg0", "me2-mossy_train02": "pos0"}
 MITOEMV2_MOSSY_VAL_VOLUMES = {"me2-mossy_train03": "pos2"}
 MITOEMV2_MOSSY_IGNORE_LABEL = np.iinfo("uint32").max
 
-# ProbTEM: the processed h5 files in <data>/probtem_full/processed (read directly: the <data>/probtem copy is
-# incomplete). A seeded 3 of the 21 train images validate (the evaluation tunes on them as well); the 6 test images
-# are the evaluation images.
+# The <data>/probtem copy is incomplete, so the processed files are read.
 PROBTEM_ROOT = os.path.join("probtem_full", "processed")
 PROBTEM_N_VAL = 3
 
-# UroCell: the 5 volumes (256^3, 16 nm isotropic) with mitochondria labels; each trains on z < 224 and validates on
-# the rest. The other 3 volumes have no mitochondria labels.
+# The other 3 UroCell volumes have no mitochondria labels.
 UROCELL_MITO_VOLUMES = ["fib1-0-0-0.h5", "fib1-1-0-3.h5", "fib1-3-2-1.h5", "fib1-3-3-0.h5", "fib1-4-3-0.h5"]
 UROCELL_TRAIN_ROI = np.s_[:224, :, :]
 UROCELL_VAL_ROI = np.s_[224:, :, :]
 
-# VNC: only the train stack (20 slices) is labeled, the test stack has no labels. z < 16 trains and z >= 16 validates;
-# the 4-slice validation slab does not fit a 3d patch, so VNC trains in the 2d group on single slices.
+# The 4-slice validation slab does not fit a 3D patch, so VNC trains on single slices.
 VNC_TRAIN_ROI = np.s_[:16, :, :]
 VNC_VAL_ROI = np.s_[16:, :, :]
 
-# Parlakgul liver: the 64-slice boxes of the four samples (6461 lean, 6464 / 9430 obese, 1857 obese Climp63), cached by
-# torch-em's parlakgul_liver loader. The first one is in the original data folder, the others in parlakgul_liver_boxes
-# (their bounding boxes are listed in training_boxes.json there). Each box trains on z < 50 and validates on the rest.
-# NOTE: Parlakgul is an evaluation dataset now (it is not in EM_MITO_DATASETS): its semantic masks merge touching
-# mitochondria and hold irregular fragments. The evaluation reads PARLAKGUL_LIVER_BOXES.
+# Parlakgul liver is an evaluation dataset now (not in EM_MITO_DATASETS); the evaluation reads these boxes.
 PARLAKGUL_LIVER_BOXES = [
     os.path.join("parlakgul_liver", "6461_mito_c2fda2f2e9f2.zarr"),
     os.path.join("parlakgul_liver_boxes", "6461_mito_6437b92288e2.zarr"),
@@ -3055,41 +3027,24 @@ PARLAKGUL_LIVER_BOXES = [
 PARLAKGUL_LIVER_TRAIN_ROI = np.s_[:50, :, :]
 PARLAKGUL_LIVER_VAL_ROI = np.s_[50:, :, :]
 
-# MitoVerse (<data>/mitoverse/data/<dataset>/<volume>.zarr, arrays 'img' and 'mito'): only the parts that duplicate
-# no other training or evaluation data are used; the full collection repeats MitoEM, the CEM benchmark, Kasthuri and
-# Lucchi, DenseCell, MitoEM v2, CellMap and others. xiao18 (mouse auditory cortex ssSEM, 8 x 8 x 50 nm) trains on
-# z >= 15 and validates on z < 14: section z = 14 is torn (a third of it is blank resin without labels), so no patch
-# crosses it. haberl18 (CDeep3M, mouse brain SBF-SEM, 10 x 10 x 24 nm) trains on vol0 and does not validate, since
-# vol1 has only 10 slices. The five MICrONS phase 1 volumes of turner22 (ssTEM, 8 x 8 x 40 nm) train on z < 36 and
-# validate on the remaining 14 slices, except vol1 and vol2: their last 14 slices hold a missing section (constant
-# raw), so every validation patch would be rejected by the blank slice sampler. They train whole.
+# Section 14 of xiao18 is torn, so no patch crosses it.
 MITOVERSE_XIAO18_TRAIN_ROI = np.s_[15:, :, :]
 MITOVERSE_XIAO18_VAL_ROI = np.s_[:14, :, :]
 MITOVERSE_MICRONS1_VOLUMES = [f"microns1_vol{i}" for i in range(5)]
+# The validation slab of these volumes holds a missing section, so they train whole.
 MITOVERSE_MICRONS1_TRAIN_ONLY_VOLUMES = ("microns1_vol1", "microns1_vol2")
 MITOVERSE_MICRONS1_TRAIN_ROI = np.s_[:36, :, :]
 MITOVERSE_MICRONS1_VAL_ROI = np.s_[36:, :, :]
-# Some MICrONS phase 1 slices miss image data (raw == 0) while the labels continue there. Connected raw == 0 regions
-# of a slice above this area (in pixels) carry MITOVERSE_IGNORE_LABEL, so the loss ignores them but not single dark
-# membrane pixels.
+# Regions of raw == 0 above this area (in pixels) are missing data, not dark membranes.
 MITOVERSE_MISSING_DATA_MIN_AREA = 2000
 MITOVERSE_IGNORE_LABEL = np.iinfo("uint32").max
 
-# Human organoids (<data>/human_organoids/11380/data, FIB-SEM, 2x binned, voxel size undocumented): the mitochondria
-# labels of the four volumes, the nuclei and other organelles are background. The raw is int8. Each volume trains on its
-# first 90% of z and validates on the rest.
 HUMAN_ORGANOIDS_VOLUMES = ["F059_bin2.h5", "F107_A1_bin2.h5", "F107_A2_bin2.h5", "F107_A3_bin2.h5"]
 HUMAN_ORGANOIDS_VAL_FRACTION = 0.1
-# The mitochondria instance labels of the four volumes (<data>/human_organoids_mito/<volume>_mito_labels.zarr, written
-# by finetuning/v2/generalist/em_organelles/preprocess_mito_dataset.py): the connected components of the manual semantic
-# masks, split by a neck watershed where touching mitochondria form one component (about 4-12% of the components).
+# The neck watershed instances of finetuning/v2/generalist/em_organelles/preprocess_mito_dataset.py.
 HUMAN_ORGANOIDS_MITO_ROOT = "human_organoids_mito"
 
-
-# ASEM mitochondria (<data>/asem/mito_crops, zarr crops with 'raw' and semantic 'labels', manual and dense in their
-# crop, FIB-SEM): volumes 46 and 58 (5 nm) train on z < 224 and validate on the rest, the small volume 2E (4 nm,
-# 200 px in plane) trains whole as 192 x 192 patches resized to 512 x 512. Volume 64 (cell_6, the micro-sam v1 EM test
-# volume) and the 61 hold-out block are the in-domain evaluation volumes.
+# ASEM volumes 61 and 64 are the in-domain evaluation volumes.
 ASEM_MITO_ROOT = os.path.join("asem", "mito_crops")
 ASEM_MITO_TRAIN_VOLUMES = ("46_z640-896_y0-1024_x1112-2136.zarr", "58_z152-408_y0-1000_x1480-2504.zarr")
 ASEM_MITO_SMALL_VOLUMES = ("2E_z1015-1215_y316-516_x294-494.zarr",)
@@ -3097,59 +3052,35 @@ ASEM_MITO_TRAIN_ROI = np.s_[:224, :, :]
 ASEM_MITO_VAL_ROI = np.s_[224:, :, :]
 ASEM_MITO_SMALL_SIDE = 192
 
-# Brain PFIB-SEM mitochondria (<data>/brain_pfibsem/brain_pfibsem.h5, mouse brain PFIB-SEM, 5 nm isotropic, 181 x 1300
-# x 1300, expert binary masks made on the 2 us reference stack): the noisy 0.5 us stack is registered to the reference
-# stack (correlation 0.99 of the smoothed slices without any shift), so it trains with the same labels as a noise
-# augmentation. z < 144 trains and the rest (37 slices) validates, as in the torch-em loader.
+# The noisy stack is registered to the reference stack, so it trains with the same labels.
 BRAIN_PFIBSEM_PATH = os.path.join("brain_pfibsem", "brain_pfibsem.h5")
 BRAIN_PFIBSEM_TRAIN_ROI = np.s_[:144, :, :]
 BRAIN_PFIBSEM_VAL_ROI = np.s_[144:, :, :]
 
-# SNEMI Mito (<data>/snemi_mito_stack/snemi_mito.h5, written by build_snemi_mito_stack.py in mito_nuc_figures/scripts;
-# ssSEM of the mouse neocortex, SNEMI3D, 6 x 6 x 30 nm, manual binary masks): the 100 consecutive slices are stacked
-# and the official contiguous split is kept: z 0-49 trains, z 50-69 validates, z 70-99 (test) is not used.
+# The official SNEMI split: z 70-99 is the test part.
 SNEMI_MITO_PATH = os.path.join("snemi_mito_stack", "snemi_mito.h5")
 SNEMI_MITO_TRAIN_ROI = np.s_[:50, :, :]
 SNEMI_MITO_VAL_ROI = np.s_[50:70, :, :]
 
-# U2OS FIB-SEM mitochondria (<data>/u2os_fibsem/1_Mitochondria/1_Train_Mito, FIB-SEM of one U2-OS cell, 45 manually
-# annotated single slices of 692 x 1697, binary masks): trained as 2D; every 9th slice validates (5 slices, which are
-# 30-250 sections away from their neighbours in the stack).
 U2OS_FIBSEM_MITO_ROOT = os.path.join("u2os_fibsem", "1_Mitochondria", "1_Train_Mito")
 U2OS_FIBSEM_MITO_VAL_STEP = 9
 
-# HeLa STARD3 mitochondria (<data>/hela_stard3/<volume>.h5, FIB-SEM of HeLa cells, EMPIAR-13156, 8 nm pixels for 'ctrl'
-# and 'stard3_fa_ya', 5 nm for 'stard3', treated as isotropic): the binary mitochondria masks of the densely annotated
-# ROI of each volume (the torch-em loader crops raw and labels to it). The other two volumes train whole, 'ctrl' trains
-# on z < 404 and validates on the last 40 slices.
 HELA_STARD3_VOLUMES = ("ctrl", "stard3", "stard3_fa_ya")
 HELA_STARD3_VAL_VOLUME = "ctrl"
 HELA_STARD3_VAL_START = 404
 
-# Parlakgul fasting liver mitochondria (<data>/parlakgul_fasting_liver/<sample>_mito_<hash>.zarr, FIB-SEM of the mouse
-# liver, EMPIAR-12017, 8 nm isotropic, the authors' mitochondria instance segmentation): 64 x 1024 x 1024 tissue
-# boxes (9428 lean fasted, 8970 obese fasted, 2679 obese LacZ, 1858 obese RRBP1; 8970 has two boxes that do not
-# overlap, the central one and the torch-em default one), cached by torch-em's parlakgul_fasting_liver loader. These
-# samples differ from the Parlakgul liver samples of the out-of-domain
-# evaluation (parlakgul_liver_eval: 6461, 6464, 9430, 1857). Each box trains on z < 50 and validates on the rest.
+# These samples differ from the Parlakgul liver samples of the evaluation.
 PARLAKGUL_FASTING_ROOT = "parlakgul_fasting_liver"
 PARLAKGUL_FASTING_TRAIN_ROI = np.s_[:50, :, :]
 PARLAKGUL_FASTING_VAL_ROI = np.s_[50:, :, :]
 
-# AIVE mitochondria (<data>/aive/aive_dataset<i>.h5, FIB-SEM of cells and muscle tissue, EMPIAR-12885, 6.5 x 6.5 x
-# 10 nm): the mitochondria class (1) of the harmonized semantic organelle labels of torch-em's aive loader. Not every
-# mitochondrion is annotated in every volume. Each volume trains on its first ~90% of z and validates on the rest, per
-# volume file name the first validation slice.
 AIVE_MITO_CLASS = 1
 AIVE_MITO_VAL_STARTS = {
     "aive_dataset1.h5": 652, "aive_dataset2.h5": 772, "aive_dataset3.h5": 556, "aive_dataset4.h5": 280,
 }
 
 
-# MitoSegEM mitochondria (<data>/mito_segem, EMPIAR-12535, noisy SBF-SEM, 15 nm pixels, 50 nm sections): one cached
-# 64 x 1024 x 1024 box (z, y, x in the full volume) per tissue, network predictions with a manual instance assignment.
-# The testis and brainstem boxes train on z < 50 and validate on the rest; the intestine box is an out-of-domain
-# evaluation set (finetuning/v2/evaluation/common.py).
+# The intestine box of MitoSegEM is an out-of-domain evaluation set.
 MITO_SEGEM_TRAIN_BOXES = {
     "testis": (1268, 1332, 1792, 2816, 7680, 8704),
     "brainstem": (1868, 1932, 7936, 8960, 7168, 8192),
@@ -3158,14 +3089,7 @@ MITO_SEGEM_TRAIN_ROI = np.s_[:50, :, :]
 MITO_SEGEM_VAL_ROI = np.s_[50:, :, :]
 
 
-# CellMap mitochondria (<data>/cellmap_mito_crops, one zarr store with 'raw' and 'labels' per challenge crop with a
-# mito label array, listed in its index.json): without sum159-4 crop211, whose mito array is empty although
-# mitochondria are visible. No crop overlaps the MitoEM v2 jurkat / macro / podo volumes (crops of jrc_jurkat-1,
-# jrc_macrophage-2 and jrc_mus-kidney), which a template matching of all their crops against these volumes showed.
-# Only crops with labeled mitochondria train, since an empty crop only yields batches without objects, which the
-# joint trainer skips. The crops are grouped by in-plane size into the patch sides of CELLMAP_MITO_PATCH_SIDES,
-# crops below the smallest side are not used, and whole volumes (cells) validate, because the crops of one volume
-# can be near-duplicates or nested.
+# The crops of one cell can be nested, so whole cells validate.
 CELLMAP_MITO_PATCH_SIDES = (128, 192, 256, 384, 512)
 CELLMAP_MITO_VAL_FRACTION = 0.1
 
@@ -3206,11 +3130,7 @@ EM_NUCLEUS_DATASETS = (
 # Objects below this size (in voxels of the training patch) are dropped from the nucleus targets.
 EM_NUCLEUS_MIN_SIZE_3D = 50
 
-# The training samples per epoch of the nucleus datasets (per source; summed over the z groups), by the rules of the
-# mitochondria generalist (EM_MITO_TRAIN_SAMPLES): 3D sources 200 x sqrt(training voxels / 250M) clipped to [200, 600],
-# 2D sources 2800 patches or about 7 passes over their patches, Cerebellum about 7 passes and the microSAM train crop
-# 200. On top, the large and diverse sources get more: OpenOrganelle 1000, CellMap, human organoids, SXT and Janelia
-# 800, BetaSeg 400 and AIVE 300 (2026-10-19). Every volume gets at least one sample.
+# Training samples per epoch and source, by the rules of EM_MITO_TRAIN_SAMPLES; large, diverse sources get more.
 EM_NUCLEUS_TRAIN_SAMPLES = {
     "betaseg_nucleus": 400, "cellmap_nucleus": 800, "human_organoids_nucleus": 800, "sxt_nucleus": 800,
     "fafb_nuclei": 293, "janelia_nucleus": 800, "microns_nuclei": 414, "waenet_fibsem_nucleus": 200,
@@ -3219,15 +3139,13 @@ EM_NUCLEUS_TRAIN_SAMPLES = {
     "vem_nuclei_2d": 2800, "vem_nuclei_3d": 200, "aive_nucleus": 300, "cerebellum_nucleus": 175,
     "macrophage_a431_nucleus": 424,
 }
-# The nuclei a patch needs per dataset: at least half of 40 random patches of the dataset (pooled over its volumes,
-# connected components, 14-slice patches, 2026-10-19) held this many; the other datasets need one.
+# The nuclei that a patch needs per dataset (measured on 40 random patches); the other datasets need one.
 EM_NUCLEUS_MIN_INSTANCES = {
     "fafb_nuclei": 3, "microns_nuclei": 3, "platynereis_nuclei": 3, "microsam_em_nuclei": 3, "janelia_nucleus": 3,
     "tumor_spheroid_nuclei": 2, "human_organoids_nucleus": 2, "cellmap_nucleus": 2, "vem_nuclei": 2,
     "openorganelle_nucleus": 2,
 }
-# The volumes (by their last two path components) where none of the 40 patches held that many nuclei, so their
-# sampler would never accept a patch: they need one.
+# These volumes never held that many nuclei in a patch, so they need one.
 EM_NUCLEUS_SPARSE_VOLUMES = {
     "cellmap_nucleus_crops/jrc_mus-liver-zon-2_crop367.zarr": 1, "janelia_nucleus/jrc_mus-nacc-2.zarr": 1,
     "janelia_nucleus/jrc_mus-nacc-4.zarr": 1, "openorganelle_nucleus_full/jrc_cos7-11.zarr": 1,
@@ -3235,146 +3153,73 @@ EM_NUCLEUS_SPARSE_VOLUMES = {
     "vem_nuclei_nucleus/id_12.h5": 1,
 }
 
-# Nucleus volumes are drawn at the largest of these patch sides that fits in-plane; patches below 512 px are resized
-# to 512 x 512.
+# A volume uses the largest side that fits in-plane; patches below 512 px are resized to 512 x 512.
 EM_NUCLEUS_PATCH_SIDES = (128, 192, 256, 320, 384, 512)
 
-# BetaSeg nuclei (<data>/betaseg_nucleus_boxes, 4 nm isotropic FIB-SEM of mouse beta cells): one box per volume
-# around the labeled nucleus of the target cell with a margin of 32 voxels. Only the nucleus of the target cell is
-# labeled, and unlabeled neighbouring nuclei enter some boxes (high_c4, low_c2), so the labels carry
-# BETASEG_NUCLEUS_IGNORE_LABEL outside the target cell mask and on blank raw, and the loss ignores those voxels.
+# Only the target cell is labeled, so the loss ignores the voxels outside it.
 BETASEG_NUCLEUS_TRAIN_VOLUMES = ("high_c1", "high_c2", "high_c3", "high_c4", "low_c1", "low_c2")
 BETASEG_NUCLEUS_VAL_VOLUMES = ("low_c3",)
 BETASEG_NUCLEUS_IGNORE_LABEL = np.iinfo("uint32").max
 
-# CellMap nuclei (<data>/cellmap_nucleus_crops, one zarr store with 'raw' and 'labels' per crop, listed in its
-# index.json): only the large tissue crops at 32 and 64 nm with many complete nuclei, nucleus labels only. The small
-# high-resolution crops are not used: most hold one nucleus cut by the crop borders, and 15 lie fully inside a
-# nucleus. jrc_mus-liver-zon-2 crop357 (the 'test' crop of the index) is the in-domain evaluation crop, since it
-# overlaps no other crop (crop358 and crop367 overlap each other).
+# The CellMap crop357 of jrc_mus-liver-zon-2 is the in-domain evaluation crop.
 CELLMAP_NUCLEUS_VAL_CROPS = ("jrc_zf-cardiac-1_crop379",)
 
-# Human organoids nuclei: the raw of the four volumes (HUMAN_ORGANOIDS_VOLUMES) with cleaned nucleus instance labels
-# (<data>/human_organoids_nucleus/<volume>_nucleus_labels.zarr, written by build_human_organoids_nucleus_labels.py in
-# mito_nuc_figures/scripts): the speckled manual semantic masks are closed and their holes filled per slice, the
-# labels on the black alignment padding are removed, the nuclei are separated by 3D connected components, and label
-# fragments below 100k voxels and the entotic cell of F107_A1 (whose nucleus is not labeled) carry
-# HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL.
-# The z split is the one of the mitochondria block (HUMAN_ORGANOIDS_VAL_FRACTION).
+# Label fragments and the entotic cell of F107_A1 carry this label.
 HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL = np.iinfo("uint32").max
 
-# SXT INS-1E nuclei (<data>/sxt_ins1e_mito, one zarr store per cell): soft X-ray tomography (not EM) of INS-1E cells in
-# glass capillaries, isotropic 36.8-45.5 nm, semi-automatic semantic labels (0 exterior, 1 cell, 2 nucleus, 5 mito).
-# Only the target cell is labeled and some tomograms may hold unlabeled neighbour cells, so the nucleus is the object,
-# the rest of the cell is background, and the loss ignores the exterior (SXT_NUCLEUS_IGNORE_LABEL). The ignore label
-# is the uint16 maximum, since torch-em casts the labels back to their stored dtype (uint16) after the augmentations.
-# A seeded set of SXT_NUCLEUS_N_VAL cells validates.
+# SXT is soft X-ray tomography; the loss ignores the exterior of the target cell.
 SXT_NUCLEUS_CLASS = 2
 SXT_EXTERIOR_CLASS = 0
 SXT_NUCLEUS_IGNORE_LABEL = np.iinfo("uint16").max
 SXT_NUCLEUS_N_VAL = 5
 
-# FAFB nuclei (<data>/fafb_nuclei/{train,val,test}, 256 x 512 x 512 blocks of ssTEM of the adult fly brain at
-# 32 x 32 x 40 nm): the automatic FlyWire nucleus segmentation (v5), which is clean and near-exhaustive, so it trains
-# despite being automatic. The train blocks train, the val blocks validate, and the test blocks are the in-domain
-# evaluation blocks.
+# The FAFB test blocks are the in-domain evaluation blocks.
 FAFB_NUCLEI_Z_SCALE = 40 / 32
 
-# Janelia nuclei (<data>/janelia_nucleus, one zarr store with 'raw' and 'labels' per OpenOrganelle volume, 32-128 nm):
-# 13 volumes with Cellpose pseudo-labels (near-exhaustive, a few small or very dark nuclei missed) and 3 manual
-# jrc_mus-nacc volumes (1-3 nuclei each). The voxels are treated as isotropic (z / xy is 0.74-1.34). jrc_mus-kidney is
-# the volume of the CellMap kidney crop179, which trains as well. jrc_mus-granule-neurons-1 is not used, since it is
-# only 85 px wide in y. JANELIA_NUCLEUS_VAL_VOLUMES validate.
+# jrc_mus-granule-neurons-1 is only 85 px wide in y.
 JANELIA_NUCLEUS_EXCLUDED_VOLUMES = ("jrc_mus-granule-neurons-1",)
 JANELIA_NUCLEUS_VAL_VOLUMES = ("jrc_mus-meissner-corpuscle-2",)
 
-# MICrONS nuclei (<data>/microns_nuclei/{train,val,test}, 512^3 blocks of ssTEM of the mouse visual cortex at
-# 64 x 64 x 40 nm): the automatic minnie65 nucleus segmentation, clean and near-exhaustive, so it trains despite being
-# automatic. As for FAFB, the train blocks train, the val blocks validate, and the test blocks are the in-domain
-# evaluation blocks.
+# The MICrONS test blocks are the in-domain evaluation blocks.
 MICRONS_NUCLEI_Z_SCALE = 40 / 64
 
-# Platynereis nuclei (<data>/platynereis/nuclei/train_data_nuclei_<id>.h5, SBEM of a 6 dpf larva at about
-# 80 x 80 x 100 nm, manual instance labels, exhaustive inside the annotated box). Each volume carries a halo of
-# unlabeled voxels (PLATYNEREIS_NUCLEI_IGNORE_LABEL) around the annotated box, so only the valid ROI of each volume
-# (_compute_platy_rois) trains. Volume 03 (dense brain region, 108 nuclei) is the in-domain evaluation volume and
-# volume 12 validates.
+# Only the valid ROI of each volume trains; volume 03 is the in-domain evaluation volume.
 PLATYNEREIS_NUCLEI_TRAIN_IDS = (1, 2, 4, 5, 6, 7, 8, 9, 10, 11)
 PLATYNEREIS_NUCLEI_VAL_IDS = (12,)
 PLATYNEREIS_NUCLEI_TEST_IDS = (3,)
 PLATYNEREIS_NUCLEI_IGNORE_LABEL = -1
 PLATYNEREIS_NUCLEI_Z_SCALE = 100 / 80
 
-# Tumor spheroid nuclei (<data>/tumor_spheroid_nucleus, derived from <data>/tumor_spheroid_em/2d_manual/50-50-50 by
-# build_tumor_spheroid_nucleus_labels.py in mito_nuc_figures/scripts; SBF-SEM of a tumor spheroid with gold
-# nanoparticles, inverted contrast): 20 manually annotated single slices in xy, xz and yz (the 100 nm slices are the
-# same slices downsampled). Many annotated cells carry no nucleus label, some of them with nucleus-like content, so
-# every cell without a nucleus label carries TUMOR_SPHEROID_NUCLEI_IGNORE_LABEL and the loss ignores it. Some slices
-# are only 2-7 sections apart, so the validation slices are ones without a close neighbour.
+# The validation slices have no close neighbour; cells without a nucleus label carry the ignore label.
 TUMOR_SPHEROID_NUCLEI_VAL_SLICES = ("Au_01-vol_01-x_1300.h5", "Au_01-vol_01-z_0274.h5")
 TUMOR_SPHEROID_NUCLEI_IGNORE_LABEL = np.iinfo("uint32").max
 
-# The new torch-em nucleus datasets of 2026-10-18. The derived data of all of them except microsam_em_nuclei is written
-# by build_new_nucleus_data.py in mito_nuc_figures/scripts. The large images and volumes are downscaled there so that a
-# nucleus is a few hundred px wide, i.e. a 512 px patch shows nucleus boundaries and context.
-# Cardiomyocyte TEM (<data>/cardiomyocyte_tem_nucleus): 9 TEM micrographs of isolated cardiomyocytes, one nucleus
-# each (manual masks, the nucleoli are part of the nucleus), downscaled 4x; a seeded pair of images validates.
+# The derived data of these datasets comes from build_new_nucleus_data.py in mito_nuc_figures/scripts.
 CARDIOMYOCYTE_NUCLEUS_ROOT = "cardiomyocyte_tem_nucleus"
 CARDIOMYOCYTE_NUCLEUS_N_VAL = 2
-# microSAM EM nuclei (<data>/microsam_em_nuclei/data): the 'train' crop (32 x 512 x 512) of the microSAM user study,
-# the only crop with manual reference labels (48 nuclei); the 'annotation' crop only holds user-study outputs, which
-# differ and miss nuclei, so it is not used. The whole train crop trains and there is no validation leaf.
+# Only the 'train' crop has reference labels, so the 'annotation' crop is not used.
 MICROSAM_EM_NUCLEI_PATH = os.path.join("microsam_em_nuclei", "data", "train_data.h5")
-# Perez nuclei (<data>/perez_nucleus): the nucleus task tiles of the Perez SBF-SEM data (mouse suprachiasmatic nucleus);
-# the 500 px train tiles (resized to 512 px) train and the 1000 px test tiles validate.
 PEREZ_NUCLEUS_ROOT = "perez_nucleus"
-# vEM nuclei (<data>/vem_nuclei_nucleus, S-BIAD2822): 2D array tomography SEM images of cancer cells and tumor tissue
-# (NucleoNet predictions, manually proofread), downscaled so that nuclei are about 250 px wide, with the unlabeled
-# border band ignored where the border nuclei were removed (VEM_NUCLEI_IGNORE_LABEL), and two 3D FIB-SEM volumes with
-# one nucleus each, downscaled 2x. A seeded 2D image and the last VEM_NUCLEI_VAL_SLICES slices of volume id_12
-# validate; the nucleus of id_12 ends at z 399 of 463, so the slab holds its last 37 slices.
 VEM_NUCLEI_ROOT = "vem_nuclei_nucleus"
 VEM_NUCLEI_3D_IDS = (11, 12)
+# The nucleus of id_12 ends at z 399 of 463, so this slab holds its end.
 VEM_NUCLEI_VAL_SLICES = 100
 VEM_NUCLEI_IGNORE_LABEL = np.iinfo("uint32").max
-# AIVE nuclei (<data>/aive_nucleus, EMPIAR-12885): the nucleus of three FIB-SEM overview volumes (nucleus class with
-# the nucleoli, labeled 'chromatin', folded in), downscaled to 30 x 26 x 26 nm; the last AIVE_NUCLEUS_VAL_SLICES slices
-# of dataset 3 validate.
 AIVE_NUCLEUS_ROOT = "aive_nucleus"
 AIVE_NUCLEUS_Z_SCALE = 30 / 26
 AIVE_NUCLEUS_VAL_SLICES = 40
-# Cerebellum nuclei (<data>/cerebellum_fibsem_nucleus): mouse cerebellum FIB-SEM, nuclei labeled by students (not
-# necessarily proofread), downscaled 2x to 20 nm. Two large nuclei (from z = 0); the loss ignores three small labeled
-# pieces of a dark object inside a myelinated axon near the end of the volume (CEREBELLUM_NUCLEUS_IGNORE_LABEL).
-# z >= CEREBELLUM_NUCLEUS_VAL_Z validates, which holds the last 22 slices of one large nucleus.
 CEREBELLUM_NUCLEUS_PATH = os.path.join("cerebellum_fibsem_nucleus", "cerebellum_fibsem.h5")
+# This slab holds the end of one large nucleus.
 CEREBELLUM_NUCLEUS_VAL_Z = 200
 CEREBELLUM_NUCLEUS_IGNORE_LABEL = np.iinfo("uint32").max
-# Macrophage / A431 nuclei (<data>/macrophage_a431_nucleus, EMPIAR-13420): SBF-SEM volumes of macrophages and an A431
-# cell with one nucleus each (three in sbf_no_load; quick semantic MIB annotations), downscaled 4x in xy. The voxel
-# size is not stored; the nucleus extents suggest a z / xy anisotropy of about 2.5 after downscaling. The slices from
-# MACROPHAGE_NUCLEUS_VAL_Z of sbf_a431 validate; its nucleus ends at z 134 of 162, so the slab holds its last 20 slices.
 MACROPHAGE_NUCLEUS_ROOT = "macrophage_a431_nucleus"
 MACROPHAGE_NUCLEUS_Z_SCALE = 2.5
 MACROPHAGE_NUCLEUS_VAL_VOLUME = "sbf_a431"
+# The nucleus of sbf_a431 ends at z 134 of 162, so this slab holds its end.
 MACROPHAGE_NUCLEUS_VAL_Z = 115
 
-# WAE-Net nuclei (<data>/waenet_nucleus, written by build_waenet_nucleus.py in mito_nuc_figures/scripts). Dataset 1 is
-# a FIB-SEM stack of pancreatic carcinoid cells with all nuclei labeled (dataset_1.h5, the last WAENET_VAL_FRACTION of
-# z validates; one alignment seam between slices 180 and 181). Dataset 3 holds unregistered serial ssTEM sections of
-# one cell, trained as single images (dataset_3_{train,val}.h5, a contiguous block of sections validates). Datasets
-# 4-7 are single TEM images of lymphocytes and B cells in which only the central cell is labeled
-# (tem_{train,val}.h5): the loss is restricted to the central cell mask (cytoplasm and nucleus labels) dilated by
-# 10 px, all other pixels, including the unlabeled neighbour cells, carry WAENET_NUCLEUS_IGNORE_LABEL. Dataset 2 has no
-# nucleus labels. The 2D images are stored as stacks of 512 x 512 images and drawn as (1, 512, 512) patches.
+# In the WAE-Net TEM images only the central cell is labeled, so the loss ignores the other pixels.
 WAENET_VAL_FRACTION = 0.1
-
-# OpenOrganelle nuclei (<data>/openorganelle_nucleus_full/index.json, written by build_openorganelle_nucleus_full.py in
-# mito_nuc_figures/scripts): automatic nucleus segmentations of OpenOrganelle FIB-SEM volumes, isotropic 32-128 nm.
-# The near-exhaustive tissue volumes as full arrays (the torch-em loader caches only one 128^3 crop of several of
-# them) and the single-cell volumes (1-3 nuclei, all labeled) that are at least 128 px wide in-plane; the binary
-# single-cell labels are separated by connected components. The volumes with envelope or membrane labels, thin sperm
-# nuclei, ragged TEM tiles or a single nucleus in a huge volume are not used. The 'val' volume of the index validates.
 WAENET_NUCLEUS_IGNORE_LABEL = np.iinfo("uint32").max
 
 
@@ -3484,11 +3329,7 @@ def cellmap_nucleus_split_crops(input_path, split):
     return {side: sorted(paths) for side, paths in sorted(groups.items())}
 
 
-# CEM-MitoLab groups (source folders) that never train: every group whose name matches a mitochondria evaluation
-# dataset, so that no evaluation data can leak into training through MitoLab. MitoEM (Wei2020_MitoEM-H / -R), MitoEM v2
-# jurkat and macro (their OpenOrganelle source cells), DenseCell (Guay2020), Kasthuri (kasthuri2011), MitoSegEM
-# (segem2015), Parlakgul (Parlakgul2020), Perez (perez2014) and the hela_cell volume of the CEM-Mito-Benchmark (the
-# HeLa groups). Groups that match only training datasets (UroCell) still train.
+# The CEM-MitoLab groups whose names match a mitochondria evaluation dataset never train.
 MITOLAB_EXCLUDED_GROUPS = (
     "Wei2020_MitoEM-H", "Wei2020_MitoEM-R", "jrc_jurkat-1_openorganelle", "jrc_macrophage-2_openorganelle",
     "Guay2020_patient1", "kasthuri2011", "segem2015", "Hennies2020_AMST_HeLaBV2", "jrc_hela-1_openorganelle",
@@ -3721,8 +3562,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
 
     # 4. MICrONS pinky mitochondria (3D, ssTEM of the mouse visual cortex, 4x4x40 nm, manual instance labels)
-    # NOTE: The uint8 ids wrap at 255, so distinct mitochondria can share an id; the per-patch connected components
-    # of the label transform split the ones that are not connected.
+    # NOTE: The uint8 ids wrap at 255; the connected components split the ids that are not connected.
     if "microns_pinky_mito" in EM_MITO_DATASETS:
         pinky_path = os.path.join(input_path, "microns", "pinky", MICRONS_PINKY_MITO_FILE)
         for z in z_slices:
@@ -3768,9 +3608,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     "label_transform2": mito_label_trafo(
                         EM_MITO_MIN_SIZE_3D, sampling=(3.75, 1, 1), ignore_label=MISSING_RAW_IGNORE_LABEL
                     ),
-                    # Some slices hold regions of one constant value (e.g. saturated 254 in human z = 190) that still
-                    # carry labels; they become ignore. The test needs the stored intensities, so the raw is only
-                    # prepared here and normalized inside the transform.
+                    # Labels on constant raw (saturated 254 in human z = 190) become ignore; the transform normalizes.
                     "raw_transform": _prepare_identity,
                     "transform": partial(
                         _ignore_missing_raw_trafo, ignore_label=MISSING_RAW_IGNORE_LABEL, any_constant=True,
@@ -3833,8 +3671,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
 
     # 7. MitoEM v2 mossy (3D mitochondria in ssSEM of mossy fiber boutons in the mouse cerebellum, 8 x 8 x 30 nm)
-    # NOTE: Only the boutons are annotated: the raw comes from the MitoVerse copies, the labels carry the ignore label
-    # outside the bouton mask (see mitoemv2_mossy_label_path), and the loss ignores those voxels.
+    # NOTE: Only the boutons are annotated, so the loss ignores the voxels outside them.
     if "mitoemv2_mossy" in EM_MITO_DATASETS:
         han24_root = os.path.join(input_path, "mitoverse", "data", "han24")
         for volumes, ds_list, n_samples in [
@@ -3891,8 +3728,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
             )
 
     # 9. UroCell (3D mitochondria in FIB-SEM of the mouse urinary bladder, 16 nm isotropic, manual instance labels)
-    # NOTE: The volumes are 256 px in plane, so 256 x 256 patches are resized to 512 x 512 (the z / xy anisotropy of
-    # the resized patch is 2), as for the small EMNeuron volumes. The raw is stored as float64.
+    # NOTE: The volumes are 256 px in plane, so the patches are resized to 512 x 512.
     if "uro_cell" in EM_MITO_DATASETS:
         urocell_paths = [os.path.join(input_path, "uro_cell", name) for name in UROCELL_MITO_VOLUMES]
         for z in z_slices:
@@ -3948,8 +3784,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
             )
 
     # 11. Parlakgul liver (3D mitochondria in FIB-SEM of the mouse liver, 8 nm isotropic, proofread semantic labels)
-    # NOTE: The labels are stored as 0 / 255, so the sampler sees a single id before the connected components. The
-    # connected components merge a few touching mitochondria (2-7% of the objects).
+    # NOTE: The connected components merge a few touching mitochondria (2-7% of the objects).
     if "parlakgul_liver" in EM_MITO_DATASETS:
         parlakgul_paths = [os.path.join(input_path, box) for box in PARLAKGUL_LIVER_BOXES]
         for z in z_slices:
@@ -4003,8 +3838,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
 
     # 13. MitoVerse haberl18 (3D mitochondria in SBF-SEM of the mouse brain, CDeep3M, 10 x 10 x 24 nm, instance labels)
-    # NOTE: The volumes are 256 px in plane, so 256 x 256 patches are resized to 512 x 512 (the z / xy anisotropy of
-    # the resized patch is 24 / 5), as for UroCell.
+    # NOTE: The volumes are 256 px in plane, so the patches are resized to 512 x 512.
     if "mitoverse_haberl18" in EM_MITO_DATASETS:
         haberl18_root = os.path.join(input_path, "mitoverse", "data", "haberl18")
         for z in z_slices:
@@ -4034,8 +3868,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
 
     # 14. MitoVerse MICrONS phase 1 (3D mitochondria in ssTEM of the mouse visual cortex, 8 x 8 x 40 nm, proofread)
-    # NOTE: The labels carry the ignore label in the regions without image data (see
-    # mitoverse_missing_data_label_path), and the loss ignores those voxels.
+    # NOTE: The loss ignores the regions without image data.
     if "mitoverse_microns1" in EM_MITO_DATASETS:
         microns1_root = os.path.join(input_path, "mitoverse", "data", "turner22")
         raw_paths = [os.path.join(microns1_root, f"{volume}.zarr") for volume in MITOVERSE_MICRONS1_VOLUMES]
@@ -4088,8 +3921,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
 
     # 15. CellMap mitochondria (3D mitochondria in FIB-SEM crops of cells and tissues, 2-32 nm, manual labels)
-    # NOTE: Nuclei and all other structures are background. Each patch side group is one dataset; patches below 512 px
-    # are resized to 512 x 512, which gives the (isotropic) crops a z / xy anisotropy of 512 / side.
+    # NOTE: Each patch side group is one dataset; patches below 512 px are resized to 512 x 512.
     if "cellmap_mito" in EM_MITO_DATASETS:
         cellmap_groups = {split: cellmap_mito_split_crops(input_path, split) for split in ("train", "val")}
         for z in z_slices:
@@ -4126,8 +3958,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
 
     # 16. Human organoids mitochondria (3D, FIB-SEM of patient-derived colorectal cancer organoids, manual labels)
-    # NOTE: The labels are the neck watershed instances (HUMAN_ORGANOIDS_MITO_ROOT); the per-patch connected components
-    # keep touching instances apart. The large black alignment padding is handled by the blank slice sampler.
+    # NOTE: The labels are the precomputed neck watershed instances (HUMAN_ORGANOIDS_MITO_ROOT).
     if "human_organoids_mito" in EM_MITO_DATASETS:
         organoid_paths = [
             os.path.join(input_path, "human_organoids", "11380", "data", name) for name in HUMAN_ORGANOIDS_VOLUMES
@@ -4219,8 +4050,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
             )
 
     # 18. Brain PFIB-SEM mitochondria (3D mitochondria in PFIB-SEM of the mouse brain, 5 nm isotropic, expert labels)
-    # NOTE: The reference (2 us) and the registered noisy (0.5 us) stack train with the same labels; only the
-    # reference stack validates.
+    # NOTE: Both stacks train with the same labels; only the reference stack validates.
     if "brain_pfibsem_mito" in EM_MITO_DATASETS:
         brain_path = os.path.join(input_path, BRAIN_PFIBSEM_PATH)
         for z in z_slices:
@@ -4472,9 +4302,7 @@ def _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_tr
         groups, label_key, train_samples, ignore_label=None, pre_label_transform=None, weights=None,
         min_num_instances=1,
     ):
-        # The pre_label_transform (connected components by default) runs before the sampler, so the sampler counts the
-        # instances of a patch. The samples of a split are divided across the patch side groups by the summed weights
-        # of their volumes (*weights*, {path: weight}), by default one per volume, with at least one per volume.
+        # The samples are divided across the side groups by the weights of their volumes ({path: weight}).
         excluded = ["raw_transform", "label_transform2", "sampler", "pre_label_transform"]
         if pre_label_transform is None:
             pre_label_transform = connected_components(ignore_label)
@@ -4506,9 +4334,7 @@ def _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_tr
                     )
 
     def add_volume_datasets(volumes, train_samples, ignore_label=None, min_num_instances=1):
-        # *volumes* are (split, path, raw_key, label_key, roi, z_scale) tuples; the volumes of a split are grouped by
-        # patch side (from the in-plane size of their roi), keys and z_scale, and the samples are divided across the
-        # groups by their number of volumes, with at least one per volume.
+        # *volumes* are (split, path, raw_key, label_key, roi, z_scale) tuples.
         excluded = ["raw_transform", "label_transform2", "sampler", "pre_label_transform"]
         groups = {}
         for split, path, raw_key, label_key, roi, z_scale in volumes:
@@ -4582,10 +4408,8 @@ def _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_tr
             min_num_instances=EM_NUCLEUS_MIN_INSTANCES["cellmap_nucleus"],
         )
 
-    # 3. Human organoids nuclei (3D nuclei in FIB-SEM of a breast cancer spheroid and colorectal cancer organoids,
-    # manual labels)
-    # NOTE: The loss ignores label fragments and the entotic cell (HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL). The large
-    # black alignment padding is handled by the blank slice sampler.
+    # 3. Human organoids nuclei (3D nuclei in FIB-SEM of a spheroid and colorectal cancer organoids, manual labels)
+    # NOTE: The loss ignores label fragments and the entotic cell.
     if "human_organoids_nucleus" in EM_NUCLEUS_DATASETS:
         names = [name.replace("_bin2.h5", "") for name in HUMAN_ORGANOIDS_VOLUMES]
         raw_paths = [os.path.join(input_path, "human_organoids", "11380", "data", f"{name}_bin2.h5") for name in names]
@@ -4621,10 +4445,8 @@ def _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_tr
                     )
                 )
 
-    # 4. SXT INS-1E nuclei (3D nucleus of one cell per tomogram in soft X-ray tomography of INS-1E cells, 36.8-45.5 nm,
-    # semi-automatic labels)
-    # NOTE: The pre_label_transform maps the class labels to the nucleus and the exterior to SXT_NUCLEUS_IGNORE_LABEL,
-    # which the loss ignores, and labels the connected components before the sampler.
+    # 4. SXT INS-1E nuclei (3D nucleus of one cell per soft X-ray tomogram, 36.8-45.5 nm, semi-automatic labels)
+    # NOTE: The pre_label_transform maps the classes to the nucleus before the connected components.
     if "sxt_nucleus" in EM_NUCLEUS_DATASETS:
         sxt_groups = {split: sxt_nucleus_split_paths(input_path, split) for split in ("train", "val")}
         add_grouped_datasets(
@@ -4719,9 +4541,8 @@ def _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_tr
                     )
                 )
 
-    # 9. WAE-Net dataset 3 nuclei (2D nucleus in serial ssTEM sections of one interphase BON cell, manual labels) and
-    # 10. WAE-Net datasets 4-7 nuclei (2D nucleus of the central cell in TEM images of lymphocytes and B cells, manual
-    # labels; the loss ignores the pixels outside the central cell band, WAENET_NUCLEUS_IGNORE_LABEL)
+    # 9. WAE-Net dataset 3 nuclei (2D, serial ssTEM sections of one cell) and
+    # 10. WAE-Net datasets 4-7 nuclei (2D, TEM images of lymphocytes and B cells; only the central cell is labeled)
     for name, prefix in [("waenet_sstem_nucleus", "dataset_3"), ("waenet_tem_nucleus", "tem")]:
         if name not in EM_NUCLEUS_DATASETS:
             continue
@@ -4844,9 +4665,8 @@ def _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_tr
             EM_NUCLEUS_TRAIN_SAMPLES["perez_nucleus"],
         )
 
-    # 17. vEM nuclei (2D nuclei in array tomography SEM and 3D nuclei in FIB-SEM of cancer cells and tumor tissue,
-    # proofread NucleoNet predictions)
-    # NOTE: The loss ignores the unlabeled border band of the 2D images whose border nuclei were removed.
+    # 17. vEM nuclei (2D array tomography SEM and 3D FIB-SEM of cancer cells, proofread NucleoNet predictions)
+    # NOTE: The loss ignores the unlabeled border band of the 2D images.
     if "vem_nuclei" in EM_NUCLEUS_DATASETS:
         vem_root = os.path.join(input_path, VEM_NUCLEI_ROOT)
         vem_3d = [os.path.join(vem_root, f"id_{i}.h5") for i in VEM_NUCLEI_3D_IDS]

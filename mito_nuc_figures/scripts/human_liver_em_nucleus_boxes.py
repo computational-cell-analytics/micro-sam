@@ -1,32 +1,32 @@
 """Select, preview, download and downsample the human liver EM nucleus evaluation boxes.
 
-The nucleus labels are the authors' automated segmentation and only cover the hepatocyte nuclei in the upper part of
-the tissue, so the boxes are placed where nuclei are labeled (see human_liver_em_nucleus_map.py) and every box is
-checked visually before it is used. The modes:
+The nucleus labels are the automated segmentation of the authors. They only cover the hepatocyte nuclei in the upper
+part of the tissue. Thus, the boxes are placed where nuclei are labeled (see human_liver_em_nucleus_map.py). Every box
+gets a visual check before use. The modes:
 - 'select' scores 4096 x 4096 windows of BOX_DEPTH slices by the labeled nuclei in the sampled slices.
 - 'preview' renders a strided view (every PREVIEW_STRIDE-th row and column) of the raw and the nucleus mask of a
-  window, read with one small range request per raw row, to check it before the full download.
+  window. It reads one small range request per raw row, to check the window before the full download.
 - 'download' streams a box at full resolution slice by slice (resumable) into <output>/fullres.
 - 'finalize' downsamples the full resolution boxes 4x in xy and writes the evaluation boxes with nucleus instances.
 """
-import argparse
 import io
-import json
 import os
+import json
+import time
 import shutil
 import socket
-import time
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 
+import requests
 import numpy as np
-import matplotlib
+from PIL import Image
+from scipy import ndimage
+from skimage.segmentation import find_boundaries
 
+import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa
-import requests  # noqa
-from PIL import Image  # noqa
-from scipy import ndimage  # noqa
-from skimage.segmentation import find_boundaries  # noqa
 
 from figure_utils import DATA_ROOT, get_output_dir  # noqa
 
@@ -180,7 +180,7 @@ def read_raw_rows(z, x0, x1, y0, y1):
 def download_box(name, bbox, output):
     """Download the raw and the nucleus mask of a box slice by slice, then write them to <output>/fullres.
 
-    Every slice is saved on its own under a temporary name that is moved in place when complete, so that a failed or
+    Every slice is saved on its own under a temporary name that is moved in place when complete. Thus, a failed or
     requeued job only downloads the slices that are missing.
     """
     import zarr

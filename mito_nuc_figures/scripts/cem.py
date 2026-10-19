@@ -2,9 +2,9 @@
 import os
 from glob import glob
 
-import imageio.v3 as imageio
-import numpy as np
 import tifffile
+import numpy as np
+import imageio.v3 as imageio
 
 from figure_utils import DATA_ROOT, get_output_dir, save_image_grid, save_volume_figure, write_info
 

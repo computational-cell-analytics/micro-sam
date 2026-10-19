@@ -2,21 +2,25 @@
 
 They check that no unlabeled neighbouring nucleus enters the boxes.
 
-Only the nucleus of the central target cell is labeled in each volume. Each montage shows every ~16th z-slice of the box
-around the labeled nucleus (plus a margin), the labeled nucleus outlined in blue, and the part of the box outside the
-target cell mask (the 'membrane' label, a filled cell mask) tinted red: a nucleus inside a red area is unlabeled.
+Only the nucleus of the central target cell is labeled in each volume.
+Each montage shows every ~16th z-slice of the box around the labeled nucleus plus a margin. It marks:
+- the labeled nucleus with a blue outline.
+- the part of the box outside the target cell mask with a red tint.
+  The mask is the 'membrane' label, a filled cell mask.
+
+A nucleus inside a red area is unlabeled.
 """
-import argparse
-import glob
 import os
+import glob
+import argparse
 
 import h5py
 import numpy as np
-import matplotlib
+from skimage.segmentation import find_boundaries
 
+import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa
-from skimage.segmentation import find_boundaries  # noqa
 
 from figure_utils import DATA_ROOT, get_output_dir, normalize  # noqa
 

@@ -1,18 +1,18 @@
 """Render the mito / nucleus annotated crops of the CellMap Segmentation Challenge.
 
-The crops are read directly from the zip of the challenge data ('matched_res_no_pad'), which holds
-the EM volumes only for the regions covered by the 289 crops of the challenge manifest.
+The crops are read directly from the zip of the challenge data ('matched_res_no_pad').
+This zip holds the EM volumes only for the regions covered by the 289 crops of the challenge manifest.
 For each crop, the label scale level that matches an EM scale level is used (the finest one),
 following torch-em's '_download_cellmap_data'.
 """
-import argparse
-import json
 import os
+import json
 import zipfile
+import argparse
 
+import zarr
 import numpy as np
 import pandas as pd
-import zarr
 
 from figure_utils import DATA_ROOT, get_output_dir, save_image_grid, save_volume_figure, write_info
 

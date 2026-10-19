@@ -1,21 +1,21 @@
 """Write the BetaSeg nucleus training boxes.
 
 Only the nucleus of the central target cell is labeled in each volume. Each box is the bounding box of the labeled
-nucleus plus a margin. Neighbouring cells, which can bring unlabeled nuclei into the box (for example in high_c4 and
-low_c2, see betaseg_nucleus_check.py), are excluded from the loss: the labels carry IGNORE_LABEL outside the target
-cell mask (the 'membrane' label, a filled cell mask) and in the regions without image data.
+nucleus plus a margin. Neighbouring cells can bring unlabeled nuclei into the box (for example in high_c4 and low_c2,
+see betaseg_nucleus_check.py). The loss excludes them: the labels carry IGNORE_LABEL outside the target cell mask and
+in the regions without image data. The target cell mask is the 'membrane' label, a filled cell mask.
 """
-import argparse
+import os
 import glob
 import json
-import os
+import argparse
 
 import h5py
 import numpy as np
 from scipy import ndimage
 
-from betaseg_nucleus_boxes import nucleus_box
 from figure_utils import DATA_ROOT
+from betaseg_nucleus_boxes import nucleus_box
 
 
 IGNORE_LABEL = np.iinfo("uint32").max
