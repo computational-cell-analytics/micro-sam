@@ -139,7 +139,7 @@ tooltips = {
         "load_button": "Load the selected classifier and predict on the current image.",
         "export_dir": "Folder where the trained classifier is saved. The file name is generated automatically as <image>_<nclasses>classes_<date>_<time>_<hash>.joblib. Defaults to the current working directory.",  # noqa
         "export_button": "Save the current classifier into the selected folder.",
-        "label_names": "Your classes. Select a class to paint with it. Each label id that you paint or select in the layer controls gets a row. Names are saved with the exported classifier.",  # noqa
+        "label_names": "Your classes. Select a class to paint with it. Each label id that you paint or select in the layer controls gets a row. Names are saved with the exported classifier. The class colors replace the napari colormap of the annotations and prediction layers, so the napari colormap controls (e.g. shuffle colors) have no effect on them.",  # noqa
         "label_name_row": "Optional name for this class.",
         "class_select": "Paint with this class.",
         "class_color": "Change the color of this class in the annotations and the prediction.",

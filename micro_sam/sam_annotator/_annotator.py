@@ -1169,7 +1169,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             z = self._current_slice()
             data[z] = prediction[z]
             layer.data = data
-        self._refresh_label_widget()
+        # Each predicted class gets a class row, e.g. a class whose annotations were restored with napari's redo.
+        self._ensure_classes(rf.classes_)
 
     def _clear_annotations(self, apply_to_volume=True):
         # Remove the annotation scribbles and the prediction: the whole volume, or only the current

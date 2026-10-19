@@ -83,8 +83,6 @@ def _train_rf(
     return model
 
 
-# TODO add a gui element that shows the current label ids, how many objects are labeled, and that
-# enables naming them so that the user can keep track of what has been labeled
 class ObjectClassifier(_ClassifierBase):
     """GUI for the object classifier: trains a random forest on per-object SAM/SAM2 embedding features."""
 
