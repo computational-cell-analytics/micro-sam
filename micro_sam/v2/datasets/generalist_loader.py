@@ -3044,10 +3044,14 @@ HUMAN_ORGANOIDS_VAL_FRACTION = 0.1
 # The neck watershed instances of finetuning/v2/generalist/em_organelles/preprocess_mito_dataset.py.
 HUMAN_ORGANOIDS_MITO_ROOT = "human_organoids_mito"
 
-# ASEM volumes 61 and 64 are the in-domain evaluation volumes.
-ASEM_MITO_ROOT = os.path.join("asem", "mito_crops")
-ASEM_MITO_TRAIN_VOLUMES = ("46_z640-896_y0-1024_x1112-2136.zarr", "58_z152-408_y0-1000_x1480-2504.zarr")
-ASEM_MITO_SMALL_VOLUMES = ("2E_z1015-1215_y316-516_x294-494.zarr",)
+# The ASEM boxes (z0, z1, y0, y1, x0, x1) in raw voxels, cached by torch-em; 61 and 64 are evaluation volumes.
+ASEM_MITO_BOXES = {
+    "46": (640, 896, 0, 1024, 1112, 2136), "58": (152, 408, 0, 1000, 1480, 2504),
+    "61": (0, 700, 190, 730, 2630, 3380), "64": (400, 641, 326, 802, 2212, 2740),
+    "2E": (1015, 1215, 316, 516, 294, 494),
+}
+ASEM_MITO_TRAIN_VOLUMES = ("46", "58")
+ASEM_MITO_SMALL_VOLUMES = ("2E",)
 ASEM_MITO_TRAIN_ROI = np.s_[:224, :, :]
 ASEM_MITO_VAL_ROI = np.s_[224:, :, :]
 ASEM_MITO_SMALL_SIDE = 192
@@ -3056,11 +3060,6 @@ ASEM_MITO_SMALL_SIDE = 192
 BRAIN_PFIBSEM_PATH = os.path.join("brain_pfibsem", "brain_pfibsem.h5")
 BRAIN_PFIBSEM_TRAIN_ROI = np.s_[:144, :, :]
 BRAIN_PFIBSEM_VAL_ROI = np.s_[144:, :, :]
-
-# The official SNEMI split: z 70-99 is the test part.
-SNEMI_MITO_PATH = os.path.join("snemi_mito_stack", "snemi_mito.h5")
-SNEMI_MITO_TRAIN_ROI = np.s_[:50, :, :]
-SNEMI_MITO_VAL_ROI = np.s_[50:70, :, :]
 
 U2OS_FIBSEM_MITO_ROOT = os.path.join("u2os_fibsem", "1_Mitochondria", "1_Train_Mito")
 U2OS_FIBSEM_MITO_VAL_STEP = 9
@@ -3148,8 +3147,8 @@ EM_NUCLEUS_MIN_INSTANCES = {
 # These volumes never held that many nuclei in a patch, so they need one.
 EM_NUCLEUS_SPARSE_VOLUMES = {
     "cellmap_nucleus_crops/jrc_mus-liver-zon-2_crop367.zarr": 1, "janelia_nucleus/jrc_mus-nacc-2.zarr": 1,
-    "janelia_nucleus/jrc_mus-nacc-4.zarr": 1, "openorganelle_nucleus_full/jrc_cos7-11.zarr": 1,
-    "openorganelle_nucleus_full/jrc_hela-21.zarr": 1, "openorganelle_nucleus_full/aic_desmosome-3.zarr": 1,
+    "janelia_nucleus/jrc_mus-nacc-4.zarr": 1, "openorganelle_nucleus/jrc_cos7-11_64nm.zarr": 1,
+    "openorganelle_nucleus/jrc_hela-21.zarr": 1, "openorganelle_nucleus/aic_desmosome-3.zarr": 1,
     "vem_nuclei_nucleus/id_12.h5": 1,
 }
 
@@ -3194,7 +3193,7 @@ PLATYNEREIS_NUCLEI_Z_SCALE = 100 / 80
 TUMOR_SPHEROID_NUCLEI_VAL_SLICES = ("Au_01-vol_01-x_1300.h5", "Au_01-vol_01-z_0274.h5")
 TUMOR_SPHEROID_NUCLEI_IGNORE_LABEL = np.iinfo("uint32").max
 
-# The derived data of these datasets comes from build_new_nucleus_data.py in mito_nuc_figures/scripts.
+# finetuning/v2/generalist/em_organelles/preprocess_nucleus_dataset.py writes the derived data of these datasets.
 CARDIOMYOCYTE_NUCLEUS_ROOT = "cardiomyocyte_tem_nucleus"
 CARDIOMYOCYTE_NUCLEUS_N_VAL = 2
 # Only the 'train' crop has reference labels, so the 'annotation' crop is not used.
@@ -3221,6 +3220,16 @@ MACROPHAGE_NUCLEUS_VAL_Z = 115
 # In the WAE-Net TEM images only the central cell is labeled, so the loss ignores the other pixels.
 WAENET_VAL_FRACTION = 0.1
 WAENET_NUCLEUS_IGNORE_LABEL = np.iinfo("uint32").max
+
+# The OpenOrganelle nucleus volumes with the voxel size (nm) of their full torch-em arrays; None is the default cache.
+OPENORGANELLE_NUCLEUS_VOLUMES = {
+    "jrc_mus-pancreas-4": 128.0, "jrc_mus-skin-1": 128.0, "jrc_mus-hippocampus-1": 128.0, "jrc_mus-sc-zp104a": 96.0,
+    "jrc_mus-sc-zp105a": 96.0, "jrc_choroid-plexus-2": 64.0, "jrc_cos7-11": 64.0, "jrc_ctl-id8-3": 128.0,
+    "jrc_ctl-id8-4": 128.0, "jrc_ctl-id8-5": 128.0, "jrc_ccl81-covid-1": 64.0, "jrc_hela-21": None,
+    "aic_desmosome-3": None, "jrc_mus-thymus-1": None, "jrc_hum-airway-14953vc": None, "jrc_fly-acc-calyx-1": None,
+    "jrc_fly-fsb-1": None,
+}
+OPENORGANELLE_NUCLEUS_VAL_VOLUMES = ("jrc_mus-sc-zp105a",)
 
 
 def em_nucleus_patch_side(shape):
@@ -3305,13 +3314,16 @@ def openorganelle_nucleus_split_paths(input_path, split):
     The voxel counts weight the samples, so that the large tissue volumes are not outweighed by the many single-cell
     volumes with one to three nuclei.
     """
-    with open(os.path.join(input_path, "openorganelle_nucleus_full", "index.json")) as f:
-        volumes = [volume for volume in json.load(f) if volume["split"] == split]
+    root = os.path.join(input_path, "openorganelle_nucleus")
     groups, voxels = {}, {}
-    for volume in volumes:
-        path = os.path.join(input_path, volume["path"])
-        groups.setdefault(em_nucleus_patch_side(volume["shape"]), []).append(path)
-        voxels[path] = int(np.prod(volume["shape"]))
+    for name, voxel_size in OPENORGANELLE_NUCLEUS_VOLUMES.items():
+        if (name in OPENORGANELLE_NUCLEUS_VAL_VOLUMES) != (split == "val"):
+            continue
+        path = datasets.openorganelle_nucleus.get_openorganelle_nucleus_paths(root, [name], voxel_size=voxel_size)[0]
+        with open_file(path, "r") as f:
+            shape = f["labels"].shape
+        groups.setdefault(em_nucleus_patch_side(shape), []).append(path)
+        voxels[path] = int(np.prod(shape))
     return {side: sorted(paths) for side, paths in sorted(groups.items())}, voxels
 
 
@@ -3534,7 +3546,6 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
 
     # 3. Lucchi (3D mitochondria in FIB-SEM of the mouse hippocampus, 5 nm isotropic, manual semantic labels)
-    # NOTE: The sampler sees the semantic labels before the connected components, i.e. a single id.
     if "lucchi" in EM_MITO_DATASETS:
         for z in z_slices:
             lucchi_kwargs = {
@@ -3706,7 +3717,6 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
 
     # 8. ProbTEM (2D mitochondria in TEM of mouse skeletal muscle, 2560 x 2560, manual semantic labels)
-    # NOTE: The sampler sees the semantic labels before the connected components, i.e. a single id.
     if "probtem" in EM_MITO_DATASETS:
         probtem_kwargs = {
             "raw_key": "raw", "label_key": "labels", "patch_shape": patch_shape, "ndim": 2, "is_seg_dataset": True,
@@ -3997,15 +4007,20 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
 
     # 17. ASEM mitochondria (3D mitochondria in FIB-SEM of cultured cells, 4-5 nm isotropic, manual semantic labels)
-    # NOTE: The sampler sees the semantic labels before the connected components, i.e. a single id.
     if "asem_mito" in EM_MITO_DATASETS:
-        asem_paths = [os.path.join(input_path, ASEM_MITO_ROOT, name) for name in ASEM_MITO_TRAIN_VOLUMES]
-        small_paths = [os.path.join(input_path, ASEM_MITO_ROOT, name) for name in ASEM_MITO_SMALL_VOLUMES]
+        asem_paths, small_paths = [
+            datasets.asem.get_asem_paths(
+                os.path.join(input_path, "asem"), list(volumes), organelles="mito",
+                bounding_boxes={volume: ASEM_MITO_BOXES[volume] for volume in volumes},
+            )
+            for volumes in (ASEM_MITO_TRAIN_VOLUMES, ASEM_MITO_SMALL_VOLUMES)
+        ]
         resize = 512 / ASEM_MITO_SMALL_SIDE
         excluded = ["raw_transform", "label_transform2", "sampler"]
         for z in z_slices:
             asem_kwargs = {
-                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                "raw_key": "volumes/raw", "label_key": "volumes/labels/mito", "patch_shape": (z, *patch_shape),
+                "ndim": 3,
                 **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
                 "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D),
                 "pre_label_transform": _connected_components_pre_label_trafo,
@@ -4026,7 +4041,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
                 )
             small_kwargs = {
-                "raw_key": "raw", "label_key": "labels", "ndim": 3,
+                "raw_key": "volumes/raw", "label_key": "volumes/labels/mito", "ndim": 3,
                 "patch_shape": (z, ASEM_MITO_SMALL_SIDE, ASEM_MITO_SMALL_SIDE),
                 **{k: v for k, v in kwargs.items() if k not in excluded},
                 "raw_transform": _resize_raw_to_512,
@@ -4079,9 +4094,8 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
 
     # 19. SNEMI Mito (3D mitochondria in ssSEM of the mouse neocortex, SNEMI3D, 6 x 6 x 30 nm, manual binary masks)
-    # NOTE: The sampler sees the binary labels before the connected components, i.e. a single id.
     if "snemi_mito" in EM_MITO_DATASETS:
-        snemi_path = os.path.join(input_path, SNEMI_MITO_PATH)
+        snemi_path = datasets.snemi_mito.get_snemi_mito_data(os.path.join(input_path, "snemi_mito"), as_volume=True)
         for z in z_slices:
             snemi_kwargs = {
                 "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
@@ -4093,7 +4107,8 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 ),
             }
             for roi, ds_list, n_samples in [
-                (SNEMI_MITO_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["snemi_mito"]), (SNEMI_MITO_VAL_ROI, val_ds, 40),
+                (datasets.snemi_mito.VOLUME_ROIS["train"], train_ds, EM_MITO_TRAIN_SAMPLES["snemi_mito"]),
+                (datasets.snemi_mito.VOLUME_ROIS["val"], val_ds, 40),
             ]:
                 ds_list.append(
                     UniDataWrapper(
@@ -4106,7 +4121,6 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
 
     # 20. U2OS FIB-SEM mitochondria (2D mitochondria in single FIB-SEM slices of a U2-OS cell, manual binary masks)
-    # NOTE: The sampler sees the binary labels before the connected components, i.e. a single id.
     if "u2os_fibsem_mito" in EM_MITO_DATASETS:
         u2os_images = sorted(glob(os.path.join(input_path, U2OS_FIBSEM_MITO_ROOT, "images_tif", "*.tif")))
         u2os_labels = sorted(glob(os.path.join(input_path, U2OS_FIBSEM_MITO_ROOT, "labels_tif", "*.tif")))
@@ -4136,7 +4150,6 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
             )
 
     # 21. HeLa STARD3 mitochondria (3D mitochondria in FIB-SEM of HeLa cells, 5-8 nm, manual binary masks in the ROI)
-    # NOTE: The sampler sees the binary labels before the connected components, i.e. a single id.
     if "hela_stard3_mito" in EM_MITO_DATASETS:
         hela_paths = [os.path.join(input_path, "hela_stard3", f"{volume}.h5") for volume in HELA_STARD3_VOLUMES]
         train_rois = [
@@ -4196,7 +4209,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
 
     # 23. AIVE mitochondria (3D mitochondria in FIB-SEM of cells and muscle tissue, 6.5 x 6.5 x 10 nm, semantic labels)
-    # NOTE: The mitochondria class is taken before the sampler, i.e. the sampler sees a single id.
+    # NOTE: The mitochondria class is taken before the connected components.
     if "aive_mito" in EM_MITO_DATASETS:
         aive_paths = [os.path.join(input_path, "aive", name) for name in AIVE_MITO_VAL_STARTS]
         for z in z_slices:

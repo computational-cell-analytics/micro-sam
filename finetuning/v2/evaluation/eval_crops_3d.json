@@ -1661,7 +1661,7 @@
   },
   "donglai_wei_mito": {
    "crop_shape": [32, 512, 512],
-   "note": "Mitochondria panel (out-of-domain): internal data from Donglai Wei (not public), the MICrONS phase 1 volume below the tuning slab (the first 150 slices). Only a fraction of the mitochondria is annotated, so unlabeled mitochondria in the crops count as false positives. 16 of 1216 tiles are kept (at most 16 per volume, the ones with the most objects), holding 46-54 mitochondria.",
+   "note": "Mitochondria panel (out-of-domain): internal data from Donglai Wei (not public), the MICrONS phase 1 volume below the tuning slab (the first 150 slices). The labels are dense in the crops (checked by eye). 16 of 1216 tiles are kept (at most 16 per volume, the ones with the most objects), holding 46-54 mitochondria.",
    "starts": {
     "microns1_im.h5": [
      [150, 512, 1024],
@@ -1812,6 +1812,94 @@
      [160, 0, 0],
      [192, 0, 0],
      [224, 0, 0]
+    ]
+   }
+  },
+  "nucmm_zebrafish": {
+   "crop_shape": [64, 64, 64],
+   "note": "Nucleus panel (out-of-domain): the scored NucMM-Z volumes (ssEM at about 0.5 um, 64^3), each crop a whole volume; manual instances. 4 of 5 tiles are kept (at most 16 per volume, the ones with the most objects), holding 56-612 nuclei.",
+   "starts": {
+    "img_0000_0576_0768.h5": [
+     [0, 0, 0]
+    ],
+    "img_0000_0704_0832.h5": [
+     [0, 0, 0]
+    ],
+    "img_0064_0384_0832.h5": [],
+    "img_0064_0448_0960.h5": [
+     [0, 0, 0]
+    ],
+    "img_0064_0576_0640.h5": [
+     [0, 0, 0]
+    ]
+   }
+  },
+  "nucmm_mouse": {
+   "crop_shape": [32, 192, 192],
+   "note": "Nucleus panel (out-of-domain): the four NucMM-M val volumes (X-ray micro-CT at 0.72 um, 192^3, not EM); manual instances. 20 of 24 tiles are kept (at most 16 per volume, the ones with the most objects), holding 8-70 nuclei.",
+   "starts": {
+    "img_000_200_576.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0]
+    ],
+    "img_000_604_200.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0]
+    ],
+    "img_508_200_200.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0]
+    ],
+    "img_508_604_576.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0]
+    ]
+   }
+  },
+  "aive_nucleus": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel (out-of-domain): AIVE datasets 2 and 3 below the tuning slab (the first 40 slices), one nucleus per volume with the nucleoli folded in. 25 of 26 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-1 nuclei.",
+   "starts": {
+    "aive_dataset2.h5": [
+     [40, 0, 0],
+     [72, 0, 0],
+     [72, 0, 512],
+     [104, 0, 0],
+     [104, 0, 512],
+     [136, 0, 0],
+     [136, 0, 512],
+     [168, 0, 0],
+     [168, 0, 512],
+     [200, 0, 0],
+     [200, 0, 512],
+     [232, 0, 0],
+     [232, 0, 512],
+     [264, 0, 0],
+     [264, 0, 512]
+    ],
+    "aive_dataset3.h5": [
+     [40, 0, 0],
+     [40, 0, 512],
+     [72, 0, 0],
+     [72, 0, 512],
+     [104, 0, 0],
+     [104, 0, 512],
+     [136, 0, 0],
+     [136, 0, 512],
+     [168, 0, 0],
+     [168, 0, 512]
     ]
    }
   }

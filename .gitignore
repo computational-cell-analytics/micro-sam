@@ -216,3 +216,6 @@ embeddings/
 
 # Local handoff notes.
 HANDOFF*.md
+
+# Curation figures and notes of the mito / nucleus EM generalists (kept locally).
+mito_nuc_figures/

@@ -41,7 +41,7 @@ from micro_sam.v2.datasets.generalist_loader import (
     dsb_fluorescence_training_paths, synapsenet_roi, synapsenet_tomograms, _train_val_test_split,
     CELLMAP_NUCLEUS_VAL_CROPS, PLATYNEREIS_NUCLEI_IGNORE_LABEL, PLATYNEREIS_NUCLEI_TEST_IDS,
     PLATYNEREIS_NUCLEI_VAL_IDS,
-    _compute_platy_rois, SNEMI_MITO_PATH, SNEMI_MITO_VAL_ROI,
+    _compute_platy_rois, ASEM_MITO_BOXES,
 )
 
 
@@ -587,27 +587,20 @@ EM_ROIS = {
     "lucchi": {"test": np.s_[:, :, :], "val": np.s_[140:, :, :]},
     # The SNEMI Mito stack: the mitochondria generalist trains on its train split (z < 50) and validates on its valid
     # split (z 50-69), which tunes; the test split (z 70-99) is scored.
-    "snemi_mito": {"test": np.s_[70:, :, :], "val": SNEMI_MITO_VAL_ROI},
+    "snemi_mito": {"test": datasets.snemi_mito.VOLUME_ROIS["test"], "val": datasets.snemi_mito.VOLUME_ROIS["val"]},
 }
 
 # The CEM-Mito-Benchmark volumes in the torch-em benchmark numbering (7 is the 2d TEM benchmark).
 MITOLAB_BENCHMARK_IDS = {name: i for i, name in enumerate(MITOLAB_VOLUMES, start=1)}
 MITOLAB_TEM_BENCHMARK_ID = 7
 
-# The ASEM crops; the generalist trains on 46, 58 and 2E, so only 61 and 64 are scored.
-ASEM_MITO_CROPS = {
-    "46": (640, 896, 0, 1024, 1112, 2136),
-    "58": (152, 408, 0, 1000, 1480, 2504),
-    "61": (0, 700, 190, 730, 2630, 3380),
-    "64": (400, 641, 326, 802, 2212, 2740),
-    "2E": (1015, 1215, 316, 516, 294, 494),
-}
+# The generalist trains on the ASEM boxes 46, 58 and 2E, so only 61 and 64 are scored.
 ASEM_MITO_EVAL_VOLUMES = ("61", "64")
 
 
 def asem_crop_name(volume_id):
-    """The file name of one ASEM mito crop in <data>/asem/mito_crops."""
-    z0, z1, y0, y1, x0, x1 = ASEM_MITO_CROPS[volume_id]
+    """The file name of the torch-em store of one ASEM box (see ASEM_MITO_BOXES)."""
+    z0, z1, y0, y1, x0, x1 = ASEM_MITO_BOXES[volume_id]
     return f"{volume_id}_z{z0}-{z1}_y{y0}-{y1}_x{x0}-{x1}.zarr"
 
 
@@ -903,53 +896,6 @@ def _cmito_dauer_manual_patches(data_root: str, download: bool) -> List[str]:
             os.replace(tmp_path, out_path)
         paths.append(out_path)
     return paths
-
-
-def _asem_mito_crop(data_root: str, volume_id: str, download: bool) -> str:
-    """The path of one ASEM mito crop (see ASEM_MITO_CROPS), streamed from s3://asem-project if it is missing."""
-    path = os.path.join(data_root, "asem", "mito_crops", asem_crop_name(volume_id))
-    if os.path.exists(path):
-        return path
-    if not download:
-        raise FileNotFoundError(f"'{path}' does not exist. Pass download=True to stream it from s3://asem-project.")
-
-    import fsspec
-    import s3fs
-    import zarr
-    from zarr.codecs import BloscCodec
-
-    fs = s3fs.S3FileSystem(anon=True)
-    remote = f"asem-project/datasets/{volume_id}/{volume_id}.zarr/volumes"
-
-    def open_remote(key):
-        array = zarr.open_array(fsspec.get_mapper(f"s3://{remote}/{key}", anon=True), mode="r", zarr_format=2)
-        return array, json.loads(fs.cat(f"{remote}/{key}/.zattrs"))
-
-    raw, raw_attrs = open_remote("raw")
-    labels, label_attrs = open_remote("labels/mito")
-    resolution = np.array(raw_attrs["resolution"])
-    # The labels can be a crop of the raw volume, placed by their offset in nm.
-    oz, oy, ox = (np.array(label_attrs["offset"]) - np.array(raw_attrs["offset"])) // resolution
-    z0, z1, y0, y1, x0, x1 = ASEM_MITO_CROPS[volume_id]
-    data = {
-        "raw": np.asarray(raw[z0:z1, y0:y1, x0:x1]),
-        "labels": np.asarray(labels[z0 - oz:z1 - oz, y0 - oy:y1 - oy, x0 - ox:x1 - ox]),
-    }
-    assert data["raw"].shape == data["labels"].shape, {key: value.shape for key, value in data.items()}
-
-    tmp_path = f"{path}.{os.getpid()}.tmp"
-    group = zarr.open_group(tmp_path, mode="w")
-    for key, shuffle in (("raw", "shuffle"), ("labels", "bitshuffle")):
-        array = group.create_array(
-            key, shape=data[key].shape, chunks=(64, 256, 256), dtype=data[key].dtype,
-            compressors=BloscCodec(cname="zstd", clevel=6, shuffle=shuffle),
-        )
-        array[:] = data[key]
-    group.attrs["source"] = f"s3://{remote}/(raw, labels/mito)"
-    group.attrs["crop_zyx_raw_voxels"] = list(ASEM_MITO_CROPS[volume_id])
-    group.attrs["resolution_nm"] = resolution.tolist()
-    os.replace(tmp_path, path)
-    return path
 
 
 # Channels the 2d light microscopy models see, as indices into the stored channel-last image. A single index gives
@@ -1956,7 +1902,7 @@ def _get_3d_em_data_paths(
     if dataset_name == "snemi_mito":
         # Mitochondria. The stacked SNEMI Mito slices, scored and tuned in the regions of EM_ROIS; 'load_volume' turns
         # the binary labels into instances.
-        path = os.path.join(p, SNEMI_MITO_PATH)
+        path = datasets.snemi_mito.get_snemi_mito_data(os.path.join(p, "snemi_mito"), download=download, as_volume=True)
         return [path], [path], "raw", "labels"
 
     if dataset_name == "kasthuri":
@@ -2129,8 +2075,11 @@ def _get_3d_em_data_paths(
     if dataset_name == "asem_mito":
         # The ASEM evaluation crops (64 and the 61 hold-out block), scored and tuned in the regions of
         # EM_VOLUME_ROIS. Semantic labels, which 'load_volume' turns into instances.
-        paths = [_asem_mito_crop(p, volume_id, download) for volume_id in ASEM_MITO_EVAL_VOLUMES]
-        return paths, paths, "raw", "labels"
+        paths = datasets.asem.get_asem_paths(
+            os.path.join(p, "asem"), list(ASEM_MITO_EVAL_VOLUMES), download=download, organelles="mito",
+            bounding_boxes={volume: ASEM_MITO_BOXES[volume] for volume in ASEM_MITO_EVAL_VOLUMES},
+        )
+        return paths, paths, "volumes/raw", "volumes/labels/mito"
 
     if dataset_name == "isbi2012":
         path = em.isbi2012.get_isbi_paths(path=os.path.join(p, "isbi2012"), download=download)
