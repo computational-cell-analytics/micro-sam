@@ -117,7 +117,7 @@ def main():
     parser.add_argument("--n_iterations", type=int, default=None)
     parser.add_argument("--model_type", default="hvit_t", choices=["hvit_t", "hvit_s", "hvit_b", "hvit_l"])
     parser.add_argument("--batch_size", type=int, default=1)
-    parser.add_argument("--dataset_choice", default="all", choices=["lm", "em", "hp", "em_organelles", "all"])
+    parser.add_argument("--dataset_choice", default="all", choices=["lm", "em", "hp", "all"])
     parser.add_argument("--compile", action="store_true", help="Compile the encoder, the decoder and the loss.")
     parser.add_argument(
         "--boundary_dice_weight", type=float, default=0.5,

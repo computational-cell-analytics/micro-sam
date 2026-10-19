@@ -2,6 +2,7 @@ import os
 import re
 import json
 import random
+import shutil
 from glob import glob
 from functools import partial
 
@@ -31,13 +32,13 @@ from ..transforms.labels import (
     _em_cell_label_trafo, _joint_em_cell_label_trafo, _background_id_label_trafo,
     _plantseg_label_trafo, _astih_pre_label_transform, _instance_labels,
     _ignore_missing_raw_trafo, _ignore_unlabelled_blobs_trafo, _labels_to_uint32, _drop_oversized_label_trafo,
-    _compact_label_ids,
+    _compact_label_ids, _ignore_label_trafo, _connected_components_pre_label_trafo,
     _JointLabelTransform, _JointGeodesicLabelTransform,
 )
 
-# The training domains. 'all' is LM + EM + HP; the mito and nucleus EM generalist ('em_organelles') is a separate
-# domain and is not part of 'all'.
-DATASET_CHOICES = ("lm", "em", "hp", "em_organelles", "all")
+# The training domains. 'all' is LM + EM + HP; the mitochondria EM generalist ('em_mito') and the nucleus EM
+# generalist ('em_nucleus') are separate domains and are not part of 'all'.
+DATASET_CHOICES = ("lm", "em", "hp", "em_mito", "em_nucleus", "all")
 
 # Cap on validation samples drawn per dataset, to keep the per-epoch validation pass cheap.
 # Each access is a random crop (see UniDataWrapper.max_samples), so this is N random samples.
@@ -194,6 +195,34 @@ def _resize_then_em_label_trafo(y, em_trafo_fn):
     """Resize small label patch to 512×512 then apply the EM label transform."""
     y = _resize_to_512(y, is_label=True)
     return em_trafo_fn(y)
+
+
+def _compute_platy_rois(root, sample_ids, ignore_label, file_template, label_key, cache_prefix="_roi_cache"):
+    """The bounding box of the valid (not ignore_label) voxels of each Platynereis volume, the only region that trains.
+
+    The boxes are cached in a json file in *root*, named by *cache_prefix* and the sample ids.
+    """
+    cache_path = os.path.join(root, f"{cache_prefix}_{'_'.join(map(str, sample_ids))}.json")
+    if os.path.exists(cache_path):
+        with open(cache_path) as f:
+            data = json.load(f)
+        return {int(k): tuple(slice(s[0], s[1]) for s in v) for k, v in data.items()}
+
+    rois = {}
+    for sample_id in sample_ids:
+        path = os.path.join(root, (file_template % sample_id))
+        with open_file(path, "r") as f:
+            labels = f[label_key][:]
+        valid_coordinates = np.where(labels != ignore_label)
+        roi = tuple(slice(int(coord.min()), int(coord.max()) + 1) for coord in valid_coordinates)
+        rois[sample_id] = roi
+
+    tmp_path = cache_path + f".tmp{os.getpid()}"
+    with open(tmp_path, "w") as f:
+        json.dump({str(k): [(s.start, s.stop) for s in v] for k, v in rois.items()}, f)
+    os.replace(tmp_path, cache_path)
+
+    return rois
 
 
 def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
@@ -645,7 +674,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         bd_train_l.extend(train_l)
         bd_val_l.extend(val_l)
     for raws, labs, ds_list, n_samples in [
-        (bd_train_r, bd_train_l, train_ds, 200), (bd_val_r, bd_val_l, val_ds, 50)
+        (bd_train_r, bd_train_l, train_ds, 200), (bd_val_r, bd_val_l, val_ds, 50),
     ]:
         ds_list.append(
             UniDataWrapper(
@@ -711,7 +740,7 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         )
         (cb_train_r, cb_val_r, _), (cb_train_l, cb_val_l, _) = _train_val_test_split(cellbindb_raw, cellbindb_labels)
         for raws, labs, ds_list, n_samples in [
-            (cb_train_r, cb_train_l, train_ds, 150), (cb_val_r, cb_val_l, val_ds, 30)
+            (cb_train_r, cb_train_l, train_ds, 150), (cb_val_r, cb_val_l, val_ds, 30),
         ]:
             ds_list.append(
                 UniDataWrapper(
@@ -1545,29 +1574,6 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
         ))
 
     # 3. Platynereis (cell segmentation in vEM)
-    def _compute_platy_rois(root, sample_ids, ignore_label, file_template, label_key):
-        cache_path = os.path.join(root, f"_roi_cache_{'_'.join(map(str, sample_ids))}.json")
-        if os.path.exists(cache_path):
-            with open(cache_path) as f:
-                data = json.load(f)
-            return {int(k): tuple(slice(s[0], s[1]) for s in v) for k, v in data.items()}
-
-        rois = {}
-        for sample_id in sample_ids:
-            path = os.path.join(root, (file_template % sample_id))
-            with open_file(path, "r") as f:
-                labels = f[label_key][:]
-            valid_coordinates = np.where(labels != ignore_label)
-            roi = tuple(slice(int(coord.min()), int(coord.max()) + 1) for coord in valid_coordinates)
-            rois[sample_id] = roi
-
-        tmp_path = cache_path + f".tmp{os.getpid()}"
-        with open(tmp_path, "w") as f:
-            json.dump({str(k): [(s.start, s.stop) for s in v] for k, v in rois.items()}, f)
-        os.replace(tmp_path, cache_path)
-
-        return rois
-
     platy_root = os.path.join(input_path, "platynereis")
     platy_cell_template = "membrane/train_data_membrane_%02i.n5"
     label_key = "volumes/labels/segmentation/s1"
@@ -2897,7 +2903,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     )
     dsb_hp_kwargs = {"patch_shape": patch_shape, "is_seg_dataset": False, "raw_key": None, "label_key": None, **kwargs}
     for raws, labs, ds_list, n_samples in [
-        (dsb_hp_train_r, dsb_hp_train_l, train_ds, 100), (dsb_hp_val_r, dsb_hp_val_l, val_ds, 25)
+        (dsb_hp_train_r, dsb_hp_train_l, train_ds, 100), (dsb_hp_val_r, dsb_hp_val_l, val_ds, 25),
     ]:
         ds_list.append(
             UniDataWrapper(
@@ -2915,7 +2921,7 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     (cb_he_train_r, cb_he_val_r, _), (cb_he_train_l, cb_he_val_l, _) = _train_val_test_split(cb_he_raw, cb_he_labels)
     cb_he_kwargs = {"patch_shape": patch_shape, "is_seg_dataset": False, "ndim": 2, **kwargs}
     for raws, labs, ds_list, n_samples in [
-        (cb_he_train_r, cb_he_train_l, train_ds, 150), (cb_he_val_r, cb_he_val_l, val_ds, 30)
+        (cb_he_train_r, cb_he_train_l, train_ds, 150), (cb_he_val_r, cb_he_val_l, val_ds, 30),
     ]:
         ds_list.append(
             UniDataWrapper(
@@ -2928,37 +2934,569 @@ def _get_hp_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     return train_ds, val_ds
 
 
-# The datasets of the mito and nucleus EM generalist ('em_organelles'). Each name enables one block in
-# _get_em_organelles_datasets.
-EM_ORGANELLES_DATASETS = ("mitolab", "cmito", "densecell_mito")
+# The datasets of the mitochondria EM generalist ('em_mito'). Each name enables one block in
+# _get_em_mito_datasets.
+EM_MITO_DATASETS = (
+    "mitolab", "densecell_mito", "lucchi", "microns_pinky_mito", "mitoem", "mitoemv2", "mitoemv2_mossy", "probtem",
+    "uro_cell", "vnc", "mitoverse_xiao18", "mitoverse_haberl18", "mitoverse_microns1",
+    "cellmap_mito", "human_organoids_mito", "asem_mito", "brain_pfibsem_mito", "snemi_mito", "u2os_fibsem_mito",
+    "hela_stard3_mito", "parlakgul_fasting_liver_mito", "aive_mito", "mito_segem",
+)
 
-# Objects below this size (in pixels / voxels of the training patch) are dropped from the organelle targets.
-EM_ORGANELLES_MIN_SIZE = 25
-EM_ORGANELLES_MIN_SIZE_3D = 50
+# Objects below this size (in pixels / voxels of the training patch) are dropped from the mitochondria targets.
+EM_MITO_MIN_SIZE = 25
+EM_MITO_MIN_SIZE_3D = 50
 
-# Cmito: one cached 128 x 1024 x 1024 box per C. elegans stage (written by torch-em's cmito loader, l3 by voxel index
-# because of the l3 bounding box conversion in cmito.py), with the z / xy anisotropy of the stage. The exact boxes are
-# recorded in mito_nuc_figures/mito_only/cmito/info.json. The last 16 slices of each box validate.
-CMITO_BOXES = {
-    "l1": ("l1_ceb79c8268d7.zarr", 50 / 5.12),
-    "l2": ("l2_2ea67de84d7e.zarr", 30 / 8),
-    "l3": ("l3_voxels_13ca91605fde.zarr", 50 / 6.144),
-    "adult": ("adult_dba9f64835ae.zarr", 30 / 16),
-    "dauer": ("dauer_eee06de11b55.zarr", 50 / 8),
+# The training samples per epoch of the mitochondria datasets (per source; summed over the z groups). A 3D sample is one
+# patch and one iteration: 200 x sqrt(training voxels / 250M), clipped to [200, 600], so larger sources get more but
+# sublinearly. A 2D sample is one patch: 2800 patches are 200 iterations at the 2D batch of hvit_t (14). The tiny
+# sources get about 7 passes per epoch instead, as the small 3D sources: VNC and U2OS (about 64 and 180 patches of
+# 512 x 512), haberl18 (20 x 256 x 256, 2 patches) and DenseCell (35 x 800 x 800, 7 patches). CellMap gets more than
+# the cap for its 115 crops of many cell types and tissues. CEM-MitoLab draws every training tile once per epoch. The
+# brain PFIB-SEM noisy stack repeats the reference stack, so the two share one budget.
+EM_MITO_TRAIN_SAMPLES = {
+    "densecell_mito": 50, "lucchi": 200, "microns_pinky_mito": 240, "mitoem_human": 600, "mitoem_rat": 600,
+    "mitoemv2_beta": 515, "mitoemv2_jurkat": 200, "mitoemv2_macro": 207, "mitoemv2_podo": 207, "mitoemv2_sperm": 254,
+    "mitoemv2_stem": 200, "mitoemv2_mossy": 478, "probtem": 2800, "uro_cell": 200, "vnc": 450,
+    "mitoverse_xiao18": 200, "mitoverse_haberl18": 14, "mitoverse_microns1": 200, "cellmap_mito": 800,
+    "human_organoids_mito": 600, "asem_mito": 225, "asem_mito_small": 50, "brain_pfibsem_reference": 150,
+    "brain_pfibsem_noisy": 50, "snemi_mito": 200, "u2os_fibsem_mito": 1260, "hela_stard3_mito": 446,
+    "parlakgul_fasting_liver_mito": 205, "aive_mito": 600, "mito_segem": 200,
 }
-CMITO_TRAIN_ROI = np.s_[:112, :, :]
-CMITO_VAL_ROI = np.s_[112:, :, :]
+# The CEM-MitoLab validation images per group: one group holds 720 of the 1264 validation tiles otherwise.
+MITOLAB_VAL_IMAGES_PER_GROUP = 50
+
+# The sampler counts the connected components of a patch above the min size, without the background (0) and ignore
+# labels. A patch needs EM_MITO_MIN_INSTANCES of them; CEM-MitoLab and CellMap need one, since many MitoLab tiles hold
+# fewer than three mitochondria (a tile that fails is never drawn) and most 200^3 CellMap crops hold 0-1 per patch.
+EM_MITO_MIN_INSTANCES = 3
+# The volumes (by file name) where fewer than half of 40 random patches held three mitochondria, with the minimum that
+# at least half of them reach (1 if none). The measurement used 14-slice patches.
+EM_MITO_SPARSE_VOLUMES = {
+    "me2-macro_train01.n5": 1, "me2-jurkat_train01.n5": 2, "pos0.zarr": 2, "fib1-1-0-3.h5": 2,
+    "x_0.h5": 2, "x_7.h5": 2, "x_9.h5": 2, "x_13.h5": 2, "x_17.h5": 2,
+    "stard3.h5": 1, "1858_mito_80954b8a9027.zarr": 1, "8970_mito_b68e28ee1a3e.zarr": 1,
+    "aive_dataset1.h5": 1, "aive_dataset2.h5": 1, "aive_dataset3.h5": 1,
+}
+
+# The validation regions of the 3D datasets hold at least 14 slices, the deepest patch of the training configs (z = 14
+# for hvit_t and hvit_s); torch-em zero-pads shallower regions in z, which would put blank planes into the patches.
 
 # DenseCell mitochondria use the same split as the DenseCell cell instances in the EM generalist: the train volume
 # trains on z < 35 and validates on z >= 35.
 DENSECELL_TRAIN_ROI = np.s_[:35, :, :]
 DENSECELL_VAL_ROI = np.s_[35:, :, :]
 
-# CEM-MitoLab groups (source folders) that never train. Candidates, to add once their source dataset is assigned to
-# evaluation: Wei2020_MitoEM-H, Wei2020_MitoEM-R (MitoEM), UroCell, kasthuri2011, CREMI, the OpenOrganelle cells
-# (jrc_hela-2_openorganelle, jrc_hela-3_openorganelle, jrc_jurkat-1_openorganelle, jrc_macrophage-2_openorganelle),
-# perez2014 and Guay2020_patient1 (likely the DenseCell source).
-MITOLAB_EXCLUDED_GROUPS = ()
+# Lucchi: the train volume trains on z < 140 and validates on z >= 140, the test volume is the evaluation volume.
+# The CEM-Mito-Benchmark 'lucchi_pp' is the Lucchi train volume, so it is not evaluated.
+LUCCHI_TRAIN_ROI = np.s_[:140, :, :]
+LUCCHI_VAL_ROI = np.s_[140:, :, :]
+
+# MICrONS pinky: only the stitched volume vol19-vol34 is densely annotated for mitochondria; the '_realigned' copy is
+# the same annotation re-registered, and the other pinky volumes label the mitochondria of a few cells only.
+MICRONS_PINKY_MITO_FILE = "pinky_stitched_vol19-vol34.h5"
+MICRONS_PINKY_MITO_TRAIN_ROI = np.s_[:86, :, :]
+MICRONS_PINKY_MITO_VAL_ROI = np.s_[86:, :, :]
+
+# MitoEM: only the train volumes of both samples train (z < 360) and validate (z >= 360). The val volumes are the
+# evaluation volumes, and the test volumes have no labels.
+MITOEM_SAMPLES = ("human", "rat")
+MITOEM_TRAIN_ROI = np.s_[:360, :, :]
+MITOEM_VAL_ROI = np.s_[360:, :, :]
+
+# MitoEM v2: the official train volumes train and the official val volumes validate (the converted n5 copies in
+# <data>/mitoemv2/n5_data); the test volumes are the evaluation volumes. The value is the z / xy anisotropy. pyra is
+# left out: its crops are regions of MitoEM-H, which trains and evaluates above. The jurkat val volume
+# (me2-jurkat_train02) has labels that do not match its raw data, so jurkat validates on the last slices of its train
+# volume instead (MITOEMV2_JURKAT_*_ROI).
+MITOEMV2_DATASETS = {"beta": 1, "jurkat": 1, "macro": 1, "podo": 1, "sperm": 1, "stem": 30 / 8}
+MITOEMV2_JURKAT_TRAIN_ROI = np.s_[:230, :, :]
+MITOEMV2_JURKAT_VAL_ROI = np.s_[230:, :, :]
+
+# MitoEM v2 mossy: only the mitochondria inside the mossy fiber boutons are annotated. The bouton mask comes with the
+# MitoVerse copies of these volumes (<data>/mitoverse/data/han24), whose labels are identical to the MitoEM v2 ones:
+# the MitoEM v2 samples are mapped to the MitoVerse volumes below. Outside the boutons the loss is ignored.
+MITOEMV2_MOSSY_TRAIN_VOLUMES = {"me2-mossy_train01": "neg0", "me2-mossy_train02": "pos0"}
+MITOEMV2_MOSSY_VAL_VOLUMES = {"me2-mossy_train03": "pos2"}
+MITOEMV2_MOSSY_IGNORE_LABEL = np.iinfo("uint32").max
+
+# ProbTEM: the processed h5 files in <data>/probtem_full/processed (read directly: the <data>/probtem copy is
+# incomplete). A seeded 3 of the 21 train images validate (the evaluation tunes on them as well); the 6 test images
+# are the evaluation images.
+PROBTEM_ROOT = os.path.join("probtem_full", "processed")
+PROBTEM_N_VAL = 3
+
+# UroCell: the 5 volumes (256^3, 16 nm isotropic) with mitochondria labels; each trains on z < 224 and validates on
+# the rest. The other 3 volumes have no mitochondria labels.
+UROCELL_MITO_VOLUMES = ["fib1-0-0-0.h5", "fib1-1-0-3.h5", "fib1-3-2-1.h5", "fib1-3-3-0.h5", "fib1-4-3-0.h5"]
+UROCELL_TRAIN_ROI = np.s_[:224, :, :]
+UROCELL_VAL_ROI = np.s_[224:, :, :]
+
+# VNC: only the train stack (20 slices) is labeled, the test stack has no labels. z < 16 trains and z >= 16 validates;
+# the 4-slice validation slab does not fit a 3d patch, so VNC trains in the 2d group on single slices.
+VNC_TRAIN_ROI = np.s_[:16, :, :]
+VNC_VAL_ROI = np.s_[16:, :, :]
+
+# Parlakgul liver: the 64-slice boxes of the four samples (6461 lean, 6464 / 9430 obese, 1857 obese Climp63), cached by
+# torch-em's parlakgul_liver loader. The first one is in the original data folder, the others in parlakgul_liver_boxes
+# (their bounding boxes are listed in training_boxes.json there). Each box trains on z < 50 and validates on the rest.
+# NOTE: Parlakgul is an evaluation dataset now (it is not in EM_MITO_DATASETS): its semantic masks merge touching
+# mitochondria and hold irregular fragments. The evaluation reads PARLAKGUL_LIVER_BOXES.
+PARLAKGUL_LIVER_BOXES = [
+    os.path.join("parlakgul_liver", "6461_mito_c2fda2f2e9f2.zarr"),
+    os.path.join("parlakgul_liver_boxes", "6461_mito_6437b92288e2.zarr"),
+    os.path.join("parlakgul_liver_boxes", "6464_mito_f42d478376ae.zarr"),
+    os.path.join("parlakgul_liver_boxes", "6464_mito_84cb0665a8d2.zarr"),
+    os.path.join("parlakgul_liver_boxes", "9430_mito_d4c0a73009c8.zarr"),
+    os.path.join("parlakgul_liver_boxes", "9430_mito_c5f9fef6fb64.zarr"),
+    os.path.join("parlakgul_liver_boxes", "1857_mito_0a7959a670ff.zarr"),
+    os.path.join("parlakgul_liver_boxes", "1857_mito_f95eb8970213.zarr"),
+]
+PARLAKGUL_LIVER_TRAIN_ROI = np.s_[:50, :, :]
+PARLAKGUL_LIVER_VAL_ROI = np.s_[50:, :, :]
+
+# MitoVerse (<data>/mitoverse/data/<dataset>/<volume>.zarr, arrays 'img' and 'mito'): only the parts that duplicate
+# no other training or evaluation data are used; the full collection repeats MitoEM, the CEM benchmark, Kasthuri and
+# Lucchi, DenseCell, MitoEM v2, CellMap and others. xiao18 (mouse auditory cortex ssSEM, 8 x 8 x 50 nm) trains on
+# z >= 15 and validates on z < 14: section z = 14 is torn (a third of it is blank resin without labels), so no patch
+# crosses it. haberl18 (CDeep3M, mouse brain SBF-SEM, 10 x 10 x 24 nm) trains on vol0 and does not validate, since
+# vol1 has only 10 slices. The five MICrONS phase 1 volumes of turner22 (ssTEM, 8 x 8 x 40 nm) train on z < 36 and
+# validate on the remaining 14 slices, except vol1 and vol2: their last 14 slices hold a missing section (constant
+# raw), so every validation patch would be rejected by the blank slice sampler. They train whole.
+MITOVERSE_XIAO18_TRAIN_ROI = np.s_[15:, :, :]
+MITOVERSE_XIAO18_VAL_ROI = np.s_[:14, :, :]
+MITOVERSE_MICRONS1_VOLUMES = [f"microns1_vol{i}" for i in range(5)]
+MITOVERSE_MICRONS1_TRAIN_ONLY_VOLUMES = ("microns1_vol1", "microns1_vol2")
+MITOVERSE_MICRONS1_TRAIN_ROI = np.s_[:36, :, :]
+MITOVERSE_MICRONS1_VAL_ROI = np.s_[36:, :, :]
+# Some MICrONS phase 1 slices miss image data (raw == 0) while the labels continue there. Connected raw == 0 regions
+# of a slice above this area (in pixels) carry MITOVERSE_IGNORE_LABEL, so the loss ignores them but not single dark
+# membrane pixels.
+MITOVERSE_MISSING_DATA_MIN_AREA = 2000
+MITOVERSE_IGNORE_LABEL = np.iinfo("uint32").max
+
+# Human organoids (<data>/human_organoids/11380/data, FIB-SEM, 2x binned, voxel size undocumented): the mitochondria
+# labels of the four volumes, the nuclei and other organelles are background. The raw is int8. Each volume trains on its
+# first 90% of z and validates on the rest.
+HUMAN_ORGANOIDS_VOLUMES = ["F059_bin2.h5", "F107_A1_bin2.h5", "F107_A2_bin2.h5", "F107_A3_bin2.h5"]
+HUMAN_ORGANOIDS_VAL_FRACTION = 0.1
+# The mitochondria instance labels of the four volumes (<data>/human_organoids_mito/<volume>_mito_labels.zarr, written
+# by finetuning/v2/generalist/em_organelles/preprocess_mito_dataset.py): the connected components of the manual semantic
+# masks, split by a neck watershed where touching mitochondria form one component (about 4-12% of the components).
+HUMAN_ORGANOIDS_MITO_ROOT = "human_organoids_mito"
+
+
+# ASEM mitochondria (<data>/asem/mito_crops, zarr crops with 'raw' and semantic 'labels', manual and dense in their
+# crop, FIB-SEM): volumes 46 and 58 (5 nm) train on z < 224 and validate on the rest, the small volume 2E (4 nm,
+# 200 px in plane) trains whole as 192 x 192 patches resized to 512 x 512. Volume 64 (cell_6, the micro-sam v1 EM test
+# volume) and the 61 hold-out block are the in-domain evaluation volumes.
+ASEM_MITO_ROOT = os.path.join("asem", "mito_crops")
+ASEM_MITO_TRAIN_VOLUMES = ("46_z640-896_y0-1024_x1112-2136.zarr", "58_z152-408_y0-1000_x1480-2504.zarr")
+ASEM_MITO_SMALL_VOLUMES = ("2E_z1015-1215_y316-516_x294-494.zarr",)
+ASEM_MITO_TRAIN_ROI = np.s_[:224, :, :]
+ASEM_MITO_VAL_ROI = np.s_[224:, :, :]
+ASEM_MITO_SMALL_SIDE = 192
+
+# Brain PFIB-SEM mitochondria (<data>/brain_pfibsem/brain_pfibsem.h5, mouse brain PFIB-SEM, 5 nm isotropic, 181 x 1300
+# x 1300, expert binary masks made on the 2 us reference stack): the noisy 0.5 us stack is registered to the reference
+# stack (correlation 0.99 of the smoothed slices without any shift), so it trains with the same labels as a noise
+# augmentation. z < 144 trains and the rest (37 slices) validates, as in the torch-em loader.
+BRAIN_PFIBSEM_PATH = os.path.join("brain_pfibsem", "brain_pfibsem.h5")
+BRAIN_PFIBSEM_TRAIN_ROI = np.s_[:144, :, :]
+BRAIN_PFIBSEM_VAL_ROI = np.s_[144:, :, :]
+
+# SNEMI Mito (<data>/snemi_mito_stack/snemi_mito.h5, written by build_snemi_mito_stack.py in mito_nuc_figures/scripts;
+# ssSEM of the mouse neocortex, SNEMI3D, 6 x 6 x 30 nm, manual binary masks): the 100 consecutive slices are stacked
+# and the official contiguous split is kept: z 0-49 trains, z 50-69 validates, z 70-99 (test) is not used.
+SNEMI_MITO_PATH = os.path.join("snemi_mito_stack", "snemi_mito.h5")
+SNEMI_MITO_TRAIN_ROI = np.s_[:50, :, :]
+SNEMI_MITO_VAL_ROI = np.s_[50:70, :, :]
+
+# U2OS FIB-SEM mitochondria (<data>/u2os_fibsem/1_Mitochondria/1_Train_Mito, FIB-SEM of one U2-OS cell, 45 manually
+# annotated single slices of 692 x 1697, binary masks): trained as 2D; every 9th slice validates (5 slices, which are
+# 30-250 sections away from their neighbours in the stack).
+U2OS_FIBSEM_MITO_ROOT = os.path.join("u2os_fibsem", "1_Mitochondria", "1_Train_Mito")
+U2OS_FIBSEM_MITO_VAL_STEP = 9
+
+# HeLa STARD3 mitochondria (<data>/hela_stard3/<volume>.h5, FIB-SEM of HeLa cells, EMPIAR-13156, 8 nm pixels for 'ctrl'
+# and 'stard3_fa_ya', 5 nm for 'stard3', treated as isotropic): the binary mitochondria masks of the densely annotated
+# ROI of each volume (the torch-em loader crops raw and labels to it). The other two volumes train whole, 'ctrl' trains
+# on z < 404 and validates on the last 40 slices.
+HELA_STARD3_VOLUMES = ("ctrl", "stard3", "stard3_fa_ya")
+HELA_STARD3_VAL_VOLUME = "ctrl"
+HELA_STARD3_VAL_START = 404
+
+# Parlakgul fasting liver mitochondria (<data>/parlakgul_fasting_liver/<sample>_mito_<hash>.zarr, FIB-SEM of the mouse
+# liver, EMPIAR-12017, 8 nm isotropic, the authors' mitochondria instance segmentation): 64 x 1024 x 1024 tissue
+# boxes (9428 lean fasted, 8970 obese fasted, 2679 obese LacZ, 1858 obese RRBP1; 8970 has two boxes that do not
+# overlap, the central one and the torch-em default one), cached by torch-em's parlakgul_fasting_liver loader. These
+# samples differ from the Parlakgul liver samples of the out-of-domain
+# evaluation (parlakgul_liver_eval: 6461, 6464, 9430, 1857). Each box trains on z < 50 and validates on the rest.
+PARLAKGUL_FASTING_ROOT = "parlakgul_fasting_liver"
+PARLAKGUL_FASTING_TRAIN_ROI = np.s_[:50, :, :]
+PARLAKGUL_FASTING_VAL_ROI = np.s_[50:, :, :]
+
+# AIVE mitochondria (<data>/aive/aive_dataset<i>.h5, FIB-SEM of cells and muscle tissue, EMPIAR-12885, 6.5 x 6.5 x
+# 10 nm): the mitochondria class (1) of the harmonized semantic organelle labels of torch-em's aive loader. Not every
+# mitochondrion is annotated in every volume. Each volume trains on its first ~90% of z and validates on the rest, per
+# volume file name the first validation slice.
+AIVE_MITO_CLASS = 1
+AIVE_MITO_VAL_STARTS = {
+    "aive_dataset1.h5": 652, "aive_dataset2.h5": 772, "aive_dataset3.h5": 556, "aive_dataset4.h5": 280,
+}
+
+
+# MitoSegEM mitochondria (<data>/mito_segem, EMPIAR-12535, noisy SBF-SEM, 15 nm pixels, 50 nm sections): one cached
+# 64 x 1024 x 1024 box (z, y, x in the full volume) per tissue, network predictions with a manual instance assignment.
+# The testis and brainstem boxes train on z < 50 and validate on the rest; the intestine box is an out-of-domain
+# evaluation set (finetuning/v2/evaluation/common.py).
+MITO_SEGEM_TRAIN_BOXES = {
+    "testis": (1268, 1332, 1792, 2816, 7680, 8704),
+    "brainstem": (1868, 1932, 7936, 8960, 7168, 8192),
+}
+MITO_SEGEM_TRAIN_ROI = np.s_[:50, :, :]
+MITO_SEGEM_VAL_ROI = np.s_[50:, :, :]
+
+
+# CellMap mitochondria (<data>/cellmap_mito_crops, one zarr store with 'raw' and 'labels' per challenge crop with a
+# mito label array, listed in its index.json): without sum159-4 crop211, whose mito array is empty although
+# mitochondria are visible. No crop overlaps the MitoEM v2 jurkat / macro / podo volumes (crops of jrc_jurkat-1,
+# jrc_macrophage-2 and jrc_mus-kidney), which a template matching of all their crops against these volumes showed.
+# Only crops with labeled mitochondria train, since an empty crop only yields batches without objects, which the
+# joint trainer skips. The crops are grouped by in-plane size into the patch sides of CELLMAP_MITO_PATCH_SIDES,
+# crops below the smallest side are not used, and whole volumes (cells) validate, because the crops of one volume
+# can be near-duplicates or nested.
+CELLMAP_MITO_PATCH_SIDES = (128, 192, 256, 384, 512)
+CELLMAP_MITO_VAL_FRACTION = 0.1
+
+
+def probtem_split_paths(input_path, split):
+    """The ProbTEM train images of the 'train' or 'val' part."""
+    paths = sorted(glob(os.path.join(input_path, PROBTEM_ROOT, "train", "*.h5")))
+    train_paths, val_paths = train_test_split(paths, test_size=PROBTEM_N_VAL, random_state=42)
+    return sorted(train_paths if split == "train" else val_paths)
+
+
+def cellmap_mito_split_crops(input_path, split):
+    """The CellMap mito crops of the 'train' or 'val' volumes, as {patch side: crop paths}."""
+    root = os.path.join(input_path, "cellmap_mito_crops")
+    with open(os.path.join(root, "index.json")) as f:
+        crops = [
+            crop for crop in json.load(f) if crop["n_ids"] > 0 and min(crop["shape"][1:]) >= CELLMAP_MITO_PATCH_SIDES[0]
+        ]
+    volumes = sorted({crop["volume"] for crop in crops})
+    train_volumes, val_volumes = train_test_split(volumes, test_size=CELLMAP_MITO_VAL_FRACTION, random_state=42)
+    keep = set(train_volumes if split == "train" else val_volumes)
+    groups = {}
+    for crop in crops:
+        if crop["volume"] in keep:
+            side = max(s for s in CELLMAP_MITO_PATCH_SIDES if s <= min(crop["shape"][1:]))
+            groups.setdefault(side, []).append(os.path.join(root, f"{crop['name']}.zarr"))
+    return {side: sorted(paths) for side, paths in sorted(groups.items())}
+
+
+# The datasets of the nucleus EM generalist ('em_nucleus'). Each name enables one block in _get_em_nucleus_datasets.
+EM_NUCLEUS_DATASETS = (
+    "betaseg_nucleus", "cellmap_nucleus", "human_organoids_nucleus", "sxt_nucleus", "fafb_nuclei", "janelia_nucleus",
+    "microns_nuclei", "waenet_fibsem_nucleus", "waenet_sstem_nucleus", "waenet_tem_nucleus", "platynereis_nuclei",
+    "tumor_spheroid_nuclei", "openorganelle_nucleus", "cardiomyocyte_tem_nucleus", "microsam_em_nuclei",
+    "perez_nucleus", "vem_nuclei", "aive_nucleus", "cerebellum_nucleus", "macrophage_a431_nucleus",
+)
+
+# Objects below this size (in voxels of the training patch) are dropped from the nucleus targets.
+EM_NUCLEUS_MIN_SIZE_3D = 50
+
+# The training samples per epoch of the nucleus datasets (per source; summed over the z groups), by the rules of the
+# mitochondria generalist (EM_MITO_TRAIN_SAMPLES): 3D sources 200 x sqrt(training voxels / 250M) clipped to [200, 600],
+# 2D sources 2800 patches or about 7 passes over their patches, Cerebellum about 7 passes and the microSAM train crop
+# 200. On top, the large and diverse sources get more: OpenOrganelle 1000, CellMap, human organoids, SXT and Janelia
+# 800, BetaSeg 400 and AIVE 300 (2026-10-19). Every volume gets at least one sample.
+EM_NUCLEUS_TRAIN_SAMPLES = {
+    "betaseg_nucleus": 400, "cellmap_nucleus": 800, "human_organoids_nucleus": 800, "sxt_nucleus": 800,
+    "fafb_nuclei": 293, "janelia_nucleus": 800, "microns_nuclei": 414, "waenet_fibsem_nucleus": 200,
+    "waenet_sstem_nucleus": 510, "waenet_tem_nucleus": 2500, "platynereis_nuclei": 200, "tumor_spheroid_nuclei": 1400,
+    "openorganelle_nucleus": 1000, "cardiomyocyte_tem_nucleus": 575, "microsam_em_nuclei": 200, "perez_nucleus": 350,
+    "vem_nuclei_2d": 2800, "vem_nuclei_3d": 200, "aive_nucleus": 300, "cerebellum_nucleus": 175,
+    "macrophage_a431_nucleus": 424,
+}
+# The nuclei a patch needs per dataset: at least half of 40 random patches of the dataset (pooled over its volumes,
+# connected components, 14-slice patches, 2026-10-19) held this many; the other datasets need one.
+EM_NUCLEUS_MIN_INSTANCES = {
+    "fafb_nuclei": 3, "microns_nuclei": 3, "platynereis_nuclei": 3, "microsam_em_nuclei": 3, "janelia_nucleus": 3,
+    "tumor_spheroid_nuclei": 2, "human_organoids_nucleus": 2, "cellmap_nucleus": 2, "vem_nuclei": 2,
+    "openorganelle_nucleus": 2,
+}
+# The volumes (by their last two path components) where none of the 40 patches held that many nuclei, so their
+# sampler would never accept a patch: they need one.
+EM_NUCLEUS_SPARSE_VOLUMES = {
+    "cellmap_nucleus_crops/jrc_mus-liver-zon-2_crop367.zarr": 1, "janelia_nucleus/jrc_mus-nacc-2.zarr": 1,
+    "janelia_nucleus/jrc_mus-nacc-4.zarr": 1, "openorganelle_nucleus_full/jrc_cos7-11.zarr": 1,
+    "openorganelle_nucleus_full/jrc_hela-21.zarr": 1, "openorganelle_nucleus_full/aic_desmosome-3.zarr": 1,
+    "vem_nuclei_nucleus/id_12.h5": 1,
+}
+
+# Nucleus volumes are drawn at the largest of these patch sides that fits in-plane; patches below 512 px are resized
+# to 512 x 512.
+EM_NUCLEUS_PATCH_SIDES = (128, 192, 256, 320, 384, 512)
+
+# BetaSeg nuclei (<data>/betaseg_nucleus_boxes, 4 nm isotropic FIB-SEM of mouse beta cells): one box per volume
+# around the labeled nucleus of the target cell with a margin of 32 voxels. Only the nucleus of the target cell is
+# labeled, and unlabeled neighbouring nuclei enter some boxes (high_c4, low_c2), so the labels carry
+# BETASEG_NUCLEUS_IGNORE_LABEL outside the target cell mask and on blank raw, and the loss ignores those voxels.
+BETASEG_NUCLEUS_TRAIN_VOLUMES = ("high_c1", "high_c2", "high_c3", "high_c4", "low_c1", "low_c2")
+BETASEG_NUCLEUS_VAL_VOLUMES = ("low_c3",)
+BETASEG_NUCLEUS_IGNORE_LABEL = np.iinfo("uint32").max
+
+# CellMap nuclei (<data>/cellmap_nucleus_crops, one zarr store with 'raw' and 'labels' per crop, listed in its
+# index.json): only the large tissue crops at 32 and 64 nm with many complete nuclei, nucleus labels only. The small
+# high-resolution crops are not used: most hold one nucleus cut by the crop borders, and 15 lie fully inside a
+# nucleus. jrc_mus-liver-zon-2 crop357 (the 'test' crop of the index) is the in-domain evaluation crop, since it
+# overlaps no other crop (crop358 and crop367 overlap each other).
+CELLMAP_NUCLEUS_VAL_CROPS = ("jrc_zf-cardiac-1_crop379",)
+
+# Human organoids nuclei: the raw of the four volumes (HUMAN_ORGANOIDS_VOLUMES) with cleaned nucleus instance labels
+# (<data>/human_organoids_nucleus/<volume>_nucleus_labels.zarr, written by build_human_organoids_nucleus_labels.py in
+# mito_nuc_figures/scripts): the speckled manual semantic masks are closed and their holes filled per slice, the
+# labels on the black alignment padding are removed, the nuclei are separated by 3D connected components, and label
+# fragments below 100k voxels and the entotic cell of F107_A1 (whose nucleus is not labeled) carry
+# HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL.
+# The z split is the one of the mitochondria block (HUMAN_ORGANOIDS_VAL_FRACTION).
+HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL = np.iinfo("uint32").max
+
+# SXT INS-1E nuclei (<data>/sxt_ins1e_mito, one zarr store per cell): soft X-ray tomography (not EM) of INS-1E cells in
+# glass capillaries, isotropic 36.8-45.5 nm, semi-automatic semantic labels (0 exterior, 1 cell, 2 nucleus, 5 mito).
+# Only the target cell is labeled and some tomograms may hold unlabeled neighbour cells, so the nucleus is the object,
+# the rest of the cell is background, and the loss ignores the exterior (SXT_NUCLEUS_IGNORE_LABEL). The ignore label
+# is the uint16 maximum, since torch-em casts the labels back to their stored dtype (uint16) after the augmentations.
+# A seeded set of SXT_NUCLEUS_N_VAL cells validates.
+SXT_NUCLEUS_CLASS = 2
+SXT_EXTERIOR_CLASS = 0
+SXT_NUCLEUS_IGNORE_LABEL = np.iinfo("uint16").max
+SXT_NUCLEUS_N_VAL = 5
+
+# FAFB nuclei (<data>/fafb_nuclei/{train,val,test}, 256 x 512 x 512 blocks of ssTEM of the adult fly brain at
+# 32 x 32 x 40 nm): the automatic FlyWire nucleus segmentation (v5), which is clean and near-exhaustive, so it trains
+# despite being automatic. The train blocks train, the val blocks validate, and the test blocks are the in-domain
+# evaluation blocks.
+FAFB_NUCLEI_Z_SCALE = 40 / 32
+
+# Janelia nuclei (<data>/janelia_nucleus, one zarr store with 'raw' and 'labels' per OpenOrganelle volume, 32-128 nm):
+# 13 volumes with Cellpose pseudo-labels (near-exhaustive, a few small or very dark nuclei missed) and 3 manual
+# jrc_mus-nacc volumes (1-3 nuclei each). The voxels are treated as isotropic (z / xy is 0.74-1.34). jrc_mus-kidney is
+# the volume of the CellMap kidney crop179, which trains as well. jrc_mus-granule-neurons-1 is not used, since it is
+# only 85 px wide in y. JANELIA_NUCLEUS_VAL_VOLUMES validate.
+JANELIA_NUCLEUS_EXCLUDED_VOLUMES = ("jrc_mus-granule-neurons-1",)
+JANELIA_NUCLEUS_VAL_VOLUMES = ("jrc_mus-meissner-corpuscle-2",)
+
+# MICrONS nuclei (<data>/microns_nuclei/{train,val,test}, 512^3 blocks of ssTEM of the mouse visual cortex at
+# 64 x 64 x 40 nm): the automatic minnie65 nucleus segmentation, clean and near-exhaustive, so it trains despite being
+# automatic. As for FAFB, the train blocks train, the val blocks validate, and the test blocks are the in-domain
+# evaluation blocks.
+MICRONS_NUCLEI_Z_SCALE = 40 / 64
+
+# Platynereis nuclei (<data>/platynereis/nuclei/train_data_nuclei_<id>.h5, SBEM of a 6 dpf larva at about
+# 80 x 80 x 100 nm, manual instance labels, exhaustive inside the annotated box). Each volume carries a halo of
+# unlabeled voxels (PLATYNEREIS_NUCLEI_IGNORE_LABEL) around the annotated box, so only the valid ROI of each volume
+# (_compute_platy_rois) trains. Volume 03 (dense brain region, 108 nuclei) is the in-domain evaluation volume and
+# volume 12 validates.
+PLATYNEREIS_NUCLEI_TRAIN_IDS = (1, 2, 4, 5, 6, 7, 8, 9, 10, 11)
+PLATYNEREIS_NUCLEI_VAL_IDS = (12,)
+PLATYNEREIS_NUCLEI_TEST_IDS = (3,)
+PLATYNEREIS_NUCLEI_IGNORE_LABEL = -1
+PLATYNEREIS_NUCLEI_Z_SCALE = 100 / 80
+
+# Tumor spheroid nuclei (<data>/tumor_spheroid_nucleus, derived from <data>/tumor_spheroid_em/2d_manual/50-50-50 by
+# build_tumor_spheroid_nucleus_labels.py in mito_nuc_figures/scripts; SBF-SEM of a tumor spheroid with gold
+# nanoparticles, inverted contrast): 20 manually annotated single slices in xy, xz and yz (the 100 nm slices are the
+# same slices downsampled). Many annotated cells carry no nucleus label, some of them with nucleus-like content, so
+# every cell without a nucleus label carries TUMOR_SPHEROID_NUCLEI_IGNORE_LABEL and the loss ignores it. Some slices
+# are only 2-7 sections apart, so the validation slices are ones without a close neighbour.
+TUMOR_SPHEROID_NUCLEI_VAL_SLICES = ("Au_01-vol_01-x_1300.h5", "Au_01-vol_01-z_0274.h5")
+TUMOR_SPHEROID_NUCLEI_IGNORE_LABEL = np.iinfo("uint32").max
+
+# The new torch-em nucleus datasets of 2026-10-18. The derived data of all of them except microsam_em_nuclei is written
+# by build_new_nucleus_data.py in mito_nuc_figures/scripts. The large images and volumes are downscaled there so that a
+# nucleus is a few hundred px wide, i.e. a 512 px patch shows nucleus boundaries and context.
+# Cardiomyocyte TEM (<data>/cardiomyocyte_tem_nucleus): 9 TEM micrographs of isolated cardiomyocytes, one nucleus
+# each (manual masks, the nucleoli are part of the nucleus), downscaled 4x; a seeded pair of images validates.
+CARDIOMYOCYTE_NUCLEUS_ROOT = "cardiomyocyte_tem_nucleus"
+CARDIOMYOCYTE_NUCLEUS_N_VAL = 2
+# microSAM EM nuclei (<data>/microsam_em_nuclei/data): the 'train' crop (32 x 512 x 512) of the microSAM user study,
+# the only crop with manual reference labels (48 nuclei); the 'annotation' crop only holds user-study outputs, which
+# differ and miss nuclei, so it is not used. The whole train crop trains and there is no validation leaf.
+MICROSAM_EM_NUCLEI_PATH = os.path.join("microsam_em_nuclei", "data", "train_data.h5")
+# Perez nuclei (<data>/perez_nucleus): the nucleus task tiles of the Perez SBF-SEM data (mouse suprachiasmatic nucleus);
+# the 500 px train tiles (resized to 512 px) train and the 1000 px test tiles validate.
+PEREZ_NUCLEUS_ROOT = "perez_nucleus"
+# vEM nuclei (<data>/vem_nuclei_nucleus, S-BIAD2822): 2D array tomography SEM images of cancer cells and tumor tissue
+# (NucleoNet predictions, manually proofread), downscaled so that nuclei are about 250 px wide, with the unlabeled
+# border band ignored where the border nuclei were removed (VEM_NUCLEI_IGNORE_LABEL), and two 3D FIB-SEM volumes with
+# one nucleus each, downscaled 2x. A seeded 2D image and the last VEM_NUCLEI_VAL_SLICES slices of volume id_12
+# validate; the nucleus of id_12 ends at z 399 of 463, so the slab holds its last 37 slices.
+VEM_NUCLEI_ROOT = "vem_nuclei_nucleus"
+VEM_NUCLEI_3D_IDS = (11, 12)
+VEM_NUCLEI_VAL_SLICES = 100
+VEM_NUCLEI_IGNORE_LABEL = np.iinfo("uint32").max
+# AIVE nuclei (<data>/aive_nucleus, EMPIAR-12885): the nucleus of three FIB-SEM overview volumes (nucleus class with
+# the nucleoli, labeled 'chromatin', folded in), downscaled to 30 x 26 x 26 nm; the last AIVE_NUCLEUS_VAL_SLICES slices
+# of dataset 3 validate.
+AIVE_NUCLEUS_ROOT = "aive_nucleus"
+AIVE_NUCLEUS_Z_SCALE = 30 / 26
+AIVE_NUCLEUS_VAL_SLICES = 40
+# Cerebellum nuclei (<data>/cerebellum_fibsem_nucleus): mouse cerebellum FIB-SEM, nuclei labeled by students (not
+# necessarily proofread), downscaled 2x to 20 nm. Two large nuclei (from z = 0); the loss ignores three small labeled
+# pieces of a dark object inside a myelinated axon near the end of the volume (CEREBELLUM_NUCLEUS_IGNORE_LABEL).
+# z >= CEREBELLUM_NUCLEUS_VAL_Z validates, which holds the last 22 slices of one large nucleus.
+CEREBELLUM_NUCLEUS_PATH = os.path.join("cerebellum_fibsem_nucleus", "cerebellum_fibsem.h5")
+CEREBELLUM_NUCLEUS_VAL_Z = 200
+CEREBELLUM_NUCLEUS_IGNORE_LABEL = np.iinfo("uint32").max
+# Macrophage / A431 nuclei (<data>/macrophage_a431_nucleus, EMPIAR-13420): SBF-SEM volumes of macrophages and an A431
+# cell with one nucleus each (three in sbf_no_load; quick semantic MIB annotations), downscaled 4x in xy. The voxel
+# size is not stored; the nucleus extents suggest a z / xy anisotropy of about 2.5 after downscaling. The slices from
+# MACROPHAGE_NUCLEUS_VAL_Z of sbf_a431 validate; its nucleus ends at z 134 of 162, so the slab holds its last 20 slices.
+MACROPHAGE_NUCLEUS_ROOT = "macrophage_a431_nucleus"
+MACROPHAGE_NUCLEUS_Z_SCALE = 2.5
+MACROPHAGE_NUCLEUS_VAL_VOLUME = "sbf_a431"
+MACROPHAGE_NUCLEUS_VAL_Z = 115
+
+# WAE-Net nuclei (<data>/waenet_nucleus, written by build_waenet_nucleus.py in mito_nuc_figures/scripts). Dataset 1 is
+# a FIB-SEM stack of pancreatic carcinoid cells with all nuclei labeled (dataset_1.h5, the last WAENET_VAL_FRACTION of
+# z validates; one alignment seam between slices 180 and 181). Dataset 3 holds unregistered serial ssTEM sections of
+# one cell, trained as single images (dataset_3_{train,val}.h5, a contiguous block of sections validates). Datasets
+# 4-7 are single TEM images of lymphocytes and B cells in which only the central cell is labeled
+# (tem_{train,val}.h5): the loss is restricted to the central cell mask (cytoplasm and nucleus labels) dilated by
+# 10 px, all other pixels, including the unlabeled neighbour cells, carry WAENET_NUCLEUS_IGNORE_LABEL. Dataset 2 has no
+# nucleus labels. The 2D images are stored as stacks of 512 x 512 images and drawn as (1, 512, 512) patches.
+WAENET_VAL_FRACTION = 0.1
+
+# OpenOrganelle nuclei (<data>/openorganelle_nucleus_full/index.json, written by build_openorganelle_nucleus_full.py in
+# mito_nuc_figures/scripts): automatic nucleus segmentations of OpenOrganelle FIB-SEM volumes, isotropic 32-128 nm.
+# The near-exhaustive tissue volumes as full arrays (the torch-em loader caches only one 128^3 crop of several of
+# them) and the single-cell volumes (1-3 nuclei, all labeled) that are at least 128 px wide in-plane; the binary
+# single-cell labels are separated by connected components. The volumes with envelope or membrane labels, thin sperm
+# nuclei, ragged TEM tiles or a single nucleus in a huge volume are not used. The 'val' volume of the index validates.
+WAENET_NUCLEUS_IGNORE_LABEL = np.iinfo("uint32").max
+
+
+def em_nucleus_patch_side(shape):
+    """The largest patch side of EM_NUCLEUS_PATCH_SIDES that fits in-plane into a volume of *shape*."""
+    return max(side for side in EM_NUCLEUS_PATCH_SIDES if side <= min(shape[-2:]))
+
+
+def betaseg_nucleus_split_boxes(input_path, split):
+    """The BetaSeg nucleus boxes of the 'train' or 'val' volumes, as {patch side: box paths}."""
+    groups = {}
+    for volume in BETASEG_NUCLEUS_TRAIN_VOLUMES if split == "train" else BETASEG_NUCLEUS_VAL_VOLUMES:
+        path = os.path.join(input_path, "betaseg_nucleus_boxes", f"{volume}.h5")
+        with open_file(path, "r") as f:
+            groups.setdefault(em_nucleus_patch_side(f["raw"].shape), []).append(path)
+    return {side: sorted(paths) for side, paths in sorted(groups.items())}
+
+
+def sxt_nucleus_labels(labels):
+    """The nucleus mask of the SXT INS-1E class labels, with SXT_NUCLEUS_IGNORE_LABEL outside the cell."""
+    labels = np.asarray(labels)
+    nucleus = (labels == SXT_NUCLEUS_CLASS).astype("uint16")
+    nucleus[labels == SXT_EXTERIOR_CLASS] = SXT_NUCLEUS_IGNORE_LABEL
+    return nucleus
+
+
+def sxt_nucleus_instances(labels):
+    """The connected components of the SXT INS-1E nucleus mask, as the pre_label_transform (before the sampler)."""
+    return _connected_components_pre_label_trafo(sxt_nucleus_labels(labels), ignore_label=SXT_NUCLEUS_IGNORE_LABEL)
+
+
+def sxt_nucleus_split_paths(input_path, split):
+    """The SXT INS-1E cells of the 'train' or 'val' part, as {patch side: zarr paths}."""
+    paths = sorted(glob(os.path.join(input_path, "sxt_ins1e_mito", "*.zarr")))
+    train_paths, val_paths = train_test_split(paths, test_size=SXT_NUCLEUS_N_VAL, random_state=42)
+    groups = {}
+    for path in train_paths if split == "train" else val_paths:
+        with open_file(path, "r") as f:
+            groups.setdefault(em_nucleus_patch_side(f["labels"].shape), []).append(path)
+    return {side: sorted(paths) for side, paths in sorted(groups.items())}
+
+
+def platynereis_nuclei_split_rois(input_path, split):
+    """The Platynereis nucleus volumes of the 'train' or 'val' part, as {patch side: (paths, valid rois)}."""
+    root = os.path.join(input_path, "platynereis")
+    template = "nuclei/train_data_nuclei_%02i.h5"
+    sample_ids = PLATYNEREIS_NUCLEI_TRAIN_IDS if split == "train" else PLATYNEREIS_NUCLEI_VAL_IDS
+    valid_rois = _compute_platy_rois(
+        root, sample_ids, ignore_label=PLATYNEREIS_NUCLEI_IGNORE_LABEL, file_template=template,
+        label_key="volumes/labels/nucleus_instance_labels", cache_prefix="_nuclei_roi_cache",
+    )
+    groups = {}
+    for sample_id in sample_ids:
+        roi = valid_rois[sample_id]
+        side = em_nucleus_patch_side((roi[1].stop - roi[1].start, roi[2].stop - roi[2].start))
+        paths, rois = groups.setdefault(side, ([], []))
+        paths.append(os.path.join(root, template % sample_id))
+        rois.append(roi)
+    return dict(sorted(groups.items()))
+
+
+def janelia_nucleus_split_paths(input_path, split):
+    """The Janelia nucleus volumes of the split, as {patch side: zarr paths}, and their voxel counts.
+
+    The voxel counts weight the samples, so that the large tissue volumes are not outweighed by the small volumes with
+    one to three nuclei.
+    """
+    groups, voxels = {}, {}
+    for path in sorted(glob(os.path.join(input_path, "janelia_nucleus", "*.zarr"))):
+        name = os.path.basename(path)[:-len(".zarr")]
+        if name in JANELIA_NUCLEUS_EXCLUDED_VOLUMES or (name in JANELIA_NUCLEUS_VAL_VOLUMES) != (split == "val"):
+            continue
+        with open_file(path, "r") as f:
+            shape = f["labels"].shape
+        groups.setdefault(em_nucleus_patch_side(shape), []).append(path)
+        voxels[path] = int(np.prod(shape))
+    return {side: sorted(paths) for side, paths in sorted(groups.items())}, voxels
+
+
+def openorganelle_nucleus_split_paths(input_path, split):
+    """The OpenOrganelle nucleus volumes of the split, as {patch side: zarr paths}, and their voxel counts.
+
+    The voxel counts weight the samples, so that the large tissue volumes are not outweighed by the many single-cell
+    volumes with one to three nuclei.
+    """
+    with open(os.path.join(input_path, "openorganelle_nucleus_full", "index.json")) as f:
+        volumes = [volume for volume in json.load(f) if volume["split"] == split]
+    groups, voxels = {}, {}
+    for volume in volumes:
+        path = os.path.join(input_path, volume["path"])
+        groups.setdefault(em_nucleus_patch_side(volume["shape"]), []).append(path)
+        voxels[path] = int(np.prod(volume["shape"]))
+    return {side: sorted(paths) for side, paths in sorted(groups.items())}, voxels
+
+
+def cellmap_nucleus_split_crops(input_path, split):
+    """The CellMap nucleus crops of the 'train' or 'val' part, as {patch side: crop paths}."""
+    root = os.path.join(input_path, "cellmap_nucleus_crops")
+    with open(os.path.join(root, "index.json")) as f:
+        crops = [crop for crop in json.load(f) if crop["split"] == "train"]
+    groups = {}
+    for crop in crops:
+        if (crop["name"] in CELLMAP_NUCLEUS_VAL_CROPS) == (split == "val"):
+            groups.setdefault(em_nucleus_patch_side(crop["shape"]), []).append(
+                os.path.join(root, f"{crop['name']}.zarr")
+            )
+    return {side: sorted(paths) for side, paths in sorted(groups.items())}
+
+
+# CEM-MitoLab groups (source folders) that never train: every group whose name matches a mitochondria evaluation
+# dataset, so that no evaluation data can leak into training through MitoLab. MitoEM (Wei2020_MitoEM-H / -R), MitoEM v2
+# jurkat and macro (their OpenOrganelle source cells), DenseCell (Guay2020), Kasthuri (kasthuri2011), MitoSegEM
+# (segem2015), Parlakgul (Parlakgul2020), Perez (perez2014) and the hela_cell volume of the CEM-Mito-Benchmark (the
+# HeLa groups). Groups that match only training datasets (UroCell) still train.
+MITOLAB_EXCLUDED_GROUPS = (
+    "Wei2020_MitoEM-H", "Wei2020_MitoEM-R", "jrc_jurkat-1_openorganelle", "jrc_macrophage-2_openorganelle",
+    "Guay2020_patient1", "kasthuri2011", "segem2015", "Hennies2020_AMST_HeLaBV2", "jrc_hela-1_openorganelle",
+    "jrc_hela-2_openorganelle", "jrc_hela-3_openorganelle", "jrc_hela-4_openorganelle", "jrc_hela-21_openorganelle",
+    "jrc_hela-22_openorganelle", "jrc_hela-bfa_openorganelle", "jrc_hela-h89-1_openorganelle",
+    "jrc_hela-h89-2_openorganelle", "Parlakgul2020_file03_video", "Parlakgul2020_file04_video",
+    "perez2014",
+)
 
 # Fraction of the CEM-MitoLab groups that validate. The split is by group, so the tiles of one source volume never
 # land in both splits.
@@ -2978,17 +3516,114 @@ def mitolab_split_paths(path, split):
     train_groups, val_groups = train_test_split(groups, test_size=MITOLAB_VAL_FRACTION, random_state=42)
     keep = set(train_groups if split == "train" else val_groups)
     pairs = [(r, lab) for r, lab in zip(raw_paths, label_paths) if mitolab_group(r, root) in keep]
+    if split == "val":
+        # A seeded MITOLAB_VAL_IMAGES_PER_GROUP images per group, so that no group dominates the validation.
+        by_group = {}
+        for pair in pairs:
+            by_group.setdefault(mitolab_group(pair[0], root), []).append(pair)
+        rng = np.random.default_rng(42)
+        pairs = []
+        for group in sorted(by_group):
+            members = by_group[group]
+            if len(members) > MITOLAB_VAL_IMAGES_PER_GROUP:
+                members = [members[i] for i in sorted(rng.choice(len(members), MITOLAB_VAL_IMAGES_PER_GROUP, False))]
+            pairs.extend(members)
     return [r for r, _ in pairs], [lab for _, lab in pairs]
 
 
-def _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
-    """Get the mitochondria and nucleus EM datasets for the organelle generalist.
+def mitoemv2_mossy_label_path(input_path, volume):
+    """The labels of one MitoVerse han24 volume with MITOEMV2_MOSSY_IGNORE_LABEL outside the annotated boutons.
 
-    Mitochondria and nuclei are trained class-agnostic: a dataset with both classes merges them into one instance
-    label map. Organelles are not dense cells, so the targets come from the plain label transform (no outer boundary
-    erosion as in the EM cell datasets). The distance transform relabels every extracted patch with connected
-    components (``apply_label=True``): semantic labels become instances, and the disconnected pieces of one id inside
-    a patch become separate instances. Objects that touch, such as thin bridges across sections, stay merged.
+    They are written once to <input_path>/mitoverse_derived, slab by slab, under a temporary name that is moved in
+    place when complete, so that interrupted writes and concurrent ranks never leave a partial array behind.
+    """
+    import zarr
+
+    out_path = os.path.join(input_path, "mitoverse_derived", f"han24_{volume}_bouton_labels.zarr")
+    if os.path.exists(out_path):
+        return out_path
+
+    source = zarr.open_group(os.path.join(input_path, "mitoverse", "data", "han24", f"{volume}.zarr"), mode="r")
+    tmp_path = f"{out_path}.{os.getpid()}.incomplete"
+    labels = zarr.open_group(tmp_path, mode="w").create_array(
+        "labels", shape=source["mito"].shape, chunks=(32, 256, 256), dtype="uint32"
+    )
+    for z in range(0, labels.shape[0], 32):
+        slab = source["mito"][z:z + 32].astype("uint32")
+        slab[source["mask"][z:z + 32] == 0] = MITOEMV2_MOSSY_IGNORE_LABEL
+        labels[z:z + 32] = slab
+    try:
+        os.replace(tmp_path, out_path)
+    except OSError:
+        # Another rank moved its copy in place first.
+        shutil.rmtree(tmp_path)
+    return out_path
+
+
+def mitoverse_missing_data_label_path(input_path, dataset, volume):
+    """The labels of one MitoVerse volume with MITOVERSE_IGNORE_LABEL inside the regions without image data.
+
+    A region without image data is a connected raw == 0 region of a slice above MITOVERSE_MISSING_DATA_MIN_AREA.
+    The labels are written once to <input_path>/mitoverse_derived, slice by slice, under a temporary name that is
+    moved in place when complete, as in mitoemv2_mossy_label_path.
+    """
+    import zarr
+    from scipy import ndimage
+
+    out_path = os.path.join(input_path, "mitoverse_derived", f"{dataset}_{volume}_missing_data_labels.zarr")
+    if os.path.exists(out_path):
+        return out_path
+
+    source = zarr.open_group(os.path.join(input_path, "mitoverse", "data", dataset, f"{volume}.zarr"), mode="r")
+    tmp_path = f"{out_path}.{os.getpid()}.incomplete"
+    labels = zarr.open_group(tmp_path, mode="w").create_array(
+        "labels", shape=source["mito"].shape, chunks=(32, 256, 256), dtype="uint32"
+    )
+    for z in range(labels.shape[0]):
+        slice_labels = source["mito"][z].astype("uint32")
+        empty, _ = ndimage.label(source["img"][z] == 0)
+        areas = np.bincount(empty.ravel())
+        missing = np.isin(empty, np.where(areas > MITOVERSE_MISSING_DATA_MIN_AREA)[0]) & (empty > 0)
+        slice_labels[missing] = MITOVERSE_IGNORE_LABEL
+        labels[z] = slice_labels
+    try:
+        os.replace(tmp_path, out_path)
+    except OSError:
+        # Another rank moved its copy in place first.
+        shutil.rmtree(tmp_path)
+    return out_path
+
+
+def _set_volume_min_instances(dataset, min_instances, depth=1):
+    """Set min_num_instances of the leaves whose raw path ends in a key of *min_instances* ({path end: minimum}).
+
+    The key is the last *depth* components of the raw path.
+    """
+    if isinstance(dataset, (list, tuple)):
+        for ds in dataset:
+            _set_volume_min_instances(ds, min_instances, depth)
+    elif isinstance(dataset, UniDataWrapper):
+        _set_volume_min_instances(dataset.ds, min_instances, depth)
+    elif getattr(dataset, "datasets", None) is not None:
+        for ds in dataset.datasets:
+            _set_volume_min_instances(ds, min_instances, depth)
+    elif getattr(dataset, "raw_path", None) is not None:
+        key = "/".join(str(dataset.raw_path).split(os.sep)[-depth:])
+        if key in min_instances:
+            sampler = dataset.sampler
+            dataset.sampler = MinInstanceSampler(
+                min_num_instances=min_instances[key], min_size=sampler.min_size, exclude_ids=sampler.exclude_ids,
+            )
+
+
+def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
+    """Get the mitochondria EM datasets for the mitochondria generalist.
+
+    Only the mitochondria labels of a dataset are used, all other structures are background. Mitochondria are not dense
+    cells, so the targets come from the plain label transform (no outer boundary erosion as in the EM cell datasets).
+    The distance transform relabels every extracted patch with connected components (``apply_label=True``): semantic
+    labels become instances, and the disconnected pieces of one id inside a patch become separate instances. Objects
+    that touch, such as thin bridges across sections, stay merged.
 
     Returns:
         Tuple of (train_ds, val_ds) lists of UniDataWrapper instances.
@@ -2996,20 +3631,24 @@ def _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label
     train_ds, val_ds = [], []
     n_z = len(z_slices)
 
-    def organelle_label_trafo(min_size=EM_ORGANELLES_MIN_SIZE, sampling=None):
-        if label_trafo is None:
-            return kwargs.get("label_transform2")
-        return label_trafo(min_size=min_size, sampling=sampling)
+    def mito_label_trafo(min_size=EM_MITO_MIN_SIZE, sampling=None, ignore_label=None):
+        trafo = kwargs.get("label_transform2") if label_trafo is None else label_trafo(
+            min_size=min_size, sampling=sampling
+        )
+        if ignore_label is None:
+            return trafo
+        return partial(_ignore_label_trafo, ignore_label=ignore_label, label_trafo=trafo)
 
     # 1. CEM-MitoLab (2D mitochondria instance segmentation in EM tiles from about 600 source volumes and images)
     # NOTE: The tiles are 63-512 px, so the whole tile is drawn and randomly upscaled and padded to the patch shape.
     # Only the non-empty tiles are used, split by source group (see mitolab_split_paths).
-    if "mitolab" in EM_ORGANELLES_DATASETS:
+    if "mitolab" in EM_MITO_DATASETS:
         mitolab_kwargs = {
             "patch_shape": None, "raw_key": None, "label_key": None, "is_seg_dataset": False, "ndim": 2,
             **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
-            "label_transform2": organelle_label_trafo(),
-            "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
+            "label_transform2": mito_label_trafo(),
+            "pre_label_transform": _connected_components_pre_label_trafo,
+            "sampler": MinInstanceSampler(min_num_instances=1, min_size=EM_MITO_MIN_SIZE, exclude_ids=[0]),
             "transform": _with_flips(_random_resize_and_pad_trafo, patch_shape),
         }
         for split, ds_list in [("train", train_ds), ("val", val_ds)]:
@@ -3023,32 +3662,9 @@ def _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label
                 )
             )
 
-    # 2. Cmito (3D dense mitochondria instances in whole-animal C. elegans ssTEM, five developmental stages)
-    # NOTE: Reads the cached boxes directly (see CMITO_BOXES); each stage is one dataset with its own anisotropy.
-    if "cmito" in EM_ORGANELLES_DATASETS:
-        for z in z_slices:
-            for stage, (file_name, z_scale) in CMITO_BOXES.items():
-                cmito_path = os.path.join(input_path, "cmito", file_name)
-                cmito_kwargs = {
-                    "raw_paths": cmito_path, "raw_key": "raw", "label_paths": cmito_path, "label_key": "labels",
-                    "patch_shape": (z, *patch_shape), "ndim": 3,
-                    **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
-                    "label_transform2": organelle_label_trafo(EM_ORGANELLES_MIN_SIZE_3D, sampling=(z_scale, 1, 1)),
-                    "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
-                }
-                for roi, ds_list, n_samples in [(CMITO_TRAIN_ROI, train_ds, 100), (CMITO_VAL_ROI, val_ds, 10)]:
-                    ds_list.append(
-                        UniDataWrapper(
-                            torch_em.default_segmentation_dataset(
-                                rois=roi, n_samples=max(1, n_samples // n_z), **cmito_kwargs
-                            ),
-                            source_ndim=3, group_key=(3, z),
-                        )
-                    )
-
-    # 3. DenseCell mitochondria (3D, class 2 of the semantic map in SBF-SEM of human platelets, 10x10x50 nm)
+    # 2. DenseCell mitochondria (3D, class 2 of the semantic map in SBF-SEM of human platelets, 10x10x50 nm)
     # NOTE: The mitochondria are small and sparse (13-36 per volume), so one object per patch is enough.
-    if "densecell_mito" in EM_ORGANELLES_DATASETS:
+    if "densecell_mito" in EM_MITO_DATASETS:
         for z in z_slices:
             densecell_kwargs = {
                 "path": os.path.join(input_path, "densecell"),
@@ -3057,10 +3673,16 @@ def _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label
                 "download": True,
                 "ndim": 3,
                 **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
-                "label_transform2": organelle_label_trafo(EM_ORGANELLES_MIN_SIZE_3D, sampling=(5, 1, 1)),
-                "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0]),
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D, sampling=(5, 1, 1)),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
             }
-            for roi, ds_list, n_samples in [(DENSECELL_TRAIN_ROI, train_ds, 200), (DENSECELL_VAL_ROI, val_ds, 40)]:
+            for roi, ds_list, n_samples in [
+                (DENSECELL_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["densecell_mito"]),
+                (DENSECELL_VAL_ROI, val_ds, 40),
+            ]:
                 ds_list.append(
                     UniDataWrapper(
                         datasets.get_densecell_dataset(
@@ -3070,6 +3692,1210 @@ def _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label
                     )
                 )
 
+    # 3. Lucchi (3D mitochondria in FIB-SEM of the mouse hippocampus, 5 nm isotropic, manual semantic labels)
+    # NOTE: The sampler sees the semantic labels before the connected components, i.e. a single id.
+    if "lucchi" in EM_MITO_DATASETS:
+        for z in z_slices:
+            lucchi_kwargs = {
+                "path": os.path.join(input_path, "lucchi"),
+                "patch_shape": (z, *patch_shape),
+                "download": True,
+                "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for roi, ds_list, n_samples in [
+                (LUCCHI_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["lucchi"]), (LUCCHI_VAL_ROI, val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        datasets.get_lucchi_dataset(
+                            split="train", rois=roi, n_samples=max(1, n_samples // n_z), **lucchi_kwargs
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 4. MICrONS pinky mitochondria (3D, ssTEM of the mouse visual cortex, 4x4x40 nm, manual instance labels)
+    # NOTE: The uint8 ids wrap at 255, so distinct mitochondria can share an id; the per-patch connected components
+    # of the label transform split the ones that are not connected.
+    if "microns_pinky_mito" in EM_MITO_DATASETS:
+        pinky_path = os.path.join(input_path, "microns", "pinky", MICRONS_PINKY_MITO_FILE)
+        for z in z_slices:
+            pinky_kwargs = {
+                "raw_paths": pinky_path, "raw_key": "volumes/image",
+                "label_paths": pinky_path, "label_key": "volumes/mitochondria",
+                "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D, sampling=(10, 1, 1)),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for roi, ds_list, n_samples in [
+                (MICRONS_PINKY_MITO_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["microns_pinky_mito"]),
+                (MICRONS_PINKY_MITO_VAL_ROI, val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            rois=roi, n_samples=max(1, n_samples // n_z), **pinky_kwargs
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 5. MitoEM (3D mitochondria in ssTEM of the human and rat cortex, 8x8x30 nm, manual proofread instance labels)
+    # NOTE: Reads the train volumes directly; torch-em's mitoem dataset adds its own instance label transform.
+    if "mitoem" in EM_MITO_DATASETS:
+        for sample in MITOEM_SAMPLES:
+            mitoem_path = datasets.mitoem.get_mitoem_paths(
+                os.path.join(input_path, "mitoem"), splits="train", samples=sample, download=False
+            )[0]
+            for z in z_slices:
+                mitoem_kwargs = {
+                    "raw_paths": mitoem_path, "raw_key": "raw", "label_paths": mitoem_path, "label_key": "labels",
+                    "patch_shape": (z, *patch_shape), "ndim": 3,
+                    **{
+                        k: v for k, v in kwargs.items()
+                        if k not in ["raw_transform", "label_transform2", "sampler", "transform"]
+                    },
+                    "label_transform2": mito_label_trafo(
+                        EM_MITO_MIN_SIZE_3D, sampling=(3.75, 1, 1), ignore_label=MISSING_RAW_IGNORE_LABEL
+                    ),
+                    # Some slices hold regions of one constant value (e.g. saturated 254 in human z = 190) that still
+                    # carry labels; they become ignore. The test needs the stored intensities, so the raw is only
+                    # prepared here and normalized inside the transform.
+                    "raw_transform": _prepare_identity,
+                    "transform": partial(
+                        _ignore_missing_raw_trafo, ignore_label=MISSING_RAW_IGNORE_LABEL, any_constant=True,
+                        transform=get_augmentations(ndim=3),
+                    ),
+                    "pre_label_transform": _connected_components_pre_label_trafo,
+                    "sampler": MinInstanceSampler(
+                        min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                    ),
+                }
+                for roi, ds_list, n_samples in [
+                    (MITOEM_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES[f"mitoem_{sample}"]),
+                    (MITOEM_VAL_ROI, val_ds, 40),
+                ]:
+                    ds_list.append(
+                        UniDataWrapper(
+                            torch_em.default_segmentation_dataset(
+                                rois=roi, n_samples=max(1, n_samples // n_z), **mitoem_kwargs
+                            ),
+                            source_ndim=3, group_key=(3, z),
+                        )
+                    )
+
+    # 6. MitoEM v2 (3D mitochondria, expert-verified instances; FIB-SEM at 16 nm and SBF-SEM at 8 x 8 x 30 nm)
+    # NOTE: The official train / val volumes, see MITOEMV2_DATASETS. jurkat validates on the end of its train volume.
+    if "mitoemv2" in EM_MITO_DATASETS:
+        mitoemv2_path = os.path.join(input_path, "mitoemv2")
+        for name, z_scale in MITOEMV2_DATASETS.items():
+            train_paths = datasets.mitoemv2.get_mitoemv2_paths(mitoemv2_path, name, split="train", download=False)
+            if name == "jurkat":
+                splits = [
+                    (train_paths, MITOEMV2_JURKAT_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["mitoemv2_jurkat"]),
+                    (train_paths, MITOEMV2_JURKAT_VAL_ROI, val_ds, 40),
+                ]
+            else:
+                val_paths = datasets.mitoemv2.get_mitoemv2_paths(mitoemv2_path, name, split="val", download=False)
+                splits = [
+                    (train_paths, None, train_ds, EM_MITO_TRAIN_SAMPLES[f"mitoemv2_{name}"]),
+                    (val_paths, None, val_ds, 40),
+                ]
+            for z in z_slices:
+                mitoemv2_kwargs = {
+                    "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                    **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                    "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D, sampling=(z_scale, 1, 1)),
+                    "pre_label_transform": _connected_components_pre_label_trafo,
+                    "sampler": MinInstanceSampler(
+                        min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                    ),
+                }
+                for paths, roi, ds_list, n_samples in splits:
+                    ds_list.append(
+                        UniDataWrapper(
+                            torch_em.default_segmentation_dataset(
+                                raw_paths=paths, label_paths=paths, rois=None if roi is None else [roi] * len(paths),
+                                n_samples=max(1, n_samples // n_z), **mitoemv2_kwargs,
+                            ),
+                            source_ndim=3, group_key=(3, z),
+                        )
+                    )
+
+    # 7. MitoEM v2 mossy (3D mitochondria in ssSEM of mossy fiber boutons in the mouse cerebellum, 8 x 8 x 30 nm)
+    # NOTE: Only the boutons are annotated: the raw comes from the MitoVerse copies, the labels carry the ignore label
+    # outside the bouton mask (see mitoemv2_mossy_label_path), and the loss ignores those voxels.
+    if "mitoemv2_mossy" in EM_MITO_DATASETS:
+        han24_root = os.path.join(input_path, "mitoverse", "data", "han24")
+        for volumes, ds_list, n_samples in [
+            (MITOEMV2_MOSSY_TRAIN_VOLUMES, train_ds, EM_MITO_TRAIN_SAMPLES["mitoemv2_mossy"]),
+            (MITOEMV2_MOSSY_VAL_VOLUMES, val_ds, 40),
+        ]:
+            raw_paths = [os.path.join(han24_root, f"{volume}.zarr") for volume in volumes.values()]
+            label_paths = [mitoemv2_mossy_label_path(input_path, volume) for volume in volumes.values()]
+            for z in z_slices:
+                mossy_kwargs = {
+                    "raw_key": "img", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                    **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                    "label_transform2": mito_label_trafo(
+                        EM_MITO_MIN_SIZE_3D, sampling=(30 / 8, 1, 1), ignore_label=MITOEMV2_MOSSY_IGNORE_LABEL
+                    ),
+                    "pre_label_transform": partial(
+                        _connected_components_pre_label_trafo, ignore_label=MITOEMV2_MOSSY_IGNORE_LABEL
+                    ),
+                    "sampler": MinInstanceSampler(
+                        min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D,
+                        exclude_ids=[0, MITOEMV2_MOSSY_IGNORE_LABEL],
+                    ),
+                }
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=raw_paths, label_paths=label_paths, n_samples=max(1, n_samples // n_z),
+                            **mossy_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 8. ProbTEM (2D mitochondria in TEM of mouse skeletal muscle, 2560 x 2560, manual semantic labels)
+    # NOTE: The sampler sees the semantic labels before the connected components, i.e. a single id.
+    if "probtem" in EM_MITO_DATASETS:
+        probtem_kwargs = {
+            "raw_key": "raw", "label_key": "labels", "patch_shape": patch_shape, "ndim": 2, "is_seg_dataset": True,
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+            "label_transform2": mito_label_trafo(),
+            "pre_label_transform": _connected_components_pre_label_trafo,
+            "sampler": MinInstanceSampler(
+                min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE, exclude_ids=[0]
+            ),
+        }
+        for split, ds_list, n_samples in [("train", train_ds, EM_MITO_TRAIN_SAMPLES["probtem"]), ("val", val_ds, 40)]:
+            paths = probtem_split_paths(input_path, split)
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=paths, label_paths=paths, n_samples=n_samples, **probtem_kwargs
+                    ), source_ndim=2,
+                )
+            )
+
+    # 9. UroCell (3D mitochondria in FIB-SEM of the mouse urinary bladder, 16 nm isotropic, manual instance labels)
+    # NOTE: The volumes are 256 px in plane, so 256 x 256 patches are resized to 512 x 512 (the z / xy anisotropy of
+    # the resized patch is 2), as for the small EMNeuron volumes. The raw is stored as float64.
+    if "uro_cell" in EM_MITO_DATASETS:
+        urocell_paths = [os.path.join(input_path, "uro_cell", name) for name in UROCELL_MITO_VOLUMES]
+        for z in z_slices:
+            urocell_kwargs = {
+                "raw_key": "raw", "label_key": "labels/mito", "patch_shape": (z, 256, 256), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2", "sampler"]},
+                "raw_transform": _resize_raw_to_512,
+                "label_transform2": partial(
+                    _resize_then_em_label_trafo,
+                    em_trafo_fn=mito_label_trafo(EM_MITO_MIN_SIZE_3D, sampling=(2, 1, 1)),
+                ),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for roi, ds_list, n_samples in [
+                (UROCELL_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["uro_cell"]), (UROCELL_VAL_ROI, val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=urocell_paths, label_paths=urocell_paths, rois=[roi] * len(urocell_paths),
+                            n_samples=max(1, n_samples // n_z), **urocell_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 10. VNC (mitochondria in ssTEM of the Drosophila ventral nerve cord, 4.6 x 4.6 x 45 nm, manual labels)
+    # NOTE: Single slices of the 20-slice train stack (see VNC_TRAIN_ROI), drawn as (1, 512, 512) patches.
+    if "vnc" in EM_MITO_DATASETS:
+        vnc_path = os.path.join(input_path, "vnc", "vnc_train.h5")
+        vnc_kwargs = {
+            "raw_key": "raw", "label_key": "labels/mitochondria", "patch_shape": (1, *patch_shape),
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+            "label_transform2": mito_label_trafo(),
+            "pre_label_transform": _connected_components_pre_label_trafo,
+            "sampler": MinInstanceSampler(
+                min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE, exclude_ids=[0]
+            ),
+        }
+        for roi, ds_list, n_samples in [
+            (VNC_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["vnc"]), (VNC_VAL_ROI, val_ds, 20),
+        ]:
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=vnc_path, label_paths=vnc_path, rois=roi, n_samples=n_samples, **vnc_kwargs
+                    ),
+                    source_ndim=2,
+                )
+            )
+
+    # 11. Parlakgul liver (3D mitochondria in FIB-SEM of the mouse liver, 8 nm isotropic, proofread semantic labels)
+    # NOTE: The labels are stored as 0 / 255, so the sampler sees a single id before the connected components. The
+    # connected components merge a few touching mitochondria (2-7% of the objects).
+    if "parlakgul_liver" in EM_MITO_DATASETS:
+        parlakgul_paths = [os.path.join(input_path, box) for box in PARLAKGUL_LIVER_BOXES]
+        for z in z_slices:
+            parlakgul_kwargs = {
+                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for roi, ds_list, n_samples in [
+                (PARLAKGUL_LIVER_TRAIN_ROI, train_ds, 200), (PARLAKGUL_LIVER_VAL_ROI, val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=parlakgul_paths, label_paths=parlakgul_paths, rois=[roi] * len(parlakgul_paths),
+                            n_samples=max(1, n_samples // n_z), **parlakgul_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 12. MitoVerse xiao18 (3D mitochondria in ssSEM of the mouse auditory cortex, 8 x 8 x 50 nm, instance labels)
+    if "mitoverse_xiao18" in EM_MITO_DATASETS:
+        xiao18_path = os.path.join(input_path, "mitoverse", "data", "xiao18", "vol0.zarr")
+        for z in z_slices:
+            xiao18_kwargs = {
+                "raw_paths": xiao18_path, "raw_key": "img", "label_paths": xiao18_path, "label_key": "mito",
+                "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D, sampling=(6.25, 1, 1)),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for roi, ds_list, n_samples in [
+                (MITOVERSE_XIAO18_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["mitoverse_xiao18"]),
+                (MITOVERSE_XIAO18_VAL_ROI, val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            rois=roi, n_samples=max(1, n_samples // n_z), **xiao18_kwargs
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 13. MitoVerse haberl18 (3D mitochondria in SBF-SEM of the mouse brain, CDeep3M, 10 x 10 x 24 nm, instance labels)
+    # NOTE: The volumes are 256 px in plane, so 256 x 256 patches are resized to 512 x 512 (the z / xy anisotropy of
+    # the resized patch is 24 / 5), as for UroCell.
+    if "mitoverse_haberl18" in EM_MITO_DATASETS:
+        haberl18_root = os.path.join(input_path, "mitoverse", "data", "haberl18")
+        for z in z_slices:
+            haberl18_kwargs = {
+                "raw_key": "img", "label_key": "mito", "patch_shape": (z, 256, 256), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["raw_transform", "label_transform2", "sampler"]},
+                "raw_transform": _resize_raw_to_512,
+                "label_transform2": partial(
+                    _resize_then_em_label_trafo,
+                    em_trafo_fn=mito_label_trafo(EM_MITO_MIN_SIZE_3D, sampling=(4.8, 1, 1)),
+                ),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for volume, ds_list, n_samples in [("vol0", train_ds, EM_MITO_TRAIN_SAMPLES["mitoverse_haberl18"])]:
+                haberl18_path = os.path.join(haberl18_root, f"{volume}.zarr")
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=haberl18_path, label_paths=haberl18_path, n_samples=max(1, n_samples // n_z),
+                            **haberl18_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 14. MitoVerse MICrONS phase 1 (3D mitochondria in ssTEM of the mouse visual cortex, 8 x 8 x 40 nm, proofread)
+    # NOTE: The labels carry the ignore label in the regions without image data (see
+    # mitoverse_missing_data_label_path), and the loss ignores those voxels.
+    if "mitoverse_microns1" in EM_MITO_DATASETS:
+        microns1_root = os.path.join(input_path, "mitoverse", "data", "turner22")
+        raw_paths = [os.path.join(microns1_root, f"{volume}.zarr") for volume in MITOVERSE_MICRONS1_VOLUMES]
+        label_paths = [
+            mitoverse_missing_data_label_path(input_path, "turner22", volume) for volume in MITOVERSE_MICRONS1_VOLUMES
+        ]
+        for z in z_slices:
+            microns1_kwargs = {
+                "raw_key": "img", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{
+                    k: v for k, v in kwargs.items()
+                    if k not in ["raw_transform", "label_transform2", "sampler", "transform"]
+                },
+                "label_transform2": mito_label_trafo(
+                    EM_MITO_MIN_SIZE_3D, sampling=(5, 1, 1), ignore_label=MITOVERSE_IGNORE_LABEL
+                ),
+                # Missing sections and tiles are also filled with the constant 128, which the raw == 0 test of the
+                # derived labels misses; those regions become ignore here. The raw is normalized inside the transform.
+                "raw_transform": _prepare_identity,
+                "transform": partial(
+                    _ignore_missing_raw_trafo, ignore_label=MITOVERSE_IGNORE_LABEL, any_constant=True,
+                    transform=get_augmentations(ndim=3),
+                ),
+                "pre_label_transform": partial(
+                    _connected_components_pre_label_trafo, ignore_label=MITOVERSE_IGNORE_LABEL
+                ),
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D,
+                    exclude_ids=[0, MITOVERSE_IGNORE_LABEL],
+                ),
+            }
+            train_only = [volume in MITOVERSE_MICRONS1_TRAIN_ONLY_VOLUMES for volume in MITOVERSE_MICRONS1_VOLUMES]
+            train_rois = [np.s_[:, :, :] if only else MITOVERSE_MICRONS1_TRAIN_ROI for only in train_only]
+            val_volumes = [i for i, only in enumerate(train_only) if not only]
+            for paths, rois, ds_list, n_samples in [
+                ((raw_paths, label_paths), train_rois, train_ds, EM_MITO_TRAIN_SAMPLES["mitoverse_microns1"]),
+                (
+                    ([raw_paths[i] for i in val_volumes], [label_paths[i] for i in val_volumes]),
+                    [MITOVERSE_MICRONS1_VAL_ROI] * len(val_volumes), val_ds, 40,
+                ),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=paths[0], label_paths=paths[1], rois=rois,
+                            n_samples=max(1, n_samples // n_z), **microns1_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 15. CellMap mitochondria (3D mitochondria in FIB-SEM crops of cells and tissues, 2-32 nm, manual labels)
+    # NOTE: Nuclei and all other structures are background. Each patch side group is one dataset; patches below 512 px
+    # are resized to 512 x 512, which gives the (isotropic) crops a z / xy anisotropy of 512 / side.
+    if "cellmap_mito" in EM_MITO_DATASETS:
+        cellmap_groups = {split: cellmap_mito_split_crops(input_path, split) for split in ("train", "val")}
+        for z in z_slices:
+            for split, ds_list, n_samples in [
+                ("train", train_ds, EM_MITO_TRAIN_SAMPLES["cellmap_mito"]), ("val", val_ds, 40),
+            ]:
+                n_crops = sum(len(paths) for paths in cellmap_groups[split].values())
+                for side, paths in cellmap_groups[split].items():
+                    resize = side < 512
+                    em_trafo_fn = mito_label_trafo(
+                        EM_MITO_MIN_SIZE_3D, sampling=(512 / side, 1, 1) if resize else None
+                    )
+                    excluded = ["raw_transform", "label_transform2", "sampler"]
+                    cellmap_kwargs = {
+                        "raw_key": "raw", "label_key": "labels", "patch_shape": (z, side, side), "ndim": 3,
+                        **{k: v for k, v in kwargs.items() if k not in excluded},
+                        "raw_transform": _resize_raw_to_512 if resize else kwargs["raw_transform"],
+                        "label_transform2": (
+                            partial(_resize_then_em_label_trafo, em_trafo_fn=em_trafo_fn) if resize else em_trafo_fn
+                        ),
+                        "pre_label_transform": _connected_components_pre_label_trafo,
+                        "sampler": MinInstanceSampler(
+                            min_num_instances=1, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                        ),
+                    }
+                    ds_list.append(
+                        UniDataWrapper(
+                            torch_em.default_segmentation_dataset(
+                                raw_paths=paths, label_paths=paths,
+                                n_samples=max(1, round(n_samples * len(paths) / n_crops) // n_z), **cellmap_kwargs,
+                            ),
+                            source_ndim=3, group_key=(3, z),
+                        )
+                    )
+
+    # 16. Human organoids mitochondria (3D, FIB-SEM of patient-derived colorectal cancer organoids, manual labels)
+    # NOTE: The labels are the neck watershed instances (HUMAN_ORGANOIDS_MITO_ROOT); the per-patch connected components
+    # keep touching instances apart. The large black alignment padding is handled by the blank slice sampler.
+    if "human_organoids_mito" in EM_MITO_DATASETS:
+        organoid_paths = [
+            os.path.join(input_path, "human_organoids", "11380", "data", name) for name in HUMAN_ORGANOIDS_VOLUMES
+        ]
+        mito_label_paths = [
+            os.path.join(input_path, HUMAN_ORGANOIDS_MITO_ROOT, name.replace("_bin2.h5", "_mito_labels.zarr"))
+            for name in HUMAN_ORGANOIDS_VOLUMES
+        ]
+        organoid_rois = {"train": [], "val": []}
+        for path in organoid_paths:
+            with open_file(path, "r") as f:
+                n_train = int(f["mitos"].shape[0] * (1 - HUMAN_ORGANOIDS_VAL_FRACTION))
+            organoid_rois["train"].append(np.s_[:n_train, :, :])
+            organoid_rois["val"].append(np.s_[n_train:, :, :])
+        for z in z_slices:
+            organoid_kwargs = {
+                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for split, ds_list, n_samples in [
+                ("train", train_ds, EM_MITO_TRAIN_SAMPLES["human_organoids_mito"]), ("val", val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=organoid_paths, label_paths=mito_label_paths, rois=organoid_rois[split],
+                            n_samples=max(1, n_samples // n_z), **organoid_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 17. ASEM mitochondria (3D mitochondria in FIB-SEM of cultured cells, 4-5 nm isotropic, manual semantic labels)
+    # NOTE: The sampler sees the semantic labels before the connected components, i.e. a single id.
+    if "asem_mito" in EM_MITO_DATASETS:
+        asem_paths = [os.path.join(input_path, ASEM_MITO_ROOT, name) for name in ASEM_MITO_TRAIN_VOLUMES]
+        small_paths = [os.path.join(input_path, ASEM_MITO_ROOT, name) for name in ASEM_MITO_SMALL_VOLUMES]
+        resize = 512 / ASEM_MITO_SMALL_SIDE
+        excluded = ["raw_transform", "label_transform2", "sampler"]
+        for z in z_slices:
+            asem_kwargs = {
+                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for roi, ds_list, n_samples in [
+                (ASEM_MITO_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["asem_mito"]), (ASEM_MITO_VAL_ROI, val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=asem_paths, label_paths=asem_paths, rois=[roi] * len(asem_paths),
+                            n_samples=max(1, n_samples // n_z), **asem_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+            small_kwargs = {
+                "raw_key": "raw", "label_key": "labels", "ndim": 3,
+                "patch_shape": (z, ASEM_MITO_SMALL_SIDE, ASEM_MITO_SMALL_SIDE),
+                **{k: v for k, v in kwargs.items() if k not in excluded},
+                "raw_transform": _resize_raw_to_512,
+                "label_transform2": partial(
+                    _resize_then_em_label_trafo,
+                    em_trafo_fn=mito_label_trafo(EM_MITO_MIN_SIZE_3D, sampling=(resize, 1, 1)),
+                ),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            train_ds.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=small_paths, label_paths=small_paths,
+                        n_samples=max(1, EM_MITO_TRAIN_SAMPLES["asem_mito_small"] // n_z), **small_kwargs,
+                    ),
+                    source_ndim=3, group_key=(3, z),
+                )
+            )
+
+    # 18. Brain PFIB-SEM mitochondria (3D mitochondria in PFIB-SEM of the mouse brain, 5 nm isotropic, expert labels)
+    # NOTE: The reference (2 us) and the registered noisy (0.5 us) stack train with the same labels; only the
+    # reference stack validates.
+    if "brain_pfibsem_mito" in EM_MITO_DATASETS:
+        brain_path = os.path.join(input_path, BRAIN_PFIBSEM_PATH)
+        for z in z_slices:
+            for raw_key, roi, ds_list, n_samples in [
+                ("raw/reference", BRAIN_PFIBSEM_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["brain_pfibsem_reference"]),
+                ("raw/noisy", BRAIN_PFIBSEM_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["brain_pfibsem_noisy"]),
+                ("raw/reference", BRAIN_PFIBSEM_VAL_ROI, val_ds, 40),
+            ]:
+                brain_kwargs = {
+                    "raw_key": raw_key, "label_key": "labels/mitochondria", "patch_shape": (z, *patch_shape),
+                    "ndim": 3, **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                    "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D),
+                    "pre_label_transform": _connected_components_pre_label_trafo,
+                    "sampler": MinInstanceSampler(
+                        min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                    ),
+                }
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=brain_path, label_paths=brain_path, rois=roi,
+                            n_samples=max(1, n_samples // n_z), **brain_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 19. SNEMI Mito (3D mitochondria in ssSEM of the mouse neocortex, SNEMI3D, 6 x 6 x 30 nm, manual binary masks)
+    # NOTE: The sampler sees the binary labels before the connected components, i.e. a single id.
+    if "snemi_mito" in EM_MITO_DATASETS:
+        snemi_path = os.path.join(input_path, SNEMI_MITO_PATH)
+        for z in z_slices:
+            snemi_kwargs = {
+                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D, sampling=(30 / 6, 1, 1)),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for roi, ds_list, n_samples in [
+                (SNEMI_MITO_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["snemi_mito"]), (SNEMI_MITO_VAL_ROI, val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=snemi_path, label_paths=snemi_path, rois=roi,
+                            n_samples=max(1, n_samples // n_z), **snemi_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 20. U2OS FIB-SEM mitochondria (2D mitochondria in single FIB-SEM slices of a U2-OS cell, manual binary masks)
+    # NOTE: The sampler sees the binary labels before the connected components, i.e. a single id.
+    if "u2os_fibsem_mito" in EM_MITO_DATASETS:
+        u2os_images = sorted(glob(os.path.join(input_path, U2OS_FIBSEM_MITO_ROOT, "images_tif", "*.tif")))
+        u2os_labels = sorted(glob(os.path.join(input_path, U2OS_FIBSEM_MITO_ROOT, "labels_tif", "*.tif")))
+        u2os_kwargs = {
+            "raw_key": None, "label_key": None, "patch_shape": patch_shape, "ndim": 2, "is_seg_dataset": False,
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+            "label_transform2": mito_label_trafo(),
+            "pre_label_transform": _connected_components_pre_label_trafo,
+            "sampler": MinInstanceSampler(
+                min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE, exclude_ids=[0]
+            ),
+        }
+        for split, ds_list, n_samples in [
+            ("train", train_ds, EM_MITO_TRAIN_SAMPLES["u2os_fibsem_mito"]), ("val", val_ds, 40),
+        ]:
+            keep = [
+                (i % U2OS_FIBSEM_MITO_VAL_STEP == U2OS_FIBSEM_MITO_VAL_STEP // 2) == (split == "val")
+                for i in range(len(u2os_images))
+            ]
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=[p for p, k in zip(u2os_images, keep) if k],
+                        label_paths=[p for p, k in zip(u2os_labels, keep) if k], n_samples=n_samples, **u2os_kwargs,
+                    ), source_ndim=2,
+                )
+            )
+
+    # 21. HeLa STARD3 mitochondria (3D mitochondria in FIB-SEM of HeLa cells, 5-8 nm, manual binary masks in the ROI)
+    # NOTE: The sampler sees the binary labels before the connected components, i.e. a single id.
+    if "hela_stard3_mito" in EM_MITO_DATASETS:
+        hela_paths = [os.path.join(input_path, "hela_stard3", f"{volume}.h5") for volume in HELA_STARD3_VOLUMES]
+        train_rois = [
+            np.s_[:HELA_STARD3_VAL_START, :, :] if volume == HELA_STARD3_VAL_VOLUME else np.s_[:, :, :]
+            for volume in HELA_STARD3_VOLUMES
+        ]
+        val_path = hela_paths[HELA_STARD3_VOLUMES.index(HELA_STARD3_VAL_VOLUME)]
+        for z in z_slices:
+            hela_kwargs = {
+                "raw_key": "raw", "label_key": "labels/mitochondria", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for paths, rois, ds_list, n_samples in [
+                (hela_paths, train_rois, train_ds, EM_MITO_TRAIN_SAMPLES["hela_stard3_mito"]),
+                ([val_path], [np.s_[HELA_STARD3_VAL_START:, :, :]], val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=paths, label_paths=paths, rois=rois, n_samples=max(1, n_samples // n_z),
+                            **hela_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 22. Parlakgul fasting liver mitochondria (3D mitochondria in FIB-SEM of the mouse liver, 8 nm, instance labels)
+    if "parlakgul_fasting_liver_mito" in EM_MITO_DATASETS:
+        fasting_paths = sorted(glob(os.path.join(input_path, PARLAKGUL_FASTING_ROOT, "*_mito_*.zarr")))
+        for z in z_slices:
+            fasting_kwargs = {
+                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for roi, ds_list, n_samples in [
+                (PARLAKGUL_FASTING_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["parlakgul_fasting_liver_mito"]),
+                (PARLAKGUL_FASTING_VAL_ROI, val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=fasting_paths, label_paths=fasting_paths, rois=[roi] * len(fasting_paths),
+                            n_samples=max(1, n_samples // n_z), **fasting_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 23. AIVE mitochondria (3D mitochondria in FIB-SEM of cells and muscle tissue, 6.5 x 6.5 x 10 nm, semantic labels)
+    # NOTE: The mitochondria class is taken before the sampler, i.e. the sampler sees a single id.
+    if "aive_mito" in EM_MITO_DATASETS:
+        aive_paths = [os.path.join(input_path, "aive", name) for name in AIVE_MITO_VAL_STARTS]
+        for z in z_slices:
+            aive_kwargs = {
+                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler", "pre_label_transform"]},
+                "pre_label_transform": partial(
+                    _connected_components_pre_label_trafo, foreground_class=AIVE_MITO_CLASS
+                ),
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D, sampling=(10 / 6.5, 1, 1)),
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for rois, ds_list, n_samples in [
+                (
+                    [np.s_[:start, :, :] for start in AIVE_MITO_VAL_STARTS.values()], train_ds,
+                    EM_MITO_TRAIN_SAMPLES["aive_mito"],
+                ),
+                ([np.s_[start:, :, :] for start in AIVE_MITO_VAL_STARTS.values()], val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=aive_paths, label_paths=aive_paths, rois=rois,
+                            n_samples=max(1, n_samples // n_z), **aive_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 24. MitoSegEM (3D mitochondria in SBF-SEM of the mouse testis and brainstem, 15 x 15 x 50 nm, instance labels)
+    if "mito_segem" in EM_MITO_DATASETS:
+        from torch_em.data.datasets.electron_microscopy.mito_segem import get_mito_segem_paths
+        segem_paths = [
+            path for tissue, box in MITO_SEGEM_TRAIN_BOXES.items()
+            for path in get_mito_segem_paths(os.path.join(input_path, "mito_segem"), [box], tissue, download=True)
+        ]
+        for z in z_slices:
+            segem_kwargs = {
+                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D, sampling=(50 / 15, 1, 1)),
+                "pre_label_transform": _connected_components_pre_label_trafo,
+                "sampler": MinInstanceSampler(
+                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
+                ),
+            }
+            for roi, ds_list, n_samples in [
+                (MITO_SEGEM_TRAIN_ROI, train_ds, EM_MITO_TRAIN_SAMPLES["mito_segem"]), (MITO_SEGEM_VAL_ROI, val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=segem_paths, label_paths=segem_paths, rois=[roi] * len(segem_paths),
+                            n_samples=max(1, n_samples // n_z), **segem_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    _set_volume_min_instances([train_ds, val_ds], EM_MITO_SPARSE_VOLUMES)
+    return train_ds, val_ds
+
+
+def _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
+    """Get the nucleus EM datasets for the nucleus generalist.
+
+    The targets come from the plain label transform, as for the mitochondria generalist, and the distance transform
+    relabels every extracted patch with connected components (``apply_label=True``). Each patch side group of a dataset
+    (see EM_NUCLEUS_PATCH_SIDES) is one dataset, and patches below 512 px are resized to 512 x 512, which gives the
+    isotropic volumes a z / xy anisotropy of 512 / side.
+
+    Returns:
+        Tuple of (train_ds, val_ds) lists of UniDataWrapper instances.
+    """
+    train_ds, val_ds = [], []
+    n_z = len(z_slices)
+
+    def nucleus_label_trafo(side, ignore_label=None, z_scale=1):
+        resize = side < 512
+        z_factor = z_scale * 512 / side
+        sampling = None if z_factor == 1 else (z_factor, 1, 1)
+        trafo = kwargs.get("label_transform2") if label_trafo is None else label_trafo(
+            min_size=EM_NUCLEUS_MIN_SIZE_3D, sampling=sampling
+        )
+        if ignore_label is not None:
+            trafo = partial(_ignore_label_trafo, ignore_label=ignore_label, label_trafo=trafo)
+        return partial(_resize_then_em_label_trafo, em_trafo_fn=trafo) if resize else trafo
+
+    def connected_components(ignore_label=None):
+        if ignore_label is None:
+            return _connected_components_pre_label_trafo
+        return partial(_connected_components_pre_label_trafo, ignore_label=ignore_label)
+
+    def nucleus_sampler(ignore_label=None, min_num_instances=1):
+        exclude_ids = [0] if ignore_label is None else [0, ignore_label]
+        return MinInstanceSampler(
+            min_num_instances=min_num_instances, min_size=EM_NUCLEUS_MIN_SIZE_3D, exclude_ids=exclude_ids
+        )
+
+    def add_grouped_datasets(
+        groups, label_key, train_samples, ignore_label=None, pre_label_transform=None, weights=None,
+        min_num_instances=1,
+    ):
+        # The pre_label_transform (connected components by default) runs before the sampler, so the sampler counts the
+        # instances of a patch. The samples of a split are divided across the patch side groups by the summed weights
+        # of their volumes (*weights*, {path: weight}), by default one per volume, with at least one per volume.
+        excluded = ["raw_transform", "label_transform2", "sampler", "pre_label_transform"]
+        if pre_label_transform is None:
+            pre_label_transform = connected_components(ignore_label)
+        for z in z_slices:
+            for split, ds_list, n_samples in [("train", train_ds, train_samples), ("val", val_ds, 40)]:
+                group_weights = {
+                    side: sum(1 if weights is None else weights[path] for path in paths)
+                    for side, paths in groups[split].items()
+                }
+                total_weight = sum(group_weights.values())
+                for side, paths in groups[split].items():
+                    nucleus_kwargs = {
+                        "raw_key": "raw", "label_key": label_key, "patch_shape": (z, side, side), "ndim": 3,
+                        **{k: v for k, v in kwargs.items() if k not in excluded},
+                        "raw_transform": _resize_raw_to_512 if side < 512 else kwargs["raw_transform"],
+                        "label_transform2": nucleus_label_trafo(side, ignore_label),
+                        "pre_label_transform": pre_label_transform,
+                        "sampler": nucleus_sampler(ignore_label, min_num_instances),
+                    }
+                    ds_list.append(
+                        UniDataWrapper(
+                            torch_em.default_segmentation_dataset(
+                                raw_paths=paths, label_paths=paths,
+                                n_samples=max(len(paths), round(n_samples * group_weights[side] / total_weight) // n_z),
+                                **nucleus_kwargs,
+                            ),
+                            source_ndim=3, group_key=(3, z),
+                        )
+                    )
+
+    def add_volume_datasets(volumes, train_samples, ignore_label=None, min_num_instances=1):
+        # *volumes* are (split, path, raw_key, label_key, roi, z_scale) tuples; the volumes of a split are grouped by
+        # patch side (from the in-plane size of their roi), keys and z_scale, and the samples are divided across the
+        # groups by their number of volumes, with at least one per volume.
+        excluded = ["raw_transform", "label_transform2", "sampler", "pre_label_transform"]
+        groups = {}
+        for split, path, raw_key, label_key, roi, z_scale in volumes:
+            with open_file(path, "r") as f:
+                shape = f[label_key].shape
+            in_plane = [len(range(*sl.indices(n))) for sl, n in zip(roi[1:], shape[1:])]
+            key = (split, em_nucleus_patch_side(in_plane), raw_key, label_key, z_scale)
+            groups.setdefault(key, []).append((path, roi))
+        for z in z_slices:
+            for split, ds_list, n_samples in [("train", train_ds, train_samples), ("val", val_ds, 40)]:
+                n_volumes = sum(len(entries) for key, entries in groups.items() if key[0] == split)
+                for (group_split, side, raw_key, label_key, z_scale), entries in groups.items():
+                    if group_split != split:
+                        continue
+                    volume_kwargs = {
+                        "raw_key": raw_key, "label_key": label_key, "patch_shape": (z, side, side), "ndim": 3,
+                        **{k: v for k, v in kwargs.items() if k not in excluded},
+                        "raw_transform": _resize_raw_to_512 if side < 512 else kwargs["raw_transform"],
+                        "label_transform2": nucleus_label_trafo(side, ignore_label, z_scale=z_scale),
+                        "pre_label_transform": connected_components(ignore_label),
+                        "sampler": nucleus_sampler(ignore_label, min_num_instances),
+                    }
+                    ds_list.append(
+                        UniDataWrapper(
+                            torch_em.default_segmentation_dataset(
+                                raw_paths=[path for path, _ in entries], label_paths=[path for path, _ in entries],
+                                rois=[roi for _, roi in entries],
+                                n_samples=max(len(entries), round(n_samples * len(entries) / n_volumes) // n_z),
+                                **volume_kwargs,
+                            ),
+                            source_ndim=3, group_key=(3, z),
+                        )
+                    )
+
+    def add_image_datasets(train_paths, val_paths, train_samples, ignore_label=None, min_num_instances=1):
+        # 2D images (h5 files with 'raw' and 'labels') of at least 512 px, drawn as 512 x 512 patches.
+        image_kwargs = {
+            "raw_key": "raw", "label_key": "labels", "patch_shape": patch_shape, "ndim": 2,
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+            "label_transform2": nucleus_label_trafo(512, ignore_label=ignore_label),
+            "pre_label_transform": connected_components(ignore_label),
+            "sampler": nucleus_sampler(ignore_label, min_num_instances),
+        }
+        for paths, ds_list, n_samples in [(train_paths, train_ds, train_samples), (val_paths, val_ds, 40)]:
+            if not paths:
+                continue
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=paths, label_paths=paths, n_samples=n_samples, **image_kwargs
+                    ),
+                    source_ndim=2,
+                )
+            )
+
+    # 1. BetaSeg nuclei (3D nucleus of one target cell per volume in FIB-SEM of mouse beta cells, 4 nm, manual labels)
+    # NOTE: The loss ignores the voxels outside the target cell and on blank raw (BETASEG_NUCLEUS_IGNORE_LABEL).
+    if "betaseg_nucleus" in EM_NUCLEUS_DATASETS:
+        betaseg_groups = {split: betaseg_nucleus_split_boxes(input_path, split) for split in ("train", "val")}
+        add_grouped_datasets(
+            betaseg_groups, "labels/nucleus", EM_NUCLEUS_TRAIN_SAMPLES["betaseg_nucleus"],
+            ignore_label=BETASEG_NUCLEUS_IGNORE_LABEL,
+        )
+
+    # 2. CellMap nuclei (3D nuclei in FIB-SEM crops of mouse liver, kidney and heart and zebrafish heart, 32-64 nm,
+    # manual instance labels)
+    if "cellmap_nucleus" in EM_NUCLEUS_DATASETS:
+        cellmap_groups = {split: cellmap_nucleus_split_crops(input_path, split) for split in ("train", "val")}
+        add_grouped_datasets(
+            cellmap_groups, "labels", EM_NUCLEUS_TRAIN_SAMPLES["cellmap_nucleus"],
+            min_num_instances=EM_NUCLEUS_MIN_INSTANCES["cellmap_nucleus"],
+        )
+
+    # 3. Human organoids nuclei (3D nuclei in FIB-SEM of a breast cancer spheroid and colorectal cancer organoids,
+    # manual labels)
+    # NOTE: The loss ignores label fragments and the entotic cell (HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL). The large
+    # black alignment padding is handled by the blank slice sampler.
+    if "human_organoids_nucleus" in EM_NUCLEUS_DATASETS:
+        names = [name.replace("_bin2.h5", "") for name in HUMAN_ORGANOIDS_VOLUMES]
+        raw_paths = [os.path.join(input_path, "human_organoids", "11380", "data", f"{name}_bin2.h5") for name in names]
+        label_paths = [
+            os.path.join(input_path, "human_organoids_nucleus", f"{name}_nucleus_labels.zarr") for name in names
+        ]
+        organoid_rois = {"train": [], "val": []}
+        for path in raw_paths:
+            with open_file(path, "r") as f:
+                n_train = int(f["nuclei"].shape[0] * (1 - HUMAN_ORGANOIDS_VAL_FRACTION))
+            organoid_rois["train"].append(np.s_[:n_train, :, :])
+            organoid_rois["val"].append(np.s_[n_train:, :, :])
+        for z in z_slices:
+            organoid_kwargs = {
+                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": nucleus_label_trafo(512, ignore_label=HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL),
+                "pre_label_transform": connected_components(HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL),
+                "sampler": nucleus_sampler(
+                    HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL, EM_NUCLEUS_MIN_INSTANCES["human_organoids_nucleus"]
+                ),
+            }
+            for split, ds_list, n_samples in [
+                ("train", train_ds, EM_NUCLEUS_TRAIN_SAMPLES["human_organoids_nucleus"]), ("val", val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=raw_paths, label_paths=label_paths, rois=organoid_rois[split],
+                            n_samples=max(1, n_samples // n_z), **organoid_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 4. SXT INS-1E nuclei (3D nucleus of one cell per tomogram in soft X-ray tomography of INS-1E cells, 36.8-45.5 nm,
+    # semi-automatic labels)
+    # NOTE: The pre_label_transform maps the class labels to the nucleus and the exterior to SXT_NUCLEUS_IGNORE_LABEL,
+    # which the loss ignores, and labels the connected components before the sampler.
+    if "sxt_nucleus" in EM_NUCLEUS_DATASETS:
+        sxt_groups = {split: sxt_nucleus_split_paths(input_path, split) for split in ("train", "val")}
+        add_grouped_datasets(
+            sxt_groups, "labels", EM_NUCLEUS_TRAIN_SAMPLES["sxt_nucleus"], ignore_label=SXT_NUCLEUS_IGNORE_LABEL,
+            pre_label_transform=sxt_nucleus_instances,
+        )
+
+    # 5. FAFB nuclei (3D nuclei in ssTEM of the adult fly brain, 32 x 32 x 40 nm, automatic FlyWire segmentation)
+    if "fafb_nuclei" in EM_NUCLEUS_DATASETS:
+        for z in z_slices:
+            fafb_kwargs = {
+                "raw_key": "raw", "label_key": "labels/nuclei", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": nucleus_label_trafo(512, z_scale=FAFB_NUCLEI_Z_SCALE),
+                "pre_label_transform": connected_components(),
+                "sampler": nucleus_sampler(min_num_instances=EM_NUCLEUS_MIN_INSTANCES["fafb_nuclei"]),
+            }
+            for split, ds_list, n_samples in [
+                ("train", train_ds, EM_NUCLEUS_TRAIN_SAMPLES["fafb_nuclei"]), ("val", val_ds, 40),
+            ]:
+                paths = sorted(glob(os.path.join(input_path, "fafb_nuclei", split, "*.h5")))
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=paths, label_paths=paths, n_samples=max(1, n_samples // n_z), **fafb_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 6. Janelia nuclei (3D nuclei in FIB-SEM of 15 OpenOrganelle volumes of mouse and fly tissues, 32-128 nm,
+    # Cellpose pseudo-labels and 3 manual volumes)
+    if "janelia_nucleus" in EM_NUCLEUS_DATASETS:
+        janelia_groups, janelia_voxels = {}, {}
+        for split in ("train", "val"):
+            janelia_groups[split], split_voxels = janelia_nucleus_split_paths(input_path, split)
+            janelia_voxels.update(split_voxels)
+        add_grouped_datasets(
+            janelia_groups, "labels", EM_NUCLEUS_TRAIN_SAMPLES["janelia_nucleus"], weights=janelia_voxels,
+            min_num_instances=EM_NUCLEUS_MIN_INSTANCES["janelia_nucleus"],
+        )
+
+    # 7. MICrONS nuclei (3D nuclei in ssTEM of the mouse visual cortex, 64 x 64 x 40 nm, automatic minnie65 labels)
+    if "microns_nuclei" in EM_NUCLEUS_DATASETS:
+        for z in z_slices:
+            microns_kwargs = {
+                "raw_key": "raw", "label_key": "labels/nuclei", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": nucleus_label_trafo(512, z_scale=MICRONS_NUCLEI_Z_SCALE),
+                "pre_label_transform": connected_components(),
+                "sampler": nucleus_sampler(min_num_instances=EM_NUCLEUS_MIN_INSTANCES["microns_nuclei"]),
+            }
+            for split, ds_list, n_samples in [
+                ("train", train_ds, EM_NUCLEUS_TRAIN_SAMPLES["microns_nuclei"]), ("val", val_ds, 40),
+            ]:
+                paths = sorted(glob(os.path.join(input_path, "microns_nuclei", split, "*.h5")))
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=paths, label_paths=paths, n_samples=max(1, n_samples // n_z), **microns_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    waenet_root = os.path.join(input_path, "waenet_nucleus")
+
+    # 8. WAE-Net dataset 1 nuclei (3D nuclei in FIB-SEM of pancreatic carcinoid cells, manual labels)
+    if "waenet_fibsem_nucleus" in EM_NUCLEUS_DATASETS:
+        waenet_path = os.path.join(waenet_root, "dataset_1.h5")
+        with open_file(waenet_path, "r") as f:
+            n_train = int(f["raw"].shape[0] * (1 - WAENET_VAL_FRACTION))
+        waenet_rois = {"train": np.s_[:n_train, :, :], "val": np.s_[n_train:, :, :]}
+        for z in z_slices:
+            waenet_kwargs = {
+                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
+                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+                "label_transform2": nucleus_label_trafo(512),
+                "pre_label_transform": connected_components(),
+                "sampler": nucleus_sampler(),
+            }
+            for split, ds_list, n_samples in [
+                ("train", train_ds, EM_NUCLEUS_TRAIN_SAMPLES["waenet_fibsem_nucleus"]), ("val", val_ds, 40),
+            ]:
+                ds_list.append(
+                    UniDataWrapper(
+                        torch_em.default_segmentation_dataset(
+                            raw_paths=waenet_path, label_paths=waenet_path, rois=waenet_rois[split],
+                            n_samples=max(1, n_samples // n_z), **waenet_kwargs,
+                        ),
+                        source_ndim=3, group_key=(3, z),
+                    )
+                )
+
+    # 9. WAE-Net dataset 3 nuclei (2D nucleus in serial ssTEM sections of one interphase BON cell, manual labels) and
+    # 10. WAE-Net datasets 4-7 nuclei (2D nucleus of the central cell in TEM images of lymphocytes and B cells, manual
+    # labels; the loss ignores the pixels outside the central cell band, WAENET_NUCLEUS_IGNORE_LABEL)
+    for name, prefix in [("waenet_sstem_nucleus", "dataset_3"), ("waenet_tem_nucleus", "tem")]:
+        if name not in EM_NUCLEUS_DATASETS:
+            continue
+        waenet_kwargs = {
+            "raw_key": "raw", "label_key": "labels", "patch_shape": (1, *patch_shape),
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+            "label_transform2": nucleus_label_trafo(512, ignore_label=WAENET_NUCLEUS_IGNORE_LABEL),
+            "pre_label_transform": connected_components(WAENET_NUCLEUS_IGNORE_LABEL),
+            "sampler": nucleus_sampler(WAENET_NUCLEUS_IGNORE_LABEL),
+        }
+        for split, ds_list, n_samples in [("train", train_ds, EM_NUCLEUS_TRAIN_SAMPLES[name]), ("val", val_ds, 40)]:
+            waenet_path = os.path.join(waenet_root, f"{prefix}_{split}.h5")
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=waenet_path, label_paths=waenet_path, n_samples=n_samples, **waenet_kwargs
+                    ),
+                    source_ndim=2,
+                )
+            )
+
+    # 11. Platynereis nuclei (3D nuclei in SBEM of a Platynereis larva, about 80 x 80 x 100 nm, manual instance labels)
+    # NOTE: Only the valid ROI of each volume trains, which removes the halo of unlabeled voxels.
+    if "platynereis_nuclei" in EM_NUCLEUS_DATASETS:
+        platy_groups = {split: platynereis_nuclei_split_rois(input_path, split) for split in ("train", "val")}
+        excluded = ["raw_transform", "label_transform2", "sampler"]
+        for z in z_slices:
+            for split, ds_list, n_samples in [
+                ("train", train_ds, EM_NUCLEUS_TRAIN_SAMPLES["platynereis_nuclei"]), ("val", val_ds, 40),
+            ]:
+                n_volumes = sum(len(paths) for paths, _ in platy_groups[split].values())
+                for side, (paths, rois) in platy_groups[split].items():
+                    platy_kwargs = {
+                        "raw_key": "volumes/raw", "label_key": "volumes/labels/nucleus_instance_labels",
+                        "patch_shape": (z, side, side), "ndim": 3,
+                        **{k: v for k, v in kwargs.items() if k not in excluded},
+                        "raw_transform": _resize_raw_to_512 if side < 512 else kwargs["raw_transform"],
+                        "label_transform2": nucleus_label_trafo(side, z_scale=PLATYNEREIS_NUCLEI_Z_SCALE),
+                        "pre_label_transform": connected_components(),
+                        "sampler": nucleus_sampler(min_num_instances=EM_NUCLEUS_MIN_INSTANCES["platynereis_nuclei"]),
+                    }
+                    ds_list.append(
+                        UniDataWrapper(
+                            torch_em.default_segmentation_dataset(
+                                raw_paths=paths, label_paths=paths, rois=rois,
+                                n_samples=max(len(paths), round(n_samples * len(paths) / n_volumes) // n_z),
+                                **platy_kwargs,
+                            ),
+                            source_ndim=3, group_key=(3, z),
+                        )
+                    )
+
+    # 12. Tumor spheroid nuclei (2D nuclei in single SBF-SEM slices of a tumor spheroid, 50 nm, manual instance labels)
+    # NOTE: The loss ignores the annotated cells without a nucleus label (TUMOR_SPHEROID_NUCLEI_IGNORE_LABEL).
+    if "tumor_spheroid_nuclei" in EM_NUCLEUS_DATASETS:
+        spheroid_paths = sorted(glob(os.path.join(input_path, "tumor_spheroid_nucleus", "*.h5")))
+        spheroid_kwargs = {
+            "raw_key": "raw", "label_key": "labels", "patch_shape": patch_shape, "ndim": 2,
+            **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
+            "label_transform2": nucleus_label_trafo(512, ignore_label=TUMOR_SPHEROID_NUCLEI_IGNORE_LABEL),
+            "pre_label_transform": connected_components(TUMOR_SPHEROID_NUCLEI_IGNORE_LABEL),
+            "sampler": nucleus_sampler(
+                TUMOR_SPHEROID_NUCLEI_IGNORE_LABEL, EM_NUCLEUS_MIN_INSTANCES["tumor_spheroid_nuclei"]
+            ),
+        }
+        for split, ds_list, n_samples in [
+            ("train", train_ds, EM_NUCLEUS_TRAIN_SAMPLES["tumor_spheroid_nuclei"]), ("val", val_ds, 40),
+        ]:
+            paths = [
+                path for path in spheroid_paths
+                if (os.path.basename(path) in TUMOR_SPHEROID_NUCLEI_VAL_SLICES) == (split == "val")
+            ]
+            ds_list.append(
+                UniDataWrapper(
+                    torch_em.default_segmentation_dataset(
+                        raw_paths=paths, label_paths=paths, n_samples=n_samples, **spheroid_kwargs
+                    ),
+                    source_ndim=2,
+                )
+            )
+
+    # 13. OpenOrganelle nuclei (3D nuclei in FIB-SEM of 17 OpenOrganelle tissue and single-cell volumes, 32-128 nm,
+    # automatic labels)
+    if "openorganelle_nucleus" in EM_NUCLEUS_DATASETS:
+        openorganelle_groups, openorganelle_voxels = {}, {}
+        for split in ("train", "val"):
+            openorganelle_groups[split], split_voxels = openorganelle_nucleus_split_paths(input_path, split)
+            openorganelle_voxels.update(split_voxels)
+        add_grouped_datasets(
+            openorganelle_groups, "labels", EM_NUCLEUS_TRAIN_SAMPLES["openorganelle_nucleus"],
+            weights=openorganelle_voxels, min_num_instances=EM_NUCLEUS_MIN_INSTANCES["openorganelle_nucleus"],
+        )
+
+    full = np.s_[:, :, :]
+
+    # 14. Cardiomyocyte TEM nuclei (2D nucleus in TEM micrographs of isolated cardiomyocytes, manual masks, downscaled)
+    if "cardiomyocyte_tem_nucleus" in EM_NUCLEUS_DATASETS:
+        cardio_paths = sorted(glob(os.path.join(input_path, CARDIOMYOCYTE_NUCLEUS_ROOT, "*.h5")))
+        cardio_train, cardio_val = train_test_split(
+            cardio_paths, test_size=CARDIOMYOCYTE_NUCLEUS_N_VAL, random_state=42
+        )
+        add_image_datasets(
+            sorted(cardio_train), sorted(cardio_val), EM_NUCLEUS_TRAIN_SAMPLES["cardiomyocyte_tem_nucleus"]
+        )
+
+    # 15. microSAM EM nuclei (3D nuclei in the 32 x 512 x 512 train crop of the microSAM user study, manual labels)
+    # NOTE: The whole crop trains (no validation leaf), and the user-study 'annotation' crop is not used.
+    if "microsam_em_nuclei" in EM_NUCLEUS_DATASETS:
+        microsam_path = os.path.join(input_path, MICROSAM_EM_NUCLEI_PATH)
+        add_volume_datasets(
+            [("train", microsam_path, "raw", "labels/nuclei", full, 1)], EM_NUCLEUS_TRAIN_SAMPLES["microsam_em_nuclei"],
+            min_num_instances=EM_NUCLEUS_MIN_INSTANCES["microsam_em_nuclei"],
+        )
+
+    # 16. Perez nuclei (2D nuclei in SBF-SEM tiles of the mouse suprachiasmatic nucleus, manual masks)
+    if "perez_nucleus" in EM_NUCLEUS_DATASETS:
+        add_image_datasets(
+            sorted(glob(os.path.join(input_path, PEREZ_NUCLEUS_ROOT, "train", "*.h5"))),
+            sorted(glob(os.path.join(input_path, PEREZ_NUCLEUS_ROOT, "test", "*.h5"))),
+            EM_NUCLEUS_TRAIN_SAMPLES["perez_nucleus"],
+        )
+
+    # 17. vEM nuclei (2D nuclei in array tomography SEM and 3D nuclei in FIB-SEM of cancer cells and tumor tissue,
+    # proofread NucleoNet predictions)
+    # NOTE: The loss ignores the unlabeled border band of the 2D images whose border nuclei were removed.
+    if "vem_nuclei" in EM_NUCLEUS_DATASETS:
+        vem_root = os.path.join(input_path, VEM_NUCLEI_ROOT)
+        vem_3d = [os.path.join(vem_root, f"id_{i}.h5") for i in VEM_NUCLEI_3D_IDS]
+        vem_2d = sorted(p for p in glob(os.path.join(vem_root, "id_*.h5")) if p not in vem_3d)
+        vem_train, vem_val = train_test_split(vem_2d, test_size=1, random_state=42)
+        add_image_datasets(
+            sorted(vem_train), vem_val, EM_NUCLEUS_TRAIN_SAMPLES["vem_nuclei_2d"], ignore_label=VEM_NUCLEI_IGNORE_LABEL,
+            min_num_instances=EM_NUCLEUS_MIN_INSTANCES["vem_nuclei"],
+        )
+        val_slab = np.s_[-VEM_NUCLEI_VAL_SLICES:, :, :]
+        train_slab = np.s_[:-VEM_NUCLEI_VAL_SLICES, :, :]
+        add_volume_datasets([
+            ("train", vem_3d[0], "raw", "labels", full, 1), ("train", vem_3d[1], "raw", "labels", train_slab, 1),
+            ("val", vem_3d[1], "raw", "labels", val_slab, 1),
+        ], EM_NUCLEUS_TRAIN_SAMPLES["vem_nuclei_3d"], min_num_instances=EM_NUCLEUS_MIN_INSTANCES["vem_nuclei"])
+
+    # 18. AIVE nuclei (3D nuclei in FIB-SEM overview volumes of cells, downscaled to 30 x 26 x 26 nm, manual labels)
+    if "aive_nucleus" in EM_NUCLEUS_DATASETS:
+        aive_paths = sorted(glob(os.path.join(input_path, AIVE_NUCLEUS_ROOT, "*.h5")))
+        aive_volumes = [("train", path, "raw", "labels", full, AIVE_NUCLEUS_Z_SCALE) for path in aive_paths[:-1]]
+        aive_volumes += [
+            ("train", aive_paths[-1], "raw", "labels", np.s_[:-AIVE_NUCLEUS_VAL_SLICES, :, :], AIVE_NUCLEUS_Z_SCALE),
+            ("val", aive_paths[-1], "raw", "labels", np.s_[-AIVE_NUCLEUS_VAL_SLICES:, :, :], AIVE_NUCLEUS_Z_SCALE),
+        ]
+        add_volume_datasets(aive_volumes, EM_NUCLEUS_TRAIN_SAMPLES["aive_nucleus"])
+
+    # 19. Cerebellum nuclei (3D nuclei in FIB-SEM of the mouse cerebellum, downscaled to 20 nm, student labels)
+    if "cerebellum_nucleus" in EM_NUCLEUS_DATASETS:
+        cerebellum_path = os.path.join(input_path, CEREBELLUM_NUCLEUS_PATH)
+        add_volume_datasets([
+            ("train", cerebellum_path, "raw", "labels", np.s_[:CEREBELLUM_NUCLEUS_VAL_Z, :, :], 1),
+            ("val", cerebellum_path, "raw", "labels", np.s_[CEREBELLUM_NUCLEUS_VAL_Z:, :, :], 1),
+        ], EM_NUCLEUS_TRAIN_SAMPLES["cerebellum_nucleus"], ignore_label=CEREBELLUM_NUCLEUS_IGNORE_LABEL)
+
+    # 20. Macrophage / A431 nuclei (3D nucleus in SBF-SEM of macrophages and an A431 cell, quick semantic annotations)
+    if "macrophage_a431_nucleus" in EM_NUCLEUS_DATASETS:
+        macrophage_volumes = []
+        for path in sorted(glob(os.path.join(input_path, MACROPHAGE_NUCLEUS_ROOT, "*.h5"))):
+            z_scale = MACROPHAGE_NUCLEUS_Z_SCALE
+            if os.path.basename(path) == f"{MACROPHAGE_NUCLEUS_VAL_VOLUME}.h5":
+                macrophage_volumes += [
+                    ("train", path, "raw", "labels", np.s_[:MACROPHAGE_NUCLEUS_VAL_Z, :, :], z_scale),
+                    ("val", path, "raw", "labels", np.s_[MACROPHAGE_NUCLEUS_VAL_Z:, :, :], z_scale),
+                ]
+            else:
+                macrophage_volumes.append(("train", path, "raw", "labels", full, z_scale))
+        add_volume_datasets(macrophage_volumes, EM_NUCLEUS_TRAIN_SAMPLES["macrophage_a431_nucleus"])
+
+    _set_volume_min_instances([train_ds, val_ds], EM_NUCLEUS_SPARSE_VOLUMES, depth=2)
     return train_ds, val_ds
 
 
@@ -3098,7 +4924,8 @@ def get_dataloaders(
             - ``"lm"``: Light microscopy datasets only (2D + 3D LM).
             - ``"em"``: Electron microscopy datasets only.
             - ``"hp"``: Histopathology datasets only.
-            - ``"em_organelles"``: Mitochondria and nucleus EM datasets only (not part of ``"all"``).
+            - ``"em_mito"``: Mitochondria EM datasets only (not part of ``"all"``).
+            - ``"em_nucleus"``: Nucleus EM datasets only (not part of ``"all"``).
             - ``"all"``: LM, EM and HP datasets (default).
         with_boundaries: The flag to append the full object-boundary channel to the automatic targets.
     """
@@ -3143,10 +4970,15 @@ def get_dataloaders(
         train_ds.extend(hp_train)
         val_ds.extend(hp_val)
 
-    if dataset_choice == "em_organelles":
-        org_train, org_val = _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
-        train_ds.extend(org_train)
-        val_ds.extend(org_val)
+    if dataset_choice == "em_mito":
+        mito_train, mito_val = _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(mito_train)
+        val_ds.extend(mito_val)
+
+    if dataset_choice == "em_nucleus":
+        nuc_train, nuc_val = _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(nuc_train)
+        val_ds.extend(nuc_val)
 
     _configure_training_normalization(train_ds, val_ds)
 
@@ -3194,7 +5026,7 @@ def get_interactive_dataloaders(
         z_slices: List of z-slice counts for 3D data (e.g. [8]).
             Defaults to [8].
         dataset_choice: Which dataset domain to include - ``"lm"``, ``"em"``,
-            ``"hp"``, ``"em_organelles"``, or ``"all"`` (default).
+            ``"hp"``, ``"em_mito"``, ``"em_nucleus"``, or ``"all"`` (default).
         n_workers: Number of DataLoader worker processes.
 
     Returns:
@@ -3267,10 +5099,15 @@ def _build_automatic_datasets(input_path, z_slices, dataset_choice, with_boundar
         train_ds.extend(hp_train)
         val_ds.extend(hp_val)
 
-    if dataset_choice == "em_organelles":
-        org_train, org_val = _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
-        train_ds.extend(org_train)
-        val_ds.extend(org_val)
+    if dataset_choice == "em_mito":
+        mito_train, mito_val = _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(mito_train)
+        val_ds.extend(mito_val)
+
+    if dataset_choice == "em_nucleus":
+        nuc_train, nuc_val = _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(nuc_train)
+        val_ds.extend(nuc_val)
 
     _configure_training_normalization(train_ds, val_ds)
     return ConcatDataset(*train_ds), ConcatDataset(*val_ds)
@@ -3312,10 +5149,15 @@ def _build_interactive_datasets(input_path, z_slices, dataset_choice):
         train_ds.extend(hp_train)
         val_ds.extend(hp_val)
 
-    if dataset_choice == "em_organelles":
-        org_train, org_val = _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
-        train_ds.extend(org_train)
-        val_ds.extend(org_val)
+    if dataset_choice == "em_mito":
+        mito_train, mito_val = _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
+        train_ds.extend(mito_train)
+        val_ds.extend(mito_val)
+
+    if dataset_choice == "em_nucleus":
+        nuc_train, nuc_val = _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo=None)
+        train_ds.extend(nuc_train)
+        val_ds.extend(nuc_val)
 
     _configure_training_normalization(train_ds, val_ds)
 
@@ -3344,7 +5186,7 @@ def _build_joint_datasets(
     Args:
         input_path: Root path to the generalist training data.
         z_slices: Z-slice counts for 3D groups.
-        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, ``"em_organelles"``, or ``"all"``.
+        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, ``"em_mito"``, ``"em_nucleus"``, or ``"all"``.
         distance_type: Which directed distance target the automatic branch regresses.
             ``"geodesic"`` uses :class:`_JointGeodesicLabelTransform`, ``"directed"`` uses
             :class:`_JointLabelTransform`.
@@ -3393,10 +5235,15 @@ def _build_joint_datasets(
         train_ds.extend(hp_train)
         val_ds.extend(hp_val)
 
-    if dataset_choice == "em_organelles":
-        org_train, org_val = _get_em_organelles_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
-        train_ds.extend(org_train)
-        val_ds.extend(org_val)
+    if dataset_choice == "em_mito":
+        mito_train, mito_val = _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(mito_train)
+        val_ds.extend(mito_val)
+
+    if dataset_choice == "em_nucleus":
+        nuc_train, nuc_val = _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo)
+        train_ds.extend(nuc_train)
+        val_ds.extend(nuc_val)
 
     _configure_training_normalization(train_ds, val_ds)
 

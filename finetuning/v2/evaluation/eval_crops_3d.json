@@ -797,29 +797,6 @@
     ]
    }
   },
-  "mitolab_lucchi_pp": {
-   "crop_shape": [32, 512, 512],
-   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The test region is z 33-165. One tile without a mitochondrion is left out.",
-   "starts": {
-    "lucchi_pp_em.tif": [
-     [33, 0, 0],
-     [33, 0, 512],
-     [33, 512, 0],
-     [33, 512, 512],
-     [65, 0, 0],
-     [65, 0, 512],
-     [65, 512, 0],
-     [65, 512, 512],
-     [97, 0, 0],
-     [97, 0, 512],
-     [97, 512, 0],
-     [97, 512, 512],
-     [129, 0, 0],
-     [129, 0, 512],
-     [129, 512, 512]
-    ]
-   }
-  },
   "mitolab_salivary_gland": {
    "crop_shape": [32, 512, 512],
    "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The test region is z 250-1260. 16 of its 128 tiles are kept, holding 20-66 mitochondria.",
@@ -846,51 +823,8 @@
   },
   "asem_mito": {
    "crop_shape": [32, 512, 512],
-   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The 5 nm mitochondria are large, so a crop holds 1-11 of them. 46 and 58 keep 16 of their 28 tiles, 61 keeps 13 of 14.",
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The 5 nm mitochondria are large, so a crop holds 1-11 of them. 61 keeps 13 of 14 tiles. Only 64 and the 61 hold-out block are scored: the mitochondria generalist trains on 46, 58 and 2E.",
    "starts": {
-    "2E_z1015-1215_y316-516_x294-494.zarr": [
-     [40, 0, 0],
-     [72, 0, 0],
-     [104, 0, 0],
-     [136, 0, 0],
-     [168, 0, 0]
-    ],
-    "46_z640-896_y0-1024_x1112-2136.zarr": [
-     [48, 55, 77],
-     [48, 55, 589],
-     [48, 567, 77],
-     [80, 55, 77],
-     [80, 55, 589],
-     [80, 567, 77],
-     [112, 55, 77],
-     [112, 55, 589],
-     [144, 55, 77],
-     [144, 55, 589],
-     [176, 55, 77],
-     [176, 55, 589],
-     [208, 55, 77],
-     [208, 55, 589],
-     [240, 55, 77],
-     [240, 55, 589]
-    ],
-    "58_z152-408_y0-1000_x1480-2504.zarr": [
-     [48, 60, 0],
-     [48, 60, 512],
-     [48, 572, 0],
-     [48, 572, 512],
-     [80, 60, 0],
-     [80, 60, 512],
-     [112, 60, 0],
-     [112, 60, 512],
-     [144, 60, 0],
-     [144, 60, 512],
-     [144, 572, 512],
-     [176, 60, 0],
-     [176, 60, 512],
-     [176, 572, 0],
-     [208, 60, 0],
-     [240, 60, 0]
-    ],
     "61_z0-700_y190-730_x2630-3380.zarr": [
      [140, 0, 0],
      [172, 0, 0],
@@ -912,6 +846,972 @@
      [134, 0, 46],
      [166, 0, 46],
      [198, 0, 46]
+    ]
+   }
+  },
+  "cmito_l1": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. Tiles with a blank (missing) section are dropped too. The ground truth is Cmito model output, not hand labels. 12 of 12 tiles are kept, holding 15-36 mitochondria.",
+   "starts": {
+    "l1_ceb79c8268d7.zarr": [
+     [26, 0, 0],
+     [26, 0, 512],
+     [26, 512, 0],
+     [26, 512, 512],
+     [58, 0, 0],
+     [58, 0, 512],
+     [58, 512, 0],
+     [58, 512, 512],
+     [90, 0, 0],
+     [90, 0, 512],
+     [90, 512, 0],
+     [90, 512, 512]
+    ]
+   }
+  },
+  "cmito_l2": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. Tiles with a blank (missing) section are dropped too. The ground truth is Cmito model output, not hand labels. 12 of 12 tiles are kept, holding 26-50 mitochondria.",
+   "starts": {
+    "l2_2ea67de84d7e.zarr": [
+     [26, 0, 0],
+     [26, 0, 512],
+     [26, 512, 0],
+     [26, 512, 512],
+     [58, 0, 0],
+     [58, 0, 512],
+     [58, 512, 0],
+     [58, 512, 512],
+     [90, 0, 0],
+     [90, 0, 512],
+     [90, 512, 0],
+     [90, 512, 512]
+    ]
+   }
+  },
+  "cmito_l3": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. Tiles with a blank (missing) section are dropped too. The ground truth is Cmito model output, not hand labels. 12 of 12 tiles are kept, holding 31-63 mitochondria.",
+   "starts": {
+    "l3_voxels_13ca91605fde.zarr": [
+     [26, 0, 0],
+     [26, 0, 512],
+     [26, 512, 0],
+     [26, 512, 512],
+     [58, 0, 0],
+     [58, 0, 512],
+     [58, 512, 0],
+     [58, 512, 512],
+     [90, 0, 0],
+     [90, 0, 512],
+     [90, 512, 0],
+     [90, 512, 512]
+    ]
+   }
+  },
+  "cmito_adult": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. Tiles with a blank (missing) section are dropped too. The ground truth is Cmito model output, not hand labels. 8 of 12 tiles are kept (4 have a blank section), holding 63-120 mitochondria.",
+   "starts": {
+    "adult_dba9f64835ae.zarr": [
+     [26, 0, 0],
+     [26, 0, 512],
+     [26, 512, 0],
+     [26, 512, 512],
+     [90, 0, 0],
+     [90, 0, 512],
+     [90, 512, 0],
+     [90, 512, 512]
+    ]
+   }
+  },
+  "cmito_dauer": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. Tiles with a blank (missing) section are dropped too. The ground truth is Cmito model output, not hand labels. 16 of 36 tiles are kept, holding 106-177 mitochondria.",
+   "starts": {
+    "dauer_056f5d679440.zarr": [
+     [73, 528, 16],
+     [73, 528, 528],
+     [105, 528, 16],
+     [105, 528, 528],
+     [137, 528, 16],
+     [137, 528, 528],
+     [169, 528, 16],
+     [169, 528, 528],
+     [201, 528, 16],
+     [201, 528, 528],
+     [233, 528, 16],
+     [233, 528, 528],
+     [265, 528, 16],
+     [265, 528, 528],
+     [297, 528, 528],
+     [329, 528, 528]
+    ]
+   }
+  },
+  "densecell_mito": {
+   "crop_shape": [24, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The crops span all 24 slices of the blind val volume; the tuning data is z >= 35 of the train volume. 2 crops hold 2-13 mitochondria.",
+   "starts": {
+    "densecell_val.h5": [
+     [0, 8, 105],
+     [0, 520, 105]
+    ]
+   }
+  },
+  "hemibrain_mito": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The ground truth is class 1 of the automated FlyEM detection (16 nm, upsampled to 8 nm). 16 of 104 tiles are kept, holding 31-74 mitochondria.",
+   "starts": {
+    "mito_e6712bb65fa6.h5": [
+     [269, 512, 0],
+     [301, 512, 0],
+     [429, 512, 512],
+     [461, 512, 0],
+     [525, 0, 512],
+     [525, 512, 0],
+     [557, 0, 512],
+     [557, 512, 0],
+     [589, 0, 512],
+     [589, 512, 0],
+     [621, 512, 0],
+     [653, 512, 0],
+     [685, 512, 0],
+     [749, 512, 0],
+     [781, 0, 0],
+     [973, 512, 0]
+    ]
+   }
+  },
+  "kasthuri": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation of the Kasthuri test volume (the train volume tunes). Tiles thinner than 16 slices or 256 px in plane, tiles with a blank section and tiles where more than half of the voxels are padding (-1, the area around the rotated section, excluded from scoring) are dropped, and of the tiles that pass the object-count rule at most 16 are kept, the ones with the most objects. 16 of 25 tiles are kept, holding 5-18 mitochondria, with 0-49% padding.",
+   "starts": {
+    "kasthuri_test.h5": [
+     [0, 572, 15],
+     [0, 572, 527],
+     [0, 572, 1039],
+     [32, 60, 527],
+     [32, 572, 15],
+     [32, 572, 527],
+     [32, 572, 1039],
+     [32, 1084, 1039],
+     [64, 60, 15],
+     [64, 60, 527],
+     [64, 60, 1039],
+     [64, 572, 15],
+     [64, 572, 527],
+     [64, 572, 1039],
+     [64, 1084, 527],
+     [64, 1084, 1039]
+    ]
+   }
+  },
+  "mito_segem_intestine": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The test region of the 64-slice box is z 13-63, so the second row of crops is 19 slices deep. The ground truth is network predictions with a manual instance assignment. 8 of 8 tiles are kept, holding 15-36 mitochondria.",
+   "starts": {
+    "intestine_d5c5b8eea4ef.zarr": [
+     [13, 0, 0],
+     [13, 0, 512],
+     [13, 512, 0],
+     [13, 512, 512],
+     [45, 0, 0],
+     [45, 0, 512],
+     [45, 512, 0],
+     [45, 512, 512]
+    ]
+   }
+  },
+  "mitoem_human": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The val volume is scored (the test volumes have no labels); its test region is z 20-99, so the last row of crops is 16 slices deep. 16 of 192 tiles are kept, holding 26-34 mitochondria.",
+   "starts": {
+    "human_val.n5": [
+     [20, 0, 0],
+     [20, 0, 3584],
+     [20, 1024, 2048],
+     [20, 1024, 3072],
+     [20, 1536, 2048],
+     [20, 2048, 1536],
+     [20, 3584, 512],
+     [52, 0, 0],
+     [52, 0, 2560],
+     [52, 0, 3584],
+     [52, 512, 2048],
+     [52, 512, 2560],
+     [52, 1024, 0],
+     [52, 1536, 2560],
+     [52, 2048, 2560],
+     [52, 3584, 3584]
+    ]
+   }
+  },
+  "mitoem_rat": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The val volume is scored (the test volumes have no labels); its test region is z 20-99, so the last row of crops is 16 slices deep. 16 of 192 tiles are kept, holding 22-30 mitochondria.",
+   "starts": {
+    "rat_val.n5": [
+     [20, 512, 1536],
+     [20, 512, 2560],
+     [20, 1024, 2560],
+     [20, 1024, 3072],
+     [20, 1536, 512],
+     [20, 1536, 2560],
+     [20, 3584, 512],
+     [52, 0, 512],
+     [52, 0, 1024],
+     [52, 512, 1536],
+     [52, 1024, 2560],
+     [52, 1024, 3072],
+     [52, 1536, 2560],
+     [52, 3584, 2560],
+     [52, 3584, 3072],
+     [84, 3584, 3072]
+    ]
+   }
+  },
+  "mitoemv2_beta": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The MitoEM v2 test volumes are scored, their val volumes tune. me2-beta_test01.n5: 16 of 58 tiles, 30-50 mitochondria; me2-beta_test02.n5: 16 of 50 tiles, 27-34 mitochondria; me2-beta_test03.n5: 16 of 54 tiles, 28-57 mitochondria.",
+   "starts": {
+    "me2-beta_test01.n5": [
+     [0, 31, 55],
+     [32, 31, 55],
+     [64, 31, 55],
+     [96, 31, 55],
+     [128, 31, 55],
+     [160, 31, 55],
+     [192, 31, 55],
+     [224, 31, 55],
+     [256, 31, 55],
+     [288, 31, 55],
+     [480, 31, 567],
+     [512, 31, 567],
+     [576, 31, 55],
+     [672, 31, 55],
+     [704, 31, 55],
+     [704, 31, 567]
+    ],
+    "me2-beta_test02.n5": [
+     [251, 40, 617],
+     [283, 40, 617],
+     [315, 40, 617],
+     [347, 40, 617],
+     [379, 40, 617],
+     [411, 40, 617],
+     [443, 40, 617],
+     [507, 40, 617],
+     [539, 40, 617],
+     [571, 40, 617],
+     [603, 40, 617],
+     [635, 40, 617],
+     [667, 40, 105],
+     [699, 40, 105],
+     [731, 40, 105],
+     [763, 40, 105]
+    ],
+    "me2-beta_test03.n5": [
+     [64, 31, 37],
+     [96, 31, 37],
+     [128, 31, 37],
+     [160, 31, 37],
+     [192, 31, 37],
+     [224, 31, 37],
+     [256, 31, 37],
+     [288, 31, 37],
+     [320, 31, 37],
+     [352, 31, 37],
+     [384, 31, 37],
+     [416, 31, 37],
+     [448, 31, 37],
+     [480, 31, 37],
+     [512, 31, 37],
+     [608, 31, 37]
+    ]
+   }
+  },
+  "mitoemv2_jurkat": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The jurkat test volume is scored whole (its train volume tunes on z >= 230). me2-jurkat_test01.n5: 16 of 32 tiles, 11-32 mitochondria.",
+   "starts": {
+    "me2-jurkat_test01.n5": [
+     [0, 0, 512],
+     [0, 512, 0],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [64, 0, 0],
+     [64, 0, 512],
+     [96, 0, 0],
+     [96, 0, 512],
+     [128, 0, 0],
+     [128, 0, 512],
+     [160, 0, 0],
+     [192, 0, 0],
+     [192, 512, 0],
+     [224, 0, 512],
+     [224, 512, 0]
+    ]
+   }
+  },
+  "mitoemv2_macro": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The MitoEM v2 test volumes are scored, their val volumes tune. me2-macro_test01.n5: 16 of 24 tiles, 16-73 mitochondria.",
+   "starts": {
+    "me2-macro_test01.n5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512],
+     [64, 0, 0],
+     [64, 0, 512],
+     [64, 512, 0],
+     [64, 512, 512],
+     [96, 0, 0],
+     [96, 512, 0],
+     [128, 0, 0],
+     [128, 512, 0]
+    ]
+   }
+  },
+  "mitoemv2_podo": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The MitoEM v2 test volumes are scored, their val volumes tune. me2-podo_test01.n5: 16 of 32 tiles, 56-86 mitochondria.",
+   "starts": {
+    "me2-podo_test01.n5": [
+     [0, 0, 0],
+     [0, 512, 0],
+     [32, 0, 0],
+     [32, 512, 0],
+     [64, 0, 0],
+     [64, 512, 0],
+     [96, 0, 0],
+     [96, 512, 0],
+     [128, 0, 0],
+     [128, 512, 0],
+     [160, 0, 0],
+     [160, 512, 0],
+     [192, 0, 0],
+     [192, 512, 0],
+     [224, 0, 0],
+     [224, 512, 0]
+    ]
+   }
+  },
+  "mitoemv2_sperm": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The MitoEM v2 test volumes are scored, their val volumes tune. me2-sperm_test01.n5: 16 of 64 tiles, 44-57 mitochondria.",
+   "starts": {
+    "me2-sperm_test01.n5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [64, 0, 0],
+     [64, 0, 512],
+     [96, 0, 512],
+     [128, 0, 0],
+     [128, 0, 512],
+     [160, 0, 512],
+     [160, 512, 512],
+     [192, 0, 512],
+     [224, 0, 512],
+     [288, 0, 0],
+     [320, 0, 0],
+     [352, 0, 0]
+    ]
+   }
+  },
+  "mitoemv2_stem": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The stem test volume is 100 slices deep, so the crops span z 0-31, 32-63, 64-95. me2-stem_test01.n5: 12 of 12 tiles, 61-115 mitochondria.",
+   "starts": {
+    "me2-stem_test01.n5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512],
+     [64, 0, 0],
+     [64, 0, 512],
+     [64, 512, 0],
+     [64, 512, 512]
+    ]
+   }
+  },
+  "mitoemv2_mossy": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The test volumes are the MitoVerse copies of the MitoEM v2 mossy test volumes (test01 = neg1, test02 = pos1); only the bouton mask is annotated and scored, and the object count is taken inside the mask. neg1.zarr: 16 of 44 tiles, 17-34 mitochondria, 12-35% annotated; pos1.zarr: 16 of 99 tiles, 17-43 mitochondria, 13-36% annotated.",
+   "starts": {
+    "neg1.zarr": [
+     [39, 12, 10],
+     [39, 12, 522],
+     [39, 524, 522],
+     [71, 12, 10],
+     [71, 12, 522],
+     [71, 524, 10],
+     [71, 524, 522],
+     [103, 12, 10],
+     [103, 12, 522],
+     [135, 12, 522],
+     [135, 524, 522],
+     [167, 12, 522],
+     [167, 524, 522],
+     [199, 524, 522],
+     [231, 524, 522],
+     [263, 524, 522]
+    ],
+    "pos1.zarr": [
+     [98, 577, 0],
+     [98, 577, 512],
+     [130, 65, 0],
+     [130, 577, 0],
+     [130, 577, 512],
+     [162, 577, 0],
+     [194, 65, 512],
+     [194, 577, 0],
+     [194, 1089, 0],
+     [226, 65, 512],
+     [226, 577, 0],
+     [226, 1089, 0],
+     [258, 577, 0],
+     [258, 1089, 0],
+     [258, 1089, 512],
+     [290, 1089, 1024]
+    ]
+   }
+  },
+  "mitonet_kidney": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The ground truth is MitoNet output. The test region of each box is z 26-127 (z < 26 tunes). kidney_050478761254.zarr: 12 of 12 tiles, 39-68 mitochondria; kidney_32c6ece54f2a.zarr: 12 of 12 tiles, 32-67 mitochondria; kidney_348c6793d55c.zarr: 12 of 12 tiles, 55-88 mitochondria.",
+   "starts": {
+    "kidney_050478761254.zarr": [
+     [26, 0, 0],
+     [26, 0, 512],
+     [26, 512, 0],
+     [26, 512, 512],
+     [58, 0, 0],
+     [58, 0, 512],
+     [58, 512, 0],
+     [58, 512, 512],
+     [90, 0, 0],
+     [90, 0, 512],
+     [90, 512, 0],
+     [90, 512, 512]
+    ],
+    "kidney_32c6ece54f2a.zarr": [
+     [26, 0, 0],
+     [26, 0, 512],
+     [26, 512, 0],
+     [26, 512, 512],
+     [58, 0, 0],
+     [58, 0, 512],
+     [58, 512, 0],
+     [58, 512, 512],
+     [90, 0, 0],
+     [90, 0, 512],
+     [90, 512, 0],
+     [90, 512, 512]
+    ],
+    "kidney_348c6793d55c.zarr": [
+     [26, 0, 0],
+     [26, 0, 512],
+     [26, 512, 0],
+     [26, 512, 512],
+     [58, 0, 0],
+     [58, 0, 512],
+     [58, 512, 0],
+     [58, 512, 512],
+     [90, 0, 0],
+     [90, 0, 512],
+     [90, 512, 0],
+     [90, 512, 512]
+    ]
+   }
+  },
+  "human_liver_em": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel: the crops tile the three scored 32 x 1024 x 1024 boxes (the tuning box is separate). Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The ground truth is the authors' automated deep-learning segmentation (semantic, made instances by connected components). 12 of 12 tiles are kept, holding 13-25 mitochondria.",
+   "starts": {
+    "37c1c12abcd0.zarr": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512]
+    ],
+    "43a0100f55ea.zarr": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512]
+    ],
+    "e68ea63a9074.zarr": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512]
+    ]
+   }
+  },
+  "cellmap_nucleus": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel: the held-out jrc_mus-liver-zon-2 crop357 (32 nm, manual instances). 16 of 423 tiles are kept (at most 16 per volume, the ones with the most objects), holding 2-3 nuclei.",
+   "starts": {
+    "jrc_mus-liver-zon-2_crop357.zarr": [
+     [0, 512, 0],
+     [0, 512, 512],
+     [0, 1024, 512],
+     [0, 1024, 1024],
+     [32, 0, 512],
+     [32, 0, 1024],
+     [32, 512, 0],
+     [32, 512, 512],
+     [32, 1024, 512],
+     [32, 1024, 1024],
+     [64, 0, 512],
+     [64, 512, 512],
+     [64, 1024, 1024],
+     [96, 0, 512],
+     [96, 1024, 1024],
+     [128, 1024, 1024]
+    ]
+   }
+  },
+  "fafb_nuclei": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel: the four official FAFB test blocks (automatic FlyWire nucleus segmentation). 27 of 32 tiles are kept (at most 16 per volume, the ones with the most objects), holding 15-55 nuclei.",
+   "starts": {
+    "test_block_0.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0]
+    ],
+    "test_block_1.h5": [
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0]
+    ],
+    "test_block_2.h5": [
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0]
+    ],
+    "test_block_3.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0]
+    ]
+   }
+  },
+  "microns_nuclei": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel: the four official MICrONS test blocks (automatic minnie65 nucleus segmentation). 63 of 64 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-9 nuclei.",
+   "starts": {
+    "test_block_0.h5": [
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0],
+     [256, 0, 0],
+     [288, 0, 0],
+     [320, 0, 0],
+     [352, 0, 0],
+     [384, 0, 0],
+     [416, 0, 0],
+     [448, 0, 0],
+     [480, 0, 0]
+    ],
+    "test_block_1.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0],
+     [256, 0, 0],
+     [288, 0, 0],
+     [320, 0, 0],
+     [352, 0, 0],
+     [384, 0, 0],
+     [416, 0, 0],
+     [448, 0, 0],
+     [480, 0, 0]
+    ],
+    "test_block_2.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0],
+     [256, 0, 0],
+     [288, 0, 0],
+     [320, 0, 0],
+     [352, 0, 0],
+     [384, 0, 0],
+     [416, 0, 0],
+     [448, 0, 0],
+     [480, 0, 0]
+    ],
+    "test_block_3.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0],
+     [256, 0, 0],
+     [288, 0, 0],
+     [320, 0, 0],
+     [352, 0, 0],
+     [384, 0, 0],
+     [416, 0, 0],
+     [448, 0, 0],
+     [480, 0, 0]
+    ]
+   }
+  },
+  "platynereis_nuclei": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel: Platynereis volume 03 inside its annotated box (manual instances). 3 of 3 tiles are kept (at most 16 per volume, the ones with the most objects), holding 51-57 nuclei.",
+   "starts": {
+    "train_data_nuclei_03.h5": [
+     [16, 32, 32],
+     [48, 32, 32],
+     [80, 32, 32]
+    ]
+   }
+  },
+  "human_liver_em_nucleus": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel (out-of-domain): three 4x downsampled human liver boxes (automated segmentation, every visible nucleus labeled). 9 of 12 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-3 nuclei.",
+   "starts": {
+    "test_a.zarr": [
+     [0, 0, 0],
+     [0, 0, 512]
+    ],
+    "test_b.zarr": [
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512]
+    ],
+    "test_c.zarr": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512]
+    ]
+   }
+  },
+  "parlakgul_liver_eval": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel (out-of-domain): the manual Parlakgul evaluation crops are only 25 x 150 x 150, so each scored crop (the first two per liver sample) is one fixed crop of the whole volume (capped to the crop).",
+   "starts": {
+    "1857_mito_001.zarr": [
+     [0, 0, 0]
+    ],
+    "1857_mito_002.zarr": [
+     [0, 0, 0]
+    ],
+    "6461_mito_001.zarr": [
+     [0, 0, 0]
+    ],
+    "6461_mito_002.zarr": [
+     [0, 0, 0]
+    ],
+    "6464_mito_001.zarr": [
+     [0, 0, 0]
+    ],
+    "6464_mito_002.zarr": [
+     [0, 0, 0]
+    ],
+    "9430_mito_001.zarr": [
+     [0, 0, 0]
+    ],
+    "9430_mito_002.zarr": [
+     [0, 0, 0]
+    ]
+   }
+  },
+  "cerebellum_fibsem_mito": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel (out-of-domain): the Cerebellum FIB-SEM volume below the tuning slab (the first 106 slices); student-labeled mitochondria instances, not necessarily proofread. 16 of 52 tiles are kept (at most 16 per volume, the ones with the most objects), holding 14-22 mitochondria.",
+   "starts": {
+    "cerebellum_fibsem.h5": [
+     [106, 0, 0],
+     [138, 512, 0],
+     [170, 512, 0],
+     [266, 512, 0],
+     [298, 0, 512],
+     [298, 512, 512],
+     [330, 512, 512],
+     [362, 0, 512],
+     [362, 512, 512],
+     [394, 512, 512],
+     [426, 0, 0],
+     [426, 0, 512],
+     [426, 512, 512],
+     [458, 512, 512],
+     [490, 0, 0],
+     [490, 512, 512]
+    ]
+   }
+  },
+  "mito_anf": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel (out-of-domain): the two MitoANF boxes below their tuning slabs (the first 26 slices); only the mitochondria of traced auditory nerve fibers are labeled (about half of the visible ones). 24 of 24 tiles are kept (at most 16 per volume, the ones with the most objects), holding 6-58 mitochondria.",
+   "starts": {
+    "M1_9cb2de6a1d1f.zarr": [
+     [26, 0, 0],
+     [26, 0, 512],
+     [26, 512, 0],
+     [26, 512, 512],
+     [58, 0, 0],
+     [58, 0, 512],
+     [58, 512, 0],
+     [58, 512, 512],
+     [90, 0, 0],
+     [90, 0, 512],
+     [90, 512, 0],
+     [90, 512, 512]
+    ],
+    "M2_908d64f28407.zarr": [
+     [26, 0, 0],
+     [26, 0, 512],
+     [26, 512, 0],
+     [26, 512, 512],
+     [58, 0, 0],
+     [58, 0, 512],
+     [58, 512, 0],
+     [58, 512, 512],
+     [90, 0, 0],
+     [90, 0, 512],
+     [90, 512, 0],
+     [90, 512, 512]
+    ]
+   }
+  },
+  "macrophage_a431_mito": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel (out-of-domain): the Macrophage / A431 fib_control block (z 848-975) below the tuning slab (the first 26 slices); quick semantic MIB mitochondria labels, made instances by connected components. 16 of 66 tiles are kept (at most 16 per volume, the ones with the most objects), holding 5-14 mitochondria.",
+   "starts": {
+    "fib_control_z848-976.h5": [
+     [26, 0, 1536],
+     [26, 0, 2048],
+     [26, 0, 2560],
+     [26, 0, 3072],
+     [26, 0, 3584],
+     [58, 0, 1536],
+     [58, 0, 2048],
+     [58, 0, 2560],
+     [58, 0, 3072],
+     [58, 0, 3584],
+     [58, 512, 2048],
+     [90, 0, 1024],
+     [90, 0, 1536],
+     [90, 0, 2048],
+     [90, 0, 3072],
+     [90, 0, 3584]
+    ]
+   }
+  },
+  "snemi_mito": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel (in-domain): the test split of the SNEMI Mito stack (z 70-99); the train and valid splits are training data, the valid split tunes. Manual semantic labels, made instances by connected components. 4 of 4 tiles are kept (at most 16 per volume, the ones with the most objects), holding 16-19 mitochondria.",
+   "starts": {
+    "snemi_mito.h5": [
+     [70, 0, 0],
+     [70, 0, 512],
+     [70, 512, 0],
+     [70, 512, 512]
+    ]
+   }
+  },
+  "donglai_wei_mito": {
+   "crop_shape": [32, 512, 512],
+   "note": "Mitochondria panel (out-of-domain): internal data from Donglai Wei (not public), the MICrONS phase 1 volume below the tuning slab (the first 150 slices). Only a fraction of the mitochondria is annotated, so unlabeled mitochondria in the crops count as false positives. 16 of 1216 tiles are kept (at most 16 per volume, the ones with the most objects), holding 46-54 mitochondria.",
+   "starts": {
+    "microns1_im.h5": [
+     [150, 512, 1024],
+     [150, 1536, 2560],
+     [150, 2048, 3072],
+     [214, 1536, 3584],
+     [214, 2560, 512],
+     [214, 3584, 1024],
+     [246, 2048, 3584],
+     [278, 2560, 512],
+     [310, 512, 1536],
+     [310, 1536, 3072],
+     [438, 1536, 3072],
+     [470, 1536, 1024],
+     [502, 1536, 3584],
+     [534, 3072, 1536],
+     [566, 3072, 2560],
+     [662, 3584, 1536]
+    ]
+   }
+  },
+  "etchacell_nucleus": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel (out-of-domain): the scored Etch a Cell ROIs (HeLa SBF-SEM, 4x downsampled in-plane, one nucleus per ROI, filled from the consensus nuclear envelope labels). 96 of 117 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-2 nuclei.",
+   "starts": {
+    "ROI_1416-1932-171.h5": [
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0],
+     [256, 0, 0]
+    ],
+    "ROI_1536-3456-213.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0],
+     [256, 0, 0]
+    ],
+    "ROI_1656-6756-329.h5": [
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0]
+    ],
+    "ROI_1716-7800-517.h5": [
+     [32, 0, 0]
+    ],
+    "ROI_2052-5784-112.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0]
+    ],
+    "ROI_2448-4704-271.h5": [
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0]
+    ],
+    "ROI_2820-6780-468.h5": [
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0]
+    ],
+    "ROI_2832-1692-1.h5": [
+     [0, 0, 0],
+     [32, 0, 0]
+    ],
+    "ROI_3000-3264-393.h5": [
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0]
+    ],
+    "ROI_3516-5712-314.h5": [
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0],
+     [256, 0, 0]
+    ],
+    "ROI_3576-5232-35.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0]
+    ],
+    "ROI_3624-2712-201.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0],
+     [256, 0, 0]
+    ],
+    "ROI_3768-7248-143.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0],
+     [256, 0, 0]
+    ],
+    "ROI_3972-1956-438.h5": [
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0]
+    ],
+    "ROI_4320-1260-95.h5": [
+     [0, 0, 0],
+     [32, 0, 0],
+     [64, 0, 0],
+     [96, 0, 0],
+     [128, 0, 0],
+     [160, 0, 0],
+     [192, 0, 0],
+     [224, 0, 0]
     ]
    }
   }

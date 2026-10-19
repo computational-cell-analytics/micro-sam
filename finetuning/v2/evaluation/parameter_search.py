@@ -42,7 +42,7 @@ from bioimage_py.evaluation import symmetric_best_dice_score
 from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_density
 
 from common import (
-    DATASETS_3D, DATASETS_DENSE, DATASETS_EM_ORGANELLE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
+    DATASETS_3D, DATASETS_DENSE, DATASETS_EM_MITO, DATASETS_EM_NUCLEUS, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
     GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS,
     build_model, check_data_download, drop_severed_objects, has_val_split, load_data,
     n_samples, predict_unisam2, read_tuned_params, resolve_checkpoint_identity,
@@ -696,7 +696,9 @@ REGISTRY_DATASETS = [
     "plantseg_root", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
     "embedseg_mouse_skull", "embedseg_platy_ish", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "nucverse3d",
     # The EM mitochondria panel, tuned on its held-out z-slabs (3d) and the random 10 % of its images (2d).
-    *DATASETS_EM_ORGANELLE,
+    *DATASETS_EM_MITO,
+    # The EM nucleus panel, tuned on the data its training validates on.
+    *DATASETS_EM_NUCLEUS,
 ]
 
 PARTITION = "grete:preemptible"
