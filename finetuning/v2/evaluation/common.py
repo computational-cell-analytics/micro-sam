@@ -427,8 +427,18 @@ HUMAN_LIVER_EM_NUCLEUS_BOXES = {"test": ["test_a", "test_b", "test_c"], "val": [
 # Etch-a-Cell nuclei (out-of-domain): the envelope labels are filled into nuclei.
 ETCHACELL_NUCLEUS_ROOT = "etchacell_nucleus"
 ETCHACELL_NUCLEUS_TUNING_ROIS = ("ROI_1584-6996-1", "ROI_1608-912-1", "ROI_3588-3972-1")
+# NucMM (out-of-domain): only 7 of the 54 NucMM-Z label volumes are available, two of them tune.
+NUCMM_ROOT = "nuc_mm"
+NUCMM_ZEBRAFISH_TUNING = ("seg_0064_0960_0896.h5", "seg_0128_0384_0768.h5")
+# NucMM-M is X-ray micro-CT, not EM; its val volumes are scored and a train volume tunes.
+NUCMM_MOUSE_TUNING = ("img_000_200_200.h5",)
+# AIVE nuclei (out-of-domain): dataset1 holds only a cap of its nucleus (19 slices), so it is left out.
+AIVE_NUCLEUS_ROOT = "aive_nucleus"
+AIVE_NUCLEUS_EVAL_VOLUMES = ("aive_dataset2.h5", "aive_dataset3.h5")
 DATASETS_3D_EM_NUCLEUS_ID = ["cellmap_nucleus", "fafb_nuclei", "microns_nuclei", "platynereis_nuclei"]
-DATASETS_3D_EM_NUCLEUS_OOD = ["human_liver_em_nucleus", "etchacell_nucleus"]
+DATASETS_3D_EM_NUCLEUS_OOD = [
+    "human_liver_em_nucleus", "etchacell_nucleus", "nucmm_zebrafish", "nucmm_mouse", "aive_nucleus",
+]
 DATASETS_3D_EM_NUCLEUS = DATASETS_3D_EM_NUCLEUS_ID + DATASETS_3D_EM_NUCLEUS_OOD
 DATASETS_EM_NUCLEUS = DATASETS_3D_EM_NUCLEUS + DATASETS_2D_EM_NUCLEUS
 
@@ -569,6 +579,8 @@ EM_ROIS = {
     "mito_anf": {"test": np.s_[26:, :, :], "val": np.s_[:26, :, :]},
     # The Donglai Wei MICrONS phase 1 volume has 750 slices; the first fifth tunes, in a window without blank raw.
     "donglai_wei_mito": {"test": np.s_[150:, :, :], "val": np.s_[:150, 512:1024, 2560:3072]},
+    # The AIVE nucleus volumes have 206-286 slices; the first 40 tune.
+    "aive_nucleus": {"test": np.s_[40:, :, :], "val": np.s_[:40, :, :]},
     # The Cerebellum FIB-SEM volume has 530 slices; the first fifth tunes.
     "cerebellum_fibsem_mito": {"test": np.s_[106:, :, :], "val": np.s_[:106, :, :]},
     # The mitochondria generalist trains on z < 140 of the Lucchi train volume and validates on the rest, which tunes.
@@ -2085,6 +2097,29 @@ def _get_3d_em_data_paths(
         ]
         return paths, paths, "raw", "labels"
 
+    if dataset_name == "nucmm_zebrafish":
+        # The raw and the instance labels are separate files of the same name.
+        root = os.path.join(p, NUCMM_ROOT, "Zebrafish (NucMM-Z)")
+        names = [
+            os.path.basename(path) for path in sorted(glob(os.path.join(root, "Label", "train", "*.h5")))
+            if (os.path.basename(path) in NUCMM_ZEBRAFISH_TUNING) == is_val
+        ]
+        raw_paths = [os.path.join(root, "Image", "train", name.replace("seg_", "img_")) for name in names]
+        label_paths = [os.path.join(root, "Label", "train", name) for name in names]
+        return raw_paths, label_paths, "main", "main"
+
+    if dataset_name == "aive_nucleus":
+        # Scored and tuned in the regions of EM_ROIS. One nucleus per volume.
+        paths = [os.path.join(p, AIVE_NUCLEUS_ROOT, name) for name in AIVE_NUCLEUS_EVAL_VOLUMES]
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "nucmm_mouse":
+        if is_val:
+            paths = [os.path.join(p, NUCMM_ROOT, "mouse", "train", name) for name in NUCMM_MOUSE_TUNING]
+        else:
+            paths = sorted(glob(os.path.join(p, NUCMM_ROOT, "mouse", "val", "*.h5")))
+        return paths, paths, "raw", "labels"
+
     if dataset_name == "platynereis_nuclei":
         # Volume 03 is scored and volume 12 tunes, inside their valid ROI (see em_roi). Instance labels.
         sample_ids = PLATYNEREIS_NUCLEI_VAL_IDS if is_val else PLATYNEREIS_NUCLEI_TEST_IDS
@@ -2398,6 +2433,9 @@ DATASET_SPACING: dict = {
     "platynereis_nuclei": (100 / 80, 1, 1),  # SBEM: about 100 nm sections, 80 nm pixels
     "human_liver_em_nucleus": (55 / 32, 1, 1),  # SBF-SEM: ~55 nm sections, 8 nm pixels downsampled 4x
     "etchacell_nucleus": (50 / 40, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels downsampled 4x
+    "nucmm_zebrafish": (0.48 / 0.51, 1, 1),  # ssEM: about 0.5 um voxels
+    "nucmm_mouse": (1, 1, 1),  # micro-CT, 0.72 um isotropic
+    "aive_nucleus": (30 / 26, 1, 1),  # FIB-SEM, downscaled to 30 x 26 x 26 nm
     "mitoem_human": (30 / 8, 1, 1),  # ATUM-SEM: 30 nm sections, 8 nm pixels
     "mitoem_rat": (30 / 8, 1, 1),  # ATUM-SEM: 30 nm sections, 8 nm pixels
     **{name: (1, 1, 1) for name in ("mitoemv2_beta", "mitoemv2_jurkat", "mitoemv2_macro", "mitoemv2_podo")},
@@ -3108,6 +3146,8 @@ GT_MIN_SIZE_3D = {
     "human_liver_em": 100, "parlakgul_liver_eval": 100, "cerebellum_fibsem_mito": 100,
     "macrophage_a431_mito": 100, "mito_anf": 100, "donglai_wei_mito": 100,
     **{name: 100 for name in DATASETS_3D_EM_NUCLEUS},
+    # The NucMM-Z nuclei are only about 50 voxels large.
+    "nucmm_zebrafish": 10,
 }
 
 # The fixed crops of the 3d test volumes, which replace the center crop: the crop shape and the crop starts per volume,

@@ -3124,7 +3124,7 @@ EM_NUCLEUS_DATASETS = (
     "betaseg_nucleus", "cellmap_nucleus", "human_organoids_nucleus", "sxt_nucleus", "fafb_nuclei", "janelia_nucleus",
     "microns_nuclei", "waenet_fibsem_nucleus", "waenet_sstem_nucleus", "waenet_tem_nucleus", "platynereis_nuclei",
     "tumor_spheroid_nuclei", "openorganelle_nucleus", "cardiomyocyte_tem_nucleus", "microsam_em_nuclei",
-    "perez_nucleus", "vem_nuclei", "aive_nucleus", "cerebellum_nucleus", "macrophage_a431_nucleus",
+    "perez_nucleus", "vem_nuclei", "cerebellum_nucleus", "macrophage_a431_nucleus",
 )
 
 # Objects below this size (in voxels of the training patch) are dropped from the nucleus targets.
