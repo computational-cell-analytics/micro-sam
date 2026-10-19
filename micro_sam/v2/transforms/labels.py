@@ -116,9 +116,9 @@ def _connected_components_pre_label_trafo(labels, ignore_label=None, foreground_
         foreground_class: For semantic labels, the class whose mask is labeled; all other classes are background.
     """
     labels = np.asarray(labels)
+    ignore = None if ignore_label is None else labels == ignore_label
     if foreground_class is not None:
         labels = labels == foreground_class
-    ignore = None if ignore_label is None else labels == ignore_label
     if ignore is not None:
         labels = np.where(ignore, 0, labels)
     if labels.dtype != bool:

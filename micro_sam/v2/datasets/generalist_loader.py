@@ -3014,20 +3014,6 @@ UROCELL_VAL_ROI = np.s_[224:, :, :]
 VNC_TRAIN_ROI = np.s_[:16, :, :]
 VNC_VAL_ROI = np.s_[16:, :, :]
 
-# Parlakgul liver is an evaluation dataset now (not in EM_MITO_DATASETS); the evaluation reads these boxes.
-PARLAKGUL_LIVER_BOXES = [
-    os.path.join("parlakgul_liver", "6461_mito_c2fda2f2e9f2.zarr"),
-    os.path.join("parlakgul_liver_boxes", "6461_mito_6437b92288e2.zarr"),
-    os.path.join("parlakgul_liver_boxes", "6464_mito_f42d478376ae.zarr"),
-    os.path.join("parlakgul_liver_boxes", "6464_mito_84cb0665a8d2.zarr"),
-    os.path.join("parlakgul_liver_boxes", "9430_mito_d4c0a73009c8.zarr"),
-    os.path.join("parlakgul_liver_boxes", "9430_mito_c5f9fef6fb64.zarr"),
-    os.path.join("parlakgul_liver_boxes", "1857_mito_0a7959a670ff.zarr"),
-    os.path.join("parlakgul_liver_boxes", "1857_mito_f95eb8970213.zarr"),
-]
-PARLAKGUL_LIVER_TRAIN_ROI = np.s_[:50, :, :]
-PARLAKGUL_LIVER_VAL_ROI = np.s_[50:, :, :]
-
 # Section 14 of xiao18 is torn, so no patch crosses it.
 MITOVERSE_XIAO18_TRAIN_ROI = np.s_[15:, :, :]
 MITOVERSE_XIAO18_VAL_ROI = np.s_[:14, :, :]
@@ -3136,7 +3122,7 @@ EM_NUCLEUS_TRAIN_SAMPLES = {
     "fafb_nuclei": 293, "janelia_nucleus": 900, "microns_nuclei": 414, "waenet_fibsem_nucleus": 200,
     "waenet_sstem_nucleus": 510, "waenet_tem_nucleus": 2500, "platynereis_nuclei": 200, "tumor_spheroid_nuclei": 1400,
     "openorganelle_nucleus": 1100, "cardiomyocyte_tem_nucleus": 575, "microsam_em_nuclei": 200, "perez_nucleus": 350,
-    "vem_nuclei_2d": 2800, "vem_nuclei_3d": 200, "aive_nucleus": 300, "cerebellum_nucleus": 175,
+    "vem_nuclei_2d": 2800, "vem_nuclei_3d": 200, "cerebellum_nucleus": 175,
     "macrophage_a431_nucleus": 424,
 }
 # The nuclei that a patch needs per dataset (measured on 40 random patches); the other datasets need one.
@@ -3205,9 +3191,6 @@ VEM_NUCLEI_3D_IDS = (11, 12)
 # The nucleus of id_12 ends at z 399 of 463, so this slab holds its end.
 VEM_NUCLEI_VAL_SLICES = 100
 VEM_NUCLEI_IGNORE_LABEL = np.iinfo("uint32").max
-AIVE_NUCLEUS_ROOT = "aive_nucleus"
-AIVE_NUCLEUS_Z_SCALE = 30 / 26
-AIVE_NUCLEUS_VAL_SLICES = 40
 CEREBELLUM_NUCLEUS_PATH = os.path.join("cerebellum_fibsem_nucleus", "cerebellum_fibsem.h5")
 # This slab holds the end of one large nucleus.
 CEREBELLUM_NUCLEUS_VAL_Z = 200
@@ -3794,34 +3777,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
             )
 
-    # 11. Parlakgul liver (3D mitochondria in FIB-SEM of the mouse liver, 8 nm isotropic, proofread semantic labels)
-    # NOTE: The connected components merge a few touching mitochondria (2-7% of the objects).
-    if "parlakgul_liver" in EM_MITO_DATASETS:
-        parlakgul_paths = [os.path.join(input_path, box) for box in PARLAKGUL_LIVER_BOXES]
-        for z in z_slices:
-            parlakgul_kwargs = {
-                "raw_key": "raw", "label_key": "labels", "patch_shape": (z, *patch_shape), "ndim": 3,
-                **{k: v for k, v in kwargs.items() if k not in ["label_transform2", "sampler"]},
-                "label_transform2": mito_label_trafo(EM_MITO_MIN_SIZE_3D),
-                "pre_label_transform": _connected_components_pre_label_trafo,
-                "sampler": MinInstanceSampler(
-                    min_num_instances=EM_MITO_MIN_INSTANCES, min_size=EM_MITO_MIN_SIZE_3D, exclude_ids=[0]
-                ),
-            }
-            for roi, ds_list, n_samples in [
-                (PARLAKGUL_LIVER_TRAIN_ROI, train_ds, 200), (PARLAKGUL_LIVER_VAL_ROI, val_ds, 40),
-            ]:
-                ds_list.append(
-                    UniDataWrapper(
-                        torch_em.default_segmentation_dataset(
-                            raw_paths=parlakgul_paths, label_paths=parlakgul_paths, rois=[roi] * len(parlakgul_paths),
-                            n_samples=max(1, n_samples // n_z), **parlakgul_kwargs,
-                        ),
-                        source_ndim=3, group_key=(3, z),
-                    )
-                )
-
-    # 12. MitoVerse xiao18 (3D mitochondria in ssSEM of the mouse auditory cortex, 8 x 8 x 50 nm, instance labels)
+    # 11. MitoVerse xiao18 (3D mitochondria in ssSEM of the mouse auditory cortex, 8 x 8 x 50 nm, instance labels)
     if "mitoverse_xiao18" in EM_MITO_DATASETS:
         xiao18_path = os.path.join(input_path, "mitoverse", "data", "xiao18", "vol0.zarr")
         for z in z_slices:
@@ -3848,7 +3804,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
                 )
 
-    # 13. MitoVerse haberl18 (3D mitochondria in SBF-SEM of the mouse brain, CDeep3M, 10 x 10 x 24 nm, instance labels)
+    # 12. MitoVerse haberl18 (3D mitochondria in SBF-SEM of the mouse brain, CDeep3M, 10 x 10 x 24 nm, instance labels)
     # NOTE: The volumes are 256 px in plane, so the patches are resized to 512 x 512.
     if "mitoverse_haberl18" in EM_MITO_DATASETS:
         haberl18_root = os.path.join(input_path, "mitoverse", "data", "haberl18")
@@ -3878,7 +3834,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
                 )
 
-    # 14. MitoVerse MICrONS phase 1 (3D mitochondria in ssTEM of the mouse visual cortex, 8 x 8 x 40 nm, proofread)
+    # 13. MitoVerse MICrONS phase 1 (3D mitochondria in ssTEM of the mouse visual cortex, 8 x 8 x 40 nm, proofread)
     # NOTE: The loss ignores the regions without image data.
     if "mitoverse_microns1" in EM_MITO_DATASETS:
         microns1_root = os.path.join(input_path, "mitoverse", "data", "turner22")
@@ -3931,7 +3887,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
                 )
 
-    # 15. CellMap mitochondria (3D mitochondria in FIB-SEM crops of cells and tissues, 2-32 nm, manual labels)
+    # 14. CellMap mitochondria (3D mitochondria in FIB-SEM crops of cells and tissues, 2-32 nm, manual labels)
     # NOTE: Each patch side group is one dataset; patches below 512 px are resized to 512 x 512.
     if "cellmap_mito" in EM_MITO_DATASETS:
         cellmap_groups = {split: cellmap_mito_split_crops(input_path, split) for split in ("train", "val")}
@@ -3968,7 +3924,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                         )
                     )
 
-    # 16. Human organoids mitochondria (3D, FIB-SEM of patient-derived colorectal cancer organoids, manual labels)
+    # 15. Human organoids mitochondria (3D, FIB-SEM of patient-derived colorectal cancer organoids, manual labels)
     # NOTE: The labels are the precomputed neck watershed instances (HUMAN_ORGANOIDS_MITO_ROOT).
     if "human_organoids_mito" in EM_MITO_DATASETS:
         organoid_paths = [
@@ -4007,7 +3963,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
                 )
 
-    # 17. ASEM mitochondria (3D mitochondria in FIB-SEM of cultured cells, 4-5 nm isotropic, manual semantic labels)
+    # 16. ASEM mitochondria (3D mitochondria in FIB-SEM of cultured cells, 4-5 nm isotropic, manual semantic labels)
     if "asem_mito" in EM_MITO_DATASETS:
         asem_paths, small_paths = [
             datasets.asem.get_asem_paths(
@@ -4065,7 +4021,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
             )
 
-    # 18. Brain PFIB-SEM mitochondria (3D mitochondria in PFIB-SEM of the mouse brain, 5 nm isotropic, expert labels)
+    # 17. Brain PFIB-SEM mitochondria (3D mitochondria in PFIB-SEM of the mouse brain, 5 nm isotropic, expert labels)
     # NOTE: Both stacks train with the same labels; only the reference stack validates.
     if "brain_pfibsem_mito" in EM_MITO_DATASETS:
         brain_path = os.path.join(input_path, BRAIN_PFIBSEM_PATH)
@@ -4094,7 +4050,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
                 )
 
-    # 19. SNEMI Mito (3D mitochondria in ssSEM of the mouse neocortex, SNEMI3D, 6 x 6 x 30 nm, manual binary masks)
+    # 18. SNEMI Mito (3D mitochondria in ssSEM of the mouse neocortex, SNEMI3D, 6 x 6 x 30 nm, manual binary masks)
     if "snemi_mito" in EM_MITO_DATASETS:
         snemi_path = datasets.snemi_mito.get_snemi_mito_data(os.path.join(input_path, "snemi_mito"), as_volume=True)
         for z in z_slices:
@@ -4121,7 +4077,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
                 )
 
-    # 20. U2OS FIB-SEM mitochondria (2D mitochondria in single FIB-SEM slices of a U2-OS cell, manual binary masks)
+    # 19. U2OS FIB-SEM mitochondria (2D mitochondria in single FIB-SEM slices of a U2-OS cell, manual binary masks)
     if "u2os_fibsem_mito" in EM_MITO_DATASETS:
         u2os_images = sorted(glob(os.path.join(input_path, U2OS_FIBSEM_MITO_ROOT, "images_tif", "*.tif")))
         u2os_labels = sorted(glob(os.path.join(input_path, U2OS_FIBSEM_MITO_ROOT, "labels_tif", "*.tif")))
@@ -4150,7 +4106,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                 )
             )
 
-    # 21. HeLa STARD3 mitochondria (3D mitochondria in FIB-SEM of HeLa cells, 5-8 nm, manual binary masks in the ROI)
+    # 20. HeLa STARD3 mitochondria (3D mitochondria in FIB-SEM of HeLa cells, 5-8 nm, manual binary masks in the ROI)
     if "hela_stard3_mito" in EM_MITO_DATASETS:
         hela_paths = [os.path.join(input_path, "hela_stard3", f"{volume}.h5") for volume in HELA_STARD3_VOLUMES]
         train_rois = [
@@ -4182,7 +4138,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
                 )
 
-    # 22. Parlakgul fasting liver mitochondria (3D mitochondria in FIB-SEM of the mouse liver, 8 nm, instance labels)
+    # 21. Parlakgul fasting liver mitochondria (3D mitochondria in FIB-SEM of the mouse liver, 8 nm, instance labels)
     if "parlakgul_fasting_liver_mito" in EM_MITO_DATASETS:
         fasting_paths = sorted(glob(os.path.join(input_path, PARLAKGUL_FASTING_ROOT, "*_mito_*.zarr")))
         for z in z_slices:
@@ -4209,7 +4165,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
                 )
 
-    # 23. AIVE mitochondria (3D mitochondria in FIB-SEM of cells and muscle tissue, 6.5 x 6.5 x 10 nm, semantic labels)
+    # 22. AIVE mitochondria (3D mitochondria in FIB-SEM of cells and muscle tissue, 6.5 x 6.5 x 10 nm, semantic labels)
     # NOTE: The mitochondria class is taken before the connected components.
     if "aive_mito" in EM_MITO_DATASETS:
         aive_paths = [os.path.join(input_path, "aive", name) for name in AIVE_MITO_VAL_STARTS]
@@ -4242,7 +4198,7 @@ def _get_em_mito_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo
                     )
                 )
 
-    # 24. MitoSegEM (3D mitochondria in SBF-SEM of the mouse testis and brainstem, 15 x 15 x 50 nm, instance labels)
+    # 23. MitoSegEM (3D mitochondria in SBF-SEM of the mouse testis and brainstem, 15 x 15 x 50 nm, instance labels)
     if "mito_segem" in EM_MITO_DATASETS:
         from torch_em.data.datasets.electron_microscopy.mito_segem import get_mito_segem_paths
         segem_paths = [
@@ -4697,17 +4653,7 @@ def _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_tr
             ("val", vem_3d[1], "raw", "labels", val_slab, 1),
         ], EM_NUCLEUS_TRAIN_SAMPLES["vem_nuclei_3d"], min_num_instances=EM_NUCLEUS_MIN_INSTANCES["vem_nuclei"])
 
-    # 18. AIVE nuclei (3D nuclei in FIB-SEM overview volumes of cells, downscaled to 30 x 26 x 26 nm, manual labels)
-    if "aive_nucleus" in EM_NUCLEUS_DATASETS:
-        aive_paths = sorted(glob(os.path.join(input_path, AIVE_NUCLEUS_ROOT, "*.h5")))
-        aive_volumes = [("train", path, "raw", "labels", full, AIVE_NUCLEUS_Z_SCALE) for path in aive_paths[:-1]]
-        aive_volumes += [
-            ("train", aive_paths[-1], "raw", "labels", np.s_[:-AIVE_NUCLEUS_VAL_SLICES, :, :], AIVE_NUCLEUS_Z_SCALE),
-            ("val", aive_paths[-1], "raw", "labels", np.s_[-AIVE_NUCLEUS_VAL_SLICES:, :, :], AIVE_NUCLEUS_Z_SCALE),
-        ]
-        add_volume_datasets(aive_volumes, EM_NUCLEUS_TRAIN_SAMPLES["aive_nucleus"])
-
-    # 19. Cerebellum nuclei (3D nuclei in FIB-SEM of the mouse cerebellum, downscaled to 20 nm, student labels)
+    # 18. Cerebellum nuclei (3D nuclei in FIB-SEM of the mouse cerebellum, downscaled to 20 nm, student labels)
     if "cerebellum_nucleus" in EM_NUCLEUS_DATASETS:
         cerebellum_path = os.path.join(input_path, CEREBELLUM_NUCLEUS_PATH)
         add_volume_datasets([
@@ -4715,7 +4661,7 @@ def _get_em_nucleus_datasets(input_path, patch_shape, z_slices, kwargs, label_tr
             ("val", cerebellum_path, "raw", "labels", np.s_[CEREBELLUM_NUCLEUS_VAL_Z:, :, :], 1),
         ], EM_NUCLEUS_TRAIN_SAMPLES["cerebellum_nucleus"], ignore_label=CEREBELLUM_NUCLEUS_IGNORE_LABEL)
 
-    # 20. Macrophage / A431 nuclei (3D nucleus in SBF-SEM of macrophages and an A431 cell, quick semantic annotations)
+    # 19. Macrophage / A431 nuclei (3D nucleus in SBF-SEM of macrophages and an A431 cell, quick semantic annotations)
     if "macrophage_a431_nucleus" in EM_NUCLEUS_DATASETS:
         macrophage_volumes = []
         for path in sorted(glob(os.path.join(input_path, MACROPHAGE_NUCLEUS_ROOT, "*.h5"))):
