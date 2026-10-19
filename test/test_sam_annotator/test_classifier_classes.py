@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from qtpy import QtWidgets
 
-from micro_sam.sam_annotator import _widgets as widgets
+from micro_sam.sam_annotator import _annotator, _widgets as widgets
 from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam.sam_annotator.pixel_classifier import PixelClassifier
 from micro_sam.sam_annotator.object_classifier import ObjectClassifier
@@ -22,7 +22,11 @@ def annotator(make_napari_viewer_proxy, request):
     state = AnnotatorState()
     state.batch_training_data, state.batch_index = {}, None
     viewer = make_napari_viewer_proxy()
-    yield request.param(viewer), viewer
+    annotator = request.param(viewer)
+    # The classifier is kept in the state, so a classifier of an earlier test must not leak into this one.
+    annotator._set_rf(None)
+    yield annotator, viewer
+    annotator._set_rf(None)
     state.batch_training_data, state.batch_index = {}, None
     viewer.close()
 
@@ -107,6 +111,37 @@ def test_remove_class(annotator, monkeypatch):
     annotator._refresh_label_widget()
     annotator._remove_class(4)
     assert messages == ["error"] and 4 in _row_ids(annotator)
+
+
+@both
+def test_classifier_classes(annotator, monkeypatch):
+    annotator, viewer = annotator
+    annotator._set_rf(SimpleNamespace(classes_=np.array([1, 2, 6])))
+
+    # The classes of the classifier get rows, so that the prediction shows them in their class colors.
+    annotator._refresh_label_widget()
+    assert _row_ids(annotator) == [1, 2, 6]
+    np.testing.assert_allclose(
+        viewer.layers["prediction"].colormap.map(6)[:3], viewer.layers["annotations"].colormap.map(6)[:3]
+    )
+
+    # For a class of the classifier only the annotations are removed. The row stays until the classifier is retrained.
+    infos = []
+    monkeypatch.setattr(_annotator, "show_info", infos.append)
+    layer = viewer.layers["annotations"]
+    data = np.zeros_like(layer.data)
+    data[:4, :4], data[4:8, 4:8] = 1, 6
+    layer.data = data
+    annotator._remove_class(6, confirm=False)
+    assert not (layer.data == 6).any() and (layer.data == 1).sum() == 16
+    assert 6 in _row_ids(annotator) and len(infos) == 1
+
+    # After retraining without the class it is removed. A class that the classifier does not know is removed directly.
+    annotator._set_rf(SimpleNamespace(classes_=np.array([1, 2])))
+    annotator._remove_class(6, confirm=False)
+    annotator._select_class(3)
+    annotator._remove_class(3, confirm=False)
+    assert _row_ids(annotator) == [1, 2] and len(infos) == 1
 
 
 @both

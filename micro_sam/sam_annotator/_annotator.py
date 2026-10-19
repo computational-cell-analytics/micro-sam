@@ -729,7 +729,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
             self._apply_class_colors()
 
     def _apply_class_colors(self):
-        # An id without a class is white. Each id that the layers can show gets a class row, so this is rare.
+        # An id without a class is white. Each id in the annotations, the training data of the other images
+        # and the classes of the classifier gets a class row, so this is rare.
         color_dict = {None: "white", 0: "transparent", **{i: c["color"] for i, c in self._classes.items()}}
         for name in ("annotations", "prediction"):
             if name in self._viewer.layers:
@@ -774,8 +775,13 @@ class _ClassifierBase(QtWidgets.QScrollArea):
 
     def _remove_class(self, class_id, confirm=True):
         # Removes the class and its annotations in the current image. This does not change the training data
-        # of the other images, so a class that is annotated there cannot be removed here.
+        # of the other images, so a class that is annotated there cannot be removed here. For a class of the current
+        # classifier only the annotations are removed: the prediction can still show it, so its row stays until
+        # the classifier is retrained without it.
         state = AnnotatorState()
+        rf = self._get_rf()
+        in_classifier = rf is not None and class_id in rf.classes_
+
         other_images = [
             idx for idx, (_, labels, _) in (state.batch_training_data or {}).items()
             if idx != state.batch_index and np.any(labels == class_id)
@@ -788,13 +794,21 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         layer = self._viewer.layers["annotations"]
         annotated = layer.data == class_id
         if annotated.any():
-            if confirm and widgets._generate_message(
-                "info", f"Remove class {class_id} and its annotations in this image?"
-            ):
+            if in_classifier:
+                question = f"Remove the annotations of class {class_id} in this image?"
+            else:
+                question = f"Remove class {class_id} and its annotations in this image?"
+            if confirm and widgets._generate_message("info", question):
                 return
             data = layer.data
             data[annotated] = 0
             layer.data = data
+
+        if in_classifier:
+            return show_info(
+                f"Class {class_id} is a class of the current classifier. Retrain the classifier without its "
+                "annotations, then remove the class."
+            )
 
         row = self._class_rows.pop(class_id)[0]
         self._class_group.removeButton(self._class_group.button(class_id))
@@ -810,8 +824,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         self._apply_class_colors()
 
     def _refresh_label_widget(self, event=None):
-        # Add a class row for each id in the annotations, the training data of the other images and the
-        # selected label. Rows are removed only with their 'x' button.
+        # Add a class row for each id in the annotations, the training data of the other images, the classes
+        # of the classifier and the selected label. Rows are removed only with their 'x' button.
         state = AnnotatorState()
         self._connect_annotations_layer()
         layer = self._viewer.layers["annotations"]
@@ -819,6 +833,9 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         for idx, (_, labels, _) in (state.batch_training_data or {}).items():
             if idx != state.batch_index:
                 ids.append(np.unique(labels))
+        rf = self._get_rf()
+        if rf is not None:
+            ids.append(np.asarray(rf.classes_))
         self._ensure_classes(np.unique(np.concatenate(ids)))
         self._on_selected_label()
 
