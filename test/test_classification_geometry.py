@@ -6,6 +6,7 @@ embedding. These tests pin that the padded region is discarded instead of being 
 content, which silently misplaces every feature for non-square inputs.
 """
 
+import pytest
 import numpy as np
 
 from micro_sam.object_classification import compute_object_features
@@ -52,20 +53,22 @@ def test_object_features_exclude_padding():
     assert np.allclose(features[0, 1:], 1.0), f"padded region leaked into the object features: {features[0, 1:]}"
 
 
-def test_object_features_match_skimage_interpolation():
-    # The embedding resize must keep the pixel-center alignment of 'skimage.transform.resize'. The objects
-    # are away from the 2 px edge, where torch repeats the edge pixel and skimage mirrors it.
+@pytest.mark.parametrize("shape, objects", [
+    ((64, 64), [np.s_[8:20, 8:20], np.s_[30:40, 40:56]]),  # upsampling of the embedding, with torch
+    ((8, 8), [np.s_[2:4, 2:4], np.s_[4:6, 3:6]]),  # downsampling of the embedding, with bioimage-cpp
+])
+def test_object_features_match_skimage_interpolation(shape, objects):
+    # The objects stay off the 2 px edge, where torch repeats the edge pixel and skimage mirrors it.
     from skimage.transform import resize
 
-    shape = (64, 64)
     features = np.random.default_rng(0).normal(size=(1, N_CHANNELS, EMBEDDING_SIZE, EMBEDDING_SIZE))
     embeddings = {**_padded_embeddings(), "features": features.astype("float32"), "original_size": shape}
     segmentation = np.zeros(shape, dtype="uint32")
-    segmentation[8:20, 8:20] = 1
-    segmentation[30:40, 40:56] = 2
+    for seg_id, bb in enumerate(objects, start=1):
+        segmentation[bb] = seg_id
 
     _, object_features = compute_object_features(embeddings, segmentation, verbose=False)
 
-    upsampled = resize(features[0].transpose(1, 2, 0), shape + (N_CHANNELS,), preserve_range=True)
-    expected = [upsampled[segmentation == seg_id].mean(axis=0) for seg_id in (1, 2)]
+    resized = resize(features[0].transpose(1, 2, 0), shape + (N_CHANNELS,), preserve_range=True)
+    expected = [resized[segmentation == seg_id].mean(axis=0) for seg_id in range(1, len(objects) + 1)]
     assert np.allclose(object_features[:, 1:], expected, atol=1e-5)
