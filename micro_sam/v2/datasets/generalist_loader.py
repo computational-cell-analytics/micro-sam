@@ -2947,15 +2947,16 @@ EM_MITO_DATASETS = (
 EM_MITO_MIN_SIZE = 25
 EM_MITO_MIN_SIZE_3D = 50
 
-# Training samples per epoch and source: 3D 200 x sqrt(voxels / 250M) in [200, 600], tiny sources ~7 passes.
+# Training samples per epoch and source: 3D 200 x sqrt(voxels / 250M) in [200, 600], tiny sources ~7 passes;
+# the large, diverse sources get more.
 EM_MITO_TRAIN_SAMPLES = {
-    "densecell_mito": 50, "lucchi": 200, "microns_pinky_mito": 240, "mitoem_human": 600, "mitoem_rat": 600,
+    "densecell_mito": 50, "lucchi": 200, "microns_pinky_mito": 240, "mitoem_human": 700, "mitoem_rat": 700,
     "mitoemv2_beta": 515, "mitoemv2_jurkat": 200, "mitoemv2_macro": 207, "mitoemv2_podo": 207, "mitoemv2_sperm": 254,
     "mitoemv2_stem": 200, "mitoemv2_mossy": 478, "probtem": 2800, "uro_cell": 200, "vnc": 450,
-    "mitoverse_xiao18": 200, "mitoverse_haberl18": 14, "mitoverse_microns1": 200, "cellmap_mito": 800,
-    "human_organoids_mito": 600, "asem_mito": 225, "asem_mito_small": 50, "brain_pfibsem_reference": 150,
+    "mitoverse_xiao18": 200, "mitoverse_haberl18": 14, "mitoverse_microns1": 200, "cellmap_mito": 900,
+    "human_organoids_mito": 700, "asem_mito": 225, "asem_mito_small": 50, "brain_pfibsem_reference": 150,
     "brain_pfibsem_noisy": 50, "snemi_mito": 200, "u2os_fibsem_mito": 1260, "hela_stard3_mito": 446,
-    "parlakgul_fasting_liver_mito": 205, "aive_mito": 600, "mito_segem": 200,
+    "parlakgul_fasting_liver_mito": 205, "aive_mito": 700, "mito_segem": 200,
 }
 # One CEM-MitoLab group holds 720 of the 1264 validation tiles, so each group is capped.
 MITOLAB_VAL_IMAGES_PER_GROUP = 50
@@ -3131,10 +3132,10 @@ EM_NUCLEUS_MIN_SIZE_3D = 50
 
 # Training samples per epoch and source, by the rules of EM_MITO_TRAIN_SAMPLES; large, diverse sources get more.
 EM_NUCLEUS_TRAIN_SAMPLES = {
-    "betaseg_nucleus": 400, "cellmap_nucleus": 800, "human_organoids_nucleus": 800, "sxt_nucleus": 800,
-    "fafb_nuclei": 293, "janelia_nucleus": 800, "microns_nuclei": 414, "waenet_fibsem_nucleus": 200,
+    "betaseg_nucleus": 400, "cellmap_nucleus": 900, "human_organoids_nucleus": 900, "sxt_nucleus": 800,
+    "fafb_nuclei": 293, "janelia_nucleus": 900, "microns_nuclei": 414, "waenet_fibsem_nucleus": 200,
     "waenet_sstem_nucleus": 510, "waenet_tem_nucleus": 2500, "platynereis_nuclei": 200, "tumor_spheroid_nuclei": 1400,
-    "openorganelle_nucleus": 1000, "cardiomyocyte_tem_nucleus": 575, "microsam_em_nuclei": 200, "perez_nucleus": 350,
+    "openorganelle_nucleus": 1100, "cardiomyocyte_tem_nucleus": 575, "microsam_em_nuclei": 200, "perez_nucleus": 350,
     "vem_nuclei_2d": 2800, "vem_nuclei_3d": 200, "aive_nucleus": 300, "cerebellum_nucleus": 175,
     "macrophage_a431_nucleus": 424,
 }

@@ -71,7 +71,7 @@ def build_common(model_type, n_epochs, n_iterations, batch_size, use_compile=Fal
         boundary_dice_weight=boundary_dice_weight,
         save_every_kth_epoch=5,  # keeps fallback checkpoints next to best.pt and latest.pt
         # A mito epoch is about half as long as a cell generalist epoch, so the patience is longer.
-        scheduler_kwargs={"mode": "min", "factor": 0.9, "patience": 15},
+        scheduler_kwargs={"mode": "min", "factor": 0.9, "patience": 20},
         label_trafo_threads=int(os.environ.get("LABEL_TRAFO_THREADS", 1)),  # threads per worker in the label transform
         compile=["encoder", "decoder", "loss"] if use_compile else None,
     )
