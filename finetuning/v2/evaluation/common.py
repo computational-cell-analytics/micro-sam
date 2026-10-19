@@ -585,9 +585,8 @@ EM_ROIS = {
     "cerebellum_fibsem_mito": {"test": np.s_[106:, :, :], "val": np.s_[:106, :, :]},
     # The mitochondria generalist trains on z < 140 of the Lucchi train volume and validates on the rest, which tunes.
     "lucchi": {"test": np.s_[:, :, :], "val": np.s_[140:, :, :]},
-    # The SNEMI Mito stack: the mitochondria generalist trains on its train split (z < 50) and validates on its valid
-    # split (z 50-69), which tunes; the test split (z 70-99) is scored.
-    "snemi_mito": {"test": datasets.snemi_mito.VOLUME_ROIS["test"], "val": datasets.snemi_mito.VOLUME_ROIS["val"]},
+    # The SNEMI Mito splits of torch-em, written out so that older torch-em releases import this module.
+    "snemi_mito": {"test": np.s_[70:100, :, :], "val": np.s_[50:70, :, :]},
 }
 
 # The CEM-Mito-Benchmark volumes in the torch-em benchmark numbering (7 is the 2d TEM benchmark).
