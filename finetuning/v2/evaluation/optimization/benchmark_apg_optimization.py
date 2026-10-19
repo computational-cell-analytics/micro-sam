@@ -60,8 +60,8 @@ sys.path.insert(0, str(EVALUATION_ROOT))
 
 import common  # noqa
 from common import (  # noqa
-    CROP_SHAPE_2D, DATASET_SPACING, DATASETS_3D_EM, GENERATE_PARAM_KEYS, GT_MIN_SIZE_2D, VAL_Z_RANGE,
-    VOLUME_SPEED_OPTIONS, build_apg_segmenter, checkpoint_checksum, drop_severed_objects,
+    CROP_SHAPE_2D, DATASET_SPACING, DATASETS_3D_EM, DATASETS_EM_MITO, GENERATE_PARAM_KEYS, GT_MIN_SIZE_2D,
+    VAL_Z_RANGE, VOLUME_SPEED_OPTIONS, build_apg_segmenter, checkpoint_checksum, drop_severed_objects,
     ensure_8bit_range, get_data_paths, get_joint_checkpoint, genuine_misses, read_2d, resolve_params,
     sorted_path_pairs,
 )
@@ -994,7 +994,9 @@ def _sample_row(
     initialization_seconds: float, generation_seconds: float, peak_cuda_memory_bytes: Optional[int],
     generation_stats: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
-    metric_mode = "dense" if sample["dataset"] in DATASETS_3D_EM else "sparse"
+    # The mitochondria volumes are separable objects, scored like the light microscopy data.
+    is_dense = sample["dataset"] in DATASETS_3D_EM and sample["dataset"] not in DATASETS_EM_MITO
+    metric_mode = "dense" if is_dense else "sparse"
     border_min_size = GT_MIN_SIZE_2D.get(sample["dataset"], 0) if sample["ndim"] == 2 else 0
     metrics = compute_metrics(segmentation, labels, metric_mode, border_min_size=border_min_size)
     row = {

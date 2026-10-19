@@ -103,23 +103,63 @@ def _labels_to_uint32(labels):
     return np.asarray(labels).astype("uint32")
 
 
-def _ignore_missing_raw_trafo(raw, labels, ignore_label, normalizer=None, min_area=4096, transform=None):
+def _connected_components_pre_label_trafo(labels, ignore_label=None, foreground_class=None):
+    """Connected components of a patch, as the pre_label_transform, so that the sampler counts instances.
+
+    torch_em runs the sampler before label_transform2, so without this a sampler sees binary or semantic labels as
+    one id. Touching objects with different ids stay separate, and the disconnected pieces of one id become separate
+    instances. The output is uint32, which torch_em keeps as the loaded dtype.
+
+    Args:
+        labels: The label patch.
+        ignore_label: The id of the ignored voxels, which keep their id and are not labeled.
+        foreground_class: For semantic labels, the class whose mask is labeled; all other classes are background.
+    """
+    labels = np.asarray(labels)
+    ignore = None if ignore_label is None else labels == ignore_label
+    if foreground_class is not None:
+        labels = labels == foreground_class
+    if ignore is not None:
+        labels = np.where(ignore, 0, labels)
+    if labels.dtype != bool:
+        labels = labels.astype("uint32")
+    instances = connected_components(labels).astype("uint32")
+    if ignore is not None:
+        instances[ignore] = ignore_label
+    return instances
+
+
+def _ignore_missing_raw_trafo(
+    raw, labels, ignore_label, normalizer=None, min_area=4096, transform=None, any_constant=False
+):
     """Mark labels as *ignore_label* where the raw holds a missing tile, normalize the raw, then apply *transform*.
 
-    A missing tile is a connected region of exact zeros in a slice with at least *min_area* pixels. The test needs
-    the stored intensities, since a percentile normalization clips dark tissue to zero as well, so the leaf's
-    raw_transform must leave the normalization to *normalizer*, which runs here after the test. Runs as the joint
-    'transform', so it sees the raw and precedes label_transform2. The loaded label dtype must hold *ignore_label*,
-    see :func:`_labels_to_uint32`.
+    A missing tile is a connected region of exact zeros in a slice with at least *min_area* pixels. With
+    *any_constant*, it is a connected region of any one constant value. Some volumes fill missing data with such a
+    value, for example 128 or a saturated 254. The test needs the stored intensities, since a percentile
+    normalization clips dark tissue to zero as well, so the leaf's raw_transform must leave the normalization to
+    *normalizer*, which runs here after the test. Runs as the joint 'transform', so it sees the raw and precedes
+    label_transform2. The loaded label dtype must hold *ignore_label*, see :func:`_labels_to_uint32`.
     """
     raw = np.asarray(raw)
     labels = np.asarray(labels)
-    zero = np.all(raw == 0, axis=0) if raw.ndim == labels.ndim + 1 else raw == 0
+    if any_constant:
+        # The channels of the prepared raw are copies, so the first one holds the stored intensities.
+        values = raw[0] if raw.ndim == labels.ndim + 1 else raw
+        zero = np.zeros(values.shape, dtype=bool)
+    else:
+        zero = np.all(raw == 0, axis=0) if raw.ndim == labels.ndim + 1 else raw == 0
     missing = np.zeros_like(zero)
     slices = zero if zero.ndim == 3 else zero[None]
     out = missing if missing.ndim == 3 else missing[None]
     for z in range(slices.shape[0]):
-        components = connected_components(slices[z])
+        if any_constant:
+            plane = values[z] if values.ndim == 3 else values
+            # Connected components of equal-valued pixels: every value gets an id above the background 0.
+            value_ids = np.unique(plane, return_inverse=True)[1].reshape(plane.shape).astype("uint32") + 1
+            components = connected_components(value_ids)
+        else:
+            components = connected_components(slices[z])
         if components.max() == 0:
             continue
         areas = np.bincount(components.ravel().astype("int64"))
@@ -211,6 +251,27 @@ def _plantseg_label_trafo(y, data, label_trafo):
     y = label_trafo(y)
     fg_channel = 1 if getattr(label_trafo, "instances", False) else 0
     y[fg_channel][ignore] = FOREGROUND_IGNORE_VALUE
+    return y
+
+
+def _ignore_label_trafo(y, ignore_label, label_trafo=None):
+    """Exclude the voxels that carry *ignore_label* from the foreground target, then apply *label_trafo*.
+
+    The ignored voxels count as background for *label_trafo* and are set to FOREGROUND_IGNORE_VALUE in its
+    foreground channel, so that no loss term supervises them. Without a *label_trafo* they are only set to 0.
+    """
+    ignore = np.asarray(y) == ignore_label
+    y = np.where(ignore, 0, y)
+    if label_trafo is None:
+        return y
+
+    y = label_trafo(y)
+    if getattr(label_trafo, "instances", False):
+        # The instance channel feeds the interactive branch, which samples objects from it.
+        y[0][ignore] = 0
+        y[1][ignore] = FOREGROUND_IGNORE_VALUE
+    else:
+        y[0][ignore] = FOREGROUND_IGNORE_VALUE
     return y
 
 

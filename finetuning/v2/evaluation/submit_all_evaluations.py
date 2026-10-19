@@ -38,8 +38,8 @@ from typing import Optional
 from datetime import datetime
 
 from common import (
-    DATA_ROOT, DATASETS_2D_LM, DATASETS_HP, DATASETS_3D_LM, DATASETS_EM, DATASETS_3D_EM, DATASETS_SUPPLEMENTARY,
-    MODEL_TYPES, n_samples,
+    DATA_ROOT, DATASETS_2D_LM, DATASETS_HP, DATASETS_3D_LM, DATASETS_EM, DATASETS_3D_EM, DATASETS_EM_MITO,
+    DATASETS_EM_NUCLEUS, DATASETS_SUPPLEMENTARY, MODEL_TYPES, n_samples,
 )
 
 EVAL_ROOT = Path(__file__).resolve().parent
@@ -56,6 +56,8 @@ PINNED_ENV_VARS = ("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", "MICRO_SAM2_JOINT_EXPORT_
 
 DATASETS_LM = tuple(DATASETS_2D_LM + DATASETS_3D_LM)
 DATASETS_EM = tuple(DATASETS_EM)
+DATASETS_EM_MITO = tuple(DATASETS_EM_MITO)
+DATASETS_EM_NUCLEUS = tuple(DATASETS_EM_NUCLEUS)
 DATASETS_HP = tuple(DATASETS_HP)
 DATASETS = tuple(sorted(set(DATASETS_LM + DATASETS_EM + DATASETS_HP)))
 DATASETS_3D = tuple(sorted(set(DATASETS_3D_LM + DATASETS_3D_EM)))
@@ -70,13 +72,16 @@ INTERACTIVE_METHODS = ("nninteractive", "sam3", "sam", "sam2", "micro-sam", "mic
 # through the same script rather than a second copy of the same inference.
 SHARED_ENGINE_METHODS = {"sam2"}
 
-# What each method can actually be run on. A method that is absent runs on everything.
+# What each method can actually be run on. A method that is absent runs on everything. 'exclude' lists datasets
+# a method is not meant for although their modality and dimensionality fit.
 METHOD_SUPPORT = {
     ("automatic", "cellsam"): {"ndim": (2,)},
     ("automatic", "cellvit"): {"modality": ("hp",), "ndim": (2,)},
     ("automatic", "microsam_ais"): {"modality": ("lm", "hp")},
     ("automatic", "microsam_apg"): {"modality": ("lm", "hp")},
-    ("automatic", "segneuron"): {"modality": ("em",), "ndim": (3,)},
+    ("automatic", "segneuron"): {
+        "modality": ("em",), "ndim": (3,), "exclude": DATASETS_EM_MITO + DATASETS_EM_NUCLEUS
+    },
     ("automatic", "focus3d"): {"modality": ("lm",), "ndim": (3,)},
     ("interactive", "sam"): {"ndim": (2,)},
     ("interactive", "micro-sam"): {"ndim": (2,)},
@@ -202,7 +207,11 @@ def select_datasets(args: argparse.Namespace, method: Optional[str], mode: Optio
     if not args.supplementary and not args.data:
         datasets = tuple(d for d in datasets if d not in DATASETS_SUPPLEMENTARY)
 
-    if args.modality != "all":
+    if args.modality == "em_mito":
+        datasets = tuple(d for d in datasets if d in DATASETS_EM_MITO)
+    elif args.modality == "em_nucleus":
+        datasets = tuple(d for d in datasets if d in DATASETS_EM_NUCLEUS)
+    elif args.modality != "all":
         datasets = tuple(d for d in datasets if modality_of(d) == args.modality)
     if args.ndim is not None:
         datasets = tuple(d for d in datasets if ndim_of(d) == args.ndim)
@@ -212,6 +221,8 @@ def select_datasets(args: argparse.Namespace, method: Optional[str], mode: Optio
         datasets = tuple(d for d in datasets if modality_of(d) in support["modality"])
     if "ndim" in support:
         datasets = tuple(d for d in datasets if ndim_of(d) in support["ndim"])
+    if "exclude" in support:
+        datasets = tuple(d for d in datasets if d not in support["exclude"])
     return datasets
 
 
@@ -377,7 +388,11 @@ def main():
         "--supplementary", action="store_true",
         help="Include the supplementary datasets, which --all_datasets leaves out by default.",
     )
-    parser.add_argument("--modality", default="all", choices=("lm", "em", "hp", "all"), help="Restrict to a modality.")
+    parser.add_argument(
+        "--modality", default="all", choices=("lm", "em", "hp", "em_mito", "em_nucleus", "all"),
+        help="Restrict to a modality. 'em' is every EM dataset, 'em_mito' the mitochondria panel only, "
+        "'em_nucleus' the nucleus panel only.",
+    )
     parser.add_argument("--ndim", type=int, default=None, choices=(2, 3), help="Restrict to a dimensionality.")
     parser.add_argument("--segmentation_type", required=True, choices=("automatic", "interactive"))
     parser.add_argument("--segmentation_mode", nargs="+", default=["ais"], choices=SEGMENTATION_MODES,

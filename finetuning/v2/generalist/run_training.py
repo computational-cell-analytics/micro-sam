@@ -71,7 +71,7 @@ export MALLOC_TRIM_THRESHOLD_=134217728
 
 export LABEL_TRAFO_THREADS=6
 export N_WORKERS=8
-export RUN_TAG={tag}
+export RUN_TAG={tag or ""}
 
 # The compile cache must be node-local. A cache on the shared filesystem blocks on its file locks.
 export TORCHINDUCTOR_CACHE_DIR=/local/jobs/${{USER}}_${{SLURM_JOB_ID}}/inductor

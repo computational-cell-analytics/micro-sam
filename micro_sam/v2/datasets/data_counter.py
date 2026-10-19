@@ -54,11 +54,22 @@ from torch_em.data.datasets.electron_microscopy.platynereis import CELL_IGNORE_L
 
 from .wrapper import _leaves
 from ..transforms.raw import _identity
-from .generalist_loader import _get_em_datasets, _get_hp_datasets, _get_lm_datasets, _resize_then_em_label_trafo
+from .generalist_loader import (
+    _get_em_datasets, _get_em_mito_datasets, _get_em_nucleus_datasets, _get_hp_datasets, _get_lm_datasets,
+    _resize_then_em_label_trafo,
+)
 
 DEFAULT_INPUT_PATH = "/mnt/vast-nhr/projects/cidas/cca/data"
-DOMAIN_BUILDERS = {"lm": _get_lm_datasets, "em": _get_em_datasets, "hp": _get_hp_datasets}
-DOMAIN_NAMES = {"lm": "light microscopy", "em": "electron microscopy", "hp": "histopathology"}
+DOMAIN_BUILDERS = {
+    "lm": _get_lm_datasets, "em": _get_em_datasets, "hp": _get_hp_datasets,
+    "em_mito": _get_em_mito_datasets, "em_nucleus": _get_em_nucleus_datasets,
+}
+DOMAIN_NAMES = {
+    "lm": "light microscopy", "em": "electron microscopy", "hp": "histopathology",
+    "em_mito": "electron microscopy mitochondria", "em_nucleus": "electron microscopy nuclei",
+}
+# The domains of the 'all' generalist, counted by default.
+DEFAULT_DOMAINS = ["lm", "em", "hp"]
 # The background and the ignore label of the EM cell datasets are never objects.
 NON_OBJECT_IDS = (0, CELL_IGNORE_LABEL)
 # The largest number of label elements that one slab of a streamed unit holds.
@@ -133,7 +144,7 @@ def build_units(domain, input_path):
     """Build the datasets of one domain in the same way as the training and collect their label sources.
 
     Args:
-        domain: The domain, one of ``"lm"``, ``"em"`` or ``"hp"``.
+        domain: The domain, one of ``"lm"``, ``"em"``, ``"hp"``, ``"em_mito"`` or ``"em_nucleus"``.
         input_path: The root path of the training data.
 
     Returns:
@@ -399,7 +410,7 @@ def run(input_path, domains, n_workers, output_prefix, per_dataset, cache_path):
 def main():
     parser = argparse.ArgumentParser(description="Count the generalist training data (train + val).")
     parser.add_argument("--input_path", default=DEFAULT_INPUT_PATH, help="The root path of the training data.")
-    parser.add_argument("--domains", nargs="+", default=list(DOMAIN_BUILDERS), choices=list(DOMAIN_BUILDERS))
+    parser.add_argument("--domains", nargs="+", default=DEFAULT_DOMAINS, choices=list(DOMAIN_BUILDERS))
     parser.add_argument("--n_workers", type=int, default=len(os.sched_getaffinity(0)), help="The number of processes.")
     parser.add_argument("--output_prefix", default="generalist_data_counts", help="The prefix of the CSV files.")
     parser.add_argument("--per_dataset", action="store_true", help="Also write the breakdown per dataset.")

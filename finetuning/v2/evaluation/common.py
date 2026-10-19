@@ -39,6 +39,9 @@ from micro_sam.v2.datasets.generalist_loader import (
     PNAS_TEST_PLANTS, PNAS_VAL_PLANTS, TOIAM_TEST_MOVIES, TOIAM_VAL_MOVIES, WING_DISC_TEST_VOLUMES, WING_DISC_VAL_Z,
     XENIUM_TEST_SAMPLES, XENIUM_VAL_SAMPLES, SYNAPSENET_TEST_TOMOGRAMS, cell_acdc_movie, cvz_group,
     dsb_fluorescence_training_paths, synapsenet_roi, synapsenet_tomograms, _train_val_test_split,
+    CELLMAP_NUCLEUS_VAL_CROPS, PLATYNEREIS_NUCLEI_IGNORE_LABEL, PLATYNEREIS_NUCLEI_TEST_IDS,
+    PLATYNEREIS_NUCLEI_VAL_IDS,
+    _compute_platy_rois, ASEM_MITO_BOXES,
 )
 
 
@@ -293,9 +296,34 @@ DATASETS_2D_HP_SUPPLEMENTARY = [
 DATASETS_2D_HP_OOD = ["cytodark0", "deepliif", "khoshdeli", "panoptils", "pcns"]
 DATASETS_HP = DATASETS_2D_HP_ID + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_2D_HP_OOD
 
-# Electron microscopy. The 2d sets are ASTIH (myelinated axons, neurite category) and the tumor spheroid slices
-# (cell category); their splits and the 3d regions below come from the generalist loader constants.
-DATASETS_2D_EM = ["astih", "tumor_spheroid"]
+# 2D EM: ASTIH (neurites), the tumor spheroid slices (cells) and the mitochondria and nucleus panels.
+DATASETS_2D_EM_MITO = [
+    "mitolab_tem", "cmito_dauer_manual", "probtem", "tnbc_mito", "elmi_mito",
+    "lewy_mito", "perez_mito", "cardiomyocyte_tem_mito",
+]
+# Cardiomyocyte TEM (out-of-domain): the images are downscaled and cut into the densest tiles.
+# Touching mitochondria merge, mostly in 914.1_nucC and 914.22_nucE.
+CARDIOMYOCYTE_TEM_SCALE = 2
+CARDIOMYOCYTE_TEM_N_TILES = 4
+# Perez (out-of-domain): the 40 test tiles are scored; the train tiles equal the excluded MitoLab group.
+# The tiles are partly annotated.
+PEREZ_MITO_N_TUNING = 10
+# ELMI Mito (out-of-domain): only 3-6 mitochondria per image are labeled.
+ELMI_MITO_TUNING_IMAGES = ("ELMI_05.tif",)
+# Lewy Mito (out-of-domain): crops around single mitochondria; neighbours are often not labeled.
+LEWY_MITO_GROUPS = ("SN-PD", "HC-SN")
+LEWY_MITO_N_TEST = 300
+LEWY_MITO_N_TUNING = 30
+LEWY_MITO_MIN_SIDE = 128
+# TNBC-Mito (out-of-domain): the low-magnification images miss labels, so they are left out.
+TNBC_MITO_COHORTS = ("DRP1-KO", "HCI-010", "PIM001-P")
+TNBC_MITO_EXCLUDED_TEST_IMAGES = ("R20_72_G01_2913_03.tif", "R20_72_G01_2913_05.tif", "wt_10Kx_2.tif")
+# U2OS FIB-SEM nuclei (out-of-domain): the nucleus is the convex hull of the envelope arc and the border.
+# The tuning crops are not adjacent in z.
+U2OS_FIBSEM_NUCLEUS_ROOT = "u2os_fibsem_nucleus"
+U2OS_FIBSEM_NUCLEUS_TUNING_CROPS = ("05", "11", "17")
+DATASETS_2D_EM_NUCLEUS = ["u2os_fibsem_nucleus"]
+DATASETS_2D_EM = ["astih", "tumor_spheroid"] + DATASETS_2D_EM_MITO + DATASETS_2D_EM_NUCLEUS
 
 DATASETS_2D = DATASETS_2D_LM + DATASETS_HP + DATASETS_2D_EM
 
@@ -304,7 +332,8 @@ DATASETS_2D = DATASETS_2D_LM + DATASETS_HP + DATASETS_2D_EM
 GT_MIN_SIZE_2D = {
     "livecell": 50, "dsb": 10,
     "deepbacs_label_free": 50, "deepbacs_fluorescence": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
-    "u20s": 10, "vicar": 25, "yeaz": 10,
+    "u20s": 10, "vicar": 25, "yeaz": 10, "probtem": 25, "tnbc_mito": 25, "elmi_mito": 25, "lewy_mito": 25,
+    "perez_mito": 25, "cardiomyocyte_tem_mito": 25, "u2os_fibsem_nucleus": 25,
 }
 
 # Light microscopy, 3d, grouped as the 2d datasets. nis3d is the Drosophila pair the loader trains on. Of MorphoNet
@@ -337,16 +366,92 @@ DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb", "nisb"]
 # Cell segmentation: Platynereis volume 9 and the DenseCell val volume are blind; the tumor spheroid slices are 2d.
 DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell", "synapsenet_compartments"]
 
+# The CEM-Mito-Benchmark volumes; lucchi_pp equals the Lucchi train volume, so it is not scored.
+MITOLAB_VOLUMES = ("c_elegans", "fly_brain", "glycolytic_muscle", "hela_cell", "lucchi_pp", "salivary_gland")
+MITOLAB_EVALUATED_VOLUMES = tuple(name for name in MITOLAB_VOLUMES if name != "lucchi_pp")
+# The Cmito volumes; their labels are Cmito model output, not hand labels.
+CMITO_VOLUMES = {
+    "cmito_l1": "l1_ceb79c8268d7.zarr",
+    "cmito_l2": "l2_2ea67de84d7e.zarr",
+    "cmito_l3": "l3_voxels_13ca91605fde.zarr",
+    "cmito_adult": "adult_dba9f64835ae.zarr",
+    "cmito_dauer": "dauer_056f5d679440.zarr",
+}
+# The testis and brainstem boxes of MitoSegEM train, so only the intestine box is scored.
+MITO_SEGEM_BOXES = {
+    "mito_segem_intestine": ("intestine", (468, 532, 2304, 3328, 2816, 3840)),
+}
+# The MitoEM val volumes are scored; the test volumes have no labels.
+MITOEM_SAMPLES = {"mitoem_human": "human", "mitoem_rat": "rat"}
+# The MitoEM v2 test volumes are scored; jurkat tunes on the end of its train volume.
+# mossy is scored only inside the bouton mask of its MitoVerse copies.
+MITOEMV2_DATASETS = {
+    f"mitoemv2_{name}": name for name in ("beta", "jurkat", "macro", "podo", "sperm", "stem", "mossy")
+}
+# The MitoVerse han24 volumes of the MitoEM v2 mossy samples: test01 -> neg1, test02 -> pos1, val (train03) -> pos2.
+MITOEMV2_MOSSY_VOLUMES = {"test": ["neg1", "pos1"], "val": ["pos2"]}
+# MitoNet-Predicted-Kidney (in-domain): MitoNet output in boxes that no training crop overlaps.
+MITONET_KIDNEY_BOXES = [
+    (2240, 2368, 2560, 3584, 3584, 4608), (4800, 4928, 2048, 3072, 4096, 5120), (10432, 10560, 1024, 2048, 512, 1536),
+]
+# Human liver (out-of-domain): automatic labels; the boxes lie in the annotated region.
+HUMAN_LIVER_EM_BOXES = {
+    "test": [
+        (10752, 11776, 6656, 7680, 440, 472), (11264, 12288, 1024, 2048, 240, 272), (2048, 3072, 11776, 12800, 40, 72),
+    ],
+    "val": [(9216, 10240, 6656, 7680, 540, 556)],
+}
+# Parlakgul liver (out-of-domain): the manual crops; the third crop of each sample tunes.
+PARLAKGUL_LIVER_EVAL_SAMPLES = ("6461", "6464", "9430", "1857")
+PARLAKGUL_LIVER_EVAL_TUNING_CROP = "003"
+# Cerebellum FIB-SEM mitochondria (out-of-domain): the first fifth of z tunes.
+CEREBELLUM_FIBSEM_PATH = os.path.join("cerebellum_fibsem", "cerebellum_fibsem.h5")
+# Macrophage / A431 mitochondria (out-of-domain): the first fifth of the block tunes.
+MACROPHAGE_A431_MITO_PATH = os.path.join("macrophage_a431", "fib_control_z848-976.h5")
+# MitoANF (out-of-domain): only the mitochondria of traced nerve fibers are labeled.
+MITO_ANF_BOXES = ("M1_9cb2de6a1d1f.zarr", "M2_908d64f28407.zarr")
+# INTERNAL data from Donglai Wei's lab (not public), out-of-domain; blank raw strips are not scored.
+DONGLAI_WEI_MITO_ROOT = os.path.join("donglai_wei_mito", "micron1")
+# densecell_mito and hemibrain_mito are in-domain sets of the generalists.
+DATASETS_3D_EM_MITO = (
+    [f"mitolab_{name}" for name in MITOLAB_EVALUATED_VOLUMES] + ["asem_mito"] + list(CMITO_VOLUMES)
+    + ["densecell_mito", "hemibrain_mito", "lucchi", "snemi_mito", "kasthuri"] + list(MITO_SEGEM_BOXES)
+    + list(MITOEM_SAMPLES) + list(MITOEMV2_DATASETS) + ["mitonet_kidney", "human_liver_em", "parlakgul_liver_eval"]
+    + ["cerebellum_fibsem_mito", "macrophage_a431_mito", "mito_anf", "donglai_wei_mito"]
+)
+DATASETS_3D_EM_MITO_SUPPLEMENTARY = []
+
+# The nucleus panel: the in-domain sets are held-out parts of the training datasets.
+CELLMAP_NUCLEUS_TEST_CROPS = ("jrc_mus-liver-zon-2_crop357",)
+HUMAN_LIVER_EM_NUCLEUS_BOXES = {"test": ["test_a", "test_b", "test_c"], "val": ["tune"]}
+# Etch-a-Cell nuclei (out-of-domain): the envelope labels are filled into nuclei.
+ETCHACELL_NUCLEUS_ROOT = "etchacell_nucleus"
+ETCHACELL_NUCLEUS_TUNING_ROIS = ("ROI_1584-6996-1", "ROI_1608-912-1", "ROI_3588-3972-1")
+# NucMM (out-of-domain): only 7 of the 54 NucMM-Z label volumes are available, two of them tune.
+NUCMM_ROOT = "nuc_mm"
+NUCMM_ZEBRAFISH_TUNING = ("seg_0064_0960_0896.h5", "seg_0128_0384_0768.h5")
+# NucMM-M is X-ray micro-CT, not EM; its val volumes are scored and a train volume tunes.
+NUCMM_MOUSE_TUNING = ("img_000_200_200.h5",)
+# AIVE nuclei (out-of-domain): dataset1 holds only a cap of its nucleus (19 slices), so it is left out.
+AIVE_NUCLEUS_ROOT = "aive_nucleus"
+AIVE_NUCLEUS_EVAL_VOLUMES = ("aive_dataset2.h5", "aive_dataset3.h5")
+DATASETS_3D_EM_NUCLEUS_ID = ["cellmap_nucleus", "fafb_nuclei", "microns_nuclei", "platynereis_nuclei"]
+DATASETS_3D_EM_NUCLEUS_OOD = [
+    "human_liver_em_nucleus", "etchacell_nucleus", "nucmm_zebrafish", "nucmm_mouse", "aive_nucleus",
+]
+DATASETS_3D_EM_NUCLEUS = DATASETS_3D_EM_NUCLEUS_ID + DATASETS_3D_EM_NUCLEUS_OOD
+DATASETS_EM_NUCLEUS = DATASETS_3D_EM_NUCLEUS + DATASETS_2D_EM_NUCLEUS
+
 DATASETS_3D_EM = (
     DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_OOD
-    + DATASETS_3D_EM_CELL_ID
+    + DATASETS_3D_EM_CELL_ID + DATASETS_3D_EM_MITO + DATASETS_3D_EM_MITO_SUPPLEMENTARY + DATASETS_3D_EM_NUCLEUS
 )
 DATASETS_EM = DATASETS_2D_EM + DATASETS_3D_EM
+DATASETS_EM_MITO = (
+    DATASETS_2D_EM_MITO + DATASETS_3D_EM_MITO + DATASETS_3D_EM_MITO_SUPPLEMENTARY
+)
 
-# Datasets for the micro-sam v1 interactive sweeps only, which no micro-sam2 evaluation selects.
-DATASETS_3D_SWEEP_ONLY = ["lucchi"]
-
-DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM + DATASETS_3D_SWEEP_ONLY
+DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
 # The neurite datasets need the dense (multicut) pipeline and are ranked by the CREMI score. The EM cell datasets
 # segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
@@ -357,7 +462,7 @@ DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTAR
 DATASETS_SUPPLEMENTARY = (
     DATASETS_2D_LM_CELL_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM
     + DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY + DATASETS_2D_LM_LABEL_FREE_RESERVE + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY
-    + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_2D_HP_SUPPLEMENTARY
+    + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_3D_EM_MITO_SUPPLEMENTARY
 )
 
 # The split to tune on, or None where the loader has no splits and VAL_Z_RANGE holds out a z-slab.
@@ -397,16 +502,20 @@ LM_VAL_Z_SLABS = {
     "bbbc033": {"BBBC033.h5": slice(0, 6)},
 }
 
-# EM: None means the tuning data is a different region (EM_ROIS) or different files (see _get_3d_em_data_paths) of
-# the same dataset, both disjoint from the blind test region. fib25 has no validation data and is not listed.
+# EM: None means the tuning data is a different region (EM_ROIS, EM_VOLUME_ROIS) or different files (see
+# _get_3d_em_data_paths) of the same dataset, both disjoint from the blind test region. fib25 has no validation data
+# and is not listed.
 VAL_SPLITS.update({
     name: None for name in (
         "cremi", "snemi", "axonem", "fafb", "hemibrain", "manc", "malecns", "wafer4", "minnie65",
         "zebrafinch_j0126", "zebrafinch_j0251", "wildenberg", "liconn", "xpress", "nisb", "platynereis_cells",
-        "densecell", "synapsenet_compartments",
-        "astih", "tumor_spheroid",
+        "densecell", "synapsenet_compartments", *DATASETS_3D_EM_MITO, *DATASETS_3D_EM_MITO_SUPPLEMENTARY,
+        *DATASETS_3D_EM_NUCLEUS,
     )
 })
+# The 2d EM resolvers return their tuning images for any split other than 'test', and a None split resolves to
+# 'test', so they need 'val' here.
+VAL_SPLITS.update({name: "val" for name in DATASETS_2D_EM})
 
 # Histopathology tuning splits. The 'val' splits are the loader's validation data, 'train' is used where a
 # dataset has no val split (cpm17, monuseg, glysac); both are disjoint from the scored test split. pannuke
@@ -440,6 +549,67 @@ EM_ROIS = {
     # Volume 9 (test) and volumes 7-8 (val) are read inside the bounding boxes of their labelled cells.
     "platynereis_cells": {"test": np.s_[10:110, 128:1152, 128:1152], "val": np.s_[:, :, :]},
     "densecell": {"test": np.s_[:, :, :], "val": np.s_[35:, :, :]},
+    # The CEM-Mito-Benchmark volumes are annotated throughout (salivary_gland from z 76). The tuning slab is the
+    # start of the annotated stack, about a fifth of it, and the rest is scored.
+    "mitolab_c_elegans": {"test": np.s_[48:, :, :], "val": np.s_[:48, :, :]},
+    "mitolab_fly_brain": {"test": np.s_[48:, :, :], "val": np.s_[:48, :, :]},
+    "mitolab_glycolytic_muscle": {"test": np.s_[48:, :, :], "val": np.s_[:48, :, :]},
+    "mitolab_hela_cell": {"test": np.s_[48:, :, :], "val": np.s_[:48, :, :]},
+    "mitolab_salivary_gland": {"test": np.s_[250:, :, :], "val": np.s_[:250, :, :]},
+    # The Cmito boxes have 128 slices and the dauer worm 364; the first fifth tunes.
+    "cmito_l1": {"test": np.s_[26:, :, :], "val": np.s_[:26, :, :]},
+    "cmito_l2": {"test": np.s_[26:, :, :], "val": np.s_[:26, :, :]},
+    "cmito_l3": {"test": np.s_[26:, :, :], "val": np.s_[:26, :, :]},
+    "cmito_adult": {"test": np.s_[26:, :, :], "val": np.s_[:26, :, :]},
+    "cmito_dauer": {"test": np.s_[73:, :, :], "val": np.s_[:73, :, :]},
+    # The same regions as the DenseCell cells: the val volume is scored, the train volume tunes on z >= 35.
+    "densecell_mito": {"test": np.s_[:, :, :], "val": np.s_[35:, :, :]},
+    "hemibrain_mito": {"test": np.s_[205:, :, :], "val": np.s_[:205, :, :]},
+    # The MitoSegEM boxes have 64 slices; the first fifth tunes.
+    **{name: {"test": np.s_[13:, :, :], "val": np.s_[:13, :, :]} for name in MITO_SEGEM_BOXES},
+    # The MitoEM val volumes have 100 slices; the first 20 tune.
+    **{name: {"test": np.s_[20:, :, :], "val": np.s_[:20, :, :]} for name in MITOEM_SAMPLES},
+    # The jurkat test volume is scored whole, its train volume tunes on the slab the generalist holds out (z >= 230).
+    "mitoemv2_jurkat": {"test": np.s_[:, :, :], "val": np.s_[230:, :, :]},
+    # The MitoNet kidney boxes have 128 slices; the first fifth tunes.
+    "mitonet_kidney": {"test": np.s_[26:, :, :], "val": np.s_[:26, :, :]},
+    # The Macrophage / A431 fib_control block has 128 slices; the first fifth tunes.
+    "macrophage_a431_mito": {"test": np.s_[26:, :, :], "val": np.s_[:26, :, :]},
+    # The MitoANF boxes have 128 slices; the first fifth tunes.
+    "mito_anf": {"test": np.s_[26:, :, :], "val": np.s_[:26, :, :]},
+    # The Donglai Wei MICrONS phase 1 volume has 750 slices; the first fifth tunes, in a window without blank raw.
+    "donglai_wei_mito": {"test": np.s_[150:, :, :], "val": np.s_[:150, 512:1024, 2560:3072]},
+    # The AIVE nucleus volumes have 206-286 slices; the first 40 tune.
+    "aive_nucleus": {"test": np.s_[40:, :, :], "val": np.s_[:40, :, :]},
+    # The Cerebellum FIB-SEM volume has 530 slices; the first fifth tunes.
+    "cerebellum_fibsem_mito": {"test": np.s_[106:, :, :], "val": np.s_[:106, :, :]},
+    # The mitochondria generalist trains on z < 140 of the Lucchi train volume and validates on the rest, which tunes.
+    "lucchi": {"test": np.s_[:, :, :], "val": np.s_[140:, :, :]},
+    # The SNEMI Mito splits of torch-em, written out so that older torch-em releases import this module.
+    "snemi_mito": {"test": np.s_[70:100, :, :], "val": np.s_[50:70, :, :]},
+}
+
+# The CEM-Mito-Benchmark volumes in the torch-em benchmark numbering (7 is the 2d TEM benchmark).
+MITOLAB_BENCHMARK_IDS = {name: i for i, name in enumerate(MITOLAB_VOLUMES, start=1)}
+MITOLAB_TEM_BENCHMARK_ID = 7
+
+# The generalist trains on the ASEM boxes 46, 58 and 2E, so only 61 and 64 are scored.
+ASEM_MITO_EVAL_VOLUMES = ("61", "64")
+
+
+def asem_crop_name(volume_id):
+    """The file name of the torch-em store of one ASEM box (see ASEM_MITO_BOXES)."""
+    z0, z1, y0, y1, x0, x1 = ASEM_MITO_BOXES[volume_id]
+    return f"{volume_id}_z{z0}-{z1}_y{y0}-{y1}_x{x0}-{x1}.zarr"
+
+
+# The test and tuning regions of datasets with several volumes, per volume file name. The tuning slab is the start of
+# the annotated stack of each volume, about a fifth of it, and the rest is scored.
+EM_VOLUME_ROIS = {
+    "asem_mito": {
+        asem_crop_name("61"): {"test": np.s_[140:, :, :], "val": np.s_[:140, :, :]},
+        asem_crop_name("64"): {"test": np.s_[70:, :, :], "val": np.s_[:70, :, :]},
+    },
 }
 
 # SynapseWeb is annotated in an irregular core of each volume; these are the bounding boxes of the dense cores.
@@ -486,6 +656,17 @@ def em_roi(dataset_name: str, label_path: str, split: str):
     if dataset_name == "synapseweb":
         region = os.path.basename(label_path).replace("synapseweb_hippocampus_", "").replace(".h5", "")
         return SYNAPSEWEB_CORE_ROIS[region]
+    if dataset_name in EM_VOLUME_ROIS:
+        return EM_VOLUME_ROIS[dataset_name][os.path.basename(label_path)][split]
+    if dataset_name == "platynereis_nuclei":
+        # The annotated box of the volume (its valid ROI), as in training; the halo around it is unlabeled.
+        sample_id = int(os.path.basename(label_path).replace("train_data_nuclei_", "").replace(".h5", ""))
+        rois = _compute_platy_rois(
+            os.path.dirname(os.path.dirname(label_path)), [sample_id], ignore_label=PLATYNEREIS_NUCLEI_IGNORE_LABEL,
+            file_template="nuclei/train_data_nuclei_%02i.h5", label_key="volumes/labels/nucleus_instance_labels",
+            cache_prefix="_nuclei_roi_cache",
+        )
+        return rois[sample_id]
     rois = EM_ROIS.get(dataset_name)
     return None if rois is None else rois[split]
 
@@ -661,12 +842,69 @@ def _held_out_part(raw_paths, label_paths, split):
     return (val_r, val_l) if split == "val" else (test_r, test_l)
 
 
+# The hand-labeled Cmito dauer patches; 140 of the 200 patches carry labels.
+CMITO_MANUAL = "precomputed://https://storage.googleapis.com/gnd-dauer1/mito_label/220114_test"
+CMITO_MANUAL_BOX = (32, 544, 32, 544, 0, 200)  # x, y, z: the extent of the labels
+
+
+def _cmito_dauer_manual_patches(data_root: str, download: bool) -> List[str]:
+    """The hand-labeled Cmito dauer patches with labels, one cached file each ('raw', 'labels').
+
+    The block is cached as <data>/cmito/dauer_manual_220114_test.zarr (raw cropped to the labels, z, y, x), streamed
+    from the public bucket if it is missing; the patches are written from it to the evaluation cache.
+    """
+    import h5py
+    import zarr
+
+    block_path = os.path.join(data_root, "cmito", "dauer_manual_220114_test.zarr")
+    if not os.path.exists(block_path):
+        if not download:
+            raise FileNotFoundError(f"'{block_path}' does not exist. Pass download=True to stream it from GCS.")
+        from cloudvolume import CloudVolume
+        from zarr.codecs import BloscCodec
+
+        x0, x1, y0, y1, z0, z1 = CMITO_MANUAL_BOX
+        data = {
+            key: np.asarray(
+                CloudVolume(f"{CMITO_MANUAL}/{name}", use_https=True, progress=False)[x0:x1, y0:y1, z0:z1]
+            )[..., 0].transpose(2, 1, 0)
+            for key, name in (("raw", "image"), ("labels", "label"))
+        }
+        tmp_path = f"{block_path}.{os.getpid()}.tmp"
+        group = zarr.open_group(tmp_path, mode="w")
+        for key, array in data.items():
+            group.create_array(
+                key, shape=array.shape, chunks=(1, 512, 512), dtype=array.dtype, compressors=BloscCodec(cname="zstd"),
+            )[:] = array
+        group.attrs["source"] = CMITO_MANUAL
+        group.attrs["box_xyz"] = list(CMITO_MANUAL_BOX)
+        os.replace(tmp_path, block_path)
+
+    block = zarr.open_group(block_path, mode="r")
+    raw, labels = block["raw"][:], block["labels"][:]
+    cache_dir = os.path.join(EVAL_CACHE_ROOT, "cmito_dauer_manual")
+    os.makedirs(cache_dir, exist_ok=True)
+    paths = []
+    for z in np.where(labels.any(axis=(1, 2)))[0]:
+        out_path = os.path.join(cache_dir, f"patch_{z:03}.h5")
+        if not os.path.exists(out_path):
+            tmp_path = f"{out_path}.{os.getpid()}.tmp"
+            with h5py.File(tmp_path, "w") as f:
+                f.create_dataset("raw", data=raw[z], compression="gzip")
+                f.create_dataset("labels", data=labels[z], compression="gzip")
+            os.replace(tmp_path, out_path)
+        paths.append(out_path)
+    return paths
+
+
 # Channels the 2d light microscopy models see, as indices into the stored channel-last image. A single index gives
 # a grayscale image. Datasets not listed are fed as stored; a two-channel image gets a zero third channel, which is
 # the TissueNet layout pan_multiplex trains with.
 LM_IMAGE_CHANNELS = {
     "cvz_fluo_cell": (0, 2, 1), "cvz_fluo_dapi": (0,), "enseg": (1,), "xenium_cells": (1, 2, 3),
     "hela_cytonuc": (2,), "micro_bench": (2,), "spatch_dapi": (0,), "bac_mother": (0,),
+    # The Lewy Mito crops are gray values stored as RGB.
+    "lewy_mito": (0,),
 }
 
 
@@ -821,7 +1059,168 @@ def _get_2d_data_paths(
         paths = [path for path in paths if os.path.basename(path) in names]
         return paths, paths, raw_key, label_key
 
+    if dataset_name == "mitolab_tem":
+        # The 100 images of the TEM benchmark; a random 10 % (seed 42) tunes, the rest is scored.
+        image_dir, mask_dir, _, _, _ = datasets.electron_microscopy.cem.get_benchmark_paths(
+            os.path.join(p, "mitolab"), dataset_id=MITOLAB_TEM_BENCHMARK_ID, download=download,
+        )
+        raw_paths, label_paths = _sorted_pairs(
+            sorted(glob(os.path.join(image_dir, "*.tiff"))), sorted(glob(os.path.join(mask_dir, "*.tiff")))
+        )
+        raw_paths, label_paths = _loader_val_part(raw_paths, label_paths, split)
+        return raw_paths, label_paths, None, None
+
+    if dataset_name == "cmito_dauer_manual":
+        # The 140 hand-labeled dauer patches; a random 10 % (seed 42) tunes, the rest is scored.
+        paths = _cmito_dauer_manual_patches(p, download)
+        paths = _loader_val_part(paths, paths, split)[0]
+        return sorted(paths), sorted(paths), "raw", "labels"
+
+    if dataset_name == "probtem":
+        # The 6 test images are scored; the 3 training validation images tune.
+        root = os.path.join(p, "probtem_full", "processed")
+        if split == "test":
+            paths = sorted(glob(os.path.join(root, "test", "*.h5")))
+        else:
+            train_paths = sorted(glob(os.path.join(root, "train", "*.h5")))
+            paths = sorted(train_test_split(train_paths, test_size=3, random_state=42)[1])
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "tnbc_mito":
+        # The test images of TNBC_MITO_COHORTS without TNBC_MITO_EXCLUDED_TEST_IMAGES are scored, a seeded 10 of their
+        # tra_val images tune.
+        pairs = []
+        for cohort in TNBC_MITO_COHORTS:
+            raw_paths, label_paths = datasets.electron_microscopy.tnbc_mito.get_tnbc_mito_paths(
+                os.path.join(p, "tnbc_mito"), "tst" if split == "test" else "tra_val", cohort, download=download,
+            )
+            pairs.extend(zip(raw_paths, label_paths))
+        pairs = sorted(pairs)
+        if split == "test":
+            pairs = [pair for pair in pairs if os.path.basename(pair[0]) not in TNBC_MITO_EXCLUDED_TEST_IMAGES]
+        else:
+            pairs = sorted(train_test_split(pairs, test_size=10, random_state=42)[1])
+        return [raw for raw, _ in pairs], [label for _, label in pairs], None, None
+
+    if dataset_name == "elmi_mito":
+        raw_paths, label_paths = datasets.electron_microscopy.elmi_mito.get_elmi_mito_paths(
+            os.path.join(p, "elmi_mito"), download=download,
+        )
+        pairs = [
+            pair for pair in sorted(zip(raw_paths, label_paths))
+            if (os.path.basename(pair[0]) in ELMI_MITO_TUNING_IMAGES) == (split != "test")
+        ]
+        return [raw for raw, _ in pairs], [label for _, label in pairs], None, None
+
+    if dataset_name == "lewy_mito":
+        return (*_lewy_mito_pairs(os.path.join(p, "lewy_mito"), split, download), None, None)
+
+    if dataset_name == "cardiomyocyte_tem_mito":
+        tiles = _cardiomyocyte_tem_eval_tiles(p, download)
+        images = sorted({os.path.basename(path).rsplit("_tile", 1)[0] for path in tiles})
+        tuning = set(train_test_split(images, test_size=1, random_state=42)[1])
+        tiles = [
+            path for path in tiles if (os.path.basename(path).rsplit("_tile", 1)[0] in tuning) == (split != "test")
+        ]
+        return sorted(tiles), sorted(tiles), "raw", "labels"
+
+    if dataset_name == "u2os_fibsem_nucleus":
+        paths = sorted(glob(os.path.join(p, U2OS_FIBSEM_NUCLEUS_ROOT, "*.h5")))
+        paths = [
+            path for path in paths
+            if (os.path.basename(path).split("_crop_")[1][:2] in U2OS_FIBSEM_NUCLEUS_TUNING_CROPS) == (split != "test")
+        ]
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "perez_mito":
+        raw_paths, label_paths = datasets.electron_microscopy.perez.get_perez_paths(
+            os.path.join(p, "perez"), "test" if split == "test" else "train", organelle="mito", download=download,
+        )
+        pairs = sorted(zip(raw_paths, label_paths))
+        if split != "test":
+            pairs = sorted(train_test_split(pairs, test_size=PEREZ_MITO_N_TUNING, random_state=42)[1])
+        return [raw for raw, _ in pairs], [label for _, label in pairs], None, None
+
     return _get_2d_lm_data_paths(dataset_name, p, download, split)
+
+
+def _cardiomyocyte_tem_eval_tiles(data_root: str, download: bool) -> List[str]:
+    """The cached evaluation tiles of the Cardiomyocyte TEM mitochondria, see CARDIOMYOCYTE_TEM_SCALE."""
+    import h5py
+    import tifffile
+    from skimage.transform import downscale_local_mean
+
+    cache_dir = os.path.join(EVAL_CACHE_ROOT, "cardiomyocyte_tem")
+    if os.path.isdir(cache_dir) and os.listdir(cache_dir):
+        return sorted(glob(os.path.join(cache_dir, "*.h5")))
+    os.makedirs(cache_dir, exist_ok=True)
+    raw_paths, label_paths = datasets.electron_microscopy.cardiomyocyte_tem.get_cardiomyocyte_tem_paths(
+        os.path.join(data_root, "cardiomyocyte_tem"), "mito", download=download,
+    )
+    labels_by_name = {os.path.basename(path).replace("KO_", "").replace("_mito.tif", ""): path for path in label_paths}
+    tile_shape = tuple(2 * s for s in CROP_SHAPE_2D)
+    scale = CARDIOMYOCYTE_TEM_SCALE
+    paths = []
+    for raw_path in raw_paths:
+        name = os.path.basename(raw_path).replace(".tif", "")
+        raw = tifffile.imread(raw_path).astype("float32")
+        labels = tifffile.imread(labels_by_name[name]) > 0
+        raw = downscale_local_mean(raw, (scale, scale))
+        labels = labels[::scale, ::scale][:raw.shape[0], :raw.shape[1]]
+        candidates = []
+        for y in range(0, raw.shape[0] - tile_shape[0] + 1, tile_shape[0]):
+            for x in range(0, raw.shape[1] - tile_shape[1] + 1, tile_shape[1]):
+                tile = np.s_[y:y + tile_shape[0], x:x + tile_shape[1]]
+                n_objects = int(connected_components(labels[tile]).max())
+                candidates.append((n_objects, (y, x), tile))
+        for n_objects, (y, x), tile in sorted(candidates, key=lambda c: -c[0])[:CARDIOMYOCYTE_TEM_N_TILES]:
+            out_path = os.path.join(cache_dir, f"{name}_tile_y{y}_x{x}.h5")
+            tmp_path = f"{out_path}.{os.getpid()}.tmp"
+            with h5py.File(tmp_path, "w") as f:
+                f.create_dataset("raw", data=(normalize_raw(raw[tile]) * 255).astype("uint8"), compression="gzip")
+                f.create_dataset("labels", data=labels[tile].astype("uint8"), compression="gzip")
+                f.attrs["origin_yx_downscaled"] = [y, x]
+                f.attrs["scale"] = scale
+            os.replace(tmp_path, out_path)
+            paths.append(out_path)
+    return sorted(paths)
+
+
+def _lewy_mito_instances(mask: np.ndarray) -> np.ndarray:
+    """The instances of a Lewy Mito mask: float mitochondria ids, resampled with interpolation, so every object outline
+    carries thin rings of in-between ids. An opening of each id with a disk of radius 2 removes these rings, the
+    interiors keep their ids.
+    """
+    from scipy.ndimage import binary_opening
+    from skimage.morphology import disk
+
+    instances = np.zeros(mask.shape, dtype="uint32")
+    for object_id in np.unique(mask[mask > 0]):
+        instances[binary_opening(mask == object_id, structure=disk(2))] = int(object_id)
+    return instances
+
+
+def _lewy_mito_pairs(root: str, split: str, download: bool) -> Tuple[List[str], List[str]]:
+    """The Lewy Mito crops of the test or the tuning subset, see LEWY_MITO_GROUPS."""
+    raw_paths, label_paths = datasets.electron_microscopy.lewy_mito.get_lewy_mito_paths(
+        root, groups=list(LEWY_MITO_GROUPS), download=download,
+    )
+    pairs = sorted(zip(raw_paths, label_paths))
+    folders = sorted({os.path.dirname(os.path.dirname(raw)) for raw, _ in pairs})
+    tuning_folders = set(train_test_split(folders, test_size=0.1, random_state=42)[1])
+    pairs = [
+        pair for pair in pairs if (os.path.dirname(os.path.dirname(pair[0])) in tuning_folders) == (split != "test")
+    ]
+    rng = np.random.default_rng(42)
+    selected = []
+    for index in rng.permutation(len(pairs)):
+        raw, label = pairs[index]
+        if min(imageio.improps(raw).shape[:2]) >= LEWY_MITO_MIN_SIDE:
+            selected.append((raw, label))
+        if len(selected) == (LEWY_MITO_N_TEST if split == "test" else LEWY_MITO_N_TUNING):
+            break
+    selected = sorted(selected)
+    return [raw for raw, _ in selected], [label for _, label in selected]
 
 
 def _get_2d_lm_data_paths(
@@ -1492,9 +1891,194 @@ def _get_3d_em_data_paths(
         return paths, paths, "raw", "labels/compartments"
 
     if dataset_name == "lucchi":
-        # Mitochondria, for the micro-sam v1 sweeps. 'load_volume' turns the binary labels into instances.
-        path = em.lucchi.get_lucchi_paths(path=os.path.join(p, "lucchi"), split="test", download=download)
+        # Mitochondria. The test volume is scored, the training volume tunes on its validation slab (EM_ROIS);
+        # 'load_volume' turns the binary labels into instances.
+        path = em.lucchi.get_lucchi_paths(
+            path=os.path.join(p, "lucchi"), split="train" if is_val else "test", download=download,
+        )
         return [path], [path], "raw", "labels"
+
+    if dataset_name == "snemi_mito":
+        # Mitochondria. The stacked SNEMI Mito slices, scored and tuned in the regions of EM_ROIS; 'load_volume' turns
+        # the binary labels into instances.
+        path = datasets.snemi_mito.get_snemi_mito_data(os.path.join(p, "snemi_mito"), download=download, as_volume=True)
+        return [path], [path], "raw", "labels"
+
+    if dataset_name == "kasthuri":
+        # Mitochondria. The test volume is scored, the train volume tunes; -1 marks the padding around the rotated
+        # section, which 'load_volume' excludes from scoring.
+        path = em.kasthuri.get_kasthuri_paths(
+            path=os.path.join(p, "kasthuri"), split="train" if is_val else "test", download=download,
+        )
+        return [path], [path], "raw", "labels"
+
+    if dataset_name.startswith("mitolab_"):
+        # One volume of the CEM-Mito-Benchmark, scored and tuned in the regions of EM_ROIS.
+        raw_path, label_path, _, _, _ = em.cem.get_benchmark_paths(
+            os.path.join(p, "mitolab"), dataset_id=MITOLAB_BENCHMARK_IDS[dataset_name.replace("mitolab_", "")],
+            download=download,
+        )
+        return [raw_path], [label_path], None, None
+
+    if dataset_name in CMITO_VOLUMES:
+        # One Cmito volume, scored and tuned in the regions of EM_ROIS. Dense instance labels from Cmito model output.
+        path = os.path.join(p, "cmito", CMITO_VOLUMES[dataset_name])
+        return [path], [path], "raw", "labels"
+
+    if dataset_name in MITOEM_SAMPLES:
+        # The MitoEM val volume of one species, scored and tuned in the regions of EM_ROIS. Instance labels.
+        paths = em.mitoem.get_mitoem_paths(
+            os.path.join(p, "mitoem"), splits=["val"], samples=[MITOEM_SAMPLES[dataset_name]], download=download,
+        )
+        return paths, paths, "raw", "labels"
+
+    if dataset_name in MITOEMV2_DATASETS:
+        # MitoEM v2: the test volumes are scored, the official val volumes tune (jurkat: its train volume, in the
+        # region of EM_ROIS). mossy comes from the MitoVerse copies, where 'load_volume' reads the bouton mask.
+        name = MITOEMV2_DATASETS[dataset_name]
+        if name == "mossy":
+            root = os.path.join(p, "mitoverse", "data", "han24")
+            volumes = MITOEMV2_MOSSY_VOLUMES["val" if is_val else "test"]
+            paths = [os.path.join(root, f"{volume}.zarr") for volume in volumes]
+            return paths, paths, "img", "mito"
+        mitoemv2_split = "test" if not is_val else ("train" if name == "jurkat" else "val")
+        paths = em.mitoemv2.get_mitoemv2_paths(
+            os.path.join(p, "mitoemv2"), name, split=mitoemv2_split, download=download,
+        )
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "mitonet_kidney":
+        # The cached MitoNet-Predicted-Kidney boxes, scored and tuned in the regions of EM_ROIS. Instance labels.
+        paths = em.mitonet_predicted_kidney.get_mitonet_predicted_kidney_paths(
+            os.path.join(p, "mitonet_predicted_kidney"), bounding_boxes=MITONET_KIDNEY_BOXES, download=download,
+        )
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "human_liver_em":
+        # The cached human liver boxes: three are scored, a separate one tunes. Semantic labels (0 / 255), which
+        # 'load_volume' turns into instances.
+        paths = [
+            em.human_liver_em.get_human_liver_em_data(os.path.join(p, "human_liver_em_boxes"), bbox, download=download)
+            for bbox in HUMAN_LIVER_EM_BOXES["val" if is_val else "test"]
+        ]
+        return paths, paths, "raw", "mito"
+
+    if dataset_name == "cerebellum_fibsem_mito":
+        # The Cerebellum FIB-SEM volume, scored and tuned in the regions of EM_ROIS. Instance labels.
+        path = os.path.join(p, CEREBELLUM_FIBSEM_PATH)
+        return [path], [path], "raw", "labels/mitochondria"
+
+    if dataset_name == "mito_anf":
+        # The cached MitoANF boxes, scored and tuned in the regions of EM_ROIS. Instance labels (partial).
+        paths = [os.path.join(p, "mito_anf", name) for name in MITO_ANF_BOXES]
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "donglai_wei_mito":
+        # The internal Donglai Wei volume, scored and tuned in the regions of EM_ROIS. Instance labels (partial).
+        root = os.path.join(p, DONGLAI_WEI_MITO_ROOT)
+        return [os.path.join(root, "microns1_im.h5")], [os.path.join(root, "microns1_mito.h5")], "main", "main"
+
+    if dataset_name == "macrophage_a431_mito":
+        # The fib_control block, scored and tuned in the regions of EM_ROIS. Semantic labels, which 'load_volume'
+        # turns into instances.
+        path = os.path.join(p, MACROPHAGE_A431_MITO_PATH)
+        return [path], [path], "raw", "labels/mitochondria"
+
+    if dataset_name == "parlakgul_liver_eval":
+        # The manual Parlakgul evaluation crops: the first two crops per sample are scored, the third tunes. Manual
+        # instance labels.
+        paths = datasets.electron_microscopy.parlakgul_liver_eval.get_parlakgul_liver_eval_paths(
+            os.path.join(p, "parlakgul_liver_eval"), samples=list(PARLAKGUL_LIVER_EVAL_SAMPLES), download=download,
+        )
+        tuning = [path for path in paths if path.endswith(f"_mito_{PARLAKGUL_LIVER_EVAL_TUNING_CROP}.zarr")]
+        paths = sorted(tuning if is_val else [path for path in paths if path not in tuning])
+        return paths, paths, "raw", "labels"
+
+    if dataset_name in MITO_SEGEM_BOXES:
+        # One cached MitoSegEM box, scored and tuned in the regions of EM_ROIS. Instance labels.
+        tissue, bounding_box = MITO_SEGEM_BOXES[dataset_name]
+        paths = em.mito_segem.get_mito_segem_paths(
+            os.path.join(p, "mito_segem"), bounding_boxes=[bounding_box], tissue=tissue, download=download,
+        )
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "densecell_mito":
+        # The mitochondrion class of DenseCell: the val volume is scored, the train volume tunes on z >= 35.
+        path = em.densecell.get_densecell_paths(
+            path=os.path.join(p, "densecell"), split="train" if is_val else "val", download=download,
+        )
+        return [path], [path], "raw", "labels/mitochondrion"
+
+    if dataset_name == "hemibrain_mito":
+        # The mitochondria detection of the cached hemibrain box; 'load_volume' keeps its class 1 (mitochondria).
+        paths = em.hemibrain.get_hemibrain_paths(
+            path=os.path.join(p, "hemibrain"), label_choice="mito", download=download,
+        )
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "cellmap_nucleus":
+        # The CellMap nucleus crops cached for the nucleus generalist: the held-out crop is scored, the validation crop
+        # tunes. Instance labels.
+        names = CELLMAP_NUCLEUS_VAL_CROPS if is_val else CELLMAP_NUCLEUS_TEST_CROPS
+        paths = [os.path.join(p, "cellmap_nucleus_crops", f"{name}.zarr") for name in names]
+        return paths, paths, "raw", "labels"
+
+    if dataset_name in ("fafb_nuclei", "microns_nuclei"):
+        # The official test blocks are scored, the val blocks tune. Instance labels of the automatic segmentation.
+        paths = sorted(glob(os.path.join(p, dataset_name, "val" if is_val else "test", "*.h5")))
+        return paths, paths, "raw", "labels/nuclei"
+
+    if dataset_name == "human_liver_em_nucleus":
+        # The 4x downsampled human liver nucleus boxes: three are scored, a separate one tunes. Instance labels.
+        names = HUMAN_LIVER_EM_NUCLEUS_BOXES["val" if is_val else "test"]
+        paths = [os.path.join(p, "human_liver_em_nucleus_boxes", f"{name}.zarr") for name in names]
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "etchacell_nucleus":
+        # The held-out ROIs tune, the other ROIs are scored. Instance labels (one nucleus per ROI).
+        paths = [
+            path for path in sorted(glob(os.path.join(p, ETCHACELL_NUCLEUS_ROOT, "*.h5")))
+            if (os.path.basename(path)[:-3] in ETCHACELL_NUCLEUS_TUNING_ROIS) == is_val
+        ]
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "nucmm_zebrafish":
+        # The raw and the instance labels are separate files of the same name.
+        root = os.path.join(p, NUCMM_ROOT, "Zebrafish (NucMM-Z)")
+        names = [
+            os.path.basename(path) for path in sorted(glob(os.path.join(root, "Label", "train", "*.h5")))
+            if (os.path.basename(path) in NUCMM_ZEBRAFISH_TUNING) == is_val
+        ]
+        raw_paths = [os.path.join(root, "Image", "train", name.replace("seg_", "img_")) for name in names]
+        label_paths = [os.path.join(root, "Label", "train", name) for name in names]
+        return raw_paths, label_paths, "main", "main"
+
+    if dataset_name == "aive_nucleus":
+        # Scored and tuned in the regions of EM_ROIS. One nucleus per volume.
+        paths = [os.path.join(p, AIVE_NUCLEUS_ROOT, name) for name in AIVE_NUCLEUS_EVAL_VOLUMES]
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "nucmm_mouse":
+        if is_val:
+            paths = [os.path.join(p, NUCMM_ROOT, "mouse", "train", name) for name in NUCMM_MOUSE_TUNING]
+        else:
+            paths = sorted(glob(os.path.join(p, NUCMM_ROOT, "mouse", "val", "*.h5")))
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "platynereis_nuclei":
+        # Volume 03 is scored and volume 12 tunes, inside their valid ROI (see em_roi). Instance labels.
+        sample_ids = PLATYNEREIS_NUCLEI_VAL_IDS if is_val else PLATYNEREIS_NUCLEI_TEST_IDS
+        paths = [os.path.join(p, "platynereis", "nuclei", f"train_data_nuclei_{i:02}.h5") for i in sample_ids]
+        return paths, paths, "volumes/raw", "volumes/labels/nucleus_instance_labels"
+
+    if dataset_name == "asem_mito":
+        # The ASEM evaluation crops (64 and the 61 hold-out block), scored and tuned in the regions of
+        # EM_VOLUME_ROIS. Semantic labels, which 'load_volume' turns into instances.
+        paths = datasets.asem.get_asem_paths(
+            os.path.join(p, "asem"), list(ASEM_MITO_EVAL_VOLUMES), download=download, organelles="mito",
+            bounding_boxes={volume: ASEM_MITO_BOXES[volume] for volume in ASEM_MITO_EVAL_VOLUMES},
+        )
+        return paths, paths, "volumes/raw", "volumes/labels/mito"
 
     if dataset_name == "isbi2012":
         path = em.isbi2012.get_isbi_paths(path=os.path.join(p, "isbi2012"), download=download)
@@ -1591,7 +2175,8 @@ def load_volume(
     """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
 
     valid_roi is a boolean mask that is True where the data is annotated. It is None except for the datasets
-    that are annotated only in part (platynereis_cells, synapseweb, plantseg_root, plantseg_ovules).
+    that are annotated only in part (platynereis_cells, synapseweb, plantseg_root, plantseg_ovules, kasthuri) and
+    for donglai_wei_mito, whose blank raw strips are excluded.
 
     'split' selects the test or the tuning region of the EM volumes, see EM_ROIS. 'z_range' restricts the
     volume to a z-slab before the center crop, which is how a dataset without splits holds tuning data out
@@ -1630,13 +2215,26 @@ def load_volume(
         # Label 1 is the background, label 0 the unannotated deeper tissue.
         valid_roi = labels != 0
         labels[labels == 1] = 0
-    elif dataset_name == "plantseg_ovules":
+    elif dataset_name in ("plantseg_ovules", "kasthuri", "platynereis_nuclei"):
+        # -1 marks unannotated voxels (for kasthuri the padding around the rotated section, for platynereis_nuclei
+        # the halo around the annotated box).
         labels = labels.astype("int64")
         valid_roi = labels != -1
         labels[labels == -1] = 0
     elif dataset_name == "pnas_arabidopsis":
         # The background carries id 1.
         labels[labels == 1] = 0
+    elif dataset_name == "hemibrain_mito":
+        # Class 1 of the 4-class detection is mitochondria; 2 (interior), 3 (background) and 4 (unlabeled) are not.
+        labels = (labels == 1).astype("uint32")
+    elif dataset_name == "donglai_wei_mito":
+        # Blank raw marks missing data at the section edges, where the labels continue; it is excluded from scoring.
+        valid_roi = raw > 0
+        labels[~valid_roi] = 0
+    elif dataset_name == "mitoemv2_mossy":
+        # Only the mossy fiber boutons (the MitoVerse bouton mask) are annotated; the rest is excluded from scoring.
+        valid_roi = np.asarray(open_file(label_path, mode="r")["mask"][window]) > 0
+        labels[~valid_roi] = 0
 
     if ensure_8bit:
         raw = normalize_raw(raw) * 255.0
@@ -1766,6 +2364,38 @@ DATASET_SPACING: dict = {
     "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
     "densecell": (5, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels
+    "densecell_mito": (5, 1, 1),
+    "cmito_l1": (50 / 5.12, 1, 1),  # ssTEM: 50 nm sections, 5.12 nm pixels
+    "cmito_l2": (30 / 8, 1, 1),  # 30 nm sections, 8 nm pixels
+    "cmito_l3": (50 / 6.144, 1, 1),  # 50 nm sections, 6.144 nm pixels
+    "cmito_adult": (30 / 16, 1, 1),  # 30 nm sections, 16 nm pixels
+    "cmito_dauer": (50 / 8, 1, 1),  # 50 nm sections, 8 nm pixels
+    "hemibrain_mito": (1, 1, 1),  # FIB-SEM, 8 nm isotropic
+    "kasthuri": (10, 1, 1),  # ATUM-SEM, 3 nm pixels, 30 nm sections
+    "snemi_mito": (30 / 6, 1, 1),  # ssSEM, 6 nm pixels, 30 nm sections
+    "mito_segem_intestine": (50 / 8, 1, 1),  # SBF-SEM: 50 nm sections, 8 nm pixels
+    "human_liver_em": (55 / 8, 1, 1),  # SBF-SEM: ~55 nm sections, 8 nm pixels
+    "cellmap_nucleus": (1, 1, 1),  # FIB-SEM, 32 nm isotropic
+    "fafb_nuclei": (40 / 32, 1, 1),  # ssTEM: 40 nm sections, 32 nm pixels
+    "microns_nuclei": (40 / 64, 1, 1),  # ssTEM: 40 nm sections, 64 nm pixels
+    "platynereis_nuclei": (100 / 80, 1, 1),  # SBEM: about 100 nm sections, 80 nm pixels
+    "human_liver_em_nucleus": (55 / 32, 1, 1),  # SBF-SEM: ~55 nm sections, 8 nm pixels downsampled 4x
+    "etchacell_nucleus": (50 / 40, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels downsampled 4x
+    "nucmm_zebrafish": (0.48 / 0.51, 1, 1),  # ssEM: about 0.5 um voxels
+    "nucmm_mouse": (1, 1, 1),  # micro-CT, 0.72 um isotropic
+    "aive_nucleus": (30 / 26, 1, 1),  # FIB-SEM, downscaled to 30 x 26 x 26 nm
+    "mitoem_human": (30 / 8, 1, 1),  # ATUM-SEM: 30 nm sections, 8 nm pixels
+    "mitoem_rat": (30 / 8, 1, 1),  # ATUM-SEM: 30 nm sections, 8 nm pixels
+    **{name: (1, 1, 1) for name in ("mitoemv2_beta", "mitoemv2_jurkat", "mitoemv2_macro", "mitoemv2_podo")},
+    "mitoemv2_sperm": (1, 1, 1),  # FIB-SEM, 16 nm isotropic
+    "mitoemv2_stem": (30 / 8, 1, 1),  # SBF-SEM, 8 x 8 x 30 nm (MitoEM v2 metadata)
+    "mitoemv2_mossy": (30 / 8, 1, 1),  # ssSEM, 8 x 8 x 30 nm
+    "mitonet_kidney": (1, 1, 1),  # FIB-SEM, 16 nm isotropic
+    "parlakgul_liver_eval": (1, 1, 1),  # FIB-SEM, 8 nm isotropic
+    "cerebellum_fibsem_mito": (1, 1, 1),  # FIB-SEM, 10 nm
+    "macrophage_a431_mito": (12 / 6, 1, 1),  # FIB-SEM, 6 x 6 x 12 nm
+    "mito_anf": (50 / 12, 1, 1),  # SBEM, 12 x 12 x 50 nm
+    "donglai_wei_mito": (40 / 8, 1, 1),  # ssEM, 8 x 8 x 40 nm
     "synapsenet_compartments": (1, 1, 1),  # electron tomography, isotropic
     "nisb": (2.2, 1, 1),  # synthetic: 20 nm sections, 9 nm pixels
     "bbbc032": (5, 1, 1),  # spinning disk confocal: z=0.5µm, xy=0.101µm
@@ -2452,6 +3082,22 @@ def check_data_download(dataset_name: str, data_root: str, download: bool = True
 CROP_SHAPE_2D = (512, 512)
 CROP_SHAPE_3D = (8, 512, 512)
 
+# The 2d datasets scored on the whole stored image instead of the center crop, e.g. the TEM benchmark images (most of
+# them 1024 x 1024, whose center crop drops half of the mitochondria).
+FULL_IMAGE_2D = frozenset(DATASETS_2D_EM_MITO + DATASETS_2D_EM_NUCLEUS)
+
+# Ground-truth size floor of 3d datasets whose instances come from semantic labels: the connected components of
+# a semantic mask include specks of a few voxels that are no objects.
+GT_MIN_SIZE_3D = {
+    "asem_mito": 100, "densecell_mito": 50, "hemibrain_mito": 100, "lucchi": 100, "snemi_mito": 100, "kasthuri": 100,
+    **{name: 100 for name in [*MITO_SEGEM_BOXES, *MITOEM_SAMPLES, *MITOEMV2_DATASETS, "mitonet_kidney"]},
+    "human_liver_em": 100, "parlakgul_liver_eval": 100, "cerebellum_fibsem_mito": 100,
+    "macrophage_a431_mito": 100, "mito_anf": 100, "donglai_wei_mito": 100,
+    **{name: 100 for name in DATASETS_3D_EM_NUCLEUS},
+    # The NucMM-Z nuclei are only about 50 voxels large.
+    "nucmm_zebrafish": 10,
+}
+
 # The fixed crops of the 3d test volumes, which replace the center crop: the crop shape and the crop starts per volume,
 # in stored array coordinates. eval_crops_3d.json also holds the rule that places the crops and a note per dataset.
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_crops_3d.json")) as f:
@@ -2675,11 +3321,16 @@ def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_
     # Normalize before cropping, so that the percentiles cover the whole image.
     image = select_channels(read_2d(raw_path, raw_key), dataset_name)
     image = ensure_8bit_range(image) if normalize else np.clip(image, 0, 255).astype("uint8")
-    roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
+    if dataset_name in FULL_IMAGE_2D:
+        roi = tuple(slice(None) for _ in image.shape[:2])
+    else:
+        roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
     labels = read_2d(label_path, label_key)[roi]
     if dataset_name == "astih":
         # Semantic labels (1 myelin, 2 axon); the instances are the axon class, as in training.
         labels = labels == 2
+    elif dataset_name == "lewy_mito":
+        labels = _lewy_mito_instances(labels)
     gt = connected_components(labels).astype("uint32")
     return image[roi], drop_severed_objects(gt, GT_MIN_SIZE_2D.get(dataset_name, 0))
 
@@ -2693,6 +3344,7 @@ def load_evaluation_sample_3d(
         raw_path, label_path, raw_key, label_key, dataset_name, crop_shape, z_range=z_range, split=split,
         crop_start=crop_start,
     )
+    min_size = max(min_size, GT_MIN_SIZE_3D.get(dataset_name, 0))
     return raw, apply_min_size(labels, min_size, dataset_name), valid_roi
 
 

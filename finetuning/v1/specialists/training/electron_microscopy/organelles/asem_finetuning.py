@@ -41,10 +41,12 @@ def get_dataloaders(patch_shape, data_path):
     https://github.com/constantinpape/torch-em/blob/main/torch_em/data/datasets/asem.py
     It will automatically download the asem data.
 
-    Experimental split:
-        - Training: `cell_1`
-        - Validation: `cell_2`
-        - Testing: `cell_6`
+    Experimental split (volume ids of the ASEM S3 bucket):
+        - Training: `46`
+        - Validation: `58`
+        - Testing: `64`
+
+    46 and 58 are the cells 1 and 2 of the ASEM publication, the bucket does not tell which is which.
 
     Note: to replace this with another data loader you need to return a torch data loader
     that retuns `x, y` tensors, where `x` is the image data and `y` are the labels.
@@ -57,12 +59,12 @@ def get_dataloaders(patch_shape, data_path):
     sampler = MinForegroundSampler(min_fraction=0.01)
     train_loader = get_asem_loader(
         path=data_path, patch_shape=patch_shape, batch_size=2, ndim=2, download=True,
-        organelles="er", volume_ids=["cell_1"], raw_transform=raw_transform, n_samples=1500,
+        organelles="er", volume_ids=["46"], raw_transform=raw_transform, n_samples=1500,
         label_transform=label_transform, num_workers=16, sampler=sampler, shuffle=True,
     )
     val_loader = get_asem_loader(
         path=data_path, patch_shape=patch_shape, batch_size=1, ndim=2, download=True,
-        organelles="er", volume_ids=["cell_2"], raw_transform=raw_transform, n_samples=500,
+        organelles="er", volume_ids=["58"], raw_transform=raw_transform, n_samples=500,
         label_transform=label_transform, num_workers=16, sampler=sampler, shuffle=True,
     )
 
