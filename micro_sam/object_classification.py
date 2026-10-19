@@ -13,6 +13,9 @@ try:
 except ImportError:
     from tqdm import tqdm
 
+import torch
+
+from bioimage_cpp.transformation import resample
 from bioimage_cpp.utils import Blocking, take_dict
 
 from . import util
@@ -24,7 +27,6 @@ def _anyup_object_resize(embeds_chw, image_region, target_hw, upsampler):
     # Upsample a (C, h, w) embedding to (target_h, target_w, C) with AnyUp, using the image region
     # as guidance. The encoders pad the image to a square, so we square-pad the image here to match
     # how the segmentation is padded.
-    import torch
     import torch.nn.functional as F
     from .pixel_classification import _to_anyup_image
 
@@ -76,11 +78,22 @@ def _compute_object_features_impl(
     if upsampler is not None:
         # AnyUp upsamples the embedding using the image region instead of plain interpolation.
         embeddings = _anyup_object_resize(embeddings_chw, image_region, resize_hw, upsampler)
+    elif all(t >= s for t, s in zip(resize_hw, embeddings_chw.shape[1:])):
+        # Upsampling (the usual case): torch is much faster than skimage and matches it, except at the edge.
+        embeddings = torch.nn.functional.interpolate(
+            torch.from_numpy(np.ascontiguousarray(embeddings_chw, dtype="float32"))[None], size=resize_hw,
+            mode="bilinear", align_corners=False,
+        )[0].permute(1, 2, 0).numpy().astype(embeddings_chw.dtype, copy=False)  # put the channel axis last
     else:
-        embeddings = embeddings_chw.transpose(1, 2, 0)  # put the channel axis last
-        embeddings = resize(
-            embeddings, resize_hw + (embeddings.shape[-1],), preserve_range=True
-        ).astype(embeddings.dtype)
+        # Downsampling (tiny images or corner tiles): bioimage-cpp matches the skimage anti-aliasing, torch does not.
+        scale = [s / t for s, t in zip(embeddings_chw.shape[1:], resize_hw)]
+        matrix = np.array([
+            [1.0, 0.0, 0.0, 0.0], [0.0, scale[0], 0.0, (scale[0] - 1) / 2], [0.0, 0.0, scale[1], (scale[1] - 1) / 2]
+        ])
+        bounding_box = (slice(0, embeddings_chw.shape[0]),) + tuple(slice(0, t) for t in resize_hw)
+        embeddings = resample(
+            np.ascontiguousarray(embeddings_chw, dtype="float32"), matrix, bounding_box=bounding_box
+        ).transpose(1, 2, 0).astype(embeddings_chw.dtype, copy=False)  # put the channel axis last
 
     segmentation_rescaled = resize(
         segmentation_rescaled, embeddings.shape[:2], order=0, anti_aliasing=False, preserve_range=True

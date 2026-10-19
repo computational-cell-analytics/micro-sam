@@ -6,6 +6,7 @@ embedding. These tests pin that the padded region is discarded instead of being 
 content, which silently misplaces every feature for non-square inputs.
 """
 
+import pytest
 import numpy as np
 
 from micro_sam.object_classification import compute_object_features
@@ -50,3 +51,24 @@ def test_object_features_exclude_padding():
     assert seg_ids.tolist() == [1]
     # Feature layout is [area, per-channel mean], so the embedding means follow the area column.
     assert np.allclose(features[0, 1:], 1.0), f"padded region leaked into the object features: {features[0, 1:]}"
+
+
+@pytest.mark.parametrize("shape, objects", [
+    ((64, 64), [np.s_[8:20, 8:20], np.s_[30:40, 40:56]]),  # upsampling of the embedding, with torch
+    ((8, 8), [np.s_[2:4, 2:4], np.s_[4:6, 3:6]]),  # downsampling of the embedding, with bioimage-cpp
+])
+def test_object_features_match_skimage_interpolation(shape, objects):
+    # The objects stay off the 2 px edge, where torch repeats the edge pixel and skimage mirrors it.
+    from skimage.transform import resize
+
+    features = np.random.default_rng(0).normal(size=(1, N_CHANNELS, EMBEDDING_SIZE, EMBEDDING_SIZE))
+    embeddings = {**_padded_embeddings(), "features": features.astype("float32"), "original_size": shape}
+    segmentation = np.zeros(shape, dtype="uint32")
+    for seg_id, bb in enumerate(objects, start=1):
+        segmentation[bb] = seg_id
+
+    _, object_features = compute_object_features(embeddings, segmentation, verbose=False)
+
+    resized = resize(features[0].transpose(1, 2, 0), shape + (N_CHANNELS,), preserve_range=True)
+    expected = [resized[segmentation == seg_id].mean(axis=0) for seg_id in range(1, len(objects) + 1)]
+    assert np.allclose(object_features[:, 1:], expected, atol=1e-5)
