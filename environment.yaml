@@ -10,6 +10,8 @@ dependencies:
     - natsort
     - pip
     - pooch
+    # pydantic 2.14 breaks the bioimageio.spec wrap serializers that model export uses.
+    - pydantic <2.14
     - pyqt6
     - python-xxhash
     - python-elf >=0.9
