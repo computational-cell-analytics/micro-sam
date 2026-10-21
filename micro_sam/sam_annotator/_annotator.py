@@ -82,7 +82,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
 
     def _create_widgets(self):
         # Create the embedding widget and connect all events related to it.
-        self._embedding_widget = widgets.EmbeddingWidget(ndim=self._ndim)
+        self._embedding_widget = widgets.EmbeddingWidget()
         # Connect events for the image selection box.
         self._viewer.layers.events.inserted.connect(self._embedding_widget.image_selection.reset_choices)
         self._viewer.layers.events.removed.connect(self._embedding_widget.image_selection.reset_choices)
