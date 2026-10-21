@@ -562,6 +562,9 @@ def _get_auto_segmentation_options(state, object_ids):
     if widget.with_decoder:
         segmentation_options["boundary_distance_thresh"] = widget.boundary_distance_thresh
         segmentation_options["center_distance_thresh"] = widget.center_distance_thresh
+        segmentation_options["distance_smoothing"] = widget.distance_smoothing
+        segmentation_options["foreground_smoothing"] = widget.foreground_smoothing
+        segmentation_options["foreground_threshold"] = widget.foreground_threshold
     else:
         segmentation_options["pred_iou_thresh"] = widget.pred_iou_thresh
         segmentation_options["stability_score_thresh"] = widget.stability_score_thresh
@@ -1076,8 +1079,12 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
         return
 
-    viewer.layers["current_object"].data[z] = seg
-    viewer.layers["current_object"].refresh()
+    layer = viewer.layers["current_object"]
+    if state.widgets["autosegment"].timeseries:
+        seg = seg.astype(layer.data.dtype)
+        seg[seg != 0] += int(layer.data.max())
+    layer.data[z] = seg
+    layer.refresh()
 
 
 @magic_factory(call_button="Segment Frame [S]")
@@ -1928,14 +1935,15 @@ class AutoSegmentWidget(_WidgetBase):
             if is_empty:
                 self._empty_segmentation_warning()
 
+            layer = self._viewer.layers["auto_segmentation"]
             if i is None:
-                self._viewer.layers["auto_segmentation"].data = seg
+                layer.data = seg
             else:
-                self._viewer.layers["auto_segmentation"].data[i] = seg
-            self._viewer.layers["auto_segmentation"].refresh()
-
-        # Validate all layers.
-        _validate_layers(self._viewer, automatic_segmentation=True)
+                if self.timeseries:
+                    seg = seg.astype(layer.data.dtype)
+                    seg[seg != 0] += int(layer.data.max())
+                layer.data[i] = seg
+            layer.refresh()
 
         seg = seg_impl()
         update_segmentation(seg)
@@ -2016,6 +2024,8 @@ class AutoSegmentWidget(_WidgetBase):
     def __call__(self):
         if _validate_embeddings(self._viewer):
             return None
+
+        _validate_layers(self._viewer, automatic_segmentation=True)
 
         if self.with_decoder:
             kwargs = {
