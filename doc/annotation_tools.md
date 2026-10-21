@@ -1,6 +1,6 @@
 # Annotation Tools
 
-`micro_sam` provides applications for fast interactive 2d segmentation, 3d segmentation and tracking.
+`micro_sam` provides applications for fast interactive 2d segmentation, 3d segmentation, time series segmentation and tracking.
 See an example for interactive cell segmentation in phase-contrast microscopy (left), interactive segmentation
 of mitochondria in volume EM (middle) and interactive tracking of cells (right).
 
@@ -83,6 +83,18 @@ Most elements are the same as in [the 2d annotator](#annotator-2d):
 You can only segment one object at a time using the interactive segmentation functionality with this tool.
 
 Check out [the video tutorial](https://youtu.be/nqpyNQSyu74) for an in-depth explanation on how to use this tool.
+
+
+## Annotator Time Series
+
+The time series annotator segments each frame of a 2d time series independently, without tracking objects across frames.
+It supports data in `(T, Y, X)` or RGB `(T, Y, X, C)` order. It can be started by
+- clicking `Annotator Time Series` in the plugin menu after starting `napari`.
+- running `$ micro_sam.annotator_timeseries` in the command line.
+- calling `micro_sam.sam_annotator.annotator_timeseries` in a python script.
+
+It works like the 3d annotator, except that `Apply to All Frames` segments each frame on its own, without merging objects across frames.
+Use the [tracking annotator](#annotator-tracking) if you need to follow objects over time.
 
 
 ## Annotator Tracking

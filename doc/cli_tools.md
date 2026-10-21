@@ -7,6 +7,7 @@ The supported CLIs can be used by
 - Running `$ micro_sam.precompute_embeddings` for precomputing and caching the image embeddings.
 - Running `$ micro_sam.annotator_2d` for starting the 2d annotator.
 - Running `$ micro_sam.annotator_3d` for starting the 3d annotator.
+- Running `$ micro_sam.annotator_timeseries` for starting the time series annotator.
 - Running `$ micro_sam.annotator_tracking` for starting the tracking annotator.
 - Running `$ micro_sam.image_series_annotator` for starting the image series annotator.
 - Running `$ micro_sam.train` for finetuning Segment Anything models on your data.

@@ -562,13 +562,18 @@ def _get_auto_segmentation_options(state, object_ids):
     if widget.with_decoder:
         segmentation_options["boundary_distance_thresh"] = widget.boundary_distance_thresh
         segmentation_options["center_distance_thresh"] = widget.center_distance_thresh
+        segmentation_options["distance_smoothing"] = widget.distance_smoothing
+        segmentation_options["foreground_smoothing"] = widget.foreground_smoothing
+        segmentation_options["foreground_threshold"] = widget.foreground_threshold
     else:
         segmentation_options["pred_iou_thresh"] = widget.pred_iou_thresh
         segmentation_options["stability_score_thresh"] = widget.stability_score_thresh
         segmentation_options["box_nms_thresh"] = widget.box_nms_thresh
 
     segmentation_options["min_object_size"] = widget.min_object_size
-    if widget.volumetric:
+    if widget.timeseries:
+        segmentation_options["apply_to_all_frames"] = bool(widget.apply_to_volume)
+    elif widget.volumetric:
         segmentation_options["apply_to_volume"] = widget.apply_to_volume
         segmentation_options["gap_closing"] = widget.gap_closing
         segmentation_options["min_extent"] = widget.min_extent
@@ -1074,8 +1079,12 @@ def segment_slice(viewer: "napari.viewer.Viewer") -> None:
         print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
         return
 
-    viewer.layers["current_object"].data[z] = seg
-    viewer.layers["current_object"].refresh()
+    layer = viewer.layers["current_object"]
+    if state.widgets["autosegment"].timeseries:
+        seg = seg.astype(layer.data.dtype)
+        seg[seg != 0] += int(layer.data.max())
+    layer.data[z] = seg
+    layer.refresh()
 
 
 @magic_factory(call_button="Segment Frame [S]")
@@ -1734,6 +1743,8 @@ def _instance_segmentation_impl(min_object_size, i=None, pbar_init=None, pbar_up
 
 
 class AutoSegmentWidget(_WidgetBase):
+    timeseries = False
+
     def __init__(self, viewer, with_decoder, volumetric, parent=None):
         super().__init__(parent)
 
@@ -1792,7 +1803,7 @@ class AutoSegmentWidget(_WidgetBase):
         settings.layout().addLayout(layout)
 
         # Add extra settings for volumetric segmentation: gap_closing and min_extent.
-        if self.volumetric:
+        if self.volumetric and not self.timeseries:
             self.gap_closing = 2
             self.gap_closing_param, layout = self._add_int_param(
                 "gap_closing", self.gap_closing, min_val=0, max_val=10,
@@ -1824,6 +1835,30 @@ class AutoSegmentWidget(_WidgetBase):
         self.boundary_distance_thresh_param, layout = self._add_float_param(
             "boundary_distance_thresh", self.boundary_distance_thresh,
             tooltip=get_tooltip("autosegment", "boundary_distance_thresh")
+        )
+        settings.layout().addLayout(layout)
+
+        # Create the UI element for distance prediction smoothing.
+        self.distance_smoothing = 1.6
+        self.distance_smoothing_param, layout = self._add_float_param(
+            "distance_smoothing", self.distance_smoothing, max_val=10.0, step=0.1,
+            tooltip=get_tooltip("autosegment", "distance_smoothing")
+        )
+        settings.layout().addLayout(layout)
+
+        # Create the UI element for foreground prediction smoothing.
+        self.foreground_smoothing = 1.0
+        self.foreground_smoothing_param, layout = self._add_float_param(
+            "foreground_smoothing", self.foreground_smoothing, max_val=10.0, step=0.1,
+            tooltip=get_tooltip("autosegment", "foreground_smoothing")
+        )
+        settings.layout().addLayout(layout)
+
+        # Create the UI element for the foreground threshold.
+        self.foreground_threshold = 0.5
+        self.foreground_threshold_param, layout = self._add_float_param(
+            "foreground_threshold", self.foreground_threshold,
+            tooltip=get_tooltip("autosegment", "foreground_threshold")
         )
         settings.layout().addLayout(layout)
 
@@ -1900,14 +1935,15 @@ class AutoSegmentWidget(_WidgetBase):
             if is_empty:
                 self._empty_segmentation_warning()
 
+            layer = self._viewer.layers["auto_segmentation"]
             if i is None:
-                self._viewer.layers["auto_segmentation"].data = seg
+                layer.data = seg
             else:
-                self._viewer.layers["auto_segmentation"].data[i] = seg
-            self._viewer.layers["auto_segmentation"].refresh()
-
-        # Validate all layers.
-        _validate_layers(self._viewer, automatic_segmentation=True)
+                if self.timeseries:
+                    seg = seg.astype(layer.data.dtype)
+                    seg[seg != 0] += int(layer.data.max())
+                layer.data[i] = seg
+            layer.refresh()
 
         seg = seg_impl()
         update_segmentation(seg)
@@ -1989,10 +2025,15 @@ class AutoSegmentWidget(_WidgetBase):
         if _validate_embeddings(self._viewer):
             return None
 
+        _validate_layers(self._viewer, automatic_segmentation=True)
+
         if self.with_decoder:
             kwargs = {
                 "center_distance_threshold": self.center_distance_thresh,
                 "boundary_distance_threshold": self.boundary_distance_thresh,
+                "distance_smoothing": self.distance_smoothing,
+                "foreground_smoothing": self.foreground_smoothing,
+                "foreground_threshold": self.foreground_threshold,
                 "min_size": self.min_object_size,
             }
         else:
@@ -2004,7 +2045,8 @@ class AutoSegmentWidget(_WidgetBase):
         if self.volumetric and self.apply_to_volume:
             worker = self._run_segmentation_3d(kwargs)
         elif self.volumetric and not self.apply_to_volume:
-            i = int(self._viewer.dims.point[0])
+            layer = self._viewer.layers["auto_segmentation"]
+            i = int(round(layer.world_to_data(self._viewer.dims.point)[0]))
             worker = self._run_segmentation_2d(kwargs, i=i)
         else:
             worker = self._run_segmentation_2d(kwargs)
