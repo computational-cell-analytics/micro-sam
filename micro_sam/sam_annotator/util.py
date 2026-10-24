@@ -1232,10 +1232,7 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         if model_type.startswith("hvit"):  # SAM2 models, eg. 'hvit_t'.
             # Finetuned SAM2 families carry a suffix (e.g. 'hvit_t_cells' -> 'Microscopy'); the plain
             # backbones ('hvit_t', ...) are natural-image models.
-            if model_type.endswith("_cells"):
-                model_family = "Microscopy"
-            else:
-                model_family = "Natural Images"
+            model_family = widget._family_for_sam2_model(model_type)
         else:
             model_family = "Natural Images (SAM)"  # No suffix match: stick to 'Natural Images (SAM)'.
             for k, v in supported_dropdown_maps.items():

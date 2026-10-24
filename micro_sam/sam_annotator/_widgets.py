@@ -511,6 +511,8 @@ class _WidgetBase(QtWidgets.QWidget):
         self.supported_dropdown_maps = {
             "Natural Images": "_sam2",
             "Microscopy": "_cells",
+            "Mitochondria (EM)": "_em_mito",
+            "Nuclei (EM)": "_em_nuclei",
         }
 
         # Per-family backend config: the model-type suffix appended after 'hvit_{size}' and the
@@ -519,6 +521,8 @@ class _WidgetBase(QtWidgets.QWidget):
         self.model_family_config = {
             "Natural Images": {"suffix": "", "sizes": ["t", "s", "b", "l"]},
             "Microscopy": {"suffix": "_cells", "sizes": ["t", "s", "b", "l"]},
+            "Mitochondria (EM)": {"suffix": "_em_mito", "sizes": ["s"]},
+            "Nuclei (EM)": {"suffix": "_em_nuclei", "sizes": ["s"]},
         }
 
         # NOTE: The available SAM2 model sizes are 'tiny', 'small', 'base' and 'large'.
@@ -579,6 +583,13 @@ class _WidgetBase(QtWidgets.QWidget):
             self._update_model_type
         )
         return layout
+
+    def _family_for_sam2_model(self, model_type):
+        """The family of a SAM2 model name by its suffix, e.g. 'hvit_s_em_mito' -> 'Mitochondria (EM)'."""
+        for family, config in self.model_family_config.items():
+            if config["suffix"] and model_type.endswith(config["suffix"]):
+                return family
+        return "Natural Images"
 
     def _resolve_model_type(self):
         """The model type for the selected family and size, e.g. 'tiny' + 'Microscopy' -> 'hvit_t_cells'."""
@@ -2724,7 +2735,7 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
                 return family, VFM_SIZE_LABELS.get(model_name)
         if model_name.startswith("hvit_"):  # SAM2 (primary families).
             size = full_size_map.get(model_name[5])
-            family = "Microscopy" if model_name.endswith("_cells") else "Natural Images"
+            family = self._family_for_sam2_model(model_name)
         else:  # SAM1 (advanced families): 'vit_<size><suffix>'.
             size = full_size_map.get(model_name[4])
             suffix = model_name[5:]
