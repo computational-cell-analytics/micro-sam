@@ -394,6 +394,9 @@ FINETUNED_MODELS = [
     "hvit_s_cells",
     "hvit_b_cells",
     "hvit_l_cells",
+    # EM organelle models: joint SAM2 + UniSAM2 models for mitochondria and nuclei in electron microscopy.
+    "hvit_s_em_mito",
+    "hvit_s_em_nuclei",
 ]
 
 # The default model for the annotation tools (GUI + CLI + Python API). This is the single source of
@@ -414,6 +417,10 @@ FINETUNED_URLS = {
     "hvit_b_cells_decoder": "https://owncloud.gwdg.de/index.php/s/Eo3ntD2pCdv89xg/download",
     "hvit_l_cells": "https://owncloud.gwdg.de/index.php/s/MBLqZEMuaC94toI/download",
     "hvit_l_cells_decoder": "https://owncloud.gwdg.de/index.php/s/Y0exLXtfdIZV96Z/download",
+    "hvit_s_em_mito": "https://owncloud.gwdg.de/index.php/s/I4WsyC5AGhzkO3F/download",
+    "hvit_s_em_mito_decoder": "https://owncloud.gwdg.de/index.php/s/xv1V7oOrNpBHI69/download",
+    "hvit_s_em_nuclei": "https://owncloud.gwdg.de/index.php/s/0fxQ0upPSOWA0CB/download",
+    "hvit_s_em_nuclei_decoder": "https://owncloud.gwdg.de/index.php/s/cLV7fgboWQhrigP/download",
 }
 
 FINETUNED_HASHES = {
@@ -425,6 +432,10 @@ FINETUNED_HASHES = {
     "hvit_b_cells_decoder": "xxh128:0e2fec5d1054a6208a32826ad057d941",
     "hvit_l_cells": "xxh128:3ca5cba0d9622b228615d6aaa1de5d08",
     "hvit_l_cells_decoder": "xxh128:859083bcabcf885168cb6c0f0273d372",
+    "hvit_s_em_mito": "xxh128:126d208c5014e9579d989f780bee3591",
+    "hvit_s_em_mito_decoder": "xxh128:ca6258931fb13de9b798d6273113fc84",
+    "hvit_s_em_nuclei": "xxh128:c5e86906c09c3faddf1e37b2aa47042a",
+    "hvit_s_em_nuclei_decoder": "xxh128:a630123692743f1309449c1b3a177e4c",
 }
 
 
