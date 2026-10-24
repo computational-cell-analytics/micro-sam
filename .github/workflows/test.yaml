@@ -32,6 +32,9 @@ jobs:
 
       - name: Setup micromamba
         uses: mamba-org/setup-micromamba@v1
+        # Build pip packages on the main disk: the /tmp of ubuntu-latest is too small for the torch wheels.
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           environment-file: "environment.yaml"
           create-args: >-

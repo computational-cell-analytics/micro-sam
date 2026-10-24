@@ -48,8 +48,9 @@ jobs:
         run: python -m pip install git+https://github.com/ChaoningZhang/MobileSAM.git
 
       # SAM2 (hvit_* backend) is not on PyPI; install it from GitHub to keep SAM2 coverage.
+      # Reuse the installed torch: an isolated build downloads a second torch that overflows /tmp.
       - name: Install SAM2
-        run: python -m pip install git+https://github.com/facebookresearch/sam2.git
+        run: python -m pip install --no-build-isolation git+https://github.com/facebookresearch/sam2.git
 
       # A standalone mask prompt is build-dependent with the PyPI torch wheels used here;
       # MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT skips that single assertion (see the test).
