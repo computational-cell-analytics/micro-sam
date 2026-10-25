@@ -28,6 +28,13 @@ def _run_decoder_2d(model, image_embeddings, device="cpu"):
     return UniSAM2InstanceSegmentation(model, device=device)._run_decoder_2d(image_embeddings)
 
 
+def test_sparse_defaults_depend_on_dimensionality():
+    for backbone, modes in DEFAULT_POSTPROCESSING.items():
+        assert default_postprocessing(f"{backbone}_cells", "sparse") == modes["sparse"]["2d"]
+        assert default_postprocessing(f"{backbone}_cells", "sparse", is_volume=True) == modes["sparse"]["3d"]
+        assert default_postprocessing(backbone, "dense", is_volume=True) == modes["dense"]
+
+
 def test_run_multicut_uses_dense_defaults():
     signature = inspect.signature(run_multicut)
     assert signature.parameters["model_type"].default == DEFAULT_MODEL

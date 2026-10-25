@@ -1298,6 +1298,28 @@ class TestAutoSegDefaultMode:
         assert autoseg.run_button.isEnabled() is False
         viewer.close()
 
+    def test_loaded_model_selects_the_default_parameters(self, make_napari_viewer_proxy, monkeypatch):
+        # The defaults differ per backbone, so loading another model has to rebuild the settings with its values.
+        from micro_sam.sam_annotator._widgets import AutoSegmentWidget
+        from micro_sam.sam_annotator import _widgets
+        from micro_sam.v2.automatic_prompt_generation import default_prompt_generation
+        from micro_sam.v2.postprocessing import default_postprocessing
+        monkeypatch.setattr(_widgets.util, "get_device", lambda requested=None: requested or "cuda")
+
+        viewer = make_napari_viewer_proxy()
+        autoseg = AutoSegmentWidget(viewer, with_decoder=True, volumetric=False)
+        autoseg._reset_segmentation_mode(True, model_type="hvit_l_cells")
+        assert autoseg.mode == "apg"
+        defaults = default_prompt_generation("hvit_l_cells", is_volume=False)
+        assert autoseg.min_object_size_param.value() == defaults["min_size"]
+        assert autoseg.score_threshold_param.value() == pytest.approx(defaults["score_threshold"])
+
+        autoseg.mode_dropdown.setCurrentText("sparse")
+        defaults = default_postprocessing("hvit_l_cells", "sparse")
+        assert autoseg.n_iter == defaults["n_iter"]
+        assert autoseg.min_object_size == defaults["min_size"]
+        viewer.close()
+
     def test_running_without_a_decoder_reports_the_reason(self, make_napari_viewer_proxy, monkeypatch):
         # Clicking run anyway (the button can be enabled from a stale decoder state) explains why
         # nothing happens rather than falling back to AMG.
@@ -1336,9 +1358,7 @@ class TestAutoSegDefaultMode:
         assert autoseg.max_overlap_param.value() == defaults["max_overlap"]
         assert autoseg.min_object_size_param.value() == defaults["min_size"]
         assert autoseg.multimasking_checkbox.isChecked() == DEFAULT_PROMPT_GENERATION["multimasking"]
-        assert autoseg.refine_with_box_prompts_checkbox.isChecked() == (
-            DEFAULT_PROMPT_GENERATION["refinement"] == "boxes"
-        )
+        assert autoseg.refine_with_box_prompts_checkbox.isChecked() == (defaults["refinement"] == "boxes")
         viewer.close()
 
     def test_volumetric_apg_controls_build_generate_kwargs(self, make_napari_viewer_proxy):
@@ -1353,8 +1373,12 @@ class TestAutoSegDefaultMode:
         autoseg.apply_to_volume_checkbox.setChecked(True)
         defaults_3d = default_prompt_generation(DEFAULT_MODEL, is_volume=True)
         kwargs = autoseg._apg_kwargs(ndim=3)
-        for key in ("candidate_threshold", "min_candidate_size", "score_threshold", "max_overlap", "min_size", "sigma"):
+        for key in (
+            "candidate_threshold", "foreground_threshold", "min_candidate_size", "score_threshold", "max_overlap",
+            "min_size", "sigma",
+        ):
             assert kwargs[key] == pytest.approx(defaults_3d[key]), key
+        assert kwargs["refinement"] == defaults_3d["refinement"]
         assert kwargs["n_objects_per_pass"] == DEFAULT_PROMPT_GENERATION["n_objects_per_pass"]
         assert kwargs["early_stop_patience"] == DEFAULT_PROMPT_GENERATION["early_stop_patience"]
 
@@ -1477,6 +1501,9 @@ class TestAutoSegDefaultMode:
                 self.n_iter = n_iter
                 self.dt = dt
                 self.sigma = sigma
+
+            def _run_ndim(self):
+                return 2
 
         autoseg = _FakeAutoSegmentWidget()
         AutoSegmentWidget._sparse_settings(autoseg, _FakeSettings())

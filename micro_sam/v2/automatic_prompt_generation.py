@@ -2,29 +2,15 @@
 
 The flow post-processing thresholds the decoder's convergence density to get instances. APG proposes
 candidates *below* that threshold, prompts the interactive branch with each one, and keeps the masks it
-scores highly, so the model does the discrimination that thresholding cannot. Worth +0.085 mSA on livecell.
+scores highly, so the model does the discrimination that thresholding cannot.
 
 A volume works the same way, with the SAM2 video predictor in place of the image predictor: the flow
 is integrated in 3d so a density component is a whole object, each is scored in 2d on the slice it
-converges on, and the survivors are propagated through the volume. Worth +0.06 mSA over AIS on ten
-volumetric LM datasets and +0.27 on four EM ones.
+converges on, and the survivors are propagated through the volume. The optional 'refinement' re-prompts
+each instance on its anchor slice before the propagation.
 
-The parameter surface is deliberately small: everything here was measured to matter on at least one
-dataset, and a good many other levers were tried and dropped. For volumes those were: re-prompting
-every instance with the prompts the merge grouped onto it (+0.001), negative prompts from the
-adjacent instances (+0.001), conditioning the anchor slice with a box or the 2d mask instead of the
-point (+0.001 and -0.005), and sampling further positive prompts from an instance's own mask
-(-0.034, because a prompt on a propagated slice turns it into a conditioning frame and replaces the
-mask there with a single-point one). Selection is not what limits the result: an oracle that hands
-every object its best-matching propagated mask scores 0.006 above the merge.
-
-The first three of those are exactly the ingredients 2d found only pay in combination, and combining
-them on the anchor slice - which the -0.034 above is also the reason they cannot be combined anywhere
-else - is worth +2.3% mSA on 32-slice crops for +1.4% runtime, so the optional 'refinement' does that.
-It is off by default in both dimensions, being short of the +5% the optimization gates ask for. One
-thing measured there is worth knowing before touching this file: pushing the same prompt to the video
-predictor in one call rather than several costs 1.75% mSA, because each push re-runs the mask decoder
-on the conditioning frame. See finetuning/v2/evaluation/optimization/notes/APG_3D_OPTIMIZATION.md, experiment 6.
+The measurements behind these choices are in finetuning/v2/evaluation/optimization/notes/APG_2D_OPTIMIZATION.md
+and APG_3D_OPTIMIZATION.md.
 """
 
 import copy
@@ -47,9 +33,7 @@ from bioimage_cpp.utils import Blocking
 from bioimage_cpp.distance import distance_transform
 from bioimage_cpp.segmentation import label
 
-# Only the tiled stitching in 'TiledAutomaticPromptGenerator.generate' uses this, so a missing
-# 'bioimage_py' must not stop this module - and with it the annotator, which reads the parameter
-# defaults below when it builds the APG settings - from importing.
+# Only the tiled stitching uses it, so a missing 'bioimage_py' must not break the import of this module.
 try:
     import bioimage_py as bp
 except ImportError:
@@ -100,44 +84,51 @@ STABILITY_SCORE_OFFSET = 1.0
 # The multicut boundary bias `TiledAutomaticPromptGenerator` stitches tiles/blocks with by default.
 DEFAULT_STITCHING_BETA = 0.5
 
-# Per (model_type, mode) defaults from the registry parameter search, same methodology as
-# `micro_sam.v2.postprocessing.DEFAULT_POSTPROCESSING`. 2D and 3D are swept independently (a volume
-# prompts once per object rather than once per slice), so they get separate tables.
+# Per-backbone defaults from the 2026-10 v6 global parameter search, with the best mean relative mSA over the
+# in-domain validation data. 2d and 3d are tuned separately, since a volume prompts once per object.
 DEFAULT_PROMPT_GENERATION_2D = {
     "hvit_t": {
-        "foreground_threshold": 0.7, "candidate_threshold": 3.0, "n_iter": 50, "sigma": 0.5,
-        "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 50,
+        "foreground_threshold": 0.9, "candidate_threshold": 2.0, "n_iter": 50, "sigma": 1.0,
+        "min_candidate_size": 4, "score_threshold": 0.4, "max_overlap": 0.15, "min_size": 25,
+        "refinement": "boxes",
     },
     "hvit_s": {
-        "foreground_threshold": 0.7, "candidate_threshold": 1.0, "n_iter": 50, "sigma": 2.0,
-        "min_candidate_size": 4, "score_threshold": 0.5, "max_overlap": 0.15, "min_size": 50,
+        "foreground_threshold": 0.7, "candidate_threshold": 3.0, "n_iter": 50, "sigma": 1.0,
+        "min_candidate_size": 4, "score_threshold": 0.4, "max_overlap": 0.3, "min_size": 25,
+        "refinement": "boxes",
     },
     "hvit_b": {
-        "foreground_threshold": 0.7, "candidate_threshold": 3.0, "n_iter": 50, "sigma": 0.5,
-        "min_candidate_size": 4, "score_threshold": 0.5, "max_overlap": 0.15, "min_size": 50,
+        "foreground_threshold": 0.6, "candidate_threshold": 2.0, "n_iter": 50, "sigma": 1.0,
+        "min_candidate_size": 4, "score_threshold": 0.5, "max_overlap": 0.15, "min_size": 25,
+        "refinement": "boxes",
     },
     "hvit_l": {
-        "foreground_threshold": 0.7, "candidate_threshold": 2.25, "n_iter": 50, "sigma": 1.0,
-        "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 50,
+        "foreground_threshold": 0.7, "candidate_threshold": 2.0, "n_iter": 50, "sigma": 1.0,
+        "min_candidate_size": 4, "score_threshold": 0.5, "max_overlap": 0.3, "min_size": 15,
+        "refinement": "boxes",
     },
 }
 
 DEFAULT_PROMPT_GENERATION_3D = {
     "hvit_t": {
-        "candidate_threshold": (1.5, 10.0), "sigma": 1.0, "min_candidate_size": 1,
-        "score_threshold": 0.6, "max_overlap": 0.15, "min_size": 100,
+        "foreground_threshold": 0.8, "n_iter": 50, "candidate_threshold": (1.5, 10.0), "sigma": 1.0,
+        "min_candidate_size": 1, "score_threshold": 0.7, "max_overlap": 0.3, "min_size": 25,
+        "refinement": None,
     },
     "hvit_s": {
-        "candidate_threshold": (0.5, 5.0), "sigma": 1.0, "min_candidate_size": 1,
-        "score_threshold": 0.6, "max_overlap": 0.5, "min_size": 100,
+        "foreground_threshold": 0.8, "n_iter": 50, "candidate_threshold": (0.5, 5.0), "sigma": 1.0,
+        "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 25,
+        "refinement": None,
     },
     "hvit_b": {
-        "candidate_threshold": (1.0, 5.0), "sigma": 1.0, "min_candidate_size": 4,
-        "score_threshold": 0.6, "max_overlap": 0.5, "min_size": 100,
+        "foreground_threshold": 0.7, "n_iter": 50, "candidate_threshold": (0.5, 5.0), "sigma": 1.0,
+        "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 400,
+        "refinement": "points+boxes",
     },
     "hvit_l": {
-        "candidate_threshold": (1.5, 10.0), "sigma": 0.25, "min_candidate_size": 1,
-        "score_threshold": 0.6, "max_overlap": 0.5, "min_size": 100,
+        "foreground_threshold": 0.9, "n_iter": 50, "candidate_threshold": (1.0, 5.0), "sigma": 0.5,
+        "min_candidate_size": 1, "score_threshold": 0.7, "max_overlap": 0.3, "min_size": 400,
+        "refinement": None,
     },
 }
 
@@ -166,44 +157,26 @@ def default_prompt_generation(model_type: str = DEFAULT_MODEL, is_volume: bool =
 
 
 # Enough jobs per device that none idles at the end, and enough passes per job to pay for its state.
-# Eight per device instead of four costs 3% on gonuclear: the extra rebuilds outweigh the shorter tail.
 PROPAGATION_JOBS_PER_DEVICE = 4
 MIN_PASSES_PER_PROPAGATION_JOB = 4
 
 DEFAULT_PROMPT_GENERATION = {
     "multimasking": True,
-    # Off by default: no refinement mode has passed the optimization gates yet, see 'REFINEMENT_COMPONENTS'.
-    "refinement": None,
+    # Resolves to the mode of 'default_prompt_generation'; pass None to run no second round.
+    "refinement": "default",
     "refinement_kwargs": None,
     # Volumes only. Trades device memory against the pass count.
     "n_objects_per_pass": 16,
-    # Volumes only. None propagates through the whole volume, which costs one frame step per slice
-    # even once every object of a pass has ended. Measured on 32-slice crops of the five 3d
-    # benchmark datasets, stopping after two empty slices left the segmentation bit-identical on all
-    # of them while skipping 34% of GoNuclear's frame steps and 12% of C. elegans's, so it is on by
-    # default; the annotator has used this value since the volume widget was written. Raise it where
-    # objects are expected to disappear and reappear, since SAM2 can drop a mask and recover it.
+    # Volumes only. Stop a pass after this many empty slices; None propagates through the whole volume.
     "early_stop_patience": 2,
-    # Tiled volumes only. Rounds the candidates are propagated in, highest scoring first. Four in
-    # five of them lose the merge as duplicates of a better-scoring instance, and a volume pays to
-    # propagate every one before the merge ever sees it. Between rounds the voxels the finished
-    # masks claim are known, so a candidate they already cover can be dropped instead. Measured on
-    # one gonuclear volume, four rounds cut 1100s to 407s and improved mSA 0.443 -> 0.452, and held
-    # on snemi (better) and humanneurons (neutral) - but cost cremi 0.04 CREMI score, so this stays
-    # off by default until the data at hand has been measured. Four rounds is the knee: more prune
-    # more, but each round is a barrier the devices wait on.
+    # Tiled volumes only. Rounds the candidates are propagated in, highest scoring first, so that a later round
+    # drops the candidates that the finished masks already cover. Faster, but not better on every dataset.
     "propagation_waves": 1,
-    # Reject a candidate this many times larger than the median size among the candidates it is
-    # merged against. Off by default, since SAM2 propagation drift (a track that grows onto
-    # background instead of ending) is dataset dependent; see `merge_by_score`.
+    # Reject a candidate this many times larger than the median candidate it is merged against, see `merge_by_score`.
     "max_size_factor": None,
     # Number of image prompts (or refinement boxes) evaluated per forward pass.
     "batch_size": 64,
-    # These are constant across all registry backbones and dimensionalities.
-    "foreground_threshold": 0.7,
-    "n_iter": 50,
-    # Shared with the sparse post-processing's 'dt', tuned there for one peak per object rather than
-    # for recall, but 0.5 for every registry backbone either way, so it stays a flat constant here.
+    # The step of the flow integration.
     "dt": 0.5,
     # Throughput only, the density is the same either way.
     "n_threads": 8,
@@ -220,28 +193,19 @@ REFINEMENT_KWARGS = {
     "masks": (),
 }
 DEFAULT_REFINEMENT = {
-    # The defaults are the measured optimum of the recommended mode, 'points+boxes': +4.2% macro mSA
-    # on the tuned subset and +4.9% on the held-out one, for about +35-50% runtime. See
-    # finetuning/v2/evaluation/optimization/notes/APG_2D_OPTIMIZATION.md; the pipeline default stays
-    # 'refinement=None'.
     # 'replace' repaints every instance from its second-round mask; 'keep-if-better' keeps the
-    # first-round mask unless the second round scores higher - which for a box-anchored re-prompt
-    # it nearly always does, so the geometric gates below are what actually arbitrates.
+    # first-round mask unless the second round scores higher.
     "policy": "replace",
     # Off by default: a multi-prompt re-prompt is not ambiguous the way a single point is.
     "multimasking": False,
-    # Accept a second-round mask only if its IoU with the first-round mask reaches this: the
-    # re-prompt may polish the boundary but not reshape the instance. 0.85 over-gates, 0.5 barely
-    # fires; None accepts any overlap.
+    # Accept a second-round mask only if its IoU with the first-round mask reaches this. None accepts any.
     "min_consistency": 0.7,
-    # Keep the first-round mask when more than this fraction of the second-round mask lies on
-    # *other* first-round instances, which is a re-prompt growing into a neighbour. None allows any.
+    # Keep the first-round mask when more than this fraction of the second-round mask lies on other
+    # instances. None allows any.
     "max_foreign_overlap": 0.15,
-    # The surviving prompt only: grouped extra positives measurably hurt (p1 > p2 > p3 on both
-    # subsets). The suppressed prompts' productive role is as the neighbours' negative pool.
+    # Extra positives from the prompts grouped onto an instance hurt.
     "n_positives": 1,
-    # Negative points per instance, taken from the prompts of the nearest other instances. The
-    # response peaks at 6-8 and collapses beyond 12; 8 trades LiveCELL for DynamicNuclearNet.
+    # Negative points per instance, taken from the prompts of the nearest other instances.
     "n_negatives": 6,
     # Only prompts within this distance (in pixels) of an instance's bounding box can be its
     # negatives. None takes the nearest ones regardless of distance.
@@ -249,20 +213,14 @@ DEFAULT_REFINEMENT = {
     # Where an instance's negatives come from: the other instances' first-round 'prompts', or the
     # deepest 'interior' point of each other instance's mask, which sits away from shared borders.
     "negative_source": "prompts",
-    # Exclude negatives closer than this (in pixels) to the instance's own first-round mask: a
-    # negative touching the instance's true extent cuts into the object instead of bounding it.
+    # Exclude negatives closer than this (in pixels) to the instance's own first-round mask.
     "min_negative_distance": 0,
-    # Number of pixels every box prompt is grown by. Confluent data prefers 0, because a grown box
-    # reaches into the neighbouring object.
+    # Number of pixels every box prompt is grown by.
     "box_extension": 0,
 }
 
-# A volume refines its anchor slices, before the propagation. A prompt on an already propagated slice
-# would turn it into a conditioning frame and replace the mask there with a single-point one (-0.034
-# mSA, see the module docstring), so a finished track cannot be touched; what the second round
-# produces is the conditioning the propagation starts from rather than a finished mask. The
-# components mean the same as in 2d; 'conditioning' is the one volume addition, see `DEFAULT_REFINEMENT_3D`.
-# How an accepted re-prompt is pushed onto the anchor frame, see 'DEFAULT_REFINEMENT_3D'.
+# A volume refines its anchor slices before the propagation, since a prompt on a propagated slice
+# replaces its mask. 'conditioning' is the one addition to the 2d components.
 CONDITIONING_MODES = ("prompts", "prompts-grouped", "prompts-joint", "mask")
 REFINEMENT_KWARGS_3D = {
     "shared": REFINEMENT_KWARGS["shared"] + ("conditioning",),
@@ -271,36 +229,18 @@ REFINEMENT_KWARGS_3D = {
     "masks": REFINEMENT_KWARGS["masks"],
 }
 DEFAULT_REFINEMENT_3D = dict(DEFAULT_REFINEMENT)
-# The counters a volume's refinement reports, all of them accumulated over the anchor slices. Zeroed
-# together when a refinement runs, so a mode that cannot produce one still reports it as 0 rather
-# than leaving the column absent for that run only.
+# The counters a volume's refinement reports, summed over the anchor slices.
 REFINEMENT_STATS_3D = (
     "refined_candidates", "replaced_candidates", "gated_consistency", "gated_foreign",
     "refinement_negatives",
 )
 DEFAULT_REFINEMENT_3D.update({
-    # Measured on the 3d benchmark, and different from 2d on both axes. Negatives peak at four rather
-    # than six to eight: every one of a volume's negatives comes from a candidate anchored on the same
-    # slice, so each is a real in-plane neighbour and four already bound the object. Zero falls below
-    # the baseline and twelve back to +0.3%.
     "n_negatives": 4,
-    # Tighter than 2d's 0.7, where 0.85 over-gated. In 2d a wrongly accepted re-prompt costs one
-    # instance's mask; here it becomes the conditioning frame of a whole track, so refusing more of
-    # them pays. 0.95 over-gates in 3d too, vetoing 374 of 925 second rounds. With this gate tight,
-    # 'max_foreign_overlap' never fires, so it is kept at the 2d value only because it costs nothing.
+    # Tighter than in 2d, since an accepted re-prompt conditions a whole track.
     "min_consistency": 0.85,
-    # How an accepted second round reaches the propagation, which is not the formality it looks
-    # like: every push of a prompt re-runs SAM2's mask decoder on the anchor frame and feeds the
-    # previous prediction back in, so pushing the same prompt in more steps refines the anchor
-    # iteratively rather than repeating work.
-    #   'prompts'         the box, then one push per point. The most steps, and the best measured
-    #                     quality by a wide margin: +1.87% macro against +0.11% for a single push.
-    #   'prompts-grouped' the box, then one push carrying every point. Two steps.
-    #   'prompts-joint'   one push carrying the box and every point. One step, so the propagation
-    #                     starts from a single forward and the iterative refinement is gone.
-    #   'mask'            the refined mask itself, via 'add_new_mask'. The anchor frame is then
-    #                     exactly what the gates accepted, but the decoder never sees the prompt.
-    #                     Conditioning an anchor with an *unrefined* 2d mask measured -0.005 mSA.
+    # How an accepted re-prompt is pushed onto the anchor frame. Each push re-runs the mask decoder, so more
+    # pushes refine the anchor more: 'prompts' pushes the box, then each point; 'prompts-grouped' the box, then
+    # all points; 'prompts-joint' the box and all points at once; 'mask' the refined mask itself.
     "conditioning": "prompts",
 })
 
@@ -778,12 +718,9 @@ def derive_volume_prompts(
     if candidate_threshold is None:
         candidate_threshold = defaults["candidate_threshold"]
     if foreground_threshold is None:
-        # 0.7 for every registry backbone in the 2D table (not swept for volumes), so it stays a flat
-        # constant here rather than going through `default_prompt_generation`.
-        foreground_threshold = 0.7
+        foreground_threshold = defaults["foreground_threshold"]
     if n_iter is None:
-        # 50 for every registry backbone in the 2D table, same reasoning as 'foreground_threshold'.
-        n_iter = 50
+        n_iter = defaults["n_iter"]
     if dt is None:
         dt = DEFAULT_PROMPT_GENERATION["dt"]
     if sigma is None:
@@ -1335,10 +1272,11 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 such cap; see `merge_by_score`.
             refinement: Optional second round, a '+'-joined combination of 'points' (the first
                 round's prompts grouped onto each merged instance, see `derive_refinement_prompts`),
-                'boxes' (its bounding box) and 'masks' (its mask as a logit prompt). None (the default)
-                runs no second round. For a volume the round runs on each candidate's anchor slice,
-                before the propagation, and produces the conditioning that propagation starts from
-                rather than a finished mask, see `_refine_anchors`.
+                'boxes' (its bounding box) and 'masks' (its mask as a logit prompt). None runs no second
+                round. 'default' (the default) takes the mode of `default_prompt_generation`. For a
+                volume the round runs on each candidate's anchor slice, before the propagation, and
+                produces the conditioning that propagation starts from rather than a finished mask,
+                see `_refine_anchors`.
             refinement_kwargs: Keyword arguments of that second round, validated against the mode's
                 components; see `DEFAULT_REFINEMENT`, or `DEFAULT_REFINEMENT_3D` for a volume, for
                 the accepted keys and their defaults.
@@ -1380,6 +1318,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             max_overlap = defaults["max_overlap"]
         if min_size is None:
             min_size = defaults["min_size"]
+        if refinement == "default":
+            refinement = defaults["refinement"]
 
         if is_volume:
             components = resolved = None
@@ -1534,7 +1474,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             max_overlap: Reject a proposal when more than this fraction of it is already claimed.
             min_size: Minimum object size in the result.
             refinement: Optional second round, a '+'-joined combination of 'points', 'boxes',
-                and 'masks'; see `generate`.
+                and 'masks', or 'default' for the mode of `default_prompt_generation`; see `generate`.
             refinement_kwargs: Keyword arguments of that second round, validated against the mode's
                 components; see `DEFAULT_REFINEMENT` for the accepted keys and their defaults.
             batch_size: Number of prompts per forward pass of the refinement.
@@ -1549,6 +1489,8 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             max_overlap = defaults["max_overlap"]
         if min_size is None:
             min_size = defaults["min_size"]
+        if refinement == "default":
+            refinement = defaults["refinement"]
 
         components = resolved = None
         if refinement is not None:
@@ -2066,9 +2008,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
         stats = self._last_generation_stats
         stats["refined_candidates"] += len(instances)
         if point_prompts is not None:
-            # A volume can only take negatives from the candidates anchored on this same slice, so it
-            # reaches 'n_negatives' far less often than an image does - which is what would explain a
-            # flat response to that parameter. Reported, rather than assumed either way.
+            # A volume takes negatives only from the candidates on the same slice, so it reports how many it got.
             stats["refinement_negatives"] += sum(
                 int(np.count_nonzero(point_prompts[instance_id]["point_labels"] == 0))
                 for instance_id, _ in instances

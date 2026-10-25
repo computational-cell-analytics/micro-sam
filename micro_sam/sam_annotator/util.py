@@ -1297,10 +1297,10 @@ def _sync_tiling_widget(widget, tile_shape, halo, disable_when_none=True):
 # Read parameters from checkpoint path if it is given instead.
 def _sync_autosegment_widget(widget, model_type, checkpoint_path, update_decoder=None):
     # The automatic segmentation widget builds its parameters from the backend defaults for the
-    # loaded model and mode (see 'AutoSegmentWidget._make_settings_widget'), so the only thing to
-    # sync here is whether the loaded model can drive it at all.
+    # loaded model and mode (see 'AutoSegmentWidget._make_settings_widget'), so the things to sync
+    # here are which model is loaded and whether it can drive the widget at all.
     if update_decoder is not None:
-        widget._reset_segmentation_mode(update_decoder)
+        widget._reset_segmentation_mode(update_decoder, model_type=model_type)
 
 
 # Read parameters from checkpoint path if it is given instead.

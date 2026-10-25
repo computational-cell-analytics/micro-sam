@@ -20,54 +20,79 @@ from bioimage_cpp.segmentation import label, watershed
 
 from .util import DEFAULT_MODEL
 
-# Per (model_type, mode) defaults from the 2026-10 v6 joint parameter search: the best-average-rank
-# combination across every dataset that shares that mode's grid (sparse: ~70 datasets ranked by mSA,
-# dense: the 3 neuron-EM datasets ranked by the CREMI score), computed separately per backbone. The
-# characteristic change against the earlier registry tables is dt 1.0: the v6 flow fields reward
-# letting pixels travel further (livecell's per-dataset sweep even chose n_iter 200 with dt 1.0).
+# Per-backbone defaults from the 2026-10 v6 global parameter search: the combination with the best mean relative
+# score over the in-domain validation data.
+# - 'sparse': '2d' light microscopy and EM images, '3d' sparse volumes on 32-slice crops, ranked by mSA.
+# - 'dense': neurite EM volumes, ranked by the CREMI score. Only 6 datasets, so these winners are less stable.
 DEFAULT_POSTPROCESSING = {
     "hvit_t": {
         "sparse": {
-            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 100,
-            "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.75,
+            "2d": {
+                "foreground_threshold": 0.5, "density_threshold": 30.0, "min_size": 50,
+                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
+            },
+            "3d": {
+                "foreground_threshold": 0.5, "density_threshold": 80.0, "min_size": 500,
+                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
+            },
         },
-        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+        "dense": {"beta": 0.4, "density_threshold": 2.0, "sigma": 1.0, "n_iter": 50, "dt": 2.0},
     },
     "hvit_s": {
         "sparse": {
-            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 50,
-            "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.75,
+            "2d": {
+                "foreground_threshold": 0.6, "density_threshold": 20.0, "min_size": 25,
+                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.75,
+            },
+            "3d": {
+                "foreground_threshold": 0.5, "density_threshold": 100.0, "min_size": 200,
+                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.65,
+            },
         },
-        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+        "dense": {"beta": 0.3, "density_threshold": 3.0, "sigma": 1.0, "n_iter": 50, "dt": 2.0},
     },
     "hvit_b": {
         "sparse": {
-            "foreground_threshold": 0.4, "density_threshold": 20.0, "min_size": 100,
-            "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.5,
+            "2d": {
+                "foreground_threshold": 0.4, "density_threshold": 60.0, "min_size": 50,
+                "sigma": 0.15, "n_iter": 100, "dt": 1.0, "foreground_weight": 0.65,
+            },
+            "3d": {
+                "foreground_threshold": 0.5, "density_threshold": 80.0, "min_size": 200,
+                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
+            },
         },
-        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+        "dense": {"beta": 0.3, "density_threshold": 2.0, "sigma": 2.0, "n_iter": 50, "dt": 1.0},
     },
     "hvit_l": {
         "sparse": {
-            "foreground_threshold": 0.5, "density_threshold": 20.0, "min_size": 50,
-            "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.65,
+            "2d": {
+                "foreground_threshold": 0.5, "density_threshold": 40.0, "min_size": 25,
+                "sigma": 0.15, "n_iter": 800, "dt": 2.0, "foreground_weight": 0.9,
+            },
+            "3d": {
+                "foreground_threshold": 0.5, "density_threshold": 80.0, "min_size": 500,
+                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
+            },
         },
-        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 25, "dt": 0.5},
+        "dense": {"beta": 0.4, "density_threshold": 3.0, "sigma": 1.0, "n_iter": 100, "dt": 0.5},
     },
 }
 
 
-def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse") -> dict:
-    """The default postprocessing parameters for one model type and mode.
+def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse", is_volume: bool = False) -> dict:
+    """The default postprocessing parameters for one model type, mode and dimensionality.
 
     Args:
         model_type: The SAM2 backbone, e.g. 'hvit_t', or a finetuned model built on one, e.g.
             'hvit_t_cells' (only the backbone prefix is used to look up the table). Must be one of the
             4 registry backbones.
         mode: 'sparse' (`flow_instance_segmentation`) or 'dense' (`run_multicut`).
+        is_volume: Whether to use the '3d' table of the 'sparse' mode instead of the '2d' one. The 'dense'
+            mode has one table for both.
 
     Returns:
-        The default parameter dict for that model type and mode.
+        The default parameter dict for that model type, mode and dimensionality.
     """
     backbone = model_type[:6]
     if backbone not in DEFAULT_POSTPROCESSING:
@@ -75,7 +100,8 @@ def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse"
             f"No default postprocessing parameters for model type '{model_type}'. "
             f"Choose one built on a backbone in {sorted(DEFAULT_POSTPROCESSING)}."
         )
-    return DEFAULT_POSTPROCESSING[backbone][mode]
+    params = DEFAULT_POSTPROCESSING[backbone][mode]
+    return params["3d" if is_volume else "2d"] if mode == "sparse" else params
 
 
 def _compute_flow_density(
@@ -192,7 +218,7 @@ def flow_instance_segmentation(
     Returns:
         Instance segmentation, uint32 array, same spatial shape as foreground.
     """
-    defaults = default_postprocessing(model_type, "sparse")
+    defaults = default_postprocessing(model_type, "sparse", is_volume=foreground.ndim == 3)
     if foreground_threshold is None:
         foreground_threshold = defaults["foreground_threshold"]
     if n_iter is None:
