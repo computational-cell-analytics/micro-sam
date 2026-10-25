@@ -4142,13 +4142,17 @@ class AutoSegmentWidget(_WidgetBase):
             get_tooltip(*self._RUN_TOOLTIP) if self.with_decoder else _NO_DECODER_MESSAGE
         )
 
-    def _reset_segmentation_mode(self, with_decoder):
-        # If neither the decoder availability nor the offered modes changed there is nothing to
-        # rebuild. The device can change the offered modes (volumes/tracking) or their order
-        # (the CPU default is sparse, even for 2d), triggering a reset to the new default.
+    def _reset_segmentation_mode(self, with_decoder, model_type=None):
+        # If neither the decoder availability, the offered modes nor the model changed there is nothing
+        # to rebuild. The device can change the offered modes (volumes/tracking) or their order
+        # (the CPU default is sparse, even for 2d), triggering a reset to the new default. The model
+        # selects the default parameters, see 'default_postprocessing' and 'default_prompt_generation'.
         modes = self._available_modes()
-        if with_decoder == self.with_decoder and modes == self._mode_choices():
+        model_changed = model_type is not None and model_type != getattr(self, "model_type", None)
+        if with_decoder == self.with_decoder and modes == self._mode_choices() and not model_changed:
             return
+        if model_type is not None:
+            self.model_type = model_type
         self.with_decoder = with_decoder
         self._update_run_button()
 
@@ -4250,7 +4254,9 @@ class AutoSegmentWidget(_WidgetBase):
         # Flow-based instance segmentation parameters (LM data).
         from micro_sam.v2.postprocessing import default_postprocessing
         from micro_sam.v2.util import DEFAULT_MODEL
-        defaults = default_postprocessing(getattr(self, "model_type", None) or DEFAULT_MODEL, "sparse")
+        defaults = default_postprocessing(
+            getattr(self, "model_type", None) or DEFAULT_MODEL, "sparse", is_volume=self._run_ndim() == 3,
+        )
 
         self.foreground_threshold = defaults["foreground_threshold"]
         self.foreground_threshold_param, layout = self._add_float_param(
@@ -4303,7 +4309,7 @@ class AutoSegmentWidget(_WidgetBase):
     _APG_DIMENSION_PARAMS = (
         ("candidate_threshold", "candidate_threshold"), ("min_candidate_size", "min_candidate_size"),
         ("score_threshold", "score_threshold"), ("max_overlap", "max_overlap"),
-        ("min_object_size", "min_size"), ("sigma", "sigma"),
+        ("min_object_size", "min_size"), ("sigma", "sigma"), ("foreground_threshold", "foreground_threshold"),
     )
 
     def _apg_default_values(self, is_volume):
@@ -4322,6 +4328,7 @@ class AutoSegmentWidget(_WidgetBase):
         values = {attribute: defaults[key] for attribute, key in self._APG_DIMENSION_PARAMS}
         if is_volume:  # A volume has a (low, high) pair of candidate thresholds.
             values["candidate_threshold"], values["candidate_threshold_high"] = defaults["candidate_threshold"]
+        values["refine_with_box_prompts"] = defaults["refinement"] == "boxes"
         return values
 
     def _on_apply_to_volume_changed(self, state=None):
@@ -4333,7 +4340,10 @@ class AutoSegmentWidget(_WidgetBase):
         for attribute in previous:
             previous[attribute] = getattr(self, attribute)
         for attribute, value in self._apg_values[is_volume].items():
-            getattr(self, f"{attribute}_param").setValue(value)  # also updates the attribute
+            if attribute == "refine_with_box_prompts":
+                self.refine_with_box_prompts_checkbox.setChecked(bool(value))  # also updates the attribute
+            else:
+                getattr(self, f"{attribute}_param").setValue(value)  # also updates the attribute
         self.candidate_threshold_high_row.setVisible(is_volume)
 
     def _apg_settings(self, settings):
@@ -4371,7 +4381,7 @@ class AutoSegmentWidget(_WidgetBase):
             self.candidate_threshold_high_row.setVisible(is_volume)
             settings.layout().addWidget(self.candidate_threshold_high_row)
 
-        self.foreground_threshold = defaults["foreground_threshold"]
+        self.foreground_threshold = values["foreground_threshold"]
         self.foreground_threshold_param, layout = self._add_float_param(
             "foreground_threshold", self.foreground_threshold, min_val=0.0, max_val=1.0, step=0.05,
             tooltip=get_tooltip("autosegment", "foreground_threshold"),
@@ -4412,7 +4422,7 @@ class AutoSegmentWidget(_WidgetBase):
         )
         settings.layout().addWidget(self.multimasking_checkbox)
 
-        self.refine_with_box_prompts = DEFAULT_PROMPT_GENERATION["refinement"] == "boxes"
+        self.refine_with_box_prompts = values["refine_with_box_prompts"]
         self.refine_with_box_prompts_checkbox = self._add_boolean_param(
             "refine_with_box_prompts", self.refine_with_box_prompts,
             tooltip=get_tooltip("autosegment", "refine_with_box_prompts"),

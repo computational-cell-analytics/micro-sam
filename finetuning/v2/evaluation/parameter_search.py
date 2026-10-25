@@ -1,20 +1,27 @@
-"""Parameter search for micro-sam2 automatic segmentation, AISv2 and APGv2.
+"""Parameter search for micro-sam2 automatic segmentation: AIS (sparse and dense post-processing) and APG.
 
-Sweeps the postprocessing / prompt-generation grid on the validation split of every dataset that
-has one held out (see `common.VAL_SPLITS` and `common.VAL_Z_RANGE`), once per requested mode, and
-writes each ranked sweep to '<tuning_root>/<mode>/<model_type>/<checkpoint_id>/<dataset_name>.csv'.
-That is the layout `common.read_tuned_params` reads, so `evaluate_automatic_segmentation.py` only
-has to load the result instead of repeating the sweep for every evaluation job.
+'run' searches the parameters that work best over a set of datasets, and writes them to
+'<experiment_folder>/best_parameters.json', one combination per backbone, mode and data type (2d, 3d, dense):
+1. A broad grid on the validation split of every dataset. 3d APG screens its prompt axes on a few volumes first,
+   and then sweeps its selection axes for the best prompt combinations.
+2. Rounds that sweep one step past every grid edge that the best combination sits on.
+3. For APG, the best combinations with each refinement mode.
+The best combination has the best mean relative score over the datasets: the score of a dataset over its best score.
+It runs here, or with '--slurm' as Slurm job arrays. Finished sweeps are kept, so a search resumes where it stopped.
+The models are the registry models of `micro_sam.v2.util` with a decoder, e.g. 'hvit_b_cells'. A run downloads
+them first.
 
-Dense-neuron EM datasets (`common.DATASETS_DENSE`) are tuned in dense (multicut) mode and ranked by
-the CREMI score, all others in sparse (flow) mode and ranked by mSA.
+'sweep' runs one sweep per dataset and writes it to '<tuning_root>/<mode>/<model_type>/<checkpoint_id>/', the layout
+that `common.read_tuned_params` reads. 'worker' is the Slurm worker of 'run --slurm'.
 
 Usage examples:
-    python parameter_search.py -m hvit_b -e <exp> --mode ais
-    python parameter_search.py -m hvit_b -e <exp> --mode apg -d livecell gonuclear
+    python parameter_search.py run -e <exp> -m hvit_b_cells
+    python parameter_search.py run -e <exp> -m hvit_t_cells --mode apg --data 3d --slurm --sbatch "-p gpu -G 1"
+    python parameter_search.py sweep -e <exp> -m hvit_b --mode ais -d livecell
 """
 
 import os
+import sys
 import json
 import time
 import shlex
@@ -39,14 +46,37 @@ from bioimage_cpp.segmentation import label as connected_components, watershed
 
 from bioimage_py.evaluation import symmetric_best_dice_score
 
+import micro_sam.util
 from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_density
+from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, models as model_registry
 
 from common import (
-    DATASETS_3D, DATASETS_DENSE, DATASETS_EM_MITO, DATASETS_EM_NUCLEUS, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
+    DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
     GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS,
     build_model, check_data_download, drop_severed_objects, has_val_split, load_data,
     n_samples, predict_unisam2, read_tuned_params, resolve_checkpoint_identity,
 )
+
+# The temporary embeddings of 3d APG go to the job's node-local TMPDIR. In the micro-sam cache of the home
+# directory, the leftovers of jobs killed at their time limit filled the quota (2026-10-22).
+if os.environ.get("TMPDIR"):
+    import uuid
+    import atexit
+    import shutil
+    import micro_sam.v2.util
+    import micro_sam.v2.instance_segmentation
+    import micro_sam.v2.automatic_prompt_generation
+
+    def _make_temp_embedding_path():
+        parent = Path(os.environ["TMPDIR"], "micro_sam_tmp_embeddings")
+        parent.mkdir(parents=True, exist_ok=True)
+        path = str(parent / f"{uuid.uuid4().hex}.zarr")
+        atexit.register(shutil.rmtree, path, ignore_errors=True)
+        return path
+
+    for _module in (micro_sam.util, micro_sam.v2.util, micro_sam.v2.instance_segmentation,
+                    micro_sam.v2.automatic_prompt_generation):
+        _module.make_temp_embedding_path = _make_temp_embedding_path
 
 # Sparse (flow) grid for LM data. Keys map to flow_instance_segmentation arguments.
 LM_GRID = {
@@ -103,6 +133,77 @@ APG_GRID_3D = {
     "propagation_waves": [1, 4],
 }
 
+# The broad 2d grids of the global search, selected with '--grid_preset broad'. Every axis that the
+# v6 per-dataset sweeps chose at a grid edge goes past that edge. The sparse 'n_iter' x 'dt' product
+# covers the flow travel from 12.5 to 400. APG sweeps 'foreground_threshold', which APG_GRID_2D pins, and
+# keeps 3 values of 'candidate_threshold' and 'sigma', which were flat in the v6 sweeps. Each proposal
+# group costs a SAM2 pass, so this is 45 groups. The selection axes are cheap and dense. The refinement
+# is off: a refined selection re-prompts SAM2, so it is compared on the best configurations afterwards.
+BROAD_GRIDS_2D = {
+    "sparse": {
+        "foreground_threshold": [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+        "density_threshold": [2.5, 5.0, 10.0, 20.0, 30.0, 40.0],
+        "min_size": [10, 25, 50, 100, 200, 500],
+        "sigma": [0.25, 0.5, 1.0, 2.0],
+        "n_iter": [50, 100, 200],
+        "dt": [0.25, 0.5, 1.0, 2.0],
+        "foreground_weight": [0.0, 0.25, 0.5, 0.65, 0.75, 0.9, 1.0],
+    },
+    "apg": {
+        "foreground_threshold": [0.3, 0.4, 0.5, 0.6, 0.7],
+        "candidate_threshold": [1.0, 2.0, 3.0],
+        "n_iter": [50],
+        "dt": [0.5],
+        "sigma": [0.5, 1.0, 2.0],
+        "min_candidate_size": [4],
+        "score_threshold": [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+        "max_overlap": [0.1, 0.15, 0.3, 0.5],
+        "min_size": [25, 50, 100],
+        "refinement": [None],
+    },
+}
+# The broad 3d grids of the global search, keyed like the 2d presets plus '_3d' for volumes. The volumes are
+# 32 x 512 x 512 crops of the in-domain validation data, the shape of the test crops (PIPELINE_CROP_3D).
+# Sparse goes past every edge the earlier per-dataset sweeps (LM_GRID) chose, and its flow travel covers 25 to 800
+# like the 2d grid. 'min_size' counts voxels. Dense goes past the edges of EM_GRID:
+# its earlier optimum sat at the lowest 'beta', 'density_threshold' and 'sigma'.
+# A volume runs every APG combo in full, so APG sweeps in two stages: 'apg_3d' covers the prompt axes with the
+# selection pinned to the middle of its range, and the selection axes are then swept on the best prompt combos
+# (see `apg_3d_base_stages`). Its 'foreground_threshold' and 'sigma' keep the values around the earlier
+# 3d defaults and the 2d winners, which makes 90 combos. 'propagation_waves' only acts on tiled volumes, so it
+# is not swept.
+BROAD_GRIDS_3D = {
+    "sparse_3d": {
+        "foreground_threshold": [0.3, 0.4, 0.5, 0.6, 0.7],
+        "density_threshold": [5.0, 10.0, 20.0, 30.0, 50.0, 80.0],
+        "min_size": [25, 50, 100, 200, 500, 1000],
+        "sigma": [0.15, 0.25, 0.5, 1.0],
+        "n_iter": [50, 100, 200, 400],
+        "dt": [0.5, 1.0, 2.0],
+        "foreground_weight": [0.0, 0.25, 0.5, 0.65, 0.75, 0.9, 1.0],
+    },
+    "dense": {
+        "beta": [0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+        "density_threshold": [1.0, 2.0, 3.0, 5.0, 10.0],
+        "sigma": [0.25, 0.5, 1.0, 2.0],
+        "n_iter": [12, 25, 50, 100],
+        "dt": [0.5, 1.0],
+    },
+    "apg_3d": {
+        "foreground_threshold": [0.6, 0.7, 0.8],
+        "n_iter": [50],
+        "candidate_threshold": [(2.0, 10.0), (1.5, 10.0), (1.0, 5.0), (0.5, 5.0), (0.25, 1.0, 5.0)],
+        "sigma": [0.25, 0.5, 1.0],
+        "min_candidate_size": [1, 4],
+        "score_threshold": [0.6],
+        "max_overlap": [0.3],
+        "min_size": [100],
+    },
+}
+PRESET_GRIDS_2D = {"broad": BROAD_GRIDS_2D}
+PRESET_GRIDS_3D = {"broad": BROAD_GRIDS_3D}
+GRID_PRESETS = ("default", *PRESET_GRIDS_2D)
+
 # The APG parameters that decide the mask proposals, which is the half that needs the model. Combos
 # that share these reuse one set of proposals, as the sparse grid reuses a cached flow density.
 APG_PROPOSAL_KEYS = ("candidate_threshold", "sigma", "foreground_threshold", "n_iter", "dt", "min_candidate_size")
@@ -124,7 +225,7 @@ CRITERION_ASCENDING = {"msa": False, "cremi": True}
 POSTPROC_THREADS = 4
 
 
-def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_override=None):
+def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_override=None, grid_preset="default"):
     """Build the sweep configuration for one dataset and mode.
 
     Dense-neuron EM datasets (`common.DATASETS_DENSE`) are tuned in dense (multicut) mode and ranked
@@ -140,6 +241,8 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_over
         crop_shape: The 3d center crop. Defaults to CROP_SHAPE_3D.
         grid_override: Values replacing the swept values of the named grid axes. Only the named axes
             change, every other axis keeps the values the mode's grid gives it.
+        grid_preset: 'default' for the grids above, or 'broad' for BROAD_GRIDS_2D (images) and BROAD_GRIDS_3D
+            (volumes).
 
     Returns:
         The configuration dict.
@@ -151,6 +254,14 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_over
         postproc_mode, grid = "apg", (APG_GRID_3D if is_3d else APG_GRID_2D)
     else:
         postproc_mode, grid = ("dense", EM_GRID) if is_dense else ("sparse", LM_GRID)
+
+    if grid_preset != "default":
+        # A volume takes the '_3d' grid of the preset, and dense data (always volumes) the 'dense' one.
+        grids = (PRESET_GRIDS_3D if is_3d else PRESET_GRIDS_2D).get(grid_preset, {})
+        key = f"{postproc_mode}_3d" if is_3d and postproc_mode != "dense" else postproc_mode
+        if key not in grids:
+            raise ValueError(f"The '{grid_preset}' grid does not exist for '{dataset_name}' in {postproc_mode} mode.")
+        grid = grids[key]
 
     if grid_override:
         # A typo would otherwise fail deep inside the sweep.
@@ -197,6 +308,17 @@ def compute_metrics(seg, labels, metric_mode, border_min_size=0):
     return metrics
 
 
+def shard_group_keys(postproc_mode, ndim):
+    """The parameters whose combos share the expensive step of a sweep, or None if no step is shared."""
+    if postproc_mode == "apg" and ndim == 2:
+        return APG_PROPOSAL_KEYS
+    if postproc_mode == "sparse":
+        return FLOW_DENSITY_KEYS
+    if postproc_mode == "dense":
+        return OVERSEG_KEYS
+    return None
+
+
 def shard_params_list(params_list, shard_index, num_shards, postproc_mode, ndim):
     """Return this shard's slice of 'params_list'.
 
@@ -205,19 +327,41 @@ def shard_params_list(params_list, shard_index, num_shards, postproc_mode, ndim)
     proposal groups touched, not with len(params_list). A plain interleaved slice still touches every
     group in every shard whenever 'num_shards' divides the selection-combo block evenly (it does here:
     16 selections per group), so it would save nothing. Splitting whole groups across shards instead
-    makes the split actually proportional. Every other mode's dominant cost (min_size/watershed for
-    sparse, the multicut solve for dense, generate() per combo for 3d APG) scales with len(params_list)
+    makes the split actually proportional. Sparse is split the same way, by FLOW_DENSITY_KEYS, so that
+    no two shards integrate the same flow density, and dense by OVERSEG_KEYS, so that no two shards build
+    the same oversegmentation. 3d APG runs generate() per combo, which scales with len(params_list)
     directly, so a plain interleaved slice already shares out the work evenly there.
     """
-    if postproc_mode != "apg" or ndim != 2 or num_shards <= 1:
+    group_keys = shard_group_keys(postproc_mode, ndim)
+    if group_keys is None or num_shards <= 1:
         return params_list[shard_index::num_shards]
     groups = {}
     for params in params_list:
-        key = tuple(sorted((k, v) for k, v in params.items() if k in APG_PROPOSAL_KEYS))
+        key = tuple(sorted((k, v) for k, v in params.items() if k in group_keys))
         groups.setdefault(key, []).append(params)
     return [
         params for i, key in enumerate(groups) if i % num_shards == shard_index for params in groups[key]
     ]
+
+
+def n_shard_groups(params_list, postproc_mode, ndim):
+    """The number of groups `shard_params_list` splits 'params_list' into, so the most shards that are not empty."""
+    group_keys = shard_group_keys(postproc_mode, ndim)
+    if group_keys is None:
+        return len(params_list)
+    return len({tuple(sorted((k, v) for k, v in p.items() if k in group_keys)) for p in params_list})
+
+
+def sweep_params_list(config, params_file=None):
+    """The combos of a sweep: those of 'params_file' (a JSON list), or else the grid of 'config'."""
+    if params_file is not None:
+        with open(params_file) as f:
+            return json.load(f)
+    keys = list(config["grid"])
+    params_list = [dict(zip(keys, combo)) for combo in itertools.product(*[config["grid"][k] for k in keys])]
+    if config["mode"] == "sparse":
+        params_list = deduplicate_flow_travel(params_list)
+    return params_list
 
 
 def deduplicate_flow_travel(params_list):
@@ -274,42 +418,45 @@ def score_image_sparse_cached(
         if fw not in hmap_cache:
             hmap_cache[fw] = watershed_heightmap(foreground, directed, fw)
 
-    # The base watershed does not depend on min_size, so all min_size values of a combo reuse it.
-    base_cache, base_lock = {}, threading.Lock()
+    # The base watershed does not depend on min_size, so the combos that differ only in min_size share it. They
+    # are scored together and the base is dropped afterwards: keeping every base of a volume runs out of memory.
+    groups = {}
+    for index, params in enumerate(params_list):
+        key = tuple(params[k] for k in FLOW_DENSITY_KEYS) + (params["density_threshold"], params["foreground_weight"])
+        groups.setdefault(key, []).append(index)
 
-    def base_segmentation(key, fg_mask, density, density_threshold, hmap):
-        with base_lock:
-            cached = base_cache.get(key)
-        if cached is None:
-            seeds = connected_components(density > density_threshold)
-            cached = watershed(hmap, markers=seeds, mask=fg_mask)
-            with base_lock:
-                base_cache[key] = cached
-        return cached
-
-    def score(params):
-        ft, sigma, n_iter, dt = (params[k] for k in FLOW_DENSITY_KEYS)
-        fw, density_threshold = params["foreground_weight"], params["density_threshold"]
-        fg_mask = fg_mask_cache[ft]
-        hmap = hmap_cache[fw]
+    def score_group(key, indices):
+        ft, sigma, n_iter, dt, density_threshold, fw = key
+        fg_mask, hmap = fg_mask_cache[ft], hmap_cache[fw]
         try:
-            key = (ft, sigma, n_iter, dt, density_threshold, fw)
-            seg = base_segmentation(key, fg_mask, density_cache[(ft, sigma, n_iter, dt)], density_threshold, hmap)
-            min_size = params["min_size"]
-            if min_size > 0:
-                seg = seg.copy()
-                ids, sizes = np.unique(seg, return_counts=True)
-                discard = ids[(sizes < min_size) & (ids > 0)]
-                seg[np.isin(seg, discard)] = 0
-                seg = watershed(hmap, markers=seg, mask=fg_mask)
-            return compute_metrics(seg.astype("uint32"), labels, "sparse", border_min_size)
+            base = watershed(hmap, markers=connected_components(density_cache[key[:4]] > density_threshold),
+                             mask=fg_mask)
         except Exception as e:
-            warnings.warn(f"Sparse postprocessing failed for {params}: {e}")
-            return None
+            warnings.warn(f"Sparse postprocessing failed for {dict(zip(FLOW_DENSITY_KEYS, key))}: {e}")
+            return [(index, None) for index in indices]
+        results = []
+        for index in indices:
+            try:
+                seg, min_size = base, params_list[index]["min_size"]
+                if min_size > 0:
+                    seg = base.copy()
+                    ids, sizes = np.unique(seg, return_counts=True)
+                    discard = ids[(sizes < min_size) & (ids > 0)]
+                    seg[np.isin(seg, discard)] = 0
+                    seg = watershed(hmap, markers=seg, mask=fg_mask)
+                results.append((index, compute_metrics(seg.astype("uint32"), labels, "sparse", border_min_size)))
+            except Exception as e:
+                warnings.warn(f"Sparse postprocessing failed for {params_list[index]}: {e}")
+                results.append((index, None))
+        return results
 
-    # Scoring a combination is independent of the others, and dominates the runtime of the sweep.
+    # Scoring a group is independent of the others, and dominates the runtime of the sweep.
+    scores = [None] * len(params_list)
     with futures.ThreadPoolExecutor(n_threads) as tp:
-        return list(tp.map(score, params_list))
+        for results in tp.map(lambda item: score_group(*item), groups.items()):
+            for index, metrics in results:
+                scores[index] = metrics
+    return scores
 
 
 def dense_boundary_and_distances(prediction):
@@ -441,6 +588,26 @@ def score_sample_apg_cached(segmenter, labels, params_list, metric_mode, border_
     return scores
 
 
+def cached_prediction(cache_dir, index, model, raw, ndim, device):
+    """Return the decoder output of one validation sample, from 'cache_dir' when it holds it.
+
+    Without a cache directory the model always runs. With one, a missing output is predicted and
+    written there, through a temporary file so that a concurrent reader never sees half of it.
+    """
+    if cache_dir is None:
+        return predict_unisam2(model, raw, ndim=ndim, device=device)
+    path = os.path.join(cache_dir, f"{index}.npy")
+    if os.path.exists(path):
+        return np.load(path)
+    if model is None:
+        raise FileNotFoundError(f"'{path}' is not cached and no model was loaded to predict it.")
+    prediction = predict_unisam2(model, raw, ndim=ndim, device=device)
+    tmp_path = f"{path}.{os.getpid()}.tmp.npy"
+    np.save(tmp_path, prediction)
+    os.replace(tmp_path, path)
+    return prediction
+
+
 def score_image(
     prediction, labels, mode, params_list, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
 ):
@@ -487,7 +654,40 @@ def shard_output_path(output_dir, dataset_name, shard_index=0, num_shards=1):
     return os.path.join(output_dir, f"{dataset_name}.shard{shard_index}of{num_shards}.csv")
 
 
-def merge_shards(output_root, dataset_name, mode, model_type, num_shards, checkpoint_id=None, criterion=None):
+def per_image_path(csv_path):
+    """The per-image score matrix that is written next to a sweep CSV."""
+    return csv_path[:-len(".csv")] + ".per_image.npz"
+
+
+def save_per_image(csv_path, params_list, sample_index, scores, criterion):
+    """Save the criterion of every combo on every scored sample, as a (combos x samples) matrix.
+
+    The CSV keeps only the mean and the standard deviation. The matrix lets a global selection
+    bootstrap over the samples, and compare the combos on exactly the same samples.
+    """
+    np.savez_compressed(
+        per_image_path(csv_path), scores=np.asarray(scores, dtype="float64").reshape(len(sample_index), -1).T,
+        sample_index=np.asarray(sample_index, dtype="int64"), params=json.dumps(params_list), criterion=criterion,
+    )
+
+
+def merge_per_image(shard_paths, csv_path):
+    """Concatenate the per-image matrices of the shards along the combos."""
+    shards = [np.load(per_image_path(p)) for p in shard_paths]
+    sample_index = shards[0]["sample_index"]
+    if any(not np.array_equal(s["sample_index"], sample_index) for s in shards):
+        raise ValueError(f"The shards of '{csv_path}' scored different samples.")
+    np.savez_compressed(
+        per_image_path(csv_path), scores=np.concatenate([s["scores"] for s in shards]), sample_index=sample_index,
+        params=json.dumps([p for s in shards for p in json.loads(str(s["params"]))]),
+        criterion=str(shards[0]["criterion"]),
+    )
+
+
+def merge_shards(
+    output_root, dataset_name, mode, model_type, num_shards, checkpoint_id=None, criterion=None,
+    grid_preset="default",
+):
     """Combine a dataset's shard CSVs into the canonical ranked file `tune_parameters` would write.
 
     Each shard scores a disjoint slice of the same grid on the same validation samples, so merging is
@@ -503,13 +703,16 @@ def merge_shards(output_root, dataset_name, mode, model_type, num_shards, checkp
     if missing:
         raise FileNotFoundError(f"Missing shard(s) for '{dataset_name}': {missing}")
 
-    config = tuning_config(dataset_name, mode, criterion=criterion)
+    config = tuning_config(dataset_name, mode, criterion=criterion, grid_preset=grid_preset)
     ascending = CRITERION_ASCENDING[config["criterion"]]
     df = pd.concat([pd.read_csv(p) for p in shard_paths], ignore_index=True)
     df = df.sort_values(f"{config['criterion']}_mean", ascending=ascending).reset_index(drop=True)
 
     csv_path = os.path.join(output_dir, f"{dataset_name}.csv")
     df.to_csv(csv_path, index=False)
+    # The sweeps from before the per-image output have no matrix to merge.
+    if all(os.path.exists(per_image_path(p)) for p in shard_paths):
+        merge_per_image(shard_paths, csv_path)
     print(f"Merged {num_shards} shards into '{csv_path}'.")
     report_best(df, dataset_name, config)
 
@@ -517,7 +720,8 @@ def merge_shards(output_root, dataset_name, mode, model_type, num_shards, checkp
 def tune_parameters(
     model, mode, dataset_name, data_root, model_type, output_root, device,
     n_threads=POSTPROC_THREADS, n_tuning_samples=None, tuning_stride=1, crop_shape=None, criterion=None,
-    checkpoint_id=None, shard_index=0, num_shards=1, grid_override=None,
+    checkpoint_id=None, shard_index=0, num_shards=1, grid_override=None, grid_preset="default", subsample=None,
+    prediction_cache=None, cache_only=False, params_file=None,
 ):
     """Sweep the grid of a mode on the validation split and return the best parameter combination.
 
@@ -553,6 +757,13 @@ def tune_parameters(
         shard_index: This job's slice of the grid, in [0, num_shards).
         num_shards: How many jobs split the grid. 1 means no sharding.
         grid_override: Values replacing the swept values of the named grid axes, see `tuning_config`.
+        grid_preset: The grid to start from, see `tuning_config`.
+        subsample: Score this many validation samples, spread evenly over the split. It replaces
+            'n_tuning_samples' and 'tuning_stride'.
+        prediction_cache: The root of the decoder outputs of the AIS sweep, see `cached_prediction`. A
+            sweep that finds every output there needs no model, so it runs on a CPU node.
+        cache_only: Only write the decoder outputs to 'prediction_cache', do not sweep.
+        params_file: A JSON list of parameter dicts to sweep instead of the grid.
 
     Returns:
         The best parameter combination, or None when the dataset has nothing held out to tune on, or
@@ -563,7 +774,8 @@ def tune_parameters(
         return None
 
     config = tuning_config(
-        dataset_name, mode, criterion=criterion, crop_shape=crop_shape, grid_override=grid_override
+        dataset_name, mode, criterion=criterion, crop_shape=crop_shape, grid_override=grid_override,
+        grid_preset=grid_preset,
     )
     output_dir = os.path.join(output_root, model_type, checkpoint_id) if checkpoint_id else os.path.join(
         output_root, model_type
@@ -587,18 +799,14 @@ def tune_parameters(
         return params
 
     ndim, postproc_mode = config["ndim"], config["mode"]
-    keys = list(config["grid"])
-    params_list = [dict(zip(keys, combo)) for combo in itertools.product(*[config["grid"][k] for k in keys])]
-    if postproc_mode == "sparse":
-        n_full = len(params_list)
-        params_list = deduplicate_flow_travel(params_list)
-        if len(params_list) < n_full:
-            print(f"Deduplicated {n_full} combos to {len(params_list)} by flow travel (n_iter * dt).")
+    params_list = sweep_params_list(config, params_file)
     if num_shards > 1:
         params_list = shard_params_list(params_list, shard_index, num_shards, postproc_mode, ndim)
 
     border_min_size = GT_MIN_SIZE_2D.get(dataset_name, 0) if ndim == 2 else 0
     total = n_samples(dataset_name, data_root, split="val")
+    if subsample is not None:
+        tuning_stride, n_tuning_samples = max(1, total // subsample), subsample
     total = len(range(0, total, tuning_stride))
     if n_tuning_samples is not None:
         total = min(total, n_tuning_samples)
@@ -607,10 +815,18 @@ def tune_parameters(
         f"(stride={tuning_stride}), mode='{mode}'."
     )
 
+    cache_dir = None
+    if prediction_cache is not None:
+        if postproc_mode == "apg":
+            raise ValueError("The prediction cache holds decoder outputs, which only the AIS sweep reads.")
+        cache_dir = os.path.join(prediction_cache, model_type, checkpoint_id or "default", dataset_name)
+        os.makedirs(cache_dir, exist_ok=True)
+
     samples = load_data(
         dataset_name, data_root, ndim, split="val", crop_shape=config["crop"], z_range=config["z_range"],
     )
     metric_lists = [[] for _ in params_list]
+    sample_index, per_image = [], []
     t0 = time.perf_counter()
     n_scored = 0
     for index, (raw, labels, _) in enumerate(tqdm(samples, total=total, desc=f"tune-{mode}")):
@@ -628,7 +844,9 @@ def tune_parameters(
                     spacing=config["spacing"], border_min_size=border_min_size,
                 )
             else:
-                prediction = predict_unisam2(model, raw, ndim=ndim, device=device)
+                prediction = cached_prediction(cache_dir, index, model, raw, ndim, device)
+                if cache_only:
+                    continue
                 scores = score_image(
                     prediction, labels, postproc_mode, params_list,
                     n_threads=n_threads, spacing=config["spacing"], border_min_size=border_min_size,
@@ -639,6 +857,12 @@ def tune_parameters(
         for i, metrics in enumerate(scores):
             if metrics is not None:
                 metric_lists[i].append(metrics)
+        sample_index.append(index)
+        per_image.append([np.nan if m is None else m[config["criterion"]] for m in scores])
+
+    if cache_only:
+        print(f"Cached the predictions of {n_scored} sample(s) in '{cache_dir}' ({time.perf_counter() - t0:.0f}s).")
+        return None
 
     rows = []
     for params, per_sample in zip(params_list, metric_lists):
@@ -658,6 +882,7 @@ def tune_parameters(
     ascending = CRITERION_ASCENDING[config["criterion"]]
     df = pd.DataFrame(rows).sort_values(f"{config['criterion']}_mean", ascending=ascending).reset_index(drop=True)
     df.to_csv(csv_path, index=False)
+    save_per_image(csv_path, params_list, sample_index, per_image, config["criterion"])
     print(f"Saved {csv_path} ({time.perf_counter() - t0:.0f}s).")
     if num_shards > 1:
         return None
@@ -665,485 +890,689 @@ def tune_parameters(
     return read_tuned_params(output_root, dataset_name, model_type, checkpoint_id)
 
 
-# Generates (and optionally submits) the Slurm job arrays for a full registry-checkpoint sweep: every
-# model type, both modes, every dataset with a validation split, against the released registry
-# checkpoints ('{model_type}_cells[_decoder]' under MODELS_ROOT) rather than a joint-training
-# checkpoint. Use -c/-e/--joint_checkpoint directly for a joint-checkpoint sweep instead.
+# The registry models that automatic segmentation runs on, which are the ones with a decoder.
+REGISTRY_MODELS = [model for model in FINETUNED_MODELS if has_registered_decoder(model)]
 
-EVAL_ROOT = Path(__file__).resolve().parent
-MODELS_ROOT = "/user/archit/u16934/.cache/micro_sam/models"
-REGISTRY_EXPERIMENT_FOLDER = (
-    "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/v2_cells_registry_evaluation"
-)
-
-# Every dataset requested for the registry sweep that has a validation split to tune on.
-REGISTRY_DATASETS = [
-    "livecell", "tissuenet", "dynamicnuclearnet", "deepbacs_label_free", "deepbacs_fluorescence", "yeaz",
-    "covid_if_cells", "covid_if_nuclei", "deepseas",
-    "neurips_cellseg_fluorescence", "neurips_cellseg_label_free", "gonuclear", "platynereis_cells", "cremi", "snemi",
-    "humanneurons",
-    # Histopathology, tuned on the pools of common.VAL_SPLITS (loader val splits, or train where none exists).
-    "cpm17", "glysac", "histo_miner", "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc", "monuseg",
-    "pannuke", "puma", "srsanet", "tnbc_celltype", "cytodark0", "deepliif", "pcns",
-    # Light microscopy 2d, tuned on the loader val splits. The sets above already cover livecell, tissuenet,
-    # dynamicnuclearnet, deepbacs, yeaz and neurips_cellseg (fluorescence and label-free).
-    "cvz_fluo_cell", "cvz_fluo_dapi", "omnipose_bact_fluor", "omnipose_bact_phase", "omnipose_worm",
-    "omnipose_worm_high_res", "dememseg", "flywing", "enseg", "pan_multiplex", "xenium_cells", "xenium_nuclei",
-    "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei", "tsakiroglou", "orgasegment", "organoidnet",
-    "bccd", "cell_acdc", "cellular", "cisd", "vicar", "microbeseg", "orgline", "organoid", "mcellseg", "toiam",
-    "bbbc030",
-    # Light microscopy 3d, tuned on the loader val splits (gonuclear is listed above).
-    "plantseg_root", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
-    "embedseg_mouse_skull", "embedseg_platy_ish", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "nucverse3d",
-    # The EM mitochondria panel, tuned on its held-out z-slabs (3d) and the random 10 % of its images (2d).
-    *DATASETS_EM_MITO,
-    # The EM nucleus panel, tuned on the data its training validates on.
-    *DATASETS_EM_NUCLEUS,
-]
-
-PARTITION = "grete:preemptible"
-# The micro-sam2 environment on grete; every array task activates it.
-ENV = "super"
-
-# Which joint training version a task sweeps. Pinned into the array script, so a queued task sweeps
-# the weights the submission chose rather than whatever the environment holds when it starts.
-JOINT_ENV_VARS = ("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", "MICRO_SAM2_JOINT_EXPORT_ROOT")
-CPUS = 4
-# The v5a-era sizing (54 min worst shard, 62 min unsharded) no longer holds: the v6 sweeps run their
-# 2d tasks 2-3x slower on the MIG slices (livecell shards and several unsharded datasets overran a
-# 1:30 budget on 2026-09-29), so the limit carries that margin now.
-TIME_LIMIT_2D = "03:00:00"
-TIME_LIMIT_3D = "04:00:00"
-MAX_CONCURRENT = 20
-N_ATTEMPTS = 3
-
-# Every job requests the smallest MIG slice that fits (no OOM observed at 10gb); bump only after
-# seeing an actual OOM. Two GPU pools are used, not just one: grete:preemptible only has a handful of
-# nodes, and jobs are bottlenecked by free CPU cores on a node rather than by GPU memory or slice
-# count, so spreading across both pools (rather than requesting 1g.10gb everywhere) roughly doubles
-# how many of our tasks the scheduler can run at once. hvit_t/hvit_s use GPU_10 (nodes ggpu102/137/159,
-# 1g.10gb slices); hvit_b/hvit_l use GPU_20 (nodes ggpu158/192, 2g.20gb slices), which measured far more
-# free CPU headroom when this was tuned.
-GPU_10, GPU_20 = "1g.10gb:1", "2g.20gb:1"
-# Extra ad hoc pools opened to soak up whatever else is free overnight; not part of the regular
-# hvit_t/s -> GPU_10, hvit_b/l -> GPU_20 routing, just an overflow destination for manually moved tasks.
-GPU_1G20, GPU_3G40 = "1g.20gb:1", "3g.40gb:1"
-MEM_2D, MEM_3D = "16G", "32G"
-LARGE_MODELS = {"hvit_b", "hvit_l"}
-
-# Job/script names identify a pool by this generic label rather than the GPU spec itself.
-GPU_POOL_LABEL = {GPU_10: "poolA", GPU_20: "poolB", GPU_1G20: "poolD", GPU_3G40: "poolE"}
-
-
-def gpu_pool_label(gpu):
-    """The generic pool label for a GPU spec, for job/script names that should not name hardware."""
-    return GPU_POOL_LABEL.get(gpu, "poolX")
-
-
-# Measured: AIS scales with grid size (52.4s/sample on tissuenet's 10800-combo grid, ~30-90s/sample on
-# the others); APG scales with sample count almost independent of dataset (69-89s/sample everywhere,
-# since its cost is 24 fixed propose() calls per sample, see shard_params_list). tissuenet (3118 val
-# images), deepseas (3169) and dynamicnuclearnet (1417) would otherwise take 26-77 hours per sweep;
-# capped to a still-plenty-large random subset instead. livecell (570) is left uncapped.
-# The three histopathology tile pools (pannuke fold 2: 2523, lizard_mitosis val: 1017, pcns train: 1084) are
-# capped the same way, as are the large light microscopy val pools.
-REGISTRY_N_TUNING_SAMPLES = {
-    "tissuenet": 300, "deepseas": 300, "dynamicnuclearnet": 300,
-    "pannuke": 300, "lizard_mitosis": 300, "pcns": 300,
-    "dememseg": 300, "flywing": 300, "orgline": 300, "cisd": 300, "toiam": 300,
-    "bmgd": 300, "pan_multiplex": 300,
+# The in-domain data of the micro-sam2 cell models, per data type. Out-of-domain data is never tuned on.
+IN_DOMAIN = {
+    "2d": [
+        "bitdepth_nucseg", "bmgd", "cell_acdc", "cellbindb", "cellular", "cpm17", "cvz_fluo_cell", "cvz_fluo_dapi",
+        "deepbacs_label_free", "dynamicnuclearnet", "enseg", "flywing", "glysac", "histo_miner", "ifnuclei",
+        "livecell", "microbeseg", "monuseg", "neurips_cellseg_fluorescence", "neurips_cellseg_label_free",
+        "omnipose_bact_fluor", "omnipose_bact_phase", "pannuke", "puma", "tissuenet", "tsakiroglou", "u20s", "vicar",
+        "astih", "tumor_spheroid",
+    ],
+    "3d": [
+        "plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
+        "embedseg_mouse_skull", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear", "nucverse3d",
+        "platynereis_cells", "densecell", "synapsenet_compartments",
+    ],
+    "dense": ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress"],
 }
-
-# Extra shard counts for the 2d datasets whose (uncapped or capped) sample count still makes an
-# unsharded sweep too slow. APG's usable shard ceiling is 24 (one proposal group per shard, see
-# shard_params_list); AIS keeps splitting the grid directly since its cost scales with grid size.
-# livecell's AIS shards measured ~3x slower on the cluster's shared MIG slices than the login-node
-# timing test that sized the others (which tracked their estimates fine): a 1/5 grid slice ran at
-# ~26.3s/sample instead of the ~8.7s/sample a linear scaling from the unsharded 43.4s/sample implied.
-# 14 shards keeps each one comfortably under the 4h budget even at that measured, not estimated, rate.
-REGISTRY_2D_SHARDS = {
-    ("tissuenet", "ais"): 4, ("tissuenet", "apg"): 24,
-    ("deepseas", "ais"): 4, ("deepseas", "apg"): 24,
-    ("dynamicnuclearnet", "ais"): 5, ("dynamicnuclearnet", "apg"): 24,
-    ("livecell", "ais"): 14, ("livecell", "apg"): 24,
-    ("neurips_cellseg_fluorescence", "ais"): 2, ("neurips_cellseg_fluorescence", "apg"): 4,
-    ("neurips_cellseg_label_free", "ais"): 2, ("neurips_cellseg_label_free", "apg"): 4,
-    ("pannuke", "ais"): 4, ("pannuke", "apg"): 24,
-    ("lizard_mitosis", "ais"): 4, ("lizard_mitosis", "apg"): 24,
-    ("pcns", "ais"): 4, ("pcns", "apg"): 24,
-    ("deepliif", "ais"): 2, ("deepliif", "apg"): 12,
-    ("histo_miner", "ais"): 2, ("histo_miner", "apg"): 12,
-    ("dememseg", "ais"): 4, ("dememseg", "apg"): 24,
-    ("flywing", "ais"): 4, ("flywing", "apg"): 24,
-    ("orgline", "ais"): 4, ("orgline", "apg"): 24,
-    ("cisd", "ais"): 4, ("cisd", "apg"): 24,
-    ("toiam", "ais"): 4, ("toiam", "apg"): 24,
-    ("bmgd", "ais"): 4, ("bmgd", "apg"): 24,
-    ("pan_multiplex", "ais"): 12, ("pan_multiplex", "apg"): 24,
-    # Histopathology AIS on v6: dense nuclei make the flow grid slow per sample, so the small (32-46
-    # image) val pools still overran the unsharded 1:30 budget on the MIG slices (yeaz too; hvit_l on a
-    # full H100 only lost lizard and lynsec_ihc). 4 shards keep each task well under it.
-    ("yeaz", "ais"): 4, ("cpm17", "ais"): 4, ("glysac", "ais"): 4, ("lizard", "ais"): 4,
-    ("lynsec_he", "ais"): 4, ("lynsec_ihc", "ais"): 4, ("monuseg", "ais"): 4,
-    ("organoidnet", "ais"): 4, ("bccd", "ais"): 4, ("vicar", "ais"): 4,
-    # Histopathology APG on v5a: dense nuclei make every proposal slow. Unsharded, lizard took 187 s per sample
-    # (3.6 h) and lynsec_ihc 125 s per sample. lynsec_he and monuseg took 93 and 89 min. Only APG was timed here.
-    ("lizard", "apg"): 12, ("lynsec_ihc", "apg"): 12, ("lynsec_he", "apg"): 4, ("monuseg", "apg"): 4,
+# The modes each data type is tuned for. The neurite EM volumes have no APG.
+DATA_MODES = {"2d": ("ais", "apg"), "3d": ("ais", "apg"), "dense": ("ais",)}
+# The large 2d validation splits are scored on this many samples, spread evenly.
+MAX_SAMPLES = {"tissuenet": 500, "dynamicnuclearnet": 500, "pannuke": 500}
+# Volumes are tuned on crops of the shape of the test crops.
+PIPELINE_CROP_3D = (32, 512, 512)
+# 3d APG runs every combo in full, so it screens its prompt axes on a few volumes first. The datasets with the most
+# objects per volume are scored on smaller blocks: (volumes of the screen, crop).
+APG_3D_SCREEN_VOLUMES = 2
+APG_3D_VOLUMES = 5
+APG_3D_BLOCKS = {"pnas_arabidopsis": (3, (32, 256, 256)), "phmamm": (3, (32, 256, 256))}
+# The second 3d APG stage crosses the best prompt combos of the screen with these selection axes.
+APG_3D_PROMPT_TOP = 2
+APG_3D_SELECTION_GRID = {
+    "score_threshold": [0.4, 0.5, 0.6, 0.7], "max_overlap": [0.15, 0.3, 0.5], "min_size": [25, 100, 400],
 }
+# The best APG combos that are swept again with each refinement mode.
+REFINEMENT_TOP = {"2d": 10, "3d": 3}
+REFINEMENTS = ("boxes", "points+boxes")
+# The axes whose values are fractions, and the axes of integers, for the steps past a grid edge.
+FRACTION_KEYS = ("foreground_threshold", "score_threshold", "max_overlap", "foreground_weight", "beta")
+INTEGER_KEYS = ("n_iter", "min_size", "min_candidate_size")
+# The queue and the scheduler are polled this often, in seconds.
+POLL_SECONDS = 60
+# A worker claims a new task only with this many seconds of its time limit left.
+MIN_SECONDS_LEFT = 600
+# Asking the scheduler per task would flood it: the running jobs are fetched at most every RUNNING_TTL seconds, or
+# every RUNNING_MIN_AGE seconds to judge a claim written after the last fetch.
+RUNNING_TTL = 300
+RUNNING_MIN_AGE = 30
+SCHEDULER = {"end_time": None, "running_time": 0.0, "running_jobs": set()}
+SCHEDULER_LOCK = threading.Lock()
 
 
-def registry_num_shards(dataset_name, mode):
-    """How many array tasks split one (model_type, mode, dataset) grid of the registry sweep.
+def data_type(dataset_name):
+    """The data type of a dataset: '2d', '3d' (sparse volumes) or 'dense' (neurite EM volumes)."""
+    if dataset_name in DATASETS_DENSE:
+        return "dense"
+    return "3d" if dataset_name in DATASETS_3D else "2d"
 
-    The sparse (flow) grid used by AIS on the sparse 3d datasets (embedseg, gonuclear, see
-    DATASETS_DENSE) is far larger than every other grid (roughly 10800 combos
-    after flow-travel dedup vs. 72 for dense EM and <=384 for APG), so it gets split the most; every
-    3d dataset still gets split. 2d datasets stay a single job except the ones in REGISTRY_2D_SHARDS,
-    whose validation-sample count (even after REGISTRY_N_TUNING_SAMPLES capping) is large enough that
-    an unsharded sweep would still overrun the walltime budget.
+
+def cap_samples(subsample, n_samples):
+    """The smaller of two caps on the number of samples, where None means no cap."""
+    if n_samples is None:
+        return subsample
+    return n_samples if subsample is None else min(subsample, n_samples)
+
+
+def sample_options(context, data, dataset_name, apg_stage=None):
+    """The crop and the number of samples that a sweep of one dataset scores.
+
+    'apg_stage' is 'screen' or 'selection' for 3d APG, which scores fewer volumes, see APG_3D_BLOCKS.
     """
-    if dataset_name not in DATASETS_3D:
-        return REGISTRY_2D_SHARDS.get((dataset_name, mode), 1)
-    if mode == "ais":
-        return 12 if dataset_name not in DATASETS_DENSE else 4
-    return 4
+    crop = None if data == "2d" else tuple(context["crop_3d"])
+    subsample = MAX_SAMPLES.get(dataset_name)
+    if apg_stage is not None:
+        volumes = APG_3D_SCREEN_VOLUMES if apg_stage == "screen" else APG_3D_VOLUMES
+        if dataset_name in APG_3D_BLOCKS:
+            screen_volumes, crop = APG_3D_BLOCKS[dataset_name]
+            volumes = screen_volumes if apg_stage == "screen" else APG_3D_VOLUMES
+        subsample = volumes
+    return {"crop": crop, "subsample": cap_samples(subsample, context["n_samples"])}
 
 
-def registry_gpu_tier(dataset_name, model_type):
-    """(gpu, memory, time_limit) for one (dataset, model_type) of the registry sweep."""
-    gpu = GPU_20 if model_type in LARGE_MODELS else GPU_10
-    if dataset_name not in DATASETS_3D:
-        return gpu, MEM_2D, TIME_LIMIT_2D
-    return gpu, MEM_3D, TIME_LIMIT_3D
+def make_sweep(model, mode, data, dataset_name, root, options, params_file=None):
+    return {
+        "model": model, "model_type": backbone(model), "mode": mode, "data": data, "dataset": dataset_name,
+        "root": root, "params_file": params_file, **options,
+    }
 
 
-def tuning_command(
-    experiment_folder, data_root, model_type, mode, dataset_name, shard_index, num_shards, weights, merge=False,
-):
-    """The parameter_search.py invocation for one (shard of a) tuning job, or its merge.
+def sweep_config(sweep):
+    return tuning_config(sweep["dataset"], sweep["mode"], crop_shape=sweep["crop"], grid_preset="broad")
 
-    Args:
-        weights: The flags selecting the weights, from `registry_weights` or `joint_weights`.
-    """
-    command = [
-        "python", str(EVAL_ROOT / "parameter_search.py"),
-        "-d", dataset_name, "-i", data_root, "-e", experiment_folder,
-        "-m", model_type, "--mode", mode, *weights,
+
+def backbone(model):
+    """The SAM2 backbone of a registry model, e.g. 'hvit_t' for 'hvit_t_cells'."""
+    return model[:6]
+
+
+def registry_weights(model):
+    """Download a registry model, and return the paths of its SAM2 weights and of its decoder."""
+    registry = model_registry()
+    return {"interactive_checkpoint": registry.fetch(model), "checkpoint": registry.fetch(f"{model}_decoder")}
+
+
+def checkpoint_identity(context, model):
+    """The checkpoint id of the weights of a model, computed once per run."""
+    with context["lock"]:
+        if model not in context["identities"]:
+            weights = context["weights"][model]
+            context["identities"][model], _ = resolve_checkpoint_identity(
+                "apg", backbone(model), checkpoint_path=weights["checkpoint"],
+                interactive_checkpoint_path=weights["interactive_checkpoint"],
+            )
+        return context["identities"][model]
+
+
+def sweep_csv(context, sweep, root=None):
+    output_dir = os.path.join(
+        root or sweep["root"], sweep["mode"], sweep["model_type"], checkpoint_identity(context, sweep["model"])
+    )
+    return os.path.join(output_dir, f"{sweep['dataset']}.csv")
+
+
+def sweep_is_done(context, sweep):
+    csv_path = sweep_csv(context, sweep)
+    return os.path.exists(csv_path) and os.path.exists(per_image_path(csv_path))
+
+
+def prediction_cache(context, sweep):
+    """The decoder outputs of AIS are cached once per dataset and reused by every stage."""
+    return os.path.join(context["experiment_folder"], "predictions") if sweep["mode"] == "ais" else None
+
+
+def write_params(context, data, stage, model_type, combos):
+    path = os.path.join(context["experiment_folder"], "params", data, stage, f"{model_type}.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(combos, f, indent=1)
+    return path
+
+
+def load_sweep(csv_path):
+    """The mean score per combo of one merged sweep, or None if it is missing."""
+    if not os.path.exists(per_image_path(csv_path)):
+        return None
+    data = np.load(per_image_path(csv_path))
+    params = [json.dumps(p, sort_keys=True) for p in json.loads(str(data["params"]))]
+    return pd.Series(data["scores"].mean(axis=1), index=params)
+
+
+def load_scores(context, roots, mode, model, datasets):
+    """The mean score per combo and dataset over the sweeps below 'roots', which score the same samples."""
+    columns = {}
+    for dataset_name in datasets:
+        sweep = make_sweep(model, mode, None, dataset_name, None, {})
+        sweeps = [load_sweep(sweep_csv(context, sweep, root)) for root in roots]
+        sweeps = [sweep for sweep in sweeps if sweep is not None]
+        if sweeps:
+            scores = pd.concat(sweeps)
+            columns[dataset_name] = scores[~scores.index.duplicated()]
+    return pd.DataFrame(columns)
+
+
+def grid_edges(combos, params):
+    """The parameters of a combo that sit at the edge of the values swept."""
+    values = swept_values(json.loads(combo) for combo in combos)
+    return [
+        f"{key}={value}" for key, value in params.items()
+        if len(values.get(key, ())) > 1 and value in (min(values[key]), max(values[key]))
     ]
-    if dataset_name in REGISTRY_N_TUNING_SAMPLES:
-        command.extend(["--n_tuning_samples", str(REGISTRY_N_TUNING_SAMPLES[dataset_name])])
-    if num_shards > 1:
-        command.extend(["--num_shards", str(num_shards)])
-        if merge:
-            command.append("--merge_shards")
-        else:
-            command.extend(["--shard_index", str(shard_index)])
-    return " ".join(command)
 
 
-def registry_weights(model_type, mode):
-    """The weight flags of the registry sweep: the released '{model_type}_cells' checkpoints."""
-    weights = ["-c", os.path.join(MODELS_ROOT, f"{model_type}_cells_decoder")]
-    if mode == "apg":
-        weights.extend(["--interactive_checkpoint", os.path.join(MODELS_ROOT, f"{model_type}_cells")])
-    return weights
+def select_combos(scores, lower_is_better):
+    """Rank the combos swept on every dataset by their mean relative score.
 
-
-def joint_weights(joint_checkpoint):
-    """The weight flags of a joint sweep. The training version comes from JOINT_ENV_VARS."""
-    return ["--joint_checkpoint", joint_checkpoint]
-
-
-def registry_job_tasks(experiment_folder, data_root):
-    """Every (tag, command) pair for the registry sweep, split into direct / shard / merge groups.
-
-    Returns a dict {(group, gpu): [(tag, command), ...]}, group in {'direct', 'shard', 'merge'}.
-    """
-    groups = {}
-    for model_type in MODEL_TYPES:
-        for mode in MODES:
-            for dataset_name in REGISTRY_DATASETS:
-                num_shards = registry_num_shards(dataset_name, mode)
-                tier = registry_gpu_tier(dataset_name, model_type)
-                base_tag = f"tune_{model_type}_cells_{mode}_{dataset_name}"
-                weights = registry_weights(model_type, mode)
-                if num_shards == 1:
-                    command = tuning_command(
-                        experiment_folder, data_root, model_type, mode, dataset_name, 0, 1, weights
-                    )
-                    groups.setdefault(("direct", *tier), []).append((base_tag, command))
-                    continue
-                for shard_index in range(num_shards):
-                    tag = f"{base_tag}_shard{shard_index}of{num_shards}"
-                    command = tuning_command(
-                        experiment_folder, data_root, model_type, mode, dataset_name, shard_index, num_shards, weights
-                    )
-                    groups.setdefault(("shard", *tier), []).append((tag, command))
-                merge_command = tuning_command(
-                    experiment_folder, data_root, model_type, mode, dataset_name, 0, num_shards, weights, merge=True
-                )
-                groups.setdefault(("merge", *tier), []).append((f"{base_tag}_merge", merge_command))
-    return groups
-
-
-def joint_job_tasks(experiment_folder, data_root, model_type, mode, joint_checkpoint, datasets=None):
-    """Every (tag, command) pair of a joint-checkpoint sweep, split into direct / shard / merge groups.
-
-    Mirrors `registry_job_tasks` for one model type and one mode, over the registry datasets, or over
-    'datasets' for a partial (re)submission, e.g. repairing timed-out tasks with a new shard count.
+    The relative score of a combo on a dataset is its score over the best score of that dataset (the best one over
+    it, when lower is better), so every dataset weighs the same. Leaving one dataset out shows how stable the winner
+    is: it is selected again on the other datasets and scored on the one left out.
 
     Returns:
-        A dict {(group, gpu): [(tag, command), ...]}, group in {'direct', 'shard', 'merge'}.
+        The table of the combos, best first, and a summary of the winner.
     """
-    weights = joint_weights(joint_checkpoint)
-    groups = {}
-    for dataset_name in (datasets or REGISTRY_DATASETS):
-        num_shards = registry_num_shards(dataset_name, mode)
-        tier = registry_gpu_tier(dataset_name, model_type)
-        base_tag = f"tune_{model_type}_joint_{mode}_{dataset_name}"
-        if num_shards == 1:
-            command = tuning_command(experiment_folder, data_root, model_type, mode, dataset_name, 0, 1, weights)
-            groups.setdefault(("direct", *tier), []).append((base_tag, command))
-            continue
-        for shard_index in range(num_shards):
-            tag = f"{base_tag}_shard{shard_index}of{num_shards}"
-            command = tuning_command(
-                experiment_folder, data_root, model_type, mode, dataset_name, shard_index, num_shards, weights
-            )
-            groups.setdefault(("shard", *tier), []).append((tag, command))
-        merge_command = tuning_command(
-            experiment_folder, data_root, model_type, mode, dataset_name, 0, num_shards, weights, merge=True
-        )
-        groups.setdefault(("merge", *tier), []).append((f"{base_tag}_merge", merge_command))
-    return groups
+    n_combos = len(scores)
+    scores = scores.dropna()
+    if scores.empty:
+        raise RuntimeError("No combo was swept on every dataset.")
+    relative = scores.min(axis=0) / scores if lower_is_better else scores / scores.max(axis=0)
+    table = pd.DataFrame({
+        "mean_relative_score": relative.mean(axis=1), "min_relative_score": relative.min(axis=1),
+        "mean_score": scores.mean(axis=1),
+    }).join(relative.add_prefix("relative_")).sort_values("mean_relative_score", ascending=False)
+    winner = table.index[0]
+    lodo = {}
+    # Leaving one dataset out needs two of them at least.
+    for name in relative.columns if relative.shape[1] > 1 else []:
+        held_out_winner = relative.drop(columns=name).mean(axis=1).idxmax()
+        lodo[name] = (held_out_winner == winner, relative.loc[held_out_winner, name])
+    summary = {
+        "params": json.loads(winner), "n_datasets": relative.shape[1], "n_combos": len(scores),
+        "n_combos_dropped": n_combos - len(scores),
+        "mean_relative_score": float(table.loc[winner, "mean_relative_score"]),
+        "min_relative_score": float(table.loc[winner, "min_relative_score"]),
+        "worst_dataset": relative.loc[winner].idxmin(),
+        "lodo_same_winner": int(sum(same for same, _ in lodo.values())),
+        "lodo_mean_relative_score": float(np.mean([value for _, value in lodo.values()])) if lodo else None,
+        "grid_edges": grid_edges(scores.index, json.loads(winner)),
+    }
+    return table, summary
 
 
-def write_tasks_file(job_folder, name, tasks):
-    """Write one 'tag<TAB>command' line per task and return its path."""
-    tasks_path = job_folder / f"tasks_{name}.txt"
-    with open(tasks_path, "w") as f:
-        for tag, command in tasks:
-            f.write(f"{tag}\t{command}\n")
-    return tasks_path
+def swept_values(combos):
+    """The numeric values swept per axis."""
+    values = {}
+    for combo in combos:
+        for key, value in combo.items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                values.setdefault(key, set()).add(value)
+    return values
 
 
-def env_exports():
-    """Return 'export' lines pinning the joint training version, or an empty string if none is set."""
-    return "".join(f"export {name}={shlex.quote(os.environ[name])}\n" for name in JOINT_ENV_VARS if name in os.environ)
+def step_past(key, values, value):
+    """The next value past the grid edge that 'value' sits on, or None if it sits inside the grid or at a bound.
 
-
-def write_array_script(
-    job_folder, name, tasks_path, n_tasks, gpu, memory, time_limit, dependency=None, partition=None, reservation=None,
-):
-    """Write one Slurm array script that dispatches each task line by SLURM_ARRAY_TASK_ID."""
-    script_path = job_folder / f"array_{name}.sh"
-    dep_line = f"\n#SBATCH --dependency={dependency}" if dependency else ""
-    reservation_line = f"\n#SBATCH --reservation={reservation}" if reservation else ""
-    script = f"""#!/bin/bash
-#SBATCH -c {CPUS}
-#SBATCH --mem {memory}
-#SBATCH -t {time_limit}
-#SBATCH -p {partition or PARTITION}
-#SBATCH -G {gpu}
-#SBATCH --job-name={name}
-#SBATCH --array=0-{n_tasks - 1}%{MAX_CONCURRENT}
-#SBATCH --requeue{dep_line}{reservation_line}
-#SBATCH --constraint=inet
-#SBATCH -o {job_folder}/logs/{name}_%A_%a.out
-#SBATCH -e {job_folder}/logs/{name}_%A_%a.err
-
-source ~/.bashrc
-micromamba activate {ENV}
-{env_exports()}
-line=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" {tasks_path})
-tag=$(cut -f1 <<< "$line")
-command=$(cut -f2- <<< "$line")
-echo "Task $SLURM_ARRAY_TASK_ID: $tag"
-
-status=1
-for attempt in $(seq 1 {N_ATTEMPTS}); do
-  eval "$command" && status=0 && break
-  echo "Attempt $attempt of '$tag' failed."
-done
-exit $status
-"""
-    with open(script_path, "w") as f:
-        f.write(script)
-    return script_path
-
-
-def submit_job(script: Path, dependency=None) -> str:
-    """Submit one array script, optionally after another job, and return its job id."""
-    command = ["sbatch"]
-    if dependency:
-        command.extend(["--dependency", dependency])
-    command.append(str(script))
-    result = subprocess.run(command, capture_output=True, text=True)
-    out = (result.stdout or result.stderr).strip()
-    print(out)
-    job_id = out.split()[-1] if out.startswith("Submitted batch job") else None
-    if job_id is None:
-        raise RuntimeError(f"Could not parse a job id from sbatch output: '{out}'")
-    return job_id
-
-
-def submit_job_arrays(job_folder, groups, dry, partition=None, gpu_override=None, reservation=None):
-    """Write one array script per (group, tier) and submit it, each merge after the shards it needs.
-
-    A tier is (gpu, memory, time_limit), so the 2d and the 3d tasks of one group do not share a
-    reservation: 2d tasks reserving the 3d memory starve the nodes long before the GPUs run out.
-    'partition', 'gpu_override' and 'reservation' redirect a whole submission to another pool, e.g. a
-    full-GPU partition, where the MIG specs of `registry_gpu_tier` do not exist.
+    The step continues the spacing of the last two values: geometric where they differ by a factor of 1.5 or more,
+    such as 50 and 100, and linear otherwise, such as 0.6 and 0.7.
     """
-    if gpu_override is not None:
-        merged = {}
-        for (group, _, memory, time_limit), tasks in groups.items():
-            merged.setdefault((group, gpu_override, memory, time_limit), []).extend(tasks)
-        groups = merged
+    values = sorted(values)
+    if len(values) < 2 or value not in (values[0], values[-1]):
+        return None
+    inner, edge = (values[-2], values[-1]) if value == values[-1] else (values[1], values[0])
+    if min(inner, edge) > 0 and max(inner, edge) / min(inner, edge) >= 1.5:
+        new = edge * edge / inner
+    else:
+        new = 2 * edge - inner
+    if key in FRACTION_KEYS:
+        new = min(max(new, 0.0), 1.0)
+    elif new <= 0:
+        new = edge / 2
+    new = max(1, int(round(new))) if key in INTEGER_KEYS else round(float(new), 4)
+    return None if new in values else new
 
-    direct_scripts, shard_scripts, merge_scripts = [], [], []
-    for (group, *tier), tasks in groups.items():
-        gpu, memory, time_limit = tier
-        name = f"{group}_{gpu_pool_label(gpu)}_{memory}"
-        tasks_path = write_tasks_file(job_folder, name, tasks)
-        script = write_array_script(
-            job_folder, name, tasks_path, len(tasks), gpu, memory, time_limit,
-            partition=partition, reservation=reservation,
-        )
-        if group == "direct":
-            direct_scripts.append(script)
-        elif group == "shard":
-            shard_scripts.append((tuple(tier), script))
-        else:
-            merge_scripts.append((tuple(tier), script))
 
-    n_direct = sum(len(t) for (g, *_), t in groups.items() if g == "direct")
-    n_shard = sum(len(t) for (g, *_), t in groups.items() if g == "shard")
-    n_merge = sum(len(t) for (g, *_), t in groups.items() if g == "merge")
+def edge_combos(winner, swept):
+    """The winner with one axis at a time moved one step past the grid edge that it sits on."""
+    combos = []
+    for key, value in winner.items():
+        if key in swept and value in swept[key]:
+            new = step_past(key, swept[key], value)
+            if new is not None:
+                combos.append({**winner, key: new})
+    return combos
+
+
+def run_params_stage(context, runner, model, mode, data, stage, combos, options):
+    """Sweep 'combos' on every dataset of a data type and return the root of the stage."""
+    params_file = write_params(context, data, stage, model, combos)
+    root = os.path.join(context["experiment_folder"], "tuning", data, stage)
+    runner.run([
+        make_sweep(model, mode, data, name, root, options[name], params_file)
+        for name in context["datasets"][data]
+    ])
+    return root
+
+
+def broad_stage(context, runner, model, mode, data):
+    """Sweep the broad grid on every dataset of a data type.
+
+    Returns:
+        The roots of the stage, the combos it swept, and the sample options of the later stages per dataset.
+    """
+    datasets = context["datasets"][data]
+    options = {name: sample_options(context, data, name) for name in datasets}
+    root = os.path.join(context["experiment_folder"], "tuning", data, "broad")
+    sweeps = [make_sweep(model, mode, data, name, root, options[name]) for name in datasets]
+    runner.run(sweeps)
+    return [root], sweep_params_list(sweep_config(sweeps[0])), options
+
+
+def apg_3d_base_stages(context, runner, model):
+    """Screen the prompt axes of 3d APG on a few volumes, then sweep the selection axes of its best prompt combos.
+
+    Returns:
+        Like `broad_stage`. The later stages score the volumes of the selection stage.
+    """
+    datasets = context["datasets"]["3d"]
+    screen_options = {name: sample_options(context, "3d", name, apg_stage="screen") for name in datasets}
+    root = os.path.join(context["experiment_folder"], "tuning", "3d", "screen")
+    sweeps = [make_sweep(model, "apg", "3d", name, root, screen_options[name]) for name in datasets]
+    runner.run(sweeps)
+    table, _ = select_combos(load_scores(context, [root], "apg", model, datasets), lower_is_better=False)
+    prompts = [json.loads(params) for params in table.index[:APG_3D_PROMPT_TOP]]
+    keys = list(APG_3D_SELECTION_GRID)
+    combos = [
+        {**prompt, **dict(zip(keys, values))}
+        for prompt in prompts for values in itertools.product(*APG_3D_SELECTION_GRID.values())
+    ]
+    options = {name: sample_options(context, "3d", name, apg_stage="selection") for name in datasets}
+    selection_root = run_params_stage(context, runner, model, "apg", "3d", "selection", combos, options)
+    return [selection_root], sweep_params_list(sweep_config(sweeps[0])) + combos, options
+
+
+def search(context, runner, model, mode, data):
+    """Run every stage of the search of one model, mode and data type, and return the summary of its winner."""
+    datasets = context["datasets"][data]
+    lower_is_better = data == "dense"
+    if mode == "apg" and data == "3d":
+        roots, combos, options = apg_3d_base_stages(context, runner, model)
+    else:
+        roots, combos, options = broad_stage(context, runner, model, mode, data)
+
+    for round_index in range(1, context["edge_rounds"] + 1):
+        _, summary = select_combos(load_scores(context, roots, mode, model, datasets), lower_is_better)
+        new = edge_combos(summary["params"], swept_values(combos))
+        if not new:
+            break
+        stage = f"edge{round_index}"
+        roots.append(run_params_stage(context, runner, model, mode, data, stage, new, options))
+        combos += new
+
+    if mode == "apg":
+        table, _ = select_combos(load_scores(context, roots, mode, model, datasets), lower_is_better)
+        best = [json.loads(params) for params in table.index[:REFINEMENT_TOP[data]]]
+        refined = [{**p, "refinement": r} for p in best for r in REFINEMENTS if p.get("refinement") != r]
+        roots.append(run_params_stage(context, runner, model, mode, data, "refinement", refined, options))
+
+    table, summary = select_combos(load_scores(context, roots, mode, model, datasets), lower_is_better)
+    output_dir = os.path.join(context["experiment_folder"], "selection", f"{data}_{mode}")
+    os.makedirs(output_dir, exist_ok=True)
+    table.head(50).reset_index(names="params").to_csv(os.path.join(output_dir, f"{model}.csv"), index=False)
+    with open(os.path.join(output_dir, f"{model}.json"), "w") as f:
+        json.dump(summary, f, indent=1)
     print(
-        f"Wrote {len(direct_scripts) + len(shard_scripts) + len(merge_scripts)} array script(s) to "
-        f"'{job_folder}': {n_direct} direct task(s), {n_shard} shard task(s), {n_merge} merge task(s)."
+        f"{model} {mode} {data}: mean relative score {summary['mean_relative_score']:.4f} over "
+        f"{summary['n_datasets']} datasets, same winner without one dataset for {summary['lodo_same_winner']}, "
+        f"{summary['params']}"
     )
-    if dry:
-        return
-
-    for script in direct_scripts:
-        submit_job(script)
-
-    shard_job_ids = {tier: submit_job(script) for tier, script in shard_scripts}
-    for tier, script in merge_scripts:
-        submit_job(script, dependency=f"afterany:{shard_job_ids[tier]}")
+    return summary
 
 
-def generate_registry_jobs(experiment_folder, data_root, dry):
-    """Write (and, unless 'dry', submit) the job arrays of the full registry-checkpoint sweep."""
-    job_folder = EVAL_ROOT / "gpu_jobs" / f"cells_registry_tune_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    (job_folder / "logs").mkdir(parents=True, exist_ok=True)
-    submit_job_arrays(job_folder, registry_job_tasks(experiment_folder, data_root), dry)
+class LocalRunner:
+    """Runs the sweeps one after the other in this process."""
+
+    def __init__(self, context):
+        self.context = context
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.models = {}
+
+    def model(self, mode, model, ndim):
+        key = (mode, model, ndim)
+        if key not in self.models:
+            # Hold the networks of one model only.
+            self.models = {k: v for k, v in self.models.items() if k[1] == model}
+            weights = self.context["weights"][model]
+            self.models[key] = build_model(
+                mode, backbone(model), self.device, ndim, checkpoint_path=weights["checkpoint"],
+                interactive_checkpoint_path=weights["interactive_checkpoint"],
+            )
+        return self.models[key]
+
+    def run(self, sweeps):
+        for sweep in sweeps:
+            if sweep_is_done(self.context, sweep):
+                continue
+            mode = sweep["mode"]
+            model = self.model(mode, sweep["model"], 2 if sweep["data"] == "2d" else 3)
+            tune_parameters(
+                model, mode, sweep["dataset"], self.context["data_root"], sweep["model_type"],
+                os.path.join(sweep["root"], mode), self.device, n_threads=self.context["n_threads"],
+                crop_shape=sweep["crop"], checkpoint_id=checkpoint_identity(self.context, sweep["model"]),
+                grid_preset="broad",
+                subsample=sweep["subsample"], prediction_cache=prediction_cache(self.context, sweep),
+                params_file=sweep["params_file"],
+            )
 
 
-def generate_joint_jobs(
-    experiment_folder, data_root, model_type, mode, joint_checkpoint, dry,
-    partition=None, gpu_override=None, reservation=None, datasets=None,
-):
-    """Write (and, unless 'dry', submit) the job arrays of a joint-checkpoint sweep.
+class SlurmRunner:
+    """Runs the sweeps as tasks of a queue that Slurm job arrays of `worker` take from.
 
-    The training version comes from JOINT_ENV_VARS, which the array script pins at submission time.
+    Large sweeps are split into shards, which are merged once all of them are done. The searches of all backbones,
+    modes and data types share the queue, so they run in parallel.
     """
-    missing = [name for name in JOINT_ENV_VARS if name not in os.environ]
-    if missing:
-        raise ValueError(f"Set {missing} to the training version to sweep, so the tasks do not read another one.")
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    job_folder = EVAL_ROOT / "gpu_jobs" / f"joint_tune_{model_type}_{mode}_{stamp}"
-    (job_folder / "logs").mkdir(parents=True, exist_ok=True)
-    groups = joint_job_tasks(experiment_folder, data_root, model_type, mode, joint_checkpoint, datasets=datasets)
-    submit_job_arrays(job_folder, groups, dry, partition=partition, gpu_override=gpu_override, reservation=reservation)
+
+    def __init__(self, context, sbatch_options, n_workers, threads, slots, max_shards):
+        self.context = context
+        self.queue_dir = Path(context["experiment_folder"], "queue")
+        (self.queue_dir / "claims").mkdir(parents=True, exist_ok=True)
+        (self.queue_dir / "logs").mkdir(exist_ok=True)
+        self.sbatch_options = shlex.split(sbatch_options)
+        self.n_workers, self.threads, self.slots, self.max_shards = n_workers, threads, slots, max_shards
+        self.job_name = f"parameter_search_{Path(context['experiment_folder']).name}"
+        self.lock = threading.Lock()
+
+    def tasks(self):
+        path = self.queue_dir / "tasks.json"
+        return json.loads(path.read_text()) if path.exists() else []
+
+    def write_tasks(self, tasks):
+        tmp = self.queue_dir / "tasks.json.tmp"
+        tmp.write_text(json.dumps(tasks, indent=1))
+        os.replace(tmp, self.queue_dir / "tasks.json")
+
+    def num_shards(self, sweep):
+        config = sweep_config(sweep)
+        params_list = sweep_params_list(config, sweep["params_file"])
+        return max(1, min(self.max_shards, n_shard_groups(params_list, config["mode"], config["ndim"])))
+
+    def command(self, sweep, shard_index=0, num_shards=1, cache_only=False):
+        weights = self.context["weights"][sweep["model"]]
+        command = [
+            sys.executable, str(Path(__file__).resolve()), "sweep", "-d", sweep["dataset"],
+            "-i", self.context["data_root"], "-e", self.context["experiment_folder"], "-m", sweep["model_type"],
+            "--mode", sweep["mode"], "--tuning_root", sweep["root"], "--grid_preset", "broad",
+            "-c", weights["checkpoint"], "--interactive_checkpoint", weights["interactive_checkpoint"],
+        ]
+        if sweep["params_file"]:
+            command += ["--params_file", sweep["params_file"]]
+        if sweep["crop"]:
+            command += ["--crop_3d", *map(str, sweep["crop"])]
+        if sweep["subsample"]:
+            command += ["--subsample", str(sweep["subsample"])]
+        if prediction_cache(self.context, sweep):
+            command += ["--prediction_cache", prediction_cache(self.context, sweep)]
+        if cache_only:
+            command += ["--cache_only"]
+        if num_shards > 1:
+            command += ["--num_shards", str(num_shards), "--shard_index", str(shard_index)]
+        return command
+
+    def add(self, tasks, index_of, sweep, command, requires=None):
+        """Add a task, or reuse the task with the same command, and return its index."""
+        key = json.dumps(command)
+        if key not in index_of:
+            tasks.append({"model_type": sweep["model_type"], "command": command, "requires": requires})
+            index_of[key] = len(tasks) - 1
+        return index_of[key]
+
+    def add_sweeps(self, sweeps):
+        """Queue the tasks of the sweeps that are not done yet, and return their indices."""
+        with self.lock:
+            tasks = self.tasks()
+            index_of = {json.dumps(task["command"]): i for i, task in enumerate(tasks)}
+            indices = []
+            for sweep in sweeps:
+                if sweep_is_done(self.context, sweep):
+                    continue
+                requires = None
+                if sweep["mode"] == "ais":
+                    # The decoder outputs are cached first, once per dataset, so that all shards and stages share them.
+                    root = os.path.join(self.context["experiment_folder"], "tuning", sweep["data"], "cache")
+                    cache_sweep = {**sweep, "root": root, "params_file": None}
+                    cache = self.add(tasks, index_of, sweep, self.command(cache_sweep, cache_only=True))
+                    indices.append(cache)
+                    requires = str(self.queue_dir / "claims" / str(cache) / "done")
+                num_shards = self.num_shards(sweep)
+                for shard_index in range(num_shards):
+                    command = self.command(sweep, shard_index, num_shards)
+                    indices.append(self.add(tasks, index_of, sweep, command, requires))
+            self.write_tasks(tasks)
+            return indices
+
+    def submit_workers(self):
+        """Submit workers until 'n_workers' of them run or wait, as long as tasks are open."""
+        with self.lock:
+            tasks = self.tasks()
+            claims = self.queue_dir / "claims"
+            n_open = sum(1 for i in range(len(tasks)) if not (claims / str(i) / "done").exists())
+            jobs = squeue("-u", os.environ.get("USER", ""), "-r", "-n", self.job_name, "-o", "%i").split()
+            n_new = min(self.n_workers, n_open) - len(jobs)
+            if n_new <= 0:
+                return
+            script = self.queue_dir / "worker.sh"
+            script.write_text(
+                f"#!/bin/bash\n{sys.executable} {Path(__file__).resolve()} worker {self.queue_dir} "
+                f"--threads {self.threads} --slots {self.slots}\n"
+            )
+            logs = self.queue_dir / "logs"
+            subprocess.run([
+                "sbatch", *self.sbatch_options, f"--array=0-{n_new - 1}", f"--job-name={self.job_name}",
+                "-c", str(self.threads), "-o", f"{logs}/%A_%a.out", "-e", f"{logs}/%A_%a.err", str(script),
+            ], check=True)
+
+    def run(self, sweeps):
+        indices = self.add_sweeps(sweeps)
+        claims = self.queue_dir / "claims"
+        while True:
+            failed = [i for i in indices if (claims / str(i) / "failed").exists()]
+            if failed:
+                raise RuntimeError(f"Tasks {failed} of '{self.queue_dir}' failed, see its logs.")
+            if all((claims / str(i) / "done").exists() for i in indices):
+                break
+            self.submit_workers()
+            time.sleep(POLL_SECONDS)
+        for sweep in sweeps:
+            num_shards = self.num_shards(sweep)
+            if num_shards > 1 and not sweep_is_done(self.context, sweep):
+                merge_shards(
+                    os.path.join(sweep["root"], sweep["mode"]), sweep["dataset"], sweep["mode"], sweep["model_type"],
+                    num_shards, checkpoint_id=checkpoint_identity(self.context, sweep["model"]), grid_preset="broad",
+                )
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "-d", "--dataset_name", type=str, nargs="+", default=None, choices=sorted(VAL_SPLITS),
-        help="Datasets to tune. Defaults to every dataset with a validation split (see common.VAL_SPLITS).",
-    )
-    parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT, help="The root the data lives in.")
-    parser.add_argument(
-        "-e", "--experiment_folder", type=str, default=None,
-        help="Required unless --generate_registry_jobs is set, which defaults to REGISTRY_EXPERIMENT_FOLDER.",
-    )
-    parser.add_argument("-m", "--model_type", type=str, default="hvit_t", choices=MODEL_TYPES)
-    parser.add_argument(
-        "--mode", type=str, nargs="+", default=list(MODES), choices=MODES, help="The segmentation modes to tune."
-    )
-    parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Weights instead of the joint export.")
-    parser.add_argument("--joint_checkpoint", type=str, default="best", help="Joint checkpoint name, without '.pt'.")
-    parser.add_argument(
-        "--interactive_checkpoint", type=str, default=None,
-        help="Standalone interactive weights for apg mode, bypassing the joint checkpoint entirely. "
-             "Requires -c/--checkpoint for the decoder half too.",
-    )
-    parser.add_argument("--tuning_root", type=str, default=None, help="Where the sweeps are written and read from.")
-    parser.add_argument("--n_tuning_samples", type=int, default=None, help="Cap each sweep to this many samples.")
-    parser.add_argument(
-        "--tuning_stride", type=int, default=1,
-        help="Only score every this-th validation sample, so a cap spreads evenly across a "
-             "cell-type-grouped sort order instead of landing in the first few groups.",
-    )
-    parser.add_argument("--criterion", type=str, default=None, choices=sorted(CRITERION_ASCENDING))
-    parser.add_argument(
-        "--grid_override", type=str, default=None,
-        help="JSON object replacing the swept values of the named grid axes, e.g. a wider "
-             "foreground_threshold list. Only the named axes change, the rest keep their defaults.",
-    )
-    parser.add_argument("--n_threads", type=int, default=POSTPROC_THREADS, help="Threads for the postprocessing.")
-    parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
-    parser.add_argument(
-        "--num_shards", type=int, default=1,
-        help="Split each dataset's grid across this many jobs, see 'shard_index' and 'merge_shards'.",
-    )
-    parser.add_argument("--shard_index", type=int, default=0, help="This job's slice of the grid, in [0, num_shards).")
-    parser.add_argument(
-        "--merge_shards", action="store_true",
-        help="Merge the 'num_shards' shards a prior sharded run wrote, instead of tuning.",
-    )
-    parser.add_argument(
-        "--generate_registry_jobs", action="store_true",
-        help="Write (and submit) the Slurm job arrays for the full registry-checkpoint sweep, instead of tuning.",
-    )
-    parser.add_argument(
-        "--generate_joint_jobs", action="store_true",
-        help="Write (and submit) the Slurm job arrays sweeping the joint checkpoint of JOINT_ENV_VARS.",
-    )
-    parser.add_argument(
-        "--dry", action="store_true", help="With either --generate_*_jobs, only write the scripts; do not submit.",
-    )
-    parser.add_argument("--partition", type=str, default=None,
-                        help=f"With --generate_joint_jobs: the Slurm partition instead of {PARTITION}.")
-    parser.add_argument("--gpu", type=str, default=None,
-                        help="With --generate_joint_jobs: one GPU spec for every task, e.g. 'H100:1' or 'A100:1', "
-                             "replacing the MIG routing (which only exists on the preemptible pool).")
-    parser.add_argument("--reservation", type=str, default=None,
-                        help="With --generate_joint_jobs: submit into this Slurm reservation.")
-    args = parser.parse_args()
+def squeue(*args):
+    return subprocess.run(["squeue", "-h", *args], capture_output=True, text=True).stdout
 
-    if args.generate_registry_jobs:
-        generate_registry_jobs(args.experiment_folder or REGISTRY_EXPERIMENT_FOLDER, args.input_path, args.dry)
-        return
 
-    if args.generate_joint_jobs:
-        if args.experiment_folder is None:
-            parser.error("-e/--experiment_folder is required with --generate_joint_jobs.")
-        if len(args.mode) != 1:
-            parser.error("--generate_joint_jobs sweeps one mode at a time; pass a single --mode.")
-        generate_joint_jobs(
-            args.experiment_folder, args.input_path, args.model_type, args.mode[0], args.joint_checkpoint, args.dry,
-            partition=args.partition, gpu_override=args.gpu, reservation=args.reservation, datasets=args.dataset_name,
-        )
-        return
+def my_job_id():
+    """This job as squeue names it: '<array>_<task>' for an array task, whose plain id names the whole array."""
+    if "SLURM_ARRAY_JOB_ID" in os.environ:
+        return f"{os.environ['SLURM_ARRAY_JOB_ID']}_{os.environ['SLURM_ARRAY_TASK_ID']}"
+    return os.environ.get("SLURM_JOB_ID")
 
+
+def seconds_left():
+    """The seconds until the Slurm time limit of this job, or a day outside of Slurm."""
+    job_id = my_job_id()
+    if job_id is None:
+        return 86400
+    with SCHEDULER_LOCK:
+        if SCHEDULER["end_time"] is None:
+            out = squeue("-j", job_id, "-o", "%L").strip().split("\n")[0].strip()
+            if not out or out[0] not in "0123456789":
+                return 0  # The scheduler did not answer, so claim nothing new until it does.
+            days, _, clock = out.rpartition("-")
+            parts = [int(p) for p in clock.split(":")]
+            while len(parts) < 3:
+                parts.insert(0, 0)
+            left = (int(days) if days else 0) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+            SCHEDULER["end_time"] = time.time() + left
+        return SCHEDULER["end_time"] - time.time()
+
+
+def job_is_running(job_id, since=0.0):
+    """Whether a job of this user runs. The list only counts if it is newer than 'since', the time of the claim."""
+    with SCHEDULER_LOCK:
+        age = time.time() - SCHEDULER["running_time"]
+        if age > RUNNING_TTL or (SCHEDULER["running_time"] <= since and age > RUNNING_MIN_AGE):
+            out = squeue("-u", os.environ.get("USER", ""), "-t", "RUNNING,COMPLETING", "-o", "%i")
+            if not out.strip():
+                return True  # No answer: keep the claim rather than run the task twice.
+            SCHEDULER["running_jobs"] = set(out.split())
+            SCHEDULER["running_time"] = time.time()
+        if SCHEDULER["running_time"] <= since:
+            return True
+        return job_id in SCHEDULER["running_jobs"]
+
+
+def process_is_alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
+def claim_is_stale(owner_line, written):
+    """Whether the worker that wrote a claim ('<job> <host> <pid>') at time 'written' is gone."""
+    job, host, pid = owner_line.split()
+    if job != (my_job_id() or "local"):
+        return not job_is_running(job, since=written)
+    return host != os.uname().nodename or not process_is_alive(int(pid))
+
+
+def try_claim(claim_dir):
+    """Claim a task with an atomic mkdir. The claim of a worker that no longer runs is taken over."""
+    owner_path = os.path.join(claim_dir, "owner")
+    try:
+        os.mkdir(claim_dir)
+    except FileExistsError:
+        if os.path.exists(os.path.join(claim_dir, "done")):
+            return False
+        try:
+            owner_line = Path(owner_path).read_text()
+            written = os.path.getmtime(owner_path)
+        except FileNotFoundError:
+            return False  # Another worker is writing its claim right now.
+        if not owner_line.strip() or not claim_is_stale(owner_line, written):
+            return False
+        # The rename is atomic, so only one worker takes the stale claim over.
+        try:
+            os.rename(claim_dir, f"{claim_dir}.stale.{os.getpid()}.{time.time()}")
+            os.mkdir(claim_dir)
+        except OSError:
+            return False
+    Path(owner_path).write_text(f"{my_job_id() or 'local'} {os.uname().nodename} {os.getpid()}\n")
+    return True
+
+
+def worker_loop(queue_dir, threads, models=None):
+    """Claim and run the tasks of a queue until none is open or the time limit is too close.
+
+    A task whose cache is not written yet, or that another running job holds, may still come free, so the worker
+    waits for it. A failed task is left for inspection, not retried.
+    """
+    claims = Path(queue_dir, "claims")
+    while True:
+        tasks = json.loads(Path(queue_dir, "tasks.json").read_text())
+        n_open, claimed = 0, False
+        for index, task in enumerate(tasks):
+            claim = claims / str(index)
+            if (claim / "done").exists() or (claim / "failed").exists():
+                continue
+            if models is not None and task["model_type"] not in models:
+                continue
+            n_open += 1
+            if task["requires"] is not None and not os.path.exists(task["requires"]):
+                continue
+            if seconds_left() < MIN_SECONDS_LEFT or not try_claim(str(claim)):
+                continue
+            claimed = True
+            command = task["command"] + ["--n_threads", str(threads)]
+            print(f"[{datetime.now():%H:%M:%S}] task {index}: {' '.join(command)}", flush=True)
+            t0 = time.time()
+            result = subprocess.run(command)
+            if result.returncode == 0:
+                (claim / "done").write_text(f"{time.time() - t0:.0f}\n")
+            else:
+                print(f"Task {index} failed with exit code {result.returncode}.", flush=True)
+                (claim / "failed").write_text(f"{result.returncode}\n")
+        if n_open == 0 or (not claimed and seconds_left() < MIN_SECONDS_LEFT):
+            break
+        if not claimed:
+            time.sleep(POLL_SECONDS)
+
+
+def run_worker(queue_dir, threads, slots, models=None):
+    """Run 'slots' worker loops side by side, each with an equal share of the threads.
+
+    The scoring holds the GIL for much of its time, so several tasks of a few threads use a node better than one.
+    """
+    if slots <= 1:
+        return worker_loop(queue_dir, threads, models)
+    with futures.ThreadPoolExecutor(slots) as pool:
+        list(pool.map(lambda _: worker_loop(queue_dir, max(1, threads // slots), models), range(slots)))
+
+
+def search_datasets(dataset_names, data_types):
+    """The datasets of every data type to search on: the in-domain ones, or 'dataset_names' sorted by type."""
+    datasets = {}
+    for data in data_types:
+        names = IN_DOMAIN[data] if dataset_names is None else [n for n in dataset_names if data_type(n) == data]
+        datasets[data] = [name for name in names if has_val_split(name)]
+    return datasets
+
+
+def run_command(args):
+    datasets = search_datasets(args.dataset_name, args.data)
+    for names in datasets.values():
+        for name in names:
+            check_data_download(name, args.input_path, split="val")
+    context = {
+        "experiment_folder": os.path.abspath(args.experiment_folder), "data_root": args.input_path,
+        "datasets": datasets, "n_samples": args.n_samples, "edge_rounds": args.edge_rounds,
+        "crop_3d": args.crop_3d, "n_threads": args.n_threads, "identities": {}, "lock": threading.Lock(),
+        "weights": {model: registry_weights(model) for model in args.model_type},
+    }
+    searches = [
+        (model, mode, data) for model in args.model_type for data in args.data for mode in args.mode
+        if mode in DATA_MODES[data] and datasets[data]
+    ]
+    if args.slurm:
+        runner = SlurmRunner(context, args.sbatch, args.workers, args.threads, args.slots, args.max_shards)
+        with futures.ThreadPoolExecutor(len(searches)) as pool:
+            summaries = list(pool.map(lambda key: search(context, runner, *key), searches))
+    else:
+        print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
+        runner = LocalRunner(context)
+        summaries = [search(context, runner, *key) for key in searches]
+
+    best = {}
+    for (model, mode, data), summary in zip(searches, summaries):
+        best.setdefault(model, {}).setdefault(mode, {})[data] = summary["params"]
+    path = os.path.join(context["experiment_folder"], "best_parameters.json")
+    with open(path, "w") as f:
+        json.dump(best, f, indent=1)
+    print(f"Wrote the best parameters to '{path}'.")
+
+
+def sweep_command(args):
     if args.experiment_folder is None:
-        raise ValueError("-e/--experiment_folder is required unless --generate_registry_jobs is set.")
-
+        raise ValueError("-e/--experiment_folder is required.")
     datasets = args.dataset_name or sorted(VAL_SPLITS)
     grid_override = json.loads(args.grid_override) if args.grid_override else None
 
@@ -1157,14 +1586,13 @@ def main():
             for dataset_name in datasets:
                 merge_shards(
                     tuning_root, dataset_name, mode, args.model_type, args.num_shards,
-                    checkpoint_id=checkpoint_id, criterion=args.criterion,
+                    checkpoint_id=checkpoint_id, criterion=args.criterion, grid_preset=args.grid_preset,
                 )
         return
 
     for dataset_name in datasets:
         check_data_download(dataset_name, args.input_path)
-        # The tuning sweep itself only ever reads the held-out 'val' split, which can live in a
-        # different download than 'test' (e.g. neurips_cellseg's Tuning vs Testing archives).
+        # The sweep only reads the held-out 'val' split, which can live in another download than 'test'.
         check_data_download(dataset_name, args.input_path, split="val")
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
@@ -1176,16 +1604,16 @@ def main():
             mode, args.model_type, args.joint_checkpoint, args.checkpoint,
             interactive_checkpoint_path=args.interactive_checkpoint,
         )
-        tuning_root = args.tuning_root or os.path.join(args.experiment_folder, "tuning")
-        tuning_root = os.path.join(tuning_root, mode)
-
-        # AIS's decoder does not depend on ndim, so one build covers every dataset. APG's video
-        # input type does, so it is rebuilt once per dimensionality group instead.
+        tuning_root = os.path.join(args.tuning_root or os.path.join(args.experiment_folder, "tuning"), mode)
+        # AIS's decoder does not depend on ndim, so one build covers every dataset. APG's video input type does,
+        # so it is rebuilt once per dimensionality.
         models = {}
         for dataset_name in datasets:
             ndim = 3 if dataset_name in DATASETS_3D else 2
             model_key = ndim if mode == "apg" else mode
-            if model_key not in models:
+            if mode == "ais" and args.prediction_cache and not args.cache_only:
+                models[model_key] = None
+            elif model_key not in models:
                 models[model_key] = build_model(
                     mode, args.model_type, device, ndim,
                     joint_checkpoint=args.joint_checkpoint, checkpoint_path=args.checkpoint,
@@ -1196,7 +1624,108 @@ def main():
                 n_threads=args.n_threads, n_tuning_samples=args.n_tuning_samples, tuning_stride=args.tuning_stride,
                 crop_shape=crop_shape, criterion=args.criterion, checkpoint_id=checkpoint_id,
                 shard_index=args.shard_index, num_shards=args.num_shards, grid_override=grid_override,
+                grid_preset=args.grid_preset, subsample=args.subsample,
+                prediction_cache=args.prediction_cache, cache_only=args.cache_only, params_file=args.params_file,
             )
+
+
+def worker_command(args):
+    run_worker(args.queue_dir, args.threads, args.slots, models=args.models)
+
+
+def add_weight_arguments(parser):
+    parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Weights instead of the joint export.")
+    parser.add_argument("--joint_checkpoint", type=str, default="best", help="Joint checkpoint name, without '.pt'.")
+    parser.add_argument(
+        "--interactive_checkpoint", type=str, default=None,
+        help="Standalone interactive weights for APG, bypassing the joint checkpoint. Requires -c for the decoder.",
+    )
+
+
+def add_run_arguments(parser):
+    parser.add_argument("-e", "--experiment_folder", type=str, required=True, help="Where the search is written.")
+    parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT, help="The root the data lives in.")
+    parser.add_argument(
+        "-m", "--model_type", type=str, nargs="+", default=[f"{model}_cells" for model in MODEL_TYPES],
+        choices=REGISTRY_MODELS, help="The registry models to search the parameters of.",
+    )
+    parser.add_argument("--mode", type=str, nargs="+", default=list(MODES), choices=MODES)
+    parser.add_argument("--data", type=str, nargs="+", default=list(IN_DOMAIN), choices=list(IN_DOMAIN))
+    parser.add_argument(
+        "-d", "--dataset_name", type=str, nargs="+", default=None, choices=sorted(VAL_SPLITS), metavar="DATASET",
+        help="Datasets to search on instead of the in-domain ones, sorted into the data types by their kind.",
+    )
+    parser.add_argument("--n_samples", type=int, default=None, help="Score at most this many samples per dataset.")
+    parser.add_argument("--edge_rounds", type=int, default=2, help="Rounds that sweep past the grid edges.")
+    parser.add_argument("--crop_3d", type=int, nargs=3, default=PIPELINE_CROP_3D, help="The crop of the volumes.")
+    parser.add_argument("--n_threads", type=int, default=POSTPROC_THREADS, help="Threads for the postprocessing.")
+    parser.add_argument("--slurm", action="store_true", help="Run the sweeps as Slurm job arrays of workers.")
+    parser.add_argument("--sbatch", type=str, default="", help="With --slurm: sbatch options, e.g. '-p gpu -G 1'.")
+    parser.add_argument("--workers", type=int, default=8, help="With --slurm: the workers to keep submitted.")
+    parser.add_argument("--threads", type=int, default=8, help="With --slurm: the CPU threads of a worker.")
+    parser.add_argument("--slots", type=int, default=2, help="With --slurm: the tasks a worker runs at once.")
+    parser.add_argument("--max_shards", type=int, default=8, help="With --slurm: split a sweep into this many tasks.")
+
+
+def add_sweep_arguments(parser):
+    parser.add_argument(
+        "-d", "--dataset_name", type=str, nargs="+", default=None, choices=sorted(VAL_SPLITS), metavar="DATASET",
+        help="Datasets to tune. Defaults to every dataset with a validation split (see common.VAL_SPLITS).",
+    )
+    parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT, help="The root the data lives in.")
+    parser.add_argument("-e", "--experiment_folder", type=str, default=None, help="The folder of the experiment.")
+    parser.add_argument("-m", "--model_type", type=str, default="hvit_t", choices=MODEL_TYPES)
+    parser.add_argument(
+        "--mode", type=str, nargs="+", default=list(MODES), choices=MODES, help="The segmentation modes to tune."
+    )
+    add_weight_arguments(parser)
+    parser.add_argument("--tuning_root", type=str, default=None, help="Where the sweeps are written and read from.")
+    parser.add_argument("--n_tuning_samples", type=int, default=None, help="Cap each sweep to this many samples.")
+    parser.add_argument(
+        "--tuning_stride", type=int, default=1,
+        help="Only score every this-th validation sample, so that a cap spreads over a sort order by cell type.",
+    )
+    parser.add_argument("--criterion", type=str, default=None, choices=sorted(CRITERION_ASCENDING))
+    parser.add_argument(
+        "--grid_override", type=str, default=None,
+        help="JSON object replacing the swept values of the named grid axes; the other axes keep their values.",
+    )
+    parser.add_argument(
+        "--grid_preset", type=str, default="default", choices=GRID_PRESETS,
+        help="The grid to sweep: 'default', or 'broad' (BROAD_GRIDS_2D and BROAD_GRIDS_3D).",
+    )
+    parser.add_argument(
+        "--params_file", type=str, default=None,
+        help="A JSON list of parameter dicts to sweep instead of the grid. The grid preset still sets the config.",
+    )
+    parser.add_argument("--subsample", type=int, default=None, help="Score this many samples, spread evenly.")
+    parser.add_argument(
+        "--prediction_cache", type=str, default=None,
+        help="Root of the cached decoder outputs of AIS. With all of them cached, AIS loads no model.",
+    )
+    parser.add_argument("--cache_only", action="store_true", help="Only fill --prediction_cache, do not sweep.")
+    parser.add_argument("--n_threads", type=int, default=POSTPROC_THREADS, help="Threads for the postprocessing.")
+    parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
+    parser.add_argument("--num_shards", type=int, default=1, help="Split the grid of a dataset across this many jobs.")
+    parser.add_argument("--shard_index", type=int, default=0, help="This job's slice of the grid, in [0, num_shards).")
+    parser.add_argument("--merge_shards", action="store_true", help="Merge the shards of a sharded sweep.")
+
+
+def add_worker_arguments(parser):
+    parser.add_argument("queue_dir", type=str, help="The queue of the search, '<experiment_folder>/queue'.")
+    parser.add_argument("--threads", type=int, default=8)
+    parser.add_argument("--slots", type=int, default=1, help="The tasks the worker runs at once.")
+    parser.add_argument("--models", nargs="+", default=None, help="Run only the tasks of these backbones.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True)
+    add_run_arguments(commands.add_parser("run", help="Search the best parameters over a set of datasets."))
+    add_sweep_arguments(commands.add_parser("sweep", help="Sweep one grid or list of combos per dataset."))
+    add_worker_arguments(commands.add_parser("worker", help="The Slurm worker of 'run --slurm'."))
+    args = parser.parse_args()
+    {"run": run_command, "sweep": sweep_command, "worker": worker_command}[args.command](args)
 
 
 if __name__ == "__main__":

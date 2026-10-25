@@ -794,7 +794,7 @@ def test_select_without_refinement_matches_the_plain_merge():
     segmenter._prediction = np.zeros((4, *shape), dtype="float32")
     segmenter._last_generation_stats = {}
 
-    segmentation = segmenter.select(proposals, score_threshold=0.6, max_overlap=0.15, min_size=1)
+    segmentation = segmenter.select(proposals, score_threshold=0.6, max_overlap=0.15, min_size=1, refinement=None)
     expected = merge_by_score(proposals[:2], shape, max_overlap=0.15, min_size=1)
     assert np.array_equal(segmentation, expected)
     # No refinement, so nothing needs the model and no statistics are recorded.
@@ -815,8 +815,8 @@ def test_select_filters_by_predicted_iou_and_a_zero_threshold_keeps_everything()
     segmenter._prediction = np.zeros((4, *shape), dtype="float32")
     segmenter._last_generation_stats = {}
 
-    filtered = segmenter.select(proposals, score_threshold=0.6, min_size=1)
-    unfiltered = segmenter.select(proposals, score_threshold=0.0, min_size=1)
+    filtered = segmenter.select(proposals, score_threshold=0.6, min_size=1, refinement=None)
+    unfiltered = segmenter.select(proposals, score_threshold=0.0, min_size=1, refinement=None)
 
     assert filtered[16, 16] != 0 and filtered[4, 4] == 0
     assert unfiltered[4, 4] != 0 and unfiltered[16, 16] != 0
@@ -1388,11 +1388,15 @@ def test_volume_generate_runs_the_refinement_end_to_end(monkeypatch):
     assert [entry[0] for entry in propagator.pushed] == ["reset", "box", "points", "box", "points"]
 
 
-def test_volume_refinement_is_off_by_default():
-    # The pipeline default stays None in both dimensions; the mode is an explicit opt-in.
-    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
-    assert DEFAULT_PROMPT_GENERATION["refinement"] is None
+def test_volume_refinement_is_on_for_hvit_b_only():
+    # 'default' resolves to the table's mode: boxes in 2d, and points+boxes for hvit_b volumes only.
+    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION, default_prompt_generation
+    assert DEFAULT_PROMPT_GENERATION["refinement"] == "default"
     assert DEFAULT_PROMPT_GENERATION["refinement_kwargs"] is None
+    for backbone in ("hvit_t", "hvit_s", "hvit_b", "hvit_l"):
+        assert default_prompt_generation(f"{backbone}_cells", is_volume=False)["refinement"] == "boxes"
+        expected = "points+boxes" if backbone == "hvit_b" else None
+        assert default_prompt_generation(f"{backbone}_cells", is_volume=True)["refinement"] == expected
 
 
 def test_volume_refinement_survives_an_anchor_slice_that_keeps_nothing(monkeypatch):
