@@ -23,7 +23,7 @@ from .util import DEFAULT_MODEL
 # Per-backbone defaults from the 2026-10 v6 global parameter search: the combination with the best mean relative
 # score over the in-domain validation data.
 # - 'sparse': '2d' light microscopy and EM images, '3d' sparse volumes on 32-slice crops, ranked by mSA.
-# - 'dense': neurite EM volumes, ranked by the CREMI score. Only 6 datasets, so these winners are less stable.
+# - 'dense': neurite EM volumes, ranked by the CREMI score.
 DEFAULT_POSTPROCESSING = {
     "hvit_t": {
         "sparse": {
@@ -36,7 +36,7 @@ DEFAULT_POSTPROCESSING = {
                 "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
             },
         },
-        "dense": {"beta": 0.4, "density_threshold": 2.0, "sigma": 1.0, "n_iter": 50, "dt": 2.0},
+        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_s": {
         "sparse": {
@@ -49,7 +49,7 @@ DEFAULT_POSTPROCESSING = {
                 "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.65,
             },
         },
-        "dense": {"beta": 0.3, "density_threshold": 3.0, "sigma": 1.0, "n_iter": 50, "dt": 2.0},
+        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_b": {
         "sparse": {
@@ -62,7 +62,7 @@ DEFAULT_POSTPROCESSING = {
                 "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
             },
         },
-        "dense": {"beta": 0.3, "density_threshold": 2.0, "sigma": 2.0, "n_iter": 50, "dt": 1.0},
+        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
     "hvit_l": {
         "sparse": {

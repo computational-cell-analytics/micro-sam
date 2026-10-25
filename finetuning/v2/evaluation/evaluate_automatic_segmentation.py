@@ -31,6 +31,29 @@ from common import (
     read_tuned_params, resolve_checkpoint_identity,
 )
 
+# The temporary embeddings of APG go to the job's node-local TMPDIR, as in `parameter_search.py`.
+# In the micro-sam cache of the home directory, the leftovers of killed jobs fill the quota.
+if os.environ.get("TMPDIR"):
+    import uuid
+    import atexit
+    import shutil
+    from pathlib import Path
+    import micro_sam.util
+    import micro_sam.v2.util
+    import micro_sam.v2.instance_segmentation
+    import micro_sam.v2.automatic_prompt_generation
+
+    def _make_temp_embedding_path():
+        parent = Path(os.environ["TMPDIR"], "micro_sam_tmp_embeddings")
+        parent.mkdir(parents=True, exist_ok=True)
+        path = str(parent / f"{uuid.uuid4().hex}.zarr")
+        atexit.register(shutil.rmtree, path, ignore_errors=True)
+        return path
+
+    for _module in (micro_sam.util, micro_sam.v2.util, micro_sam.v2.instance_segmentation,
+                    micro_sam.v2.automatic_prompt_generation):
+        _module.make_temp_embedding_path = _make_temp_embedding_path
+
 
 def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, spacing=None, devices=None):
     """Segment one sample with the tuned parameters of a mode."""
@@ -47,6 +70,7 @@ def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, sp
 def run_evaluation(
     model, mode, dataset_name, data_root, experiment_folder, model_type, params, device, limit,
     crop_shape=None, checkpoint_id=None, devices=None, tuned=None, result_tag=None, config_name=None, sample_index=None,
+    shard=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -73,6 +97,7 @@ def run_evaluation(
             parameter overrides does not collide with the plain evaluation.
         config_name: The name of the configuration the overrides came from, stored in the results.
         sample_index: The index of the only sample to score, for one array task. See `common.evaluate_samples`.
+        shard: (shard_index, n_shards) to score one stride of the samples, for one array task.
 
     Returns:
         The results as a DataFrame, or None while the rows of other samples are missing.
@@ -108,7 +133,7 @@ def run_evaluation(
             model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing, devices=devices,
         ),
         dataset_name, data_root, save_path, desc=f"{mode}-{model_type}", limit=limit, crop_shape=crop_shape,
-        sample_index=sample_index, extra_columns=extra_columns,
+        sample_index=sample_index, extra_columns=extra_columns, shard=shard,
     )
 
 
@@ -129,6 +154,8 @@ def main():
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate with the library defaults.")
     parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     parser.add_argument("--sample_index", type=int, default=None, help="Score only this sample, as one array task.")
+    parser.add_argument("--n_shards", type=int, default=None, help="Split the samples over this many array tasks.")
+    parser.add_argument("--shard_index", type=int, default=None, help="The shard this array task scores.")
     parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d crop (Z Y X).")
     parser.add_argument(
@@ -200,6 +227,7 @@ def main():
         params, device, crop_shape=crop_shape, checkpoint_id=checkpoint_id,
         devices=args.devices or None, tuned=tuned, result_tag=result_tag, config_name=config_name,
         limit=args.n_samples, sample_index=args.sample_index,
+        shard=None if args.n_shards is None else (args.shard_index, args.n_shards),
     )
 
 

@@ -2841,7 +2841,7 @@ def sample_row_path(save_path: str, sample_index: int) -> str:
 
 def evaluate_samples(
     segment_fn, dataset_name, data_root, save_path, desc, limit=None, crop_shape=None, sample_index=None,
-    extra_columns=None, normalize=True,
+    extra_columns=None, normalize=True, shard=None,
 ):
     """Segment and score the test samples of a dataset, and write the result CSV.
 
@@ -2860,6 +2860,8 @@ def evaluate_samples(
         sample_index: The index of the only sample to score.
         extra_columns: The columns to add to the result, such as the parameters of the run.
         normalize: Percentile-normalize the image, 2d only. See `load_evaluation_sample_2d`.
+        shard: (shard_index, n_shards) to score only the samples with 'index % n_shards == shard_index', for one
+            array task. The rows are stored like with 'sample_index', and samples with a stored row are skipped.
 
     Returns:
         The results as a DataFrame, or None while the rows of other samples are missing.
@@ -2869,9 +2871,26 @@ def evaluate_samples(
 
     ndim = 3 if dataset_name in DATASETS_3D else 2
     total = n_samples(dataset_name, data_root)
-    samples = load_data(dataset_name, data_root, ndim, crop_shape=crop_shape, normalize=normalize)
+    shard_ids = None
+    if shard is not None:
+        # Read only the samples of this shard that have no stored row yet.
+        shard_ids = [
+            index for index in range(shard[0], total, shard[1])
+            if not os.path.exists(sample_row_path(save_path, index))
+        ]
+    samples = load_data(
+        dataset_name, data_root, ndim, crop_shape=crop_shape, normalize=normalize,
+        sample_ids=None if shard_ids is None else set(shard_ids),
+    )
     first = 0
-    if sample_index is not None:
+    per_row = sample_index is not None or shard is not None
+    if sample_index is not None and shard is not None:
+        raise ValueError("Got both 'sample_index' and 'shard'. Pass only one of them.")
+    if shard is not None:
+        if limit is not None:
+            raise ValueError("Got both 'shard' and 'limit'. Pass only one of them.")
+        samples, total = zip(shard_ids, samples), len(shard_ids)
+    elif sample_index is not None:
         if limit is not None:
             raise ValueError("Got both 'sample_index' and 'limit'. Pass only one of them.")
         if os.path.exists(sample_row_path(save_path, sample_index)):
@@ -2881,10 +2900,12 @@ def evaluate_samples(
     elif limit is not None:
         samples, total = islice(samples, limit), min(total, limit)
 
+    if shard is None:
+        samples = enumerate(samples, start=first)
     all_gt, all_seg, misses = [], [], []
-    for index, (raw, labels, valid_roi) in enumerate(tqdm(samples, total=total, desc=desc), start=first):
+    for index, (raw, labels, valid_roi) in tqdm(samples, total=total, desc=desc):
         if labels.max() == 0:  # The sample has no ground truth to score.
-            if sample_index is not None:
+            if per_row:
                 row_path = sample_row_path(save_path, index)
                 os.makedirs(os.path.dirname(row_path), exist_ok=True)
                 pd.DataFrame({"skipped": [True]}).to_csv(f"{row_path}.{os.getpid()}.tmp", index=False)
@@ -2900,7 +2921,7 @@ def evaluate_samples(
         else:
             misses.append(genuine_misses(labels, seg))
 
-        if sample_index is not None:
+        if per_row:
             row_path = sample_row_path(save_path, index)
             os.makedirs(os.path.dirname(row_path), exist_ok=True)
             # Rename a complete file into place, since the task that merges the rows can read it at any time.
@@ -2914,7 +2935,7 @@ def evaluate_samples(
             all_gt.append(labels)
             all_seg.append(seg)
 
-    if sample_index is None:
+    if not per_row:
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
         results = run_dataset_evaluation(all_gt, all_seg, dataset_name, save_path)
         if misses:
@@ -2925,7 +2946,8 @@ def evaluate_samples(
         row_paths = [sample_row_path(save_path, index) for index in range(n_samples(dataset_name, data_root))]
         missing = [path for path in row_paths if not os.path.exists(path)]
         if missing:
-            print(f"Scored sample {sample_index}. {len(missing)} of {len(row_paths)} rows are still missing.")
+            scored = f"sample {sample_index}" if shard is None else f"shard {shard[0]} of {shard[1]}"
+            print(f"Scored {scored}. {len(missing)} of {len(row_paths)} rows are still missing.")
             return None
         frames = [pd.read_csv(path) for path in row_paths]
         # Refuse rows with other metrics, since a metric must cover every sample of the mean.
