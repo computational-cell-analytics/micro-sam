@@ -165,6 +165,22 @@ def test_update_lineage_seeds_daughters(make_napari_viewer_proxy):
     viewer.close()
 
 
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_commit_layer_follows_last_tracking(make_napari_viewer_proxy):
+    viewer = make_napari_viewer_proxy()
+    widget = AnnotatorTracking(viewer)
+    commit = widget._widgets["commit"]
+    assert commit.layer.value == "current_object"
+
+    widget._widgets["autosegment"].segmentation_finished.emit()
+    assert commit.layer.value == "auto_segmentation"
+
+    widget._widgets["interactive"].segment_requested.emit()
+    assert commit.layer.value == "current_object"
+    viewer.close()
+
+
 def test_tracking_rejects_sam1_models():
     with pytest.raises(ValueError, match="only supports micro-sam2/SAM2"):
         _validate_tracking_model_type("vit_b_lm")
