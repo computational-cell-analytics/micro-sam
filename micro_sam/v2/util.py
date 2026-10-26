@@ -251,6 +251,14 @@ def _backbone_of(model_type):
     return backbone if backbone in SUPPORTED_MODELS else FALLBACK_BACKBONE
 
 
+def parameter_family(model_type):
+    """The family whose default parameters a model uses, e.g. 'em_mito' for 'hvit_s_em_mito'.
+
+    A backbone or a cells model, e.g. 'hvit_t' or 'hvit_t_cells', uses the 'cells' defaults.
+    """
+    return str(model_type)[7:] or "cells"
+
+
 def _free_vram_gib(device):
     """The free VRAM of a CUDA device in GiB, or None for a non-CUDA device."""
     device = torch.device(device)

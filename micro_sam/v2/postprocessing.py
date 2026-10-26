@@ -18,89 +18,119 @@ from tqdm import tqdm
 from bioimage_cpp.flow import compute_flow_density
 from bioimage_cpp.segmentation import label, watershed
 
-from .util import DEFAULT_MODEL
+from .util import DEFAULT_MODEL, parameter_family
 
-# Per-backbone defaults from the 2026-10 v6 global parameter search: the combination with the best mean relative
-# score over the in-domain validation data.
-# - 'sparse': '2d' light microscopy and EM images, '3d' sparse volumes on 32-slice crops, ranked by mSA.
-# - 'dense': neurite EM volumes, ranked by the CREMI score.
+# Defaults per model family and backbone from the 2026-10 parameter searches, see `default_postprocessing`.
+# 'dense' is for neurite EM volumes, so only the cells models have it.
 DEFAULT_POSTPROCESSING = {
-    "hvit_t": {
-        "sparse": {
-            "2d": {
-                "foreground_threshold": 0.5, "density_threshold": 30.0, "min_size": 50,
-                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
+    "cells": {
+        "hvit_t": {
+            "sparse": {
+                "2d": {
+                    "foreground_threshold": 0.5, "density_threshold": 30.0, "min_size": 50,
+                    "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
+                },
+                "3d": {
+                    "foreground_threshold": 0.5, "density_threshold": 80.0, "min_size": 500,
+                    "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
+                },
             },
-            "3d": {
-                "foreground_threshold": 0.5, "density_threshold": 80.0, "min_size": 500,
-                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
-            },
+            "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
         },
-        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+        "hvit_s": {
+            "sparse": {
+                "2d": {
+                    "foreground_threshold": 0.6, "density_threshold": 20.0, "min_size": 25,
+                    "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.75,
+                },
+                "3d": {
+                    "foreground_threshold": 0.5, "density_threshold": 100.0, "min_size": 200,
+                    "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.65,
+                },
+            },
+            "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+        },
+        "hvit_b": {
+            "sparse": {
+                "2d": {
+                    "foreground_threshold": 0.4, "density_threshold": 60.0, "min_size": 50,
+                    "sigma": 0.15, "n_iter": 100, "dt": 1.0, "foreground_weight": 0.65,
+                },
+                "3d": {
+                    "foreground_threshold": 0.5, "density_threshold": 80.0, "min_size": 200,
+                    "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
+                },
+            },
+            "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+        },
+        "hvit_l": {
+            "sparse": {
+                "2d": {
+                    "foreground_threshold": 0.5, "density_threshold": 40.0, "min_size": 25,
+                    "sigma": 0.15, "n_iter": 800, "dt": 2.0, "foreground_weight": 0.9,
+                },
+                "3d": {
+                    "foreground_threshold": 0.5, "density_threshold": 80.0, "min_size": 500,
+                    "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
+                },
+            },
+            "dense": {"beta": 0.4, "density_threshold": 3.0, "sigma": 1.0, "n_iter": 100, "dt": 0.5},
+        },
     },
-    "hvit_s": {
-        "sparse": {
-            "2d": {
-                "foreground_threshold": 0.6, "density_threshold": 20.0, "min_size": 25,
-                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.75,
-            },
-            "3d": {
-                "foreground_threshold": 0.5, "density_threshold": 100.0, "min_size": 200,
-                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.65,
+    "em_mito": {
+        "hvit_s": {
+            "sparse": {
+                "2d": {
+                    "foreground_threshold": 0.3, "density_threshold": 60.0, "min_size": 500,
+                    "sigma": 1.0, "n_iter": 100, "dt": 2.0, "foreground_weight": 0.5,
+                },
+                "3d": {
+                    "foreground_threshold": 0.3, "density_threshold": 80.0, "min_size": 1000,
+                    "sigma": 0.09, "n_iter": 50, "dt": 0.5, "foreground_weight": 0.0,
+                },
             },
         },
-        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
     },
-    "hvit_b": {
-        "sparse": {
-            "2d": {
-                "foreground_threshold": 0.4, "density_threshold": 60.0, "min_size": 50,
-                "sigma": 0.15, "n_iter": 100, "dt": 1.0, "foreground_weight": 0.65,
-            },
-            "3d": {
-                "foreground_threshold": 0.5, "density_threshold": 80.0, "min_size": 200,
-                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
-            },
-        },
-        "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
-    },
-    "hvit_l": {
-        "sparse": {
-            "2d": {
-                "foreground_threshold": 0.5, "density_threshold": 40.0, "min_size": 25,
-                "sigma": 0.15, "n_iter": 800, "dt": 2.0, "foreground_weight": 0.9,
-            },
-            "3d": {
-                "foreground_threshold": 0.5, "density_threshold": 80.0, "min_size": 500,
-                "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
+    "em_nuclei": {
+        "hvit_s": {
+            "sparse": {
+                "2d": {
+                    "foreground_threshold": 0.4, "density_threshold": 20.0, "min_size": 200,
+                    "sigma": 1.0, "n_iter": 50, "dt": 1.0, "foreground_weight": 1.0,
+                },
+                "3d": {
+                    "foreground_threshold": 0.3, "density_threshold": 80.0, "min_size": 2000,
+                    "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.65,
+                },
             },
         },
-        "dense": {"beta": 0.4, "density_threshold": 3.0, "sigma": 1.0, "n_iter": 100, "dt": 0.5},
     },
 }
 
 
 def default_postprocessing(model_type: str = DEFAULT_MODEL, mode: str = "sparse", is_volume: bool = False) -> dict:
-    """The default postprocessing parameters for one model type, mode and dimensionality.
+    """The default postprocessing parameters for one model, mode and dimensionality.
 
     Args:
-        model_type: The SAM2 backbone, e.g. 'hvit_t', or a finetuned model built on one, e.g.
-            'hvit_t_cells' (only the backbone prefix is used to look up the table). Must be one of the
-            4 registry backbones.
+        model_type: The model, e.g. 'hvit_t_cells' or 'hvit_s_em_mito', or a SAM2 backbone, e.g. 'hvit_t', which
+            uses the 'cells' defaults. Its family and backbone select the table, see `parameter_family`.
         mode: 'sparse' (`flow_instance_segmentation`) or 'dense' (`run_multicut`).
         is_volume: Whether to use the '3d' table of the 'sparse' mode instead of the '2d' one. The 'dense'
             mode has one table for both.
 
     Returns:
-        The default parameter dict for that model type, mode and dimensionality.
+        The default parameter dict for that model, mode and dimensionality.
     """
-    backbone = model_type[:6]
-    if backbone not in DEFAULT_POSTPROCESSING:
+    family, backbone = parameter_family(model_type), model_type[:6]
+    params = DEFAULT_POSTPROCESSING.get(family, {}).get(backbone, {}).get(mode)
+    if params is None:
         raise ValueError(
-            f"No default postprocessing parameters for model type '{model_type}'. "
-            f"Choose one built on a backbone in {sorted(DEFAULT_POSTPROCESSING)}."
+            f"No default {mode} postprocessing parameters for model type '{model_type}'. They exist for "
+            + ", ".join(
+                f"{family_name}: {sorted(b for b, modes in table.items() if mode in modes)}"
+                for family_name, table in DEFAULT_POSTPROCESSING.items()
+            ) + "."
         )
-    params = DEFAULT_POSTPROCESSING[backbone][mode]
     return params["3d" if is_volume else "2d"] if mode == "sparse" else params
 
 

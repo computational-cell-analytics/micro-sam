@@ -49,7 +49,7 @@ from .prompt_based_segmentation import (
 )
 from .util import (
     DEFAULT_MODEL, autocast, configure_image_predictor, encode_image, get_sam2_image_predictor,
-    precompute_image_embeddings, set_precomputed, _load_list_datasets,
+    parameter_family, precompute_image_embeddings, set_precomputed, _load_list_datasets,
 )
 from .instance_segmentation import (
     UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices, _set_image_predictor_from_3d_embeddings,
@@ -84,76 +84,111 @@ STABILITY_SCORE_OFFSET = 1.0
 # The multicut boundary bias `TiledAutomaticPromptGenerator` stitches tiles/blocks with by default.
 DEFAULT_STITCHING_BETA = 0.5
 
-# Per-backbone defaults from the 2026-10 v6 global parameter search, with the best mean relative mSA over the
-# in-domain validation data. 2d and 3d are tuned separately, since a volume prompts once per object.
-DEFAULT_PROMPT_GENERATION_2D = {
-    "hvit_t": {
-        "foreground_threshold": 0.9, "candidate_threshold": 2.0, "n_iter": 50, "sigma": 1.0,
-        "min_candidate_size": 4, "score_threshold": 0.4, "max_overlap": 0.15, "min_size": 25,
-        "refinement": "boxes",
+# Defaults per model family and backbone from the 2026-10 parameter searches, see `default_prompt_generation`.
+DEFAULT_PROMPT_GENERATION_PARAMETERS = {
+    "cells": {
+        "hvit_t": {
+            "2d": {
+                "foreground_threshold": 0.9, "candidate_threshold": 2.0, "n_iter": 50, "sigma": 1.0,
+                "min_candidate_size": 4, "score_threshold": 0.4, "max_overlap": 0.15, "min_size": 25,
+                "refinement": "boxes",
+            },
+            "3d": {
+                "foreground_threshold": 0.8, "n_iter": 50, "candidate_threshold": (1.5, 10.0), "sigma": 1.0,
+                "min_candidate_size": 1, "score_threshold": 0.7, "max_overlap": 0.3, "min_size": 25,
+                "refinement": None,
+            },
+        },
+        "hvit_s": {
+            "2d": {
+                "foreground_threshold": 0.7, "candidate_threshold": 3.0, "n_iter": 50, "sigma": 1.0,
+                "min_candidate_size": 4, "score_threshold": 0.4, "max_overlap": 0.3, "min_size": 25,
+                "refinement": "boxes",
+            },
+            "3d": {
+                "foreground_threshold": 0.8, "n_iter": 50, "candidate_threshold": (0.5, 5.0), "sigma": 1.0,
+                "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 25,
+                "refinement": None,
+            },
+        },
+        "hvit_b": {
+            "2d": {
+                "foreground_threshold": 0.6, "candidate_threshold": 2.0, "n_iter": 50, "sigma": 1.0,
+                "min_candidate_size": 4, "score_threshold": 0.5, "max_overlap": 0.15, "min_size": 25,
+                "refinement": "boxes",
+            },
+            "3d": {
+                "foreground_threshold": 0.7, "n_iter": 50, "candidate_threshold": (0.5, 5.0), "sigma": 1.0,
+                "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 400,
+                "refinement": "points+boxes",
+            },
+        },
+        "hvit_l": {
+            "2d": {
+                "foreground_threshold": 0.7, "candidate_threshold": 2.0, "n_iter": 50, "sigma": 1.0,
+                "min_candidate_size": 4, "score_threshold": 0.5, "max_overlap": 0.3, "min_size": 15,
+                "refinement": "boxes",
+            },
+            "3d": {
+                "foreground_threshold": 0.9, "n_iter": 50, "candidate_threshold": (1.0, 5.0), "sigma": 0.5,
+                "min_candidate_size": 1, "score_threshold": 0.7, "max_overlap": 0.3, "min_size": 400,
+                "refinement": None,
+            },
+        },
     },
-    "hvit_s": {
-        "foreground_threshold": 0.7, "candidate_threshold": 3.0, "n_iter": 50, "sigma": 1.0,
-        "min_candidate_size": 4, "score_threshold": 0.4, "max_overlap": 0.3, "min_size": 25,
-        "refinement": "boxes",
+    "em_mito": {
+        "hvit_s": {
+            "2d": {
+                "foreground_threshold": 0.7, "candidate_threshold": 2.0, "n_iter": 50, "sigma": 0.5,
+                "min_candidate_size": 4, "score_threshold": 0.2, "max_overlap": 0.1, "min_size": 200,
+                "refinement": None,
+            },
+            "3d": {
+                "foreground_threshold": 0.8, "n_iter": 50, "candidate_threshold": (2.0, 10.0), "sigma": 1.0,
+                "min_candidate_size": 1, "score_threshold": 0.7, "max_overlap": 0.15, "min_size": 25,
+                "refinement": None,
+            },
+        },
     },
-    "hvit_b": {
-        "foreground_threshold": 0.6, "candidate_threshold": 2.0, "n_iter": 50, "sigma": 1.0,
-        "min_candidate_size": 4, "score_threshold": 0.5, "max_overlap": 0.15, "min_size": 25,
-        "refinement": "boxes",
-    },
-    "hvit_l": {
-        "foreground_threshold": 0.7, "candidate_threshold": 2.0, "n_iter": 50, "sigma": 1.0,
-        "min_candidate_size": 4, "score_threshold": 0.5, "max_overlap": 0.3, "min_size": 15,
-        "refinement": "boxes",
-    },
-}
-
-DEFAULT_PROMPT_GENERATION_3D = {
-    "hvit_t": {
-        "foreground_threshold": 0.8, "n_iter": 50, "candidate_threshold": (1.5, 10.0), "sigma": 1.0,
-        "min_candidate_size": 1, "score_threshold": 0.7, "max_overlap": 0.3, "min_size": 25,
-        "refinement": None,
-    },
-    "hvit_s": {
-        "foreground_threshold": 0.8, "n_iter": 50, "candidate_threshold": (0.5, 5.0), "sigma": 1.0,
-        "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 25,
-        "refinement": None,
-    },
-    "hvit_b": {
-        "foreground_threshold": 0.7, "n_iter": 50, "candidate_threshold": (0.5, 5.0), "sigma": 1.0,
-        "min_candidate_size": 4, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 400,
-        "refinement": "points+boxes",
-    },
-    "hvit_l": {
-        "foreground_threshold": 0.9, "n_iter": 50, "candidate_threshold": (1.0, 5.0), "sigma": 0.5,
-        "min_candidate_size": 1, "score_threshold": 0.7, "max_overlap": 0.3, "min_size": 400,
-        "refinement": None,
+    "em_nuclei": {
+        "hvit_s": {
+            "2d": {
+                "foreground_threshold": 0.7, "candidate_threshold": 1.0, "n_iter": 50, "sigma": 1.0,
+                "min_candidate_size": 4, "score_threshold": 0.7, "max_overlap": 0.5, "min_size": 25,
+                "refinement": "boxes",
+            },
+            "3d": {
+                "foreground_threshold": 0.8, "n_iter": 50, "candidate_threshold": (0.5, 5.0), "sigma": 1.0,
+                "min_candidate_size": 1, "score_threshold": 0.6, "max_overlap": 0.3, "min_size": 100,
+                "refinement": "points+boxes",
+            },
+        },
     },
 }
 
 
 def default_prompt_generation(model_type: str = DEFAULT_MODEL, is_volume: bool = False) -> dict:
-    """The default APG parameters for one model type and dimensionality.
+    """The default APG parameters for one model and dimensionality.
 
     Args:
-        model_type: The SAM2 backbone, e.g. 'hvit_t', or a finetuned model built on one (only the
-            backbone prefix is used to look up the table). Must be one of the 4 registry backbones.
+        model_type: The model, e.g. 'hvit_t_cells' or 'hvit_s_em_mito', or a SAM2 backbone, e.g. 'hvit_t', which
+            uses the 'cells' defaults. Its family and backbone select the table, see `parameter_family`.
         is_volume: Whether to use the 3D table (`derive_volume_prompts`) or the 2D one
             (`derive_point_prompts`). A volume prompts once per object rather than once per slice, so
             the two are swept and tuned independently.
 
     Returns:
-        The default parameter dict for that model type and dimensionality.
+        The default parameter dict for that model and dimensionality.
     """
-    table = DEFAULT_PROMPT_GENERATION_3D if is_volume else DEFAULT_PROMPT_GENERATION_2D
-    backbone = model_type[:6]
-    if backbone not in table:
+    family, backbone = parameter_family(model_type), model_type[:6]
+    params = DEFAULT_PROMPT_GENERATION_PARAMETERS.get(family, {}).get(backbone)
+    if params is None:
         raise ValueError(
-            f"No default prompt generation parameters for model type '{model_type}'. "
-            f"Choose one built on a backbone in {sorted(table)}."
+            f"No default prompt generation parameters for model type '{model_type}'. They exist for "
+            + ", ".join(f"{name}: {sorted(table)}" for name, table in DEFAULT_PROMPT_GENERATION_PARAMETERS.items())
+            + "."
         )
-    return table[backbone]
+    return params["3d" if is_volume else "2d"]
 
 
 # Enough jobs per device that none idles at the end, and enough passes per job to pay for its state.

@@ -4074,8 +4074,15 @@ class AutoSegmentWidget(_WidgetBase):
         Returns:
             The mode names, in dropdown order. The first is the default.
         """
+        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
+        from micro_sam.v2.util import DEFAULT_MODEL, parameter_family
+
+        # Only a model with dense defaults segments neurites, e.g. not the EM organelle models.
+        model_type = getattr(self, "model_type", None) or DEFAULT_MODEL
+        has_dense = "dense" in DEFAULT_POSTPROCESSING.get(parameter_family(model_type), {}).get(model_type[:6], {})
+        modes = self.MODES if has_dense else tuple(mode for mode in self.MODES if mode != "dense")
         if not self._apg_is_available():
-            return tuple(mode for mode in self.MODES if mode != "apg")
+            return tuple(mode for mode in modes if mode != "apg")
 
         # Tiled APG can take hours on CPU. Prefer the direct decoder post-processing there,
         # while retaining APG as an explicit choice for 2d images. Before model loading, use
@@ -4084,8 +4091,8 @@ class AutoSegmentWidget(_WidgetBase):
         state = AnnotatorState()
         device = util.get_device() if state.decoder is None else next(state.decoder.parameters()).device
         if util.device_type(device) not in _APG_ACCELERATORS:
-            return ("sparse", *(mode for mode in self.MODES if mode != "sparse"))
-        return self.MODES
+            return ("sparse", *(mode for mode in modes if mode != "sparse"))
+        return modes
 
     def _default_mode(self):
         return self._available_modes()[0]
@@ -4153,6 +4160,7 @@ class AutoSegmentWidget(_WidgetBase):
             return
         if model_type is not None:
             self.model_type = model_type
+            modes = self._available_modes()
         self.with_decoder = with_decoder
         self._update_run_button()
 

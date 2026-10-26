@@ -831,7 +831,10 @@ def get_decoder(model_type, checkpoint=None, device=None, encoder=None):
             f"Automatic segmentation with SAM2 requires a finetuned model with a registered decoder "
             f"or a decoder checkpoint. '{model_type}' provides neither."
         )
-    return get_unisam2_model(decoder_source, device=device, encoder=encoder, encoder_model_type=model_type[:6])
+    decoder = get_unisam2_model(decoder_source, device=device, encoder=encoder, encoder_model_type=model_type[:6])
+    # The defaults are looked up by the family of the full name.
+    decoder.model_type = model_type
+    return decoder
 
 
 def _resize_spatial(x: torch.Tensor, size: tuple) -> torch.Tensor:

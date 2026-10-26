@@ -202,6 +202,26 @@ def test_auto_tracking_default_mode(qtbot, monkeypatch, device, expected):
     assert widget.mode == other
 
 
+def test_auto_tracking_uses_the_defaults_of_the_model_family(qtbot, monkeypatch):
+    # An EM organelle model has no dense defaults, so the dense mode is not offered for it.
+    from micro_sam.sam_annotator import _widgets
+    from micro_sam.v2.postprocessing import default_postprocessing
+    monkeypatch.setattr(_widgets.util, "get_device", lambda requested=None: requested or "cpu")
+
+    widget = AutoTrackWidget(viewer=None, with_decoder=True, volumetric=True)
+    qtbot.addWidget(widget)
+    widget._reset_segmentation_mode(True, model_type="hvit_s_em_mito")
+
+    choices = [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
+    assert choices == ["sparse", "apg"]
+    assert widget.min_object_size_param.value() == default_postprocessing("hvit_s_em_mito", "sparse")["min_size"]
+
+    widget._reset_segmentation_mode(True, model_type="hvit_s_cells")
+    choices = [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
+    assert choices == ["sparse", "apg", "dense"]
+    assert widget.min_object_size_param.value() == default_postprocessing("hvit_s_cells", "sparse")["min_size"]
+
+
 @pytest.mark.parametrize("device", ["cpu", "cuda", "mps"])
 def test_auto_tracking_does_not_offer_amg(qtbot, monkeypatch, device):
     # AMG is gone from the annotator: without a decoder the modes stay the same and the run button
