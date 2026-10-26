@@ -5,6 +5,7 @@ import json
 import warnings
 from glob import glob
 from pathlib import Path
+from functools import lru_cache
 from itertools import islice
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -322,7 +323,12 @@ TNBC_MITO_EXCLUDED_TEST_IMAGES = ("R20_72_G01_2913_03.tif", "R20_72_G01_2913_05.
 # The tuning crops are not adjacent in z.
 U2OS_FIBSEM_NUCLEUS_ROOT = "u2os_fibsem_nucleus"
 U2OS_FIBSEM_NUCLEUS_TUNING_CROPS = ("05", "11", "17")
-DATASETS_2D_EM_NUCLEUS = ["u2os_fibsem_nucleus"]
+# Mock 2d slices of the in-domain 3d nucleus sets, see 'parameter_search.py prepare'.
+EM_NUCLEUS_MOCK_2D_ROOT = "em_nucleus_mock_2d"
+DATASETS_2D_EM_NUCLEUS_MOCK = [
+    f"{name}_2d" for name in ("cellmap_nucleus", "fafb_nuclei", "microns_nuclei", "platynereis_nuclei")
+]
+DATASETS_2D_EM_NUCLEUS = ["u2os_fibsem_nucleus"] + DATASETS_2D_EM_NUCLEUS_MOCK
 DATASETS_2D_EM = ["astih", "tumor_spheroid"] + DATASETS_2D_EM_MITO + DATASETS_2D_EM_NUCLEUS
 
 DATASETS_2D = DATASETS_2D_LM + DATASETS_HP + DATASETS_2D_EM
@@ -334,6 +340,7 @@ GT_MIN_SIZE_2D = {
     "deepbacs_label_free": 50, "deepbacs_fluorescence": 50, "dynamicnuclearnet": 50, "tissuenet": 10,
     "u20s": 10, "vicar": 25, "yeaz": 10, "probtem": 25, "tnbc_mito": 25, "elmi_mito": 25, "lewy_mito": 25,
     "perez_mito": 25, "cardiomyocyte_tem_mito": 25, "u2os_fibsem_nucleus": 25,
+    **{name: 25 for name in DATASETS_2D_EM_NUCLEUS_MOCK},
 }
 
 # Light microscopy, 3d, grouped as the 2d datasets. nis3d is the Drosophila pair the loader trains on. Of MorphoNet
@@ -1123,6 +1130,11 @@ def _get_2d_data_paths(
             path for path in tiles if (os.path.basename(path).rsplit("_tile", 1)[0] in tuning) == (split != "test")
         ]
         return sorted(tiles), sorted(tiles), "raw", "labels"
+
+    if dataset_name in DATASETS_2D_EM_NUCLEUS_MOCK:
+        prefix = "test" if split == "test" else "val"
+        paths = sorted(glob(os.path.join(p, EM_NUCLEUS_MOCK_2D_ROOT, dataset_name, f"{prefix}_*.h5")))
+        return paths, paths, "raw", "labels"
 
     if dataset_name == "u2os_fibsem_nucleus":
         paths = sorted(glob(os.path.join(p, U2OS_FIBSEM_NUCLEUS_ROOT, "*.h5")))
@@ -2194,8 +2206,8 @@ def load_volume(
         region = _read_window(label_source.shape, roi, z_range, label_source.shape)
         if any(start < r.start or start >= r.stop for start, r in zip(crop_start, region)):
             raise ValueError(
-                f"The pinned crop {crop_start} of '{dataset_name}' starts outside its test region. "
-                "Fix its start in eval_crops_3d.json."
+                f"The pinned crop {crop_start} of '{dataset_name}' starts outside its {split} region. "
+                "Fix its start in eval_crops_3d.json or tuning_crops.json."
             )
         window = tuple(
             slice(start, min(start + size, r.stop)) for start, size, r in zip(crop_start, crop_shape, region)
@@ -2273,6 +2285,26 @@ def get_joint_checkpoint(model_type: str, checkpoint: str = "best") -> str:
     if not path or not os.path.exists(path):
         raise FileNotFoundError(f"There is no joint '{checkpoint}' checkpoint for '{model_type}' under '{root}'.")
     return path
+
+
+@lru_cache
+def registry_weight_paths(model_name: str) -> Tuple[str, str]:
+    """Return the interactive and the decoder weight files of a registry model, e.g. 'hvit_s_em_mito'.
+
+    The files are downloaded into the micro-sam model cache if they are not there yet. Cached, since the
+    fetch verifies the hash of each file, and a submission asks for the same files once per task.
+    """
+    from micro_sam.v2.util import models
+
+    registry = models()
+    return registry.fetch(model_name), registry.fetch(f"{model_name}_decoder")
+
+
+def registered_model_types(family: str) -> List[str]:
+    """Return the model types that have a registry model with a decoder for a family, e.g. 'em_mito'."""
+    from micro_sam.v2.util import has_registered_decoder
+
+    return [model_type for model_type in MODEL_TYPES if has_registered_decoder(f"{model_type}_{family}")]
 
 
 def _save_atomic(obj, path: str) -> None:
@@ -2565,15 +2597,16 @@ def build_apg_segmenter(
     else:
         export_kwargs = {} if export_root is None else {"export_root": export_root}
         interactive_path, exported_decoder = export_joint_checkpoint(
-            model_type, joint_checkpoint, source_checksum=joint_checksum, **export_kwargs
+            model_type[:6], joint_checkpoint, source_checksum=joint_checksum, **export_kwargs
         )
     model = get_sam2_model(
-        model_type=model_type, device=device, checkpoint_path=interactive_path,
+        model_type=model_type[:6], device=device, checkpoint_path=interactive_path,
         **({"input_type": "videos"} if ndim == 3 else {}),
     )
     decoder = load_unisam2_model(
-        decoder_path or exported_decoder, device, encoder=model.image_encoder, encoder_model_type=model_type,
+        decoder_path or exported_decoder, device, encoder=model.image_encoder, encoder_model_type=model_type[:6],
     )
+    decoder.model_type = model_type
     return get_instance_segmentation_generator(
         model=model, decoder=decoder, segmentation_mode="apg", device=device, ndim=ndim,
         inference_device=devices,
@@ -2592,7 +2625,7 @@ def resolve_checkpoint_identity(
 
     joint_checksum = None
     if checkpoint_path is None or mode == "apg":
-        joint_path = get_joint_checkpoint(model_type, joint_checkpoint)
+        joint_path = get_joint_checkpoint(model_type[:6], joint_checkpoint)
         joint_checksum = checkpoint_checksum(joint_path)
 
     if checkpoint_path is None:
@@ -2612,7 +2645,8 @@ def build_model(
 
     Args:
         mode: The segmentation mode, one of MODES.
-        model_type: The SAM2 backbone of the joint model, e.g. 'hvit_t'.
+        model_type: The model, e.g. 'hvit_t' or 'hvit_s_em_mito'. Its backbone builds the model, its family selects
+            the default parameters.
         device: The torch device.
         ndim: The number of spatial dimensions, 2 or 3.
         joint_checkpoint: The joint trainer checkpoint, without the '.pt' suffix.
@@ -2633,9 +2667,11 @@ def build_model(
         )
 
     decoder_path = checkpoint_path or export_joint_checkpoint(
-        model_type, joint_checkpoint, source_checksum=joint_checksum
+        model_type[:6], joint_checkpoint, source_checksum=joint_checksum
     )[1]
-    return load_unisam2_model(decoder_path, device, encoder=model_type)
+    decoder = load_unisam2_model(decoder_path, device, encoder=model_type[:6])
+    decoder.model_type = model_type
+    return decoder
 
 
 def build_ais_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", device="cuda", ndim=2, cache_dir=None):
@@ -3129,8 +3165,35 @@ with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_crops_3
     }
 
 
+# The fixed tuning crops of the volumes and images, see 'parameter_search.py prepare'.
+def _read_crops(file_name):
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), file_name)) as f:
+        return {
+            name: (tuple(entry["crop_shape"]), {sample: tuple(map(tuple, v)) for sample, v in entry["starts"].items()})
+            for name, entry in json.load(f)["datasets"].items()
+        }
+
+
+TUNING_CROPS = _read_crops("tuning_crops.json")
+
+
+def tuning_crops_2d(dataset_name, raw_path, split):
+    """Return the (crop start, crop shape) pairs for one image: its crops in TUNING_CROPS or the image as stored."""
+    if split != "val" or dataset_name not in TUNING_CROPS:
+        return [(None, None)]
+    shape, starts = TUNING_CROPS[dataset_name]
+    return [(start, shape) for start in starts[os.path.basename(raw_path)]]
+
+
 def eval_crops_3d(dataset_name, raw_path, split, crop_shape):
-    """Return the (crop start, crop shape) pairs for one volume: its crops in EVAL_CROPS_3D or one center crop."""
+    """Return the (crop start, crop shape) pairs for one volume: its fixed crops or one center crop.
+
+    The fixed crops are the ones in EVAL_CROPS_3D for 'test' and in TUNING_CROPS for 'val'. The tuning crops replace
+    'crop_shape', which the parameter search passes for every volume.
+    """
+    if split == "val" and dataset_name in TUNING_CROPS:
+        shape, starts = TUNING_CROPS[dataset_name]
+        return [(start, shape) for start in starts[os.path.basename(raw_path)]]
     if split != "test" or dataset_name not in EVAL_CROPS_3D:
         return [(None, crop_shape or CROP_SHAPE_3D)]
     if crop_shape is not None:
@@ -3331,8 +3394,10 @@ def genuine_misses(gt, segmentation, iou_threshold=0.5, max_span=2):
     return len(unmatched_ids), int((~np.isin(unmatched_ids, thin)).sum())
 
 
-def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_name, normalize=True):
-    """Load one 2d sample the way the evaluation scores it.
+def load_evaluation_sample_2d(
+    raw_path, label_path, raw_key, label_key, dataset_name, normalize=True, crop_start=None, crop_shape=None,
+):
+    """Load one 2d sample the way the evaluation scores it, or one of its tuning crops (see TUNING_CROPS).
 
     The parameter search and the evaluation both call this function, so both use the same data.
 
@@ -3343,7 +3408,9 @@ def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_
     # Normalize before cropping, so that the percentiles cover the whole image.
     image = select_channels(read_2d(raw_path, raw_key), dataset_name)
     image = ensure_8bit_range(image) if normalize else np.clip(image, 0, 255).astype("uint8")
-    if dataset_name in FULL_IMAGE_2D:
+    if crop_start is not None:
+        roi = tuple(slice(start, start + size) for start, size in zip(crop_start, crop_shape))
+    elif dataset_name in FULL_IMAGE_2D:
         roi = tuple(slice(None) for _ in image.shape[:2])
     else:
         roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
@@ -3413,20 +3480,23 @@ def load_data(
                     z_range=sample_z_range, min_size=min_size, split=split, crop_start=crop_start,
                 )
         else:
-            sample_id += 1
-            if sample_ids is not None and sample_id not in sample_ids:
-                continue
-            image, gt = load_evaluation_sample_2d(
-                raw_path, label_path, raw_key, label_key, dataset_name, normalize=normalize
-            )
-            yield image, gt, None
+            for crop_start, crop_shape_2d in tuning_crops_2d(dataset_name, raw_path, split):
+                sample_id += 1
+                if sample_ids is not None and sample_id not in sample_ids:
+                    continue
+                image, gt = load_evaluation_sample_2d(
+                    raw_path, label_path, raw_key, label_key, dataset_name, normalize=normalize,
+                    crop_start=crop_start, crop_shape=crop_shape_2d,
+                )
+                yield image, gt, None
 
 
 def n_samples(dataset_name, data_root, split="test"):
     """Return the number of samples that `load_data` yields for a split."""
     raw_paths = get_data_paths(dataset_name, data_root, split=split)[0]
-    if split == "test" and dataset_name in EVAL_CROPS_3D:
-        starts = EVAL_CROPS_3D[dataset_name][1]
+    crops = {"test": EVAL_CROPS_3D, "val": TUNING_CROPS}.get(split, {})
+    if dataset_name in crops:
+        starts = crops[dataset_name][1]
         return sum(len(starts[os.path.basename(path)]) for path in raw_paths)
     return len(raw_paths)
 
