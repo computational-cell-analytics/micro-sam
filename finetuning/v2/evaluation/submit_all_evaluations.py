@@ -23,6 +23,10 @@ Usage examples:
     python submit_all_evaluations.py --all_datasets --modality em \\
         --segmentation_type interactive --method nninteractive sam2
 
+    # micro-sam2 AIS and APG with the registry mitochondria model, tuned by parameter_search.py first.
+    python submit_all_evaluations.py --all_datasets --modality em_mito --registry_model em_mito \\
+        --segmentation_type automatic --segmentation_mode ais apg -e <exp>
+
     # CellViT on the histopathology panel, one job group per checkpoint.
     python submit_all_evaluations.py --all_datasets --modality hp --segmentation_type automatic \\
         --method cellvit -m sam_h_x40 sam_h_x20 vit256_x40 vit256_x20
@@ -39,7 +43,7 @@ from datetime import datetime
 
 from common import (
     DATA_ROOT, DATASETS_2D_LM, DATASETS_HP, DATASETS_3D_LM, DATASETS_EM, DATASETS_3D_EM, DATASETS_EM_MITO,
-    DATASETS_EM_NUCLEUS, DATASETS_SUPPLEMENTARY, MODEL_TYPES, n_samples,
+    DATASETS_EM_NUCLEUS, DATASETS_SUPPLEMENTARY, MODEL_TYPES, n_samples, registered_model_types, registry_weight_paths,
 )
 
 EVAL_ROOT = Path(__file__).resolve().parent
@@ -268,12 +272,24 @@ def build_command(
     if shared_engine:
         command.extend(["--weights", "pretrained"])
     if model_type is not None:
-        command.extend(["-m", model_type])
-    if args.checkpoint is not None:
+        # The family of the full registry name selects the default parameters.
+        full_name = method is None and args.registry_model and args.segmentation_type == "automatic"
+        command.extend(["-m", f"{model_type}_{args.registry_model}" if full_name else model_type])
+    if method is None and args.registry_model is not None:
+        # The interactive script takes the SAM2 weights as -c, the automatic one the decoder.
+        interactive_path, decoder_path = registry_weight_paths(f"{model_type}_{args.registry_model}")
+        if args.segmentation_type == "interactive":
+            command.extend(["-c", interactive_path])
+        else:
+            command.extend(["-c", decoder_path])
+            if mode == "apg":
+                command.extend(["--interactive_checkpoint", interactive_path])
+    elif args.checkpoint is not None:
         command.extend(["-c", args.checkpoint])
 
     if method is None:
-        command.extend(["--joint_checkpoint", args.joint_checkpoint])
+        if args.registry_model is None:
+            command.extend(["--joint_checkpoint", args.joint_checkpoint])
         if args.segmentation_type == "automatic":
             command.extend(["--mode", mode])
             if args.skip_tuning:
@@ -407,6 +423,11 @@ def main():
     parser.add_argument("--joint_checkpoint", type=str, default="best",
                         help="Name of the joint trainer checkpoint the micro-sam2 weights are taken from, "
                              "without the '.pt' suffix, e.g. 'best' or the name of a frozen copy.")
+    parser.add_argument(
+        "--registry_model", type=str, default=None,
+        help="Evaluate the micro-sam2 registry models of this family, e.g. 'em_mito' or 'em_nuclei', instead of "
+             "the joint checkpoint. -m defaults to every model type registered as '<model_type>_<family>'.",
+    )
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate micro-sam2 with the library defaults.")
     parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     parser.add_argument(
@@ -458,6 +479,16 @@ def main():
     for method in args.method or ():
         if method not in valid_methods:
             raise ValueError(f"'{method}' is not a {args.segmentation_type} method. Choose from {valid_methods}.")
+    if args.registry_model is not None:
+        if args.method is not None or args.checkpoint is not None:
+            raise ValueError("--registry_model selects the micro-sam2 weights, so it excludes --method and -c.")
+        registered = registered_model_types(args.registry_model)
+        if not registered:
+            raise ValueError(f"No model type has a registry model with a decoder for '{args.registry_model}'.")
+        args.model_type = args.model_type or registered
+        missing = [model_type for model_type in args.model_type if model_type not in registered]
+        if missing:
+            raise ValueError(f"{missing} have no '{args.registry_model}' registry model. Registered: {registered}.")
     if args.method is None and args.model_type is None:
         args.model_type = list(MODEL_TYPES)
 

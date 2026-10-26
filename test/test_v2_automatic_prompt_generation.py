@@ -1399,6 +1399,19 @@ def test_volume_refinement_is_on_for_hvit_b_only():
         assert default_prompt_generation(f"{backbone}_cells", is_volume=True)["refinement"] == expected
 
 
+def test_prompt_generation_defaults_are_selected_by_model_family():
+    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION_PARAMETERS, default_prompt_generation
+    for family, backbones in DEFAULT_PROMPT_GENERATION_PARAMETERS.items():
+        for backbone, tables in backbones.items():
+            assert default_prompt_generation(f"{backbone}_{family}", is_volume=False) == tables["2d"]
+            assert default_prompt_generation(f"{backbone}_{family}", is_volume=True) == tables["3d"]
+    cells = DEFAULT_PROMPT_GENERATION_PARAMETERS["cells"]["hvit_s"]
+    assert default_prompt_generation("hvit_s", is_volume=True) == cells["3d"]
+    assert default_prompt_generation("hvit_s_em_nuclei", is_volume=True) != cells["3d"]
+    with pytest.raises(ValueError):
+        default_prompt_generation("hvit_t_em_mito")
+
+
 def test_volume_refinement_survives_an_anchor_slice_that_keeps_nothing(monkeypatch):
     # Every record below 'min_size', so the slice's merge keeps nothing and there is no instance to
     # re-prompt. The refinement has to fall through rather than index an empty segmentation.

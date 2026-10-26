@@ -25,11 +25,15 @@ import pandas as pd
 
 import torch
 
+from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder
+
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS, build_model,
     check_data_download, evaluate_samples, has_val_split, load_apg_overrides, postprocess_unisam2, predict_unisam2,
     read_tuned_params, resolve_checkpoint_identity,
 )
+
+REGISTRY_MODELS = [model for model in FINETUNED_MODELS if has_registered_decoder(model)]
 
 # The temporary embeddings of APG go to the job's node-local TMPDIR, as in `parameter_search.py`.
 # In the micro-sam cache of the home directory, the leftovers of killed jobs fill the quota.
@@ -83,7 +87,7 @@ def run_evaluation(
         dataset_name: The dataset to score.
         data_root: The root the data lives in.
         experiment_folder: The folder the results are written to.
-        model_type: The SAM2 backbone, which names the result file.
+        model_type: The model, e.g. 'hvit_t' or 'hvit_s_em_mito', which names the result file.
         params: The parameters to segment with, or None for the library defaults.
         device: The torch device.
         limit: Score only the first this many samples, for a smoke test. The result file is named
@@ -142,7 +146,10 @@ def main():
     parser.add_argument("-d", "--dataset_name", required=True, choices=sorted(DATASETS_2D + DATASETS_3D))
     parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT, help="The root the data lives in.")
     parser.add_argument("-e", "--experiment_folder", type=str, required=True)
-    parser.add_argument("-m", "--model_type", type=str, default="hvit_t", choices=MODEL_TYPES)
+    parser.add_argument(
+        "-m", "--model_type", type=str, default="hvit_t", choices=MODEL_TYPES + REGISTRY_MODELS,
+        help="A backbone, or a registry model whose family selects the default parameters, e.g. 'hvit_s_em_mito'.",
+    )
     parser.add_argument("--mode", type=str, default="ais", choices=MODES, help="The segmentation mode to evaluate.")
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Weights instead of the joint export.")
     parser.add_argument("--joint_checkpoint", type=str, default="best", help="Joint checkpoint name, without '.pt'.")
@@ -200,7 +207,7 @@ def main():
             tuning_root = args.tuning_root or os.path.join(args.experiment_folder, "tuning")
             tuning_root = os.path.join(tuning_root, args.mode)
             try:
-                params = read_tuned_params(tuning_root, args.dataset_name, args.model_type, checkpoint_id)
+                params = read_tuned_params(tuning_root, args.dataset_name, args.model_type[:6], checkpoint_id)
                 tuned = True
             except FileNotFoundError:
                 warnings.warn(

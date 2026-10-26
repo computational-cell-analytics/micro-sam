@@ -12,17 +12,21 @@ The models are the registry models of `micro_sam.v2.util` with a decoder, e.g. '
 them first.
 
 'sweep' runs one sweep per dataset and writes it to '<tuning_root>/<mode>/<model_type>/<checkpoint_id>/', the layout
-that `common.read_tuned_params` reads. 'worker' is the Slurm worker of 'run --slurm'.
+that `common.read_tuned_params` reads. 'worker' is the Slurm worker of 'run --slurm'. 'prepare' writes the tuning
+crops (tuning_crops.json) and the mock 2d slices of the nucleus volumes that the EM organelle searches tune on.
 
 Usage examples:
     python parameter_search.py run -e <exp> -m hvit_b_cells
     python parameter_search.py run -e <exp> -m hvit_t_cells --mode apg --data 3d --slurm --sbatch "-p gpu -G 1"
     python parameter_search.py sweep -e <exp> -m hvit_b --mode ais -d livecell
+    python parameter_search.py run -e <exp> -m hvit_s_em_mito --data 2d -d probtem mitolab_tem --n_samples 10
+    python parameter_search.py prepare --mock_nucleus_2d
 """
 
 import os
 import sys
 import json
+import math
 import time
 import shlex
 import argparse
@@ -34,13 +38,18 @@ from pathlib import Path
 from datetime import datetime
 from concurrent import futures
 
+import h5py
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from skimage.measure import label as label_components
 
 import torch
 
+from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy
+
+from torch_em.util.image import load_image
 
 from bioimage_cpp.segmentation import label as connected_components, watershed
 
@@ -51,10 +60,11 @@ from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_densi
 from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, models as model_registry
 
 from common import (
-    DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
-    GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS,
-    build_model, check_data_download, drop_severed_objects, has_val_split, load_data,
-    n_samples, predict_unisam2, read_tuned_params, resolve_checkpoint_identity,
+    DATASETS_2D_EM_NUCLEUS_MOCK, DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
+    EM_NUCLEUS_MOCK_2D_ROOT, GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, MODEL_TYPES, MODES, TUNING_CROPS,
+    VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, em_roi, get_data_paths,
+    has_val_split, load_data, load_evaluation_sample_2d, load_evaluation_sample_3d, n_samples, predict_unisam2,
+    read_tuned_params, resolve_checkpoint_identity, sorted_path_pairs, val_z_range, _read_crops, _read_window,
 )
 
 # The temporary embeddings of 3d APG go to the job's node-local TMPDIR. In the micro-sam cache of the home
@@ -894,7 +904,7 @@ def tune_parameters(
 REGISTRY_MODELS = [model for model in FINETUNED_MODELS if has_registered_decoder(model)]
 
 # The in-domain data of the micro-sam2 cell models, per data type. Out-of-domain data is never tuned on.
-IN_DOMAIN = {
+IN_DOMAIN_CELLS = {
     "2d": [
         "bitdepth_nucseg", "bmgd", "cell_acdc", "cellbindb", "cellular", "cpm17", "cvz_fluo_cell", "cvz_fluo_dapi",
         "deepbacs_label_free", "dynamicnuclearnet", "enseg", "flywing", "glysac", "histo_miner", "ifnuclei",
@@ -909,6 +919,24 @@ IN_DOMAIN = {
     ],
     "dense": ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress"],
 }
+# The in-domain data of the EM mitochondria model: the held-out parts of its training data.
+IN_DOMAIN_EM_MITO = {
+    "2d": ["probtem"],
+    "3d": [
+        "densecell_mito", "lucchi", "mitoem_human", "mitoem_rat", "mitoemv2_beta", "mitoemv2_jurkat", "mitoemv2_macro",
+        "mitoemv2_podo", "mitoemv2_sperm", "mitoemv2_stem", "mitoemv2_mossy", "asem_mito", "mitonet_kidney",
+        "snemi_mito",
+    ],
+    "dense": [],
+}
+# The in-domain data of the EM nucleus model: the held-out parts of its training data.
+IN_DOMAIN_EM_NUCLEUS = {
+    "2d": DATASETS_2D_EM_NUCLEUS_MOCK,
+    "3d": ["cellmap_nucleus", "fafb_nuclei", "microns_nuclei", "platynereis_nuclei"],
+    "dense": [],
+}
+# The in-domain data of each registry model family, e.g. 'em_mito' for 'hvit_s_em_mito'.
+FAMILY_IN_DOMAIN = {"cells": IN_DOMAIN_CELLS, "em_mito": IN_DOMAIN_EM_MITO, "em_nuclei": IN_DOMAIN_EM_NUCLEUS}
 # The modes each data type is tuned for. The neurite EM volumes have no APG.
 DATA_MODES = {"2d": ("ais", "apg"), "3d": ("ais", "apg"), "dense": ("ais",)}
 # The large 2d validation splits are scored on this many samples, spread evenly.
@@ -989,6 +1017,11 @@ def backbone(model):
     return model[:6]
 
 
+def model_family(model):
+    """The family of a registry model, e.g. 'em_mito' for 'hvit_s_em_mito'."""
+    return model[7:]
+
+
 def registry_weights(model):
     """Download a registry model, and return the paths of its SAM2 weights and of its decoder."""
     registry = model_registry()
@@ -1024,8 +1057,10 @@ def prediction_cache(context, sweep):
     return os.path.join(context["experiment_folder"], "predictions") if sweep["mode"] == "ais" else None
 
 
-def write_params(context, data, stage, model_type, combos):
-    path = os.path.join(context["experiment_folder"], "params", data, stage, f"{model_type}.json")
+def write_params(context, data, stage, model_type, mode, combos):
+    # The modes of a data type share their stage names, so the mode is part of the name: else the searches of AIS
+    # and APG, which run at the same time, overwrite each other's combos.
+    path = os.path.join(context["experiment_folder"], "params", data, stage, f"{model_type}_{mode}.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         json.dump(combos, f, indent=1)
@@ -1146,7 +1181,7 @@ def edge_combos(winner, swept):
 
 def run_params_stage(context, runner, model, mode, data, stage, combos, options):
     """Sweep 'combos' on every dataset of a data type and return the root of the stage."""
-    params_file = write_params(context, data, stage, model, combos)
+    params_file = write_params(context, data, stage, model, mode, combos)
     root = os.path.join(context["experiment_folder"], "tuning", data, stage)
     runner.run([
         make_sweep(model, mode, data, name, root, options[name], params_file)
@@ -1528,17 +1563,24 @@ def run_worker(queue_dir, threads, slots, models=None):
         list(pool.map(lambda _: worker_loop(queue_dir, max(1, threads // slots), models), range(slots)))
 
 
-def search_datasets(dataset_names, data_types):
-    """The datasets of every data type to search on: the in-domain ones, or 'dataset_names' sorted by type."""
+def search_datasets(dataset_names, data_types, family="cells"):
+    """The datasets of every data type to search on: the in-domain ones of a model family, or 'dataset_names' sorted
+    by type.
+    """
+    in_domain = FAMILY_IN_DOMAIN[family]
     datasets = {}
     for data in data_types:
-        names = IN_DOMAIN[data] if dataset_names is None else [n for n in dataset_names if data_type(n) == data]
+        names = in_domain[data] if dataset_names is None else [n for n in dataset_names if data_type(n) == data]
         datasets[data] = [name for name in names if has_val_split(name)]
     return datasets
 
 
 def run_command(args):
-    datasets = search_datasets(args.dataset_name, args.data)
+    # The models of one search share its datasets, so they have to be of one family.
+    families = sorted({model_family(model) for model in args.model_type})
+    if len(families) > 1:
+        raise ValueError(f"The models are of several families {families}. Search one family at a time.")
+    datasets = search_datasets(args.dataset_name, args.data, families[0])
     for names in datasets.values():
         for name in names:
             check_data_download(name, args.input_path, split="val")
@@ -1633,6 +1675,155 @@ def worker_command(args):
     run_worker(args.queue_dir, args.threads, args.slots, models=args.models)
 
 
+# 'prepare' writes the mock 2d nucleus slices, and as tuning crops the tiles with the most objects.
+TUNING_CROPS_PATH = Path(__file__).resolve().parent / "tuning_crops.json"
+TUNING_CROP_3D, MAX_TUNING_CROPS_3D = (32, 512, 512), 5
+TUNING_CROP_2D, MAX_TUNING_CROPS_2D = (512, 512), 10
+MOCK_SLICES, MOCK_MIN_Z_DISTANCE = 10, 4
+TUNING_CROP_DATASETS = {
+    3: IN_DOMAIN_EM_MITO["3d"] + IN_DOMAIN_EM_NUCLEUS["3d"],
+    2: [
+        "probtem", "mitolab_tem", "cmito_dauer_manual", "tnbc_mito", "cardiomyocyte_tem_mito", "u2os_fibsem_nucleus",
+        *DATASETS_2D_EM_NUCLEUS_MOCK,
+    ],
+}
+
+
+def tile_starts(region, crop_shape):
+    """The starts of the tiles of a region, a tuple of slices."""
+    axes = [
+        [sl.start] if sl.stop - sl.start <= size else list(range(sl.start, sl.stop - size + 1, size))
+        for sl, size in zip(region, crop_shape)
+    ]
+    return list(itertools.product(*axes))
+
+
+def tile_regions(dataset_name, data_root, ndim):
+    """The (sample name, loader arguments, tuning region) of every tuning sample of a dataset, in loader order."""
+    raw_paths, label_paths, raw_key, label_key = get_data_paths(dataset_name, data_root, split="val")
+    regions = []
+    for raw_path, label_path in sorted_path_pairs(raw_paths, label_paths):
+        paths = (raw_path, label_path, raw_key, label_key, dataset_name)
+        if ndim == 3:
+            source = load_image(label_path) if label_key is None else open_file(label_path, mode="r")[label_key]
+            z_range = val_z_range(dataset_name, raw_path, "val") or VAL_Z_RANGE.get(dataset_name)
+            region = _read_window(source.shape, em_roi(dataset_name, label_path, "val"), z_range, source.shape)
+        else:
+            z_range = None
+            image, _ = load_evaluation_sample_2d(*paths)
+            region = tuple(slice(0, size) for size in image.shape[:2])
+        regions.append((os.path.basename(raw_path), paths, z_range, region))
+    names = [name for name, *_ in regions]
+    if len(set(names)) != len(names):
+        raise RuntimeError(f"The tuning samples of '{dataset_name}' share file names, which name their crops.")
+    return regions
+
+
+def count_tile_objects(paths, ndim, z_range, start):
+    if ndim == 3:
+        _, labels, _ = load_evaluation_sample_3d(
+            *paths, crop_shape=TUNING_CROP_3D, z_range=z_range, split="val", crop_start=start
+        )
+    else:
+        _, labels = load_evaluation_sample_2d(*paths, crop_start=start, crop_shape=TUNING_CROP_2D)
+    return len(np.setdiff1d(np.unique(labels), [0]))
+
+
+def place_tuning_crops(dataset_name, data_root, ndim):
+    """The tuning crops of one dataset, as an entry of tuning_crops.json."""
+    crop_shape, max_crops = {3: (TUNING_CROP_3D, MAX_TUNING_CROPS_3D), 2: (TUNING_CROP_2D, MAX_TUNING_CROPS_2D)}[ndim]
+    regions = tile_regions(dataset_name, data_root, ndim)
+    per_sample = max_crops if ndim == 3 else math.ceil(max_crops / len(regions))
+    tiles = []
+    for name, paths, z_range, region in regions:
+        sample_tiles = [
+            (n_objects, name, start) for start in tile_starts(region, crop_shape)
+            if (n_objects := count_tile_objects(paths, ndim, z_range, start)) > 0
+        ]
+        tiles += sorted(sample_tiles, key=lambda tile: (-tile[0], tile[2]))[:per_sample]
+    kept = sorted(tiles, key=lambda tile: (-tile[0], tile[1], tile[2]))[:max_crops]
+    starts = {name: [] for name, *_ in regions}
+    for _, name, start in sorted(kept, key=lambda tile: (tile[1], tile[2])):
+        starts[name].append(list(start))
+    counts = [n for n, _, _ in kept]
+    note = f"{len(kept)} crops of {len(regions)} samples, holding {min(counts)}-{max(counts)} objects."
+    print(f"{dataset_name}: {note}")
+    return {"crop_shape": list(crop_shape), "note": note, "starts": starts}
+
+
+def write_tuning_crops(placed):
+    """Add the placed crops to tuning_crops.json and to the crops this process loads with."""
+    with open(TUNING_CROPS_PATH) as f:
+        crops = json.load(f)
+    crops["datasets"].update(placed)
+    tmp_path = f"{TUNING_CROPS_PATH}.tmp{os.getpid()}"
+    with open(tmp_path, "w") as f:
+        json.dump(crops, f, indent=1)
+        f.write("\n")
+    os.replace(tmp_path, TUNING_CROPS_PATH)
+    TUNING_CROPS.update(_read_crops(TUNING_CROPS_PATH.name))
+
+
+def mock_slice_labels(labels, min_size):
+    """The connected components of a 2d label slice, without the ones below 'min_size' pixels."""
+    components = label_components(labels > 0)
+    sizes = np.bincount(components.ravel())
+    small = np.nonzero(sizes < min_size)[0]
+    components[np.isin(components, small[small > 0])] = 0
+    return label_components(components > 0).astype("uint32")
+
+
+def write_mock_slices(dataset_name, data_root, split):
+    """Write the mock 2d slices of one split of an in-domain 3d nucleus set, see 'prepare'."""
+    source = dataset_name[:-len("_2d")]
+    crop = TUNING_CROP_3D if split == "val" else None
+    z_range = VAL_Z_RANGE.get(source) if split == "val" else None
+    samples = load_data(source, data_root, 3, split=split, crop_shape=crop, z_range=z_range)
+    volumes = [(raw, labels) for raw, labels, _ in samples]
+    min_size = GT_MIN_SIZE_2D[dataset_name]
+    candidates = sorted(
+        (
+            (n_objects, volume_index, z)
+            for volume_index, (_, labels) in enumerate(volumes) for z in range(labels.shape[0])
+            if (n_objects := int(mock_slice_labels(labels[z], min_size).max())) > 0
+        ),
+        key=lambda candidate: (-candidate[0], candidate[1], candidate[2]),
+    )
+    picked = []
+    for _, volume_index, z in candidates:
+        if all(v != volume_index or abs(z - pz) >= MOCK_MIN_Z_DISTANCE for v, pz in picked):
+            picked.append((volume_index, z))
+        if len(picked) == MOCK_SLICES:
+            break
+    out_dir = os.path.join(data_root, EM_NUCLEUS_MOCK_2D_ROOT, dataset_name)
+    os.makedirs(out_dir, exist_ok=True)
+    for index, (volume_index, z) in enumerate(sorted(picked)):
+        raw, labels = volumes[volume_index]
+        path = os.path.join(out_dir, f"{split}_{index:02d}.h5")
+        with h5py.File(f"{path}.tmp", "w") as f:
+            f.create_dataset("raw", data=np.clip(raw[z], 0, 255).astype("uint8"), compression="gzip")
+            f.create_dataset("labels", data=mock_slice_labels(labels[z], min_size), compression="gzip")
+            f.attrs["source"] = f"{source} {split} volume {volume_index} z {z}"
+        os.replace(f"{path}.tmp", path)
+    print(f"{dataset_name} {split}: {len(picked)} slices from {len(volumes)} crops.")
+
+
+def prepare_command(args):
+    """The 3d crops come first, since the mock 2d slices are cut from them."""
+    if 3 in args.ndim:
+        placed = {name: place_tuning_crops(name, args.input_path, 3) for name in TUNING_CROP_DATASETS[3]}
+        if not args.dry:
+            write_tuning_crops(placed)
+    if args.mock_nucleus_2d and not args.dry:
+        for dataset_name in DATASETS_2D_EM_NUCLEUS_MOCK:
+            for split in ("val", "test"):
+                write_mock_slices(dataset_name, args.input_path, split)
+    if 2 in args.ndim:
+        placed = {name: place_tuning_crops(name, args.input_path, 2) for name in TUNING_CROP_DATASETS[2]}
+        if not args.dry:
+            write_tuning_crops(placed)
+
+
 def add_weight_arguments(parser):
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Weights instead of the joint export.")
     parser.add_argument("--joint_checkpoint", type=str, default="best", help="Joint checkpoint name, without '.pt'.")
@@ -1650,7 +1841,7 @@ def add_run_arguments(parser):
         choices=REGISTRY_MODELS, help="The registry models to search the parameters of.",
     )
     parser.add_argument("--mode", type=str, nargs="+", default=list(MODES), choices=MODES)
-    parser.add_argument("--data", type=str, nargs="+", default=list(IN_DOMAIN), choices=list(IN_DOMAIN))
+    parser.add_argument("--data", type=str, nargs="+", default=list(DATA_MODES), choices=list(DATA_MODES))
     parser.add_argument(
         "-d", "--dataset_name", type=str, nargs="+", default=None, choices=sorted(VAL_SPLITS), metavar="DATASET",
         help="Datasets to search on instead of the in-domain ones, sorted into the data types by their kind.",
@@ -1718,14 +1909,23 @@ def add_worker_arguments(parser):
     parser.add_argument("--models", nargs="+", default=None, help="Run only the tasks of these backbones.")
 
 
+def add_prepare_arguments(parser):
+    parser.add_argument("-i", "--input_path", type=str, default=DATA_ROOT, help="The root the data lives in.")
+    parser.add_argument("--ndim", type=int, nargs="+", default=[3, 2], choices=(2, 3), help="The crops to place.")
+    parser.add_argument("--mock_nucleus_2d", action="store_true", help="Write the mock 2d nucleus slices too.")
+    parser.add_argument("--dry", action="store_true", help="Print the crops without writing anything.")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
     add_run_arguments(commands.add_parser("run", help="Search the best parameters over a set of datasets."))
     add_sweep_arguments(commands.add_parser("sweep", help="Sweep one grid or list of combos per dataset."))
     add_worker_arguments(commands.add_parser("worker", help="The Slurm worker of 'run --slurm'."))
+    add_prepare_arguments(commands.add_parser("prepare", help="Write the mock 2d slices and the tuning crops."))
     args = parser.parse_args()
-    {"run": run_command, "sweep": sweep_command, "worker": worker_command}[args.command](args)
+    commands = {"run": run_command, "sweep": sweep_command, "worker": worker_command, "prepare": prepare_command}
+    commands[args.command](args)
 
 
 if __name__ == "__main__":
