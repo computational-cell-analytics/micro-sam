@@ -162,6 +162,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Create the dictionary for the widgets and get the widgets of the child plugin.
         self._widgets = {"embeddings": self._embedding_widget}
         self._widgets.update(self._get_widgets())
+        self._connect_commit_layer_selection()
 
     def _create_keybindings(self):
         @self._viewer.bind_key("s", overwrite=True)
@@ -336,6 +337,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Rebuild the dimension-specific widgets, keeping the shared embedding widget.
         self._widgets = {"embeddings": self._embedding_widget}
         self._widgets.update(self._get_widgets())
+        self._connect_commit_layer_selection()
         AnnotatorState().widgets = self._widgets
 
         # Rebuild the layout and rebind the keybindings to the new widgets and layers.
@@ -348,6 +350,23 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         size_policy.setVerticalPolicy(QtWidgets.QSizePolicy.Policy.Expanding)
         self.setSizePolicy(size_policy)
         super().showEvent(event)
+
+    def _set_commit_layer(self, layer_name):
+        commit_widget = getattr(self, "_widgets", {}).get("commit")
+        if commit_widget is not None:
+            commit_widget.layer.value = layer_name
+
+    def _connect_commit_layer_selection(self):
+        # The commit layer follows the last segmentation: interactive segmentation selects
+        # 'current_object' and automatic segmentation selects 'auto_segmentation'.
+        if not all(name in self._widgets for name in ("interactive", "autosegment", "commit")):
+            return
+        self._widgets["interactive"].segment_requested.connect(
+            lambda: self._set_commit_layer("current_object")
+        )
+        self._widgets["autosegment"].segmentation_finished.connect(
+            lambda: self._set_commit_layer("auto_segmentation")
+        )
 
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
@@ -400,6 +419,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._viewer.layers["prompts"].scale = scale
 
         vutil.clear_annotations(self._viewer, clear_segmentations=False)
+        self._set_commit_layer("current_object")
 
 
 class _ClassifierBase(QtWidgets.QScrollArea):

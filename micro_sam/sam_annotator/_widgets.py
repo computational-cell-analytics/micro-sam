@@ -1150,6 +1150,7 @@ def commit(
         viewer: The napari viewer.
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
+            The annotator selects the layer of the last segmentation. The user can change it.
         preserve_mode: The mode for preserving already committed objects, in order to prevent over-writing
             them by a new commit. Supports the modes 'objects', which preserves on the object level,
             'pixels', which preserves on the pixel-level and is the default, or 'none', which does not
@@ -1207,6 +1208,7 @@ def commit_track(
         viewer: The napari viewer.
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
+            The annotator selects the layer of the last segmentation. The user can change it.
         preserve_mode: The mode for preserving already committed objects, in order to prevent over-writing
             them by a new commit. Supports the modes 'objects', which preserves on the object level,
             'pixels', which preserves on the pixel-level and is the default, or 'none', which does not
@@ -3613,6 +3615,8 @@ class InteractiveSegmentationWidget(_WidgetBase):
         parent: The parent Qt widget.
     """
 
+    segment_requested = Signal()
+
     def __init__(self, viewer, ndim, prompt_widget, parent=None):
         super().__init__(parent=parent)
         self._viewer = viewer
@@ -3818,6 +3822,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
 
     def segment(self, viewer=None):
         """Run interactive segmentation for the current prompts."""
+        self.segment_requested.emit()
         if self._ndim == 2:
             _segment_object_2d(self._viewer, batched=bool(self.batched))
         else:
@@ -3862,6 +3867,8 @@ class InteractiveTrackingWidget(_WidgetBase):
             'create_tracking_menu'.
         parent: The parent Qt widget.
     """
+
+    segment_requested = Signal()
 
     def __init__(self, viewer, tracking_widget, parent=None):
         super().__init__(parent=parent)
@@ -3925,6 +3932,7 @@ class InteractiveTrackingWidget(_WidgetBase):
 
     def segment(self, viewer=None):
         """Run interactive tracking segmentation for the current prompts."""
+        self.segment_requested.emit()
         self._segment_widget(self._viewer)
 
     def clear(self, viewer=None):
@@ -4025,6 +4033,8 @@ class AutoSegmentWidget(_WidgetBase):
         volumetric: Whether the data is volumetric (3d).
         parent: The parent Qt widget.
     """
+
+    segmentation_finished = Signal()
 
     _is_tracking = False
     MODES = ("apg", "sparse", "dense")
@@ -4833,6 +4843,7 @@ class AutoSegmentWidget(_WidgetBase):
             self._viewer.layers["auto_segmentation"].data[z] = seg
         self._viewer.layers["auto_segmentation"].refresh()
         _select_layer(self._viewer, "auto_segmentation")
+        self.segmentation_finished.emit()
 
 
 class AutoTrackWidget(AutoSegmentWidget):
@@ -4967,6 +4978,7 @@ class AutoTrackWidget(AutoSegmentWidget):
         self._viewer.layers["auto_segmentation"].data = segmentation
         self._viewer.layers["auto_segmentation"].refresh()
         _select_layer(self._viewer, "auto_segmentation")
+        self.segmentation_finished.emit()
 
     def __call__(self):
         state = AnnotatorState()
