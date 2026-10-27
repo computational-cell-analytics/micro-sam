@@ -3139,6 +3139,7 @@ class UnifiedSegmentWidget(_WidgetBase):
                 multiple_box_prompts=False,
                 image_embeddings=state.image_embeddings,
                 batched=batched,
+                previous_segmentation=self._viewer.layers["current_object"].data,
                 i=z,
             )
 
