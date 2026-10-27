@@ -3263,6 +3263,12 @@ class UnifiedSegmentWidget(_WidgetBase):
             pbar_signals.pbar_total.emit(shape[0])
             pbar_signals.pbar_description.emit("Segment object")
 
+            if self.batched and not state.is_sam2:
+                show_info(
+                    "Batched segmentation is only supported with SAM2 models (hvit_*). "
+                    "It runs in standard mode instead."
+                )
+
             if state.is_sam2:
                 # Prepare the prompts
                 point_prompts = self._viewer.layers["point_prompts"]
@@ -3284,14 +3290,6 @@ class UnifiedSegmentWidget(_WidgetBase):
                     show_info(
                         "Batched segmentation is not supported with scribble prompts. "
                         "It runs single-object segmentation instead."
-                    )
-                    is_batched = False
-
-                # Check batched mode validity and show warning if needed
-                if is_batched and not state.is_sam2:
-                    show_info(
-                        "Batched segmentation is only supported with SAM2 models (hvit_*). "
-                        "It runs in standard mode instead."
                     )
                     is_batched = False
 
