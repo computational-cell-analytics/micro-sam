@@ -632,7 +632,7 @@ def batch_tracking_annotator(
     Args:
         images: List of timeseries (TYX arrays) or file paths, each tracked independently.
         output_folder: The folder where the per-video tracking results are saved.
-        model_type: The micro-sam2/SAM2 model to use (must start with 'hvit_').
+        model_type: The Segment Anything 2 model to use. The name must start with 'hvit_'.
         embedding_path: Folder where to save/load the per-video embeddings.
         tile_shape: Shape of tiles for tiled embedding prediction. If `None`, reuse the tiling of
             already cached embeddings, else use the default tiling for images exceeding the in-plane

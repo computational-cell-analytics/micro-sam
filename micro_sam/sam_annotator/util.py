@@ -33,7 +33,7 @@ prepare_annotation_image = util.prepare_annotation_image
 
 
 def _validate_sam2_model_type(model_type: str, tool: str) -> None:
-    """Check that the model is a micro-sam2/SAM2 model.
+    """Check that the model is a Segment Anything 2 model.
 
     Only the classification tools support other models.
 
@@ -42,7 +42,7 @@ def _validate_sam2_model_type(model_type: str, tool: str) -> None:
         tool: The name of the annotation tool, for example 'segmentation' or 'tracking'.
 
     Raises:
-        ValueError: If the model is not a micro-sam2/SAM2 model.
+        ValueError: If the model is not a Segment Anything 2 model.
     """
     if not model_type.startswith("hvit_"):
         raise ValueError(

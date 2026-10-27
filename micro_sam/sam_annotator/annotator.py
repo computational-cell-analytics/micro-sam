@@ -317,7 +317,7 @@ def annotator(
         segmentation_result: An initial segmentation to load.
             This can be used to correct segmentations with Segment Anything or to save and load progress.
             The segmentation will be loaded as the 'committed_objects' layer.
-        model_type: The micro-sam2/SAM2 model to use. The name must start with 'hvit_'. For the available
+        model_type: The Segment Anything 2 model to use. The name must start with 'hvit_'. For the available
             models, see https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         tile_shape: Shape of tiles for tiled embedding prediction. If `None`, reuse the tiling of
             already cached embeddings, else use the default tiling for images exceeding the in-plane
@@ -344,7 +344,7 @@ def annotator(
         The napari viewer, only returned if `return_viewer=True`.
 
     Raises:
-        ValueError: If the model is not a micro-sam2/SAM2 model. Also if ndim is not valid or does not
+        ValueError: If the model is not a Segment Anything 2 model. Also if ndim is not valid or does not
             match the image shape.
     """
     # Normalize the image: squeeze singletons and map the channel axis to RGB. The optional 'ndim'

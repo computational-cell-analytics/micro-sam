@@ -175,7 +175,7 @@ def batch_annotator(
         images: List of the file paths or list of (set of) slices for the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
         ndim: The number of spatial dimensions (2 or 3). If None, auto-detected from image shape.
-        model_type: The micro-sam2/SAM2 model to use. The name must start with 'hvit_'. For the available
+        model_type: The Segment Anything 2 model to use. The name must start with 'hvit_'. For the available
             models, see https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         embedding_path: Filepath where to save the embeddings.
         initial_segmentations: Initial segmentations to be corrected.
