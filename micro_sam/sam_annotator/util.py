@@ -1001,7 +1001,7 @@ def _batched_interactive_segmentation(predictor, points, labels, boxes, image_em
         box, point, label = prompt
         if len(negative_points) > 0:
             if point is None:
-                point, label = negative_points, negative_labels
+                point, label = np.concatenate(negative_points), np.concatenate(negative_labels)
             else:
                 point = np.concatenate([point] + negative_points)
                 label = np.concatenate([label] + negative_labels)
