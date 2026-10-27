@@ -17,7 +17,7 @@ from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._titles import get_dock_title
-from .util import _sync_embedding_widget, _sync_tiling_widget
+from .util import _sync_embedding_widget, _sync_tiling_widget, _validate_sam2_model_type
 from .annotator import Annotator, detect_ndim
 from ._batch import BatchAnnotatorTask, run_batch
 
@@ -49,6 +49,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         precompute_autoseg_state, checkpoint_path, device, prefer_decoder,
         initial_segmentations=None, batch_size=1,
     ):
+        _validate_sam2_model_type(model_type, "segmentation")
         self.ndim = ndim
         self.model_type = model_type
         self.embedding_path = embedding_path
@@ -70,7 +71,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
 
     def precompute(self, images):
         # The tool computes embeddings lazily per item in start and advance (via 'initialize_predictor',
-        # which routes SAM1 or SAM2 and loads the model once, then reuses it across items). Here we only
+        # which loads the model once, then reuses it across items). Here we only
         # build the per-item embedding paths. Each item is 'None' when no embedding folder is given.
         if self.embedding_path is None:
             return [None] * len(images)
@@ -93,8 +94,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
 
     def _init_predictor(self, viewer, image, embedding_path):
         state = AnnotatorState()
-        # Reuse the already-loaded model on later items (and for SAM1, which preloads it in 'precompute');
-        # only the first SAM2 item actually loads the model and its decoder.
+        # Only the first item loads the model and its decoder. The later items reuse them.
         if self.predictor is not None:
             kwargs = dict(predictor=self.predictor, decoder=self.decoder, prefer_decoder=False)
         else:
@@ -107,7 +107,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
             ndim=self.ndim,
             precompute_autoseg_state=self.precompute_autoseg_state,
             checkpoint_path=self.checkpoint_path, batch_size=self.batch_size,
-            device=self.device, skip_load=False, use_cli=True, **kwargs,
+            device=self.device, use_cli=True, **kwargs,
         )
         # Capture the loaded model so subsequent items reuse it instead of reloading.
         self.predictor, self.decoder = state.predictor, state.decoder
@@ -175,8 +175,8 @@ def batch_annotator(
         images: List of the file paths or list of (set of) slices for the images to be annotated.
         output_folder: The folder where the segmentation results are saved.
         ndim: The number of spatial dimensions (2 or 3). If None, auto-detected from image shape.
-        model_type: The Segment Anything model to use. For details on the available models check out
-            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
+        model_type: The micro-sam2/SAM2 model to use. The name must start with 'hvit_'. For the available
+            models, see https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         embedding_path: Filepath where to save the embeddings.
         initial_segmentations: Initial segmentations to be corrected.
             By default no initial segmentations are loaded.
@@ -432,12 +432,12 @@ class BatchAnnotator(widgets._WidgetBase):
         self._pattern_param.textChanged.connect(self._update_default_tiling)
 
     def _build_embedding_widget(self):
-        # The classifier tasks use the classification embedding widget (which adds the 'Advanced
-        # Models' selector). Tracking uses the SAM2-only timeseries widget. Segmentation uses the default.
+        # The classifier tasks use the classification embedding widget. Its 'Advanced Models' selector also
+        # offers SAM1. Tracking uses the timeseries widget. Segmentation uses the default widget.
         if self.task in ("Object Classification", "Pixel Classification"):
             ew = widgets.ClassificationEmbeddingWidget(ndim_choice=True)
         elif self.task == "Tracking":
-            ew = widgets.EmbeddingWidget(sam2_only=True, is_timeseries=True)
+            ew = widgets.EmbeddingWidget(is_timeseries=True)
         else:
             ew = widgets.EmbeddingWidget(ndim_choice=True)
         # The launcher works on a folder and the harness computes embeddings itself, so the

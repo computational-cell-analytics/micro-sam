@@ -79,10 +79,11 @@ def test_launcher_embedding_widget_swaps_per_task(make_napari_viewer_proxy):
     assert isinstance(widget._embedding_widget, ClassificationEmbeddingWidget)
     assert hasattr(widget._embedding_widget, "advanced_checkbox")
 
-    # Tracking: the SAM2-only timeseries widget (no image-dimensions dropdown, always 3d).
+    # Tracking: the timeseries widget (no image-dimensions dropdown, always 3d).
     widget.task_dropdown.setCurrentText("Tracking")
     assert isinstance(widget._embedding_widget, EmbeddingWidget)
-    assert widget._embedding_widget.sam2_only
+    assert not isinstance(widget._embedding_widget, ClassificationEmbeddingWidget)
+    assert widget._embedding_widget.is_timeseries
     assert not widget._embedding_widget.ndim_choice
 
 

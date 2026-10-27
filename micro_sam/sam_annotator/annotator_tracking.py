@@ -26,14 +26,6 @@ STATE_COLOR_CYCLE = [
 """@private"""
 
 
-def _validate_tracking_model_type(model_type):
-    if not model_type.startswith("hvit_"):
-        raise ValueError(
-            "The tracking annotator only supports micro-sam2/SAM2 models. "
-            f"Got unsupported model '{model_type}'."
-        )
-
-
 # This solution is a bit hacky, so I won't move it to _widgets.py yet.
 def create_tracking_menu(
     points_layer, box_layer, states, track_ids, point_labels=None, tracking_widget=None, viewer=None
@@ -165,7 +157,7 @@ def create_tracking_menu(
 class AnnotatorTracking(_AnnotatorBase):
 
     def _create_embedding_widget(self):
-        return widgets.EmbeddingWidget(sam2_only=True, is_timeseries=True)
+        return widgets.EmbeddingWidget(is_timeseries=True)
 
     # The tracking annotator needs different settings for the prompt layers
     # to support the additional tracking state.
@@ -427,10 +419,6 @@ class AnnotatorTracking(_AnnotatorBase):
     def _update_image(self):
         super()._update_image()
         self._init_track_state()
-        state = AnnotatorState()
-        # Without a decoder there is no automatic tracking, and so no state to load.
-        if self._with_decoder:
-            state.autoseg_state = vutil._load_is_state(state.embedding_path)
 
 
 def annotator_tracking(
@@ -475,7 +463,7 @@ def annotator_tracking(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
-    _validate_tracking_model_type(model_type)
+    vutil._validate_sam2_model_type(model_type, "tracking")
 
     # Initialize the predictor state.
     state = AnnotatorState()
@@ -541,7 +529,7 @@ class TrackingBatchTask(BatchAnnotatorTask):
         checkpoint_path=None, decoder_path=None, device=None,
         precompute_autoseg_state=False, batch_size=1,
     ):
-        _validate_tracking_model_type(model_type)
+        vutil._validate_sam2_model_type(model_type, "tracking")
         self.model_type = model_type
         self.embedding_path = embedding_path
         self.tile_shape = tile_shape

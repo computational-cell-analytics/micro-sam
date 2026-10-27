@@ -14,10 +14,7 @@ from ._state import AnnotatorState
 from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._titles import get_dock_title
 from ._annotator import _AnnotatorBase
-from .util import (
-    _load_is_state,
-    _sync_embedding_widget,
-)
+from .util import _sync_embedding_widget, _validate_sam2_model_type
 
 
 def detect_ndim(image: np.ndarray) -> int:
@@ -292,16 +289,6 @@ class Annotator(_AnnotatorBase):
         AnnotatorState().reset_state()
         self._rebuild_for_ndim(ndim, force=True)
 
-    def _update_image(self, segmentation_result=None):
-        """Update the image and load the automatic segmentation state for 3D."""
-        super()._update_image(segmentation_result=segmentation_result)
-
-        # Load the decoder state from the embedding path (3D only). Without a decoder there is no
-        # automatic segmentation in the annotator, and so no state to load.
-        if self._ndim == 3 and AnnotatorState().decoder is not None:
-            state = AnnotatorState()
-            state.autoseg_state = _load_is_state(state.embedding_path)
-
 
 def annotator(
     image: np.ndarray,
@@ -330,8 +317,8 @@ def annotator(
         segmentation_result: An initial segmentation to load.
             This can be used to correct segmentations with Segment Anything or to save and load progress.
             The segmentation will be loaded as the 'committed_objects' layer.
-        model_type: The Segment Anything model to use. For details on the available models check out
-            https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
+        model_type: The micro-sam2/SAM2 model to use. The name must start with 'hvit_'. For the available
+            models, see https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
         tile_shape: Shape of tiles for tiled embedding prediction. If `None`, reuse the tiling of
             already cached embeddings, else use the default tiling for images exceeding the in-plane
             size threshold, and pass smaller images to Segment Anything without tiling.
@@ -357,12 +344,14 @@ def annotator(
         The napari viewer, only returned if `return_viewer=True`.
 
     Raises:
-        ValueError: If ndim is invalid or doesn't match the image shape.
+        ValueError: If the model is not a micro-sam2/SAM2 model. Also if ndim is not valid or does not
+            match the image shape.
     """
     # Normalize the image: squeeze singletons and map the channel axis to RGB. The optional 'ndim'
     # override disambiguates multi-channel inputs (e.g. reads a channels-first (C, H, W) array as a
     # 2d image), consistent with the GUI's 'image dimensions' control. With ndim=None it is
     # auto-detected. 'prepare_annotation_image' raises if the override cannot be applied to the shape.
+    _validate_sam2_model_type(model_type, "segmentation")
     image, ndim, rgb = vutil.prepare_annotation_image(image, ndim=ndim)
 
     # Extract image shape (strip RGB channel if present)
@@ -386,7 +375,6 @@ def annotator(
         decoder_path=decoder_path,
         device=device,
         prefer_decoder=prefer_decoder,
-        skip_load=False,
         use_cli=True,
     )
 

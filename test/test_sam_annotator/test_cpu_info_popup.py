@@ -58,7 +58,7 @@ def test_cpu_popup_always_shown_for_tracking(make_napari_viewer_proxy, popups, t
     # on the CPU regardless of tiling. The message says 'timeseries' rather than '3D', matching the
     # relabelled embedding progress bar.
     make_napari_viewer_proxy()
-    widget = EmbeddingWidget(sam2_only=True, is_timeseries=True)
+    widget = EmbeddingWidget(is_timeseries=True)
     widget.device = "cpu"
     widget._maybe_warn_cpu(3, tile_shape, (8, 2048, 2048))
 
