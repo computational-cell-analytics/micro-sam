@@ -615,7 +615,7 @@ class _WidgetBase(QtWidgets.QWidget):
             return _generate_message(
                 "error",
                 f"The {tool} annotator does not support the model '{self.model_type}'. "
-                "Use a micro-sam2/SAM2 model ('hvit_*').",
+                "Use a (µ)SAM2 model ('hvit_*').",
             )
         return False
 

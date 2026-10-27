@@ -46,7 +46,7 @@ def _validate_sam2_model_type(model_type: str, tool: str) -> None:
     """
     if not model_type.startswith("hvit_"):
         raise ValueError(
-            f"The {tool} annotator does not support the model '{model_type}'. Use a micro-sam2/SAM2 model ('hvit_*')."
+            f"The {tool} annotator does not support the model '{model_type}'. Use a (µ)SAM2 model ('hvit_*')."
         )
 
 

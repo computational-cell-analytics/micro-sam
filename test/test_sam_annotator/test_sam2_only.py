@@ -43,7 +43,7 @@ def test_embedding_widget_rejects_sam1(monkeypatch, is_timeseries, tool):
     # Loading saved SAM1 embeddings also sets this model type, so this covers that case too.
     widget = _make_widget(widgets.EmbeddingWidget, "vit_b_lm", is_timeseries=is_timeseries)
     assert widget._validate_model_support()
-    expected = f"The {tool} annotator does not support the model 'vit_b_lm'. Use a micro-sam2/SAM2 model ('hvit_*')."
+    expected = f"The {tool} annotator does not support the model 'vit_b_lm'. Use a (µ)SAM2 model ('hvit_*')."
     assert messages == [("error", expected)]
 
     widget = _make_widget(widgets.EmbeddingWidget, "hvit_t_cells", is_timeseries=is_timeseries)
