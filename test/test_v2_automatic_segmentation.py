@@ -14,7 +14,8 @@ from micro_sam.v2.instance_segmentation import (
     TiledAutomaticMaskGenerationSegmenter, amg_3d_segmentation,
     get_instance_segmentation_generator, get_decoder, retile_instance_segmentation_generator,
 )
-from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, default_postprocessing, run_multicut
+from micro_sam._model_settings import DEFAULT_POSTPROCESSING
+from micro_sam.v2.postprocessing import default_postprocessing, run_multicut
 from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, ImageEmbeddings
 
 

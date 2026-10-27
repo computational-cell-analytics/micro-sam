@@ -3921,7 +3921,7 @@ class AutoSegmentWidget(_WidgetBase):
         Returns:
             The mode names, in dropdown order. The first is the default.
         """
-        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
+        from micro_sam._model_settings import DEFAULT_POSTPROCESSING
         from micro_sam.v2.util import DEFAULT_MODEL, parameter_family
 
         # Only a model with dense defaults segments neurites, e.g. not the EM organelle models.

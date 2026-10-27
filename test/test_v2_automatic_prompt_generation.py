@@ -1400,7 +1400,8 @@ def test_volume_refinement_is_on_for_hvit_b_only():
 
 
 def test_prompt_generation_defaults_are_selected_by_model_family():
-    from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION_PARAMETERS, default_prompt_generation
+    from micro_sam._model_settings import DEFAULT_PROMPT_GENERATION_PARAMETERS
+    from micro_sam.v2.automatic_prompt_generation import default_prompt_generation
     for family, backbones in DEFAULT_PROMPT_GENERATION_PARAMETERS.items():
         for backbone, tables in backbones.items():
             assert default_prompt_generation(f"{backbone}_{family}", is_volume=False) == tables["2d"]
