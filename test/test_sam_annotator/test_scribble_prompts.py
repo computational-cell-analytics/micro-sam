@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 from napari.layers import Points, Shapes
 
 from micro_sam.sam_annotator import util as annotator_util
@@ -696,38 +695,6 @@ def test_sam2_volume_propagation_merges_3d_scribbles_points_and_boxes(monkeypatc
     assert current_object.refresh_count == 1
 
 
-def test_legacy_volume_segmentation_merges_slice_scribbles(monkeypatch):
-    point_layer = Points(ndim=3, properties={"label": np.empty((0,), dtype=str)})
-    prompt_layer = Shapes(
-        data=[np.array([[1.0, 4.0, 5.0], [1.0, 12.0, 13.0]])],
-        shape_type=["path"],
-        properties={"label": np.array(["positive"])},
-    )
-    captured = {}
-
-    def _prompt_segmentation(predictor, points, labels, boxes, masks, shape, **kwargs):
-        captured.update(points=points, labels=labels, boxes=boxes, masks=masks, shape=shape, kwargs=kwargs)
-        return np.ones(shape, dtype="uint32")
-
-    monkeypatch.setattr(annotator_util, "prompt_segmentation", _prompt_segmentation)
-
-    seg, slices, stop_lower, stop_upper = annotator_util.segment_slices_with_prompts(
-        predictor=object(),
-        point_prompts=point_layer,
-        box_prompts=prompt_layer,
-        image_embeddings=object(),
-        shape=(3, 32, 32),
-    )
-
-    np.testing.assert_array_equal(slices, [1])
-    assert stop_lower is False
-    assert stop_upper is False
-    assert len(captured["points"]) > 1
-    np.testing.assert_array_equal(captured["labels"], np.ones(len(captured["labels"]), dtype="int64"))
-    assert captured["boxes"] == []
-    np.testing.assert_array_equal(seg[1], 1)
-
-
 def test_negative_only_scribble_is_rejected_before_prediction(monkeypatch):
     from micro_sam.sam_annotator import _widgets
 
@@ -820,8 +787,7 @@ def test_2d_segmentation_merges_scribbles_with_clicks(monkeypatch):
     assert current_object.refresh_count == 1
 
 
-@pytest.mark.parametrize("is_sam2", [False, True])
-def test_point_and_box_only_segmentation_is_unchanged(monkeypatch, is_sam2):
+def test_point_and_box_only_segmentation_is_unchanged(monkeypatch):
     """The scribble integration must be a no-op for the existing point/box-only workflow."""
     from micro_sam.sam_annotator import _widgets
     from micro_sam.v2 import prompt_based_segmentation
@@ -843,7 +809,7 @@ def test_point_and_box_only_segmentation_is_unchanged(monkeypatch, is_sam2):
         "point_prompts": point_layer,
     })
     state = SimpleNamespace(
-        predictor=object(), image_embeddings={"input_size": (1024, 1024)}, is_sam2=is_sam2,
+        predictor=object(), image_embeddings={"input_size": (1024, 1024)}, is_sam2=True,
     )
     boxes = np.array([[2.0, 3.0, 20.0, 21.0]])
     points = np.array([[7.0, 8.0]])
@@ -865,20 +831,11 @@ def test_point_and_box_only_segmentation_is_unchanged(monkeypatch, is_sam2):
     )
     captured = {}
 
-    if is_sam2:
-        def _predict(**kwargs):
-            captured.update(kwargs)
-            return np.ones((32, 32), dtype="uint8")
+    def _predict(**kwargs):
+        captured.update(kwargs)
+        return np.ones((32, 32), dtype="uint8")
 
-        monkeypatch.setattr(prompt_based_segmentation, "promptable_segmentation_2d", _predict)
-    else:
-        def _predict(predictor, points, labels, boxes, masks, shape, **kwargs):
-            captured.update(
-                points=points, labels=labels, boxes=boxes, masks=masks, shape=shape, **kwargs
-            )
-            return np.ones(shape, dtype="uint8")
-
-        monkeypatch.setattr(_widgets.vutil, "prompt_segmentation", _predict)
+    monkeypatch.setattr(prompt_based_segmentation, "promptable_segmentation_2d", _predict)
 
     _widgets._segment_object_2d(viewer, batched=True)
 

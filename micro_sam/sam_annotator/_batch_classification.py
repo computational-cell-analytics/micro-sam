@@ -83,7 +83,7 @@ class ClassificationBatchTask(BatchAnnotatorTask):
             image, model_type=self.model_type, save_path=embedding_path, halo=halo,
             tile_shape=tile_shape, precompute_autoseg_state=False, ndim=self.ndim,
             checkpoint_path=self.checkpoint_path, device=self.device, batch_size=self.batch_size,
-            skip_load=False, use_cli=True, **kwargs,
+            use_cli=True, **kwargs,
         )
         return tile_shape, halo
 

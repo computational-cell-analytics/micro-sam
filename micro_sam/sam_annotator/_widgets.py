@@ -37,12 +37,10 @@ from . import util as vutil
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from ..v1.multi_dimensional_segmentation import (
-    PROJECTION_MODES,
     export_tracking_result_to_ctc,
     export_tracking_result_to_geff,
     export_tracking_result_to_trackmate_xml,
     get_napari_track_data,
-    segment_mask_in_volume,
     track_across_frames,
 )
 
@@ -611,11 +609,13 @@ class _WidgetBase(QtWidgets.QWidget):
             self.model_family_dropdown.blockSignals(False)
 
     def _validate_model_support(self):
-        if getattr(self, "sam2_only", False) and not self.model_type.startswith("hvit_"):
+        # The segmentation and tracking annotators support only SAM2. The classification widget overrides this.
+        if not self.model_type.startswith("hvit_"):
+            tool = "tracking" if getattr(self, "is_timeseries", False) else "segmentation"
             return _generate_message(
                 "error",
-                "The tracking annotator only supports micro-sam2/SAM2 models. "
-                f"Got unsupported model '{self.model_type}'.",
+                f"The {tool} annotator does not support the model '{self.model_type}'. "
+                "Use a (µ)SAM2 model ('hvit_*').",
             )
         return False
 
@@ -895,8 +895,7 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
 
 
 def _get_auto_segmentation_options(state, object_ids):
-    # Which parameters describe a run depends on the widget (SAM2 vs. v1) and, for SAM2, on the
-    # mode, so the widget reports them itself rather than this function guessing the attributes.
+    # The parameters of a run depend on the mode, so the widget reports them.
     widget = state.widgets["autosegment"]
 
     segmentation_options = {
@@ -911,16 +910,7 @@ def _get_promptable_segmentation_options(state, object_ids):
     segmentation_options = {
         "object_ids": [int(object_id) for object_id in object_ids]
     }
-    is_tracking = False
-    if "segment_nd" in state.widgets:
-        widget = state.widgets["segment_nd"]
-        segmentation_options["projection"] = widget.projection
-        segmentation_options["iou_threshold"] = widget.iou_threshold
-        segmentation_options["box_extension"] = widget.box_extension
-        if widget.tracking:
-            segmentation_options["motion_smoothing"] = widget.motion_smoothing
-            is_tracking = True
-    return segmentation_options, is_tracking
+    return segmentation_options, False
 
 
 def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
@@ -1689,38 +1679,24 @@ def _segment_object_2d(viewer, batched=False):
         )
         batched = False
 
-    if state.is_sam2:
-        # When the embeddings are tiled (top-level 'input_size' is None), route the prompts to the
-        # matching tile and stitch. Otherwise the predictor already holds the single image embedding.
-        if image_embeddings is not None and image_embeddings.get("input_size") is None:
-            from micro_sam.v2.prompt_based_segmentation import tiled_promptable_segmentation_2d
-            seg = tiled_promptable_segmentation_2d(
-                predictor=predictor, image_embeddings=image_embeddings,
-                points=points, labels=labels, boxes=boxes, masks=masks, batched=batched,
-                devices=state.inference_devices,
-            )
-        else:
-            from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
-            seg = promptable_segmentation_2d(
-                predictor=predictor,
-                points=points,
-                labels=labels,
-                boxes=boxes,
-                masks=masks,
-                batched=batched,
-            )
+    # When the embeddings are tiled (top-level 'input_size' is None), route the prompts to the
+    # matching tile and stitch. Otherwise the predictor already holds the single image embedding.
+    if image_embeddings is not None and image_embeddings.get("input_size") is None:
+        from micro_sam.v2.prompt_based_segmentation import tiled_promptable_segmentation_2d
+        seg = tiled_promptable_segmentation_2d(
+            predictor=predictor, image_embeddings=image_embeddings,
+            points=points, labels=labels, boxes=boxes, masks=masks, batched=batched,
+            devices=state.inference_devices,
+        )
     else:
-        seg = vutil.prompt_segmentation(
-            predictor,
-            points,
-            labels,
-            boxes,
-            masks,
-            shape,
-            image_embeddings=image_embeddings,
-            multiple_box_prompts=True,
+        from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
+        seg = promptable_segmentation_2d(
+            predictor=predictor,
+            points=points,
+            labels=labels,
+            boxes=boxes,
+            masks=masks,
             batched=batched,
-            previous_segmentation=viewer.layers["current_object"].data,
         )
 
     # no prompts were given or prompts were invalid, skip segmentation
@@ -1798,9 +1774,8 @@ class EmbeddingWidget(_WidgetBase):
     # not the classification tools which have no automatic segmentation).
     supports_state_caching = True
 
-    def __init__(self, parent=None, sam2_only=False, ndim_choice=False, is_timeseries=False):
+    def __init__(self, parent=None, ndim_choice=False, is_timeseries=False):
         super().__init__(parent=parent)
-        self.sam2_only = sam2_only
         # Whether to expose the 'image dimensions' (ndim) override dropdown. Only the segmentation
         # annotator wires it into image normalization, so it is off by default (hidden for tracking
         # and the classifiers, which do not use it).
@@ -1918,23 +1893,11 @@ class EmbeddingWidget(_WidgetBase):
                 self.custom_weights,
                 update_decoder=with_decoder,
             )
-            # Load the AIS state cache. For SAM2 the state cache (the decoder predictions) is
-            # recorded via '_autoseg_state_descriptor', and the widget reads and writes it on demand.
-            # SAM1 preloads the per-slice 3d state as before. Without a decoder there is no automatic
-            # segmentation in the annotator, and so no state to load.
-            if not with_decoder:
-                state.autoseg_state = None
-            elif state.is_sam2:
+            # Record the location of the cached decoder predictions. The widget reads and writes the cache.
+            if with_decoder:
                 state.autoseg_state = vutil._autoseg_state_descriptor(state.embedding_path, "ais")
-            elif state.widgets["autosegment"].volumetric:
-                state.autoseg_state = vutil._load_is_state(state.embedding_path)
-
-        # Set the default settings for this model in the nd-segmentation widget if it is part of
-        # the currently used plugin.
-        if "segment_nd" in state.widgets:
-            vutil._sync_ndsegment_widget(
-                state.widgets["segment_nd"], _model_type, self.custom_weights
-            )
+            else:
+                state.autoseg_state = None
 
         # Now that the (possibly tiled) embeddings are known, refresh the 'Batched' control on the
         # segment/track widgets: batched prompting is unsupported with tiling, so it is hidden then.
@@ -2716,8 +2679,6 @@ class ClassificationEmbeddingWidget(EmbeddingWidget):
             self.model_size_dropdown.setCurrentText(size)
 
     def _validate_model_support(self):
-        if super()._validate_model_support():
-            return True
         # The vit-tiny backbone needs MobileSAM. Warn (instead of crashing later) if it is selected
         # without MobileSAM installed. The model stays selectable - we just block this compute.
         from ..util import VIT_T_SUPPORT
@@ -2918,7 +2879,7 @@ class UnifiedSegmentWidget(_WidgetBase):
         self.volume_checkbox.stateChanged.connect(self._on_volume_mode_changed)
         self.layout().addWidget(self.volume_checkbox)
 
-        # 2. Add batched checkbox (initially hidden, shown for SAM2 when not tiled)
+        # 2. Add the batched checkbox. It stays hidden until the embeddings exist and are not tiled.
         self.batched = False
         self.batched_checkbox = self._add_boolean_param(
             "batched",
@@ -2929,10 +2890,11 @@ class UnifiedSegmentWidget(_WidgetBase):
         self.batched_checkbox.setVisible(False)  # Initially hidden
         self.layout().addWidget(self.batched_checkbox)
 
-        # 3. Create settings panel (initially hidden)
-        self.settings = self._create_settings()
-        self.settings.setVisible(False)
-        self.layout().addWidget(self.settings)
+        # 3. Store the settings for volume propagation. The InteractiveSegmentationWidget shows the controls.
+        # 'early_stop_patience': the number of empty slices after which propagation stops (0 disables it).
+        # 'z_range': the inclusive (z_min, z_max) range for propagation, or None for the full volume.
+        self.early_stop_patience = 2
+        self.z_range = None
 
         # 4. Add run button
         self.run_button = QtWidgets.QPushButton(self._get_button_text())
@@ -2940,64 +2902,8 @@ class UnifiedSegmentWidget(_WidgetBase):
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
-        # 5. Initialize batched checkbox visibility based on SAM version
+        # 5. Set the visibility of the batched checkbox.
         self._update_batched_visibility()
-
-    def _create_settings(self):
-        """Create the collapsible settings panel.
-        """
-        setting_values = QtWidgets.QWidget()
-        setting_values.setLayout(QtWidgets.QVBoxLayout())
-
-        # Projection mode dropdown
-        self.projection = "single_point"
-        self.projection_dropdown, layout = self._add_choice_param(
-            "projection",
-            self.projection,
-            PROJECTION_MODES,
-            tooltip=get_tooltip("segmentnd", "projection_dropdown"),
-        )
-        setting_values.layout().addLayout(layout)
-
-        # IOU threshold
-        self.iou_threshold = 0.5
-        self.iou_threshold_param, layout = self._add_float_param(
-            "iou_threshold",
-            self.iou_threshold,
-            tooltip=get_tooltip("segmentnd", "iou_threshold"),
-        )
-        setting_values.layout().addLayout(layout)
-
-        # Box extension
-        self.box_extension = 0.05
-        self.box_extension_param, layout = self._add_float_param(
-            "box_extension",
-            self.box_extension,
-            tooltip=get_tooltip("segmentnd", "box_extension"),
-        )
-        setting_values.layout().addLayout(layout)
-
-        # SAM2 volume-mode propagation controls. The engine only holds the values. The visible
-        # InteractiveSegmentationWidget owns the user-facing controls and writes these attributes.
-        # 'early_stop_patience': stop after this many consecutive empty slices (0 -> disabled).
-        # 'z_range': inclusive (z_min, z_max) hard bound on propagation, or 'None' for the full volume.
-        self.early_stop_patience = 2
-        self.z_range = None
-
-        # Motion smoothing (tracking only)
-        if self.tracking:
-            self.motion_smoothing = 0.5
-            self.motion_smoothing_param, layout = self._add_float_param(
-                "motion_smoothing",
-                self.motion_smoothing,
-                tooltip=get_tooltip("segmentnd", "motion_smoothing"),
-            )
-            setting_values.layout().addLayout(layout)
-
-        settings = _make_collapsible(
-            setting_values, title="Segmentation Settings", tooltip=get_tooltip("unified_segment", "settings"),
-        )
-        return settings
 
     def _on_volume_mode_changed(self, state):
         """Handle volume mode checkbox state change.
@@ -3005,11 +2911,6 @@ class UnifiedSegmentWidget(_WidgetBase):
         Args:
             state: Qt checkbox state (0=unchecked, 2=checked).
         """
-        is_checked = bool(state)
-
-        # Show/hide settings panel
-        self.settings.setVisible(is_checked)
-
         # Update button text
         self.run_button.setText(self._get_button_text())
 
@@ -3017,13 +2918,11 @@ class UnifiedSegmentWidget(_WidgetBase):
         self._update_batched_visibility()
 
     def _update_batched_visibility(self):
-        """Show/hide batched checkbox based on SAM version and tiling."""
+        """Show the batched checkbox only for computed embeddings that are not tiled."""
         state = AnnotatorState()
-        is_sam2 = state.is_sam2 if state.is_sam2 is not None else False
 
-        # Show batched for SAM2 models when the embeddings are not tiled (batched prompting is
-        # unsupported with tiling). Available in both slice/frame and volume/all-frames mode.
-        should_show = is_sam2 and not _embeddings_are_tiled(state)
+        # Batched prompts do not work with tiled embeddings. They work in the slice and in the volume mode.
+        should_show = state.image_embeddings is not None and not _embeddings_are_tiled(state)
         if not should_show and getattr(self, "batched", False):
             self.batched_checkbox.setChecked(False)
         self.batched_checkbox.setVisible(should_show)
@@ -3115,31 +3014,16 @@ class UnifiedSegmentWidget(_WidgetBase):
             )
             batched = False
 
-        if state.is_sam2:
-            # Use the segment_slice method for SAM2.
-            boxes = [box[[1, 0, 3, 2]] for box in boxes]
-            if batched:
-                seg = self._segment_slice_batched(z, points, labels, boxes, masks, shape)
-            else:
-                seg = state.interactive_segmenter.segment_slice(
-                    frame_idx=z,
-                    points=points[:, ::-1].copy(),
-                    labels=labels,
-                    boxes=boxes,
-                    masks=masks,
-                )
+        boxes = [box[[1, 0, 3, 2]] for box in boxes]
+        if batched:
+            seg = self._segment_slice_batched(z, points, labels, boxes, masks, shape)
         else:
-            seg = vutil.prompt_segmentation(
-                state.predictor,
-                points,
-                labels,
-                boxes,
-                masks,
-                shape,
-                multiple_box_prompts=False,
-                image_embeddings=state.image_embeddings,
-                batched=batched,
-                i=z,
+            seg = state.interactive_segmenter.segment_slice(
+                frame_idx=z,
+                points=points[:, ::-1].copy(),
+                labels=labels,
+                boxes=boxes,
+                masks=masks,
             )
 
         # No prompts were given or prompts were invalid, skip segmentation.
@@ -3263,150 +3147,105 @@ class UnifiedSegmentWidget(_WidgetBase):
             pbar_signals.pbar_total.emit(shape[0])
             pbar_signals.pbar_description.emit("Segment object")
 
-            if state.is_sam2:
-                # Prepare the prompts
-                point_prompts = self._viewer.layers["point_prompts"]
-                box_prompts = self._viewer.layers["prompts"]
-                z_values_points = np.round(point_prompts.data[:, 0])
-                z_values_scribbles = vutil.get_scribble_slices(box_prompts)
-                have_scribbles = len(z_values_scribbles) > 0
-                z_values_boxes = np.round(
-                    np.asarray([
-                        shape[0, 0]
-                        for shape, shape_type in zip(box_prompts.data, box_prompts.shape_type)
-                        if shape_type not in vutil.SCRIBBLE_SHAPE_TYPES
-                    ])
-                ).astype("int")
+            # Prepare the prompts
+            point_prompts = self._viewer.layers["point_prompts"]
+            box_prompts = self._viewer.layers["prompts"]
+            z_values_points = np.round(point_prompts.data[:, 0])
+            z_values_scribbles = vutil.get_scribble_slices(box_prompts)
+            have_scribbles = len(z_values_scribbles) > 0
+            z_values_boxes = np.round(
+                np.asarray([
+                    shape[0, 0]
+                    for shape, shape_type in zip(box_prompts.data, box_prompts.shape_type)
+                    if shape_type not in vutil.SCRIBBLE_SHAPE_TYPES
+                ])
+            ).astype("int")
 
-                # Whether the user decide to provide batched prompts for multi-object segmentation.
-                is_batched = _batched_disabled_when_tiled(state, bool(self.batched))
-                if have_scribbles and is_batched:
-                    show_info(
-                        "Batched segmentation is not supported with scribble prompts. "
-                        "It runs single-object segmentation instead."
-                    )
-                    is_batched = False
-
-                # Check batched mode validity and show warning if needed
-                if is_batched and not state.is_sam2:
-                    show_info(
-                        "Batched segmentation is only supported with SAM2 models (hvit_*). "
-                        "It runs in standard mode instead."
-                    )
-                    is_batched = False
-
-                # Collect every prompt first: a slice's negative points must be known when the boxes
-                # and masks on that slice are assigned their object ids, and the complete set is
-                # needed to detect prompts that changed since the last run.
-                shape_yx = state.image_shape[-2:]
-                point_slices = np.unique(np.concatenate([z_values_points, z_values_scribbles])).astype("int")
-                merged_prompts, shape_prompts, stop_slices = {}, {}, []
-                for curr_z in np.unique(np.concatenate([point_slices, z_values_boxes])).astype("int"):
-                    prompts = vutil.collect_frame_prompts(point_prompts, box_prompts, shape_yx, i=curr_z)
-                    # A slice whose only prompt is a single negative point is a 'stop' annotation.
-                    if prompts.is_stop:
-                        stop_slices.append(int(curr_z))
-                    elif len(prompts.points):
-                        merged_prompts[int(curr_z)] = (prompts.points, prompts.labels)
-                    rect_boxes, poly_masks = prompts.split_shapes()
-                    if rect_boxes or poly_masks:
-                        shape_prompts[int(curr_z)] = (rect_boxes, poly_masks)
-
-                have_positive_points = any(np.any(labels == 1) for _, labels in merged_prompts.values())
-                have_shape_cue = len(shape_prompts) > 0
-                if have_scribbles and not have_positive_points and not have_shape_cue:
-                    pbar_signals.pbar_stop.emit()
-                    _generate_message(
-                        "error",
-                        "A negative scribble needs a positive point, positive scribble, box or mask prompt.",
-                    )
-                    return None
-                if is_batched and not have_positive_points and not have_shape_cue:
-                    # A batched object needs a positive cue; a negative point only corrects one.
-                    pbar_signals.pbar_stop.emit()
-                    _generate_message(
-                        "error",
-                        "Batched segmentation needs a positive point, box or mask prompt.",
-                    )
-                    return None
-
-                # Plan the whole round before touching the state: the object each prompt is routed to
-                # depends on the prompt set as a whole, and the sync below needs that routing.
-                plan = _plan_volume_prompts(merged_prompts, shape_prompts, is_batched)
-                signatures = _volume_prompt_signatures(plan)
-
-                # A patience of 0 disables early stopping (propagate through the whole volume).
-                early_stop_patience = self.early_stop_patience if self.early_stop_patience > 0 else None
-                prompted_slices = set(merged_prompts) | set(shape_prompts)
-                z_range, ignored_stops = _bound_z_range_by_stops(
-                    prompted_slices, stop_slices, shape[0], self.z_range
+            # Whether the user decide to provide batched prompts for multi-object segmentation.
+            is_batched = _batched_disabled_when_tiled(state, bool(self.batched))
+            if have_scribbles and is_batched:
+                show_info(
+                    "Batched segmentation is not supported with scribble prompts. "
+                    "It runs single-object segmentation instead."
                 )
-                if ignored_stops:
-                    show_info(
-                        f"Ignoring the stop annotation (single negative point) in slice(s) {ignored_stops}: "
-                        "a stop must lie below or above all prompted slices."
-                    )
+                is_batched = False
 
-                # Propagating the same prompts again costs a full pass and drifts from the first result.
-                run_key = (
-                    id(state.interactive_segmenter), is_batched, frozenset(signatures), z_range, early_stop_patience
+            # Collect every prompt first: a slice's negative points must be known when the boxes
+            # and masks on that slice are assigned their object ids, and the complete set is
+            # needed to detect prompts that changed since the last run.
+            shape_yx = state.image_shape[-2:]
+            point_slices = np.unique(np.concatenate([z_values_points, z_values_scribbles])).astype("int")
+            merged_prompts, shape_prompts, stop_slices = {}, {}, []
+            for curr_z in np.unique(np.concatenate([point_slices, z_values_boxes])).astype("int"):
+                prompts = vutil.collect_frame_prompts(point_prompts, box_prompts, shape_yx, i=curr_z)
+                # A slice whose only prompt is a single negative point is a 'stop' annotation.
+                if prompts.is_stop:
+                    stop_slices.append(int(curr_z))
+                elif len(prompts.points):
+                    merged_prompts[int(curr_z)] = (prompts.points, prompts.labels)
+                rect_boxes, poly_masks = prompts.split_shapes()
+                if rect_boxes or poly_masks:
+                    shape_prompts[int(curr_z)] = (rect_boxes, poly_masks)
+
+            have_positive_points = any(np.any(labels == 1) for _, labels in merged_prompts.values())
+            have_shape_cue = len(shape_prompts) > 0
+            if have_scribbles and not have_positive_points and not have_shape_cue:
+                pbar_signals.pbar_stop.emit()
+                _generate_message(
+                    "error",
+                    "A negative scribble needs a positive point, positive scribble, box or mask prompt.",
                 )
-                if self._last_volume_run is not None and self._last_volume_run[0] == run_key:
-                    pbar_signals.pbar_stop.emit()
-                    return self._last_volume_run[1].copy()
-
-                # Rebuild the persistent state when a prompt was deleted, moved, relabelled or routed
-                # to a different object since the last run. A round that only adds prompts and leaves
-                # the existing routing intact keeps the state, so only the new prompts are pushed.
-                state.interactive_segmenter.sync_prompt_state(signatures)
-                _push_volume_prompts(state.interactive_segmenter, plan)
-
-                # Propagate the prompts throughout the volume and combine the propagated segmentations.
-                # Tiled segmenters count one step per slice in each tile activated above.
-                n_propagation_steps = state.interactive_segmenter.get_progress_total(z_range)
-                pbar_signals.pbar_total.emit(n_propagation_steps)
-                pbar_signals.pbar_description.emit("Propagate in volume")
-                seg = state.interactive_segmenter.predict(
-                    update_progress=emit_progress,
-                    early_stop_patience=early_stop_patience, z_range=z_range,
+                return None
+            if is_batched and not have_positive_points and not have_shape_cue:
+                # A batched object needs a positive cue; a negative point only corrects one.
+                pbar_signals.pbar_stop.emit()
+                _generate_message(
+                    "error",
+                    "Batched segmentation needs a positive point, box or mask prompt.",
                 )
-                self._last_volume_run = (run_key, seg.copy())
+                return None
 
-            else:
-                # Step 1: Segment all slices with prompts.
-                seg, slices, stop_lower, stop_upper = (
-                    vutil.segment_slices_with_prompts(
-                        state.predictor,
-                        self._viewer.layers["point_prompts"],
-                        self._viewer.layers["prompts"],
-                        state.image_embeddings,
-                        shape,
-                        update_progress=emit_progress,
-                    )
-                )
-                if len(slices) == 0:
-                    pbar_signals.pbar_stop.emit()
-                    _generate_message(
-                        "error",
-                        "No valid slice prompts remain. Add a positive point, scribble, box or mask prompt.",
-                    )
-                    return None
+            # Plan the whole round before touching the state: the object each prompt is routed to
+            # depends on the prompt set as a whole, and the sync below needs that routing.
+            plan = _plan_volume_prompts(merged_prompts, shape_prompts, is_batched)
+            signatures = _volume_prompt_signatures(plan)
 
-                # Step 2: Segment the rest of the volume based on projecting prompts.
-                seg, (z_min, z_max) = segment_mask_in_volume(
-                    seg,
-                    state.predictor,
-                    state.image_embeddings,
-                    slices,
-                    stop_lower,
-                    stop_upper,
-                    iou_threshold=self.iou_threshold,
-                    projection=self.projection,
-                    box_extension=self.box_extension,
-                    update_progress=emit_progress,
+            # A patience of 0 disables early stopping (propagate through the whole volume).
+            early_stop_patience = self.early_stop_patience if self.early_stop_patience > 0 else None
+            prompted_slices = set(merged_prompts) | set(shape_prompts)
+            z_range, ignored_stops = _bound_z_range_by_stops(
+                prompted_slices, stop_slices, shape[0], self.z_range
+            )
+            if ignored_stops:
+                show_info(
+                    f"Ignoring the stop annotation (single negative point) in slice(s) {ignored_stops}: "
+                    "a stop must lie below or above all prompted slices."
                 )
 
-                state.z_range = (z_min, z_max)
+            # Propagating the same prompts again costs a full pass and drifts from the first result.
+            run_key = (
+                id(state.interactive_segmenter), is_batched, frozenset(signatures), z_range, early_stop_patience
+            )
+            if self._last_volume_run is not None and self._last_volume_run[0] == run_key:
+                pbar_signals.pbar_stop.emit()
+                return self._last_volume_run[1].copy()
+
+            # Rebuild the persistent state when a prompt was deleted, moved, relabelled or routed
+            # to a different object since the last run. A round that only adds prompts and leaves
+            # the existing routing intact keeps the state, so only the new prompts are pushed.
+            state.interactive_segmenter.sync_prompt_state(signatures)
+            _push_volume_prompts(state.interactive_segmenter, plan)
+
+            # Propagate the prompts throughout the volume and combine the propagated segmentations.
+            # Tiled segmenters count one step per slice in each tile activated above.
+            n_propagation_steps = state.interactive_segmenter.get_progress_total(z_range)
+            pbar_signals.pbar_total.emit(n_propagation_steps)
+            pbar_signals.pbar_description.emit("Propagate in volume")
+            seg = state.interactive_segmenter.predict(
+                update_progress=emit_progress,
+                early_stop_patience=early_stop_patience, z_range=z_range,
+            )
+            self._last_volume_run = (run_key, seg.copy())
 
             pbar_signals.pbar_stop.emit()
 
@@ -3805,11 +3644,9 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self.apply_to_volume = bool(state)
         self._segment_widget.apply_to_volume = self.apply_to_volume
 
-        # Show the propagation controls only in volume mode with a SAM2 model, and size the slider.
+        # Show the propagation controls only in volume mode with a loaded model. Then fit the slider to the volume.
         if self._propagation_settings is not None:
-            annotator_state = AnnotatorState()
-            is_sam2 = bool(annotator_state.is_sam2) if annotator_state.is_sam2 is not None else False
-            show = self.apply_to_volume and is_sam2
+            show = self.apply_to_volume and AnnotatorState().predictor is not None
             self._propagation_settings.setVisible(show)
             if show:
                 self._update_z_range_slider()
@@ -4084,7 +3921,7 @@ class AutoSegmentWidget(_WidgetBase):
         Returns:
             The mode names, in dropdown order. The first is the default.
         """
-        from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING
+        from micro_sam._model_settings import DEFAULT_POSTPROCESSING
         from micro_sam.v2.util import DEFAULT_MODEL, parameter_family
 
         # Only a model with dense defaults segments neurites, e.g. not the EM organelle models.

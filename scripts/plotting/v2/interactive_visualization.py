@@ -66,7 +66,7 @@ def run_annotator(volume, embedding_path, model_type):
     state = AnnotatorState()
     state.image_shape = volume.shape
     state.initialize_predictor(
-        volume, model_type=model_type, ndim=3, save_path=embedding_path, batch_size=None, skip_load=False, use_cli=True
+        volume, model_type=model_type, ndim=3, save_path=embedding_path, batch_size=None, use_cli=True
     )
 
     viewer = napari.Viewer()

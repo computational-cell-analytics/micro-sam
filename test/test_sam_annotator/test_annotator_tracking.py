@@ -13,10 +13,8 @@ from micro_sam.sam_annotator._widgets import (
     AutoTrackWidget,
     EmbeddingWidget,
 )
-from micro_sam.sam_annotator.annotator_tracking import (
-    AnnotatorTracking,
-    _validate_tracking_model_type,
-)
+from micro_sam.sam_annotator.util import _validate_sam2_model_type
+from micro_sam.sam_annotator.annotator_tracking import AnnotatorTracking
 from micro_sam._test_util import check_layer_initialization
 
 
@@ -182,8 +180,8 @@ def test_commit_layer_follows_last_tracking(make_napari_viewer_proxy):
 
 
 def test_tracking_rejects_sam1_models():
-    with pytest.raises(ValueError, match="only supports micro-sam2/SAM2"):
-        _validate_tracking_model_type("vit_b_lm")
+    with pytest.raises(ValueError, match="tracking annotator does not support the model 'vit_b_lm'"):
+        _validate_sam2_model_type("vit_b_lm", "tracking")
 
 
 def test_auto_tracking_uses_sam2_widget():
