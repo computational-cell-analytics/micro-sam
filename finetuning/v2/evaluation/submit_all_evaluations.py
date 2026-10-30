@@ -27,6 +27,12 @@ Usage examples:
     python submit_all_evaluations.py --all_datasets --modality em_mito --registry_model em_mito \\
         --segmentation_type automatic --segmentation_mode ais apg -e <exp>
 
+    # The EM organelle baselines: MitoNet and NucleoNet, and the micro-sam v1 organelle models.
+    python submit_all_evaluations.py --all_datasets --modality em --segmentation_type automatic \\
+        --method mitonet nucleonet
+    python submit_all_evaluations.py --all_datasets --modality em --segmentation_type automatic \\
+        --method microsam_ais microsam_apg -m vit_t_em_organelles vit_b_em_organelles vit_l_em_organelles
+
     # CellViT on the histopathology panel, one job group per checkpoint.
     python submit_all_evaluations.py --all_datasets --modality hp --segmentation_type automatic \\
         --method cellvit -m sam_h_x40 sam_h_x20 vit256_x40 vit256_x20
@@ -42,8 +48,9 @@ from typing import Optional
 from datetime import datetime
 
 from common import (
-    DATA_ROOT, DATASETS_2D_LM, DATASETS_HP, DATASETS_3D_LM, DATASETS_EM, DATASETS_3D_EM, DATASETS_EM_MITO,
-    DATASETS_EM_NUCLEUS, DATASETS_SUPPLEMENTARY, MODEL_TYPES, n_samples, registered_model_types, registry_weight_paths,
+    DATA_ROOT, DATASETS_2D_EM_NUCLEUS_MOCK, DATASETS_2D_LM, DATASETS_HP, DATASETS_3D_LM, DATASETS_EM, DATASETS_3D_EM,
+    DATASETS_EM_MITO, DATASETS_EM_NUCLEUS, DATASETS_SUPPLEMENTARY, MODEL_TYPES, n_samples, registered_model_types,
+    registry_weight_paths,
 )
 
 EVAL_ROOT = Path(__file__).resolve().parent
@@ -68,7 +75,8 @@ DATASETS_3D = tuple(sorted(set(DATASETS_3D_LM + DATASETS_3D_EM)))
 
 SEGMENTATION_MODES = ("ais", "apg")
 AUTOMATIC_METHODS = (
-    "cellpose", "stardist", "cellsam", "cellvit", "microsam_ais", "microsam_apg", "segneuron", "focus3d"
+    "cellpose", "stardist", "cellsam", "cellvit", "microsam_ais", "microsam_apg", "segneuron", "focus3d", "mitonet",
+    "nucleonet",
 )
 INTERACTIVE_METHODS = ("nninteractive", "sam3", "sam", "sam2", "micro-sam", "microsam_vol")
 
@@ -76,13 +84,20 @@ INTERACTIVE_METHODS = ("nninteractive", "sam3", "sam", "sam2", "micro-sam", "mic
 # through the same script rather than a second copy of the same inference.
 SHARED_ENGINE_METHODS = {"sam2"}
 
+DATASETS_EM_ORGANELLE = DATASETS_EM_MITO + DATASETS_EM_NUCLEUS
+DATASETS_EM_OTHER = tuple(d for d in DATASETS_EM if d not in DATASETS_EM_ORGANELLE)
+# The mock 2d nucleus slices tune micro-sam2 only, and are not benchmarked.
+DATASETS_EM_NUCLEUS_MOCK = tuple(DATASETS_2D_EM_NUCLEUS_MOCK)
+
 # What each method can actually be run on. A method that is absent runs on everything. 'exclude' lists datasets
-# a method is not meant for although their modality and dimensionality fit.
+# a method is not meant for although their modality and dimensionality fit. 'datasets' lists the only ones it runs on.
 METHOD_SUPPORT = {
     ("automatic", "cellsam"): {"ndim": (2,)},
     ("automatic", "cellvit"): {"modality": ("hp",), "ndim": (2,)},
-    ("automatic", "microsam_ais"): {"modality": ("lm", "hp")},
-    ("automatic", "microsam_apg"): {"modality": ("lm", "hp")},
+    ("automatic", "microsam_ais"): {"exclude": DATASETS_EM_OTHER + DATASETS_EM_NUCLEUS_MOCK},
+    ("automatic", "microsam_apg"): {"exclude": DATASETS_EM_OTHER + DATASETS_EM_NUCLEUS_MOCK},
+    ("automatic", "mitonet"): {"datasets": DATASETS_EM_MITO},
+    ("automatic", "nucleonet"): {"datasets": DATASETS_EM_NUCLEUS, "exclude": DATASETS_EM_NUCLEUS_MOCK},
     ("automatic", "segneuron"): {
         "modality": ("em",), "ndim": (3,), "exclude": DATASETS_EM_MITO + DATASETS_EM_NUCLEUS
     },
@@ -99,6 +114,13 @@ MODEL_SUPPORT = {
     ("cellpose", "cyto3"): {"modality": ("lm", "em")}, ("cellpose", "nuclei"): {"modality": ("lm", "em")},
     ("microsam_vol", "vit_b_lm"): {"modality": ("lm",)}, ("microsam_vol", "vit_b_em_organelles"): {"modality": ("em",)},
 }
+# The automatic micro-sam v1 models: the LM generalists run on LM and HP, the EM organelle ones on mitochondria and
+# nuclei.
+MODEL_SUPPORT.update({
+    (method, f"vit_{size}_{name}"): support
+    for method in ("microsam_ais", "microsam_apg") for size in ("t", "b", "l")
+    for name, support in (("lm", {"modality": ("lm", "hp")}), ("em_organelles", {"datasets": DATASETS_EM_ORGANELLE}))
+})
 
 # Use --env to override the method-specific environments. StarDist runs in its own because it needs
 # TensorFlow, which does not belong next to torch in the main environment.
@@ -201,6 +223,17 @@ def ndim_of(dataset_name: str) -> int:
     return 3 if dataset_name in DATASETS_3D else 2
 
 
+def is_supported(support: dict, dataset_name: str) -> bool:
+    """Whether a dataset passes the 'modality', 'ndim', 'datasets' and 'exclude' rules of a support entry."""
+    if "modality" in support and modality_of(dataset_name) not in support["modality"]:
+        return False
+    if "ndim" in support and ndim_of(dataset_name) not in support["ndim"]:
+        return False
+    if "datasets" in support and dataset_name not in support["datasets"]:
+        return False
+    return dataset_name not in support.get("exclude", ())
+
+
 def select_datasets(args: argparse.Namespace, method: Optional[str], mode: Optional[str]) -> tuple:
     """The datasets one job group runs on, after the modality, dimensionality and method filters.
 
@@ -221,13 +254,7 @@ def select_datasets(args: argparse.Namespace, method: Optional[str], mode: Optio
         datasets = tuple(d for d in datasets if ndim_of(d) == args.ndim)
 
     support = METHOD_SUPPORT.get((args.segmentation_type, method), {})
-    if "modality" in support:
-        datasets = tuple(d for d in datasets if modality_of(d) in support["modality"])
-    if "ndim" in support:
-        datasets = tuple(d for d in datasets if ndim_of(d) in support["ndim"])
-    if "exclude" in support:
-        datasets = tuple(d for d in datasets if d not in support["exclude"])
-    return datasets
+    return tuple(d for d in datasets if is_supported(support, d))
 
 
 def uses_shared_engine(args: argparse.Namespace, method: Optional[str]) -> bool:
@@ -363,7 +390,7 @@ def write_array_script(
 #SBATCH -p {args.partition}
 #SBATCH -G {gpu}
 #SBATCH --job-name={name}
-#SBATCH --array=0-{len(tasks) - 1}%{MAX_CONCURRENT}
+#SBATCH --array=0-{len(tasks) - 1}%{args.max_concurrent}
 #SBATCH --requeue{qos_line}
 #SBATCH --constraint=inet
 #SBATCH -o {job_folder}/logs/{name}_%A_%a.out
@@ -455,6 +482,7 @@ def main():
                         help=f"Memory per job. Defaults to {MEMORY_2D} for 2d jobs and {MEMORY_3D} for 3d ones.")
     parser.add_argument("--time_limit", type=str, default=TIME_LIMIT, help="Slurm time limit per job.")
     parser.add_argument("--qos", type=str, default=None, help="Slurm QoS. Use '2h' with --time_limit 02:00:00.")
+    parser.add_argument("--max_concurrent", type=int, default=MAX_CONCURRENT, help="Array tasks that run at once.")
     parser.add_argument("--env", type=str, default=None,
                         help=f"Conda environment every job activates. Defaults to {DEFAULT_ENV}, "
                              "or the method-specific one in METHOD_ENV.")
@@ -511,9 +539,9 @@ def main():
                 continue
             for model_type in model_types:
                 env = DEFAULT_ENV if uses_shared_engine(args, method) else resolve_env(args, method, model_type)
-                allowed = MODEL_SUPPORT.get((method, model_type), {}).get("modality")
+                model_support = MODEL_SUPPORT.get((method, model_type), {})
                 for dataset in datasets:
-                    if allowed is not None and modality_of(dataset) not in allowed:
+                    if not is_supported(model_support, dataset):
                         continue
                     is_3d = ndim_of(dataset) == 3
                     gpu = args.gpu or (GPU_3D if is_3d else GPU_2D)

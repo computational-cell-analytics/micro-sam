@@ -1,5 +1,5 @@
 {
- "rule": "The crops are 32x512x512, capped by the test region. They tile the bounding box of the annotation without overlap and stay clear of tuning data. Crops with fewer than 20% of the median object count of the dataset are left out.",
+ "rule": "The crops are 32x512x512, capped by the test region. They tile the bounding box of the annotation without overlap and stay clear of tuning data. Crops with fewer than 20% of the median object count of the dataset are left out. 2d sets without an entry are scored on the 512x512 center crop. The note of a dataset gives its exceptions.",
  "datasets": {
   "gonuclear": {
    "crop_shape": [32, 512, 512],
@@ -950,12 +950,17 @@
    }
   },
   "densecell_mito": {
-   "crop_shape": [24, 512, 512],
-   "note": "Mitochondria panel: the crops tile the annotation inside the test region (the tuning slab at the start of the stack is left out). Tiles thinner than 16 slices or 256 px in plane are dropped, and of the tiles that pass the object-count rule at most 16 per volume are kept, the ones with the most objects. The crops span all 24 slices of the blind val volume; the tuning data is z >= 35 of the train volume. 2 crops hold 2-13 mitochondria.",
+   "crop_shape": [24, 256, 256],
+   "note": "24 x 256 x 256 tiles of the test volume (24 x 800 x 800), for more crops than 512 tiles give. 7 crops; tiles whose labels span fewer than 8 slices are left out.",
    "starts": {
     "densecell_val.h5": [
-     [0, 8, 105],
-     [0, 520, 105]
+     [0, 0, 0],
+     [0, 0, 256],
+     [0, 0, 512],
+     [0, 256, 0],
+     [0, 256, 256],
+     [0, 512, 256],
+     [0, 512, 512]
     ]
    }
   },
@@ -1648,14 +1653,18 @@
    }
   },
   "snemi_mito": {
-   "crop_shape": [32, 512, 512],
-   "note": "Mitochondria panel (in-domain): the test split of the SNEMI Mito stack (z 70-99); the train and valid splits are training data, the valid split tunes. Manual semantic labels, made instances by connected components. 4 of 4 tiles are kept (at most 16 per volume, the ones with the most objects), holding 16-19 mitochondria.",
+   "crop_shape": [15, 512, 512],
+   "note": "15 x 512 x 512 tiles of the test split (30 x 1024 x 1024): its z is split in two for more crops. 8 crops, holding 11-16 objects.",
    "starts": {
     "snemi_mito.h5": [
      [70, 0, 0],
      [70, 0, 512],
      [70, 512, 0],
-     [70, 512, 512]
+     [70, 512, 512],
+     [85, 0, 0],
+     [85, 0, 512],
+     [85, 512, 0],
+     [85, 512, 512]
     ]
    }
   },
@@ -1900,6 +1909,36 @@
      [136, 0, 512],
      [168, 0, 0],
      [168, 0, 512]
+    ]
+   }
+  },
+  "elmi_mito": {
+   "crop_shape": [512, 512],
+   "note": "512 x 512 tiles of the test images that hold a labeled mitochondrion; only 3-5 are labeled per image. 16 crops, holding 1-2 objects.",
+   "starts": {
+    "ELMI_01.tif": [
+     [0, 0],
+     [512, 0],
+     [512, 512],
+     [512, 1024],
+     [1024, 512]
+    ],
+    "ELMI_02.tif": [
+     [0, 0],
+     [0, 512],
+     [512, 1024]
+    ],
+    "ELMI_03.tif": [
+     [0, 1024],
+     [512, 1024],
+     [1024, 1024],
+     [1536, 1024]
+    ],
+    "ELMI_04.tif": [
+     [512, 512],
+     [512, 1024],
+     [1024, 0],
+     [1024, 1024]
     ]
    }
   }

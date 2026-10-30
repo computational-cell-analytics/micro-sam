@@ -5,10 +5,12 @@ Supported methods:
   stardist: StarDist pretrained (2D_versatile_fluo / 3D_demo)
   cellsam: CellSAM pipeline (2d only)
   cellvit: CellViT++ nucleus segmentation (2d histopathology only)
-  microsam_ais: micro-sam v1 automatic instance segmentation
-  microsam_apg: micro-sam v1 automatic prompt generation
+  microsam_ais: micro-sam v1 automatic instance segmentation (vit_*_em_organelles for the EM organelle sets)
+  microsam_apg: micro-sam v1 automatic prompt generation (vit_*_em_organelles for the EM organelle sets)
   segneuron: SegNeuron (3d EM only)
   focus3d: FOCUS-3D (3d LM only)
+  mitonet: MitoNet from empanada (EM mitochondria, 2d and 3d)
+  nucleonet: NucleoNet from empanada (EM nuclei, 2d and 3d)
 
 micro-sam2 itself is evaluated by evaluate_automatic_segmentation.py, which also tunes it.
 
@@ -20,9 +22,12 @@ Usage examples:
     python evaluate_automatic_baselines.py -d embedseg -e <exp> --method microsam_ais -m vit_b
     python evaluate_automatic_baselines.py -d cremi -e <exp> --method segneuron
     python evaluate_automatic_baselines.py -d gonuclear -e <exp> --method focus3d -m nuclei
+    python evaluate_automatic_baselines.py -d lucchi -e <exp> --method mitonet
+    python evaluate_automatic_baselines.py -d lucchi -e <exp> --method microsam_ais -m vit_b_em_organelles
 """
 
 import os
+import json
 import warnings
 import argparse
 
@@ -33,14 +38,19 @@ import torch
 from elf.segmentation import features, multicut, watershed
 
 from common import (
-    CROP_SHAPE_3D, DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_EM, DATASETS_HP, EVAL_CROPS_3D,
-    check_data_download, evaluate_samples,
+    CROP_SHAPE_3D, DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_EM, DATASETS_EM_MITO,
+    DATASETS_EM_NUCLEUS, DATASETS_HP, EVAL_CROPS, GT_MIN_SIZE_2D, check_data_download, drop_severed_objects,
+    ensure_8bit_range, evaluate_samples, load_data, n_samples,
 )
 
 LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
 EM_DATASETS = set(DATASETS_EM)
 HP_DATASETS = set(DATASETS_HP)
-METHODS = ["cellpose", "stardist", "cellsam", "cellvit", "microsam_ais", "microsam_apg", "segneuron", "focus3d"]
+EM_ORGANELLE_DATASETS = set(DATASETS_EM_MITO + DATASETS_EM_NUCLEUS)
+METHODS = [
+    "cellpose", "stardist", "cellsam", "cellvit", "microsam_ais", "microsam_apg", "segneuron", "focus3d", "mitonet",
+    "nucleonet",
+]
 
 SEGNEURON_ROOT = "/mnt/vast-nhr/home/archit/u12090/SegNeuron"
 SEGNEURON_CHECKPOINT = "/mnt/vast-nhr/projects/cidas/cca/models/segneuron/SegNeuronModel.ckpt"
@@ -92,6 +102,7 @@ STARDIST_3D_MODEL = "3D_demo"
 
 # micro-sam v1 model types
 SAM_V1_MODEL_TYPE = "vit_b_lm"
+SAM_V1_EM_ORGANELLE_MODEL_TYPE = "vit_b_em_organelles"
 
 # CellViT++ ships a whole-slide pipeline that needs pathopatch, ray and openslide. The patch-level model and its
 # post-processor are imported from the checkout instead, which only adds einops to the environment.
@@ -103,6 +114,26 @@ CELLVIT_CHECKPOINTS = {
     "vit256_x40": "CellViT-256-x40.pth",
     "vit256_x20": "CellViT-256-x20.pth",
 }
+
+# MitoNet and NucleoNet run from the empanada-napari checkout, which contains the empanada package.
+EMPANADA_ROOT = os.path.expanduser("~/empanada-napari")
+EMPANADA_CHECKPOINT_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/empanada"
+EMPANADA_MODELS = {"mitonet": "MitoNet_v1", "nucleonet": "NucleoNet_base_v2"}
+EMPANADA_DATASETS = {"mitonet": set(DATASETS_EM_MITO), "nucleonet": set(DATASETS_EM_NUCLEUS)}
+# The defaults of the empanada-napari inference widgets. A volume is segmented in xy only, and the objects are
+# linked through z. The ortho-plane mode also segments xz and yz, which are only a few pixels wide in the thin and
+# anisotropic test crops.
+EMPANADA_PARAMS = {
+    "label_divisor": 10000, "nms_threshold": 0.1, "nms_kernel": 3, "confidence_thr": 0.5,
+    "fine_boundaries": False,
+}
+EMPANADA_PARAMS_3D = {"median_kernel_size": 3, "min_size": 500, "min_extent": 5}
+# At the full resolution, the models split objects that are larger than in their training data. So the image
+# downsampling of the widgets is tuned per dataset on its tuning crops, at most this many of them.
+EMPANADA_SCALES = (1, 2, 4, 8)
+EMPANADA_MAX_TUNING_SAMPLES = {2: 10, 3: 5}
+# A downsampling replaces the default of 1 only if it scores this much higher, since a few crops are a noisy choice.
+EMPANADA_MIN_GAIN = 0.02
 
 # The z/xy anisotropy of each dataset (z_voxel / xy_voxel). FOCUS-3D takes it as its z_ratio.
 DATASET_ANISOTROPY = {
@@ -250,6 +281,52 @@ def _load_cellvit(model_type, checkpoint, magnification, device):
         nr_types=run_conf["data"]["num_nuclei_classes"], magnification=magnification
     )
     return model, processor, run_conf
+
+
+def _stub_cztile():
+    """Satisfy the module-level cztile import of `empanada.inference.tile`.
+
+    Only the tiled 2d inference uses cztile, and the images here are segmented whole.
+    """
+    import sys
+    import types
+    try:
+        import cztile  # noqa
+    except ImportError:
+        pass
+    else:
+        return
+
+    stubs = {
+        name: types.ModuleType(name)
+        for name in ("cztile", "cztile.fixed_total_area_strategy_2d", "cztile.tiling_strategy")
+    }
+    stubs["cztile.fixed_total_area_strategy_2d"].AlmostEqualBorderFixedTotalAreaStrategy2D = None
+    stubs["cztile.tiling_strategy"].Region2D = None
+    stubs["cztile.tiling_strategy"].TileInput = None
+    sys.modules.update(stubs)
+
+
+def _load_empanada(method, ndim, device, inference_scale):
+    """Load the empanada-napari inference module and the engine of MitoNet or NucleoNet."""
+    import sys
+    if EMPANADA_ROOT not in sys.path:
+        sys.path.insert(0, EMPANADA_ROOT)
+    _stub_cztile()
+
+    from empanada.config_loaders import read_yaml
+    from empanada_napari import inference
+
+    # The plugin sets the torch hub to the home directory on import. Keep the checkpoints with the other models.
+    torch.hub.set_dir(EMPANADA_CHECKPOINT_ROOT)
+    config_path = os.path.join(EMPANADA_ROOT, "empanada_napari", "configs", f"{EMPANADA_MODELS[method]}.yaml")
+    config = read_yaml(config_path)
+    params = {**EMPANADA_PARAMS, "inference_scale": inference_scale, "use_gpu": device != "cpu"}
+    if ndim == 2:
+        engine = inference.Engine2d(config, **params)
+    else:
+        engine = inference.Engine3d(config, **params, **EMPANADA_PARAMS_3D)
+    return inference, engine, config
 
 
 def _load_microsam_v1(method, model_type, checkpoint, device):
@@ -434,6 +511,27 @@ def _segment_focus3d(volume, segmenter, dataset_name, cell_radius, z_ratio):
     return segmenter(volume, z_ratio=z_ratio, cell_radius=cell_radius)
 
 
+def _segment_empanada(image_or_volume, inference, engine, config, ndim):
+    """Segment one image or volume with MitoNet or NucleoNet."""
+    from skimage.segmentation import relabel_sequential
+    if ndim == 2:
+        image = image_or_volume.mean(axis=-1) if image_or_volume.ndim == 3 else image_or_volume
+        # The engine returns the panoptic ids, class * label_divisor + instance.
+        seg = engine.infer(image.astype("float32"))
+        return relabel_sequential(seg)[0].astype("uint32")
+
+    # The 2d images arrive percentile-stretched to [0, 255], so the volumes get the same.
+    volume = ensure_8bit_range(image_or_volume).astype("float32")
+    trackers = {"xy": engine.infer_on_axis(volume, "xy")[1]}
+    # 'stack_postprocessing' is a napari thread worker. The undecorated generator yields one volume per class.
+    stack = inference.stack_postprocessing.__wrapped__(
+        trackers, None, config, label_divisor=EMPANADA_PARAMS["label_divisor"],
+        min_size=EMPANADA_PARAMS_3D["min_size"], min_extent=EMPANADA_PARAMS_3D["min_extent"],
+    )
+    seg = next(stack)[0]
+    return seg.astype("uint32")
+
+
 def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
     from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation
     seg = automatic_instance_segmentation(
@@ -444,6 +542,7 @@ def _segment_microsam_v1(image_or_volume, predictor, segmenter, ndim):
 
 def _run_evaluation(
     segment_fn, dataset_name, data_root, save_path, desc, limit, sample_index, crop_shape=None, normalize=True,
+    extra_columns=None,
 ):
     if limit is not None:  # Name the file after the truncation, so it cannot pass for the full evaluation.
         save_path = f"{save_path[:-4]}_n{limit}.csv"
@@ -452,7 +551,7 @@ def _run_evaluation(
         return
     evaluate_samples(
         segment_fn, dataset_name, data_root, save_path, desc, limit=limit, crop_shape=crop_shape,
-        sample_index=sample_index, normalize=normalize,
+        sample_index=sample_index, normalize=normalize, extra_columns=extra_columns,
     )
 
 
@@ -553,10 +652,10 @@ def run_focus3d_evaluation(
         return
 
     segmenter = _load_focus3d(model_type, checkpoint, device, batch_size, num_workers)
-    if crop_shape is None and dataset_name not in EVAL_CROPS_3D:
+    if crop_shape is None and dataset_name not in EVAL_CROPS:
         # The harness default of 8 slices would leave most of the model's 32-deep window as padding.
         crop_shape = (segmenter.patch_size[0],) + tuple(CROP_SHAPE_3D[1:])
-    depth = crop_shape[0] if crop_shape else EVAL_CROPS_3D[dataset_name][0][0]
+    depth = crop_shape[0] if crop_shape else EVAL_CROPS[dataset_name][0][0]
     print(f"FOCUS-3D has the patch size {segmenter.patch_size} and runs on crops of depth {depth}.")
 
     # The crop depth is in the name: a baseline scored on another crop is not comparable.
@@ -568,11 +667,76 @@ def run_focus3d_evaluation(
     )
 
 
+def tune_empanada_scale(method, dataset_name, data_root, experiment_folder, device):
+    """Return the downsampling of MitoNet or NucleoNet with the best mSA on the tuning crops of a dataset.
+
+    The scores are stored in the 'tuning' folder of the experiment, so that a dataset is tuned only once.
+    """
+    from elf.evaluation import mean_segmentation_accuracy
+    from parameter_search import TUNING_CROP_3D
+
+    tuning_path = os.path.join(experiment_folder, "tuning", f"{dataset_name}_{method}.json")
+    if os.path.exists(tuning_path):
+        with open(tuning_path) as f:
+            return json.load(f)["inference_scale"]
+
+    ndim = 3 if dataset_name in DATASETS_3D else 2
+    total, n_max = n_samples(dataset_name, data_root, split="val"), EMPANADA_MAX_TUNING_SAMPLES[ndim]
+    sample_ids = set(range(0, total, max(1, total // n_max))[:n_max])
+    samples = [
+        sample for sample in load_data(
+            dataset_name, data_root, ndim, split="val", crop_shape=TUNING_CROP_3D if ndim == 3 else None,
+            sample_ids=sample_ids,
+        ) if sample[1].max() > 0
+    ]
+    scores = {}
+    for scale in EMPANADA_SCALES:
+        inference, engine, config = _load_empanada(method, ndim, device, scale)
+        msa = []
+        for raw, labels, valid_roi in samples:
+            seg = _segment_empanada(raw, inference, engine, config, ndim)
+            if valid_roi is not None:
+                seg[~valid_roi] = 0
+            if ndim == 2:
+                seg = drop_severed_objects(seg, GT_MIN_SIZE_2D.get(dataset_name, 0))
+            msa.append(mean_segmentation_accuracy(seg, labels))
+        scores[scale] = float(np.mean(msa))
+        print(f"{method}, downsampling {scale}, {len(samples)} crops of '{dataset_name}': mSA {scores[scale]:.3f}")
+
+    best = max(scores, key=scores.get)
+    if scores[best] - scores[1] <= EMPANADA_MIN_GAIN:
+        best = 1
+    os.makedirs(os.path.dirname(tuning_path), exist_ok=True)
+    with open(tuning_path, "w") as f:
+        json.dump({"inference_scale": best, "mSA": scores, "n_crops": len(samples)}, f, indent=2)
+    return best
+
+
+def run_empanada_evaluation(dataset_name, data_root, experiment_folder, method, device, limit, sample_index):
+    if dataset_name not in EMPANADA_DATASETS[method]:
+        warnings.warn(f"{method} does not support dataset '{dataset_name}'. Skipping.", UserWarning, stacklevel=2)
+        return
+
+    ndim = 3 if dataset_name in DATASETS_3D else 2
+    scale = tune_empanada_scale(method, dataset_name, data_root, experiment_folder, device)
+    inference, engine, config = _load_empanada(method, ndim, device, scale)
+    save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_{method}.csv")
+    _run_evaluation(
+        lambda x: _segment_empanada(x, inference, engine, config, ndim),
+        dataset_name, data_root, save_path, desc=method, limit=limit, sample_index=sample_index,
+        extra_columns={"inference_scale": scale},
+    )
+
+
 def run_microsam_v1_evaluation(
     dataset_name, data_root, experiment_folder, method, model_type, checkpoint, device, limit, sample_index,
 ):
-    if dataset_name in EM_DATASETS:
-        raise ValueError(f"micro-sam v1 automatic methods do not support EM datasets; got '{dataset_name}'.")
+    # Of the EM data, the v1 models only cover mitochondria and nuclei, with the organelle models.
+    if dataset_name in EM_DATASETS and not (dataset_name in EM_ORGANELLE_DATASETS and "em_organelles" in model_type):
+        raise ValueError(
+            f"micro-sam v1 runs on EM only with the 'vit_*_em_organelles' models, and only on the mitochondria and "
+            f"nucleus datasets. Got '{model_type}' on '{dataset_name}'."
+        )
     ndim = 3 if dataset_name in DATASETS_3D else 2
     predictor, segmenter = _load_microsam_v1(method, model_type, checkpoint, device)
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_{method}_{model_type}.csv")
@@ -590,7 +754,8 @@ def main():
     parser.add_argument("--method", type=str, required=True, choices=METHODS)
     parser.add_argument(
         "-m", "--model_type", type=str, default=None,
-        help="Model type override, e.g. cyto3 for cellpose, sam_h_x40 for cellvit or vit_b for micro-sam v1."
+        help="Model type override, e.g. cyto3 for cellpose, sam_h_x40 for cellvit or vit_b_em_organelles for "
+        "micro-sam v1."
     )
     parser.add_argument(
         "-c", "--checkpoint", type=str, default=None,
@@ -645,7 +810,10 @@ def main():
     elif args.method in ("microsam_ais", "microsam_apg"):
         run_microsam_v1_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder, method=args.method,
-            model_type=args.model_type or SAM_V1_MODEL_TYPE, checkpoint=args.checkpoint, device=device,
+            model_type=args.model_type or (
+                SAM_V1_EM_ORGANELLE_MODEL_TYPE if args.dataset_name in EM_ORGANELLE_DATASETS else SAM_V1_MODEL_TYPE
+            ),
+            checkpoint=args.checkpoint, device=device,
             limit=args.n_samples, sample_index=args.sample_index,
         )
 
@@ -663,6 +831,12 @@ def main():
         run_segneuron_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
             device=device, checkpoint_path=args.checkpoint, limit=args.n_samples, sample_index=args.sample_index,
+        )
+
+    elif args.method in EMPANADA_MODELS:
+        run_empanada_evaluation(
+            args.dataset_name, args.input_path, args.experiment_folder, method=args.method, device=device,
+            limit=args.n_samples, sample_index=args.sample_index,
         )
 
     else:

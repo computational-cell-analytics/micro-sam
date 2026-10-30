@@ -2193,7 +2193,7 @@ def load_volume(
     'split' selects the test or the tuning region of the EM volumes, see EM_ROIS. 'z_range' restricts the
     volume to a z-slab before the center crop, which is how a dataset without splits holds tuning data out
     of the evaluated slab. See VAL_Z_RANGE. 'crop_start' places the crop at these stored array coordinates
-    instead of the center. See EVAL_CROPS_3D.
+    instead of the center. See EVAL_CROPS.
     """
     # Only the scored region is read: the dataset roi, the z-slab and the center crop are composed into one
     # window first, so the multi-gigavoxel connectome volumes are never loaded whole.
@@ -2207,7 +2207,7 @@ def load_volume(
         if any(start < r.start or start >= r.stop for start, r in zip(crop_start, region)):
             raise ValueError(
                 f"The pinned crop {crop_start} of '{dataset_name}' starts outside its {split} region. "
-                "Fix its start in eval_crops_3d.json or tuning_crops.json."
+                "Fix its start in eval_crops.json or tuning_crops.json."
             )
         window = tuple(
             slice(start, min(start + size, r.stop)) for start, size, r in zip(crop_start, crop_shape, region)
@@ -3140,10 +3140,6 @@ def check_data_download(dataset_name: str, data_root: str, download: bool = True
 CROP_SHAPE_2D = (512, 512)
 CROP_SHAPE_3D = (8, 512, 512)
 
-# The 2d datasets scored on the whole stored image instead of the center crop, e.g. the TEM benchmark images (most of
-# them 1024 x 1024, whose center crop drops half of the mitochondria).
-FULL_IMAGE_2D = frozenset(DATASETS_2D_EM_MITO + DATASETS_2D_EM_NUCLEUS)
-
 # Ground-truth size floor of 3d datasets whose instances come from semantic labels: the connected components of
 # a semantic mask include specks of a few voxels that are no objects.
 GT_MIN_SIZE_3D = {
@@ -3156,16 +3152,8 @@ GT_MIN_SIZE_3D = {
     "nucmm_zebrafish": 10,
 }
 
-# The fixed crops of the 3d test volumes, which replace the center crop: the crop shape and the crop starts per volume,
-# in stored array coordinates. eval_crops_3d.json also holds the rule that places the crops and a note per dataset.
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_crops_3d.json")) as f:
-    EVAL_CROPS_3D = {
-        name: (tuple(entry["crop_shape"]), {volume: tuple(map(tuple, v)) for volume, v in entry["starts"].items()})
-        for name, entry in json.load(f)["datasets"].items()
-    }
 
-
-# The fixed tuning crops of the volumes and images, see 'parameter_search.py prepare'.
+# The fixed crops per dataset: the crop shape and the crop starts per sample, in stored array coordinates.
 def _read_crops(file_name):
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), file_name)) as f:
         return {
@@ -3174,31 +3162,35 @@ def _read_crops(file_name):
         }
 
 
+# The test crops replace the center crop, and also hold the rule that placed them and a note per dataset.
+EVAL_CROPS = _read_crops("eval_crops.json")
+# The tuning crops, see 'parameter_search.py prepare'.
 TUNING_CROPS = _read_crops("tuning_crops.json")
 
 
-def tuning_crops_2d(dataset_name, raw_path, split):
-    """Return the (crop start, crop shape) pairs for one image: its crops in TUNING_CROPS or the image as stored."""
-    if split != "val" or dataset_name not in TUNING_CROPS:
+def crops_2d(dataset_name, raw_path, split):
+    """Return the (crop start, crop shape) pairs for one image: its fixed crops or (None, None) for the center crop."""
+    crops = {"test": EVAL_CROPS, "val": TUNING_CROPS}.get(split, {})
+    if dataset_name not in crops:
         return [(None, None)]
-    shape, starts = TUNING_CROPS[dataset_name]
+    shape, starts = crops[dataset_name]
     return [(start, shape) for start in starts[os.path.basename(raw_path)]]
 
 
 def eval_crops_3d(dataset_name, raw_path, split, crop_shape):
     """Return the (crop start, crop shape) pairs for one volume: its fixed crops or one center crop.
 
-    The fixed crops are the ones in EVAL_CROPS_3D for 'test' and in TUNING_CROPS for 'val'. The tuning crops replace
+    The fixed crops are the ones in EVAL_CROPS for 'test' and in TUNING_CROPS for 'val'. The tuning crops replace
     'crop_shape', which the parameter search passes for every volume.
     """
     if split == "val" and dataset_name in TUNING_CROPS:
         shape, starts = TUNING_CROPS[dataset_name]
         return [(start, shape) for start in starts[os.path.basename(raw_path)]]
-    if split != "test" or dataset_name not in EVAL_CROPS_3D:
+    if split != "test" or dataset_name not in EVAL_CROPS:
         return [(None, crop_shape or CROP_SHAPE_3D)]
     if crop_shape is not None:
-        raise ValueError(f"'{dataset_name}' has fixed crops in EVAL_CROPS_3D. Do not pass a crop shape.")
-    shape, starts = EVAL_CROPS_3D[dataset_name]
+        raise ValueError(f"'{dataset_name}' has fixed crops in EVAL_CROPS. Do not pass a crop shape.")
+    shape, starts = EVAL_CROPS[dataset_name]
     return [(start, shape) for start in starts[os.path.basename(raw_path)]]
 
 
@@ -3410,8 +3402,6 @@ def load_evaluation_sample_2d(
     image = ensure_8bit_range(image) if normalize else np.clip(image, 0, 255).astype("uint8")
     if crop_start is not None:
         roi = tuple(slice(start, start + size) for start, size in zip(crop_start, crop_shape))
-    elif dataset_name in FULL_IMAGE_2D:
-        roi = tuple(slice(None) for _ in image.shape[:2])
     else:
         roi = _center_crop_roi(image.shape[:2], CROP_SHAPE_2D)
     labels = read_2d(label_path, label_key)[roi]
@@ -3456,7 +3446,7 @@ def load_data(
         ndim: The number of spatial dimensions, 2 or 3.
         min_size: Drop ground-truth objects below this many pixels (3d only).
         split: The split to load, 'test' or the held-out 'val', see VAL_SPLITS.
-        crop_shape: The 3d center crop. Defaults to CROP_SHAPE_3D. The test volumes in EVAL_CROPS_3D use
+        crop_shape: The 3d center crop. Defaults to CROP_SHAPE_3D. The test volumes in EVAL_CROPS use
             their fixed crops instead, with one sample per crop.
         z_range: Restrict a volume to a z-slab before cropping, see VAL_Z_RANGE.
         normalize: Percentile-normalize the image, 2d only. See `load_evaluation_sample_2d`.
@@ -3480,7 +3470,7 @@ def load_data(
                     z_range=sample_z_range, min_size=min_size, split=split, crop_start=crop_start,
                 )
         else:
-            for crop_start, crop_shape_2d in tuning_crops_2d(dataset_name, raw_path, split):
+            for crop_start, crop_shape_2d in crops_2d(dataset_name, raw_path, split):
                 sample_id += 1
                 if sample_ids is not None and sample_id not in sample_ids:
                     continue
@@ -3494,7 +3484,7 @@ def load_data(
 def n_samples(dataset_name, data_root, split="test"):
     """Return the number of samples that `load_data` yields for a split."""
     raw_paths = get_data_paths(dataset_name, data_root, split=split)[0]
-    crops = {"test": EVAL_CROPS_3D, "val": TUNING_CROPS}.get(split, {})
+    crops = {"test": EVAL_CROPS, "val": TUNING_CROPS}.get(split, {})
     if dataset_name in crops:
         starts = crops[dataset_name][1]
         return sum(len(starts[os.path.basename(path)]) for path in raw_paths)
