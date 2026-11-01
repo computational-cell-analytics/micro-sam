@@ -378,22 +378,54 @@ class IterativePromptGenerator(PromptGeneratorBase):
         return net_coords, net_labels, None, None
 
 
+def _error_center(error):
+    regions, n_regions = connected_components(error)
+    if n_regions == 0:
+        return None
+    largest = regions == np.bincount(regions.ravel())[1:].argmax() + 1
+    distances = distance_transform_edt(np.pad(largest, 1))[1:-1, 1:-1]
+    y, x = np.unravel_index(distances.argmax(), distances.shape)
+    return [float(x), float(y)]
+
+
+def get_error_centers(
+    true_mask: np.ndarray, predicted_mask: np.ndarray
+) -> Tuple[Optional[List[float]], Optional[List[float]]]:
+    """Get the correction clicks of the 'center' protocol for one object in 2d.
+
+    The positive click is the center of the largest missed region and the negative click the center of the
+    largest added region, like the 'center' click sampling of RITM and SAM2. The center is the point with the
+    largest distance to the region border.
+
+    Args:
+        true_mask: The ground-truth mask of the object.
+        predicted_mask: The predicted mask of the object.
+
+    Returns:
+        The positive click as (x, y), or None if nothing is missed.
+        The negative click as (x, y), or None if nothing is added.
+    """
+    # Both error regions lie within the bounding box of the object and its prediction, so only this crop is
+    # searched. The crop keeps the raster order of the pixels, so the centers are the same.
+    union = true_mask | predicted_mask
+    if not union.any():
+        return None, None
+    rows, cols = np.where(union.any(axis=1))[0], np.where(union.any(axis=0))[0]
+    crop = np.s_[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
+    true_crop, predicted_crop = true_mask[crop], predicted_mask[crop]
+    pos = _error_center(true_crop & ~predicted_crop)
+    neg = _error_center(predicted_crop & ~true_crop)
+    pos = None if pos is None else [pos[0] + cols[0], pos[1] + rows[0]]
+    neg = None if neg is None else [neg[0] + cols[0], neg[1] + rows[0]]
+    return pos, neg
+
+
 class CenterIterativePromptGenerator(PromptGeneratorBase):
     """Generate point prompts at the centers of the prediction errors iteratively, for 2d evaluation.
 
-    Each object gets a positive click at the center of its largest missed region and a negative click at the
-    center of its largest added region, like the 'center' click sampling of RITM and SAM2. The center is the
-    point with the largest distance to the region border. A missing error type gets a padding point with the
+    Each object gets the clicks of `get_error_centers`. A missing error type gets a padding point with the
     label -1, which the model ignores.
     """
-    def _error_center(self, error):
-        regions, n_regions = connected_components(error)
-        if n_regions == 0:
-            return None
-        largest = regions == np.bincount(regions.ravel())[1:].argmax() + 1
-        distances = distance_transform_edt(np.pad(largest, 1))[1:-1, 1:-1]
-        y, x = np.unravel_index(distances.argmax(), distances.shape)
-        return [float(x), float(y)]
 
     def __call__(
         self,
@@ -420,20 +452,7 @@ class CenterIterativePromptGenerator(PromptGeneratorBase):
         predicted_objects = prediction.bool().cpu().numpy()[:, 0]
         coordinates, labels = [], []
         for true_object, predicted_object in zip(true_objects, predicted_objects):
-            # Both error regions lie within the bounding box of the object and its prediction, so only this crop
-            # is searched. The crop keeps the raster order of the pixels, so the centers are the same.
-            union = true_object | predicted_object
-            if not union.any():
-                coordinates.append([[0.0, 0.0], [0.0, 0.0]])
-                labels.append([-1, -1])
-                continue
-            rows, cols = np.where(union.any(axis=1))[0], np.where(union.any(axis=0))[0]
-            crop = np.s_[rows[0]:rows[-1] + 1, cols[0]:cols[-1] + 1]
-            true_crop, predicted_crop = true_object[crop], predicted_object[crop]
-            pos = self._error_center(true_crop & ~predicted_crop)
-            neg = self._error_center(predicted_crop & ~true_crop)
-            pos = None if pos is None else [pos[0] + cols[0], pos[1] + rows[0]]
-            neg = None if neg is None else [neg[0] + cols[0], neg[1] + rows[0]]
+            pos, neg = get_error_centers(true_object, predicted_object)
             coordinates.append([pos or [0.0, 0.0], neg or [0.0, 0.0]])
             labels.append([1 if pos else -1, 0 if neg else -1])
 

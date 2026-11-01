@@ -21,6 +21,7 @@ import json
 import argparse
 import warnings
 
+import numpy as np
 import pandas as pd
 
 import torch
@@ -28,8 +29,26 @@ import torch
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS, build_model,
     check_data_download, evaluate_samples, has_val_split, load_apg_overrides, postprocess_unisam2, predict_unisam2,
-    read_tuned_params, resolve_checkpoint_identity,
+    pad_to_min_shape, read_tuned_params, resolve_checkpoint_identity,
 )
+
+# The 2d datasets whose test images are smaller than their training images at the same pixel size. They are
+# padded with zeros to the training shape, so that micro-sam2 sees the objects at the scale it was trained on:
+# the TissueNet test images are 256 x 256 and its training images 512 x 512.
+TRAINING_SCALE_MIN_SHAPE_2D = {"tissuenet": (512, 512)}
+
+# EVAL_NORM_PERCENTILES ('lower,upper', e.g. '1,99.8'): experiment that replaces the 2nd / 98th percentile bounds
+# of the micro-sam2 input normalization; such runs belong in their own experiment folder.
+if os.environ.get("EVAL_NORM_PERCENTILES"):
+    import micro_sam.v2.normalization as _normalization
+    _lower, _upper = (float(value) for value in os.environ["EVAL_NORM_PERCENTILES"].split(","))
+    for _function in (_normalization.compute_percentile_bounds, _normalization.normalize_raw):
+        _names = _function.__code__.co_varnames[:_function.__code__.co_argcount]
+        _defaults = list(_function.__defaults__)
+        _first = len(_names) - len(_defaults)
+        _defaults[_names.index("lower_percentile") - _first] = _lower
+        _defaults[_names.index("upper_percentile") - _first] = _upper
+        _function.__defaults__ = tuple(_defaults)
 
 # The temporary embeddings of APG go to the job's node-local TMPDIR, as in `parameter_search.py`.
 # In the micro-sam cache of the home directory, the leftovers of killed jobs fill the quota.
@@ -55,8 +74,26 @@ if os.environ.get("TMPDIR"):
         _module.make_temp_embedding_path = _make_temp_embedding_path
 
 
-def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, spacing=None, devices=None):
-    """Segment one sample with the tuned parameters of a mode."""
+def segment(
+    model, mode, raw, ndim, dataset_name, model_type, params, device, spacing=None, devices=None, min_shape=None,
+):
+    """Segment one sample with the tuned parameters of a mode.
+
+    With 'min_shape' (y, x), a 2d image smaller than it is padded with zeros to that shape, as PathoSAM does with the
+    256 x 256 PanNuke tiles, and the segmentation is cropped back. A volume is padded in y and x, slice by slice.
+    """
+    if min_shape is not None and ndim == 2 and min(raw.shape[:2]) < min(min_shape):
+        from skimage.segmentation import relabel_sequential
+        padded, crop = pad_to_min_shape(raw, min_shape)
+        seg = segment(model, mode, padded, ndim, dataset_name, model_type, params, device, spacing, devices)
+        return relabel_sequential(seg[crop])[0].astype("uint32")
+    if min_shape is not None and ndim == 3 and min(raw.shape[1:3]) < min(min_shape):
+        from skimage.segmentation import relabel_sequential
+        # The z axis is moved last, so that pad_to_min_shape pads the y and x axes of every slice.
+        padded, crop = pad_to_min_shape(np.moveaxis(raw, 0, -1), min_shape)
+        seg = segment(model, mode, np.moveaxis(padded, -1, 0), ndim, dataset_name, model_type, params, device, spacing,
+                      devices)
+        return relabel_sequential(seg[(slice(None),) + crop])[0].astype("uint32")
     if mode == "apg":
         model.clear_state()
         model.initialize(raw, ndim=ndim, **(VOLUME_SPEED_OPTIONS if ndim == 3 else {}))
@@ -70,7 +107,7 @@ def segment(model, mode, raw, ndim, dataset_name, model_type, params, device, sp
 def run_evaluation(
     model, mode, dataset_name, data_root, experiment_folder, model_type, params, device, limit,
     crop_shape=None, checkpoint_id=None, devices=None, tuned=None, result_tag=None, config_name=None, sample_index=None,
-    shard=None,
+    shard=None, min_shape=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -131,6 +168,7 @@ def run_evaluation(
     return evaluate_samples(
         lambda raw: segment(
             model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing, devices=devices,
+            min_shape=min_shape,
         ),
         dataset_name, data_root, save_path, desc=f"{mode}-{model_type}", limit=limit, crop_shape=crop_shape,
         sample_index=sample_index, extra_columns=extra_columns, shard=shard,
@@ -171,6 +209,11 @@ def main():
     parser.add_argument(
         "--result_tag", type=str, default=None,
         help="Tag appended to the result file name. Defaults to the --apg_params configuration name.",
+    )
+    parser.add_argument(
+        "--pad_to_min_shape", type=int, nargs=2, default=None,
+        help="Pad images (or the slices of a volume) smaller than this (Y X) with zeros and crop the segmentation "
+        "back. Defaults to TRAINING_SCALE_MIN_SHAPE_2D of the dataset.",
     )
     args = parser.parse_args()
 
@@ -228,6 +271,10 @@ def main():
         devices=args.devices or None, tuned=tuned, result_tag=result_tag, config_name=config_name,
         limit=args.n_samples, sample_index=args.sample_index,
         shard=None if args.n_shards is None else (args.shard_index, args.n_shards),
+        min_shape=(
+            TRAINING_SCALE_MIN_SHAPE_2D.get(args.dataset_name) if args.pad_to_min_shape is None
+            else tuple(args.pad_to_min_shape)
+        ),
     )
 
 

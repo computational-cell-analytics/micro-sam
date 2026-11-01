@@ -32,14 +32,16 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 import imageio.v3 as imageio
 from tqdm import tqdm
-from scipy.ndimage import distance_transform_edt, find_objects
-from skimage.measure import label as connected_components
 
 import torch
+from bioimage_cpp.segmentation import label as relabel_components
+
+from micro_sam.prompt_generators import get_error_centers
+from micro_sam.v1.evaluation.inference import _get_batched_prompts
 
 from common import (
     CLICK_PROTOCOLS, DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_EM,
-    check_data_download, interactive_result_name, interactive_run_tag, load_data, n_samples,
+    check_data_download, interactive_result_name, interactive_run_tag, interactive_sample_ids_3d, load_data, n_samples,
     run_dataset_evaluation,
 )
 
@@ -63,38 +65,59 @@ def _load_samples(dataset_name, data_root, ndim, min_size=0, limit=None):
     return samples, total
 
 
-def _get_largest_region_center(mask):
-    """Return the most interior point of the largest connected region of a mask, or None if it is empty.
+# The baselines without a micro-sam pipeline (nnInteractive, SAM3) are prompted with the protocol of the micro-sam2
+# evaluation (see 'micro_sam.v2.evaluation.inference'), so that every method gets the same prompts: the connected
+# components of the labels are prompted with the same first box or point, the 'center' correction clicks are placed
+# on the worst slice in 3d, and the smaller object is kept where two predicted objects overlap.
+PROMPT_DILATION = 5
+PROMPT_SEED = 0
 
-    The centroid is not used, since it can lie outside the region. False foreground often forms a
-    shell around the object, and the centroid of such a shell is a point on the true object.
+
+def _prompting_labels(labels):
+    """Return the objects that get prompted: the connected components of the labels."""
+    return relabel_components(labels).astype("uint32")
+
+
+def _first_prompt_2d(mask, start_with_box):
+    """Return the first prompt of one object in 2d: its box as (x0, y0, x1, y1), or a point as (x, y)."""
+    points, _, boxes = _get_batched_prompts(
+        gt=mask.astype("uint32"), gt_ids=[1], use_points=not start_with_box, use_boxes=start_with_box,
+        n_positives=0 if start_with_box else 1, n_negatives=0, dilation=PROMPT_DILATION,
+    )
+    return [float(v) for v in (boxes[0] if start_with_box else points[0][0])]
+
+
+def _center_slice(mask):
+    """Return the slice of the first prompt of one object in 3d: the middle of its z-extent."""
+    z = np.where(mask.any(axis=(1, 2)))[0]
+    return int(np.ceil(np.mean([z.min(), z.max()])))
+
+
+def _worst_slice_clicks(gt_mask, pred_mask):
+    """Return the correction clicks of one object in 3d: the 'center' clicks on its slice with the most errors.
+
+    Returns:
+        The slice, the positive click as (x, y) or None, and the negative click as (x, y) or None.
     """
-    labeled = connected_components(mask)
-    if labeled.max() == 0:
-        return None
-    region_id = np.bincount(labeled.ravel())[1:].argmax() + 1
-    bbox = find_objects(labeled)[region_id - 1]
-    region = np.pad(labeled[bbox] == region_id, 1)
-    distances = distance_transform_edt(region)
-    point = np.unravel_index(distances.argmax(), distances.shape)
-    return [int(c) - 1 + sl.start for c, sl in zip(point, bbox)]
+    z_slices = np.where(gt_mask.any(axis=(1, 2)))[0]
+    z = int(z_slices[np.argmax([np.sum(gt_mask[z] != pred_mask[z]) for z in z_slices])])
+    pos, neg = get_error_centers(gt_mask[z], pred_mask[z])
+    return z, pos, neg
 
 
-def _get_correction_points(gt_mask, pred_mask):
-    """Return one positive FN point and one negative FP point if available."""
-    positive = _get_largest_region_center(gt_mask & ~pred_mask)
-    negative = _get_largest_region_center(~gt_mask & pred_mask)
-    return positive, negative
+def _add_object(segmentation, areas, mask, gt_id):
+    """Add one predicted object to a segmentation. Where objects overlap, the smaller one is kept."""
+    area = mask.sum()
+    existing = segmentation[mask]
+    segmentation[mask] = np.where(areas[existing] > area, gt_id, existing)
+    areas[gt_id] = area
 
 
-def _get_middle_slice_prompt(gt_mask):
-    """Return a representative z slice and the 2D object mask on this slice."""
-    z_indices = np.where(gt_mask)[0]
-    z_mid = int(np.round((int(z_indices.min()) + int(z_indices.max())) / 2.0))
-    z_values = np.unique(z_indices)
-    z = min(z_values, key=lambda zz: abs(int(zz) - z_mid))
-    mask_2d = gt_mask[z]
-    return int(z), mask_2d
+def _empty_predictions(labels, n_iterations):
+    """Return the segmentations and object areas of all iterations, before any object is added."""
+    segmentations = [np.zeros(labels.shape, dtype="uint32") for _ in range(n_iterations)]
+    areas = [np.full(int(labels.max()) + 1, np.inf) for _ in range(n_iterations)]
+    return segmentations, areas
 
 
 def _load_nninteractive(checkpoint_path, device):
@@ -110,49 +133,40 @@ def _segment_nninteractive_iterative(volume, labels, session, start_with_box, n_
     buffer = np.zeros(volume.shape, dtype="float32")
     session.set_target_buffer(buffer)
 
-    gt_ids = np.unique(labels)[1:]
-    seg_per_iter = [np.zeros(volume.shape, dtype="uint32") for _ in range(n_iterations)]
-
-    for gt_id in gt_ids:
+    labels = _prompting_labels(labels)
+    np.random.seed(PROMPT_SEED)
+    seg_per_iter, areas = _empty_predictions(labels, n_iterations)
+    for gt_id in np.setdiff1d(np.unique(labels), [0]):
         gt_mask = labels == gt_id
         session.reset_interactions()
-        z, gt_mask_2d = _get_middle_slice_prompt(gt_mask)
-        yx_coords = np.where(gt_mask_2d)
-
+        z = _center_slice(gt_mask)
+        prompt = [int(round(v)) for v in _first_prompt_2d(gt_mask[z], start_with_box)]
         if start_with_box:
-            bbox = [
-                [z, z + 1],
-                [int(yx_coords[0].min()), int(yx_coords[0].max()) + 1],
-                [int(yx_coords[1].min()), int(yx_coords[1].max()) + 1],
-            ]
-            session.add_bbox_interaction(bbox, include_interaction=True)
+            x0, y0, x1, y1 = prompt
+            session.add_bbox_interaction([[z, z + 1], [y0, y1], [x0, x1]], include_interaction=True)
         else:
-            center = (z, *_get_largest_region_center(gt_mask_2d))
-            session.add_point_interaction(center, include_interaction=True)
-
+            session.add_point_interaction((z, prompt[1], prompt[0]), include_interaction=True)
         pred_mask = buffer > 0.5
-        seg_per_iter[0][pred_mask] = gt_id
+        _add_object(seg_per_iter[0], areas[0], pred_mask, gt_id)
 
         for it in range(1, n_iterations):
-            positive_point, negative_point = _get_correction_points(gt_mask, pred_mask)
-            if positive_point is not None:
-                session.add_point_interaction(tuple(positive_point), include_interaction=True)
-                pred_mask = buffer > 0.5
-            if negative_point is not None:
-                session.add_point_interaction(tuple(negative_point), include_interaction=False)
-                pred_mask = buffer > 0.5
-            seg_per_iter[it][pred_mask] = gt_id
+            z, pos, neg = _worst_slice_clicks(gt_mask, pred_mask)
+            for click, include in ((pos, True), (neg, False)):
+                if click is not None:
+                    session.add_point_interaction((z, int(click[1]), int(click[0])), include_interaction=include)
+            pred_mask = buffer > 0.5
+            _add_object(seg_per_iter[it], areas[it], pred_mask, gt_id)
 
     return seg_per_iter
 
 
-def _nninteractive_prediction_paths(prediction_root, sample_id, n_iterations):
+def _cached_prediction_paths(prediction_root, sample_id, n_iterations):
     """The per-iteration prediction files of one sample."""
     sample_dir = os.path.join(prediction_root, f"sample_{sample_id:05d}")
     return [os.path.join(sample_dir, f"iteration{it:02d}.tif") for it in range(n_iterations)]
 
 
-def _write_nninteractive_predictions(segs, paths):
+def _write_cached_predictions(segs, paths):
     """Write the predictions of one sample. Each file is renamed into place, so no partial file is left."""
     os.makedirs(os.path.dirname(paths[0]), exist_ok=True)
     for seg, path in zip(segs, paths):
@@ -188,10 +202,8 @@ def run_nninteractive_evaluation(
         return
 
     prediction_root = os.path.join(experiment_folder, "predictions", "nninteractive", dataset_name, prompt_str)
-    total = n_samples(dataset_name, data_root)
-    if limit is not None:
-        total = min(total, limit)
-    sample_ids = range(total) if shard is None else range(shard[0], total, shard[1])
+    selected = interactive_sample_ids_3d(dataset_name, data_root, limit)
+    sample_ids = selected if shard is None else selected[shard[0]::shard[1]]
     samples = load_data(dataset_name, data_root, 3, sample_ids=set(sample_ids))
 
     # The model is loaded on the first sample that needs it, so that scoring from the cache loads no model.
@@ -200,7 +212,9 @@ def run_nninteractive_evaluation(
     pred_paths_per_iter = [[] for _ in range(n_iterations)]
     samples = tqdm(samples, total=len(sample_ids), desc="nninteractive")
     for sample_id, (raw, labels, valid_roi) in zip(sample_ids, samples):
-        paths = _nninteractive_prediction_paths(prediction_root, sample_id, n_iterations)
+        if labels.max() == 0:  # Nothing to prompt, and nothing to score, as in the micro-sam2 evaluation.
+            continue
+        paths = _cached_prediction_paths(prediction_root, sample_id, n_iterations)
         if not all(os.path.exists(path) for path in paths):
             if score_only:
                 missing.append(sample_id)
@@ -208,7 +222,7 @@ def run_nninteractive_evaluation(
             if session is None:
                 session = _load_nninteractive(checkpoint_path, device)
             segs = _segment_nninteractive_iterative(raw, labels, session, start_with_box, n_iterations)
-            _write_nninteractive_predictions(segs, paths)
+            _write_cached_predictions(segs, paths)
         all_gt.append(labels)
         all_valid_rois.append(valid_roi)
         for it, path in enumerate(paths):
@@ -291,8 +305,12 @@ def run_sam_v1_evaluation(
             "The slice-wise micro-sam v1 evaluation is 2d only. Use '--method microsam_vol' for a volume."
         )
 
-    if name_tag == "micro-sam" and dataset_name in EM_DATASETS:
-        raise ValueError(f"micro-sam interactive does not support EM datasets (LM model only); got '{dataset_name}'.")
+    # Of the EM data, micro-sam v1 covers only the mitochondria and nuclei, with the organelle models.
+    if name_tag == "micro-sam" and dataset_name in EM_DATASETS and "em_organelles" not in model_type:
+        raise ValueError(
+            f"micro-sam interactive runs on EM only with the 'vit_*_em_organelles' models; got '{model_type}' on "
+            f"'{dataset_name}'."
+        )
 
     prompt_str = "box" if start_with_box else "point"
     run_tag = interactive_run_tag(ndim=2, use_masks=use_masks, min_size=min_size, click_protocol=click_protocol)
@@ -367,18 +385,123 @@ def run_sam_v1_evaluation(
     shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def _segment_sam3_2d(image, labels, model, processor, start_with_box, n_iterations):
+    """Prompt SAM3 for every object of an image, with the protocol of the micro-sam2 evaluation.
+
+    The box stays in all iterations, the correction clicks add up, and the previous mask logits are fed back,
+    as for micro-sam2 and SAM2.
+    """
+    from PIL import Image
+
+    # SAM3 reads the size of an array as channels-first, so the image is passed as an RGB PIL image, as in its
+    # examples. Grayscale images are repeated into the three channels.
+    rgb = image if image.ndim == 3 else np.stack([image] * 3, axis=-1)
+    state = processor.set_image(Image.fromarray(np.clip(np.round(rgb), 0, 255).astype("uint8")))
+
+    labels = _prompting_labels(labels)
+    np.random.seed(PROMPT_SEED)
+    seg_per_iter, areas = _empty_predictions(labels, n_iterations)
+    for gt_id in np.setdiff1d(np.unique(labels), [0]):
+        gt_mask = labels == gt_id
+        prompt = _first_prompt_2d(gt_mask, start_with_box)
+        box = np.array([prompt], dtype="float32") if start_with_box else None
+        points = None if start_with_box else np.array([prompt], dtype="float32")
+        point_labels = None if start_with_box else np.array([1])
+        mask_input, pred_mask = None, None
+        for it in range(n_iterations):
+            if it > 0:
+                pos, neg = get_error_centers(gt_mask, pred_mask)
+                clicks = [(click, label) for click, label in ((pos, 1), (neg, 0)) if click is not None]
+                if clicks:
+                    new_points = np.array([click for click, _ in clicks], dtype="float32")
+                    new_labels = np.array([label for _, label in clicks])
+                    points = new_points if points is None else np.concatenate([points, new_points])
+                    point_labels = new_labels if point_labels is None else np.concatenate([point_labels, new_labels])
+            # A single mask for the first point, as in the 'center' protocol of micro-sam2.
+            masks, _, low_res_masks = model.predict_inst(
+                state, point_coords=points, point_labels=point_labels, box=box, mask_input=mask_input,
+                multimask_output=False,
+            )
+            pred_mask = masks[0] > 0
+            mask_input = low_res_masks[:1]
+            _add_object(seg_per_iter[it], areas[it], pred_mask, gt_id)
+    return seg_per_iter
+
+
+def _segment_sam3_3d(volume, labels, predictor, start_with_box, n_iterations):
+    """Prompt SAM3 for every object of a volume, with the protocol of the micro-sam2 evaluation.
+
+    The first prompt is on the middle slice of the object, the 'center' correction clicks are on its worst slice,
+    and the masks are propagated through the volume after every prompt, as for micro-sam2 and SAM2.
+    """
+    import tempfile
+    from micro_sam3.evaluation.inference import _propagate_sam3, _volume_to_frames
+
+    n_frames, height, width = volume.shape
+    labels = _prompting_labels(labels)
+    np.random.seed(PROMPT_SEED)
+    seg_per_iter, areas = _empty_predictions(labels, n_iterations)
+
+    def to_points(clicks):
+        coords = torch.tensor([[x / width, y / height] for (x, y), _ in clicks], dtype=torch.float32)
+        return coords, torch.tensor([label for _, label in clicks], dtype=torch.int32)
+
+    def propagate(frame):
+        pred_mask = np.zeros(labels.shape, dtype=bool)
+        for z, mask in _propagate_sam3(predictor, state, frame, n_frames).items():
+            pred_mask[z] = mask
+        return pred_mask
+
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        state = predictor.init_state(video_path=_volume_to_frames(volume, tmp_dir))
+        for gt_id in np.setdiff1d(np.unique(labels), [0]):
+            gt_mask = labels == gt_id
+            predictor.clear_all_points_in_video(state)
+            z = _center_slice(gt_mask)
+            prompt = _first_prompt_2d(gt_mask[z], start_with_box)
+            if start_with_box:
+                x0, y0, x1, y1 = prompt
+                box = np.clip(np.array([[x0 / width, y0 / height, x1 / width, y1 / height]], dtype="float32"), 0, 1)
+                predictor.add_new_points_or_box(inference_state=state, frame_idx=z, obj_id=int(gt_id), box=box)
+            else:
+                coords, point_labels = to_points([(prompt, 1)])
+                predictor.add_new_points_or_box(
+                    inference_state=state, frame_idx=z, obj_id=int(gt_id), points=coords, labels=point_labels,
+                    clear_old_points=False,
+                )
+            pred_mask = propagate(z)
+            _add_object(seg_per_iter[0], areas[0], pred_mask, gt_id)
+
+            for it in range(1, n_iterations):
+                z, pos, neg = _worst_slice_clicks(gt_mask, pred_mask)
+                clicks = [(click, label) for click, label in ((pos, 1), (neg, 0)) if click is not None]
+                if clicks:
+                    coords, point_labels = to_points(clicks)
+                    predictor.add_new_points_or_box(
+                        inference_state=state, frame_idx=z, obj_id=int(gt_id), points=coords, labels=point_labels,
+                        clear_old_points=False,
+                    )
+                    pred_mask = propagate(z)
+                _add_object(seg_per_iter[it], areas[it], pred_mask, gt_id)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    return seg_per_iter
+
+
 def run_sam3_evaluation(
     dataset_name, data_root, experiment_folder,
-    start_with_box=True, n_iterations=8, ndim=None, limit=None,
+    start_with_box=True, n_iterations=8, ndim=None, shard=None, score_only=False, limit=None,
 ):
+    """Run SAM3 with iterative prompting on the test split and write one result CSV per iteration.
+
+    The predictions are cached per sample, with the same sharding and scoring as 'run_nninteractive_evaluation'.
+    """
     if ndim is None:
         ndim = 3 if dataset_name in DATASETS_3D else 2
 
     sys.path.insert(0, SAM3_ROOT)
-    from micro_sam3.evaluation.inference import (
-        build_sam3_image_predictor, build_sam3_video_predictor,
-        run_interactive_segmentation_2d_sam3, run_interactive_segmentation_3d_sam3,
-    )
+    from micro_sam3.evaluation.inference import build_sam3_image_predictor, build_sam3_video_predictor
 
     prompt_str = "box" if start_with_box else "point"
     dim_suffix = "" if ndim == 2 else "_3d"
@@ -391,39 +514,61 @@ def run_sam3_evaluation(
         print(f"Results already stored at '{results_dir}'.")
         return
 
-    if ndim == 2:
-        model, processor = build_sam3_image_predictor()
-        predictor = None
+    prediction_root = os.path.join(experiment_folder, "predictions", f"sam3{dim_suffix}", dataset_name, prompt_str)
+    if ndim == 3:
+        selected = interactive_sample_ids_3d(dataset_name, data_root, limit)
     else:
-        predictor = build_sam3_video_predictor()
-        model, processor = None, None
+        total = n_samples(dataset_name, data_root)
+        selected = list(range(total if limit is None else min(total, limit)))
+    sample_ids = selected if shard is None else selected[shard[0]::shard[1]]
+    samples = load_data(dataset_name, data_root, ndim, sample_ids=set(sample_ids))
 
-    samples, n = _load_samples(dataset_name, data_root, ndim, limit=limit)
-    all_gt = []
-    all_seg_per_iter = [[] for _ in range(n_iterations)]
-
-    for raw, labels, valid_roi in tqdm(samples, total=n, desc=f"sam3-{ndim}d"):
-        if ndim == 2:
-            segs = run_interactive_segmentation_2d_sam3(
-                image=raw, gt=labels, model=model, processor=processor,
-                start_with_box_prompt=start_with_box, n_iterations=n_iterations,
-            )
-        else:
-            segs = run_interactive_segmentation_3d_sam3(
-                raw=raw, gt=labels, predictor=predictor,
-                start_with_box_prompt=start_with_box, n_iterations=n_iterations,
-            )
+    # The model is loaded on the first sample that needs it, so that scoring from the cache loads no model.
+    model, processor, predictor = None, None, None
+    all_gt, all_valid_rois, missing = [], [], []
+    pred_paths_per_iter = [[] for _ in range(n_iterations)]
+    samples = tqdm(samples, total=len(sample_ids), desc=f"sam3-{ndim}d")
+    for sample_id, (raw, labels, valid_roi) in zip(sample_ids, samples):
+        if labels.max() == 0:  # Nothing to prompt, and nothing to score, as in the micro-sam2 evaluation.
+            continue
+        paths = _cached_prediction_paths(prediction_root, sample_id, n_iterations)
+        if not all(os.path.exists(path) for path in paths):
+            if score_only:
+                missing.append(sample_id)
+                continue
+            if ndim == 2:
+                if model is None:
+                    model, processor = build_sam3_image_predictor()
+                segs = _segment_sam3_2d(raw, labels, model, processor, start_with_box, n_iterations)
+            else:
+                if predictor is None:
+                    predictor = build_sam3_video_predictor()
+                segs = _segment_sam3_3d(raw, labels, predictor, start_with_box, n_iterations)
+            _write_cached_predictions(segs, paths)
         all_gt.append(labels)
-        for it, seg in enumerate(segs):
-            if valid_roi is not None:
-                seg[~valid_roi] = 0
-            all_seg_per_iter[it].append(seg)
+        all_valid_rois.append(valid_roi)
+        for it, path in enumerate(paths):
+            pred_paths_per_iter[it].append(path)
+
+    if shard is not None:
+        print(f"Shard {shard[0]}/{shard[1]} finished predicting {len(sample_ids)} sample(s).")
+        return
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} sample(s) of '{dataset_name}' have no predictions yet: {missing}. Run their shards first."
+        )
 
     os.makedirs(results_dir, exist_ok=True)
     for it, save_path in enumerate(save_paths):
         if os.path.exists(save_path):
             continue
-        results = run_dataset_evaluation(all_gt, all_seg_per_iter[it], dataset_name, save_path)
+        predictions = []
+        for path, valid_roi in zip(pred_paths_per_iter[it], all_valid_rois):
+            prediction = imageio.imread(path)
+            if valid_roi is not None:
+                prediction[~valid_roi] = 0
+            predictions.append(prediction)
+        results = run_dataset_evaluation(all_gt, predictions, dataset_name, save_path)
         print(f"Iteration {it:02d}: {results}")
 
 
@@ -477,10 +622,8 @@ def run_microsam_volumetric_evaluation(
         experiment_folder, "predictions", f"microsam_vol_{model_type}", dataset_name,
         f"{prompt}{interactive_run_tag(ndim=3, min_size=min_size)}",
     )
-    total = n_samples(dataset_name, data_root)
-    if limit is not None:
-        total = min(total, limit)
-    sample_ids = range(total) if shard is None else range(shard[0], total, shard[1])
+    selected = interactive_sample_ids_3d(dataset_name, data_root, limit)
+    sample_ids = selected if shard is None else selected[shard[0]::shard[1]]
     loaded = load_data(dataset_name, data_root, 3, min_size=min_size, sample_ids=set(sample_ids))
 
     # Skip the volumes without objects: there is nothing to prompt, and nothing to score.
@@ -488,7 +631,7 @@ def run_microsam_volumetric_evaluation(
     for sample_id, (raw, labels, valid_roi) in zip(sample_ids, loaded):
         if labels.max() == 0:
             continue
-        paths = _nninteractive_prediction_paths(prediction_root, sample_id, n_iterations)
+        paths = _cached_prediction_paths(prediction_root, sample_id, n_iterations)
         if not all(os.path.exists(path) for path in paths):
             if score_only:
                 missing.append(sample_id)
@@ -507,7 +650,7 @@ def run_microsam_volumetric_evaluation(
         with ProcessPoolExecutor(min(n_workers, len(todo)), mp_context=get_context("spawn")) as pool:
             segs_per_volume = pool.map(segment, *zip(*[(raw, labels) for raw, labels, _ in todo]))
             for segs, (_, _, paths) in tqdm(zip(segs_per_volume, todo), total=len(todo), desc="microsam_vol"):
-                _write_nninteractive_predictions(segs, paths)
+                _write_cached_predictions(segs, paths)
 
     if shard is not None:
         print(f"Shard {shard[0]}/{shard[1]} finished predicting {len(sample_ids)} sample(s).")
@@ -590,8 +733,6 @@ def main():
         raise ValueError("--shard_index and --n_shards must be given together.")
     if args.score_only and args.shard_index is not None:
         raise ValueError("--score_only scores the whole dataset, so it cannot be combined with a shard.")
-    if (args.shard_index is not None or args.score_only) and args.method == "sam3":
-        raise ValueError("--shard_index, --n_shards and --score_only are not supported for sam3.")
     if args.click_protocol != "random" and args.method not in ("sam", "micro-sam"):
         raise ValueError("--click_protocol is supported for sam and micro-sam only.")
 
@@ -612,7 +753,8 @@ def main():
     elif args.method == "sam3":
         run_sam3_evaluation(
             args.dataset_name, args.input_path, args.experiment_folder,
-            start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, limit=args.n_samples,
+            start_with_box=start_with_box, n_iterations=args.n_iterations, ndim=args.ndim, shard=shard,
+            score_only=args.score_only, limit=args.n_samples,
         )
 
     elif args.method == "sam":

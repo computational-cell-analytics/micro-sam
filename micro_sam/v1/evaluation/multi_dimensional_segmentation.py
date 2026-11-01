@@ -117,7 +117,7 @@ def segment_slices_from_ground_truth(
     )
 
     # Compute instance ids (without the background)
-    label_ids = np.unique(ground_truth)[1:]
+    label_ids = np.setdiff1d(np.unique(ground_truth), [0])
     assert len(label_ids) > 0, "There are no objects to perform volumetric segmentation."
 
     # Create an empty volume to store incoming segmentations
@@ -231,7 +231,7 @@ def segment_slices_from_ground_truth(
         # Calculate dice per class.
         dice = [
             dice_score(segmentation=(final_segmentation == i), groundtruth=(curr_gt == i))
-            for i in np.unique(curr_gt)[1:]
+            for i in np.setdiff1d(np.unique(curr_gt), [0])
         ]
         dice = np.mean(dice)
         results = {"Dice": dice}
@@ -497,7 +497,7 @@ def evaluate_interactive_volume_segmentation(
     z_index = np.arange(volume.shape[0])
 
     segmentations = [np.zeros(ground_truth.shape, dtype="uint32") for _ in range(n_iterations)]
-    for label_id in tqdm(np.unique(ground_truth)[1:], desc="Segment objects", disable=not verbose):
+    for label_id in tqdm(np.setdiff1d(np.unique(ground_truth), [0]), desc="Segment objects", disable=not verbose):
         gt = ground_truth == label_id
         z_values = np.where(gt.any(axis=(1, 2)))[0]
         if start_slice == "random":

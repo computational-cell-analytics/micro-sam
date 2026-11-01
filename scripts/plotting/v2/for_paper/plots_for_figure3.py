@@ -18,7 +18,7 @@ The inputs are:
 - RESULTS_CSV and INTERACTIVE_CSV: the scores from the scripts in 'finetuning/v2/evaluation'.
 - RENDERS: the renders of 'render_pairs.py' and 'render_methods.py', made headless on a GPU node.
 - INTERACTIVE_PREDICTIONS: the interactive predictions after the first prompt.
-- QUALITATIVE_PREDICTIONS: the automatic predictions of 'predict_qualitative_samples.py'.
+- QUALITATIVE_PREDICTIONS: the automatic predictions of 'run_posthoc_scripts.py predict_samples'.
 """
 
 import os

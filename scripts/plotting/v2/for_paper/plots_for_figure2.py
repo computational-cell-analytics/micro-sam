@@ -17,7 +17,8 @@ The inputs are:
 - RESULTS_CSV and INTERACTIVE_CSV: the scores from the scripts in 'finetuning/v2/evaluation'.
 - QUALITATIVE_PREDICTIONS: the predictions for the automatic qualitative plot. To make them, write the script with
   '--write_prediction_script run.sh' and run it on a GPU node.
-- SINGLE_PROMPT_RUNS: the single-prompt predictions for the interactive qualitative plot, from 'run_single_prompt.py'.
+- SINGLE_PROMPT_RUNS: the single-prompt predictions for the interactive qualitative plot, from
+  'run_posthoc_scripts.py first_prompt'.
 
 The text uses Liberation Sans, which has the letter widths of Arial (see plot_style.py).
 """
@@ -1256,7 +1257,7 @@ def write_prediction_script(path):
         env = f"SAMPLES={sample} OUT_DIR={os.path.join(QUALITATIVE_PREDICTIONS, dataset)}"
         for method in [method for method in PANEL_METHODS[modality] if method in QUALITATIVE_METHODS]:
             lines.append(
-                f"{env} {python} {os.path.join(ROOT, 'predict_qualitative_samples.py')} "
+                f"{env} {python} {os.path.join(ROOT, 'run_posthoc_scripts.py')} predict_samples "
                 f"{PREDICTION_NAMES[method]} {args[method]} -d {dataset} -e {experiments}"
             )
     with open(path, "w") as f:

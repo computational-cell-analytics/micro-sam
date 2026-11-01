@@ -288,12 +288,15 @@ class AutomaticMaskGenerationSegmenter(AutoSegBase):
             return self._masks
         if len(self._masks) == 0:  # No masks were found.
             return np.zeros(self._original_size, dtype="uint32")
+        # Smaller masks paint over larger ones, as in micro-sam v1 AMG. With exclusive merging, the mask that
+        # covers the whole image, which AMG always predicts, claims every pixel before the objects in it.
         return mask_data_to_segmentation(
             masks=self._masks,
             shape=self._original_size,
             min_object_size=min_object_size,
             max_object_size=max_object_size,
             with_background=with_background,
+            merge_exclusively=False,
         )
 
     def get_state(self) -> Dict[str, Any]:
@@ -512,6 +515,7 @@ class TiledAutomaticMaskGenerationSegmenter(AutomaticMaskGenerationSegmenter):
                 min_object_size=min_object_size,
                 max_object_size=max_object_size,
                 with_background=with_background,
+                merge_exclusively=False,
             )
 
             # Offset the per-tile instance ids so that they stay unique across tiles.

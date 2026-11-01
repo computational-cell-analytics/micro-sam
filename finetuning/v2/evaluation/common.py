@@ -24,7 +24,6 @@ from torch_em.util.segmentation import size_filter
 
 from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 from micro_sam.v2.normalization import normalize_raw
-from micro_sam.v2.models.util import joint_unetr_state
 from micro_sam.v2.datasets.generalist_loader import (
     ASTIH_SUBSETS, AXONEM_TEST_VOLUMES, AXONEM_VAL_VOLUMES, FAFB_TEST_BOXES, FAFB_VAL_BOXES, FIB25_TEST_SAMPLE,
     LICONN_ROI, MALECNS_TEST_BOXES, MALECNS_VAL_BOXES, TUMOR_SPHEROID_TEST_SLICES, TUMOR_SPHEROID_VAL_SLICES,
@@ -250,16 +249,20 @@ ECOLI_GENES = ("cib", "crosstalk", "recA", "rpsM")
 DATASETS_2D_LM_CELL_ID = [
     "tissuenet", "omnipose_bact_fluor", "cvz_fluo_cell", "flywing", "enseg", "neurips_cellseg_fluorescence",
 ]
-DATASETS_2D_LM_CELL_SUPPLEMENTARY = ["dememseg", "pan_multiplex", "xenium_cells", "deepbacs_fluorescence"]
-DATASETS_2D_LM_CELL_OOD = ["covid_if_cells", "medussa", "hpa"]
+# xenium_cells and xenium_nuclei are not evaluated: their labels are the automatic segmentation of the Xenium
+# instrument, not annotations. Their data loading below is kept.
+DATASETS_2D_LM_CELL_SUPPLEMENTARY = ["dememseg", "pan_multiplex", "deepbacs_fluorescence"]
+DATASETS_2D_LM_CELL_OOD = ["covid_if_cells", "medussa", "hpa", "mif_tonsil_cells", "fusionx", "wing_disc_timelapse"]
 DATASETS_2D_LM_NUCLEUS_ID = [
     "dsb", "cvz_fluo_dapi", "dynamicnuclearnet", "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei",
     "tsakiroglou",
 ]
 # mnDINO images are BBBC022 U2OS fields: 30 of its 64 test images are byte-identical to u20s training images and
 # 3 more to DSB training images, so it is not out of domain.
-DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY = ["xenium_nuclei", "mndino"]
-DATASETS_2D_LM_NUCLEUS_OOD = ["cardioblast_nuclei", "hela_cytonuc", "covid_if_nuclei", "arvidsson", "micro_bench"]
+DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY = ["mndino"]
+DATASETS_2D_LM_NUCLEUS_OOD = [
+    "cardioblast_nuclei", "hela_cytonuc", "covid_if_nuclei", "arvidsson", "micro_bench", "mif_tonsil",
+]
 # sPATCH DAPI shares tissue sections with the sPATCH H&E training data, so it is a held-out platform evaluation
 # rather than an independent OOD collection until the patient overlap is resolved.
 DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM = ["spatch_dapi"]
@@ -338,9 +341,11 @@ GT_MIN_SIZE_2D = {
 
 # Light microscopy, 3d, grouped as the 2d datasets. nis3d is the Drosophila pair the loader trains on. Of MorphoNet
 # only the C. elegans nuclei (CTC Fluo-N3DH-CE) are scored: its Arabidopsis volumes are the PNAS plant1 time series
-# and its Phallusia volumes come from the PhMamm source, both of which train.
+# and its Phallusia volumes come from the PhMamm source, both of which train. mouse_embryo_membrane is the light-sheet
+# membrane stain of the mouse embryo data, mucic_mda231 the CTC Fluo-C3DL-MDA231 movies with the ISBI 2025 full
+# annotations; no model trains on either.
 DATASETS_3D_LM_CELL_ID = ["plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid"]
-DATASETS_3D_LM_CELL_OOD = ["plantseg_ovules", "cshaper", "vibrio_cholerae"]
+DATASETS_3D_LM_CELL_OOD = ["plantseg_ovules", "cshaper", "vibrio_cholerae", "mouse_embryo_membrane", "mucic_mda231"]
 DATASETS_3D_LM_NUCLEUS_ID = [
     "embedseg_mouse_skull", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear", "nucverse3d",
 ]
@@ -354,12 +359,13 @@ DATASETS_3D_LM = (
 )
 
 # Neurite segmentation: the blind regions of the v5 training sets (see EM_ROIS and the path resolver). The main
-# panel holds the sources shared with the baselines, the supplementary panel the remaining training sets. nisb is
+# panel holds the sources shared with the baselines, the supplementary panel the remaining training sets. snemi
+# (mouse ATUM-SEM) is in the main panel, as the third EM technique next to cremi and zebrafinch_j0126. nisb is
 # synthetic and kept out of training, so it is a synthetic OOD test. synapseweb is scored inside its annotated cores
 # only. humanneurons (the cached H01 crop) is no OOD set: H01 trains through EMNeuron, so it is supplementary at most.
-DATASETS_3D_EM_NEURITE_ID = ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress"]
+DATASETS_3D_EM_NEURITE_ID = ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "snemi", "liconn", "xpress"]
 DATASETS_3D_EM_NEURITE_SUPPLEMENTARY = [
-    "snemi", "axonem", "fib25", "manc", "malecns", "wafer4", "minnie65", "zebrafinch_j0251", "wildenberg",
+    "axonem", "fib25", "manc", "malecns", "wafer4", "minnie65", "zebrafinch_j0251", "wildenberg",
     "humanneurons",
 ]
 DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb", "nisb"]
@@ -483,7 +489,7 @@ VAL_SPLITS.update({
     "covid_if_cells": "val", "covid_if_nuclei": "val", "medussa": "train", "cardioblast_nuclei": "train",
     "hela_cytonuc": "val", "arvidsson": "val", "mndino": "val", "cellapp": "train", "deepseas": "train",
     "dic_hepg2": "val", "bac_mother": "val", "plantseg_ovules": "val", "cshaper": "train", "mouse_embryo": "train",
-    "blastospim": "val", "bbbc010": "val", "bbbc050": "train",
+    "mouse_embryo_membrane": "train", "mucic_mda231": "val", "blastospim": "val", "bbbc010": "val", "bbbc050": "train",
     "wing_disc": None, "embedseg_mouse_skull": None, "embedseg_platy_ish": None, "nis3d": None,
     "humanneurons": None, "bbbc032": None, "bbbc033": None,
 })
@@ -699,6 +705,18 @@ def _sorted_pairs(raw_paths, label_paths) -> Tuple[List[str], List[str]]:
     return [pair[0] for pair in pairs], [pair[1] for pair in pairs]
 
 
+def pad_to_min_shape(image, min_shape):
+    """Pad a 2d image at both sides with zeros to at least 'min_shape', and return it with the crop that undoes it.
+
+    The padding follows the PathoSAM evaluation, which pads the 256 x 256 PanNuke tiles to its 512 x 512 training
+    patch shape.
+    """
+    import numpy as np
+    pad = [(max(t - s, 0) // 2, max(t - s, 0) - max(t - s, 0) // 2) for s, t in zip(image.shape[:2], min_shape)]
+    crop = tuple(slice(before, before + s) for (before, _), s in zip(pad, image.shape[:2]))
+    return np.pad(image, pad + [(0, 0)] * (image.ndim - 2), mode="constant"), crop
+
+
 def _tiles_from_stack(stack_path: str, raw_key: str, label_key: str, out_dir: str) -> List[str]:
     """Write every tile of a stacked h5 (raw (C, N, H, W), labels (N, H, W)) into its own h5 file once.
 
@@ -748,6 +766,83 @@ def _frames_from_movie(raw_path: str, label_path: str, out_dir: str, stride: int
             g.create_dataset("raw", data=raw[t], compression="gzip")
             g.create_dataset("labels", data=labels[t], compression="gzip")
     return paths
+
+
+# The tile shape that the large images of a dataset are cut into, instead of the center crop. A center crop of
+# MEDUSSA misses most of the sparse bacteria; the best tile of every image is scored instead.
+GRID_TILE_SHAPE_2D = {"medussa": (512, 512)}
+
+# The size that the HPA images are resized to fit, then zero-padded to. A center crop or a tile of the native
+# images cuts the large cells, and the cells of the native images are too large for micro-sam2.
+HPA_RESIZE_2D = 512
+
+
+def _grid_tiles(raw_paths, label_paths, raw_key, label_key, out_dir, tile_shape, best_per_image=False):
+    """Cut every image into the tiles of a grid that covers it, and keep the tiles with labelled objects, once.
+
+    The last row and column of tiles are shifted to end at the image border, so the tiles cover the whole image.
+    Every tile is written to its own h5 file, with the raw data under 'raw' (one key per channel for a tuple of
+    raw keys) and the labels under 'labels'. With 'best_per_image', only the tile with the most objects of an
+    image is kept.
+    """
+    import h5py
+    from glob import glob
+
+    marker = os.path.join(out_dir, ".complete")
+    if not os.path.exists(marker):
+        os.makedirs(out_dir, exist_ok=True)
+        keys = raw_key if isinstance(raw_key, tuple) else (raw_key,)
+        for raw_path, label_path in zip(raw_paths, label_paths):
+            labels = read_2d(label_path, label_key)
+            raws = [read_2d(raw_path, key) for key in keys]
+            height, width = labels.shape[:2]
+            th, tw = min(tile_shape[0], height), min(tile_shape[1], width)
+            ys = sorted(set(list(range(0, height - th + 1, th)) + [height - th]))
+            xs = sorted(set(list(range(0, width - tw + 1, tw)) + [width - tw]))
+            stem = os.path.splitext(os.path.basename(raw_path))[0]
+            windows = [(y, x) for y in ys for x in xs]
+            if best_per_image:
+                counts = [len(np.unique(labels[y:y + th, x:x + tw])) for y, x in windows]
+                windows = [windows[int(np.argmax(counts))]]
+            for y, x in windows:
+                window = np.s_[y:y + th, x:x + tw]
+                if labels[window].max() == 0:
+                    continue
+                with h5py.File(os.path.join(out_dir, f"{stem}_y{y:05d}_x{x:05d}.h5"), "w") as f:
+                    for key, raw in zip(keys, raws):
+                        f.create_dataset(key, data=raw[window], compression="gzip")
+                    f.create_dataset("labels", data=labels[window], compression="gzip")
+        open(marker, "w").close()
+    return sorted(glob(os.path.join(out_dir, "*.h5")))
+
+
+def _resized_images(raw_paths, label_paths, raw_key, label_key, out_dir, size):
+    """Resize every image so that its longest side is 'size', zero-pad it to (size, size) and write it once.
+
+    The raw channels are resized with linear interpolation, the labels with nearest neighbours.
+    """
+    import h5py
+    from skimage.transform import resize as sk_resize
+
+    keys = raw_key if isinstance(raw_key, tuple) else (raw_key,)
+    os.makedirs(out_dir, exist_ok=True)
+    out_paths = []
+    for raw_path, label_path in zip(raw_paths, label_paths):
+        path = os.path.join(out_dir, os.path.basename(raw_path).rsplit(".", 1)[0] + ".h5")
+        out_paths.append(path)
+        if os.path.exists(path):
+            continue
+        labels = read_2d(label_path, label_key)
+        scale = size / max(labels.shape[:2])
+        shape = tuple(int(round(s * scale)) for s in labels.shape[:2])
+        pad = [(0, size - s) for s in shape]
+        with h5py.File(path, "w") as f:
+            for key in keys:
+                raw = sk_resize(read_2d(raw_path, key).astype("float32"), shape, order=1, anti_aliasing=True)
+                f.create_dataset(key, data=np.pad(raw, pad), compression="gzip")
+            lab = sk_resize(labels, shape, order=0, anti_aliasing=False, preserve_range=True).astype(labels.dtype)
+            f.create_dataset("labels", data=np.pad(lab, pad), compression="gzip")
+    return out_paths
 
 
 def _tiles_from_slide(
@@ -902,7 +997,9 @@ def _cmito_dauer_manual_patches(data_root: str, download: bool) -> List[str]:
 # the TissueNet layout pan_multiplex trains with.
 LM_IMAGE_CHANNELS = {
     "cvz_fluo_cell": (0, 2, 1), "cvz_fluo_dapi": (0,), "enseg": (1,), "xenium_cells": (1, 2, 3),
-    "hela_cytonuc": (2,), "micro_bench": (2,), "spatch_dapi": (0,), "bac_mother": (0,),
+    "hela_cytonuc": (2,), "micro_bench": (2,), "bac_mother": (0,),
+    # The sPATCH DAPI tiles store the stain in the blue channel; the red and green channels are empty.
+    "spatch_dapi": (2,),
     # The Lewy Mito crops are gray values stored as RGB.
     "lewy_mito": (0,),
 }
@@ -1505,12 +1602,75 @@ def _get_2d_lm_data_paths(
         return sorted(paths), sorted(paths), "raw/nuclei/s0", "labels/nuclei/s0"
 
     if dataset_name == "medussa":
-        paths = lm.medussa.get_medussa_paths(path=os.path.join(p, "medussa"), split=split, download=download)
-        return sorted(paths), sorted(paths), "raw", "labels"
+        paths = sorted(lm.medussa.get_medussa_paths(path=os.path.join(p, "medussa"), split=split, download=download))
+        # Only the tile with the most bacteria of every image is scored, since most tiles hold few or no bacteria.
+        out_dir = os.path.join(p, "eval_tiles", f"medussa_{split}_best_roi")
+        tiles = _grid_tiles(paths, paths, "raw", "labels", out_dir, GRID_TILE_SHAPE_2D["medussa"], best_per_image=True)
+        return tiles, tiles, "raw", "labels"
 
     if dataset_name == "hpa":
-        paths = lm.hpa.get_hpa_segmentation_paths(path=os.path.join(p, "hpa"), split="val", download=download)
-        return sorted(paths), sorted(paths), HPA_CHANNELS, "labels"
+        paths = sorted(lm.hpa.get_hpa_segmentation_paths(path=os.path.join(p, "hpa"), split="val", download=download))
+        # EVAL_HPA_CHANNEL_ORDER: experiment that stacks the three HPA channels in another order, e.g. '1,0,2'.
+        order = os.environ.get("EVAL_HPA_CHANNEL_ORDER")
+        channels = HPA_CHANNELS if order is None else tuple(HPA_CHANNELS[int(i)] for i in order.split(","))
+        # Every image is resized to fit (HPA_RESIZE_2D, HPA_RESIZE_2D) and zero-padded, so no cell is cut.
+        out_dir = os.path.join(p, "eval_tiles", f"hpa_val_resize{HPA_RESIZE_2D}")
+        images = _resized_images(paths, paths, HPA_CHANNELS, "labels", out_dir, HPA_RESIZE_2D)
+        return images, images, channels, "labels"
+
+    if dataset_name == "mif_tonsil_cells":
+        # The six marker channels form the membrane, DAPI (the last channel) the nuclei, written once per region.
+        # None of the regions trains, so every split returns all of them.
+        import h5py
+        img, gt = lm.mif_tonsil.get_mif_tonsil_paths(path=os.path.join(p, "mif_tonsil"), label_type="cells")
+        out_dir = os.path.join(p, "mif_tonsil", "cells_h5")
+        os.makedirs(out_dir, exist_ok=True)
+        paths = []
+        for raw_path, label_path in zip(img, gt):
+            path = os.path.join(out_dir, os.path.basename(raw_path).replace(".tif", ".h5"))
+            if not os.path.exists(path):
+                raw = imageio.imread(raw_path)
+                with h5py.File(path, "w") as f:
+                    f.create_dataset("raw/membrane", data=raw[:-1].max(axis=0))
+                    f.create_dataset("raw/nuclei", data=raw[-1])
+                    f.create_dataset("labels", data=imageio.imread(label_path))
+            paths.append(path)
+        return paths, paths, ("raw/membrane", "raw/nuclei"), "labels"
+
+    if dataset_name == "fusionx":
+        # Membrane stain stored as magenta RGB; it is scored as one gray channel, written once per image.
+        img, gt = lm.fusionx.get_fusionx_paths(path=os.path.join(p, "fusionx"), split="test", download=download)
+        out_dir = os.path.join(p, "fusionx", "gray")
+        os.makedirs(out_dir, exist_ok=True)
+        gray = []
+        for path in img:
+            gray_path = os.path.join(out_dir, os.path.basename(path).replace(".png", ".tif"))
+            if not os.path.exists(gray_path):
+                imageio.imwrite(gray_path, imageio.imread(path)[..., :3].max(axis=-1))
+            gray.append(gray_path)
+        return (*_sorted_pairs(gray, gt), None, None)
+
+    if dataset_name == "wing_disc_timelapse":
+        # None of the five movies trains. Adjacent frames are highly correlated, so every 16th frame of a movie is
+        # scored, which gives 10 to 12 frames per movie. The tissue around the annotated pouch carries a few huge
+        # labels that are not cells; labels larger than 25 times the median cell are set to background, once.
+        img, gt = [], []
+        out_dir = os.path.join(p, "eval_tiles", "wing_disc_timelapse_labels")
+        os.makedirs(out_dir, exist_ok=True)
+        for movie in lm.wing_disc_timelapse.MOVIES:
+            i, g = lm.wing_disc_timelapse.get_wing_disc_timelapse_paths(
+                path=os.path.join(p, "wing_disc_timelapse"), movies=[movie], download=download,
+            )
+            for label_path in g[::16]:
+                out_path = os.path.join(out_dir, f"{movie}_{os.path.basename(label_path)}")
+                if not os.path.exists(out_path):
+                    labels = imageio.imread(label_path)
+                    ids, sizes = np.unique(labels[labels > 0], return_counts=True)
+                    labels[np.isin(labels, ids[sizes > 25 * np.median(sizes)])] = 0
+                    imageio.imwrite(out_path, labels)
+                gt.append(out_path)
+            img += i[::16]
+        return img, gt, None, None
 
     if dataset_name == "cardioblast_nuclei":
         # Time-lapse projections of 350 frames; every 35th frame is scored.
@@ -1534,6 +1694,20 @@ def _get_2d_lm_data_paths(
     if dataset_name == "arvidsson":
         img, gt = lm.arvidsson.get_arvidsson_paths(path=os.path.join(p, "arvidsson"), split=split, download=download)
         return (*_sorted_pairs(img, gt), None, None)
+
+    if dataset_name == "mif_tonsil":
+        # The ten regions hold seven channels, the last one DAPI. The nuclei are scored on DAPI alone, which is
+        # written once per region. None of the regions trains, so every split returns all of them.
+        img, gt = lm.mif_tonsil.get_mif_tonsil_paths(path=os.path.join(p, "mif_tonsil"), download=download)
+        out_dir = os.path.join(p, "mif_tonsil", "dapi")
+        os.makedirs(out_dir, exist_ok=True)
+        dapi_paths = []
+        for path in img:
+            dapi_path = os.path.join(out_dir, os.path.basename(path))
+            if not os.path.exists(dapi_path):
+                imageio.imwrite(dapi_path, imageio.imread(path)[-1])
+            dapi_paths.append(dapi_path)
+        return (*_sorted_pairs(dapi_paths, gt), None, None)
 
     if dataset_name == "mndino":
         # The nuclei are scored; the disjoint micronuclei labels are left out.
@@ -1730,6 +1904,12 @@ def _get_3d_lm_data_paths(
         img, gt = lm.vibrio_cholerae.get_vibrio_cholerae_paths(
             path=os.path.join(p, "vibrio_cholerae"), download=download,
         )
+        if split == "test":
+            # The test data is the fully manual annotation, which a human drew from scratch on a crop of the first
+            # biofilm. The semi-manual labels of the full volumes leave many cells unlabeled.
+            folder = os.path.join(os.path.dirname(os.path.dirname(img[0])), "fully-manual-annotation")
+            img = [os.path.join(folder, "biofilm_1_cropped_raw.tif")]
+            gt = [os.path.join(folder, "biofilm_1_cropped_labels.tif")]
         return (*_sorted_pairs(img, gt), None, None)
 
     if dataset_name == "mouse_embryo":
@@ -1739,6 +1919,29 @@ def _get_3d_lm_data_paths(
             download=download,
         )
         return sorted(paths), sorted(paths), "raw", "label"
+
+    if dataset_name == "mouse_embryo_membrane":
+        # Out of domain: the official val split (one light-sheet volume) is scored, the train split is the tuning
+        # data. The labels are GASP segmentations, corrected by hand. The train file of timepoint 73 is a crop of
+        # the scored volume (z 30-160, y 280-704), so it is left out of the tuning data.
+        paths = lm.mouse_embryo.get_mouse_embryo_paths(
+            path=os.path.join(p, "mouse_embryo"), name="membrane", split="val" if split == "test" else "train",
+            download=download,
+        )
+        if split != "test":
+            paths = [path for path in paths if not os.path.basename(path).startswith("fused_paral_tp00073")]
+        return sorted(paths), sorted(paths), "raw", "label"
+
+    if dataset_name == "mucic_mda231":
+        # Out of domain, without an official split. The two CTC movies are split, so that no frame of a scored movie
+        # tunes: the 12 frames of movie 02 (44-54 cells each) are scored, the 12 frames of movie 01 (29-31 cells
+        # each) are the tuning data.
+        paths = lm.mucic.get_mucic_paths(
+            path=os.path.join(p, "mucic"), cell_line="mda231", variant="default", download=download,
+        )
+        movie = "02" if split == "test" else "01"
+        paths = [path for path in paths if os.path.basename(path).startswith(f"mda231_{movie}_")]
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
 
     if dataset_name == "blastospim":
         paths = lm.blastospim.get_blastospim_paths(path=os.path.join(p, "blastospim"), download=download)
@@ -2175,8 +2378,8 @@ def load_volume(
     """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
 
     valid_roi is a boolean mask that is True where the data is annotated. It is None except for the datasets
-    that are annotated only in part (platynereis_cells, synapseweb, plantseg_root, plantseg_ovules, kasthuri) and
-    for donglai_wei_mito, whose blank raw strips are excluded.
+    that are annotated only in part (platynereis_cells, synapseweb, plantseg_root, plantseg_ovules, kasthuri,
+    mouse_embryo_membrane) and for donglai_wei_mito, whose blank raw strips are excluded.
 
     'split' selects the test or the tuning region of the EM volumes, see EM_ROIS. 'z_range' restricts the
     volume to a z-slab before the center crop, which is how a dataset without splits holds tuning data out
@@ -2221,6 +2424,12 @@ def load_volume(
         labels = labels.astype("int64")
         valid_roi = labels != -1
         labels[labels == -1] = 0
+    elif dataset_name == "mouse_embryo_membrane":
+        # Id 65535 marks tissue that is not resolved into cells (only in the tuning volumes); it is excluded from
+        # scoring.
+        labels = labels.astype("int64")
+        valid_roi = labels != 65535
+        labels[~valid_roi] = 0
     elif dataset_name == "pnas_arabidopsis":
         # The background carries id 1.
         labels[labels == 1] = 0
@@ -2331,6 +2540,7 @@ def export_joint_checkpoint(
     Returns:
         The paths to the interactive (SAM2) and the automatic (UniSAM2 decoder) weight files.
     """
+    from micro_sam.v2.models.util import joint_unetr_state
     export_root = export_root or _joint_export_root()
     checkpoint_path = get_joint_checkpoint(model_type, checkpoint)
     source_checksum = source_checksum or checkpoint_checksum(checkpoint_path)
@@ -2363,6 +2573,7 @@ DATASET_SPACING: dict = {
     "embedseg_platy_nuclei": (5, 1, 1),  # z=2.031µm, xy=0.406µm
     "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
     "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
+    "mucic_mda231": (6.0 / 1.242, 1, 1),  # CTC Fluo-C3DL-MDA231, confocal: z=6µm, xy=1.242µm
     "densecell": (5, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels
     "densecell_mito": (5, 1, 1),
     "cmito_l1": (50 / 5.12, 1, 1),  # ssTEM: 50 nm sections, 5.12 nm pixels
@@ -2656,6 +2867,7 @@ def build_ais_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
     Returns:
         The UniSAM2 decoder in eval mode, loaded from exactly this checkpoint.
     """
+    from micro_sam.v2.models.util import joint_unetr_state
     if cache_dir is None:
         cache_dir = "/tmp/micro_sam2_checkpoint_cache"
     os.makedirs(cache_dir, exist_ok=True)
@@ -2689,6 +2901,7 @@ def build_apg_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
         The automatic prompt generator, built through the same library factory `build_apg_segmenter` uses.
     """
     from micro_sam.v2.util import get_sam2_model
+    from micro_sam.v2.models.util import joint_unetr_state
     from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
 
     if cache_dir is None:
@@ -3101,12 +3314,25 @@ def check_data_download(dataset_name: str, data_root: str, download: bool = True
     print(f"Data check passed for '{dataset_name}': {len(raw_paths)} sample(s).")
 
 
-CROP_SHAPE_2D = (512, 512)
+# The center crop that 2d samples are scored on. EVAL_CROP_SHAPE_2D overrides it for a crop-size experiment, as one
+# side length or 'full' for the whole image; such runs belong in their own experiment folder.
+_crop_override = os.environ.get("EVAL_CROP_SHAPE_2D")
+CROP_SHAPE_2D = (
+    (512, 512) if _crop_override is None else
+    (10 ** 9, 10 ** 9) if _crop_override == "full" else (int(_crop_override), int(_crop_override))
+)
 CROP_SHAPE_3D = (8, 512, 512)
+
+# The integer factor that the cropped 2d samples of a dataset are upscaled by, the image linearly and the labels by
+# repeating pixels, for every method. The wing disc timelapse cells are about 11 pixels wide, too small for the
+# image encoder at the native size. EVAL_UPSCALE_2D overrides it for all datasets in an upscaling experiment; such
+# runs belong in their own experiment folder.
+UPSCALE_2D = {"wing_disc_timelapse": 2}
+_upscale_override = os.environ.get("EVAL_UPSCALE_2D")
 
 # The 2d datasets scored on the whole stored image instead of the center crop, e.g. the TEM benchmark images (most of
 # them 1024 x 1024, whose center crop drops half of the mitochondria).
-FULL_IMAGE_2D = frozenset(DATASETS_2D_EM_MITO + DATASETS_2D_EM_NUCLEUS)
+FULL_IMAGE_2D = frozenset(DATASETS_2D_EM_MITO + DATASETS_2D_EM_NUCLEUS + list(GRID_TILE_SHAPE_2D) + ["hpa"])
 
 # Ground-truth size floor of 3d datasets whose instances come from semantic labels: the connected components of
 # a semantic mask include specks of a few voxels that are no objects.
@@ -3120,13 +3346,20 @@ GT_MIN_SIZE_3D = {
     "nucmm_zebrafish": 10,
 }
 
-# The fixed crops of the 3d test volumes, which replace the center crop: the crop shape and the crop starts per volume,
-# in stored array coordinates. eval_crops_3d.json also holds the rule that places the crops and a note per dataset.
+# The fixed crops of the 3d test volumes, which replace the center crop: the crop shape of the dataset and the
+# (crop start, crop shape) pairs per volume, in stored array coordinates. A dataset with 'crop_shapes' gives every
+# crop its own shape; otherwise all its crops have the crop shape of the dataset. eval_crops_3d.json also holds the
+# rules that place the crops and a note per dataset.
 with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval_crops_3d.json")) as f:
-    EVAL_CROPS_3D = {
-        name: (tuple(entry["crop_shape"]), {volume: tuple(map(tuple, v)) for volume, v in entry["starts"].items()})
-        for name, entry in json.load(f)["datasets"].items()
-    }
+    EVAL_CROPS_3D = {}
+    for name, entry in json.load(f)["datasets"].items():
+        shape, shapes = tuple(entry["crop_shape"]), entry.get("crop_shapes", {})
+        EVAL_CROPS_3D[name] = (shape, {
+            volume: tuple(
+                (tuple(start), tuple(shapes[volume][i]) if volume in shapes else shape) for i, start in enumerate(v)
+            )
+            for volume, v in entry["starts"].items()
+        })
 
 
 def eval_crops_3d(dataset_name, raw_path, split, crop_shape):
@@ -3135,8 +3368,7 @@ def eval_crops_3d(dataset_name, raw_path, split, crop_shape):
         return [(None, crop_shape or CROP_SHAPE_3D)]
     if crop_shape is not None:
         raise ValueError(f"'{dataset_name}' has fixed crops in EVAL_CROPS_3D. Do not pass a crop shape.")
-    shape, starts = EVAL_CROPS_3D[dataset_name]
-    return [(start, shape) for start in starts[os.path.basename(raw_path)]]
+    return list(EVAL_CROPS_3D[dataset_name][1][os.path.basename(raw_path)])
 
 
 def ensure_8bit_range(raw):
@@ -3200,8 +3432,8 @@ def interactive_run_tag(ndim=2, use_masks=True, mask_threshold=0.0, min_size=0, 
         tag += f"_t{mask_threshold:g}"
     if min_size:
         tag += f"_min{min_size}"
-    # Only the 2d path chooses the click protocol, see 'CLICK_PROTOCOLS'.
-    if ndim == 2 and click_protocol != "random":
+    # The click protocol, see 'CLICK_PROTOCOLS'.
+    if click_protocol != "random":
         tag += f"_{click_protocol}"
     return tag
 
@@ -3354,7 +3586,14 @@ def load_evaluation_sample_2d(raw_path, label_path, raw_key, label_key, dataset_
     elif dataset_name == "lewy_mito":
         labels = _lewy_mito_instances(labels)
     gt = connected_components(labels).astype("uint32")
-    return image[roi], drop_severed_objects(gt, GT_MIN_SIZE_2D.get(dataset_name, 0))
+    gt = drop_severed_objects(gt, GT_MIN_SIZE_2D.get(dataset_name, 0))
+    image = image[roi]
+    factor = UPSCALE_2D.get(dataset_name, 1) if _upscale_override is None else int(_upscale_override)
+    if factor > 1:
+        from skimage.transform import rescale
+        image = rescale(image, factor, order=1, preserve_range=True, channel_axis=-1 if image.ndim == 3 else None)
+        gt = np.repeat(np.repeat(gt, factor, axis=0), factor, axis=1)
+    return image, gt
 
 
 def load_evaluation_sample_3d(
@@ -3429,6 +3668,34 @@ def n_samples(dataset_name, data_root, split="test"):
         starts = EVAL_CROPS_3D[dataset_name][1]
         return sum(len(starts[os.path.basename(path)]) for path in raw_paths)
     return len(raw_paths)
+
+
+# The interactive evaluation scores at most this many crops of a 3d dataset. Every object of a crop is prompted
+# one by one over all iterations, so the datasets with many crops would take most of the compute. The automatic
+# evaluation scores all crops.
+INTERACTIVE_MAX_CROPS_3D = 8
+
+
+def interactive_sample_ids_3d(dataset_name, data_root, limit=None):
+    """Return the ids of the 3d test samples that the interactive evaluation scores, in increasing order.
+
+    A dataset with more crops than INTERACTIVE_MAX_CROPS_3D keeps that many, spread evenly over its crops.
+
+    Args:
+        dataset_name: The dataset.
+        data_root: The root the data lives in.
+        limit: Only use the first samples, for a check.
+
+    Returns:
+        The sample ids.
+    """
+    total = n_samples(dataset_name, data_root)
+    if limit is not None:
+        total = min(total, limit)
+    if total <= INTERACTIVE_MAX_CROPS_3D:
+        return list(range(total))
+    step = (total - 1) / (INTERACTIVE_MAX_CROPS_3D - 1)
+    return [round(i * step) for i in range(INTERACTIVE_MAX_CROPS_3D)]
 
 
 def has_val_split(dataset_name: str) -> bool:
