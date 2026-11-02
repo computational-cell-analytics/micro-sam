@@ -4,14 +4,16 @@ The image encoders (SAM1, SAM2 and the VFM encoders) all resize the longest side
 bottom/right, so a non-square image has its content in the top-left sub-rectangle of the square
 embedding. These tests pin that the padded region is discarded instead of being treated as image
 content, which silently misplaces every feature for non-square inputs. The area test pins that the
-area feature is the pixel count of the object, with or without tiling.
+area feature is the pixel count of the object. This is true with and without tiling.
 """
 
 import pytest
 import numpy as np
 
-from micro_sam.object_classification import compute_object_features
+from bioimage_cpp.utils import Blocking
+
 from micro_sam.pixel_classification import compute_pixel_features
+from micro_sam.object_classification import compute_object_features
 
 IMAGE_SHAPE = (48, 64)  # Non-square, so a quarter of the square embedding is padding.
 EMBEDDING_SIZE = 16
@@ -76,12 +78,10 @@ def test_object_features_match_skimage_interpolation(shape, objects):
 
 
 class _TileGroup(dict):
-    """A dict in place of the zarr group of tiled embeddings. Unlike a plain dict, it can hold the tiling in 'attrs'."""
+    """A dict that replaces the zarr group of the tiled embeddings. It keeps the tiling in 'attrs'."""
 
 
 def _tiled_embeddings(shape, tile_shape, halo):
-    from bioimage_cpp.utils import Blocking
-
     n_tiles = Blocking([0, 0], list(shape), list(tile_shape)).number_of_blocks
     embedding = np.ones((1, N_CHANNELS, EMBEDDING_SIZE, EMBEDDING_SIZE), dtype="float32")
     features = _TileGroup({str(tile_id): embedding for tile_id in range(n_tiles)})
@@ -91,8 +91,7 @@ def _tiled_embeddings(shape, tile_shape, halo):
 
 @pytest.mark.parametrize("mode", ["2d", "2d_tiled", "3d"])
 def test_object_area_is_pixel_count(mode):
-    # The objects are identical and cover all positions relative to the tiles. The image and most tiles
-    # are larger than the 256 px feature grid, so the resized areas are scaled. The tile halos overlap.
+    # The objects are identical. The tiles overlap and are larger than the feature grid.
     shape = (600, 600)
     segmentation = np.zeros(shape, dtype="uint32")
     corners = range(6, shape[0] - 12, 24)
