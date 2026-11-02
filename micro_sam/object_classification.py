@@ -192,8 +192,8 @@ def compute_object_features(
 
     Returns:
         The segmentation ids.
-        The object features: the area in pixels of the segmentation, the per-channel mean of the embedding,
-            and the classical features, if given.
+        The object features. The first column is the object area in pixels. The next columns are the mean
+            of each embedding channel, then the classical features, if given.
     """
     if upsampler is not None and image is None:
         raise ValueError("An 'image' is required when an AnyUp 'upsampler' is given.")
@@ -216,9 +216,9 @@ def _compute_embedding_object_features(
     is_tiled = image_embeddings["input_size"] is None
     is_3d = segmentation.ndim == 3
 
-    # The area feature is the pixel count of the object in the segmentation. The areas measured on the
-    # resized segmentation of an image, tile or slice only weight the merge of the embedding means:
-    # their scale depends on the image or tile shape, and the tile halos count pixels more than once.
+    # The area feature is the pixel count of the object in the segmentation. The areas on the resized
+    # segmentation only weight the merge of the embedding means across tiles and slices. The scale of
+    # these areas depends on the image or tile shape, and the tile halos count pixels more than once.
     all_ids, sizes = np.unique(segmentation, return_counts=True)
 
     # If we have simple embeddings, i.e. 2d without tiling, then we can directly compute the features.
@@ -234,7 +234,7 @@ def _compute_embedding_object_features(
             pbar_update=anyup_pbar.update if upsampler is not None else None,
         )
         anyup_pbar.close()
-        # Objects that vanish in the resized segmentation have no features, so look up the sizes by id.
+        # Small objects can vanish in the resized segmentation, so 'seg_ids' can be a subset of 'all_ids'.
         areas = sizes[np.searchsorted(all_ids, seg_ids)]
         return seg_ids, np.concatenate([areas[:, None], features[:, 1:]], axis=1)
 

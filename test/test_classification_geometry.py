@@ -76,7 +76,7 @@ def test_object_features_match_skimage_interpolation(shape, objects):
 
 
 class _TileGroup(dict):
-    """A stand-in for the zarr group of tiled embeddings: one dataset per tile, plus the tiling attrs."""
+    """A dict in place of the zarr group of tiled embeddings. Unlike a plain dict, it can hold the tiling in 'attrs'."""
 
 
 def _tiled_embeddings(shape, tile_shape, halo):
@@ -91,8 +91,8 @@ def _tiled_embeddings(shape, tile_shape, halo):
 
 @pytest.mark.parametrize("mode", ["2d", "2d_tiled", "3d"])
 def test_object_area_is_pixel_count(mode):
-    # Identical objects at all positions relative to the tiles. The image and the 288-320 px tiles are larger
-    # than the 256 px grid that the features are computed on, and the halos overlap.
+    # The objects are identical and cover all positions relative to the tiles. The image and most tiles
+    # are larger than the 256 px feature grid, so the resized areas are scaled. The tile halos overlap.
     shape = (600, 600)
     segmentation = np.zeros(shape, dtype="uint32")
     corners = range(6, shape[0] - 12, 24)
