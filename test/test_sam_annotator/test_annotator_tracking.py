@@ -13,10 +13,8 @@ from micro_sam.sam_annotator._widgets import (
     AutoTrackWidget,
     EmbeddingWidget,
 )
-from micro_sam.sam_annotator.annotator_tracking import (
-    AnnotatorTracking,
-    _validate_tracking_model_type,
-)
+from micro_sam.sam_annotator.util import _validate_sam2_model_type
+from micro_sam.sam_annotator.annotator_tracking import AnnotatorTracking
 from micro_sam._test_util import check_layer_initialization
 
 
@@ -165,9 +163,25 @@ def test_update_lineage_seeds_daughters(make_napari_viewer_proxy):
     viewer.close()
 
 
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_commit_layer_follows_last_tracking(make_napari_viewer_proxy):
+    viewer = make_napari_viewer_proxy()
+    widget = AnnotatorTracking(viewer)
+    commit = widget._widgets["commit"]
+    assert commit.layer.value == "current_object"
+
+    widget._widgets["autosegment"].segmentation_finished.emit()
+    assert commit.layer.value == "auto_segmentation"
+
+    widget._widgets["interactive"].segment_requested.emit()
+    assert commit.layer.value == "current_object"
+    viewer.close()
+
+
 def test_tracking_rejects_sam1_models():
-    with pytest.raises(ValueError, match="only supports micro-sam2/SAM2"):
-        _validate_tracking_model_type("vit_b_lm")
+    with pytest.raises(ValueError, match="tracking annotator does not support the model 'vit_b_lm'"):
+        _validate_sam2_model_type("vit_b_lm", "tracking")
 
 
 def test_auto_tracking_uses_sam2_widget():
@@ -200,6 +214,26 @@ def test_auto_tracking_default_mode(qtbot, monkeypatch, device, expected):
     other = "apg" if expected == "sparse" else "sparse"
     widget.mode_dropdown.setCurrentText(other)
     assert widget.mode == other
+
+
+def test_auto_tracking_uses_the_defaults_of_the_model_family(qtbot, monkeypatch):
+    # An EM organelle model has no dense defaults, so the dense mode is not offered for it.
+    from micro_sam.sam_annotator import _widgets
+    from micro_sam.v2.postprocessing import default_postprocessing
+    monkeypatch.setattr(_widgets.util, "get_device", lambda requested=None: requested or "cpu")
+
+    widget = AutoTrackWidget(viewer=None, with_decoder=True, volumetric=True)
+    qtbot.addWidget(widget)
+    widget._reset_segmentation_mode(True, model_type="hvit_s_em_mito")
+
+    choices = [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
+    assert choices == ["sparse", "apg"]
+    assert widget.min_object_size_param.value() == default_postprocessing("hvit_s_em_mito", "sparse")["min_size"]
+
+    widget._reset_segmentation_mode(True, model_type="hvit_s_cells")
+    choices = [widget.mode_dropdown.itemText(i) for i in range(widget.mode_dropdown.count())]
+    assert choices == ["sparse", "apg", "dense"]
+    assert widget.min_object_size_param.value() == default_postprocessing("hvit_s_cells", "sparse")["min_size"]
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda", "mps"])

@@ -4,7 +4,6 @@ https://itnext.io/deciding-the-best-singleton-approach-in-python-65c61e90cdc4
 """
 
 import inspect
-from functools import partial
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -13,10 +12,6 @@ from segment_anything import SamPredictor
 
 import torch.nn as nn
 
-try:
-    from napari.utils import progress as tqdm
-except ImportError:
-    from tqdm import tqdm
 from napari.layers import Image
 
 from qtpy.QtWidgets import QWidget
@@ -24,10 +19,7 @@ from qtpy.QtWidgets import QWidget
 import micro_sam
 import micro_sam.util as util
 from micro_sam.util import _get_sam_model
-from micro_sam.v1.instance_segmentation import get_decoder
-from micro_sam.precompute_state import (
-    cache_is_state, cache_autoseg_state
-)
+from micro_sam.precompute_state import cache_autoseg_state
 
 
 class Singleton(type):
@@ -127,7 +119,6 @@ class AnnotatorState(metaclass=Singleton):
         prefer_decoder=True,
         pbar_init=None,
         pbar_update=None,
-        skip_load=True,
         use_cli=False,
     ):
         assert ndim in (2, 3)
@@ -147,13 +138,7 @@ class AnnotatorState(metaclass=Singleton):
 
         # Initialize the model if necessary.
         if predictor is None:
-            self.predictor, state = _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_cli)
-            if prefer_decoder and "decoder_state" in state and model_type != "vit_b_medical_imaging":
-                self.decoder = get_decoder(
-                    image_encoder=self.predictor.model.image_encoder,
-                    decoder_state=state["decoder_state"],
-                    device=device,
-                )
+            self.predictor, _ = _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_cli)
 
         else:
             self.predictor = predictor
@@ -288,30 +273,11 @@ class AnnotatorState(metaclass=Singleton):
             if save_path is None:
                 raise RuntimeError("Require a save path to precompute the automatic segmentation state")
 
-            if self.is_sam2:
-                self._precompute_autoseg_state_sam2(
-                    image_data, ndim, save_path, model_type, pbar_init=pbar_init, pbar_update=pbar_update,
-                )
-            else:
-                self._precompute_autoseg_state_sam1(image_data, ndim, save_path, skip_load)
-
-    def _precompute_autoseg_state_sam1(self, image_data, ndim, save_path, skip_load):
-        cache_state = partial(cache_is_state, decoder=self.decoder, skip_load=skip_load)
-        if ndim == 2:
-            cache_state(
-                predictor=self.predictor, raw=image_data,
-                image_embeddings=self.image_embeddings, save_path=save_path,
+            self._precompute_autoseg_state(
+                image_data, ndim, save_path, model_type, pbar_init=pbar_init, pbar_update=pbar_update,
             )
-        else:
-            n_slices = image_data.shape[0] if image_data.ndim == 3 else image_data.shape[1]
-            for i in tqdm(range(n_slices), desc="Precompute automatic segmentation state"):
-                slice_ = np.s_[i] if image_data.ndim == 3 else np.s_[:, i]
-                cache_state(
-                    predictor=self.predictor, raw=image_data[slice_],
-                    image_embeddings=self.image_embeddings, save_path=save_path, i=i, verbose=False,
-                )
 
-    def _precompute_autoseg_state_sam2(
+    def _precompute_autoseg_state(
         self, image_data, ndim, save_path, model_type, pbar_init=None, pbar_update=None,
     ):
         resolved_model_type = getattr(self.predictor, "model_type", model_type)

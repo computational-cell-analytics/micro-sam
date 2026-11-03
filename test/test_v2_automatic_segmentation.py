@@ -14,7 +14,8 @@ from micro_sam.v2.instance_segmentation import (
     TiledAutomaticMaskGenerationSegmenter, amg_3d_segmentation,
     get_instance_segmentation_generator, get_decoder, retile_instance_segmentation_generator,
 )
-from micro_sam.v2.postprocessing import DEFAULT_POSTPROCESSING, default_postprocessing, run_multicut
+from micro_sam._model_settings import DEFAULT_POSTPROCESSING
+from micro_sam.v2.postprocessing import default_postprocessing, run_multicut
 from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, ImageEmbeddings
 
 
@@ -29,16 +30,33 @@ def _run_decoder_2d(model, image_embeddings, device="cpu"):
 
 
 def test_sparse_defaults_depend_on_dimensionality():
-    for backbone, modes in DEFAULT_POSTPROCESSING.items():
-        assert default_postprocessing(f"{backbone}_cells", "sparse") == modes["sparse"]["2d"]
-        assert default_postprocessing(f"{backbone}_cells", "sparse", is_volume=True) == modes["sparse"]["3d"]
-        assert default_postprocessing(backbone, "dense", is_volume=True) == modes["dense"]
+    for family, backbones in DEFAULT_POSTPROCESSING.items():
+        for backbone, modes in backbones.items():
+            model_type = f"{backbone}_{family}"
+            assert default_postprocessing(model_type, "sparse") == modes["sparse"]["2d"]
+            assert default_postprocessing(model_type, "sparse", is_volume=True) == modes["sparse"]["3d"]
+            if "dense" in modes:
+                assert default_postprocessing(model_type, "dense", is_volume=True) == modes["dense"]
+
+
+def test_defaults_are_selected_by_model_family():
+    # A backbone without a family uses the cells defaults; the EM organelle models have their own, and no dense ones.
+    for backbone, modes in DEFAULT_POSTPROCESSING["cells"].items():
+        assert default_postprocessing(backbone, "sparse") == modes["sparse"]["2d"]
+    for family in ("em_mito", "em_nuclei"):
+        model_type = f"hvit_s_{family}"
+        assert default_postprocessing(model_type, "sparse") == DEFAULT_POSTPROCESSING[family]["hvit_s"]["sparse"]["2d"]
+        assert default_postprocessing(model_type, "sparse") != DEFAULT_POSTPROCESSING["cells"]["hvit_s"]["sparse"]["2d"]
+        with pytest.raises(ValueError):
+            default_postprocessing(model_type, "dense")
+    with pytest.raises(ValueError):
+        default_postprocessing("hvit_t_em_mito", "sparse")
 
 
 def test_run_multicut_uses_dense_defaults():
     signature = inspect.signature(run_multicut)
     assert signature.parameters["model_type"].default == DEFAULT_MODEL
-    for backbone, modes in DEFAULT_POSTPROCESSING.items():
+    for backbone, modes in DEFAULT_POSTPROCESSING["cells"].items():
         assert default_postprocessing(backbone, "dense") == modes["dense"]
 
 

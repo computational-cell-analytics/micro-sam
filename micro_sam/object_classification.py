@@ -192,7 +192,8 @@ def compute_object_features(
 
     Returns:
         The segmentation ids.
-        The object features.
+        The object features. The first column is the object area in pixels. The next columns are the mean
+            of each embedding channel. The classical features follow, if you pass them.
     """
     if upsampler is not None and image is None:
         raise ValueError("An 'image' is required when an AnyUp 'upsampler' is given.")
@@ -215,6 +216,9 @@ def _compute_embedding_object_features(
     is_tiled = image_embeddings["input_size"] is None
     is_3d = segmentation.ndim == 3
 
+    # The area feature is the pixel count. The resized areas only weight the merge of the means.
+    all_ids, sizes = np.unique(segmentation, return_counts=True)
+
     # If we have simple embeddings, i.e. 2d without tiling, then we can directly compute the features.
     if not is_tiled and not is_3d:
         embeddings = image_embeddings["features"].squeeze()
@@ -223,18 +227,20 @@ def _compute_embedding_object_features(
         anyup_pbar = util._progress_bar(
             total=1, desc="Upsampling with AnyUp", disable=(not verbose) or (upsampler is None)
         )
-        result = _compute_object_features_impl(
+        seg_ids, features = _compute_object_features_impl(
             embeddings, segmentation, resize_embedding_shape, image_region=image, upsampler=upsampler,
             pbar_update=anyup_pbar.update if upsampler is not None else None,
         )
         anyup_pbar.close()
-        return result
+        # Small objects can vanish in the resized segmentation. Then 'seg_ids' is a subset of 'all_ids'.
+        areas = sizes[np.searchsorted(all_ids, seg_ids)]
+        return seg_ids, np.concatenate([areas[:, None], features[:, 1:]], axis=1)
 
     # Otherwise, we compute the features by iterating over slices and/or tiles,
     # compute the features for each slice / tile and accumulate them.
 
     # First, we compute the segmentation ids and initialize the required data structures.
-    seg_ids = np.unique(segmentation).tolist()
+    seg_ids = all_ids.tolist()
     if seg_ids[0] == 0:
         seg_ids = seg_ids[1:]
     visited = {seg_id: False for seg_id in seg_ids}
@@ -294,6 +300,7 @@ def _compute_embedding_object_features(
         # Set all seg ids from this block to visited.
         visited.update({seg_id: True for seg_id in this_seg_ids})
 
+    features[:, 0] = sizes[all_ids != 0]
     return np.array(seg_ids), features
 
 

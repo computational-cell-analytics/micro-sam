@@ -901,7 +901,7 @@ def run_embryo_annotator(raw, embedding_path, model_type):
     state = AnnotatorState()
     state.image_shape = raw.shape
     state.initialize_predictor(
-        raw, model_type=model_type, ndim=3, save_path=embedding_path, batch_size=None, skip_load=False, use_cli=True
+        raw, model_type=model_type, ndim=3, save_path=embedding_path, batch_size=None, use_cli=True
     )
 
     viewer = napari.Viewer()

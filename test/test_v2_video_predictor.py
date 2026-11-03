@@ -99,6 +99,8 @@ def test_propagation_waits_before_batching_offloaded_memory(monkeypatch):
 
     events = []
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    # The monkeypatch teardown deletes the patched attributes through 'nn.Module.__delattr__', which needs this.
+    torch.nn.Module.__init__(predictor)
     predictor.clear_non_cond_mem_around_input = False
     predictor.num_maskmem = 3
     predictor.memory_temporal_stride_for_eval = 1
@@ -165,6 +167,8 @@ def test_propagation_releases_mask_memory_only_on_request(monkeypatch, release):
     from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    # The monkeypatch teardown deletes the patched attributes through 'nn.Module.__delattr__', which needs this.
+    torch.nn.Module.__init__(predictor)
     predictor.clear_non_cond_mem_around_input = False
     predictor.num_maskmem = 3
     predictor.memory_temporal_stride_for_eval = 1

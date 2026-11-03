@@ -1,5 +1,5 @@
 {
- "rule": "The crops are 32x512x512, capped by the test region. They tile the bounding box of the annotation without overlap and stay clear of tuning data. Crops with fewer than 20% of the median object count of the dataset are left out.",
+ "rule": "The crops are 32x512x512, capped by the test region. They tile the bounding box of the annotation without overlap and stay clear of tuning data. Crops with fewer than 20% of the median object count of the dataset are left out. 2d sets without an entry are scored on the whole image (FULL_IMAGE_2D in common.py) or on the 512x512 center crop. The note of a dataset gives its exceptions.",
  "datasets": {
   "gonuclear": {
    "crop_shape": [32, 512, 512],
@@ -4238,6 +4238,36 @@
     ],
     "mda231_02_011.h5": [
      [22, 494, 492]
+    ]
+   }
+  },
+  "elmi_mito": {
+   "crop_shape": [512, 512],
+   "note": "512 x 512 tiles of the test images that hold a labeled mitochondrion; only 3-5 are labeled per image. 16 crops, holding 1-2 objects.",
+   "starts": {
+    "ELMI_01.tif": [
+     [0, 0],
+     [512, 0],
+     [512, 512],
+     [512, 1024],
+     [1024, 512]
+    ],
+    "ELMI_02.tif": [
+     [0, 0],
+     [0, 512],
+     [512, 1024]
+    ],
+    "ELMI_03.tif": [
+     [0, 1024],
+     [512, 1024],
+     [1024, 1024],
+     [1536, 1024]
+    ],
+    "ELMI_04.tif": [
+     [512, 512],
+     [512, 1024],
+     [1024, 0],
+     [1024, 1024]
     ]
    }
   }

@@ -8,7 +8,7 @@
 - cardiomyocyte, perez, vem, u2os, etchacell, aive, cerebellum, macrophage: the nucleus data of these torch-em
   datasets -> <output>/<folder>/ (see BUILDERS) with build_info.json.
 - human_liver_eval: the human liver EM nucleus evaluation boxes -> <output>/human_liver_em_nucleus_boxes/.
-- eval_crops: the fixed evaluation crops of the EM nucleus panel -> finetuning/v2/evaluation/eval_crops_3d.json.
+- eval_crops: the fixed evaluation crops of the EM nucleus panel -> finetuning/v2/evaluation/eval_crops.json.
 """
 import io
 import os
@@ -121,7 +121,7 @@ HUMAN_LIVER_BOXES = {
 }
 
 EVALUATION_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "evaluation"))
-EVAL_CROPS_PATH = os.path.join(EVALUATION_ROOT, "eval_crops_3d.json")
+EVAL_CROPS_PATH = os.path.join(EVALUATION_ROOT, "eval_crops.json")
 EVAL_OBJECT_NAMES = {
     "parlakgul_liver": "mitochondria", "cerebellum_fibsem_mito": "mitochondria",
     "macrophage_a431_mito": "mitochondria", "mito_anf": "mitochondria", "snemi_mito": "mitochondria",
@@ -1242,7 +1242,7 @@ def import_evaluation_common():
 
 
 def dump_crops(obj, level=0):
-    """JSON in the layout of eval_crops_3d.json: one space per level, number lists on one line."""
+    """JSON in the layout of eval_crops.json: one space per level, number lists on one line."""
     pad, inner = " " * level, " " * (level + 1)
     if isinstance(obj, dict):
         items = [f"{inner}{json.dumps(k)}: {dump_crops(v, level + 1)}" for k, v in obj.items()]
@@ -1310,7 +1310,7 @@ def place_crops(common, input_root, dataset_name):
 
 
 def preprocess_eval_crops(input_root, crops_path, datasets, dry):
-    """Place the fixed evaluation crops of the EM nucleus panel and add them to eval_crops_3d.json.
+    """Place the fixed evaluation crops of the EM nucleus panel and add them to eval_crops.json.
 
     The crops follow the rule of the file. They are 32 x 512 x 512 tiles, capped by the test region, that tile the test
     region without overlap. The annotation covers the test region. These tiles are dropped:
@@ -1354,7 +1354,7 @@ def main():
     parser.add_argument("--depth", type=int, default=32, help="The slices of a human liver window in 'select'.")
     parser.add_argument("--n_best", type=int, default=40, help="The human liver windows that 'select' prints.")
     parser.add_argument("--eval_datasets", nargs="+", default=None, help="The nucleus evaluation sets for eval_crops.")
-    parser.add_argument("--crops_path", default=EVAL_CROPS_PATH, help="The eval_crops_3d.json file to update.")
+    parser.add_argument("--crops_path", default=EVAL_CROPS_PATH, help="The eval_crops.json file to update.")
     parser.add_argument("--dry", action="store_true", help="Print the evaluation crops without writing them.")
     args = parser.parse_args()
     if args.dataset == "betaseg":

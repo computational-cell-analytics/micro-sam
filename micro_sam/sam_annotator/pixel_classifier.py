@@ -118,7 +118,7 @@ def pixel_classifier(
         image, model_type=model_type, save_path=embedding_path,
         halo=halo, tile_shape=tile_shape, precompute_autoseg_state=False,
         ndim=ndim, checkpoint_path=checkpoint_path, device=device,
-        skip_load=False, use_cli=True,
+        use_cli=True,
     )
 
     if viewer is None:

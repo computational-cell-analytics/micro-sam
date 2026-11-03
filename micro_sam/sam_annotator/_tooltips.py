@@ -23,23 +23,17 @@ tooltips = {
         "settings": "Settings for computing the image embeddings: model family and size, tiling, batch size, the embedding save path and the compute device.",  # noqa
     },
     "segmentnd": {
-        "box_extension": "Enter the factor by which the box size grows when it projects to adjacent slices. Larger factors help if object sizes change between slices.",  # noqa
-        "iou_threshold": "Enter the minimal overlap between objects in adjacent slices to continue segmentation.",
-        "early_stop_patience": "SAM2 volume mode: stop propagation once the object is absent for this many slices in a row. Lower values stop sooner (faster). A value of 0 disables early stopping and propagates through the whole volume.",  # noqa
-        "use_full_z_range": "SAM2 volume mode: propagate through all slices along z. Uncheck to restrict propagation to a chosen slice range with the slider below (faster, and a hard guardrail against leaking into neighbouring structures).",  # noqa
-        "z_range": "SAM2 volume mode: the inclusive range of slices (along z) that propagation is allowed to cover. Only used when 'Propagate through full volume' is unchecked.",  # noqa
-        "motion_smoothing": "Enter the motion smoothing factor. It helps to follow objects that have a directed movement. Higher values help for fast objects.",  # noqa
-        "projection_dropdown": "Choose the projection mode. It determines which prompts are derived from the masks projected to adjacent frames to rerun SAM.",  # noqa
-        "batched": "Enable to segment multiple objects with separate point prompts. The tool tracks each positive point as a separate object. Only available for SAM2 models.",  # noqa
-        "settings": "Settings controlling how a 2d segmentation is propagated through the volume (projection mode, IoU threshold, early stopping and the z-range).",  # noqa
+        "early_stop_patience": "Volume mode: stop propagation once the object is absent for this many slices in a row. Lower values stop sooner (faster). A value of 0 disables early stopping and propagates through the whole volume.",  # noqa
+        "use_full_z_range": "Volume mode: propagate through all slices along z. Uncheck to restrict propagation to a chosen slice range with the slider below (faster, and a hard guardrail against leaking into neighbouring structures).",  # noqa
+        "z_range": "Volume mode: the inclusive range of slices (along z) that propagation is allowed to cover. Only used when 'Propagate through full volume' is unchecked.",  # noqa
+        "settings": "The settings for the propagation of a 2d segmentation through the volume: early stopping and the z-range.",  # noqa
     },
     "unified_segment": {
         "apply_to_volume": "Choose whether to segment only the current slice or frame, or the full volume or all frames.",  # noqa
-        "batched": "Enable to segment multiple objects at once: each positive point and each box defines a separate object. Only available for SAM2 models.",  # noqa
+        "batched": "Enable to segment multiple objects at once: each positive point and each box defines a separate object.",  # noqa
         "batched_scribble_disabled": "Batched segmentation is unavailable while scribble prompts are present. Remove all path, polyline and line prompts to re-enable it.",  # noqa
         "segment_button": "Run Segment Anything 2 on the current point/box prompts to segment the object. Shortcut: S.",  # noqa
         "clear_button": "Clear the current prompts and the current-object segmentation (whole volume or current slice per 'Apply to Volume' for 3d data). Shortcut: Shift + C.",  # noqa
-        "settings": "Settings for interactive segmentation across slices (projection mode and propagation parameters).",  # noqa
     },
     "autosegment": {
         # General settings.
@@ -113,7 +107,7 @@ tooltips = {
         "configuration": "Specify the hardware configuration to use for training.",
     },
     "commit": {
-        "layer": "The layer to commit. Either 'current_object' to commit results from prompt-based segmentation or 'auto_segmentation' to commit results from automatic segmentation.",  # noqa
+        "layer": "The layer to commit. Either 'current_object' to commit results from prompt-based segmentation or 'auto_segmentation' to commit results from automatic segmentation. The layer of the last segmentation is selected automatically. You can change it.",  # noqa
         "preserve_mode": "The mode for preserving already committed objects. Either 'objects' to preserve on a per-object level, 'pixels' to preserve on a per-pixel level, or 'none' to not preserve.",  # noqa
         "commit_path": "The path to a zarr file for saving committed objects, prompts and other segmentation settings.",
         "commit_button": "Commit the current segmentation to the committed-objects layer. Shortcut: C.",

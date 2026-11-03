@@ -623,6 +623,68 @@ class TestNdimOverride:
 
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+class TestCommitLayerSelection:
+    """The commit layer follows the last segmentation (interactive or automatic)."""
+
+    def test_commit_layer_follows_last_segmentation(self, make_napari_viewer_proxy, monkeypatch):
+        from micro_sam.sam_annotator import _widgets
+        monkeypatch.setattr(_widgets, "_segment_object_2d", lambda viewer, batched=False: None)
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=2)
+        commit = widget._widgets["commit"]
+        assert commit.layer.value == "current_object"
+
+        widget._widgets["autosegment"].segmentation_finished.emit()
+        assert commit.layer.value == "auto_segmentation"
+
+        widget._widgets["interactive"].segment()
+        assert commit.layer.value == "current_object"
+        viewer.close()
+
+    def test_commit_layer_selection_after_rebuild(self, make_napari_viewer_proxy):
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=2)
+        widget._rebuild_for_ndim(3)
+
+        commit = widget._widgets["commit"]
+        assert commit.layer.value == "current_object"
+        widget._widgets["autosegment"].segmentation_finished.emit()
+        assert commit.layer.value == "auto_segmentation"
+        widget._widgets["interactive"].segment_requested.emit()
+        assert commit.layer.value == "current_object"
+        viewer.close()
+
+    def test_image_change_resets_commit_layer(self, make_napari_viewer_proxy):
+        from micro_sam.sam_annotator._state import AnnotatorState
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=2)
+        commit = widget._widgets["commit"]
+        commit.layer.value = "auto_segmentation"
+
+        state = AnnotatorState()
+        state.image_shape = (64, 64)
+        state.image_scale = (1.0, 1.0)
+        widget._update_image()
+        assert commit.layer.value == "current_object"
+        viewer.close()
+
+    def test_failed_autosegmentation_keeps_commit_layer(self, make_napari_viewer_proxy, monkeypatch):
+        from micro_sam.sam_annotator import _widgets
+        monkeypatch.setattr(_widgets, "_generate_message", lambda kind, msg: None)
+
+        viewer = make_napari_viewer_proxy()
+        widget = Annotator(viewer, ndim=2)
+        autoseg = widget._widgets["autosegment"]
+        autoseg.with_decoder = False  # The run stops before segmentation.
+        autoseg()
+        assert widget._widgets["commit"].layer.value == "current_object"
+        viewer.close()
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 class TestZTilingControls:
     """The z block / halo controls live on the (volumetric) auto-seg widget, not the embedding widget."""
 
@@ -690,6 +752,7 @@ class TestAutoSegVolumeDispatch:
         widget = SimpleNamespace(
             _viewer=viewer, mode="apg", volumetric=True, apply_to_volume=apply_to_volume,
             with_decoder=True, _is_tracking=False, _run_apg=fake_run_apg,
+            segmentation_finished=SimpleNamespace(emit=lambda: calls.update(finished=True)),
         )
 
         def fake_pbar():
@@ -717,6 +780,7 @@ class TestAutoSegVolumeDispatch:
 
         AutoSegmentWidget.__call__(widget)
         if calls:
+            assert calls.pop("finished") is True
             assert [event for event in progress_events if event[0] != "description"] == [
                 ("reset", ()), ("total", (2,)), ("update", (2,)),
                 ("reset", ()), ("total", (1,)), ("update", (1,)), ("stop", ()),
