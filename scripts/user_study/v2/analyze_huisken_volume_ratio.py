@@ -29,6 +29,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 DATA_DIR = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/huisken_data/platynereis_timelapse_3-6hpf"
+RESULT_DIR = "./results"
 VERSIONS = ["old_defaults", "new_defaults"]
 
 START_HPF, MINUTES_PER_TIMEPOINT = 3.0, 2.0
@@ -127,7 +128,7 @@ def plot_comparison(path):
     """Plot the ratio of the old and the new defaults side by side, from the saved summaries."""
     fig, axes = plt.subplots(1, len(VERSIONS), figsize=(12, 4), sharey=True)
     for ax, version in zip(axes, VERSIONS):
-        draw_ratio(ax, pd.read_csv(os.path.join(DATA_DIR, version, "volume_ratio_summary.tsv"), sep="\t"))
+        draw_ratio(ax, pd.read_csv(os.path.join(RESULT_DIR, version, "volume_ratio_summary.tsv"), sep="\t"))
         ax.set_title(version.replace("_", " "))
     fig.tight_layout()
     fig.savefig(path, dpi=200)
@@ -141,9 +142,10 @@ def main():
     parser.add_argument("--compare", action="store_true", help="Plot the old and the new defaults side by side.")
     args = parser.parse_args()
     if args.compare:
-        plot_comparison(os.path.join(DATA_DIR, "volume_ratio_old_vs_new.png"))
+        plot_comparison(os.path.join(RESULT_DIR, "volume_ratio_old_vs_new.png"))
         return
-    folder = os.path.join(DATA_DIR, args.version)
+    folder = os.path.join(RESULT_DIR, args.version)
+    os.makedirs(folder, exist_ok=True)
     cell_table_path = os.path.join(folder, "volume_ratio_cells.tsv")
     summary_path = os.path.join(folder, "volume_ratio_summary.tsv")
     plot_path = os.path.join(folder, "volume_ratio.png")
@@ -151,8 +153,9 @@ def main():
     if args.plot:
         table = pd.read_csv(cell_table_path, sep="\t").drop(columns="outlier")
     else:
-        cell_path = os.path.join(folder, "C01_membrane_seg.h5")
-        table = compute_cell_table(cell_path, os.path.join(folder, "C02_nuclei_tracks_fixed.h5"))
+        cell_path = os.path.join(DATA_DIR, args.version, "C01_membrane_seg.h5")
+        nucleus_path = os.path.join(DATA_DIR, args.version, "C02_nuclei_tracks_fixed.h5")
+        table = compute_cell_table(cell_path, nucleus_path)
     table["outlier"] = find_outliers(table)
     table.to_csv(cell_table_path, sep="\t", index=False)
     print(f"Saved the table of the cells to {cell_table_path}")
