@@ -681,12 +681,11 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         add_button.setToolTip(get_tooltip("classification", "add_class"))
         add_button.clicked.connect(lambda: self._select_class(max(self._classes, default=0) + 1))
 
-        # Qt uses Tab for focus navigation, so napari never gets it. 'Q' is next to Tab.
-        @self._viewer.bind_key("Q", overwrite=True)
+        @self._viewer.bind_key("Alt-Right", overwrite=True)
         def _next_class(event=None):
             self._cycle_class(1)
 
-        @self._viewer.bind_key("Shift-Q", overwrite=True)
+        @self._viewer.bind_key("Alt-Left", overwrite=True)
         def _previous_class(event=None):
             self._cycle_class(-1)
 
@@ -694,7 +693,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         header = QtWidgets.QLabel(self.label_widget_title)
         header.setToolTip(get_tooltip("classification", "label_names"))
         layout.addWidget(header)
-        layout.addWidget(QtWidgets.QLabel("Toggle class [Q]"))
+        layout.addWidget(QtWidgets.QLabel("Previous / next class [Alt + Left / Right]"))
         layout.addLayout(self._class_layout)
         layout.addWidget(add_button)
         return layout
@@ -917,11 +916,11 @@ class _ClassifierBase(QtWidgets.QScrollArea):
                 layer = self._viewer.layers[name]
                 layer.visible = not layer.visible
 
-        @self._viewer.bind_key("Shift-A", overwrite=True)
+        @self._viewer.bind_key("Alt-A", overwrite=True)
         def _toggle_annotations(event=None):
             _toggle_visibility("annotations")
 
-        @self._viewer.bind_key("Shift-P", overwrite=True)
+        @self._viewer.bind_key("Alt-P", overwrite=True)
         def _toggle_prediction(event=None):
             _toggle_visibility("prediction")
 

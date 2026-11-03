@@ -26,7 +26,7 @@ def test_classifier_shortcuts_and_button_labels(make_napari_viewer_proxy, classi
     assert "Train and Predict [Shift + T]" in button_labels
     assert "Clear Annotations [Shift + C]" in button_labels
 
-    for key, name in (("Shift-A", "annotations"), ("Shift-P", "prediction")):
+    for key, name in (("Alt-A", "annotations"), ("Alt-P", "prediction")):
         toggle = viewer.keymap[coerce_keybinding(key)]
         assert viewer.layers[name].visible
         toggle(viewer)
@@ -36,8 +36,8 @@ def test_classifier_shortcuts_and_button_labels(make_napari_viewer_proxy, classi
 
     annotator._select_class(3)
     annotator._select_class(1)
-    next_class = viewer.keymap[coerce_keybinding("Q")]
-    previous_class = viewer.keymap[coerce_keybinding("Shift-Q")]
+    next_class = viewer.keymap[coerce_keybinding("Alt-Right")]
+    previous_class = viewer.keymap[coerce_keybinding("Alt-Left")]
     selected = []
     for cycle in (next_class, next_class, previous_class, previous_class):
         cycle(viewer)
@@ -45,7 +45,7 @@ def test_classifier_shortcuts_and_button_labels(make_napari_viewer_proxy, classi
     assert selected == [3, 1, 3, 1]
     assert annotator._class_group.checkedId() == 1
     label_texts = {label.text() for label in annotator.findChildren(QtWidgets.QLabel)}
-    assert "Toggle class [Q]" in label_texts
+    assert "Previous / next class [Alt + Left / Right]" in label_texts
 
     viewer.layers.remove("annotations")
     next_class(viewer)
