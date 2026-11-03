@@ -13,6 +13,9 @@ In the first division round (MITOSIS_TIMEPOINTS) the nuclei are the chromosomes 
 adds by a threshold, which have no nuclear volume, so these time points are left out. The plot leaves out the time
 points with fewer than MIN_CELLS kept cells.
 
+The second panel shows the number of cells at each time point: the tracked nuclei, which stand for all cells of the
+embryo, and the cells that are kept for the ratio.
+
 Usage:
     python analyze_huisken_volume_ratio.py  # the tables and the plot, next to the segmentations
     python analyze_huisken_volume_ratio.py --version new_defaults  # the same for the results of the new defaults
@@ -106,30 +109,65 @@ def summarize(table):
     return summary.reset_index()
 
 
+def count_cells(table, nucleus_path):
+    """The number of tracked nuclei and of the cells kept for the ratio at each time point."""
+    with h5py.File(nucleus_path, "r") as f:
+        n_timepoints = f["segmentation"].shape[0]
+        track_timepoints = f["tracks"][:, 1].astype("int64")
+    counts = pd.DataFrame({"t": np.arange(n_timepoints)})
+    counts["hpf"] = START_HPF + counts["t"] * MINUTES_PER_TIMEPOINT / 60
+    counts["n_nuclei"] = np.bincount(track_timepoints, minlength=n_timepoints)
+    n_kept = (table["outlier"] == "").groupby(table["t"]).sum()
+    counts["n_cells"] = n_kept.reindex(counts["t"], fill_value=0).to_numpy()
+    return counts
+
+
 def draw_ratio(ax, summary):
     # The time points with too few cells are gaps in the line, bridged by a dashed line between their ends.
     reliable = summary[summary["n_cells"] >= MIN_CELLS]
     ax.plot(reliable["hpf"], reliable["mean_ratio"], color="#2a78d6", linewidth=1, linestyle="--")
     ax.plot(summary["hpf"], summary["mean_ratio"].where(summary["n_cells"] >= MIN_CELLS), color="#2a78d6", linewidth=2)
-    ax.set_xlabel("Time (hpf)")
     ax.set_ylabel("Mean cell / nucleus volume")
     ax.spines[["top", "right"]].set_visible(False)
 
 
-def plot_ratio(summary, path):
-    fig, ax = plt.subplots(figsize=(8, 4))
-    draw_ratio(ax, summary)
+def draw_counts(ax, counts):
+    series = [("n_nuclei", "tracked nuclei", "#2a78d6"), ("n_cells", "cells in the ratio", "#eb6834")]
+    for column, label, color in series:
+        ax.plot(counts["hpf"], counts[column], color=color, linewidth=2, label=label)
+        ax.text(counts["hpf"].iloc[-1], counts[column].iloc[-1], f" {label}", va="center", fontsize=8,
+                color="#52514e")
+    ax.axhline(MIN_CELLS, color="#bdbcb6", linewidth=1, linestyle=":")
+    ax.set_xlabel("Time (hpf)")
+    ax.set_ylabel("Number of cells")
+    ax.set_ylim(bottom=0)
+    ax.legend(frameon=False, fontsize=8, loc="upper left")
+    ax.spines[["top", "right"]].set_visible(False)
+
+
+def plot_ratio(summary, counts, path):
+    fig, axes = plt.subplots(2, 1, figsize=(9, 7), sharex=True)
+    draw_ratio(axes[0], summary)
+    draw_counts(axes[1], counts)
     fig.tight_layout()
     fig.savefig(path, dpi=200)
     print(f"Saved the plot to {path}")
 
 
 def plot_comparison(path):
-    """Plot the ratio of the old and the new defaults side by side, from the saved summaries."""
-    fig, axes = plt.subplots(1, len(VERSIONS), figsize=(12, 4), sharey=True)
-    for ax, version in zip(axes, VERSIONS):
-        draw_ratio(ax, pd.read_csv(os.path.join(RESULT_DIR, version, "volume_ratio_summary.tsv"), sep="\t"))
-        ax.set_title(version.replace("_", " "))
+    """Plot the ratio and the cell numbers of the old and the new defaults side by side, from the saved tables."""
+    fig, axes = plt.subplots(2, len(VERSIONS), figsize=(13, 7), sharex=True, sharey="row")
+    for column, version in enumerate(VERSIONS):
+        folder = os.path.join(RESULT_DIR, version)
+        counts_path = os.path.join(folder, "cell_counts.tsv")
+        if not os.path.exists(counts_path):
+            raise FileNotFoundError(
+                f"The cell numbers {counts_path} do not exist. "
+                f"Create them with 'python analyze_huisken_volume_ratio.py --plot --version {version}'."
+            )
+        draw_ratio(axes[0, column], pd.read_csv(os.path.join(folder, "volume_ratio_summary.tsv"), sep="\t"))
+        draw_counts(axes[1, column], pd.read_csv(counts_path, sep="\t"))
+        axes[0, column].set_title(version.replace("_", " "))
     fig.tight_layout()
     fig.savefig(path, dpi=200)
     print(f"Saved the plot to {path}")
@@ -148,13 +186,14 @@ def main():
     os.makedirs(folder, exist_ok=True)
     cell_table_path = os.path.join(folder, "volume_ratio_cells.tsv")
     summary_path = os.path.join(folder, "volume_ratio_summary.tsv")
+    counts_path = os.path.join(folder, "cell_counts.tsv")
     plot_path = os.path.join(folder, "volume_ratio.png")
+    nucleus_path = os.path.join(DATA_DIR, args.version, "C02_nuclei_tracks_fixed.h5")
 
     if args.plot:
         table = pd.read_csv(cell_table_path, sep="\t").drop(columns="outlier")
     else:
         cell_path = os.path.join(DATA_DIR, args.version, "C01_membrane_seg.h5")
-        nucleus_path = os.path.join(DATA_DIR, args.version, "C02_nuclei_tracks_fixed.h5")
         table = compute_cell_table(cell_path, nucleus_path)
     table["outlier"] = find_outliers(table)
     table.to_csv(cell_table_path, sep="\t", index=False)
@@ -164,7 +203,10 @@ def main():
     summary = summarize(table)
     summary.to_csv(summary_path, sep="\t", index=False, float_format="%.3f")
     print(f"Saved the summary to {summary_path}")
-    plot_ratio(summary, plot_path)
+    cell_counts = count_cells(table, nucleus_path)
+    cell_counts.to_csv(counts_path, sep="\t", index=False, float_format="%.3f")
+    print(f"Saved the cell numbers to {counts_path}")
+    plot_ratio(summary, cell_counts, plot_path)
 
 
 if __name__ == "__main__":
