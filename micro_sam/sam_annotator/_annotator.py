@@ -682,13 +682,19 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         add_button.clicked.connect(lambda: self._select_class(max(self._classes, default=0) + 1))
 
         # Qt uses Tab for focus navigation, so napari never gets it. 'Q' is next to Tab.
-        self._viewer.bind_key("Q", lambda viewer: self._cycle_class(1), overwrite=True)
-        self._viewer.bind_key("Shift-Q", lambda viewer: self._cycle_class(-1), overwrite=True)
+        @self._viewer.bind_key("Q", overwrite=True)
+        def _next_class(event=None):
+            self._cycle_class(1)
+
+        @self._viewer.bind_key("Shift-Q", overwrite=True)
+        def _previous_class(event=None):
+            self._cycle_class(-1)
 
         layout = QtWidgets.QVBoxLayout()
         header = QtWidgets.QLabel(self.label_widget_title)
         header.setToolTip(get_tooltip("classification", "label_names"))
         layout.addWidget(header)
+        layout.addWidget(QtWidgets.QLabel("Toggle class [Q / Shift + Q]"))
         layout.addLayout(self._class_layout)
         layout.addWidget(add_button)
         return layout
@@ -778,7 +784,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
 
     def _cycle_class(self, step):
         class_ids = sorted(self._classes)
-        if not class_ids:
+        if not class_ids or "annotations" not in self._viewer.layers:
             return
         current = self._viewer.layers["annotations"].selected_label
         index = (class_ids.index(current) + step) % len(class_ids) if current in class_ids else 0
@@ -911,8 +917,13 @@ class _ClassifierBase(QtWidgets.QScrollArea):
                 layer = self._viewer.layers[name]
                 layer.visible = not layer.visible
 
-        self._viewer.bind_key("Shift-A", lambda viewer: _toggle_visibility("annotations"), overwrite=True)
-        self._viewer.bind_key("Shift-P", lambda viewer: _toggle_visibility("prediction"), overwrite=True)
+        @self._viewer.bind_key("Shift-A", overwrite=True)
+        def _toggle_annotations(event=None):
+            _toggle_visibility("annotations")
+
+        @self._viewer.bind_key("Shift-P", overwrite=True)
+        def _toggle_prediction(event=None):
+            _toggle_visibility("prediction")
 
         # The two buttons sit side-by-side and expand to share the row width equally. QSizePolicy.Policy
         # is nested in Qt6 and top-level in Qt5.
