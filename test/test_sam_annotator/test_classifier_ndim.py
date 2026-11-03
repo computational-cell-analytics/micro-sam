@@ -25,6 +25,25 @@ def test_classifier_shortcuts_and_button_labels(make_napari_viewer_proxy, classi
     button_labels = {button.text() for button in buttons}
     assert "Train and Predict [Shift + T]" in button_labels
     assert "Clear Annotations [Shift + C]" in button_labels
+
+    for key, name in (("Shift-A", "annotations"), ("Shift-P", "prediction")):
+        toggle = viewer.keymap[coerce_keybinding(key)]
+        assert viewer.layers[name].visible
+        toggle(viewer)
+        assert not viewer.layers[name].visible
+        toggle(viewer)
+        assert viewer.layers[name].visible
+
+    annotator._select_class(3)
+    annotator._select_class(1)
+    next_class = viewer.keymap[coerce_keybinding("Q")]
+    previous_class = viewer.keymap[coerce_keybinding("Shift-Q")]
+    selected = []
+    for cycle in (next_class, next_class, previous_class, previous_class):
+        cycle(viewer)
+        selected.append(viewer.layers["annotations"].selected_label)
+    assert selected == [3, 1, 3, 1]
+    assert annotator._class_group.checkedId() == 1
     viewer.close()
 
 

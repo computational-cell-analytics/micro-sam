@@ -143,9 +143,13 @@ When starting this workflow the following interface opens up.
 
 You can load an image (here: `livecell`) and a segmentation (here, `segmentation`, for example from another `micro_sam` widget).
 Compute image embeddings as in the other widgets.
-Then, draw annotations for the different types of objects in your image in the `annotation` layer, see also the brushstroke labels visible in some cells in the image.
+Then, draw annotations for the different types of objects in your image in the `annotations` layer, see also the brushstroke labels visible in some cells in the image.
 By clicking `Train and predict` you train a random forest classifer on the objects you have annotated, that uses the image embeddings projected to the objects as features.
 It is then applied to all objects to obtain the semantic segmentation shown in `prediction`.
+Press `Shift + A` to show or hide the `annotations` layer.
+Press `Shift + P` to show or hide the `prediction` layer.
+Press `Q` to select the next class.
+Press `Shift + Q` to select the previous class.
 
 **This workflow is still experimental. It may significantly change in the future and we are working on a publication to explain the underlying methodology and to document it properly. Feedback is already welcome in case you use it.**
 

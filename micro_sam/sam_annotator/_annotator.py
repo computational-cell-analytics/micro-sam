@@ -681,6 +681,10 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         add_button.setToolTip(get_tooltip("classification", "add_class"))
         add_button.clicked.connect(lambda: self._select_class(max(self._classes, default=0) + 1))
 
+        # Qt uses Tab for focus navigation, so napari never gets it. 'Q' is next to Tab.
+        self._viewer.bind_key("Q", lambda viewer: self._cycle_class(1), overwrite=True)
+        self._viewer.bind_key("Shift-Q", lambda viewer: self._cycle_class(-1), overwrite=True)
+
         layout = QtWidgets.QVBoxLayout()
         header = QtWidgets.QLabel(self.label_widget_title)
         header.setToolTip(get_tooltip("classification", "label_names"))
@@ -771,6 +775,14 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         layer.mode = "paint"
         self._viewer.layers.selection.active = layer
         self._on_selected_label()
+
+    def _cycle_class(self, step):
+        class_ids = sorted(self._classes)
+        if not class_ids:
+            return
+        current = self._viewer.layers["annotations"].selected_label
+        index = (class_ids.index(current) + step) % len(class_ids) if current in class_ids else 0
+        self._select_class(class_ids[index])
 
     def _on_selected_label(self, event=None):
         # A label id selected in the napari layer controls selects its class here, or creates it.
@@ -892,6 +904,15 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         @self._viewer.bind_key("Shift-C", overwrite=True)
         def _clear(event=None):
             self._clear_annotations(_volume_value())
+
+        # napari's 'V' toggles only the selected layer, which is 'annotations' while painting.
+        def _toggle_visibility(name):
+            if name in self._viewer.layers:
+                layer = self._viewer.layers[name]
+                layer.visible = not layer.visible
+
+        self._viewer.bind_key("Shift-A", lambda viewer: _toggle_visibility("annotations"), overwrite=True)
+        self._viewer.bind_key("Shift-P", lambda viewer: _toggle_visibility("prediction"), overwrite=True)
 
         # The two buttons sit side-by-side and expand to share the row width equally. QSizePolicy.Policy
         # is nested in Qt6 and top-level in Qt5.
