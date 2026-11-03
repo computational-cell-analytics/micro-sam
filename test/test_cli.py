@@ -186,3 +186,25 @@ def test_precompute_embeddings_forwards_the_tiling(monkeypatch):
         result = runner.invoke(cli, ["precompute-embeddings", "-i", "image.tif", "-e", "embeddings.zarr", *options])
         assert result.exit_code == 0, result.output
         assert (calls[-1]["tile_shape"], calls[-1]["halo"]) == expected
+
+
+def test_v1_automatic_segmentation_forwards_the_tiling(monkeypatch):
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli
+    import micro_sam.v1.automatic_segmentation as v1_automatic_segmentation
+
+    calls = []
+    monkeypatch.setattr(v1_automatic_segmentation, "main", lambda argv: calls.append(argv))
+
+    runner = CliRunner()
+    command = ["v1", "automatic_segmentation", "-i", "image.tif", "-o", "out.tif"]
+    tiling = ["--tile_shape", "384", "384", "--halo", "64", "64"]
+    for options, expected in [([], []), (tiling, tiling)]:  # without options, the v1 command decides the tiling
+        result = runner.invoke(cli, [*command, *options])
+        assert result.exit_code == 0, result.output
+        assert calls[-1] == ["--input_path", "image.tif", "--output_path", "out.tif", *expected]
+
+    # The tile shape and the halo take exactly two values.
+    result = runner.invoke(cli, [*command, "--tile_shape", "384"])
+    assert result.exit_code != 0
