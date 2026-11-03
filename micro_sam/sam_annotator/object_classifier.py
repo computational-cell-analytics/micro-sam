@@ -196,6 +196,13 @@ class ObjectClassifier(_ClassifierBase):
         self._viewer.layers.events.inserted.connect(self._reset_segmentation_layer_choices)
         self._viewer.layers.events.removed.connect(self._reset_segmentation_layer_choices)
         self._viewer.layers.events.reordered.connect(self._reset_segmentation_layer_choices)
+
+        @self._viewer.bind_key("Shift-S", overwrite=True)
+        def _toggle_segmentation(event=None):
+            layer = self.segmentation_selection.value
+            if layer is not None:
+                layer.visible = not layer.visible
+
         return segmentation_selection
 
     def _extra_classification_sections(self):
