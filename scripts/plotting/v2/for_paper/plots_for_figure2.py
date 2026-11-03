@@ -971,17 +971,18 @@ def make_room_above(ax, legend, highest, step):
         ax.set_yticks(np.arange(first_tick(low, step), top - 0.5 * step + 1e-6, step))
 
 
-def save_figure(fig, name, kind, style="quantitative"):
+def save_figure(fig, name, kind, style="quantitative", dpi=None):
     """Save the figure as png, svg and pdf in the folder '<kind>/<style>' of OUTPUT_DIR.
 
-    The files have no date and the svg ids use a fixed salt, so that the same figure gives the same files.
+    The files have no date and the svg ids use a fixed salt, so that the same figure gives the same files. 'dpi' sets
+    the resolution of the images and of the png; the default keeps 'savefig.dpi'.
     """
     folder = os.path.join(OUTPUT_DIR, kind, style)
     os.makedirs(folder, exist_ok=True)
     metadata = {"png": None, "svg": {"Date": None}, "pdf": {"CreationDate": None}}
     with plt.rc_context({"svg.hashsalt": "micro-sam2"}):
         for extension, meta in metadata.items():
-            fig.savefig(os.path.join(folder, f"{name}.{extension}"), bbox_inches="tight", metadata=meta)
+            fig.savefig(os.path.join(folder, f"{name}.{extension}"), bbox_inches="tight", metadata=meta, dpi=dpi)
     plt.close(fig)
     print(f"Saved '{name}' to '{folder}'.")
 
