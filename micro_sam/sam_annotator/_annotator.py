@@ -694,7 +694,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         header = QtWidgets.QLabel(self.label_widget_title)
         header.setToolTip(get_tooltip("classification", "label_names"))
         layout.addWidget(header)
-        layout.addWidget(QtWidgets.QLabel("Toggle class [Q / Shift + Q]"))
+        layout.addWidget(QtWidgets.QLabel("Toggle class [Q]"))
         layout.addLayout(self._class_layout)
         layout.addWidget(add_button)
         return layout

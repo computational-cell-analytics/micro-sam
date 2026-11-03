@@ -45,7 +45,7 @@ def test_classifier_shortcuts_and_button_labels(make_napari_viewer_proxy, classi
     assert selected == [3, 1, 3, 1]
     assert annotator._class_group.checkedId() == 1
     label_texts = {label.text() for label in annotator.findChildren(QtWidgets.QLabel)}
-    assert "Toggle class [Q / Shift + Q]" in label_texts
+    assert "Toggle class [Q]" in label_texts
 
     viewer.layers.remove("annotations")
     next_class(viewer)
