@@ -148,6 +148,7 @@ By clicking `Train and predict` you train a random forest classifer on the objec
 It is then applied to all objects to obtain the semantic segmentation shown in `prediction`.
 Press `Shift + A` to show or hide the `annotations` layer.
 Press `Shift + P` to show or hide the `prediction` layer.
+Press `Shift + S` to show or hide the selected segmentation layer.
 Press `Q` to select the next class.
 Press `Shift + Q` to select the previous class.
 

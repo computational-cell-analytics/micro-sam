@@ -105,3 +105,18 @@ def test_classifier_classical_features_option(make_napari_viewer_proxy, classifi
     annotator._set_options(False, None, False, "fixed", None)
     assert annotator._get_classical_features() is None
     viewer.close()
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_object_classifier_toggles_segmentation(make_napari_viewer_proxy):
+    viewer = make_napari_viewer_proxy()
+    segmentation = viewer.add_labels(np.zeros((64, 64), dtype="uint32"), name="my_cells")
+    ObjectClassifier(viewer)
+
+    toggle = viewer.keymap[coerce_keybinding("Shift-S")]
+    toggle(viewer)
+    assert not segmentation.visible
+    toggle(viewer)
+    assert segmentation.visible
+    viewer.close()
