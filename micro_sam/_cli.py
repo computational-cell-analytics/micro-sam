@@ -976,7 +976,7 @@ def _delegate_argv(ctx):
                 argv.append(long_opt)
         elif value is None:
             continue
-        elif param.multiple:
+        elif param.multiple or param.nargs > 1:
             values = list(value)
             if values:
                 argv.append(long_opt)
@@ -1053,8 +1053,8 @@ def v1_train(ctx, **kwargs):
 @click.option("-k", "--key", default=None, help="The key for opening data with elf.io.open_file.")
 @click.option("-m", "--model_type", default=None, help="The Segment Anything model to use.")
 @click.option("-c", "--checkpoint", default=None, help="Checkpoint to load the SAM model from.")
-@click.option("--tile_shape", multiple=True, type=int, help="The tile shape for tiled prediction, e.g. '384 384'.")
-@click.option("--halo", multiple=True, type=int, help="The halo for tiled prediction, e.g. '64 64'.")
+@click.option("--tile_shape", nargs=2, type=int, help="The tile shape for tiled prediction, e.g. '384 384'.")
+@click.option("--halo", nargs=2, type=int, help="The halo for tiled prediction, e.g. '64 64'.")
 @click.option("-n", "--ndim", type=int, default=None, help="The number of spatial dimensions in the data.")
 @click.option("--mode", default=None, help="The automatic segmentation mode: 'auto', 'amg', 'ais' or 'apg'.")
 @click.option("--annotate", is_flag=True, default=False, help="Whether to continue annotation after segmentation.")

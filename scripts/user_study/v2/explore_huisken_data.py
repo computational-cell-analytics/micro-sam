@@ -40,6 +40,12 @@ The two early embryos of Beke (classic_lsm/early_embryo, see EMBRYO_NAMES), with
     python explore_huisken_data.py --embryo t0_crop --ais --apg -m hvit_l_cells  # AIS and APG with another model
     python explore_huisken_data.py --embryo t0_crop --figure box  # the figure of the box prompting, iteration 2
     python explore_huisken_data.py --embryo 3.5hpf --cellpose 3d 2d_stitch  # cellposeSAM, scored on the crop
+
+The nuclei of the time-lapse of Beke (classic_lsm/timelapse_3-6hpf), tracked over 3D+t with trackastra:
+    python explore_huisken_data.py --track_nuclei  # greedy linking with divisions, on one GPU
+    python explore_huisken_data.py --track_nuclei --tracking_mode ilp  # ILP linking, slower
+    python explore_huisken_data.py --fix_tracks  # merges the short daughters and the gap links, into '*_fixed.h5'
+    python explore_huisken_data.py --view_tracks  # the raw data, the tracked nuclei and the tracks in napari
 """
 
 import os
@@ -48,6 +54,7 @@ import shutil
 import argparse
 import tempfile
 from concurrent import futures
+from collections import Counter
 
 import cv2
 import h5py
@@ -135,7 +142,7 @@ EXM_CROPS = {
 SMALL_DEFAULT_SETTINGS = {
     "ridge": None, "clahe": None, "gamma": None, "smooth": None, "invert": False, "norm_percentiles": (2, 98),
     "scale": (1, 1, 1), "anisotropy": 1, "tile_shape": None, "halo": None, "ndim": 3, "min_size": None,
-    "merge_fragments": None, "min_border_intensity": None, "min_mean_intensity": None,
+    "merge_fragments": None, "min_border_intensity": None, "min_mean_intensity": None, "apg_params": None,
 }
 FRAGMENT_MIN_ENCLOSED = 0.6
 # A smaller volume with more z-slices than this is segmented in z-slabs of the original grid, overlapping by twice the
@@ -269,6 +276,18 @@ PALETTE = [
     (0.10, 0.10, 0.70), (1.00, 0.55, 0.55), (0.10, 0.70, 0.50), (0.90, 0.70, 0.00), (0.50, 0.00, 0.50),
     (0.00, 0.70, 0.30), (1.00, 0.70, 0.20), (0.30, 0.00, 0.70), (0.00, 1.00, 0.75), (0.75, 0.20, 0.00),
 ]
+# The nuclei of the time-lapse (classic_lsm/timelapse_3-6hpf, see 'segment_huisken_timelapse.py'), tracked over 3D+t
+# with the pretrained 'ctc' model of trackastra, for 2D and 3D data.
+TIMELAPSE_DIR = os.path.join(OUTPUT_ROOT, "timelapse_3-6hpf")
+TIMELAPSE_NUCLEI_PATH = os.path.join(TIMELAPSE_DIR, "C02_nuclei_seg.h5")
+TIMELAPSE_TRACKS_PATH = os.path.join(TIMELAPSE_DIR, "C02_nuclei_tracks.h5")
+TRACKASTRA_MODEL = "ctc"
+TRACKING_MODES = ("greedy", "greedy_nodiv", "ilp")
+# The intensity drops ~4x over the time-lapse, so each time point is normalized with its own percentiles.
+TRACKING_NORM_PERCENTILES = (1, 99.8)
+# A daughter of at most this many time points is a piece of its sister, not a division.
+SHORT_DAUGHTER_LENGTH = 2
+TIMELAPSE_SCALE = (2.5 / 0.406, 1, 1)
 
 
 def get_roi(start, shape):
@@ -730,6 +749,8 @@ def segment_small(volume, engine, settings, norm_bounds):
             generate_kwargs["min_size"] = int(settings["min_size"] * np.prod(scale))
         if settings["anisotropy"] > 1:
             generate_kwargs["spacing"] = (float(settings["anisotropy"]), 1.0, 1.0)
+    elif engine == "apg" and settings["apg_params"] is not None:
+        generate_kwargs.update(settings["apg_params"])
 
     embedding_dir = tempfile.mkdtemp(dir=EMBEDDING_ROOT)
     try:
@@ -1124,6 +1145,260 @@ def run_embryo(args, parser):
             run_embryo_annotator(raw, embedding_path, args.model_type)
 
 
+def normalize_timepoints(raw):
+    """Normalize each time point to [0, 1] with its own percentiles."""
+    volume = np.zeros(raw.shape, dtype="float32")
+    for t, frame in enumerate(raw):
+        lower, upper = np.percentile(frame, TRACKING_NORM_PERCENTILES)
+        volume[t] = np.clip((frame.astype("float32") - lower) / (upper - lower), 0, 1)
+    return volume
+
+
+def get_napari_tracks(segmentation, lineage):
+    """Get the tracks as napari (track_id, t, z, y, x) rows from the centers of the tracked nuclei."""
+    rows = []
+    for t, frame in enumerate(segmentation):
+        ids = np.unique(frame)[1:]
+        if len(ids) == 0:
+            continue
+        centers = ndimage.center_of_mass(frame > 0, frame, ids)
+        rows.extend([(track_id, t, *center) for track_id, center in zip(ids, centers)])
+    tracks = np.array(rows, dtype="float32").reshape(-1, 5)
+    assert set(np.unique(tracks[:, 0]).astype(int)) <= set(lineage[:, 0])
+    return tracks
+
+
+def predict_associations(raw, nuclei):
+    """Predict the associations between the nuclei of nearby time points with trackastra.
+
+    The time points without nuclei (t69, its raw data is empty) are left out of the tracking, so that the tracks
+    link the time points before and after them. Returns the model, the predictions and the time points.
+    """
+    import torch
+    from trackastra.model import Trackastra
+    from trackastra.data import build_windows, get_features
+    from trackastra.model.predict import predict_windows
+
+    timepoints = np.array([t for t in range(len(nuclei)) if nuclei[t].any()])
+    skipped = sorted(set(range(len(nuclei))) - set(timepoints))
+    print(f"Tracking {len(timepoints)} of {len(nuclei)} time points, without {skipped}")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = Trackastra.from_pretrained(TRACKASTRA_MODEL, device=device)
+    model.transformer.eval()
+    # The steps of 'Trackastra._predict', which predicts only the links between neighbouring time points.
+    # The window of the model covers the links over up to window - 1 time points.
+    window = model.transformer.config["window"]
+    volume = normalize_timepoints(raw[timepoints])
+    features = get_features(
+        detections=nuclei[timepoints], imgs=volume, features=model.train_args["features"],
+        ndim=model.transformer.config["coord_dim"],
+    )
+    windows = build_windows(features, window_size=window, as_torch=True)
+    predictions = predict_windows(
+        windows=windows, features=features, model=model.transformer, delta_t=window - 1, spatial_dim=nuclei.ndim - 1,
+        batch_size=model.batch_size,
+    )
+    return model, predictions, timepoints
+
+
+def link_associations(model, predictions, mode, delta_t):
+    """Link the nuclei with greedy or ILP linking. 'delta_t' > 1 links over gaps of up to delta_t - 1 time points."""
+    return model._track_from_predictions(predictions, mode=mode, delta_t=delta_t)
+
+
+def get_lineage_stats(graph):
+    """Count the divisions, the broken tracks and the nuclei of the last time point that trace back to the first one."""
+    import networkx as nx
+
+    times = {node: graph.nodes[node]["time"] for node in graph}
+    first, last = min(times.values()), max(times.values())
+    roots = [n for n in graph if graph.in_degree(n) == 0]
+    traced = set()
+    for founder in (n for n in roots if times[n] == first):
+        traced |= {n for n in nx.descendants(graph, founder) if times[n] == last}
+    n_last = sum(1 for t in times.values() if t == last)
+    return {
+        "divisions": sum(1 for n in graph if graph.out_degree(n) == 2),
+        "starts without parent": sum(1 for n in roots if times[n] > first),
+        "single time point": sum(1 for n in roots if graph.out_degree(n) == 0),
+        "gap links": sum(1 for u, v in graph.edges if times[v] - times[u] > 1),
+        "last t traced to t0": f"{len(traced)}/{n_last}",
+    }
+
+
+def compare_tracking(modes, delta_ts):
+    """Predict the associations once, then link them with each mode and delta_t and print the lineage statistics."""
+    with h5py.File(TIMELAPSE_NUCLEI_PATH, "r") as f:
+        raw, nuclei = f["raw"][:], f["segmentation"][:]
+    model, predictions, _ = predict_associations(raw, nuclei)
+    for mode in modes:
+        for delta_t in delta_ts:
+            start = time.time()
+            graph = link_associations(model, predictions, mode, delta_t)
+            stats = ", ".join(f"{key}: {value}" for key, value in get_lineage_stats(graph).items())
+            print(f"{mode} delta_t={delta_t} ({time.time() - start:.0f} s): {stats}", flush=True)
+
+
+def track_timelapse_nuclei(mode, delta_t, output_path):
+    """Track the nuclei of the time-lapse with trackastra and save the tracked nuclei and the lineage to one h5."""
+    from trackastra.tracking import apply_solution_graph_to_masks, graph_to_ctc
+
+    with h5py.File(TIMELAPSE_NUCLEI_PATH, "r") as f:
+        raw, nuclei = f["raw"][:], f["segmentation"][:]
+    start = time.time()
+    model, predictions, timepoints = predict_associations(raw, nuclei)
+    graph = link_associations(model, predictions, mode, delta_t)
+    tracked = apply_solution_graph_to_masks(graph, nuclei[timepoints])
+    tracks, labels = graph_to_ctc(graph, tracked)
+    print(f"{len(tracks)} tracks in {time.time() - start:.0f} s")
+
+    segmentation = np.zeros(nuclei.shape, dtype="uint16")
+    segmentation[timepoints] = labels
+    # The CTC lineage (track_id, t_start, t_end, parent_id), with the time of the full time-lapse.
+    lineage = tracks[["label", "t1", "t2", "parent"]].to_numpy().astype("int64")
+    lineage[:, 1], lineage[:, 2] = timepoints[lineage[:, 1]], timepoints[lineage[:, 2]]
+
+    with h5py.File(output_path, "w") as f:
+        f.create_dataset("raw", data=raw, chunks=(1, 32, 256, 256), compression="gzip")
+        ds = f.create_dataset("segmentation", data=segmentation, chunks=(1, 32, 256, 256), compression="gzip")
+        ds.attrs["axes"], ds.attrs["model"], ds.attrs["mode"] = "tzyx", TRACKASTRA_MODEL, mode
+        ds.attrs["delta_t"] = delta_t
+        ds = f.create_dataset("lineage", data=lineage)
+        ds.attrs["columns"] = ["track_id", "t_start", "t_end", "parent_id"]
+        ds = f.create_dataset("tracks", data=get_napari_tracks(segmentation, lineage))
+        ds.attrs["columns"] = ["track_id", "t", "z", "y", "x"]
+    print(f"Saved the tracks to {output_path}")
+
+
+def get_ctc_lineage_stats(lineage, tracks):
+    """Count the divisions, the broken tracks and the nuclei of the last time point that trace back to the first one."""
+    parents = {int(track_id): int(parent) for track_id, _, _, parent in lineage}
+    starts = {int(track_id): int(t_start) for track_id, t_start, _, _ in lineage}
+    n_children = Counter(parent for parent in parents.values() if parent > 0)
+    n_frames = Counter(tracks[:, 0].astype(int))
+    last = int(tracks[:, 1].max())
+    traced = 0
+    for track_id in np.unique(tracks[tracks[:, 1] == last, 0]).astype(int):
+        while parents[track_id] > 0:
+            track_id = parents[track_id]
+        traced += starts[track_id] == 0
+    return {
+        "tracks": len(lineage),
+        "divisions": sum(1 for n in n_children.values() if n == 2),
+        "single children": sum(1 for n in n_children.values() if n == 1),
+        "starts without parent": sum(1 for i in parents if parents[i] == 0 and starts[i] > 0),
+        "single time point": sum(1 for n in n_frames.values() if n == 1),
+        "last t traced to t0": f"{traced}/{len(np.unique(tracks[tracks[:, 1] == last, 0]))}",
+    }
+
+
+def fix_lineage(lineage, tracks):
+    """Merge the false divisions and the gap links of the CTC lineage.
+
+    A daughter whose track and its gap links cover at most SHORT_DAUGHTER_LENGTH time points is merged into its
+    sister. Then each track with one child is merged with the child. Returns the fixed lineage and the map from each
+    old track id to its new id.
+    """
+    rows = {int(track_id): [int(t_start), int(t_end), int(parent)] for track_id, t_start, t_end, parent in lineage}
+    n_frames = Counter(tracks[:, 0].astype(int))
+    new_ids = {track_id: track_id for track_id in rows}
+
+    def get_children(track_id):
+        return [child for child, (_, _, parent) in rows.items() if parent == track_id]
+
+    def get_chain(track_id):
+        chain = [track_id]
+        while len(get_children(chain[-1])) == 1:
+            chain.extend(get_children(chain[-1]))
+        return chain
+
+    def merge(track_id, target):
+        rows[target][0] = min(rows[target][0], rows[track_id][0])
+        rows[target][1] = max(rows[target][1], rows[track_id][1])
+        for child in get_children(track_id):
+            rows[child][2] = target
+        del rows[track_id]
+        new_ids[track_id] = target
+
+    last = int(tracks[:, 1].max())
+    n_short = 0
+    for parent in sorted(rows):
+        children = get_children(parent) if parent in rows else []
+        if len(children) != 2:
+            continue
+        chains = [get_chain(child) for child in children]
+        lengths = [sum(n_frames[track_id] for track_id in chain) for chain in chains]
+        # A daughter that divides again or reaches the end of the time-lapse is not a piece of its sister.
+        candidates = [
+            i for i in range(2) if lengths[i] <= SHORT_DAUGHTER_LENGTH and not get_children(chains[i][-1])
+            and rows[chains[i][-1]][1] < last
+        ]
+        if not candidates:
+            continue
+        short = min(candidates, key=lambda i: lengths[i])
+        for track_id in chains[short]:
+            merge(track_id, children[1 - short])
+        n_short += 1
+
+    n_gaps = 0
+    for track_id in sorted(rows, key=lambda i: rows[i][0]):
+        while track_id in rows and len(get_children(track_id)) == 1:
+            merge(get_children(track_id)[0], track_id)
+            n_gaps += 1
+    print(f"Merged {n_short} short daughters into their sisters and {n_gaps} tracks into their parents")
+
+    for track_id in new_ids:
+        while new_ids[new_ids[track_id]] != new_ids[track_id]:
+            new_ids[track_id] = new_ids[new_ids[track_id]]
+    fixed = np.array([[track_id, *row] for track_id, row in sorted(rows.items())], dtype="int64")
+    return fixed, new_ids
+
+
+def fix_timelapse_tracks(path):
+    """Fix the lineage of the tracked nuclei and save it with the relabeled nuclei next to the input h5."""
+    output_path = path.replace(".h5", "_fixed.h5")
+    with h5py.File(path, "r") as f:
+        segmentation, lineage, tracks = f["segmentation"][:], f["lineage"][:], f["tracks"][:]
+        attrs = dict(f["segmentation"].attrs)
+    print("Before:", ", ".join(f"{key}: {value}" for key, value in get_ctc_lineage_stats(lineage, tracks).items()))
+    lineage, new_ids = fix_lineage(lineage, tracks)
+
+    relabel = np.zeros(segmentation.max() + 1, dtype="uint16")
+    for track_id, new_id in new_ids.items():
+        relabel[track_id] = new_id
+    for t in range(len(segmentation)):
+        segmentation[t] = relabel[segmentation[t]]
+    tracks = get_napari_tracks(segmentation, lineage)
+    print("After:", ", ".join(f"{key}: {value}" for key, value in get_ctc_lineage_stats(lineage, tracks).items()))
+
+    with h5py.File(path, "r") as f_in, h5py.File(output_path, "w") as f:
+        f_in.copy(f_in["raw"], f, "raw")
+        ds = f.create_dataset("segmentation", data=segmentation, chunks=(1, 32, 256, 256), compression="gzip")
+        ds.attrs.update(attrs)
+        ds.attrs["short_daughter_length"] = SHORT_DAUGHTER_LENGTH
+        ds = f.create_dataset("lineage", data=lineage)
+        ds.attrs["columns"] = ["track_id", "t_start", "t_end", "parent_id"]
+        ds = f.create_dataset("tracks", data=tracks)
+        ds.attrs["columns"] = ["track_id", "t", "z", "y", "x"]
+    print(f"Saved the fixed tracks to {output_path}")
+
+
+def view_timelapse_tracks(path):
+    import napari
+
+    with h5py.File(path, "r") as f:
+        raw, segmentation, lineage, tracks = f["raw"][:], f["segmentation"][:], f["lineage"][:], f["tracks"][:]
+    # The napari graph maps each track to its parent track, for the divisions.
+    graph = {int(track_id): [int(parent)] for track_id, _, _, parent in lineage if parent > 0}
+    # The time axis comes first in each layer, so it needs its own scale.
+    scale = (1, *TIMELAPSE_SCALE)
+    viewer = napari.Viewer()
+    viewer.add_image(raw, name="raw", scale=scale)
+    viewer.add_labels(segmentation, name="nuclei", scale=scale)
+    viewer.add_tracks(tracks, graph=graph, name="tracks", scale=scale)
+    napari.run()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-e", "--engines", nargs="+", choices=ENGINES, default=list(ENGINES))
@@ -1160,10 +1435,25 @@ def main():
     parser.add_argument("--apg", action="store_true", help="Segment the embryo automatically with APG.")
     parser.add_argument("--figure", choices=tuple(EMBRYO_FIGURES), help="Show the figure of this embryo prediction.")
     parser.add_argument("--cellpose", nargs="+", choices=CELLPOSE_MODES, help="Segment the embryo with cellposeSAM.")
+    parser.add_argument("--track_nuclei", action="store_true", help="Track the nuclei of the time-lapse.")
+    parser.add_argument("--tracking_mode", default="greedy", choices=TRACKING_MODES, help="The linking of trackastra.")
+    parser.add_argument("--delta_t", type=int, default=1, help="Link the nuclei over up to delta_t time points.")
+    parser.add_argument("--compare_tracking", action="store_true", help="Compare the linking modes and delta_t.")
+    parser.add_argument("--fix_tracks", action="store_true", help="Merge the short daughters and the gap links.")
+    parser.add_argument("--view_tracks", action="store_true", help="Show the tracked nuclei in napari.")
+    parser.add_argument("--tracks_path", default=TIMELAPSE_TRACKS_PATH, help="The h5 of the tracked nuclei.")
     args = parser.parse_args()
 
     roi = get_roi(args.start, args.shape)
-    if args.embryo is not None:
+    if args.track_nuclei:
+        track_timelapse_nuclei(args.tracking_mode, args.delta_t, args.tracks_path)
+    elif args.compare_tracking:
+        compare_tracking(("greedy", "ilp"), (1, 2, 3))
+    elif args.fix_tracks:
+        fix_timelapse_tracks(args.tracks_path)
+    elif args.view_tracks:
+        view_timelapse_tracks(args.tracks_path)
+    elif args.embryo is not None:
         run_embryo(args, parser)
     elif args.sweep is not None or args.dataset is not None:
         dataset = args.sweep or args.dataset
