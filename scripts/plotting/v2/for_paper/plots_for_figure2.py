@@ -74,10 +74,10 @@ METHODS = {
 }
 
 PANELS = {
-    "label_free_cells": ("label-free", "cell", "Label-Free (Cell)"),
-    "fluorescence_cells": ("fluorescence", "cell", "Fluorescence (Cell)"),
-    "fluorescence_nuclei": ("fluorescence", "nucleus", "Fluorescence (Nucleus)"),
-    "histopathology_nuclei": ("histopathology", "nucleus", "Histopathology (Nucleus)"),
+    "label_free_cells": ("label-free", "cell", "Label-free (cell)"),
+    "fluorescence_cells": ("fluorescence", "cell", "Fluorescence (cell)"),
+    "fluorescence_nuclei": ("fluorescence", "nucleus", "Fluorescence (nucleus)"),
+    "histopathology_nuclei": ("histopathology", "nucleus", "Histopathology (nucleus)"),
 }
 
 # The methods of each modality, in their order in the plots.
@@ -148,7 +148,6 @@ VALUE_STEP = 0.05
 VALUE_ROOM = 0.01
 # The room for the mean rank after the longest bar, and the number of bars that show their mean rank.
 RANK_ROOM = 0.1
-RANKED = 3
 
 BAR_HEIGHT = 0.72
 FOUNDATION_MODELS = {"SAM", "SAM2", "SAM3"}
@@ -291,13 +290,12 @@ def plot_domain(ax, results, domain, methods, value_max, positions, tick_step, r
         value_max: The end of the value axis.
         positions: The bar position of each method.
         tick_step: The distance between the value ticks.
-        ranks: Whether the RANKED bars with the best mean rank show their mean rank.
+        ranks: Whether the bars show their mean rank.
         lower_is_better: Whether a lower score ranks better, as the CREMI score.
     """
     results = results[results["domain"] == domain]
     values = results.groupby(["method", "mode"])["score"].mean()
     rank_of = mean_ranks(results, lower_is_better) if ranks else {}
-    top_ranked = set(rank_of.nsmallest(RANKED).index) if ranks else set()
     y = np.asarray(positions)
 
     # The width of a mode name on a sub-bar, in data units.
@@ -319,14 +317,14 @@ def plot_domain(ax, results, domain, methods, value_max, positions, tick_step, r
             if mode and not short:
                 # The patch in the bar color covers the hatch under the mode name.
                 ax.text(
-                    0, position, MODE_NAMES[mode], ha="left", va="center", fontsize=5, fontweight="bold",
+                    0, position, MODE_NAMES[mode], ha="left", va="center", fontsize=6, fontweight="bold",
                     color="white", zorder=4, bbox={"boxstyle": "square,pad=0.08", "facecolor": color, "linewidth": 0},
                     transform=transforms.offset_copy(ax.transData, fig=ax.figure, x=2, units="points"),
                 )
             elif short:
                 # The mode name does not fit on the bar, so it goes after the end of the bar.
                 ax.text(
-                    values[method, mode] + 0.01, position, MODE_NAMES[mode], ha="left", va="center", fontsize=5,
+                    values[method, mode] + 0.01, position, MODE_NAMES[mode], ha="left", va="center", fontsize=6,
                     fontweight="bold", color=GROUP_COLOR,
                 )
             # The value of the first mode is smaller and gray, so that the value of the last mode stands out.
@@ -334,13 +332,12 @@ def plot_domain(ax, results, domain, methods, value_max, positions, tick_step, r
             end = values[method, mode] + (tag_width if short else 0)
             value = ax.text(
                 end + 0.01, position, f"{values[method, mode]:.3f}", ha="left", va="center",
-                fontsize=5.5 if secondary else 6, color=GROUP_COLOR if secondary else TEXT_COLOR,
-                fontweight="bold" if method == "micro-sam2" and not secondary else "normal",
+                fontsize=6, color=GROUP_COLOR if secondary else TEXT_COLOR,
             )
-            if (method, mode) in top_ranked:
+            if ranks:
                 ax.annotate(
                     f"({rank_of[method, mode]:.1f})", xy=(1, 0.5), xycoords=value, xytext=(1.5, 0),
-                    textcoords="offset points", ha="left", va="center", fontsize=5, color=GROUP_COLOR,
+                    textcoords="offset points", ha="left", va="center", fontsize=6, color=GROUP_COLOR,
                     annotation_clip=False,
                 )
 
@@ -373,11 +370,11 @@ TICK_WIDTH = 0.3
 # The band over the row of a method that has no model for a modality. The text has a contrast of 4.56 on the band.
 NOT_APPLICABLE_COLOR = "#f7f7f7"
 NOT_APPLICABLE_TEXT_COLOR = "#717171"
-SCORE_LABEL = "Mean Segmentation Accuracy ↑"
+SCORE_LABEL = "Mean segmentation accuracy ↑"
 SUB_BAR_TINT = 0.55
 MODE_NAMES = {"ais": "AIS", "apg": "APG"}
 # The width of a mode name on its sub-bar, in points.
-MODE_TAG_WIDTH = 13
+MODE_TAG_WIDTH = 15
 
 # micro-sam also gets a star, because it runs its histopathology model (PathoSAM) on H&E.
 AUTOMATIC_STARRED_METHODS = STARRED_METHODS | {"micro-sam"}
@@ -506,7 +503,7 @@ def plot_row(
                 # A narrow panel uses a smaller label, so that the label fits the band.
                 ax.text(
                     value_max / 2, rows[method], "not applicable", ha="center", va="center",
-                    fontsize=5.5 if width >= 1.0 else 5, style="italic", color=NOT_APPLICABLE_TEXT_COLOR,
+                    fontsize=6, style="italic", color=NOT_APPLICABLE_TEXT_COLOR,
                 )
         if axes:
             ax.tick_params(axis="y", labelleft=False)
@@ -514,7 +511,6 @@ def plot_row(
 
     axes[0].set_yticks(y)
     axes[0].set_yticklabels(names_of(methods, starred), fontsize=6.5)
-    axes[0].get_yticklabels()[methods.index("micro-sam2")].set_fontweight("bold")
     half = np.array([BAR_HEIGHT * n_bars.get(method, 1) / 2 for method in methods])
     axes[0].set_ylim((y - half).min() - 0.24, (y + half).max() + 0.24)
     return axes
@@ -612,7 +608,6 @@ def plot_automatic(
 
     for label, bottom, label_axes in score_labels:
         left, right = label_axes[0].get_position().x0, label_axes[-1].get_position().x1
-        # DejaVu Sans Bold has a heavier arrow.
         text, arrow = label[:-2], label[-1]
         score = fig.text(
             (left + right) / 2, (bottom - 0.24) / figure_height, text, ha="center", va="top", fontsize=MAX_FONT_SIZE,
@@ -620,7 +615,7 @@ def plot_automatic(
         )
         label_axes[0].annotate(
             arrow, xy=(1, 0.5), xycoords=score, xytext=(1.5, 0), textcoords="offset points", ha="left",
-            va="center", fontsize=MAX_FONT_SIZE, fontweight="bold", fontfamily="DejaVu Sans", color=TEXT_COLOR,
+            va="center", fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR,
             annotation_clip=False,
         )
     return fig
@@ -684,6 +679,8 @@ INTERACTIVE_DOMAIN_WIDTH = 0.3
 INTERACTIVE_DOMAIN_OFFSET = 0.1
 # The share of a panel under its lowest point, for the panels in 'room_below'.
 ROOM_BELOW = 0.12
+X_LABEL_OFFSET = 0.15  # the iteration label under the panels, in inches
+ITERATION_LABEL = "Correction iteration"
 OWN_LABEL_OFFSET = 0.27  # the own score label of a modality, left of its panels, in inches
 
 
@@ -696,7 +693,7 @@ def add_score_arrow(ax, label, arrow, fontsize=MAX_FONT_SIZE):
     """Add the arrow over a vertical score label. The arrow stays upright, so that it points along the axis."""
     ax.annotate(
         arrow, xy=(0.5, 1), xycoords=label, xytext=(0, 1.5), textcoords="offset points", ha="center", va="bottom",
-        fontsize=fontsize, fontweight="bold", fontfamily="DejaVu Sans", color=TEXT_COLOR, annotation_clip=False,
+        fontsize=fontsize, fontweight="bold", color=TEXT_COLOR, annotation_clip=False,
     )
 
 
@@ -704,7 +701,7 @@ def plot_interactive_by_domain(
     results, modalities, titles, starred=None, methods=None, score_labels=None, placeholder=False,
     panel_height=PANEL_HEIGHT, region=None, legend_panel=None, grid=None, title_line=False, legend_left=False,
     room_below=(), shared_rows=False, show_titles=True, score_gap=None, row_gap=None, band_color=BOX_BAND_COLOR,
-    legend_wide=False, prompts_on_top=False,
+    legend_wide=False, prompts_on_top=False, x_label=None,
 ):
     """Plot the mean score over the correction iterations of all modalities in one figure.
 
@@ -727,6 +724,7 @@ def plot_interactive_by_domain(
         legend_left: Whether the legend stands in the upper left corner, with the value axis raised for it.
         legend_wide: Whether the legend spans the top of its panel, with the value axis raised for it.
         prompts_on_top: Whether the prompt names stand once, over the halves of the first row, clear of the curves.
+        x_label: The label of the iteration axis, once under all panels, as the score label of the automatic plot.
         room_below: The (domain, modality) of the panels with a lowered value axis.
         shared_rows: Whether the panels of a row with the shared score label share one value range.
         show_titles: Whether the panels show the modality titles.
@@ -796,20 +794,16 @@ def plot_interactive_by_domain(
                     if (domain, prompt, method) not in average.index.droplevel("iteration"):
                         continue
                     curve = average[domain, prompt, method]
-                    style = dict(color=METHOD_COLORS[method], linewidth=1.8 if ours else 1.0, zorder=3 if ours else 2)
-                    # The first prompt is an open ring. A dashed hairline joins it to the first correction.
+                    zorder = 3 if ours else 2
                     ax.plot(
-                        curve.index[:2] + offset, curve.values[:2], color=style["color"], linewidth=0.5,
-                        linestyle=(0, (3, 1.5)), zorder=style["zorder"],
+                        curve.index + offset, curve.values, color=METHOD_COLORS[method], linewidth=1.0, marker="o",
+                        markersize=2.2, markeredgecolor="white", markeredgewidth=0.4, zorder=zorder,
                     )
+                    # The first prompt is an open ring.
                     ax.plot(
-                        curve.index[1:] + offset, curve.values[1:], marker="o", markersize=3 if ours else 2.2,
-                        markeredgecolor="white", markeredgewidth=0.4, **style,
-                    )
-                    ax.plot(
-                        curve.index[:1] + offset, curve.values[:1], linestyle="none", marker="o",
-                        markersize=3.4 if ours else 2.8, markerfacecolor="white", markeredgecolor=style["color"],
-                        markeredgewidth=0.9 if ours else 0.7, zorder=style["zorder"] + 0.5,
+                        curve.index[:1] + offset, curve.values[:1], linestyle="none", marker="o", markersize=2.8,
+                        markerfacecolor="white", markeredgecolor=METHOD_COLORS[method], markeredgewidth=0.7,
+                        zorder=zorder + 0.5,
                     )
             # Each half labels the first prompt 0 in gray, and an arrow spans the corrections.
             ticks = [offset + i for offset in offsets.values() for i in range(n_iterations)]
@@ -918,6 +912,11 @@ def plot_interactive_by_domain(
         fontweight="bold", color=TEXT_COLOR,
     )
     add_score_arrow(fig.axes[0], score, shared_label[-1])
+    if x_label is not None:
+        fig.text(
+            (lefts[0] + lefts[-1] + width) / 2 / FIGURE_WIDTH, (bottom - X_LABEL_OFFSET) / height, x_label,
+            ha="center", va="top", fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR,
+        )
     return fig
 
 
@@ -937,8 +936,8 @@ def add_panel_legend(ax, methods, starred, left=False, wide=False):
     names = dict(zip(methods, names_of(methods, starred)))
     handles = [
         plt.Line2D(
-            [], [], color=METHOD_COLORS[method], marker="o", markersize=3 if method == "micro-sam2" else 2.2,
-            linewidth=1.8 if method == "micro-sam2" else 1.0, markeredgecolor="white", markeredgewidth=0.4,
+            [], [], color=METHOD_COLORS[method], marker="o", markersize=2.2, linewidth=1.0, markeredgecolor="white",
+            markeredgewidth=0.4,
         )
         for method in methods
     ]
@@ -950,14 +949,11 @@ def add_panel_legend(ax, methods, starred, left=False, wide=False):
         place = dict(loc="lower right", bbox_to_anchor=(0.995, 0.09), ncol=2)
     legend = ax.legend(
         handles, [names[method] for method in methods], **place,
-        fontsize=5, handlelength=1.1, handletextpad=0.3, columnspacing=0.5, labelspacing=0.15, borderpad=0.25,
+        fontsize=6, handlelength=1.1, handletextpad=0.3, columnspacing=0.5, labelspacing=0.15, borderpad=0.25,
         frameon=True, framealpha=1, facecolor="white", edgecolor=LEGEND_BORDER_COLOR,
     )
     legend.get_frame().set_linewidth(0.6)
     legend.set_zorder(5)
-    for text, method in zip(legend.get_texts(), methods):
-        if method == "micro-sam2":
-            text.set_fontweight("bold")
     return legend
 
 
@@ -1004,19 +1000,25 @@ def select_datasets(results, datasets):
 
 
 # The frame of the images in the qualitative plots.
+# The datasets whose red channel is shown in magenta, so that their images are not red and green. TissueNet, with an
+# empty blue channel, gets this in 'to_rgb' by itself.
+RED_TO_MAGENTA = {"hpa"}
 FRAME_COLOR = "#c8c8c8"
 FRAME_WIDTH = 0.4
 
 
-def to_rgb(image, shape):
+def to_rgb(image, shape, red_to_magenta=False):
     """Return an image as RGB in [0, 1], with the contrast stretched over the 1 to 99.7 percentiles.
 
     Args:
         image: The image.
         shape: The shape of the labels. It tells a channel-first image from a channel-last image.
+        red_to_magenta: Whether to show the red channel in magenta, for an RGB image with a blue channel (as HPA).
 
     Returns:
-        The RGB image. An image with two channels shows them in green and blue.
+        The RGB image. An image with two channels shows them in green and blue. An RGB image with an empty blue
+        channel (as TissueNet) shows its red channel in magenta, so that it is not red and green, which readers with
+        red-green color blindness cannot tell apart.
     """
     image = np.asarray(image, dtype="float32")
     if image.ndim == 3 and image.shape[:2] != shape:
@@ -1026,8 +1028,13 @@ def to_rgb(image, shape):
     if image.shape[-1] == 2:
         image = np.stack([np.zeros(image.shape[:2]), image[..., 0], image[..., 1]], axis=-1)
     image = image[..., :3]
+    if image.shape[-1] == 3 and not image[..., 2].any() and image[..., 0].any():
+        image = np.stack([image[..., 0], image[..., 1], image[..., 0]], axis=-1)
     low, high = np.percentile(image, (1, 99.7))
-    return np.clip((image - low) / max(high - low, 1e-6), 0, 1)
+    image = np.clip((image - low) / max(high - low, 1e-6), 0, 1)
+    if red_to_magenta:
+        image[..., 2] = np.maximum(image[..., 2], image[..., 0])
+    return image
 
 
 def framed_axes(fig, left, bottom, width, height):
@@ -1044,11 +1051,11 @@ def framed_axes(fig, left, bottom, width, height):
     return ax
 
 
-def draw_score(ax, score, ours, fontsize=6):
-    """Write the score in the lower right corner of a panel, in white with a dark halo, and in bold for micro-sam2."""
+def draw_score(ax, score, bold=False, fontsize=6):
+    """Write the score in the lower right corner of a panel, in white with a dark halo, in bold if 'bold'."""
     text = ax.text(
         0.96, 0.04, f"{score:.2f}", transform=ax.transAxes, ha="right", va="bottom", fontsize=fontsize,
-        color="white", fontweight="bold" if ours else "normal",
+        color="white", fontweight="bold" if bold else "normal",
     )
     text.set_path_effects([patheffects.withStroke(linewidth=1.2, foreground="black")])
 
@@ -1097,7 +1104,7 @@ def load_segmentation(dataset, sample, name):
 def load_image(dataset, sample):
     """Return the image of a sample as RGB in [0, 1]."""
     image = tifffile.imread(os.path.join(QUALITATIVE_PREDICTIONS, dataset, f"image_{sample}.tif"))
-    return to_rgb(image, load_segmentation(dataset, sample, "labels").shape)
+    return to_rgb(image, load_segmentation(dataset, sample, "labels").shape, dataset in RED_TO_MAGENTA)
 
 
 def distinct_colors(segmentation):
@@ -1234,13 +1241,13 @@ def plot_automatic_qualitative(methods_of, region=None, aspect=1.0, grid=None, s
             elif method in methods_of[modality]:
                 segmentation = load_segmentation(dataset, sample, PREDICTION_NAMES[method])
                 ax.imshow(crop_to(overlay(image, segmentation), aspect), interpolation="none", aspect="auto")
-                draw_score(ax, mean_segmentation_accuracy(segmentation, labels), method == "micro-sam2")
+                draw_score(ax, mean_segmentation_accuracy(segmentation, labels))
 
     for row, method in enumerate(rows):
         name = names_of([method], starred)[0] if row else REFERENCE_NAME
         fig.text(
             (label_width - QUALITATIVE_NAME_GAP) / FIGURE_WIDTH, center(row) / height, name, ha="right", va="center",
-            rotation=90, fontsize=6.5, color=TEXT_COLOR, fontweight="bold" if method == "micro-sam2" else "normal",
+            rotation=90, fontsize=6.5, color=TEXT_COLOR,
         )
 
     for modality in dict.fromkeys(m for _, _, m, *_ in chosen_images) if show_titles else ():
@@ -1346,7 +1353,7 @@ def load_single_prompt(dataset, image_name):
     folders = {prompt: single_prompt_folders(dataset, prompt) for prompt in ZOOM_PROMPTS}
     inputs = folders[ZOOM_PROMPTS[0]]["inputs"]
     labels = tifffile.imread(f"{inputs}/labels/{image_name}.tif")
-    image = to_rgb(tifffile.imread(f"{inputs}/images/{image_name}.tif"), labels.shape)
+    image = to_rgb(tifffile.imread(f"{inputs}/images/{image_name}.tif"), labels.shape, dataset in RED_TO_MAGENTA)
     data = {
         (prompt, method): dict(np.load(f"{folders[prompt][method]}/{image_name}.npz"))
         for prompt in ZOOM_PROMPTS for method in ZOOM_METHODS
@@ -1409,7 +1416,6 @@ def plot_interactive_qualitative(region=None, grid=None, show_titles=True):
             name = names[method]
             fig.text(
                 x / FIGURE_WIDTH, y / height, name, ha="center", va="baseline", fontsize=6, color=TEXT_COLOR,
-                fontweight="bold" if method == "micro-sam2" else "normal",
             )
         for r, (dataset, image_name, object_id, domain) in enumerate(blocks):
             top -= (ZOOM_DOMAIN_GAP if r in domain_changes else ZOOM_ROW_GAP) * (r > 0)
@@ -1474,7 +1480,7 @@ def plot_zoom_block(fig, left, bottom, size, image_side, dataset, image_name, ob
                     edgecolor=ZOOM_PROMPT_COLOR, linewidth=ZOOM_BOX_WIDTH,
                 ))
             iou = np.logical_and(mask, reference).sum() / np.logical_or(mask, reference).sum()
-            draw_score(ax, iou, method == "micro-sam2", fontsize=5)
+            draw_score(ax, iou)
 
 
 def check_style():
@@ -1520,7 +1526,7 @@ PLOTS = {
 # The layout of the combined figure, in inches.
 COMBINED_NAME = "figure_2"
 COMBINED_DIR = os.path.join(ROOT, "figures", "final")
-PANEL_GAP = 0.18
+PANEL_GAP = 0.12
 # The size of the panel letters in points, as Nature asks for.
 PANEL_LABEL_SIZE = 8
 COMBINED_PAD = 0.04
@@ -1579,6 +1585,7 @@ def make_plot(name, region=None, compact=False):
             title_line=compact, shared_rows=True, show_titles=not compact, score_gap=0.32 if compact else None,
             row_gap=COMBINED_ROW_GAP if compact else None,
             band_color=COMBINED_BAND_COLOR if compact else BOX_BAND_COLOR, prompts_on_top=True,
+            x_label=ITERATION_LABEL,
         )
     if name == "automatic_2d_qualitative":
         methods_of = {
@@ -1634,8 +1641,14 @@ def plot_figure(plots=None, make=None):
 
     for k, name in enumerate(plots):
         sub = make(name, region, compact=True)
+        # The first plot carries the modality titles of all plots, so its letter stands below them, at the top of its
+        # panels.
+        label_top = top
+        if k == 0:
+            renderer = fig.canvas.get_renderer()
+            label_top = max(ax.get_window_extent(renderer).y1 for ax in sub.axes) / fig.dpi
         fig.text(
-            0, top / total, "abcdefgh"[k], ha="left", va="top", fontsize=PANEL_LABEL_SIZE, fontweight="bold",
+            0, label_top / total, "abcdefgh"[k], ha="left", va="top", fontsize=PANEL_LABEL_SIZE, fontweight="bold",
             color=TEXT_COLOR,
         )
         top -= height_of(sub) - sum(margins[name]) + PANEL_GAP
