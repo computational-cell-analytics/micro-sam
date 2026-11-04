@@ -3,7 +3,8 @@
 The table has one row per dataset and these columns:
 
 - ``dataset``: The dataset name. Evaluated datasets use their name in ``finetuning/v2/evaluation/common.py``.
-- ``modality``: fluorescence, label-free, EM or histopathology. A few datasets need another value (mixed, X-ray).
+- ``modality``: fluorescence, label-free, EM or histopathology; XPRESS is X-ray. A dataset that mixes modalities
+  gets its majority modality, see the comments of cellpose and neurips_cellseg.
 - ``structure``: The labeled structure, such as cell, nucleus or neurite.
 - ``dimensionality``: 2d or 3d.
 - ``role``: ``train`` (training data only), ``ID`` (training data with a scored test split) or ``OOD`` (scored
@@ -18,7 +19,7 @@ The table has one row per dataset and these columns:
   crops of the 3d volumes (8 x 512 x 512 by default, see ``EVAL_CROPS_3D``), so for 3d data a test sample is one
   crop and the objects are the ones inside the crops. Samples without labels are not scored and not counted.
   The columns are blank for datasets without a scored test split.
-- ``comment``: Notes, e.g. on the uncertain OOD status of datasets that are also in the training data.
+- ``comment``: Notes, e.g. on the subsets, the annotation or the imaging technique of a dataset.
 
 The table (``data-overview/data_overview.csv`` by default) is also the cache: the counts are only computed for
 rows whose count cells are empty, or for all requested rows with ``--force``. The table is written after every
@@ -62,15 +63,6 @@ TEST_COLUMNS = ["test_images_or_volumes", "test_objects"]
 COLUMNS = ["dataset", "modality", "structure", "dimensionality", "role"] + TRAIN_COLUMNS + TEST_COLUMNS + ["comment"]
 ROLE_ORDER = {"ID": 0, "OOD": 1, "train": 2}
 
-# Comments on the datasets whose OOD status is uncertain, see data-overview/conflcits-ID-vs-OOD.md.
-TRAINED_OOD = (
-    "Its train/val split is in the training data, but Fig. 2 scores its test split as OOD. "
-    "The OOD status is uncertain, see conflcits-ID-vs-OOD.md."
-)
-SHARED_TISSUE_OOD = (
-    "Not in the training data, but it shares tissue sections with the sPATCH H&E training data (spatch_he). "
-    "The OOD status is uncertain, see conflcits-ID-vs-OOD.md."
-)
 INTERNAL = "Internal data, not public."
 
 
@@ -151,11 +143,13 @@ ENTRIES = [
     Entry("cell_acdc", LF, "cell", 2, _lm("cell_acdc"), "cell_acdc"),
     Entry("cellbindb", FL, "nucleus", 2, _lm("cellbindb"), "cellbindb", "DAPI, ssDNA and mIF stains."),
     Entry(
-        "cellpose", "mixed", "cell", 2, _lm("cellpose"),
-        comment="Mostly fluorescence, also brightfield and non-microscopy images (cyto and cyto2).",
+        "cellpose", FL, "cell", 2, _lm("cellpose"),
+        comment="Mixed modalities (cyto and cyto2), counted as fluorescence, the majority: 45% of the images have a "
+        "dark fluorescence background, most others are dense fluorescence tissue or non-microscopy images, "
+        "few are brightfield.",
     ),
     Entry("cellular", LF, "cell", 2, _lm("cellular")),
-    Entry("cisd", LF, "cell", 2, _lm("cisd"), "cisd", TRAINED_OOD),
+    Entry("cisd", LF, "cell", 2, _lm("cisd")),
     Entry("ctc_label_free", LF, "cell", 2, _lm("ctc", _path_has(*CTC_LABEL_FREE)),
           comment="Cell Tracking Challenge: BF-C2DL-HSC, BF-C2DL-MuSC, DIC-C2DH-HeLa, PhC-C2DH-U373, PhC-C2DL-PSC."),
     Entry("ctc_fluorescence_cells", FL, "cell", 2, _lm("ctc", _path_has("/Fluo-C2DL-Huh7/", "/Fluo-C2DL-MSC/")),
@@ -177,12 +171,14 @@ ENTRIES = [
     Entry("ifnuclei", FL, "nucleus", 2, _lm("ifnuclei"), "ifnuclei"),
     Entry("livecell", LF, "cell", 2, _lm("livecell"), "livecell"),
     Entry("lpc_nucseg", FL, "nucleus", 2, _lm("lpc_nucseg")),
-    Entry("mcellseg", LF, "cell", 2, _lm("mcellseg"), "mcellseg", TRAINED_OOD),
+    Entry("mcellseg", LF, "cell", 2, _lm("mcellseg")),
     Entry("microbeseg", LF, "cell", 2, _lm("microbeseg")),
     Entry(
-        "neurips_cellseg", "mixed", "cell", 2, _lm("neurips_cellseg"),
-        comment="Brightfield, phase contrast, DIC and fluorescence images, not split by modality. Its test split is "
-        "scored as neurips_cellseg_fluorescence and neurips_cellseg_label_free.",
+        "neurips_cellseg", LF, "cell", 2, _lm("neurips_cellseg"),
+        comment="Brightfield, phase contrast, DIC and fluorescence images, counted as label-free, the majority: "
+        "385 of the 1,101 images (35%) are fluorescence by a dark-background rule that classifies 98.7% of the "
+        "tuning and test images correctly. Its test split is scored as neurips_cellseg_fluorescence and "
+        "neurips_cellseg_label_free.",
     ),
     Entry("neurips_cellseg_fluorescence", FL, "cell", 2, test="neurips_cellseg_fluorescence", comment=NEURIPS_TRAIN),
     Entry("neurips_cellseg_label_free", LF, "cell", 2, test="neurips_cellseg_label_free", comment=NEURIPS_TRAIN),
@@ -197,7 +193,7 @@ ENTRIES = [
     Entry("pan_multiplex", FL, "cell", 2, _lm("pan_multiplex"),
           comment="MIBI, CODEX and Vectra images. MIBI is mass spectrometry imaging, not fluorescence."),
     Entry("tissuenet", FL, "cell", 2, _lm("tissuenet"), "tissuenet"),
-    Entry("toiam", LF, "cell", 2, _lm("toiam"), "toiam", TRAINED_OOD),
+    Entry("toiam", LF, "cell", 2, _lm("toiam")),
     Entry("tsakiroglou", FL, "nucleus", 2, _lm("tsakiroglou")),
     Entry("u20s", FL, "nucleus", 2, _lm("u20s"), "u20s"),
     Entry("usiigaci", LF, "cell", 2, _lm("usiigaci")),
@@ -209,18 +205,24 @@ ENTRIES = [
     Entry("yeaz", LF, "cell", 2, _lm("yeaz")),
     # Light microscopy, 2d, OOD.
     Entry("arvidsson", FL, "nucleus", 2, test="arvidsson"),
+    Entry("bac_mother", LF, "cell", 2, test="bac_mother",
+          comment="E. coli in a mother machine. Every 10th frame of the test movies is scored."),
     Entry("bbbc010", LF, "worm", 2, test="bbbc010", comment="C. elegans."),
     Entry("cardioblast_nuclei", FL, "nucleus", 2, test="cardioblast_nuclei"),
+    Entry("cellapp", LF, "cell", 2, test="cellapp",
+          comment="The HeLa, RPE1 and U2OS subsets. The labels are automatic, so not every cell is annotated."),
     Entry("covid_if_cells", FL, "cell", 2, test="covid_if_cells"),
     Entry("covid_if_nuclei", FL, "nucleus", 2, test="covid_if_nuclei"),
     Entry("deepseas", LF, "cell", 2, test="deepseas"),
+    Entry("ecoli_microcolony_lineage", LF, "cell", 2, test="ecoli_microcolony_lineage",
+          comment="E. coli microcolonies (cib, crosstalk, recA, rpsM). Every 10th frame of the movies is scored."),
     Entry("fusionx", FL, "cell", 2, test="fusionx"),
     Entry("hela_cytonuc", FL, "nucleus", 2, test="hela_cytonuc"),
     Entry("hpa", FL, "cell", 2, test="hpa"),
     Entry("medussa", FL, "cell", 2, test="medussa"),
+    Entry("micro_bench", FL, "nucleus", 2, test="micro_bench", comment="The OpenCell nuclei of µBench."),
     Entry("mif_tonsil", FL, "nucleus", 2, test="mif_tonsil"),
     Entry("mif_tonsil_cells", FL, "cell", 2, test="mif_tonsil_cells"),
-    Entry("spatch_dapi", FL, "nucleus", 2, test="spatch_dapi", comment=SHARED_TISSUE_OOD),
     Entry("wing_disc_timelapse", FL, "cell", 2, test="wing_disc_timelapse"),
     Entry("yeastsam", LF, "cell", 2, test="yeastsam"),
     # Light microscopy, 3d.
@@ -300,17 +302,21 @@ ENTRIES = [
     Entry("glysac", HP, "nucleus", 2, _hp("glysac"), "glysac"),
     Entry("histo_miner", HP, "nucleus", 2, _hp("histo_miner"), "histo_miner"),
     Entry("lizard", HP, "nucleus", 2, _hp("lizard")),
-    Entry("lizard_mitosis", HP, "nucleus", 2, _hp("lizard_mitosis"), "lizard_mitosis", TRAINED_OOD),
-    Entry("lynsec_he", HP, "nucleus", 2, _hp("lynsec", _path_has("/h&e/")), "lynsec_he", TRAINED_OOD),
+    Entry("lizard_mitosis", HP, "nucleus", 2, _hp("lizard_mitosis")),
+    Entry("lynsec_he", HP, "nucleus", 2, _hp("lynsec", _path_has("/h&e/"))),
     Entry("lynsec_ihc", HP, "nucleus", 2, _hp("lynsec", _path_has("/ihc/")), comment="IHC."),
     Entry("monuseg", HP, "nucleus", 2, _hp("monuseg"), "monuseg"),
     Entry("nuinsseg", HP, "nucleus", 2, _hp("nuinsseg")),
     Entry("pannuke", HP, "nucleus", 2, _hp("pannuke"), "pannuke"),
     Entry("puma", HP, "nucleus", 2, _hp("puma"), "puma"),
     Entry("spatch_he", HP, "nucleus", 2, _hp("spatch"), comment="The H&E subsets of sPATCH."),
-    Entry("srsanet", HP, "nucleus", 2, _hp("srsanet"), "srsanet", f"IHC. {TRAINED_OOD}"),
+    Entry("srsanet", HP, "nucleus", 2, _hp("srsanet"), comment="IHC."),
     Entry("tnbc_celltype", HP, "nucleus", 2, _hp("tnbc_celltype")),
     # Histopathology, 2d, OOD.
+    Entry("amonuseg", HP, "nucleus", 2, test="amonuseg",
+          comment="H&E. Semantic masks: the instances are connected components, so touching nuclei merge."),
+    Entry("beacon", HP, "nucleus", 2, test="beacon", comment="H&E biopsies of Barrett's esophagus."),
+    Entry("cd47_ihcnusc", HP, "nucleus", 2, test="cd47_ihcnusc", comment="CD47 IHC of esophageal cancer."),
     Entry("cytodark0", HP, "nucleus", 2, test="cytodark0"),
     Entry("khoshdeli", HP, "nucleus", 2, test="khoshdeli"),
     Entry("pcns", HP, "nucleus", 2, test="pcns"),
@@ -539,10 +545,12 @@ def run(output: str, data_root: str, datasets: Optional[List[str]], force: bool,
     rows = {}
     for name, entry in entries.items():
         old = old_rows.get(name, {})
+        # Counts of a split the entry no longer has, e.g. after a dataset left the evaluation, are cleared.
+        kept = (TRAIN_COLUMNS if entry.train is not None else []) + (TEST_COLUMNS if entry.test is not None else [])
         rows[name] = {
             "dataset": name, "modality": entry.modality, "structure": entry.structure,
             "dimensionality": f"{entry.ndim}d", "role": roles[name], "comment": entry.comment,
-            **{column: old.get(column, "") for column in TRAIN_COLUMNS + TEST_COLUMNS},
+            **{column: old.get(column, "") if column in kept else "" for column in TRAIN_COLUMNS + TEST_COLUMNS},
         }
 
     selected = list(entries) if datasets is None else datasets
