@@ -159,7 +159,10 @@ GROUP_COLOR = "#6b6b6b"
 
 DATASET_NAMES = {
     "arvidsson": "Arvidsson",
+    "cellapp": "Cell-APP",
     "cellbindb": "CellBinDB",
+    "cd47_ihcnusc": "CD47 IHC-NuSC",
+    "covid_if_nuclei": "Covid IF",
     "cpm17": "CPM17",
     "cytodark0": "CytoDArk0",
     "histo_miner": "Histo-Miner",
@@ -1275,7 +1278,7 @@ def write_prediction_script(path):
 INTERACTIVE_QUALITATIVE = {
     "label_free_cells": [
         ("neurips_cellseg_label_free", "00006", 70, "ID"),
-        ("mcellseg", "00004", 17, "OOD"),
+        ("cellapp", "00013", 108, "OOD"),
     ],
     "fluorescence_cells": [
         ("tissuenet", "00013", 75, "ID"),
@@ -1283,15 +1286,15 @@ INTERACTIVE_QUALITATIVE = {
     ],
     "fluorescence_nuclei": [
         ("cellbindb", "00007", 15, "ID"),
-        ("spatch_dapi", "00020", 8, "OOD"),
+        ("covid_if_nuclei", "00017", 106, "OOD"),
     ],
     "histopathology_nuclei": [
         ("histo_miner", "00008", 62, "ID"),
-        ("srsanet", "00007", 23, "OOD"),
+        ("cd47_ihcnusc", "00015", 54, "OOD"),
     ],
 }
 # The gamma of the images of a dataset whose bright structures are saturated.
-ZOOM_GAMMA = {"spatch_dapi": 2.0}
+ZOOM_GAMMA = {}
 # A crop is a square of ZOOM_CROP_SCALE times the longer side of the object box, and at least ZOOM_MIN_CROP pixels.
 ZOOM_CROP_SCALE = 2.2
 ZOOM_MIN_CROP = 40

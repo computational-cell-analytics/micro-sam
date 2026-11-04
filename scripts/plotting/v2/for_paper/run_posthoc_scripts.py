@@ -1347,7 +1347,9 @@ def pick_crops(objects, image_names, small=False):
         & (objects.cy >= border) & (objects.cy <= objects.height - border)
         & (objects.cx >= border) & (objects.cx <= objects.width - border)
     ].copy()
-    generalists = good[[f"{method}_point" for method in ["SAM", "SAM2", "SAM3"]]].mean(axis=1)
+    # The generalists that were run, or micro-sam alone for the datasets run with '--microsam_only'.
+    rivals = [method for method in ["SAM", "SAM2", "SAM3"] if method in METHODS] or ["micro-sam"]
+    generalists = good[[f"{method}_point" for method in rivals]].mean(axis=1)
     good["generalist_gap"] = good["micro-sam2_point"] - generalists
     objects_of = {}
     for image_name in image_names:
@@ -1365,6 +1367,7 @@ def select_candidates(argv):
     """Show crowded images of a dataset as candidates for the qualitative interactive figure.
 
     Usage: python run_posthoc_scripts.py select_candidates --dataset <name> [--select] [--rescore] [--small]
+    [--microsam_only]
 
     With '--select', this picks the images: up to N_IMAGES test images with objects, the most crowded first (the most
     objects that touch another object, among images with at most MAX_OBJECTS objects), and a few more spread over the
@@ -1386,7 +1389,8 @@ def select_candidates(argv):
     to N_CANDIDATES objects each as crops with all methods and both prompts ('crops.png'): large objects away from the
     border, where micro-sam2 is better than micro-sam (also in the two decimals the figure shows) and the best or within
     TIE of the best with both prompts, ranked by how much better micro-sam2 is than SAM, SAM2 and SAM3 with a point. The
-    scores are computed once; pass '--rescore' to compute them again.
+    scores are computed once; pass '--rescore' to compute them again. With '--microsam_only', only micro-sam and
+    micro-sam2 are run and compared, and the objects are ranked by how much better micro-sam2 is than micro-sam.
 
     The objects picked by hand from the crops of each dataset are in FINALS. The objects of the interactive qualitative
     plot of Figure 2 come from them, see INTERACTIVE_QUALITATIVE in 'plots_for_figure2.py'.
@@ -1396,7 +1400,12 @@ def select_candidates(argv):
     parser.add_argument("--select", action="store_true", help="Pick the images of the dataset.")
     parser.add_argument("--rescore", action="store_true", help="Score the objects again.")
     parser.add_argument("--small", action="store_true", help="Show small objects ('crops_small.png').")
+    parser.add_argument("--microsam_only", action="store_true",
+                        help="Compare micro-sam2 with micro-sam only, for datasets without SAM, SAM2 and SAM3 runs.")
     args = parser.parse_args(argv)
+    if args.microsam_only:
+        global METHODS, OTHERS
+        METHODS, OTHERS = ["micro-sam", "micro-sam2"], ["micro-sam"]
     dataset, output = args.dataset, output_of(args.dataset)
     if args.select:
         select_images(dataset)
