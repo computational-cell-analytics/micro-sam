@@ -115,17 +115,20 @@ EXCLUDED_DATASETS = {"dic_hepg2", "xenium_nuclei", "xenium_cells"}
 PANEL_DATASETS = {
     "label_free_cells": {
         "ID": ["livecell", "neurips_cellseg_label_free", "cell_acdc", "vicar", "omnipose_bact_phase", "orgline"],
-        # toiam, mcellseg and cisd are in the training data of micro-sam2.
-        "OOD": ["deepseas", "bbbc010", "yeastsam", "toiam", "mcellseg", "cisd"],
+        # Only datasets kept out of the micro-sam2 training, see DATASETS_2D_LM_LABEL_FREE_OOD in 'common.py'.
+        # dic_hepg2 is left out: all methods score close to 0 on it.
+        "OOD": ["deepseas", "bbbc010", "yeastsam", "cellapp", "bac_mother", "ecoli_microcolony_lineage"],
     },
     "fluorescence_nuclei": {
         "ID": ["dsb", "dynamicnuclearnet", "bmgd", "ifnuclei", "u20s", "cellbindb"],
-        "OOD": ["arvidsson", "hela_cytonuc", "covid_if_nuclei", "cardioblast_nuclei", "mif_tonsil", "spatch_dapi"],
+        # spatch_dapi is left out: its tumor samples also give the sPATCH H&E training data.
+        "OOD": ["arvidsson", "hela_cytonuc", "covid_if_nuclei", "cardioblast_nuclei", "mif_tonsil", "micro_bench"],
     },
     "histopathology_nuclei": {
         "ID": ["glysac", "histo_miner", "monuseg", "cpm17", "puma", "pannuke"],
-        # lizard_mitosis, lynsec_he and srsanet are in the training data of micro-sam2.
-        "OOD": ["cytodark0", "pcns", "khoshdeli", "lizard_mitosis", "lynsec_he", "srsanet"],
+        # Only datasets kept out of the micro-sam2 training and densely annotated by hand or fully proofread, see
+        # DATASETS_2D_HP_OOD in 'common.py'. cd47_ihcnusc is IHC, the others are H&E.
+        "OOD": ["cytodark0", "pcns", "khoshdeli", "beacon", "cd47_ihcnusc", "amonuseg"],
     },
     "fluorescence_cells": {
         "ID": [
@@ -620,12 +623,14 @@ def plot_automatic(
     return fig
 
 
-# The 'method', 'model' and optional 'mode' values of each interactive method in the results.
+# The 'method', 'model' and optional 'mode' values of each interactive method in the results. Every method feeds its
+# previous mask back with the correction clicks: SAM2, SAM3 and micro-sam2 always do, SAM and micro-sam use their
+# 'with_masks' runs.
 INTERACTIVE_METHODS = {
     "SAM": ("sam", ("vit_l",), "with_masks"),
     "SAM2": ("sam2", ("hvit_l",)),
     "SAM3": ("sam3", ("default",)),
-    "micro-sam": ("micro-sam", ("vit_l_lm", "vit_l_histopathology")),
+    "micro-sam": ("micro-sam", ("vit_l_lm", "vit_l_histopathology"), "with_masks"),
     "micro-sam2": ("micro-sam2", ("hvit_l",)),
 }
 PROMPT_NAMES = {"box": "Box", "point": "Point"}
@@ -1533,6 +1538,9 @@ COMBINED_IMAGE_GRID = (COMBINED_GRID[0] - IMAGE_WIDENING, COMBINED_GRID[1] - IMA
 # A combined figure higher than A4 is scaled down.
 A4 = (210 / 25.4, 297 / 25.4)
 PNG_DPI = 600
+# The resolution of the images in the saved plots and in the combined figure: above the resolution of the shown
+# crops, so that no detail is lost. The default 'savefig.dpi' of 300 drops most of it.
+IMAGE_DPI = 1200
 
 
 def make_plot(name, region=None, compact=False):
@@ -1689,9 +1697,9 @@ def main():
     check_style()
     for name, (kind, style) in PLOTS.items():
         if name in args.only:
-            save_figure(make_plot(name), name, kind, style)
+            save_figure(make_plot(name), name, kind, style, dpi=IMAGE_DPI)
     if COMBINED_NAME in args.only:
-        save_combined(*plot_figure())
+        save_combined(*plot_figure(), dpi=IMAGE_DPI)
 
 
 if __name__ == "__main__":

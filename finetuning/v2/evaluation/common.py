@@ -242,25 +242,23 @@ SPATCH_DAPI_SUBSETS = ["xenium_ov", "xenium_hcc", "xenium_coad", "cosmx_ov", "co
 # The four E. coli pathways on disk; the remaining four are 6 GB archives each and are not fetched.
 ECOLI_GENES = ("cib", "crosstalk", "recA", "rpsM")
 
-# Light microscopy, 2d. The in-domain (ID) panels hold the blind test splits of the v5 training datasets that the
-# main comparison scores: the sources shared with the baselines. The supplementary panels hold the blind splits of
-# the remaining training datasets ("extra training"), resolvable and scorable on request but outside the main
-# panel. Out-of-domain (OOD): datasets kept out of training. Datasets with a cell and a nucleus target are listed
-# per target, omnipose per subset.
+# Light microscopy, 2d. The in-domain (ID) and out-of-domain (OOD) lists hold exactly the datasets of the Figure 2
+# panels, six each per modality (see PANEL_DATASETS in 'plots_for_figure2.py'). ID: the blind test splits of v5
+# training datasets. OOD: datasets kept out of training. The supplementary lists hold the blind splits of the
+# remaining training datasets, resolvable and scorable on request but outside the main panels. Datasets with a cell
+# and a nucleus target are listed per target, omnipose per subset.
 DATASETS_2D_LM_CELL_ID = [
-    "tissuenet", "omnipose_bact_fluor", "cvz_fluo_cell", "flywing", "enseg", "neurips_cellseg_fluorescence",
+    "tissuenet", "omnipose_bact_fluor", "cvz_fluo_cell", "flywing", "neurips_cellseg_fluorescence",
+    "deepbacs_fluorescence",
 ]
 # xenium_cells and xenium_nuclei are not evaluated: their labels are the automatic segmentation of the Xenium
 # instrument, not annotations. Their data loading below is kept.
-DATASETS_2D_LM_CELL_SUPPLEMENTARY = ["dememseg", "pan_multiplex", "deepbacs_fluorescence"]
+DATASETS_2D_LM_CELL_SUPPLEMENTARY = ["dememseg", "pan_multiplex", "enseg"]
 DATASETS_2D_LM_CELL_OOD = ["covid_if_cells", "medussa", "hpa", "mif_tonsil_cells", "fusionx", "wing_disc_timelapse"]
-DATASETS_2D_LM_NUCLEUS_ID = [
-    "dsb", "cvz_fluo_dapi", "dynamicnuclearnet", "bitdepth_nucseg", "bmgd", "cellbindb", "u20s", "ifnuclei",
-    "tsakiroglou",
-]
+DATASETS_2D_LM_NUCLEUS_ID = ["dsb", "dynamicnuclearnet", "bmgd", "cellbindb", "u20s", "ifnuclei"]
 # mnDINO images are BBBC022 U2OS fields: 30 of its 64 test images are byte-identical to u20s training images and
 # 3 more to DSB training images, so it is not out of domain.
-DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY = ["mndino"]
+DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY = ["mndino", "cvz_fluo_dapi", "bitdepth_nucseg", "tsakiroglou"]
 DATASETS_2D_LM_NUCLEUS_OOD = [
     "cardioblast_nuclei", "hela_cytonuc", "covid_if_nuclei", "arvidsson", "micro_bench", "mif_tonsil",
 ]
@@ -268,19 +266,19 @@ DATASETS_2D_LM_NUCLEUS_OOD = [
 # rather than an independent OOD collection until the patient overlap is resolved.
 DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM = ["spatch_dapi"]
 DATASETS_2D_LM_LABEL_FREE_ID = [
-    "livecell", "deepbacs_label_free", "omnipose_bact_phase", "neurips_cellseg_label_free", "cell_acdc", "cellular",
-    "vicar", "microbeseg",
+    "livecell", "omnipose_bact_phase", "neurips_cellseg_label_free", "cell_acdc", "vicar", "orgline",
 ]
 # yeaz is split per image, so every test image is a time point of a field of view that also trains.
 DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY = [
-    "orgasegment", "organoidnet", "omnipose_worm", "omnipose_worm_high_res", "bccd", "cisd", "orgline", "organoid",
-    "mcellseg", "toiam", "bbbc030", "yeaz",
+    "orgasegment", "organoidnet", "omnipose_worm", "omnipose_worm_high_res", "bccd", "cisd", "organoid",
+    "mcellseg", "toiam", "bbbc030", "yeaz", "deepbacs_label_free", "cellular", "microbeseg",
 ]
 DATASETS_2D_LM_LABEL_FREE_OOD = [
-    "cellapp", "deepseas", "dic_hepg2", "yeastsam", "bac_mother", "ecoli_microcolony_lineage", "bbbc010",
+    "cellapp", "deepseas", "yeastsam", "bac_mother", "ecoli_microcolony_lineage", "bbbc010",
 ]
-# Reserve: kept resolvable, not part of any panel until its labels are checked.
-DATASETS_2D_LM_LABEL_FREE_RESERVE = ["yeastcellseg"]
+# Reserve: kept out of training and resolvable, but not part of any panel. yeastcellseg: labels not checked yet.
+# dic_hepg2: all methods score close to 0 on it, which suggests a problem with its labels.
+DATASETS_2D_LM_LABEL_FREE_RESERVE = ["yeastcellseg", "dic_hepg2"]
 DATASETS_2D_LM = list(dict.fromkeys(
     DATASETS_2D_LM_CELL_ID + DATASETS_2D_LM_CELL_SUPPLEMENTARY + DATASETS_2D_LM_CELL_OOD
     + DATASETS_2D_LM_NUCLEUS_ID + DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_OOD
@@ -291,14 +289,19 @@ DATASETS_2D_LM = list(dict.fromkeys(
 # Histopathology nuclei. The main panel holds the official test splits of the v5 training datasets shared with the
 # baselines, which the generalist loader never touches. Supplementary: training datasets with a blind split outside
 # the main panel; lizard (overlap with CoNSeP and PanNuke), lynsec and tnbc_celltype (baseline exposure) stay there
-# until those are resolved. Out-of-domain: datasets kept out of training. lynsec is split by stain so H&E and IHC
-# are reported apart.
+# until those are resolved. Out-of-domain: datasets kept out of training, with dense manual or fully proofread
+# nucleus annotations. lynsec is split by stain so H&E and IHC are reported apart.
 DATASETS_2D_HP_ID = ["cpm17", "glysac", "histo_miner", "monuseg", "pannuke", "puma"]
 DATASETS_2D_HP_SUPPLEMENTARY = [
     "lizard", "lizard_mitosis", "lynsec_he", "lynsec_ihc", "srsanet", "tnbc_celltype", "cellbindb_he",
 ]
-DATASETS_2D_HP_OOD = ["cytodark0", "deepliif", "khoshdeli", "panoptils", "pcns"]
-DATASETS_HP = DATASETS_2D_HP_ID + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_2D_HP_OOD
+DATASETS_2D_HP_OOD = ["amonuseg", "beacon", "cd47_ihcnusc", "cytodark0", "khoshdeli", "pcns"]
+# Reserve: kept out of training and resolvable, but not part of any panel, since their annotations are not dense
+# or not manual. deepliif: masks drawn on the mpIF DAPI channel, slightly off the IHC image. panoptils:
+# bootstrapped, semi-manual labels. nusec: many nuclei, most of all stromal ones, are not annotated. bc_multiset:
+# some nuclei are not annotated, and no paper describes the protocol yet.
+DATASETS_2D_HP_RESERVE = ["deepliif", "panoptils", "nusec", "bc_multiset"]
+DATASETS_HP = DATASETS_2D_HP_ID + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_2D_HP_OOD + DATASETS_2D_HP_RESERVE
 
 # 2D EM: ASTIH (neurites), the tumor spheroid slices (cells) and the mitochondria and nucleus panels.
 DATASETS_2D_EM_MITO = [
@@ -350,15 +353,20 @@ GT_MIN_SIZE_2D = {
 # only the C. elegans nuclei (CTC Fluo-N3DH-CE) are scored: its Arabidopsis volumes are the PNAS plant1 time series
 # and its Phallusia volumes come from the PhMamm source, both of which train. mouse_embryo_membrane is the light-sheet
 # membrane stain of the mouse embryo data, mucic_mda231 the CTC Fluo-C3DL-MDA231 movies with the ISBI 2025 full
-# annotations; no model trains on either.
+# annotations; no model trains on either. morphonet_patiria is the MorphoNet starfish embryo with its curated labels.
+# nus_organoids is the nucleus benchmark of the Digitalized Organoid paper (three of its four manually annotated
+# volumes).
 DATASETS_3D_LM_CELL_ID = ["plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid"]
-DATASETS_3D_LM_CELL_OOD = ["plantseg_ovules", "cshaper", "vibrio_cholerae", "mouse_embryo_membrane", "mucic_mda231"]
+DATASETS_3D_LM_CELL_OOD = [
+    "plantseg_ovules", "cshaper", "vibrio_cholerae", "mouse_embryo_membrane", "mucic_mda231", "morphonet_patiria",
+]
 DATASETS_3D_LM_NUCLEUS_ID = [
     "embedseg_mouse_skull", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear", "nucverse3d",
 ]
 DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY = ["embedseg_platy_ish"]
 DATASETS_3D_LM_NUCLEUS_OOD = [
     "parhyale_regen", "mouse_embryo", "blastospim", "morphonet_celegans", "bbbc032", "bbbc033", "bbbc050",
+    "nus_organoids",
 ]
 DATASETS_3D_LM = (
     DATASETS_3D_LM_CELL_ID + DATASETS_3D_LM_CELL_OOD + DATASETS_3D_LM_NUCLEUS_ID + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY
@@ -370,12 +378,16 @@ DATASETS_3D_LM = (
 # (mouse ATUM-SEM) is in the main panel, as the third EM technique next to cremi and zebrafinch_j0126. nisb is
 # synthetic and kept out of training, so it is a synthetic OOD test. synapseweb is scored inside its annotated cores
 # only. humanneurons (the cached H01 crop) is no OOD set: H01 trains through EMNeuron, so it is supplementary at most.
+# microns_basil and ionsem are the out-of-distribution validation volumes of EMNeuron, which neither micro-sam2 nor
+# SegNeuron trains on (MICrONS basil: mouse visual cortex, ssTEM). cortex_human_stg is a central crop of the human
+# superior temporal gyrus volume of CortexConnectomics (Loomba et al. 2022, SBEM), whose proofread labels keep some
+# block-stitching seams.
 DATASETS_3D_EM_NEURITE_ID = ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "snemi", "liconn", "xpress"]
 DATASETS_3D_EM_NEURITE_SUPPLEMENTARY = [
     "axonem", "fib25", "manc", "malecns", "wafer4", "minnie65", "zebrafinch_j0251", "wildenberg",
     "humanneurons",
 ]
-DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb", "nisb"]
+DATASETS_3D_EM_NEURITE_OOD = ["isbi2012", "synapseweb", "nisb", "microns_basil", "ionsem", "cortex_human_stg"]
 # Cell segmentation: Platynereis volume 9 and the DenseCell val volume are blind; the tumor spheroid slices are 2d.
 DATASETS_3D_EM_CELL_ID = ["platynereis_cells", "densecell", "synapsenet_compartments"]
 
@@ -475,7 +487,8 @@ DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTAR
 DATASETS_SUPPLEMENTARY = (
     DATASETS_2D_LM_CELL_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM
     + DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY + DATASETS_2D_LM_LABEL_FREE_RESERVE + DATASETS_3D_LM_NUCLEUS_SUPPLEMENTARY
-    + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_3D_EM_MITO_SUPPLEMENTARY
+    + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_2D_HP_SUPPLEMENTARY + DATASETS_2D_HP_RESERVE
+    + DATASETS_3D_EM_MITO_SUPPLEMENTARY
 )
 
 # The split to tune on, or None where the loader has no splits and VAL_Z_RANGE holds out a z-slab.
@@ -498,7 +511,8 @@ VAL_SPLITS.update({
     "dic_hepg2": "val", "bac_mother": "val", "plantseg_ovules": "val", "cshaper": "train", "mouse_embryo": "train",
     "mouse_embryo_membrane": "train", "mucic_mda231": "val", "blastospim": "val", "bbbc010": "val", "bbbc050": "train",
     "wing_disc": None, "embedseg_mouse_skull": None, "embedseg_platy_ish": None, "nis3d": None,
-    "humanneurons": None, "bbbc032": None, "bbbc033": None,
+    "humanneurons": None, "bbbc032": None, "bbbc033": None, "morphonet_patiria": None, "nus_organoids": None,
+    "microns_basil": None, "ionsem": None, "cortex_human_stg": None,
 })
 
 # Volumes whose tuning data is a z-slab of the test volume, as (file name, z-slab), following the loader; the
@@ -537,7 +551,7 @@ VAL_SPLITS.update({
     "cpm17": "train", "glysac": "train", "histo_miner": "val", "lizard": "val", "lizard_mitosis": "val",
     "lynsec_he": "val", "lynsec_ihc": "val", "monuseg": "train", "pannuke": "val", "puma": "val",
     "srsanet": "val", "tnbc_celltype": "val", "cytodark0": "val", "deepliif": "val", "pcns": "train",
-    "cellbindb_he": "val",
+    "cellbindb_he": "val", "cd47_ihcnusc": "train", "nusec": "train", "bc_multiset": "train",
 })
 
 # The tuning slab for volumes with no splits, disjoint from the slab the evaluation scores. Indices
@@ -1128,6 +1142,36 @@ def _get_hp_data_paths(
         paths = datasets.pcns.get_pcns_paths(path=os.path.join(p, "pcns"), split=split, download=download)
         # Patches cut from the TCGA slides or patients of MoNuSeg training images, see PCNS_MONUSEG_PATCHES.
         paths = [path for path in paths if int(os.path.splitext(os.path.basename(path))[0]) not in PCNS_MONUSEG_PATCHES]
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "amonuseg":
+        # No split and no held-out data: all 48 images are scored, against the annotations of the first expert.
+        paths = datasets.amonuseg.get_amonuseg_paths(path=os.path.join(p, "amonuseg"), download=download)
+        return sorted(paths), sorted(paths), "raw", "labels/instances/exp1"
+
+    if dataset_name == "beacon":
+        # No official split and no held-out data: all 67 tiles of both cohorts are scored.
+        paths = datasets.beacon.get_beacon_paths(path=os.path.join(p, "beacon"), download=download)
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "cd47_ihcnusc":
+        # The authors' validation / test split is scored, their training split tunes.
+        paths = datasets.cd47_ihcnusc.get_cd47_ihcnusc_paths(
+            path=os.path.join(p, "cd47_ihcnusc"), split="val" if split == "test" else "train", download=download,
+        )
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "nusec":
+        paths = datasets.nusec.get_nusec_paths(
+            path=os.path.join(p, "nusec"), split="test" if split == "test" else "train", download=download,
+        )
+        return sorted(paths), sorted(paths), "raw", "labels/instances"
+
+    if dataset_name == "bc_multiset":
+        # Fold 4 is scored and fold 1 tunes. The patches of a fold overlap, see the loader.
+        paths = datasets.bc_multiset.get_bc_multiset_paths(
+            path=os.path.join(p, "bc_multiset"), folds=[4] if split == "test" else [1], download=download,
+        )
         return sorted(paths), sorted(paths), "raw", "labels/instances"
 
     raise ValueError(f"Unknown histopathology dataset: {dataset_name!r}")
@@ -1908,6 +1952,23 @@ def _get_3d_lm_data_paths(
         paths = sorted(paths)[::10]
         return paths, paths, "raw", "labels"
 
+    if dataset_name == "morphonet_patiria":
+        # Out of domain, a single volume. The labels are the curated segmentation of MorphoNet, which resolves all
+        # cells; the published segmentation of the loader leaves many cells out.
+        root = os.path.join(p, "morphonet", "Patiria miniata")
+        raw = glob(os.path.join(root, "published", "RAW", "*.tif"))
+        labels = [os.path.join(root, "curated", "SEG", "SeaStar.tiff")]
+        return raw, labels, None, None
+
+    if dataset_name == "nus_organoids":
+        # Out of domain, three volumes (cell monolayer, colon organoid, breast cancer spheroid). TM00099 is left
+        # out: its nuclei are dim and sparse, and all methods fail on it. The raw data of the original download for
+        # HCT116 is a copy of its labels, the raw data here is the correct one.
+        root = os.path.join(p, "beghin_data", "nus_organoids")
+        labels = [path for path in glob(os.path.join(root, "*_groundtruth.tif")) if "TM00099" not in path]
+        raw = [path.replace("_groundtruth.tif", ".tif") for path in labels]
+        return (*_sorted_pairs(raw, labels), None, None)
+
     if dataset_name == "parhyale_regen":
         paths = lm.parhyale_regen.get_parhyale_regen_paths(path=os.path.join(p, "parhyale_regen"), download=download)
         return sorted(paths), sorted(paths), "raw", "labels"
@@ -2299,6 +2360,16 @@ def _get_3d_em_data_paths(
         path = em.isbi2012.get_isbi_paths(path=os.path.join(p, "isbi2012"), download=download)
         return [path], [path], "raw", "labels/gt_segmentation"
 
+    if dataset_name == "cortex_human_stg":
+        # The 64 x 1024 x 1024 crop at the volume center, streamed with the torch-em loader.
+        paths = sorted(glob(os.path.join(p, "cortex_connectomics", "human_stg_*.zarr")))
+        return paths, paths, "raw", "labels"
+
+    if dataset_name in ("microns_basil", "ionsem"):
+        folder = os.path.join(p, "emneuron", "valid", "OutofDistribution",
+                              "Microns[B]" if dataset_name == "microns_basil" else "Ionsem")
+        return [os.path.join(folder, "raw.tif")], [os.path.join(folder, "label.tif")], None, None
+
     if dataset_name == "humanneurons":
         # The cached H01 crop. Resolved directly: it predates the torch-em loader for this dataset.
         paths = sorted(glob(os.path.join(p, "humanneurons", "*.h5")))
@@ -2442,7 +2513,7 @@ def load_volume(
         labels = labels.astype("int64")
         valid_roi = labels != 65535
         labels[~valid_roi] = 0
-    elif dataset_name == "pnas_arabidopsis":
+    elif dataset_name in ("pnas_arabidopsis", "morphonet_patiria"):
         # The background carries id 1.
         labels[labels == 1] = 0
     elif dataset_name == "hemibrain_mito":
@@ -2598,14 +2669,9 @@ def export_joint_checkpoint(
 VOLUME_SPEED_OPTIONS = {"offload_to_cpu": False}
 
 
+# The z/xy voxel ratios of the EM volumes, from their acquisition parameters. The light microscopy volumes are not
+# here: all methods get them as acquired, without a correction for their anisotropy.
 DATASET_SPACING: dict = {
-    # z/xy voxel ratios from published acquisition parameters
-    "embedseg_mouse_skull": (4, 1, 1),  # z=1µm, xy=0.25µm
-    "embedseg_organoid": (6, 1, 1),  # z=1µm, xy=0.1733µm
-    "embedseg_platy_nuclei": (5, 1, 1),  # z=2.031µm, xy=0.406µm
-    "blastospim": (10, 1, 1),  # SPIM: z≈2µm, xy≈0.208µm
-    "mouse_embryo": (4, 1, 1),  # confocal: z≈1µm, xy≈0.22µm
-    "mucic_mda231": (6.0 / 1.242, 1, 1),  # CTC Fluo-C3DL-MDA231, confocal: z=6µm, xy=1.242µm
     "densecell": (5, 1, 1),  # SBF-SEM: 50 nm sections, 10 nm pixels
     "densecell_mito": (5, 1, 1),
     "cmito_l1": (50 / 5.12, 1, 1),  # ssTEM: 50 nm sections, 5.12 nm pixels
@@ -2641,8 +2707,6 @@ DATASET_SPACING: dict = {
     "donglai_wei_mito": (40 / 8, 1, 1),  # ssEM, 8 x 8 x 40 nm
     "synapsenet_compartments": (1, 1, 1),  # electron tomography, isotropic
     "nisb": (2.2, 1, 1),  # synthetic: 20 nm sections, 9 nm pixels
-    "bbbc032": (5, 1, 1),  # spinning disk confocal: z=0.5µm, xy=0.101µm
-    "bbbc050": (2.5, 1, 1),  # CV1000 (test split): z=2.0µm, xy=0.8µm
 }
 
 
@@ -3380,6 +3444,10 @@ GT_MIN_SIZE_3D = {
     **{name: 100 for name in DATASETS_3D_EM_NUCLEUS},
     # The NucMM-Z nuclei are only about 50 voxels large.
     "nucmm_zebrafish": 10,
+    # The curated labels hold specks of a few voxels next to the cells, which have at least 5000 voxels.
+    "morphonet_patiria": 500,
+    # The nuclei have at least 500 voxels; some labels are specks of a few voxels.
+    "nus_organoids": 100,
 }
 
 

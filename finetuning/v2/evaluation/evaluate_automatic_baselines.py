@@ -185,8 +185,9 @@ CELLPOSE3_MODELS = ("cyto3", "nuclei")
 # The default of `eval` is 0, which leaves the slices unlinked.
 CELLPOSE_STITCH_THRESHOLD = 0.25
 # How CellPose segments a volume: 'stitch' segments every z-slice in 2d and links the masks of adjacent slices
-# (CELLPOSE_STITCH_THRESHOLD); 'do3d' predicts the flows in the xy, xz and yz views and combines them into 3d flows,
-# with the z/xy anisotropy of DATASET_ANISOTROPY where it is known. The 'do3d' results get the suffix '_do3d'.
+# (CELLPOSE_STITCH_THRESHOLD); 'do3d' predicts the flows in the xy, xz and yz views and combines them into 3d flows.
+# Both get the volume as acquired, without a correction for its anisotropy. The 'do3d' results get the suffix
+# '_do3d'.
 CELLPOSE_3D_MODES = ("stitch", "do3d")
 
 # The channels of the whole-cell and the nuclear marker in the loaded channel-last image, for the baselines that
@@ -277,18 +278,6 @@ EMPANADA_SCALES = (1, 2, 4, 8)
 EMPANADA_MAX_TUNING_SAMPLES = {2: 10, 3: 5}
 # A downsampling replaces the default of 1 only if it scores this much higher, since a few crops are a noisy choice.
 EMPANADA_MIN_GAIN = 0.02
-
-# The z/xy anisotropy of each dataset (z_voxel / xy_voxel). FOCUS-3D takes it as its z_ratio.
-DATASET_ANISOTROPY = {
-    "embedseg_mouse_skull": 4.0,
-    "embedseg_organoid": 6.0,
-    "embedseg_platy_nuclei": 5.0,
-    "blastospim": 10.0,
-    "mouse_embryo": 4.0,
-    "mucic_mda231": 6.0 / 1.242,  # CTC Fluo-C3DL-MDA231: z=6µm, xy=1.242µm
-    "cremi": 10.0,   # z=40nm, xy=4nm
-    "snemi": 5.0,    # z=30nm, xy=6nm
-}
 
 
 def _load_cellpose(model_type, device):
@@ -524,8 +513,7 @@ def _segment_cellpose(image_or_volume, model, ndim, dataset_name, mode_3d="stitc
         diameter = model.diam_mean if type(model).__name__ == "Cellpose" else None
         if mode_3d == "do3d":
             masks = model.eval(
-                image_or_volume, diameter=diameter, do_3D=True, anisotropy=DATASET_ANISOTROPY.get(dataset_name),
-                z_axis=0, **channel_kwargs,
+                image_or_volume, diameter=diameter, do_3D=True, z_axis=0, **channel_kwargs,
             )[0]
         else:
             masks = model.eval(
@@ -730,10 +718,11 @@ def _segment_focus3d(volume, segmenter, dataset_name, cell_radius, z_ratio):
     """Segment one volume with FOCUS-3D, which rescales it to its own scale first.
 
     `z_ratio` is the z-to-xy spacing ratio. `cell_radius` is the xy radius that the rescaling starts from.
-    The two are coupled: at a z_ratio of 1, FOCUS-3D rescales the z axis together with xy.
+    The two are coupled: at a z_ratio of 1, FOCUS-3D rescales the z axis together with xy. Without a z_ratio,
+    the volume is taken as acquired, with a z_ratio of 1.
     """
     if z_ratio is None:
-        z_ratio = DATASET_ANISOTROPY.get(dataset_name, 1.0)
+        z_ratio = 1.0
     return segmenter(volume, z_ratio=z_ratio, cell_radius=cell_radius)
 
 
@@ -1190,7 +1179,7 @@ def main():
     )
     parser.add_argument(
         "--z_ratio", type=float, default=None,
-        help="The z-to-xy spacing ratio. Defaults to the anisotropy."
+        help="The z-to-xy spacing ratio. Defaults to 1, the volume as acquired."
     )
     parser.add_argument("--batch_size", type=int, default=FOCUS3D_BATCH_SIZE, help="Patches per forward pass.")
     parser.add_argument("--num_workers", type=int, default=FOCUS3D_NUM_WORKERS, help="Data loader workers.")

@@ -283,11 +283,12 @@ def render_axes(fig, left, bottom, width, height, image, framed=True):
     return ax
 
 
-def plot_interactive_qualitative(region=None, grid=None, show_titles=True):
+def plot_interactive_qualitative(region=None, grid=None, show_titles=True, starred=()):
     """Plot a column per modality with a block per volume of INTERACTIVE_QUALITATIVE.
 
     A block has the volume over the reference render, and the renders of the methods (columns) per prompt (rows).
-    The arguments are as in 'plots_for_figure2.plot_interactive_qualitative'.
+    The arguments are as in 'plots_for_figure2.plot_interactive_qualitative'. The method names in 'starred' get a
+    star.
     """
     chosen = INTERACTIVE_QUALITATIVE
     header = fig2.ZOOM_HEADER if show_titles else fig2.ZOOM_HEADER_NO_TITLES
@@ -315,7 +316,7 @@ def plot_interactive_qualitative(region=None, grid=None, show_titles=True):
             fig2.draw_title(fig, left, left + column_width, height - 0.17, PANELS[modality][2])
         top = height - header - fig2.ZOOM_CAPTION
         methods_left = left + TRACING_LABEL_WIDTH + size + gap + TRACING_PROMPT_WIDTH
-        for k, (method, name) in enumerate(zip(methods, fig2.names_of(methods, set()))):
+        for k, (method, name) in enumerate(zip(methods, fig2.names_of(methods, set(starred)))):
             x = methods_left + k * (size + gap) + size / 2
             fig.text(
                 x / fig2.FIGURE_WIDTH, (top + 0.05) / height, name, ha="center", va="baseline",
@@ -568,11 +569,15 @@ def plane_overlay(image, labels, thickness):
     return rgb
 
 
-def plot_planes(fig, left, bottom, width, height, dataset, sample):
+def plot_planes(fig, left, bottom, width, height, dataset, sample, volume=None):
     """Plot the xy, the xz and the yz plane through the most objects of a volume from top to bottom, in their true
-    aspect, in a column at 'left' and 'bottom', in inches."""
-    image, labels = planes_of(dataset, sample)
-    z_scale = PLANE_Z_SCALES[dataset]
+    aspect, in a column at 'left' and 'bottom', in inches. 'volume' is the (image, labels, z/xy voxel ratio) of a
+    volume that is not one of QUALITATIVE_PREDICTIONS."""
+    if volume is None:
+        image, labels = planes_of(dataset, sample)
+        z_scale = PLANE_Z_SCALES[dataset]
+    else:
+        image, labels, z_scale = volume
     # Per axis, the plane in the middle half with the most labelled voxels.
     point = []
     for axis in range(3):
@@ -687,7 +692,7 @@ def main():
     fig2.OUTPUT_DIR = OUTPUT_DIR
     for name, (kind, style) in PLOTS.items():
         if name in args.only:
-            fig2.save_figure(make_plot(name), name, kind, style)
+            fig2.save_figure(make_plot(name), name, kind, style, dpi=fig2.IMAGE_DPI)
     if COMBINED_NAME in args.only:
         fig2.save_combined(*fig2.plot_figure(PLOTS, make_plot), name=COMBINED_NAME, dpi=COMBINED_DPI)
 

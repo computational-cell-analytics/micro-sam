@@ -4270,6 +4270,1858 @@
      [1024, 1024]
     ]
    }
+  },
+  "cortex_human_stg": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-02: the 64 x 1024 x 1024 crop at the center of the CortexConnectomics human STG volume (SBEM, 11.24 x 11.24 x 30 nm), dense proofread neuron labels with some block-stitching seams. The crops tile the annotation; tiles with a blank section or fewer than 20% of the median object count are dropped. 8 of 8 tiles are kept, holding 911-1295 objects.",
+   "starts": {
+    "human_stg_08f31f40fc22.zarr": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ]
+   }
+  },
+  "morphonet_patiria": {
+   "crop_shape": [32, 512, 512],
+   "note": "Light microscopy panel, added 2026-11-02: the single MorphoNet Patiria miniata volume (confocal, 174 x 375 x 375) with the curated labels; objects below 500 voxels are specks and left out. Each axis of the annotation is split into the fewest equal tiles of at most 32 x 512 x 512, so every crop has its own shape (crop_shapes). Crops with fewer than 20% of the median object count are left out (0 of 4; the kept crops hold 73-213 cells).",
+   "starts": {
+    "embryo1_20200812_pos6_stk010.tif": [
+     [23, 33, 41],
+     [49, 33, 41],
+     [75, 33, 41],
+     [102, 33, 41]
+    ]
+   },
+   "crop_shapes": {
+    "embryo1_20200812_pos6_stk010.tif": [
+     [26, 309, 307],
+     [26, 309, 307],
+     [27, 309, 307],
+     [26, 309, 307]
+    ]
+   }
+  },
+  "ionsem": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-02: the EMNeuron out-of-distribution validation volume (Ionsem, 30 x 1000 x 1000), dense neurite labels. The crops tile the annotation; tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count. 4 of 4 tiles are kept, holding 160-181 objects.",
+   "starts": {
+    "raw.tif": [
+     [0, 0, 0],
+     [0, 0, 500],
+     [0, 500, 0],
+     [0, 500, 500]
+    ]
+   },
+   "crop_shapes": {
+    "raw.tif": [
+     [30, 500, 500],
+     [30, 500, 500],
+     [30, 500, 500],
+     [30, 500, 500]
+    ]
+   }
+  },
+  "microns_basil": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-02: the EMNeuron out-of-distribution validation volume (MICrONS basil, ssTEM, 72 x 512 x 512), dense neurite labels. The crops tile the annotation; tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count. 1 of 3 tiles are kept, holding 225-225 objects.",
+   "starts": {
+    "raw.tif": [
+     [0, 0, 0]
+    ]
+   },
+   "crop_shapes": {
+    "raw.tif": [
+     [24, 512, 512]
+    ]
+   }
+  },
+  "isbi2012": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count. 1 of 1 tiles are kept, holding 465-465 objects.",
+   "starts": {
+    "isbi.h5": [
+     [0, 0, 0]
+    ]
+   },
+   "crop_shapes": {
+    "isbi.h5": [
+     [30, 512, 512]
+    ]
+   }
+  },
+  "nisb": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 25 of 1025 tiles are kept, holding 128-153 objects.",
+   "starts": {
+    "data.zarr": [
+     [276, 1760, 1248],
+     [308, 1760, 1248],
+     [372, 1760, 1760],
+     [404, 1760, 736],
+     [404, 1760, 1760],
+     [404, 2272, 736],
+     [404, 2272, 1760],
+     [436, 1248, 736],
+     [468, 1248, 736],
+     [564, 736, 224],
+     [564, 736, 1760],
+     [564, 1760, 736],
+     [596, 736, 1760],
+     [628, 1760, 2272],
+     [660, 1248, 1248],
+     [692, 1248, 736],
+     [692, 1248, 1248],
+     [692, 1248, 1760],
+     [788, 736, 736],
+     [820, 736, 736],
+     [852, 1760, 2272],
+     [884, 736, 224],
+     [916, 736, 224],
+     [1044, 224, 1248],
+     [1300, 736, 1760]
+    ]
+   }
+  },
+  "synapseweb": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 25 of 179 tiles are kept, holding 94-1034 objects.",
+   "starts": {
+    "synapseweb_hippocampus_apical.h5": [
+     [10, 192, 896],
+     [10, 1728, 384],
+     [10, 1728, 2432],
+     [10, 2240, 2944],
+     [10, 2752, 896],
+     [42, 1728, 384],
+     [42, 2752, 896],
+     [42, 2752, 1408],
+     [42, 3264, 896],
+     [74, 704, 1920],
+     [74, 704, 3456],
+     [74, 1216, 384],
+     [74, 1216, 896],
+     [74, 1216, 1408],
+     [74, 1728, 384],
+     [74, 1728, 896],
+     [74, 1728, 1408],
+     [74, 2240, 1408],
+     [74, 2752, 3456],
+     [74, 3264, 2432]
+    ],
+    "synapseweb_hippocampus_oblique.h5": [
+     [8, 2496, 1568],
+     [8, 2496, 2592],
+     [40, 1472, 2592],
+     [40, 3008, 2592]
+    ],
+    "synapseweb_hippocampus_spine.h5": [
+     [5, 1376, 1248]
+    ]
+   }
+  },
+  "densecell": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count. 1 of 1 tiles are kept, holding 13-13 objects.",
+   "starts": {
+    "densecell_val.h5": [
+     [0, 144, 144]
+    ]
+   },
+   "crop_shapes": {
+    "densecell_val.h5": [
+     [24, 512, 512]
+    ]
+   }
+  },
+  "fafb": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count. 44 of 48 tiles are kept, holding 568-1849 objects.",
+   "starts": {
+    "ea798aee7bab.zarr": [
+     [13, 0, 0],
+     [13, 0, 512],
+     [13, 512, 0],
+     [13, 512, 512],
+     [77, 0, 0],
+     [77, 0, 512],
+     [77, 512, 0],
+     [77, 512, 512],
+     [109, 0, 0],
+     [109, 0, 512],
+     [109, 512, 0],
+     [109, 512, 512],
+     [141, 0, 0],
+     [141, 0, 512],
+     [141, 512, 0],
+     [141, 512, 512],
+     [173, 0, 0],
+     [173, 0, 512],
+     [173, 512, 0],
+     [173, 512, 512],
+     [205, 0, 0],
+     [205, 0, 512],
+     [205, 512, 0],
+     [205, 512, 512],
+     [237, 0, 0],
+     [237, 0, 512],
+     [237, 512, 0],
+     [237, 512, 512],
+     [269, 0, 0],
+     [269, 0, 512],
+     [269, 512, 0],
+     [269, 512, 512],
+     [301, 0, 0],
+     [301, 0, 512],
+     [301, 512, 0],
+     [301, 512, 512],
+     [333, 0, 0],
+     [333, 0, 512],
+     [333, 512, 0],
+     [333, 512, 512],
+     [365, 0, 0],
+     [365, 0, 512],
+     [365, 512, 0],
+     [365, 512, 512]
+    ]
+   }
+  },
+  "hemibrain": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count. 24 of 24 tiles are kept, holding 160-306 objects.",
+   "starts": {
+    "neurons_e6712bb65fa6.h5": [
+     [826, 0, 0],
+     [826, 0, 512],
+     [826, 512, 0],
+     [826, 512, 512],
+     [858, 0, 0],
+     [858, 0, 512],
+     [858, 512, 0],
+     [858, 512, 512],
+     [890, 0, 0],
+     [890, 0, 512],
+     [890, 512, 0],
+     [890, 512, 512],
+     [922, 0, 0],
+     [922, 0, 512],
+     [922, 512, 0],
+     [922, 512, 512],
+     [954, 0, 0],
+     [954, 0, 512],
+     [954, 512, 0],
+     [954, 512, 512],
+     [986, 0, 0],
+     [986, 0, 512],
+     [986, 512, 0],
+     [986, 512, 512]
+    ]
+   }
+  },
+  "xpress": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count. 1 of 1 tiles are kept, holding 23-23 objects.",
+   "starts": {
+    "xpress-training.h5": [
+     [308, 128, 128]
+    ]
+   },
+   "crop_shapes": {
+    "xpress-training.h5": [
+     [20, 200, 200]
+    ]
+   }
+  },
+  "liconn": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 25 of 48 tiles are kept, holding 630-745 objects.",
+   "starts": {
+    "liconn.zarr": [
+     [586, 320, 384],
+     [586, 320, 896],
+     [586, 320, 1408],
+     [586, 320, 1920],
+     [586, 320, 2432],
+     [586, 320, 2944],
+     [586, 832, 384],
+     [586, 832, 896],
+     [586, 832, 1408],
+     [586, 832, 2944],
+     [586, 1344, 384],
+     [586, 1344, 896],
+     [586, 1344, 1408],
+     [586, 1344, 1920],
+     [586, 1344, 2944],
+     [586, 1856, 384],
+     [586, 1856, 1920],
+     [586, 1856, 2432],
+     [586, 1856, 2944],
+     [586, 2368, 896],
+     [586, 2368, 2944],
+     [586, 2880, 2432],
+     [586, 3392, 384],
+     [586, 3392, 2944],
+     [586, 3904, 384]
+    ]
+   }
+  },
+  "zebrafinch_j0126": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 25 of 324 tiles are kept, holding 409-827 objects.",
+   "starts": {
+    "j0126_mip0_5a3523fabf23.zarr": [
+     [512, 272, 288],
+     [512, 272, 1312],
+     [512, 1296, 288],
+     [512, 2832, 800],
+     [544, 272, 288],
+     [544, 272, 1312],
+     [544, 272, 1824],
+     [544, 1296, 288],
+     [544, 4368, 2848],
+     [576, 272, 288],
+     [576, 272, 1312],
+     [576, 784, 288],
+     [576, 1296, 2336],
+     [576, 1808, 3360],
+     [576, 2320, 3360],
+     [576, 4368, 2848],
+     [608, 272, 288],
+     [608, 272, 1312],
+     [608, 272, 1824],
+     [608, 784, 288],
+     [608, 784, 800],
+     [608, 1808, 3360],
+     [608, 2320, 3360],
+     [608, 2832, 800],
+     [608, 4368, 2848]
+    ]
+   }
+  },
+  "synapsenet_compartments": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count. 8 of 8 tiles are kept, holding 9-30 objects.",
+   "starts": {
+    "36859_H2_SP_11_rec_2Kb1dawbp_crop.h5": [
+     [3, 0, 0],
+     [35, 0, 0]
+    ],
+    "36859_J1_66K_TS_CA3_MF_19_rec_2Kb1dawbp_crop.h5": [
+     [11, 0, 0],
+     [43, 0, 0],
+     [75, 0, 0]
+    ],
+    "36859_J2_66K_TS_R04_PS11_rec_2Kb1dawbp_crop.h5": [
+     [12, 0, 0],
+     [44, 0, 0],
+     [76, 0, 0]
+    ]
+   },
+   "crop_shapes": {
+    "36859_H2_SP_11_rec_2Kb1dawbp_crop.h5": [
+     [32, 478, 479],
+     [32, 478, 479]
+    ],
+    "36859_J1_66K_TS_CA3_MF_19_rec_2Kb1dawbp_crop.h5": [
+     [32, 440, 480],
+     [32, 440, 480],
+     [32, 440, 480]
+    ],
+    "36859_J2_66K_TS_R04_PS11_rec_2Kb1dawbp_crop.h5": [
+     [32, 480, 480],
+     [32, 480, 480],
+     [32, 480, 480]
+    ]
+   }
+  },
+  "axonem": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 4 tiles are kept, holding 142-200 objects. The centred tile of im_700-3584-0_pad.h5 has blank sections (z 21, 25, 34), so its crop starts at z 35 instead.",
+   "starts": {
+    "im_700-0-3584_pad.h5": [
+     [28, 512, 512]
+    ],
+    "im_700-3584-0_pad.h5": [
+     [35, 512, 512]
+    ],
+    "im_950-0-3584_pad.h5": [
+     [29, 512, 512]
+    ],
+    "im_950-3584-0_pad.h5": [
+     [29, 512, 512]
+    ]
+   }
+  },
+  "fib25": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 16 of 16 tiles are kept, holding 584-1286 objects.",
+   "starts": {
+    "raw.h5": [
+     [4, 4, 4],
+     [36, 4, 4],
+     [68, 4, 4],
+     [100, 4, 4],
+     [132, 4, 4],
+     [164, 4, 4],
+     [196, 4, 4],
+     [228, 4, 4],
+     [260, 4, 4],
+     [292, 4, 4],
+     [324, 4, 4],
+     [356, 4, 4],
+     [388, 4, 4],
+     [420, 4, 4],
+     [452, 4, 4],
+     [484, 4, 4]
+    ]
+   }
+  },
+  "manc": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 24 of 24 tiles are kept, holding 190-462 objects.",
+   "starts": {
+    "d44819d9e109.h5": [
+     [826, 0, 0],
+     [826, 0, 512],
+     [826, 512, 0],
+     [826, 512, 512],
+     [858, 0, 0],
+     [858, 0, 512],
+     [858, 512, 0],
+     [858, 512, 512],
+     [890, 0, 0],
+     [890, 0, 512],
+     [890, 512, 0],
+     [890, 512, 512],
+     [922, 0, 0],
+     [922, 0, 512],
+     [922, 512, 0],
+     [922, 512, 512],
+     [954, 0, 0],
+     [954, 0, 512],
+     [954, 512, 0],
+     [954, 512, 512],
+     [986, 0, 0],
+     [986, 0, 512],
+     [986, 512, 0],
+     [986, 512, 512]
+    ]
+   }
+  },
+  "malecns": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 25 of 128 tiles are kept, holding 301-540 objects.",
+   "starts": {
+    "4c17ab1c9772.h5": [
+     [160, 0, 512],
+     [288, 0, 512],
+     [288, 512, 0],
+     [288, 512, 512],
+     [384, 0, 512],
+     [416, 0, 512],
+     [416, 512, 0],
+     [448, 512, 0],
+     [480, 0, 512],
+     [480, 512, 0],
+     [512, 0, 512],
+     [544, 0, 512],
+     [608, 0, 512],
+     [640, 0, 512],
+     [672, 0, 512],
+     [704, 0, 0],
+     [704, 0, 512],
+     [704, 512, 0],
+     [704, 512, 512],
+     [736, 0, 512],
+     [768, 0, 512],
+     [832, 512, 0],
+     [896, 512, 0],
+     [928, 512, 0],
+     [960, 512, 0]
+    ]
+   }
+  },
+  "wafer4": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 4 of 4 tiles are kept, holding 85-137 objects.",
+   "starts": {
+    "wafer4_inputs.h5": [
+     [100, 113, 113],
+     [100, 113, 625],
+     [100, 625, 113],
+     [100, 625, 625]
+    ]
+   },
+   "crop_shapes": {
+    "wafer4_inputs.h5": [
+     [25, 512, 512],
+     [25, 512, 512],
+     [25, 512, 512],
+     [25, 512, 512]
+    ]
+   }
+  },
+  "minnie65": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 24 of 4096 tiles are kept, holding 401-554 objects.",
+   "starts": {
+    "1573f88c7587.zarr": [
+     [0, 0, 0],
+     [0, 0, 1024],
+     [0, 1536, 512],
+     [0, 2560, 1536],
+     [192, 1024, 512],
+     [416, 3072, 512]
+    ],
+    "49705991c41e.zarr": [
+     [96, 0, 3584],
+     [96, 3072, 3584],
+     [96, 3584, 3584],
+     [128, 0, 3584],
+     [160, 0, 3584],
+     [192, 0, 3072]
+    ],
+    "5c85ec2c1e55.zarr": [
+     [32, 0, 3072],
+     [32, 0, 3584],
+     [32, 512, 512],
+     [32, 1024, 0],
+     [32, 3072, 1024],
+     [32, 3584, 2048]
+    ],
+    "99ee6e54c159.zarr": [
+     [0, 0, 512],
+     [0, 0, 2048],
+     [0, 1536, 3584],
+     [0, 3072, 3072],
+     [32, 1536, 3584],
+     [96, 3072, 0]
+    ]
+   }
+  },
+  "zebrafinch_j0251": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 25 of 128 tiles are kept, holding 313-385 objects.",
+   "starts": {
+    "j0251_mip0_4f24046ab754.zarr": [
+     [0, 0, 0],
+     [0, 0, 1536],
+     [0, 512, 0],
+     [0, 1024, 1536],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 0, 1536],
+     [32, 512, 0],
+     [32, 1024, 1536],
+     [64, 0, 512],
+     [64, 512, 0],
+     [64, 1024, 1536],
+     [64, 1536, 1536],
+     [96, 0, 512],
+     [96, 512, 0],
+     [96, 1024, 1536],
+     [128, 512, 0],
+     [160, 0, 512],
+     [160, 512, 0],
+     [160, 1024, 0],
+     [160, 1024, 1536],
+     [192, 512, 0],
+     [192, 1024, 1536],
+     [224, 512, 0],
+     [224, 1024, 1536]
+    ]
+   }
+  },
+  "wildenberg": {
+   "crop_shape": [32, 512, 512],
+   "note": "EM panel, added 2026-11-01 in place of the 8-slice center crop: the crops tile the annotation inside the test region. Tiles thinner than 16 slices or 256 px in plane and tiles with a blank section are dropped, and so are tiles with fewer than 20% of the median object count, at most 25 kept, shared over the volumes by their number of tiles (at least one each), the ones with the most objects of a volume. 8 of 9 tiles are kept, holding 3648-7752 objects.",
+   "starts": {
+    "p105_saturated_4eac7f2899e7.zarr": [
+     [120, 181, 181],
+     [120, 181, 693],
+     [120, 181, 1205],
+     [120, 693, 181],
+     [120, 693, 1205],
+     [120, 1205, 181],
+     [120, 1205, 693],
+     [120, 1205, 1205]
+    ]
+   },
+   "crop_shapes": {
+    "p105_saturated_4eac7f2899e7.zarr": [
+     [30, 512, 512],
+     [30, 512, 512],
+     [30, 512, 512],
+     [30, 512, 512],
+     [30, 512, 512],
+     [30, 512, 512],
+     [30, 512, 512],
+     [30, 512, 512]
+    ]
+   }
+  },
+  "nus_organoids": {
+   "crop_shape": [32, 512, 512],
+   "note": "Light microscopy panel, added 2026-11-02: three of the four volumes of the nucleus benchmark of the Digitalized Organoid paper with their manual labels (TM00099 is left out: its nuclei are dim and sparse, and all methods fail on it); objects below 100 voxels are specks and left out. Each axis of the annotation is split into the fewest equal tiles of at most 32 x 512 x 512, so every crop has its own shape (crop_shapes). Crops with fewer than 20% of the median object count are left out (0 of 4; the kept crops hold 38-73 nuclei).",
+   "starts": {
+    "HCT116_cells_monolayer.tif": [
+     [0, 0, 55]
+    ],
+    "Human_colon_organoid.tif": [
+     [0, 83, 155]
+    ],
+    "ZeroG_breast_cancer_spheroid.tif": [
+     [13, 147, 150],
+     [44, 147, 150]
+    ]
+   },
+   "crop_shapes": {
+    "HCT116_cells_monolayer.tif": [
+     [15, 415, 457]
+    ],
+    "Human_colon_organoid.tif": [
+     [16, 313, 208]
+    ],
+    "ZeroG_breast_cancer_spheroid.tif": [
+     [31, 224, 184],
+     [32, 224, 184]
+    ]
+   }
+  },
+  "mitolab_tem": {
+   "crop_shape": [512, 512],
+   "note": "512 x 512 tiles that cover each test image, spread evenly with a small overlap; an image axis below 512 px is one tile. 328 of 371 tiles are kept (at most 16 per image, the ones with the most objects), holding 2-86 mitochondria.",
+   "starts": {
+    "DccMhwElHJmbuS2J8lrU.tiff": [
+     [0, 512]
+    ],
+    "KDdqT7pjt4RB6DP9YhBv.tiff": [
+     [0, 0],
+     [0, 512]
+    ],
+    "gxdh9YGZMJUB58YvyzgM.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "MWyu8XxfJUz0tPpjMG68.tiff": [
+     [0, 0],
+     [0, 459],
+     [340, 0],
+     [340, 459]
+    ],
+    "sN90grldkJUpRIAJ64Bz.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "1vNHcbV4bWuC1zywuBdP.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "iidFXTWegya1bm1hl5to.tiff": [
+     [0, 0],
+     [0, 384],
+     [0, 768],
+     [284, 0],
+     [284, 384],
+     [284, 768],
+     [568, 0],
+     [568, 384],
+     [568, 768]
+    ],
+    "j1k88xV7tmKNMLM4bj1h.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0]
+    ],
+    "9SNS8ZHu7wx8HstQg2Vo.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "KYJvyQylQ6GoiyoABzCi.tiff": [
+     [0, 0],
+     [0, 342],
+     [0, 684],
+     [376, 0],
+     [376, 342],
+     [376, 684]
+    ],
+    "VFu9kl8plvKxrBEwRfhL.tiff": [
+     [0, 0],
+     [424, 0],
+     [424, 512]
+    ],
+    "qqRmOpdujNXIqEuWrFLk.tiff": [
+     [0, 0],
+     [0, 386],
+     [378, 0],
+     [378, 386],
+     [756, 0],
+     [756, 386]
+    ],
+    "HIv1HOOLTWhvBGs2GLAW.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "QWlbQZ1v00zxmk2Fp3Le.tiff": [
+     [0, 0],
+     [0, 238],
+     [145, 0],
+     [145, 238]
+    ],
+    "dYaOkBZPfpE3oHiplIst.tiff": [
+     [0, 512],
+     [512, 0]
+    ],
+    "ALknkSgr7aoWr14RfrSV.tiff": [
+     [0, 0],
+     [0, 494],
+     [334, 0],
+     [334, 494],
+     [334, 988],
+     [669, 0],
+     [669, 494],
+     [669, 988]
+    ],
+    "QLwSiZlPfFaKn9UkVw5A.tiff": [
+     [0, 0],
+     [512, 0],
+     [512, 512]
+    ],
+    "xHSMEPuKIY4T3X4UURT5.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "6plriVrEepvhHyOBmtUc.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 512]
+    ],
+    "ghAKYp44DzBUhlyn7Kec.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "7Z7jSCJZ23zSW2ZztTPJ.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "SXnwBMNzR18D8sKSjh8g.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "pLeNHL0RTZwYh5EwN7up.tiff": [
+     [0, 0]
+    ],
+    "IsdoTn0CZN3NNBHw9eHs.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "uBBsOocNXDq5poteflbh.tiff": [
+     [0, 0],
+     [128, 0]
+    ],
+    "2Tlqk9n8mmGv6G0EGxwl.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "cwpw4Zu4rqVzbTMPhql2.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "ch1HZ72XmfK9rD5K40QW.tiff": [
+     [0, 0],
+     [0, 258],
+     [0, 516],
+     [324, 0],
+     [324, 258],
+     [324, 516]
+    ],
+    "NFlQQXCuLN49baKGNHc8.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 512]
+    ],
+    "AOVAPBvPacOXcUoVM3uZ.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "TbVlEbkOaXvgqXuOC2y5.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "N9aIKs7lUVsYd6bT3LxC.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "3pbuH37yaTFrTt52QdNO.tiff": [
+     [0, 0],
+     [0, 406],
+     [390, 0],
+     [390, 406],
+     [780, 0],
+     [780, 406]
+    ],
+    "vziaz0e1YZ9BJHIY7tJV.tiff": [
+     [0, 0],
+     [512, 0]
+    ],
+    "HWJC0I0n5pPosm91fPN9.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "DprwEW2YlVIuqe8iiBUM.tiff": [
+     [0, 0],
+     [512, 0],
+     [512, 512]
+    ],
+    "kF3EaTAoYeTRf12uLsIX.tiff": [
+     [0, 0],
+     [0, 324],
+     [0, 648],
+     [494, 0],
+     [494, 324],
+     [494, 648],
+     [988, 0],
+     [988, 324],
+     [988, 648]
+    ],
+    "Gp5MEeb8iAuYfrAcOb3T.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "YnjZLcFb5mRSIQR7oTJ1.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "9jHLkwpVONtdgyvLyhds.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "GC18X3wh91fultTzXk0n.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "1unGsOC0dfeB02LCtQwi.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "AvUtncbaV60ITOmLlAkQ.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "P4f6REHlY0j5oPr8hyFr.tiff": [
+     [0, 0]
+    ],
+    "5BzcbKwHruGS296dUugB.tiff": [
+     [0, 0]
+    ],
+    "k0Ij8iyjBDimmOPwtFHL.tiff": [
+     [0, 0],
+     [0, 114],
+     [238, 0],
+     [238, 114]
+    ],
+    "3ib2iOCHNQIgrUaxnLwm.tiff": [
+     [0, 0]
+    ],
+    "bUsTjDOJHiHMPCNIWkuT.tiff": [
+     [0, 0],
+     [512, 0]
+    ],
+    "NWNws2Vo4AQhIw579f4E.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "qs9OOX5WsQhRE3Kg2rpU.tiff": [
+     [512, 512]
+    ],
+    "VcJ1fV2RlrJrmLHIzdIv.tiff": [
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "zRf1ZWOS08TxjOvROo86.tiff": [
+     [0, 0],
+     [512, 0]
+    ],
+    "V52bj9CYW97AUqevB2Rv.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "QWqaLBDT0uuxxNX25kP9.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "UH2Xa2sqyug07qibeLI2.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "d2Cvt7UfKPIAnaJGlKpw.tiff": [
+     [0, 0],
+     [0, 258],
+     [0, 516],
+     [310, 0],
+     [310, 258],
+     [310, 516]
+    ],
+    "RoECvy0RbILoKiv8jYab.tiff": [
+     [0, 0]
+    ],
+    "d7McLI44TDhNmnd1QSpo.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0]
+    ],
+    "Y5Uy1ACZO4MkqTvSzJcS.tiff": [
+     [0, 0],
+     [0, 238],
+     [142, 0],
+     [142, 238]
+    ],
+    "yayA9ov0gTMPe5oUDmCY.tiff": [
+     [0, 0],
+     [0, 157],
+     [174, 0],
+     [174, 157]
+    ],
+    "k4Uw1csHJKTrviecgXyz.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "QQZlSgIkiL7OdZ2a8oIm.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "X1DAYM5MVaMXPhpeeTBT.tiff": [
+     [0, 0],
+     [512, 0],
+     [512, 512]
+    ],
+    "TCzgvIZVHqNFtdJEPaXf.tiff": [
+     [0, 0],
+     [0, 371],
+     [404, 0],
+     [404, 371]
+    ],
+    "yn4W2WociugOlXWN83Ps.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "WCqmS6R1MFjZfQXMEbov.tiff": [
+     [0, 0],
+     [0, 48],
+     [411, 0],
+     [411, 48]
+    ],
+    "iDXfFDvQLRHsB4XZHb3A.tiff": [
+     [0, 512],
+     [512, 0]
+    ],
+    "MTeOXdixYD6o3ysTjtlY.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "v64IdYxtp9vzYzojtxir.tiff": [
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "XsisEi7EmDiq7esbhl3k.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 512]
+    ],
+    "aLriAAXSpMzI1tSLzl05.tiff": [
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "ngygM944aKxBq6rf72Zl.tiff": [
+     [0, 512],
+     [512, 0]
+    ],
+    "NpIsioJcraoQ7UM5w5KA.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "JbZdraW8jUWOkWYenUQW.tiff": [
+     [0, 0],
+     [124, 0]
+    ],
+    "17pOyGcUusCVRfzUZxTs.tiff": [
+     [0, 0],
+     [0, 73],
+     [157, 0],
+     [157, 73]
+    ],
+    "Ub2PGMk15slpiDOMy6gd.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "FJkyZfNswUHYI8UXjInE.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "1U0jYrdPwdlRDsQzkUNc.tiff": [
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "FcQtYwd3CZhEoqWrZQ6a.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "qOA9ml35XYXQjtWmFvvg.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "sXnNKReR54pzKRZ5rpfP.tiff": [
+     [0, 0],
+     [512, 0],
+     [512, 512]
+    ],
+    "hR5EYnvM2Ysjfddi9ZTt.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "pu4kmugMyXvbFtAgLogm.tiff": [
+     [512, 0],
+     [512, 512]
+    ],
+    "lCH8UM6Mv2AG7zDPrqHA.tiff": [
+     [0, 0],
+     [0, 268],
+     [0, 536],
+     [307, 0],
+     [307, 268],
+     [307, 536]
+    ],
+    "E3DjzU1Hv0lKtRerU0dr.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "XzLxoE9qQ3O9Gq28iveF.tiff": [
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "eL79mWeRWlqFAqOO6w8o.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "AH9rwncuiyjonmnTpzc6.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "snDIBSvwQMaqGKBbGF6V.tiff": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "UTbbCmNhBbRwzOznV6eM.tiff": [
+     [0, 0],
+     [0, 512]
+    ]
+   },
+   "crop_shapes": {
+    "pLeNHL0RTZwYh5EwN7up.tiff": [
+     [315, 224]
+    ],
+    "uBBsOocNXDq5poteflbh.tiff": [
+     [512, 451],
+     [512, 451]
+    ],
+    "P4f6REHlY0j5oPr8hyFr.tiff": [
+     [359, 456]
+    ],
+    "5BzcbKwHruGS296dUugB.tiff": [
+     [324, 460]
+    ],
+    "3ib2iOCHNQIgrUaxnLwm.tiff": [
+     [470, 501]
+    ],
+    "JbZdraW8jUWOkWYenUQW.tiff": [
+     [512, 449],
+     [512, 449]
+    ]
+   }
+  },
+  "probtem": {
+   "crop_shape": [512, 512],
+   "note": "512 x 512 tiles that cover each test image, spread evenly with a small overlap; an image axis below 512 px is one tile. 96 of 150 tiles are kept (at most 16 per image, the ones with the most objects), holding 1-7 mitochondria.",
+   "starts": {
+    "x_0.h5": [
+     [0, 512],
+     [0, 1024],
+     [512, 0],
+     [512, 512],
+     [512, 1024],
+     [512, 1536],
+     [512, 2048],
+     [1024, 0],
+     [1024, 512],
+     [1024, 1024],
+     [1024, 1536],
+     [1024, 2048],
+     [1536, 1536],
+     [1536, 2048],
+     [2048, 1536],
+     [2048, 2048]
+    ],
+    "x_1.h5": [
+     [0, 0],
+     [0, 512],
+     [0, 1024],
+     [0, 1536],
+     [0, 2048],
+     [512, 0],
+     [512, 1024],
+     [512, 1536],
+     [512, 2048],
+     [1024, 0],
+     [1024, 512],
+     [1536, 512],
+     [1536, 2048],
+     [2048, 512],
+     [2048, 1536],
+     [2048, 2048]
+    ],
+    "x_2.h5": [
+     [0, 0],
+     [0, 512],
+     [0, 1024],
+     [512, 0],
+     [512, 1024],
+     [1024, 0],
+     [1024, 512],
+     [1024, 1024],
+     [1024, 1536],
+     [1536, 0],
+     [1536, 512],
+     [1536, 1024],
+     [1536, 1536],
+     [2048, 512],
+     [2048, 1536],
+     [2048, 2048]
+    ],
+    "x_3.h5": [
+     [0, 0],
+     [0, 512],
+     [0, 1024],
+     [0, 1536],
+     [0, 2048],
+     [512, 0],
+     [512, 512],
+     [512, 1024],
+     [512, 1536],
+     [512, 2048],
+     [1024, 0],
+     [1024, 1024],
+     [1024, 1536],
+     [2048, 1024],
+     [2048, 1536],
+     [2048, 2048]
+    ],
+    "x_4.h5": [
+     [0, 0],
+     [0, 512],
+     [0, 1024],
+     [0, 1536],
+     [0, 2048],
+     [512, 0],
+     [512, 512],
+     [512, 1024],
+     [512, 1536],
+     [1024, 0],
+     [1024, 512],
+     [1024, 1024],
+     [1536, 1024],
+     [2048, 0],
+     [2048, 1024],
+     [2048, 2048]
+    ],
+    "x_5.h5": [
+     [0, 512],
+     [0, 1024],
+     [0, 1536],
+     [0, 2048],
+     [512, 0],
+     [512, 512],
+     [512, 1024],
+     [512, 1536],
+     [512, 2048],
+     [1024, 0],
+     [1024, 512],
+     [1024, 1536],
+     [2048, 0],
+     [2048, 512],
+     [2048, 1536],
+     [2048, 2048]
+    ]
+   }
+  },
+  "tnbc_mito": {
+   "crop_shape": [512, 512],
+   "note": "512 x 512 tiles that cover each test image, spread evenly with a small overlap; an image axis below 512 px is one tile. 136 of 552 tiles are kept (at most 16 per image, the ones with the most objects), holding 1-27 mitochondria.",
+   "starts": {
+    "wt_3_HM_2.tif": [
+     [0, 1536],
+     [512, 0],
+     [512, 512],
+     [512, 1024],
+     [1024, 0],
+     [1024, 512],
+     [1024, 1024],
+     [1024, 1536],
+     [1536, 1536]
+    ],
+    "wt_7Kx_2.tif": [
+     [0, 512],
+     [0, 1024],
+     [0, 1536],
+     [1024, 512],
+     [1024, 1024],
+     [1536, 512],
+     [1536, 1024]
+    ],
+    "wt_9_HM_2.tif": [
+     [0, 1024],
+     [512, 0],
+     [512, 1536],
+     [1024, 0],
+     [1024, 512],
+     [1024, 1024],
+     [1024, 1536],
+     [1536, 512]
+    ],
+    "R20_72_G01_2913_11.tif": [
+     [0, 512],
+     [0, 2048],
+     [0, 2560],
+     [464, 2048],
+     [464, 2560],
+     [928, 2048],
+     [1392, 1024],
+     [1392, 1536],
+     [1856, 1024],
+     [1856, 1536],
+     [1856, 2560],
+     [2320, 1536],
+     [2784, 1536],
+     [2784, 3072],
+     [3248, 3072],
+     [3248, 3584]
+    ],
+    "R20_72_G01_2913_18.tif": [
+     [928, 2560],
+     [928, 3072],
+     [1392, 0],
+     [1392, 512],
+     [1392, 1024],
+     [1392, 1536],
+     [1392, 2048],
+     [1392, 2560],
+     [1392, 3072],
+     [1392, 3584],
+     [1856, 0],
+     [1856, 512],
+     [1856, 1536],
+     [1856, 2048],
+     [1856, 2560],
+     [1856, 3072]
+    ],
+    "R20_120C_55A_01.tif": [
+     [0, 2560],
+     [0, 3072],
+     [464, 2560],
+     [464, 3072],
+     [928, 2560],
+     [928, 3072],
+     [1392, 2048],
+     [1392, 2560],
+     [1392, 3072],
+     [2320, 0],
+     [2320, 1536],
+     [2784, 1536],
+     [2784, 2048],
+     [2784, 2560],
+     [3248, 1536],
+     [3248, 3584]
+    ],
+    "R20_120E_56A_25.tif": [
+     [464, 1536],
+     [928, 1024],
+     [928, 1536],
+     [928, 2048],
+     [1392, 0],
+     [1392, 1024],
+     [1856, 512],
+     [1856, 1536],
+     [1856, 2048],
+     [2320, 512],
+     [2320, 1536],
+     [2320, 2048],
+     [2784, 0],
+     [2784, 512],
+     [2784, 3584],
+     [3248, 2560]
+    ],
+    "R20_120E_56A_39.tif": [
+     [0, 0],
+     [464, 0],
+     [464, 2560],
+     [928, 0],
+     [928, 2048],
+     [1392, 1536],
+     [1392, 2560],
+     [1392, 3072],
+     [1392, 3584],
+     [1856, 2560],
+     [1856, 3584],
+     [2320, 3072],
+     [2784, 2048],
+     [3248, 1536],
+     [3248, 2048],
+     [3712, 3584]
+    ],
+    "R20_120F_56B_32.tif": [
+     [0, 3072],
+     [464, 1024],
+     [464, 3072],
+     [928, 2560],
+     [928, 3072],
+     [1392, 2048],
+     [1392, 2560],
+     [1392, 3072],
+     [1392, 3584],
+     [1856, 3584],
+     [2320, 2560],
+     [2784, 1024],
+     [2784, 2048],
+     [2784, 2560],
+     [2784, 3072],
+     [2784, 3584]
+    ],
+    "R20_120F_56B_37.tif": [
+     [0, 2048],
+     [464, 2560],
+     [1392, 512],
+     [1392, 1024],
+     [1392, 2048],
+     [1856, 512],
+     [1856, 1024],
+     [1856, 2048],
+     [1856, 3584],
+     [2320, 2560],
+     [2784, 512],
+     [2784, 2560],
+     [2784, 3072],
+     [3248, 512],
+     [3712, 512],
+     [3712, 1536]
+    ]
+   }
+  },
+  "perez_mito": {
+   "crop_shape": [512, 512],
+   "note": "512 x 512 tiles that cover each test image, spread evenly with a small overlap; an image axis below 512 px is one tile. 151 of 160 tiles are kept (at most 16 per image, the ones with the most objects), holding 1-9 mitochondria.",
+   "starts": {
+    "000.png": [
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "001.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "002.png": [
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "003.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "004.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "005.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "006.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "007.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "008.png": [
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "009.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0]
+    ],
+    "010.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "011.png": [
+     [0, 0],
+     [0, 488],
+     [488, 488]
+    ],
+    "012.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "013.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "014.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "015.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "016.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "017.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "018.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "019.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "020.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "021.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "022.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "023.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "024.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "025.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "026.png": [
+     [0, 0],
+     [0, 488]
+    ],
+    "027.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "028.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "029.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "030.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "031.png": [
+     [0, 0],
+     [0, 488],
+     [488, 488]
+    ],
+    "032.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "033.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "034.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "035.png": [
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "036.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "037.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "038.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ],
+    "039.png": [
+     [0, 0],
+     [0, 488],
+     [488, 0],
+     [488, 488]
+    ]
+   }
+  },
+  "cardiomyocyte_tem_mito": {
+   "crop_shape": [512, 512],
+   "note": "512 x 512 tiles that cover each test image, spread evenly with a small overlap; an image axis below 512 px is one tile. 113 of 124 tiles are kept (at most 16 per image, the ones with the most objects), holding 6-88 mitochondria.",
+   "starts": {
+    "914.11_grid1_nucA_m2_M3500x_tile_y0_x0.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.11_grid1_nucA_m2_M3500x_tile_y1024_x0.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.11_grid1_nucA_m2_M3500x_tile_y1024_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.11_grid1_nucA_m2_M3500x_tile_y2048_x2048.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.11_grid4_nucA_m2_M3500x_tile_y0_x0.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.11_grid4_nucA_m2_M3500x_tile_y1024_x0.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 512]
+    ],
+    "914.11_grid4_nucA_m2_M3500x_tile_y1024_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.11_grid4_nucA_m2_M3500x_tile_y2048_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.16_18.12.2023_nucD_m2_3500x_tile_y0_x0.h5": [
+     [512, 0],
+     [512, 512]
+    ],
+    "914.16_18.12.2023_nucD_m2_3500x_tile_y0_x1024.h5": [
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.16_18.12.2023_nucD_m2_3500x_tile_y0_x2048.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.16_18.12.2023_nucD_m2_3500x_tile_y0_x3072.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.1_nucA_m3_3500x_tile_y0_x0.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.1_nucA_m3_3500x_tile_y0_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.1_nucA_m3_3500x_tile_y1024_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.1_nucA_m3_3500x_tile_y2048_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.1_nucC_m3_3500x_tile_y0_x0.h5": [
+     [0, 512],
+     [512, 512]
+    ],
+    "914.1_nucC_m3_3500x_tile_y1024_x0.h5": [
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.1_nucC_m3_3500x_tile_y2048_x0.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.22_nucC_m3_3500x_tile_y0_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.22_nucC_m3_3500x_tile_y1024_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.22_nucC_m3_3500x_tile_y2048_x0.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.22_nucC_m3_3500x_tile_y2048_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.22_nucE_m2_3500x_tile_y0_x0.h5": [
+     [512, 512]
+    ],
+    "914.22_nucE_m2_3500x_tile_y0_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.22_nucE_m2_3500x_tile_y1024_x0.h5": [
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.22_nucE_m2_3500x_tile_y1024_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.9_grid1_nucA_m3_M3500x_tile_y3072_x3072.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.9_grid1_nucA_m3_M3500x_tile_y4096_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.9_grid1_nucA_m3_M3500x_tile_y5120_x0.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ],
+    "914.9_grid1_nucA_m3_M3500x_tile_y5120_x1024.h5": [
+     [0, 0],
+     [0, 512],
+     [512, 0],
+     [512, 512]
+    ]
+   }
   }
  }
 }

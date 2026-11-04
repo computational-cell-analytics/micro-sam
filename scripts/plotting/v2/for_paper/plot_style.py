@@ -37,6 +37,11 @@ METHOD_COLORS = {
     # The EM organelle models of empanada: MitoNet violet and NucleoNet green, the hues furthest from the others.
     "MitoNet": "#9E39E6",
     "NucleoNet": "#30BF30",
+    # The feature models of the classification plots: DINOv3 indigo and UNIv2 vermilion, at least 15 OKLab units
+    # from all colors above. The end-to-end baselines are dark grey with a dashed line.
+    "DINOv3": "#1E1E9E",
+    "UNIv2": "#FF4500",
+    "End-to-end": "#52514E",
 }
 TEXT_COLOR = "#212427"
 

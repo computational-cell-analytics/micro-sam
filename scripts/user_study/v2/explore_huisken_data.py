@@ -46,6 +46,14 @@ The nuclei of the time-lapse of Beke (classic_lsm/timelapse_3-6hpf), tracked ove
     python explore_huisken_data.py --track_nuclei --tracking_mode ilp  # ILP linking, slower
     python explore_huisken_data.py --fix_tracks  # merges the short daughters and the gap links, into '*_fixed.h5'
     python explore_huisken_data.py --view_tracks  # the raw data, the tracked nuclei and the tracks in napari
+
+The stitched ExM volume of the whole specimen (exm_lsm/high_res/stitched), (1540, 955, 2394) uint16 at ~1.255 um:
+    python explore_huisken_data.py --stitched_exm  # converts the tif to a sharded OME-Zarr 0.5 next to it
+    python explore_huisken_data.py --stitched_exm --level 1  # AIS and APG on the test blocks of s1
+    python explore_huisken_data.py --stitched_exm --collect  # all levels on the s0 grid, one h5 per block for napari
+    python explore_huisken_data.py --stitched_exm --full --level 1  # AIS on the whole s1 level, in z-slabs
+    python explore_huisken_data.py --stitched_exm --clean --level 0  # removes the stripe noise objects
+    python explore_huisken_data.py --stitched_exm --add_labels  # the clean s0 segmentation as 'labels/nuclei'
 """
 
 import os
@@ -58,6 +66,7 @@ from collections import Counter
 
 import cv2
 import h5py
+import zarr
 import tifffile
 import numpy as np
 from scipy import ndimage
@@ -66,8 +75,9 @@ from skimage.filters import sato
 from skimage.measure import block_reduce
 from skimage.segmentation import find_boundaries
 
-from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
 from micro_sam.v2.batched_inference import NORMALIZATION_SAMPLE_SLICES, _volume_normalization_bounds
+from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data/huisken_data"
@@ -107,6 +117,40 @@ SMALL_DATA_PATHS = {
     "exm": os.path.join(DATA_ROOT, "exm_lsm", "low_res", "whole", "Pdu_6dpf_ExM_downsampled_nuclei-sytox-green.avi"),
     "membrane": os.path.join(DATA_ROOT, "classic_lsm", "membrane", "fused_t000050_R0001_C02_Dfinal_cropped.tif"),
 }
+# The stitched ExM volume of the whole specimen, and its OME-Zarr conversion in the same folder.
+STITCHED_EXM_DIR = os.path.join(DATA_ROOT, "exm_lsm", "high_res", "stitched")
+STITCHED_EXM_PATH = os.path.join(STITCHED_EXM_DIR, "Expanded_Platynereis.tif")
+STITCHED_EXM_ZARR_PATH = os.path.join(STITCHED_EXM_DIR, "Expanded_Platynereis.ome.zarr")
+STITCHED_EXM_LABEL_NAME = "nuclei"
+# Chunks of 2 MB (uint16) are the unit of compression and of a partial read, shards of 128 MB are the files on disk.
+STITCHED_EXM_CHUNKS = (64, 128, 128)
+STITCHED_EXM_SHARDS = (256, 512, 512)
+STITCHED_EXM_N_LEVELS = 3
+STITCHED_EXM_N_THREADS = 4
+# The test blocks on the s0 grid, nuclei are ~20 x 40 px in yx there: the packed nuclei of the left half of the
+# specimen and the scattered nuclei of the right half.
+STITCHED_EXM_BLOCKS = {
+    "dense": (slice(1100, 1228), slice(256, 768), slice(300, 812)),
+    "sparse": (slice(1150, 1278), slice(256, 768), slice(1800, 2312)),
+    # The center of 'sparse', ~56 nuclei, for a quick check of AIS and APG.
+    "sparse_small": (slice(1182, 1246), slice(384, 640), slice(1928, 2184)),
+}
+STITCHED_EXM_SEGMENT_LEVELS = (0, 1)
+STITCHED_EXM_OUTPUT_ROOT = os.path.join(OUTPUT_ROOT, "stitched_exm")
+STITCHED_EXM_VIEW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stitched_exm_h5")
+# AIS on each whole level. s0 uses the default tiling (512, halo 128, upscaled 1.33x), s1 tiles of 256 with halo 64
+# (upscaled 2.67x), so that a nucleus has the same size in the SAM input at both levels. The z-slab halos have the
+# same physical size, the slabs keep the memory of a s0 slab at ~30 GB.
+STITCHED_EXM_FULL = {
+    0: {"tile_shape": None, "halo": None, "slab_size": 128, "slab_halo": 16},
+    1: {"tile_shape": (DEFAULT_TILE_Z, 256, 256), "halo": (DEFAULT_HALO_Z, 64, 64), "slab_size": 128, "slab_halo": 8},
+}
+# The stripe noise objects in the empty slices have a contrast of 0.8-1.5 to the ring around them, the dimmest real
+# nuclei >= 4.5. The ring is measured on the s1 grid.
+STITCHED_EXM_MIN_CONTRAST = 1.5
+STITCHED_EXM_RING_WIDTH = 4
+# In um^3, about a sphere of 4.6 um diameter, far below the volume of a nucleus.
+STITCHED_EXM_SMALL_VOLUME = 50
 # The embeddings are written to the tmp folder of the job and removed after each segmentation.
 EMBEDDING_ROOT = os.environ.get("TMPDIR", tempfile.gettempdir())
 # The ZYX crops of the exm sweep: the dense, saturated nuclei on the left and the dim nuclei on the right.
@@ -316,9 +360,9 @@ def upsample_labels(segmentation, factor, shape):
     return segmentation[tuple(slice(0, size) for size in shape)]
 
 
-def segment(volume, engine, embedding_path, min_size, norm_bounds=None):
+def segment(volume, engine, embedding_path, min_size, norm_bounds=None, tile_shape=None, halo=None):
     predictor, segmenter = get_predictor_and_segmenter(model_type=MODEL_TYPE, segmentation_mode=engine, ndim=3)
-    generate_kwargs = {}
+    generate_kwargs = {"tile_shape": tile_shape, "halo": halo}
     if engine == "ais":
         generate_kwargs["n_threads"] = N_POSTPROCESSING_THREADS
         # Only the AIS post-processing takes the minimum size, None keeps the model default.
@@ -395,11 +439,10 @@ def get_volume_norm_bounds(downsample):
     return _volume_normalization_bounds(sample)
 
 
-def remove_low_contrast_objects(segmentation, volume, min_contrast=MIN_CONTRAST, ring_width=RING_WIDTH):
-    """Remove the objects that are not brighter than the background around them, in place."""
+def get_low_contrast_ids(segmentation, volume, min_contrast=MIN_CONTRAST, ring_width=RING_WIDTH):
+    """The ids of the objects that are not brighter than the background around them, and the object count."""
     removed, n_objects = [], 0
-    bboxes = ndimage.find_objects(segmentation)
-    for object_id, bbox in enumerate(bboxes, 1):
+    for object_id, bbox in enumerate(ndimage.find_objects(segmentation), 1):
         if bbox is None:
             continue
         n_objects += 1
@@ -413,12 +456,26 @@ def remove_low_contrast_objects(segmentation, volume, min_contrast=MIN_CONTRAST,
         raw = volume[bbox]
         if raw[mask].mean() < min_contrast * raw[ring].mean():
             removed.append(object_id)
+    return removed, n_objects
 
+
+def remove_ids(segmentation, ids, relabel=False):
+    """Set the objects with these ids to 0 in place, optionally make the remaining ids consecutive."""
+    lut = np.arange(int(segmentation.max()) + 1, dtype=segmentation.dtype)
+    lut[ids] = 0
+    if relabel:
+        kept = lut > 0
+        lut[kept] = np.arange(1, kept.sum() + 1, dtype=segmentation.dtype)
+    for z in range(0, segmentation.shape[0], 64):
+        segmentation[z:z + 64] = lut[segmentation[z:z + 64]]
+    return segmentation
+
+
+def remove_low_contrast_objects(segmentation, volume, min_contrast=MIN_CONTRAST, ring_width=RING_WIDTH):
+    """Remove the objects that are not brighter than the background around them, in place."""
+    removed, n_objects = get_low_contrast_ids(segmentation, volume, min_contrast, ring_width)
     if removed:
-        lut = np.arange(len(bboxes) + 1, dtype=segmentation.dtype)
-        lut[removed] = 0
-        for z in range(0, segmentation.shape[0], 64):
-            segmentation[z:z + 64] = lut[segmentation[z:z + 64]]
+        remove_ids(segmentation, removed)
     print(f"Removed {len(removed)} of {n_objects} objects with a contrast below {min_contrast}", flush=True)
     return segmentation
 
@@ -874,6 +931,306 @@ def view_small(dataset, crop, tag=None):
             if key != "raw":
                 viewer.add_labels(f[key][:], name=key)
     napari.run()
+
+
+def get_stitched_voxel_size(tif):
+    """The ZYX voxel size in um, from the ImageJ spacing and the XY resolution tags."""
+    page = tif.pages[0]
+    z = tif.imagej_metadata["spacing"]
+    y, x = (denominator / numerator for numerator, denominator in (
+        page.tags["YResolution"].value, page.tags["XResolution"].value
+    ))
+    return (z, y, x)
+
+
+def downsample_labels(labels, factor):
+    """Nearest downsampling: the voxel next to the center of each block keeps the ids intact."""
+    if factor == 1:
+        return labels
+    start = factor // 2
+    return labels[start::factor, start::factor, start::factor]
+
+
+def write_ome_zarr_pyramid(group, data, voxel_size, name, downsample, method, compressor):
+    """Write a sharded, compressed OME-Zarr 0.5 multiscale of a ZYX volume into a zarr v3 group.
+
+    The volume is written in z-slabs of one s0 shard. The shards of a level are thinner in z by its factor, so that
+    each slab fills whole shards of every level and no two threads write into the same shard.
+    """
+    factors = [2 ** level for level in range(STITCHED_EXM_N_LEVELS)]
+    slab_size = STITCHED_EXM_SHARDS[0]
+    arrays = [
+        group.create_array(
+            f"s{level}", shape=tuple(size // factor for size in data.shape), dtype=data.dtype,
+            chunks=STITCHED_EXM_CHUNKS, shards=(slab_size // factor,) + STITCHED_EXM_SHARDS[1:], compressors=compressor,
+            dimension_names=("z", "y", "x"),
+        )
+        for level, factor in enumerate(factors)
+    ]
+
+    def _write_slab(z):
+        slab = np.asarray(data[z:z + slab_size])
+        for array, factor in zip(arrays, factors):
+            stop = min((z + slab_size) // factor, array.shape[0])
+            block = slab[:(stop - z // factor) * factor, :array.shape[1] * factor, :array.shape[2] * factor]
+            array[z // factor:stop] = downsample(block, factor)
+
+    with futures.ThreadPoolExecutor(STITCHED_EXM_N_THREADS) as executor:
+        list(executor.map(_write_slab, range(0, data.shape[0], slab_size)))
+
+    multiscales = {
+        "name": name,
+        "axes": [{"name": axis, "type": "space", "unit": "micrometer"} for axis in "zyx"],
+        "datasets": [
+            {
+                "path": f"s{level}",
+                "coordinateTransformations": [
+                    {"type": "scale", "scale": [size * factor for size in voxel_size]},
+                    {"type": "translation", "translation": [size * (factor - 1) / 2 for size in voxel_size]},
+                ],
+            }
+            for level, factor in enumerate(factors)
+        ],
+        "type": method,
+    }
+    return [array.shape for array in arrays], multiscales
+
+
+def convert_stitched_exm_to_ome_zarr(tif_path=STITCHED_EXM_PATH, output_path=STITCHED_EXM_ZARR_PATH):
+    """Write the stitched tif as a sharded, compressed OME-Zarr 0.5 (zarr v3) with a 2x mean pyramid.
+
+    The tif is uncompressed and contiguous, so it is memory mapped.
+    """
+    with tifffile.TiffFile(tif_path) as tif:
+        voxel_size = get_stitched_voxel_size(tif)
+    data = tifffile.memmap(tif_path, mode="r")
+    print(f"Converting {tif_path} with shape {data.shape} and voxel size {voxel_size} um")
+
+    t0 = time.time()
+    root = zarr.open_group(output_path, mode="w", zarr_format=3)
+    compressor = zarr.codecs.BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle")
+    name = os.path.splitext(os.path.basename(tif_path))[0]
+    shapes, multiscales = write_ome_zarr_pyramid(root, data, voxel_size, name, downsample_volume, "mean", compressor)
+    root.attrs["ome"] = {"version": "0.5", "multiscales": [multiscales]}
+    print(f"Saved {output_path} in {time.time() - t0:.0f} s, levels: {shapes}")
+
+
+def add_stitched_exm_labels(segmentation_path, name=STITCHED_EXM_LABEL_NAME, output_path=STITCHED_EXM_ZARR_PATH):
+    """Add a segmentation as an OME-Zarr label image with the same pyramid as the raw, under 'labels/<name>'."""
+    with tifffile.TiffFile(STITCHED_EXM_PATH) as tif:
+        voxel_size = get_stitched_voxel_size(tif)
+    with h5py.File(segmentation_path, "r") as f:
+        segmentation = f["segmentation"][:]
+    # uint16 holds the ids of the cleaned segmentation and halves the size.
+    assert segmentation.max() < np.iinfo("uint16").max
+    segmentation = segmentation.astype("uint16")
+    print(f"Adding {segmentation_path} with {segmentation.max()} objects as 'labels/{name}'")
+
+    t0 = time.time()
+    root = zarr.open_group(output_path, mode="a", zarr_format=3)
+    assert root["s0"].shape == segmentation.shape, "The segmentation must match the s0 grid of the raw."
+    labels = root.require_group("labels")
+    if name in labels:
+        del labels[name]
+    group = labels.create_group(name)
+    # Labels compress best with byte shuffle, the ids are piecewise constant.
+    compressor = zarr.codecs.BloscCodec(cname="zstd", clevel=5, shuffle="shuffle")
+    shapes, multiscales = write_ome_zarr_pyramid(
+        group, segmentation, voxel_size, name, downsample_labels, "nearest", compressor
+    )
+    image_label = {"version": "0.5", "source": {"image": "../../"}}
+    group.attrs["ome"] = {"version": "0.5", "multiscales": [multiscales], "image-label": image_label}
+    label_names = [label for label in labels.attrs.get("ome", {}).get("labels", []) if label != name] + [name]
+    labels.attrs["ome"] = {"version": "0.5", "labels": label_names}
+    print(f"Saved {output_path}/labels/{name} in {time.time() - t0:.0f} s, levels: {shapes}")
+
+
+def convert_stitched_exm(overwrite):
+    if overwrite or not os.path.exists(STITCHED_EXM_ZARR_PATH):
+        convert_stitched_exm_to_ome_zarr()
+    else:
+        print(f"{STITCHED_EXM_ZARR_PATH} exists already, pass '--overwrite' to convert again")
+    # A new OME-Zarr has no labels, so the clean segmentation is added again if it exists.
+    clean_path = get_stitched_full_path(0).replace(".h5", "_clean.h5")
+    root = zarr.open_group(STITCHED_EXM_ZARR_PATH, mode="r")
+    has_labels = "labels" in root and STITCHED_EXM_LABEL_NAME in root["labels"]
+    if os.path.exists(clean_path) and not has_labels:
+        add_stitched_exm_labels(clean_path)
+
+
+def get_stitched_block_roi(block, level):
+    """The ROI of a block of STITCHED_EXM_BLOCKS on the grid of a pyramid level."""
+    factor = 2 ** level
+    return tuple(slice(r.start // factor, r.stop // factor) for r in STITCHED_EXM_BLOCKS[block])
+
+
+def get_stitched_block_path(block, level):
+    return os.path.join(STITCHED_EXM_OUTPUT_ROOT, f"{block}_s{level}_{MODEL_TYPE}.h5")
+
+
+def segment_stitched_exm_block(block, level, engines):
+    """Segment a block of one pyramid level of the OME-Zarr, and save the raw block and the labels on that grid."""
+    volume = zarr.open_group(STITCHED_EXM_ZARR_PATH, mode="r")[f"s{level}"][get_stitched_block_roi(block, level)]
+    print(f"Block {block} of s{level}: {volume.shape}, range [{volume.min()}, {volume.max()}]")
+    os.makedirs(STITCHED_EXM_OUTPUT_ROOT, exist_ok=True)
+    output_path = get_stitched_block_path(block, level)
+    # AIS and APG decode from the same embeddings, so they are computed once per block.
+    embedding_dir = tempfile.mkdtemp(dir=EMBEDDING_ROOT)
+    try:
+        embedding_path = os.path.join(embedding_dir, "embeddings.zarr")
+        for engine in engines:
+            segmentation = segment(volume, engine, embedding_path, min_size=None)
+            with h5py.File(output_path, "a") as f:
+                if "raw" not in f:
+                    f.create_dataset("raw", data=volume, compression="gzip")
+                if engine in f:
+                    del f[engine]
+                f.create_dataset(engine, data=segmentation, compression="gzip")
+    finally:
+        shutil.rmtree(embedding_dir)
+    print(f"Saved the raw block and the segmentations to {output_path}")
+
+
+def describe_segmentation(segmentation, voxel_volume):
+    """The object count and the quartiles of the object volumes in um^3."""
+    ids, sizes = np.unique(segmentation[segmentation > 0], return_counts=True)
+    if len(ids) == 0:
+        return "0 objects"
+    q1, median, q3 = np.percentile(sizes * voxel_volume, [25, 50, 75])
+    n_small = int((sizes * voxel_volume < STITCHED_EXM_SMALL_VOLUME).sum())
+    return f"{len(ids)} objects, volume quartiles {q1:.0f} / {median:.0f} / {q3:.0f} um^3, {n_small} under 50 um^3"
+
+
+def collect_stitched_exm_blocks(blocks, engines):
+    """Put the segmentations of every level onto the s0 grid of each block, in one h5 per block for napari."""
+    with tifffile.TiffFile(STITCHED_EXM_PATH) as tif:
+        voxel_volume = float(np.prod(get_stitched_voxel_size(tif)))
+    os.makedirs(STITCHED_EXM_VIEW_DIR, exist_ok=True)
+    for block in blocks:
+        output_path = os.path.join(STITCHED_EXM_VIEW_DIR, f"{block}.h5")
+        with h5py.File(get_stitched_block_path(block, 0), "r") as f:
+            raw = f["raw"][:]
+        with h5py.File(output_path, "w") as out:
+            out.create_dataset("raw", data=raw, compression="gzip", chunks=True)
+            for level in STITCHED_EXM_SEGMENT_LEVELS:
+                factor = 2 ** level
+                with h5py.File(get_stitched_block_path(block, level), "r") as f:
+                    for engine in engines:
+                        if engine not in f:
+                            print(f"{block} s{level} {engine}: not segmented yet, skipped")
+                            continue
+                        segmentation = f[engine][:]
+                        description = describe_segmentation(segmentation, voxel_volume * factor ** 3)
+                        print(f"{block} s{level} {engine}: {description}")
+                        segmentation = upsample_labels(segmentation, factor, raw.shape)
+                        out.create_dataset(f"s{level}_{engine}", data=segmentation, compression="gzip", chunks=True)
+        print(f"Saved {output_path}")
+
+
+def get_stitched_full_path(level):
+    return os.path.join(STITCHED_EXM_OUTPUT_ROOT, f"full_s{level}_{MODEL_TYPE}_ais.h5")
+
+
+def segment_stitched_exm_full(level):
+    """AIS on one whole pyramid level, in z-slabs that are stitched by IoU in their overlap.
+
+    The slabs are segmented one after the other, each slab is saved so that a killed run resumes.
+    """
+    settings = STITCHED_EXM_FULL[level]
+    array = zarr.open_group(STITCHED_EXM_ZARR_PATH, mode="r")[f"s{level}"]
+    # Every slab is normalized with the bounds of the whole level.
+    norm_bounds = _volume_normalization_bounds(array)
+    slabs = get_slabs((0, array.shape[0]), settings["slab_size"], settings["slab_halo"])
+    slab_dir = os.path.join(STITCHED_EXM_OUTPUT_ROOT, f"full_s{level}_slabs")
+    os.makedirs(slab_dir, exist_ok=True)
+    print(f"s{level}: {array.shape}, {len(slabs)} slabs, tiling {settings['tile_shape']} / {settings['halo']}")
+
+    for index, (start, stop, core_start, core_stop) in enumerate(slabs):
+        slab_path = os.path.join(slab_dir, f"slab_{index:03d}.h5")
+        if os.path.exists(slab_path):
+            continue
+        begin = time.time()
+        volume = array[start:stop]
+        embedding_dir = tempfile.mkdtemp(dir=EMBEDDING_ROOT)
+        try:
+            embedding_path = os.path.join(embedding_dir, "embeddings.zarr")
+            segmentation = segment(
+                volume, "ais", embedding_path, None, norm_bounds, settings["tile_shape"], settings["halo"]
+            )
+        finally:
+            shutil.rmtree(embedding_dir)
+        # Written to a tmp name first, so that a killed run never leaves a partial slab.
+        with h5py.File(slab_path + ".tmp", "w") as f:
+            f.create_dataset("segmentation", data=segmentation, compression="lzf", chunks=True)
+            f.attrs.update({"start": start, "stop": stop, "core_start": core_start, "core_stop": core_stop})
+        os.rename(slab_path + ".tmp", slab_path)
+        print(f"s{level} slab {index + 1}/{len(slabs)}: {start}-{stop} in {time.time() - begin:.0f} s", flush=True)
+
+    begin = time.time()
+    segmentation = np.zeros(array.shape, dtype="uint32")
+    offset, matches, previous = 0, [], None
+    for index, (start, stop, core_start, core_stop) in enumerate(slabs):
+        with h5py.File(os.path.join(slab_dir, f"slab_{index:03d}.h5"), "r") as f:
+            slab = f["segmentation"][:].astype("uint32")
+        # Every slab numbers its objects from 1, the offset makes the ids unique across the slabs.
+        slab[slab != 0] += np.uint32(offset)
+        if previous is not None:
+            previous_slab, previous_start, previous_stop = previous
+            matches += match_overlap(previous_slab[start - previous_start:], slab[:previous_stop - start])
+        segmentation[core_start:core_stop] = slab[core_start - start:core_stop - start]
+        offset = max(offset, int(slab.max()))
+        previous = (slab, start, stop)
+    segmentation, n_objects = merge_matched_ids(segmentation, matches, offset)
+    print(f"s{level}: {n_objects} objects, {len(matches)} matched across slabs, in {time.time() - begin:.0f} s")
+
+    output_path = get_stitched_full_path(level)
+    with h5py.File(output_path, "w") as f:
+        f.create_dataset("segmentation", data=segmentation, compression="gzip", chunks=STITCHED_EXM_CHUNKS)
+        f.attrs.update({"level": level, "n_objects": n_objects})
+    print(f"Saved {output_path}")
+
+
+def clean_stitched_exm_full(level, min_contrast=STITCHED_EXM_MIN_CONTRAST):
+    """Remove the low contrast objects of a whole level segmentation, mostly the light-sheet stripe noise in the
+    empty slices.
+
+    The contrast is measured on the s1 grid, the s0 labels keep their ids under nearest downsampling.
+    """
+    with h5py.File(get_stitched_full_path(level), "r") as f:
+        segmentation = f["segmentation"][:]
+    factor = 2 ** (1 - level)
+    volume = zarr.open_group(STITCHED_EXM_ZARR_PATH, mode="r")["s1"][:]
+    # The s1 grid drops the odd trailing s0 row of y.
+    grid = segmentation[::factor, ::factor, ::factor][tuple(slice(0, size) for size in volume.shape)]
+    removed, n_objects = get_low_contrast_ids(grid, volume, min_contrast, STITCHED_EXM_RING_WIDTH)
+    segmentation = remove_ids(segmentation, removed, relabel=True)
+    n_kept = int(segmentation.max())
+    print(f"s{level}: removed {len(removed)} of {n_objects} objects under contrast {min_contrast}, {n_kept} kept")
+
+    output_path = get_stitched_full_path(level).replace(".h5", "_clean.h5")
+    with h5py.File(output_path, "w") as f:
+        f.create_dataset("segmentation", data=segmentation, compression="gzip", chunks=STITCHED_EXM_CHUNKS)
+        f.attrs.update({"level": level, "n_objects": n_kept, "min_contrast": min_contrast})
+    print(f"Saved {output_path}")
+
+
+def explore_stitched_exm_data(args, parser):
+    blocks = args.blocks or list(STITCHED_EXM_BLOCKS)
+    if (args.full or args.clean) and args.level is None:
+        parser.error("'--full' and '--clean' need '--level'.")
+    if args.add_labels:
+        add_stitched_exm_labels(get_stitched_full_path(0).replace(".h5", "_clean.h5"))
+    elif args.clean:
+        clean_stitched_exm_full(args.level)
+    elif args.full:
+        segment_stitched_exm_full(args.level)
+    elif args.collect:
+        collect_stitched_exm_blocks(blocks, args.engines)
+    elif args.level is not None:
+        for block in blocks:
+            segment_stitched_exm_block(block, args.level, args.engines)
+    else:
+        convert_stitched_exm(args.overwrite)
 
 
 def load_embryo(volume):
@@ -1442,6 +1799,13 @@ def main():
     parser.add_argument("--fix_tracks", action="store_true", help="Merge the short daughters and the gap links.")
     parser.add_argument("--view_tracks", action="store_true", help="Show the tracked nuclei in napari.")
     parser.add_argument("--tracks_path", default=TIMELAPSE_TRACKS_PATH, help="The h5 of the tracked nuclei.")
+    parser.add_argument("--stitched_exm", action="store_true", help="Explore the stitched ExM volume of the specimen.")
+    parser.add_argument("--overwrite", action="store_true", help="Convert the stitched ExM volume again.")
+    parser.add_argument("--level", type=int, choices=STITCHED_EXM_SEGMENT_LEVELS, help="The stitched ExM level.")
+    parser.add_argument("--blocks", nargs="+", choices=tuple(STITCHED_EXM_BLOCKS), help="The stitched ExM blocks.")
+    parser.add_argument("--collect", action="store_true", help="Put the stitched block results into one h5 each.")
+    parser.add_argument("--clean", action="store_true", help="Remove the low contrast objects of the whole level.")
+    parser.add_argument("--add_labels", action="store_true", help="Add the clean s0 segmentation to the OME-Zarr.")
     args = parser.parse_args()
 
     roi = get_roi(args.start, args.shape)
@@ -1453,6 +1817,8 @@ def main():
         fix_timelapse_tracks(args.tracks_path)
     elif args.view_tracks:
         view_timelapse_tracks(args.tracks_path)
+    elif args.stitched_exm:
+        explore_stitched_exm_data(args, parser)
     elif args.embryo is not None:
         run_embryo(args, parser)
     elif args.sweep is not None or args.dataset is not None:
