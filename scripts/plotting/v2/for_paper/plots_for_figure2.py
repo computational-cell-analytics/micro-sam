@@ -48,6 +48,11 @@ from elf.evaluation import mean_segmentation_accuracy
 
 from plot_style import MAX_FONT_SIZE, METHOD_COLORS, TEXT_COLOR, set_style
 
+# The labels that have little room (the values and ranks next to the bars, the mode tags in the bars and the scores
+# on the images) are a half point smaller than all other text, which is MAX_FONT_SIZE (Constantin Pape, 2026-11-06:
+# bigger fonts).
+SMALL_FONT_SIZE = MAX_FONT_SIZE - 0.5
+
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 RESULTS_CSV = os.path.join(ROOT, "figures", "cells_automatic_segmentation_2d_results.csv")
@@ -321,27 +326,27 @@ def plot_domain(ax, results, domain, methods, value_max, positions, tick_step, r
             if mode and not short:
                 # The patch in the bar color covers the hatch under the mode name.
                 ax.text(
-                    0, position, MODE_NAMES[mode], ha="left", va="center", fontsize=6, fontweight="bold",
+                    0, position, MODE_NAMES[mode], ha="left", va="center", fontsize=SMALL_FONT_SIZE, fontweight="bold",
                     color="white", zorder=4, bbox={"boxstyle": "square,pad=0.08", "facecolor": color, "linewidth": 0},
                     transform=transforms.offset_copy(ax.transData, fig=ax.figure, x=2, units="points"),
                 )
             elif short:
                 # The mode name does not fit on the bar, so it goes after the end of the bar.
                 ax.text(
-                    values[method, mode] + 0.01, position, MODE_NAMES[mode], ha="left", va="center", fontsize=6,
-                    fontweight="bold", color=GROUP_COLOR,
+                    values[method, mode] + 0.01, position, MODE_NAMES[mode], ha="left", va="center",
+                    fontsize=SMALL_FONT_SIZE, fontweight="bold", color=GROUP_COLOR,
                 )
             # The value of the first mode is smaller and gray, so that the value of the last mode stands out.
             secondary = mode not in ("", MODES[-1])
             end = values[method, mode] + (tag_width if short else 0)
             value = ax.text(
                 end + 0.01, position, f"{values[method, mode]:.3f}", ha="left", va="center",
-                fontsize=6, color=GROUP_COLOR if secondary else TEXT_COLOR,
+                fontsize=SMALL_FONT_SIZE, color=GROUP_COLOR if secondary else TEXT_COLOR,
             )
             if ranks:
                 ax.annotate(
                     f"({rank_of[method, mode]:.1f})", xy=(1, 0.5), xycoords=value, xytext=(1.5, 0),
-                    textcoords="offset points", ha="left", va="center", fontsize=6, color=GROUP_COLOR,
+                    textcoords="offset points", ha="left", va="center", fontsize=SMALL_FONT_SIZE, color=GROUP_COLOR,
                     annotation_clip=False,
                 )
 
@@ -351,6 +356,7 @@ def plot_domain(ax, results, domain, methods, value_max, positions, tick_step, r
     ax.grid(axis="x", color="#e6e5e0", linewidth=0.5, linestyle=(0, (3, 3)), zorder=0)
     ax.set_axisbelow(True)
     ax.tick_params(axis="y", length=0)
+    ax.tick_params(axis="x", labelsize=MAX_FONT_SIZE)
     ax.set_title(DOMAIN_TITLES[domain], fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR, pad=4)
 
 
@@ -507,14 +513,14 @@ def plot_row(
                 # A narrow panel uses a smaller label, so that the label fits the band.
                 ax.text(
                     value_max / 2, rows[method], "not applicable", ha="center", va="center",
-                    fontsize=6, style="italic", color=NOT_APPLICABLE_TEXT_COLOR,
+                    fontsize=MAX_FONT_SIZE, style="italic", color=NOT_APPLICABLE_TEXT_COLOR,
                 )
         if axes:
             ax.tick_params(axis="y", labelleft=False)
         axes.append(ax)
 
     axes[0].set_yticks(y)
-    axes[0].set_yticklabels(names_of(methods, starred), fontsize=6.5)
+    axes[0].set_yticklabels(names_of(methods, starred), fontsize=MAX_FONT_SIZE)
     half = np.array([BAR_HEIGHT * n_bars.get(method, 1) / 2 for method in methods])
     axes[0].set_ylim((y - half).min() - 0.24, (y + half).max() + 0.24)
     return axes
@@ -814,13 +820,14 @@ def plot_interactive_by_domain(
             ax.set_xticks(ticks)
             ax.set_xticklabels([])
             ax.tick_params(axis="x", length=1.5)
+            ax.tick_params(axis="both", labelsize=MAX_FONT_SIZE)
             transform = ax.get_xaxis_transform()
             # Only the last row labels its iterations.
             labelled = domain == domains[-1]
             for prompt, offset in offsets.items():
                 for iteration in (0, 1, n_iterations - 1) if labelled else ():
                     ax.text(
-                        offset + iteration, -0.065, str(iteration), ha="center", va="center", fontsize=6,
+                        offset + iteration, -0.065, str(iteration), ha="center", va="center", fontsize=MAX_FONT_SIZE,
                         color=GROUP_COLOR if iteration == 0 else TEXT_COLOR, transform=transform,
                     )
                 if labelled:
@@ -835,18 +842,18 @@ def plot_interactive_by_domain(
                 if not prompts_on_top:
                     ax.text(
                         offset + (n_iterations - 1) / 2, 0.015, PROMPT_NAMES[prompt], ha="center", va="bottom",
-                        fontsize=6, style="italic", color=GROUP_COLOR, transform=transform, zorder=4,
+                        fontsize=MAX_FONT_SIZE, style="italic", color=GROUP_COLOR, transform=transform, zorder=4,
                     )
                 elif domain == domains[0]:
                     ax.text(
                         offset + (n_iterations - 1) / 2, 1.02, PROMPT_NAMES[prompt], ha="center", va="bottom",
-                        fontsize=6, style="italic", color=GROUP_COLOR, transform=transform,
+                        fontsize=MAX_FONT_SIZE, style="italic", color=GROUP_COLOR, transform=transform,
                     )
             ax.set_xlim(-0.6, last + 0.6)
             if pending:
                 ax.set_yticks([])
                 ax.text(
-                    0.5, 0.55, "Results pending", ha="center", va="center", fontsize=6, style="italic",
+                    0.5, 0.55, "Results pending", ha="center", va="center", fontsize=MAX_FONT_SIZE, style="italic",
                     color=GROUP_COLOR, transform=ax.transAxes,
                 )
             shown = [] if pending else curves_of(name, domain)
@@ -877,7 +884,9 @@ def plot_interactive_by_domain(
                 if title_line:
                     draw_title(fig, left, left + width, bottom + panel_height + TITLE_LINE_GAP, titles[name])
                 else:
-                    ax.set_title(titles[name], fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR, pad=4)
+                    # With the prompt names over the first row, the title stands above them.
+                    pad = 12 if prompts_on_top else 4
+                    ax.set_title(titles[name], fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR, pad=pad)
                 titled.add(name)
             if score_labels[name] != shared_label:
                 own_label_axes.setdefault(name, []).append(ax)
@@ -904,11 +913,11 @@ def plot_interactive_by_domain(
     for name, axes in own_label_axes.items():
         upper, lower = axes[0].get_position(), axes[-1].get_position()
         ax = axes[-1]
-        ax.set_ylabel(score_labels[name][:-2], fontsize=6, fontweight="bold", color=TEXT_COLOR)
+        ax.set_ylabel(score_labels[name][:-2], fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR)
         ax.yaxis.set_label_coords(
             -OWN_LABEL_OFFSET / (lower.width * FIGURE_WIDTH), ((upper.y1 + lower.y0) / 2 - lower.y0) / lower.height
         )
-        add_score_arrow(ax, ax.yaxis.label, score_labels[name][-1], fontsize=6)
+        add_score_arrow(ax, ax.yaxis.label, score_labels[name][-1], fontsize=MAX_FONT_SIZE)
     middle = 0.5 * (height - LEGEND_HEIGHT) / height
     score_x = INTERACTIVE_SCORE_X if score_gap is None else grid[0] - score_gap
     score = fig.text(
@@ -953,7 +962,8 @@ def add_panel_legend(ax, methods, starred, left=False, wide=False):
         place = dict(loc="lower right", bbox_to_anchor=(0.995, 0.09), ncol=2)
     legend = ax.legend(
         handles, [names[method] for method in methods], **place,
-        fontsize=6, handlelength=1.1, handletextpad=0.3, columnspacing=0.5, labelspacing=0.15, borderpad=0.25,
+        fontsize=MAX_FONT_SIZE, handlelength=1.1, handletextpad=0.3, columnspacing=0.5, labelspacing=0.15,
+        borderpad=0.25,
         frameon=True, framealpha=1, facecolor="white", edgecolor=LEGEND_BORDER_COLOR,
     )
     legend.get_frame().set_linewidth(0.6)
@@ -1055,7 +1065,7 @@ def framed_axes(fig, left, bottom, width, height):
     return ax
 
 
-def draw_score(ax, score, bold=False, fontsize=6):
+def draw_score(ax, score, bold=False, fontsize=SMALL_FONT_SIZE):
     """Write the score in the lower right corner of a panel, in white with a dark halo, in bold if 'bold'."""
     text = ax.text(
         0.96, 0.04, f"{score:.2f}", transform=ax.transAxes, ha="right", va="bottom", fontsize=fontsize,
@@ -1239,7 +1249,7 @@ def plot_automatic_qualitative(methods_of, region=None, aspect=1.0, grid=None, s
                 in_domain = domain == "ID"
                 ax.text(
                     0.5, 1.04, DATASET_NAMES.get(dataset, dataset), transform=ax.transAxes, ha="center",
-                    va="bottom", fontsize=6, color=TEXT_COLOR, style="italic" if in_domain else "normal",
+                    va="bottom", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR, style="italic" if in_domain else "normal",
                     fontweight="normal" if in_domain else "bold",
                 )
             elif method in methods_of[modality]:
@@ -1251,7 +1261,7 @@ def plot_automatic_qualitative(methods_of, region=None, aspect=1.0, grid=None, s
         name = names_of([method], starred)[0] if row else REFERENCE_NAME
         fig.text(
             (label_width - QUALITATIVE_NAME_GAP) / FIGURE_WIDTH, center(row) / height, name, ha="right", va="center",
-            rotation=90, fontsize=6.5, color=TEXT_COLOR,
+            rotation=90, fontsize=MAX_FONT_SIZE, color=TEXT_COLOR,
         )
 
     for modality in dict.fromkeys(m for _, _, m, *_ in chosen_images) if show_titles else ():
@@ -1419,7 +1429,8 @@ def plot_interactive_qualitative(region=None, grid=None, show_titles=True):
             y = top - ZOOM_CAPTION + 0.05
             name = names[method]
             fig.text(
-                x / FIGURE_WIDTH, y / height, name, ha="center", va="baseline", fontsize=6, color=TEXT_COLOR,
+                x / FIGURE_WIDTH, y / height, name, ha="center", va="baseline", fontsize=MAX_FONT_SIZE,
+                color=TEXT_COLOR,
             )
         for r, (dataset, image_name, object_id, domain) in enumerate(blocks):
             top -= (ZOOM_DOMAIN_GAP if r in domain_changes else ZOOM_ROW_GAP) * (r > 0)
@@ -1447,11 +1458,15 @@ def plot_zoom_block(fig, left, bottom, size, image_side, dataset, image_name, ob
     y1 = min(top + side - 0.5, image.shape[0] - 0.5 - inset)
     ax.add_patch(plt.Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, edgecolor=ZOOM_OBJECT_COLOR, linewidth=1.0))
     in_domain = domain == "ID"
-    ax.text(
+    name = ax.text(
         0.0, 1.0 + 0.05 / image_side, DATASET_NAMES.get(dataset, dataset), transform=ax.transAxes, ha="left",
-        va="baseline", fontsize=6, color=TEXT_COLOR, style="italic" if in_domain else "normal",
+        va="baseline", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR, style="italic" if in_domain else "normal",
         fontweight="normal" if in_domain else "bold",
     )
+    # A name wider than the image and the gap after it would run under the crops, so only such a name gets smaller.
+    width = name.get_window_extent(fig.canvas.get_renderer()).width / fig.dpi
+    if width > image_side + ZOOM_GAP:
+        name.set_fontsize(MAX_FONT_SIZE * (image_side + ZOOM_GAP) / width)
 
     # The prompt marks have a fixed size, so that they look the same in crops of any size.
     crops_left = left + image_side + ZOOM_GAP
@@ -1530,7 +1545,7 @@ PLOTS = {
 # The layout of the combined figure, in inches.
 COMBINED_NAME = "figure_2"
 COMBINED_DIR = os.path.join(ROOT, "figures", "final")
-PANEL_GAP = 0.12
+PANEL_GAP = 0.07
 # The size of the panel letters in points, as Nature asks for.
 PANEL_LABEL_SIZE = 8
 COMBINED_PAD = 0.04

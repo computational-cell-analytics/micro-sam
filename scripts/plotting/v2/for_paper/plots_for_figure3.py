@@ -91,8 +91,12 @@ PANEL_DATASETS = {
     },
     # SegNeuron also trains on the in-domain sources, so they are in domain for both methods.
     "em_neurites": {
-        "ID": ["cremi", "zebrafinch_j0126", "snemi"],
-        "OOD": ["isbi2012", "nisb", "synapseweb"],
+        # xpress is left out (user, 2026-11-05): its test data is a single 20-slice slab, where a few neurites
+        # decide the score.
+        "ID": ["cremi", "fafb", "hemibrain", "liconn", "snemi", "zebrafinch_j0126"],
+        # OOD means out of distribution for micro-sam2 (user, 2026-11-05): humanneurons (H01) is not in its training
+        # data, though SegNeuron trains on H01. It replaces cortex_human_stg, whose labels keep block-stitching seams.
+        "OOD": ["humanneurons", "ionsem", "isbi2012", "microns_basil", "nisb", "synapseweb"],
     },
 }
 
@@ -219,7 +223,7 @@ TRACING_ASPECT = 0.78  # the height to width ratio of the renders, to keep the f
 # The room around the objects, as a share of the render size.
 TRACING_PAD = 0.01
 # The method names, in points: 'nnInteractive' is as wide as a render.
-TRACING_NAME_SIZE = 6
+TRACING_NAME_SIZE = fig2.MAX_FONT_SIZE
 
 
 def prediction_path(method, dataset, sample, prompt):
@@ -378,7 +382,8 @@ def plot_tracing_block(fig, left, bottom, size, modality, dataset, sample, objec
     in_domain = domain == "ID"
     fig.text(
         (x - 0.02) / fig2.FIGURE_WIDTH, (bottom + (volume_height + gap + reference_height) / 2) / height,
-        wrapped(DATASET_NAMES[dataset], 12), rotation=90, ha="right", va="center", ma="center", fontsize=6,
+        wrapped(DATASET_NAMES[dataset], 12), rotation=90, ha="right", va="center", ma="center",
+        fontsize=fig2.MAX_FONT_SIZE,
         color=TEXT_COLOR, linespacing=1.0, style="italic" if in_domain else "normal",
         fontweight="normal" if in_domain else "bold",
     )
@@ -406,7 +411,7 @@ def plot_tracing_block(fig, left, bottom, size, modality, dataset, sample, objec
         y = bottom + (1 - row) * (tall + gap)
         fig.text(
             (methods_left - 0.02) / fig2.FIGURE_WIDTH, (y + tall / 2) / height, fig2.PROMPT_NAMES[prompt],
-            rotation=90, ha="right", va="center", fontsize=6, color=TEXT_COLOR,
+            rotation=90, ha="right", va="center", fontsize=fig2.MAX_FONT_SIZE, color=TEXT_COLOR,
         )
         for col, method in enumerate(methods):
             ax = render_axes(fig, methods_left + col * (size + gap), y, size, tall, images[method, prompt])
@@ -523,7 +528,7 @@ def plot_automatic_qualitative(region=None):
             continue
         fig.text(
             (starts[0] - 0.05) / fig2.FIGURE_WIDTH, (bottom_of(row) + size / 2) / height, name, ha="right",
-            va="center", rotation=90, fontsize=6.5, color=TEXT_COLOR,
+            va="center", rotation=90, fontsize=fig2.MAX_FONT_SIZE, color=TEXT_COLOR,
             fontweight="bold" if row == len(names) - 1 else "normal",
         )
     return fig
@@ -621,7 +626,7 @@ def plot_volume_column(fig, left, bottoms, width, size, dataset, sample, modalit
     in_domain = domain == "ID"
     fig.text(
         (left + width / 2) / fig2.FIGURE_WIDTH, (bottoms[0] + size + 0.04) / fig2.height_of(fig),
-        DATASET_NAMES[dataset], ha="center", va="baseline", fontsize=6, color=TEXT_COLOR,
+        DATASET_NAMES[dataset], ha="center", va="baseline", fontsize=fig2.MAX_FONT_SIZE, color=TEXT_COLOR,
         style="italic" if in_domain else "normal", fontweight="normal" if in_domain else "bold",
     )
 
@@ -642,10 +647,13 @@ def plot_volume_column(fig, left, bottoms, width, size, dataset, sample, modalit
         # The row names name CellposeSAM, so another baseline is named in its panel.
         if method not in ("CellposeSAM", "micro-sam2"):
             ax.text(
-                0.04, 0.96, method, transform=ax.transAxes, ha="left", va="top", fontsize=5, color=TEXT_COLOR,
+                0.04, 0.96, method, transform=ax.transAxes, ha="left", va="top",
+                fontsize=fig2.SMALL_FONT_SIZE, color=TEXT_COLOR,
                 bbox={"boxstyle": "square,pad=0.1", "facecolor": "white", "alpha": 0.8, "linewidth": 0},
             )
-        fig2.draw_score(ax, automatic_score(dataset, sample, method, metric), method == "micro-sam2", fontsize=5)
+        fig2.draw_score(
+            ax, automatic_score(dataset, sample, method, metric), method == "micro-sam2", fontsize=fig2.SMALL_FONT_SIZE
+        )
 
 
 # The plots in their order in the combined figure, with their kind and style.

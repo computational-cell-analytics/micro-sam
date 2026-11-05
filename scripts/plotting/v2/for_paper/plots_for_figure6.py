@@ -263,7 +263,8 @@ def region_score(dataset, prediction):
 def label_panel(ax, name):
     """Write a name in the upper left corner of a panel."""
     ax.text(
-        0.04, 0.96, name, transform=ax.transAxes, ha="left", va="top", fontsize=6, color=fig3.TEXT_COLOR,
+        0.04, 0.96, name, transform=ax.transAxes, ha="left", va="top", fontsize=fig2.MAX_FONT_SIZE,
+        color=fig3.TEXT_COLOR,
         bbox={"boxstyle": "square,pad=0.1", "facecolor": "white", "alpha": 0.8, "linewidth": 0},
     )
 
@@ -292,7 +293,8 @@ def plot_automatic_qualitative(region=None):
         in_domain = domain == "ID"
         fig.text(
             (start + column_width / 2) / fig2.FIGURE_WIDTH, (upper + size + 0.04) / height, QUALITATIVE_NAMES[dataset],
-            ha="center", va="baseline", fontsize=6, color=fig3.TEXT_COLOR, style="italic" if in_domain else "normal",
+            ha="center", va="baseline", fontsize=fig2.MAX_FONT_SIZE, color=fig3.TEXT_COLOR,
+            style="italic" if in_domain else "normal",
             fontweight="normal" if in_domain else "bold",
         )
 

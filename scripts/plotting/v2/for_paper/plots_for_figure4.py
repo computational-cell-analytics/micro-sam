@@ -1009,6 +1009,23 @@ COMBINED_NAME = "figure_4"
 IMAGE_DPI = 1200
 # The gap between two panels, in points. The panel letter stands in the top left corner of its panel.
 COMBINED_GAP = 7
+# The plots that hold more than one panel (Constantin Pape, 2026-11-06: object and pixel classification are panels a
+# and b): the title of the first row, and the titles of the rows that start a new panel. A new letter stands as far
+# above its row title as the letter of the plot stands above the first title.
+SPLIT_PANELS = {"classification": ("PanNuke", ["BCSS"])}
+
+
+def title_y(svg, title):
+    """Return the y of the baseline of a text of a matplotlib svg, in its user units."""
+    return float(re.search(rf'<text [^>]*y="([0-9.]+)"[^>]*>{re.escape(title)}</text>', svg).group(1))
+
+
+def panel_letter(letter, y):
+    """Return the svg text of a panel letter with its baseline at y."""
+    return (
+        f'<text x="0" y="{y:.3f}" font-family="Arial, Liberation Sans, Helvetica, sans-serif" '
+        f'font-size="{fig2.PANEL_LABEL_SIZE}" font-weight="bold" fill="{TEXT_COLOR}">{letter}</text>'
+    )
 
 
 def panel_svg(path, prefix, x, y):
@@ -1033,7 +1050,7 @@ def plot_combined():
     The panels keep their editable text, because they are nested as svg and not drawn again.
     """
     width = fig2.FIGURE_WIDTH * 72
-    parts, y = [], 0.0
+    parts, y, letters = [], 0.0, iter("abcdefgh")
     for k, (name, kind, style) in enumerate(COMBINED_PANELS):
         path = os.path.join(OUTPUT_DIR, kind, style, f"{name}.svg")
         svg, panel_width, panel_height = panel_svg(path, f"panel{k}_", 0, y)
@@ -1043,11 +1060,12 @@ def plot_combined():
         if panel_width > width + 1:
             raise ValueError(f"The panel '{name}' is {panel_width:.0f} pt wide, more than the figure ({width:.0f} pt).")
         parts.append(svg)
-        parts.append(
-            f'<text x="0" y="{y + fig2.PANEL_LABEL_SIZE:.3f}" font-family="Arial, Liberation Sans, Helvetica, '
-            f'sans-serif" font-size="{fig2.PANEL_LABEL_SIZE}" font-weight="bold" fill="{TEXT_COLOR}">'
-            f'{"abcdefgh"[k]}</text>'
-        )
+        parts.append(panel_letter(next(letters), y + fig2.PANEL_LABEL_SIZE))
+        if name in SPLIT_PANELS:
+            first, others = SPLIT_PANELS[name]
+            for title in others:
+                shift = title_y(svg, title) - title_y(svg, first)
+                parts.append(panel_letter(next(letters), y + fig2.PANEL_LABEL_SIZE + shift))
         y += panel_height + COMBINED_GAP
     height = y - COMBINED_GAP
     # As 'save_combined' of Figures 2 and 3: the page is scaled down to fit A4 if it is larger; the view box keeps the
