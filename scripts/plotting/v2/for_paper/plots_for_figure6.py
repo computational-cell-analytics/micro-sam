@@ -68,8 +68,9 @@ PANEL_METHODS = {
     "em_nuclei": ["NucleoNet", "micro-sam", "micro-sam2"],
 }
 # micro-sam2 runs a different model per organelle ('hvit_s_em_mito', 'hvit_s_em_nuclei'), so it gets a star, in all
-# plots (user, 2026-11-01). micro-sam has no star in the interactive plot (user, 2026-11-05).
-STARRED_METHODS = {"micro-sam2"}
+# plots (user, 2026-11-01). micro-sam has no star in the interactive plot (user, 2026-11-05). MitoNet and NucleoNet get
+# a cross: their inference scale is tuned per dataset on its tuning crops (Constantin Pape, 2026-11-06).
+STARRED_METHODS = {"micro-sam2": "*", "MitoNet": "\u2020", "NucleoNet": "\u2020"}
 INTERACTIVE_STARRED_METHODS = {"micro-sam2"}
 
 # The largest model of each method, as in Figure 3. SAM and micro-sam correct with clicks only, as the others do.

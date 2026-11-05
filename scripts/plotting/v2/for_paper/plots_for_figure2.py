@@ -234,9 +234,13 @@ def one_mode(results, modes):
 
 
 def names_of(methods, starred):
-    """Return the plot names of the methods, such as "μSAM2" and "CPSAM", with a star for the methods in 'starred'."""
+    """Return the plot names of the methods, such as "μSAM2" and "CPSAM", with a mark for the methods in 'starred'.
+
+    'starred' is a set of methods, which get a star, or a dict from method to its mark (such as "†").
+    """
     names = [method.replace("micro-sam", "μSAM").replace("Cellpose", "CP") for method in methods]
-    return [f"{name}*" if method in starred else name for name, method in zip(names, methods)]
+    marks = starred if isinstance(starred, dict) else {method: "*" for method in starred}
+    return [f"{name}{marks.get(method, '')}" for name, method in zip(names, methods)]
 
 
 def tick_formatter(step, zero=False):
