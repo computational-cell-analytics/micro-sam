@@ -42,6 +42,9 @@ METHOD_COLORS = {
     "DINOv3": "#1E1E9E",
     "UNIv2": "#FF4500",
     "End-to-end": "#52514E",
+    # ilastik (classical features, classification plots only) royal blue: at least 18 OKLab units from every method
+    # of those plots, also for protan and deutan vision, and at least 12 from every color above.
+    "ilastik": "#1861F2",
 }
 TEXT_COLOR = "#212427"
 

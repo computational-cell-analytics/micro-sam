@@ -98,8 +98,10 @@ FEATURES = {
     "microSAM1 (histopathology)": "micro-sam",
     "microSAM2": "micro-sam2",
     "-": "End-to-end",
+    "ilastik": "ilastik",
 }
-METHOD_ORDER = ["SAM", "SAM2", "SAM3", "DINOv3", "UNIv2", "micro-sam", "End-to-end", "micro-sam2"]
+# ilastik: a random forest on the classical filter features of ilastik (Carolin Teuber, 2026-11-06).
+METHOD_ORDER = ["SAM", "SAM2", "SAM3", "DINOv3", "UNIv2", "micro-sam", "ilastik", "End-to-end", "micro-sam2"]
 # The legend name of each method. The star marks a domain-specific model (μSAM is PathoSAM, or the LM model on BBBC041).
 METHOD_LABELS = {
     "micro-sam": "\u03bcSAM*", "micro-sam2": "\u03bcSAM2", "UNIv2": "UNIv2*", "End-to-end": "ResNet18 / U-Net",
@@ -129,12 +131,12 @@ RANK_SHIFT = 0.0
 # The (title, methods) of each card. The title breaks the top border of its card.
 LEGEND_GROUPS = [
     ("General purpose", ["SAM", "SAM2", "SAM3", "DINOv3"]), ("Domain-specific", ["UNIv2", "micro-sam"]),
-    ("Supervised", ["End-to-end"]), ("Ours", ["micro-sam2"]),
+    ("Baselines", ["ilastik", "End-to-end"]), ("Ours", ["micro-sam2"]),
 ]
 # The room above the panels and below them (for the x axis label and the legend), in inches.
 TOP_ROOM = 0.2
 BOTTOM_ROOM = 0.8
-CARD_GAP = 0.01
+CARD_GAP = 0.02
 # The card border is the legend border of Figure 2.
 CARD_EDGE_COLOR = fig2.LEGEND_BORDER_COLOR
 # The card titles use the grey of Figure 2 (contrast 5.3 on white). They start this many points right of the corner.
@@ -147,16 +149,21 @@ X_LABEL_GAP = 0.01
 PANEL_HEIGHT = 1.45
 # The rows, with their gap, fill the figure height minus the room above and below them.
 FIGURE_HEIGHT = 2 * PANEL_HEIGHT - 0.46 + TOP_ROOM + BOTTOM_ROOM
-# The bottom of the legend cards, 0.3 inch over the bottom of the figure, in figure height.
+# The bottom of the lower row of legend cards, 0.3 inch over the bottom of the figure, in figure height.
 LEGEND_Y = 0.3 / FIGURE_HEIGHT
+# The indices into LEGEND_GROUPS of each row of cards, top row first, and the distance between the bottoms of two
+# rows, in inches. One row over the whole figure width (user, 2026-11-06).
+LEGEND_ROWS = [[0, 1, 2, 3]]
+LEGEND_ROW_STEP = 0.36
 
-# The ranks compare the feature models per dataset and label count, without UNIv2 and the supervised baseline.
+# The ranks compare the feature models per dataset and label count, ilastik among them (its features go into a random
+# forest as well), without UNIv2 and the supervised baseline.
 RANK_EXCLUDED = {"UNIv2", "End-to-end"}
 # The second rank column averages over all label counts.
 ALL_COUNTS = "All counts"
 # The width of the slope chart relative to a line panel, and the smallest vertical distance between two names.
 SLOPE_WIDTH = 1.1
-LABEL_GAP = 0.3
+LABEL_GAP = 7.5  # in points: a 6 pt name with some room
 GUIDE_COLOR = "#e6e5e0"
 # The rank values next to the names: smaller and in the grey of the ranks of Figure 2 (contrast 5.3 on white).
 RANK_VALUE_COLOR = fig2.GROUP_COLOR
@@ -268,13 +275,19 @@ def legend_handle(method):
     )
 
 
-def add_card(fig, group, width=None):
+def card_y(index):
+    """Return the bottom of the legend card of LEGEND_GROUPS[index], in figure height."""
+    row = next(k for k, members in enumerate(LEGEND_ROWS) if index in members)
+    return LEGEND_Y + (len(LEGEND_ROWS) - 1 - row) * LEGEND_ROW_STEP / FIGURE_HEIGHT
+
+
+def add_card(fig, group, width=None, y=LEGEND_Y):
     """Add the legend card of a group of methods. A card with a width spreads its entries over that width."""
-    anchor = (0, LEGEND_Y) if width is None else (0, LEGEND_Y, width, 0)
+    anchor = (0, y) if width is None else (0, y, width, 0)
     legend = fig.legend(
         [legend_handle(method) for method in group], [METHOD_LABELS.get(method, method) for method in group],
         loc="lower left", bbox_to_anchor=anchor, ncol=len(group), frameon=True, fancybox=True,
-        fontsize=MAX_FONT_SIZE, handlelength=1.4, handletextpad=0.4, columnspacing=0.75, borderpad=0.4,
+        fontsize=MAX_FONT_SIZE, handlelength=1.4, handletextpad=0.4, columnspacing=1.1, borderpad=0.4,
         mode=None if width is None else "expand",
     )
     legend.get_frame().set(edgecolor=CARD_EDGE_COLOR, linewidth=0.6, facecolor="white")
@@ -282,24 +295,27 @@ def add_card(fig, group, width=None):
     return legend
 
 
-def place_cards(fig, legends, starts):
-    """Move the legend cards to these left edges, in figure width."""
-    for legend, start in zip(legends, starts):
+def place_cards(fig, legends, starts, ys):
+    """Move the legend cards to these left edges, in figure width, and these bottoms, in figure height."""
+    for legend, start, y in zip(legends, starts, ys):
         anchor = legend.get_bbox_to_anchor().transformed(fig.transFigure.inverted())
-        legend.set_bbox_to_anchor((start, LEGEND_Y, anchor.width, 0), transform=fig.transFigure)
+        legend.set_bbox_to_anchor((start, y, anchor.width, 0), transform=fig.transFigure)
 
 
-def add_legend(fig, left, keys):
-    """Add the legend as one card per group of methods, side by side and centered between left and right.
+def add_legend(fig, left, right_axes):
+    """Add the legend as one card per group of methods, in the rows of LEGEND_ROWS, each row centered between left
+    and right.
 
-    Left is the left edge of the dataset panels in figure width, and right the right edge of the key cards.
+    Left is the left edge of the dataset panels in figure width, and right the right edge of the drawn content of
+    'right_axes' (the rank charts), so that the cards spread under the whole figure.
     """
     # The cards get their size in a draw at the dpi of the png, because text widths change with the dpi.
     dpi = fig.dpi
     fig.set_dpi(plt.rcParams["savefig.dpi"])
     renderer = fig.canvas.get_renderer()
     title_font = font_manager.FontProperties(size=6, weight="bold")
-    legends = [add_card(fig, group) for _, group in LEGEND_GROUPS]
+    ys = [card_y(index) for index in range(len(LEGEND_GROUPS))]
+    legends = [add_card(fig, group, y=y) for (_, group), y in zip(LEGEND_GROUPS, ys)]
     fig.canvas.draw()
     # A card that is narrower than its title, with an inset on both sides, is made as wide as that.
     for index, (title, group) in enumerate(LEGEND_GROUPS):
@@ -309,21 +325,25 @@ def add_legend(fig, left, keys):
         if needed > width:
             # The expanded card loses its border padding, so its width is set again with the measured shortfall.
             legends[index].remove()
-            legends[index] = add_card(fig, group, width=needed / fig.bbox.width)
+            legends[index] = add_card(fig, group, width=needed / fig.bbox.width, y=ys[index])
             fig.canvas.draw()
             shortfall = needed - legends[index].get_frame().get_window_extent(renderer).width
             legends[index].remove()
-            legends[index] = add_card(fig, group, width=(needed + shortfall) / fig.bbox.width)
+            legends[index] = add_card(fig, group, width=(needed + shortfall) / fig.bbox.width, y=ys[index])
     fig.canvas.draw()
     widths = [legend.get_window_extent(renderer).width / fig.bbox.width for legend in legends]
-    right = max(key.get_legend().get_frame().get_window_extent(renderer).x1 for key in keys) / fig.bbox.width
-    starts = np.cumsum([0] + [width + CARD_GAP for width in widths[:-1]])
-    place_cards(fig, legends, starts)
-    # The rounded borders stand out of the measured cards, so the row is centered again on the drawn borders.
+    right = max(ax.get_tightbbox(renderer).x1 for ax in right_axes) / fig.bbox.width
+    starts = np.zeros(len(legends))
+    for members in LEGEND_ROWS:
+        starts[members] = np.cumsum([0] + [widths[k] + CARD_GAP for k in members[:-1]])
+    place_cards(fig, legends, starts, ys)
+    # The rounded borders stand out of the measured cards, so each row is centered again on the drawn borders.
     fig.canvas.draw()
-    frames = [legend.get_frame().get_window_extent(renderer) for legend in legends]
-    drawn = (min(frame.x0 for frame in frames) + max(frame.x1 for frame in frames)) / 2 / fig.bbox.width
-    place_cards(fig, legends, starts + (left + right) / 2 - drawn)
+    for members in LEGEND_ROWS:
+        frames = [legends[k].get_frame().get_window_extent(renderer) for k in members]
+        drawn = (min(frame.x0 for frame in frames) + max(frame.x1 for frame in frames)) / 2 / fig.bbox.width
+        starts[members] += (left + right) / 2 - drawn
+    place_cards(fig, legends, starts, ys)
     # The title stands on the top border near the left corner, on a white box that hides the border under it.
     fig.canvas.draw()
     for legend, (title, _) in zip(legends, LEGEND_GROUPS):
@@ -379,8 +399,12 @@ def plot_rank_slope(ax, tables, column_names, title=None):
         )
     renderer = ax.figure.canvas.get_renderer()
     value_font = font_manager.FontProperties(size=RANK_VALUE_SIZE)
+    # The gap between two names in rank units: LABEL_GAP points over the height of the chart.
+    low, high = ax.get_ylim()
+    gap = LABEL_GAP / 72 * abs(high - low) / ax.get_window_extent().transformed(
+        ax.figure.dpi_scale_trans.inverted()).height
     for x, column, side in ((0, columns[0], "right"), (1, columns[1], "left")):
-        positions = spread({method: column[method] for method in methods}, LABEL_GAP)
+        positions = spread({method: column[method] for method in methods}, gap)
         offset = -0.07 if side == "right" else 0.07
         for method in methods:
             # The value stands next to the line and the name next to the value, with a gap of 1.5 points.
@@ -441,7 +465,7 @@ def plot_classification():
         (first.x0 + last.x1) / 2, first.y0 - X_LABEL_GAP, "Method", ha="center", va="top", fontsize=MAX_FONT_SIZE,
         fontweight="bold", color=TEXT_COLOR,
     )
-    add_legend(fig, panels[0].get_position().x0, keys)
+    add_legend(fig, panels[0].get_position().x0, ranks)
     return fig
 
 
