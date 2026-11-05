@@ -50,9 +50,9 @@ QUALITATIVE_PREDICTIONS = os.path.join(EXPERIMENTS, "qualitative_3d", "out")
 
 # The (category, structure, title, score column, score label) of each modality. The EM cells go to the supplement.
 PANELS = {
-    "fluorescence_cells": ("fluorescence", "cell", "Fluorescence (Cell)", "msa", "Mean Segmentation Accuracy ↑"),
-    "fluorescence_nuclei": ("fluorescence", "nucleus", "Fluorescence (Nucleus)", "msa", "Mean Segmentation Accuracy ↑"),
-    "em_neurites": ("EM", "neurite", "Electron Microscopy (Neurite)", "cremi", "CREMI Score ↓"),
+    "fluorescence_cells": ("fluorescence", "cell", "Fluorescence (cell)", "msa", "Mean segmentation accuracy ↑"),
+    "fluorescence_nuclei": ("fluorescence", "nucleus", "Fluorescence (nucleus)", "msa", "Mean segmentation accuracy ↑"),
+    "em_neurites": ("EM", "neurite", "Electron microscopy (neurite)", "cremi", "CREMI score ↓"),
 }
 
 # The 'method', 'model' and 'mode' values of each automatic method in the 3d results.
@@ -529,7 +529,6 @@ def plot_automatic_qualitative(region=None):
         fig.text(
             (starts[0] - 0.05) / fig2.FIGURE_WIDTH, (bottom_of(row) + size / 2) / height, name, ha="right",
             va="center", rotation=90, fontsize=fig2.MAX_FONT_SIZE, color=TEXT_COLOR,
-            fontweight="bold" if row == len(names) - 1 else "normal",
         )
     return fig
 
@@ -652,7 +651,7 @@ def plot_volume_column(fig, left, bottoms, width, size, dataset, sample, modalit
                 bbox={"boxstyle": "square,pad=0.1", "facecolor": "white", "alpha": 0.8, "linewidth": 0},
             )
         fig2.draw_score(
-            ax, automatic_score(dataset, sample, method, metric), method == "micro-sam2", fontsize=fig2.SMALL_FONT_SIZE
+            ax, automatic_score(dataset, sample, method, metric), fontsize=fig2.SMALL_FONT_SIZE
         )
 
 
