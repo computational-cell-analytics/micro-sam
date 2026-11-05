@@ -168,7 +168,7 @@ INTERACTIVE_QUALITATIVE = {
     ],
     "fluorescence_nuclei": [
         ("embedseg_platy_nuclei", 1, (102, 119), "ID"),
-        ("parhyale_regen", 2, (33, 36), "OOD"),
+        ("nus_organoids", 1, (18, 28), "OOD"),
     ],
     "em_neurites": [
         ("snemi", 1, (39, 56), "ID"),
@@ -201,7 +201,7 @@ DATASET_NAMES = {
     "pnas_arabidopsis": "PNAS Arabidopsis",
     "plantseg_ovules": "PlantSeg Ovules",
     "embedseg_platy_nuclei": "EmbedSeg Platynereis",
-    "parhyale_regen": "Parhyale Regen",
+    "nus_organoids": "NUS Organoids",
     "snemi": "SNEMI3D",
     "isbi2012": "ISBI 2012",
     "embedseg_organoid": "EmbedSeg Organoid",
@@ -216,7 +216,7 @@ TRACING_GAP = 0.02
 TRACING_MIN_REFERENCE = 0.22  # the least height of the reference over the volume
 TRACING_REFERENCE_MARGIN = 0.1  # the room around the reference, as a share of its render
 # The datasets whose renders are cut around the objects of all methods.
-FIT_ALL = {"parhyale_regen"}
+FIT_ALL = set()
 # The datasets whose two objects stand far apart: the share of the gap between them that their renders close.
 OBJECT_GAPS = {"plantseg_ovules": 0.6}
 TRACING_ASPECT = 0.78  # the height to width ratio of the renders, to keep the figure within a page
