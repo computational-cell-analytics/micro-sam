@@ -71,14 +71,19 @@ FIGURES = os.path.join(ROOT, "figures")
 OUTPUT_DIR = os.path.join(FIGURES, "figure4")
 
 # The (table, title, datasets) of each row. Each dataset maps to its panel title.
+# The unit of the label counts of each row, as the title of its key, and the fewest labels as the rank column.
+UNITS = {"object": "# Objects", "pixel": "# Pixels"}
+FEWEST = {"object": "25 objects", "pixel": "100 pixels"}
+# The score: the F1 per class, averaged over the classes, computed over the objects or over the pixels.
+SCORE_NAME = "Mean F1 \u2191"
 ROWS = {
     "object": (
-        "object_classification_results.csv", "Object Classification",
-        {"pannuke": "PanNuke", "puma": "PUMA (Nuclei)", "bbbc041": "BBBC041"},
+        "object_classification_results.csv", "Object classification",
+        {"pannuke": "PanNuke", "puma": "PUMA (nuclei)", "bbbc041": "BBBC041"},
     ),
     "pixel": (
-        "pixel_classification_results.csv", "Pixel Classification",
-        {"bcss": "BCSS", "puma_tissue": "PUMA (Tissue)", "ignite": "IGNITE"},
+        "pixel_classification_results.csv", "Pixel classification",
+        {"bcss": "BCSS", "puma_tissue": "PUMA (tissue)", "ignite": "IGNITE"},
     ),
 }
 
@@ -97,7 +102,7 @@ FEATURES = {
 METHOD_ORDER = ["SAM", "SAM2", "SAM3", "DINOv3", "UNIv2", "micro-sam", "End-to-end", "micro-sam2"]
 # The legend name of each method. The star marks a domain-specific model (μSAM is PathoSAM, or the LM model on BBBC041).
 METHOD_LABELS = {
-    "micro-sam": "\u03bcSAM*", "micro-sam2": "\u03bcSAM2", "UNIv2": "UNIv2*", "End-to-end": "Baseline",
+    "micro-sam": "\u03bcSAM*", "micro-sam2": "\u03bcSAM2", "UNIv2": "UNIv2*", "End-to-end": "ResNet18 / U-Net",
 }
 # The slot of a method: its width, the background, and the shade of the fewest labels (0 white, 1 full color).
 SLOT_WIDTH = 0.82
@@ -114,20 +119,21 @@ DOT_SIZES = (4, 16)
 # The key right of each row names the number of labels of each dot, drawn in a neutral grey.
 KEY_WIDTH = 0.2
 KEY_COLOR = "#52514E"
-KEY_FONT_SIZE = 5.5
+KEY_FONT_SIZE = 6
 # The key moves this far left (in figure width) into the gap after the third panel, to stand close to it.
 KEY_SHIFT = 0.025
 # The rank charts start this much further left (in figure width), closer to the keys, and keep their right edge.
-RANK_SHIFT = 0.03
-OUR_DOT_SIZES = (7, 26)
+RANK_SHIFT = 0.0
 
 # The legend has one card per group of methods. The gap between two cards is in figure width.
 # The (title, methods) of each card. The title breaks the top border of its card.
 LEGEND_GROUPS = [
-    ("General Purpose", ["SAM", "SAM2", "SAM3", "DINOv3"]), ("Domain-Specific", ["UNIv2", "micro-sam"]),
+    ("General purpose", ["SAM", "SAM2", "SAM3", "DINOv3"]), ("Domain-specific", ["UNIv2", "micro-sam"]),
     ("Supervised", ["End-to-end"]), ("Ours", ["micro-sam2"]),
 ]
-LEGEND_Y = 0.093
+# The room above the panels and below them (for the x axis label and the legend), in inches.
+TOP_ROOM = 0.2
+BOTTOM_ROOM = 0.8
 CARD_GAP = 0.01
 # The card border is the legend border of Figure 2.
 CARD_EDGE_COLOR = fig2.LEGEND_BORDER_COLOR
@@ -135,19 +141,26 @@ CARD_EDGE_COLOR = fig2.LEGEND_BORDER_COLOR
 CARD_TITLE_COLOR = fig2.GROUP_COLOR
 CARD_TITLE_INSET = 5
 
+# The gap from the bottom row to the x axis label, in figure height.
+X_LABEL_GAP = 0.01
 # The panel size in inches, for three panels in the double column width of 183 mm.
 PANEL_HEIGHT = 1.45
+# The rows, with their gap, fill the figure height minus the room above and below them.
+FIGURE_HEIGHT = 2 * PANEL_HEIGHT - 0.46 + TOP_ROOM + BOTTOM_ROOM
+# The bottom of the legend cards, 0.3 inch over the bottom of the figure, in figure height.
+LEGEND_Y = 0.3 / FIGURE_HEIGHT
 
 # The ranks compare the feature models per dataset and label count, without UNIv2 and the supervised baseline.
 RANK_EXCLUDED = {"UNIv2", "End-to-end"}
-RANK_COLUMNS = ["Few Labels", "All Labels"]
+# The second rank column averages over all label counts.
+ALL_COUNTS = "All counts"
 # The width of the slope chart relative to a line panel, and the smallest vertical distance between two names.
 SLOPE_WIDTH = 1.1
 LABEL_GAP = 0.3
 GUIDE_COLOR = "#e6e5e0"
 # The rank values next to the names: smaller and in the grey of the ranks of Figure 2 (contrast 5.3 on white).
 RANK_VALUE_COLOR = fig2.GROUP_COLOR
-RANK_VALUE_SIZE = 5
+RANK_VALUE_SIZE = 6
 
 
 def load_results(table):
@@ -161,7 +174,12 @@ def load_results(table):
         part.columns = ["dataset", "method", "mean", "std"]
         part["budget"] = budget
         rows.append(part)
-    return pd.concat(rows).dropna(subset=["mean"]), budgets
+    rows = pd.concat(rows).dropna(subset=["mean"])
+    # A label count that only the supervised baseline has (all labels of the pixel tasks) is left out: no feature
+    # model can be compared with it.
+    features = rows[rows["method"] != "End-to-end"]
+    budgets = [budget for budget in budgets if budget in set(features["budget"])]
+    return rows[rows["budget"].isin(budgets)], budgets
 
 
 def shade(color, fraction):
@@ -178,7 +196,7 @@ def budget_label(budget):
     return f"{value // 1000}k" if value >= 1000 else str(value)
 
 
-def plot_key(ax, budgets):
+def plot_key(ax, budgets, unit):
     """Plot a card with the dot of each number of labels from top (most) to bottom (fewest), with its name.
 
     The card stands in the vertical middle of its row.
@@ -196,8 +214,9 @@ def plot_key(ax, budgets):
     legend = ax.legend(
         handles[::-1], labels[::-1], loc="center left", bbox_to_anchor=(0, 0.5), frameon=True, fancybox=True,
         fontsize=KEY_FONT_SIZE, handlelength=0.9, handletextpad=0.15, labelspacing=0.9, borderpad=0.4,
-        borderaxespad=0,
+        borderaxespad=0, title=unit, title_fontsize=KEY_FONT_SIZE,
     )
+    legend.get_title().set_color(KEY_COLOR)
     legend.get_frame().set(edgecolor=CARD_EDGE_COLOR, linewidth=0.6, facecolor="white")
     legend.get_frame().set_boxstyle("round", pad=0.2, rounding_size=0.4)
     for text in legend.get_texts():
@@ -214,20 +233,19 @@ def plot_panel(ax, results, budgets):
             ax.axvspan(slot - SLOT_SPAN, slot + SLOT_SPAN, color=NOT_APPLICABLE_COLOR, linewidth=0, zorder=0)
             ax.text(
                 slot, 0.5, "not applicable", transform=ax.get_xaxis_transform(), rotation=90, ha="center",
-                va="center", fontsize=5, style="italic", color=NOT_APPLICABLE_TEXT_COLOR,
+                va="center", fontsize=6, style="italic", color=NOT_APPLICABLE_TEXT_COLOR,
             )
             continue
         ax.axvspan(slot - SLOT_SPAN, slot + SLOT_SPAN, color=SLOT_COLOR, linewidth=0, zorder=0)
         steps = np.array([budgets.index(budget) for budget in curve.index])
         x = slot - SLOT_WIDTH / 2 + SLOT_WIDTH * steps / (len(budgets) - 1)
-        ours = method == "micro-sam2"
         color = METHOD_COLORS[method]
         ax.errorbar(
-            x, curve["mean"], yerr=curve["std"], color=color, linewidth=1.4 if ours else 0.7, elinewidth=0.5,
+            x, curve["mean"], yerr=curve["std"], color=color, linewidth=0.7, elinewidth=0.5,
             capsize=0, linestyle=(0, (3, 1.5)) if method == "End-to-end" else "-", zorder=2,
         )
         fractions = steps / (len(budgets) - 1)
-        smallest, largest = OUR_DOT_SIZES if ours else DOT_SIZES
+        smallest, largest = DOT_SIZES
         ax.scatter(
             x, curve["mean"], s=smallest + (largest - smallest) * fractions,
             color=[shade(color, fraction) for fraction in fractions], edgecolor=color, linewidth=0.7, zorder=3,
@@ -244,9 +262,8 @@ def legend_handle(method):
 
     The short handle uses shorter dashes than the plot, so that the dashes of the baseline stay visible.
     """
-    ours = method == "micro-sam2"
     return plt.Line2D(
-        [], [], color=METHOD_COLORS[method], marker="o", markersize=4 if ours else 3, linewidth=1.4 if ours else 0.7,
+        [], [], color=METHOD_COLORS[method], marker="o", markersize=3, linewidth=0.7,
         markeredgecolor=METHOD_COLORS[method], linestyle=(0, (1.2, 0.8)) if method == "End-to-end" else "-",
     )
 
@@ -262,9 +279,6 @@ def add_card(fig, group, width=None):
     )
     legend.get_frame().set(edgecolor=CARD_EDGE_COLOR, linewidth=0.6, facecolor="white")
     legend.get_frame().set_boxstyle("round", pad=0.2, rounding_size=0.4)
-    for text in legend.get_texts():
-        if text.get_text() == METHOD_LABELS["micro-sam2"]:
-            text.set_fontweight("bold")
     return legend
 
 
@@ -350,7 +364,7 @@ def spread(values, gap):
     return positions
 
 
-def plot_rank_slope(ax, tables, title=None, columns_named=True):
+def plot_rank_slope(ax, tables, column_names, title=None):
     """Plot the mean rank of each feature model with the fewest labels and over all label counts."""
     columns = [mean_ranks(tables, lowest) for lowest in (True, False)]
     methods = [method for method in METHOD_ORDER if method in columns[0].index]
@@ -360,7 +374,7 @@ def plot_rank_slope(ax, tables, title=None, columns_named=True):
         ours = method == "micro-sam2"
         ax.plot(
             [0, 1], [columns[0][method], columns[1][method]], color=METHOD_COLORS[method],
-            linewidth=2.0 if ours else 1.0, marker="o", markersize=4.5 if ours else 3, markeredgecolor="white",
+            linewidth=1.0, marker="o", markersize=3, markeredgecolor="white",
             markeredgewidth=0.6, solid_capstyle="round", zorder=3 if ours else 2,
         )
     renderer = ax.figure.canvas.get_renderer()
@@ -374,15 +388,14 @@ def plot_rank_slope(ax, tables, title=None, columns_named=True):
             value = f"({column[method]:.1f})"
             ax.annotate(value, anchor, ha=side, va="center", fontsize=RANK_VALUE_SIZE, color=RANK_VALUE_COLOR)
             width = renderer.get_text_width_height_descent(value, value_font, ismath=False)[0]
-            width = width * 72 / renderer.dpi + 1.5
+            width = width * 72 / renderer.dpi + 3
             ax.annotate(
                 METHOD_LABELS.get(method, method), anchor, xytext=(-width if side == "right" else width, 0),
                 textcoords="offset points", ha=side, va="center", fontsize=6, color=TEXT_COLOR,
-                fontweight="bold" if method == "micro-sam2" else "normal",
             )
     ax.invert_yaxis()
     ax.set_xlim(-0.75, 1.75)
-    ax.set_xticks([0, 1], RANK_COLUMNS if columns_named else ["", ""])
+    ax.set_xticks([0, 1], column_names)
     ax.tick_params(axis="x", length=0, labelsize=6, pad=2)
     if title:
         ax.set_title(title, fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR, pad=4)
@@ -393,7 +406,7 @@ def plot_rank_slope(ax, tables, title=None, columns_named=True):
 
 def plot_classification():
     """Plot the object classification row over the pixel classification row."""
-    fig = plt.figure(figsize=(fig2.FIGURE_WIDTH, len(ROWS) * PANEL_HEIGHT + 0.4))
+    fig = plt.figure(figsize=(fig2.FIGURE_WIDTH, FIGURE_HEIGHT))
     grid = fig.add_gridspec(
         len(ROWS), 5, hspace=0.35, wspace=0.22, width_ratios=[1, 1, 1, KEY_WIDTH, SLOPE_WIDTH]
     )
@@ -401,25 +414,33 @@ def plot_classification():
     for row, ((_, (_, row_title, datasets)), (results, budgets)) in enumerate(zip(ROWS.items(), tables)):
         row_axes = [fig.add_subplot(grid[row, column]) for column in range(3)]
         panels = row_axes
-        row_axes[0].set_ylabel(f"{row_title}\nScore", fontsize=6, fontweight="bold", color=TEXT_COLOR)
+        row_axes[0].set_ylabel(f"{row_title}\n{SCORE_NAME}", fontsize=6, fontweight="bold", color=TEXT_COLOR)
         for ax, (dataset, title) in zip(row_axes, datasets.items()):
             plot_panel(ax, results[results["dataset"] == dataset], budgets)
             ax.set_title(title, fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR, pad=4)
     keys = [fig.add_subplot(grid[row, 3]) for row in range(len(tables))]
     ranks = []
-    for row, table in enumerate(tables):
+    for row, (kind, table) in enumerate(zip(ROWS, tables)):
         # Only the top chart has the title; both charts name the columns.
         ranks.append(fig.add_subplot(grid[row, 4]))
-        plot_rank_slope(ranks[-1], [table], title="Mean Rank" if row == 0 else None, columns_named=True)
-    fig.subplots_adjust(left=0.08, right=0.99, top=0.94, bottom=0.2)
+        plot_rank_slope(ranks[-1], [table], [FEWEST[kind], ALL_COUNTS], title="Mean rank" if row == 0 else None)
+    fig.subplots_adjust(
+        left=0.08, right=0.975, top=1 - TOP_ROOM / FIGURE_HEIGHT, bottom=BOTTOM_ROOM / FIGURE_HEIGHT
+    )
     for key in keys:
         position = key.get_position()
         key.set_position([position.x0 - KEY_SHIFT, position.y0, position.width, position.height])
     for rank in ranks:
         position = rank.get_position()
         rank.set_position([position.x0 - RANK_SHIFT, position.y0, position.width + RANK_SHIFT, position.height])
-    for key, (_, budgets) in zip(keys, tables):
-        plot_key(key, budgets)
+    for key, unit, (_, budgets) in zip(keys, UNITS.values(), tables):
+        plot_key(key, budgets, unit)
+    # The x axis of the dataset panels: one slot per method. The label stands once under the bottom row.
+    first, last = panels[0].get_position(), panels[-1].get_position()
+    fig.text(
+        (first.x0 + last.x1) / 2, first.y0 - X_LABEL_GAP, "Method", ha="center", va="top", fontsize=MAX_FONT_SIZE,
+        fontweight="bold", color=TEXT_COLOR,
+    )
     add_legend(fig, panels[0].get_position().x0, keys)
     return fig
 
@@ -428,11 +449,12 @@ def plot_classification():
 QUALITATIVE = [
     (
         "bcss", 1000, "TCGA-E2-A14X-DX1_xmin88836_ymin66393_MPP-0.2500_2_1",
-        "TCGA-AQ-A54N-DX1_xmin32440_ymin26558_MPP-0.2500_0_3", "Pixel Classification\n(BCSS)",
+        "TCGA-AQ-A54N-DX1_xmin32440_ymin26558_MPP-0.2500_0_3", "Pixel classification\n(BCSS)",
     ),
-    ("pannuke", 100, "fold_3_1675", "fold_1_0782", "Object Classification\n(PanNuke)"),
+    ("pannuke", 100, "fold_3_1675", "fold_1_0782", "Object classification\n(PanNuke)"),
 ]
-QUALITATIVE_COLUMNS = ["Training Strokes", "Training Reference", "Test Image", "Test Reference"]
+ANNOTATIONS = "User annotations"
+QUALITATIVE_COLUMNS = [ANNOTATIONS, "Training reference", "Test image", "Test reference"]
 # The methods shown on the test crop, after the reference columns, with their column title.
 QUALITATIVE_METHODS = {"micro-sam2": "\u03bcSAM2"}
 # The strokes are drawn thicker with a white edge, so that they stay visible on dark tissue. This is only the display.
@@ -441,31 +463,26 @@ PIXEL_STROKE_EDGE = 2
 OBJECT_STROKE_EDGE = "#ffffff"
 
 
-# The part of the long axis of an object that its stroke line covers.
-OBJECT_STROKE_LENGTH = 0.7
+# The radius of the point that marks an annotated object, in pixels of the tile.
+OBJECT_POINT_RADIUS = 5
 
 
 def object_stroke_overlay(image, strokes, instances):
-    """Draw the stroke of each stroked object as a thin line along its long axis, with a white edge."""
-    from skimage.draw import line
+    """Draw each annotated object as a point at its center in its class color, with a white edge.
+
+    An object label belongs to the whole object, so the figure shows it as one point and not as the stroke.
+    """
+    from skimage.draw import disk as disk_at
     from skimage.measure import regionprops
     from skimage.morphology import dilation, disk
-    center = np.zeros(strokes.shape, dtype="uint8")
+    core = np.zeros(strokes.shape, dtype="uint8")
     for prop in regionprops(instances):
         values = strokes[instances == prop.label]
         values = values[values > 0]
         if len(values) == 0:
             continue
-        cy, cx = prop.centroid
-        # The long axis points along (cos, sin) of the orientation in (row, column) order.
-        dr, dc = np.cos(prop.orientation), np.sin(prop.orientation)
-        half = OBJECT_STROKE_LENGTH * prop.axis_major_length / 2
-        start = (int(round(cy - half * dr)), int(round(cx - half * dc)))
-        end = (int(round(cy + half * dr)), int(round(cx + half * dc)))
-        rr, cc = line(*start, *end)
-        keep = (rr >= 0) & (rr < center.shape[0]) & (cc >= 0) & (cc < center.shape[1])
-        center[rr[keep], cc[keep]] = np.bincount(values).argmax()
-    core = dilation(center, disk(1))
+        rr, cc = disk_at(prop.centroid, OBJECT_POINT_RADIUS, shape=core.shape)
+        core[rr, cc] = np.bincount(values).argmax()
     edge = dilation(core > 0, disk(2)) & (core == 0)
     out = image.copy()
     out[edge] = np.array(colors.to_rgb(OBJECT_STROKE_EDGE)) * 255
@@ -487,10 +504,19 @@ CLASS_COLORS = [
     "#E69F00", "#0072B2", "#009E73", "#CC79A7", "#F0E442", "#7F3C8D", "#56B4E9", "#8C564B", "#7F7F7F", "#11A579",
 ]
 CLASS_ALPHA = 0.45
+# The nuclei get a stronger fill and a dark outline, so that their class colors stand out on H&E.
+OBJECT_ALPHA = 0.8
+OBJECT_OUTLINE = "#1a1a1a"
 
 
-def class_overlay(image, labels, instances=None, alpha=CLASS_ALPHA):
-    """Blend the class colors over the image; objects get an opaque outline in their class color."""
+def class_overlay(image, labels, instances=None, alpha=None, dark_outline=True):
+    """Blend the class colors over the image; objects get an opaque outline.
+
+    The outline is dark (OBJECT_OUTLINE), or in the class color without 'dark_outline'. The default opacity is
+    OBJECT_ALPHA for objects and CLASS_ALPHA for pixel classes.
+    """
+    if alpha is None:
+        alpha = CLASS_ALPHA if instances is None else OBJECT_ALPHA
     from skimage.segmentation import find_boundaries
     palette = np.array([[0, 0, 0]] + [colors.to_rgb(c) for c in CLASS_COLORS]) * 255
     out = image.astype("float").copy()
@@ -498,7 +524,7 @@ def class_overlay(image, labels, instances=None, alpha=CLASS_ALPHA):
     out[mask] = (1 - alpha) * out[mask] + alpha * palette[labels[mask]]
     if instances is not None:
         edges = find_boundaries(instances, mode="inner") & mask
-        out[edges] = palette[labels[edges]]
+        out[edges] = np.array(colors.to_rgb(OBJECT_OUTLINE)) * 255 if dark_outline else palette[labels[edges]]
     return out.astype("uint8")
 
 
@@ -607,6 +633,8 @@ def plot_classification_qualitative():
 
 # The (dataset, budget, slide) of the pixel classification panel. The slide holds the BCSS test crop.
 SLIDE = ("bcss", 1000, "TCGA-E2-A14X-01Z-00-DX1")
+# The pixel size of the slide at the base level in µm ('MPP = 0.2468' in the svs header, scanned at 40x).
+SLIDE_PIXEL_SIZE = 0.2468
 # The BCSS test crop (tile 2_1) on the slide as (x, y, size) at the base level. BCSS images are 1.215 times smaller.
 SLIDE_CROP = (89458, 67637, 622)
 # The whole slide is shown at 1/4 of the class map, with the majority class of each block.
@@ -627,7 +655,7 @@ def block_majority(classes, block, n_classes):
 
 
 # The (row, column) of each tile in the 2 x 2 grid of a slide panel.
-SLIDE_TILES = {"Training Strokes": (0, 0), "Test Image": (1, 0), "Test Reference": (0, 1), "μSAM2": (1, 1)}
+SLIDE_TILES = {ANNOTATIONS: (0, 0), "Test image": (1, 0), "Test reference": (0, 1), "μSAM2": (1, 1)}
 # The gaps of the layout and the height of the titles, in inches.
 SLIDE_COLUMN_GAP = 0.2
 SLIDE_ROW_GAP = 0.17
@@ -676,11 +704,37 @@ def slide_tiles(name, budget, test_stem, train_stem):
     else:
         stroke_tile = pixel_stroke_overlay(train_raw, strokes)
     tiles = {
-        "Training Strokes": stroke_tile, "Test Image": raw, "Test Reference": class_overlay(raw, semantic, objects),
-        "μSAM2": class_overlay(raw, prediction, objects),
+        ANNOTATIONS: stroke_tile, "Test image": raw,
+        "Test reference": class_overlay(raw, semantic, objects), "μSAM2": class_overlay(raw, prediction, objects),
     }
     shown = set(np.unique(semantic)) | set(np.unique(prediction)) | set(np.unique(strokes))
     return tiles, crop_macro_f1(prediction, semantic, instances, task), shown
+
+
+# The scale bar of a slide image: its height and its distance to the lower left corner, in axes fractions.
+SCALE_BAR_HEIGHT = 0.012
+SCALE_BAR_INSET = 0.04
+
+
+def add_scale_bar(ax, scale_bar, image_width):
+    """Draw a scale bar in the lower left corner of an image.
+
+    Args:
+        ax: The axes of the image.
+        scale_bar: The (length in µm, label, color) of the bar. The label stands over the bar in the same color.
+        image_width: The width of the shown image in µm.
+    """
+    from matplotlib.patches import Rectangle
+    length, label, color = scale_bar
+    width = length / image_width
+    ax.add_patch(Rectangle(
+        (SCALE_BAR_INSET, SCALE_BAR_INSET), width, SCALE_BAR_HEIGHT, transform=ax.transAxes, facecolor=color,
+        edgecolor="none", zorder=5,
+    ))
+    ax.text(
+        SCALE_BAR_INSET + width / 2, SCALE_BAR_INSET + SCALE_BAR_HEIGHT + 0.01, label, transform=ax.transAxes,
+        ha="center", va="bottom", fontsize=6, color=color, zorder=5,
+    )
 
 
 def plot_slide_panel(panel):
@@ -694,7 +748,8 @@ def plot_slide_panel(panel):
 
     Args:
         panel: The dictionary with the tiles, the score and the two slide images. It also holds the extent of the
-            slide images in source pixels, the crop (x, y, size), the titles, the row label and the classes.
+            slide images in source pixels, the pixel size of the source in µm, the scale bar (see 'add_scale_bar'),
+            the crop (x, y, size), the titles, the row label and the classes.
 
     Returns:
         The figure.
@@ -729,14 +784,14 @@ def plot_slide_panel(panel):
         ax.set_yticks([])
         for spine in ax.spines.values():
             spine.set(color=fig2.FRAME_COLOR, linewidth=fig2.FRAME_WIDTH, visible=True)
-        weight = "bold" if "μSAM2" in title else "normal"
-        ax.set_title(title, fontsize=fontsize, color=TEXT_COLOR, pad=2.5, fontweight=weight)
+        ax.set_title(title, fontsize=fontsize, color=TEXT_COLOR, pad=2.5, fontweight="normal")
         return ax
 
     left_slide = QUALITATIVE_LABEL_WIDTH
     grid_left = left_slide + map_width + cone_gap
     map_left = grid_left + 2 * side + SLIDE_COLUMN_GAP + cone_gap
-    add_panel(panel["image"], left_slide, 0, map_width, map_height, panel["image_title"])
+    image_ax = add_panel(panel["image"], left_slide, 0, map_width, map_height, panel["image_title"])
+    add_scale_bar(image_ax, panel["scale_bar"], panel["pixel_size"] * extent[1])
     add_panel(panel["map"], map_left, 0, map_width, map_height, panel["map_title"])
     fig.text(
         (left_slide - QUALITATIVE_LABEL_WIDTH / 2) / width, (map_height / 2) / height, panel["label"],
@@ -747,11 +802,11 @@ def plot_slide_panel(panel):
         x = grid_left + column * (side + SLIDE_COLUMN_GAP)
         y = bottom + (1 - row) * (side + SLIDE_ROW_GAP)
         ax = add_panel(tiles[title], x, y, side, side, title, zorder=3, fontsize=SLIDE_TILE_FONT_SIZE)
-        if title == "Training Strokes":
+        if title == ANNOTATIONS:
             for spine in ax.spines.values():
                 spine.set(color=TRAINING_FRAME_COLOR, linewidth=TRAINING_FRAME_WIDTH, visible=True)
         if title == "μSAM2":
-            fig2.draw_score(ax, score, True)
+            fig2.draw_score(ax, score)
         corners[title] = (x, y)
 
     half = max(SLIDE_BOX_SIZE, crop[2] / extent[1] * map_width) / 2
@@ -783,7 +838,7 @@ def plot_slide_panel(panel):
         ))
 
     center = box_center(left_slide)
-    cone(center, 1, *corners["Test Image"])
+    cone(center, 1, *corners["Test image"])
     box(center)
     center = box_center(map_left)
     ours_x, ours_y = corners["μSAM2"]
@@ -807,11 +862,13 @@ def plot_slide_panel(panel):
     boxes = [legend.get_window_extent(renderer).transformed(fig.transFigure.inverted()) for legend in legends]
     x0, x1 = min(b.x0 for b in boxes), max(b.x1 for b in boxes)
     y0, y1 = min(b.y0 for b in boxes), max(b.y1 for b in boxes)
-    # The card is LEGEND_CARD_PAD around the legend rows, with rounded corners of 0.04 inch.
-    pad_x, pad_y = LEGEND_CARD_PAD[0] / width, LEGEND_CARD_PAD[1] / height
+    # The card is LEGEND_CARD_PAD around the legend rows. It is drawn in inches, so that its corners are round, with
+    # the corner radius of the legend cards of panel a (0.4 times their font size).
+    pad_x, pad_y = LEGEND_CARD_PAD
+    radius = 0.4 * MAX_FONT_SIZE / 72
     card = FancyBboxPatch(
-        (x0 - pad_x, y0 - pad_y), x1 - x0 + 2 * pad_x, y1 - y0 + 2 * pad_y,
-        boxstyle=f"round,pad=0,rounding_size={0.04 / height:.4f}", transform=fig.transFigure, facecolor="white",
+        (x0 * width - pad_x, y0 * height - pad_y), (x1 - x0) * width + 2 * pad_x, (y1 - y0) * height + 2 * pad_y,
+        boxstyle=f"round,pad=0,rounding_size={radius:.4f}", transform=to_figure, facecolor="white",
         edgecolor=CARD_EDGE_COLOR, linewidth=0.6, zorder=4,
     )
     fig.add_artist(card)
@@ -843,8 +900,9 @@ def plot_classification_slide():
     return plot_slide_panel({
         "tiles": tiles, "score": score, "image": small_thumbnail.astype("uint8"), "map": palette[small_classes],
         "extent": (r * block * scale, c * block * scale), "crop": SLIDE_CROP, "class_names": class_names,
-        "classes": set(range(1, len(class_names) + 1)), "image_title": "Whole Slide Image (Test)",
-        "map_title": "μSAM2 (Tissue Segmentation)", "label": "Pixel Classification\n(BCSS)",
+        "classes": set(range(1, len(class_names) + 1)), "image_title": "Whole slide image (test)",
+        "pixel_size": SLIDE_PIXEL_SIZE, "scale_bar": (5000, "5 mm", TEXT_COLOR),
+        "map_title": "μSAM2 (tissue segmentation)", "label": "Pixel classification\n(BCSS)",
     })
 
 
@@ -854,6 +912,8 @@ PUMA_PANEL = {
     "budget": 100000, "roi": "training_set_primary_roi_045", "test_tile": "0_1",
     "train_stem": "training_set_primary_roi_053_1_1", "crop": (2560, 2048, 512),
 }
+# The pixel size of the context image in µm, from its tif resolution (43967 pixels per cm).
+PUMA_PIXEL_SIZE = 1e4 / 43967
 # The context image is shown 2 times smaller. The class map fades the H&E by this fraction, so the nuclei stand out.
 PUMA_DISPLAY_BLOCK = 2
 PUMA_MAP_FADE = 0.7
@@ -885,10 +945,12 @@ def plot_object_classification_slide():
     faded = ((1 - PUMA_MAP_FADE) * context + PUMA_MAP_FADE * 255).astype("uint8")
     return plot_slide_panel({
         "tiles": tiles, "score": score, "image": small(context),
-        "map": small(class_overlay(faded, classes, segmentation, alpha=1.0)), "extent": context.shape[:2],
+        "map": small(class_overlay(faded, classes, segmentation, alpha=1.0, dark_outline=False)),
+        "extent": context.shape[:2],
         "crop": PUMA_PANEL["crop"], "class_names": class_names, "classes": shown - {0},
-        "image_title": "Context Image (Test)", "map_title": "μSAM2 (Nucleus Classification)",
-        "label": "Object Classification\n(PUMA)",
+        "pixel_size": PUMA_PIXEL_SIZE, "scale_bar": (200, "200 µm", "white"),
+        "image_title": "Context image (test)", "map_title": "μSAM2 (nucleus classification)",
+        "label": "Object classification\n(PUMA)",
     })
 
 
@@ -914,8 +976,8 @@ PLOTS = {
 # The panels of the combined figure, top to bottom: (plot name, kind, style).
 COMBINED_PANELS = [
     ("classification", "classification", "quantitative"),
-    ("classification_slide", "classification", "slide"),
     ("object_classification_slide", "classification", "slide"),
+    ("classification_slide", "classification", "slide"),
 ]
 COMBINED_NAME = "figure_4"
 # The resolution of the images and of the combined png. It is above the 1100 dpi of the shown tiles.
