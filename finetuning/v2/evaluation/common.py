@@ -464,7 +464,23 @@ DATASETS_3D_EM_NUCLEUS_ID = ["cellmap_nucleus", "fafb_nuclei", "microns_nuclei",
 DATASETS_3D_EM_NUCLEUS_OOD = [
     "human_liver_em_nucleus", "etchacell_nucleus", "nucmm_zebrafish", "nucmm_mouse", "aive_nucleus",
 ]
-DATASETS_3D_EM_NUCLEUS = DATASETS_3D_EM_NUCLEUS_ID + DATASETS_3D_EM_NUCLEUS_OOD
+# Candidate in-domain test sets (user, 2026-11-05), written by 'prepare_em_nucleus_candidates.py': the OpenOrganelle
+# dauer larva volume, which the nucleus model never saw, and the validation part of the human organoid volumes.
+CANDIDATE_NUCLEUS_ROOTS = {
+    "dauer_larva_nucleus": "dauer_larva_nucleus", "human_organoids_nucleus": "human_organoids_nucleus_val",
+}
+# The human placenta array tomography volumes (S-BIAD3408, torch-em 'placenta_at'): manual nuclei of one CTB cell and
+# an arbitrary STB region per volume, so they are scored with LABELLED_ONLY_DATASETS (user, 2026-11-05).
+PLACENTA_NUCLEUS_ROOT = "placenta_at"
+# Automatic nucleus segmentations of connectome volumes (torch-em loaders of the same names, 6 crops of
+# 64 x 1024 x 1024 each): the first crop tunes, the others are scored (user, 2026-11-05).
+CONNECTOME_NUCLEUS_TUNING = {
+    "malecns_nuclei": "brain_0.h5", "zheng_ca3_nuclei": "crop_0.h5", "acson_nuclei": "crop_0.h5",
+}
+DATASETS_3D_EM_NUCLEUS_CANDIDATES = (
+    list(CANDIDATE_NUCLEUS_ROOTS) + ["placenta_nucleus"] + list(CONNECTOME_NUCLEUS_TUNING)
+)
+DATASETS_3D_EM_NUCLEUS = DATASETS_3D_EM_NUCLEUS_ID + DATASETS_3D_EM_NUCLEUS_OOD + DATASETS_3D_EM_NUCLEUS_CANDIDATES
 DATASETS_EM_NUCLEUS = DATASETS_3D_EM_NUCLEUS + DATASETS_2D_EM_NUCLEUS
 
 DATASETS_3D_EM = (
@@ -2329,6 +2345,25 @@ def _get_3d_em_data_paths(
         label_paths = [os.path.join(root, "Label", "train", name) for name in names]
         return raw_paths, label_paths, "main", "main"
 
+    if dataset_name in CONNECTOME_NUCLEUS_TUNING:
+        # One file per crop; the tuning crop is held out from the scored ones.
+        paths = [
+            path for path in sorted(glob(os.path.join(p, dataset_name, "*.h5")))
+            if (os.path.basename(path) == CONNECTOME_NUCLEUS_TUNING[dataset_name]) == is_val
+        ]
+        return paths, paths, "raw", "labels"
+
+    if dataset_name == "placenta_nucleus":
+        # Both volumes are scored and also tune: the dataset has no other annotated volume.
+        paths = sorted(glob(os.path.join(p, PLACENTA_NUCLEUS_ROOT, "placenta*.h5")))
+        return paths, paths, "raw", "labels/nuclei"
+
+    if dataset_name in CANDIDATE_NUCLEUS_ROOTS:
+        # The scored boxes or slabs are in 'test', the tuning ones in 'val'. Instance labels.
+        folder = os.path.join(p, CANDIDATE_NUCLEUS_ROOTS[dataset_name], "val" if is_val else "test")
+        paths = sorted(glob(os.path.join(folder, "*.h5")))
+        return paths, paths, "raw", "labels"
+
     if dataset_name == "aive_nucleus":
         # Scored and tuned in the regions of EM_ROIS. One nucleus per volume.
         paths = [os.path.join(p, AIVE_NUCLEUS_ROOT, name) for name in AIVE_NUCLEUS_EVAL_VOLUMES]
@@ -2693,6 +2728,12 @@ DATASET_SPACING: dict = {
     "nucmm_zebrafish": (0.48 / 0.51, 1, 1),  # ssEM: about 0.5 um voxels
     "nucmm_mouse": (1, 1, 1),  # micro-CT, 0.72 um isotropic
     "aive_nucleus": (30 / 26, 1, 1),  # FIB-SEM, downscaled to 30 x 26 x 26 nm
+    "dauer_larva_nucleus": (70 / 40, 1, 1),  # ssTEM: 70 nm sections, labels at 40 nm pixels
+    "human_organoids_nucleus": (1, 1, 1),  # FIB-SEM, binned 2x, isotropic
+    "placenta_nucleus": (4, 1, 1),  # array tomography: 80 nm sections, 16 or 24 nm pixels
+    "malecns_nuclei": (1, 1, 1),  # FIB-SEM, 16 nm isotropic
+    "zheng_ca3_nuclei": (45 / 72, 1, 1),  # ssTEM: 45 nm sections, 72 nm pixels
+    "acson_nuclei": (1, 1, 1),  # SBEM, downsampled to 50 nm isotropic
     "mitoem_human": (30 / 8, 1, 1),  # ATUM-SEM: 30 nm sections, 8 nm pixels
     "mitoem_rat": (30 / 8, 1, 1),  # ATUM-SEM: 30 nm sections, 8 nm pixels
     **{name: (1, 1, 1) for name in ("mitoemv2_beta", "mitoemv2_jurkat", "mitoemv2_macro", "mitoemv2_podo")},
@@ -3152,6 +3193,18 @@ def sample_row_path(save_path: str, sample_index: int) -> str:
     return os.path.join(f"{save_path[:-4]}_samples", f"sample_{sample_index:04d}.csv")
 
 
+# The datasets that label only some of their nuclei (e.g. the central cell of a ROI). Their predicted objects that do
+# not touch a labelled object are removed before scoring, so that unlabelled nuclei do not count as false positives.
+# Splits and merges of the labelled objects still count (user, 2026-11-05).
+LABELLED_ONLY_DATASETS = {"etchacell_nucleus", "placenta_nucleus"}
+
+
+def keep_labelled_objects(seg, labels):
+    """Return the segmentation with only the objects that overlap the labelled foreground."""
+    keep = np.setdiff1d(np.unique(seg[labels > 0]), [0])
+    return np.where(np.isin(seg, keep), seg, 0).astype(seg.dtype)
+
+
 def evaluate_samples(
     segment_fn, dataset_name, data_root, save_path, desc, limit=None, crop_shape=None, sample_index=None,
     extra_columns=None, normalize=True, shard=None,
@@ -3228,6 +3281,8 @@ def evaluate_samples(
         seg = segment_fn(raw)
         if valid_roi is not None:
             seg[~valid_roi] = 0
+        if dataset_name in LABELLED_ONLY_DATASETS:
+            seg = keep_labelled_objects(seg, labels)
         if ndim == 2:
             # The ground truth has no severed objects either, so predicting one is not a false positive.
             seg = drop_severed_objects(seg, GT_MIN_SIZE_2D.get(dataset_name, 0))

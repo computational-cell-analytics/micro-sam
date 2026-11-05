@@ -6122,6 +6122,291 @@
      [512, 512]
     ]
    }
+  },
+  "dauer_larva_nucleus": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel candidate (in-domain): boxes of the OpenOrganelle jrc_dauer-larva volume (ssTEM, 70 x 40 x 40 nm), which the nucleus model never saw; automatic COSEM nucleus instances. 14 of 24 tiles are kept (at most 16 per volume, the ones with the most objects), holding 6-38 nuclei.",
+   "starts": {
+    "box_192_1029_11266.h5": [
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ],
+    "box_192_1029_12290.h5": [
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ],
+    "box_256_1029_11778.h5": [
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ]
+   }
+  },
+  "human_organoids_nucleus": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel candidate (in-domain): the validation part of the four human organoid volumes (the last 10% of the slices, manual instances), which selected the training checkpoint. 64 of 201 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-6 nuclei.",
+   "starts": {
+    "F059.h5": [
+     [0, 0, 1024],
+     [0, 512, 512],
+     [0, 512, 1024],
+     [0, 512, 1536],
+     [0, 1024, 1024],
+     [0, 1024, 1536],
+     [32, 0, 1024],
+     [32, 512, 512],
+     [32, 512, 1024],
+     [32, 512, 1536],
+     [32, 1024, 1024],
+     [32, 1024, 1536],
+     [64, 0, 1024],
+     [64, 512, 1024],
+     [64, 512, 1536],
+     [64, 1024, 1024]
+    ],
+    "F107_A1.h5": [
+     [0, 0, 1024],
+     [0, 512, 0],
+     [0, 512, 512],
+     [0, 512, 1024],
+     [0, 1024, 512],
+     [0, 1024, 1024],
+     [32, 0, 1024],
+     [32, 512, 0],
+     [32, 512, 512],
+     [32, 512, 1024],
+     [32, 1024, 512],
+     [32, 1024, 1024],
+     [64, 0, 1024],
+     [64, 512, 0],
+     [64, 512, 512],
+     [96, 0, 1024]
+    ],
+    "F107_A2.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 512, 512],
+     [32, 1024, 512],
+     [64, 512, 0],
+     [64, 512, 512],
+     [64, 1024, 512],
+     [96, 0, 0],
+     [96, 0, 1024],
+     [96, 512, 512],
+     [96, 1024, 512],
+     [128, 0, 0],
+     [128, 512, 0]
+    ],
+    "F107_A3.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [0, 1024, 0],
+     [0, 1024, 512],
+     [32, 512, 0],
+     [32, 512, 512],
+     [32, 1024, 512],
+     [64, 512, 0],
+     [64, 512, 512],
+     [64, 512, 1024],
+     [64, 1024, 0],
+     [64, 1024, 512],
+     [96, 512, 0],
+     [96, 512, 512]
+    ]
+   }
+  },
+  "placenta_nucleus": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel candidate (out-of-domain): the two human placenta array tomography volumes (S-BIAD3408, 80 nm sections); manual nuclei of one CTB cell and an STB region, scored only where labelled. 19 of 56 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-7 nuclei.",
+   "starts": {
+    "placenta1.h5": [
+     [0, 0, 1024],
+     [0, 0, 1536],
+     [0, 512, 1024],
+     [0, 512, 1536],
+     [0, 1024, 1024],
+     [0, 1024, 1536],
+     [32, 0, 512],
+     [32, 0, 1024],
+     [32, 0, 1536],
+     [32, 512, 512],
+     [32, 512, 1024],
+     [32, 512, 1536],
+     [32, 1024, 1024],
+     [32, 1024, 1536]
+    ],
+    "placenta2.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 512],
+     [128, 512, 0],
+     [160, 512, 0]
+    ]
+   }
+  },
+  "malecns_nuclei": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel candidate (out-of-domain): Drosophila male CNS FIB-SEM crops at 16 nm; automatic nucleus segmentation, not filtered for glia or noise. 40 of 40 tiles are kept (at most 16 per volume, the ones with the most objects), holding 5-23 nuclei.",
+   "starts": {
+    "brain_1.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ],
+    "brain_2.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ],
+    "brain_3.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ],
+    "brain_4.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ],
+    "vnc_0.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ]
+   }
+  },
+  "zheng_ca3_nuclei": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel candidate (out-of-domain): mouse CA3 ssTEM crops at 72 x 72 x 45 nm; automatic nucleus segmentation. 27 of 40 tiles are kept (at most 16 per volume, the ones with the most objects), holding 3-14 nuclei.",
+   "starts": {
+    "crop_1.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 512]
+    ],
+    "crop_2.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512]
+    ],
+    "crop_3.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512]
+    ],
+    "crop_4.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ],
+    "crop_5.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ]
+   }
+  },
+  "acson_nuclei": {
+   "crop_shape": [32, 512, 512],
+   "note": "Nucleus panel candidate (out-of-domain): rat white matter SBEM crops at 50 nm (DeepACSON); automatic nucleus segmentation. 37 of 40 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-6 nuclei.",
+   "starts": {
+    "crop_1.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 512]
+    ],
+    "crop_2.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ],
+    "crop_3.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ],
+    "crop_4.h5": [
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ],
+    "crop_5.h5": [
+     [0, 0, 0],
+     [0, 0, 512],
+     [0, 512, 0],
+     [0, 512, 512],
+     [32, 0, 0],
+     [32, 0, 512],
+     [32, 512, 0],
+     [32, 512, 512]
+    ]
+   }
   }
  }
 }

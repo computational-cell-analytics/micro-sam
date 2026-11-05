@@ -79,13 +79,15 @@ PANEL_METHODS = {
 PANEL_DATASETS = {
     "fluorescence_cells": {
         "ID": ["cartocell", "embedseg_organoid", "phmamm", "plantseg_root", "pnas_arabidopsis", "wing_disc"],
-        # vibrio_cholerae is left out: its labels split many cells along z, so all methods score below 0.07 mSA.
-        "OOD": ["cshaper", "plantseg_ovules"],
+        # Three OOD datasets only (user, 2026-11-05). vibrio_cholerae is left out: its labels split many cells along
+        # z, so all methods score below 0.07 mSA.
+        "OOD": ["cshaper", "morphonet_patiria", "plantseg_ovules"],
     },
     "fluorescence_nuclei": {
         "ID": ["celegans_atlas", "embedseg_mouse_skull", "embedseg_platy_nuclei", "gonuclear", "nis3d", "nucverse3d"],
-        # mouse_embryo is left out: only part of its nuclei have labels.
-        "OOD": ["bbbc032", "bbbc033", "bbbc050", "blastospim", "morphonet_celegans", "parhyale_regen"],
+        # mouse_embryo is left out: only part of its nuclei have labels. parhyale_regen is left out for nus_organoids
+        # (user, 2026-11-05): all methods score 0.13 mSA or less on it, so it does not tell the methods apart.
+        "OOD": ["bbbc032", "bbbc033", "bbbc050", "blastospim", "morphonet_celegans", "nus_organoids"],
     },
     # SegNeuron also trains on the in-domain sources, so they are in domain for both methods.
     "em_neurites": {
@@ -217,7 +219,7 @@ TRACING_ASPECT = 0.78  # the height to width ratio of the renders, to keep the f
 # The room around the objects, as a share of the render size.
 TRACING_PAD = 0.01
 # The method names, in points: 'nnInteractive' is as wide as a render.
-TRACING_NAME_SIZE = 5.5
+TRACING_NAME_SIZE = 6
 
 
 def prediction_path(method, dataset, sample, prompt):
@@ -320,7 +322,7 @@ def plot_interactive_qualitative(region=None, grid=None, show_titles=True, starr
             x = methods_left + k * (size + gap) + size / 2
             fig.text(
                 x / fig2.FIGURE_WIDTH, (top + 0.05) / height, name, ha="center", va="baseline",
-                fontsize=TRACING_NAME_SIZE, color=TEXT_COLOR, fontweight="bold" if method == "micro-sam2" else "normal",
+                fontsize=TRACING_NAME_SIZE, color=TEXT_COLOR,
             )
         for r, (dataset, sample, objects, domain) in enumerate(blocks):
             top -= (fig2.ZOOM_DOMAIN_GAP if r in domain_changes else fig2.ZOOM_ROW_GAP) * (r > 0)
@@ -404,12 +406,12 @@ def plot_tracing_block(fig, left, bottom, size, modality, dataset, sample, objec
         y = bottom + (1 - row) * (tall + gap)
         fig.text(
             (methods_left - 0.02) / fig2.FIGURE_WIDTH, (y + tall / 2) / height, fig2.PROMPT_NAMES[prompt],
-            rotation=90, ha="right", va="center", fontsize=5, color=TEXT_COLOR,
+            rotation=90, ha="right", va="center", fontsize=6, color=TEXT_COLOR,
         )
         for col, method in enumerate(methods):
             ax = render_axes(fig, methods_left + col * (size + gap), y, size, tall, images[method, prompt])
             score = tracing_score(dataset, sample, objects, method, prompt)
-            fig2.draw_score(ax, score, method == "micro-sam2", fontsize=5)
+            fig2.draw_score(ax, score)
 
 
 # The (dataset, sample, modality, domain) of each volume, chosen by the lead of micro-sam2 APG over the best baseline.

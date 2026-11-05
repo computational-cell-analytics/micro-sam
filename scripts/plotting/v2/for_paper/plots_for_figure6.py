@@ -41,19 +41,19 @@ FIGURES = os.path.join(ROOT, "figures")
 OUTPUT_DIR = os.path.join(FIGURES, "figure6")
 QUALITATIVE = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/qualitative_em"
 
-# The (results table, interactive table, structure, title) of each organelle. The automatic tables have no NucMM
-# (user, 2026-10-30), so the interactive plot leaves it out too: both plots show the same datasets.
+# The (results table, interactive table, structure, title) of each organelle. Both plots show the datasets of
+# PANEL_DATASETS.
 PANELS = {
     "em_mito": (
         "em_mito_automatic_segmentation_3d_results.csv", "em_mito_interactive_segmentation_3d_results.csv",
-        "mitochondrion", "Electron Microscopy (Mitochondrion)",
+        "mitochondrion", "Electron microscopy (mitochondrion)",
     ),
     "em_nuclei": (
         "em_nuc_automatic_segmentation_3d_results.csv", "em_nuc_interactive_segmentation_3d_results.csv",
-        "nucleus", "Electron Microscopy (Nucleus)",
+        "nucleus", "Electron microscopy (nucleus)",
     ),
 }
-SCORE_LABEL = "Mean Segmentation Accuracy ↑"
+SCORE_LABEL = "Mean segmentation accuracy ↑"
 
 # The 'method', 'model' and 'mode' values of each automatic method in the 3d results. micro-sam shows AIS, its
 # default mode (see fig2.FIGURE_MODES), and micro-sam2 AIS and APG.
@@ -68,9 +68,9 @@ PANEL_METHODS = {
     "em_nuclei": ["NucleoNet", "micro-sam", "micro-sam2"],
 }
 # micro-sam2 runs a different model per organelle ('hvit_s_em_mito', 'hvit_s_em_nuclei'), so it gets a star, in all
-# plots (user, 2026-11-01). The interactive plot also stars micro-sam, with its EM model (user, 2026-11-01).
+# plots (user, 2026-11-01). micro-sam has no star in the interactive plot (user, 2026-11-05).
 STARRED_METHODS = {"micro-sam2"}
-INTERACTIVE_STARRED_METHODS = {"micro-sam2", "micro-sam"}
+INTERACTIVE_STARRED_METHODS = {"micro-sam2"}
 
 # The largest model of each method, as in Figure 3. SAM and micro-sam correct with clicks only, as the others do.
 INTERACTIVE_METHODS = {
@@ -85,10 +85,76 @@ INTERACTIVE_METHODS = {
 AUTOMATIC_ROWS = [["em_mito", "em_nuclei"]]
 
 
+# The six in-domain and six out-of-domain datasets of each organelle (user, 2026-11-05 and 2026-11-06). They set the
+# domain of each dataset: parlakgul_liver_eval is in domain, as it comes from the study of the trained Parlakgul
+# fasting-liver volume. The nucleus sets of 2026-11-05 are in the tables by 'collect_em_organelle_results.py'.
+# etchacell_nucleus and placenta_nucleus score only the predictions on labelled nuclei (common.py).
+PANEL_DATASETS = {
+    "em_mito": {
+        "ID": ["mitoemv2", "mitoem", "lucchi", "asem_mito", "snemi_mito", "parlakgul_liver_eval"],
+        "OOD": ["mitolab", "kasthuri", "human_liver_em", "cerebellum_fibsem_mito", "macrophage_a431_mito", "cmito"],
+    },
+    "em_nuclei": {
+        "ID": [
+            "cellmap_nucleus", "fafb_nuclei", "microns_nuclei", "platynereis_nuclei", "dauer_larva_nucleus",
+            "human_organoids_nucleus",
+        ],
+        "OOD": [
+            "human_liver_em_nucleus", "etchacell_nucleus", "aive_nucleus", "malecns_nuclei", "placenta_nucleus",
+            "zheng_ca3_nuclei",
+        ],
+    },
+}
+# The sub-volumes of one dataset are pooled into one dataset, with the score of each weighted by its number of scored
+# crops (user, 2026-11-05). Separate datasets are never pooled. mitolab_tem is 2d, so it is not in MitoLab.
+POOLED = {
+    "mitoemv2": [
+        "mitoemv2_beta", "mitoemv2_jurkat", "mitoemv2_macro", "mitoemv2_podo", "mitoemv2_sperm", "mitoemv2_stem",
+        "mitoemv2_mossy",
+    ],
+    "mitoem": ["mitoem_human", "mitoem_rat"],
+    "mitolab": [
+        "mitolab_c_elegans", "mitolab_fly_brain", "mitolab_glycolytic_muscle", "mitolab_hela_cell",
+        "mitolab_salivary_gland",
+    ],
+    "cmito": ["cmito_l1", "cmito_l2", "cmito_l3", "cmito_adult", "cmito_dauer"],
+}
+# The interactive evaluation scores at most this many crops of a 3d dataset (INTERACTIVE_MAX_CROPS_3D in common.py).
+INTERACTIVE_MAX_CROPS = 8
+
+
 def panel_datasets(name):
-    """Return the in-domain and out-of-domain datasets of an organelle, in the order of its automatic table."""
+    """Return the in-domain and out-of-domain datasets of an organelle."""
+    return PANEL_DATASETS[name]
+
+
+def crop_counts(name, interactive=False):
+    """Return the number of scored crops of each dataset of an organelle, from its automatic table."""
     table = pd.read_csv(os.path.join(FIGURES, PANELS[name][0])).drop_duplicates("dataset")
-    return {domain: list(table[table["domain"] == domain]["dataset"]) for domain in fig2.DOMAIN_TITLES}
+    counts = dict(zip(table["dataset"], table["n_samples"]))
+    return {d: min(n, INTERACTIVE_MAX_CROPS) for d, n in counts.items()} if interactive else counts
+
+
+def pool(results, counts):
+    """Pool the sub-volumes of POOLED into one dataset, with the crop-weighted mean of their scores.
+
+    A pooled score is left out unless every sub-volume has a score for that method and setting.
+    """
+    members = {member: group for group, names in POOLED.items() for member in names}
+    pooled = results[results["dataset"].isin(members)].copy()
+    keys = [column for column in pooled.columns if column not in ("dataset", "domain", "score")]
+    pooled["group"] = pooled["dataset"].map(members)
+    pooled["weight"] = pooled["dataset"].map(counts)
+    rows = []
+    for values, part in pooled.groupby(["group"] + keys, dropna=False):
+        part = part.dropna(subset=["score"])
+        if set(part["dataset"]) != set(POOLED[values[0]]):
+            continue
+        rows.append({
+            "dataset": values[0], **dict(zip(keys, values[1:])),
+            "score": float(np.average(part["score"], weights=part["weight"])),
+        })
+    return pd.concat([results[~results["dataset"].isin(members)], pd.DataFrame(rows)], ignore_index=True)
 
 
 def plot_automatic(region=None, compact=False):
@@ -98,7 +164,8 @@ def plot_automatic(region=None, compact=False):
     """
     results = {}
     for name, (table, _, structure, _) in PANELS.items():
-        rows = fig2.load_modes("EM", structure, path=os.path.join(FIGURES, table), methods=METHODS)
+        rows = pool(fig2.load_modes("EM", structure, path=os.path.join(FIGURES, table), methods=METHODS),
+                    crop_counts(name))
         results[name] = fig2.one_mode(fig2.select_datasets(rows, panel_datasets(name)), fig2.FIGURE_MODES)
     panels = {name: (title, SCORE_LABEL, PANEL_METHODS[name]) for name, (_, _, _, title) in PANELS.items()}
     return fig2.plot_automatic(
@@ -116,12 +183,15 @@ def plot_interactive(region=None, compact=False):
     The legend stands in the point half of the out-of-domain mitochondria panel, whose curves stay low. The value
     axes end at 1, the highest mSA: the shared row would otherwise be raised over the nucleus curves for the legend.
     """
-    results = {
-        name: fig2.load_interactive(
-            "EM", structure, panel_datasets(name), path=os.path.join(FIGURES, table), methods=INTERACTIVE_METHODS,
-        ).dropna(subset=["score"])
-        for name, (_, table, structure, _) in PANELS.items()
-    }
+    results = {}
+    for name, (_, table, structure, _) in PANELS.items():
+        datasets = panel_datasets(name)
+        members = [m for d in sum(datasets.values(), []) for m in POOLED.get(d, [d])]
+        rows = fig2.load_interactive(
+            "EM", structure, {"all": members}, path=os.path.join(FIGURES, table), methods=INTERACTIVE_METHODS,
+        )
+        rows = pool(rows, crop_counts(name, interactive=True))
+        results[name] = fig2.select_datasets(rows, datasets).dropna(subset=["score"])
     titles = {name: title for name, (_, _, _, title) in PANELS.items()}
     fig = fig2.plot_interactive_by_domain(
         results, list(PANELS), titles, INTERACTIVE_STARRED_METHODS, methods=INTERACTIVE_METHODS,
@@ -129,7 +199,7 @@ def plot_interactive(region=None, compact=False):
         panel_height=fig2.COMBINED_PANEL_HEIGHT if compact else fig2.PANEL_HEIGHT,
         grid=fig3.COMBINED_GRID if compact else None, title_line=compact, show_titles=not compact,
         score_gap=0.32 if compact else None, row_gap=fig2.COMBINED_ROW_GAP if compact else None,
-        band_color=fig2.COMBINED_BAND_COLOR if compact else fig2.BOX_BAND_COLOR,
+        band_color=fig2.COMBINED_BAND_COLOR if compact else fig2.BOX_BAND_COLOR, x_label=fig2.ITERATION_LABEL,
     )
     for ax in fig.axes:
         low, high = ax.get_ylim()
@@ -189,11 +259,10 @@ def region_score(dataset, prediction):
         return float(f.attrs["msa"])
 
 
-def label_panel(ax, name, bold=False):
+def label_panel(ax, name):
     """Write a name in the upper left corner of a panel."""
     ax.text(
-        0.04, 0.96, name, transform=ax.transAxes, ha="left", va="top", fontsize=5, color=fig3.TEXT_COLOR,
-        fontweight="bold" if bold else "normal",
+        0.04, 0.96, name, transform=ax.transAxes, ha="left", va="top", fontsize=6, color=fig3.TEXT_COLOR,
         bbox={"boxstyle": "square,pad=0.1", "facecolor": "white", "alpha": 0.8, "linewidth": 0},
     )
 
@@ -237,27 +306,28 @@ def plot_automatic_qualitative(region=None):
         for k, (method, image) in enumerate(zip([baseline, "micro-sam2"], images)):
             ours = method == "micro-sam2"
             ax = fig3.render_axes(fig, start + k * (width + gap), lower, width, size, image)
-            label_panel(ax, fig2.names_of([method], STARRED_METHODS)[0], bold=ours)
+            label_panel(ax, fig2.names_of([method], STARRED_METHODS)[0])
             score = region_score(dataset, prediction if ours else "empanada")
-            fig2.draw_score(ax, score, ours, fontsize=5)
+            fig2.draw_score(ax, score)
     return fig
 
 
 # The (dataset, sample, ids of the objects, domain) of each volume of the interactive qualitative plot, from the
-# candidates of 'interactive_pairs.py' (user, 2026-11-01). The out-of-domain nucleus crops hold one nucleus each, so
+# candidates of 'interactive_pairs.py' (user, 2026-11-01). The out-of-domain mitochondria are from Kasthuri, one of
+# the datasets of the panels (user, 2026-11-06). The out-of-domain nucleus crops hold one nucleus each, so
 # that block shows one object.
 INTERACTIVE_QUALITATIVE = {
-    "em_mito": [("mitoemv2_stem", 2, (94, 105), "ID"), ("mito_anf", 3, (5, 6), "OOD")],
+    "em_mito": [("mitoemv2_stem", 2, (94, 105), "ID"), ("kasthuri", 9, (3, 4), "OOD")],
     "em_nuclei": [("fafb_nuclei", 19, (10, 15), "ID"), ("etchacell_nucleus", 41, (1,), "OOD")],
 }
 INTERACTIVE_PAIRS = os.path.join(QUALITATIVE, "interactive")
 TRACING_METHODS = ["nnInteractive", "micro-sam2"]
 # The volumes whose renders are cut around the objects of all methods, so that the objects of nnInteractive, which
 # reach far beyond the reference, show whole (user, 2026-11-01).
-TRACING_FIT_ALL = {"mitoemv2_stem", "mito_anf"}
+TRACING_FIT_ALL = {"mitoemv2_stem"}
 TRACING_NAMES = {
-    "mitoemv2_stem": "MitoEM v2 Stem", "mito_anf": "Mito ANF", "fafb_nuclei": "FAFB Nuclei",
-    "etchacell_nucleus": "EtchACell Nucleus",
+    "mitoemv2_stem": "MitoEM v2 Stem", "kasthuri": "Kasthuri", "fafb_nuclei": "FAFB Nuclei",
+    "etchacell_nucleus": "EtchACell",
 }
 
 
