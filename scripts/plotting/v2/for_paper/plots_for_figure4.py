@@ -74,6 +74,8 @@ OUTPUT_DIR = os.path.join(FIGURES, "figure4")
 # The unit of the label counts of each row, as the title of its key, and the fewest labels as the rank column.
 UNITS = {"object": "# Objects", "pixel": "# Pixels"}
 FEWEST = {"object": "25 objects", "pixel": "100 pixels"}
+# The name of the most labels of each row, the second rank column (Constantin Pape, 2026-11-06).
+MOST = {"object": "All objects", "pixel": "100k pixels"}
 # The score: the F1 per class, averaged over the classes, computed over the objects or over the pixels.
 SCORE_NAME = "Mean F1 \u2191"
 ROWS = {
@@ -119,11 +121,11 @@ LIGHTEST_SHADE = 0.4
 # The dot area in points^2 for the fewest and the most labels; the area grows linearly with the label step.
 DOT_SIZES = (4, 16)
 # The key right of each row names the number of labels of each dot, drawn in a neutral grey.
-KEY_WIDTH = 0.2
+KEY_WIDTH = 0.24
 KEY_COLOR = "#52514E"
-KEY_FONT_SIZE = 6
+KEY_FONT_SIZE = MAX_FONT_SIZE
 # The key moves this far left (in figure width) into the gap after the third panel, to stand close to it.
-KEY_SHIFT = 0.025
+KEY_SHIFT = 0.033
 # The rank charts start this much further left (in figure width), closer to the keys, and keep their right edge.
 RANK_SHIFT = 0.0
 
@@ -135,7 +137,7 @@ LEGEND_GROUPS = [
 ]
 # The room above the panels and below them (for the x axis label and the legend), in inches.
 TOP_ROOM = 0.2
-BOTTOM_ROOM = 0.8
+BOTTOM_ROOM = 0.78
 CARD_GAP = 0.02
 # The card border is the legend border of Figure 2.
 CARD_EDGE_COLOR = fig2.LEGEND_BORDER_COLOR
@@ -143,10 +145,8 @@ CARD_EDGE_COLOR = fig2.LEGEND_BORDER_COLOR
 CARD_TITLE_COLOR = fig2.GROUP_COLOR
 CARD_TITLE_INSET = 5
 
-# The gap from the bottom row to the x axis label, in figure height.
-X_LABEL_GAP = 0.01
 # The panel size in inches, for three panels in the double column width of 183 mm.
-PANEL_HEIGHT = 1.45
+PANEL_HEIGHT = 1.55
 # The rows, with their gap, fill the figure height minus the room above and below them.
 FIGURE_HEIGHT = 2 * PANEL_HEIGHT - 0.46 + TOP_ROOM + BOTTOM_ROOM
 # The bottom of the lower row of legend cards, 0.3 inch over the bottom of the figure, in figure height.
@@ -159,15 +159,15 @@ LEGEND_ROW_STEP = 0.36
 # The ranks compare the feature models per dataset and label count, ilastik among them (its features go into a random
 # forest as well), without UNIv2 and the supervised baseline.
 RANK_EXCLUDED = {"UNIv2", "End-to-end"}
-# The second rank column averages over all label counts.
-ALL_COUNTS = "All counts"
 # The width of the slope chart relative to a line panel, and the smallest vertical distance between two names.
 SLOPE_WIDTH = 1.1
+# The right edge of the grid of panels, in figure width; the rank names stand out of it.
+PANELS_RIGHT = 0.93
 LABEL_GAP = 7.5  # in points: a 6 pt name with some room
 GUIDE_COLOR = "#e6e5e0"
 # The rank values next to the names: smaller and in the grey of the ranks of Figure 2 (contrast 5.3 on white).
 RANK_VALUE_COLOR = fig2.GROUP_COLOR
-RANK_VALUE_SIZE = 6
+RANK_VALUE_SIZE = MAX_FONT_SIZE
 
 
 def load_results(table):
@@ -240,7 +240,7 @@ def plot_panel(ax, results, budgets):
             ax.axvspan(slot - SLOT_SPAN, slot + SLOT_SPAN, color=NOT_APPLICABLE_COLOR, linewidth=0, zorder=0)
             ax.text(
                 slot, 0.5, "not applicable", transform=ax.get_xaxis_transform(), rotation=90, ha="center",
-                va="center", fontsize=6, style="italic", color=NOT_APPLICABLE_TEXT_COLOR,
+                va="center", fontsize=MAX_FONT_SIZE, style="italic", color=NOT_APPLICABLE_TEXT_COLOR,
             )
             continue
         ax.axvspan(slot - SLOT_SPAN, slot + SLOT_SPAN, color=SLOT_COLOR, linewidth=0, zorder=0)
@@ -259,6 +259,7 @@ def plot_panel(ax, results, budgets):
             clip_on=False,
         )
     ax.set_xticks([])
+    ax.tick_params(axis="y", labelsize=MAX_FONT_SIZE)
     ax.set_xlim(-0.6, len(METHOD_ORDER) - 0.4)
     ax.grid(axis="y", color="#e6e5e0", linewidth=0.5, linestyle=(0, (3, 3)), zorder=1)
     ax.set_axisbelow(True)
@@ -313,7 +314,7 @@ def add_legend(fig, left, right_axes):
     dpi = fig.dpi
     fig.set_dpi(plt.rcParams["savefig.dpi"])
     renderer = fig.canvas.get_renderer()
-    title_font = font_manager.FontProperties(size=6, weight="bold")
+    title_font = font_manager.FontProperties(size=MAX_FONT_SIZE, weight="bold")
     ys = [card_y(index) for index in range(len(LEGEND_GROUPS))]
     legends = [add_card(fig, group, y=y) for (_, group), y in zip(LEGEND_GROUPS, ys)]
     fig.canvas.draw()
@@ -349,19 +350,21 @@ def add_legend(fig, left, right_axes):
     for legend, (title, _) in zip(legends, LEGEND_GROUPS):
         frame = legend.get_frame().get_window_extent(renderer).transformed(fig.transFigure.inverted())
         fig.text(
-            frame.x0, frame.y1, title, ha="left", va="center", fontsize=6, fontweight="bold", color=CARD_TITLE_COLOR,
+            frame.x0, frame.y1, title, ha="left", va="center", fontsize=MAX_FONT_SIZE, fontweight="bold",
+            color=CARD_TITLE_COLOR,
             bbox={"boxstyle": "square,pad=0.15", "facecolor": "white", "linewidth": 0}, zorder=10,
             transform=transforms.offset_copy(fig.transFigure, fig=fig, x=CARD_TITLE_INSET, units="points"),
         )
     fig.set_dpi(dpi)
 
 
-def mean_ranks(tables, lowest):
-    """Return the mean rank of each feature model over the datasets and label counts of all tables."""
+def mean_ranks(tables, most):
+    """Return the mean rank of each feature model over the datasets of all tables, with the fewest or the most labels.
+    """
     ranks = []
     for results, budgets in tables:
         results = results[~results["method"].isin(RANK_EXCLUDED)]
-        results = results[results["budget"] == budgets[0]] if lowest else results
+        results = results[results["budget"] == budgets[-1 if most else 0]]
         rank = results.groupby(["dataset", "budget"])["mean"].rank(ascending=False)
         ranks.append(results.assign(rank=rank))
     return pd.concat(ranks).groupby("method")["rank"].mean()
@@ -385,8 +388,8 @@ def spread(values, gap):
 
 
 def plot_rank_slope(ax, tables, column_names, title=None):
-    """Plot the mean rank of each feature model with the fewest labels and over all label counts."""
-    columns = [mean_ranks(tables, lowest) for lowest in (True, False)]
+    """Plot the mean rank of each feature model with the fewest and with the most labels."""
+    columns = [mean_ranks(tables, most) for most in (False, True)]
     methods = [method for method in METHOD_ORDER if method in columns[0].index]
     for x in (0, 1):
         ax.axvline(x, color=GUIDE_COLOR, linewidth=0.8, zorder=0)
@@ -415,12 +418,12 @@ def plot_rank_slope(ax, tables, column_names, title=None):
             width = width * 72 / renderer.dpi + 3
             ax.annotate(
                 METHOD_LABELS.get(method, method), anchor, xytext=(-width if side == "right" else width, 0),
-                textcoords="offset points", ha=side, va="center", fontsize=6, color=TEXT_COLOR,
+                textcoords="offset points", ha=side, va="center", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR,
             )
     ax.invert_yaxis()
     ax.set_xlim(-0.75, 1.75)
     ax.set_xticks([0, 1], column_names)
-    ax.tick_params(axis="x", length=0, labelsize=6, pad=2)
+    ax.tick_params(axis="x", length=0, labelsize=MAX_FONT_SIZE, pad=2)
     if title:
         ax.set_title(title, fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR, pad=4)
     ax.set_yticks([])
@@ -432,13 +435,15 @@ def plot_classification():
     """Plot the object classification row over the pixel classification row."""
     fig = plt.figure(figsize=(fig2.FIGURE_WIDTH, FIGURE_HEIGHT))
     grid = fig.add_gridspec(
-        len(ROWS), 5, hspace=0.35, wspace=0.22, width_ratios=[1, 1, 1, KEY_WIDTH, SLOPE_WIDTH]
+        len(ROWS), 5, hspace=0.3, wspace=0.27, width_ratios=[1, 1, 1, KEY_WIDTH, SLOPE_WIDTH]
     )
     tables = [load_results(table) for table, _, _ in ROWS.values()]
     for row, ((_, (_, row_title, datasets)), (results, budgets)) in enumerate(zip(ROWS.items(), tables)):
         row_axes = [fig.add_subplot(grid[row, column]) for column in range(3)]
         panels = row_axes
-        row_axes[0].set_ylabel(f"{row_title}\n{SCORE_NAME}", fontsize=6, fontweight="bold", color=TEXT_COLOR)
+        row_axes[0].set_ylabel(
+            f"{row_title}\n{SCORE_NAME}", fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR
+        )
         for ax, (dataset, title) in zip(row_axes, datasets.items()):
             plot_panel(ax, results[results["dataset"] == dataset], budgets)
             ax.set_title(title, fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR, pad=4)
@@ -447,9 +452,9 @@ def plot_classification():
     for row, (kind, table) in enumerate(zip(ROWS, tables)):
         # Only the top chart has the title; both charts name the columns.
         ranks.append(fig.add_subplot(grid[row, 4]))
-        plot_rank_slope(ranks[-1], [table], [FEWEST[kind], ALL_COUNTS], title="Mean rank" if row == 0 else None)
+        plot_rank_slope(ranks[-1], [table], [FEWEST[kind], MOST[kind]], title="Mean rank" if row == 0 else None)
     fig.subplots_adjust(
-        left=0.08, right=0.975, top=1 - TOP_ROOM / FIGURE_HEIGHT, bottom=BOTTOM_ROOM / FIGURE_HEIGHT
+        left=0.07, right=PANELS_RIGHT, top=1 - TOP_ROOM / FIGURE_HEIGHT, bottom=BOTTOM_ROOM / FIGURE_HEIGHT
     )
     for key in keys:
         position = key.get_position()
@@ -459,12 +464,8 @@ def plot_classification():
         rank.set_position([position.x0 - RANK_SHIFT, position.y0, position.width + RANK_SHIFT, position.height])
     for key, unit, (_, budgets) in zip(keys, UNITS.values(), tables):
         plot_key(key, budgets, unit)
-    # The x axis of the dataset panels: one slot per method. The label stands once under the bottom row.
-    first, last = panels[0].get_position(), panels[-1].get_position()
-    fig.text(
-        (first.x0 + last.x1) / 2, first.y0 - X_LABEL_GAP, "Method", ha="center", va="top", fontsize=MAX_FONT_SIZE,
-        fontweight="bold", color=TEXT_COLOR,
-    )
+    # The x axis of the dataset panels has one slot per method and no label: the legend under them names the slots
+    # (Constantin Pape, 2026-11-06).
     add_legend(fig, panels[0].get_position().x0, ranks)
     return fig
 
@@ -639,11 +640,11 @@ def plot_classification_qualitative():
                     fontweight="bold" if ours else "normal",
                 )
             if column == 0:
-                ax.set_ylabel(title, fontsize=6, fontweight="bold", color=TEXT_COLOR, labelpad=3)
+                ax.set_ylabel(title, fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR, labelpad=3)
         # The legend card spans the image columns under the row.
         handles = [Patch(color=CLASS_COLORS[k], label=n) for k, n in enumerate(class_names)]
         legend = fig.legend(
-            handles=handles, loc="center", ncol=len(handles), fontsize=6, frameon=True, fancybox=True,
+            handles=handles, loc="center", ncol=len(handles), fontsize=MAX_FONT_SIZE, frameon=True, fancybox=True,
             handlelength=1.0, handleheight=0.8, columnspacing=1.6, borderpad=0.35, labelcolor=TEXT_COLOR,
             bbox_to_anchor=(
                 (QUALITATIVE_LABEL_WIDTH + (width - QUALITATIVE_LABEL_WIDTH) / 2) / width,
@@ -686,7 +687,7 @@ SLIDE_ROW_GAP = 0.17
 SLIDE_CONE_GAP = 0.27
 SLIDE_TITLE_HEIGHT = 0.16
 # The tile titles of a slide panel are a point smaller than the other titles, so that they fit over the tiles.
-SLIDE_TILE_FONT_SIZE = MAX_FONT_SIZE - 1
+SLIDE_TILE_FONT_SIZE = MAX_FONT_SIZE
 # The padding of the legend card around its rows, in inches: (sides, top and bottom). The sides get more, since the
 # legend width is measured before saving, a little narrower than drawn.
 LEGEND_CARD_PAD = (0.12, 0.05)
@@ -757,7 +758,7 @@ def add_scale_bar(ax, scale_bar, image_width):
     ))
     ax.text(
         SCALE_BAR_INSET + width / 2, SCALE_BAR_INSET + SCALE_BAR_HEIGHT + 0.01, label, transform=ax.transAxes,
-        ha="center", va="bottom", fontsize=6, color=color, zorder=5,
+        ha="center", va="bottom", fontsize=MAX_FONT_SIZE, color=color, zorder=5,
     )
 
 
@@ -819,7 +820,7 @@ def plot_slide_panel(panel):
     add_panel(panel["map"], map_left, 0, map_width, map_height, panel["map_title"])
     fig.text(
         (left_slide - QUALITATIVE_LABEL_WIDTH / 2) / width, (map_height / 2) / height, panel["label"],
-        rotation=90, ha="center", va="center", fontsize=6, fontweight="bold", color=TEXT_COLOR,
+        rotation=90, ha="center", va="center", fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR,
     )
     corners = {}
     for title, (row, column) in SLIDE_TILES.items():
@@ -877,7 +878,7 @@ def plot_slide_panel(panel):
     legends = []
     for row, row_handles in enumerate([handles[:first], handles[first:]]):
         legend = fig.legend(
-            handles=row_handles, loc="center", ncol=len(row_handles), fontsize=6, frameon=False,
+            handles=row_handles, loc="center", ncol=len(row_handles), fontsize=MAX_FONT_SIZE, frameon=False,
             handlelength=1.0, handleheight=0.8, columnspacing=1.2, borderpad=0.0, labelcolor=TEXT_COLOR,
             bbox_to_anchor=(center_x, (legend_height * (0.64 - 0.32 * row)) / height),
         )
