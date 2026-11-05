@@ -42,8 +42,7 @@ FONT_DIR = os.path.expanduser("~/.local/share/fonts/liberation")
 MIN_TEXT, MAX_TEXT = 5 * 25.4 / 72, 7 * 25.4 / 72
 # the layout of the figure in mm: panel a on top, panels b and c below it; the letters sit in a column on the left,
 # and panel c is scaled down to fit next to panel b
-FIGURE_W, LETTER_W, ROW_GAP, PANEL_GAP, LETTER_SIZE = 183.0, 2.8, 3.0, 2.0, 8 * 25.4 / 72
-C_SCALE = 0.77
+FIGURE_W, LETTER_W, ROW_GAP, PANEL_GAP, LETTER_SIZE = 183.0, 2.8, 2.0, 2.0, 8 * 25.4 / 72
 SIZE = 8.5
 STACK_FRAME, STACK_OFFSET = 7.4, 1.4
 ITEM_GAP = 1.5
@@ -1194,33 +1193,9 @@ ITEMS = {
     "automatic_batch_objects": (automatic_batch_objects, STACK_FRAME + 2 * STACK_OFFSET, "objects"),
 }
 
-# the task groups of panel c: the interactive ones on the left half, the automatic ones on the right half
-INTERACTIVE_GROUPS = [
-    ("Segmentation", ["interactive_2d", "interactive_3d"]),
-    ("Tracking", ["interactive_2dt"]),
-    ("Classification", ["pixel_classification", "object_classification"]),
-]
-AUTOMATIC_GROUPS = [
-    ("Segmentation", ["automatic_2d", "automatic_3d"]),
-    ("Tracking", ["automatic_2dt", "automatic_3dt"]),
-    ("Batch Processing", ["automatic_batch", "automatic_batch_objects"]),
-]
-
 
 def group_width(names, scale=1.0):
     return scale * (sum(ITEMS[name][1] for name in names) + ITEM_GAP * (len(names) - 1))
-
-
-def draw_group(drawing, cx, cy, header, names, scale=1.0, color=TEXT):
-    """Draw a group of items centered at (cx, cy) and enlarged by scale, with its header above and labels below."""
-    width = group_width(names, scale)
-    drawing.text(cx, cy - 6.0 * scale - 1.7, header, 2.0, weight="bold", color=color)
-    x = cx - width / 2
-    for name in names:
-        draw, item_width, label = ITEMS[name]
-        scaled(drawing, scale, draw, x, cy)
-        drawing.text(x + scale * item_width / 2, cy + 6.0 * scale + 2.3, label, 1.6, color=SUBTEXT)
-        x += scale * (item_width + ITEM_GAP)
 
 
 def superellipse(cx, cy, a, b, power=4.0, samples=240):
@@ -1230,104 +1205,6 @@ def superellipse(cx, cy, a, b, power=4.0, samples=240):
     x = cx + a * np.sign(c) * np.abs(c) ** (2 / power)
     y = cy + b * np.sign(s) * np.abs(s) ** (2 / power)
     return np.stack([x, y], axis=1)
-
-
-def compact_layout(scale, halo, rows):
-    """Place the groups around the hub at x = 0: the middle group beside the hub, the others above and below it.
-
-    Returns the centers of the groups of each side and how far each side reaches from the hub.
-    """
-    layout, reach = {}, {}
-    for side, groups in ((-1, INTERACTIVE_GROUPS), (1, AUTOMATIC_GROUPS)):
-        halves = [group_width(names, scale) / 2 for _, names in groups]
-        # the upper and lower groups share one column, and the middle group stands as close to the hub as it can,
-        # so that the three groups of a side trace one curve around the hub
-        column = max(20.5, 6.5 + max(halves[0], halves[2]))
-        offsets = [column, halo + 1.2 + halves[1], column]
-        centers = [(side * offset, row) for offset, row in zip(offsets, rows)]
-        layout[side] = centers
-        reach[side] = max(offset + half for offset, half in zip(offsets, halves))
-    return layout, reach
-
-
-def prompt_icon(drawing, kind, x, cy):
-    """Draw the icon of one kind of prompt with its left edge at x, and return its right edge."""
-    if kind == "points":
-        point_prompt(drawing, x + 0.55, cy, r=0.55)
-        point_prompt(drawing, x + 2.0, cy, positive=False, r=0.55)
-        return x + 2.6
-    if kind == "scribbles":
-        t = np.linspace(0, 1, 20)
-        for dy, color in ((-0.45, TEAL), (0.45, ORANGE)):
-            brush_stroke(drawing, x + 0.1 + 2.4 * t, cy + dy + 0.3 * np.sin(2 * np.pi * t), color, width=0.32)
-        return x + 2.6
-    # the shape prompts are drawn around a small cell, in the teal of the positive prompts
-    cell = blob_path(x + 1.3, cy, 0.62, 1.25, 0.4, seed=7)
-    if kind in ("box", "lasso"):
-        drawing.add(f'<path d="{cell}" fill="#7b7c84"/>')
-    if kind == "box":
-        drawing.add(
-            f'<rect x="{fmt(x + 0.15)}" y="{fmt(cy - 0.95)}" width="2.3" height="1.9" rx="0.15" fill="none" '
-            f'stroke="{TEAL}" stroke-width="0.24"/>'
-        )
-        for px, py in ((x + 0.15, cy - 0.95), (x + 2.45, cy - 0.95), (x + 0.15, cy + 0.95), (x + 2.45, cy + 0.95)):
-            drawing.add(
-                f'<rect x="{fmt(px - 0.22)}" y="{fmt(py - 0.22)}" width="0.44" height="0.44" fill="#ffffff" '
-                f'stroke="{TEAL}" stroke-width="0.14"/>'
-            )
-    elif kind == "lasso":
-        t = np.linspace(0, 2 * np.pi, 40, endpoint=False)
-        rr = 1.0 + 0.1 * np.sin(3 * t + 0.6) + 0.06 * np.sin(5 * t + 1.3)
-        points = [(x + 1.3 + 1.2 * r * np.cos(a), cy + 0.82 * r * np.sin(a)) for r, a in zip(rr, t)]
-        path = "M" + "L".join(f"{fmt(px)},{fmt(py)}" for px, py in points) + "Z"
-        drawing.add(
-            f'<path d="{path}" fill="{TEAL}" fill-opacity="0.15" stroke="{TEAL}" stroke-width="0.24" '
-            'stroke-dasharray="0.45,0.3" stroke-linejoin="round"/>'
-        )
-    else:
-        # three slices of a stack, the middle one prompted, the mask carried to the others
-        for k, dy in enumerate((-0.75, 0.0, 0.75)):
-            middle = k == 1
-            fill, edge = ("#d9f0f3", TEAL) if middle else ("#eceaf0", "#8d8d96")
-            drawing.add(
-                f'<path d="M{fmt(x + 0.1)},{fmt(cy + dy + 0.35)}l0.6,-0.7h1.8l-0.6,0.7Z" fill="{fill}" '
-                f'stroke="{edge}" stroke-width="0.14" stroke-linejoin="round"/>'
-            )
-        point_prompt(drawing, x + 1.3, cy, r=0.28)
-    return x + 2.6
-
-
-# the icons show the positive and the negative prompts, so the names leave them out
-PROMPTS = [
-    ("points", "points"), ("box", "box"), ("scribbles", "scribbles"), ("lasso", "lasso / ellipse"),
-    ("volume", "propagation"),
-]
-
-
-def prompt_row(drawing, cx, cy):
-    """List the prompts of the annotation tools in one row on a card centered at (cx, cy), as checked in
-    micro_sam/sam_annotator: positive and negative points and scribbles, boxes, lasso and ellipse shapes as mask
-    prompts, and the propagation of the prompts of one slice or frame through a volume or a timeseries."""
-    color = mix(INTERACTIVE_STYLE[1], "#000000", 0.3)
-    size = drawing.text_size(1.3)
-    start = len(drawing.body)
-    drawing.text(0.0, 0.7, "Prompts", 1.76, weight="bold", color=color, anchor="start")
-    x = text_width("Prompts", drawing.text_size(1.76), bold=True) + 2.2
-    for kind, text in PROMPTS:
-        right = prompt_icon(drawing, kind, x, 0.0)
-        drawing.text(right + 0.6, 0.6, text, 1.3, color=SUBTEXT, anchor="start")
-        x = right + 0.6 + text_width(text, size) + 1.8
-    width = x - 1.8
-    inner = "".join(drawing.body[start:])
-    del drawing.body[start:]
-    pad, height = 1.4, 4.6
-    x0 = cx - width / 2
-    drawing.add(
-        f'<rect x="{fmt(x0 - pad)}" y="{fmt(cy - height / 2)}" width="{fmt(width + 2 * pad)}" height="{fmt(height)}" '
-        f'rx="1.2" fill="#ffffff" stroke="{RIM}" stroke-width="0.3"/>'
-        f'<g transform="translate({fmt(x0)},{fmt(cy)})">{inner}</g>'
-    )
-    return cy + height / 2
 
 
 def loop_badge(drawing, center, r=2.7):
@@ -1363,45 +1240,49 @@ def logo_data_uri(path, width_px=480):
     return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode(), image.width / image.height
 
 
-def draw_hub(drawing, cx, cy, radius, logo_path, napari_logo, python_logo):
-    """Draw the μSAM2 hub as a white disc with the logo and the name, and its three interfaces as round badges on the
-    lower rim of the disc, like the correction badge on its upper rim."""
-    drawing.add(
-        f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(radius)}" fill="#ffffff" stroke="{RIM}" '
-        'stroke-width="0.35"/>'
-    )
-    # the full logo of micro-sam with its name, centered in the disc
+def draw_interfaces(drawing, cx, cy, logo_path, napari_logo, python_logo, logo_w=17.0, height=7.6):
+    """Draw the μSAM2 ecosystem as one white pill centered at (cx, cy): the logo, then a round badge with the name to
+    its right for each of its three interfaces. Returns the lower edge of the pill."""
     uri, aspect = logo_data_uri(logo_path, width_px=900)
-    logo_w = 16.0
     logo_h = logo_w / aspect
+    interfaces = [("napari", svg_uri(napari_logo)), ("Python", svg_uri(python_logo)), ("CLI", None)]
+    badge, icon, gap, name_size = 2.1, 2.6, 0.8, 2.12
+    widths = [2 * badge + gap + text_width(name, name_size) for name, _ in interfaces]
+    total = logo_w + sum(3.0 + w for w in widths)
+    x = cx - total / 2
+    margin = height / 2
     drawing.add(
-        f'<image x="{fmt(cx - logo_w / 2)}" y="{fmt(cy - logo_h / 2)}" width="{fmt(logo_w)}" height="{fmt(logo_h)}" '
+        f'<rect x="{fmt(x - margin)}" y="{fmt(cy - height / 2)}" width="{fmt(total + 2 * margin)}" '
+        f'height="{fmt(height)}" rx="{fmt(height / 2)}" fill="#ffffff" stroke="{RIM}" stroke-width="0.4"/>'
+    )
+    drawing.add(
+        f'<image x="{fmt(x)}" y="{fmt(cy - logo_h / 2)}" width="{fmt(logo_w)}" height="{fmt(logo_h)}" '
         f'preserveAspectRatio="xMidYMid meet" xlink:href="{uri}"/>'
     )
-    interfaces = [("napari", svg_uri(napari_logo)), ("Python", svg_uri(python_logo)), ("CLI", None)]
-    badge, icon = 2.05, 2.5
-    for angle, (label, icon_uri) in zip((236, 270, 304), interfaces):
-        t = np.radians(angle)
-        bx, by = cx + radius * np.cos(t), cy - radius * np.sin(t)
+    x += logo_w
+    for (name, icon_uri), w in zip(interfaces, widths):
+        x += 3.0
+        bx = x + badge
         drawing.add(
-            f'<circle cx="{fmt(bx)}" cy="{fmt(by)}" r="{fmt(badge)}" fill="#ffffff" stroke="{RIM}" '
+            f'<circle cx="{fmt(bx)}" cy="{fmt(cy)}" r="{fmt(badge)}" fill="#ffffff" stroke="{RIM}" '
             'stroke-width="0.3"/>'
         )
         if icon_uri is None:
             # the prompt of a terminal
-            s_ = 1.5
+            s_ = 1.6
             drawing.add(
-                f'<path d="M{fmt(bx - 0.55 * s_)},{fmt(by - 0.4 * s_)}l{fmt(0.4 * s_)},{fmt(0.32 * s_)}'
-                f'l{fmt(-0.4 * s_)},{fmt(0.32 * s_)}M{fmt(bx + 0.05 * s_)},{fmt(by + 0.42 * s_)}h{fmt(0.5 * s_)}" '
-                f'fill="none" stroke="#2d2b36" stroke-width="0.24" stroke-linecap="round" stroke-linejoin="round"/>'
+                f'<path d="M{fmt(bx - 0.55 * s_)},{fmt(cy - 0.4 * s_)}l{fmt(0.4 * s_)},{fmt(0.32 * s_)}'
+                f'l{fmt(-0.4 * s_)},{fmt(0.32 * s_)}M{fmt(bx + 0.05 * s_)},{fmt(cy + 0.42 * s_)}h{fmt(0.5 * s_)}" '
+                f'fill="none" stroke="#2d2b36" stroke-width="0.22" stroke-linecap="round" stroke-linejoin="round"/>'
             )
         else:
             drawing.add(
-                f'<image x="{fmt(bx - icon / 2)}" y="{fmt(by - icon / 2)}" width="{fmt(icon)}" height="{fmt(icon)}" '
+                f'<image x="{fmt(bx - icon / 2)}" y="{fmt(cy - icon / 2)}" width="{fmt(icon)}" height="{fmt(icon)}" '
                 f'xlink:href="{icon_uri}"/>'
             )
-        # the name of each interface sits right below its badge
-        drawing.text(bx, by + badge + 2.4, label, 1.3, color=SUBTEXT)
+        drawing.text(bx + badge + gap, cy + 0.75, name, name_size, color=TEXT, anchor="start")
+        x += w
+    return cy + height / 2
 
 
 def svg_uri(path):
@@ -1417,7 +1298,7 @@ A_HEADER_Y = 5.5
 # spans the panel below them
 A_ENCODER_X = (18.0, 40.0)
 A_BAND_X, A_BAND_GAP = 61.5, 3.0
-AUTO_BAND_H, INTER_H = 63.5, 47.0
+AUTO_BAND_H, INTER_H = 63.5, 38.5
 INTER_Y = AUTO_BAND_H + A_BAND_GAP
 A_H = INTER_Y + INTER_H
 A_CONTENT_X = 69.0
@@ -1425,11 +1306,13 @@ A_CONTENT_X = 69.0
 A_ENTRY = 19.0
 A_OUTPUT_X = 151.5
 A_SCALE = 1.35
+# the images of the interactive band are a little smaller, so that the band stays thin
+A_INTER_SCALE = 1.15
 # the rows of the 2D and the 3D outputs, relative to the top of a band
-A_ROW_2D, A_ROW_3D, AUTO_ROW_3D = 15.5, 35.5, 43.5
-# the Hiera stages as (tokens per side, size, layers, global attention), and the decoder stages as (channels,
-# height, depth) of their feature maps
+A_ROW_2D, A_ROW_3D, AUTO_ROW_3D = 12.0, 27.5, 43.5
+# the Hiera stages as (tokens per side, size, layers, global attention)
 HIERA_STAGES = [(16, 9.5, 2, False), (8, 7.4, 3, False), (4, 5.7, 5, True), (2, 4.3, 3, True)]
+# the decoder stages as (channels, height, depth) of their feature maps
 STAGES = [(0.9, 22.0, 5.6), (1.5, 16.0, 4.2), (2.2, 11.5, 3.0), (3.0, 8.0, 2.2)]
 ARROW = "#5f5a6b"
 # the fills and outlines of the modules; the heads take the colors of the bands of panel c
@@ -1495,6 +1378,14 @@ def feature_map(drawing, x, cy, w, h, d, style):
     return x + w + dx
 
 
+def slab_stack(drawing, x, cy, count, style, w=3.4, d=2.2, gap=0.65):
+    """Draw a stack of slices, as the features of a volume with their z axis pointing up; return its right edge."""
+    right = x
+    for k in range(count):
+        right = embedding_slab(drawing, x, cy + 0.6 * (count - 1) * gap / 2 + 1.0 - gap * k, w, d, n=3, style=style)
+    return right
+
+
 def mix(a, b, t):
     rgb = (1 - t) * hex_to_rgb(a) + t * hex_to_rgb(b)
     return "#" + "".join(f"{int(round(255 * c)):02x}" for c in rgb)
@@ -1515,14 +1406,6 @@ def embedding_slab(drawing, x, y, w, d, n=5, style=ENCODER_STYLE):
         f'<path d="{grid}" stroke="{edge}" stroke-width="0.08"/>'
     )
     return x + w + dx
-
-
-def slab_stack(drawing, x, cy, count, style, w=3.4, d=2.2, gap=0.65):
-    """Draw a stack of slices, as the features of a volume with their z axis pointing up; return its right edge."""
-    right = x
-    for k in range(count):
-        right = embedding_slab(drawing, x, cy + 0.6 * (count - 1) * gap / 2 + 1.0 - gap * k, w, d, n=3, style=style)
-    return right
 
 
 # the volume of the 3D examples of panel a: a neuron with a cell body and its processes among other cells and neurites,
@@ -2116,17 +1999,18 @@ def item_label(drawing, x, width, y, text, size=1.76):
     drawing.text(x + width / 2, y, text, size, color=SUBTEXT)
 
 
-def outputs(drawing, draw_2d, draw_3d, y, row_2d=None, row_3d=None):
+def outputs(drawing, draw_2d, draw_3d, y, row_2d=None, row_3d=None, scale=A_SCALE):
     """Draw the 2D output above the 3D output, and return the left edge of each."""
     row_2d = A_ROW_2D if row_2d is None else row_2d
     row_3d = A_ROW_3D if row_3d is None else row_3d
-    w2, w3 = SIZE * A_SCALE, (SIZE + 3.5) * A_SCALE
-    x2 = A_OUTPUT_X + (w3 - w2) / 2
-    scaled(drawing, A_SCALE, draw_2d, x2, y + row_2d)
-    item_label(drawing, A_OUTPUT_X, w3, y + row_2d + w2 / 2 + 2.2, "2D")
-    scaled(drawing, A_SCALE, draw_3d, A_OUTPUT_X, y + row_3d)
-    item_label(drawing, A_OUTPUT_X, w3, y + row_3d + w3 / 2 + 2.3, "3D")
-    return x2, A_OUTPUT_X
+    w2, w3, wide = SIZE * scale, (SIZE + 3.5) * scale, (SIZE + 3.5) * A_SCALE
+    # the outputs are centered in the column of the widest output
+    x2, x3 = A_OUTPUT_X + (wide - w2) / 2, A_OUTPUT_X + (wide - w3) / 2
+    scaled(drawing, scale, draw_2d, x2, y + row_2d)
+    item_label(drawing, A_OUTPUT_X, wide, y + row_2d + w2 / 2 + 2.2, "2D")
+    scaled(drawing, scale, draw_3d, x3, y + row_3d)
+    item_label(drawing, A_OUTPUT_X, wide, y + row_3d + w3 / 2 + 2.3, "3D")
+    return x2, x3
 
 
 def a_band(drawing, x, y, height, title, background, title_y):
@@ -2137,10 +2021,10 @@ def a_band(drawing, x, y, height, title, background, title_y):
     drawing.text(x + 3.3, title_y, title, 2.12, weight="bold", color=BLUE, rotate=-90)
 
 
-def token_grid(drawing, x, y, size, n, highlight=None):
+def token_grid(drawing, x, y, size, n, highlight=None, style=ENCODER_STYLE):
     """Draw one transformer block as a square grid of n x n tokens; highlight is the side of an attention window
     in tokens, or n for global attention."""
-    fill, edge = ENCODER_STYLE
+    fill, edge = style
     lines = "".join(
         f"M{fmt(x + size * k / n)},{fmt(y)}v{fmt(size)}M{fmt(x)},{fmt(y + size * k / n)}h{fmt(size)}"
         for k in range(1, n)
@@ -2187,7 +2071,9 @@ def hiera(drawing, cx, top):
         f'<rect x="{fmt(neck_x)}" y="{fmt(neck_top)}" width="3.6" height="{fmt(neck_bottom - neck_top)}" rx="0.6" '
         f'fill="{fill}" stroke="{edge}" stroke-width="0.2"/>'
     )
-    drawing.text(neck_x + 1.8, (neck_top + neck_bottom) / 2, "neck", 1.5, rotate=-90)
+    # the rotated text reads upwards with its letters left of its baseline, so the baseline moves right by half the
+    # height of the letters to center the word in the neck
+    drawing.text(neck_x + 1.8 + 0.36 * drawing.text_size(1.5), (neck_top + neck_bottom) / 2, "neck", 1.5, rotate=-90)
     for x, y_link in links:
         flow_arrow(drawing, [(x + 0.3, y_link), (neck_x - 0.2, y_link)], head=0.5, width=0.18)
     return y
@@ -2245,10 +2131,10 @@ def draw_trunk(drawing):
         f'<path d="M{fmt(emb_x + 12.0)},{fmt(cy_2d)}H{fmt(bus_x)}M{fmt(emb_x + 12.0)},{fmt(cy_3d)}H{fmt(bus_x)}'
         f'M{fmt(bus_x)},{fmt(cy_2d)}V{fmt(INTER_Y + 5.0)}" fill="none" stroke="{ARROW}" stroke-width="0.25"/>'
     )
-    return bus_x
+    return bus_x, (top, bottom)
 
 
-def propagation(drawing, x, top, count=7, size=8.6, pitch=10.4, step=14):
+def propagation(drawing, x, top, count=5, size=8.6, pitch=10.6, step=21):
     """Show how the memory carries the mask of the neuron from the prompted middle slice to the slices on both sides,
     as EM slices of the volume with the mask that each of them gets."""
     middle, labels = count // 2, neuron_volume()
@@ -2266,28 +2152,15 @@ def propagation(drawing, x, top, count=7, size=8.6, pitch=10.4, step=14):
         )
         if k == middle:
             point_prompt(drawing, sx + PROMPT[0] * size, top + PROMPT[1] * size, r=0.5)
-        drawing.text(sx + size / 2, top + size + 1.9, f"z = {index}", 1.25, color=SUBTEXT)
-    # the mask hops from slice to slice, forward and backward from the prompted slice, numbered in their order
-    t = np.linspace(0, 1, 24)[:, None]
-    for step in range(1, middle + 1):
-        for direction in (1, -1):
-            a, b = middle + direction * (step - 1), middle + direction * step
-            start = np.array([x + a * pitch + size / 2 + direction * 1.2, top - 0.3])
-            end = np.array([x + b * pitch + size / 2 - direction * 1.2, top - 0.3])
-            c1, c2 = start + (0, -2.6), end + (0, -2.6)
-            curve = (1 - t) ** 3 * start + 3 * (1 - t) ** 2 * t * c1 + 3 * (1 - t) * t ** 2 * c2 + t ** 3 * end
-            flow_arrow(drawing, list(curve), head=0.6, width=0.22)
-            drawing.text((start[0] + end[0]) / 2, top - 2.6, str(step), 1.05, weight="bold", color=SUBTEXT)
-    center, half = x + middle * pitch + size / 2, (middle + 1) / 2 * pitch
-    label_y = top + size + 4.4
-    for direction, text in ((-1, "backward propagation"), (1, "forward propagation")):
-        reach = text_width(text, drawing.text_size(1.3), bold=True) / 2 + 0.6
-        anchor_x = center + direction * half
-        drawing.text(anchor_x, label_y, text, 1.3, weight="bold", color=SUBTEXT)
-        # a small arrow on the outer side of the label points the way of the propagation
-        arrow = [(anchor_x + direction * reach, label_y - 0.45), (anchor_x + direction * (reach + 2.4), label_y - 0.45)]
-        flow_arrow(drawing, arrow, head=0.6, width=0.22)
-    drawing.text(center, top + size + 4.4, "prompted", 1.3, color=TEAL_DARK)
+    # one arrow to each side names the propagation from the prompted slice through the volume
+    center = x + middle * pitch + size / 2
+    left, right = x - 0.2, x + (count - 1) * pitch + size + 0.2
+    label_y = top + size + 2.6
+    drawing.text(center, label_y, "prompted slice", 1.3, color=TEAL_DARK)
+    reach = text_width("prompted slice", drawing.text_size(1.3)) / 2 + 1.2
+    flow_arrow(drawing, [(center - reach, label_y - 0.45), (left, label_y - 0.45)], head=0.6, width=0.22)
+    flow_arrow(drawing, [(center + reach, label_y - 0.45), (right, label_y - 0.45)], head=0.6, width=0.22)
+    drawing.text(center, label_y + 2.3, "propagation through the volume", 1.3, color=SUBTEXT)
 
 
 def memory_bank(drawing, x, cy, size=5.6, gap=0.7, step=14, squeeze=0.45, shear=-0.32):
@@ -2320,10 +2193,12 @@ def draw_interactive_head(drawing, bus_x):
     """Draw the interactive band below the trunk: the prompts below the inputs, the prompt encoder below the image
     encoder, the memory attention that propagates a mask through volumes, and the mask decoder."""
     y0 = INTER_Y
-    a_band(drawing, 0.0, y0, INTER_H, "Interactive Segmentation", INTERACTIVE_BACKGROUND, y0 + 23.5)
+    a_band(drawing, 0.0, y0, INTER_H, "Interactive segmentation", INTERACTIVE_BACKGROUND, y0 + 19.2)
     decoder_x = A_OUTPUT_X - 19.5
     decoder_right = decoder_x + 13.5
-    module(drawing, decoder_x, y0 + 2.0, decoder_right - decoder_x, 41.5, ["Mask", "decoder"], INTERACTIVE_STYLE)
+    module(
+        drawing, decoder_x, y0 + 2.0, decoder_right - decoder_x, INTER_H - 4.0, ["Mask", "decoder"], INTERACTIVE_STYLE
+    )
     # 2D embeddings go straight to the mask decoder, the slices of a volume pass the memory attention first
     split, bypass, memory = bus_x + 3.0, y0 + 3.5, y0 + 10.5
     drawing.add(
@@ -2341,26 +2216,22 @@ def draw_interactive_head(drawing, bus_x):
     loop_y, loop_x = y0 + 17.5, memory_x + 20.0
     flow_arrow(drawing, [(decoder_x - 0.3, loop_y), (loop_x, loop_y), (loop_x, memory + 4.2)])
     memory_bank(drawing, loop_x + 10.0, loop_y - 0.4)
-    propagation(drawing, decoder_x - 82.0, y0 + 24.5)
+    propagation(drawing, decoder_x - 58.0, y0 + 21.0, size=7.6, pitch=9.4)
     # prompts are placed on a 2D image, or on one slice of a volume, right below the inputs
-    row_2d, row_3d = y0 + 14.5, y0 + 34.5
-    drawing.text(12.0, y0 + 5.0, "Prompts", 1.76, color=SUBTEXT)
-    scaled(drawing, 12.0 / SIZE, slice_prompted, 6.0, row_2d)
-    place_render(drawing, render_prompted_slice(), 5.0, row_3d, 14.0)
-    encoder_x, encoder_y, elbow = 27.0, y0 + 25.0, 23.5
+    row_2d, row_3d = y0 + A_ROW_2D, y0 + A_ROW_3D
+    drawing.text(11.5, y0 + 4.6, "Prompts", 1.76, color=SUBTEXT)
+    scaled(drawing, 10.5 / SIZE, slice_prompted, 6.25, row_2d)
+    place_render(drawing, render_prompted_slice(), 5.0, row_3d, 12.5)
+    encoder_x, encoder_y, elbow = 27.0, y0 + 20.0, 23.5
     module(drawing, encoder_x, encoder_y - 5.0, 18.0, 10.0, ["Prompt", "encoder"], INTERACTIVE_STYLE)
-    for start, row, end in ((18.4, row_2d, encoder_y - 2.0), (19.8, row_3d, encoder_y + 2.0)):
+    for start, row, end in ((17.4, row_2d, encoder_y - 2.0), (18.6, row_3d, encoder_y + 2.0)):
         flow_arrow(drawing, [(start, row), (elbow, row), (elbow, end), (encoder_x - 0.7, end)])
     # the prompt embeddings run below the memory to the mask decoder
-    lane = y0 + 42.0
+    lane = y0 + INTER_H - 2.7
     flow_arrow(drawing, [(encoder_x + 9.0, encoder_y + 5.6), (encoder_x + 9.0, lane), (decoder_x - 0.7, lane)])
-    x2, x3 = outputs(drawing, slice_interactive, interactive_3d_render, y0)
+    x2, x3 = outputs(drawing, slice_interactive, interactive_3d_render, y0, scale=A_INTER_SCALE)
     flow_arrow(drawing, [(decoder_right + 0.7, y0 + A_ROW_2D), (x2 - 1.2, y0 + A_ROW_2D)])
     flow_arrow(drawing, [(decoder_right + 0.7, y0 + A_ROW_3D), (x3 - 1.2, y0 + A_ROW_3D)])
-
-
-def operator(drawing, x, y, symbol):
-    drawing.text(x, y + 0.6, symbol, 1.8, weight="bold")
 
 
 def strip_pooling(drawing, x, y, width):
@@ -2377,7 +2248,7 @@ def strip_pooling(drawing, x, y, width):
     right = slab_stack(drawing, x + 1.2, row, 4, AUTOMATIC_STYLE, w=3.0, d=2.0)
     drawing.text(x + 0.8, row + 4.4, "x: Z × H × W", small, color=SUBTEXT, anchor="start")
     flow_arrow(drawing, [(right + 0.6, row), (right + 3.4, row)], head=0.55, width=0.2)
-    drawing.text(right + 2.5, row - 1.0, "mean z", small, color=SUBTEXT)
+    drawing.text(right + 2.0, row - 2.6, "mean z", small, color=SUBTEXT)
     slice_x = right + 3.7
     right = embedding_slab(drawing, slice_x, row + 0.8, 3.0, 2.0, n=3, style=AUTOMATIC_STYLE)
     drawing.text(slice_x + 2.4, row + 2.4, "1 × H × W", small, color=SUBTEXT)
@@ -2419,27 +2290,26 @@ def strip_pooling(drawing, x, y, width):
     drawing.text(x + width / 2, y + 23.3, "3D only (2D: DSP(x) = x)", 1.15, weight="bold", color=SUBTEXT)
 
 
-def draw_automatic_head(drawing, bus_x):
-    """Draw the segmentation decoder, its foreground, distance and boundary predictions, and the segmentation."""
-    a_band(drawing, A_BAND_X, 0.0, AUTO_BAND_H, "Automatic Segmentation", AUTOMATIC_BACKGROUND, 36.0)
-    # the content sits a little lower, so that the first decoder stage lines up with the 2D embedding
-    y = 0.0
-    # the box closes right below the sketch of the DSP block
-    x0, x1, top = A_CONTENT_X, A_CONTENT_X + 40.0, y + 4.0
-    bottom = top + 56.4
+def draw_automatic_head(drawing, bus_x, encoder_box):
+    """Draw the automatic band: the segmentation decoder, as tall as the image encoder, and the maps it predicts for
+    an image and for a volume, with the instance segmentation made from each."""
+    a_band(drawing, A_BAND_X, 0.0, AUTO_BAND_H, "Automatic segmentation", AUTOMATIC_BACKGROUND, 36.0)
+    top, bottom = encoder_box
+    x0, x1 = A_CONTENT_X, A_CONTENT_X + 40.0
     fill, edge = AUTOMATIC_STYLE
     drawing.add(
         f'<rect x="{fmt(x0)}" y="{fmt(top)}" width="{fmt(x1 - x0)}" height="{fmt(bottom - top)}" rx="1.2" '
         f'fill="{mix(fill, "#ffffff", 0.55)}" stroke="{edge}" stroke-width="0.25"/>'
     )
-    drawing.text((x0 + x1) / 2, top + 4.5, "Segmentation decoder", 2.12, weight="bold")
-    flow_arrow(drawing, [(bus_x, A_ENTRY), (x0 - 0.7, A_ENTRY)])
-    # the decoder upsamples the embeddings back to the image resolution, and every 3D block ends with a DSP block
+    drawing.text((x0 + x1) / 2, A_HEADER_Y, "Segmentation decoder", 2.12, weight="bold")
+    flow_arrow(drawing, [(bus_x, A_ENTRY), (x0 + 1.3, A_ENTRY)])
+    # the decoder upsamples the embeddings back to the image resolution: an image passes straight from stage to
+    # stage, a volume takes the detour through the DSP block after each stage
     cy, x, markers = A_ENTRY, x0 + 2.0, []
     zoom_index = len(drawing.body)
-    # a 2D input passes straight on from stage to stage, a volume takes the detour through the DSP block
-    gap, drop, marker = 5.6, 3.0, 1.85
-    for k, (w, h, d) in enumerate(STAGES[::-1]):
+    # the DSP circles are wide enough for their name at the smallest print size
+    gap, drop, marker = 5.6, 3.8, 2.3
+    for w, h, d in STAGES[::-1]:
         x = feature_map(drawing, x, cy, w, 0.85 * h, 0.75 * d, AUTOMATIC_STYLE)
         mx = x + gap / 2
         markers.append(mx)
@@ -2449,8 +2319,6 @@ def draw_automatic_head(drawing, bus_x):
             f'M{fmt(mx + marker)},{fmt(cy + drop)}H{fmt(x + gap - 0.8)}V{fmt(cy)}" fill="none" stroke="{ARROW}" '
             'stroke-width="0.2" stroke-linejoin="round" stroke-dasharray="0.35,0.3"/>'
         )
-        if k == 0:
-            drawing.text(mx, cy + drop + marker + 1.9, "3D", 0.85, color=SUBTEXT)
         x += gap
     for mx in markers:
         drawing.add(
@@ -2458,12 +2326,15 @@ def draw_automatic_head(drawing, bus_x):
             'stroke-width="0.22"/>'
         )
         drawing.text(mx, cy + drop + 0.55, "DSP", 0.85, weight="bold", color=edge)
-    # the sketch of the DSP block opens from one DSP block like a magnifying cone, drawn behind the feature maps
-    frame_x, frame_top, frame_w = x0 + 1.2, top + 29.0, x1 - x0 - 2.4
-    frame_bottom = frame_top + 25.0
-    mx = markers[2]
+    # the sketch of the DSP block opens from one DSP block like a magnifying cone, drawn behind the feature maps; it
+    # fills the lower part of the decoder
+    frame_x, frame_w = x0 + 1.2, x1 - x0 - 2.4
+    frame_bottom = bottom - 1.2
+    frame_top = frame_bottom - 25.0
+    mx, spread, corner = markers[2], 1.4, 0.8
+    rim = cy + drop + np.sqrt(marker ** 2 - spread ** 2)
     cone = [
-        (mx - 1.4, cy + drop + 1.2), (mx + 1.4, cy + drop + 1.2), (frame_x + frame_w, frame_top), (frame_x, frame_top)
+        (mx - spread, rim), (mx + spread, rim), (frame_x + frame_w - corner, frame_top), (frame_x + corner, frame_top)
     ]
     drawing.body.insert(zoom_index, (
         '<path d="M' + "L".join(f"{fmt(px)},{fmt(py)}" for px, py in cone) + f'Z" fill="#ffffff" '
@@ -2480,33 +2351,33 @@ def draw_automatic_head(drawing, bus_x):
     # the outputs of the decoder, computed with the training targets of micro-sam; z only exists in volumes
     maps_2d = decoder_maps()[0]
     names = ["foreground", "boundary", "x-distance", "y-distance", "z-distance"]
-    front, depth, gap = 4.8, 1.6, 0.7
-    pitch, mx = front + depth + gap, x1 + 4.0
-    # the 3D row sits lower than in the interactive band, since the automatic band is as tall as the inputs
-    row_2d, row_3d = A_ENTRY, y + AUTO_ROW_3D
-    # the four 2D maps stretch over the whole row, the five 3D maps sit in their own row; each row names its maps
-    width = len(names) * pitch - gap
-    tile = (width - 3 * gap) / 4
+    front, depth, map_gap = 4.8, 1.6, 0.7
+    pitch, mx = front + depth + map_gap, x1 + 4.0
+    row_2d, row_3d = A_ENTRY, AUTO_ROW_3D
+    # the four 2D maps stretch over the whole row, the five 3D maps sit in their own rows; each map is named
+    width = len(names) * pitch - map_gap
+    tile = (width - 3 * map_gap) / 4
     for k, name in enumerate(names[:4]):
-        tx = mx + k * (tile + gap)
+        tx = mx + k * (tile + map_gap)
         drawing.text(tx + tile / 2, row_2d - tile / 2 - 1.2, name, 1.3, color=SUBTEXT)
         map_tile(drawing, tx, row_2d - tile / 2, tile, maps_2d[name])
     # the 3D maps are larger and split in two lines, the foreground and boundary above the three distances, and the
-    # 3D output sits between the two lines
+    # line of the volume runs between them
     block, lines = 10.0, [(names[:2], row_3d - 7.2), (names[2:], row_3d + 6.9)]
-    for line, cy in lines:
+    for line, line_y in lines:
         spacing = (width - len(line) * block) / (len(line) - 1) if len(line) > 2 else 4.0
         start = mx + (width - len(line) * block - (len(line) - 1) * spacing) / 2
         for k, name in enumerate(line):
             tx = start + k * (block + spacing)
-            height = place_render(drawing, render_map_block(name), tx, cy, block)
-            drawing.text(tx + block / 2, cy - height / 2 - 1.1, name, 1.3, color=SUBTEXT)
-    end = mx + width
-    for row in (row_2d, row_3d):
-        flow_arrow(drawing, [(x1 + 0.7, row), (mx - 0.7, row)])
-    x2, x3 = outputs(drawing, slice_automatic, automatic_3d_render, y, row_2d=A_ENTRY, row_3d=AUTO_ROW_3D)
-    flow_arrow(drawing, [(end + 0.7, row_2d), (x2 - 1.2, row_2d)])
-    flow_arrow(drawing, [(end + 0.7, row_3d), (x3 - 1.2, row_3d)])
+            height = place_render(drawing, render_map_block(name), tx, line_y, block)
+            drawing.text(tx + block / 2, line_y - height / 2 - 1.1, name, 1.3, color=SUBTEXT)
+    maps_end = mx + width
+    # the image and the volume leave the decoder on their own rows
+    flow_arrow(drawing, [(x - 0.3, row_2d), (mx - 0.7, row_2d)])
+    flow_arrow(drawing, [(x1 + 0.7, row_3d), (mx - 0.7, row_3d)])
+    x2, x3 = outputs(drawing, slice_automatic, automatic_3d_render, 0.0, row_2d=row_2d, row_3d=row_3d)
+    flow_arrow(drawing, [(maps_end + 0.7, row_2d), (x2 - 1.2, row_2d)])
+    flow_arrow(drawing, [(maps_end + 0.7, row_3d), (x3 - 1.2, row_3d)])
 
 
 def fetch_python_logo(path, url=PYTHON_LOGO_URL):
@@ -2524,35 +2395,40 @@ def fetch_python_logo(path, url=PYTHON_LOGO_URL):
 
 # panel b: example crops of the training data, one per dataset or imaging technique, grouped by domain
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
-# the training pools: the generalist model (cells and nuclei in LM, EM and histopathology) and the two EM organelle
-# models, with their numbers of datasets and their colors
-B_POOLS = (
-    ("cells", ("Cells (EM and LM)", "and Nuclei (LM)"), 91, PURPLE),
-    ("mitochondria", ("Mitochondria (EM)",), 23, TEAL),
-    ("nuclei", ("Nuclei (EM)",), 19, ORANGE),
-)
-# the scale of the data per domain, counted on 2026-11-03: the train split of the loader of micro_sam/v2/datasets
-# (datasets, 2D images or 3D volumes, annotated objects) and the test data of the evaluation in the paper (from
-# finetuning/v2/evaluation/common.py); LICONN (expansion microscopy) counts as fluorescence, and the four LM datasets
-# with both modalities count in both
-B_DOMAIN_STATS = {
-    "fluorescence": {"train": (36, 17379, 16904245), "test": (56, 4842, 596936)},
-    "label-free": {"train": (20, 17074, 2278387), "test": (28, 4573, 400474)},
-    "em": {"train": (63, 10224, 1433432), "test": (72, 434, 224667)},
-    "histopathology": {"train": (18, 10422, 877470), "test": (21, 8022, 601052)},
+# the number of datasets of the generalist model; the four LM datasets with both modalities count once here
+B_TRAIN_DATASETS = 91
+# the datasets of the generalist model per domain, for the slices of the pie chart; each of the four LM datasets with
+# both modalities counts in the one of most of its training images (Omnipose and NeurIPS CellSeg in label-free, CTC and
+# DeepBacs in fluorescence), so that the slices add up to all datasets
+B_DOMAIN_DATASETS = {"fluorescence": 34, "label-free": 18, "em": 21, "histopathology": 18}
+# the annotated objects of the datasets of the generalist model per domain: all annotated images and volumes on disk,
+# in all splits and including the subsets that the loader leaves out (level C of figures/figure1/data_stats/full,
+# counted 2026-11-05), without the EM mitochondria and nucleus data; the connectomes count the boxes on disk, LICONN
+# (expansion microscopy) counts as fluorescence, and XPRESS (X-ray, 51 objects) counts with electron microscopy, since
+# the model trains on it in the EM pool
+B_OBJECTS = {
+    "fluorescence": 21653662, "label-free": 4443510, "em": 2083391, "histopathology": 1707969,
 }
+# the pixels of all 2D images and the voxels of all 3D volumes of the same data
+B_PIXELS, B_VOXELS = 57086325840, 230487473654
 # the domains with their titles, their quadrant (column, row) around the hub, and their fill and edge colors
 B_DOMAINS = (
     ("fluorescence", "Fluorescence microscopy", (0, 0), ("#e2ece6", "#5f8a78")),
     ("label-free", "Label-free microscopy", (1, 0), ("#efe9dc", "#9a8256")),
-    ("em", "Electron &amp; X-ray microscopy", (0, 1), ("#e6e4ee", "#736ca3")),
+    ("em", "Electron microscopy", (0, 1), ("#e6e4ee", "#736ca3")),
     ("histopathology", "Histopathology", (1, 1), ("#f1e2e8", "#8f6676")),
 )
 # the crops are resized to this size in pixels before they are drawn
 B_TILE_PX = 256
-# each quadrant holds a grid of tiles without the cell in its inner corner, which the hub covers
-B_COLUMNS, B_ROWS = 4, 2
-B_TILE, B_GAP, B_CAPTION, B_PAD, B_HEADER = 10.2, 2.2, 6.0, 1.6, 8.6
+# each quadrant holds a grid of tiles without the cell in its inner corner, which the pie chart covers
+B_COLUMNS, B_ROWS = 3, 2
+B_GAP, B_CAPTION, B_PAD, B_HEADER, B_QUADRANT_GAP = 2.2, 5.8, 1.6, 3.4, 1.4
+# the cards behind the tiles of volumes and movies reach this far to the right of their tiles, so the right margin of
+# a quadrant is wider by it
+B_CARD_REACH = 1.5
+# panels b and c are equally wide, side by side below panel a
+B_WIDTH = (FIGURE_W - 2 * LETTER_W - PANEL_GAP) / 2
+B_TILE = ((B_WIDTH - B_QUADRANT_GAP) / 2 - 2 * B_PAD - B_CARD_REACH - (B_COLUMNS - 1) * B_GAP) / B_COLUMNS
 B_CHANNEL_COLORS = {
     "gray": (1.0, 1.0, 1.0), "red": (1.0, 0.25, 0.2), "green": (0.2, 1.0, 0.35), "blue": (0.3, 0.45, 1.0),
     "magenta": (1.0, 0.2, 1.0), "cyan": (0.1, 0.9, 1.0), "yellow": (1.0, 0.9, 0.1),
@@ -2561,47 +2437,32 @@ B_CHANNEL_COLORS = {
 # in source pixels and 'index' selects the slice, frame or image in front of the two spatial axes
 B_DATASETS = [
     dict(
-        dataset="CellPose", domain="fluorescence", caption=("widefield", "cell lines"),
-        raw_path="cellpose/cyto/train/094_img.png", raw_key=None, label_path="cellpose/cyto/train/094_masks.png",
-        label_key=None, channels=[(1, "green"), (0, "magenta")], crop=(208, 0, 192),
+        dataset="Omnipose", domain="fluorescence", caption=("widefield", "bacteria"),
+        raw_path="omnipose/data/bact_fluor/train_sorted/cex/s_flex_cex_xy2_tile12_cyto.tif", raw_key=None,
+        label_path="omnipose/data/bact_fluor/train_sorted/cex/s_flex_cex_xy2_tile12_cyto_masks.tif", label_key=None,
+        crop=(0, 0, 508),
     ),
     dict(
-        dataset="Xenium", domain="fluorescence", caption=("Xenium", "spatial omics"),
-        raw_path="xenium/preprocessed/human_lung_cancer.h5", raw_key="raw/stack", label_key="labels/cells",
-        channels=[(1, "green"), (2, "magenta"), (3, "cyan")], crop=(5860, 35906, 224),
+        dataset="TissueNet", domain="fluorescence", caption=("multiplexed", "tissue"),
+        raw_path="tissuenet/train/image_1100.zarr", raw_key="raw/rgb", label_key="labels/cell",
+        channels=[(1, "green"), (0, "magenta")], channel_axis=0, crop=(0, 0, 512),
     ),
     dict(
         dataset="PlantSeg", domain="fluorescence", caption=("light-sheet", "plant root"), ndim=3,
+        # the volumes are the time points of three movies; the cards behind the tile show further slices
+        time_lapse=True,
         raw_path="plantseg/root_train/Movie1_t00049_crop_gt.h5", raw_key="raw", label_key="label", index=139,
         crop=(130, 280, 320),
     ),
     dict(
-        dataset="CartoCell", domain="fluorescence", caption=("confocal", "MDCK cysts"), ndim=3,
-        raw_path="cartocell/CartoCell/train_M2/x/control_7d.2HX1.B.10.2.tif", raw_key=None,
-        label_path="cartocell/CartoCell/train_M2/y/control_7d.2HX1.B.10.2.tif", label_key=None, index=29,
-        crop=(0, 0, 88),
-    ),
-    dict(
-        dataset="NucVerse3D", domain="fluorescence", caption=("two-photon", "mouse liver"), ndim=3,
-        raw_path="nucverse3d/raw/preprocessed/liver/train/20211015_01_P30_PBS_Periportal.h5", raw_key="raw",
-        label_key="labels", index=112, crop=(128, 0, 192),
-    ),
-    dict(
-        dataset="EpiCure", domain="fluorescence", caption=("confocal", "zebrafish brain"), time_lapse=True,
-        raw_path="epicure/prepared/telencephalon_raw.tif", raw_key=None,
-        label_path="epicure/data_generalisations/movie3/epics_corrected/moji_merged_3to13_crop_labels.tif",
-        label_key=None, index=5, crop=(372, 160, 256),
+        dataset="DynamicNuclearNet", domain="fluorescence", caption=("widefield", "nuclei"), time_lapse=True,
+        raw_path="dynamicnuclearnet/train/image_2520.zarr", raw_key="raw", label_key="labels", crop=(0, 0, 512),
+        # the frames of a movie are consecutive files; 2520, 2522 and 2524 belong to the same movie
+        frame_pattern="dynamicnuclearnet/train/image_{:04d}.zarr", frame=2520,
     ),
     dict(
         dataset="LICONN", domain="fluorescence", caption=("expansion", "mouse brain"), ndim=3,
         raw_path="liconn/liconn.zarr", raw_key="raw", label_key="seg_proofread", index=175, crop=(2048, 1024, 384),
-    ),
-    dict(
-        dataset="LIVECell", domain="label-free", caption=("phase contrast", "cell lines"),
-        raw_path="livecell/images/livecell_train_val_images/SKOV3_Phase_H4_1_02d20h00m_4.tif",
-        raw_key=None,
-        label_path="livecell/annotations/livecell_train_val_images/SKOV3/SKOV3_Phase_H4_1_02d20h00m_4.tif",
-        label_key=None, crop=(0, 180, 288),
     ),
     dict(
         dataset="OrgLine", domain="label-free", caption=("brightfield", "organoids"),
@@ -2626,11 +2487,6 @@ B_DATASETS = [
         label_path="vicar/labelled/PC3/00231_PC3_mask.png", label_key=None, crop=(216, 0, 384),
     ),
     dict(
-        dataset="Omnipose", domain="label-free", caption=("brightfield", "C. elegans"),
-        raw_path="omnipose/data/worm/train/c_elegans_wormpose_24.tif", raw_key=None,
-        label_path="omnipose/data/worm/train/c_elegans_wormpose_24_masks.tif", label_key=None, crop=(120, 120, 192),
-    ),
-    dict(
         dataset="Cell-ACDC", domain="label-free", caption=("phase contrast", "budding yeast"), time_lapse=True,
         raw_path=(
             "cell_acdc/test_data_budding_yeast/TimeLapse_2D/MIA_KC_htb1_mCitrine_labeled/Position_4/Images/"
@@ -2653,36 +2509,19 @@ B_DATASETS = [
         label_key="volumes/labels/segmentation_corrected/v1/ignore_16777215/s1", index=64, crop=(96, 96, 384),
     ),
     dict(
-        dataset="XPRESS", domain="em", caption=("X-ray", "white matter"), ndim=3, raw_path="xpress/xpress-training.h5",
-        raw_key="raw", label_key="labels", index=154, crop=(128, 128, 192),
+        dataset="Wafer4", domain="em", caption=("multi-beam SEM", "mouse cortex"), ndim=3,
+        raw_path="wafer4/wafer4_inputs.h5", raw_key="main", label_path="wafer4/wafer4_labels.h5", label_key="main",
+        index=40, crop=(400, 400, 384),
     ),
     dict(
-        dataset="MitoEM v2", domain="em", caption=("FIB-SEM", "mitochondria"), pool="mitochondria", ndim=3,
-        raw_path="mitoemv2/n5_data/podo/me2-podo_train01.n5", raw_key="raw", label_key="labels", index=42,
-        crop=(0, 0, 384),
+        dataset="ASTIH", domain="em", caption=("SEM", "rat spinal cord"),
+        raw_path="astih/SEM1/train/sub-rat4_sample-data12_SEM.h5", raw_key="raw", label_key="labels",
+        instances=["class", 2], crop=(100, 100, 512),
     ),
     dict(
-        dataset="CEM-MitoLab", domain="em", caption=("TEM", "mitochondria"), pool="mitochondria",
-        raw_path=(
-            "mitolab/11037/cem_mitolab/1sYX4D9362V99rkr63J9_2D/images/"
-            "1sYX4D9362V99rkr63J9_2D_img00313-LOC-2d-512-1024_0-512.tiff"
-        ),
-        raw_key=None,
-        label_path=(
-            "mitolab/11037/cem_mitolab/1sYX4D9362V99rkr63J9_2D/masks/"
-            "1sYX4D9362V99rkr63J9_2D_img00313-LOC-2d-512-1024_0-512.tiff"
-        ),
-        label_key=None, crop=(0, 0, 512),
-    ),
-    dict(
-        dataset="OpenOrganelle nuclei", domain="em", caption=("FIB-SEM", "nuclei"), pool="nuclei", ndim=3,
-        raw_path="openorganelle_nucleus/jrc_mus-thymus-1.zarr", raw_key="raw", label_key="labels", index=754,
-        crop=(480, 192, 384),
-    ),
-    dict(
-        dataset="FAFB nuclei", domain="em", caption=("ssTEM", "nuclei"), pool="nuclei", ndim=3,
-        raw_path="fafb_nuclei/train/train_block_0.h5", raw_key="raw", label_key="labels/nuclei", index=212,
-        crop=(0, 0, 512),
+        dataset="Tumor spheroid EM", domain="em", caption=("SBF-SEM", "tumor spheroid"),
+        raw_path="tumor_spheroid_em/2d_manual/50-50-50/Au_01-vol_01-z_0034.h5", raw_key="raw",
+        label_key="labels/cells", crop=(0, 0, 2000),
     ),
     dict(
         dataset="LyNSeC", domain="histopathology", caption=("IHC", "lymphoma"),
@@ -2710,17 +2549,6 @@ B_DATASETS = [
         dataset="PUMA", domain="histopathology", caption=("H&amp;E", "melanoma"),
         raw_path="puma/train/preprocessed/training_set_primary_roi_081.h5", raw_key="raw",
         label_key="labels/instances/nuclei", rgb=True, channel_axis=0, crop=(768, 288, 256),
-    ),
-    dict(
-        dataset="Histo-Miner", domain="histopathology", caption=("H&amp;E", "skin cancer"),
-        raw_path="histo_miner/NucSeg_OriginalFormat/Train/RawImages_tif/nucseg_14_Region9_tile9.tif", raw_key=None,
-        label_path="histo_miner/NucSeg_OriginalFormat/Train/InstanceMaps_tif/nucseg_14_Region9_tile9.tif",
-        label_key=None, rgb=True, channel_axis=2, crop=(0, 0, 256),
-    ),
-    dict(
-        dataset="PanNuke", domain="histopathology", caption=("H&amp;E", "pan-cancer"),
-        raw_path="pannuke/pannuke_fold_1.h5", raw_key="images", label_key="labels/instances", index=1061, rgb=True,
-        channel_axis=0, crop=(0, 0, 256),
     ),
 ]
 
@@ -2841,6 +2669,11 @@ def neighbor_slice(k, step, spacing=4):
     """Load the image of the slice or frame 'step * spacing' away from the one of the k-th example, in the direction
     that stays inside the volume or movie, at a smaller size and a little darker, for the cards behind its tile."""
     spec = B_DATASETS[k]
+    if "frame_pattern" in spec:
+        # a movie stored as one file per frame: the later frames are the files with the next numbers
+        path = os.path.join(DATA_ROOT, spec["frame_pattern"].format(spec["frame"] + step * spacing))
+        raw = read_crop(path, spec.get("raw_key"), None, spec["crop"], spec.get("channel_axis"))
+        return 0.85 * resize(to_display(raw, spec), B_TILE_PX // 2)
     path = os.path.join(DATA_ROOT, spec["raw_path"])
     depth = open_array(path, spec.get("raw_key")).shape[0]
     index = spec["index"] + step * spacing
@@ -2884,12 +2717,6 @@ def b_tile(drawing, x, y, size, k, spec):
                 f'fill="none" stroke="#ffffff" stroke-width="0.2"/>'
             )
     rgb, labels = dataset_tile(k)
-    pool_colors = {name: color for name, _, _, color in B_POOLS}
-    if spec.get("pool"):
-        drawing.add(
-            f'<rect x="{fmt(x - 0.2)}" y="{fmt(y - 0.2)}" width="{fmt(size + 0.4)}" height="{fmt(size + 0.4)}" '
-            f'rx="0.75" fill="none" stroke="{pool_colors[spec["pool"]]}" stroke-width="0.35"/>'
-        )
     clip = drawing.clip_rect(x, y, size, size, 0.6)
     drawing.add(
         f'<image x="{fmt(x)}" y="{fmt(y)}" width="{fmt(size)}" height="{fmt(size)}" preserveAspectRatio="none" '
@@ -2912,27 +2739,9 @@ def b_tile(drawing, x, y, size, k, spec):
         drawing.text(x + size / 2, y + size + 1.75 + 1.85 * line, text, size_pt, color=color)
 
 
-def split_key(drawing, cx, y):
-    """Explain the split of the tiles: the image in the upper left half, the annotation in the lower right half."""
-    size = 2.2
-    x = cx - size / 2
-    drawing.text(x - 0.5, y + 0.6, "image", 1.76, color=SUBTEXT, anchor="end")
-    drawing.add(
-        f'<path d="M{fmt(x)},{fmt(y - size / 2)}h{fmt(size)}L{fmt(x)},{fmt(y + size / 2)}Z" fill="#9a97a3"/>'
-        f'<path d="M{fmt(x + size)},{fmt(y - size / 2)}V{fmt(y + size / 2)}H{fmt(x)}Z" fill="{PURPLE}"/>'
-    )
-    drawing.text(x + size + 0.5, y + 0.6, "labels", 1.76, color=SUBTEXT, anchor="start")
-
-
 def format_count(value):
     """Format a number of objects in millions or thousands."""
     return f"{value / 1e6:.1f} M" if value >= 1e6 else f"{value / 1e3:.0f} k"
-
-
-def stats_line(split, stats):
-    datasets, images, objects = stats
-    label = f'<tspan style="font-weight:bold">{split}</tspan>'
-    return f"{label} {datasets} datasets · {images:,} images · {format_count(objects)} objects"
 
 
 def quadrant_cells(column, row):
@@ -2950,41 +2759,57 @@ def arc_path(cx, cy, radius, start, stop):
     return f"M{fmt(x0)},{fmt(y0)}A{fmt(radius)},{fmt(radius)} 0 {large} 1 {fmt(x1)},{fmt(y1)}"
 
 
-def b_hub(drawing, cx, cy, radius):
-    """Draw the hub of the training data: a ring split into the training pools of the models by their number of
-    datasets, and inside it the total and a legend of the pools."""
+def b_pie(drawing, cx, cy, radius):
+    """Draw the pie chart of the training data: a ring split into the domains by their number of datasets, in the
+    edge colors of their quadrants, with the totals of the datasets, objects, pixels and voxels inside it."""
     drawing.add(f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(radius)}" fill="#ffffff"/>')
-    total = sum(count for _, _, count, _ in B_POOLS)
-    angle, gap = 0.0, 3.0
-    for _, _, count, color in B_POOLS:
-        span = 360.0 * count / total
+    counts = B_DOMAIN_DATASETS
+    total = sum(counts.values())
+    assert total == B_TRAIN_DATASETS
+    width = 3.2
+    ring = radius - width / 2 - 0.2
+    # the slices run clockwise in the order of the quadrants: upper right, lower right, lower left, upper left; the
+    # ring is turned so that each slice points roughly to its quadrant
+    order = ("label-free", "histopathology", "em", "fluorescence")
+    start = 20.0
+    colors = {domain: mix(edge, "#000000", 0.15) for domain, _, _, (_, edge) in B_DOMAINS}
+    angle = start
+    for domain in order:
+        span = 360.0 * counts[domain] / total
         drawing.add(
-            f'<path d="{arc_path(cx, cy, radius, angle + gap / 2, angle + span - gap / 2)}" fill="none" '
-            f'stroke="{color}" stroke-width="0.9" stroke-linecap="round"/>'
+            f'<path d="{arc_path(cx, cy, ring, angle, angle + span)}" fill="none" stroke="{colors[domain]}" '
+            f'stroke-width="{fmt(width)}"/>'
         )
+        # the number of datasets sits in the middle of its slice, in white
+        middle = np.radians(angle + span / 2)
+        tx, ty = cx + ring * np.sin(middle), cy - ring * np.cos(middle)
+        drawing.text(tx, ty + 0.6, str(counts[domain]), 1.76, weight="bold", color="#ffffff")
         angle += span
-    drawing.text(cx, cy - 6.6, "Training data", 2.12, weight="bold", color=BLUE)
-    drawing.text(cx, cy - 3.9, f"{total} datasets", 2.12, weight="bold")
-    y = cy - 0.9
-    for _, lines, count, color in B_POOLS:
-        drawing.add(f'<circle cx="{fmt(cx - 9.0)}" cy="{fmt(y - 0.6)}" r="0.6" fill="{color}"/>')
-        drawing.text(cx + 9.2, y, str(count), 1.76, weight="bold", anchor="end")
-        for line in lines:
-            drawing.text(cx - 8.0, y, line, 1.76, anchor="start")
-            y += 2.1
-        y += 0.2
-    split_key(drawing, cx, y + 0.9)
+    # white gaps between the slices
+    angle = start
+    for domain in order:
+        t = np.radians(angle)
+        x0, y0 = cx + (ring - width / 2) * np.sin(t), cy - (ring - width / 2) * np.cos(t)
+        x1, y1 = cx + (ring + width / 2) * np.sin(t), cy - (ring + width / 2) * np.cos(t)
+        drawing.add(f'<path d="M{fmt(x0)},{fmt(y0)}L{fmt(x1)},{fmt(y1)}" stroke="#ffffff" stroke-width="0.3"/>')
+        angle += 360.0 * counts[domain] / total
+    drawing.text(cx, cy - 3.5, "Training data", 2.12, weight="bold", color=BLUE)
+    drawing.text(cx, cy - 0.9, f"{B_TRAIN_DATASETS} datasets", 1.94, weight="bold")
+    drawing.text(cx, cy + 1.5, f"{format_count(sum(B_OBJECTS.values()))} objects", 1.94, color=SUBTEXT)
+    drawing.text(cx, cy + 3.7, f"{B_PIXELS / 1e9:.0f} G pixels (2D)", 1.76, color=SUBTEXT)
+    drawing.text(cx, cy + 5.8, f"{B_VOXELS / 1e9:.0f} G voxels (3D)", 1.76, color=SUBTEXT)
 
 
 def build_panel_b():
-    """Draw panel b in its own coordinates in mm: the training data as a world of four domains around a hub, like
-    panel c. Each domain fills a quadrant with example crops of its datasets; each tile shows the image in its upper
-    left half and the annotated instances in its lower right half. Returns the content and the size of the panel."""
+    """Draw panel b in its own coordinates in mm: the training data as a world of four domains around a pie chart of
+    their training objects. Each domain fills a quadrant with example crops of its datasets; each tile shows the
+    image in its upper left half and the annotated instances in its lower right half. Returns the content and the
+    size of the panel."""
     drawing = Drawing()
     pitch_x, pitch_y = B_TILE + B_GAP, B_TILE + B_CAPTION
-    width_q = 2 * B_PAD + B_COLUMNS * B_TILE + (B_COLUMNS - 1) * B_GAP
+    width_q = 2 * B_PAD + B_CARD_REACH + B_COLUMNS * B_TILE + (B_COLUMNS - 1) * B_GAP
     height_q = B_HEADER + 1.6 + B_ROWS * pitch_y
-    gap = 1.4
+    gap = B_QUADRANT_GAP
     width, height = 2 * width_q + gap, 2 * height_q + gap
     cx, cy = width / 2, height / 2
     tiles, boxes = [], []
@@ -2994,15 +2819,12 @@ def build_panel_b():
             f'<rect x="{fmt(qx)}" y="{fmt(qy)}" width="{fmt(width_q)}" height="{fmt(height_q)}" rx="1.2" '
             f'fill="{fill}" stroke="{edge}" stroke-width="0.3" stroke-opacity="0.8"/>'
         )
-        # the titles and the numbers sit on the outer edges, the top quadrants above their tiles, the bottom ones below
+        # the titles sit on the outer edges, the top quadrants above their tiles, the bottom ones below
         top = qy + (B_HEADER + 1.6 if row == 0 else 2.2)
-        title_y = qy + 3.0 if row == 0 else qy + height_q - 5.7
-        title_x, anchor = (qx + B_PAD, "start") if column == 0 else (qx + width_q - B_PAD, "end")
+        title_y = qy + 3.0 if row == 0 else qy + height_q - 1.3
+        title_x, anchor = (qx + B_PAD, "start") if column == 0 else (qx + width_q - B_PAD - B_CARD_REACH, "end")
         color = mix(edge, "#000000", 0.35)
         drawing.text(title_x, title_y, title, 2.12, weight="bold", color=color, anchor=anchor)
-        for k, split in enumerate(("train", "test")):
-            line = stats_line(split, B_DOMAIN_STATS[domain][split])
-            drawing.text(title_x, title_y + 2.4 + 2.15 * k, line, 1.76, color=SUBTEXT, anchor=anchor)
         members = [(k, spec) for k, spec in enumerate(B_DATASETS) if spec["domain"] == domain]
         for (r, c), (k, spec) in zip(quadrant_cells(column, row), members):
             x, y = qx + B_PAD + c * pitch_x, top + r * pitch_y
@@ -3015,7 +2837,7 @@ def build_panel_b():
     drawing.add(f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(halo)}" fill="#ffffff"/>')
     for x, y, k, spec in tiles:
         b_tile(drawing, x, y, B_TILE, k, spec)
-    b_hub(drawing, cx, cy, halo - 0.6)
+    b_pie(drawing, cx, cy, halo - 0.6)
     content = f'<defs>{shared_defs()}{"".join(drawing.defs)}</defs>{"".join(drawing.body)}'
     # the ids must differ from the ones of panels a and c, since all panels end up in the same figure
     return content.replace("f1c-", "f1b-"), width, height
@@ -3024,8 +2846,8 @@ def build_panel_b():
 def build_panel_a():
     """Draw panel a, the architecture of μSAM2, in its own coordinates in mm."""
     drawing = Drawing(text_scale=A_TEXT_SCALE, scale=A4_WIDTH / A_W)
-    bus_x = draw_trunk(drawing)
-    draw_automatic_head(drawing, bus_x)
+    bus_x, encoder_box = draw_trunk(drawing)
+    draw_automatic_head(drawing, bus_x, encoder_box)
     draw_interactive_head(drawing, bus_x)
     w3 = (SIZE + 3.5) * A_SCALE
     drawing.text(A_OUTPUT_X + w3 / 2, A_HEADER_Y, "Output", 2.12, weight="bold")
@@ -3035,73 +2857,94 @@ def build_panel_a():
     return content.replace("f1c-", "f1a-")
 
 
-def build_panel_c(logo_path, napari_logo, python_logo):
-    """Draw panel c in its own coordinates in mm: the μSAM2 hub in the middle, and the tasks stacked in two halves that
-    wrap it, the interactive ones on the left and the automatic ones on the right, each half as wide as its content.
-    Returns the content and the size of the panel."""
-    height, scale = 80.0, 1.22
-    # the halo leaves room for the badges of the interfaces and their names on the lower rim of the hub
-    hub_r, gap, halo, margin = 10.5, 1.4, 15.6, 6.3
-    rows = (-24.5, 0.0, 24.5)
-    layout, reach = compact_layout(scale, halo, rows)
-    a_left, a_right = reach[-1] + margin, reach[1] + margin
-    width = a_left + a_right + 1.4
-    cx, cy, b = a_left + 0.7, height / 2, 39.4
-    drawing = Drawing(scale=C_SCALE)
-    halves = ((-1, a_left, INTERACTIVE_BACKGROUND, INTERACTIVE_STYLE[1]),
-              (1, a_right, AUTOMATIC_BACKGROUND, AUTOMATIC_STYLE[1]))
-    for side, a, color, edge in halves:
-        # the two halves form one rectangle with slightly rounded corners, like the bands of panel a
-        r, x0, x1, y0, y1 = 1.2, cx - a, cx + a, cy - b, cy + b
-        shape = (
-            f"M{fmt(x0 + r)},{fmt(y0)}H{fmt(x1 - r)}A{r},{r} 0 0 1 {fmt(x1)},{fmt(y0 + r)}V{fmt(y1 - r)}"
-            f"A{r},{r} 0 0 1 {fmt(x1 - r)},{fmt(y1)}H{fmt(x0 + r)}A{r},{r} 0 0 1 {fmt(x0)},{fmt(y1 - r)}"
-            f"V{fmt(y0 + r)}A{r},{r} 0 0 1 {fmt(x0 + r)},{fmt(y0)}Z"
-        )
-        x0 = 0.0 if side < 0 else cx + gap
-        clip = drawing.clip_rect(x0, 0, (cx - gap) if side < 0 else (width - cx - gap), height, 0)
-        # a thin outline in the darker band color traces the outer edge of each half
-        drawing.add(
-            f'<path d="{shape}" fill="{color}" stroke="{edge}" stroke-width="0.3" stroke-opacity="0.8" '
-            f'clip-path="url(#{clip})"/>'
-        )
-    # a white halo around the hub cuts the two halves into crescents
-    drawing.add(f'<circle cx="{fmt(cx)}" cy="{fmt(cy)}" r="{fmt(halo)}" fill="#ffffff"/>')
-    drawing.text(cx - a_left + 2.4, cy, "Interactive Analysis", 2.12, weight="bold", color=BLUE, rotate=-90)
-    drawing.text(cx + a_right - 2.4, cy, "Automatic Analysis", 2.12, weight="bold", color=BLUE, rotate=90)
-    # the headers take a dark shade of the color of their half
-    header_colors = {
-        -1: mix(INTERACTIVE_STYLE[1], "#000000", 0.3), 1: mix(AUTOMATIC_STYLE[1], "#000000", 0.35)
-    }
-    for side, groups in ((-1, INTERACTIVE_GROUPS), (1, AUTOMATIC_GROUPS)):
-        for (header, names), (dx, dy) in zip(groups, layout[side]):
-            draw_group(drawing, cx + dx, cy + dy + 1.0, header, names, scale=scale, color=header_colors[side])
-    draw_hub(drawing, cx, cy, hub_r, logo_path, napari_logo, python_logo)
-    # correction runs over the hub, from the automatic half to the interactive half
-    radius = halo + 0.4
-    angles = np.radians(np.linspace(62, 118, 60))
-    points = [(cx + radius * np.cos(t), cy - radius * np.sin(t)) for t in angles]
-    gid = drawing.linear_gradient(*points[0], *points[-1])
-    tip = np.array(points[-1])
-    direction = tip - np.array(points[-5])
-    direction /= np.linalg.norm(direction)
-    normal = np.array([-direction[1], direction[0]])
-    head = 1.4
-    left, right = tip - direction * head + normal * head * 0.6, tip - direction * head - normal * head * 0.6
-    line = "M" + "L".join(f"{fmt(px)},{fmt(py)}" for px, py in points[:-4])
+def draw_items(drawing, cx, cy, names, scale):
+    """Draw the items of one cell of panel c centered at (cx, cy) and enlarged by scale, with their labels below."""
+    x = cx - group_width(names, scale) / 2
+    for name in names:
+        draw, item_width, label = ITEMS[name]
+        scaled(drawing, scale, draw, x, cy)
+        drawing.text(x + scale * item_width / 2, cy + 6.0 * scale + 2.3, label, 1.6, color=SUBTEXT)
+        x += scale * (item_width + ITEM_GAP)
+
+
+def correction_arrow(drawing, x_from, x_to, y):
+    """Draw the correction as an arrow from the automatic side to the interactive side, with its badge in the middle
+    and its name below the badge."""
+    gid = drawing.linear_gradient(x_from, y, x_to, y)
+    head = 1.2
     drawing.add(
-        f'<path d="{line}" fill="none" stroke="url(#{gid})" stroke-width="0.6" stroke-linecap="round"/>'
-        f'<path d="M{fmt(tip[0])},{fmt(tip[1])}L{fmt(left[0])},{fmt(left[1])}'
-        f'L{fmt(right[0])},{fmt(right[1])}Z" fill="url(#{gid})"/>'
+        f'<path d="M{fmt(x_from)},{fmt(y)}H{fmt(x_to + head)}" fill="none" stroke="url(#{gid})" stroke-width="0.6" '
+        f'stroke-linecap="round"/><path d="M{fmt(x_to)},{fmt(y)}l{fmt(head)},{fmt(-0.75 * head)}'
+        f'v{fmt(1.5 * head)}Z" fill="url(#{gid})"/>'
     )
-    badge = (cx, cy - radius)
-    loop_badge(drawing, badge, r=2.3)
+    badge = ((x_from + x_to) / 2, y)
+    loop_badge(drawing, badge, r=2.1)
     correction_icon(drawing, badge)
-    drawing.text(cx, badge[1] - 3.3, "correction", 1.76, weight="bold", color=SUBTEXT)
-    # the card of the prompts sits on the bottom edge, centered in the panel
-    height = max(height, prompt_row(drawing, width / 2, cy + b) + 0.3)
+    drawing.text(badge[0], y + 4.2, "correction", 1.76, weight="bold", color=SUBTEXT)
+
+
+# the rows of panel c: the shared label in the middle, the interactive items on the left and the automatic items on
+# the right; the automatic classification runs as batch processing
+C_ROWS = [
+    ("Segmentation", ["interactive_2d", "interactive_3d"], ["automatic_2d", "automatic_3d"]),
+    ("Tracking", ["interactive_2dt"], ["automatic_2dt", "automatic_3dt"]),
+    ("Classification", ["pixel_classification", "object_classification"],
+     ["automatic_batch", "automatic_batch_objects"]),
+]
+
+
+def build_panel_c(logo_path, napari_logo, python_logo, width, height):
+    """Draw panel c in mm as a table: the interactive tasks in the left band, the automatic tasks in the right band,
+    and between them a white column with the μSAM2 logo and its interfaces on top and the name of each row.
+
+    Each row holds the same task in both bands, so the two modes of each task face each other; the correction runs
+    above all rows from the automatic to the interactive band, since every automatic result can be corrected
+    interactively. Returns the content, the size of the panel and its scale.
+    """
+    drawing = Drawing()
+    title_size, label_size, pad = 2.12, 2.12, 1.0
+    # the white middle column is as wide as the longest row name
+    middle = max(text_width(name, label_size, bold=True) for name, *_ in C_ROWS) + 2.0
+    band = (width - middle) / 2
+    cx = width / 2
+    # on top a strip with the logo and the interfaces, then the bands with their titles, which the correction joins:
+    # every automatic result can be corrected interactively
+    # the pill of the ecosystem overlaps the upper edges of both bands, which both build on it
+    pill_y, bands_top, title_y = 4.0, 5.2, 12.6
+    rows_top = title_y + 2.8
+    row_h = (height - rows_top - pad) / len(C_ROWS)
+    # the items take the largest scale at which the widest cell fits its band and the highest one its row, with some
+    # air between the 3D renders and the lines of the rows
+    widest = max(group_width(names) for _, *cells in C_ROWS for names in cells)
+    scale = min((band - 2.5) / widest, (row_h - 6.6) / 12.0)
+    bands = ((0.0, INTERACTIVE_BACKGROUND, INTERACTIVE_STYLE[1], "Interactive analysis"),
+             (width - band, AUTOMATIC_BACKGROUND, AUTOMATIC_STYLE[1], "Automatic analysis"))
+    for x0, color, edge, title in bands:
+        drawing.add(
+            f'<rect x="{fmt(x0 + 0.15)}" y="{fmt(bands_top)}" width="{fmt(band - 0.3)}" '
+            f'height="{fmt(height - bands_top - 0.15)}" rx="1.2" fill="{color}" stroke="{edge}" stroke-width="0.3" '
+            'stroke-opacity="0.8"/>'
+        )
+        drawing.text(x0 + band / 2, title_y, title, title_size, weight="bold", color=BLUE)
+        # thin white lines separate the rows inside the bands
+        for k in range(len(C_ROWS)):
+            y = rows_top + k * row_h
+            drawing.add(
+                f'<path d="M{fmt(x0 + 2.0)},{fmt(y)}H{fmt(x0 + band - 2.0)}" stroke="#ffffff" stroke-width="0.5"/>'
+            )
+    draw_interfaces(drawing, cx, pill_y, logo_path, napari_logo, python_logo)
+    # the correction runs from the end of one title to the start of the other, at the height of their middle
+    left, right = (text_width(title, title_size, bold=True) / 2 for *_, title in bands)
+    correction_arrow(drawing, width - band / 2 - right - 1.2, band / 2 + left + 1.2, title_y - 0.7)
+    for k, (name, interactive, automatic) in enumerate(C_ROWS):
+        top = rows_top + k * row_h
+        # the items sit a little above the middle of the row, since their labels hang below them
+        cy = top + row_h / 2 - 1.6
+        draw_items(drawing, band / 2, cy, interactive, scale)
+        draw_items(drawing, width - band / 2, cy, automatic, scale)
+        drawing.text(cx, cy + 0.7, name, label_size, weight="bold", color=TEXT)
     content = f'<defs>{shared_defs()}{"".join(drawing.defs)}</defs>{"".join(drawing.body)}'
-    return content, width, height
+    return content, width, height, 1.0
 
 
 def save_panel(content, output_folder, name, width, height):
@@ -3133,14 +2976,14 @@ def save_panel(content, output_folder, name, width, height):
 def build_figure(panels):
     """Put the panels together: panel a on top, panels b and c next to each other below it, each with its letter.
     Returns the content and the size of the figure."""
-    (a, _, a_h), (b, b_w, b_h), (c, c_w, c_h) = panels["a"], panels["b"], panels["c"]
+    (a, _, a_h), (b, b_w, b_h), (c, c_w, c_h, c_scale) = panels["a"], panels["b"], panels["c"]
     c_x, row_y = LETTER_W + b_w + PANEL_GAP + LETTER_W, a_h + ROW_GAP
-    if c_x + C_SCALE * c_w > FIGURE_W + 0.01:
-        raise ValueError(f"Panel c is {c_x + C_SCALE * c_w - FIGURE_W:.1f} mm too wide for the figure.")
+    if c_x + c_scale * c_w > FIGURE_W + 0.01:
+        raise ValueError(f"Panel c is {c_x + c_scale * c_w - FIGURE_W:.1f} mm too wide for the figure.")
     parts = [
         f'<g transform="translate({fmt(LETTER_W)},0)">{a}</g>',
         f'<g transform="translate({fmt(LETTER_W)},{fmt(row_y)})">{b}</g>',
-        f'<g transform="translate({fmt(c_x)},{fmt(row_y)}) scale({fmt(C_SCALE)})">{c}</g>',
+        f'<g transform="translate({fmt(c_x)},{fmt(row_y)}) scale({fmt(c_scale)})">{c}</g>',
     ]
     for letter, x, y in (("a", 0.0, 0.0), ("b", 0.0, row_y), ("c", c_x - LETTER_W, row_y)):
         parts.append(
@@ -3148,7 +2991,7 @@ def build_figure(panels):
             f'font-weight:bold;fill:{TEXT}">{letter}</text>'
         )
     # a small margin keeps the outlines of the lowest panel inside the page
-    height = row_y + max(b_h, C_SCALE * c_h) + 0.6
+    height = row_y + max(b_h, c_scale * c_h) + 0.6
     return '<rect width="100%" height="100%" fill="#ffffff"/>' + "".join(parts), FIGURE_W, height
 
 
@@ -3166,15 +3009,18 @@ def main():
     panels = {}
     if "a" in args.panels:
         panels["a"] = (build_panel_a(), A4_WIDTH, A_H * A4_WIDTH / A_W)
-    if "b" in args.panels:
+    # panel c takes the size of panel b, so panel b comes first
+    if "b" in args.panels or "c" in args.panels:
         panels["b"] = build_panel_b()
     if "c" in args.panels:
         fetch_python_logo(args.python_logo)
-        panels["c"] = build_panel_c(args.logo, args.napari_logo, args.python_logo)
-    for name, (content, width, height) in panels.items():
-        save_panel(content, args.output_folder, f"fig1_panel_{name}", width, height)
+        _, b_w, b_h = panels["b"]
+        panels["c"] = build_panel_c(args.logo, args.napari_logo, args.python_logo, b_w, b_h)
+    for name, (content, width, height, *_) in panels.items():
+        if name in args.panels:
+            save_panel(content, args.output_folder, f"fig1_panel_{name}", width, height)
     # the whole figure needs all panels
-    if len(panels) == 3:
+    if len(args.panels) == 3:
         os.makedirs(args.final_folder, exist_ok=True)
         content, width, height = build_figure(panels)
         save_panel(content, args.final_folder, "figure_1", width, height)
