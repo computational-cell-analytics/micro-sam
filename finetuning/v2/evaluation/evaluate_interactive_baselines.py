@@ -21,6 +21,7 @@ Usage examples:
 
 import os
 import sys
+import time
 import uuid
 import shutil
 import argparse
@@ -49,6 +50,10 @@ METHODS = ["nninteractive", "sam3", "sam", "micro-sam", "microsam_vol"]
 
 NNINTERACTIVE_CHECKPOINT = "/mnt/vast-nhr/home/archit/u12090/nnInteractive/pretrained_weights/nnInteractive_v1.0"
 SAM3_ROOT = "/mnt/vast-nhr/home/archit/u12090/SAM3_Experiments"
+
+# The SAM3 3d evaluation saves its state after an object at most this often, so that an interrupted volume goes on
+# from there: one 32-slice crop can take up to a day (2026-11-05).
+CHECKPOINT_SECONDS = 600
 
 SAM_V1_MODEL_TYPE = "vit_b"
 MICROSAM_V1_LM_MODEL = "vit_b_lm"
@@ -428,11 +433,51 @@ def _segment_sam3_2d(image, labels, model, processor, start_with_box, n_iteratio
     return seg_per_iter
 
 
-def _segment_sam3_3d(volume, labels, predictor, start_with_box, n_iterations):
+def _save_object_checkpoint(path, segmentations, areas, last_id):
+    """Save the state of a volume after its object 'last_id': the segmentations and object areas of all iterations
+    and the random state. The file is renamed into place, so no partial file is left.
+    """
+    _, keys, pos, has_gauss, gauss = np.random.get_state()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    partial_path = f"{path[:-4]}.{uuid.uuid4().hex}.partial.npz"
+    np.savez_compressed(
+        partial_path, segmentations=np.stack(segmentations), areas=np.stack(areas), last_id=last_id,
+        rng_keys=keys, rng_pos=pos, rng_has_gauss=has_gauss, rng_gauss=gauss,
+    )
+    os.replace(partial_path, path)
+
+
+def _load_object_checkpoint(path, labels, n_iterations):
+    """Return the segmentations, object areas and last finished object of an interrupted volume, or None.
+
+    The random state is restored too, so the run goes on as if it had not been interrupted. A checkpoint of other
+    labels or another number of iterations is not used.
+    """
+    if path is None or not os.path.exists(path):
+        return None
+    try:
+        with np.load(path) as f:
+            segmentations, areas, last_id = list(f["segmentations"]), list(f["areas"]), int(f["last_id"])
+            state = ("MT19937", f["rng_keys"], int(f["rng_pos"]), int(f["rng_has_gauss"]), float(f["rng_gauss"]))
+    except (OSError, KeyError, ValueError) as e:
+        print(f"The checkpoint '{path}' cannot be read and is not used: {e}")
+        return None
+    if len(segmentations) != n_iterations or segmentations[0].shape != labels.shape or \
+            len(areas[0]) != int(labels.max()) + 1:
+        print(f"The checkpoint '{path}' belongs to another run and is not used.")
+        return None
+    np.random.set_state(state)
+    return segmentations, areas, last_id
+
+
+def _segment_sam3_3d(volume, labels, predictor, start_with_box, n_iterations, checkpoint_path=None):
     """Prompt SAM3 for every object of a volume, with the protocol of the micro-sam2 evaluation.
 
     The first prompt is on the middle slice of the object, the 'center' correction clicks are on its worst slice,
     and the masks are propagated through the volume after every prompt, as for micro-sam2 and SAM2.
+    With 'checkpoint_path', the state is saved every CHECKPOINT_SECONDS after an object, and an interrupted volume
+    goes on after its last saved object: the objects are prompted one by one, each from cleared points, so the
+    result is the same as without the interruption.
     """
     import tempfile
     from micro_sam3.evaluation.inference import _propagate_sam3, _volume_to_frames
@@ -441,6 +486,12 @@ def _segment_sam3_3d(volume, labels, predictor, start_with_box, n_iterations):
     labels = _prompting_labels(labels)
     np.random.seed(PROMPT_SEED)
     seg_per_iter, areas = _empty_predictions(labels, n_iterations)
+    last_id = 0
+    checkpoint = _load_object_checkpoint(checkpoint_path, labels, n_iterations)
+    if checkpoint is not None:
+        seg_per_iter, areas, last_id = checkpoint
+        print(f"Going on after object {last_id} of {int(labels.max())} from '{checkpoint_path}'.")
+    saved = time.time()
 
     def to_points(clicks):
         coords = torch.tensor([[x / width, y / height] for (x, y), _ in clicks], dtype=torch.float32)
@@ -456,6 +507,8 @@ def _segment_sam3_3d(volume, labels, predictor, start_with_box, n_iterations):
     try:
         state = predictor.init_state(video_path=_volume_to_frames(volume, tmp_dir))
         for gt_id in np.setdiff1d(np.unique(labels), [0]):
+            if gt_id <= last_id:
+                continue
             gt_mask = labels == gt_id
             predictor.clear_all_points_in_video(state)
             z = _center_slice(gt_mask)
@@ -484,6 +537,9 @@ def _segment_sam3_3d(volume, labels, predictor, start_with_box, n_iterations):
                     )
                     pred_mask = propagate(z)
                 _add_object(seg_per_iter[it], areas[it], pred_mask, gt_id)
+            if checkpoint_path is not None and time.time() - saved > CHECKPOINT_SECONDS:
+                _save_object_checkpoint(checkpoint_path, seg_per_iter, areas, int(gt_id))
+                saved = time.time()
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     return seg_per_iter
@@ -543,8 +599,11 @@ def run_sam3_evaluation(
             else:
                 if predictor is None:
                     predictor = build_sam3_video_predictor()
-                segs = _segment_sam3_3d(raw, labels, predictor, start_with_box, n_iterations)
+                checkpoint_path = os.path.join(os.path.dirname(paths[0]), "checkpoint.npz")
+                segs = _segment_sam3_3d(raw, labels, predictor, start_with_box, n_iterations, checkpoint_path)
             _write_cached_predictions(segs, paths)
+            if ndim == 3 and os.path.exists(checkpoint_path):
+                os.remove(checkpoint_path)
         all_gt.append(labels)
         all_valid_rois.append(valid_roi)
         for it, path in enumerate(paths):
