@@ -7,11 +7,20 @@ annotations. It reads the crops from the training data.
 Panel c shows the tasks that micro-sam2 supports around its hub: interactive analysis (segmentation in 2D and 3D,
 tracking in 2D+T, pixel and object classification, with the prompts that the tools support) on the left, and
 automatic analysis (segmentation in 2D and 3D, tracking in 2D+T and 3D+T, batch processing) on the right.
+Panel d shows examples from the user studies as studio renders: the objects in 3D with distinct colours for close
+objects, on a light grey floor with walls and shadows (the expanded Platynereis nuclei, the MCF7 spheroid nuclei and
+the cells of a heart section). The renders run off screen with pyvista on a GPU node (--render) and are saved in
+panel_d of the output folder; panel d puts the examples together from them, in rows.
 The panels and the whole figure are saved as svg, pdf and png.
 """
 
 import io
 import os
+import re
+import glob
+import json
+import time
+import colorsys
 import base64
 import argparse
 import subprocess
@@ -22,13 +31,20 @@ from functools import lru_cache
 import zarr
 import tifffile
 import numpy as np
+import vtk
+import matplotlib
 import pyvista as pv
-from PIL import Image, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
 import imageio.v3 as imageio
 from matplotlib.path import Path
 from scipy.spatial.distance import cdist
 from scipy.interpolate import make_interp_spline
+from skimage.color import rgb2lab
+from skimage.segmentation import find_boundaries
+from matplotlib import font_manager
+from matplotlib import pyplot as plt
+from matplotlib.patches import ConnectionPatch, Polygon
 
 from elf.io import open_file
 
@@ -42,7 +58,9 @@ FONT_DIR = os.path.expanduser("~/.local/share/fonts/liberation")
 MIN_TEXT, MAX_TEXT = 5 * 25.4 / 72, 7 * 25.4 / 72
 # the layout of the figure in mm: panel a on top, panels b and c below it; the letters sit in a column on the left,
 # and panel c is scaled down to fit next to panel b
-FIGURE_W, LETTER_W, ROW_GAP, PANEL_GAP, LETTER_SIZE = 183.0, 2.8, 2.0, 2.0, 8 * 25.4 / 72
+FIGURE_W, LETTER_W, ROW_GAP, PANEL_GAP, LETTER_SIZE = 183.0, 2.8, 3.5, 2.0, 8 * 25.4 / 72
+# the height of the figure: an A4 page with the same margins as the width leaves (13.5 mm)
+FIGURE_H = 270.0
 SIZE = 8.5
 STACK_FRAME, STACK_OFFSET = 7.4, 1.4
 ITEM_GAP = 1.5
@@ -67,7 +85,8 @@ SOMA_LABEL, FEATURED_LABEL = N_AXIAL + N_LATERAL, N_AXIAL + N_LATERAL + 1
 
 # the logo of micro-sam, taken from the documentation of this repository
 REPOSITORY = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), *[os.pardir] * 4))
-LOGO = os.path.join(REPOSITORY, "doc", "logo", "logo_and_text.png")
+# the μSAM2 logo, cropped to its artwork
+LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "micro_sam2_logo.svg")
 # the official Python logo, which is downloaded once into the assets folder next to this script
 PYTHON_LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "python_logo.svg")
 PYTHON_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/c/c3/Python-logo-notext.svg"
@@ -1240,11 +1259,17 @@ def logo_data_uri(path, width_px=480):
     return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode(), image.width / image.height
 
 
-def draw_interfaces(drawing, cx, cy, logo_path, napari_logo, python_logo, logo_w=17.0, height=7.6):
-    """Draw the μSAM2 ecosystem as one white pill centered at (cx, cy): the logo, then a round badge with the name to
-    its right for each of its three interfaces. Returns the lower edge of the pill."""
-    uri, aspect = logo_data_uri(logo_path, width_px=900)
-    logo_h = logo_w / aspect
+def draw_interfaces(drawing, cx, cy, logo_path, napari_logo, python_logo, logo_h=7.0, height=8.2):
+    """Draw the μSAM2 ecosystem as one white pill centered at (cx, cy): the logo (an svg is kept as vectors), then a
+    round badge with the name to its right for each of its three interfaces. Returns the lower edge of the pill."""
+    if logo_path.endswith(".svg"):
+        uri = svg_uri(logo_path)
+        with open(logo_path) as f:
+            _, _, w, h = map(float, re.search(r'viewBox="([^"]*)"', f.read()).group(1).split())
+        aspect = w / h
+    else:
+        uri, aspect = logo_data_uri(logo_path, width_px=900)
+    logo_w = logo_h * aspect
     interfaces = [("napari", svg_uri(napari_logo)), ("Python", svg_uri(python_logo)), ("CLI", None)]
     badge, icon, gap, name_size = 2.1, 2.6, 0.8, 2.12
     widths = [2 * badge + gap + text_width(name, name_size) for name, _ in interfaces]
@@ -1298,7 +1323,7 @@ A_HEADER_Y = 5.5
 # spans the panel below them
 A_ENCODER_X = (18.0, 40.0)
 A_BAND_X, A_BAND_GAP = 61.5, 3.0
-AUTO_BAND_H, INTER_H = 63.5, 38.5
+AUTO_BAND_H, INTER_H = 57.0, 45.0
 INTER_Y = AUTO_BAND_H + A_BAND_GAP
 A_H = INTER_Y + INTER_H
 A_CONTENT_X = 69.0
@@ -1307,11 +1332,12 @@ A_ENTRY = 19.0
 A_OUTPUT_X = 151.5
 A_SCALE = 1.35
 # the images of the interactive band are a little smaller, so that the band stays thin
-A_INTER_SCALE = 1.15
 # the rows of the 2D and the 3D outputs, relative to the top of a band
-A_ROW_2D, A_ROW_3D, AUTO_ROW_3D = 12.0, 27.5, 43.5
+A_ROW_2D, A_ROW_3D, AUTO_ROW_3D = 11.0, 31.0, 44.0
+# the 3D input and its embeddings, relative to the top of the panel
+A_TRUNK_3D = 44.0
 # the Hiera stages as (tokens per side, size, layers, global attention)
-HIERA_STAGES = [(16, 9.5, 2, False), (8, 7.4, 3, False), (4, 5.7, 5, True), (2, 4.3, 3, True)]
+HIERA_STAGES = [(16, 7.4, 2, False), (8, 5.8, 3, False), (4, 4.5, 5, True), (2, 3.4, 3, True)]
 # the decoder stages as (channels, height, depth) of their feature maps
 STAGES = [(0.9, 22.0, 5.6), (1.5, 16.0, 4.2), (2.2, 11.5, 3.0), (3.0, 8.0, 2.2)]
 ARROW = "#5f5a6b"
@@ -1376,14 +1402,6 @@ def feature_map(drawing, x, cy, w, h, d, style):
         f'stroke="{edge}" stroke-width="0.15" stroke-linejoin="round"/>'
     )
     return x + w + dx
-
-
-def slab_stack(drawing, x, cy, count, style, w=3.4, d=2.2, gap=0.65):
-    """Draw a stack of slices, as the features of a volume with their z axis pointing up; return its right edge."""
-    right = x
-    for k in range(count):
-        right = embedding_slab(drawing, x, cy + 0.6 * (count - 1) * gap / 2 + 1.0 - gap * k, w, d, n=3, style=style)
-    return right
 
 
 def mix(a, b, t):
@@ -1749,12 +1767,6 @@ SLICE_INDICES = (0, 18, 36, 54, 73, 91, 109, 127)
 
 
 @lru_cache
-def render_slices():
-    """The slices of the volume, pulled apart, as the image encoder sees them one after the other."""
-    slabs = [slice_slab(em_slice(k), k, spread=1.6) for k in SLICE_INDICES]
-    return render(lambda plotter: add_colors(plotter, slabs), edges=False)
-
-
 @lru_cache
 def render_prompted_slice():
     """The volume with its middle slice, on which the point prompt is placed."""
@@ -1999,10 +2011,8 @@ def item_label(drawing, x, width, y, text, size=1.76):
     drawing.text(x + width / 2, y, text, size, color=SUBTEXT)
 
 
-def outputs(drawing, draw_2d, draw_3d, y, row_2d=None, row_3d=None, scale=A_SCALE):
+def outputs(drawing, draw_2d, draw_3d, y, row_2d, row_3d, scale=A_SCALE):
     """Draw the 2D output above the 3D output, and return the left edge of each."""
-    row_2d = A_ROW_2D if row_2d is None else row_2d
-    row_3d = A_ROW_3D if row_3d is None else row_3d
     w2, w3, wide = SIZE * scale, (SIZE + 3.5) * scale, (SIZE + 3.5) * A_SCALE
     # the outputs are centered in the column of the widest output
     x2, x3 = A_OUTPUT_X + (wide - w2) / 2, A_OUTPUT_X + (wide - w3) / 2
@@ -2018,7 +2028,8 @@ def a_band(drawing, x, y, height, title, background, title_y):
         f'<rect x="{fmt(x)}" y="{fmt(y)}" width="{fmt(A_W - x)}" height="{fmt(height)}" rx="1.2" '
         f'fill="{background}"/>'
     )
-    drawing.text(x + 3.3, title_y, title, 2.12, weight="bold", color=BLUE, rotate=-90)
+    # a little smaller than the headers, so that it fits the height of the thin interactive band
+    drawing.text(x + 2.9, title_y, title, 1.5, weight="bold", color=BLUE, rotate=-90)
 
 
 def token_grid(drawing, x, y, size, n, highlight=None, style=ENCODER_STYLE):
@@ -2062,9 +2073,9 @@ def hiera(drawing, cx, top):
         links.append((x + width, y + size / 2))
         y += size
         if k < len(HIERA_STAGES) - 1:
-            flow_arrow(drawing, [(cx, y + 0.3), (cx, y + 2.1)], head=0.6, width=0.2)
-            drawing.text(cx + 0.8, y + 1.7, "pool", 1.25, color=SUBTEXT, anchor="start")
-            y += 2.4
+            flow_arrow(drawing, [(cx, y + 0.3), (cx, y + 1.7)], head=0.55, width=0.2)
+            drawing.text(cx + 0.8, y + 1.5, "pool", 1.25, color=SUBTEXT, anchor="start")
+            y += 2.0
     neck_top, neck_bottom = top - 0.5, y + 0.5
     fill, edge = ENCODER_STYLE
     drawing.add(
@@ -2088,32 +2099,29 @@ def attention_legend(drawing, x, y):
 
 
 def draw_trunk(drawing):
-    """Draw the inputs, the hierarchical image encoder and the embeddings, which both heads share. The inputs stack in
-    one column, where a volume reaches the image encoder slice by slice."""
+    """Draw the inputs, the hierarchical image encoder and the embeddings, which both heads share. The image and the
+    volume stack in one column; the image encoder takes a volume slice by slice."""
     # the 2D embedding lines up with the entry of the automatic head, so that its line runs straight through
-    cy_2d, cy_block, cy_3d = A_ENTRY, 35.5, 53.0
+    cy_2d, cy_3d = A_ENTRY, A_TRUNK_3D
     column = 14.0
     drawing.text(column / 2, A_HEADER_Y, "Input", 2.12, weight="bold")
     scaled(drawing, 13.0 / SIZE, slice_input, 0.5, cy_2d)
     item_label(drawing, 0.0, column, cy_2d + 6.5 + 2.4, "2D image")
-    height = place_render(drawing, render_em_block(), 1.0, cy_block, 12.0)
-    item_label(drawing, 0.0, column, cy_block + height / 2 + 2.4, "3D volume")
-    flow_arrow(drawing, [(column / 2, cy_block + height / 2 + 3.3), (column / 2, cy_3d - 6.6)])
-    height = place_render(drawing, render_slices(), 0.5, cy_3d, 12.8)
-    item_label(drawing, 0.0, column, cy_3d + height / 2 + 2.4, "Z slices")
+    height = place_render(drawing, render_em_block(), 1.0, cy_3d, 12.0)
+    item_label(drawing, 0.0, column, cy_3d + height / 2 + 2.4, "3D volume")
     # the Hiera encoder, a hierarchical vision transformer, downsamples each image or slice in stages
     (x0, x1), top = A_ENCODER_X, 1.5
     box_index = len(drawing.body)
     drawing.text((x0 + x1) / 2, A_HEADER_Y, "Image encoder", 2.12, weight="bold")
     # the box fits the stages, its legend and its caption, and still takes the arrow of the volume
-    bottom = max(hiera(drawing, x0 + 7.8, top + 8.0) + 13.5, cy_3d + 6.0)
+    bottom = max(hiera(drawing, x0 + 7.8, top + 7.5) + 11.0, cy_3d + 6.0) + 2.0
     fill, edge = ENCODER_STYLE
     drawing.body.insert(box_index, (
         f'<rect x="{fmt(x0)}" y="{fmt(top)}" width="{fmt(x1 - x0)}" height="{fmt(bottom - top)}" rx="1.2" '
         f'fill="{mix(fill, "#ffffff", 0.55)}" stroke="{edge}" stroke-width="0.25"/>'
     ))
-    attention_legend(drawing, x0 + 1.4, bottom - 9.6)
-    item_label(drawing, x0, x1 - x0, bottom - 2.2, "Hierarchical ViT (Hiera)", size=1.5)
+    attention_legend(drawing, x0 + 1.4, bottom - 8.4)
+    item_label(drawing, x0, x1 - x0, bottom - 1.8, "Hierarchical ViT (Hiera)", size=1.5)
     flow_arrow(drawing, [(column + 0.6, cy_2d), (x0 - 0.7, cy_2d)])
     flow_arrow(drawing, [(column + 0.6, cy_3d), (x0 - 0.7, cy_3d)])
     emb_x = x1 + 3.5
@@ -2129,49 +2137,56 @@ def draw_trunk(drawing):
     bus_x = emb_x + 15.0
     drawing.add(
         f'<path d="M{fmt(emb_x + 12.0)},{fmt(cy_2d)}H{fmt(bus_x)}M{fmt(emb_x + 12.0)},{fmt(cy_3d)}H{fmt(bus_x)}'
-        f'M{fmt(bus_x)},{fmt(cy_2d)}V{fmt(INTER_Y + 5.0)}" fill="none" stroke="{ARROW}" stroke-width="0.25"/>'
+        f'M{fmt(bus_x)},{fmt(cy_2d)}V{fmt(INTER_Y)}" fill="none" stroke="{ARROW}" stroke-width="0.25"/>'
     )
     return bus_x, (top, bottom)
 
 
-def propagation(drawing, x, top, count=5, size=8.6, pitch=10.6, step=21):
-    """Show how the memory carries the mask of the neuron from the prompted middle slice to the slices on both sides,
-    as EM slices of the volume with the mask that each of them gets."""
-    middle, labels = count // 2, neuron_volume()
-    for k in range(count):
-        index = MIDDLE + (k - middle) * step
-        image = overlay(em_slice(index), [labels[index] == NEURON_LABEL])
-        sx = x + k * pitch
-        clip = drawing.clip_rect(sx, top, size, size, 0.6)
-        color, width = (TEAL, 0.45) if k == middle else (SLICE_STYLE[1], 0.2)
+def recycle_icon(drawing, cx, cy, r, color):
+    """Two arrows that chase each other around a circle: the memory is used again and again."""
+    for start in (20.0, 200.0):
+        a0, a1 = np.radians(start), np.radians(start + 130.0)
+        x0, y0 = cx + r * np.cos(a0), cy + r * np.sin(a0)
+        x1, y1 = cx + r * np.cos(a1), cy + r * np.sin(a1)
         drawing.add(
-            f'<image x="{fmt(sx)}" y="{fmt(top)}" width="{fmt(size)}" height="{fmt(size)}" preserveAspectRatio="none" '
-            f'clip-path="url(#{clip})" xlink:href="{array_uri(image)}"/>'
-            f'<rect x="{fmt(sx)}" y="{fmt(top)}" width="{fmt(size)}" height="{fmt(size)}" rx="0.6" fill="none" '
-            f'stroke="{color}" stroke-width="{fmt(width)}"/>'
+            f'<path d="M{fmt(x0)},{fmt(y0)}A{fmt(r)},{fmt(r)} 0 0 1 {fmt(x1)},{fmt(y1)}" fill="none" '
+            f'stroke="{color}" stroke-width="0.3" stroke-linecap="round"/>'
         )
-        if k == middle:
-            point_prompt(drawing, sx + PROMPT[0] * size, top + PROMPT[1] * size, r=0.5)
-    # one arrow to each side names the propagation from the prompted slice through the volume
-    center = x + middle * pitch + size / 2
-    left, right = x - 0.2, x + (count - 1) * pitch + size + 0.2
-    label_y = top + size + 2.6
-    drawing.text(center, label_y, "prompted slice", 1.3, color=TEAL_DARK)
-    reach = text_width("prompted slice", drawing.text_size(1.3)) / 2 + 1.2
-    flow_arrow(drawing, [(center - reach, label_y - 0.45), (left, label_y - 0.45)], head=0.6, width=0.22)
-    flow_arrow(drawing, [(center + reach, label_y - 0.45), (right, label_y - 0.45)], head=0.6, width=0.22)
-    drawing.text(center, label_y + 2.3, "propagation through the volume", 1.3, color=SUBTEXT)
+        # the head points along the circle, clockwise
+        tangent = np.array([-np.sin(a1), np.cos(a1)])
+        normal = np.array([np.cos(a1), np.sin(a1)])
+        tip = np.array([x1, y1]) + 0.55 * tangent
+        left, right = tip - 0.75 * tangent + 0.38 * normal, tip - 0.75 * tangent - 0.38 * normal
+        drawing.add(
+            f'<path d="M{fmt(tip[0])},{fmt(tip[1])}L{fmt(left[0])},{fmt(left[1])}L{fmt(right[0])},{fmt(right[1])}Z" '
+            f'fill="{color}"/>'
+        )
 
 
-def memory_bank(drawing, x, cy, size=5.6, gap=0.7, step=14, squeeze=0.45, shear=-0.32):
-    """Draw the memory bank as the masks of the slices that were already processed, standing side by side like books
-    with a small gap and facing left, the way the memory flows, with its label."""
+def memory_bank(drawing, cx, cy, size=5.6, gap=0.7, step=14, squeeze=0.45, shear=-0.32):
+    """Draw the memory bank centered at (cx, cy) on a card with rounded corners: a recycle sign, the masks of the
+    slices that were already processed, standing side by side like books with a small gap and facing left, the way
+    the memory flows, and its label. Returns the left and right edges of the card."""
     labels = neuron_volume()
     # the prompted middle slice stands in front, the slices that the memory reached from it behind
     indices = [MIDDLE, MIDDLE + step, MIDDLE - step, MIDDLE + 2 * step]
-    top = cy - size / 2 - shear * size * squeeze / 2
     w = size * squeeze
     shift = w + gap
+    icon_r, pad = 1.5, 1.4
+    label_w = max(text_width("memory bank", drawing.text_size(1.25), bold=True),
+                  text_width("masks of processed slices", drawing.text_size(1.2)))
+    slices_w = (len(indices) - 1) * shift + w
+    total = pad + 2 * icon_r + 1.2 + slices_w + 1.2 + label_w + pad
+    x0, x1 = cx - total / 2, cx + total / 2
+    y0, y1 = cy - size / 2 - 1.6, cy + size / 2 + 1.6
+    fill, edge = INTERACTIVE_STYLE
+    drawing.add(
+        f'<rect x="{fmt(x0)}" y="{fmt(y0)}" width="{fmt(total)}" height="{fmt(y1 - y0)}" rx="1.6" '
+        f'fill="{mix(fill, "#ffffff", 0.6)}" stroke="{edge}" stroke-width="0.25"/>'
+    )
+    recycle_icon(drawing, x0 + pad + icon_r, cy, icon_r, mix(edge, "#000000", 0.2))
+    x = x0 + pad + 2 * icon_r + 1.2
+    top = cy - size / 2 - shear * size * squeeze / 2
     # the slices further right stand behind, so they are drawn first
     for k, index in reversed(list(enumerate(indices))):
         # the memory keeps the masks themselves, shown in pastel red on a light background
@@ -2183,26 +2198,26 @@ def memory_bank(drawing, x, cy, size=5.6, gap=0.7, step=14, squeeze=0.45, shear=
             f'preserveAspectRatio="none" xlink:href="{array_uri(image)}"/><rect width="{fmt(size)}" '
             f'height="{fmt(size)}" fill="none" stroke="{SLICE_STYLE[1]}" stroke-width="0.3"/></g>'
         )
-    label_x = x + (len(indices) - 1) * shift + w + 1.2
-    # the label sits above the loop that runs through the slices
-    drawing.text(label_x, cy - 2.9, "memory bank", 1.25, weight="bold", color=TEXT, anchor="start")
-    drawing.text(label_x, cy - 0.9, "masks of processed slices", 1.2, color=SUBTEXT, anchor="start")
+    label_x = x + slices_w + 1.2
+    drawing.text(label_x, cy - 0.3, "memory bank", 1.25, weight="bold", color=TEXT, anchor="start")
+    drawing.text(label_x, cy + 1.7, "masks of processed slices", 1.2, color=SUBTEXT, anchor="start")
+    return x0, x1
 
 
 def draw_interactive_head(drawing, bus_x):
     """Draw the interactive band below the trunk: the prompts below the inputs, the prompt encoder below the image
     encoder, the memory attention that propagates a mask through volumes, and the mask decoder."""
     y0 = INTER_Y
-    a_band(drawing, 0.0, y0, INTER_H, "Interactive segmentation", INTERACTIVE_BACKGROUND, y0 + 19.2)
+    a_band(drawing, 0.0, y0, INTER_H, "Interactive segmentation", INTERACTIVE_BACKGROUND, y0 + INTER_H / 2)
     decoder_x = A_OUTPUT_X - 19.5
     decoder_right = decoder_x + 13.5
     module(
-        drawing, decoder_x, y0 + 2.0, decoder_right - decoder_x, INTER_H - 4.0, ["Mask", "decoder"], INTERACTIVE_STYLE
+        drawing, decoder_x, y0 + 1.5, decoder_right - decoder_x, INTER_H - 3.0, ["Mask", "decoder"], INTERACTIVE_STYLE
     )
     # 2D embeddings go straight to the mask decoder, the slices of a volume pass the memory attention first
-    split, bypass, memory = bus_x + 3.0, y0 + 3.5, y0 + 10.5
+    split, bypass, memory = bus_x + 3.0, y0 + 0.14 * INTER_H, y0 + 0.4 * INTER_H
     drawing.add(
-        f'<path d="M{fmt(bus_x)},{fmt(y0 - A_BAND_GAP)}V{fmt(y0 + 5.0)}H{fmt(split)}M{fmt(split)},{fmt(bypass)}'
+        f'<path d="M{fmt(bus_x)},{fmt(y0 - A_BAND_GAP)}V{fmt(bypass)}H{fmt(split)}M{fmt(split)},{fmt(bypass)}'
         f'V{fmt(memory)}" fill="none" stroke="{ARROW}" stroke-width="0.25" stroke-linejoin="round"/>'
     )
     flow_arrow(drawing, [(split, bypass), (decoder_x - 0.7, bypass)])
@@ -2210,91 +2225,47 @@ def draw_interactive_head(drawing, bus_x):
     memory_x = split + 6.0
     flow_arrow(drawing, [(split, memory), (memory_x - 0.7, memory)])
     drawing.text(split + 1.5, memory - 0.8, "3D", 1.3, color=SUBTEXT, anchor="start")
-    module(drawing, memory_x, memory - 3.6, 26.0, 7.2, ["Memory attention", "(3D only)"], INTERACTIVE_STYLE)
+    module(drawing, memory_x, memory - 3.6, 26.0, 7.2, ["Memory attention"], INTERACTIVE_STYLE)
     flow_arrow(drawing, [(memory_x + 26.7, memory), (decoder_x - 0.7, memory)])
     # the masks of the slices go into a memory bank, which conditions the next slices
-    loop_y, loop_x = y0 + 17.5, memory_x + 20.0
-    flow_arrow(drawing, [(decoder_x - 0.3, loop_y), (loop_x, loop_y), (loop_x, memory + 4.2)])
-    memory_bank(drawing, loop_x + 10.0, loop_y - 0.4)
-    propagation(drawing, decoder_x - 58.0, y0 + 21.0, size=7.6, pitch=9.4)
-    # prompts are placed on a 2D image, or on one slice of a volume, right below the inputs
+    # the loop runs left from the mask decoder, through the memory bank in its middle, and turns up with a round
+    # corner into the memory attention
+    loop_y, loop_x, bend = y0 + 0.72 * INTER_H, memory_x + 13.0, 2.0
+    drawing.add(
+        f'<path d="M{fmt(decoder_x - 0.3)},{fmt(loop_y)}H{fmt(loop_x + bend)}Q{fmt(loop_x)},{fmt(loop_y)} '
+        f'{fmt(loop_x)},{fmt(loop_y - bend)}V{fmt(memory + 5.4)}" fill="none" stroke="{ARROW}" stroke-width="0.25"/>'
+    )
+    flow_arrow(drawing, [(loop_x, memory + 5.5), (loop_x, memory + 4.2)])
+    memory_bank(drawing, (loop_x + decoder_x) / 2, loop_y)
+    # prompts are placed on a 2D image, or on one slice of a volume, at the left
     row_2d, row_3d = y0 + A_ROW_2D, y0 + A_ROW_3D
-    drawing.text(11.5, y0 + 4.6, "Prompts", 1.76, color=SUBTEXT)
-    scaled(drawing, 10.5 / SIZE, slice_prompted, 6.25, row_2d)
-    place_render(drawing, render_prompted_slice(), 5.0, row_3d, 12.5)
-    encoder_x, encoder_y, elbow = 27.0, y0 + 20.0, 23.5
-    module(drawing, encoder_x, encoder_y - 5.0, 18.0, 10.0, ["Prompt", "encoder"], INTERACTIVE_STYLE)
-    for start, row, end in ((17.4, row_2d, encoder_y - 2.0), (18.6, row_3d, encoder_y + 2.0)):
+    prompt = 11.0  # the size of the prompted image
+    scaled(drawing, prompt / SIZE, slice_prompted, 7.0, row_2d)
+    place_render(drawing, render_prompted_slice(), 6.0, row_3d, 1.2 * prompt)
+    encoder_x, encoder_y, elbow = 27.0, y0 + INTER_H / 2, 23.5
+    module(drawing, encoder_x, encoder_y - 5.0, 17.0, 10.0, ["Prompt", "encoder"], INTERACTIVE_STYLE)
+    for start, row, end in ((7.6 + prompt, row_2d, encoder_y - 2.0), (6.6 + 1.2 * prompt, row_3d, encoder_y + 2.0)):
         flow_arrow(drawing, [(start, row), (elbow, row), (elbow, end), (encoder_x - 0.7, end)])
     # the prompt embeddings run below the memory to the mask decoder
-    lane = y0 + INTER_H - 2.7
-    flow_arrow(drawing, [(encoder_x + 9.0, encoder_y + 5.6), (encoder_x + 9.0, lane), (decoder_x - 0.7, lane)])
-    x2, x3 = outputs(drawing, slice_interactive, interactive_3d_render, y0, scale=A_INTER_SCALE)
-    flow_arrow(drawing, [(decoder_right + 0.7, y0 + A_ROW_2D), (x2 - 1.2, y0 + A_ROW_2D)])
-    flow_arrow(drawing, [(decoder_right + 0.7, y0 + A_ROW_3D), (x3 - 1.2, y0 + A_ROW_3D)])
-
-
-def strip_pooling(drawing, x, y, width):
-    """Sketch the DSP block (Depth Strip Pooling) after each 3D block of the decoder, as in
-    torch_em.model.unetr: the features
-    x of all slices are averaged over z, two 1x1x1 convolutions with batch norm and ReLU in between and a sigmoid turn
-    the average into a gate g, and DSP(x) = x + x * g applies the gate to every slice as a gated residual."""
-    fill, edge = AUTOMATIC_STYLE
-    small = 1.05
-    bold = '<tspan style="font-weight:bold">{}</tspan>'.format
-    title = f"{bold('DSP')} ({bold('D')}epth {bold('S')}trip {bold('P')}ooling) {bold('Block')}"
-    drawing.text(x + width / 2, y + 3.6, title, 1.45)
-    row = y + 10.2
-    right = slab_stack(drawing, x + 1.2, row, 4, AUTOMATIC_STYLE, w=3.0, d=2.0)
-    drawing.text(x + 0.8, row + 4.4, "x: Z × H × W", small, color=SUBTEXT, anchor="start")
-    flow_arrow(drawing, [(right + 0.6, row), (right + 3.4, row)], head=0.55, width=0.2)
-    drawing.text(right + 2.0, row - 2.6, "mean z", small, color=SUBTEXT)
-    slice_x = right + 3.7
-    right = embedding_slab(drawing, slice_x, row + 0.8, 3.0, 2.0, n=3, style=AUTOMATIC_STYLE)
-    drawing.text(slice_x + 2.4, row + 2.4, "1 × H × W", small, color=SUBTEXT)
-    flow_arrow(drawing, [(right + 0.3, row), (right + 1.5, row)], head=0.55, width=0.2)
-    # the small network that turns the average into the gate, as one capsule with a cell per layer
-    cells = [
-        (4.0, ("conv",), fill), (4.6, ("BN", "ReLU"), fill), (4.0, ("conv",), fill), (2.4, ("σ",), GATE_STYLE[0]),
-    ]
-    cx, top, height = right + 1.8, row - 1.9, 3.8
-    total = sum(w for w, _, _ in cells)
-    clip = drawing.clip_rect(cx, top, total, height, 1.1)
-    parts = [f'<g clip-path="url(#{clip})">']
-    offset = cx
-    for w, _, color in cells:
-        parts.append(f'<rect x="{fmt(offset)}" y="{fmt(top)}" width="{fmt(w)}" height="{fmt(height)}" fill="{color}"/>')
-        offset += w
-    parts.append("</g>")
-    separators = "".join(f"M{fmt(cx + sum(w for w, _, _ in cells[:k]))},{fmt(top)}v{fmt(height)}" for k in range(1, 4))
-    parts.append(f'<path d="{separators}" stroke="{edge}" stroke-width="0.15"/>')
-    parts.append(
-        f'<rect x="{fmt(cx)}" y="{fmt(top)}" width="{fmt(total)}" height="{fmt(height)}" rx="1.1" fill="none" '
-        f'stroke="{edge}" stroke-width="0.22"/>'
-    )
-    drawing.add("".join(parts))
-    offset = cx
-    for w, lines, _ in cells:
-        for k, line in enumerate(lines):
-            drawing.text(offset + w / 2, row + 0.55 + (k - (len(lines) - 1) / 2) * 1.75, line, 0.98)
-        offset += w
-    drawing.text(cx + total / 2, row + 3.8, "1×1×1 convolutions", small, color=SUBTEXT)
-    flow_arrow(drawing, [(cx + total + 0.3, row), (cx + total + 1.5, row)], head=0.55, width=0.2)
-    gate_x = cx + total + 1.8
-    embedding_slab(drawing, gate_x, row + 0.8, 3.0, 2.0, n=3, style=GATE_STYLE)
-    drawing.text(gate_x + 2.2, row + 3.8, "gate g", small, color=GATE_STYLE[1])
-    # the gated residual, with the gate broadcast to every slice
-    g = f'<tspan style="fill:{GATE_STYLE[1]}">g</tspan>'
-    drawing.text(x + width / 2, y + 18.6, f"DSP(x) = x + x ⊙ {g}", 1.8, weight="bold")
-    drawing.text(x + width / 2, y + 21.1, "g is broadcast over z", 1.15, color=SUBTEXT)
-    drawing.text(x + width / 2, y + 23.3, "3D only (2D: DSP(x) = x)", 1.15, weight="bold", color=SUBTEXT)
+    lane = y0 + INTER_H - 2.5
+    flow_arrow(drawing, [(encoder_x + 8.5, encoder_y + 5.6), (encoder_x + 8.5, lane), (decoder_x - 0.7, lane)])
+    # the outputs are small, with their names to their right, so that the band stays thin
+    for draw, scale, row, name in ((slice_interactive, prompt / SIZE, row_2d, "2D"),
+                                   (interactive_3d_render, 0.07 * prompt, row_3d, "3D")):
+        x = A_OUTPUT_X + 1.5
+        scaled(drawing, scale, draw, x, row)
+        flow_arrow(drawing, [(decoder_right + 0.7, row), (x - 1.2, row)])
+        drawing.text(x + (SIZE + 3.5) * scale + 1.0, row + 0.6, name, 1.76, color=SUBTEXT, anchor="start")
 
 
 def draw_automatic_head(drawing, bus_x, encoder_box):
-    """Draw the automatic band: the segmentation decoder, as tall as the image encoder, and the maps it predicts for
-    an image and for a volume, with the instance segmentation made from each."""
-    a_band(drawing, A_BAND_X, 0.0, AUTO_BAND_H, "Automatic segmentation", AUTOMATIC_BACKGROUND, 36.0)
-    top, bottom = encoder_box
+    """Draw the automatic band: the segmentation decoder, as tall as its stages, and the maps it predicts for an
+    image and for a volume, with the instance segmentation made from each: the 2D maps right of the decoder, the 3D
+    maps in a row below it."""
+    a_band(drawing, A_BAND_X, 0.0, AUTO_BAND_H, "Automatic segmentation", AUTOMATIC_BACKGROUND, AUTO_BAND_H / 2 + 4.0)
+    top = encoder_box[0]
+    # the box ends a little below the largest feature map (drawn at 0.85 of its height and 0.75 of its depth)
+    bottom = A_ENTRY + max(0.85 * h / 2 + 0.75 * d for _, h, d in STAGES) + 2.0
     x0, x1 = A_CONTENT_X, A_CONTENT_X + 40.0
     fill, edge = AUTOMATIC_STYLE
     drawing.add(
@@ -2306,7 +2277,6 @@ def draw_automatic_head(drawing, bus_x, encoder_box):
     # the decoder upsamples the embeddings back to the image resolution: an image passes straight from stage to
     # stage, a volume takes the detour through the DSP block after each stage
     cy, x, markers = A_ENTRY, x0 + 2.0, []
-    zoom_index = len(drawing.body)
     # the DSP circles are wide enough for their name at the smallest print size
     gap, drop, marker = 5.6, 3.8, 2.3
     for w, h, d in STAGES[::-1]:
@@ -2320,34 +2290,15 @@ def draw_automatic_head(drawing, bus_x, encoder_box):
             'stroke-width="0.2" stroke-linejoin="round" stroke-dasharray="0.35,0.3"/>'
         )
         x += gap
+    # the name of the DSP blocks, small, in the lower left corner of the decoder
+    drawing.text(x0 + 1.2, bottom - 1.0, "DSP = Depth Strip Pooling", 1.3, color=SUBTEXT, anchor="start")
     for mx in markers:
         drawing.add(
             f'<circle cx="{fmt(mx)}" cy="{fmt(cy + drop)}" r="{fmt(marker)}" fill="#ffffff" stroke="{edge}" '
             'stroke-width="0.22"/>'
         )
-        drawing.text(mx, cy + drop + 0.55, "DSP", 0.85, weight="bold", color=edge)
-    # the sketch of the DSP block opens from one DSP block like a magnifying cone, drawn behind the feature maps; it
-    # fills the lower part of the decoder
-    frame_x, frame_w = x0 + 1.2, x1 - x0 - 2.4
-    frame_bottom = bottom - 1.2
-    frame_top = frame_bottom - 25.0
-    mx, spread, corner = markers[2], 1.4, 0.8
-    rim = cy + drop + np.sqrt(marker ** 2 - spread ** 2)
-    cone = [
-        (mx - spread, rim), (mx + spread, rim), (frame_x + frame_w - corner, frame_top), (frame_x + corner, frame_top)
-    ]
-    drawing.body.insert(zoom_index, (
-        '<path d="M' + "L".join(f"{fmt(px)},{fmt(py)}" for px, py in cone) + f'Z" fill="#ffffff" '
-        f'fill-opacity="0.55" stroke="none"/><path d="M{fmt(cone[0][0])},{fmt(cone[0][1])}L{fmt(cone[3][0])},'
-        f'{fmt(cone[3][1])}M{fmt(cone[1][0])},{fmt(cone[1][1])}L{fmt(cone[2][0])},{fmt(cone[2][1])}" '
-        f'stroke="{edge}" stroke-width="0.15" stroke-opacity="0.7"/>'
-    ))
-    frame_h = frame_bottom - frame_top
-    drawing.add(
-        f'<rect x="{fmt(frame_x)}" y="{fmt(frame_top)}" width="{fmt(frame_w)}" height="{fmt(frame_h)}" '
-        f'rx="0.8" fill="#ffffff" fill-opacity="0.85" stroke="{edge}" stroke-width="0.2"/>'
-    )
-    strip_pooling(drawing, frame_x, frame_top, frame_w)
+        # darker than the outline, for a contrast above 4.5 on white
+        drawing.text(mx, cy + drop + 0.55, "DSP", 0.85, weight="bold", color=mix(edge, "#000000", 0.4))
     # the outputs of the decoder, computed with the training targets of micro-sam; z only exists in volumes
     maps_2d = decoder_maps()[0]
     names = ["foreground", "boundary", "x-distance", "y-distance", "z-distance"]
@@ -2361,20 +2312,18 @@ def draw_automatic_head(drawing, bus_x, encoder_box):
         tx = mx + k * (tile + map_gap)
         drawing.text(tx + tile / 2, row_2d - tile / 2 - 1.2, name, 1.3, color=SUBTEXT)
         map_tile(drawing, tx, row_2d - tile / 2, tile, maps_2d[name])
-    # the 3D maps are larger and split in two lines, the foreground and boundary above the three distances, and the
-    # line of the volume runs between them
-    block, lines = 10.0, [(names[:2], row_3d - 7.2), (names[2:], row_3d + 6.9)]
-    for line, line_y in lines:
-        spacing = (width - len(line) * block) / (len(line) - 1) if len(line) > 2 else 4.0
-        start = mx + (width - len(line) * block - (len(line) - 1) * spacing) / 2
-        for k, name in enumerate(line):
-            tx = start + k * (block + spacing)
-            height = place_render(drawing, render_map_block(name), tx, line_y, block)
-            drawing.text(tx + block / 2, line_y - height / 2 - 1.1, name, 1.3, color=SUBTEXT)
     maps_end = mx + width
-    # the image and the volume leave the decoder on their own rows
+    # the five 3D maps sit in one row below the decoder, from its left edge to the end of the 2D maps, each named
+    # below it; the volume branches off the arrow to the 2D maps, just right of the decoder, down to them
+    block = 10.0
+    spacing = (maps_end - x0 - 0.5 - len(names) * block) / (len(names) - 1)
+    for k, name in enumerate(names):
+        tx = x0 + 0.5 + k * (block + spacing)
+        height = place_render(drawing, render_map_block(name), tx, row_3d, block)
+        drawing.text(tx + block / 2, row_3d + height / 2 + 2.0, name, 1.3, color=SUBTEXT)
     flow_arrow(drawing, [(x - 0.3, row_2d), (mx - 0.7, row_2d)])
-    flow_arrow(drawing, [(x1 + 0.7, row_3d), (mx - 0.7, row_3d)])
+    branch = x1 + 1.6
+    flow_arrow(drawing, [(branch, row_2d), (branch, row_3d - block / 2 - 0.6)])
     x2, x3 = outputs(drawing, slice_automatic, automatic_3d_render, 0.0, row_2d=row_2d, row_3d=row_3d)
     flow_arrow(drawing, [(maps_end + 0.7, row_2d), (x2 - 1.2, row_2d)])
     flow_arrow(drawing, [(maps_end + 0.7, row_3d), (x3 - 1.2, row_3d)])
@@ -2422,13 +2371,14 @@ B_DOMAINS = (
 B_TILE_PX = 256
 # each quadrant holds a grid of tiles without the cell in its inner corner, which the pie chart covers
 B_COLUMNS, B_ROWS = 3, 2
-B_GAP, B_CAPTION, B_PAD, B_HEADER, B_QUADRANT_GAP = 2.2, 5.8, 1.6, 3.4, 1.4
+B_GAP, B_PAD, B_QUADRANT_GAP = 2.2, 1.6, 1.4
+# the gap between the rows of tiles, larger than between the columns, for some air
+B_ROW_GAP = 5.0
 # the cards behind the tiles of volumes and movies reach this far to the right of their tiles, so the right margin of
 # a quadrant is wider by it
 B_CARD_REACH = 1.5
-# panels b and c are equally wide, side by side below panel a
-B_WIDTH = (FIGURE_W - 2 * LETTER_W - PANEL_GAP) / 2
-B_TILE = ((B_WIDTH - B_QUADRANT_GAP) / 2 - 2 * B_PAD - B_CARD_REACH - (B_COLUMNS - 1) * B_GAP) / B_COLUMNS
+# the tiles are as large as needed for their captions at 5 pt; panel c takes the rest of the width
+B_TILE = 12.6
 B_CHANNEL_COLORS = {
     "gray": (1.0, 1.0, 1.0), "red": (1.0, 0.25, 0.2), "green": (0.2, 1.0, 0.35), "blue": (0.3, 0.45, 1.0),
     "magenta": (1.0, 0.2, 1.0), "cyan": (0.1, 0.9, 1.0), "yellow": (1.0, 0.9, 0.1),
@@ -2504,22 +2454,22 @@ B_DATASETS = [
         raw_key="volumes/raw", label_key="volumes/labels/neuron_ids", index=24, crop=(672, 0, 384),
     ),
     dict(
-        dataset="Platynereis cells", domain="em", caption=("SBEM", "Platynereis"), ndim=3,
+        dataset="Platynereis cells", domain="em", caption=("SBEM", "platynereis"), ndim=3,
         raw_path="platynereis/membrane/train_data_membrane_01.n5", raw_key="volumes/raw/s1",
         label_key="volumes/labels/segmentation_corrected/v1/ignore_16777215/s1", index=64, crop=(96, 96, 384),
     ),
     dict(
-        dataset="Wafer4", domain="em", caption=("multi-beam SEM", "mouse cortex"), ndim=3,
+        dataset="Wafer4", domain="em", caption=("mSEM", "cortex"), ndim=3,
         raw_path="wafer4/wafer4_inputs.h5", raw_key="main", label_path="wafer4/wafer4_labels.h5", label_key="main",
         index=40, crop=(400, 400, 384),
     ),
     dict(
-        dataset="ASTIH", domain="em", caption=("SEM", "rat spinal cord"),
+        dataset="ASTIH", domain="em", caption=("SEM", "spinal cord"),
         raw_path="astih/SEM1/train/sub-rat4_sample-data12_SEM.h5", raw_key="raw", label_key="labels",
         instances=["class", 2], crop=(100, 100, 512),
     ),
     dict(
-        dataset="Tumor spheroid EM", domain="em", caption=("SBF-SEM", "tumor spheroid"),
+        dataset="Tumor spheroid EM", domain="em", caption=("SBF-SEM", "spheroid"),
         raw_path="tumor_spheroid_em/2d_manual/50-50-50/Au_01-vol_01-z_0034.h5", raw_key="raw",
         label_key="labels/cells", crop=(0, 0, 2000),
     ),
@@ -2702,7 +2652,8 @@ def label_overlay(rgb, labels, seed):
 
 
 def b_tile(drawing, x, y, size, k, spec):
-    """Draw one example as a rounded tile, with a stack behind it for volumes, and the caption below it."""
+    """Draw one example as a rounded tile, with a stack behind it for volumes and movies, and its caption on it in
+    small text: the modality on the upper left, the tissue or organism on the lower right."""
     if spec.get("ndim", 2) == 3 or spec.get("time_lapse"):
         # the cards behind the tile show the slices further in the volume, or the frames later in the movie
         spacing = 2 if spec.get("time_lapse") else 4
@@ -2724,19 +2675,20 @@ def b_tile(drawing, x, y, size, k, spec):
         f'<path d="M{fmt(x + size)},{fmt(y)}L{fmt(x)},{fmt(y + size)}" stroke="#ffffff" stroke-width="0.15" '
         f'clip-path="url(#{clip})"/>'
     )
-    badge = {3: "3D"}.get(spec.get("ndim", 2), "2D+t" if spec.get("time_lapse") else None)
-    if spec.get("time_lapse") and spec.get("ndim", 2) == 3:
-        badge = "3D+t"
-    if badge:
-        w = 1.15 * len(badge) + 0.6
-        drawing.add(
-            f'<rect x="{fmt(x + 0.3)}" y="{fmt(y + 0.3)}" width="{fmt(w)}" height="2.2" rx="0.45" fill="{TEXT}" '
-            'fill-opacity="0.75"/>'
-        )
-        drawing.text(x + 0.3 + w / 2, y + 1.98, badge, 1.76, weight="bold", color="#ffffff")
-    for line, text in enumerate(spec["caption"]):
-        size_pt, color = (1.76, TEXT) if line == 0 else (1.55, SUBTEXT)
-        drawing.text(x + size / 2, y + size + 1.75 + 1.85 * line, text, size_pt, color=color)
+    modality, tissue = spec["caption"]
+    tile_tag(drawing, x + 0.2, y + 0.2, modality, "start")
+    tile_tag(drawing, x + size - 0.2, y + size - 2.2, tissue, "end")
+
+
+def tile_tag(drawing, x, y, text, anchor):
+    """Write a small text (5 pt) on a tile, white on a tight dark box with its top at y, from x to the right (start)
+    or to the left (end)."""
+    size = drawing.text_size(1.76)
+    w = text_width(text, size) + 0.4
+    x0 = x if anchor == "start" else x - w
+    drawing.add(f'<rect x="{fmt(x0)}" y="{fmt(y)}" width="{fmt(w)}" height="2.0" rx="0.45" fill="{TEXT}" '
+                'fill-opacity="0.72"/>')
+    drawing.text(x0 + w / 2, y + 1.48, text, 1.76, color="#ffffff")
 
 
 def format_count(value):
@@ -2766,7 +2718,7 @@ def b_pie(drawing, cx, cy, radius):
     counts = B_DOMAIN_DATASETS
     total = sum(counts.values())
     assert total == B_TRAIN_DATASETS
-    width = 3.2
+    width = 2.6
     ring = radius - width / 2 - 0.2
     # the slices run clockwise in the order of the quadrants: upper right, lower right, lower left, upper left; the
     # ring is turned so that each slice points roughly to its quadrant
@@ -2793,11 +2745,20 @@ def b_pie(drawing, cx, cy, radius):
         x1, y1 = cx + (ring + width / 2) * np.sin(t), cy - (ring + width / 2) * np.cos(t)
         drawing.add(f'<path d="M{fmt(x0)},{fmt(y0)}L{fmt(x1)},{fmt(y1)}" stroke="#ffffff" stroke-width="0.3"/>')
         angle += 360.0 * counts[domain] / total
-    drawing.text(cx, cy - 3.5, "Training data", 2.12, weight="bold", color=BLUE)
-    drawing.text(cx, cy - 0.9, f"{B_TRAIN_DATASETS} datasets", 1.94, weight="bold")
-    drawing.text(cx, cy + 1.5, f"{format_count(sum(B_OBJECTS.values()))} objects", 1.94, color=SUBTEXT)
-    drawing.text(cx, cy + 3.7, f"{B_PIXELS / 1e9:.0f} G pixels (2D)", 1.76, color=SUBTEXT)
-    drawing.text(cx, cy + 5.8, f"{B_VOXELS / 1e9:.0f} G voxels (3D)", 1.76, color=SUBTEXT)
+    drawing.text(cx, cy - 3.0, "Training data", 2.12, weight="bold", color=BLUE)
+    drawing.text(cx, cy - 0.7, f"{B_TRAIN_DATASETS} datasets", 1.94, weight="bold")
+    drawing.text(cx, cy + 1.4, f"{format_count(sum(B_OBJECTS.values()))} objects", 1.76, color=SUBTEXT)
+    drawing.text(cx, cy + 3.3, f"{B_PIXELS / 1e9:.0f} G pixels (2D)", 1.76, color=SUBTEXT)
+    drawing.text(cx, cy + 5.2, f"{B_VOXELS / 1e9:.0f} G voxels (3D)", 1.76, color=SUBTEXT)
+
+
+def b_size():
+    """Get the size of a quadrant of panel b, the margin of the panel and the size of the panel. The domain names sit
+    on the outer edges, so the quadrants need no header; the panel keeps a margin for the outer halves of the names."""
+    width_q = 2 * B_PAD + B_CARD_REACH + B_COLUMNS * B_TILE + (B_COLUMNS - 1) * B_GAP
+    height_q = 5.4 + B_ROWS * B_TILE + (B_ROWS - 1) * B_ROW_GAP
+    margin = 0.8 * Drawing().text_size(2.12)
+    return width_q, height_q, margin, 2 * width_q + B_QUADRANT_GAP, 2 * height_q + B_QUADRANT_GAP + 2 * margin
 
 
 def build_panel_b():
@@ -2806,30 +2767,28 @@ def build_panel_b():
     image in its upper left half and the annotated instances in its lower right half. Returns the content and the
     size of the panel."""
     drawing = Drawing()
-    pitch_x, pitch_y = B_TILE + B_GAP, B_TILE + B_CAPTION
-    width_q = 2 * B_PAD + B_CARD_REACH + B_COLUMNS * B_TILE + (B_COLUMNS - 1) * B_GAP
-    height_q = B_HEADER + 1.6 + B_ROWS * pitch_y
+    pitch_x, pitch_y = B_TILE + B_GAP, B_TILE + B_ROW_GAP
+    width_q, height_q, margin, width, height = b_size()
     gap = B_QUADRANT_GAP
-    width, height = 2 * width_q + gap, 2 * height_q + gap
     cx, cy = width / 2, height / 2
     tiles, boxes = [], []
     for domain, title, (column, row), (fill, edge) in B_DOMAINS:
-        qx, qy = column * (width_q + gap), row * (height_q + gap)
+        qx, qy = column * (width_q + gap), margin + row * (height_q + gap)
         drawing.add(
             f'<rect x="{fmt(qx)}" y="{fmt(qy)}" width="{fmt(width_q)}" height="{fmt(height_q)}" rx="1.2" '
             f'fill="{fill}" stroke="{edge}" stroke-width="0.3" stroke-opacity="0.8"/>'
         )
-        # the titles sit on the outer edges, the top quadrants above their tiles, the bottom ones below
-        top = qy + (B_HEADER + 1.6 if row == 0 else 2.2)
-        title_y = qy + 3.0 if row == 0 else qy + height_q - 1.3
+        # the titles sit on the outer edges: on the upper edge of the top quadrants, on the lower edge of the bottom
+        # ones, at their outer corners
+        top = qy + (2.7 if row == 0 else 1.9)
+        title_y = qy if row == 0 else qy + height_q
         title_x, anchor = (qx + B_PAD, "start") if column == 0 else (qx + width_q - B_PAD - B_CARD_REACH, "end")
-        color = mix(edge, "#000000", 0.35)
-        drawing.text(title_x, title_y, title, 2.12, weight="bold", color=color, anchor=anchor)
+        edge_label(drawing, title_x, title_y, title, 2.12, fill, edge, mix(edge, "#000000", 0.35), anchor=anchor)
         members = [(k, spec) for k, spec in enumerate(B_DATASETS) if spec["domain"] == domain]
         for (r, c), (k, spec) in zip(quadrant_cells(column, row), members):
             x, y = qx + B_PAD + c * pitch_x, top + r * pitch_y
             tiles.append((x, y, k, spec))
-            boxes.append((x - 1.0, y - 1.6, x + B_TILE + 1.0, y + B_TILE + B_CAPTION - 1.2))
+            boxes.append((x - 1.0, y - 1.6, x + B_TILE + 1.0, y + B_TILE + 0.4))
     # the white halo around the hub reaches up to the nearest tile or caption
     halo = min(
         np.hypot(max(x0 - cx, 0, cx - x1), max(y0 - cy, 0, cy - y1)) for x0, y0, x1, y1 in boxes
@@ -2843,33 +2802,53 @@ def build_panel_b():
     return content.replace("f1c-", "f1b-"), width, height
 
 
-def build_panel_a():
-    """Draw panel a, the architecture of μSAM2, in its own coordinates in mm."""
-    drawing = Drawing(text_scale=A_TEXT_SCALE, scale=A4_WIDTH / A_W)
+def build_panel_a(width=A4_WIDTH):
+    """Draw panel a, the architecture of μSAM2, in its own coordinates, scaled to the given width in mm (the text
+    stays between MIN_TEXT and MAX_TEXT in print)."""
+    drawing = Drawing(text_scale=A_TEXT_SCALE, scale=width / A_W)
     bus_x, encoder_box = draw_trunk(drawing)
     draw_automatic_head(drawing, bus_x, encoder_box)
     draw_interactive_head(drawing, bus_x)
     w3 = (SIZE + 3.5) * A_SCALE
     drawing.text(A_OUTPUT_X + w3 / 2, A_HEADER_Y, "Output", 2.12, weight="bold")
-    body = f'<g transform="scale({fmt(A4_WIDTH / A_W)})">{"".join(drawing.body)}</g>'
+    body = f'<g transform="scale({fmt(width / A_W)})">{"".join(drawing.body)}</g>'
     content = f'<defs>{shared_defs()}{"".join(drawing.defs)}</defs>{body}'
     # the ids must differ from the ones of panel c, since both panels end up in the same figure
     return content.replace("f1c-", "f1a-")
 
 
 def draw_items(drawing, cx, cy, names, scale):
-    """Draw the items of one cell of panel c centered at (cx, cy) and enlarged by scale, with their labels below."""
+    """Draw the items of one cell of panel c centered at (cx, cy) and enlarged by scale, each with its label right
+    below it (the items are about as high as they are wide)."""
     x = cx - group_width(names, scale) / 2
     for name in names:
         draw, item_width, label = ITEMS[name]
         scaled(drawing, scale, draw, x, cy)
-        drawing.text(x + scale * item_width / 2, cy + 6.0 * scale + 2.3, label, 1.6, color=SUBTEXT)
+        drawing.text(x + scale * item_width / 2, cy + scale * item_width / 2 + 1.9, label, 1.6, color=SUBTEXT)
         x += scale * (item_width + ITEM_GAP)
 
 
-def correction_arrow(drawing, x_from, x_to, y):
+def edge_label(drawing, x, y, text, size, fill, edge, color, anchor="middle"):
+    """Draw a title stitched onto the edge of a card: a small pill of the card's colors, centered on the edge at y,
+    half inside and half outside the card."""
+    size = drawing.text_size(size)
+    w, h = text_width(text, size, bold=True) + 2.6, 1.5 * size
+    x0 = x - w / 2 if anchor == "middle" else (x if anchor == "start" else x - w)
+    drawing.add(
+        f'<rect x="{fmt(x0)}" y="{fmt(y - h / 2)}" width="{fmt(w)}" height="{fmt(h)}" rx="{fmt(h / 2)}" '
+        f'fill="{fill}" stroke="{edge}" stroke-width="0.3"/>'
+    )
+    # the size is already the printed one, so it is passed on unchanged
+    drawing.add(
+        f'<text x="{fmt(x0 + w / 2)}" y="{fmt(y + 0.36 * size)}" style="{FONT};font-size:{fmt(size)}px;'
+        f'font-weight:bold;fill:{color};text-anchor:middle">{text}</text>'
+    )
+    return w
+
+
+def correction_arrow(drawing, x_from, x_to, y, label_dy=4.2):
     """Draw the correction as an arrow from the automatic side to the interactive side, with its badge in the middle
-    and its name below the badge."""
+    and its name below the badge (or above it, for a negative label_dy)."""
     gid = drawing.linear_gradient(x_from, y, x_to, y)
     head = 1.2
     drawing.add(
@@ -2880,7 +2859,7 @@ def correction_arrow(drawing, x_from, x_to, y):
     badge = ((x_from + x_to) / 2, y)
     loop_badge(drawing, badge, r=2.1)
     correction_icon(drawing, badge)
-    drawing.text(badge[0], y + 4.2, "correction", 1.76, weight="bold", color=SUBTEXT)
+    drawing.text(badge[0], y + label_dy, "correction", 1.76, weight="bold", color=SUBTEXT)
 
 
 # the rows of panel c: the shared label in the middle, the interactive items on the left and the automatic items on
@@ -2902,40 +2881,35 @@ def build_panel_c(logo_path, napari_logo, python_logo, width, height):
     interactively. Returns the content, the size of the panel and its scale.
     """
     drawing = Drawing()
-    title_size, label_size, pad = 2.12, 2.12, 1.0
+    title_size, label_size = 2.12, 2.12
     # the white middle column is as wide as the longest row name
     middle = max(text_width(name, label_size, bold=True) for name, *_ in C_ROWS) + 2.0
     band = (width - middle) / 2
     cx = width / 2
-    # on top a strip with the logo and the interfaces, then the bands with their titles, which the correction joins:
-    # every automatic result can be corrected interactively
-    # the pill of the ecosystem overlaps the upper edges of both bands, which both build on it
-    pill_y, bands_top, title_y = 4.0, 5.2, 12.6
-    rows_top = title_y + 2.8
-    row_h = (height - rows_top - pad) / len(C_ROWS)
-    # the items take the largest scale at which the widest cell fits its band and the highest one its row, with some
-    # air between the 3D renders and the lines of the rows
+    # the pill of the ecosystem overlaps the upper edges of both bands, which both build on it; the titles of the bands
+    # sit on their lower edges, joined by the correction: every automatic result can be corrected interactively
+    pill_y, bands_top = 4.0, 5.2
+    bands_bottom = height - 0.8 * drawing.text_size(title_size)
+    # the rows start a little below the pill, so that it has some air
+    rows_top, rows_bottom = bands_top + 5.2, bands_bottom - 1.6
+    row_h = (rows_bottom - rows_top) / len(C_ROWS)
+    # the items take the largest scale at which the widest cell fits its band and the highest one its row
     widest = max(group_width(names) for _, *cells in C_ROWS for names in cells)
-    scale = min((band - 2.5) / widest, (row_h - 6.6) / 12.0)
+    scale = min((band - 2.5) / widest, (row_h - 3.6) / 12.0)
     bands = ((0.0, INTERACTIVE_BACKGROUND, INTERACTIVE_STYLE[1], "Interactive analysis"),
              (width - band, AUTOMATIC_BACKGROUND, AUTOMATIC_STYLE[1], "Automatic analysis"))
     for x0, color, edge, title in bands:
         drawing.add(
             f'<rect x="{fmt(x0 + 0.15)}" y="{fmt(bands_top)}" width="{fmt(band - 0.3)}" '
-            f'height="{fmt(height - bands_top - 0.15)}" rx="1.2" fill="{color}" stroke="{edge}" stroke-width="0.3" '
+            f'height="{fmt(bands_bottom - bands_top)}" rx="1.2" fill="{color}" stroke="{edge}" stroke-width="0.3" '
             'stroke-opacity="0.8"/>'
         )
-        drawing.text(x0 + band / 2, title_y, title, title_size, weight="bold", color=BLUE)
-        # thin white lines separate the rows inside the bands
-        for k in range(len(C_ROWS)):
-            y = rows_top + k * row_h
-            drawing.add(
-                f'<path d="M{fmt(x0 + 2.0)},{fmt(y)}H{fmt(x0 + band - 2.0)}" stroke="#ffffff" stroke-width="0.5"/>'
-            )
+    widths = [edge_label(drawing, x0 + band / 2, bands_bottom, title, title_size, color, edge, BLUE)
+              for x0, color, edge, title in bands]
     draw_interfaces(drawing, cx, pill_y, logo_path, napari_logo, python_logo)
-    # the correction runs from the end of one title to the start of the other, at the height of their middle
-    left, right = (text_width(title, title_size, bold=True) / 2 for *_, title in bands)
-    correction_arrow(drawing, width - band / 2 - right - 1.2, band / 2 + left + 1.2, title_y - 0.7)
+    # the correction runs between the two titles on the lower edge, with its name above its badge
+    correction_arrow(drawing, width - band / 2 - widths[1] / 2 - 0.6, band / 2 + widths[0] / 2 + 0.6, bands_bottom,
+                     label_dy=-3.0)
     for k, (name, interactive, automatic) in enumerate(C_ROWS):
         top = rows_top + k * row_h
         # the items sit a little above the middle of the row, since their labels hang below them
@@ -2974,8 +2948,8 @@ def save_panel(content, output_folder, name, width, height):
 
 
 def build_figure(panels):
-    """Put the panels together: panel a on top, panels b and c next to each other below it, each with its letter.
-    Returns the content and the size of the figure."""
+    """Put the panels together: panel a on top, panels b and c next to each other below it, and panel d below them,
+    each with its letter. Returns the content and the size of the figure."""
     (a, _, a_h), (b, b_w, b_h), (c, c_w, c_h, c_scale) = panels["a"], panels["b"], panels["c"]
     c_x, row_y = LETTER_W + b_w + PANEL_GAP + LETTER_W, a_h + ROW_GAP
     if c_x + c_scale * c_w > FIGURE_W + 0.01:
@@ -2985,14 +2959,1065 @@ def build_figure(panels):
         f'<g transform="translate({fmt(LETTER_W)},{fmt(row_y)})">{b}</g>',
         f'<g transform="translate({fmt(c_x)},{fmt(row_y)}) scale({fmt(c_scale)})">{c}</g>',
     ]
-    for letter, x, y in (("a", 0.0, 0.0), ("b", 0.0, row_y), ("c", c_x - LETTER_W, row_y)):
+    d, _, d_h = panels["d"]
+    d_y = row_y + max(b_h, c_scale * c_h) + ROW_GAP
+    parts.append(f'<g transform="translate({fmt(LETTER_W)},{fmt(d_y)})">{d}</g>')
+    for letter, x, y in (("a", 0.0, 0.0), ("b", 0.0, row_y), ("c", c_x - LETTER_W, row_y), ("d", 0.0, d_y)):
         parts.append(
             f'<text x="{fmt(x)}" y="{fmt(y + LETTER_SIZE)}" style="{FONT};font-size:{fmt(LETTER_SIZE)}px;'
             f'font-weight:bold;fill:{TEXT}">{letter}</text>'
         )
     # a small margin keeps the outlines of the lowest panel inside the page
-    height = row_y + max(b_h, c_scale * c_h) + 0.6
-    return '<rect width="100%" height="100%" fill="#ffffff"/>' + "".join(parts), FIGURE_W, height
+    height = d_y + d_h + 0.6
+    width = max(FIGURE_W, LETTER_W + panels["d"][1])
+    return '<rect width="100%" height="100%" fill="#ffffff"/>' + "".join(parts), width, height
+
+
+#
+# Panel d: examples from the user studies, as studio renders: the objects in 3D with distinct colours for close
+# objects, on a light grey floor with walls and shadows. The renders run off screen with pyvista (on a GPU node);
+# the panels are put together from the saved renders with matplotlib.
+#
+
+D_LINE = "#1a1a1a"
+# the top margin of each example of panel d in mm: room for its number
+D_TOP = {"platynereis": 2.5, "spheroid": 2.5, "gruen": 2.5, "histai": 2.5}
+D_START = time.time()
+# the expanded Platynereis (Huisken lab): nuclei of the whole animal (s1 grid: z, y, x)
+PLATY = os.path.join(DATA_ROOT, "huisken_data/exm_lsm/high_res/stitched/Expanded_Platynereis.ome.zarr")
+PLATY_SHAPE = (770, 477, 1197)
+PLATY_VOXEL_UM = 2.5112882406416843  # s1 voxel size, expanded
+PLATY_EXPANSION = 10.0  # assumed expansion factor, for the pre-expansion scale bars
+PLATY_SLAB_UM = 11.0  # section thickness, pre-expansion
+# the upright oblique studio view: volume axes x, y, z = s1 axes 2, 1, 0; the round end (low x) on top. The window
+# is twice the size of the saved render, for smooth edges and shadows; PLATY_RES scales all renders of the example,
+# so that they print at more than 1200 dpi
+PLATY_RES = 1.25
+PLATY_SIZE = (round(3300 * PLATY_RES), round(6000 * PLATY_RES))
+PLATY_BOUNDS = (0, PLATY_SHAPE[2], 0, PLATY_SHAPE[1], 0, PLATY_SHAPE[0])
+PLATY_CENTER = np.array([PLATY_SHAPE[2], PLATY_SHAPE[1], PLATY_SHAPE[0]], float) / 2
+PLATY_DIRECTION = np.array([-0.3, 1.0, -0.5]) / np.linalg.norm([-0.3, 1.0, -0.5])
+PLATY_UP = (-1, 0, 0)
+PLATY_ZOOM = 1.55
+# the crop of the studio render (rows r0:r1, columns c0:c1): the animal, its shadows and its raw signal, with margins
+PLATY_FRAME = tuple(round(v * PLATY_RES) for v in (334, 2639, 0, 1468))
+# the section is seen from its normal (z, the studio camera side), tilted a little like the studio view
+PLATY_DIRECTION_B = np.array([-0.15, 0.25, -1.0]) / np.linalg.norm([-0.15, 0.25, -1.0])
+# the MCF7 spheroid (Beghin lab): the nuclei of the largest stack, DAPI in channel 0 of the raw
+SPHEROID = os.path.join(DATA_ROOT, "beghin_data/mcf7_spheroids/dapi_ki67")
+SPHEROID_XY_UM, SPHEROID_Z_UM = 0.414, 1.5
+# the heart section (Gruen lab): the normalized volume (z, y, x, channel), three crops and their cell masks
+GRUEN = os.path.join(DATA_ROOT, "gruen_lab_data")
+# no voxel size in the files: z from the 10 um section in 16 planes, xy estimated from the size of the nuclei
+GRUEN_XY_UM, GRUEN_Z_UM = 0.12, 10.0 / 16
+# the Ki67 core (HistAI, case_13673): OME-Zarr in a zip with the image pyramid (c, y, x), labels/instances and
+# labels/classes (1: positive tumor nucleus, 2: negative tumor nucleus, 3: other cells); 0.5 um per level 0 px
+HISTAI = os.path.join(DATA_ROOT, "histai_specimen_omezarr_2026-11-06", "case_13673.ome.zarr.zip")
+HISTAI_UM, HISTAI_CROP = 0.5, 1024
+HISTAI_CLASS_RGB = np.array([[200, 200, 200], [214, 39, 40], [31, 90, 214], [240, 180, 0]], np.uint8)
+
+
+def d_log(*args):
+    print(*args, round(time.time() - D_START), flush=True)
+
+
+def d_separate(labels):
+    """Remove the voxels where two objects touch, so that each object becomes its own surface; also return the
+    pairs of touching objects."""
+    pairs = set()
+    cut = np.zeros(labels.shape, bool)
+    for axis in range(3):
+        a = np.moveaxis(labels, axis, 0)
+        lo, hi = a[:-1], a[1:]
+        touch = (lo != hi) & (lo > 0) & (hi > 0)
+        found = np.unique(np.stack([lo[touch], hi[touch]], 1), axis=0)
+        pairs.update(map(tuple, found))
+        c = np.moveaxis(cut, axis, 0)
+        c[:-1] |= touch
+        c[1:] |= touch
+    labels = labels.copy()
+    labels[cut] = 0
+    return labels, pairs
+
+
+def d_near_pairs(coarse, radius=2):
+    """Pairs of objects closer than about radius voxels."""
+    pairs = set()
+    offsets = [(dz, dy, dx) for dz in range(0, radius + 1) for dy in range(-radius, radius + 1)
+               for dx in range(-radius, radius + 1)
+               if (dz, dy, dx) > (0, 0, 0) and dz * dz + dy * dy + dx * dx <= radius * radius + 1]
+    nz, ny, nx = coarse.shape
+    for dz, dy, dx in offsets:
+        a = coarse[0:nz - dz, max(0, -dy):ny - max(0, dy), max(0, -dx):nx - max(0, dx)]
+        b = coarse[dz:nz, max(0, dy):ny - max(0, -dy), max(0, dx):nx - max(0, -dx)]
+        hit = (a != b) & (a > 0) & (b > 0)
+        code = np.unique(np.minimum(a[hit], b[hit]).astype("int64") * 100000 + np.maximum(a[hit], b[hit]))
+        pairs.update(zip((code // 100000).tolist(), (code % 100000).tolist()))
+    return pairs
+
+
+def d_distinct_colors(n_labels, pairs, seed=1):
+    """A palette of clear colours; each object gets a colour that is clearly different (in Lab) from the colours of
+    its neighbours, so that close objects never look alike."""
+    palette = []
+    for i in range(60):
+        hue = (i * 0.6180339887) % 1.0
+        sat = (0.42, 0.58, 0.30)[i % 3]
+        val = (0.97, 0.88, 0.78)[(i // 3) % 3]
+        palette.append(colorsys.hsv_to_rgb(hue, sat, val))
+    palette = np.array(palette)
+    lab = rgb2lab(palette[None])[0]
+    dist = np.linalg.norm(lab[:, None] - lab[None], axis=-1)
+    neighbours = [[] for _ in range(n_labels + 1)]
+    for a, b in pairs:
+        neighbours[a].append(b)
+        neighbours[b].append(a)
+    rng = np.random.default_rng(seed)
+    choice = np.full(n_labels + 1, -1)
+    # the most connected objects first
+    order = sorted(range(1, n_labels + 1), key=lambda i: (-len(neighbours[i]), rng.random()))
+    for label in order:
+        used = [choice[n] for n in neighbours[label] if choice[n] >= 0]
+        # a random colour among those clearly different from all neighbours, else the most different one
+        gap = dist[:, used].min(axis=1) if used else np.full(len(palette), np.inf)
+        clear = np.flatnonzero(gap >= 30)
+        choice[label] = int(rng.choice(clear)) if len(clear) else int(np.argmax(gap))
+    choice[0] = 0
+    return palette[choice]
+
+
+def d_label_surfaces(labels):
+    """Smooth surfaces of all objects in one pass; the label of each face is in cell_data["label"]."""
+    grid = pv.ImageData(dimensions=labels.shape[::-1])
+    grid.point_data["values"] = labels.ravel(order="C")
+    nets = vtk.vtkSurfaceNets3D()
+    nets.SetInputData(grid)
+    nets.SetInputArrayToProcess(0, 0, 0, 0, "values")
+    nets.GenerateLabels(int(labels.max()), 1, int(labels.max()))
+    nets.SetOutputMeshTypeToTriangles()
+    nets.SetOutputStyleToBoundary()
+    nets.SmoothingOn()
+    nets.SetNumberOfIterations(40)
+    nets.Update()
+    mesh = pv.wrap(nets.GetOutput())
+    mesh.cell_data["label"] = np.asarray(mesh.cell_data["BoundaryLabels"]).max(axis=1)
+    return mesh
+
+
+def d_colored_mesh(labels, colors, z_scale=1.0):
+    """The surfaces with one rgb colour per face; a colour map would be resampled to 256 colours and merge
+    neighbouring ids."""
+    mesh = d_label_surfaces(labels)
+    mesh.points[:, 2] *= z_scale
+    mesh.cell_data["rgb"] = (colors[mesh.cell_data["label"]] * 255).astype("uint8")
+    return mesh
+
+
+def d_add_objects(plotter, mesh):
+    plotter.add_mesh(mesh, scalars="rgb", rgb=True, smooth_shading=True, specular=0.2, specular_power=20,
+                     ambient=0.35, diffuse=0.75, show_scalar_bar=False)
+
+
+def d_project(plotter, points):
+    """Image coordinates (column, row) of world points, at the saved (half) image size."""
+    renderer = plotter.renderer
+    height = plotter.window_size[1]
+    out = []
+    for p in points:
+        renderer.SetWorldPoint(*p, 1.0)
+        renderer.WorldToDisplay()
+        x, y, _ = renderer.GetDisplayPoint()
+        out.append((x / 2, (height - y) / 2))
+    return out
+
+
+def d_px_per_unit(plotter, centre, step=50.0):
+    """Pixels of the saved render per scene unit at the depth of the centre, along x."""
+    a, b = d_project(plotter, [centre, np.asarray(centre) + np.array([step, 0, 0])])
+    return float(np.hypot(b[0] - a[0], b[1] - a[1]) / step)
+
+
+def d_screenshot(plotter, size, transparent=False):
+    """Render, and scale the double size window down to the saved size, for smooth edges."""
+    plotter.render()
+    image = plotter.screenshot(return_img=True, transparent_background=transparent)
+    return np.asarray(Image.fromarray(image).resize(size, Image.LANCZOS))
+
+
+def d_view(elevation, azimuth):
+    """The direction from the scene to the camera, and its horizontal part."""
+    flat = np.array([np.cos(np.radians(azimuth)), np.sin(np.radians(azimuth)), 0.0])
+    return np.cos(np.radians(elevation)) * flat + np.array([0, 0, np.sin(np.radians(elevation))]), flat
+
+
+def d_quad(corners):
+    """A rectangle from four corners, finely split so that the shadows look smooth."""
+    return pv.PolyData(np.array(corners, float), faces=[4, 0, 1, 2, 3]).triangulate().subdivide(4)
+
+
+def d_backdrop(plotter, bounds, view, margin, reach, height):
+    """A floor under the scene (z up) and two walls behind it, on the sides away from the camera."""
+    x0, x1, y0, y1, z0, z1 = bounds
+    floor_z = z0 - margin
+    wx = x0 - margin if view[0] > 0 else x1 + margin
+    wy = y0 - margin if view[1] > 0 else y1 + margin
+    fx = x1 + reach if view[0] > 0 else x0 - reach
+    fy = y1 + reach if view[1] > 0 else y0 - reach
+    top = z1 + height
+    for plane in (d_quad([(wx, wy, floor_z), (fx, wy, floor_z), (fx, fy, floor_z), (wx, fy, floor_z)]),
+                  d_quad([(wx, wy, floor_z), (wx, fy, floor_z), (wx, fy, top), (wx, wy, top)]),
+                  d_quad([(wx, wy, floor_z), (fx, wy, floor_z), (fx, wy, top), (wx, wy, top)])):
+        plotter.add_mesh(plane, color=(0.95, 0.95, 0.95), ambient=0.45, diffuse=0.6, specular=0.0)
+
+
+def d_studio(size, bounds, view, distance, zoom):
+    """A plotter with the studio lights and shadows (z up), the camera from the view direction onto the bounds."""
+    x0, x1, y0, y1, z0, z1 = bounds
+    middle = np.array([(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2])
+    plotter = pv.Plotter(off_screen=True, window_size=(size[0] * 2, size[1] * 2), lighting="none")
+    plotter.set_background("white")
+    # a key light from above, a little to the side of the camera, and a soft fill light from the camera
+    side = np.cross(view, [0, 0, 1.0])
+    key = middle + distance * (0.5 * view + 0.45 * side / np.linalg.norm(side) + np.array([0, 0, 1.0]))
+    plotter.add_light(pv.Light(position=tuple(key), focal_point=tuple(middle), intensity=0.7, positional=True,
+                               cone_angle=50, light_type="scene light"))
+    plotter.add_light(pv.Light(position=tuple(middle + 2 * distance * view), focal_point=tuple(middle),
+                               intensity=0.55, light_type="scene light"))
+    plotter.enable_shadows()
+    plotter.renderer._render_passes._shadow_map_pass.GetShadowMapBakerPass().SetResolution(8192)
+    plotter.camera.focal_point = middle
+    plotter.camera.position = middle + 3 * distance * view
+    plotter.camera.up = (0, 0, 1)
+    plotter.camera.view_angle = 20
+    plotter.reset_camera(bounds=bounds)
+    plotter.camera.zoom(zoom)
+    return plotter
+
+
+def d_section_shot(add, centre, direction, up, key, bounds, size, zoom, transparent=False, points=()):
+    """A render of a section from its camera direction, with ambient occlusion and no shadows; returns the image,
+    the image positions of the points and the pixels per scene unit at the centre."""
+    plotter = pv.Plotter(off_screen=True, window_size=(size[0] * 2, size[1] * 2), lighting="none")
+    plotter.set_background("white")
+    add(plotter)
+    plotter.add_light(pv.Light(position=tuple(centre + key), focal_point=tuple(centre), intensity=0.7,
+                               light_type="scene light"))
+    plotter.add_light(pv.Light(position=tuple(centre + 3000 * direction), focal_point=tuple(centre),
+                               intensity=0.55, light_type="scene light"))
+    plotter.enable_ssao(radius=5, bias=0.05, kernel_size=128, blur=True)
+    plotter.camera.focal_point = centre
+    plotter.camera.position = centre + 3000 * direction
+    plotter.camera.up = tuple(up)
+    plotter.camera.view_angle = 20
+    plotter.reset_camera(bounds=bounds)
+    plotter.camera.zoom(zoom)
+    image = d_screenshot(plotter, size, transparent)
+    projected, ppu = d_project(plotter, points), d_px_per_unit(plotter, centre)
+    plotter.close()
+    return image, projected, ppu
+
+
+def d_card(plotter, image, origin, step, thickness):
+    """A raw card: a dark box with the image on its top face. Image row 0 is at the far (high y) edge; the box spans
+    x in [ox, ox + width * step] and y in [oy - height * step, oy]."""
+    h, w = image.shape[:2]
+    ox, oy, oz = origin
+    box = pv.Box(bounds=(ox, ox + w * step, oy - h * step, oy, oz, oz + thickness))
+    plotter.add_mesh(box, color=(0.08, 0.08, 0.08), ambient=0.6, diffuse=0.4, specular=0.0)
+    grid = pv.ImageData(dimensions=(w, h, 1), spacing=(step, step, 1.0),
+                        origin=(ox + step / 2, oy - h * step + step / 2, oz + thickness + 0.5))
+    grid.point_data["rgb"] = image[::-1].reshape(-1, 3)
+    plotter.add_mesh(grid, scalars="rgb", rgb=True, ambient=1.0, diffuse=0.0, specular=0.0, show_scalar_bar=False)
+
+
+def d_rectangle(bounds):
+    """The four corners of a box in its middle z plane."""
+    x0, x1, y0, y1, z0, z1 = bounds
+    z = (z0 + z1) / 2
+    return [(x0, y0, z), (x1, y0, z), (x1, y1, z), (x0, y1, z)]
+
+
+def d_upsample(volume, factor, shape):
+    """Nearest upsampling of a coarse volume into the given shape; a missing edge is filled from the last voxel."""
+    up = volume
+    for axis in range(3):
+        up = np.repeat(up, factor, axis)
+    up = np.pad(up, [(0, max(0, s - u)) for s, u in zip(shape, up.shape)], mode="edge")
+    return up[:shape[0], :shape[1], :shape[2]]
+
+
+def platy_raw_s0(cache):
+    """The Platynereis raw at s0, divided by its smooth local level, scaled to uint8 (20th to 99.9th percentile) and
+    masked to the body. It is large (3.5 GB), so it is cached."""
+    if os.path.exists(cache):
+        return np.load(cache, mmap_mode="r")
+    group = zarr.open_group(PLATY, mode="r")
+    shape = tuple(2 * s for s in PLATY_SHAPE)
+    coarse = zarr.open_group(PLATY + "/labels/nuclei", mode="r")["s2"][:] > 0
+    body = ndimage.binary_dilation(ndimage.binary_closing(coarse, iterations=3), iterations=3)
+    level = ndimage.gaussian_filter(group["s2"][:].astype("float32"), 12) + 1.0
+    # the normalised volume in half precision, then the contrast limits from a sparse sample of it
+    norm = np.zeros(shape, "float16")
+    slab = 64
+    for z0 in range(0, shape[0], slab):
+        z1 = min(z0 + slab, shape[0])
+        c0, c1 = z0 // 4, (z1 + 3) // 4
+        block = group["s0"][z0:z1, :shape[1], :shape[2]].astype("float32")
+        lev = d_upsample(level[c0:c1], 4, (c1 * 4 - c0 * 4,) + shape[1:])[z0 - c0 * 4:z1 - c0 * 4]
+        mask = d_upsample(body[c0:c1], 4, (c1 * 4 - c0 * 4,) + shape[1:])[z0 - c0 * 4:z1 - c0 * 4]
+        block = block / lev
+        block[~mask] = np.nan
+        norm[z0:z1, :block.shape[1], :block.shape[2]] = block
+    lo, hi = np.nanpercentile(norm[::3, ::3, ::3].astype("float32"), [20, 99.9])
+    raw = np.zeros(shape, "uint8")
+    for z0 in range(0, shape[0], slab):
+        block = norm[z0:z0 + slab].astype("float32")
+        raw[z0:z0 + slab] = np.nan_to_num(np.clip((block - lo) / (hi - lo), 0, 1) * 255, nan=0).astype("uint8")
+    del norm
+    np.save(cache, raw)
+    d_log("raw s0", raw.shape)
+    return raw
+
+
+def platy_backdrop(plotter):
+    """A floor below the tail end and two walls behind the animal, in light grey."""
+    x1, y1, z1 = PLATY_SHAPE[2], PLATY_SHAPE[1], PLATY_SHAPE[0]
+    m, far, top = 60, 350, -250
+    floor_x, wall_y, wall_z = x1 + m, -m, z1 + m
+    # the floor spans from the walls to the front; the walls from the floor to above the round end
+    front_y, front_z = y1 + far, -far
+    for plane in (d_quad([(floor_x, wall_y, wall_z), (floor_x, front_y, wall_z), (floor_x, front_y, front_z),
+                          (floor_x, wall_y, front_z)]),
+                  d_quad([(top, wall_y, front_z), (top, wall_y, wall_z), (floor_x, wall_y, wall_z),
+                          (floor_x, wall_y, front_z)]),
+                  d_quad([(top, wall_y, wall_z), (top, front_y, wall_z), (floor_x, front_y, wall_z),
+                          (floor_x, wall_y, wall_z)])):
+        plotter.add_mesh(plane, color=(0.95, 0.95, 0.95), ambient=0.45, diffuse=0.6, specular=0.0)
+
+
+def render_platynereis(out, raw_cache):
+    """The renders of the Platynereis panel: the nuclei in the studio, an 11 um longitudinal section (the nuclei with
+    their centre in a slab, and the raw of its middle plane), and close-ups of its anterior and posterior ends."""
+    os.makedirs(out, exist_ok=True)
+    nuclei = zarr.open_group(PLATY + "/labels/nuclei", mode="r")
+    labels = nuclei["s1"][:]
+    n_labels = int(labels.max())
+    separated, pairs = d_separate(labels)
+    pairs |= d_near_pairs(nuclei["s2"][:])
+    colors = d_distinct_colors(n_labels, pairs)
+    d_log("colours")
+    # the centre of each nucleus, in s1 voxels (z, y, x)
+    counts = np.zeros(n_labels + 1)
+    sums = np.zeros((3, n_labels + 1))
+    for z0 in range(0, labels.shape[0], 64):
+        block = labels[z0:z0 + 64]
+        zz, yy, xx = np.indices(block.shape, dtype="float32")
+        flat = block.ravel()
+        counts += np.bincount(flat, minlength=n_labels + 1)
+        for axis, c in enumerate((zz + z0, yy, xx)):
+            sums[axis] += np.bincount(flat, weights=c.ravel(), minlength=n_labels + 1)
+    del labels
+    cz, cy, cx = (sums / np.maximum(counts, 1))[:, 1:]
+    ids = np.arange(1, n_labels + 1)
+    # the slab: the nuclei with their centre within half the thickness of the middle of the body in z; the studio
+    # camera sees this plane almost edge on
+    half = PLATY_SLAB_UM * PLATY_EXPANSION / PLATY_VOXEL_UM / 2
+    z_mid = float(np.median(cz))
+    in_slab = np.abs(cz - z_mid) <= half
+    slab_ids = ids[in_slab]
+    layout = {"nuclei": n_labels, "slab_nuclei": int(len(slab_ids)), "slab_um": PLATY_SLAB_UM,
+              "expansion": PLATY_EXPANSION, "voxel_um": PLATY_VOXEL_UM}
+
+    # the studio, cropped to the frame, and the outline of the slab plane in it (from above the round end down to the
+    # floor, like a sheet standing in the studio)
+    plotter = pv.Plotter(off_screen=True, window_size=PLATY_SIZE, lighting="none")
+    plotter.set_background("white")
+    d_add_objects(plotter, d_colored_mesh(separated, colors))
+    platy_backdrop(plotter)
+    plotter.add_light(pv.Light(position=tuple(PLATY_CENTER + np.array([-2500.0, 1200.0, -1600.0])),
+                               focal_point=tuple(PLATY_CENTER), intensity=0.7, positional=True, cone_angle=40,
+                               light_type="scene light"))
+    plotter.add_light(pv.Light(position=tuple(PLATY_CENTER + PLATY_DIRECTION * 3000 + np.array([0.0, 600.0, 0.0])),
+                               focal_point=tuple(PLATY_CENTER), intensity=0.55, light_type="scene light"))
+    plotter.enable_shadows()
+    plotter.renderer._render_passes._shadow_map_pass.GetShadowMapBakerPass().SetResolution(8192)
+    plotter.camera.focal_point = PLATY_CENTER
+    plotter.camera.position = PLATY_CENTER + PLATY_DIRECTION * 4000
+    plotter.camera.up = PLATY_UP
+    plotter.camera.view_angle = 20
+    plotter.reset_camera(bounds=PLATY_BOUNDS)
+    plotter.camera.zoom(PLATY_ZOOM)
+    image = d_screenshot(plotter, (PLATY_SIZE[0] // 2, PLATY_SIZE[1] // 2))
+    r0, r1, c0, c1 = PLATY_FRAME
+    Image.fromarray(image[r0:r1, c0:c1]).save(f"{out}/seg_studio.png")
+    sub = np.where(np.isin(separated, slab_ids), separated, 0)
+    del separated
+    mesh = d_colored_mesh(sub, colors)
+    del sub
+    x0, x1, y0, y1, _, _ = mesh.bounds
+    outline = d_project(plotter, d_rectangle((x0 - 40, x1 + 60, y0 - 25, y1 + 25, z_mid, z_mid)))
+    layout["studio"] = {"slab_outline": [(c - c0, r - r0) for c, r in outline],
+                        "px_per_voxel": d_px_per_unit(plotter, PLATY_CENTER)}
+    plotter.close()
+    d_log("studio")
+
+    # the anterior (round end, low x) and posterior boxes, from the centres of the slab nuclei
+    sx, sy = cx[in_slab], cy[in_slab]
+    x_lo, x_hi = sx.min(), sx.max()
+    length = x_hi - x_lo
+    box_ids, box_points = {}, []
+    for name, (b0, b1) in (("anterior", (x_lo - 8, x_lo + 0.30 * length)),
+                           ("posterior", (x_hi - 0.22 * length, x_hi + 8))):
+        pick = (sx >= b0) & (sx <= b1)
+        box_ids[name] = slab_ids[pick]
+        box_points += d_rectangle((b0, b1, sy[pick].min() - 14, sy[pick].max() + 14, z_mid - half, z_mid + half))
+
+    # the section on a transparent background (for the stack of cards in the figure), and the raw of its middle
+    # plane, from the same camera: a dark card over the slab area
+    slab_bounds = mesh.bounds
+
+    def shot(add, bounds, size, zoom, transparent=False, points=()):
+        centre = np.array([(bounds[0] + bounds[1]) / 2, (bounds[2] + bounds[3]) / 2, (bounds[4] + bounds[5]) / 2])
+        return d_section_shot(add, centre, PLATY_DIRECTION_B, PLATY_UP, np.array([-2500.0, 1500.0, -1500.0]), bounds,
+                              size, zoom, transparent, points)
+
+    # the section prints narrow and tall, so it is rendered larger than the studio
+    section_size = (round(1100 * 2.5), round(2000 * 2.5))
+    image, projected, ppv = shot(lambda p: d_add_objects(p, mesh), slab_bounds, section_size, 1.0, True, box_points)
+    Image.fromarray(image).save(f"{out}/section_rgba.png")
+    layout["section"] = {"anterior_box": projected[:4], "posterior_box": projected[4:], "px_per_voxel": ppv,
+                         "raw_slice_s0_z": int(round(2 * z_mid))}
+    raw = platy_raw_s0(raw_cache)
+    pad = 12
+    ia, ib = int(max(0, 2 * (x0 - pad))), int(min(raw.shape[2], 2 * (x1 + pad)))
+    ja, jb = int(max(0, 2 * (y0 - pad))), int(min(raw.shape[1], 2 * (y1 + pad)))
+    plane = np.asarray(raw[int(round(2 * z_mid)), ja:jb, ia:ib], dtype="float32")
+    # the contrast of the single slice, which is dimmer than the projection the raw was scaled for
+    raw_hi = float(np.percentile(plane[plane > 0], 99.0))
+
+    def add_raw(plotter):
+        grid = pv.ImageData(dimensions=(plane.shape[1], plane.shape[0], 1), spacing=(0.5, 0.5, 1.0),
+                            origin=(ia / 2, ja / 2, z_mid))
+        grid.point_data["values"] = plane.ravel(order="C")
+        plotter.add_mesh(grid, scalars="values", cmap="gray", clim=(0, raw_hi), ambient=1.0, diffuse=0.0,
+                         specular=0.0, show_scalar_bar=False)
+
+    Image.fromarray(shot(add_raw, slab_bounds, section_size, 1.0)[0]).save(f"{out}/section_raw.png")
+    d_log("section")
+    for name in ("anterior", "posterior"):
+        part = mesh.extract_cells(np.flatnonzero(np.isin(mesh.cell_data["label"], box_ids[name])))
+        image, _, ppv = shot(lambda p, part=part: d_add_objects(p, part), part.bounds, (1300, 1300), 1.05)
+        Image.fromarray(image).save(f"{out}/{name}.png")
+        layout[name] = {"nuclei": int(len(box_ids[name])), "px_per_voxel": ppv}
+    json.dump(layout, open(f"{out}/layout.json", "w"), indent=1)
+    d_log("platynereis done")
+
+
+def render_spheroid(out):
+    """The renders of the spheroid panel: the nuclei in the studio (elevation 40) with the outline of the middle z
+    plane, the nuclei cut by that plane seen from above (on a transparent background), and the DAPI raw of the plane
+    from the same camera."""
+    os.makedirs(out, exist_ok=True)
+    z_scale = SPHEROID_Z_UM / SPHEROID_XY_UM  # the scene is in xy voxel units
+    labels = tifffile.imread(f"{SPHEROID}/s2_nucleus_prediction.tif").astype("uint32")
+    ids, inverse = np.unique(labels, return_inverse=True)
+    labels = inverse.reshape(labels.shape).astype("uint16")
+    n_labels = len(ids) - 1
+    separated, pairs = d_separate(labels)
+    pairs |= d_near_pairs(labels, radius=3)
+    colors = d_distinct_colors(n_labels, pairs)
+    mesh = d_colored_mesh(separated, colors, z_scale)
+    # the section: the nuclei cut by the middle plane (the plane of the raw), rendered in full
+    zz = np.nonzero(labels)[0]
+    lab = labels[labels > 0]
+    count = np.maximum(np.bincount(lab, minlength=n_labels + 1), 1)
+    raw_z = int(round(np.median(np.bincount(lab, weights=zz, minlength=n_labels + 1)[1:] / count[1:])))
+    slab_ids = np.unique(labels[raw_z])[1:]
+    section = d_colored_mesh(np.where(np.isin(separated, slab_ids), separated, 0), colors, z_scale)
+    z_plane = raw_z * z_scale
+    d_log("spheroid", n_labels, "nuclei,", len(slab_ids), "in plane", raw_z)
+
+    # the section card: a square in the plane, its sides along the view (far side up) and across it, so that it
+    # shows as a near upright card in both renders
+    view, flat = d_view(40, 40)
+    up_h, right_h = -flat, np.array([-flat[1], flat[0], 0.0])
+    sx0, sx1, sy0, sy1, _, _ = section.bounds
+    centre = np.array([(sx0 + sx1) / 2, (sy0 + sy1) / 2, z_plane])
+    rel = section.points - centre
+    half = float(np.abs(np.c_[rel @ right_h, rel @ up_h]).max()) + 12
+    corners = [tuple(centre + half * (a * right_h + b * up_h)) for a, b in ((-1, 1), (1, 1), (1, -1), (-1, -1))]
+
+    plotter = d_studio((2000, 2000), mesh.bounds, view, 900, 1.0)
+    d_add_objects(plotter, mesh)
+    d_backdrop(plotter, mesh.bounds, view, 25, 260, 120)
+    Image.fromarray(d_screenshot(plotter, (2000, 2000))).save(f"{out}/studio.png")
+    x0, x1, y0, y1, z0, z1 = mesh.bounds
+    layout = {"nuclei": n_labels, "slab_nuclei": int(len(slab_ids)), "xy_um": SPHEROID_XY_UM,
+              "z_um": SPHEROID_Z_UM, "raw_z": raw_z,
+              "studio": {"slab_outline": d_project(plotter, corners),
+                         "px_per_voxel": d_px_per_unit(plotter, [(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2])}}
+    plotter.close()
+
+    # the section from above, tilted towards the studio camera; the far side on top, as in the studio
+    raw = tifffile.imread(f"{SPHEROID}/s2.tif")[raw_z, 0].astype("float32")
+    steps = np.arange(-half, half + 0.5, 0.5)
+    a, b = np.meshgrid(steps, steps, indexing="ij")
+    x = centre[0] + a * right_h[0] + b * up_h[0]
+    y = centre[1] + a * right_h[1] + b * up_h[1]
+    # the background level of the raw is black, also outside the image
+    lo, hi = np.percentile(raw, [10, 99.5])
+    plane = ndimage.map_coordinates(raw, [y, x], order=1, cval=lo)
+    direction = 0.5 * flat + np.array([0, 0, 1.0])
+    direction /= np.linalg.norm(direction)
+    right = np.cross(-direction, -flat)
+    right /= np.linalg.norm(right)
+    up = np.cross(right, -direction)
+    key = 3000 * (direction + 0.5 * up - 0.5 * right)
+    c = np.array(corners)
+    bounds = (c[:, 0].min(), c[:, 0].max(), c[:, 1].min(), c[:, 1].max(), z_plane - 5, z_plane + 5)
+
+    def add_raw(plotter):
+        grid = pv.StructuredGrid(x[..., None], y[..., None], np.full(x.shape + (1,), z_plane))
+        grid.point_data["values"] = plane.ravel(order="F")
+        plotter.add_mesh(grid, scalars="values", cmap="gray", clim=(lo, hi), ambient=1.0, diffuse=0.0, specular=0.0,
+                         show_scalar_bar=False)
+
+    image, _, ppv = d_section_shot(lambda p: d_add_objects(p, section), centre, direction, up, key, bounds,
+                                   (1600, 1600), 1.6, transparent=True)
+    Image.fromarray(image).save(f"{out}/section_rgba.png")
+    image, _, _ = d_section_shot(add_raw, centre, direction, up, key, bounds, (1600, 1600), 1.6)
+    Image.fromarray(image).save(f"{out}/section_raw.png")
+    layout["section"] = {"px_per_voxel": ppv}
+    json.dump(layout, open(f"{out}/layout.json", "w"), indent=1)
+    d_log("spheroid done")
+
+
+def render_gruen(out):
+    """The renders of the heart section panel: the volume as one card of its merged channels (on white) with the
+    outlines of the three crops on it, and for each crop its cells alone, in the studio, from the same direction."""
+    os.makedirs(out, exist_ok=True)
+    z_scale = GRUEN_Z_UM / GRUEN_XY_UM  # the scene is in xy pixel units
+    view, _ = d_view(35, -60)
+    down = 2  # the downscaling of the raw card of the volume
+    volume = tifffile.imread(glob.glob(f"{GRUEN}/*_normalized.tif")[0])
+    height, width = volume.shape[1:3]
+    thickness = volume.shape[0] * z_scale
+    mip = volume.max(0)
+    # the nuclear channel (blue) is dim and blue looks dark: stretch it to its 99.5th percentile, with a gamma
+    nuclei = mip[..., 2].astype("float32")
+    mip[..., 2] = (np.clip(nuclei / np.percentile(nuclei, 99.5), 0, 1) ** 0.7 * 255).astype("uint8")
+    del volume
+    small = np.asarray(Image.fromarray(mip).resize((width // down, height // down), Image.LANCZOS))
+    crops = []
+    for path in sorted(glob.glob(f"{GRUEN}/RGB/*crop*.tif")):
+        name = os.path.basename(path)
+        crops.append({"name": f"crop{name.split('_crop')[1].split('_')[0]}",
+                      "y": int(name.split("_y")[1].split("_")[0]), "x": int(name.split("_x")[1].split(".")[0]),
+                      "mask": f"{GRUEN}/masks/{name.replace('.tif', '_mask.tif')}"})
+
+    # one card of the merged channels
+    top_z = 0.0
+    plotter = d_studio((2400, 2400), (0, width, -height, 0, 0, top_z + thickness), view, 4000, 1.0)
+    d_card(plotter, small, (0, 0, top_z), down, thickness)
+    Image.fromarray(d_screenshot(plotter, (2400, 2400))).save(f"{out}/volume.png")
+    layout = {"xy_um": GRUEN_XY_UM, "z_um": GRUEN_Z_UM, "volume": [int(height), int(width)], "crops": {}}
+    for crop in crops:
+        # the crop footprint on the top face of the top card: top left, top right, bottom right, bottom left
+        x, y, z = crop["x"], -crop["y"], top_z + thickness + 0.5
+        corners = [(x, y, z), (x + 512, y, z), (x + 512, y - 512, z), (x, y - 512, z)]
+        layout["crops"][crop["name"]] = {"outline": d_project(plotter, corners), "y": crop["y"], "x": crop["x"]}
+    layout["volume_px_per_pixel"] = d_px_per_unit(plotter, (width / 2, -height / 2, top_z), 500.0)
+    plotter.close()
+    d_log("volume")
+
+    # each crop: its cells alone, on the studio floor
+    for crop in crops:
+        labels = tifffile.imread(crop["mask"])
+        ids, inverse = np.unique(labels, return_inverse=True)
+        labels = inverse.reshape(labels.shape).astype("uint16")
+        n_labels = len(ids) - 1
+        separated, pairs = d_separate(labels)
+        pairs |= d_near_pairs(labels, radius=3)
+        colors = d_distinct_colors(n_labels, pairs)
+        # the cells fill all planes and reach the crop edges: pad with background, so that their surfaces close
+        mesh = d_label_surfaces(np.pad(separated, 1))
+        mesh.points -= 1
+        # y down the image rows as in the volume render; the mirror flips the faces, so turn them back
+        mesh.points[:, 1] *= -1
+        mesh.points[:, 2] *= z_scale
+        mesh.flip_faces(inplace=True)
+        mesh.cell_data["rgb"] = (colors[mesh.cell_data["label"]] * 255).astype("uint8")
+        bounds = (0, 512, -512, 0, 0, labels.shape[0] * z_scale)
+        plotter = d_studio((1400, 1400), bounds, view, 700, 1.0)
+        d_add_objects(plotter, mesh)
+        d_backdrop(plotter, bounds, view, 30, 300, 180)
+        Image.fromarray(d_screenshot(plotter, (1400, 1400))).save(f"{out}/{crop['name']}.png")
+        # the corners of the top face of the cell block (the cells fill most of the crop), in the same order as
+        # the crop outline
+        z = bounds[5]
+        face = d_project(plotter, [(0, 0, z), (512, 0, z), (512, -512, z), (0, -512, z)])
+        layout["crops"][crop["name"]].update({"top_face": face, "cells": n_labels,
+                                              "px_per_pixel": d_px_per_unit(plotter, (256, -256, 0))})
+        plotter.close()
+        d_log(crop["name"], n_labels, "cells")
+    json.dump(layout, open(f"{out}/layout.json", "w"), indent=1)
+    d_log("gruen done")
+
+
+def render_histai(out):
+    """The render of the Ki67 core example: the whole core upright in the studio (scan orientation), and in a column on
+    its right two full resolution crops (the most positive and the most negative tumor windows),
+    joined by lines from their boxes on the core. Each crop shows both outputs: every segmented nucleus with a light
+    fill and an outline in the colour of its class."""
+    os.makedirs(out, exist_ok=True)
+    group = zarr.open_group(zarr.storage.ZipStore(HISTAI, mode="r"), mode="r", zarr_format=2)
+    h0, w0 = group["0"].shape[1:]
+    size_px = HISTAI_CROP
+    # the crops, found on level 3 (1 px = 8 level 0 px), at least two crop sizes apart
+    classes3 = group["labels/classes/3"][:]
+    k = size_px // 8
+    maps = {"positive": ndimage.uniform_filter((classes3 == 1).astype("float32"), k),
+            "negative": ndimage.uniform_filter((classes3 == 2).astype("float32"), k)}
+    taken, crops = np.zeros(classes3.shape, bool), {}
+    for name in ("positive", "negative"):
+        score = np.where(taken, -1, maps[name])
+        cy, cx = np.unravel_index(np.argmax(score), score.shape)
+        crops[name] = (int(np.clip(cy * 8 - size_px // 2, 0, h0 - size_px)),
+                       int(np.clip(cx * 8 - size_px // 2, 0, w0 - size_px)))
+        taken[max(0, cy - 2 * k):cy + 2 * k, max(0, cx - 2 * k):cx + 2 * k] = True
+
+    def outlined(y0, x0):
+        """The crop with each nucleus in the colour of its class (the class of most of its pixels): a light fill and a
+        thick outline. Also return the number of nuclei per class."""
+        raw = np.moveaxis(group["0"][:, y0:y0 + size_px, x0:x0 + size_px], 0, -1).copy()
+        inst = group["labels/instances/0"][y0:y0 + size_px, x0:x0 + size_px]
+        cls = group["labels/classes/0"][y0:y0 + size_px, x0:x0 + size_px]
+        ids, inverse = np.unique(inst, return_inverse=True)
+        inst = inverse.reshape(inst.shape)
+        n = len(ids) - 1
+        votes = np.stack([np.bincount(inst[cls == c].ravel(), minlength=n + 1) for c in range(4)], 1)
+        obj_class = votes[:, 1:].argmax(1) + 1
+        obj_class[votes[:, 1:].sum(1) == 0] = 0
+        inside = inst > 0
+        raw[inside] = (0.6 * raw[inside] + 0.4 * HISTAI_CLASS_RGB[obj_class[inst[inside]]]).astype(np.uint8)
+        edge = ndimage.binary_dilation(find_boundaries(inst, mode="inner"), iterations=2) & inside
+        raw[edge] = HISTAI_CLASS_RGB[obj_class[inst[edge]]]
+        return raw, [int((obj_class[1:] == c).sum()) for c in (1, 2, 3)]
+
+    def rect(x, y, w, h):
+        """Top left, top right, bottom right, bottom left; y is the top edge (scene y grows upwards)."""
+        return [(x, y), (x + w, y), (x + w, y - h), (x, y - h)]
+
+    t, core_h, card, gap_x, gap_y = 20.0, 3000.0, 1100.0, 250.0, 120.0
+    step0 = core_h / h0  # scene units per level 0 px on the core
+    core_w = w0 * step0
+    column_x = core_w + gap_x
+    column_top = -(core_h - (2 * card + gap_y)) / 2
+    view, _ = d_view(55, -90)
+    size = (3900, 3900)  # large enough to print at more than 1200 dpi
+    plotter = d_studio(size, (0, column_x + card, -core_h, 0, 0, t), view, 8000, 1.0)
+    d_card(plotter, np.moveaxis(group["3"][:], 0, -1), (0, 0, 0), step0 * 8, t)
+    layout = {"um_per_px": HISTAI_UM, "crops": {}}
+    for i, name in enumerate(sorted(crops, key=lambda n: crops[n][0])):  # top to bottom along the core
+        y0, x0 = crops[name]
+        image, counts = outlined(y0, x0)
+        top = column_top - i * (card + gap_y)
+        d_card(plotter, image, (column_x, top, 0), card / size_px, t)
+        box = rect(x0 * step0, -y0 * step0, size_px * step0, size_px * step0)
+        target = rect(column_x, top, card, card)
+        ring = [(x, y, t + 1) for x, y in box + box[:1]]
+        plotter.add_mesh(pv.lines_from_points(np.array(ring)), color=(0.1, 0.1, 0.1), line_width=8)
+        # from the right corners of the box to the left corners of the crop card
+        for a, b in ((box[1], target[0]), (box[2], target[3])):
+            plotter.add_mesh(pv.Line((a[0], a[1], t + 1), (b[0], b[1], t + 1)), color=(0.15, 0.15, 0.15),
+                             line_width=5)
+        layout["crops"][name] = {"y0": y0, "x0": x0, "positive": counts[0], "negative": counts[1], "other": counts[2]}
+    image = d_screenshot(plotter, size)
+    # pixels of the render per micrometer, at the centre of the core and of the middle crop
+    layout["core_px_per_um"] = d_px_per_unit(plotter, (core_w / 2, -core_h / 2, t)) * step0 / HISTAI_UM
+    middle = (column_x + card / 2, column_top - card / 2, t)
+    layout["crop_px_per_um"] = d_px_per_unit(plotter, middle) * card / size_px / HISTAI_UM
+    left = d_project(plotter, [(column_x, column_top - 2 * card - gap_y, t)])[0][0]
+    plotter.close()
+    rows, cols = np.nonzero((image < 245).any(-1))
+    r0, c0 = max(rows.min() - 8, 0), max(cols.min() - 8, 0)
+    image = image[r0:rows.max() + 8, c0:cols.max() + 8]
+    layout["crop_column_left"] = (left - c0) / image.shape[1]
+    Image.fromarray(image).save(f"{out}/zoom.png")
+    json.dump(layout, open(f"{out}/layout.json", "w"), indent=1)
+    d_log("histai done")
+
+
+def d_fonts():
+    for name in os.listdir(FONT_DIR):
+        if name.endswith(".ttf"):
+            font_manager.fontManager.addfont(os.path.join(FONT_DIR, name))
+    matplotlib.rcParams["font.family"] = "Liberation Sans"
+    matplotlib.rcParams["font.size"] = 7
+
+
+def d_load(path, mode="RGB"):
+    return np.asarray(Image.open(path).convert(mode))
+
+
+def d_crop_white(image, margin):
+    """Crop a white background image to its content plus a margin; also return the offset (column, row)."""
+    rows, cols = np.nonzero((image < 245).any(-1))
+    r0, c0 = max(rows.min() - margin, 0), max(cols.min() - margin, 0)
+    return image[r0:rows.max() + margin, c0:cols.max() + margin], np.array([c0, r0])
+
+
+def d_crop_to(image, points, keep, margin):
+    """Crop to the pixels to keep and the given points, plus a margin; also return the offset (column, row)."""
+    rows, cols = np.nonzero(keep)
+    pts = np.asarray(points).reshape(-1, 2)
+    c0, c1 = min(cols.min(), pts[:, 0].min()), max(cols.max(), pts[:, 0].max())
+    r0, r1 = min(rows.min(), pts[:, 1].min()), max(rows.max(), pts[:, 1].max())
+    c0, r0 = int(max(c0 - margin, 0)), int(max(r0 - margin, 0))
+    c1, r1 = int(min(c1 + margin, image.shape[1])), int(min(r1 + margin, image.shape[0]))
+    return image[r0:r1, c0:c1], np.array([c0, r0])
+
+
+def d_colourful(image):
+    """The scene without the grey studio: coloured or dark pixels."""
+    rgb = image.astype(int)
+    return (np.ptp(rgb, -1) > 30) | (rgb.max(-1) < 60)
+
+
+def d_card_corners(image):
+    """The corners of a dark tilted card on white: top left, top right, bottom right, bottom left."""
+    rows, cols = np.nonzero((image < 250).any(-1))
+    s, d = cols + rows, cols - rows
+    return np.array([(cols[i], rows[i]) for i in (np.argmin(s), np.argmax(d), np.argmax(s), np.argmin(d))], float)
+
+
+def d_stretch(raw, on_card):
+    """More contrast in a raw card: stretch to its 98th percentile on the card, with a slight gamma."""
+    grey = raw[..., 0].astype(float)
+    hi = np.percentile(grey[on_card & (grey > 8)], 98)
+    stretched = (np.clip(grey / hi, 0, 1) ** 0.8 * 255)[..., None].repeat(3, -1)
+    return np.where(on_card[..., None], stretched, raw).astype("uint8")
+
+
+def d_layered(raw, seg, shift):
+    """A stack of two cards of the same tilted shape: the raw at the back with its edge drawn, and the objects (with
+    their own alpha, rendered on a transparent background) on a clear card in front, moved by the shift vector.
+    Returns the image, the card corners and the origins of the back and front layers."""
+    h, w = raw.shape[:2]
+    dx, dy = int(round(shift[0])), int(round(shift[1]))
+    back = np.array([0, max(0, -dy)])
+    front = back + [dx, dy]
+    out = np.full((h + abs(dy), w + dx, 3), 255, "uint8")
+    out[back[1]:back[1] + h, back[0]:back[0] + w] = raw
+    card = d_card_corners(raw)
+    edge = Image.fromarray(out)
+    ImageDraw.Draw(edge).polygon([tuple(p) for p in card + back], outline=(138, 138, 138), width=3)
+    out = np.asarray(edge).astype(float)
+    alpha = seg[..., 3:4].astype(float) / 255
+    region = out[front[1]:front[1] + h, front[0]:front[0] + w]
+    out[front[1]:front[1] + h, front[0]:front[0] + w] = region * (1 - alpha) + seg[..., :3] * alpha
+    return np.clip(out, 0, 255).astype("uint8"), card, back, front
+
+
+# the print resolutions of the images placed in panel d
+D_DPI = []
+
+
+class DFigure:
+    """A matplotlib figure laid out in mm from the top left."""
+
+    def __init__(self, width, height):
+        self.width, self.height = width, height
+        self.fig = plt.figure(figsize=(width / 25.4, height / 25.4), dpi=300)
+
+    def axes(self, x, y, w, h):
+        return self.fig.add_axes([x / self.width, 1 - (y + h) / self.height, w / self.width, h / self.height])
+
+    def image(self, image, x, y, w, h, frame=False):
+        """The image as large as fits in a box, aligned to the top left; with a thin frame or without axes."""
+        ih, iw = image.shape[:2]
+        scale = min(w / iw, h / ih)
+        # the print resolution of the image (pixels per inch), for the check that panel d stays above 1200 dpi
+        D_DPI.append(25.4 / scale)
+        ax = self.axes(x, y, iw * scale, ih * scale)
+        # no interpolation: the svg keeps the full resolution of the render, instead of resampling it to 72 dpi
+        ax.imshow(image, interpolation="none")
+        if frame:
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_linewidth(0.6)
+                spine.set_color(D_LINE)
+        else:
+            ax.axis("off")
+        return ax
+
+    def title(self, ax, text):
+        ax.text(0.5, 1.0 + 1.6 / (ax.get_position().height * self.height), text, transform=ax.transAxes,
+                ha="center", va="baseline", fontsize=7, color=D_LINE)
+
+    def connect(self, ax_a, point_a, ax_b, point_b):
+        self.fig.add_artist(ConnectionPatch(xyA=point_a, coordsA=ax_a.transData, xyB=point_b, coordsB=ax_b.transData,
+                                            lw=0.5, color=D_LINE))
+
+    def svg(self):
+        """The figure as an svg element sized in mm, with editable text, to place in the svg of the figure."""
+        buffer = io.StringIO()
+        # transparent, so that an example placed over the empty margin of another does not hide it
+        with matplotlib.rc_context({"svg.fonttype": "none", "image.composite_image": False}):
+            self.fig.savefig(buffer, format="svg", dpi=300, transparent=True)
+        plt.close(self.fig)
+        text = buffer.getvalue()
+        root = text[text.index("<svg"):]
+        head, body = root.split(">", 1)
+        head = re.sub(r'\s(width|height)="[^"]*"', "", head)
+        # the text asks for Arial first, as in the other panels; Liberation Sans has its metrics
+        body = re.sub(r"font-family:\s*'?Liberation Sans'?", "font-family:Arial,'Liberation Sans',sans-serif", body)
+        return f'{head} width="{fmt(self.width)}" height="{fmt(self.height)}">{body}'
+
+
+def d_scale_bar(fig, ax, um, px_per_um, below=1.6, inset=0.03):
+    """A scale bar a fixed distance (in mm) below the image of the axes, at its left, with its label to its right,
+    so that neither covers the image at any size. Whole millimeters are labelled in mm."""
+    h, w = ax.get_ylim()[0] + 0.5, ax.get_xlim()[1] + 0.5
+    px_per_mm = h / (ax.get_position().height * fig.height)
+    x0, y = inset * w, h + below * px_per_mm
+    ax.plot([x0, x0 + um * px_per_um], [y, y], color=D_LINE, lw=1.6, solid_capstyle="butt", clip_on=False)
+    label = f"{um // 1000} mm" if um >= 1000 and um % 1000 == 0 else f"{um} µm"
+    ax.text(x0 + um * px_per_um + 0.8 * px_per_mm, y, label, ha="left", va="center", color=D_LINE,
+            fontsize=6.5, clip_on=False)
+    ax.set_ylim(h - 0.5, -0.5)
+
+
+def d_box(ax, corners, lw=0.7):
+    """A dark outline with a white halo under it, so that it shows on dark and on white."""
+    ax.add_patch(Polygon(corners, closed=True, fill=False, edgecolor="white", lw=lw + 1.1, joinstyle="miter"))
+    ax.add_patch(Polygon(corners, closed=True, fill=False, edgecolor=D_LINE, lw=lw, joinstyle="miter"))
+
+
+def d_right_edge(corners):
+    """The upper and the lower of the two rightmost corners."""
+    right = corners[np.argsort(corners[:, 0])[-2:]]
+    return right[np.argmin(right[:, 1])], right[np.argmax(right[:, 1])]
+
+
+def build_platynereis(folder, height, measure=False):
+    """The Platynereis example: a) the nuclei in the studio with the section plane, b) the section as a stack of the
+    raw card at the back and its nuclei on a clear card in front, joined to the plane by thin lines."""
+    layout = json.load(open(f"{folder}/layout.json"))
+    um_pre = layout["voxel_um"] / layout["expansion"]  # pre-expansion micrometers per s1 voxel
+    raw = d_load(f"{folder}/section_raw.png")
+    raw = d_stretch(raw, (raw < 250).any(-1))
+    corners = d_card_corners(raw)
+    section, card, back, front = d_layered(raw, d_load(f"{folder}/section_rgba.png", "RGBA"),
+                                           0.42 * (corners[1] - corners[0]))
+    section, offset = d_crop_white(section, 8)
+    glass, back_card = card + front - offset, card + back - offset
+    # a: the studio cropped to the animal and the section plane, with a small margin
+    seg = d_load(f"{folder}/seg_studio.png")
+    outline = np.array(layout["studio"]["slab_outline"])
+    cols = np.flatnonzero((np.ptp(seg.astype(int), -1) > 40).any(0))
+    a0 = max(int(min(cols.min(), outline[:, 0].min())) - 4, 0)
+    a1 = min(int(max(cols.max(), outline[:, 0].max())) + 4, seg.shape[1])
+    seg, outline = seg[:, a0:a1], outline - [a0, 0]
+
+    # the widths follow from one common height of a and b
+    top, gap = D_TOP["platynereis"], 2.5
+    row_h = height - top - 4
+    wa = row_h * seg.shape[1] / seg.shape[0]
+    wb = row_h * section.shape[1] / section.shape[0]
+    xa, xb = 3.0, 3.0 + wa + gap
+    width = xb + wb + 1.5
+    if measure:
+        return None, width
+    fig = DFigure(width, height)
+    ax_a = fig.image(seg, xa, top, wa, row_h)
+    ax_b = fig.image(section, xb, top, wb, row_h)
+    # the section plane in a, and lines from its right edge to the left corners of the raw card in b (corners: top
+    # left, top right, bottom right, bottom left)
+    ax_a.add_patch(Polygon(outline, closed=True, fill=False, edgecolor=D_LINE, lw=0.8, joinstyle="miter"))
+    upper, lower = d_right_edge(outline)
+    fig.connect(ax_a, upper, ax_b, back_card[0])
+    fig.connect(ax_a, lower, ax_b, back_card[3])
+    ax_b.add_patch(Polygon(glass, closed=True, fill=False, edgecolor="#8a8a8a", lw=0.5, joinstyle="miter"))
+    d_scale_bar(fig, ax_a, 50, layout["studio"]["px_per_voxel"] / um_pre)
+    d_scale_bar(fig, ax_b, 20, layout["section"]["px_per_voxel"] / um_pre)
+    return fig.svg(), width
+
+
+def build_spheroid(folder, height, measure=False, stacked=False):
+    """The spheroid example: the nuclei in the studio with the outline of the middle z plane, and next to it (or below
+    it, if stacked) a stack of the DAPI raw of the plane at the back and the nuclei cut by the plane on a clear card
+    in front."""
+    layout = json.load(open(f"{folder}/layout.json"))
+    raw = d_load(f"{folder}/section_raw.png")
+    rows, cols = np.indices(raw.shape[:2])
+    on_card = Path(d_card_corners(raw)).contains_points(np.c_[cols.ravel(), rows.ravel()]).reshape(raw.shape[:2])
+    raw = d_stretch(raw, on_card)
+    corners = d_card_corners(raw)
+    section, card, back, front = d_layered(raw, d_load(f"{folder}/section_rgba.png", "RGBA"),
+                                           0.42 * (corners[1] - corners[0]))
+    section, offset = d_crop_white(section, 22)
+    glass, back_card = card + front - offset, card + back - offset
+    # a: the studio cropped to the spheroid and the plane outline, with room for the floor and the shadows
+    studio = d_load(f"{folder}/studio.png")
+    outline = np.array(layout["studio"]["slab_outline"])
+    colourful = np.ptp(studio.astype(int), -1) > 40
+    rows, cols = np.flatnonzero(colourful.any(1)), np.flatnonzero(colourful.any(0))
+    r0, r1 = min(rows.min(), outline[:, 1].min()), max(rows.max(), outline[:, 1].max())
+    c0, c1 = min(cols.min(), outline[:, 0].min()), max(cols.max(), outline[:, 0].max())
+    r0, r1 = int(max(r0 - 0.02 * (r1 - r0), 0)), int(min(r1 + 0.05 * (r1 - r0), studio.shape[0]))
+    c0, c1 = int(max(c0 - 0.02 * (c1 - c0), 0)), int(min(c1 + 0.02 * (c1 - c0), studio.shape[1]))
+    studio, outline = studio[r0:r1, c0:c1], outline - [c0, r0]
+
+    top, gap = D_TOP["spheroid"], 2.5
+    if stacked:
+        # one column of the studio and the section below it, as wide as the height allows
+        column = (height - top - gap - 4.0) / (studio.shape[0] / studio.shape[1] + section.shape[0] / section.shape[1])
+        ha = column * studio.shape[0] / studio.shape[1]
+        width = 3.0 + column + 1.5
+        boxes = ((3.0, top, column, ha), (3.0, top + ha + gap, column, height - top - ha - gap - 4.0))
+    else:
+        # the studio and the section next to each other, of the same height
+        row_h = height - top - 4.0
+        wa, wb = (row_h * image.shape[1] / image.shape[0] for image in (studio, section))
+        width = 3.0 + wa + gap + 1.5 + wb + 1.5
+        boxes = ((3.0, top, wa, row_h), (3.0 + wa + gap + 1.5, top, wb, row_h))
+    if measure:
+        return None, width
+    fig = DFigure(width, height)
+    ax_a = fig.image(studio, *boxes[0])
+    ax_b = fig.image(section, *boxes[1])
+    ax_a.add_patch(Polygon(outline, closed=True, fill=False, edgecolor=D_LINE, lw=0.8, joinstyle="miter"))
+    # corners: top left, top right, bottom right, bottom left, in the outline and in the raw card
+    if stacked:
+        # from the leftmost and rightmost corners of the plane down to the top corners of the card, beside the spheroid
+        fig.connect(ax_a, outline[np.argmin(outline[:, 0])], ax_b, back_card[0])
+        fig.connect(ax_a, outline[np.argmax(outline[:, 0])], ax_b, back_card[1])
+    else:
+        # from the right corners of the plane to the left corners of the card, so that no line crosses the studio
+        for i, j in ((1, 0), (2, 3)):
+            fig.connect(ax_a, outline[i], ax_b, back_card[j])
+    ax_b.add_patch(Polygon(glass, closed=True, fill=False, edgecolor="#8a8a8a", lw=0.5, joinstyle="miter"))
+    d_scale_bar(fig, ax_a, 50, layout["studio"]["px_per_voxel"] / layout["xy_um"])
+    d_scale_bar(fig, ax_b, 50, layout["section"]["px_per_voxel"] / layout["xy_um"])
+    return fig.svg(), width
+
+
+def build_gruen(folder, height, measure=False):
+    """The heart section panel: a) the volume as one card of its merged channels with the outlines of two of the
+    crops on it, and the cells of each of these crops, joined to its outline by lines from the top and right
+    corners of the outline to the top and left corners of the top face of the cells."""
+    layout = json.load(open(f"{folder}/layout.json"))
+    volume = d_load(f"{folder}/volume.png")
+    crops = layout["crops"]
+    # the second and third crops from the top, so that each gets more room
+    names = sorted(crops, key=lambda n: np.mean(np.array(crops[n]["outline"])[:, 1]))[1:]  # top to bottom in a
+    volume, offset = d_crop_to(volume, [crops[n]["outline"] for n in names], d_colourful(volume), 10)
+    renders = {}
+    for n in names:
+        image = d_load(f"{folder}/{n}.png")
+        image, off = d_crop_to(image, crops[n]["top_face"], d_colourful(image), 10)
+        renders[n] = (image, np.array(crops[n]["top_face"]) - off)
+
+    top, gap, vgap = D_TOP["gruen"], 5.0, 3.0
+    row_h = height - top - 4
+    wa = row_h * volume.shape[1] / volume.shape[0]
+    ch = (row_h - (len(names) - 1) * vgap) / len(names)
+    wc = max(ch * im.shape[1] / im.shape[0] for im, _ in renders.values())
+    xa, xc = 3.0, 3.0 + wa + gap
+    width = xc + wc + 1.5
+    if measure:
+        return None, width
+    fig = DFigure(width, height)
+    ax_a = fig.image(volume, xa, top, wa, row_h)
+    for i, n in enumerate(names):
+        y = top + i * (ch + vgap)
+        image, face = renders[n]
+        ax = fig.image(image, xc, y, wc, ch)
+        if i == len(names) - 1:
+            # the pixel size is estimated (GRUEN_XY_UM), not from the files
+            d_scale_bar(fig, ax, 20, crops[n]["px_per_pixel"] / layout["xy_um"])
+        outline = np.array(crops[n]["outline"]) - offset
+        d_box(ax_a, outline)
+        # the top and right corners of the outline (no line crosses a) to the top and left corners of the top face
+        # of the cells (no line crosses the crop)
+        fig.connect(ax_a, outline[np.argmin(outline[:, 1])], ax, face[np.argmin(face[:, 1])])
+        fig.connect(ax_a, outline[np.argmax(outline[:, 0])], ax, face[np.argmin(face[:, 0])])
+    d_scale_bar(fig, ax_a, 100, layout["volume_px_per_pixel"] / layout["xy_um"])
+    return fig.svg(), width
+
+
+def build_histai(folder, height, measure=False):
+    """The Ki67 core example: its render with a scale bar for the core and one for the crops below it."""
+    layout = json.load(open(f"{folder}/layout.json"))
+    image = d_load(f"{folder}/zoom.png")
+    top = D_TOP["histai"]
+    row_h = height - top - 4.0
+    width = 3.0 + row_h * image.shape[1] / image.shape[0] + 1.5
+    if measure:
+        return None, width
+    fig = DFigure(width, height)
+    ax = fig.image(image, 3.0, top, width - 4.5, row_h)
+    d_scale_bar(fig, ax, 1000, layout["core_px_per_um"], inset=0.02)
+    d_scale_bar(fig, ax, 100, layout["crop_px_per_um"], inset=layout["crop_column_left"])
+    return fig.svg(), width
+
+
+D_RENDERS = {"platynereis": render_platynereis, "spheroid": render_spheroid, "gruen": render_gruen,
+             "histai": render_histai}
+# the rows of panel d with their examples, in reading order; each row fills the width of the figure
+# panel d is one row of columns, from left to right; the examples of a column are stacked, with the same width
+D_COLUMNS = (("platynereis",), ("gruen", "spheroid"), ("histai",))
+D_BUILDERS = {"platynereis": build_platynereis, "spheroid": build_spheroid, "gruen": build_gruen,
+              "histai": build_histai}
+D_EXAMPLE_GAP = 1.5
+# the gap between stacked examples (the one above already ends with its scale bar strip)
+D_STACK_GAP = 0.0
+
+
+def build_panel_d(folder, width=A4_WIDTH, height=None):
+    """Panel d: the examples in one row of columns, from their renders in the folder, each with its number (i, ii,
+    ...) at the top left of its first image. All columns have the same height, at which the row fills the width (at
+    most the given height); the examples of a column are stacked at the same width. The width of an example grows
+    linearly with its height. Returns the svg content and the size of the panel."""
+    d_fonts()
+    line = {}
+    for column in D_COLUMNS:
+        for name in column:
+            build, path = D_BUILDERS[name], os.path.join(folder, name)
+            low, high = build(path, 50.0, measure=True)[1], build(path, 100.0, measure=True)[1]
+            line[name] = ((high - low) / 50.0, low - (high - low))  # slope and offset
+
+    def column_width(column, h):
+        """The width of a column of height h: its examples stacked at one width, filling the height."""
+        inverse = sum(1 / line[n][0] for n in column)
+        return (h - D_STACK_GAP * (len(column) - 1) + sum(line[n][1] / line[n][0] for n in column)) / inverse
+
+    def row_width(h):
+        return sum(column_width(c, h) for c in D_COLUMNS) + D_EXAMPLE_GAP * (len(D_COLUMNS) - 1)
+
+    # the height at which the row fills the width (the row width grows linearly with the height)
+    h50, h100 = row_width(50.0), row_width(100.0)
+    panel_h = 50.0 + (width - h50) * 50.0 / (h100 - h50)
+    if height is not None:
+        panel_h = min(panel_h, height)
+    widths = [column_width(c, panel_h) for c in D_COLUMNS]
+    gap = (width - sum(widths)) / (len(D_COLUMNS) - 1)
+    parts, x, numbers = [], 0.0, iter(("i", "ii", "iii", "iv", "v", "vi"))
+    size = MAX_TEXT  # 7 pt, below the 8 pt panel letters
+    for column, column_w in zip(D_COLUMNS, widths):
+        y = 0.0
+        for name in column:
+            example_h = (column_w - line[name][1]) / line[name][0]
+            svg, _ = D_BUILDERS[name](os.path.join(folder, name), example_h)
+            parts.append(f'<g transform="translate({fmt(x)},{fmt(y)})">{svg}</g>')
+            # right next to the first image of the example (which starts 3 mm in and D_TOP down), at its top
+            parts.append(f'<text x="{fmt(x + 2.6)}" y="{fmt(y + D_TOP[name] + 0.75 * size)}" text-anchor="end" '
+                         f'style="{FONT};font-size:{fmt(size)}px;font-weight:bold;fill:{TEXT}">{next(numbers)}</text>')
+            y += example_h + D_STACK_GAP
+        x += column_w + gap
+    return "".join(parts), width, panel_h
 
 
 def main():
@@ -3002,11 +4027,26 @@ def main():
     parser.add_argument("--logo", default=LOGO, help="The micro-sam2 logo.")
     parser.add_argument("--napari_logo", default=NAPARI_LOGO, help="The napari logo, by default the one of napari.")
     parser.add_argument("--python_logo", default=PYTHON_LOGO, help="The Python logo.")
-    parser.add_argument("--panels", nargs="+", default=["a", "b", "c"], help="The panels to make.")
+    parser.add_argument("--panels", nargs="+", default=["a", "b", "c", "d"], help="The panels to make.")
+    parser.add_argument("--render", nargs="+", default=[], choices=sorted(D_RENDERS),
+                        help="The panel d examples to render again, before panel d is put together (on a GPU node).")
+    parser.add_argument("--platy_raw_cache", default=os.path.join(os.environ.get("TMPDIR", "/tmp"),
+                                                                  "platynereis_raw_s0.npy"),
+                        help="The cache of the normalised Platynereis raw at s0 (3.5 GB), for the section.")
     args = parser.parse_args()
 
     os.makedirs(args.output_folder, exist_ok=True)
     panels = {}
+    # panel d first: its examples may be rendered again
+    d_folder = os.path.join(args.output_folder, "panel_d")
+    for name in args.render:
+        if name == "platynereis":
+            render_platynereis(os.path.join(d_folder, name), args.platy_raw_cache)
+        else:
+            D_RENDERS[name](os.path.join(d_folder, name))
+    d = build_panel_d(d_folder)
+    if "d" in args.panels:
+        panels["d"] = d
     if "a" in args.panels:
         panels["a"] = (build_panel_a(), A4_WIDTH, A_H * A4_WIDTH / A_W)
     # panel c takes the size of panel b, so panel b comes first
@@ -3015,12 +4055,13 @@ def main():
     if "c" in args.panels:
         fetch_python_logo(args.python_logo)
         _, b_w, b_h = panels["b"]
-        panels["c"] = build_panel_c(args.logo, args.napari_logo, args.python_logo, b_w, b_h)
+        c_w = FIGURE_W - 2 * LETTER_W - PANEL_GAP - b_w
+        panels["c"] = build_panel_c(args.logo, args.napari_logo, args.python_logo, c_w, b_h)
     for name, (content, width, height, *_) in panels.items():
         if name in args.panels:
             save_panel(content, args.output_folder, f"fig1_panel_{name}", width, height)
     # the whole figure needs all panels
-    if len(args.panels) == 3:
+    if {"a", "b", "c", "d"} <= set(args.panels):
         os.makedirs(args.final_folder, exist_ok=True)
         content, width, height = build_figure(panels)
         save_panel(content, args.final_folder, "figure_1", width, height)
