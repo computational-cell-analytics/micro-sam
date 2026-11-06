@@ -154,7 +154,7 @@ def _run_interactive_segmentation_2d_per_image(
     # Expects RGB-style images.
     encode_image(predictor, image.astype("uint8"))  # uint8 is what SAM2 expects as input.
 
-    gt_ids = np.unique(gt)[1:]
+    gt_ids = np.setdiff1d(np.unique(gt), [0])
 
     points, point_labels, boxes = _get_batched_prompts(
         gt=gt,
@@ -329,8 +329,10 @@ def run_interactive_segmentation_2d(
         # Run connected components on labels
         gt = connected_components(gt).astype("uint32")
 
-        if len(np.unique(gt)) == 1:
-            continue  # skipping the image as there are no labels.
+        # Skip the image if it has no labels. An image that one object covers has no background, but it
+        # still has a label to prompt.
+        if gt.max() == 0:
+            continue
 
         _run_interactive_segmentation_2d_per_image(
             image=image,
@@ -399,6 +401,7 @@ def run_interactive_segmentation_3d(
     run_connected_components: bool = True,
     seed: int = 0,
     correction_margin: float = 0.0,
+    click_protocol: str = "random",
 ) -> str:
     """Run interactive segmentation on 3d inputs using Segment Anything 2.
 
@@ -422,6 +425,8 @@ def run_interactive_segmentation_3d(
         seed: The seed of the prompt sampling of the volume.
         correction_margin: The fraction of each object's z-extent at either end that is excluded when the slice
             for the next correction click is chosen. 0 chooses among all slices of the object.
+        click_protocol: The correction clicks on the worst slice of an object: 'random' samples them at random
+            positions in the error regions, 'center' places them at the centers of the largest error regions.
 
     Returns:
         The folder where segmentations are stored.
@@ -477,7 +482,7 @@ def run_interactive_segmentation_3d(
     # and with them the results, reproducible.
     np.random.seed(seed)
 
-    gt_ids = list(np.unique(labels))[1:]  # Ignoring the background label
+    gt_ids = list(np.setdiff1d(np.unique(labels), [0]))  # Ignoring the background label
     # An empty volume has nothing to prompt, so all iterations stay empty.
     segmentation = [np.zeros(labels.shape, dtype="uint64") for _ in range(n_iterations)]
     # The area of the object that holds each label, per iteration, to resolve overlaps.
@@ -496,6 +501,7 @@ def run_interactive_segmentation_3d(
             batch_size=batch_size,
             n_iterations=n_iterations,
             correction_margin=correction_margin,
+            click_protocol=click_protocol,
         )
 
         # Merge the incoming object. Where objects overlap, the smaller one is kept, as in the 2d
@@ -533,6 +539,7 @@ def _run_interactive_segmentation_3d_per_object(
     batch_size: int = 32,
     n_iterations: int = 8,
     correction_margin: float = 0.0,
+    click_protocol: str = "random",
 ):
     """Functionality for interactive segmentation using iterative prompting.
     """
@@ -559,6 +566,7 @@ def _run_interactive_segmentation_3d_per_object(
         batch_size=batch_size,
         n_iterations=n_iterations,
         correction_margin=correction_margin,
+        click_protocol=click_protocol,
     )
 
     assert len(gt_ids) == len(preds_per_object), "The number of label ids must match the number of objects segmented."
@@ -616,11 +624,14 @@ def _extract_prompts_per_object(
 @torch.no_grad()
 def _get_iteratively_prompted_segmentation_per_image_dir(
     inference_state, labels, id_to_prompts, predictor, batch_size=32, n_iterations=8, correction_margin=0.0,
+    click_protocol="random",
 ):
     """Functionality for inference of 3d interactive segmentation.
     """
     # Let's define the iterative prompt generator.
-    prompt_generator = IterativePromptGenerator()
+    if click_protocol not in ("random", "center"):
+        raise ValueError(f"Invalid click protocol '{click_protocol}', choose 'random' or 'center'.")
+    prompt_generator = CenterIterativePromptGenerator() if click_protocol == "center" else IterativePromptGenerator()
 
     pred_per_object = []
     for _obj_id, _input_prompts in id_to_prompts.items():
@@ -645,6 +656,9 @@ def _get_iteratively_prompted_segmentation_per_image_dir(
                 # previous propagation at that frame, matching the mask_inputs feedback used
                 # during training (SAM2Train._iter_correct_pt_sampling, line 492).
                 for per_point, per_label in zip(_corr_points, _corr_labels):
+                    # The 'center' clicks pad a missing error type with the label -1.
+                    if per_label < 0:
+                        continue
                     _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
                         inference_state=inference_state, frame_idx=_corr_frame, obj_id=_obj_id,
                         points=np.array([per_point]), labels=np.array([per_label]),
