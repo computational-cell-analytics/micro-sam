@@ -253,7 +253,11 @@ ENTRIES = [
     Entry("blastospim", FL, "nucleus", 3, test="blastospim"),
     Entry("cshaper", FL, "cell", 3, test="cshaper"),
     Entry("morphonet_celegans", FL, "nucleus", 3, test="morphonet_celegans"),
-    Entry("parhyale_regen", FL, "nucleus", 3, test="parhyale_regen"),
+    Entry("morphonet_patiria", FL, "cell", 3, test="morphonet_patiria",
+          comment="The MorphoNet starfish (Patiria miniata) embryo with its curated labels."),
+    Entry("nus_organoids", FL, "nucleus", 3, test="nus_organoids",
+          comment="Three of the four manually annotated volumes of the nucleus benchmark of the Digitalized "
+          "Organoid paper: cell monolayer, colon organoid and breast cancer spheroid."),
     Entry("plantseg_ovules", FL, "cell", 3, test="plantseg_ovules"),
     # Electron microscopy (and EM-like), 2d.
     Entry("astih_bf", LF, "axon", 2, _em("astih", _path_has("/BF1/", "/BF2/")),
@@ -267,13 +271,14 @@ ENTRIES = [
     Entry(
         "emneuron", EM, "neurite", 3, _em("emneuron"),
         comment="A compilation of vEM volumes (without its AxonEM, CREMI and FIB-25 folders). It also holds "
-        "Kasthuri (ATUM) and J0126 volumes, the sources of the snemi and zebrafinch_j0126 test data.",
+        "Kasthuri (ATUM) and J0126 volumes, the sources of the snemi and zebrafinch_j0126 test data. Its "
+        "out-of-distribution validation volumes, the sources of ionsem, microns_basil and synapseweb, do not train.",
     ),
-    Entry("fafb", EM, "neurite", 3, _em("fafb")),
+    Entry("fafb", EM, "neurite", 3, _em("fafb"), "fafb"),
     Entry("fib25", EM, "neurite", 3, _em("fib25")),
-    Entry("hemibrain", EM, "neurite", 3, _em("hemibrain")),
+    Entry("hemibrain", EM, "neurite", 3, _em("hemibrain"), "hemibrain"),
     Entry("igor_cells", EM, "cell", 3, _em("igor_cells"), comment=f"Internal annotations. {INTERNAL}"),
-    Entry("liconn", FL, "neurite", 3, _em("liconn"), comment="Expansion light microscopy (EM-like), not EM."),
+    Entry("liconn", FL, "neurite", 3, _em("liconn"), "liconn", comment="Expansion light microscopy (EM-like), not EM."),
     Entry("malecns", EM, "neurite", 3, _em("malecns")),
     Entry("manc", EM, "neurite", 3, _em("manc")),
     Entry("microns_minnie65", EM, "neurite", 3, _em("microns-minnie65")),
@@ -289,7 +294,14 @@ ENTRIES = [
     Entry("zebrafinch_j0126", EM, "neurite", 3, _em("zebrafinch", _path_has("/j0126_")), "zebrafinch_j0126"),
     Entry("zebrafinch_j0251", EM, "neurite", 3, _em("zebrafinch", _path_has("/j0251_"))),
     # Electron microscopy, 3d, OOD.
+    Entry("humanneurons", EM, "neurite", 3, test="humanneurons",
+          comment="A 64 x 2048 x 2048 crop of the H01 human cortex volume."),
+    Entry("ionsem", EM, "neurite", 3, test="ionsem",
+          comment="Ionsem, an out-of-distribution validation volume of EMNeuron."),
     Entry("isbi2012", EM, "neurite", 3, test="isbi2012"),
+    Entry("microns_basil", EM, "neurite", 3, test="microns_basil",
+          comment="MICrONS basil (mouse visual cortex, ssTEM), an out-of-distribution validation volume of "
+          "EMNeuron."),
     Entry("nisb", EM, "neurite", 3, test="nisb", comment="Synthetic data."),
     Entry("synapseweb", EM, "neurite", 3, test="synapseweb"),
     # Histopathology, 2d.
@@ -323,23 +335,31 @@ ENTRIES = [
 ]
 
 
-def read_panels() -> Dict[str, Tuple[int, str]]:
-    """Read the ID and OOD datasets of the Figure 2 and 3 panels from the plotting scripts.
+def read_figure_literal(path: str, name: str):
+    """Read the literal value of a module-level assignment from a plotting script, without importing it."""
+    with open(path) as f:
+        tree = ast.parse(f.read())
+    nodes = [
+        node.value for node in tree.body if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+    ]
+    if len(nodes) != 1:
+        raise RuntimeError(f"Expected one {name} assignment in {path}, found {len(nodes)}.")
+    return ast.literal_eval(nodes[0])
+
+
+def read_panels(figure_scripts: Optional[Dict[int, str]] = None) -> Dict[str, Tuple[int, str]]:
+    """Read the ID and OOD datasets of the figure panels from the plotting scripts.
+
+    Args:
+        figure_scripts: The plotting script of each dimensionality. ``FIGURE_SCRIPTS`` (Figures 2 and 3) by default.
 
     Returns:
         The dimensionality and the role ('ID' or 'OOD') of every evaluated dataset.
     """
     panels = {}
-    for ndim, path in FIGURE_SCRIPTS.items():
-        with open(path) as f:
-            tree = ast.parse(f.read())
-        nodes = [
-            node.value for node in tree.body if isinstance(node, ast.Assign)
-            and any(isinstance(target, ast.Name) and target.id == "PANEL_DATASETS" for target in node.targets)
-        ]
-        if len(nodes) != 1:
-            raise RuntimeError(f"Expected one PANEL_DATASETS assignment in {path}, found {len(nodes)}.")
-        for panel in ast.literal_eval(nodes[0]).values():
+    for ndim, path in (FIGURE_SCRIPTS if figure_scripts is None else figure_scripts).items():
+        for panel in read_figure_literal(path, "PANEL_DATASETS").values():
             for role, names in panel.items():
                 for name in names:
                     if name in panels and panels[name] != (ndim, role):
@@ -398,7 +418,7 @@ def assign_units(units, entries: List[Entry]) -> Dict[str, list]:
             assigned[matches[0].name].append(unit)
     if unassigned or ambiguous:
         raise RuntimeError(
-            "The registry does not partition the training data. Update ENTRIES.\n"
+            "The registry does not partition the training data. Update its entries.\n"
             f"Unassigned label sources ({len(unassigned)}): {unassigned[:10]}\n"
             f"Label sources with several entries ({len(ambiguous)}): {ambiguous[:10]}"
         )
@@ -453,33 +473,39 @@ def build_training_units(domains, data_root):
 
 
 def submit_train(pool, units, transforms):
-    """Submit the counting of the training label sources of one dataset."""
-    from micro_sam.v2.datasets.data_counter import _file_key, count_unit
+    """Submit the counting of the training label sources of one dataset.
 
-    # A file split into several regions of interest is one volume, its objects are the union of the ids.
-    units_per_file = Counter(_file_key(unit) for unit in units)
-    return [
-        pool.submit(
-            count_unit, unit, *transforms[unit.key], keep_ids=not unit.stacked and units_per_file[_file_key(unit)] > 1
-        )
-        for unit in units
-    ]
+    Returns:
+        The counting jobs and their futures. A file split into several regions of interest is one volume, see
+        ``micro_sam.v2.datasets.data_counter.counting_jobs``.
+    """
+    from micro_sam.v2.datasets.data_counter import count_job, counting_jobs
+
+    jobs = counting_jobs(units, transforms)
+    return [(job, pool.submit(count_job, job)) for job in jobs]
 
 
 def finish_train(name, units, futures):
     """Sum the counts of the training label sources of one dataset."""
     from micro_sam.v2.datasets.data_counter import summarize
 
-    counts = {unit.key: future.result() for unit, future in zip(units, futures)}
+    counts = {
+        unit.key: count for job, future in futures for unit, count in zip(job.units, future.result())
+    }
     _, rows = summarize([replace(unit, dataset=name) for unit in units], counts)
     return sum(row["n_images"] for row in rows), sum(row["n_objects"] for row in rows)
 
 
-def submit_test(pool, dataset_name, ndim, data_root, n_workers):
-    """Submit the counting of the scored test samples of one dataset, split into shards."""
-    n_samples = _common().n_samples(dataset_name, data_root)
-    n_shards = max(1, min(n_workers, n_samples))
-    return [pool.submit(count_test_shard, dataset_name, ndim, data_root, i, n_shards) for i in range(n_shards)]
+def submit_test(pool, dataset_names, ndim, data_root, n_workers):
+    """Submit the counting of the scored test samples of one or several pooled datasets, split into shards."""
+    futures = []
+    for dataset_name in dataset_names:
+        n_samples = _common().n_samples(dataset_name, data_root)
+        n_shards = max(1, min(n_workers, n_samples))
+        futures.extend(
+            pool.submit(count_test_shard, dataset_name, ndim, data_root, i, n_shards) for i in range(n_shards)
+        )
+    return futures
 
 
 def finish_test(futures):
@@ -515,11 +541,20 @@ def write_table(path: str, rows: Dict[str, dict]) -> None:
     os.replace(tmp_path, path)
 
 
+def _futures(submitted) -> list:
+    """The futures of the submitted counts: the train counts are (job, future) pairs, the test counts futures."""
+    return [item[1] if isinstance(item, tuple) else item for item in submitted]
+
+
 def _is_missing(row: dict, columns: List[str]) -> bool:
     return any(row.get(column, "") in ("", None) for column in columns)
 
 
-def run(output: str, data_root: str, datasets: Optional[List[str]], force: bool, n_workers: int) -> None:
+def run(
+    output: str, data_root: str, datasets: Optional[List[str]], force: bool, n_workers: int,
+    registry: Optional[List[Entry]] = None, roles: Optional[Dict[str, str]] = None,
+    pooled: Optional[Dict[str, List[str]]] = None,
+) -> None:
     """Fill in the missing counts of the table, or recompute them with 'force'.
 
     Args:
@@ -528,10 +563,15 @@ def run(output: str, data_root: str, datasets: Optional[List[str]], force: bool,
         datasets: Only process these datasets. All by default.
         force: Recompute the counts of the processed datasets even if the table has them.
         n_workers: The number of processes that count in parallel.
+        registry: The rows of the table. ``ENTRIES`` by default.
+        roles: The role of each entry. By default derived from the Figure 2 and 3 panels with ``check_registry``.
+        pooled: The evaluation datasets that a figure pools into one test dataset, by the name of the pooled
+            dataset. The test counts of a pooled dataset are the sums over its parts.
     """
-    panels = read_panels()
-    roles = check_registry(ENTRIES, panels)
-    entries = {entry.name: entry for entry in ENTRIES}
+    registry = ENTRIES if registry is None else registry
+    if roles is None:
+        roles = check_registry(registry, read_panels())
+    entries = {entry.name: entry for entry in registry}
     if datasets is not None:
         unknown = sorted(set(datasets) - set(entries))
         if unknown:
@@ -571,7 +611,7 @@ def run(output: str, data_root: str, datasets: Optional[List[str]], force: bool,
     if need_train:
         domains = sorted({entries[name].train.domain for name in need_train})
         units, transforms = build_training_units(domains, data_root)
-        units_per_entry = assign_units(units, ENTRIES)
+        units_per_entry = assign_units(units, registry)
 
     failed = []
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
@@ -582,7 +622,9 @@ def run(output: str, data_root: str, datasets: Optional[List[str]], force: bool,
                 if name in need_train:
                     jobs["train"] = submit_train(pool, units_per_entry[name], transforms)
                 if name in need_test:
-                    jobs["test"] = submit_test(pool, entries[name].test, entries[name].ndim, data_root, n_workers)
+                    test = entries[name].test
+                    parts = (pooled or {}).get(test, [test])
+                    jobs["test"] = submit_test(pool, parts, entries[name].ndim, data_root, n_workers)
             except Exception as e:
                 warnings.warn(f"Could not start counting {name}: {e!r}")
                 failed.append(name)
@@ -592,9 +634,11 @@ def run(output: str, data_root: str, datasets: Optional[List[str]], force: bool,
         with tqdm(total=len(todo), desc="Count the datasets") as pbar:
             pbar.update(len(todo) - len(pending))
             while pending:
-                futures = [f for jobs in pending.values() for fs in jobs.values() for f in fs]
+                futures = [f for jobs in pending.values() for fs in jobs.values() for f in _futures(fs)]
                 wait(futures, return_when=FIRST_COMPLETED)
-                for name in [n for n, jobs in pending.items() if all(f.done() for fs in jobs.values() for f in fs)]:
+                for name in [
+                    n for n, jobs in pending.items() if all(f.done() for fs in jobs.values() for f in _futures(fs))
+                ]:
                     jobs = pending.pop(name)
                     try:
                         if "train" in jobs:
