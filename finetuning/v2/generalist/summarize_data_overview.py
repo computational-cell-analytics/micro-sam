@@ -12,18 +12,23 @@ The readout is chosen with the positional argument:
   For each the ID, the OOD and the summed (ID + OOD) objects are printed; the summed objects of all groups are all
   annotations of the scored 2d test splits. All label-free datasets count as cells, including the organoids of
   OrgLine and the C. elegans of BBBC010, which are in the label-free cells panel.
+- ``test-3d``: The number of annotated objects in the scored 3d test data (test crops, see
+  ``create_data_overview.py``) for the three panels of Figure 3: LM cells, LM nuclei and EM neurites. For each the
+  ID, the OOD and the summed (ID + OOD) objects are printed. LICONN (expansion microscopy) counts as EM, as in the
+  EM neurites panel of Figure 3.
 - ``detail``: A Markdown table with the structures and the images or volumes per modality, structure and
-  dimensionality, for the training data and the scored 2d test data (ID and OOD). The training rows use the
+  dimensionality, for the training data and the scored 2d and 3d test data (ID and OOD). The training rows use the
   groups of ``train``, split by modality: label-free and histopathology datasets count as cells and nuclei, EM and
   the EM-like LICONN and XPRESS count as 'Cell / Neurite'. Cellpose (fluorescence) and NeurIPS CellSeg
   (label-free) mix modalities and count under their majority modality. The test rows are the groups of
-  ``test-2d``.
+  ``test-2d`` and ``test-3d``; for 3d the images / volumes are the scored test crops.
 
 Usage:
 
     python summarize_data_overview.py          # same as 'train'
     python summarize_data_overview.py train
     python summarize_data_overview.py test-2d
+    python summarize_data_overview.py test-3d
     python summarize_data_overview.py detail
 """
 
@@ -38,6 +43,8 @@ EM_LIKE = {"liconn", "xpress"}
 GROUPS = ["2d LM cells", "2d LM nuclei", "3d LM cells", "3d LM nuclei", "EM structures"]
 # The groups of the 2d test data, the panels of Figure 2.
 TEST_2D_GROUPS = ["label-free cells", "fluorescence cells", "fluorescence nuclei", "histopathology nuclei"]
+# The groups of the 3d test data, the panels of Figure 3.
+TEST_3D_GROUPS = ["LM cells", "LM nuclei", "EM neurites"]
 
 
 def read_table(path):
@@ -59,9 +66,12 @@ def select_train_rows(rows):
     return [row for row in rows if row["role"] in ("train", "ID") and row["train_objects"] != ""]
 
 
-def select_test_2d_rows(rows):
-    """Return the 2d rows with a scored test split. Raise an error if one has no test counts."""
-    test_rows = [row for row in rows if row["dimensionality"] == "2d" and row["role"] in ("ID", "OOD")]
+def select_test_rows(rows, ndim):
+    """Return the rows of the given dimensionality ('2d' or '3d') with a scored test split.
+
+    Raise an error if one has no test counts.
+    """
+    test_rows = [row for row in rows if row["dimensionality"] == ndim and row["role"] in ("ID", "OOD")]
     missing = [row["dataset"] for row in test_rows if row["test_objects"] == ""]
     if missing:
         raise RuntimeError(f"The table has no test counts for {missing}. Run create_data_overview.py to fill them in.")
@@ -112,24 +122,34 @@ def test_2d_group(row):
     raise ValueError(f"{row['dataset']} has the modality {row['modality']}, which is in no 2d test group.")
 
 
-def print_test_2d(rows):
-    """Print the annotated objects of the scored 2d test splits per group, for ID, OOD and both."""
-    test_rows = select_test_2d_rows(rows)
+def test_3d_group(row):
+    """Return the group (the Figure 3 panel) of a 3d dataset with a scored test split."""
+    if row["modality"] == "EM" or row["dataset"] in EM_LIKE:
+        return "EM neurites"
+    if row["modality"] == "fluorescence":
+        return "LM nuclei" if row["structure"] == "nucleus" else "LM cells"
+    raise ValueError(f"{row['dataset']} has the modality {row['modality']}, which is in no 3d test group.")
+
+
+def print_test(rows, ndim, group_fn, groups):
+    """Print the annotated objects of the scored test splits per group, for ID, OOD and both."""
+    test_rows = select_test_rows(rows, ndim)
     totals = defaultdict(lambda: {"ID": 0, "OOD": 0, "images": 0, "datasets": 0})
     for row in test_rows:
-        total = totals[test_2d_group(row)]
+        total = totals[group_fn(row)]
         total[row["role"]] += int(row["test_objects"])
         total["images"] += int(row["test_images_or_volumes"])
         total["datasets"] += 1
 
-    # The groups must cover every scored 2d object.
+    # The groups must cover every scored object.
     expected = sum(int(row["test_objects"]) for row in test_rows)
     grand_total = sum(t["ID"] + t["OOD"] for t in totals.values())
     assert grand_total == expected, (grand_total, expected)
 
-    print("Annotated objects in the scored 2d test data:")
-    print(f"{'group':<22} {'ID':>10} {'OOD':>10} {'ID + OOD':>10} {'images':>8} {'datasets':>9}")
-    for group in TEST_2D_GROUPS:
+    images = "images" if ndim == "2d" else "crops"
+    print(f"Annotated objects in the scored {ndim} test data:")
+    print(f"{'group':<22} {'ID':>10} {'OOD':>10} {'ID + OOD':>10} {images:>8} {'datasets':>9}")
+    for group in groups:
         total = totals[group]
         print(
             f"{group:<22} {total['ID']:>10,} {total['OOD']:>10,} {total['ID'] + total['OOD']:>10,} "
@@ -153,11 +173,16 @@ DETAIL_TRAIN_ROWS = [
     ("Fluorescence", "Nucleus", "3"),
     ("Electron Microscopy", "Cell / Neurite", "3"),
 ]
-DETAIL_TEST_ROWS = {
+DETAIL_TEST_2D_ROWS = {
     "label-free cells": ("Label-free", "Cell", "2"),
     "fluorescence cells": ("Fluorescence", "Cell", "2"),
     "fluorescence nuclei": ("Fluorescence", "Nucleus", "2"),
     "histopathology nuclei": ("Histopathology", "Nucleus", "2"),
+}
+DETAIL_TEST_3D_ROWS = {
+    "LM cells": ("Fluorescence", "Cell", "3"),
+    "LM nuclei": ("Fluorescence", "Nucleus", "3"),
+    "EM neurites": ("Electron Microscopy", "Cell / Neurite", "3"),
 }
 
 
@@ -176,7 +201,7 @@ def detail_train_row(row):
 
 
 def print_detail(rows):
-    """Print the detail table of the training data and the scored 2d test data as Markdown."""
+    """Print the detail table of the training data and the scored 2d and 3d test data as Markdown."""
     train_rows = select_train_rows(rows)
     train = defaultdict(lambda: {"objects": 0, "images": 0})
     for row in train_rows:
@@ -187,19 +212,24 @@ def print_detail(rows):
         train[key]["images"] += int(row["train_images_or_volumes"])
     assert sum(t["objects"] for t in train.values()) == sum(int(row["train_objects"]) for row in train_rows)
 
-    test_rows = select_test_2d_rows(rows)
     test = defaultdict(lambda: {"ID": 0, "OOD": 0, "ID images": 0, "OOD images": 0})
-    for row in test_rows:
-        key = DETAIL_TEST_ROWS[test_2d_group(row)]
-        test[key][row["role"]] += int(row["test_objects"])
-        test[key][f"{row['role']} images"] += int(row["test_images_or_volumes"])
-    assert sum(t["ID"] + t["OOD"] for t in test.values()) == sum(int(row["test_objects"]) for row in test_rows)
+    for ndim, group_fn, detail_rows in [
+        ("2d", test_2d_group, DETAIL_TEST_2D_ROWS), ("3d", test_3d_group, DETAIL_TEST_3D_ROWS)
+    ]:
+        test_rows = select_test_rows(rows, ndim)
+        for row in test_rows:
+            key = detail_rows[group_fn(row)]
+            test[key][row["role"]] += int(row["test_objects"])
+            test[key][f"{row['role']} images"] += int(row["test_images_or_volumes"])
+        assert sum(test[key]["ID"] + test[key]["OOD"] for key in detail_rows.values()) == sum(
+            int(row["test_objects"]) for row in test_rows
+        )
 
     print("| Modality | Structure | Dimensionality | Split | # Structures | # Images / Volumes |")
     print("|---|---|---|---|---|---|")
     for key in DETAIL_TRAIN_ROWS:
         print(f"| {' | '.join(key)} | Train | {train[key]['objects']:,} | {train[key]['images']:,} |")
-    for key in DETAIL_TEST_ROWS.values():
+    for key in [*DETAIL_TEST_2D_ROWS.values(), *DETAIL_TEST_3D_ROWS.values()]:
         counts = test[key]
         print(
             f"| {' | '.join(key)} | Test | {counts['ID']:,} (ID); {counts['OOD']:,} (OOD) | "
@@ -207,7 +237,17 @@ def print_detail(rows):
         )
 
 
-READOUTS = {"train": print_train, "test-2d": print_test_2d, "detail": print_detail}
+def print_test_2d(rows):
+    """Print the annotated objects of the scored 2d test splits per Figure 2 panel, for ID, OOD and both."""
+    print_test(rows, "2d", test_2d_group, TEST_2D_GROUPS)
+
+
+def print_test_3d(rows):
+    """Print the annotated objects of the scored 3d test crops per Figure 3 panel, for ID, OOD and both."""
+    print_test(rows, "3d", test_3d_group, TEST_3D_GROUPS)
+
+
+READOUTS = {"train": print_train, "test-2d": print_test_2d, "test-3d": print_test_3d, "detail": print_detail}
 
 
 def main():
