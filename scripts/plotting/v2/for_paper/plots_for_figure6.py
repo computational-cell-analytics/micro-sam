@@ -88,12 +88,14 @@ AUTOMATIC_ROWS = [["em_mito", "em_nuclei"]]
 
 # The six in-domain and six out-of-domain datasets of each organelle (user, 2026-11-05 and 2026-11-06). They set the
 # domain of each dataset: parlakgul_liver_eval is in domain, as it comes from the study of the trained Parlakgul
-# fasting-liver volume. The nucleus sets of 2026-11-05 are in the tables by 'collect_em_organelle_results.py'.
+# fasting-liver volume. kasthuri is left out: it comes from the Kasthuri et al. 2015 data of the trained SNEMI Mito.
+# mito_anf replaces it out of domain; only its mitochondria of traced nerve fibers are labelled (user, 2026-11-06).
+# The nucleus sets of 2026-11-05 are in the tables by 'collect_em_organelle_results.py'.
 # etchacell_nucleus and placenta_nucleus score only the predictions on labelled nuclei (common.py).
 PANEL_DATASETS = {
     "em_mito": {
         "ID": ["mitoemv2", "mitoem", "lucchi", "asem_mito", "snemi_mito", "parlakgul_liver_eval"],
-        "OOD": ["mitolab", "kasthuri", "human_liver_em", "cerebellum_fibsem_mito", "macrophage_a431_mito", "cmito"],
+        "OOD": ["mitolab", "mito_anf", "human_liver_em", "cerebellum_fibsem_mito", "macrophage_a431_mito", "cmito"],
     },
     "em_nuclei": {
         "ID": [
@@ -316,20 +318,20 @@ def plot_automatic_qualitative(region=None):
 
 
 # The (dataset, sample, ids of the objects, domain) of each volume of the interactive qualitative plot, from the
-# candidates of 'interactive_pairs.py' (user, 2026-11-01). The out-of-domain mitochondria are from Kasthuri, one of
+# candidates of 'interactive_pairs.py' (user, 2026-11-01). The out-of-domain mitochondria are from MitoANF, one of
 # the datasets of the panels (user, 2026-11-06). The out-of-domain nucleus crops hold one nucleus each, so
 # that block shows one object.
 INTERACTIVE_QUALITATIVE = {
-    "em_mito": [("mitoemv2_stem", 2, (94, 105), "ID"), ("kasthuri", 9, (3, 4), "OOD")],
+    "em_mito": [("mitoemv2_stem", 2, (94, 105), "ID"), ("mito_anf", 3, (5, 6), "OOD")],
     "em_nuclei": [("fafb_nuclei", 19, (10, 15), "ID"), ("etchacell_nucleus", 41, (1,), "OOD")],
 }
 INTERACTIVE_PAIRS = os.path.join(QUALITATIVE, "interactive")
 TRACING_METHODS = ["nnInteractive", "micro-sam2"]
 # The volumes whose renders are cut around the objects of all methods, so that the objects of nnInteractive, which
 # reach far beyond the reference, show whole (user, 2026-11-01).
-TRACING_FIT_ALL = {"mitoemv2_stem"}
+TRACING_FIT_ALL = {"mitoemv2_stem", "mito_anf"}
 TRACING_NAMES = {
-    "mitoemv2_stem": "MitoEM v2 Stem", "kasthuri": "Kasthuri", "fafb_nuclei": "FAFB Nuclei",
+    "mitoemv2_stem": "MitoEM v2 Stem", "mito_anf": "Mito ANF", "fafb_nuclei": "FAFB Nuclei",
     "etchacell_nucleus": "EtchACell",
 }
 
