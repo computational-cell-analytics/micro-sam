@@ -31,6 +31,9 @@ tooltips = {
     # Settings for AIS.
     "boundary_distance_thresh": "Enter the boundary distance threshold.",
     "center_distance_thresh": "Enter the center distance threshold.",
+    "distance_smoothing": "Enter the sigma for smoothing the distance predictions. Set to 0 to disable.",
+    "foreground_smoothing": "Enter the sigma for smoothing the foreground predictions. Set to 0 to disable.",
+    "foreground_threshold": "Enter the foreground threshold.",
     # Settings for AMG.
     "box_nms_thresh": "Enter the non-maximum suppression threshold.",
     "pred_iou_thresh": "Enter the threshold for filtering objects based on the predicted IOU.",
@@ -39,6 +42,9 @@ tooltips = {
   "autotrack": {
       "run_button": "Run automatic tracking.",
       "run_tracking": "Choose if to run tracking for the whole timeseries or if to segment only the current timeframe."
+  },
+  "timeseries": {
+      "apply_to_all_frames": "Choose if to segment all frames independently or only the current frame.",
   },
   "prompt_menu": {
     "labels": "Choose positive prompts to inlcude regions or negative ones to exclude regions. Toggle between the settings by pressing [t].",  # noqa
