@@ -411,7 +411,7 @@ def _batched_promptable_segmentation_2d(predictor, points, labels, boxes, masks=
 
 
 def _points_in_block(points, block):
-    """Return a mask of the (y, x) points that fall inside the block."""
+    """Return a boolean array that selects the (y, x) points inside the block, after rounding to pixels."""
     rounded = np.round(points).astype(int)
     return (
         (rounded[:, 0] >= block.begin[0]) & (rounded[:, 0] < block.end[0])
@@ -420,11 +420,14 @@ def _points_in_block(points, block):
 
 
 def _stitch_tiles(shape, tiling, halo, tile_segs, tile_object_ids):
-    """Stitch per-tile label maps with global object ids into the full image.
+    """Stitch the per-tile label maps into the full image.
+
+    The same id in two tiles counts as the same object.
 
     Each tile writes its inner block first. The halos then complete the objects that cross into a
-    neighbouring tile, but only where that tile did not segment the same object. A halo never
-    overwrites an inner-block result, so the tile with the full context for a pixel decides it.
+    neighbouring tile, but only for object ids that the neighbouring tile has no prompt for. A halo
+    never overwrites an inner-block result, because the tile that owns a pixel sees it with more
+    context.
     """
     out = np.zeros(shape, dtype="uint32")
     for tile_id, seg in tile_segs.items():
@@ -466,17 +469,18 @@ def tiled_promptable_segmentation_2d(
 ):
     """Tiled 2d promptable segmentation for the SAM2 image predictor.
 
-    Routes the prompts to tiles, sets each tile's precomputed embeddings on the predictor (via
-    `set_precomputed`), runs `promptable_segmentation_2d` on the tile, and stitches the per-tile
-    masks into the full image (see `_stitch_tiles`). Points are in (y, x) order, as passed by the
-    annotator. Same return convention as `promptable_segmentation_2d`.
+    Each tile with a prompt runs `promptable_segmentation_2d` on its precomputed embeddings (set via
+    `set_precomputed`). The function stitches the tile results into the full image. Points are in
+    (y, x) order, as passed by the annotator. Same return convention as `promptable_segmentation_2d`.
 
     Prompt routing:
     - A positive point goes to the tile whose inner block contains it.
-    - A negative point goes to every tile whose outer block contains it.
-    - A box goes to every tile whose inner block it overlaps, clipped to that tile.
+    - A negative point goes to every tile whose outer block contains it, if that tile also has a
+      positive point or a box.
+    - A box goes to every tile whose inner block it overlaps, clipped to the outer block of that tile.
 
-    An object that extends more than the halo beyond the tile of its prompt is cut at the tile edge.
+    An object that extends more than the halo beyond the tile of its prompt is cut at the outer edge of
+    the halo.
 
     Independent active tiles run concurrently on persistent predictor replicas. By default all
     visible CUDA devices are used; pass `devices` to select or restrict them.
@@ -526,8 +530,8 @@ def tiled_promptable_segmentation_2d(
         local_boxes = [box - np.concatenate([origin, origin]) for box in job["boxes"]] or None
         local_masks = job["masks"] if job["boxes"] else None
         tile_jobs[tile_id] = local_points, local_labels, local_boxes, local_masks
-        # The ids of the objects that the tile segments: one object, or one per box if it has no points.
-        # In batched mode, one object per positive point and per box.
+        # The object ids that 'promptable_segmentation_2d' returns for this tile. Batched mode: one per positive
+        # point and one per box. Single-object mode: one, or one per box for a tile with boxes only.
         n_objects = len(job["points"]) + len(job["boxes"]) if batched else max(1, len(job["boxes"]))
         tile_object_ids[tile_id] = np.arange(1, n_objects + 1, dtype="uint32")
 

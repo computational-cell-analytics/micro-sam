@@ -168,9 +168,12 @@ def test_points_with_multiple_boxes_are_rejected():
 class DiskTilePredictor:
     """A stand-in SAM2 image predictor for tiled 2d prompts.
 
-    It segments a disk around each object's first positive point (the union of disks around all
-    positive points for a single object) and the box region for a box prompt. It records the
-    tile and the prompts of every call.
+    It segments:
+    - a single object from points: the union of disks around its positive points;
+    - batched objects from points: a disk around the first point of each object;
+    - a box: the box region.
+
+    It records the tile and the prompts of every call.
     """
 
     def __init__(self, radius):
@@ -207,7 +210,7 @@ class DiskTilePredictor:
                 objects.append(mask)
         else:
             coords, labels = np.asarray(point_coords), np.asarray(point_labels)
-            if coords.ndim == 2:  # One object from all of its points.
+            if coords.ndim == 2:
                 objects = [self._disk(coords[labels == 1])]
             else:  # Batched: one object per row, its first point is the positive one.
                 objects = [self._disk(row[:1]) for row in coords]
@@ -218,7 +221,10 @@ class DiskTilePredictor:
 
 
 def run_tiled_2d(monkeypatch, radius=6, shape=(64, 64), tile_shape=(32, 32), halo=(8, 8), **prompts):
-    """Run 'tiled_promptable_segmentation_2d' on a 2 x 2 tiling with the disk predictor."""
+    """Run 'tiled_promptable_segmentation_2d' with the disk predictor.
+
+    The default shapes give a 2 x 2 tiling.
+    """
     tiling = Blocking([0, 0], list(shape), list(tile_shape))
     predictor = DiskTilePredictor(radius)
     monkeypatch.setattr("micro_sam.v2.util.configure_image_predictor", lambda predictor: predictor)
