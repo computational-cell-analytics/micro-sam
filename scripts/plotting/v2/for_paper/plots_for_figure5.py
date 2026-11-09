@@ -93,13 +93,13 @@ INTERACTIVE_METHODS = {
     "micro-sam": ("micro-sam", "vit_l_lm"),
     "micro-sam2": ("micro-sam2", "hvit_l"),
 }
-# The interactive datasets, in-domain first, with their names in the plot and their domain. BacMother is left out
-# (user, 2026-11-08).
+# The interactive datasets, in-domain first, with their names in the plot and their domain. They are the 2D+t datasets
+# of the automatic plot, in the same order (user, 2026-11-09), so BacMother and Tracking FM are left out.
 INTERACTIVE_DATASETS = {
-    "dynamicnuclearnet": ("DynamicNuclearNet", "ID"),
     "toiam": ("TOIAM", "ID"),
-    "tracking_fm_real": ("Tracking FM", "OOD"),
-    # The out-of-domain datasets of 'prepare_tracking_data.py' (user, 2026-11-08).
+    "yeaz": ("YeaZ", "ID"),
+    "cellacdc": ("CellACDC", "ID"),
+    "dynamicnuclearnet": ("DynamicNuclearNet", "ID"),
     "alfi": ("ALFI", "OOD"),
     "cardioblast": ("Cardioblast", "OOD"),
     "ecoli": ("E. coli", "OOD"),
