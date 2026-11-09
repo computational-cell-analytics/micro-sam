@@ -1,6 +1,9 @@
 """Helper functions for downloading Segment Anything models and predicting image embeddings.
 """
 
+# Must run before segment_anything / torchvision import triton.
+from . import _triton_guard  # noqa
+
 import os
 import json
 import uuid
