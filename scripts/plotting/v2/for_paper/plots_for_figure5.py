@@ -239,7 +239,7 @@ def load_interactive(metric):
 # The layout of the interactive plot, in inches: the left margin for the score label, the room right of the panels
 # for the domain labels and the gap between the columns, which leaves room for the label of the second column.
 # The height of the panels, lower than in Figure 2, to leave room for panel e (user, 2026-11-09).
-INTERACTIVE_PANEL_HEIGHT = 0.95
+INTERACTIVE_PANEL_HEIGHT = 0.85
 INTERACTIVE_GRID = (0.55, fig2.RIGHT_MARGIN + fig2.INTERACTIVE_DOMAIN_WIDTH, 0.35)
 
 
@@ -495,6 +495,9 @@ LINK_COLORS = {"Correct": "#dbdbdb", "False": "#ff00ff", "Missed": "#00ffff"}
 AUTOMATIC_QUALITATIVE_GRID = (0.05, 0.2, 0.15)
 AUTOMATIC_QUALITATIVE_HEADER = 0.25
 AUTOMATIC_QUALITATIVE_LEGEND = 0.02
+# the width of the first frame below the views, as a share of the column width, and the gap above it, in inches
+PYRAMID_OVERVIEW_SHARE = 0.4
+PYRAMID_GAP = 0.02
 
 
 def sequence_tra(dataset, sequence, method, mode, ndim):
@@ -519,30 +522,40 @@ def draw_link_legend(fig, x, top, length):
             ((x - 0.035) / fig2.FIGURE_WIDTH, (y - 0.07) / height), 0.07 / fig2.FIGURE_WIDTH, 0.07 / height,
             facecolor=color, edgecolor="#a0a0a0", linewidth=0.3,
         ))
-        fig.text(x / fig2.FIGURE_WIDTH, (y - 0.09) / height, label, ha="center", va="top", rotation=270,
-                 fontsize=MAX_FONT_SIZE - 1, color=TEXT_COLOR)
-        y -= length / len(LINK_COLORS)
+        text = fig.text(x / fig2.FIGURE_WIDTH, (y - 0.09) / height, label, ha="center", va="top", rotation=270,
+                        fontsize=MAX_FONT_SIZE - 1, color=TEXT_COLOR)
+        # the next entry starts below this label, measured, or at the next third of 'length' if that is lower
+        figure = fig.figure if hasattr(fig, "figure") and fig.figure is not None else fig
+        extent = text.get_window_extent(renderer=figure.canvas.get_renderer())
+        y -= max(length / len(LINK_COLORS), 0.09 + extent.height / figure.dpi + 0.08)
 
 
 def plot_automatic_qualitative(region=None):
-    """One block per movie of AUTOMATIC_QUALITATIVE, side by side as the columns of panel a (2D+t in domain, 2D+t out
-    of domain, 3D+t out of domain): the space-time renders of CellposeSAM and micro-sam2, with the TRA of the movie in
-    the corner, and a legend of the link colours below. The dataset name is in italics in domain, in bold out of
+    """One block per movie of AUTOMATIC_QUALITATIVE, side by side as the columns of panel a: on top the space-time
+    views of a small window of the movie for CellposeSAM and micro-sam2, with the TRA of the movie in the corner, and
+    below them the first frame with the square of the window, joined to the views by lines (feedback 2026-11-10). A
+    legend of the link colours stands on the right. The dataset name is in italics in domain, in bold out of
     domain."""
+    from matplotlib.patches import ConnectionPatch, Polygon
     starts, column_width = fig2.column_grid(AUTOMATIC_QUALITATIVE_GRID, len(AUTOMATIC_QUALITATIVE))
     gap = LINEAGE_GAP
     size = (column_width - gap) / len(QUALITATIVE_METHODS)
-    renders = {
-        (entry[2], method): np.asarray(Image.open(os.path.join(AUTOMATIC_RENDERS, f"render_{entry[2]}_{key}.png"))
-                                       .convert("RGBA")) / 255
-        for entry in AUTOMATIC_QUALITATIVE for method, (key, _, _) in QUALITATIVE_METHODS.items()
-    }
-    tall = max(size * image.shape[0] / image.shape[1] for image in renders.values())
-    height = AUTOMATIC_QUALITATIVE_HEADER + tall + AUTOMATIC_QUALITATIVE_LEGEND
+    blocks = []
+    for dataset, sequence, _, domain, label, ndim in AUTOMATIC_QUALITATIVE:
+        name = f"{dataset}_{sequence.zfill(2) if ndim == 3 else sequence}"
+        layout = json.load(open(os.path.join(AUTOMATIC_RENDERS, f"pyramid_{name}.json")))
+        load = lambda key: np.asarray(Image.open(os.path.join(AUTOMATIC_RENDERS, f"pyramid_{name}_{key}.png"))  # noqa
+                                      .convert("RGBA")) / 255
+        blocks.append((name, layout, load("overview"),
+                       {method: load(key) for method, (key, _, _) in QUALITATIVE_METHODS.items()}))
+    tall = max(size * im.shape[0] / im.shape[1] for _, _, _, views in blocks for im in views.values())
+    overview_w = PYRAMID_OVERVIEW_SHARE * column_width
+    low = max(overview_w * ov.shape[0] / ov.shape[1] for _, _, ov, _ in blocks)
+    height = AUTOMATIC_QUALITATIVE_HEADER + tall + PYRAMID_GAP + low + AUTOMATIC_QUALITATIVE_LEGEND
     fig = fig2.new_figure(height, region)
-    bottom = AUTOMATIC_QUALITATIVE_LEGEND
-    # No dimension titles: panel a above carries them (user, 2026-11-09).
-    for left, (dataset, sequence, name, domain, label, ndim) in zip(starts, AUTOMATIC_QUALITATIVE):
+    bottom = AUTOMATIC_QUALITATIVE_LEGEND + low + PYRAMID_GAP
+    for left, (dataset, sequence, _, domain, label, ndim), (name, layout, overview, views) in zip(
+            starts, AUTOMATIC_QUALITATIVE, blocks):
         in_domain = domain == "ID"
         fig.text(
             (left + column_width / 2) / fig2.FIGURE_WIDTH, (bottom + tall + 0.13) / height, label, ha="center",
@@ -550,13 +563,28 @@ def plot_automatic_qualitative(region=None):
             fontweight="normal" if in_domain else "bold",
         )
         methods = list(QUALITATIVE_METHODS)
+        axes = []
         for k, (method, display) in enumerate(zip(methods, fig2.names_of(methods, set()))):
             x = left + k * (size + gap)
             fig.text((x + size / 2) / fig2.FIGURE_WIDTH, (bottom + tall + 0.03) / height, display, ha="center",
                      va="baseline", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR)
-            ax = image_axes(fig, x, bottom, size, tall, renders[name, method])
+            ax = image_axes(fig, x, bottom, size, tall, views[method])
             _, table_method, mode = QUALITATIVE_METHODS[method]
             fig2.draw_score(ax, sequence_tra(dataset, sequence, table_method, mode, ndim))
+            axes.append(ax)
+        ov_ax = image_axes(fig, left + (column_width - overview_w) / 2, AUTOMATIC_QUALITATIVE_LEGEND, overview_w, low,
+                           overview, framed=False)
+        box = np.array(layout["overview"]["box"])
+        # white, so that the square shows on the dark frames
+        ov_ax.add_patch(Polygon(box, closed=True, fill=False, edgecolor="#ffffff", lw=1.0))
+        # the leftmost and the rightmost corners of the square to the left corner of the first view and the right
+        # corner of the second view, both on the front edge of their cards
+        targets = [(axes[0], np.array(layout[QUALITATIVE_METHODS[methods[0]][0]]["corners"]), np.argmin),
+                   (axes[1], np.array(layout[QUALITATIVE_METHODS[methods[1]][0]]["corners"]), np.argmax)]
+        for (ax, corners, pick), start in zip(targets, (box[np.argmin(box[:, 0])], box[np.argmax(box[:, 0])])):
+            end = corners[pick(corners[:, 0])]
+            fig.add_artist(ConnectionPatch(start, end, "data", "data", axesA=ov_ax, axesB=ax, color=TEXT_COLOR,
+                                           lw=0.5))
     draw_link_legend(fig, fig2.FIGURE_WIDTH - 0.1, bottom + tall, tall)
     return fig
 
@@ -588,7 +616,7 @@ BEKE_GREY = np.array([0.78, 0.78, 0.76])
 # The width of the Beke panel right of panel d, the gap between them and the least height of their row, in inches.
 BEKE_WIDTH = 2.9
 BEKE_GAP = 0.05
-BEKE_HEIGHT = 4.47
+BEKE_HEIGHT = 4.33
 MM = 1 / 25.4
 
 
@@ -879,7 +907,7 @@ LINEAGE_PARTS = ["pyramid", "tree_reference"] + [
 # import them.
 tifffile = pv = gaussian_filter1d = EdgeFlag = NodeFlag = None
 rp = render_pairs = best_planes = block_of = surfaces = z_scale_of = tu = None
-d_backdrop = d_card = d_screenshot = d_studio = d_view = None
+d_backdrop = d_card = d_screenshot = d_studio = d_view = d_project = None
 
 
 def load_render_modules(out_folder):
@@ -900,14 +928,14 @@ def load_render_modules(out_folder):
     from render_pv import surfaces
     from select_tracing import z_scale_of
     import tracking_util as tu
-    from plots_for_figure1 import d_backdrop, d_card, d_screenshot, d_studio, d_view
+    from plots_for_figure1 import d_backdrop, d_card, d_project, d_screenshot, d_studio, d_view
     # The colours of the lineage renders: index 1 is the mother, 2 and 3 the daughters.
     rp.PALETTE = ["#000000", LINEAGE_COLORS["Mother"], *LINEAGE_COLORS["Daughters"]]
     globals().update(
         tifffile=tifffile, pv=pv, gaussian_filter1d=gaussian_filter1d,
         EdgeFlag=EdgeFlag, NodeFlag=NodeFlag, rp=rp, render_pairs=render_pairs, best_planes=best_planes,
         block_of=block_of, surfaces=surfaces, z_scale_of=z_scale_of, tu=tu, d_backdrop=d_backdrop, d_card=d_card,
-        d_screenshot=d_screenshot, d_studio=d_studio, d_view=d_view,
+        d_screenshot=d_screenshot, d_studio=d_studio, d_view=d_view, d_project=d_project,
     )
 
 
@@ -1237,11 +1265,12 @@ def st_position(graph, node, height):
     return np.array([x - ST_ORIGIN[1], -(y - ST_ORIGIN[0]), ST_CARD["base"] + graph.graph.nodes[node]["t"] * height])
 
 
-def st_best_window(edge_sets, shape, share):
+def st_best_window(edge_sets, shape, share, bounds=None):
     """The square window, of 'share' of the smaller image side, where the second method has the most more errors than
     the first. 'edge_sets' holds per method a list of (graph, edges) with its errors; an edge counts at its first
-    node. Returns (y0, x0, side)."""
+    node. 'bounds' (y0, y1, x0, x1) limits the window to a part of the frame. Returns (y0, x0, side)."""
     side = int(share * min(shape))
+    by0, by1, bx0, bx1 = bounds if bounds is not None else (0, shape[0], 0, shape[1])
     step = max(side // 8, 1)
     counts = []
     for sets in edge_sets:
@@ -1259,7 +1288,7 @@ def st_best_window(edge_sets, shape, share):
         total += c[y - 1, x - 1] if y and x else 0
         return total
     best = max(((box(counts[1], y, x) - box(counts[0], y, x), y, x)
-                for y in range(0, shape[0] - side + 1, step) for x in range(0, shape[1] - side + 1, step)))
+                for y in range(by0, by1 - side + 1, step) for x in range(bx0, bx1 - side + 1, step)))
     return best[1], best[2], side
 
 
@@ -1607,6 +1636,123 @@ def ls_sample_lineages(args):
     return list(rows.values())
 
 
+# The pyramid views of panel b (feedback 2026-11-10: the tracks were hard to see in the whole field of view): the
+# first frame of the movie as a card with the square of a small window on it, and above it the space-time view of the
+# window for each method, where the tracks and their errors are large enough to see. The window is the square of
+# PYRAMID_SHARE of the smaller frame side where CellposeSAM has the most more errors than micro-sam2 ('st_best_window').
+# Each entry is (dataset, sequence, Trackastra model, window share, time stretch).
+PYRAMID_RENDERS = [
+    ("DynamicNuclearNet", "3T3_nuc_s2_p1_1c", "general_2d_w_SAM2_features", 0.3, 1.0),
+    ("WingDisc", "Ecd_20150608_P1", "general_2d_w_SAM2_features", 0.12, 1.0),
+    ("Fluo-N3DH-SIM+", "01", "ctc", 0.35, 1.0),
+]
+PYRAMID_SIZE = (1400, 1400)
+
+
+def pyr_shot(rgb, meshes, shape, top, elevation, window=None):
+    """A space-time scene of the card 'rgb' (x right, y down the rows) and the tube meshes, without the studio.
+    Return the cropped image, the image positions of the card corners (top left, top right, bottom right, bottom left)
+    on its top face, and those of the 'window' (y0, x0, side) on the card."""
+    bounds = (0, shape[1], -shape[0], 0, 0, top)
+    view = d_view(elevation, -60)[0]
+    plotter = d_studio(PYRAMID_SIZE, bounds, view, 900, 1.0)
+    plotter.disable_shadows()
+    thickness = ST_CARD["thickness"]
+    d_card(plotter, (rgb * 255).astype("uint8"), (0, 0, 0), 1.0, thickness)
+    for mesh, opacity in meshes:
+        if mesh is not None:
+            plotter.add_mesh(mesh, scalars="rgb", rgb=True, smooth_shading=True, specular=0.3, specular_power=30,
+                             ambient=0.35, diffuse=0.75, show_scalar_bar=False, opacity=opacity)
+    z = thickness + 0.6
+    h, w = shape
+    if window is not None:
+        y0, x0, side = window
+        box = [(x0, -y0, z), (x0 + side, -y0, z), (x0 + side, -y0 - side, z), (x0, -y0 - side, z)]
+        plotter.add_mesh(pv.lines_from_points(np.array(box + box[:1])), color=(0.05, 0.05, 0.05), line_width=6)
+    image = d_screenshot(plotter, PYRAMID_SIZE)
+    corners = np.array(d_project(plotter, [(0, 0, z), (w, 0, z), (w, -h, z), (0, -h, z)]))
+    box_px = np.array(d_project(plotter, box)) if window is not None else None
+    plotter.close()
+    rows, cols = np.nonzero((image < 245).any(-1))
+    r0, c0 = max(rows.min() - 10, 0), max(cols.min() - 10, 0)
+    image = image[r0:rows.max() + 10, c0:cols.max() + 10]
+    shift = np.array([c0, r0])
+    return image, corners - shift, (None if box_px is None else box_px - shift)
+
+
+def pyr_render(out_folder, dataset, sequence, tracking_model, share, stretch):
+    """The pyramid view of one movie: 'pyramid_<name>_overview.png' and 'pyramid_<name>_<method>.png', and the card
+    corners and the window square in 'pyramid_<name>.json'."""
+    from traccuracy import EdgeFlag, NodeFlag
+    os.makedirs(out_folder, exist_ok=True)
+    gt_folder = os.path.join(tu.gt_folder_of(dataset, sequence), "TRA")
+    n_frames = len([f for f in os.listdir(gt_folder) if f.endswith(".tif")])
+    raw = tu.load_frames(dataset, sequence, 0, 1)[0].astype("float32")
+    if raw.ndim == 3:
+        raw = raw.max(axis=0)
+    full_shape = raw.shape
+    # the box of the image without black padding (as in DynamicNuclearNet)
+    filled = np.nonzero(raw > raw.min())
+    fy0, fy1, fx0, fx1 = filled[0].min(), filled[0].max() + 1, filled[1].min(), filled[1].max() + 1
+    lo, hi = np.percentile(raw[fy0:fy1, fx0:fx1], [1, 99.8])
+    gray = np.clip((raw - lo) / max(hi - lo, 1e-6), 0, 1)
+
+    found = []
+    for name, (key, _) in ST_METHODS.items():
+        pred_folder = os.path.join(ST_PREDICTIONS, f"{dataset}_{sequence}_{key}_{tracking_model}_greedy")
+        if dataset in tu.SPARSE_GT_DATASETS and os.path.isdir(pred_folder + "_annotated"):
+            pred_folder += "_annotated"
+        gt_graph, pred_graph, scores = st_match(gt_folder, pred_folder, n_frames)
+        st_smooth_positions(gt_graph)
+        st_smooth_positions(pred_graph)
+        false_nodes = set(pred_graph.get_nodes_with_flag(NodeFlag.CTC_FALSE_POS))
+        false_pos = set(pred_graph.get_edges_with_flag(EdgeFlag.CTC_FALSE_POS))
+        false_pos |= {e for e in pred_graph.graph.edges if e[0] in false_nodes or e[1] in false_nodes}
+        good = [e for e in pred_graph.graph.edges if e not in false_pos]
+        missed = list(gt_graph.get_edges_with_flag(EdgeFlag.CTC_FALSE_NEG))
+        found.append((key, pred_graph, gt_graph, good, list(false_pos), missed))
+    # the window in the coordinates of the whole frame, kept inside the image box
+    # the window stays half a window away from the border of the image box, where the tracks run out of the frame
+    # and most errors are border effects (user, 2026-11-10)
+    share = share * min(fy1 - fy0, fx1 - fx0) / min(full_shape)
+    margin = int(share * min(full_shape) / 2)
+    y0, x0, side = st_best_window([[(f[1], f[4]), (f[2], f[5])] for f in found], full_shape, share,
+                                  (fy0 + margin, fy1 - margin, fx0 + margin, fx1 - margin))
+    window = (y0, x0, side)
+    name = f"{dataset}_{sequence}"
+    layout = {"window": [int(y0), int(x0), int(side)]}
+
+    # the overview: the first frame of the image box with the window on it, seen from higher up
+    box_shape = (fy1 - fy0, fx1 - fx0)
+    ST_CARD.update(thickness=3.0 * max(box_shape) / 512, base=6.0 * max(box_shape) / 512)
+    rgb = np.repeat(gray[fy0:fy1, fx0:fx1, None], 3, -1)
+    image, corners, box = pyr_shot(rgb, [], box_shape, ST_CARD["thickness"] + 1, 40, (y0 - fy0, x0 - fx0, side))
+    Image.fromarray(image).save(os.path.join(out_folder, f"pyramid_{name}_overview.png"))
+    layout["overview"] = {"corners": corners.tolist(), "box": box.tolist()}
+
+    # the window of each method, as the space-time view
+    ST_ORIGIN[:] = [y0, x0]
+    ST_CARD.update(thickness=3.0 * side / 512, base=6.0 * side / 512)
+    height = stretch * 0.8 * side / max(n_frames - 1, 1)
+    radius = side / 200
+    crop = np.repeat(gray[y0:y0 + side, x0:x0 + side, None], 3, -1)
+    for key, pred_graph, gt_graph, good, false_pos, missed in found:
+        good, false_pos, missed = (st_inside(pred_graph, good, window), st_inside(pred_graph, false_pos, window),
+                                   st_inside(gt_graph, missed, window))
+        meshes = [
+            (st_segments_mesh(pred_graph, good, [ST_GOOD_COLOR] * len(good), radius * 0.6, height), ST_GOOD_OPACITY),
+            (st_segments_mesh(pred_graph, false_pos, [ST_FP_COLOR] * len(false_pos), radius * 1.6, height), 1.0),
+            (st_segments_mesh(gt_graph, missed, [ST_FN_COLOR] * len(missed), radius * 1.6, height), 1.0),
+        ]
+        top = ST_CARD["base"] + (n_frames - 1) * height
+        image, corners, _ = pyr_shot(crop, meshes, (side, side), top, 18)
+        tag = "microsam2_apg" if key.startswith("hvit") else "cpsam"
+        Image.fromarray(image).save(os.path.join(out_folder, f"pyramid_{name}_{tag}.png"))
+        layout[tag] = {"corners": corners.tolist(), "false": len(false_pos), "missed": len(missed)}
+        print("pyramid", name, tag, len(false_pos), "false", len(missed), "missed links in the window", flush=True)
+    json.dump(layout, open(os.path.join(out_folder, f"pyramid_{name}.json"), "w"), indent=1)
+
+
 def fv_render_floor(out_folder, dataset, sequence):
     """The floor view of a 3D+t movie for micro-sam2 APG and CellposeSAM: the first frame as a volume block, the
     nuclei of the first and the last frame as 3d surfaces, and the links between them in the colours of the
@@ -1671,7 +1817,7 @@ def ls_score_lineages(dataset):
     print(len(rows), "dividing lineages of", dataset, "from", len(jobs), "movies")
 
 
-RENDERS = ["lineage_scores", "lineages", "spacetime", "floor", "beke"]
+RENDERS = ["lineage_scores", "lineages", "spacetime", "floor", "pyramid", "beke"]
 
 
 def render(targets):
@@ -1681,7 +1827,7 @@ def render(targets):
     os.chdir(ROOT)
     if "beke" in targets:
         render_beke()
-    if set(targets) & {"lineage_scores", "lineages", "spacetime", "floor"}:
+    if set(targets) & {"lineage_scores", "lineages", "spacetime", "floor", "pyramid"}:
         load_render_modules(LINEAGE_RENDERS)
     if "lineage_scores" in targets:
         for dataset, _, _, _ in INTERACTIVE_QUALITATIVE:
@@ -1695,6 +1841,9 @@ def render(targets):
         ST_SEG.update(st_seg_scores())
         for dataset, sequence, model, window, stretch in SPACETIME_RENDERS:
             st_candidate(AUTOMATIC_RENDERS, dataset, sequence, model, window, stretch)
+    if "pyramid" in targets:
+        for dataset, sequence, model, share, stretch in PYRAMID_RENDERS:
+            pyr_render(AUTOMATIC_RENDERS, dataset, sequence, model, share, stretch)
     if "floor" in targets:
         for dataset, sequence in FLOOR_RENDERS:
             fv_render_floor(AUTOMATIC_RENDERS, dataset, sequence)
