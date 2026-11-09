@@ -246,12 +246,36 @@ def disk(center, radius, shape=(64, 64)):
     return (yy - center[0]) ** 2 + (xx - center[1]) ** 2 <= radius ** 2
 
 
-def test_tiled_2d_completes_an_object_across_the_tile_border(monkeypatch):
+def test_tiled_batched_2d_gives_unique_ids_across_tiles(monkeypatch):
+    points = np.array([[10, 10], [10, 50], [50, 10], [50, 50]])
+    seg, _ = run_tiled_2d(monkeypatch, points=points, labels=np.ones(4, dtype=int), batched=True)
+
+    for object_id, point in enumerate(points, start=1):
+        assert np.array_equal(seg == object_id, disk(point, 6))
+    assert set(np.unique(seg)) == {0, 1, 2, 3, 4}
+
+
+@pytest.mark.parametrize("batched", (True, False))
+def test_tiled_2d_completes_an_object_across_the_tile_border(monkeypatch, batched):
     # The point is 3 px left of the border at x = 32, so the disk reaches x = 35 in the next tile.
-    seg, predictor = run_tiled_2d(monkeypatch, points=np.array([[16, 29]]), labels=np.array([1]))
+    seg, predictor = run_tiled_2d(
+        monkeypatch, points=np.array([[16, 29]]), labels=np.array([1]), batched=batched,
+    )
 
     assert np.array_equal(seg == 1, disk((16, 29), 6))
     assert {call["tile_id"] for call in predictor.calls} == {0}
+
+
+def test_tiled_batched_2d_inner_block_wins_over_a_neighbour_halo(monkeypatch):
+    # The two disks overlap across the border at x = 32: object 1 from tile 0, object 2 from tile 1.
+    seg, _ = run_tiled_2d(
+        monkeypatch, points=np.array([[16, 29], [24, 36]]), labels=np.array([1, 1]), batched=True,
+    )
+
+    # In the overlap, each tile decides its own inner block.
+    assert seg[20, 31] == 1 and seg[20, 33] == 2
+    # Outside the overlap, each halo completes its object in the other tile.
+    assert seg[12, 33] == 1 and seg[22, 31] == 2
 
 
 def test_tiled_single_object_2d_tile_with_prompts_decides_its_inner_block(monkeypatch):
@@ -273,6 +297,21 @@ def test_tiled_2d_negative_points_reach_every_tile_that_sees_them(monkeypatch):
     assert call["point_labels"].tolist() == [1, 0]
     # (x, y) in tile-local coordinates.
     assert call["point_coords"].tolist() == [[29, 16], [36, 16]]
+
+
+def test_tiled_batched_2d_box_ids_follow_the_points(monkeypatch):
+    small_box = np.array([12, 26, 20, 36])  # crosses x = 32, fits into the halo of tile 0.
+    large_box = np.array([44, 10, 52, 54])  # wider than any tile with its halo.
+    seg, predictor = run_tiled_2d(
+        monkeypatch, points=np.array([[5, 5], [5, 58]]), labels=np.array([1, 1]),
+        boxes=[small_box, large_box], masks=[None, None], batched=True,
+    )
+
+    assert np.all(seg[12:20, 26:36] == 3)
+    assert np.all(seg[44:52, 10:54] == 4)
+    assert set(np.unique(seg)) == {0, 1, 2, 3, 4}
+    box_tiles = sorted(call["tile_id"] for call in predictor.calls if call["box"] is not None)
+    assert box_tiles == [0, 2, 3]  # the small box in one tile, the large box split into two.
 
 
 def make_tiled_segmenter():
