@@ -160,8 +160,10 @@ class _WidgetBase(QtWidgets.QWidget):
         return checkbox
 
     def _update_batched_visibility(self):
-        """Hide the 'Batched' checkbox while embeddings are tiled (batched prompting is unsupported
-        for tiled volumes). No-op for widgets without a batched checkbox."""
+        """Hide the 'Batched' checkbox while the embeddings are tiled.
+
+        Batched prompting is unsupported for tiled volumes. No-op for widgets without a batched checkbox.
+        """
         checkbox = getattr(self, "batched_checkbox", None)
         if checkbox is None:
             return
@@ -1500,8 +1502,9 @@ def _refresh_batched_controls():
 
 
 def _batched_disabled_when_tiled(state, batched):
-    """Batched (multi-object) prompting is not supported for tiled volumes. Force single-object and warn.
+    """Return False, with a warning, if batched prompting is requested for tiled embeddings.
 
+    The volume segmentation uses this guard, because batched prompting is unsupported for tiled volumes.
     Tiled 2d images support batched prompting (see `tiled_promptable_segmentation_2d`).
     """
     if batched and _embeddings_are_tiled(state):
@@ -3553,7 +3556,11 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self._update_batched_visibility()
 
     def _update_batched_visibility(self, event=None):
-        """Disable batched segmentation while one or more scribble prompts are present."""
+        """Update the 'Batched' checkbox for the tiling and the scribble prompts.
+
+        For a volume, hide the checkbox while the embeddings are tiled. Disable batched segmentation while
+        one or more scribble prompts are present.
+        """
         if self._ndim != 2:
             super()._update_batched_visibility()
 

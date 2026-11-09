@@ -300,8 +300,8 @@ def test_tiled_2d_negative_points_reach_every_tile_that_sees_them(monkeypatch):
 
 
 def test_tiled_batched_2d_box_ids_follow_the_points(monkeypatch):
-    small_box = np.array([12, 26, 20, 36])  # crosses x = 32, fits into the halo of tile 0.
-    large_box = np.array([44, 10, 52, 54])  # wider than any tile with its halo.
+    small_box = np.array([12, 26, 20, 36])  # Crosses x = 32 and fits into the outer block of tile 0.
+    large_box = np.array([44, 10, 52, 54])  # Wider than the outer block of any tile.
     seg, predictor = run_tiled_2d(
         monkeypatch, points=np.array([[5, 5], [5, 58]]), labels=np.array([1, 1]),
         boxes=[small_box, large_box], masks=[None, None], batched=True,
@@ -311,7 +311,7 @@ def test_tiled_batched_2d_box_ids_follow_the_points(monkeypatch):
     assert np.all(seg[44:52, 10:54] == 4)
     assert set(np.unique(seg)) == {0, 1, 2, 3, 4}
     box_tiles = sorted(call["tile_id"] for call in predictor.calls if call["box"] is not None)
-    assert box_tiles == [0, 2, 3]  # the small box in one tile, the large box split into two.
+    assert box_tiles == [0, 2, 3]  # The small box goes to one tile, and the large box is split into two.
 
 
 def make_tiled_segmenter():

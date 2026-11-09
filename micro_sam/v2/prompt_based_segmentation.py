@@ -490,10 +490,13 @@ def tiled_promptable_segmentation_2d(
     - A positive point goes to the tile whose inner block contains it.
     - A negative point goes to every tile whose outer block contains it, if that tile also has a
       positive point or a box.
-    - In batched mode, each positive point and each box is one object with its own id, numbered as in
-      the untiled batched mode. A box goes to the tile at its center if that tile holds the whole box.
+    - In batched mode, a box goes to the tile at its center if the outer block of that tile holds the
+      whole box.
     - Other boxes go to every tile whose inner block they overlap, clipped to the outer block of that
       tile.
+
+    In batched mode, each positive point and each box is one object with its own id. The ids follow
+    the same order as in the untiled batched mode.
 
     An object that extends more than the halo beyond the tile of its prompt is cut at the outer edge of
     the halo.
@@ -550,8 +553,9 @@ def tiled_promptable_segmentation_2d(
         local_boxes = [box - np.concatenate([origin, origin]) for box in job["boxes"]] or None
         local_masks = job["masks"] if job["boxes"] else None
         tile_jobs[tile_id] = local_points, local_labels, local_boxes, local_masks
-        # The batched tile result numbers its objects in prompt order: positive points, then boxes.
-        # Otherwise the tile segments one object, or one per box if it has no points.
+        # The global id for each local id of the tile result. A batched tile result numbers its objects in
+        # prompt order: positive points, then boxes. Otherwise, the tile segments one object, or one per box
+        # for a tile with boxes only, and keeps its local ids.
         if batched:
             tile_object_ids[tile_id] = np.array(job["point_ids"] + job["box_ids"], dtype="uint32")
         else:
