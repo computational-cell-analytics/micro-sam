@@ -34,9 +34,17 @@ CTC_SEQUENCES = ("01", "02")
 
 # The other 2d+t data in CTC format: their root folder and whether micro-sam2 trained on the dataset.
 # TOIAM trained on movies 00 to 02 and validated on 03 (see 'generalist_loader.TOIAM_TRAIN_MOVIES'), so 04 is held out.
+# The four datasets of 'prepare_tracking_data.py' (EColi, ALFI, Cardioblast, WingDisc), converted to CTC format with
+# dense track masks. micro-sam2 did not train on any of them.
+TRACKING_DATA = os.path.join(EXPERIMENT_ROOT, "data")
+CONVERTED_DATASETS = ("EColi", "ALFI", "Cardioblast", "WingDisc", "YeaZ", "CellACDC", "DynamicNuclearNet")
+# The converted datasets from the sources of the micro-sam2 training, with movies it did not train on: the YeaZ
+# phase-contrast movies (micro-sam2 trained on YeaZ bright field) and the Cell-ACDC test movie.
+CONVERTED_IN_DOMAIN = ("YeaZ", "CellACDC", "DynamicNuclearNet")
 OTHER_CTC_DATASETS = {
     "BacMother": (os.path.join(DATA_ROOT, "bac_mother", "CTC", "test"), False),
     "TOIAM": (os.path.join(DATA_ROOT, "toiam", "data"), True),
+    **{name: (os.path.join(TRACKING_DATA, name), name in CONVERTED_IN_DOMAIN) for name in CONVERTED_DATASETS},
 }
 TOIAM_TEST_MOVIES = ("04",)
 # TOIAM 04 has 5740 tracks over 800 frames, too many for the simulated user. The interactive runs take frames 300 to
@@ -49,7 +57,13 @@ FM_ROOT = os.path.join(DATA_ROOT, "tracking_fm_data", "new_data_131026", "real")
 # The interactive datasets and their domain: DynamicNuclearNet and TOIAM were part of the micro-sam2 training.
 INTERACTIVE_DATASETS = {
     "dynamicnuclearnet": "in-domain", "toiam": "in-domain", "bacmother": "out-of-domain",
-    "tracking_fm_real": "out-of-domain",
+    "tracking_fm_real": "out-of-domain", "ecoli": "out-of-domain", "alfi": "out-of-domain",
+    "cardioblast": "out-of-domain", "wingdisc": "out-of-domain", "yeaz": "in-domain", "cellacdc": "in-domain",
+}
+# The interactive datasets that are read from the CTC folders of an automatic dataset.
+INTERACTIVE_CTC = {
+    "toiam": "TOIAM", "bacmother": "BacMother", "ecoli": "EColi", "alfi": "ALFI", "cardioblast": "Cardioblast",
+    "wingdisc": "WingDisc", "yeaz": "YeaZ", "cellacdc": "CellACDC",
 }
 
 
@@ -73,6 +87,8 @@ def sequences_of(name):
         return TOIAM_TEST_MOVIES
     if name == "BacMother":
         return sorted(folder for folder in os.listdir(dataset_root(name)) if folder.isdigit())
+    if name in CONVERTED_DATASETS:
+        return sorted(folder for folder in os.listdir(dataset_root(name)) if not folder.endswith("_GT"))
     return CTC_SEQUENCES
 
 
@@ -135,8 +151,8 @@ def interactive_samples(dataset_name):
         return sorted(os.path.basename(path)[:-len(".ome.zarr")] for path in glob.glob(f"{FM_ROOT}/*.ome.zarr"))
     if dataset_name == "toiam":
         return list(TOIAM_TEST_MOVIES)
-    if dataset_name == "bacmother":
-        return list(sequences_of("BacMother"))
+    if dataset_name in INTERACTIVE_CTC:
+        return list(sequences_of(INTERACTIVE_CTC[dataset_name]))
     raise ValueError(f"Unknown interactive dataset '{dataset_name}'.")
 
 
@@ -151,8 +167,8 @@ def load_interactive_sample(dataset_name, sample):
         f = zarr.open(os.path.join(FM_ROOT, f"{sample}.ome.zarr"), mode="r")
         raw, masks = f["s0"][:], f["labels/cells/s0"][:].astype("uint32")
         return raw, masks, _geff_tracks(f)
-    if dataset_name in ("toiam", "bacmother"):
-        name = "TOIAM" if dataset_name == "toiam" else "BacMother"
+    if dataset_name in INTERACTIVE_CTC:
+        name = INTERACTIVE_CTC[dataset_name]
         raw = load_sequence(name, sample)
         masks, tracks = load_ctc_tracks(os.path.join(gt_folder_of(name, sample), "TRA"))
         if dataset_name == "toiam":
@@ -421,3 +437,13 @@ def set_norm_percentiles(lower, upper):
         defaults[names.index("lower_percentile") - first] = lower
         defaults[names.index("upper_percentile") - first] = upper
         function.__defaults__ = tuple(defaults)
+
+
+def frame_paths(name, sequence):
+    """Get the paths of the frames of one sequence."""
+    return sorted(glob.glob(os.path.join(dataset_root(name), sequence, "t*.tif")))
+
+
+def load_frames(name, sequence, start, end):
+    """Load the frames start to end (exclusive) of one sequence."""
+    return to_grayscale(np.stack([tifffile.imread(path) for path in frame_paths(name, sequence)[start:end]]))

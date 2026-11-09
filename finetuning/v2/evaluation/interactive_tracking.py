@@ -229,6 +229,155 @@ class TrackingAnnotator:
         self.reset_track_state()
 
 
+class V1TrackingAnnotator:
+    """The state and the actions of the micro-sam v1 tracking annotator, without napari.
+
+    Copies the tracking of micro-sam v1 (before 'Refactor tracking annotator', #1251): the frames with prompts of the
+    current track are segmented from their prompts ('segment_slices_with_prompts'), then the track is propagated
+    frame by frame from the first of them with the mask of the previous frame and a motion model
+    ('track_from_prompts'), with the defaults of its widget. A frame with a 'division' point stops the track before
+    it, so a user marks a division on the first frame of the daughters. It has the interface of `TrackingAnnotator`.
+
+    Args:
+        image: The timeseries, (T, Y, X).
+        model_type: The micro-sam v1 model, e.g. 'vit_l_lm'.
+        embedding_path: Where the embeddings are cached.
+        device: The torch device.
+    """
+
+    # The defaults of the v1 tracking widget.
+    projection = "single_point"
+    iou_threshold = 0.5
+    box_extension = 0.05
+    motion_smoothing = 0.5
+
+    def __init__(self, image, model_type="vit_l_lm", embedding_path=None, device=None):
+        from micro_sam.v1.util import get_sam_model, precompute_image_embeddings
+        self.predictor = get_sam_model(model_type=model_type, device=device)
+        self.image_embeddings = precompute_image_embeddings(
+            self.predictor, image, save_path=embedding_path, ndim=3, verbose=True,
+        )
+        self.shape = image.shape
+        self.committed_objects = np.zeros(self.shape, dtype="uint32")
+        self.committed_lineages = []
+        self.reset_track_state()
+
+    reset_track_state = TrackingAnnotator.reset_track_state
+    add_point = TrackingAnnotator.add_point
+    add_box = TrackingAnnotator.add_box
+    remove_prompts = TrackingAnnotator.remove_prompts
+    _update_lineage = TrackingAnnotator._update_lineage
+    replay = TrackingAnnotator.replay
+
+    def add_division(self, t, yx, track_id=None):
+        """Mark the division of a track whose last frame is t: v1 takes the marker on the next frame."""
+        self.add_point(t + 1, yx, positive=True, state="division", track_id=track_id)
+
+    def _frame_prompts(self, t, track_id):
+        """The point prompts (y, x), labels and boxes of a track on a frame; division points are prompts in v1."""
+        points = [p for p in self.points if p.t == t and p.track_id == track_id]
+        boxes = [b.box for b in self.boxes if b.t == t and b.track_id == track_id]
+        return np.array([[p.y, p.x] for p in points]).reshape(-1, 2), np.array([p.label for p in points]), boxes
+
+    def _segment_prompted_frames(self, track_id):
+        """Segment the frames with prompts of a track ('segment_slices_with_prompts')."""
+        from micro_sam.v1 import prompt_based_segmentation as pbs
+        seg = np.zeros(self.shape, dtype="uint32")
+        frames = sorted({p.t for p in self.points if p.track_id == track_id} |
+                        {b.t for b in self.boxes if b.track_id == track_id})
+        stop_upper = False
+        for t in list(frames):
+            points, labels, boxes = self._frame_prompts(t, track_id)
+            if len(points) == 1 and labels[0] == 0 and not boxes:  # A lone negative point is a stop annotation.
+                if t == frames[-1]:
+                    stop_upper = True
+                elif t != frames[0]:
+                    frames.remove(t)
+                continue
+            emb = dict(image_embeddings=self.image_embeddings, i=t)
+            if len(points) and boxes:
+                pred = pbs.segment_from_box_and_points(self.predictor, boxes[0], points, labels, **emb)
+            elif boxes:
+                pred = pbs.segment_from_box(self.predictor, boxes[0], **emb)
+            else:
+                pred = pbs.segment_from_points(self.predictor, points, labels, **emb)
+            seg[t] = np.asarray(pred).squeeze() > 0
+        return seg, np.array(frames, dtype="int"), stop_upper
+
+    def _is_division(self, t):
+        """'prompt_layer_to_state': a frame is in the division state if any point on it is."""
+        return any(p.t == t and p.state == "division" for p in self.points)
+
+    def _track(self, seg, frames, stop_upper):
+        """Propagate the track from its first prompted frame ('track_from_prompts')."""
+        from scipy.ndimage import shift
+        from micro_sam.util import compute_iou
+        from micro_sam.v1 import prompt_based_segmentation as pbs
+        from micro_sam.v1.multi_dimensional_segmentation import _validate_projection
+        use_box, use_mask, use_points, use_single_point = _validate_projection(self.projection)
+
+        def center(t):
+            ys, xs = np.where(seg[t] == 1)
+            return np.array([ys.mean(), xs.mean()])
+
+        motion_model, has_division = None, False
+        t0 = int(frames.min())
+        t = t0 + 1
+        while t < seg.shape[0]:
+            if t == t0 + 2:
+                motion_model = center(t - 1) - center(t - 2)
+            elif t > t0 + 2:
+                motion_model = self.motion_smoothing * motion_model + (1 - self.motion_smoothing) * (
+                    center(t - 1) - center(t - 2))
+            if t in frames:
+                seg_prev, seg_t = None, seg[t]
+                state = "division" if self._is_division(t) else "track"
+            else:
+                seg_prev = seg[t - 1]
+                if not seg_prev.any():  # The track is lost: SAM has no mask to continue from.
+                    break
+                if motion_model is not None and not np.isnan(motion_model).any():
+                    shifted = np.zeros_like(seg_prev)
+                    shift(seg_prev, motion_model, output=shifted, order=0, prefilter=False)
+                    seg_prev = shifted
+                seg_t = pbs.segment_from_mask(
+                    self.predictor, seg_prev, image_embeddings=self.image_embeddings, i=t, use_mask=use_mask,
+                    use_box=use_box, use_points=use_points, box_extension=self.box_extension,
+                    use_single_point=use_single_point,
+                )
+                seg_t = (np.asarray(seg_t).squeeze() > 0).astype(seg.dtype)
+                state = "track"
+                if t < frames[-1]:
+                    seg_prev = None
+            if seg_prev is not None and compute_iou(seg_prev, seg_t) < self.iou_threshold:
+                break
+            if state == "division":
+                has_division = True
+                break
+            seg[t] = seg_t
+            t += 1
+            if t == frames[-1] and stop_upper:
+                break
+        return seg, has_division
+
+    def segment(self):
+        """Run 'Track Object' of the v1 annotator for the current track."""
+        track_id = self.current_track_id
+        seg, frames, stop_upper = self._segment_prompted_frames(track_id)
+        if len(frames) == 0:
+            return
+        seg, has_division = self._track(seg, frames, stop_upper)
+        if has_division and len(self.lineage.get(track_id, [])) == 0:
+            self._update_lineage(track_id)
+        self.current_object[self.current_object == track_id] = 0
+        self.current_object[seg == 1] = track_id
+        self.log.append((self.log_tag, "write", track_id, np.flatnonzero(seg == 1)))
+
+    def commit(self):
+        commit_objects(self.committed_objects, self.committed_lineages, self.current_object, self.lineage)
+        self.reset_track_state()
+
+
 def center_of(mask):
     """Get the point of a mask farthest from its boundary, in its largest component, as (y, x)."""
     components, n = ndimage.label(mask)
@@ -404,8 +553,15 @@ class SimulatedUser:
         })
         self.annotator.commit()
 
-    def run(self, progress=None):
+    def run(self, progress=None, lineages=None):
+        """Annotate all lineages, or only the roots lineages[0] to lineages[1] (exclusive) of `roots`.
+
+        The lineages are independent until they are committed, so a range of them can be annotated on its own and the
+        records of all ranges merged in the order of `roots` (see `results_per_budget`).
+        """
         roots = self.roots()
+        if lineages is not None:
+            roots = roots[lineages[0]:lineages[1]]
         for root in roots if progress is None else progress(roots):
             self.annotate_lineage(root)
 

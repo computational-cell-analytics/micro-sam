@@ -17,6 +17,7 @@ Usage examples:
 import os
 import glob
 import json
+import pickle
 import time
 import shutil
 import argparse
@@ -32,7 +33,7 @@ import torch
 
 from micro_sam.v1.multi_dimensional_segmentation import export_tracking_result_to_ctc
 
-from interactive_tracking import SimulatedUser, TrackingAnnotator
+from interactive_tracking import SimulatedUser, TrackingAnnotator, V1TrackingAnnotator
 from tracking_util import (
     EXPERIMENT_ROOT, INTERACTIVE_DATASETS, dense_seg_score, interactive_samples, load_interactive_sample,
     set_norm_percentiles, split_track_gaps, tracking_metrics, use_tmpdir_for_embeddings, write_ctc_tracks,
@@ -77,11 +78,45 @@ def score_budgets(gt_masks, budgets, pred_root):
     return info, rows
 
 
+# The interactive tools: the micro-sam2 annotator with the micro-sam2 model or stock SAM2, and the micro-sam v1
+# annotator with its light microscopy model. Each has its default model.
+METHODS = {"microsam2": "hvit_l_cells", "sam2": "hvit_l", "microsam_v1": "vit_l_lm"}
+
+
+def merge_parts(user, parts_folder):
+    """Put the lineage records of all annotated ranges into 'user', in the order of its roots.
+
+    Returns:
+        The summed embedding and annotation times, or None if a range is missing.
+    """
+    n_roots = len(user.roots())
+    parts = sorted(glob.glob(os.path.join(parts_folder, "part_*.pkl")))
+    covered, records, times = 0, [], {"embedding_time": 0.0, "annotation_time": 0.0}
+    for path in parts:
+        with open(path, "rb") as f:
+            part = pickle.load(f)
+        if part["start"] != covered:
+            break
+        covered = part["end"]
+        records += part["records"]
+        for key in times:
+            times[key] += part[key]
+    if covered < n_roots:
+        print(f"The ranges in '{parts_folder}' cover {covered} of {n_roots} lineages.")
+        return None
+    user.lineage_records = records
+    return times
+
+
 def run_sample(
     dataset_name, sample, model_type, first_prompt, n_corrections, accept_iou, output_root, correction,
-    norm_percentiles=None,
+    norm_percentiles=None, method="microsam2", lineages=None, merge=False,
 ):
-    """Annotate one movie with the simulated user and return its rows of scores."""
+    """Annotate one movie with the simulated user and return its rows of scores.
+
+    With 'lineages' (start, end), only that range of the lineages is annotated and its records are stored; 'merge'
+    then joins the records of all ranges, exports and scores them. The result equals that of a run in one piece.
+    """
     # The point corrections keep the plain name of the first runs.
     correction_tag = "" if correction == "points" else f"_{correction}corr"
     tag = f"{dataset_name}_{sample}_{model_type}_{first_prompt}{correction_tag}_c{n_corrections}_iou{accept_iou}"
@@ -96,14 +131,30 @@ def run_sample(
     print(f"{dataset_name} {sample}: {raw.shape} {raw.dtype}, {len(gt_tracks)} tracks")
     budgets = range(n_corrections + 1)
     pred_root = os.path.join(output_root, "predictions", tag)
+    parts_folder = os.path.join(pred_root, "lineage_parts")
+    if lineages is not None:
+        part_path = os.path.join(parts_folder, f"part_{lineages[0]:05d}-{lineages[1]:05d}.pkl")
+        if os.path.exists(part_path):
+            print(f"The lineages {lineages} are already stored at '{part_path}'.")
+            return None
     if os.path.exists(os.path.join(pred_root, "complete")):
         print(f"The annotation is already exported at '{pred_root}'. It is only scored.")
+    elif merge:
+        user = SimulatedUser(
+            None, gt_masks, gt_tracks, first_prompt=first_prompt, n_corrections=n_corrections, accept_iou=accept_iou,
+            correction=correction,
+        )
+        info = merge_parts(user, parts_folder)
+        if info is None:
+            raise RuntimeError(f"Not all lineage ranges of {tag} are annotated yet.")
+        export_budgets(user, gt_masks, gt_tracks, budgets, pred_root, info)
     else:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         embedding_dir = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
         try:
             start = time.time()
-            annotator = TrackingAnnotator(raw, model_type, os.path.join(embedding_dir, "embeddings.zarr"), device)
+            annotator_class = V1TrackingAnnotator if method == "microsam_v1" else TrackingAnnotator
+            annotator = annotator_class(raw, model_type, os.path.join(embedding_dir, "embeddings.zarr"), device)
             embedding_time = time.time() - start
 
             start = time.time()
@@ -111,18 +162,28 @@ def run_sample(
                 annotator, gt_masks, gt_tracks, first_prompt=first_prompt, n_corrections=n_corrections,
                 accept_iou=accept_iou, correction=correction,
             )
-            user.run(progress=lambda roots: tqdm(roots, desc="Annotate lineages"))
+            user.run(progress=lambda roots: tqdm(roots, desc="Annotate lineages"), lineages=lineages)
             annotation_time = time.time() - start
         finally:
             shutil.rmtree(embedding_dir, ignore_errors=True)
         info = {"embedding_time": embedding_time, "annotation_time": annotation_time}
+        if lineages is not None:
+            os.makedirs(parts_folder, exist_ok=True)
+            part = {"start": lineages[0], "end": min(lineages[1], len(user.roots())),
+                    "records": user.lineage_records, **info}
+            with open(part_path + ".partial", "wb") as f:
+                pickle.dump(part, f)
+            os.replace(part_path + ".partial", part_path)
+            print(f"Stored the lineages {lineages} at '{part_path}'.")
+            return None
         export_budgets(user, gt_masks, gt_tracks, budgets, pred_root, info)
 
     info, rows = score_budgets(gt_masks, budgets, pred_root)
     result = pd.DataFrame([
         {
             "dataset": dataset_name, "domain": INTERACTIVE_DATASETS[dataset_name], "sample": sample,
-            "model": model_type, "first_prompt": first_prompt, "correction": correction, "accept_iou": accept_iou,
+            "method": method, "model": model_type, "first_prompt": first_prompt, "correction": correction,
+            "accept_iou": accept_iou,
             "norm_percentiles": "2,98" if norm_percentiles is None else ",".join(map(str, norm_percentiles)),
             "n_frames": raw.shape[0], "n_gt_tracks": len(gt_tracks), "embedding_time": info["embedding_time"],
             "annotation_time": info["annotation_time"], **row,
@@ -139,8 +200,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-d", "--dataset_name", type=str, required=True, choices=sorted(INTERACTIVE_DATASETS))
     parser.add_argument("-s", "--sample", type=str, default=None, help="The movie. All movies by default.")
-    parser.add_argument("-m", "--model_type", type=str, default="hvit_l_cells")
+    parser.add_argument(
+        "--method", type=str, default="microsam2", choices=sorted(METHODS),
+        help="The tool: the micro-sam2 annotator ('microsam2', 'sam2' with stock SAM2) or the micro-sam v1 annotator.",
+    )
+    parser.add_argument("-m", "--model_type", type=str, default=None, help="By default the model of the method.")
     parser.add_argument("--first_prompt", type=str, default="box", choices=("box", "point"))
+    parser.add_argument(
+        "--lineages", type=int, nargs=2, default=None,
+        help="Only annotate the lineages START to END (exclusive) and store them, to split a long movie.",
+    )
+    parser.add_argument("--merge", action="store_true", help="Merge, export and score the stored lineage ranges.")
     parser.add_argument("--n_corrections", type=int, default=4, help="The largest number of corrections per track.")
     parser.add_argument(
         "--correction", type=str, default="box", choices=("points", "box"),
@@ -165,11 +235,13 @@ def main():
     use_tmpdir_for_embeddings()
     if args.norm_percentiles is not None:
         set_norm_percentiles(*args.norm_percentiles)
+    model_type = args.model_type or METHODS[args.method]
     for sample in samples if args.sample is None else [args.sample]:
         run_sample(
-            args.dataset_name, sample, args.model_type, args.first_prompt, args.n_corrections, args.accept_iou,
+            args.dataset_name, sample, model_type, args.first_prompt, args.n_corrections, args.accept_iou,
             args.output_root, args.correction,
             norm_percentiles=None if args.norm_percentiles is None else tuple(args.norm_percentiles),
+            method=args.method, lineages=None if args.lineages is None else tuple(args.lineages), merge=args.merge,
         )
 
 
