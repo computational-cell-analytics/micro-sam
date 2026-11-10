@@ -141,11 +141,11 @@ EVAL_MAX_TILES_PER_VOLUME = 16
 EVAL_MIN_RELATIVE_COUNT = 0.2
 EVAL_NOTES = {
     "malecns_nuclei": (
-        "Nucleus panel candidate (out-of-domain): Drosophila male CNS FIB-SEM crops at 16 nm; automatic nucleus "
+        "Nucleus panel (out-of-domain): Drosophila male CNS FIB-SEM crops at 16 nm; automatic nucleus "
         "segmentation, not filtered for glia or noise."
     ),
     "zheng_ca3_nuclei": (
-        "Nucleus panel candidate (out-of-domain): mouse CA3 ssTEM crops at 72 x 72 x 45 nm; automatic nucleus "
+        "Nucleus panel (out-of-domain): mouse CA3 ssTEM crops at 72 x 72 x 45 nm; automatic nucleus "
         "segmentation."
     ),
     "acson_nuclei": (
@@ -153,15 +153,15 @@ EVAL_NOTES = {
         "segmentation."
     ),
     "placenta_nucleus": (
-        "Nucleus panel candidate (out-of-domain): the two human placenta array tomography volumes (S-BIAD3408, 80 nm "
+        "Nucleus panel (out-of-domain): the two human placenta array tomography volumes (S-BIAD3408, 80 nm "
         "sections); manual nuclei of one CTB cell and an STB region, scored only where labelled."
     ),
     "dauer_larva_nucleus": (
-        "Nucleus panel candidate (in-domain): boxes of the OpenOrganelle jrc_dauer-larva volume (ssTEM, 70 x 40 x 40 "
+        "Nucleus panel (in-domain): boxes of the OpenOrganelle jrc_dauer-larva volume (ssTEM, 70 x 40 x 40 "
         "nm), which the nucleus model never saw; automatic COSEM nucleus instances."
     ),
     "human_organoids_nucleus": (
-        "Nucleus panel candidate (in-domain): the validation part of the four human organoid volumes (the last 10% "
+        "Nucleus panel (in-domain): the validation part of the four human organoid volumes (the last 10% "
         "of the slices, manual instances), which selected the training checkpoint."
     ),
     "cellmap_nucleus": "Nucleus panel: the held-out jrc_mus-liver-zon-2 crop357 (32 nm, manual instances).",

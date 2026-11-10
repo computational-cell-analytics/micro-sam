@@ -6125,7 +6125,7 @@
   },
   "dauer_larva_nucleus": {
    "crop_shape": [32, 512, 512],
-   "note": "Nucleus panel candidate (in-domain): boxes of the OpenOrganelle jrc_dauer-larva volume (ssTEM, 70 x 40 x 40 nm), which the nucleus model never saw; automatic COSEM nucleus instances. 14 of 24 tiles are kept (at most 16 per volume, the ones with the most objects), holding 6-38 nuclei.",
+   "note": "Nucleus panel (in-domain): boxes of the OpenOrganelle jrc_dauer-larva volume (ssTEM, 70 x 40 x 40 nm), which the nucleus model never saw; automatic COSEM nucleus instances. 14 of 24 tiles are kept (at most 16 per volume, the ones with the most objects), holding 6-38 nuclei.",
    "starts": {
     "box_192_1029_11266.h5": [
      [0, 512, 0],
@@ -6151,7 +6151,7 @@
   },
   "human_organoids_nucleus": {
    "crop_shape": [32, 512, 512],
-   "note": "Nucleus panel candidate (in-domain): the validation part of the four human organoid volumes (the last 10% of the slices, manual instances), which selected the training checkpoint. 64 of 201 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-6 nuclei.",
+   "note": "Nucleus panel (in-domain): the validation part of the four human organoid volumes (the last 10% of the slices, manual instances), which selected the training checkpoint. 64 of 201 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-6 nuclei.",
    "starts": {
     "F059.h5": [
      [0, 0, 1024],
@@ -6229,7 +6229,7 @@
   },
   "placenta_nucleus": {
    "crop_shape": [32, 512, 512],
-   "note": "Nucleus panel candidate (out-of-domain): the two human placenta array tomography volumes (S-BIAD3408, 80 nm sections); manual nuclei of one CTB cell and an STB region, scored only where labelled. 19 of 56 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-7 nuclei.",
+   "note": "Nucleus panel (out-of-domain): the two human placenta array tomography volumes (S-BIAD3408, 80 nm sections); manual nuclei of one CTB cell and an STB region, scored only where labelled. 19 of 56 tiles are kept (at most 16 per volume, the ones with the most objects), holding 1-7 nuclei.",
    "starts": {
     "placenta1.h5": [
      [0, 0, 1024],
@@ -6258,7 +6258,7 @@
   },
   "malecns_nuclei": {
    "crop_shape": [32, 512, 512],
-   "note": "Nucleus panel candidate (out-of-domain): Drosophila male CNS FIB-SEM crops at 16 nm; automatic nucleus segmentation, not filtered for glia or noise. 40 of 40 tiles are kept (at most 16 per volume, the ones with the most objects), holding 5-23 nuclei.",
+   "note": "Nucleus panel (out-of-domain): Drosophila male CNS FIB-SEM crops at 16 nm; automatic nucleus segmentation, not filtered for glia or noise. 40 of 40 tiles are kept (at most 16 per volume, the ones with the most objects), holding 5-23 nuclei.",
    "starts": {
     "brain_1.h5": [
      [0, 0, 0],
@@ -6314,7 +6314,7 @@
   },
   "zheng_ca3_nuclei": {
    "crop_shape": [32, 512, 512],
-   "note": "Nucleus panel candidate (out-of-domain): mouse CA3 ssTEM crops at 72 x 72 x 45 nm; automatic nucleus segmentation. 27 of 40 tiles are kept (at most 16 per volume, the ones with the most objects), holding 3-14 nuclei.",
+   "note": "Nucleus panel (out-of-domain): mouse CA3 ssTEM crops at 72 x 72 x 45 nm; automatic nucleus segmentation. 27 of 40 tiles are kept (at most 16 per volume, the ones with the most objects), holding 3-14 nuclei.",
    "starts": {
     "crop_1.h5": [
      [0, 0, 0],
