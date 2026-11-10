@@ -22,8 +22,9 @@ Usage:
     python plots_for_figure5.py --render lineage_scores lineages spacetime floor beke  # the renders, on a GPU node
 
 The inputs are the central tracking tables, written by 'finetuning/v2/evaluation/collect_tracking_results.py', the
-tracking predictions in TRACKING_ROOT, and the Beke tracks of 'scripts/user_study/v2/huisken_tracks_h5'. The renders
-go to TRACKING_ROOT ('lineage_renders', 'automatic_renders', 'lineage_search') and to 'figures/figure5/beke'.
+tracking predictions in TRACKING_ROOT, and the Beke tracks of 'scripts/user_study/v2/huisken_lab/huisken_tracks_h5'.
+The renders go to TRACKING_ROOT ('lineage_renders', 'automatic_renders', 'lineage_search') and to
+'figures/figure5/beke'.
 """
 
 import os
@@ -593,7 +594,9 @@ PLOTS = {
 
 
 # Panel e: the tracked nuclei of the Beke time-lapse of Platynereis; render with '--render beke'.
-BEKE_TRACKS = os.path.join(ROOT, "..", "..", "..", "user_study", "v2", "huisken_tracks_h5", "tracks_new_defaults.h5")
+BEKE_TRACKS = os.path.join(
+    ROOT, "..", "..", "..", "user_study", "v2", "huisken_lab", "huisken_tracks_h5", "tracks_new_defaults.h5"
+)
 BEKE_DATA = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/huisken_data/platynereis_timelapse_3-6hpf"
 BEKE_RENDERS = os.path.join(OUTPUT_DIR, "beke")
 # z spacing over the xy spacing (2.5 / 0.406 um, xy downsampled 2x), and the xy pixel size
