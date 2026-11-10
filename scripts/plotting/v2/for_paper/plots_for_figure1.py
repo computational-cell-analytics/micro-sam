@@ -87,8 +87,8 @@ SOMA_LABEL, FEATURED_LABEL = N_AXIAL + N_LATERAL, N_AXIAL + N_LATERAL + 1
 
 # the logo of micro-sam, taken from the documentation of this repository
 REPOSITORY = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), *[os.pardir] * 4))
-# the μSAM2 logo, cropped to its artwork
-LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "micro_sam2_logo.svg")
+# the μSAM2 logo (the horizontal light version, 901 x 381 px, from the user, 2026-11-10)
+LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "micro_sam2_logo.png")
 # the official Python logo, which is downloaded once into the assets folder next to this script
 PYTHON_LOGO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "python_logo.svg")
 PYTHON_LOGO_URL = "https://upload.wikimedia.org/wikipedia/commons/c/c3/Python-logo-notext.svg"
