@@ -183,6 +183,36 @@ EXCLUDED_TEST_IMAGES = {
 }
 
 
+def use_tmpdir_for_embeddings():
+    """Write the temporary embeddings of micro-sam to the job's node-local TMPDIR, not to the micro-sam cache.
+
+    In the cache of the home directory, the leftovers of jobs killed at their time limit fill the quota.
+    """
+    if not os.environ.get("TMPDIR"):
+        return
+    import uuid
+    import atexit
+    import shutil
+    import micro_sam.util
+    import micro_sam.v2.util
+    import micro_sam.v2.instance_segmentation
+    import micro_sam.v2.automatic_prompt_generation
+
+    def make_temp_embedding_path():
+        parent = Path(os.environ["TMPDIR"], "micro_sam_tmp_embeddings")
+        parent.mkdir(parents=True, exist_ok=True)
+        path = str(parent / f"{uuid.uuid4().hex}.zarr")
+        atexit.register(shutil.rmtree, path, ignore_errors=True)
+        return path
+
+    modules = (
+        micro_sam.util, micro_sam.v2.util, micro_sam.v2.instance_segmentation,
+        micro_sam.v2.automatic_prompt_generation,
+    )
+    for module in modules:
+        module.make_temp_embedding_path = make_temp_embedding_path
+
+
 def drop_excluded_test_images(dataset_name, raw_paths, label_paths) -> Tuple[List[str], List[str]]:
     """Remove the test images of a dataset that have a copy in the training data, see EXCLUDED_TEST_IMAGES."""
     excluded = EXCLUDED_TEST_IMAGES.get(dataset_name)
@@ -464,7 +494,7 @@ DATASETS_3D_EM_NUCLEUS_ID = ["cellmap_nucleus", "fafb_nuclei", "microns_nuclei",
 DATASETS_3D_EM_NUCLEUS_OOD = [
     "human_liver_em_nucleus", "etchacell_nucleus", "nucmm_zebrafish", "nucmm_mouse", "aive_nucleus",
 ]
-# Candidate in-domain test sets (user, 2026-11-05), written by 'prepare_em_nucleus_candidates.py': the OpenOrganelle
+# In-domain test sets of the EM nucleus panel, written by 'prepare_em_nucleus_test_sets.py': the OpenOrganelle
 # dauer larva volume, which the nucleus model never saw, and the validation part of the human organoid volumes.
 CANDIDATE_NUCLEUS_ROOTS = {
     "dauer_larva_nucleus": "dauer_larva_nucleus", "human_organoids_nucleus": "human_organoids_nucleus_val",

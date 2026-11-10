@@ -31,7 +31,7 @@ from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS, build_model,
     check_data_download, evaluate_samples, has_val_split, load_apg_overrides, postprocess_unisam2, predict_unisam2,
-    pad_to_min_shape, read_tuned_params, resolve_checkpoint_identity,
+    pad_to_min_shape, read_tuned_params, resolve_checkpoint_identity, use_tmpdir_for_embeddings,
 )
 
 # The 2d datasets whose test images are smaller than their training images at the same pixel size. They are
@@ -54,28 +54,7 @@ if os.environ.get("EVAL_NORM_PERCENTILES"):
 
 REGISTRY_MODELS = [model for model in FINETUNED_MODELS if has_registered_decoder(model)]
 
-# The temporary embeddings of APG go to the job's node-local TMPDIR, as in `parameter_search.py`.
-# In the micro-sam cache of the home directory, the leftovers of killed jobs fill the quota.
-if os.environ.get("TMPDIR"):
-    import uuid
-    import atexit
-    import shutil
-    from pathlib import Path
-    import micro_sam.util
-    import micro_sam.v2.util
-    import micro_sam.v2.instance_segmentation
-    import micro_sam.v2.automatic_prompt_generation
-
-    def _make_temp_embedding_path():
-        parent = Path(os.environ["TMPDIR"], "micro_sam_tmp_embeddings")
-        parent.mkdir(parents=True, exist_ok=True)
-        path = str(parent / f"{uuid.uuid4().hex}.zarr")
-        atexit.register(shutil.rmtree, path, ignore_errors=True)
-        return path
-
-    for _module in (micro_sam.util, micro_sam.v2.util, micro_sam.v2.instance_segmentation,
-                    micro_sam.v2.automatic_prompt_generation):
-        _module.make_temp_embedding_path = _make_temp_embedding_path
+use_tmpdir_for_embeddings()
 
 
 def segment(

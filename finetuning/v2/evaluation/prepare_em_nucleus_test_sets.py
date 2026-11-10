@@ -1,4 +1,4 @@
-"""Write the data of two candidate in-domain test sets of the EM nucleus panel (user, 2026-11-05).
+"""Write the data of two in-domain test sets of the EM nucleus panel of Figure 6.
 
 - dauer_larva_nucleus: boxes of the OpenOrganelle jrc_dauer-larva volume (C. elegans, ssTEM). The volume is not in
   OPENORGANELLE_NUCLEUS_VOLUMES of the generalist loader, so the nucleus model never saw it. Its labels are the
@@ -8,7 +8,7 @@
   last HUMAN_ORGANOIDS_VAL_FRACTION of the slices, manual labels). It selected the training checkpoint, so it is not
   unseen data. The 32 slices before it (training data) tune.
 
-Usage: python prepare_em_nucleus_candidates.py [--datasets dauer_larva_nucleus human_organoids_nucleus]
+Usage: python prepare_em_nucleus_test_sets.py [--datasets dauer_larva_nucleus human_organoids_nucleus]
 
 The files go to DATA_ROOT/<dataset>/{test,val}/*.h5 with 'raw' and 'labels'. Then place the evaluation crops with
 'preprocess_nucleus_dataset.py --dataset eval_crops --eval_datasets <dataset>'.

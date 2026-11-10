@@ -9,11 +9,7 @@ real movies of 'tracking_fm_data' (out-of-domain).
 import os
 import re
 import glob
-import uuid
-import atexit
-import shutil
 import warnings
-from pathlib import Path
 
 import zarr
 import tifffile
@@ -176,24 +172,6 @@ def _geff_tracks(f):
     """Read the CTC lineage table that the GEFF graph of an OME-Zarr stores; its labels are the CTC track ids."""
     lbep = f["tracks/cells.geff"].attrs["geff"]["extra"]["ctc"]["man_track_lbep"]
     return pd.DataFrame(lbep, columns=["track", "start", "end", "parent"])
-
-
-def use_tmpdir_for_embeddings():
-    """Write the temporary embeddings of micro-sam to the job's TMPDIR, not to the micro-sam cache folder."""
-    if not os.environ.get("TMPDIR"):
-        return
-    import micro_sam.util
-    import micro_sam.v2.util
-
-    def make_temp_embedding_path():
-        parent = Path(os.environ["TMPDIR"], "micro_sam_tmp_embeddings")
-        parent.mkdir(parents=True, exist_ok=True)
-        path = str(parent / f"{uuid.uuid4().hex}.zarr")
-        atexit.register(shutil.rmtree, path, ignore_errors=True)
-        return path
-
-    for module in (micro_sam.util, micro_sam.v2.util):
-        module.make_temp_embedding_path = make_temp_embedding_path
 
 
 def tracking_metrics(gt_folder, pred_folder, gt_track_file=None, dense_gt=False):

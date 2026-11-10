@@ -14,11 +14,11 @@ frame, as short GPU jobs; '--link_only' then links all stored frames with Tracka
 CPU node with enough memory. The result is the same as of a run in one piece.
 
 Usage examples:
-    python run_automatic_tracking.py -d Fluo-N2DH-GOWT1 -s 01 --mode ais
-    python run_automatic_tracking.py -d Fluo-C3DH-A549 -s 02 --mode apg
-    python run_automatic_tracking.py -d Fluo-N3DL-DRO -s 01 --mode apg --frames 0 5
-    python run_automatic_tracking.py -d Fluo-N3DL-DRO -s 01 --mode apg --link_only
-    python run_automatic_tracking.py --list
+    python evaluate_automatic_tracking.py -d Fluo-N2DH-GOWT1 -s 01 --mode ais
+    python evaluate_automatic_tracking.py -d Fluo-C3DH-A549 -s 02 --mode apg
+    python evaluate_automatic_tracking.py -d Fluo-N3DL-DRO -s 01 --mode apg --frames 0 5
+    python evaluate_automatic_tracking.py -d Fluo-N3DL-DRO -s 01 --mode apg --link_only
+    python evaluate_automatic_tracking.py --list
 """
 
 import os
@@ -38,10 +38,10 @@ import torch
 from micro_sam.v1.multi_dimensional_segmentation import track_across_frames
 from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
+from common import use_tmpdir_for_embeddings
 from tracking_util import (
     EXPERIMENT_ROOT, SPARSE_GT_DATASETS, LazyFrames, automatic_datasets, ctc_seg_score, gt_folder_of, in_training,
     is_3d, load_frames, load_sequence, restrict_to_annotated, sequences_of, set_norm_percentiles, tracking_metrics,
-    use_tmpdir_for_embeddings,
 )
 
 

@@ -9,9 +9,9 @@ Datasets (see `tracking_util.INTERACTIVE_DATASETS`): 'dynamicnuclearnet' (in-dom
 (out-of-domain).
 
 Usage examples:
-    python run_interactive_tracking.py -d dynamicnuclearnet -s HeLa-S3_nuc_pos4_q1_5c
-    python run_interactive_tracking.py -d tracking_fm_real -s microb_s3z1 --n_corrections 2
-    python run_interactive_tracking.py -d dynamicnuclearnet --list
+    python evaluate_interactive_tracking.py -d dynamicnuclearnet -s HeLa-S3_nuc_pos4_q1_5c
+    python evaluate_interactive_tracking.py -d tracking_fm_real -s microb_s3z1 --n_corrections 2
+    python evaluate_interactive_tracking.py -d dynamicnuclearnet --list
 """
 
 import os
@@ -33,10 +33,11 @@ import torch
 
 from micro_sam.v1.multi_dimensional_segmentation import export_tracking_result_to_ctc
 
+from common import use_tmpdir_for_embeddings
 from interactive_tracking import SimulatedUser, TrackingAnnotator, V1TrackingAnnotator
 from tracking_util import (
     EXPERIMENT_ROOT, INTERACTIVE_DATASETS, dense_seg_score, interactive_samples, load_interactive_sample,
-    set_norm_percentiles, split_track_gaps, tracking_metrics, use_tmpdir_for_embeddings, write_ctc_tracks,
+    set_norm_percentiles, split_track_gaps, tracking_metrics, write_ctc_tracks,
 )
 
 

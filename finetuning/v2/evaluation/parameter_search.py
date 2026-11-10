@@ -55,7 +55,6 @@ from bioimage_cpp.segmentation import label as connected_components, watershed
 
 from bioimage_py.evaluation import symmetric_best_dice_score
 
-import micro_sam.util
 from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_density
 from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, models as model_registry
 
@@ -64,29 +63,11 @@ from common import (
     EM_NUCLEUS_MOCK_2D_ROOT, GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, MODEL_TYPES, MODES, TUNING_CROPS,
     VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, em_roi, get_data_paths,
     has_val_split, load_data, load_evaluation_sample_2d, load_evaluation_sample_3d, n_samples, predict_unisam2,
-    read_tuned_params, resolve_checkpoint_identity, sorted_path_pairs, val_z_range, _read_crops, _read_window,
+    read_tuned_params, resolve_checkpoint_identity, sorted_path_pairs, use_tmpdir_for_embeddings, val_z_range,
+    _read_crops, _read_window,
 )
 
-# The temporary embeddings of 3d APG go to the job's node-local TMPDIR. In the micro-sam cache of the home
-# directory, the leftovers of jobs killed at their time limit filled the quota (2026-10-22).
-if os.environ.get("TMPDIR"):
-    import uuid
-    import atexit
-    import shutil
-    import micro_sam.v2.util
-    import micro_sam.v2.instance_segmentation
-    import micro_sam.v2.automatic_prompt_generation
-
-    def _make_temp_embedding_path():
-        parent = Path(os.environ["TMPDIR"], "micro_sam_tmp_embeddings")
-        parent.mkdir(parents=True, exist_ok=True)
-        path = str(parent / f"{uuid.uuid4().hex}.zarr")
-        atexit.register(shutil.rmtree, path, ignore_errors=True)
-        return path
-
-    for _module in (micro_sam.util, micro_sam.v2.util, micro_sam.v2.instance_segmentation,
-                    micro_sam.v2.automatic_prompt_generation):
-        _module.make_temp_embedding_path = _make_temp_embedding_path
+use_tmpdir_for_embeddings()
 
 # Sparse (flow) grid for LM data. Keys map to flow_instance_segmentation arguments.
 LM_GRID = {
