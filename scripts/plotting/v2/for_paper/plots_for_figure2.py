@@ -288,6 +288,21 @@ def mean_ranks(results, lower_is_better=False):
     return table.rank(axis=1, ascending=lower_is_better).mean()
 
 
+def contrast(color_a, color_b):
+    """The WCAG contrast ratio of two colors."""
+    def luminance(color):
+        r, g, b = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in colors.to_rgb(color)]
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    low, high = sorted([luminance(color_a), luminance(color_b)])
+    return (high + 0.05) / (low + 0.05)
+
+
+def label_color(bar_color):
+    """White or the text color for a label on a bar, whichever has the higher contrast."""
+    return max(["white", TEXT_COLOR], key=lambda color: contrast(color, bar_color))
+
+
 def plot_domain(ax, results, domain, methods, value_max, positions, tick_step, ranks, lower_is_better=False):
     """Plot one horizontal bar per method with its mean score over the datasets of one domain.
 
@@ -327,7 +342,8 @@ def plot_domain(ax, results, domain, methods, value_max, positions, tick_step, r
                 # The patch in the bar color covers the hatch under the mode name.
                 ax.text(
                     0, position, MODE_NAMES[mode], ha="left", va="center", fontsize=SMALL_FONT_SIZE, fontweight="bold",
-                    color="white", zorder=4, bbox={"boxstyle": "square,pad=0.08", "facecolor": color, "linewidth": 0},
+                    color=label_color(color), zorder=4,
+                    bbox={"boxstyle": "square,pad=0.08", "facecolor": color, "linewidth": 0},
                     transform=transforms.offset_copy(ax.transData, fig=ax.figure, x=2, units="points"),
                 )
             elif short:
