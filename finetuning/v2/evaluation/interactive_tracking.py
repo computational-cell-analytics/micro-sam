@@ -283,8 +283,9 @@ class V1TrackingAnnotator:
         """Segment the frames with prompts of a track ('segment_slices_with_prompts')."""
         from micro_sam.v1 import prompt_based_segmentation as pbs
         seg = np.zeros(self.shape, dtype="uint32")
-        frames = sorted({p.t for p in self.points if p.track_id == track_id} |
-                        {b.t for b in self.boxes if b.track_id == track_id})
+        frames = sorted(
+            {p.t for p in self.points if p.track_id == track_id} | {b.t for b in self.boxes if b.track_id == track_id}
+        )
         stop_upper = False
         for t in list(frames):
             points, labels, boxes = self._frame_prompts(t, track_id)
@@ -328,7 +329,8 @@ class V1TrackingAnnotator:
                 motion_model = center(t - 1) - center(t - 2)
             elif t > t0 + 2:
                 motion_model = self.motion_smoothing * motion_model + (1 - self.motion_smoothing) * (
-                    center(t - 1) - center(t - 2))
+                    center(t - 1) - center(t - 2)
+                )
             if t in frames:
                 seg_prev, seg_t = None, seg[t]
                 state = "division" if self._is_division(t) else "track"

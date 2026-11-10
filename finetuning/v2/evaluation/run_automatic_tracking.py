@@ -166,8 +166,11 @@ def rescore_tracking(dataset_name, sequence, pred_folder, result_path):
     """Score the stored prediction of a run again and update its result table."""
     old = pd.read_csv(result_path)
     scores = score_tracking(dataset_name, sequence, pred_folder, LazyFrames(pred_folder))
-    keep = [c for c in ("dataset", "sequence", "ndim", "in_training", "model", "mode", "tracking_model", "linking_mode",
-                        "n_frames", "n_segmented_objects", "segmentation_time", "tracking_time") if c in old.columns]
+    columns = (
+        "dataset", "sequence", "ndim", "in_training", "model", "mode", "tracking_model", "linking_mode", "n_frames",
+        "n_segmented_objects", "segmentation_time", "tracking_time",
+    )
+    keep = [c for c in columns if c in old.columns]
     result = pd.DataFrame([{**old.iloc[0][keep].to_dict(), **scores}])
     result.to_csv(result_path, index=False)
     print(result.T.to_string(header=False))

@@ -29,15 +29,12 @@ SCORES = {
     "Mitotic Branching Correctness (Frame Buffer 0)": "mbc",
 }
 
-# The modality of each dataset, as (category, structure). The CTC names give it: BF, DIC and PhC are label-free,
-# Fluo is fluorescence, C is a cell and N a nucleus. TOIAM and BacMother are bacteria in phase contrast.
-# tracking_fm_real mixes C. elegans nuclei (fluorescence) and other movies.
+# The modality of each dataset that its CTC name does not give, as (category, structure).
 MODALITIES = {
     "BacMother": ("label-free", "cell"), "TOIAM": ("label-free", "cell"),
     "dynamicnuclearnet": ("fluorescence", "nucleus"), "toiam": ("label-free", "cell"),
     "bacmother": ("label-free", "cell"), "tracking_fm_real": ("mixed", "mixed"),
-    # The datasets of 'prepare_tracking_data.py'. ALFI labels the nucleus of an interphase cell and the whole mitotic
-    # cell; it counts as label-free cells.
+    # ALFI labels interphase nuclei and whole mitotic cells; it counts as label-free cells.
     "EColi": ("label-free", "cell"), "ecoli": ("label-free", "cell"), "ALFI": ("label-free", "cell"),
     "alfi": ("label-free", "cell"), "Cardioblast": ("fluorescence", "nucleus"),
     "cardioblast": ("fluorescence", "nucleus"),
@@ -46,9 +43,7 @@ MODALITIES = {
     "cellacdc": ("label-free", "cell"), "DynamicNuclearNet": ("fluorescence", "nucleus"),
 }
 
-# The datasets that the micro-sam LM model (vit_l_lm) trained on, after the v1 training script
-# ('finetuning/v1/generalists/training/light_microscopy/obtain_lm_datasets.py'): all CTC training sets but
-# Fluo-N2DH-GOWT1 and Fluo-N2DL-HeLa, and DynamicNuclearNet. The scores use the same CTC training sequences.
+# The datasets that micro-sam (vit_l_lm) trained on, from the v1 training script.
 MICROSAM_TRAINING = {
     "BF-C2DL-HSC", "BF-C2DL-MuSC", "DIC-C2DH-HeLa", "Fluo-C2DL-Huh7", "Fluo-C2DL-MSC", "Fluo-C3DH-A549",
     "Fluo-C3DH-A549-SIM", "Fluo-C3DH-H157", "Fluo-C3DL-MDA231", "Fluo-N2DH-SIM+", "Fluo-N3DH-CE", "Fluo-N3DH-CHO",
@@ -56,10 +51,12 @@ MICROSAM_TRAINING = {
 }
 
 # The (method, model) names of the central tables, as in the segmentation tables.
-AUTOMATIC_METHODS = {"microsam2": ("micro-sam2", "hvit_l"), "microsam_v1": ("micro-sam", "vit_l_lm"),
-                     "cpsam": ("cellpose", "cpsam")}
-INTERACTIVE_METHODS = {"hvit_l_cells": ("micro-sam2", "hvit_l"), "hvit_l": ("sam2", "hvit_l"),
-                       "vit_l_lm": ("micro-sam", "vit_l_lm")}
+AUTOMATIC_METHODS = {
+    "microsam2": ("micro-sam2", "hvit_l"), "microsam_v1": ("micro-sam", "vit_l_lm"), "cpsam": ("cellpose", "cpsam")
+}
+INTERACTIVE_METHODS = {
+    "hvit_l_cells": ("micro-sam2", "hvit_l"), "hvit_l": ("sam2", "hvit_l"), "vit_l_lm": ("micro-sam", "vit_l_lm")
+}
 
 
 def collect(folder):

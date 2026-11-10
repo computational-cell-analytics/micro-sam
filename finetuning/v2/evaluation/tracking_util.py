@@ -15,10 +15,10 @@ import shutil
 import warnings
 from pathlib import Path
 
+import zarr
+import tifffile
 import numpy as np
 import pandas as pd
-import tifffile
-import zarr
 
 from common import DATA_ROOT
 
@@ -32,14 +32,10 @@ CTC_TRAINED = (
 )
 CTC_SEQUENCES = ("01", "02")
 
-# The other 2d+t data in CTC format: their root folder and whether micro-sam2 trained on the dataset.
-# TOIAM trained on movies 00 to 02 and validated on 03 (see 'generalist_loader.TOIAM_TRAIN_MOVIES'), so 04 is held out.
-# The four datasets of 'prepare_tracking_data.py' (EColi, ALFI, Cardioblast, WingDisc), converted to CTC format with
-# dense track masks. micro-sam2 did not train on any of them.
+# The other 2D+t data in CTC format and whether micro-sam2 trained on it; TOIAM movie 04 is held out.
 TRACKING_DATA = os.path.join(EXPERIMENT_ROOT, "data")
 CONVERTED_DATASETS = ("EColi", "ALFI", "Cardioblast", "WingDisc", "YeaZ", "CellACDC", "DynamicNuclearNet")
-# The converted datasets from the sources of the micro-sam2 training, with movies it did not train on: the YeaZ
-# phase-contrast movies (micro-sam2 trained on YeaZ bright field) and the Cell-ACDC test movie.
+# Held-out movies from the training sources: the YeaZ phase-contrast movies and the Cell-ACDC test movie.
 CONVERTED_IN_DOMAIN = ("YeaZ", "CellACDC", "DynamicNuclearNet")
 OTHER_CTC_DATASETS = {
     "BacMother": (os.path.join(DATA_ROOT, "bac_mother", "CTC", "test"), False),
@@ -47,8 +43,7 @@ OTHER_CTC_DATASETS = {
     **{name: (os.path.join(TRACKING_DATA, name), name in CONVERTED_IN_DOMAIN) for name in CONVERTED_DATASETS},
 }
 TOIAM_TEST_MOVIES = ("04",)
-# TOIAM 04 has 5740 tracks over 800 frames, too many for the simulated user. The interactive runs take frames 300 to
-# 399: 104 tracks with 37 divisions, as many as the larger DynamicNuclearNet movies (the colony grows from 2 cells).
+# TOIAM 04 is too large for the simulated user: frames 300 to 399 only.
 TOIAM_INTERACTIVE_FRAMES = (300, 100)
 
 DNN_ROOT = os.path.join(DATA_ROOT, "deepcell_tracking_data", "test")

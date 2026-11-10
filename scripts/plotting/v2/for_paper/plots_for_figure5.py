@@ -17,7 +17,7 @@ The figure compares tracking with micro-sam2 (hvit_l) to the baselines. The scri
 
 Usage:
 
-    python plots_for_figure5.py                     # all plots and the combined figure
+    python plots_for_figure5.py  # all plots and the combined figure
     python plots_for_figure5.py --only figure_5
     python plots_for_figure5.py --render lineage_scores lineages spacetime floor beke  # the renders, on a GPU node
 
@@ -46,8 +46,7 @@ AUTOMATIC_CSV = os.path.join(ROOT, "figures", "cells_automatic_tracking_results.
 INTERACTIVE_CSV = os.path.join(ROOT, "figures", "cells_interactive_tracking_results.csv")
 OUTPUT_DIR = os.path.join(ROOT, "figures", "figure5")
 
-# The score label of each tracking metric in the table: TRA scores detection and linking together and SEG the
-# overlap of the masks. DET is left out (user, 2026-11-08): it stays within 0.02 of TRA everywhere.
+# DET is left out: it stays within 0.02 of TRA everywhere.
 SCORE_LABELS = {
     "tra": "Tracking accuracy (TRA) ↑",
     "seg": "Segmentation accuracy (SEG) ↑",
@@ -59,24 +58,20 @@ AUTOMATIC_METHODS = {
     "CellposeSAM": ("cellpose", "cpsam"),
     "micro-sam2": ("micro-sam2", "hvit_l"),
 }
-# Trackastra links with the SAM2 features in 2D+t (user, 2026-11-09); Trackastra has no such model for 3D+t.
+# Trackastra links with the SAM2 features in 2D+t; Trackastra has no such model for 3D+t.
 TRACKING_MODELS = {2: "general_2d_w_SAM2_features", 3: "ctc"}
 PANELS = {
     "tracking_2d": (2, "2D+t"),
     "tracking_3d": (3, "3D+t"),
 }
-# The datasets of the automatic plot (user, 2026-11-08): no CTC data, because both models trained on the CTC training
-# movies that are the only ones with labels; so 2D+t only. The in-domain movies come from sources of the micro-sam2
-# training but were held out (TOIAM movie 04, the YeaZ phase-contrast val and test movies, the Cell-ACDC test movie
-# and the DynamicNuclearNet tracking test movies). The out-of-domain datasets are in neither training.
+# No 2D CTC data: both models trained on its labelled movies. The in-domain movies come from training sources
+# but were held out.
 AUTOMATIC_DATASETS = {
     2: {
         "ID": ["TOIAM", "YeaZ", "CellACDC", "DynamicNuclearNet"],
         "OOD": ["ALFI", "Cardioblast", "EColi", "WingDisc"],
     },
-    # All 3D+t data are CTC sets; micro-sam2 trained on none of them. Six of
-    # the nine sets are shown (user, 2026-11-08: fixed choice); the full table goes to the supplement.
-    # micro-sam trained on all nine sets, which the plot does not mark.
+    # micro-sam2 trained on none of the 3D+t CTC sets; six of the nine are shown.
     3: {
         "OOD": [
             "Fluo-C3DH-A549-SIM", "Fluo-C3DH-H157", "Fluo-C3DL-MDA231", "Fluo-N3DH-CHO", "Fluo-N3DH-SIM+",
@@ -84,17 +79,16 @@ AUTOMATIC_DATASETS = {
         ],
     },
 }
-# No method gets a mark (user, 2026-11-08): in domain and out of domain refer to the training data of micro-sam2.
+# No method gets a mark: in domain and out of domain refer to the training data of micro-sam2.
 MARKS = {}
 
-# The ('method', 'model') values of each interactive method; stock SAM2 is back in (user, 2026-11-09).
+# The ('method', 'model') values of each interactive method; stock SAM2 is back in.
 INTERACTIVE_METHODS = {
     "SAM2": ("sam2", "hvit_l"),
     "micro-sam": ("micro-sam", "vit_l_lm"),
     "micro-sam2": ("micro-sam2", "hvit_l"),
 }
-# The interactive datasets, in-domain first, with their names in the plot and their domain. They are the 2D+t datasets
-# of the automatic plot, in the same order (user, 2026-11-09), so BacMother and Tracking FM are left out.
+# The interactive datasets: the 2D+t datasets of the automatic plot, in the same order.
 INTERACTIVE_DATASETS = {
     "toiam": ("TOIAM", "ID"),
     "yeaz": ("YeaZ", "ID"),
@@ -129,13 +123,11 @@ def load_automatic(metric):
     return results
 
 
-# The scores of the automatic plot (one row each) and of the interactive plot (one column each): LNK scores the
-# links alone (user, 2026-11-09).
+# The scores of the automatic plot (rows) and of the interactive plot (columns).
 AUTOMATIC_METRICS = ["tra", "seg", "lnk"]
 # The layout of the automatic plot, in inches: one row per score and one column per group of datasets.
 AUTOMATIC_GROUPS = [("tracking_2d", "ID"), ("tracking_2d", "OOD"), ("tracking_3d", "OOD")]
-# The score of each row stands vertically right of it (user, 2026-11-09), which leaves small row gaps; the panels are
-# AUTOMATIC_SHRINK of the bar height of Figure 2.
+# The score names stand right of the rows, so the rows can be close.
 AUTOMATIC_TOP = 0.36
 AUTOMATIC_ROW_GAP = 0.1
 AUTOMATIC_BOTTOM = 0.2
@@ -182,7 +174,7 @@ def plot_automatic(region=None):
             ax.set_title("")
             ax.xaxis.set_major_formatter(fig2.tick_formatter(tick_step, zero=True))
             ax.set_ylim((y - half).min() - 0.24, (y + half).max() + 0.24)
-            # Only the bottom row labels its value ticks (user, 2026-11-08); the rows share the value range.
+            # Only the bottom row labels its value ticks; the rows share the value range.
             if i < len(metrics) - 1:
                 ax.tick_params(axis="x", labelbottom=False)
             if k == 0:
@@ -194,22 +186,25 @@ def plot_automatic(region=None):
             axes[metric, k] = ax
         # The score of the row stands vertically right of its panels.
         right = lefts[-1] + width + 0.05
-        fig.text(right / fig2.FIGURE_WIDTH, (bottom + panel_height / 2) / height, f"{metric.upper()} ↑", ha="left",
-                 va="center", rotation=270, fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR)
+        fig.text(
+            right / fig2.FIGURE_WIDTH, (bottom + panel_height / 2) / height, f"{metric.upper()} ↑", ha="left",
+            va="center", rotation=270, fontsize=MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR
+        )
 
     # The domain over each column, in the style of the dataset names, and the dimension over its columns.
     top = height - AUTOMATIC_TOP + 0.01
     for k, (dim, domain) in enumerate(AUTOMATIC_GROUPS):
-        fig.text((lefts[k] + width / 2) / fig2.FIGURE_WIDTH, top / height, fig2.DOMAIN_TITLES[domain], ha="center",
-                 va="bottom", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR, **fig2.DOMAIN_STYLES[domain])
+        fig.text(
+            (lefts[k] + width / 2) / fig2.FIGURE_WIDTH, top / height, fig2.DOMAIN_TITLES[domain], ha="center",
+            va="bottom", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR, **fig2.DOMAIN_STYLES[domain]
+        )
     for dim, (_, title) in PANELS.items():
         columns = [k for k, (d, _) in enumerate(AUTOMATIC_GROUPS) if d == dim]
         fig2.draw_title(fig, lefts[columns[0]], lefts[columns[-1]] + width, top + 0.15, title)
     return fig
 
 
-# The datasets of the interactive plot: the same as the 2D+t datasets of the automatic plot (user, 2026-11-09),
-# with the names of the interactive runs.
+# The 2D+t datasets with the names of the interactive runs.
 INTERACTIVE_PLOT_DATASETS = {
     "ID": ["toiam", "yeaz", "cellacdc", "dynamicnuclearnet"],
     "OOD": ["alfi", "cardioblast", "ecoli", "wingdisc"],
@@ -236,9 +231,7 @@ def load_interactive(metric):
     return pd.concat(parts, ignore_index=True)
 
 
-# The layout of the interactive plot, in inches: the left margin for the score label, the room right of the panels
-# for the domain labels and the gap between the columns, which leaves room for the label of the second column.
-# The height of the panels, lower than in Figure 2, to leave room for panel e (user, 2026-11-09).
+# The layout of the interactive plot, in inches.
 INTERACTIVE_PANEL_HEIGHT = 0.85
 INTERACTIVE_GRID = (0.55, fig2.RIGHT_MARGIN + fig2.INTERACTIVE_DOMAIN_WIDTH, 0.35)
 
@@ -266,12 +259,10 @@ def plot_interactive(region=None):
     return fig
 
 
-# The interactive qualitative plot: one dividing lineage per domain, where micro-sam2 splits the mother into both
-# daughters after the first prompt and micro-sam fails, as (dataset, movie, root track, domain).
-# FINAL (user, 2026-11-09): do not change these lineages.
+# One dividing lineage per domain that micro-sam2 splits and micro-sam does not. Final: do not change.
 INTERACTIVE_QUALITATIVE = [
     ("dynamicnuclearnet", "3T3_nuc_s2_p1_1c", 6, "ID"),
-    # Lineage 58 lies inside the field of view; lineage 68 is cut by its edge (user, 2026-11-09).
+    # Lineage 58 lies inside the field of view; lineage 68 is cut by its edge.
     ("wingdisc", "Ecd_20161213_F0", 58, "OOD"),
 ]
 TRACKING_ROOT = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/tracking"
@@ -281,9 +272,7 @@ LINEAGE_SCORES = os.path.join(TRACKING_ROOT, "lineage_search")
 LINEAGE_METHODS = {"micro-sam": "microsam", "micro-sam2": "microsam2"}
 LINEAGE_RUNS = {"micro-sam": "s1", "micro-sam2": "s2"}
 LINEAGE_PROMPTS = ["point", "box"]
-# The colours of the mother and the two daughters, as in the renders.
-# The first daughter is blue, not green, so that it stays apart from the yellow mother with red-green colour
-# blindness (user, 2026-11-09; Okabe-Ito blue).
+# The mother and the daughters; blue instead of green, for red-green colour blindness.
 LINEAGE_COLORS = {"Mother": "#ffd91a", "Daughters": ("#0072b2", "#ff40d9")}
 # The layout, in inches.
 LINEAGE_GRID = (0.05, 0.05, 0.25)
@@ -296,14 +285,12 @@ LINEAGE_ROW_GAP = 0.08
 LINEAGE_LEGEND = 0.16
 LINEAGE_ASPECT = 1.0
 LINEAGE_PAD = 0.03
-# The reference stands over the crop of the movie, as if it rose out of it: its height as a share of the block height,
-# and the gap between the top of the crop and the reference, in inches.
+# The size of the reference over the movie crop, and its gap to the crop.
 LINEAGE_REFERENCE_HEIGHT = 0.28
 LINEAGE_REFERENCE_RISE = 0.05
 # The gap between the top of the reference and its label, in inches.
 LINEAGE_LABEL_GAP = 0.06
-# The largest width of the movie render, in render sizes (wider than its column, into the margins at its sides), and
-# its largest height, as a share of the block height.
+# The largest width and height of the movie render.
 LINEAGE_VOLUME_SCALE = 1.12
 LINEAGE_VOLUME_HEIGHT = 0.6
 
@@ -360,8 +347,7 @@ def plot_lineage_block(fig, left, bottom, size, dataset, sample, root, domain):
     # The tree renders: translucent masks with their centre lines, seen facing the split.
     keys = ["tree_reference"] + [f"tree_{LINEAGE_METHODS[m]}_{p}" for p in LINEAGE_PROMPTS for m in LINEAGE_METHODS]
     images = dict(zip(keys, trim([load_lineage_render(dataset, sample, root, key) for key in keys])))
-    # The movie as the volume of Figure 3 panel d: the whole field of view at the first prompt with the crop
-    # enlarged over it.
+    # The movie as the volume of Figure 3 panel d.
     volume = trim([load_lineage_render(dataset, sample, root, "pyramid")])[0]
 
     # The dataset name stands left of the block, written vertically: in italics in domain, in bold out of domain.
@@ -373,9 +359,7 @@ def plot_lineage_block(fig, left, bottom, size, dataset, sample, root, domain):
         rotation=90, ha="right", va="center", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR,
         style="italic" if in_domain else "normal", fontweight="normal" if in_domain else "bold",
     )
-    # The volume render and the reference over it form one group, in the middle between the point and the box row:
-    # the movie takes up to LINEAGE_VOLUME_HEIGHT of the block height (and LINEAGE_VOLUME_SCALE render sizes in width),
-    # the reference, unframed and smaller, rises a little over the top of the crop.
+    # The movie and the reference over it form one group, centred between the rows.
     block = 2 * tall + gap
     rows, columns = volume.shape[:2]
     volume_width = min(LINEAGE_VOLUME_SCALE * size, LINEAGE_VOLUME_HEIGHT * block * columns / rows)
@@ -389,8 +373,10 @@ def plot_lineage_block(fig, left, bottom, size, dataset, sample, root, domain):
     group_top = group_bottom + group
     shift = 0.0
     image_axes(fig, x - (volume_width - size) / 2, group_bottom, volume_width, volume_height, volume, framed=False)
-    image_axes(fig, x + (size - width) / 2, group_bottom + volume_height + LINEAGE_REFERENCE_RISE, width, shown,
-               reference, framed=False)
+    image_axes(
+        fig, x + (size - width) / 2, group_bottom + volume_height + LINEAGE_REFERENCE_RISE, width, shown, reference,
+        framed=False
+    )
     fig.text(
         (x + size / 2) / fig2.FIGURE_WIDTH, (group_top + shift + LINEAGE_LABEL_GAP) / height, "Reference", ha="center",
         va="baseline", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR,
@@ -427,13 +413,14 @@ def draw_lineage_legend(fig, y, center=None):
                 facecolor=color, edgecolor="none",
             ))
             x += 0.09
-        fig.text(x / fig2.FIGURE_WIDTH, y / height, label, ha="left", va="center", fontsize=MAX_FONT_SIZE,
-                 color=TEXT_COLOR)
+        fig.text(
+            x / fig2.FIGURE_WIDTH, y / height, label, ha="left", va="center", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR
+        )
         x += 0.55
 
 
 def plot_interactive_qualitative(region=None, right=None, beke=False):
-    """One block per lineage of INTERACTIVE_QUALITATIVE, one under the other (user, 2026-11-09: DynamicNuclearNet on
+    """One block per lineage of INTERACTIVE_QUALITATIVE, one under the other (DynamicNuclearNet on
     top, the wing disc under it), with a colour legend below.
 
     'right' is the room right of the blocks, in inches; with 'beke', the Beke tracking panel (panel e of the combined
@@ -457,7 +444,7 @@ def plot_interactive_qualitative(region=None, right=None, beke=False):
     lift = (height - natural) / 2
     left = left_margin + (room - extra - (n_methods + 1) * size) / 2
     fig = fig2.new_figure(height, region)
-    # No domain titles (user, 2026-11-09): the style of the dataset names shows the domain.
+    # No domain titles: the style of the dataset names shows the domain.
     bottom = lift + LINEAGE_LEGEND
     for dataset, sample, root, domain in reversed(INTERACTIVE_QUALITATIVE):
         plot_lineage_block(fig, left, bottom, size, dataset, sample, root, domain)
@@ -466,18 +453,14 @@ def plot_interactive_qualitative(region=None, right=None, beke=False):
     if beke:
         box_left = fig2.FIGURE_WIDTH - right_margin + BEKE_GAP
         draw_beke(fig, (box_left, 0.0, fig2.FIGURE_WIDTH - box_left, height))
-        fig.text(box_left / fig2.FIGURE_WIDTH, 1.0, "e", ha="left", va="top", fontsize=fig2.PANEL_LABEL_SIZE,
-                 fontweight="bold", color=TEXT_COLOR, transform=fig.transSubfigure if region else fig.transFigure)
+        fig.text(
+            box_left / fig2.FIGURE_WIDTH, 1.0, "e", ha="left", va="top", fontsize=fig2.PANEL_LABEL_SIZE,
+            fontweight="bold", color=TEXT_COLOR, transform=fig.transSubfigure if region else fig.transFigure
+        )
     return fig
 
 
-# The automatic qualitative plot (user, 2026-11-09): one 2D+t movie per domain, where micro-sam2 has fewer
-# tracking errors than CellposeSAM, as (dataset, movie, render name, domain, dataset name). The wing disc shows the
-# window of 35% of the frame side where CellposeSAM has the most more errors ('render_tracking_candidates.py' with
-# window share 0.35).
-# The 3D+t movie (Fluo-N3DH-SIM+ 01) has the nuclei of its first frame as 3d surfaces on the floor ('floor' view of
-# 'render_tracking_3d_views.py', user, 2026-11-09); the DynamicNuclearNet render has its time axis 1.4 times
-# longer. Each entry is (dataset, movie, render name, domain, dataset name, dimension).
+# One movie per column of panel a, where micro-sam2 has fewer tracking errors than CellposeSAM.
 AUTOMATIC_QUALITATIVE = [
     ("DynamicNuclearNet", "3T3_nuc_s2_p1_1c", "DynamicNuclearNet_3T3_nuc_s2_p1_1c_stretch1.4", "ID",
      "DynamicNuclearNet", 2),
@@ -488,10 +471,9 @@ AUTOMATIC_QUALITATIVE = [
 AUTOMATIC_RENDERS = os.path.join(TRACKING_ROOT, "automatic_renders")
 AUTOMATIC_SEQUENCE_CSV = os.path.join(TRACKING_ROOT, "automatic_tracking_results.csv")
 QUALITATIVE_METHODS = {"CellposeSAM": ("cpsam", "cpsam", None), "micro-sam2": ("microsam2_apg", "microsam2", "apg")}
-# The link colours of the renders.
-# The link colours, with short names for the vertical legend: correct, false and missed links.
+# The link colours, with short names for the vertical legend.
 LINK_COLORS = {"Correct": "#dbdbdb", "False": "#ff00ff", "Missed": "#00ffff"}
-# The link legend stands vertically right of the renders (user, 2026-11-09), in the right margin.
+# The link legend stands vertically right of the renders, in the right margin.
 AUTOMATIC_QUALITATIVE_GRID = (0.05, 0.2, 0.15)
 AUTOMATIC_QUALITATIVE_HEADER = 0.25
 AUTOMATIC_QUALITATIVE_LEGEND = 0.02
@@ -504,9 +486,11 @@ def sequence_tra(dataset, sequence, method, mode, ndim):
     """The TRA of one movie, linked with the Trackastra model of its dimension."""
     table = pd.read_csv(AUTOMATIC_SEQUENCE_CSV, dtype={"sequence": str})
     table["method"] = table["method"].fillna("microsam2")
-    rows = table[(table["dataset"] == dataset) & (table["sequence"] == sequence) & (table["method"] == method)
-                 & (table["tracking_model"] == TRACKING_MODELS[ndim])
-                 & (table["norm_percentiles"].isna() | (table["norm_percentiles"] == "2,98"))]
+    rows = table[
+        (table["dataset"] == dataset) & (table["sequence"] == sequence) & (table["method"] == method)
+        & (table["tracking_model"] == TRACKING_MODELS[ndim])
+        & (table["norm_percentiles"].isna() | (table["norm_percentiles"] == "2,98"))
+    ]
     if mode is not None:
         rows = rows[rows["mode"] == mode]
     return float(rows["TRA"].iloc[-1])
@@ -522,8 +506,10 @@ def draw_link_legend(fig, x, top, length):
             ((x - 0.035) / fig2.FIGURE_WIDTH, (y - 0.07) / height), 0.07 / fig2.FIGURE_WIDTH, 0.07 / height,
             facecolor=color, edgecolor="#a0a0a0", linewidth=0.3,
         ))
-        text = fig.text(x / fig2.FIGURE_WIDTH, (y - 0.09) / height, label, ha="center", va="top", rotation=270,
-                        fontsize=MAX_FONT_SIZE - 1, color=TEXT_COLOR)
+        text = fig.text(
+            x / fig2.FIGURE_WIDTH, (y - 0.09) / height, label, ha="center", va="top", rotation=270,
+            fontsize=MAX_FONT_SIZE - 1, color=TEXT_COLOR
+        )
         # the next entry starts below this label, measured, or at the next third of 'length' if that is lower
         figure = fig.figure if hasattr(fig, "figure") and fig.figure is not None else fig
         extent = text.get_window_extent(renderer=figure.canvas.get_renderer())
@@ -533,7 +519,7 @@ def draw_link_legend(fig, x, top, length):
 def plot_automatic_qualitative(region=None):
     """One block per movie of AUTOMATIC_QUALITATIVE, side by side as the columns of panel a: on top the space-time
     views of a small window of the movie for CellposeSAM and micro-sam2, with the TRA of the movie in the corner, and
-    below them the first frame with the square of the window, joined to the views by lines (feedback 2026-11-10). A
+    below them the first frame with the square of the window, joined to the views by lines. A
     legend of the link colours stands on the right. The dataset name is in italics in domain, in bold out of
     domain."""
     from matplotlib.patches import ConnectionPatch, Polygon
@@ -544,10 +530,13 @@ def plot_automatic_qualitative(region=None):
     for dataset, sequence, _, domain, label, ndim in AUTOMATIC_QUALITATIVE:
         name = f"{dataset}_{sequence.zfill(2) if ndim == 3 else sequence}"
         layout = json.load(open(os.path.join(AUTOMATIC_RENDERS, f"pyramid_{name}.json")))
-        load = lambda key: np.asarray(Image.open(os.path.join(AUTOMATIC_RENDERS, f"pyramid_{name}_{key}.png"))  # noqa
-                                      .convert("RGBA")) / 255
-        blocks.append((name, layout, load("overview"),
-                       {method: load(key) for method, (key, _, _) in QUALITATIVE_METHODS.items()}))
+
+        def load(key, name=name):
+            path = os.path.join(AUTOMATIC_RENDERS, f"pyramid_{name}_{key}.png")
+            return np.asarray(Image.open(path).convert("RGBA")) / 255
+        blocks.append(
+            (name, layout, load("overview"), {method: load(key) for method, (key, _, _) in QUALITATIVE_METHODS.items()})
+        )
     tall = max(size * im.shape[0] / im.shape[1] for _, _, _, views in blocks for im in views.values())
     overview_w = PYRAMID_OVERVIEW_SHARE * column_width
     low = max(overview_w * ov.shape[0] / ov.shape[1] for _, _, ov, _ in blocks)
@@ -555,7 +544,8 @@ def plot_automatic_qualitative(region=None):
     fig = fig2.new_figure(height, region)
     bottom = AUTOMATIC_QUALITATIVE_LEGEND + low + PYRAMID_GAP
     for left, (dataset, sequence, _, domain, label, ndim), (name, layout, overview, views) in zip(
-            starts, AUTOMATIC_QUALITATIVE, blocks):
+        starts, AUTOMATIC_QUALITATIVE, blocks
+    ):
         in_domain = domain == "ID"
         fig.text(
             (left + column_width / 2) / fig2.FIGURE_WIDTH, (bottom + tall + 0.13) / height, label, ha="center",
@@ -566,25 +556,29 @@ def plot_automatic_qualitative(region=None):
         axes = []
         for k, (method, display) in enumerate(zip(methods, fig2.names_of(methods, set()))):
             x = left + k * (size + gap)
-            fig.text((x + size / 2) / fig2.FIGURE_WIDTH, (bottom + tall + 0.03) / height, display, ha="center",
-                     va="baseline", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR)
+            fig.text(
+                (x + size / 2) / fig2.FIGURE_WIDTH, (bottom + tall + 0.03) / height, display, ha="center",
+                va="baseline", fontsize=MAX_FONT_SIZE, color=TEXT_COLOR
+            )
             ax = image_axes(fig, x, bottom, size, tall, views[method])
             _, table_method, mode = QUALITATIVE_METHODS[method]
             fig2.draw_score(ax, sequence_tra(dataset, sequence, table_method, mode, ndim))
             axes.append(ax)
-        ov_ax = image_axes(fig, left + (column_width - overview_w) / 2, AUTOMATIC_QUALITATIVE_LEGEND, overview_w, low,
-                           overview, framed=False)
+        ov_ax = image_axes(
+            fig, left + (column_width - overview_w) / 2, AUTOMATIC_QUALITATIVE_LEGEND, overview_w, low, overview,
+            framed=False
+        )
         box = np.array(layout["overview"]["box"])
         # white, so that the square shows on the dark frames
         ov_ax.add_patch(Polygon(box, closed=True, fill=False, edgecolor="#ffffff", lw=1.0))
-        # the leftmost and the rightmost corners of the square to the left corner of the first view and the right
-        # corner of the second view, both on the front edge of their cards
-        targets = [(axes[0], np.array(layout[QUALITATIVE_METHODS[methods[0]][0]]["corners"]), np.argmin),
-                   (axes[1], np.array(layout[QUALITATIVE_METHODS[methods[1]][0]]["corners"]), np.argmax)]
+        # lines from the outer corners of the square to the outer front corners of the views
+        targets = [
+            (axes[0], np.array(layout[QUALITATIVE_METHODS[methods[0]][0]]["corners"]), np.argmin),
+            (axes[1], np.array(layout[QUALITATIVE_METHODS[methods[1]][0]]["corners"]), np.argmax)
+        ]
         for (ax, corners, pick), start in zip(targets, (box[np.argmin(box[:, 0])], box[np.argmax(box[:, 0])])):
             end = corners[pick(corners[:, 0])]
-            fig.add_artist(ConnectionPatch(start, end, "data", "data", axesA=ov_ax, axesB=ax, color=TEXT_COLOR,
-                                           lw=0.5))
+            fig.add_artist(ConnectionPatch(start, end, "data", "data", axesA=ov_ax, axesB=ax, color=TEXT_COLOR, lw=0.5))
     draw_link_legend(fig, fig2.FIGURE_WIDTH - 0.1, bottom + tall, tall)
     return fig
 
@@ -598,10 +592,7 @@ PLOTS = {
 }
 
 
-# The Beke panel (panel e, user, 2026-11-09): the tracked nuclei of the Beke time-lapse of Platynereis (3-6 hpf, new
-# defaults of the Huisken study), as a stack of raw cards at four time points with the outlines of the nuclei and their
-# paths, colour per lineage tree, and beside each card the 3d nuclei of its time point. It was panel a of the former
-# 'plots_for_beke_tracking.py'. The renders run on a GPU node with '--render beke', the panel is put together from them.
+# Panel e: the tracked nuclei of the Beke time-lapse of Platynereis; render with '--render beke'.
 BEKE_TRACKS = os.path.join(ROOT, "..", "..", "..", "user_study", "v2", "huisken_tracks_h5", "tracks_new_defaults.h5")
 BEKE_DATA = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/huisken_data/platynereis_timelapse_3-6hpf"
 BEKE_RENDERS = os.path.join(OUTPUT_DIR, "beke")
@@ -697,8 +688,10 @@ def beke_tube(points, colors, radius):
 
 def beke_add_rgb(plotter, mesh, specular=0.3, specular_power=30):
     if mesh is not None:
-        plotter.add_mesh(mesh, scalars="rgb", rgb=True, smooth_shading=True, specular=specular,
-                         specular_power=specular_power, ambient=0.35, diffuse=0.75, show_scalar_bar=False)
+        plotter.add_mesh(
+            mesh, scalars="rgb", rgb=True, smooth_shading=True, specular=specular, specular_power=specular_power,
+            ambient=0.35, diffuse=0.75, show_scalar_bar=False
+        )
 
 
 def beke_raw_mip(raw, t):
@@ -735,8 +728,10 @@ def beke_render_stack(raw, segmentation, lineage, tracks, colors):
             image[edge & (labels == i)] = colors[int(i)]
         cards.append(((image * 255).astype("uint8"), k * gap))
     levels = np.arange(len(BEKE_TIMEPOINTS)) * gap
-    tubes = [beke_tube(np.c_[zyx[:, 2], -zyx[:, 1], np.interp(t, BEKE_TIMEPOINTS, levels) + 2],
-                       [colors[i] for _ in t], 1.0) for i, (t, zyx) in beke_paths(lineage, tracks).items()]
+    tubes = [
+        beke_tube(np.c_[zyx[:, 2], -zyx[:, 1], np.interp(t, BEKE_TIMEPOINTS, levels) + 2], [colors[i] for _ in t], 1.0)
+        for i, (t, zyx) in beke_paths(lineage, tracks).items()
+    ]
     bounds = (0, w, -h, 0, 0, (len(BEKE_TIMEPOINTS) - 1) * gap + 4)
     size = (1800, 2200)
     view = d_view(22, -60)[0]
@@ -770,7 +765,7 @@ def beke_render_nuclei(segmentation, colors):
         remap[ids] = np.arange(len(ids))
         mesh = d_colored_mesh(remap[labels], np.array([BEKE_GREY] + [colors[int(i)] for i in ids[1:]]), BEKE_Z_SCALE)
         plotter = d_studio((1400, 1400), bounds, view, 700, 1.05)
-        # Without shadows (user, 2026-11-09): no floor and no shadow pass.
+        # Without shadows: no floor and no shadow pass.
         plotter.disable_shadows()
         beke_add_rgb(plotter, mesh, specular=0.2, specular_power=20)
         Image.fromarray(d_screenshot(plotter, (1400, 1400))).save(os.path.join(BEKE_RENDERS, f"nuclei_t{t:03d}.png"))
@@ -824,13 +819,16 @@ def draw_beke(fig, box):
     bar = np.array(layout["stack_bar"])
     # the bar runs along the front edge of the lowest card; it moves down into the white below the card
     bar_shift = np.array([0, 70.0])
-    c0, r0, c1, r1 = beke_crop_box(stack, np.zeros(stack.shape[:2], bool),
-                                   np.r_[corners.reshape(-1, 2), bar + bar_shift], margins=(20, 20, 20, 40))
+    c0, r0, c1, r1 = beke_crop_box(
+        stack, np.zeros(stack.shape[:2], bool), np.r_[corners.reshape(-1, 2), bar + bar_shift], margins=(20, 20, 20, 40)
+    )
     stack = stack[r0:r1, c0:c1]
     corners = corners - [c0, r0]
     bar = bar + bar_shift - [c0, r0]
-    nuclei = [np.asarray(Image.open(os.path.join(BEKE_RENDERS, f"nuclei_t{t:03d}.png")).convert("RGB"))
-              for t in BEKE_TIMEPOINTS]
+    nuclei = [
+        np.asarray(Image.open(os.path.join(BEKE_RENDERS, f"nuclei_t{t:03d}.png")).convert("RGB"))
+        for t in BEKE_TIMEPOINTS
+    ]
     # one crop for all time points, so that they keep the same scale
     keep = np.any([image.min(-1) < 235 for image in nuclei], axis=0)
     n0, m0, n1, m1 = beke_crop_box(nuclei[0], keep, margins=(20, 20, 20, 20))
@@ -859,15 +857,19 @@ def draw_beke(fig, box):
     for k, (t, image) in enumerate(zip(BEKE_TIMEPOINTS, nuclei)):
         # the latest time point on top, as in the stack
         bottom = box_bottom + margin + k * (view_h + label_h + view_gap)
-        # Each view stands on a card with a hairline frame, as the renders of panels b and d (user, 2026-11-09).
+        # Each view stands on a card with a hairline frame, as the renders of panels b and d.
         ax = fig2.framed_axes(fig, view_left, bottom, view_w, view_h)
         ax.imshow(image, aspect="auto")
-        ax.text(0, 1.02, f"{beke_to_hpf(t):.1f} hpf", transform=ax.transAxes, ha="left", va="bottom",
-                fontsize=MAX_FONT_SIZE - 1, color=TEXT_COLOR, fontweight="bold")
+        ax.text(
+            0, 1.02, f"{beke_to_hpf(t):.1f} hpf", transform=ax.transAxes, ha="left", va="bottom",
+            fontsize=MAX_FONT_SIZE - 1, color=TEXT_COLOR, fontweight="bold"
+        )
         right = corners[k][np.argmax(corners[k][:, 0])]
         # the connector runs from the right corner of the card to the left edge of its view, touching both
-        fig.add_artist(ConnectionPatch(right, (0, 0.5), "data", "axes fraction", axesA=stack_ax, axesB=ax,
-                                       color="#52514e", lw=0.8, ls=(0, (3, 1.5)), capstyle="butt", zorder=5))
+        fig.add_artist(ConnectionPatch(
+            right, (0, 0.5), "data", "axes fraction", axesA=stack_ax, axesB=ax, color="#52514e", lw=0.8,
+            ls=(0, (3, 1.5)), capstyle="butt", zorder=5
+        ))
 
 
 def plot_beke(region=None):
@@ -883,12 +885,7 @@ def plot_interactive_qualitative_beke(region=None):
     return plot_interactive_qualitative(region=region, right=BEKE_WIDTH + BEKE_GAP, beke=True)
 
 
-# ---- The renders (run headless on a GPU node with '--render') -----------------------------------------------------
-# The renders of panels b, d and e, and the lineage scores of panel d. They were separate scripts before (user,
-# 2026-11-09: this script is the only one for Figure 5): 'render_interactive_lineage_3d.py' (lr_, panel d),
-# 'render_tracking_candidates.py' (st_, the space-time views of panel b), 'render_tracking_3d_views.py' (fv_, the floor
-# view of the 3D+t movie of panel b) and 'lineage_search/find_lineages_both.py' (ls_, the lineage scores of panel d).
-# They use the render helpers of the Figure 3 renders (RENDERS_3D) and of Figure 1 ('plots_for_figure1.py').
+# The renders of panels b, d and e and the lineage scores of panel d, made on a GPU node with '--render'.
 RENDERS_3D = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/qualitative_3d/render_tryouts"
 EVALUATION = os.path.join(ROOT, "..", "..", "..", "..", "finetuning", "v2", "evaluation")
 # The 2D+t movies of panel b as render specs (dataset, sequence, Trackastra model, window share, time stretch).
@@ -903,8 +900,7 @@ LINEAGE_PARTS = ["pyramid", "tree_reference"] + [
 ]
 
 
-# The render helpers, set by 'load_render_modules': they need pyvista and the render folders, so the plots do not
-# import them.
+# Set by 'load_render_modules', so that the plots need no pyvista.
 tifffile = pv = gaussian_filter1d = EdgeFlag = NodeFlag = None
 rp = render_pairs = best_planes = block_of = surfaces = z_scale_of = tu = None
 d_backdrop = d_card = d_screenshot = d_studio = d_view = d_project = None
@@ -944,21 +940,17 @@ LR_PRED = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/t
 LR_METHODS = {"microsam2": "hvit_l_cells", "microsam": "vit_l_lm"}
 LR_PROMPTS = {"point": "point_c4_iou0.9", "box": "box_boxcorr_c4_iou0.9"}
 LR_BUDGET = 0
-# The tree renders: the opacity of the masks, the radius of the centre lines (as a share of the larger side of the
-# crop), the share of the track colour that the centre lines keep (the rest is black), and the elevation of the view.
+# The tree renders: mask opacity, line radius, line shade and view elevation.
 LR_TREE_OPACITY = 0.72
 LR_TREE_RADIUS = 0.012
 LR_TREE_SHADE = 0.6
 LR_TREE_ELEVATION = 15.0
-# A predicted object is drawn on a frame only if it matches the reference object with at least this IoU; a frame where
-# the method floods the background or loses the cell stays empty, and the centre line breaks there.
+# A predicted mask is drawn only where it matches the reference with this IoU.
 LR_MATCH_IOU = 0.5
-# The smoothing of the tree surfaces: less than the default, so that the small daughters of the wing disc keep their
-# size. The centre lines break at gaps of more than LR_MAX_GAP frames.
+# Less smoothing, so that the small wing disc daughters keep their size.
 LR_TREE_SMOOTHING = dict(sigma=0.5, n_iter=15)
 LR_MAX_GAP = 2
-# The movie views: the number of frames in the stack of the field of view, and the gap between them, as a share of the
-# larger side of the field of view. The crop shows one frame, the one of the first prompt.
+# The number of frames in the movie stack and the gap between them.
 LR_N_SLICES = 8
 LR_SLICE_GAP = 0.09
 # The radius of the node at the division, in radii of the centre lines.
@@ -981,7 +973,8 @@ def lr_frame_slice(plotter, image, low, high, origin, xy_scale, z, overlay=()):
     rgb = np.repeat(gray[..., None], 3, axis=-1)
     for mask, color in overlay:
         rgb[mask] = (1 - render_pairs.OVERLAY_ALPHA) * rgb[mask] + render_pairs.OVERLAY_ALPHA * np.array(
-            rp.pv.Color(color).float_rgb)
+            rp.pv.Color(color).float_rgb
+        )
     plane = rp.pv.ImageData(dimensions=(nx, ny, 1), spacing=(xy_scale, xy_scale, 1), origin=(*origin, z))
     # The points of the plane run over x first, then y, as the pixels of the image in C order.
     plane.point_data["rgb"] = (rgb.reshape(-1, 3) * 255).astype(np.uint8)
@@ -1028,8 +1021,9 @@ def lr_render_pyramid(raw, mother, crop, path):
     origin = (cx - (side - 1) * scale / 2, cy - (side - 1) * scale / 2)
     # The crop shows only the frame of the first prompt, with the mother on it.
     crop_top = base
-    lr_frame_slice(plotter, raw[0, y0:y1, x0:x1], low, high, origin, scale, crop_top,
-                   [(mother[y0:y1, x0:x1], rp.PALETTE[1])])
+    lr_frame_slice(
+        plotter, raw[0, y0:y1, x0:x1], low, high, origin, scale, crop_top, [(mother[y0:y1, x0:x1], rp.PALETTE[1])]
+    )
     low_corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
     far = origin[0] + (side - 1) * scale, origin[1] + (side - 1) * scale
     high_corners = [(origin[0], origin[1]), (far[0], origin[1]), far, (origin[0], far[1])]
@@ -1052,8 +1046,10 @@ def lr_centre_line(labels, k, z_scale):
         else:
             spans.append([t, t])
     for first, last in spans:
-        points = np.array([(*np.argwhere(labels[t] == k).mean(0)[::-1], t * z_scale)
-                           for t in range(first, last + 1) if (labels[t] == k).any()], dtype=float)
+        points = np.array([
+            (*np.argwhere(labels[t] == k).mean(0)[::-1], t * z_scale)
+            for t in range(first, last + 1) if (labels[t] == k).any()
+        ], dtype=float)
         if len(points) > 3:
             points[:, :2] = gaussian_filter1d(points[:, :2], 1.5, axis=0, mode="nearest")
         segments.append(points)
@@ -1100,8 +1096,9 @@ def lr_render_tree(labels, reference, z_scale, path):
             tube = rp.pv.Spline(points, 4 * len(points)).tube(radius=radius)
             plotter.add_mesh(tube, **render_pairs.mesh_kwargs(shade[k]))
     if split:
-        plotter.add_mesh(rp.pv.Sphere(radius=LR_TREE_NODE * radius, center=mother[-1][-1]),
-                         **render_pairs.mesh_kwargs("#1a1a1a"))
+        plotter.add_mesh(
+            rp.pv.Sphere(radius=LR_TREE_NODE * radius, center=mother[-1][-1]), **render_pairs.mesh_kwargs("#1a1a1a")
+        )
     center = np.array([(frame[0] + frame[1]) / 2, (frame[2] + frame[3]) / 2, (frame[4] + frame[5]) / 2])
     size = max(frame[1] - frame[0], frame[3] - frame[2], frame[5] - frame[4])
     plotter.camera_position = [center + 4 * size * direction, center, (0, 0, 1)]
@@ -1133,8 +1130,7 @@ def lr_render(dataset, sample, root, parts):
     name = f"{dataset}_{sample}_{root}"
     volume = (image, reference)
     if "pyramid" in parts:
-        # A square crop of the size of the lineage crop, centred on the mother at the first prompt, inside the field
-        # of view.
+        # A square crop centred on the mother at the first prompt.
         side = min(max(y1 - y0, x1 - x0), gt.shape[1], gt.shape[2])
         cy, cx = [int(c) for c in np.argwhere(gt[t0] == root).mean(0)]
         sy = int(np.clip(cy - side // 2, 0, gt.shape[1] - side))
@@ -1147,8 +1143,9 @@ def lr_render(dataset, sample, root, parts):
         print("rendered", name, "tree reference", flush=True)
     if "reference" in parts:
         rp.render_combined(name, z_scale, out=f"{LR_OUT}/{name}_volume.png", volume=volume, stand=True, objects=False)
-        rp.render_combined(name, z_scale, labels=reference, out=f"{LR_OUT}/{name}_reference.png", volume=volume,
-                           image=False)
+        rp.render_combined(
+            name, z_scale, labels=reference, out=f"{LR_OUT}/{name}_reference.png", volume=volume, image=False
+        )
     for method, model in LR_METHODS.items():
         for prompt, suffix in LR_PROMPTS.items():
             key = f"{method}_{prompt}"
@@ -1170,8 +1167,9 @@ def lr_render(dataset, sample, root, parts):
             if f"tree_{key}" in parts:
                 lr_render_tree(labels, reference, z_scale, f"{LR_OUT}/{name}_tree_{key}")
             if key in parts:
-                rp.render_combined(name, z_scale, labels=labels, out=f"{LR_OUT}/{name}_{key}.png", volume=volume,
-                                   image=False)
+                rp.render_combined(
+                    name, z_scale, labels=labels, out=f"{LR_OUT}/{name}_{key}.png", volume=volume, image=False
+                )
             print("rendered", name, method, prompt, flush=True)
 
 
@@ -1181,17 +1179,14 @@ ST_METHODS = {
     "micro-sam2 (APG)": ("hvit_l_cells_apg", METHOD_COLORS["micro-sam2"]),
     "CellposeSAM": ("cpsam_cpsam", METHOD_COLORS["CellposeSAM"]),
 }
-# The colours of divisualisation: correct links very light grey, errors from the "cool" colour map, missed links
-# (false negatives) at its cyan end and false links (false positives) at its magenta end.
-# The shadow pass of the renderer drops translucent meshes, so the correct links are opaque, very light and thin
-# instead, which looks like the translucent tracks of divisualisation.
+# The colours of divisualisation; correct links are opaque, since the shadow pass drops translucent meshes.
 ST_GOOD_COLOR = np.array([0.86, 0.86, 0.86])
 ST_FN_COLOR = np.array([0.0, 1.0, 1.0])
 ST_FP_COLOR = np.array([1.0, 0.0, 1.0])
 ST_SMOOTHING = 3
 ST_GOOD_OPACITY = 1.0
 ST_RENDER_SIZE = (1100, 1100)
-# Without the studio (user, 2026-11-09): no walls, floor or shadows, only the card and the tracks on white.
+# Without the studio: no walls, floor or shadows, only the card and the tracks on white.
 ST_STUDIO = False
 ST_RESULTS = os.path.join(TRACKING_ROOT, "automatic_tracking_results.csv")
 
@@ -1254,8 +1249,7 @@ def st_smooth_positions(graph, iterations=ST_SMOOTHING):
 
 # The origin (y, x) of the shown window of the field of view; (0, 0) shows all of it.
 ST_ORIGIN = [0, 0]
-# The thickness of the raw card and the height where the tracks start, in pixels of an image of 512 pixels; both scale
-# with the image, so that a small window shows a thin slice as a large frame does. Set per movie in 'st_candidate'.
+# The card thickness and the track start, per 512 pixels of image size.
 ST_CARD = {"thickness": 3.0, "base": 6.0}
 
 
@@ -1287,8 +1281,10 @@ def st_best_window(edge_sets, shape, share, bounds=None):
         total -= c[y + side - 1, x - 1] if x else 0
         total += c[y - 1, x - 1] if y and x else 0
         return total
-    best = max(((box(counts[1], y, x) - box(counts[0], y, x), y, x)
-                for y in range(by0, by1 - side + 1, step) for x in range(bx0, bx1 - side + 1, step)))
+    best = max(
+        (box(counts[1], y, x) - box(counts[0], y, x), y, x)
+        for y in range(by0, by1 - side + 1, step) for x in range(bx0, bx1 - side + 1, step)
+    )
     return best[1], best[2], side
 
 
@@ -1320,8 +1316,9 @@ def st_lineage_colors(graph):
     """One colour per connected lineage of the graph: golden-ratio hues."""
     import networkx as nx
     colors = {}
-    components = sorted(nx.weakly_connected_components(graph.graph),
-                        key=lambda c: min(graph.graph.nodes[n]["t"] for n in c))
+    components = sorted(
+        nx.weakly_connected_components(graph.graph), key=lambda c: min(graph.graph.nodes[n]["t"] for n in c)
+    )
     for k, component in enumerate(components):
         rgb = np.array(colorsys.hsv_to_rgb((k * 0.6180339887) % 1.0, 0.65, 0.9))
         for node in component:
@@ -1340,8 +1337,10 @@ def st_render(raw0, meshes, shape, n_frames, height):
     d_card(plotter, card, (0, 0, 0), 1.0, ST_CARD["thickness"])
     for mesh, opacity in meshes:
         if mesh is not None:
-            plotter.add_mesh(mesh, scalars="rgb", rgb=True, smooth_shading=True, specular=0.3, specular_power=30,
-                             ambient=0.35, diffuse=0.75, show_scalar_bar=False, opacity=opacity)
+            plotter.add_mesh(
+                mesh, scalars="rgb", rgb=True, smooth_shading=True, specular=0.3, specular_power=30, ambient=0.35,
+                diffuse=0.75, show_scalar_bar=False, opacity=opacity
+            )
     if ST_STUDIO:
         d_backdrop(plotter, bounds, view, 10, 300, 40)
     image = d_screenshot(plotter, ST_RENDER_SIZE)
@@ -1412,10 +1411,11 @@ def st_candidate(out_folder, dataset, sequence, tracking_model, window_share=Non
     for name, pred_graph, gt_graph, good, false_pos, missed, scores in found:
         key = ST_METHODS[name][0]
         if window is not None:
-            good, false_pos, missed = (st_inside(pred_graph, good, window), st_inside(pred_graph, false_pos, window),
-                                       st_inside(gt_graph, missed, window))
-        # The correct links are thin and translucent, the errors thick and opaque, so that the errors stand out
-        # (user, 2026-11-09).
+            good, false_pos, missed = (
+                st_inside(pred_graph, good, window), st_inside(pred_graph, false_pos, window),
+                st_inside(gt_graph, missed, window)
+            )
+        # Thin correct links and thick errors, so that the errors stand out.
         meshes = [
             (st_segments_mesh(pred_graph, good, [ST_GOOD_COLOR] * len(good), radius * 0.6, height), ST_GOOD_OPACITY),
             (st_segments_mesh(pred_graph, list(false_pos), [ST_FP_COLOR] * len(false_pos), radius * 1.6, height), 1.0),
@@ -1423,10 +1423,13 @@ def st_candidate(out_folder, dataset, sequence, tracking_model, window_share=Non
         ]
         renders.append(st_render(raw0, meshes, shape, n_frames, height))
         seg = ST_SEG.get((dataset, sequence, key))
-        titles.append(f"{name}\nSEG {seg:.2f} · TRA {scores['TRA']:.2f} · {len(false_pos)} false / {len(missed)} "
-                      "missed links")
-        print(dataset, sequence, name, {k: round(scores[k], 3) for k in ("TRA", "DET", "LNK")}, len(false_pos),
-              len(missed), flush=True)
+        titles.append(
+            f"{name}\nSEG {seg:.2f} · TRA {scores['TRA']:.2f} · {len(false_pos)} false / {len(missed)} " "missed links"
+        )
+        print(
+            dataset, sequence, name, {k: round(scores[k], 3) for k in ("TRA", "DET", "LNK")}, len(false_pos),
+            len(missed), flush=True
+        )
 
     set_style()
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 5.6))
@@ -1434,11 +1437,14 @@ def st_candidate(out_folder, dataset, sequence, tracking_model, window_share=Non
         ax.imshow(image)
         ax.set_title(title, fontsize=10)
         ax.axis("off")
-    fig.suptitle(f"{dataset} {sequence}: space-time view (x, y on the floor, time up); grey = correct links, "
-                 "magenta = false links, cyan = missed links", fontsize=10)
+    fig.suptitle(
+        f"{dataset} {sequence}: space-time view (x, y on the floor, time up); grey = correct links, "
+        "magenta = false links, cyan = missed links", fontsize=10
+    )
     suffix = ("" if window is None else f"_window{window_share}") + ("" if stretch == 1.0 else f"_stretch{stretch:g}")
-    fig.savefig(os.path.join(out_folder, f"automatic_tracking_{dataset}_{sequence}{suffix}.png"), dpi=200,
-                bbox_inches="tight")
+    fig.savefig(
+        os.path.join(out_folder, f"automatic_tracking_{dataset}_{sequence}{suffix}.png"), dpi=200, bbox_inches="tight"
+    )
     plt.close(fig)
     for image, title in zip(renders, ["microsam2_apg", "cpsam"]):
         Image.fromarray(image).save(os.path.join(out_folder, f"render_{dataset}_{sequence}{suffix}_{title}.png"))
@@ -1446,8 +1452,7 @@ def st_candidate(out_folder, dataset, sequence, tracking_model, window_share=Non
 
 # The renders of the former 'render_tracking_3d_views.py'.
 FV_NUCLEUS_COLOR = (0.8, 0.8, 0.8)
-# The height of the bands of the first- and the last-frame nuclei and the thickness of the volume block in the 'floor'
-# view, as shares of the larger image side.
+# The bands of the first and last nuclei and the volume block, per larger image side.
 FV_FLOOR_BAND = 0.08
 FV_BLOCK_THICKNESS = 0.12
 
@@ -1505,8 +1510,9 @@ def fv_tubes(points_pairs, color, radius):
 def fv_add(plotter, item):
     if item is not None:
         mesh, color = item
-        plotter.add_mesh(mesh, color=color, smooth_shading=True, specular=0.3, specular_power=30, ambient=0.35,
-                         diffuse=0.75)
+        plotter.add_mesh(
+            mesh, color=color, smooth_shading=True, specular=0.3, specular_power=30, ambient=0.35, diffuse=0.75
+        )
 
 
 def fv_nuclei_meshes(labels, z_scale, squash=None, lift=0.0):
@@ -1605,11 +1611,14 @@ def ls_sample_lineages(args):
     lineages = {r: descendants(r) for r in roots if children.get(r) or any(children.get(d) for d in descendants(r))}
     if not lineages:
         return []
-    rows = {r: {"dataset": dataset, "sample": sample, "root": r, "n_tracks": len(ts),
-                "n_divisions": sum(1 for t in ts if len(children.get(t, [])) >= 2),
-                "start": min(tracks[t][0] for t in ts), "end": max(tracks[t][1] for t in ts),
-                "n_track_frames": sum(tracks[t][1] - tracks[t][0] + 1 for t in ts)}
-            for r, ts in lineages.items()}
+    rows = {}
+    for r, ts in lineages.items():
+        rows[r] = {
+            "dataset": dataset, "sample": sample, "root": r, "n_tracks": len(ts),
+            "n_divisions": sum(1 for t in ts if len(children.get(t, [])) >= 2),
+            "start": min(tracks[t][0] for t in ts), "end": max(tracks[t][1] for t in ts),
+            "n_track_frames": sum(tracks[t][1] - tracks[t][0] + 1 for t in ts),
+        }
     for run, suffix in LS_RUNS.items():
         folder = os.path.join(LS_PRED, f"{dataset}_{sample}_{suffix}")
         if not os.path.isdir(folder):
@@ -1619,8 +1628,9 @@ def ls_sample_lineages(args):
             pparent = {r[0]: r[3] for r in ptable}
             matches = ls_best_matches(gt, pred)
             for root, ts in lineages.items():
-                ious = [matches.get((t, tid), (0, 0.0))[1] for tid in ts
-                        for t in range(tracks[tid][0], tracks[tid][1] + 1)]
+                ious = [
+                    matches.get((t, tid), (0, 0.0))[1] for tid in ts for t in range(tracks[tid][0], tracks[tid][1] + 1)
+                ]
                 correct = True
                 for tid in ts:
                     daughters = children.get(tid, [])
@@ -1629,17 +1639,15 @@ def ls_sample_lineages(args):
                     mother = matches.get((tracks[tid][1], tid), (0, 0))[0]
                     picked = [matches.get((tracks[d][0], d), (0, 0))[0] for d in daughters]
                     if mother == 0 or 0 in picked or len(set(picked)) < len(picked) or any(
-                            pparent.get(p, 0) != mother for p in picked):
+                        pparent.get(p, 0) != mother for p in picked
+                    ):
                         correct = False
                 rows[root][f"iou_{run}_{budget}"] = float(np.mean(ious))
                 rows[root][f"div_{run}_{budget}"] = correct
     return list(rows.values())
 
 
-# The pyramid views of panel b (feedback 2026-11-10: the tracks were hard to see in the whole field of view): the
-# first frame of the movie as a card with the square of a small window on it, and above it the space-time view of the
-# window for each method, where the tracks and their errors are large enough to see. The window is the square of
-# PYRAMID_SHARE of the smaller frame side where CellposeSAM has the most more errors than micro-sam2 ('st_best_window').
+# Panel b: a small error-dense window of each movie over its first frame, so that the tracks are visible.
 # Each entry is (dataset, sequence, Trackastra model, window share, time stretch).
 PYRAMID_RENDERS = [
     ("DynamicNuclearNet", "3T3_nuc_s2_p1_1c", "general_2d_w_SAM2_features", 0.3, 1.0),
@@ -1661,8 +1669,10 @@ def pyr_shot(rgb, meshes, shape, top, elevation, window=None):
     d_card(plotter, (rgb * 255).astype("uint8"), (0, 0, 0), 1.0, thickness)
     for mesh, opacity in meshes:
         if mesh is not None:
-            plotter.add_mesh(mesh, scalars="rgb", rgb=True, smooth_shading=True, specular=0.3, specular_power=30,
-                             ambient=0.35, diffuse=0.75, show_scalar_bar=False, opacity=opacity)
+            plotter.add_mesh(
+                mesh, scalars="rgb", rgb=True, smooth_shading=True, specular=0.3, specular_power=30, ambient=0.35,
+                diffuse=0.75, show_scalar_bar=False, opacity=opacity
+            )
     z = thickness + 0.6
     h, w = shape
     if window is not None:
@@ -1711,13 +1721,13 @@ def pyr_render(out_folder, dataset, sequence, tracking_model, share, stretch):
         good = [e for e in pred_graph.graph.edges if e not in false_pos]
         missed = list(gt_graph.get_edges_with_flag(EdgeFlag.CTC_FALSE_NEG))
         found.append((key, pred_graph, gt_graph, good, list(false_pos), missed))
-    # the window in the coordinates of the whole frame, kept inside the image box
-    # the window stays half a window away from the border of the image box, where the tracks run out of the frame
-    # and most errors are border effects (user, 2026-11-10)
+    # the window keeps half a window from the border, where most errors are tracks leaving the frame
     share = share * min(fy1 - fy0, fx1 - fx0) / min(full_shape)
     margin = int(share * min(full_shape) / 2)
-    y0, x0, side = st_best_window([[(f[1], f[4]), (f[2], f[5])] for f in found], full_shape, share,
-                                  (fy0 + margin, fy1 - margin, fx0 + margin, fx1 - margin))
+    y0, x0, side = st_best_window(
+        [[(f[1], f[4]), (f[2], f[5])] for f in found], full_shape, share,
+        (fy0 + margin, fy1 - margin, fx0 + margin, fx1 - margin)
+    )
     window = (y0, x0, side)
     name = f"{dataset}_{sequence}"
     layout = {"window": [int(y0), int(x0), int(side)]}
@@ -1737,8 +1747,10 @@ def pyr_render(out_folder, dataset, sequence, tracking_model, share, stretch):
     radius = side / 200
     crop = np.repeat(gray[y0:y0 + side, x0:x0 + side, None], 3, -1)
     for key, pred_graph, gt_graph, good, false_pos, missed in found:
-        good, false_pos, missed = (st_inside(pred_graph, good, window), st_inside(pred_graph, false_pos, window),
-                                   st_inside(gt_graph, missed, window))
+        good, false_pos, missed = (
+            st_inside(pred_graph, good, window), st_inside(pred_graph, false_pos, window),
+            st_inside(gt_graph, missed, window)
+        )
         meshes = [
             (st_segments_mesh(pred_graph, good, [ST_GOOD_COLOR] * len(good), radius * 0.6, height), ST_GOOD_OPACITY),
             (st_segments_mesh(pred_graph, false_pos, [ST_FP_COLOR] * len(false_pos), radius * 1.6, height), 1.0),
@@ -1780,18 +1792,23 @@ def fv_render_floor(out_folder, dataset, sequence):
         block = FV_BLOCK_THICKNESS * big
         start = block + band
         end = start + (n_frames - 1) * height
-        nuclei = (fv_nuclei_meshes(fv_load_frame(pred_folder, 0), z_scale, squash=band, lift=block)
-                  + fv_nuclei_meshes(fv_load_frame(pred_folder, n_frames - 1), z_scale, squash=band, lift=end))
+        nuclei = (
+            fv_nuclei_meshes(fv_load_frame(pred_folder, 0), z_scale, squash=band, lift=block)
+            + fv_nuclei_meshes(fv_load_frame(pred_folder, n_frames - 1), z_scale, squash=band, lift=end)
+        )
 
         def pairs(graph, edges):
             nodes = graph.graph.nodes
-            return [tuple(np.array([nodes[n]["x"], -nodes[n]["y"], start + nodes[n]["t"] * height]) for n in edge)
-                    for edge in edges]
+            return [
+                tuple(np.array([nodes[n]["x"], -nodes[n]["y"], start + nodes[n]["t"] * height]) for n in edge)
+                for edge in edges
+            ]
 
         def content(plotter):
             for mesh in nuclei:
-                plotter.add_mesh(mesh, color=FV_NUCLEUS_COLOR, smooth_shading=True, specular=0.2, ambient=0.35,
-                                 diffuse=0.7)
+                plotter.add_mesh(
+                    mesh, color=FV_NUCLEUS_COLOR, smooth_shading=True, specular=0.2, ambient=0.35, diffuse=0.7
+                )
             fv_add(plotter, fv_tubes(pairs(pred_graph, good), tuple(ST_GOOD_COLOR), radius * 0.6))
             fv_add(plotter, fv_tubes(pairs(pred_graph, false_pos), tuple(ST_FP_COLOR), radius * 1.6))
             fv_add(plotter, fv_tubes(pairs(gt_graph, missed), tuple(ST_FN_COLOR), radius * 1.6))
@@ -1855,8 +1872,7 @@ COMBINED_ORDER = [
     "automatic_tracking", "automatic_tracking_qualitative", "interactive_tracking", "interactive_qualitative_beke",
 ]
 COMBINED_DPI = 1200
-# The gap above a plot in the combined figure, in inches, where it differs from the gap of Figure 2 (user, 2026-11-09:
-# panel c close to panel b).
+# The gap above a plot, in inches, where it differs from Figure 2.
 COMBINED_GAPS = {"interactive_tracking": 0.05}
 
 
@@ -1881,8 +1897,10 @@ def plot_figure():
         if k == 0:
             renderer = fig.canvas.get_renderer()
             label_top = max(ax.get_window_extent(renderer).y1 for ax in sub.axes) / fig.dpi
-        fig.text(0, label_top / total, "abcdefgh"[k], ha="left", va="top", fontsize=fig2.PANEL_LABEL_SIZE,
-                 fontweight="bold", color=TEXT_COLOR)
+        fig.text(
+            0, label_top / total, "abcdefgh"[k], ha="left", va="top", fontsize=fig2.PANEL_LABEL_SIZE, fontweight="bold",
+            color=TEXT_COLOR
+        )
         top -= fig2.height_of(sub) - sum(margins[name]) + fig2.PANEL_GAP
     return fig, top + fig2.PANEL_GAP, start
 
@@ -1898,8 +1916,9 @@ def main():
     names = list(PLOTS) + [COMBINED_NAME]
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--only", nargs="+", choices=names, default=names, help="Make only these plots.")
-    parser.add_argument("--render", nargs="+", choices=RENDERS,
-                        help="Make these renders (on a GPU node) instead of the plots.")
+    parser.add_argument(
+        "--render", nargs="+", choices=RENDERS, help="Make these renders (on a GPU node) instead of the plots."
+    )
     args = parser.parse_args()
     if args.render:
         render(args.render)

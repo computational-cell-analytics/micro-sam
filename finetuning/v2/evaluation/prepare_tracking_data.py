@@ -32,10 +32,10 @@ import zipfile
 import argparse
 import tempfile
 
-import imageio.v3 as imageio
+import tifffile
 import numpy as np
 import scipy.io as sio
-import tifffile
+import imageio.v3 as imageio
 
 from common import DATA_ROOT
 
@@ -281,9 +281,10 @@ def prepare_dynamicnuclearnet(output):
         write_sequence(output, sample, raw, masks, parents)
 
 
-DATASETS = {"EColi": prepare_ecoli, "ALFI": prepare_alfi, "Cardioblast": prepare_cardioblast,
-            "WingDisc": prepare_wing_disc, "YeaZ": prepare_yeaz, "CellACDC": prepare_cell_acdc,
-            "DynamicNuclearNet": prepare_dynamicnuclearnet}
+DATASETS = {
+    "EColi": prepare_ecoli, "ALFI": prepare_alfi, "Cardioblast": prepare_cardioblast, "WingDisc": prepare_wing_disc,
+    "YeaZ": prepare_yeaz, "CellACDC": prepare_cell_acdc, "DynamicNuclearNet": prepare_dynamicnuclearnet
+}
 
 
 def main():

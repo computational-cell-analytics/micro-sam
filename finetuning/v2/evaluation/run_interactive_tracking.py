@@ -17,8 +17,8 @@ Usage examples:
 import os
 import glob
 import json
-import pickle
 import time
+import pickle
 import shutil
 import argparse
 import tempfile
@@ -169,8 +169,10 @@ def run_sample(
         info = {"embedding_time": embedding_time, "annotation_time": annotation_time}
         if lineages is not None:
             os.makedirs(parts_folder, exist_ok=True)
-            part = {"start": lineages[0], "end": min(lineages[1], len(user.roots())),
-                    "records": user.lineage_records, **info}
+            part = {
+                "start": lineages[0], "end": min(lineages[1], len(user.roots())), "records": user.lineage_records,
+                **info
+            }
             with open(part_path + ".partial", "wb") as f:
                 pickle.dump(part, f)
             os.replace(part_path + ".partial", part_path)
