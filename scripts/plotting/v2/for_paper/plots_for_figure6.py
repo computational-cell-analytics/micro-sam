@@ -7,10 +7,12 @@ The figure compares 3d automatic and interactive segmentation of EM mitochondria
 - 'automatic_3d_qualitative': per organelle, a large region of one test volume in 3d with its planes, and the 3d
   objects of the reference, of the specialist model and of micro-sam2 (in 'automatic/qualitative').
 - 'interactive_3d': the score over the correction iterations, with a point or a box as the first prompt.
-- 'interactive_3d_qualitative': per organelle and domain, two objects (one nucleus out of domain) in 3d, segmented by
-  nnInteractive and micro-sam2 from the first point and the first box, in the layout of panel d of Figure 3.
+- 'interactive_3d_qualitative': two mitochondria volumes (in and out of domain) and one nucleus volume (in domain),
+  two objects each in 3d, segmented by nnInteractive and micro-sam2 from the first point and the first box, in the
+  layout of panel d of Figure 3. The room of the fourth volume holds panel e: the nuclei that micro-sam2 segments
+  automatically in a FIB-SEM spheroid of the Beghin lab, in 3d and on one slice of the raw.
 
-The combined figure 'figure_6' puts the four plots together as panels a-d, as Figure 3, in 'figures/final'.
+The combined figure 'figure_6' puts the four plots together as panels a-e, as Figure 3, in 'figures/final'.
 
 Usage:
 
@@ -183,7 +185,7 @@ def plot_automatic(region=None, compact=False):
 def plot_interactive(region=None, compact=False):
     """Plot the interactive results of both organelles over the correction iterations.
 
-    The legend stands in the point half of the out-of-domain mitochondria panel, whose curves stay low. The value
+    The legend spans the out-of-domain mitochondria panel in two rows (user, 2026-11-10); its curves stay low. The value
     axes end at 1, the highest mSA: the shared row would otherwise be raised over the nucleus curves for the legend.
     """
     results = {}
@@ -198,7 +200,7 @@ def plot_interactive(region=None, compact=False):
     titles = {name: title for name, (_, _, _, title) in PANELS.items()}
     fig = fig2.plot_interactive_by_domain(
         results, list(PANELS), titles, INTERACTIVE_STARRED_METHODS, methods=INTERACTIVE_METHODS,
-        legend_panel=("OOD", "em_mito"), legend_left=True, shared_rows=True, prompts_on_top=compact, region=region,
+        legend_panel=("OOD", "em_mito"), legend_wide=True, shared_rows=True, prompts_on_top=compact, region=region,
         panel_height=fig2.COMBINED_PANEL_HEIGHT if compact else fig2.PANEL_HEIGHT,
         grid=fig3.COMBINED_GRID if compact else None, title_line=compact, show_titles=not compact,
         score_gap=0.32 if compact else None, row_gap=fig2.COMBINED_ROW_GAP if compact else None,
@@ -323,8 +325,19 @@ def plot_automatic_qualitative(region=None):
 # that block shows one object.
 INTERACTIVE_QUALITATIVE = {
     "em_mito": [("mitoemv2_stem", 2, (94, 105), "ID"), ("mito_anf", 3, (5, 6), "OOD")],
-    "em_nuclei": [("fafb_nuclei", 19, (10, 15), "ID"), ("etchacell_nucleus", 41, (1,), "OOD")],
+    "em_nuclei": [("fafb_nuclei", 19, (10, 15), "ID")],
 }
+# The out-of-domain nucleus block of the interactive qualitative plot gives its room to panel e (user, 2026-11-10):
+# the nuclei that micro-sam2 segments automatically in a FIB-SEM spheroid of the Beghin lab, which has no reference.
+# The renders are from 'render_section' in 'explore_beghin_em_data.py': the 3d nuclei with the outline of one slice,
+# and the nuclei that cross the slice, cut at it and standing on its raw. 'layout.json' holds the corners of both.
+SPHEROID_RENDERS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "user_study", "v2", "beghin_lab", "renders",
+    "section",
+)
+SPHEROID_GAP = 0.08
+# The distance of the panel letter left of the images, in inches.
+SPHEROID_LETTER_OFFSET = 0.1
 INTERACTIVE_PAIRS = os.path.join(QUALITATIVE, "interactive")
 TRACING_METHODS = ["nnInteractive", "micro-sam2"]
 # The volumes whose renders are cut around the objects of all methods, so that the objects of nnInteractive, which
@@ -359,13 +372,89 @@ def plot_interactive_qualitative(region=None, compact=False):
     try:
         for name, value in settings.items():
             setattr(fig3, name, value)
-        return fig3.plot_interactive_qualitative(
+        fig = fig3.plot_interactive_qualitative(
             region, grid=fig3.COMBINED_TRACING_GRID if compact else None, show_titles=not compact,
             starred=STARRED_METHODS,
         )
     finally:
         for name, value in saved.items():
             setattr(fig3, name, value)
+    plot_spheroid(fig, compact)
+    return fig
+
+
+def tracing_layout(compact):
+    """Return the left edge of the nucleus column, its width and the height of a block row of the interactive
+    qualitative plot, in inches, as 'plots_for_figure3.plot_interactive_qualitative' computes them."""
+    gap = fig3.TRACING_GAP
+    grid = fig3.COMBINED_TRACING_GRID if compact else (0, gap, fig2.ZOOM_BLOCK_GAP + gap)
+    starts, column_width = fig2.column_grid(grid, len(INTERACTIVE_QUALITATIVE))
+    n_methods = len(TRACING_METHODS)
+    size = (column_width - fig3.TRACING_LABEL_WIDTH - fig3.TRACING_PROMPT_WIDTH - n_methods * gap) / (n_methods + 1)
+    return starts[-1], column_width, 2 * fig3.TRACING_ASPECT * size + gap
+
+
+def plot_spheroid(fig, compact):
+    """Plot panel e in the room of the second block of the nucleus column: the 3d nuclei of the spheroid with the
+    outline of a slice, and the nuclei of the slice on its raw, joined by lines from the right corners of the outline
+    to the top and the bottom corner of the slice, like a pyramid."""
+    import json
+    from matplotlib.patches import ConnectionPatch, Polygon
+
+    layout = json.load(open(os.path.join(SPHEROID_RENDERS, "layout.json")))
+    studio, studio_offset = crop_white(load_rgb(os.path.join(SPHEROID_RENDERS, "section_studio.png")))
+    section, section_offset = crop_white(load_rgb(os.path.join(SPHEROID_RENDERS, "section_nuclei_on_raw.png")))
+    outline = np.array(layout["studio"]["plane_outline"]) - studio_offset
+    corners = np.array(layout["section"]["card_corners"]) - section_offset
+
+    height = fig2.height_of(fig)
+    header = fig2.ZOOM_HEADER_NO_TITLES if compact else fig2.ZOOM_HEADER
+    left, column_width, row_height = tracing_layout(compact)
+    top = height - header - fig2.ZOOM_CAPTION - row_height - fig2.ZOOM_DOMAIN_GAP
+    bottom = top - row_height
+    x = left + fig3.TRACING_LABEL_WIDTH
+    # Both images also take most of the gap above the block (user, 2026-11-10: a bit bigger), unless they would be
+    # wider than the column.
+    ratios = [image.shape[1] / image.shape[0] for image in (studio, section)]
+    room = row_height + fig2.ZOOM_DOMAIN_GAP - 0.02
+    image_height = min(room, (left + column_width - x - SPHEROID_GAP) / sum(ratios))
+    widths = [image_height * ratio for ratio in ratios]
+    y = bottom + (room - image_height) / 2
+
+    def axes_at(x0, width):
+        ax = fig.add_axes([x0 / fig2.FIGURE_WIDTH, y / height, width / fig2.FIGURE_WIDTH, image_height / height])
+        ax.axis("off")
+        return ax
+
+    ax_studio = axes_at(x, widths[0])
+    ax_section = axes_at(x + widths[0] + SPHEROID_GAP, widths[1])
+    ax_studio.imshow(studio)
+    ax_section.imshow(section)
+    ax_studio.add_patch(Polygon(outline, closed=True, fill=False, edgecolor=fig3.TEXT_COLOR, lw=0.5, clip_on=False))
+    right = outline[np.argsort(outline[:, 0])[-2:]]
+    upper, lower = right[np.argmin(right[:, 1])], right[np.argmax(right[:, 1])]
+    top_corner, bottom_corner = corners[np.argmin(corners[:, 1])], corners[np.argmax(corners[:, 1])]
+    for point_a, point_b in ((upper, top_corner), (lower, bottom_corner)):
+        fig.add_artist(ConnectionPatch(
+            point_a, point_b, "data", "data", axesA=ax_studio, axesB=ax_section, color=fig3.TEXT_COLOR, lw=0.4,
+        ))
+    # The letter of panel e stands next to the spheroid, without a dataset name or a caption (user, 2026-11-10).
+    if compact:
+        fig.text(
+            (x - SPHEROID_LETTER_OFFSET) / fig2.FIGURE_WIDTH, (y + image_height) / height, "e", ha="left",
+            va="top", fontsize=fig2.PANEL_LABEL_SIZE, fontweight="bold", color=fig3.TEXT_COLOR,
+        )
+
+
+def load_rgb(path):
+    return np.asarray(Image.open(path).convert("RGB"))
+
+
+def crop_white(image, margin=8):
+    """Crop an image on white to its content plus a margin, and return the offset (column, row) of the crop."""
+    rows, columns = np.nonzero((image < 245).any(-1))
+    r0, c0 = max(rows.min() - margin, 0), max(columns.min() - margin, 0)
+    return image[r0:rows.max() + margin, c0:columns.max() + margin], np.array([c0, r0])
 
 
 # The plots in their order in the combined figure, with their kind and style.
