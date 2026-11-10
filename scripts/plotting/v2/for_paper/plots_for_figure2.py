@@ -332,7 +332,8 @@ def plot_domain(ax, results, domain, methods, value_max, positions, tick_step, r
             position = yi + BAR_HEIGHT * ((len(modes) - 1) / 2 - k)
             color = METHOD_COLORS[method]
             if mode and mode != MODES[-1]:
-                color = colors.to_hex([1 - SUB_BAR_TINT * (1 - c) for c in colors.to_rgb(color)])
+                tint = MODE_TINTS.get(mode, SUB_BAR_TINT)
+                color = colors.to_hex([1 - tint * (1 - c) for c in colors.to_rgb(color)])
             bar = ax.barh(position, values[method, mode], height=BAR_HEIGHT, color=color, linewidth=0, zorder=2)[0]
             if method == "micro-sam2":
                 bar.set_hatch("///")
@@ -398,6 +399,8 @@ NOT_APPLICABLE_COLOR = "#f7f7f7"
 NOT_APPLICABLE_TEXT_COLOR = "#717171"
 SCORE_LABEL = "Mean segmentation accuracy ↑"
 SUB_BAR_TINT = 0.55
+# The tint of the sub-bars of single modes, in place of SUB_BAR_TINT, e.g. one tint per model size.
+MODE_TINTS = {}
 MODE_NAMES = {"ais": "AIS", "apg": "APG"}
 # The width of a mode name on its sub-bar, in points.
 MODE_TAG_WIDTH = 15
