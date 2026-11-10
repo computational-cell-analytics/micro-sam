@@ -13,12 +13,18 @@ A large 3d+t sequence can be split: '--frames START END' segments only these fra
 frame, as short GPU jobs; '--link_only' then links all stored frames with Trackastra and scores the result, e.g. on a
 CPU node with enough memory. The result is the same as of a run in one piece.
 
+'--prepare_data' converts the movies of other sources (E. coli, ALFI, Cardioblast, wing disc, YeaZ, Cell-ACDC and
+DynamicNuclearNet, see 'tracking_util.PREPARED_DATASETS') to the CTC format once. '--collect' joins the result tables
+of all runs and, with '--figure_folder', writes the central table 'cells_automatic_tracking_results.csv'.
+
 Usage examples:
     python evaluate_automatic_tracking.py -d Fluo-N2DH-GOWT1 -s 01 --mode ais
     python evaluate_automatic_tracking.py -d Fluo-C3DH-A549 -s 02 --mode apg
     python evaluate_automatic_tracking.py -d Fluo-N3DL-DRO -s 01 --mode apg --frames 0 5
     python evaluate_automatic_tracking.py -d Fluo-N3DL-DRO -s 01 --mode apg --link_only
     python evaluate_automatic_tracking.py --list
+    python evaluate_automatic_tracking.py --prepare_data ALFI
+    python evaluate_automatic_tracking.py --collect --figure_folder ../../../scripts/plotting/v2/for_paper/figures
 """
 
 import os
@@ -40,6 +46,7 @@ from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation,
 
 from common import use_tmpdir_for_embeddings
 from tracking_util import (
+    MICROSAM_TRAINING, PREPARED_DATASETS, TRACKING_DATA, modality, prepare_tracking_data, scores_of, write_tables,
     EXPERIMENT_ROOT, SPARSE_GT_DATASETS, LazyFrames, automatic_datasets, ctc_seg_score, gt_folder_of, in_training,
     is_3d, load_frames, load_sequence, restrict_to_annotated, sequences_of, set_norm_percentiles, tracking_metrics,
 )
@@ -247,6 +254,36 @@ def run_tracking(
     return result
 
 
+# The (method, model) names of the central table, as in the segmentation tables.
+TABLE_METHODS = {
+    "microsam2": ("micro-sam2", "hvit_l"), "microsam_v1": ("micro-sam", "vit_l_lm"), "cpsam": ("cellpose", "cpsam")
+}
+
+
+def central_automatic(table):
+    """The automatic table of the paper: one row per dataset, method, mode and Trackastra model."""
+    # Only the default 2/98 percentile normalization; the other normalizations were tests.
+    table = table[table["norm_percentiles"].isna() | (table["norm_percentiles"] == "2,98")].copy()
+    # The first micro-sam2 runs have no method column.
+    table["method"] = table["method"].fillna("microsam2")
+    table = table.drop_duplicates(["dataset", "sequence", "method", "mode", "tracking_model"], keep="last")
+    table["model"] = [TABLE_METHODS[method][1] for method in table["method"]]
+    table["method"] = [TABLE_METHODS[method][0] for method in table["method"]]
+    # micro-sam runs AIS; the baselines have no mode.
+    table.loc[table["method"] == "micro-sam", "mode"] = "ais"
+    table.loc[table["method"] == "cellpose", "mode"] = None
+    table["ndim"] = table["ndim"].str[0].astype(int)
+    keys = ["dataset", "ndim", "in_training", "method", "model", "mode", "tracking_model", "linking_mode"]
+    result = scores_of(table, keys)
+    result.insert(1, "category", [modality(d)[0] for d in result["dataset"]])
+    result.insert(2, "structure", [modality(d)[1] for d in result["dataset"]])
+    # The domain is that of micro-sam2: in domain if micro-sam2 trained on the dataset.
+    result.insert(3, "domain", ["ID" if seen else "OOD" for seen in result.pop("in_training")])
+    result.insert(5, "in_microsam_training", result["dataset"].isin(MICROSAM_TRAINING))
+    result["primary_metric"], result["lower_is_better"] = "tra", False
+    return result.sort_values(["ndim", "dataset", "method", "mode", "tracking_model"], na_position="first")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
@@ -275,7 +312,22 @@ def main():
         "--norm_percentiles", type=float, nargs=2, default=None,
         help="Lower and upper percentile of the input normalization instead of 2 and 98, e.g. 1 99.8.",
     )
+    parser.add_argument(
+        "--prepare_data", nargs="*", default=None, choices=list(PREPARED_DATASETS),
+        help="Convert these datasets (all if none is given) to the CTC format of the evaluation and exit.",
+    )
+    parser.add_argument("--data_root", default=TRACKING_DATA, help="Where --prepare_data writes the movies.")
+    parser.add_argument("--collect", action="store_true", help="Collect the result tables of all runs.")
+    parser.add_argument("--figure_folder", default=None, help="Where --collect writes the central table.")
     args = parser.parse_args()
+    if args.prepare_data is not None:
+        prepare_tracking_data(args.prepare_data, args.data_root)
+        return
+    if args.collect:
+        keys = ["dataset", "sequence", "ndim", "in_training", "mode"]
+        root = os.path.dirname(args.output_root.rstrip("/"))
+        write_tables("automatic", keys, central_automatic, root, args.figure_folder)
+        return
 
     if args.list:
         for name in automatic_datasets():

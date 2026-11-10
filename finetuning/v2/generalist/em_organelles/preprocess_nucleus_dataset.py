@@ -8,12 +8,13 @@
 - cardiomyocyte, perez, vem, u2os, etchacell, aive, cerebellum, macrophage: the nucleus data of these torch-em
   datasets -> <output>/<folder>/ (see BUILDERS) with build_info.json.
 - human_liver_eval: the human liver EM nucleus evaluation boxes -> <output>/human_liver_em_nucleus_boxes/.
+- dauer_larva_test, human_organoids_test: the in-domain test sets of the EM nucleus panel ->
+  <output>/dauer_larva_nucleus/ and <output>/human_organoids_nucleus_val/, with test/ and val/ (then run eval_crops).
 - eval_crops: the fixed evaluation crops of the EM nucleus panel -> finetuning/v2/evaluation/eval_crops.json.
 """
 import io
 import os
 import re
-import sys
 import glob
 import json
 import time
@@ -42,7 +43,10 @@ from elf.io import open_file
 
 from torch_em.data.datasets.electron_microscopy.human_liver_em import _HttpFile
 
-from preprocess_mito_dataset import CELLMAP_ZIP, DATA_ROOT, get_cellmap_em_levels, load_cellmap_crop
+from preprocess_mito_dataset import (
+    CELLMAP_ZIP, DATA_ROOT, EVAL_CROPS_PATH, get_cellmap_em_levels, import_evaluation_common,
+    load_cellmap_crop, update_eval_crops,
+)
 
 
 IGNORE_LABEL = np.iinfo("uint32").max
@@ -120,8 +124,6 @@ HUMAN_LIVER_BOXES = {
     "tune": {"bbox_xxyyzz": [7168, 11264, 1024, 5120, 160, 176], "role": "tuning"},
 }
 
-EVALUATION_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "evaluation"))
-EVAL_CROPS_PATH = os.path.join(EVALUATION_ROOT, "eval_crops.json")
 EVAL_OBJECT_NAMES = {
     "parlakgul_liver": "mitochondria", "cerebellum_fibsem_mito": "mitochondria",
     "macrophage_a431_mito": "mitochondria", "mito_anf": "mitochondria", "snemi_mito": "mitochondria",
@@ -1258,24 +1260,91 @@ def preprocess_human_liver(input_root, output_root, steps, names, map_step, dept
             json.dump(infos, f, indent=2)
 
 
-def import_evaluation_common():
-    """Import common.py of the evaluation folder. Only the eval_crops choice needs it, and it loads torch."""
-    sys.path.insert(0, EVALUATION_ROOT)
-    import common
-    return common
+# The dauer larva boxes on the label grid (z, y, x) and the number of scored boxes; one more box tunes.
+DAUER_BOX_SHAPE = (64, 1024, 1024)
+DAUER_TEST_BOXES = 3
+DAUER_NAME = "jrc_dauer-larva"
+DAUER_LABELS = "labels/inference/nucleus_seg"
+DAUER_RAW = "em/tem-uint8"
+# The raw level closest to the 40 nm label grid, and the coarse label level that ranks the boxes.
+DAUER_RAW_LEVEL = "s3"
+DAUER_COARSE_LEVEL = "s4"
+# The slices of each organoid volume before its validation part that tune.
+ORGANOID_TUNING_SLICES = 32
 
 
-def dump_crops(obj, level=0):
-    """JSON in the layout of eval_crops.json: one space per level, number lists on one line."""
-    pad, inner = " " * level, " " * (level + 1)
-    if isinstance(obj, dict):
-        items = [f"{inner}{json.dumps(k)}: {dump_crops(v, level + 1)}" for k, v in obj.items()]
-        return "{\n" + ",\n".join(items) + "\n" + pad + "}"
-    if isinstance(obj, list):
-        if all(not isinstance(x, (list, dict)) for x in obj):
-            return json.dumps(obj)
-        return "[\n" + ",\n".join(inner + dump_crops(x, level + 1) for x in obj) + "\n" + pad + "]"
-    return json.dumps(obj)
+def write_test_h5(path, raw, labels):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_h5(path, raw, labels)
+    print(f"Wrote {path}: {raw.shape}, {len(np.unique(labels)) - 1} objects.")
+
+
+def rank_dauer_boxes():
+    """Return the starts of the non-overlapping boxes on the label grid, the ones with the most nuclei first."""
+    from torch_em.data.datasets.electron_microscopy import openorganelle_nucleus as oo
+    url = f"s3://janelia-cosem-datasets/{DAUER_NAME}/{DAUER_NAME}.zarr/recon-1/{DAUER_LABELS}"
+    coarse = np.asarray(oo._open_remote_zarr(f"{url}/{DAUER_COARSE_LEVEL}")[:])
+    full_shape = oo._open_remote_zarr(f"{url}/s0").shape
+    factor = np.array(full_shape) / np.array(coarse.shape)
+    window = [max(1, int(round(s / f))) for s, f in zip(DAUER_BOX_SHAPE, factor)]
+    candidates = []
+    for z in range(0, coarse.shape[0] - window[0] + 1, window[0]):
+        for y in range(0, coarse.shape[1] - window[1] + 1, window[1] // 2):
+            for x in range(0, coarse.shape[2] - window[2] + 1, window[2] // 2):
+                ids = np.unique(coarse[z:z + window[0], y:y + window[1], x:x + window[2]])
+                candidates.append((len(ids) - (ids[0] == 0), (z, y, x)))
+    chosen = []
+    for count, start in sorted(candidates, reverse=True):
+        box = [(s, s + w) for s, w in zip(start, window)]
+        if all(any(b[1] <= c[0] or c[1] <= b[0] for b, c in zip(box, other)) for other in chosen):
+            chosen.append(box)
+            print(f"Box at {start} (coarse grid) with {count} nuclei.")
+        if len(chosen) == DAUER_TEST_BOXES + 1:
+            break
+    return [tuple(int(round(lo * f)) for (lo, _), f in zip(box, factor)) for box in chosen]
+
+
+def preprocess_dauer_larva_test(output_root):
+    """The dauer larva boxes -> <output>/dauer_larva_nucleus/{test,val}/, the raw resampled to the label grid."""
+    from torch_em.data.datasets.electron_microscopy import openorganelle_nucleus as oo
+    base = f"s3://janelia-cosem-datasets/{DAUER_NAME}/{DAUER_NAME}.zarr/recon-1"
+    labels = oo._open_remote_zarr(f"{base}/{DAUER_LABELS}/s0")
+    raw = oo._open_remote_zarr(f"{base}/{DAUER_RAW}/{DAUER_RAW_LEVEL}")
+    label_scale = oo._multiscale_levels(f"{oo.BUCKET_URL}{DAUER_NAME}/{DAUER_NAME}.zarr/recon-1/{DAUER_LABELS}")["s0"]
+    raw_levels = oo._multiscale_levels(f"{oo.BUCKET_URL}{DAUER_NAME}/{DAUER_NAME}.zarr/recon-1/{DAUER_RAW}")
+    ratio = np.array(label_scale) / np.array(raw_levels[DAUER_RAW_LEVEL])
+    for k, start in enumerate(rank_dauer_boxes()):
+        box = tuple(slice(s, min(s + w, n)) for s, w, n in zip(start, DAUER_BOX_SHAPE, labels.shape))
+        label_data = np.asarray(labels[box]).astype("uint32")
+        raw_box = tuple(slice(int(sl.start * r), int(np.ceil(sl.stop * r))) for sl, r in zip(box, ratio))
+        raw_native = np.asarray(raw[raw_box])
+        raw_data = ndimage.zoom(raw_native, [t / s for t, s in zip(label_data.shape, raw_native.shape)], order=1)
+        split = "test" if k < DAUER_TEST_BOXES else "val"
+        name = "_".join(str(sl.start) for sl in box)
+        path = os.path.join(output_root, "dauer_larva_nucleus", split, f"box_{name}.h5")
+        write_test_h5(path, raw_data.astype("uint8"), label_data)
+
+
+def preprocess_human_organoids_test(input_root, output_root):
+    """The validation part of the human organoid volumes -> <output>/human_organoids_nucleus_val/{test,val}/."""
+    from micro_sam.v2.datasets.generalist_loader import (
+        HUMAN_ORGANOIDS_VOLUMES, HUMAN_ORGANOIDS_VAL_FRACTION, HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL,
+    )
+    for volume in HUMAN_ORGANOIDS_VOLUMES:
+        name = volume.replace("_bin2.h5", "")
+        with h5py.File(os.path.join(input_root, "human_organoids", "11380", "data", volume), "r") as f:
+            raw = f["raw"]
+            n_train = int(raw.shape[0] * (1 - HUMAN_ORGANOIDS_VAL_FRACTION))
+            parts = {"test": np.s_[n_train:], "val": np.s_[n_train - ORGANOID_TUNING_SLICES:n_train]}
+            label_path = os.path.join(input_root, "human_organoids_nucleus", f"{name}_nucleus_labels.zarr")
+            labels = zarr.open(label_path, mode="r")
+            labels = labels["labels"] if not hasattr(labels, "shape") else labels
+            for split, part in parts.items():
+                label_data = np.asarray(labels[part]).astype("uint32")
+                # the ignored fragments and the entotic cell are not scored
+                label_data[label_data == HUMAN_ORGANOIDS_NUCLEUS_IGNORE_LABEL] = 0
+                path = os.path.join(output_root, "human_organoids_nucleus_val", split, f"{name}.h5")
+                write_test_h5(path, raw[part], label_data)
 
 
 def tile_starts(region, crop_shape, min_tile_shape):
@@ -1349,21 +1418,13 @@ def preprocess_eval_crops(input_root, crops_path, datasets, dry):
     """
     common = import_evaluation_common()
     datasets = datasets or common.DATASETS_3D_EM_NUCLEUS
-    placed = {name: place_crops(common, input_root, name) for name in datasets}
-    # The file is read after the crops are placed, so edits made in the meantime are kept.
-    with open(crops_path) as f:
-        crops = json.load(f)
-    crops["datasets"].update(placed)
-    if not dry:
-        tmp_path = f"{crops_path}.tmp{os.getpid()}"
-        with open(tmp_path, "w") as f:
-            f.write(dump_crops(crops) + "\n")
-        os.replace(tmp_path, crops_path)
+    update_eval_crops({name: place_crops(common, input_root, name) for name in datasets}, crops_path, dry)
 
 
 def main():
     choices = [
-        "betaseg", "human_organoids", "tumor_spheroid", "waenet", "cellmap", *BUILDERS, "human_liver_eval", "eval_crops"
+        "betaseg", "human_organoids", "tumor_spheroid", "waenet", "cellmap", *BUILDERS, "human_liver_eval",
+        "dauer_larva_test", "human_organoids_test", "eval_crops",
     ]
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset", required=True, choices=choices, help="The dataset to preprocess.")
@@ -1397,6 +1458,10 @@ def main():
         preprocess_human_liver(
             args.input_root, args.output_root, args.steps, args.names, args.map_step, args.depth, args.n_best
         )
+    elif args.dataset == "dauer_larva_test":
+        preprocess_dauer_larva_test(args.output_root)
+    elif args.dataset == "human_organoids_test":
+        preprocess_human_organoids_test(args.input_root, args.output_root)
     else:
         preprocess_eval_crops(args.input_root, args.crops_path, args.eval_datasets, args.dry)
 

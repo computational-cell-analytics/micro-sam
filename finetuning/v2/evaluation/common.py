@@ -494,7 +494,7 @@ DATASETS_3D_EM_NUCLEUS_ID = ["cellmap_nucleus", "fafb_nuclei", "microns_nuclei",
 DATASETS_3D_EM_NUCLEUS_OOD = [
     "human_liver_em_nucleus", "etchacell_nucleus", "nucmm_zebrafish", "nucmm_mouse", "aive_nucleus",
 ]
-# In-domain test sets of the EM nucleus panel, written by 'prepare_em_nucleus_test_sets.py': the OpenOrganelle
+# In-domain test sets of the EM nucleus panel, written by 'preprocess_nucleus_dataset.py': the OpenOrganelle
 # dauer larva volume, which the nucleus model never saw, and the validation part of the human organoid volumes.
 NUCLEUS_TEST_SET_ROOTS = {
     "dauer_larva_nucleus": "dauer_larva_nucleus", "human_organoids_nucleus": "human_organoids_nucleus_val",

@@ -8,8 +8,10 @@
   -> <output>/macrophage_a431/fib_control_z<start>-<stop>.h5.
 - cellmap: the CellMap Segmentation Challenge crops with a mito label array
   -> <output>/cellmap_mito_crops/<volume>_crop<id>.zarr and index.json.
+- eval_crops_2d: the 512 x 512 test crops of the 2d EM mitochondria sets -> finetuning/v2/evaluation/eval_crops.json.
 """
 import os
+import sys
 import json
 import time
 import shutil
@@ -35,6 +37,13 @@ from micro_sam.v2.datasets.generalist_loader import HUMAN_ORGANOIDS_MITO_ROOT, H
 
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
+EVALUATION_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "evaluation"))
+EVAL_CROPS_PATH = os.path.join(EVALUATION_ROOT, "eval_crops.json")
+# The 2d EM mitochondria test sets that get 512 x 512 evaluation crops, and the rules of their placement.
+EVAL_DATASETS_2D = ["mitolab_tem", "probtem", "tnbc_mito", "perez_mito", "cardiomyocyte_tem_mito"]
+EVAL_TILE_2D = 512
+EVAL_MIN_RELATIVE_COUNT_2D = 0.2
+EVAL_MAX_TILES_PER_IMAGE_2D = 16
 NECK_RATIO = 0.5
 MIN_PIECE = 5000
 SEED_HEIGHT = 1.0
@@ -457,8 +466,111 @@ def preprocess_cellmap(input_root, output_root):
         json.dump(index, f, indent=1)
 
 
+def import_evaluation_common():
+    """Import common.py of the evaluation folder. Only the evaluation crops need it, and it loads torch."""
+    sys.path.insert(0, EVALUATION_ROOT)
+    import common
+    return common
+
+
+def dump_crops(obj, level=0):
+    """JSON in the layout of eval_crops.json: one space per level, number lists on one line."""
+    pad, inner = " " * level, " " * (level + 1)
+    if isinstance(obj, dict):
+        items = [f"{inner}{json.dumps(k)}: {dump_crops(v, level + 1)}" for k, v in obj.items()]
+        return "{\n" + ",\n".join(items) + "\n" + pad + "}"
+    if isinstance(obj, list):
+        if all(not isinstance(x, (list, dict)) for x in obj):
+            return json.dumps(obj)
+        return "[\n" + ",\n".join(inner + dump_crops(x, level + 1) for x in obj) + "\n" + pad + "]"
+    return json.dumps(obj)
+
+
+def update_eval_crops(placed, crops_path, dry):
+    """Add the placed crops to eval_crops.json; it is read after the placement, so that edits meanwhile are kept."""
+    if dry:
+        return
+    with open(crops_path) as f:
+        crops = json.load(f)
+    crops["datasets"].update(placed)
+    tmp_path = f"{crops_path}.tmp{os.getpid()}"
+    with open(tmp_path, "w") as f:
+        f.write(dump_crops(crops) + "\n")
+    os.replace(tmp_path, crops_path)
+    print(f"Saved the crops of {len(placed)} datasets to {crops_path}.")
+
+
+def cover_starts(n):
+    """The tile starts that cover an axis of length n with the fewest tiles, spread evenly, and the tile size."""
+    if n <= EVAL_TILE_2D:
+        return [0], n
+    k = int(np.ceil(n / EVAL_TILE_2D))
+    return [int(round(i * (n - EVAL_TILE_2D) / (k - 1))) for i in range(k)], EVAL_TILE_2D
+
+
+def count_objects_2d(common, raw, labels, start, shape, min_size):
+    """The number of objects in a tile, or None for a tile with a constant raw image."""
+    window = tuple(slice(s, s + t) for s, t in zip(start, shape))
+    patch = raw[window]
+    if patch.min() == patch.max():
+        return None
+    gt = common.drop_severed_objects(label(labels[window]).astype("uint32"), min_size)
+    return int(len(np.unique(gt)) - 1)
+
+
+def place_crops_2d(common, dataset_name):
+    """The eval_crops.json entry of a 2d dataset, with the crop shape of each image in 'crop_shapes'."""
+    raw_paths, label_paths, raw_key, label_key = common.get_data_paths(dataset_name, common.DATA_ROOT, split="test")[:4]
+    min_size = common.GT_MIN_SIZE_2D.get(dataset_name, 0)
+    counts, shapes = {}, {}
+    for raw_path, label_path in zip(raw_paths, label_paths):
+        raw, labels = common.read_2d(raw_path, raw_key), common.read_2d(label_path, label_key)
+        if raw.ndim == 3:
+            raw = raw.mean(axis=-1)
+        (ys, height), (xs, width) = cover_starts(raw.shape[0]), cover_starts(raw.shape[1])
+        name = os.path.basename(raw_path)
+        shapes[name] = [height, width]
+        counts[name] = {
+            (y, x): count_objects_2d(common, raw, labels, (y, x), (height, width), min_size) for y in ys for x in xs
+        }
+    valid = [n for tiles in counts.values() for n in tiles.values() if n]
+    threshold = EVAL_MIN_RELATIVE_COUNT_2D * float(np.median(valid))
+    starts, crop_shapes, kept, n_tiles = {}, {}, [], 0
+    for name, tiles in counts.items():
+        n_tiles += len(tiles)
+        passing = sorted(((n, s) for s, n in tiles.items() if n and n >= threshold), key=lambda t: -t[0])
+        passing = passing[:EVAL_MAX_TILES_PER_IMAGE_2D]
+        if not passing:
+            continue
+        starts[name] = [list(start) for _, start in sorted(passing, key=lambda t: t[1])]
+        if shapes[name] != [EVAL_TILE_2D, EVAL_TILE_2D]:
+            crop_shapes[name] = [shapes[name]] * len(passing)
+        kept.extend(n for n, _ in passing)
+    note = (
+        "512 x 512 tiles that cover each test image, spread evenly with a small overlap; an image axis below 512 px "
+        f"is one tile. {len(kept)} of {n_tiles} tiles are kept (at most {EVAL_MAX_TILES_PER_IMAGE_2D} per image, the "
+        f"ones with the most objects), holding {min(kept)}-{max(kept)} mitochondria."
+    )
+    print(f"{dataset_name}: {note}")
+    entry = {"crop_shape": [EVAL_TILE_2D, EVAL_TILE_2D], "note": note, "starts": starts}
+    if crop_shapes:
+        entry["crop_shapes"] = crop_shapes
+    return entry
+
+
+def preprocess_eval_crops_2d(datasets, crops_path, dry):
+    """Place the 512 x 512 test crops of the 2d EM mitochondria datasets and add them to eval_crops.json.
+
+    The crops cover each test image with the fewest tiles, spread evenly, so neighbors overlap by a few pixels. Tiles
+    with a constant raw image or with fewer than 20% of the median object count of the dataset are dropped; of the
+    rest, at most 16 per image stay, the ones with the most objects.
+    """
+    common = import_evaluation_common()
+    update_eval_crops({name: place_crops_2d(common, name) for name in datasets}, crops_path, dry)
+
+
 def main():
-    choices = ["human_organoids", "parlakgul_fasting", "macrophage_fib_control", "cellmap"]
+    choices = ["human_organoids", "parlakgul_fasting", "macrophage_fib_control", "cellmap", "eval_crops_2d"]
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset", required=True, choices=choices, help="The dataset to preprocess.")
     parser.add_argument("--input_root", default=DATA_ROOT, help="The data root to read the source data from.")
@@ -470,6 +582,9 @@ def main():
     parser.add_argument("--start", type=int, default=848, help="The first macrophage fib_control slice (zero-based).")
     parser.add_argument("--stop", type=int, default=976, help="The macrophage fib_control slice after the last one.")
     parser.add_argument("--n_threads", type=int, default=8, help="Parallel macrophage fib_control downloads.")
+    parser.add_argument("--eval_datasets", nargs="+", default=EVAL_DATASETS_2D, help="The 2d sets for eval_crops_2d.")
+    parser.add_argument("--crops_path", default=EVAL_CROPS_PATH, help="The eval_crops.json file to update.")
+    parser.add_argument("--dry", action="store_true", help="Print the evaluation crops without writing them.")
     args = parser.parse_args()
     if args.dataset == "human_organoids":
         volumes = args.volumes or [name.replace("_bin2.h5", "") for name in HUMAN_ORGANOIDS_VOLUMES]
@@ -478,8 +593,10 @@ def main():
         download_parlakgul_fasting(args.output_root, args.index)
     elif args.dataset == "macrophage_fib_control":
         download_macrophage_fib_control(args.output_root, args.start, args.stop, args.n_threads)
-    else:
+    elif args.dataset == "cellmap":
         preprocess_cellmap(args.input_root, args.output_root)
+    else:
+        preprocess_eval_crops_2d(args.eval_datasets, args.crops_path, args.dry)
 
 
 if __name__ == "__main__":

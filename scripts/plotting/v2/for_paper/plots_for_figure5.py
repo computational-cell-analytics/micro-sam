@@ -21,7 +21,7 @@ Usage:
     python plots_for_figure5.py --only figure_5
     python plots_for_figure5.py --render lineage_scores lineages spacetime floor beke  # the renders, on a GPU node
 
-The inputs are the central tracking tables, written by 'finetuning/v2/evaluation/collect_tracking_results.py', the
+The inputs are the central tracking tables, written by '--collect' of the two tracking evaluation scripts, the
 tracking predictions in TRACKING_ROOT, and the Beke tracks of 'scripts/user_study/v2/huisken_lab/huisken_tracks_h5'.
 The renders go to TRACKING_ROOT ('lineage_renders', 'automatic_renders', 'lineage_search') and to
 'figures/figure5/beke'.

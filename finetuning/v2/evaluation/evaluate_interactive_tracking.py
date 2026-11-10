@@ -5,13 +5,14 @@ on the first frame of each track, a stop where it ends, a division where it divi
 frame. The committed result for each correction budget is written in CTC format and scored with traccuracy (TRA, DET,
 LNK, divisions with an IoU matching) and the SEG score over all frames.
 
-Datasets (see `tracking_util.INTERACTIVE_DATASETS`): 'dynamicnuclearnet' (in-domain) and 'tracking_fm_real'
-(out-of-domain).
+The datasets are in `tracking_util.INTERACTIVE_DATASETS`. '--collect' joins the result tables of all runs and, with
+'--figure_folder', writes the central table 'cells_interactive_tracking_results.csv'.
 
 Usage examples:
     python evaluate_interactive_tracking.py -d dynamicnuclearnet -s HeLa-S3_nuc_pos4_q1_5c
     python evaluate_interactive_tracking.py -d tracking_fm_real -s microb_s3z1 --n_corrections 2
     python evaluate_interactive_tracking.py -d dynamicnuclearnet --list
+    python evaluate_interactive_tracking.py --collect --figure_folder ../../../scripts/plotting/v2/for_paper/figures
 """
 
 import os
@@ -36,6 +37,7 @@ from micro_sam.v1.multi_dimensional_segmentation import export_tracking_result_t
 from common import use_tmpdir_for_embeddings
 from interactive_tracking import SimulatedUser, TrackingAnnotator, V1TrackingAnnotator
 from tracking_util import (
+    MICROSAM_TRAINING, modality, scores_of, write_tables,
     EXPERIMENT_ROOT, INTERACTIVE_DATASETS, dense_seg_score, interactive_samples, load_interactive_sample,
     set_norm_percentiles, split_track_gaps, tracking_metrics, write_ctc_tracks,
 )
@@ -199,9 +201,37 @@ def run_sample(
     return result
 
 
+# The (method, model) names of the central table, as in the segmentation tables.
+TABLE_METHODS = {
+    "hvit_l_cells": ("micro-sam2", "hvit_l"), "hvit_l": ("sam2", "hvit_l"), "vit_l_lm": ("micro-sam", "vit_l_lm")
+}
+
+
+def central_interactive(table):
+    """The interactive table of the paper: one row per dataset, method, first prompt, correction and iteration."""
+    # Only the default 2/98 percentile normalization; the 1/99.8 runs were tests.
+    table = table[table["norm_percentiles"].isna() | (table["norm_percentiles"] == "2,98")].copy()
+    table["model"], table["method"] = (
+        [TABLE_METHODS[model][1] for model in table["model"]],
+        [TABLE_METHODS[model][0] for model in table["model"]],
+    )
+    # The first runs corrected with points and have no correction column.
+    table["correction"] = table["correction"].fillna("points")
+    table = table.rename(columns={"first_prompt": "prompt", "n_corrections": "iteration"})
+    keys = ["dataset", "domain", "method", "model", "prompt", "correction", "accept_iou", "iteration"]
+    result = scores_of(table, keys)
+    result["n_prompts"] = table.groupby(keys, dropna=False)["n_prompts"].mean().values
+    result.insert(1, "category", [modality(d)[0] for d in result["dataset"]])
+    result.insert(2, "structure", [modality(d)[1] for d in result["dataset"]])
+    result["domain"] = result["domain"].map({"in-domain": "ID", "out-of-domain": "OOD"})
+    result.insert(4, "in_microsam_training", result["dataset"].isin(MICROSAM_TRAINING))
+    result["primary_metric"], result["lower_is_better"] = "tra", False
+    return result.sort_values(["dataset", "method", "correction", "iteration"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("-d", "--dataset_name", type=str, required=True, choices=sorted(INTERACTIVE_DATASETS))
+    parser.add_argument("-d", "--dataset_name", type=str, default=None, choices=sorted(INTERACTIVE_DATASETS))
     parser.add_argument("-s", "--sample", type=str, default=None, help="The movie. All movies by default.")
     parser.add_argument(
         "--method", type=str, default="microsam2", choices=sorted(METHODS),
@@ -226,8 +256,17 @@ def main():
     parser.add_argument("--accept_iou", type=float, default=0.9, help="The user accepts a track above this IoU.")
     parser.add_argument("-o", "--output_root", type=str, default=os.path.join(EXPERIMENT_ROOT, "interactive"))
     parser.add_argument("--list", action="store_true", help="Print the movies of the dataset and exit.")
+    parser.add_argument("--collect", action="store_true", help="Collect the result tables of all runs.")
+    parser.add_argument("--figure_folder", default=None, help="Where --collect writes the central table.")
     args = parser.parse_args()
+    if args.collect:
+        keys = ["dataset", "domain", "sample", "n_corrections", "n_prompts"]
+        root = os.path.dirname(args.output_root.rstrip("/"))
+        write_tables("interactive", keys, central_interactive, root, args.figure_folder)
+        return
 
+    if args.dataset_name is None:
+        parser.error("Give a dataset with -d, or use --collect.")
     samples = interactive_samples(args.dataset_name)
     if args.list:
         print("\n".join(samples))
