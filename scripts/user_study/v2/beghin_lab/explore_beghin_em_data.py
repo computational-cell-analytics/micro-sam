@@ -217,10 +217,8 @@ def convert_to_ome_zarr(input_path, output_path, voxel_size, num_levels, num_wor
 
 
 def segment_image(image, model_type, engine, ndim=2, tile_shape=None, halo=None):
-    # An all-zero tile shape turns the default tiling off.
-    is_tiled = tile_shape is not None and any(tile_shape)
     predictor, segmenter = get_predictor_and_segmenter(
-        model_type=model_type, segmentation_mode=engine, ndim=ndim, is_tiled=is_tiled,
+        model_type=model_type, segmentation_mode=engine, ndim=ndim, is_tiled=tile_shape is not None,
     )
     embedding_dir = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
     try:
@@ -599,37 +597,24 @@ def get_full_blocks(shape):
     return [(tuple(a[0] for a in block), tuple(a[1] for a in block)) for block in product(*axes)]
 
 
-def get_full_block_dir(untiled=False):
-    return FULL_BLOCK_DIR + "_untiled" if untiled else FULL_BLOCK_DIR
+def get_full_block_path(start):
+    return os.path.join(FULL_BLOCK_DIR, "block_z{}_y{}_x{}.h5".format(*start))
 
 
-def get_full_block_path(start, untiled=False):
-    return os.path.join(get_full_block_dir(untiled), "block_z{}_y{}_x{}.h5".format(*start))
-
-
-def get_full_label_name(untiled=False):
-    return "nuclei_untiled" if untiled else "nuclei"
-
-
-def segment_full(zarr_path, untiled=False):
-    """Segment the blocks that no other worker has claimed yet.
-
-    By default each 1024 x 1024 block is tiled in-plane with the default 512 tiles, which cuts nuclei at the tile
-    borders. With 'untiled', each block goes to the model in one piece, a block is as large as the encoder input.
-    """
-    os.makedirs(get_full_block_dir(untiled), exist_ok=True)
+def segment_full(zarr_path):
+    """Segment the blocks that no other worker has claimed yet."""
+    os.makedirs(FULL_BLOCK_DIR, exist_ok=True)
     raw = zarr.open_array(os.path.join(zarr_path, "s0"), mode="r")
     blocks = get_full_blocks(raw.shape)
     for start, _ in blocks:
-        path = get_full_block_path(start, untiled)
+        path = get_full_block_path(start)
         try:
             os.close(os.open(path + ".lock", os.O_CREAT | os.O_EXCL))
         except FileExistsError:
             continue
         bb = tuple(slice(s, s + b) for s, b in zip(start, FULL_BLOCK_SHAPE))
         t0 = time.time()
-        tiling = dict(tile_shape=(0, 0, 0), halo=(0, 0, 0)) if untiled else {}
-        segmentation = segment_image(raw[bb], MODELS["nuclei"], "apg", ndim=3, **tiling)
+        segmentation = segment_image(raw[bb], MODELS["nuclei"], "apg", ndim=3)
         with h5py.File(path + ".tmp", "w") as f:
             f.create_dataset("segmentation", data=segmentation, chunks=True, compression="gzip")
             f.attrs["start"] = start
@@ -639,7 +624,7 @@ def segment_full(zarr_path, untiled=False):
     print(f"No unclaimed blocks left of {len(blocks)}")
 
 
-def stitch_full_blocks(shape, untiled=False):
+def stitch_full_blocks(shape):
     """Put the objects of each block, whose bounding box center is in the core of the block, into the volume.
 
     An object that overlaps the objects already in the volume with more than half of its voxels is a copy of them and
@@ -649,7 +634,7 @@ def stitch_full_blocks(shape, untiled=False):
     stitched = np.zeros(shape, dtype="uint16")
     next_id, n_dropped = 1, 0
     for start, core in get_full_blocks(shape):
-        with h5py.File(get_full_block_path(start, untiled), "r") as f:
+        with h5py.File(get_full_block_path(start), "r") as f:
             segmentation = f["segmentation"][:]
         for i, box in enumerate(ndimage.find_objects(segmentation), 1):
             if box is None:
@@ -665,7 +650,7 @@ def stitch_full_blocks(shape, untiled=False):
             assert next_id < np.iinfo(stitched.dtype).max
             target[mask & (target == 0)] = next_id
             next_id += 1
-        print(f"Stitched {os.path.basename(get_full_block_path(start, untiled))}, {next_id - 1} objects", flush=True)
+        print(f"Stitched {os.path.basename(get_full_block_path(start))}, {next_id - 1} objects", flush=True)
     print(f"{next_id - 1} objects in the volume, {n_dropped} copies dropped")
     return stitched
 
@@ -707,23 +692,19 @@ def add_nuclei_labels(zarr_path, segmentation, name="nuclei"):
     print(f"Saved {zarr_path}/labels/{name}")
 
 
-def get_artifact_reason(box, shape, tiled=True):
-    """Why an object with this bounding box is an artifact, or None for a nucleus.
-
-    The tile shape rule is only for the tiled segmentation.
-    """
+def get_artifact_reason(box, shape):
+    """Why an object with this bounding box is an artifact, or None for a nucleus."""
     z_extent, *yx_extents = [b.stop - b.start for b in box]
     if z_extent <= MAX_FLAT_Z:
         return "flat"
-    tile_shaped = tiled and any(abs(e - TILE_SIZE) <= TILE_TOLERANCE for e in yx_extents)
-    if max(yx_extents) > MAX_YX_EXTENT or tile_shaped:
+    if max(yx_extents) > MAX_YX_EXTENT or any(abs(e - TILE_SIZE) <= TILE_TOLERANCE for e in yx_extents):
         return "too wide or tile shaped"
     if any(b.start == 0 or b.stop == n for b, n in zip(box[1:], shape[1:])):
         return "at the y or x border"
     return None
 
 
-def remove_artifacts(segmentation, tiled=True):
+def remove_artifacts(segmentation):
     """Remove the artifacts in place, keep the largest piece of each nucleus and relabel consecutively."""
     boxes = ndimage.find_objects(segmentation)
     mapping = np.zeros(len(boxes) + 1, dtype=segmentation.dtype)
@@ -732,7 +713,7 @@ def remove_artifacts(segmentation, tiled=True):
     for i, box in enumerate(boxes, 1):
         if box is None:
             continue
-        reason = get_artifact_reason(box, segmentation.shape, tiled)
+        reason = get_artifact_reason(box, segmentation.shape)
         if reason is None:
             # Small loose pieces of a nucleus show as speckles in the renders.
             mask = segmentation[box] == i
@@ -773,32 +754,28 @@ def plot_full(zarr_path, labels, name, plot_path):
     print(f"Saved the plot to {plot_path}")
 
 
-def clean_full(zarr_path, plot_path, untiled=False):
-    """Remove the artifacts from 'labels/<name>' and add the result as 'labels/<name>_clean'."""
-    source = get_full_label_name(untiled)
-    name = f"{source}_clean"
-    segmentation = zarr.open_array(os.path.join(zarr_path, "labels", source, "s0"), mode="r")[:]
-    print(f"labels/{source}: {len(np.unique(segmentation)) - 1} objects")
-    segmentation = remove_artifacts(segmentation, tiled=not untiled)
+def clean_full(zarr_path, plot_path, name="nuclei_clean"):
+    """Remove the artifacts from 'labels/nuclei' and add the result as 'labels/<name>'."""
+    segmentation = zarr.open_array(os.path.join(zarr_path, "labels", "nuclei", "s0"), mode="r")[:]
+    print(f"labels/nuclei: {len(np.unique(segmentation)) - 1} objects")
+    segmentation = remove_artifacts(segmentation)
     add_nuclei_labels(zarr_path, segmentation, name=name)
     plot_full(zarr_path, segmentation, name, plot_path)
 
 
-def stitch_full(zarr_path, plot_path, untiled=False):
+def stitch_full(zarr_path, plot_path):
     shape = zarr.open_array(os.path.join(zarr_path, "s0"), mode="r").shape
-    blocks = get_full_blocks(shape)
-    missing = [start for start, _ in blocks if not os.path.exists(get_full_block_path(start, untiled))]
+    missing = [start for start, _ in get_full_blocks(shape) if not os.path.exists(get_full_block_path(start))]
     assert not missing, f"{len(missing)} blocks are not segmented yet: {missing}"
     t0 = time.time()
-    stitched = stitch_full_blocks(shape, untiled)
+    stitched = stitch_full_blocks(shape)
     merged, _, groups = merge_z_stacked(stitched, MIN_OVERLAP)
     del stitched
     cleaned = remove_small(merged, MIN_SIZE, copy=False)
     print(f"Merged {len(groups)} groups, {len(np.unique(cleaned)) - 1} objects of at least {MIN_SIZE:.0e} voxels, "
           f"{time.time() - t0:.0f} s")
-    name = get_full_label_name(untiled)
-    add_nuclei_labels(zarr_path, cleaned, name=name)
-    plot_full(zarr_path, cleaned, name, plot_path)
+    add_nuclei_labels(zarr_path, cleaned)
+    plot_full(zarr_path, cleaned, "nuclei", plot_path)
 
 
 def render_nuclei(zarr_path, out_dir):
@@ -1066,15 +1043,12 @@ def main():
 
     full = subparsers.add_parser("segment_full", help="Segment the nuclei of the s0 volume in blocks (one worker).")
     full.add_argument("--zarr_path", default=OUTPUT_PATH)
-    full.add_argument("--untiled", action="store_true", help="Segment each block in one piece.")
 
     stitch = subparsers.add_parser("stitch_full", help="Stitch the blocks and add them to the OME-Zarr.")
     stitch.add_argument("--zarr_path", default=OUTPUT_PATH)
-    stitch.add_argument("--untiled", action="store_true", help="Stitch the untiled blocks to 'labels/nuclei_untiled'.")
 
     clean = subparsers.add_parser("clean_full", help="Remove the artifacts of 'labels/nuclei' as a new label image.")
     clean.add_argument("--zarr_path", default=OUTPUT_PATH)
-    clean.add_argument("--untiled", action="store_true", help="Clean 'labels/nuclei_untiled'.")
 
     render = subparsers.add_parser("render", help="Render candidate 3d views of 'labels/nuclei_clean' (GPU node).")
     render.add_argument("--zarr_path", default=OUTPUT_PATH)
@@ -1108,13 +1082,11 @@ def main():
         plot_path = f"beghin_em_3d_{args.run}_merges.png"
         merge_test(SEGMENT_3D_DIR, args.run, args.key, args.min_overlap, args.min_size, plot_path)
     elif args.task == "segment_full":
-        segment_full(args.zarr_path, args.untiled)
+        segment_full(args.zarr_path)
     elif args.task == "stitch_full":
-        suffix = "_untiled" if args.untiled else ""
-        stitch_full(args.zarr_path, f"beghin_em_3d_nuclei_s0_full{suffix}.png", args.untiled)
+        stitch_full(args.zarr_path, "beghin_em_3d_nuclei_s0_full.png")
     elif args.task == "clean_full":
-        suffix = "_untiled" if args.untiled else ""
-        clean_full(args.zarr_path, f"beghin_em_3d_nuclei_s0_full{suffix}_clean.png", args.untiled)
+        clean_full(args.zarr_path, "beghin_em_3d_nuclei_s0_full_clean.png")
     elif args.task == "render":
         render_nuclei(args.zarr_path, RENDER_DIR)
     elif args.task == "render_section":
