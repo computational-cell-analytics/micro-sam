@@ -496,7 +496,7 @@ DATASETS_3D_EM_NUCLEUS_OOD = [
 ]
 # In-domain test sets of the EM nucleus panel, written by 'prepare_em_nucleus_test_sets.py': the OpenOrganelle
 # dauer larva volume, which the nucleus model never saw, and the validation part of the human organoid volumes.
-CANDIDATE_NUCLEUS_ROOTS = {
+NUCLEUS_TEST_SET_ROOTS = {
     "dauer_larva_nucleus": "dauer_larva_nucleus", "human_organoids_nucleus": "human_organoids_nucleus_val",
 }
 # The human placenta array tomography volumes (S-BIAD3408, torch-em 'placenta_at'): manual nuclei of one CTB cell and
@@ -508,7 +508,7 @@ CONNECTOME_NUCLEUS_TUNING = {
     "malecns_nuclei": "brain_0.h5", "zheng_ca3_nuclei": "crop_0.h5", "acson_nuclei": "crop_0.h5",
 }
 DATASETS_3D_EM_NUCLEUS_CANDIDATES = (
-    list(CANDIDATE_NUCLEUS_ROOTS) + ["placenta_nucleus"] + list(CONNECTOME_NUCLEUS_TUNING)
+    list(NUCLEUS_TEST_SET_ROOTS) + ["placenta_nucleus"] + list(CONNECTOME_NUCLEUS_TUNING)
 )
 DATASETS_3D_EM_NUCLEUS = DATASETS_3D_EM_NUCLEUS_ID + DATASETS_3D_EM_NUCLEUS_OOD + DATASETS_3D_EM_NUCLEUS_CANDIDATES
 DATASETS_EM_NUCLEUS = DATASETS_3D_EM_NUCLEUS + DATASETS_2D_EM_NUCLEUS
@@ -2388,9 +2388,9 @@ def _get_3d_em_data_paths(
         paths = sorted(glob(os.path.join(p, PLACENTA_NUCLEUS_ROOT, "placenta*.h5")))
         return paths, paths, "raw", "labels/nuclei"
 
-    if dataset_name in CANDIDATE_NUCLEUS_ROOTS:
+    if dataset_name in NUCLEUS_TEST_SET_ROOTS:
         # The scored boxes or slabs are in 'test', the tuning ones in 'val'. Instance labels.
-        folder = os.path.join(p, CANDIDATE_NUCLEUS_ROOTS[dataset_name], "val" if is_val else "test")
+        folder = os.path.join(p, NUCLEUS_TEST_SET_ROOTS[dataset_name], "val" if is_val else "test")
         paths = sorted(glob(os.path.join(folder, "*.h5")))
         return paths, paths, "raw", "labels"
 
