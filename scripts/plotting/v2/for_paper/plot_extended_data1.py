@@ -4,8 +4,8 @@ sizes of micro-sam2.
 The figure repeats panels a and c of Figure 2 and panels a and c of Figure 3, on the same datasets, with the four
 Hiera sizes of micro-sam2 (T, S, B, L) and of SAM2. The script writes these plots to
 'figures/extendeddata1/<automatic|interactive>/quantitative':
-- 'automatic_2d' (panel a): the mSA of CellposeSAM and of micro-sam2 (APG) per modality, for the in-domain and the
-  out-of-domain datasets.
+- 'automatic_2d' (panel a): the mSA of CellposeSAM and of micro-sam2 (AIS and APG) per modality, for the in-domain and
+  the out-of-domain datasets.
 - 'interactive_2d' (panel b): the mSA of SAM2 and micro-sam2 over the correction iterations, with a point or a box as
   the first prompt.
 - 'automatic_3d' (panel c): as panel a for 3d. The EM neurites compare SegNeuron instead of CellposeSAM.
@@ -13,6 +13,7 @@ Hiera sizes of micro-sam2 (T, S, B, L) and of SAM2. The script writes these plot
 - 'extended_data_1' (in 'figures/final'): the four plots in one figure, as panels a to d.
 
 A model size is a tint of the color of its method: T is the lightest, L has the full color, as in Figures 2 and 3.
+The automatic panels show micro-sam2 with one sub-bar per mode and size: AIS T to L, then APG T to L.
 
 Usage:
 
@@ -40,12 +41,14 @@ SIZES = ["hvit_t", "hvit_s", "hvit_b", "hvit_l"]
 SIZE_NAMES = {"hvit_t": "T", "hvit_s": "S", "hvit_b": "B", "hvit_l": "L"}
 SIZE_TINTS = {"hvit_t": 0.5, "hvit_s": 0.67, "hvit_b": 0.83, "hvit_l": 1.0}
 
-# The ('method', 'model') of the automatic baselines, per dimension. micro-sam2 runs APG.
+# The ('method', 'model') of the automatic baselines, per dimension. micro-sam2 runs AIS and APG.
 AUTOMATIC_BASELINES_2D = {"CellposeSAM": ("cellpose", "cpsam")}
 AUTOMATIC_BASELINES_3D = {"CellposeSAM": ("cellpose", "cpsam_do3d"), "SegNeuron": ("segneuron", "default")}
 # The baseline of each 3d modality: SegNeuron for the EM neurites, where CellposeSAM has no results.
 BASELINE_3D = {"fluorescence_cells": "CellposeSAM", "fluorescence_nuclei": "CellposeSAM", "em_neurites": "SegNeuron"}
-MICROSAM2_MODE = "apg"
+MICROSAM2_MODES = {"ais": "AIS", "apg": "APG"}
+# The sub-bars of micro-sam2 in the automatic plots, as '<mode>_<size>', from the top to the bottom.
+SIZE_MODES = [f"{mode}_{size}" for mode in MICROSAM2_MODES for size in SIZES]
 
 # The interactive methods with one size, as (method, model), and those with all sizes, as their method.
 INTERACTIVE_SINGLE_3D = {"nnInteractive": ("nninteractive", "default")}
@@ -82,7 +85,8 @@ def interactive_methods(single):
 def load_automatic(path, category, structure, datasets, baselines, metric="msa"):
     """Load the automatic scores of the baselines and of each size of micro-sam2 for one modality.
 
-    The column 'mode' holds the size of micro-sam2, and an empty string for the baselines.
+    The column 'mode' holds the mode and size of micro-sam2, such as 'ais_hvit_t', and an empty string for the
+    baselines.
     """
     df = pd.read_csv(path)
     df = df[(df["category"] == category) & (df["structure"] == structure)]
@@ -90,8 +94,8 @@ def load_automatic(path, category, structure, datasets, baselines, metric="msa")
     for name, (method, model) in baselines.items():
         rows = df[(df["method"] == method) & (df["model"] == model) & df["mode"].isna()]
         parts.append(rows.assign(method=name, mode=""))
-    rows = df[(df["method"] == "micro-sam2") & df["model"].isin(SIZES) & (df["mode"] == MICROSAM2_MODE)]
-    parts.append(rows.assign(mode=rows["model"]))
+    rows = df[(df["method"] == "micro-sam2") & df["model"].isin(SIZES) & df["mode"].isin(MICROSAM2_MODES)]
+    parts.append(rows.assign(mode=rows["mode"] + "_" + rows["model"]))
     results = pd.concat(parts, ignore_index=True)[["dataset", "method", "mode", metric]]
     return fig2.select_datasets(results.rename(columns={metric: "score"}), datasets)
 
@@ -201,10 +205,14 @@ def make_plot(name, region=None, compact=False):
 
 
 def set_size_modes():
-    """Let the bar plots of Figure 2 show the sizes of micro-sam2 as its sub-bars, in place of the modes."""
-    fig2.MODES = SIZES
-    fig2.MODE_NAMES = SIZE_NAMES
-    fig2.MODE_TINTS = SIZE_TINTS
+    """Let the bar plots of Figure 2 show each mode and size of micro-sam2 as a sub-bar, tinted by its size."""
+    fig2.MODES = SIZE_MODES
+    fig2.MODE_NAMES = {
+        f"{mode}_{size}": f"{name} {SIZE_NAMES[size]}" for mode, name in MICROSAM2_MODES.items() for size in SIZES
+    }
+    fig2.MODE_TINTS = {f"{mode}_{size}": SIZE_TINTS[size] for mode in MICROSAM2_MODES for size in SIZES}
+    # The longer names, such as 'APG L', need more room on their sub-bars.
+    fig2.MODE_TAG_WIDTH = 20
 
 
 def main():
