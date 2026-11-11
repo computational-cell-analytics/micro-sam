@@ -4833,7 +4833,7 @@ class AutoTrackWidget(AutoSegmentWidget):
 
         if not (self.volumetric and getattr(self, "apply_to_volume", False)):
             return super().__call__()
-        # Check before the segmentation of all frames, which can take minutes.
+        # The segmentation of all frames can take minutes, so check for trackastra first.
         try:
             _require_trackastra()
         except RuntimeError as e:
