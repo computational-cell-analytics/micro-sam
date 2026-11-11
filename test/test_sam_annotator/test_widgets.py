@@ -147,6 +147,7 @@ def test_hidden_batch_size_is_not_applied(qtbot, monkeypatch):
 
 
 @pytest.mark.gui
+@pytest.mark.skipif(platform.system() == "Windows", reason="GUI test does not work on Windows.")
 def test_show_activity_dock(make_napari_viewer_proxy):
     from micro_sam.sam_annotator._widgets import _show_activity_dock
 
