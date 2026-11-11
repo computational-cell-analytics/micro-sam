@@ -1387,7 +1387,7 @@ def test_volume_generate_runs_the_refinement_end_to_end(monkeypatch):
     # Both objects reached the propagator box-first then points, in one pass, which is what the
     # default 'prompts' strategy asks for.
     assert [entry[0] for entry in propagator.pushed] == ["reset", "box", "points", "box", "points"]
-    # The passes report the progress, so a pass shows no progress bar of its own.
+    # The progress bar counts passes, so a pass gets no bar of its own.
     assert propagator.verbose is False
 
 

@@ -728,15 +728,15 @@ def _create_pbar_for_threadworker(initial_description=None):
 
 
 def _show_activity_dock(viewer):
-    """Open the napari activity dock, which shows the progress bars, for a long run.
+    """Open the napari activity dock, which shows the progress bars, during a run.
 
-    The dock uses private napari API. If that API is missing, the run continues without the dock.
+    This function uses private napari API. If that API is missing, the function does nothing.
 
     Args:
-        viewer: The napari viewer.
+        viewer: The napari viewer or its PublicOnlyProxy.
 
     Returns:
-        A function that closes the dock again if it was closed before.
+        A function that closes the dock again if the dock was closed before.
     """
     # A plugin widget gets a PublicOnlyProxy viewer, which warns on each private attribute access.
     viewer = getattr(viewer, "__wrapped__", viewer)
@@ -4536,7 +4536,7 @@ class AutoSegmentWidget(_WidgetBase):
             self._segmenter_key = cache_key
 
         postproc_kwargs = self._postproc_kwargs()
-        if self.mode == "dense":  # Only the multicut post-processing reports progress.
+        if self.mode == "dense":  # Only the multicut of 'dense' mode accepts progress callbacks.
             postproc_kwargs.update(pbar_init=pbar_init, pbar_update=pbar_update)
         return self._segmenter.generate(mode=self.mode, **postproc_kwargs)
 

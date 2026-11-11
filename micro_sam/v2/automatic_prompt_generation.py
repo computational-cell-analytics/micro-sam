@@ -2039,7 +2039,7 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
             propagator.reset_tracking()
             for object_id, candidate in enumerate(batch, start=1):
                 self._condition_pass(candidate, object_id, propagator)
-            # The passes report their own progress, so the frames of a pass show no progress bar.
+            # The progress bar counts passes, so the frames of a pass get no bar of their own.
             video_segments = propagator.propagate_prompts(early_stop_patience=early_stop_patience, verbose=False)
             return _volume_records(video_segments, batch, self._volume.shape[:3]), len(video_segments)
 

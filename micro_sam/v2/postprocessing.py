@@ -251,9 +251,11 @@ def run_multicut(
         dt: Flow integration step size.
         sigma: Gaussian sigma for smoothing the convergence-density map.
         n_threads: Number of threads for the parallel slice-wise oversegmentation.
-        verbose: Whether to show the progress of the slice-wise oversegmentation.
-        pbar_init: Callback to initialize an external progress bar. It replaces the terminal progress bar.
-        pbar_update: Callback to update an external progress bar.
+        verbose: Whether to report the progress of the slice-wise oversegmentation.
+        pbar_init: Callback that starts an external progress bar with '(total, description)'.
+            The external progress bar replaces the terminal progress bar.
+        pbar_update: Callback that advances the external progress bar by a number of slices.
+            Give it together with 'pbar_init'.
 
     Returns:
         Instance segmentation, uint64 array, shape (Z, Y, X).
@@ -298,7 +300,7 @@ def run_multicut(
     pbar_init(n_slices, "Slice-wise oversegmentation")
     offsets = []
     with futures.ThreadPoolExecutor(n_threads) as tp:
-        # The results arrive in this thread, so a GUI callback can repaint safely.
+        # The results arrive in the calling thread, so a GUI callback can safely repaint.
         for offset in tp.map(_run_overseg, range(n_slices)):
             offsets.append(offset)
             pbar_update(1)

@@ -166,5 +166,5 @@ def test_show_activity_dock(make_napari_viewer_proxy):
     _show_activity_dock(viewer)()
     assert not dialog.isHidden()
 
-    # Without the private napari API the run continues without the dock.
+    # Without the private napari API, the function does nothing.
     _show_activity_dock(object())()

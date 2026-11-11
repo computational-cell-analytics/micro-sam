@@ -1025,8 +1025,8 @@ class PromptableSegmentation3D:
         would never be propagated backwards at all. So objects that share an anchor are propagated
         together and the rest get a state of their own.
 
-        'verbose' shows a terminal progress bar over the frames. By default, the bar shows only when
-        there is no 'update_progress' callback, because a caller with a callback shows its own progress.
+        'verbose' shows a terminal progress bar over the frames. By default ('None'), the bar shows only
+        without an 'update_progress' callback. A caller with a callback shows its own progress.
         """
         if verbose is None:
             verbose = update_progress is None
