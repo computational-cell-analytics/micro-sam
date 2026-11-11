@@ -255,3 +255,27 @@ def test_auto_tracking_does_not_offer_amg(qtbot, monkeypatch, device):
     assert widget.run_button.isEnabled() is True
     # The enabled button keeps the tracking tooltip, not the segmentation one.
     assert widget.run_button.toolTip() == get_tooltip("autotrack", "run_button")
+
+
+@pytest.mark.gui
+def test_automatic_tracking_reports_missing_trackastra_before_segmenting(qtbot, monkeypatch):
+    from micro_sam.sam_annotator import _widgets
+    from micro_sam.sam_annotator._state import AnnotatorState
+
+    widget = _widgets.AutoTrackWidget.__new__(_widgets.AutoTrackWidget)
+    widget.with_decoder, widget.mode, widget.volumetric, widget.apply_to_volume = True, "sparse", True, True
+    widget._viewer = None
+    monkeypatch.setattr(AnnotatorState(), "decoder", object())
+
+    def missing_trackastra():
+        raise RuntimeError("Automatic tracking requires trackastra.")
+
+    messages = []
+    monkeypatch.setattr(_widgets, "_require_trackastra", missing_trackastra)
+    monkeypatch.setattr(_widgets, "_generate_message", lambda kind, text: messages.append((kind, text)))
+    monkeypatch.setattr(
+        _widgets.AutoTrackWidget, "_track_timeseries", lambda *args: pytest.fail("The frames were segmented."),
+    )
+
+    widget()
+    assert messages == [("error", "Automatic tracking requires trackastra.")]

@@ -504,7 +504,7 @@ def _require_trackastra():
         message = (
             f"Automatic tracking requires trackastra, which is installed but fails to import: {cause}. "
             "One of its dependencies is missing or incompatible, so reinstalling trackastra will not "
-            "fix this. See the traceback above for the failing import."
+            "fix this. See the traceback in the terminal for the failing import."
         )
     raise RuntimeError(message) from TRACKASTRA_IMPORT_ERROR
 

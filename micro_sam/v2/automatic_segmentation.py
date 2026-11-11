@@ -390,9 +390,10 @@ def automatic_tracking(
     from tqdm import trange
 
     from ..util import load_image_data
-    from ..v1.multi_dimensional_segmentation import track_across_frames
+    from ..v1.multi_dimensional_segmentation import _require_trackastra, track_across_frames
     from .instance_segmentation import retile_instance_segmentation_generator
 
+    _require_trackastra()
     timeseries = input_path if isinstance(input_path, np.ndarray) else load_image_data(input_path, key=key)
     if timeseries.ndim != 3:
         raise ValueError(f"Automatic tracking expects a (T, Y, X) timeseries, got shape {timeseries.shape}.")

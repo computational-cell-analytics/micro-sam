@@ -1204,3 +1204,21 @@ def test_decoder_width_check_skips_models_without_out_conv():
     from micro_sam.v2.instance_segmentation import _check_decoder_width
 
     _check_decoder_width(types.SimpleNamespace(), 32)
+
+
+def test_automatic_tracking_checks_trackastra_before_segmenting(monkeypatch):
+    from micro_sam.v2 import automatic_segmentation
+
+    def missing_trackastra():
+        raise RuntimeError("Automatic tracking requires trackastra.")
+
+    monkeypatch.setattr("micro_sam.v1.multi_dimensional_segmentation._require_trackastra", missing_trackastra)
+    monkeypatch.setattr(
+        automatic_segmentation, "automatic_instance_segmentation",
+        lambda **kwargs: pytest.fail("The frames were segmented."),
+    )
+
+    with pytest.raises(RuntimeError, match="requires trackastra"):
+        automatic_segmentation.automatic_tracking(
+            predictor=None, segmenter=None, input_path=np.zeros((2, 8, 8), dtype="float32"), verbose=False,
+        )
