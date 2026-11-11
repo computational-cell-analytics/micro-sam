@@ -3,6 +3,7 @@
 
 import os
 import warnings
+import importlib
 import multiprocessing as mp
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -489,10 +490,25 @@ def _require_trackastra():
     Trackastra being absent and trackastra failing to import because one of its dependencies is
     broken look the same here, but only the first is fixed by installing trackastra.
 
+    The import is tried again, because the module-level import can be stale: for example, the user
+    installs trackastra while napari is open.
+
     Raises:
         RuntimeError: If trackastra could not be imported.
     """
+    global Trackastra, graph_to_ctc, graph_to_napari_tracks, TRACKASTRA_IMPORT_ERROR
     if Trackastra is not None:
+        return
+
+    importlib.invalidate_caches()
+    try:
+        from trackastra.model import Trackastra
+        from trackastra.tracking import graph_to_ctc, graph_to_napari_tracks
+    except ImportError as e:
+        Trackastra = graph_to_ctc = graph_to_napari_tracks = None
+        TRACKASTRA_IMPORT_ERROR = e
+    else:
+        TRACKASTRA_IMPORT_ERROR = None
         return
 
     # A broken dependency raises a plain ImportError, which does not say which package is missing.
