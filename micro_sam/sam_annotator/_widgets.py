@@ -4535,7 +4535,10 @@ class AutoSegmentWidget(_WidgetBase):
             )
             self._segmenter_key = cache_key
 
-        return self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
+        postproc_kwargs = self._postproc_kwargs()
+        if self.mode == "dense":  # Only the multicut post-processing reports progress.
+            postproc_kwargs.update(pbar_init=pbar_init, pbar_update=pbar_update)
+        return self._segmenter.generate(mode=self.mode, **postproc_kwargs)
 
     def _run_apg(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.precompute_state import cache_autoseg_state

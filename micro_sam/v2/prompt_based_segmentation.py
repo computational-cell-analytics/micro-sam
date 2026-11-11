@@ -956,7 +956,8 @@ class PromptableSegmentation3D:
                 )
 
     def _propagate_in_direction(
-        self, reverse, update_progress=None, early_stop_patience=None, z_range=None, seen_frames=None
+        self, reverse, update_progress=None, early_stop_patience=None, z_range=None, seen_frames=None,
+        verbose=True,
     ):
         """Run SAM2 propagation in one temporal direction, optionally stopping early.
 
@@ -977,6 +978,7 @@ class PromptableSegmentation3D:
                 to the end of the volume.
             seen_frames: Optional set of already-counted frame indices, shared across both directions,
                 so a frame processed in both (the conditioning frame) advances 'update_progress' once.
+            verbose: Whether to show a terminal progress bar over the frames.
 
         Returns:
             Mapping from frame index to per-object boolean masks, in the order frames were yielded.
@@ -985,6 +987,7 @@ class PromptableSegmentation3D:
         consecutive_empty = 0
         for out_frame_idx, out_obj_ids, out_mask_logits in self.predictor.propagate_in_video(
             self.inference_state, reverse=reverse, release_stale_mask_memory=self.release_stale_mask_memory,
+            verbose=verbose,
         ):
             # Hard z-range bound: stop once propagation would leave the user-selected slice range.
             if z_range is not None and not (z_range[0] <= out_frame_idx <= z_range[1]):
@@ -1013,7 +1016,7 @@ class PromptableSegmentation3D:
 
         return video_segments
 
-    def propagate_prompts(self, update_progress=None, early_stop_patience=None, z_range=None):
+    def propagate_prompts(self, update_progress=None, early_stop_patience=None, z_range=None, verbose=None):
         """Propagate the pushed prompts through the volume, one pass per conditioned slice.
 
         SAM2 propagates every object of a state from the earliest slice any of them is conditioned on,
@@ -1021,12 +1024,17 @@ class PromptableSegmentation3D:
         tracked - and have those results written into their memory - before they are conditioned, and
         would never be propagated backwards at all. So objects that share an anchor are propagated
         together and the rest get a state of their own.
+
+        'verbose' shows a terminal progress bar over the frames. By default, the bar shows only when
+        there is no 'update_progress' callback, because a caller with a callback shows its own progress.
         """
+        if verbose is None:
+            verbose = update_progress is None
         groups = {}
         for object_id, frame in self._anchor_per_object().items():
             groups.setdefault(frame, []).append(object_id)
         if len(groups) <= 1:
-            return self._propagate_both_directions(update_progress, early_stop_patience, z_range)
+            return self._propagate_both_directions(update_progress, early_stop_patience, z_range, verbose)
 
         # The active maps intentionally omit replaced prompts. Reconstruct from successful calls so
         # point batches, replacement boundaries and the previous-logit chain stay unchanged.
@@ -1036,7 +1044,7 @@ class PromptableSegmentation3D:
         for object_ids in groups.values():
             self._replay_prompts(snapshot, set(object_ids))
             for frame, per_object in self._propagate_both_directions(
-                update_progress, early_stop_patience, z_range
+                update_progress, early_stop_patience, z_range, verbose
             ).items():
                 video_segments.setdefault(frame, {}).update(per_object)
 
@@ -1044,19 +1052,19 @@ class PromptableSegmentation3D:
         self._prompt_signatures = prompt_signatures
         return video_segments
 
-    def _propagate_both_directions(self, update_progress=None, early_stop_patience=None, z_range=None):
+    def _propagate_both_directions(self, update_progress=None, early_stop_patience=None, z_range=None, verbose=True):
         # Shared across both directions, so the conditioning frame is counted once.
         seen_frames = set()
         forward_video_segments = self._propagate_in_direction(
             reverse=False, update_progress=update_progress, early_stop_patience=early_stop_patience,
-            z_range=z_range, seen_frames=seen_frames,
+            z_range=z_range, seen_frames=seen_frames, verbose=verbose,
         )
 
         reverse_video_segments = {}
         if len(forward_video_segments) < self.volume.shape[0]:  # Only if the forward pass fell short.
             reverse_video_segments = self._propagate_in_direction(
                 reverse=True, update_progress=update_progress, early_stop_patience=early_stop_patience,
-                z_range=z_range, seen_frames=seen_frames,
+                z_range=z_range, seen_frames=seen_frames, verbose=verbose,
             )
             # Reversed, so it stitches onto the forward propagation.
             reverse_video_segments = dict(reversed(list(reverse_video_segments.items())))

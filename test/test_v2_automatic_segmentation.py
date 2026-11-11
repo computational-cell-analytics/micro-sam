@@ -60,6 +60,23 @@ def test_run_multicut_uses_dense_defaults():
         assert default_postprocessing(backbone, "dense") == modes["dense"]
 
 
+def test_run_multicut_reports_slice_progress_to_callbacks(capsys):
+    rng = np.random.default_rng(0)
+    boundary_map = rng.random((3, 16, 16)).astype("float32")
+    distances = rng.standard_normal((2, 3, 16, 16)).astype("float32")
+    calls = []
+
+    run_multicut(
+        boundary_map, distances, n_threads=2,
+        pbar_init=lambda total, description: calls.append(("init", total)),
+        pbar_update=lambda n: calls.append(("update", n)),
+    )
+
+    assert calls[0] == ("init", 3)
+    assert sum(n for kind, n in calls if kind == "update") == 3
+    assert "Slice-wise oversegmentation" not in capsys.readouterr().err
+
+
 class _FakeSAM2Model:
     """Mimics SAM2's `_prepare_backbone_features` (flatten + permute, no encoder), for model-free tests."""
 

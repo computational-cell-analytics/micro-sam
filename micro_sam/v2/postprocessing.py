@@ -10,10 +10,9 @@ into instance segmentation maps. Two strategies are provided:
 """
 
 from concurrent import futures
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 import numpy as np
-from tqdm import tqdm
 
 from bioimage_cpp.flow import compute_flow_density
 from bioimage_cpp.segmentation import label, watershed
@@ -229,6 +228,9 @@ def run_multicut(
     dt: Optional[float] = None,
     sigma: Optional[float] = None,
     n_threads: int = 8,
+    verbose: bool = True,
+    pbar_init: Optional[Callable] = None,
+    pbar_update: Optional[Callable] = None,
 ) -> np.ndarray:
     """Instance segmentation for 3D EM data via slice-wise oversegmentation + multicut.
 
@@ -249,6 +251,9 @@ def run_multicut(
         dt: Flow integration step size.
         sigma: Gaussian sigma for smoothing the convergence-density map.
         n_threads: Number of threads for the parallel slice-wise oversegmentation.
+        verbose: Whether to show the progress of the slice-wise oversegmentation.
+        pbar_init: Callback to initialize an external progress bar. It replaces the terminal progress bar.
+        pbar_update: Callback to update an external progress bar.
 
     Returns:
         Instance segmentation, uint64 array, shape (Z, Y, X).
@@ -288,11 +293,16 @@ def run_multicut(
         overseg[z] = wsz
         return int(wsz.max())
 
+    from micro_sam.util import handle_pbar
+    _, pbar_init, pbar_update, pbar_close = handle_pbar(verbose, pbar_init, pbar_update)
+    pbar_init(n_slices, "Slice-wise oversegmentation")
+    offsets = []
     with futures.ThreadPoolExecutor(n_threads) as tp:
-        offsets = list(tqdm(
-            tp.map(_run_overseg, range(n_slices)),
-            total=n_slices, desc="Slice-wise oversegmentation",
-        ))
+        # The results arrive in this thread, so a GUI callback can repaint safely.
+        for offset in tp.map(_run_overseg, range(n_slices)):
+            offsets.append(offset)
+            pbar_update(1)
+    pbar_close()
 
     offsets = np.array(offsets, dtype="uint64")
     offsets = np.roll(offsets, 1)
