@@ -45,7 +45,7 @@ BENCHMARK_ROOT = os.environ.get(
 SAMPLE_CSV = os.path.join(BENCHMARK_ROOT, "runtimes_per_sample.csv")
 OBJECT_CSV = os.path.join(BENCHMARK_ROOT, "runtimes_per_object.csv")
 
-DEVICES = {"cpu": "CPU (16 cores)", "a100": "GPU (A100)", "m1": "Apple M1"}
+DEVICES = {"cpu": "CPU (16 cores)", "a100": "GPU (A100)", "m2": "Apple M2"}
 # CREMI (3d EM, reference SegNeuron) is timed too, but not shown: APG L takes more than 12 h per volume on CPU.
 DATASETS = {"livecell": "LIVECell (2d, LM)", "gonuclear": "GoNuclear (3d, LM)"}
 REFERENCES = {"cellposesam": "CellposeSAM"}
@@ -96,7 +96,7 @@ def load():
     objects = pd.read_csv(OBJECT_CSV) if os.path.exists(OBJECT_CSV) else pd.DataFrame(
         columns=["device_tag", "dataset", "method", "model", "seconds_per_slice", "n_slices"]
     )
-    # Only the selected samples: all images in 2d, the same three volumes per dataset in 3d, on every device.
+    # Only the selected samples: all images in 2d, the volumes of VOLUMES_3D per dataset in 3d (one on the M2).
     if "selected" in samples:
         samples = samples[samples["selected"].astype(bool)]
         objects = objects[objects["selected"].astype(bool)]

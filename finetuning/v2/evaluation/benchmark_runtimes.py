@@ -24,7 +24,7 @@ Usage:
     # One group (dataset, method, model, prompt) on one device:
     python benchmark_runtimes.py run --device_tag a100 -d livecell --method apg -m hvit_t
     # All groups of a device in turn (e.g. on a Mac, see 'run_runtimes_mac.sh'):
-    python benchmark_runtimes.py run --device_tag m1 --device mps --all
+    python benchmark_runtimes.py run --device_tag m2 --device mps --all
     python benchmark_runtimes.py collect
 """
 
@@ -119,8 +119,15 @@ def environment(device, threads):
             info["cpu_model"] = next(line.split(":", 1)[1].strip() for line in f if line.startswith("model name"))
     except (OSError, StopIteration):
         info["cpu_model"] = platform.processor()
+    if platform.system() == "Darwin":
+        import subprocess
+        info["cpu_model"] = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True
+        ).stdout.strip()
     if str(device).startswith("cuda"):
         info["gpu"] = torch.cuda.get_device_name()
+    elif str(device).startswith("mps"):
+        info["gpu"] = info["cpu_model"]
     return info
 
 
@@ -146,12 +153,22 @@ VOLUMES_3D_GROUP = {
     # CREMI is not in the figure; its CPU APG B runs are not completed.
     ("cpu", "cremi", "apg", "hvit_b"): ["sample_0001.h5", "sample_0003.h5"],
 }
+# Devices that are timed on fewer volumes. The M2 takes about 1 h per volume for APG, so only the volume with the
+# object count closest to the mean of the three.
+VOLUMES_3D_DEVICE = {
+    ("m2", "gonuclear"): ["sample_0014.h5"],
+}
 
 
 def group_paths(device_tag, dataset, method, model=None):
-    """The samples that are timed for a group: all in 2d, the volumes of VOLUMES_3D (or VOLUMES_3D_GROUP) in 3d."""
+    """The samples that are timed for a group: all in 2d, the volumes of VOLUMES_3D in 3d.
+
+    VOLUMES_3D_GROUP and then VOLUMES_3D_DEVICE replace the volumes of VOLUMES_3D for a group or for a device.
+    """
     paths = sample_paths(dataset)
-    volumes = VOLUMES_3D_GROUP.get((device_tag, dataset, method, model), VOLUMES_3D.get(dataset))
+    volumes = VOLUMES_3D_GROUP.get(
+        (device_tag, dataset, method, model), VOLUMES_3D_DEVICE.get((device_tag, dataset), VOLUMES_3D.get(dataset))
+    )
     if volumes is not None:
         paths = [p for p in paths if os.path.basename(p) in volumes]
     return paths
@@ -431,6 +448,14 @@ def result_path(device_tag, dataset, method, model, sample_path):
     return os.path.join(ROOT, "results", device_tag, dataset, f"{method}_{model}", name)
 
 
+def release_memory(device):
+    """Empty the MPS cache between samples, untimed: without a watermark it grows into swap over the samples."""
+    if str(device).startswith("mps"):
+        import gc
+        gc.collect()
+        torch.mps.empty_cache()
+
+
 def run_group(device_tag, device, dataset, method, model, deadline, threads, max_samples=None):
     """Time all samples of one group that have no result yet. Stops before 'deadline' (time.time())."""
     paths = group_paths(device_tag, dataset, method, model)[:max_samples]
@@ -463,6 +488,7 @@ def run_group(device_tag, device, dataset, method, model, deadline, threads, max
         n_slices = WARMUP_SLICES.get(str(device), WARMUP_SLICES["cuda"])
         raw, labels = raw[:n_slices], labels[:n_slices]
     call(raw, labels)
+    release_memory(device)
     for path in paths:
         # A sample that does not fit in the time left is left to a longer job; a shorter one may still fit.
         if time.time() + FIT_MARGIN * expected_seconds(device_tag, dataset, method, model, path) > deadline:
@@ -488,6 +514,10 @@ def run_group(device_tag, device, dataset, method, model, deadline, threads, max
         else:
             times, n_objects = call(raw, labels)
             record.update({"times": times, "n_objects": n_objects})
+        if str(device).startswith("mps"):
+            record["mps_allocated_gb"] = torch.mps.current_allocated_memory() / 1e9
+            record["mps_driver_gb"] = torch.mps.driver_allocated_memory() / 1e9
+        release_memory(device)
         record["wall_seconds"] = time.time() - start
         with open(out + ".tmp", "w") as f:
             json.dump(record, f, indent=1)
@@ -685,7 +715,7 @@ def collect():
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["export", "run", "collect", "status"])
-    parser.add_argument("--device_tag", help="The name of the device in the results, e.g. 'cpu', 'a100', 'm1'.")
+    parser.add_argument("--device_tag", help="The name of the device in the results, e.g. 'cpu', 'a100', 'm2'.")
     parser.add_argument("--device", default=None, help="The torch device. Default: cuda if available, else cpu.")
     parser.add_argument("-d", "--dataset_name", choices=list(DATASETS))
     parser.add_argument("--method", choices=["ais", "apg", "cellposesam", "segneuron"] + INTERACTIVE)
