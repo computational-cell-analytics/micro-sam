@@ -56,17 +56,20 @@ PROMPTS = {"interactive_point": "Point", "interactive_box": "Box"}
 # The number of slices of the 3d samples (all evaluation crops are 32 x 512 x 512), for the time per slice.
 N_SLICES = {"gonuclear": 32, "cremi": 32}
 # The devices whose automatic runtimes span orders of magnitude get a log time axis.
-LOG_DEVICES = {"cpu"}
+LOG_DEVICES = {"cpu", "a100", "m1"}
 # The gap between the stacked parts and the smallest width of a part, as fractions of the axis width.
 PART_GAP = 0.006
 # The space between the end of a bar (or its error bar) and its number, in points.
 LABEL_PAD = 2
+# The share of the axis width taken by the longest bar; the rest is for its number.
+BAR_SHARE_2D, BAR_SHARE_3D = 0.8, 0.7
 # The largest share of a block that its number may fill.
 TEXT_FILL = 0.8
 # The color of the time per slice next to the totals (contrast 5.3 on white).
 SLICE_COLOR = "#6b6b6b"
 # The panels (device, dataset) whose totals carry the unit.
-SECONDS_PANELS = {("cpu", "livecell"), ("cpu", "gonuclear"), ("cpu", "cremi")}
+SECONDS_PANELS = {(device, dataset) for device in ("cpu", "a100", "m1")
+                  for dataset in ("livecell", "gonuclear", "cremi")}
 # The panels (device, dataset) that write times over MINUTES_FROM seconds in minutes.
 MINUTES_PANELS = {("cpu", "gonuclear"), ("cpu", "cremi")}
 MINUTES_FROM = 200
@@ -163,6 +166,8 @@ def format_tick(value, _):
 
 
 def format_seconds(value):
+    if value < 0.1:
+        return f"{value:.2g}"
     return f"{value:.0f}" if value >= 10 else f"{value:.1f}" if value >= 1 else f"{value:.2f}"
 
 
@@ -217,6 +222,36 @@ def draw_segments(ax, segments, log, minutes=False, seconds=False):
                 text.remove()
 
 
+def write_total(ax, x, y, seconds, device, dataset, per_slice=None):
+    """Write a total right of 'x', followed by the time per slice in gray italics (3d)."""
+    if (device, dataset) in MINUTES_PANELS and seconds > MINUTES_FROM:
+        note = f" {format_minutes(seconds)}"
+    else:
+        note = " " + (f"{seconds:.2g}" if seconds < 0.1 else f"{seconds:.2f}" if seconds < 100 else f"{seconds:.0f}")
+        if (device, dataset) in SECONDS_PANELS:
+            note += " s"
+    text = ax.text(x, y, note, va="center", ha="left", fontsize=fig2.SMALL_FONT_SIZE, color=TEXT_COLOR,
+                   transform=transforms.offset_copy(ax.transData, fig=ax.figure, x=LABEL_PAD, units="points"))
+    if per_slice is not None:
+        per_slice = f"{per_slice / 60:.1f} min" if per_slice > MINUTES_FROM else f"{per_slice:.2g} s"
+        ax.annotate(f" ({per_slice}/slice)", xy=(1, 0.5), xycoords=text, va="center", ha="left",
+                    fontsize=fig2.SMALL_FONT_SIZE, color=SLICE_COLOR, fontstyle="italic")
+
+
+def log_start(first):
+    """The power of ten under the shortest first part; one lower if that part would be a sliver."""
+    start = 10.0 ** np.floor(np.log10(first.min()))
+    return start / 10 if first.min() < 2 * start else start
+
+
+def set_log_axis(ax, start, end, share):
+    """A log time axis on which the longest bar takes 'share' of the width."""
+    ax.set_xscale("log")
+    ax.set_xlim(start, start * (end / start) ** (1 / share))
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(format_tick))
+    ax.xaxis.set_minor_formatter(ticker.NullFormatter())
+
+
 def plot_automatic(region=None, compact=False):
     samples, _ = load()
     n_rows = len(automatic_rows("livecell"))
@@ -241,6 +276,9 @@ def plot_automatic(region=None, compact=False):
                 # network), so that every part stays visible.
                 first = means[means.index.get_level_values("part").isin(["encoder", "network"]) & (means > 0)]
                 start = 10.0 ** np.floor(np.log10(first.min())) if log else 0.0
+                # A first part just above the power of ten would be a sliver, so start one power lower.
+                if log and first.min() < 2 * start:
+                    start /= 10
                 end, segments = 0.0, []
                 for yi, (label, method, model, color_name) in zip(y, rows):
                     if (method, model) not in totals.index:
@@ -257,27 +295,11 @@ def plot_automatic(region=None, compact=False):
                     segments[-1] += (mean - lower,)
                     ax.errorbar(mean, yi, xerr=[[lower], [std]], color=fig2.GROUP_COLOR, linewidth=0.6,
                                 capsize=1.2, zorder=3)
-                    if (device, dataset) in MINUTES_PANELS and mean > MINUTES_FROM:
-                        note = f" {format_minutes(mean)}"
-                    else:
-                        note = f" {mean:.2f}" if mean < 100 else f" {mean:.0f}"
-                        if (device, dataset) in SECONDS_PANELS:
-                            note += " s"
-                    # The total is written a little right of the error bar, followed by the time per slice
-                    # (italic, gray). The legend names the references.
-                    text = ax.text(mean + std, yi, note, va="center", ha="left", fontsize=fig2.SMALL_FONT_SIZE,
-                                   color=TEXT_COLOR, transform=transforms.offset_copy(
-                                       ax.transData, fig=fig, x=LABEL_PAD, units="points"))
-                    pieces = []
-                    if dataset in N_SLICES:
-                        pieces.append((f" ({mean / N_SLICES[dataset]:.2g} s/slice)",
-                                       {"color": SLICE_COLOR, "fontstyle": "italic"}))
-                    for piece, style in pieces:
-                        text = ax.annotate(piece, xy=(1, 0.5), xycoords=text, va="center", ha="left",
-                                           fontsize=fig2.SMALL_FONT_SIZE, **style)
+                    write_total(ax, mean + std, yi, mean, device, dataset,
+                                mean / N_SLICES[dataset] if dataset in N_SLICES else None)
                     end = max(end, mean + std)
                 # The bars take the same share of the axis on a linear and on a log axis; the rest is for the notes.
-                share = 1 / 1.9 if dataset in N_SLICES else 1 / 1.45
+                share = BAR_SHARE_3D if dataset in N_SLICES else BAR_SHARE_2D
                 if log:
                     ax.set_xscale("log")
                     ax.set_xlim(start, start * (end / start) ** (1 / share))
@@ -293,10 +315,21 @@ def plot_automatic(region=None, compact=False):
             ax.set_yticklabels([row[0] for row in rows] if j == 0 else [], fontsize=fig2.SMALL_FONT_SIZE)
     label_grid(fig, axes)
     bottom_box = axes[-1, 0].get_position()
-    fig.text(0.5, bottom_box.y0 - 0.25 / height, "Time per image (2d) or volume (3d) [s] ↓ (CPU: log scale)",
+    fig.text(0.5, bottom_box.y0 - 0.25 / height, "Time per image (2d) or volume (3d) [s, log scale] ↓",
              ha="center", va="top",
              fontsize=fig2.MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR)
-    fig.text(0.5, bottom_box.y0 - 0.4 / height, "Reference: CellposeSAM",
+    # Groups with fewer samples than the others of their panel (a run that did not finish) are named in the note.
+    counts = samples[samples["part"] == "total"].groupby(["device_tag", "dataset", "method", "model"]).size()
+    note = "Reference: CellposeSAM"
+    for (device, dataset, method, model), n in counts.items():
+        if device not in DEVICES or dataset not in DATASETS or method not in ("ais", "apg"):
+            continue
+        full = counts.loc[device, dataset].max()
+        if n < full:
+            unit = "volumes" if dataset in N_SLICES else "images"
+            note += (f". {DATASETS[dataset].split(' (')[0]} μSAM2 {method.upper()} {SIZE_NAMES[model]}"
+                     f" on {DEVICES[device].split(' (')[0]}: {n} of {full} {unit}")
+    fig.text(0.5, bottom_box.y0 - 0.4 / height, note,
              ha="center", va="top", fontsize=fig2.SMALL_FONT_SIZE, color=TEXT_COLOR)
     handles = [plt.Rectangle((0, 0), 1, 1, color=tinted(METHOD_COLORS["micro-sam2"], PART_TINTS[part]))
                for part in ["encoder", "decoder", "postprocessing"]]
@@ -320,11 +353,9 @@ def plot_interactive(region=None, compact=False):
     height = 0.3 + len(DEVICES) * (panel_height + 0.25) + 0.6 + legend_height
     fig = fig2.new_figure(height, region)
     axes = grid_axes(fig, len(DEVICES), len(DATASETS), panel_height, top=0.3)
-    # Each row has two bars on a log time axis: the image encoder, once per image (2d) or volume (3d), and the prompt
-    # encoder with the mask decoder, per object (2d) or per object and slice (3d). Their colors are those of the
-    # encoder and the decoder in the automatic plot.
-    part_colors = {part: tinted(METHOD_COLORS["micro-sam2"], PART_TINTS[part]) for part in ("encoder", "decoder")}
-    offsets = {"encoder": BAR_HEIGHT / 4, "decoder": -BAR_HEIGHT / 4}
+    # Each row is one stacked bar on a log time axis, as in panel a: the image encoder, once per image (2d) or
+    # volume (3d), then the prompt encoder with the mask decoder for one object after its first prompt, in 3d through
+    # all slices. The gray italic number is the decoder time per slice.
     y = -np.arange(len(rows)) - np.where(np.arange(len(rows)) >= len(SIZES), 0.4, 0)
     for i, device in enumerate(DEVICES):
         for j, dataset in enumerate(DATASETS):
@@ -335,41 +366,30 @@ def plot_interactive(region=None, compact=False):
             if obj.empty:
                 draw_pending(ax)
             else:
-                stats = {
-                    "encoder": enc.groupby(["method", "model", "sample"])["seconds"].sum()
-                    .groupby(["method", "model"]).agg(["mean", "std"]),
-                    "decoder": obj.groupby(["method", "model"])["seconds_per_slice"].agg(["mean", "std"]),
-                }
-                # The bars start at the power of ten under the fastest decoder.
-                start = 10.0 ** np.floor(np.log10(stats["decoder"]["mean"].min()))
-                end = 0.0
+                encoder = enc.groupby(["method", "model", "sample"])["seconds"].sum() \
+                    .groupby(["method", "model"]).agg(["mean", "std"])
+                decoder = obj.groupby(["method", "model"])["seconds"].agg(["mean", "std"])
+                per_slice = obj.groupby(["method", "model"])["seconds_per_slice"].mean()
+                start = log_start(encoder["mean"][encoder["mean"] > 0])
+                segments, end = [], 0.0
                 for yi, (label, method, model) in zip(y, rows):
-                    notes, row_end = [], 0.0
-                    for part, table in stats.items():
-                        if (method, model) not in table.index:
-                            continue
-                        mean, std = table.loc[(method, model)]
-                        std = 0.0 if np.isnan(std) else std
-                        position = yi + offsets[part]
-                        bar = ax.barh(position, mean - start, left=start, height=BAR_HEIGHT / 2,
-                                      color=part_colors[part], linewidth=0, zorder=2)[0]
-                        bar.set_hatch("///")
-                        bar.set_edgecolor("white")
-                        lower = min(std, mean - start * 1.01)
-                        ax.errorbar(mean, position, xerr=[[lower], [std]], color=fig2.GROUP_COLOR, linewidth=0.5,
-                                    capsize=1.0, zorder=3)
-                        notes.append(f"{mean * 1000:.1f} ms" if mean < 1 else f"{mean:.2f} s")
-                        row_end = max(row_end, mean + std)
-                    # One note per row, after its longer bar: the encoder time, then the decoder time.
-                    if notes:
-                        ax.text(row_end, yi, " " + " / ".join(notes), va="center", ha="left",
-                                fontsize=fig2.SMALL_FONT_SIZE, color=TEXT_COLOR)
-                    end = max(end, row_end)
-                # As in the automatic plot, the bars take about half of the axis; the rest is for the notes.
-                ax.set_xscale("log")
-                ax.set_xlim(start, start * (end / start) ** 1.75)
-                ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:g}"))
-                ax.xaxis.set_minor_formatter(ticker.NullFormatter())
+                    if (method, model) not in encoder.index or (method, model) not in decoder.index:
+                        continue
+                    enc_mean, enc_std = encoder.loc[(method, model)]
+                    dec_mean, dec_std = decoder.loc[(method, model)]
+                    mean = enc_mean + dec_mean
+                    std = float(np.hypot(np.nan_to_num(enc_std), np.nan_to_num(dec_std)))
+                    lower = min(std, mean - start * 1.01)
+                    ax.errorbar(mean, yi, xerr=[[lower], [std]], color=fig2.GROUP_COLOR, linewidth=0.6,
+                                capsize=1.2, zorder=3)
+                    segments.append((yi, start, [enc_mean, dec_mean], ["encoder", "decoder"], "micro-sam2",
+                                     mean - lower))
+                    write_total(ax, mean + std, yi, mean, device, dataset,
+                                per_slice.loc[(method, model)] if dataset in N_SLICES else None)
+                    end = max(end, mean + std)
+                set_log_axis(ax, start, end, BAR_SHARE_3D if dataset in N_SLICES else BAR_SHARE_2D)
+                draw_segments(ax, segments, True, minutes=(device, dataset) in MINUTES_PANELS,
+                              seconds=(device, dataset) in SECONDS_PANELS)
                 style_axes(ax)
             ax.set_ylim(y.min() - 0.6, y.max() + 0.6)
             ax.set_yticks(y)
@@ -379,10 +399,10 @@ def plot_interactive(region=None, compact=False):
     fig.text(0.5, bottom_box.y0 - 0.25 / height, "Time [s, log scale] ↓", ha="center", va="top",
              fontsize=fig2.MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR)
     fig.text(0.5, bottom_box.y0 - 0.4 / height,
-             "Numbers: encoder / decoder. Encoder: once per image (2d) or volume (3d). "
-             "Decoder: per object (2d) or per object and slice (3d), after one prompt", ha="center", va="top",
+             "Encoder: once per image (2d) or volume (3d). Decoder: one object after its first prompt, in 3d "
+             "through all slices", ha="center", va="top",
              fontsize=fig2.SMALL_FONT_SIZE, color=TEXT_COLOR)
-    handles = [plt.Rectangle((0, 0), 1, 1, facecolor=part_colors[part], edgecolor="white", hatch="///", linewidth=0)
+    handles = [plt.Rectangle((0, 0), 1, 1, color=tinted(METHOD_COLORS["micro-sam2"], PART_TINTS[part]))
                for part in ("encoder", "decoder")]
     legend = fig.legend(handles, ["μSAM2 image encoder", "μSAM2 prompt encoder + mask decoder"], loc="upper center",
                         bbox_to_anchor=(0.5, bottom_box.y0 - 0.55 / height), ncol=2, fontsize=fig2.MAX_FONT_SIZE,
