@@ -56,7 +56,7 @@ PROMPTS = {"interactive_point": "Point", "interactive_box": "Box"}
 # The number of slices of the 3d samples (all evaluation crops are 32 x 512 x 512), for the time per slice.
 N_SLICES = {"gonuclear": 32, "cremi": 32}
 # The devices whose automatic runtimes span orders of magnitude get a log time axis.
-LOG_DEVICES = {"cpu", "a100", "m1"}
+LOG_DEVICES = {"cpu", "a100", "m2"}
 # The gap between the stacked parts and the smallest width of a part, as fractions of the axis width.
 PART_GAP = 0.006
 # The space between the end of a bar (or its error bar) and its number, in points.
@@ -68,7 +68,7 @@ TEXT_FILL = 0.8
 # The color of the time per slice next to the totals (contrast 5.3 on white).
 SLICE_COLOR = "#6b6b6b"
 # The panels (device, dataset) whose totals carry the unit.
-SECONDS_PANELS = {(device, dataset) for device in ("cpu", "a100", "m1")
+SECONDS_PANELS = {(device, dataset) for device in ("cpu", "a100", "m2")
                   for dataset in ("livecell", "gonuclear", "cremi")}
 # The panels (device, dataset) that write times over MINUTES_FROM seconds in minutes.
 MINUTES_PANELS = {("cpu", "gonuclear"), ("cpu", "cremi")}
