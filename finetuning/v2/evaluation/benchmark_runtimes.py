@@ -143,6 +143,8 @@ VOLUMES_3D = {
 # Groups that are timed on fewer volumes. CREMI APG L needs more than 12 h per volume on CPU, so only one volume.
 VOLUMES_3D_GROUP = {
     ("cpu", "cremi", "apg", "hvit_l"): ["sample_0001.h5"],
+    # CREMI is not in the figure; its CPU APG B runs are not completed.
+    ("cpu", "cremi", "apg", "hvit_b"): ["sample_0001.h5", "sample_0003.h5"],
 }
 
 
