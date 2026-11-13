@@ -219,3 +219,6 @@ HANDOFF*.md
 
 # Curation figures and notes of the mito / nucleus EM generalists (kept locally).
 mito_nuc_figures/
+
+# Generated paper figures and results tables (kept locally).
+scripts/plotting/v2/for_paper/figures/
