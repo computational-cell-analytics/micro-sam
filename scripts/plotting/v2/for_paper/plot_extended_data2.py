@@ -23,6 +23,7 @@ Usage:
     python plot_extended_data2.py
 """
 
+import glob
 import os
 import argparse
 
@@ -32,6 +33,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.ticker as ticker
 import matplotlib.transforms as transforms
+from matplotlib.text import Annotation
 
 import plots_for_figure2 as fig2
 from plot_style import METHOD_COLORS, TEXT_COLOR, set_style
@@ -44,11 +46,17 @@ BENCHMARK_ROOT = os.environ.get(
 )
 SAMPLE_CSV = os.path.join(BENCHMARK_ROOT, "runtimes_per_sample.csv")
 OBJECT_CSV = os.path.join(BENCHMARK_ROOT, "runtimes_per_object.csv")
+# The Mac results are timed off the cluster and committed as CSV tables (one folder per device tag).
+DEVICE_CSV_ROOT = os.path.join(ROOT, "..", "..", "..", "..", "finetuning", "v2", "evaluation")
 
 DEVICES = {"cpu": "CPU (16 cores)", "a100": "GPU (A100)", "m2": "Apple M2"}
 # CREMI (3d EM, reference SegNeuron) is timed too, but not shown: APG L takes more than 12 h per volume on CPU.
 DATASETS = {"livecell": "LIVECell (2d, LM)", "gonuclear": "GoNuclear (3d, LM)"}
 REFERENCES = {"cellposesam": "CellposeSAM"}
+# The text over a mode that was not run in a panel, because it takes too long there.
+NOT_RUN_TEXT = "not run (hours per volume)"
+# The short names of the references in the figure.
+REFERENCE_NAMES = {"cellposesam": "CPSAM"}
 SIZES = ["hvit_t", "hvit_s", "hvit_b", "hvit_l"]
 SIZE_NAMES = {"hvit_t": "T", "hvit_s": "S", "hvit_b": "B", "hvit_l": "L"}
 MODES = {"ais": "AIS", "apg": "APG"}
@@ -71,7 +79,7 @@ SLICE_COLOR = "#6b6b6b"
 SECONDS_PANELS = {(device, dataset) for device in ("cpu", "a100", "m2")
                   for dataset in ("livecell", "gonuclear", "cremi")}
 # The panels (device, dataset) that write times over MINUTES_FROM seconds in minutes.
-MINUTES_PANELS = {("cpu", "gonuclear"), ("cpu", "cremi")}
+MINUTES_PANELS = {("cpu", "gonuclear"), ("cpu", "cremi"), ("m2", "gonuclear")}
 MINUTES_FROM = 200
 MIN_PART_WIDTH = 0.012
 # The share of the micro-sam2 color for the interactive bars: a tint that no part of panel a uses.
@@ -96,6 +104,19 @@ def load():
     objects = pd.read_csv(OBJECT_CSV) if os.path.exists(OBJECT_CSV) else pd.DataFrame(
         columns=["device_tag", "dataset", "method", "model", "seconds_per_slice", "n_slices"]
     )
+    # The committed tables of a device replace its rows in the cluster tables.
+    for folder in sorted(glob.glob(os.path.join(DEVICE_CSV_ROOT, "runtimes_*"))):
+        device_tag = os.path.basename(folder)[len("runtimes_"):]
+        for name, table in (("samples", "runtimes_per_sample.csv"), ("objects", "runtimes_per_object.csv")):
+            path = os.path.join(folder, table)
+            if not os.path.exists(path):
+                continue
+            current = samples if name == "samples" else objects
+            current = pd.concat([current[current["device_tag"] != device_tag], pd.read_csv(path)], ignore_index=True)
+            if name == "samples":
+                samples = current
+            else:
+                objects = current
     # Only the selected samples: all images in 2d, the volumes of VOLUMES_3D per dataset in 3d (one on the M2).
     if "selected" in samples:
         samples = samples[samples["selected"].astype(bool)]
@@ -106,7 +127,7 @@ def load():
 def automatic_rows(dataset):
     """The bars of one automatic panel, top to bottom, as (label, method, model, method color name)."""
     reference = "segneuron" if dataset == "cremi" else "cellposesam"
-    rows = [("Reference", reference, "default", REFERENCES[reference])]
+    rows = [(REFERENCE_NAMES.get(reference, REFERENCES[reference]), reference, "default", REFERENCES[reference])]
     for mode, mode_name in MODES.items():
         rows += [(f"μSAM2 {mode_name} {SIZE_NAMES[size]}", mode, size, "micro-sam2") for size in SIZES]
     return rows
@@ -161,7 +182,8 @@ def format_minutes(value):
 def format_tick(value, _):
     """Log axis ticks in seconds; from 1000 s on as powers of ten, which are shorter."""
     if value >= 1000:
-        return f"$10^{{{np.log10(value):.0f}}}$ s"
+        # Unicode superscripts instead of mathtext, which would embed a second font.
+        return "10" + str(int(round(np.log10(value)))).translate(str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")) + " s"
     return f"{value:g} s"
 
 
@@ -171,10 +193,22 @@ def format_seconds(value):
     return f"{value:.0f}" if value >= 10 else f"{value:.1f}" if value >= 1 else f"{value:.2f}"
 
 
+def contrast(first, second):
+    """The WCAG contrast ratio of two colors."""
+    def luminance(color):
+        rgb = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in colors.to_rgb(color)]
+        return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+    high, low = sorted([luminance(first), luminance(second)], reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
 def text_color_on(color):
-    """White text on dark colors, dark text on light colors."""
+    """White text on dark colors, dark text on light colors; black where neither reaches a contrast of 4.5."""
     red, green, blue = colors.to_rgb(color)
-    return "white" if 0.2126 * red + 0.7152 * green + 0.0722 * blue < 0.5 else TEXT_COLOR
+    preferred = "white" if 0.2126 * red + 0.7152 * green + 0.0722 * blue < 0.5 else TEXT_COLOR
+    if contrast(preferred, color) >= 4.5:
+        return preferred
+    return max(["white", TEXT_COLOR, "black"], key=lambda text: contrast(text, color))
 
 
 def draw_segments(ax, segments, log, minutes=False, seconds=False):
@@ -233,7 +267,10 @@ def write_total(ax, x, y, seconds, device, dataset, per_slice=None):
     text = ax.text(x, y, note, va="center", ha="left", fontsize=fig2.SMALL_FONT_SIZE, color=TEXT_COLOR,
                    transform=transforms.offset_copy(ax.transData, fig=ax.figure, x=LABEL_PAD, units="points"))
     if per_slice is not None:
-        per_slice = f"{per_slice / 60:.1f} min" if per_slice > MINUTES_FROM else f"{per_slice:.2g} s"
+        if per_slice > MINUTES_FROM:
+            per_slice = f"{per_slice / 60:.1f} min"
+        else:
+            per_slice = f"{per_slice:.2g} s" if per_slice < 100 else f"{per_slice:.0f} s"
         ax.annotate(f" ({per_slice}/slice)", xy=(1, 0.5), xycoords=text, va="center", ha="left",
                     fontsize=fig2.SMALL_FONT_SIZE, color=SLICE_COLOR, fontstyle="italic")
 
@@ -252,12 +289,19 @@ def set_log_axis(ax, start, end, share):
     ax.xaxis.set_minor_formatter(ticker.NullFormatter())
 
 
+def title_on_edge(fig, legend, title):
+    """Write the title of a legend card on the top left of its frame, over the frame line."""
+    fig.add_artist(Annotation(title, xy=(0, 1), xycoords=legend, xytext=(6, 0), textcoords="offset points",
+                              ha="left", va="center", fontsize=fig2.MAX_FONT_SIZE, color=TEXT_COLOR,
+                              zorder=legend.get_zorder() + 1, bbox=dict(facecolor="white", edgecolor="none", pad=1.5)))
+
+
 def plot_automatic(region=None, compact=False):
     samples, _ = load()
     n_rows = len(automatic_rows("livecell"))
     panel_height = (n_rows + 0.6) * ROW_HEIGHT
     legend_height = 0.3
-    height = 0.3 + len(DEVICES) * (panel_height + 0.25) + 0.5 + legend_height
+    height = 0.3 + len(DEVICES) * (panel_height + 0.25) + 0.3 + legend_height
     fig = fig2.new_figure(height, region)
     axes = grid_axes(fig, len(DEVICES), len(DATASETS), panel_height, top=0.3)
     for i, device in enumerate(DEVICES):
@@ -309,6 +353,17 @@ def plot_automatic(region=None, compact=False):
                     ax.set_xlim(0, end / share)
                 draw_segments(ax, segments, log, minutes=(device, dataset) in MINUTES_PANELS,
                               seconds=(device, dataset) in SECONDS_PANELS)
+                # A mode without any result in a panel (not run, too slow) gets one band over its rows, as the
+                # 'not applicable' bands of Figure 2.
+                for mode in MODES:
+                    mode_y = [yi for yi, row in zip(y, rows) if row[1] == mode]
+                    if any((mode, size) in totals.index for size in SIZES):
+                        continue
+                    ax.axhspan(min(mode_y) - BAR_HEIGHT / 2, max(mode_y) + BAR_HEIGHT / 2,
+                               color=fig2.NOT_APPLICABLE_COLOR, linewidth=0, zorder=0)
+                    ax.text(0.5, np.mean(mode_y), NOT_RUN_TEXT, transform=ax.get_yaxis_transform(),
+                            ha="center", va="center", fontsize=fig2.MAX_FONT_SIZE, style="italic",
+                            color=fig2.NOT_APPLICABLE_TEXT_COLOR)
                 style_axes(ax)
             ax.set_ylim(y.min() - 0.6, y.max() + 0.6)
             ax.set_yticks(y)
@@ -318,30 +373,20 @@ def plot_automatic(region=None, compact=False):
     fig.text(0.5, bottom_box.y0 - 0.25 / height, "Time per image (2d) or volume (3d) [s, log scale] ↓",
              ha="center", va="top",
              fontsize=fig2.MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR)
-    # Groups with fewer samples than the others of their panel (a run that did not finish) are named in the note.
-    counts = samples[samples["part"] == "total"].groupby(["device_tag", "dataset", "method", "model"]).size()
-    note = "Reference: CellposeSAM"
-    for (device, dataset, method, model), n in counts.items():
-        if device not in DEVICES or dataset not in DATASETS or method not in ("ais", "apg"):
-            continue
-        full = counts.loc[device, dataset].max()
-        if n < full:
-            unit = "volumes" if dataset in N_SLICES else "images"
-            note += (f". {DATASETS[dataset].split(' (')[0]} μSAM2 {method.upper()} {SIZE_NAMES[model]}"
-                     f" on {DEVICES[device].split(' (')[0]}: {n} of {full} {unit}")
-    fig.text(0.5, bottom_box.y0 - 0.4 / height, note,
-             ha="center", va="top", fontsize=fig2.SMALL_FONT_SIZE, color=TEXT_COLOR)
-    handles = [plt.Rectangle((0, 0), 1, 1, color=tinted(METHOD_COLORS["micro-sam2"], PART_TINTS[part]))
-               for part in ["encoder", "decoder", "postprocessing"]]
-    labels = ["μSAM2 encoder", "μSAM2 decoder", "μSAM2 postprocessing"]
-    for name in REFERENCES.values():
-        handles += [plt.Rectangle((0, 0), 1, 1, color=tinted(METHOD_COLORS[name], PART_TINTS[part]))
-                    for part in ["network", "postprocessing"]]
-        labels += [f"{name} network", f"{name} postprocessing"]
-    legend = fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=4,
-                        fontsize=fig2.MAX_FONT_SIZE, frameon=True, edgecolor=fig2.LEGEND_BORDER_COLOR,
-                        handlelength=1.1, columnspacing=0.8)
-    legend.get_frame().set_linewidth(0.6)
+    # One legend card per method, side by side: micro-sam2 left of the center, the references right of it.
+    cards = [("μSAM2", "micro-sam2", ["encoder", "decoder", "postprocessing"])]
+    cards += [(REFERENCE_NAMES.get(method, name), name, ["network", "postprocessing"])
+              for method, name in REFERENCES.items()]
+    for k, (title, color_name, parts) in enumerate(cards):
+        handles = [plt.Rectangle((0, 0), 1, 1, color=tinted(METHOD_COLORS[color_name], PART_TINTS[part]))
+                   for part in parts]
+        legend = fig.legend(handles, [PART_NAMES[part] for part in parts], ncol=len(parts),
+                            loc="lower right" if k == 0 else "lower left",
+                            bbox_to_anchor=(0.49 if k == 0 else 0.51, 0.0),
+                            fontsize=fig2.MAX_FONT_SIZE, frameon=True,
+                            edgecolor=fig2.LEGEND_BORDER_COLOR, handlelength=1.1, columnspacing=0.8, borderpad=0.9)
+        legend.get_frame().set_linewidth(0.6)
+        title_on_edge(fig, legend, title)
     return fig
 
 
@@ -349,8 +394,8 @@ def plot_interactive(region=None, compact=False):
     samples, objects = load()
     rows = [(f"{PROMPTS[method]} {SIZE_NAMES[size]}", method, size) for method in PROMPTS for size in SIZES]
     panel_height = (len(rows) + 0.6) * ROW_HEIGHT
-    legend_height = 0.2
-    height = 0.3 + len(DEVICES) * (panel_height + 0.25) + 0.6 + legend_height
+    legend_height = 0.3
+    height = 0.3 + len(DEVICES) * (panel_height + 0.25) + 0.3 + legend_height
     fig = fig2.new_figure(height, region)
     axes = grid_axes(fig, len(DEVICES), len(DATASETS), panel_height, top=0.3)
     # Each row is one stacked bar on a log time axis, as in panel a: the image encoder, once per image (2d) or
@@ -396,18 +441,16 @@ def plot_interactive(region=None, compact=False):
             ax.set_yticklabels([row[0] for row in rows] if j == 0 else [], fontsize=fig2.SMALL_FONT_SIZE)
     label_grid(fig, axes)
     bottom_box = axes[-1, 0].get_position()
-    fig.text(0.5, bottom_box.y0 - 0.25 / height, "Time [s, log scale] ↓", ha="center", va="top",
+    fig.text(0.5, bottom_box.y0 - 0.25 / height, "Time per object [s, log scale] ↓", ha="center", va="top",
              fontsize=fig2.MAX_FONT_SIZE, fontweight="bold", color=TEXT_COLOR)
-    fig.text(0.5, bottom_box.y0 - 0.4 / height,
-             "Encoder: once per image (2d) or volume (3d). Decoder: one object after its first prompt, in 3d "
-             "through all slices", ha="center", va="top",
-             fontsize=fig2.SMALL_FONT_SIZE, color=TEXT_COLOR)
     handles = [plt.Rectangle((0, 0), 1, 1, color=tinted(METHOD_COLORS["micro-sam2"], PART_TINTS[part]))
                for part in ("encoder", "decoder")]
-    legend = fig.legend(handles, ["μSAM2 image encoder", "μSAM2 prompt encoder + mask decoder"], loc="upper center",
-                        bbox_to_anchor=(0.5, bottom_box.y0 - 0.55 / height), ncol=2, fontsize=fig2.MAX_FONT_SIZE,
-                        frameon=True, edgecolor=fig2.LEGEND_BORDER_COLOR, handlelength=1.1, columnspacing=0.8)
+    legend = fig.legend(handles, ["Encoder", "Prompt encoder & Mask decoder"],
+                        loc="lower center", bbox_to_anchor=(0.5, 0.0), ncol=2, fontsize=fig2.MAX_FONT_SIZE,
+                        frameon=True, edgecolor=fig2.LEGEND_BORDER_COLOR, handlelength=1.1,
+                        columnspacing=0.8, borderpad=0.9)
     legend.get_frame().set_linewidth(0.6)
+    title_on_edge(fig, legend, "μSAM2")
     return fig
 
 
