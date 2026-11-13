@@ -1972,7 +1972,7 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 )
             )
 
-    # 16. Zebrafinch j0126 (neuron segmentation in FIB-SEM of zebra finch Area X, 10x10x20 nm, Kornfeld lab)
+    # 16. Zebrafinch j0126 (neuron segmentation in SBEM of zebra finch Area X, 10x10x20 nm, Kornfeld lab)
     # NOTE: Somata, vessels and missing tiles carry no id, so unlabelled blobs above 2 um^2 map to the ignore
     # label. The last fifth of z validates. j0251 (10x10x25 nm) uses boxes placed by a tissue scan, since
     # torch_em's cached boxes sit at the empty volume corner.

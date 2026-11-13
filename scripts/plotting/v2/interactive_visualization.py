@@ -1,6 +1,6 @@
 """Interactive 3d segmentation with 'hvit_t_cells' in the micro-sam annotator on LICONN.
 
-The beke volumes moved to 'scripts/user_study/v2/explore_huisken_data.py' ('--embryo').
+The beke volumes moved to 'scripts/user_study/v2/huisken_lab/explore_huisken_data.py' ('--embryo').
 
 Usage:
     python interactive_visualization.py --view  # only the raw volume in napari

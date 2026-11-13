@@ -13,7 +13,7 @@ from segment_anything import SamPredictor
 
 import torch
 
-from bioimage_cpp.segmentation import relabel_sequential
+from bioimage_cpp.segmentation import label as connected_components, relabel_sequential
 
 from ... import util as util
 from . import instance_segmentation
@@ -393,7 +393,7 @@ def _run_inference_with_iterative_prompting_for_image(
 
     prompt_generator = CenterIterativePromptGenerator() if click_protocol == "center" else IterativePromptGenerator()
 
-    gt_ids = np.unique(gt)[1:]
+    gt_ids = np.setdiff1d(np.unique(gt), [0])
 
     # Use multi-masking only if we have a single positive point without box
     if start_with_box_prompt:
@@ -440,7 +440,9 @@ def _run_inference_with_iterative_prompting_for_image(
         # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
         multimasking = False
 
-        masks = torch.stack([m["segmentation"][None] for m in batched_outputs]).to(torch.float32)
+        # The masks are stacked on the CPU: the prompt generators move them there anyway, and many objects in a
+        # large image do not fit on the GPU.
+        masks = torch.stack([m["segmentation"][None].cpu() for m in batched_outputs]).to(torch.float32)
 
         next_coords, next_labels = _get_batched_iterative_prompts(
             sampled_binary_gt, masks, batch_size, prompt_generator
@@ -521,7 +523,9 @@ def run_inference_with_iterative_prompting(
 
         image = imageio.imread(image_path)
         gt = imageio.imread(gt_path).astype("uint32")
-        gt = relabel_sequential(gt)[0]
+        # The objects that get prompted are the connected components of the labels, as in the micro-sam2
+        # evaluation, so that both prompt the same objects.
+        gt = connected_components(gt).astype("uint32")
 
         if embedding_dir is None:
             embedding_path = None

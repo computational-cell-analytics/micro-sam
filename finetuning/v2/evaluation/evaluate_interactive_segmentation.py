@@ -41,7 +41,8 @@ from micro_sam.v2.evaluation.inference import (
 from common import (
     CLICK_PROTOCOLS, DATA_ROOT, DATASETS_2D, DATASETS_3D, MODEL_TYPES, CHECKPOINT_PATHS,
     check_data_download, checkpoint_checksum, export_joint_checkpoint, get_joint_checkpoint,
-    interactive_result_name, interactive_run_tag, load_data, n_samples, run_dataset_evaluation,
+    interactive_result_name, interactive_run_tag, interactive_sample_ids_3d, load_data, n_samples,
+    run_dataset_evaluation,
 )
 
 
@@ -232,7 +233,7 @@ def run_interactive_evaluation_2d(
 def run_interactive_evaluation_3d(
     dataset_name, data_root, experiment_folder, device, model_type, checkpoint_path, tag, legacy_tag,
     start_with_box=True, n_iterations=8, min_size=0, crop_shape=None, shard=None, score_only=False, limit=None,
-    correction_margin=0.0,
+    correction_margin=0.0, click_protocol="random",
 ):
     """Run iterative prompting on the 3d test split and write one result CSV per iteration.
 
@@ -249,12 +250,14 @@ def run_interactive_evaluation_3d(
     save_paths = [
         os.path.join(results_dir, interactive_result_name(
             dataset_name, tag, model_type, prompt, iteration, ndim=3, min_size=min_size,
+            click_protocol=click_protocol,
         ))
         for iteration in range(n_iterations)
     ]
     legacy_paths = [
         os.path.join(results_dir, interactive_result_name(
             dataset_name, legacy_tag, model_type, prompt, iteration, ndim=3, min_size=min_size,
+            click_protocol=click_protocol,
         ))
         for iteration in range(n_iterations)
     ]
@@ -264,15 +267,13 @@ def run_interactive_evaluation_3d(
 
     # Keyed by model type and dataset, since the cached predictions are reused across runs and the
     # per-sample names are otherwise identical for every dataset. 'min_size' changes the ground truth
-    # and therefore the prompts, so it has to key the cache too.
+    # and therefore the prompts, and the click protocol changes the prompts, so both key the cache too.
     prediction_root = os.path.join(
         experiment_folder, "predictions", f"{tag}_{model_type}",
-        dataset_name if not min_size else f"{dataset_name}_min{min_size}",
+        f"{dataset_name}{interactive_run_tag(3, min_size=min_size, click_protocol=click_protocol)}",
     )
-    total = n_samples(dataset_name, data_root)
-    if limit is not None:
-        total = min(total, limit)
-    sample_ids = range(total) if shard is None else range(shard[0], total, shard[1])
+    selected = interactive_sample_ids_3d(dataset_name, data_root, limit)
+    sample_ids = selected if shard is None else selected[shard[0]::shard[1]]
     samples = load_data(
         dataset_name, data_root, 3, min_size=min_size, crop_shape=crop_shape, sample_ids=set(sample_ids)
     )
@@ -305,6 +306,7 @@ def run_interactive_evaluation_3d(
                 device=device,
                 n_iterations=n_iterations,
                 correction_margin=correction_margin,
+                click_protocol=click_protocol,
             )
         all_gt.append(labels)
         all_valid_rois.append(valid_roi)
@@ -361,8 +363,9 @@ def main():
     )
     parser.add_argument(
         "--click_protocol", type=str, default="random", choices=CLICK_PROTOCOLS,
-        help="2d only. The correction clicks: 'random' positions in the error regions, or the 'center' of the "
-             "largest error regions with a single mask for the first point, see 'CLICK_PROTOCOLS'.",
+        help="The correction clicks: 'random' positions in the error regions, or the 'center' of the largest "
+             "error regions with a single mask for the first point in 2d, see 'CLICK_PROTOCOLS'. In 3d the clicks "
+             "go on the worst slice of an object.",
     )
     parser.add_argument("--crop_3d", type=int, nargs=3, default=None, help="Override the 3d center crop (Z Y X).")
     parser.add_argument(
@@ -388,8 +391,6 @@ def main():
         raise ValueError("--score_only scores the whole dataset, so it cannot be combined with a shard.")
 
     ndim = args.ndim or (3 if args.dataset_name in DATASETS_3D else 2)
-    if ndim == 3 and args.click_protocol != "random":
-        raise ValueError("--click_protocol applies to 2d only.")
 
     check_data_download(args.dataset_name, args.input_path)
 
@@ -416,6 +417,7 @@ def main():
             start_with_box=(args.prompt_choice == "box"), n_iterations=args.n_iterations,
             min_size=args.min_size, crop_shape=tuple(args.crop_3d) if args.crop_3d else None,
             shard=shard, score_only=args.score_only, limit=args.n_samples, correction_margin=args.correction_margin,
+            click_protocol=args.click_protocol,
         )
 
 
