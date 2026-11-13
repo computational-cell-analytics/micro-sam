@@ -46,8 +46,9 @@ BENCHMARK_ROOT = os.environ.get(
 )
 SAMPLE_CSV = os.path.join(BENCHMARK_ROOT, "runtimes_per_sample.csv")
 OBJECT_CSV = os.path.join(BENCHMARK_ROOT, "runtimes_per_object.csv")
-# The Mac results are timed off the cluster and committed as CSV tables (one folder per device tag).
-DEVICE_CSV_ROOT = os.path.join(ROOT, "..", "..", "..", "..", "finetuning", "v2", "evaluation")
+# The tables of the devices timed off the cluster (the Mac) are in one folder per device tag, next to the main
+# tables. They are separate, because 'benchmark_runtimes.py collect' rewrites the main tables.
+DEVICE_CSV_ROOT = BENCHMARK_ROOT
 
 DEVICES = {"cpu": "CPU (16 cores)", "a100": "GPU (A100)", "m2": "Apple M2"}
 # CREMI (3d EM, reference SegNeuron) is timed too, but not shown: APG L takes more than 12 h per volume on CPU.
@@ -104,9 +105,9 @@ def load():
     objects = pd.read_csv(OBJECT_CSV) if os.path.exists(OBJECT_CSV) else pd.DataFrame(
         columns=["device_tag", "dataset", "method", "model", "seconds_per_slice", "n_slices"]
     )
-    # The committed tables of a device replace its rows in the cluster tables.
-    for folder in sorted(glob.glob(os.path.join(DEVICE_CSV_ROOT, "runtimes_*"))):
-        device_tag = os.path.basename(folder)[len("runtimes_"):]
+    # The tables of a device folder replace the rows of this device in the main tables.
+    for folder in sorted(glob.glob(os.path.join(DEVICE_CSV_ROOT, "runtimes_*", ""))):
+        device_tag = os.path.basename(os.path.dirname(folder))[len("runtimes_"):]
         for name, table in (("samples", "runtimes_per_sample.csv"), ("objects", "runtimes_per_object.csv")):
             path = os.path.join(folder, table)
             if not os.path.exists(path):
