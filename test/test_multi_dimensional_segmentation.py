@@ -126,3 +126,41 @@ class TestMultiDimensionalSegmentation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.fixture
+def failed_trackastra_import(monkeypatch):
+    """The state of the module after its import of trackastra failed. The fixture restores the state after the test."""
+    import micro_sam.v1.multi_dimensional_segmentation as mds
+
+    for name in ("Trackastra", "graph_to_ctc", "graph_to_napari_tracks"):
+        monkeypatch.setattr(mds, name, None)
+    monkeypatch.setattr(mds, "TRACKASTRA_IMPORT_ERROR", ModuleNotFoundError("No module named 'trackastra'"))
+    return mds
+
+
+def test_require_trackastra_retries_a_failed_import(failed_trackastra_import, monkeypatch):
+    # For example, the user installed trackastra while napari was open.
+    import sys
+    import types
+
+    mds = failed_trackastra_import
+    model, tracking = types.ModuleType("trackastra.model"), types.ModuleType("trackastra.tracking")
+    model.Trackastra = object()
+    tracking.graph_to_ctc = tracking.graph_to_napari_tracks = lambda *args: None
+    monkeypatch.setitem(sys.modules, "trackastra", types.ModuleType("trackastra"))
+    monkeypatch.setitem(sys.modules, "trackastra.model", model)
+    monkeypatch.setitem(sys.modules, "trackastra.tracking", tracking)
+
+    mds._require_trackastra()
+    assert mds.Trackastra is model.Trackastra
+    assert mds.TRACKASTRA_IMPORT_ERROR is None
+
+
+def test_require_trackastra_reports_a_missing_package(failed_trackastra_import, monkeypatch):
+    import sys
+
+    for name in ("trackastra", "trackastra.model", "trackastra.tracking"):
+        monkeypatch.setitem(sys.modules, name, None)
+    with pytest.raises(RuntimeError, match="pip install trackastra"):
+        failed_trackastra_import._require_trackastra()

@@ -2,6 +2,7 @@
 
 import gc
 import os
+import traceback
 import json
 import hashlib
 import multiprocessing as mp
@@ -42,6 +43,7 @@ from ..v1.multi_dimensional_segmentation import (
     export_tracking_result_to_trackmate_xml,
     get_napari_track_data,
     track_across_frames,
+    _require_trackastra,
 )
 
 #
@@ -4831,6 +4833,12 @@ class AutoTrackWidget(AutoSegmentWidget):
 
         if not (self.volumetric and getattr(self, "apply_to_volume", False)):
             return super().__call__()
+        # The segmentation of all frames can take minutes, so check for trackastra first.
+        try:
+            _require_trackastra()
+        except RuntimeError as e:
+            traceback.print_exc()
+            return _generate_message("error", str(e))
         if _validate_layers(self._viewer, automatic_segmentation=True):
             return None
         if state.committed_lineages:
