@@ -131,6 +131,36 @@ def test_propagation_waits_before_batching_offloaded_memory(monkeypatch):
     assert events == ["wait", "batch"]
 
 
+@pytest.mark.parametrize("verbose", [True, False])
+def test_propagation_progress_bar_follows_verbose(monkeypatch, capsys, verbose):
+    from micro_sam.v2.models._video_predictor import CustomVideoPredictor
+
+    predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
+    torch.nn.Module.__init__(predictor)
+    predictor.clear_non_cond_mem_around_input = False
+    predictor.num_maskmem = 3
+    predictor.memory_temporal_stride_for_eval = 1
+    monkeypatch.setattr(predictor, "propagate_in_video_preflight", lambda state: None)
+    monkeypatch.setattr(predictor, "_get_obj_num", lambda state: 1)
+    monkeypatch.setattr(
+        predictor, "_track_frame_batch", lambda state, group, frame_idx, reverse: torch.zeros(1, 1, 2, 2),
+    )
+    monkeypatch.setattr(predictor, "_get_orig_video_res_output", lambda state, masks: (masks, masks))
+    inference_state = {
+        "num_frames": 2,
+        "obj_ids": [1],
+        "device": "cpu",
+        "offload_state_to_cpu": False,
+        "output_dict_per_obj": {
+            0: {"cond_frame_outputs": {0: frame_output(1.0)}, "non_cond_frame_outputs": {}}
+        },
+        "frames_tracked_per_obj": {0: {}},
+    }
+
+    list(predictor.propagate_in_video(inference_state, start_frame_idx=1, max_frame_num_to_track=1, verbose=verbose))
+    assert ("propagate in video" in capsys.readouterr().err) == verbose
+
+
 def test_mask_memory_release_keeps_the_window_for_a_direction_switch():
     from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 

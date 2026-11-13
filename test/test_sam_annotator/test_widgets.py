@@ -144,3 +144,28 @@ def test_hidden_batch_size_is_not_applied(qtbot, monkeypatch):
     assert widget._effective_batch_size() == 1
     monkeypatch.setattr("micro_sam.util._get_default_device", lambda: "cuda")
     assert widget._effective_batch_size() == 32
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() == "Windows", reason="GUI test does not work on Windows.")
+def test_show_activity_dock(make_napari_viewer_proxy):
+    from micro_sam.sam_annotator._widgets import _show_activity_dock
+
+    viewer = make_napari_viewer_proxy()
+    dialog = viewer.__wrapped__.window._qt_window._activity_dialog
+    assert dialog.isHidden()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        restore = _show_activity_dock(viewer)
+    assert not dialog.isHidden()
+    restore()
+    assert dialog.isHidden()
+
+    # A dock that the user opened stays open after the run.
+    dialog.show()
+    _show_activity_dock(viewer)()
+    assert not dialog.isHidden()
+
+    # Without the private napari API, the function does nothing.
+    _show_activity_dock(object())()

@@ -483,7 +483,7 @@ class CustomVideoPredictor(SAM2VideoPredictor):
     @torch.inference_mode()
     def propagate_in_video(
         self, inference_state, start_frame_idx=None, max_frame_num_to_track=None, reverse=False,
-        release_stale_mask_memory=False,
+        release_stale_mask_memory=False, verbose=True,
     ):
         """Propagate the prompts through the volume, tracking a frame's objects in one forward pass.
 
@@ -501,6 +501,8 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         'release_stale_mask_memory' frees the memory of the frames behind the attention window. Only a
         caller that resets the state after the pass may set it: a prompt added later reads the memory
         of the frames behind its slice.
+
+        'verbose' shows a terminal progress bar over the frames.
         """
         self.propagate_in_video_preflight(inference_state)
 
@@ -524,7 +526,7 @@ class CustomVideoPredictor(SAM2VideoPredictor):
             end_frame_idx = min(start_frame_idx + max_frame_num_to_track, num_frames - 1)
             processing_order = range(start_frame_idx, end_frame_idx + 1)
 
-        for frame_idx in tqdm(processing_order, desc="propagate in video"):
+        for frame_idx in tqdm(processing_order, desc="propagate in video", disable=not verbose):
             pred_masks_per_obj = [None] * batch_size
             to_track = []
             for obj_idx in range(batch_size):

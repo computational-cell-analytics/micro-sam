@@ -535,8 +535,10 @@ class TrackingPropagationPredictor:
     def __init__(self, occupancy):
         self.occupancy = occupancy
         self.frames_yielded = 0
+        self.verbose = None
 
-    def propagate_in_video(self, inference_state, reverse=False, release_stale_mask_memory=False):
+    def propagate_in_video(self, inference_state, reverse=False, release_stale_mask_memory=False, verbose=True):
+        self.verbose = verbose
         for frame_idx, occupied in enumerate(self.occupancy):
             self.frames_yielded += 1
             logits = torch.full((1, 1, 4, 4), 1.0 if occupied else -1.0)
@@ -549,6 +551,29 @@ def _propagate_with_patience(occupancy, patience):
     segmenter.inference_state = {}
     segments = segmenter._propagate_in_direction(reverse=False, early_stop_patience=patience)
     return segments, segmenter.predictor.frames_yielded
+
+
+def test_propagation_passes_verbose_to_the_predictor():
+    segmenter = PromptableSegmentation3D.__new__(PromptableSegmentation3D)
+    segmenter.predictor = TrackingPropagationPredictor([True])
+    segmenter.inference_state = {}
+    segmenter._propagate_in_direction(reverse=False, verbose=False)
+    assert segmenter.predictor.verbose is False
+
+
+def test_propagation_shows_a_terminal_bar_only_without_a_progress_callback(monkeypatch):
+    # A caller with a progress callback, e.g. the napari annotator, shows its own progress bar.
+    segmenter = PromptableSegmentation3D.__new__(PromptableSegmentation3D)
+    verbose_per_call = []
+    monkeypatch.setattr(segmenter, "_anchor_per_object", lambda: {1: 0}, raising=False)
+    monkeypatch.setattr(
+        segmenter, "_propagate_both_directions", lambda *args: verbose_per_call.append(args[-1]) or {}, raising=False,
+    )
+
+    segmenter.propagate_prompts()
+    segmenter.propagate_prompts(update_progress=lambda n: None)
+    segmenter.propagate_prompts(update_progress=lambda n: None, verbose=True)
+    assert verbose_per_call == [True, False, True]
 
 
 def test_early_stopping_skips_frames_past_the_end_of_every_object():

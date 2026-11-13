@@ -727,6 +727,29 @@ def _create_pbar_for_threadworker(initial_description=None):
     return pbar, pbar_signals
 
 
+def _show_activity_dock(viewer):
+    """Open the napari activity dock, which shows the progress bars, during a run.
+
+    This function uses private napari API. If that API is missing, the function does nothing.
+
+    Args:
+        viewer: The napari viewer or its PublicOnlyProxy.
+
+    Returns:
+        A function that closes the dock again if the dock was closed before.
+    """
+    # A plugin widget gets a PublicOnlyProxy viewer, which warns on each private attribute access.
+    viewer = getattr(viewer, "__wrapped__", viewer)
+    try:
+        window = viewer.window._qt_window
+        if not window._activity_dialog.isHidden():
+            return lambda: None
+        window.statusBar()._toggle_activity_dock(True)
+    except AttributeError:
+        return lambda: None
+    return lambda: window.statusBar()._toggle_activity_dock(False)
+
+
 def _reset_tracking_state(viewer):
     """Reset the tracking state.
 
@@ -4512,7 +4535,10 @@ class AutoSegmentWidget(_WidgetBase):
             )
             self._segmenter_key = cache_key
 
-        return self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
+        postproc_kwargs = self._postproc_kwargs()
+        if self.mode == "dense":  # Only the multicut of 'dense' mode accepts progress callbacks.
+            postproc_kwargs.update(pbar_init=pbar_init, pbar_update=pbar_update)
+        return self._segmenter.generate(mode=self.mode, **postproc_kwargs)
 
     def _run_apg(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
         from micro_sam.precompute_state import cache_autoseg_state
@@ -4652,6 +4678,7 @@ class AutoSegmentWidget(_WidgetBase):
         # event loop with 'processEvents' on each update so it repaints live. It is always closed in
         # the 'finally' block. Batched 3d inference forwards completed tile-slice increments from its
         # worker threads to this calling thread so napari can repaint them safely.
+        restore_activity_dock = _show_activity_dock(self._viewer)
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
         def pbar_init(total, description):
@@ -4673,6 +4700,7 @@ class AutoSegmentWidget(_WidgetBase):
                 seg = self._run_unisam2(state, run_raw, ndim, z, pbar_init=pbar_init, pbar_update=pbar_update)
         finally:
             pbar_signals.pbar_stop.emit()
+            restore_activity_dock()
 
         if z is None:
             self._viewer.layers["auto_segmentation"].data = seg
@@ -4755,6 +4783,7 @@ class AutoTrackWidget(AutoSegmentWidget):
 
     def _track_timeseries(self, state, raw):
         segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
+        restore_activity_dock = _show_activity_dock(self._viewer)
         pbar, pbar_signals = _create_pbar_for_threadworker()
         offset = 0
 
@@ -4810,6 +4839,7 @@ class AutoTrackWidget(AutoSegmentWidget):
             )
         finally:
             pbar_signals.pbar_stop.emit()
+            restore_activity_dock()
 
         state.lineage = lineages
         self._viewer.layers["auto_segmentation"].data = segmentation

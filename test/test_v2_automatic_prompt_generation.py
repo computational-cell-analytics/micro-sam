@@ -1085,7 +1085,8 @@ class _RecordingPropagator:
     def add_mask_prompts(self, frame_ids, masks=None, object_id=None, refine=True):
         self.pushed.append(("mask", int(frame_ids), int(object_id), int(np.asarray(masks[0]).sum()), refine))
 
-    def propagate_prompts(self, early_stop_patience=None):
+    def propagate_prompts(self, early_stop_patience=None, verbose=None):
+        self.verbose = verbose
         return self.video_segments
 
 
@@ -1386,6 +1387,8 @@ def test_volume_generate_runs_the_refinement_end_to_end(monkeypatch):
     # Both objects reached the propagator box-first then points, in one pass, which is what the
     # default 'prompts' strategy asks for.
     assert [entry[0] for entry in propagator.pushed] == ["reset", "box", "points", "box", "points"]
+    # The progress bar counts passes, so a pass gets no bar of its own.
+    assert propagator.verbose is False
 
 
 def test_volume_refinement_is_on_for_hvit_b_only():
