@@ -1,7 +1,7 @@
 """Plots for Extended Data Figure 2 of the micro-sam2 paper: the runtimes of micro-sam2 on CPU, GPU and Apple silicon.
 
-The numbers come from 'finetuning/v2/evaluation/benchmark_runtimes.py' (run 'collect' there first): one timed run
-per sample of LIVECell (2d LM) and GoNuclear (3d LM), for the four sizes of micro-sam2 (T, S, B, L) and the
+The numbers come from 'finetuning/v2/evaluation/runtime_benchmarking_script.py' (run 'collect' there first): one
+timed run per sample of LIVECell (2d LM) and GoNuclear (3d LM), for the four sizes of micro-sam2 (T, S, B, L) and the
 reference CellposeSAM. AIS and APG share their first stage: the embeddings of the image or of every slice (untiled),
 then the decoder on them. The script writes these plots to
 'figures/extendeddata2/<automatic|interactive>/quantitative':
@@ -16,7 +16,7 @@ then the decoder on them. The script writes these plots to
 - 'extended_data_2' (in 'figures/final'): both plots in one figure.
 
 In 3d, all methods on all devices are timed on the same three volumes per dataset (see 'VOLUMES_3D' in
-'benchmark_runtimes.py'). A device without results (e.g. the Mac before it is run) shows 'Results pending'.
+'runtime_benchmarking_script.py'). A device without results (e.g. the Mac before it is run) shows 'Results pending'.
 
 Usage:
 
@@ -47,7 +47,7 @@ BENCHMARK_ROOT = os.environ.get(
 SAMPLE_CSV = os.path.join(BENCHMARK_ROOT, "runtimes_per_sample.csv")
 OBJECT_CSV = os.path.join(BENCHMARK_ROOT, "runtimes_per_object.csv")
 # The tables of the devices timed off the cluster (the Mac) are in one folder per device tag, next to the main
-# tables. They are separate, because 'benchmark_runtimes.py collect' rewrites the main tables.
+# tables. They are separate, because 'runtime_benchmarking_script.py collect' rewrites the main tables.
 DEVICE_CSV_ROOT = BENCHMARK_ROOT
 
 DEVICES = {"cpu": "CPU (16 cores)", "a100": "GPU (A100)", "m2": "Apple M2"}

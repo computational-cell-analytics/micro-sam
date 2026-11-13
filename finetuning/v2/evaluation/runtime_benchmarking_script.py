@@ -20,12 +20,12 @@ numbers can be regrouped later without a rerun ('collect' writes them into CSV t
 Usage:
 
     # Once, on the cluster: write the samples, so that every device times the same inputs.
-    python benchmark_runtimes.py export
+    python runtime_benchmarking_script.py export
     # One group (dataset, method, model, prompt) on one device:
-    python benchmark_runtimes.py run --device_tag a100 -d livecell --method apg -m hvit_t
-    # All groups of a device in turn (e.g. on a Mac, see 'run_runtimes_mac.sh'):
-    python benchmark_runtimes.py run --device_tag m2 --device mps --all
-    python benchmark_runtimes.py collect
+    python runtime_benchmarking_script.py run --device_tag a100 -d livecell --method apg -m hvit_t
+    # All groups of a device in turn (e.g. on a Mac):
+    python runtime_benchmarking_script.py run --device_tag m2 --device mps --all
+    python runtime_benchmarking_script.py collect
 """
 
 import os
